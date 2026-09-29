@@ -36,7 +36,7 @@ verify:
 review:
   mode: ai
   ai_reviewer:
-    model: auto/best-coding
+    model: devin/swe-2-high
     inline_comments: true
     incremental: true
   risk_labels:
