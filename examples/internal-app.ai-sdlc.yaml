@@ -1,0 +1,86 @@
+# Archetype: internal app — aggressive ceiling.
+# Full autonomy up to auto-merge-all: any non-critical PR merges itself on
+# green. critical still requires pr:risk-accepted. Deploy intentionally left
+# out of scope (deploys_to staging, but level stops at auto-merge-all —
+# raise to auto-deploy only with a verified rollback path).
+spec: "1.0.0"
+
+repo:
+  archetype: app
+  primary_language: javascript
+  deploys_to: staging
+
+autonomy:
+  level: auto-merge-all
+  merge_requires_checks: true
+  freeze_env: AI_SDLC_FREEZE
+
+triggers:
+  issue_label: ready-to-implement
+  skip_labels:
+    - epic
+    - wontfix
+    - invalid
+    - duplicate
+    - question
+    - dependencies
+    - needs-human
+  authorized_labelers:
+    - Axel-DaMage
+
+verify:
+  commands:
+    - npm test
+  required_checks:
+    - sanity
+  timeout_seconds: 600
+
+review:
+  mode: hybrid            # AI reviews every PR; humans spot-check
+  ai_reviewer:
+    model: auto/best-reasoning
+    inline_comments: true
+    incremental: true
+  risk_labels:
+    - pr:risk-low
+    - pr:risk-medium
+    - pr:risk-high
+    - pr:risk-critical
+    - pr:risk-accepted
+  critical_requires_acceptance: true
+
+merge:
+  method: squash
+  delete_branch: true
+  max_repairs: 5           # internal velocity > bounded repair count
+  pending_max_minutes: 45
+  grace_minutes: 5
+  skip_labels:
+    - needs-human
+    - hold
+    - do-not-merge
+    - wip
+
+model:
+  primary: auto/best-coding
+  fallback: auto/best-fast
+  routing_hints:
+    docs_tasks: auto/best-fast
+    refactor_tasks: auto/best-reasoning
+
+engine:
+  name: scc
+  max_steps: 400
+  max_seconds: 1500
+  flags:
+    - --no-commit
+    - --audit-log
+    - --summary-file
+    - --prompt-file
+
+escalation:
+  label: needs-human
+  contacts:
+    - "@Axel-DaMage"
+  notify_channels:
+    - discord:ops

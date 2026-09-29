@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/os-santiago/ai-sdlc/main/spec/ai-sdlc.schema.json",
+  "title": "ai-sdlc.yaml — per-repo declarative pipeline contract",
+  "description": "Normative schema for the .ai-sdlc.yaml file that every repo opting into the AI-SDLC pipeline places at its root. Versioned (semver-tagged); workflows pin to a spec version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["spec"],
+  "properties": {
+    "spec": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Spec version this config conforms to (semver, e.g. \"1.0.0\"). Required — lets the runtime refuse unknown contracts."
+    },
+    "repo": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Repo characterization hints used for policy defaults and routing.",
+      "properties": {
+        "archetype": {
+          "type": "string",
+          "enum": ["library", "service", "app", "tooling", "docs", "infra"]
+        },
+        "primary_language": {
+          "type": "string",
+          "enum": ["javascript", "typescript", "python", "go", "rust", "java", "shell", "other"]
+        },
+        "deploys_to": {
+          "type": "string",
+          "description": "Free-form deployment target label (e.g. 'prod', 'staging', 'none')."
+        }
+      }
+    },
+    "autonomy": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Trust-ladder ceiling: the pipeline may operate BELOW this level, never above.",
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["shadow", "suggest", "auto-pr", "auto-merge-low", "auto-merge-all", "auto-deploy"],
+          "description": "Progressive-autonomy ceiling (see spec/trust-ladder.md). Default: suggest."
+        },
+        "merge_requires_checks": {
+          "type": "boolean",
+          "description": "If true, auto-merge requires all required_checks green even at auto-merge-all. Default: true."
+        },
+        "freeze_env": {
+          "type": "string",
+          "description": "Env var name that, when set, freezes autonomy to shadow. Default: AI_SDLC_FREEZE."
+        }
+      }
+    },
+    "triggers": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Intake contract: which issues enter the pipeline.",
+      "properties": {
+        "issue_label": { "type": "string", "default": "ready-to-implement" },
+        "skip_labels": {
+          "type": "array", "items": { "type": "string" },
+          "description": "Terminal/ignored labels. Recommended: epic, wontfix, invalid, duplicate, question, dependencies, needs-human."
+        },
+        "authorized_labelers": {
+          "type": "array", "items": { "type": "string" },
+          "description": "GitHub logins whose labels trigger dispatch. Empty = anyone."
+        }
+      }
+    },
+    "verify": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-repo verification contract — commands the agent must keep green.",
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Shell commands run in the worktree before a PR is opened (e.g. 'npm test')."
+        },
+        "required_checks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "GitHub check-run names that must be green for automerge. Empty = all reported checks."
+        },
+        "timeout_seconds": { "type": "integer", "minimum": 60, "default": 900 }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Review stage policy (see spec/risk-taxonomy.md when landed).",
+      "properties": {
+        "mode": { "type": "string", "enum": ["ai", "human", "hybrid"], "default": "ai" },
+        "ai_reviewer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model": { "type": "string" },
+            "inline_comments": { "type": "boolean", "default": true },
+            "incremental": { "type": "boolean", "default": true }
+          }
+        },
+        "risk_labels": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^pr:risk-" },
+          "description": "Canonical risk taxonomy. Default: pr:risk-low|medium|high|critical|accepted."
+        },
+        "critical_requires_acceptance": {
+          "type": "boolean",
+          "description": "pr:risk-critical PRs withhold merge until pr:risk-accepted is applied. Default: true."
+        }
+      }
+    },
+    "merge": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Automerge loop bounds (see merger semantics).",
+      "properties": {
+        "method": { "type": "string", "enum": ["squash", "merge", "rebase"], "default": "squash" },
+        "delete_branch": { "type": "boolean", "default": true },
+        "max_repairs": { "type": "integer", "minimum": 0, "maximum": 10, "default": 3 },
+        "pending_max_minutes": { "type": "integer", "minimum": 5, "default": 60 },
+        "grace_minutes": { "type": "integer", "minimum": 0, "default": 10 },
+        "skip_labels": {
+          "type": "array", "items": { "type": "string" },
+          "description": "Labels that block merge unconditionally. Default: needs-human, hold, do-not-merge, wip."
+        }
+      }
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Flow-state label names (scc:* issue flow, pr:* PR states). Keys map canonical states to label names; repos may rename without forking the runtime."
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Model routing hints consumed by the engine dispatcher.",
+      "properties": {
+        "primary": { "type": "string", "description": "Primary routed model (e.g. 'auto/best-coding')." },
+        "fallback": { "type": ["string", "null"], "description": "One-shot fallback on provider-quota failure (Hermes #220)." },
+        "routing_hints": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Task-class → model overrides (e.g. fast_tasks: 'auto/best-fast')."
+        }
+      }
+    },
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Engine invocation contract (sc-agent-cli today; any tool honoring the headless contract).",
+      "properties": {
+        "name": { "type": "string", "default": "scc" },
+        "max_steps": { "type": "integer", "minimum": 10, "default": 400 },
+        "max_seconds": { "type": "integer", "minimum": 60, "default": 1500 },
+        "flags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Extra headless flags (e.g. --no-commit --audit-log --summary-file --prompt-file)."
+        }
+      }
+    },
+    "escalation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Human escalation surface.",
+      "properties": {
+        "label": { "type": "string", "default": "needs-human" },
+        "contacts": { "type": "array", "items": { "type": "string" }, "description": "GitHub handles notified on escalation." },
+        "notify_channels": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Free-form notification targets (deployment-specific: discord channel ids, slack webhooks names, etc.)"
+        }
+      }
+    }
+  }
+}
