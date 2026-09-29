@@ -1,0 +1,98 @@
+# ai-sdlc-intake — reusable intake stage (issue #8)
+#
+# Validates DoR on a labeled issue and hands off to implementation.
+# Caller usage (in the consuming repo):
+#
+#   name: ai-sdlc
+#   on:
+#     issues: { types: [labeled] }
+#   jobs:
+#     intake:
+#       uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-intake.yml@main
+#       with:
+#         repo: ${{ github.repository }}
+#         issue_number: ${{ github.event.issue.number }}
+#       secrets: inherit
+name: ai-sdlc-intake
+
+on:
+  workflow_call:
+    inputs:
+      repo:
+        description: 'owner/repo being processed'
+        type: string
+        required: true
+      issue_number:
+        description: 'issue to validate and queue'
+        type: number
+        required: true
+      trigger_label:
+        description: 'label that arms dispatch (overrides .ai-sdlc.yaml)'
+        type: string
+        default: 'ready-to-implement'
+    outputs:
+      dispatch:
+        description: '"true" when the issue passes DoR and is queued'
+        type: string
+        value: ${{ jobs.intake.outputs.dispatch }}
+    secrets:
+      AI_SDLC_TOKEN:
+        description: 'PAT/App token — needed when GITHUB_TOKEN lacks cross-repo issue access'
+        required: false
+
+env:
+  GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+  REPO: ${{ inputs.repo }}
+  ISSUE: ${{ inputs.issue_number }}
+  TRIGGER: ${{ inputs.trigger_label }}
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  intake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      dispatch: ${{ steps.dor.outputs.dispatch }}
+    steps:
+      - name: Validate DoR (R1–R6)
+        id: dor
+        run: |
+          set -euo pipefail
+          gh issue view "$ISSUE" -R "$REPO" --json number,title,body,labels > issue.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const i = JSON.parse(fs.readFileSync('issue.json', 'utf8'));
+          const labels = (i.labels || []).map(l => (l.name || l).toLowerCase());
+          const body = i.body || '';
+          const acSec = /##\s*(acceptance criteria|ac)\b/i.test(body)
+            ? body.split(/##\s*(?:acceptance criteria|ac)\b/i)[1] || '' : '';
+          const acItems = (acSec.match(/^\s*(?:-|\*|\d+\.)\s+/gm) || []).length;
+          const checks = {
+            'R1 conventional title': /^(feat|fix|docs|chore|refactor|perf|test|build|ci|security)(\(.+\))?: .{5,}/.test(i.title),
+            'R2 AC section present': acSec.trim().length > 0,
+            'R3 ≥1 AC item': acItems >= 1,
+            'R4 non-trivial body': body.trim().length >= 120,
+            'R5 no skip-label': !labels.some(l => ['epic','wontfix','invalid','duplicate','question','dependencies','needs-human','scc:not-ready'].includes(l)),
+            'R6 no TBD in AC': !/\bTBD\b|\bTODO\b/i.test(acSec)
+          };
+          const failed = Object.entries(checks).filter(([, ok]) => !ok).map(([k]) => k);
+          console.log('DoR:', JSON.stringify(checks, null, 0));
+          fs.writeFileSync(process.env.GITHUB_OUTPUT, `dispatch=${failed.length ? 'false' : 'true'}\nfailed=${failed.join('|')}\n`);
+          NODE
+
+      - name: Outcome → label + comment
+        env:
+          PASS: ${{ steps.dor.outputs.dispatch }}
+          FAILED: ${{ steps.dor.outputs.failed }}
+        run: |
+          set -euo pipefail
+          if [ "$PASS" = "true" ]; then
+            gh issue edit "$ISSUE" -R "$REPO" --add-label "scc:queued"
+            gh issue comment "$ISSUE" -R "$REPO" --body "✅ **AI-SDLC intake:** DoR passed — queued for implementation. Follow the opened PR for progress."
+          else
+            gh issue edit "$ISSUE" -R "$REPO" --add-label "scc:not-ready"
+            gh issue comment "$ISSUE" -R "$REPO" --body "🛡️ **AI-SDLC intake:** Definition-of-Ready failed: \`$FAILED\` — see spec/definition-of-ready.md. Refine and re-apply \`$TRIGGER\`."
+          fi
