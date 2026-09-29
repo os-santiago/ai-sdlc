@@ -1,0 +1,88 @@
+# .ai-sdlc.yaml — os-santiago/ai-sdlc consumes its own contract (dogfooding).
+# Canonical repo → keeps a conservative ceiling (auto-merge-low) since the
+# runtime must earn trust here first. Validates via:
+#   tools/validate-ai-sdlc-config.sh .ai-sdlc.yaml spec/ai-sdlc.schema.json
+spec: "1.0.0"
+
+repo:
+  archetype: tooling
+  primary_language: shell
+  deploys_to: none
+
+autonomy:
+  level: auto-merge-low
+  merge_requires_checks: true
+  freeze_env: AI_SDLC_FREEZE
+
+triggers:
+  issue_label: ready-to-implement
+  skip_labels:
+    - epic
+    - wontfix
+    - invalid
+    - duplicate
+    - question
+    - dependencies
+    - needs-human
+  authorized_labelers:
+    - Axel-DaMage
+
+verify:
+  commands:
+    - bash tools/validate-ai-sdlc-config.sh .ai-sdlc.yaml spec/ai-sdlc.schema.json
+  required_checks: []
+  timeout_seconds: 300
+
+review:
+  mode: ai
+  ai_reviewer:
+    model: auto/best-coding
+    inline_comments: true
+    incremental: true
+  risk_labels:
+    - pr:risk-low
+    - pr:risk-medium
+    - pr:risk-high
+    - pr:risk-critical
+    - pr:risk-accepted
+  critical_requires_acceptance: true
+
+merge:
+  method: squash
+  delete_branch: true
+  max_repairs: 3
+  pending_max_minutes: 60
+  grace_minutes: 10
+  skip_labels:
+    - needs-human
+    - hold
+    - do-not-merge
+    - wip
+
+labels:
+  queued: scc:queued
+  in-progress: scc:in-progress
+  pr-opened: scc:pr-opened
+  failed: scc:failed
+  not-ready: scc:not-ready
+  no-changes: scc:no-changes
+
+model:
+  primary: auto/best-coding
+  fallback: auto/best-fast
+
+engine:
+  name: scc
+  max_steps: 200
+  max_seconds: 900
+  flags:
+    - --no-commit
+    - --audit-log
+    - --summary-file
+    - --prompt-file
+
+escalation:
+  label: needs-human
+  contacts:
+    - "@Axel-DaMage"
+  notify_channels: []

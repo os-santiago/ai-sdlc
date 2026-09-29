@@ -1,0 +1,33 @@
+# Self-dogfooding caller: this repo consumes its own reusable runtime.
+# An issue labeled `ready-to-implement` → DoR intake → implement → PR.
+# Requires repo secrets: MODEL_API_KEY (engine inference). Without it the
+# implement job fails fast and the issue lands on scc:failed — opt-in by
+# label only.
+name: ai-sdlc (self)
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  intake:
+    if: github.event.label.name == 'ready-to-implement'
+    uses: ./.github/workflows/ai-sdlc-intake.yml
+    with:
+      repo: ${{ github.repository }}
+      issue_number: ${{ github.event.issue.number }}
+    secrets: inherit
+
+  implement:
+    needs: intake
+    if: needs.intake.outputs.dispatch == 'true'
+    uses: ./.github/workflows/ai-sdlc-implement.yml
+    with:
+      repo: ${{ github.repository }}
+      issue_number: ${{ github.event.issue.number }}
+    secrets: inherit
