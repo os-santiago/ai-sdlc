@@ -9,11 +9,11 @@ implements via `.ai-sdlc.yaml` at its root.
 |---|---|---|
 | [`ai-sdlc.schema.json`](ai-sdlc.schema.json) | JSON Schema (draft 2020-12) for `.ai-sdlc.yaml` — repo contract: verify commands, autonomy ceiling, review policy, labels, model routing, escalation | #2 |
 | `labels.md` | canonical state taxonomy — `scc-*` issue flow vs `pr:*` states | adev→here |
-| `trust-ladder.md` | shadow/suggest/auto-PR/auto-merge-low/auto-merge-all/auto-deploy | adev #5 |
-| `definition-of-ready.md` | atomicity contract for agent-consumable issues | adev #1 |
-| `risk-taxonomy.md` | PR risk classes mapped to review/merge policy | adev #3 |
-| `injection-defense.md` | sanitization of issue bodies, web content, dep docs | adev #4 |
-| `org-policy.md` | org baseline `.ai-sdlc.yaml` with inheritance/overrides | adev #6 |
+| [`trust-ladder.md`](trust-ladder.md) | Six-level progressive autonomy: levels, promotion gates, demotion triggers, freeze | #5 |
+| [`definition-of-ready.md`](definition-of-ready.md) | DoR fields, AC format, atomicity rules, R1–R6 machine-checkable validation | #1 |
+| [`risk-taxonomy.md`](risk-taxonomy.md) | pr:risk-* tiers + required-evidence matrix + merge-gate decision table | #3 |
+| [`injection-defense.md`](injection-defense.md) | Trust-boundary model, fence+scrub convention, forbidden-action rules | #4 |
+| [`org-policy.md`](org-policy.md) | Field-level merge, pin-able floor fields, resolution algorithm | #6 |
 
 ## Versioning
 
