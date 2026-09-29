@@ -1,0 +1,119 @@
+# ai-sdlc-automerge — reusable merge gate (issue #9)
+#
+# Ports the Hermes pr_merger decision table (spec/risk-taxonomy.md):
+#   green+mergeable → squash+delete-branch; failing checks → bounded repair
+#   signal; pending > cap or conflicts → needs-human escalation.
+# Caller: on check_run.completed / pull_request events, or as a step in a
+# scheduled poll.
+name: ai-sdlc-automerge
+
+on:
+  workflow_call:
+    inputs:
+      repo:
+        type: string
+        required: true
+      pr_number:
+        type: number
+        required: true
+      max_repairs:
+        description: 'repair rounds before escalation'
+        type: number
+        default: 3
+      pending_max_minutes:
+        type: number
+        default: 60
+      merge_method:
+        type: string
+        default: 'squash'
+    outputs:
+      action:
+        description: 'merged | repair-signaled | escalated | held | skipped'
+        type: string
+        value: ${{ jobs.gate.outputs.action }}
+    secrets:
+      AI_SDLC_TOKEN:
+        required: false
+
+env:
+  GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+  REPO: ${{ inputs.repo }}
+  PR: ${{ inputs.pr_number }}
+  MAX_REPAIRS: ${{ inputs.max_repairs }}
+  PENDING_MAX: ${{ inputs.pending_max_minutes }}
+  METHOD: ${{ inputs.merge_method }}
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: ai-sdlc-merge-${{ inputs.repo }}-${{ inputs.pr_number }}
+      cancel-in-progress: true
+    outputs:
+      action: ${{ steps.eval.outputs.action }}
+    steps:
+      - name: Evaluate merge gate
+        id: eval
+        run: |
+          set -euo pipefail
+          gh pr view "$PR" -R "$REPO" --json number,title,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,labels,createdAt > pr.json
+          gh pr checks "$PR" -R "$REPO" --json name,state,conclusion > checks.json || true
+          node - <<'NODE'
+          const fs = require('fs');
+          const pr = JSON.parse(fs.readFileSync('pr.json', 'utf8'));
+          const checks = JSON.parse(fs.readFileSync('checks.json', 'utf8') || '[]');
+          const labels = (pr.labels || []).map(l => l.name);
+          const SKIP = ['needs-human', 'hold', 'do-not-merge', 'wip'];
+          const out = (k, v) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${k}=${v}\n`);
+
+          // Decision table (spec/risk-taxonomy.md):
+          let action = 'skipped', reason = '';
+          if (pr.isDraft) { action = 'skipped'; reason = 'draft'; }
+          else if (labels.some(l => SKIP.includes(l))) { action = 'skipped'; reason = 'skip-label'; }
+          else if (pr.baseRefName !== 'main') { action = 'skipped'; reason = 'non-main-base'; }
+          else if (labels.includes('pr:risk-critical') && !labels.includes('pr:risk-accepted')) { action = 'held'; reason = 'risk-critical-unaccepted'; }
+          else if (pr.mergeable === 'CONFLICTING') { action = 'escalated'; reason = 'conflict'; }
+          else {
+            const failing = checks.filter(c => c.conclusion === 'FAILURE' || c.conclusion === 'TIMED_OUT' || c.conclusion === 'ACTION_REQUIRED');
+            const pending = checks.filter(c => !c.conclusion);
+            const ageMin = (Date.now() - new Date(pr.createdAt)) / 60000;
+            if (failing.length) { action = 'repair-signaled'; reason = `failing:${failing.map(c => c.name).join(',')}`; }
+            else if (pending.length && ageMin > Number(process.env.PENDING_MAX)) { action = 'escalated'; reason = 'pending-timeout'; }
+            else if (pending.length) { action = 'held'; reason = 'pending'; }
+            else if (pr.mergeable === 'MERGEABLE' && checks.length) { action = 'merged'; reason = 'green'; }
+            else if (pr.mergeable === 'MERGEABLE' && !checks.length) { action = 'merged'; reason = 'no-checks'; }
+            else { action = 'held'; reason = `mergeable=${pr.mergeable}`; }
+          }
+          console.log(`decision: ${action} (${reason})`);
+          out('action', action); out('reason', reason);
+          NODE
+
+      - name: Merge on green
+        if: steps.eval.outputs.action == 'merged'
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR" -R "$REPO" --"$METHOD" --delete-branch
+
+      - name: Escalate to human
+        if: steps.eval.outputs.action == 'escalated'
+        env:
+          REASON: ${{ steps.eval.outputs.reason }}
+        run: |
+          set -euo pipefail
+          gh pr edit "$PR" -R "$REPO" --add-label needs-human
+          gh pr comment "$PR" -R "$REPO" --body "⚠️ **AI-SDLC merge gate escalated** — reason: \`$REASON\`. Human review required; remove \`needs-human\` to hand control back."
+
+      - name: Signal repair need
+        if: steps.eval.outputs.action == 'repair-signaled'
+        env:
+          REASON: ${{ steps.eval.outputs.reason }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$PR" -R "$REPO" --body "🔧 **AI-SDLC:** checks failing (\`$REASON\`) — dispatch a bounded repair pass (see docs/runtime.md: repair loop, max $MAX_REPAIRS rounds)."
