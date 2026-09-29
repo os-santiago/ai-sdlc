@@ -9,8 +9,8 @@ thin caller workflow + `.ai-sdlc.yaml` and gets the autonomous loop.
 |---|---|---|
 | `ai-sdlc-intake.yml` | DoR validation (R1–R6 per `spec/definition-of-ready.md`), `scc:queued`/`scc:not-ready` labels | `issues.labeled` in caller |
 | `ai-sdlc-implement.yml` | `scc` headless run → branch → PR (`Closes #N`) + manifest/audit artifacts | called on `scc:queued` |
-| `ai-sdlc-automerge.yml` *(planned, issue #9)* | green+mergeable → squash; bounded repair; `needs-human` escalation | `check_run.completed` / `pull_request` |
-| `ai-sdlc-verify.yml` *(planned, issue #9)* | post-merge verify commands | post-merge |
+| `ai-sdlc-automerge.yml` | merge-gate decision table (spec/risk-taxonomy.md): green+mergeable → squash+delete; failing → repair signal; pending/conflict → `needs-human` | `check_run.completed` / `pull_request` / called |
+| `ai-sdlc-verify.yml` | post-merge verify commands (from `.ai-sdlc.yaml` or input); failure → issue (or revert when enabled) | post-merge |
 
 ## Caller example
 
