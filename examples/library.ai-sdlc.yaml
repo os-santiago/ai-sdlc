@@ -1,0 +1,89 @@
+# Archetype: public library — conservative ceiling.
+# Trust never exceeds auto-merge-low: PRs open autonomously and merge
+# themselves only when the risk label is pr:risk-low AND checks are green.
+spec: "1.0.0"
+
+repo:
+  archetype: library
+  primary_language: typescript
+  deploys_to: none
+
+autonomy:
+  level: auto-merge-low
+  merge_requires_checks: true
+  freeze_env: AI_SDLC_FREEZE
+
+triggers:
+  issue_label: ready-to-implement
+  skip_labels:
+    - epic
+    - wontfix
+    - invalid
+    - duplicate
+    - question
+    - dependencies
+    - needs-human
+  authorized_labelers:
+    - Axel-DaMage
+
+verify:
+  commands:
+    - npm ci
+    - npm run build
+    - npm test
+  required_checks: []
+  timeout_seconds: 900
+
+review:
+  mode: ai
+  ai_reviewer:
+    model: auto/best-coding
+    inline_comments: true
+    incremental: true
+  risk_labels:
+    - pr:risk-low
+    - pr:risk-medium
+    - pr:risk-high
+    - pr:risk-critical
+    - pr:risk-accepted
+  critical_requires_acceptance: true
+
+merge:
+  method: squash
+  delete_branch: true
+  max_repairs: 3
+  pending_max_minutes: 60
+  grace_minutes: 10
+  skip_labels:
+    - needs-human
+    - hold
+    - do-not-merge
+    - wip
+
+labels:
+  queued: scc:queued
+  in-progress: scc:in-progress
+  pr-opened: scc:pr-opened
+  failed: scc:failed
+
+model:
+  primary: auto/best-coding
+  fallback: auto/best-fast
+  routing_hints:
+    docs_tasks: auto/best-fast
+
+engine:
+  name: scc
+  max_steps: 400
+  max_seconds: 1500
+  flags:
+    - --no-commit
+    - --audit-log
+    - --summary-file
+    - --prompt-file
+
+escalation:
+  label: needs-human
+  contacts:
+    - "@Axel-DaMage"
+  notify_channels: []
