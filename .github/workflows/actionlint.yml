@@ -1,0 +1,24 @@
+# CI gate: invalid workflow files must fail PR checks instead of landing on
+# main and producing phantom 0-job failed runs (issue #15).
+name: actionlint
+
+on:
+  pull_request:
+    paths: ['.github/workflows/**']
+  push:
+    branches: [main]
+    paths: ['.github/workflows/**']
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run actionlint
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash -s latest
+          ./actionlint -color

@@ -29,7 +29,6 @@ on:
     outputs:
       action:
         description: 'merged | repair-signaled | escalated | held | skipped'
-        type: string
         value: ${{ jobs.gate.outputs.action }}
     secrets:
       AI_SDLC_TOKEN:

@@ -33,7 +33,6 @@ on:
     outputs:
       dispatch:
         description: '"true" when the issue passes DoR and is queued'
-        type: string
         value: ${{ jobs.intake.outputs.dispatch }}
     secrets:
       AI_SDLC_TOKEN:
