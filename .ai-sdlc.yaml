@@ -36,7 +36,7 @@ verify:
 review:
   mode: ai
   ai_reviewer:
-    model: auto/best-coding
+    model: devin/swe-2-high
     inline_comments: true
     incremental: true
   risk_labels:
@@ -68,8 +68,8 @@ labels:
   no-changes: scc:no-changes
 
 model:
-  primary: auto/best-coding
-  fallback: auto/best-fast
+  primary: devin/swe-2-high      # OmniRoute devin provider (SWE-2, free-tier) — auto/best-coding upstreams quota-dead until ~2026-10-04
+  fallback: devin/swe-2-medium
 
 engine:
   name: scc
