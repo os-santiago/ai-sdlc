@@ -1,0 +1,117 @@
+# ai-sdlc-sweep — scheduled stall-sweep over the merge gate (issue #29)
+#
+# The automerge gate is event-driven; a missed event or a PR that went green
+# while nothing was listening would stall silently. This sweep re-feeds every
+# open pipeline PR to the SAME gate (ai-sdlc-automerge.yml) on a schedule, so
+# no pipeline PR stays open unresolved: it is merged, or it carries
+# `needs-human` with a cause. The decision table lives only in the gate.
+#
+# Pipeline PR = open, base `main`, and head branch matching PIPELINE_BRANCH_RE
+# or labeled PIPELINE_LABEL. Drafts and skip-labeled PRs are dropped before
+# the bound is applied (the gate would skip them anyway) so human-owned PRs
+# can't starve the scan. Cost: see docs/runtime.md § Stall-sweep.
+name: ai-sdlc-sweep
+
+on:
+  schedule:
+    - cron: '7,37 * * * *'
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'sweep only this PR (blank = all pipeline PRs)'
+        type: string
+        default: ''
+      max_prs:
+        description: 'PRs fed to the gate per run (capped at 20)'
+        type: number
+        default: 20
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-sdlc-sweep
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      prs: ${{ steps.find.outputs.prs }}
+      count: ${{ steps.find.outputs.count }}
+      max_repairs: ${{ steps.cfg.outputs.max_repairs }}
+      pending_max_minutes: ${{ steps.cfg.outputs.pending_max_minutes }}
+      merge_method: ${{ steps.cfg.outputs.merge_method }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .ai-sdlc.yaml
+          sparse-checkout-cone-mode: false
+
+      - name: Read merge settings from .ai-sdlc.yaml
+        id: cfg
+        run: |
+          set -euo pipefail
+          {
+            echo "max_repairs=$(yq -r '.merge.max_repairs // 3' .ai-sdlc.yaml)"
+            echo "pending_max_minutes=$(yq -r '.merge.pending_max_minutes // 60' .ai-sdlc.yaml)"
+            echo "merge_method=$(yq -r '.merge.method // "squash"' .ai-sdlc.yaml)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Enumerate pipeline PRs
+        id: find
+        env:
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ONLY_PR: ${{ inputs.pr_number }}
+          MAX_PRS: ${{ inputs.max_prs || 20 }}
+          PIPELINE_BRANCH_RE: '^(feat|fix)/issue-[0-9]+'
+          PIPELINE_LABEL: 'ai-sdlc'
+          SKIP_LABELS: 'needs-human,hold,do-not-merge,wip'
+        run: |
+          set -euo pipefail
+          MAX=$(( MAX_PRS > 20 ? 20 : MAX_PRS ))
+          gh pr list -R "$REPO" --state open --base main --limit 100 \
+            --json number,headRefName,isDraft,labels,updatedAt > prs.json
+          jq -c --arg re "$PIPELINE_BRANCH_RE" --arg lbl "$PIPELINE_LABEL" \
+                --arg skip "$SKIP_LABELS" --arg only "$ONLY_PR" --argjson max "$MAX" '
+            ($skip | split(",")) as $skips
+            | map(select(($only == "") or (.number | tostring) == $only))
+            | map(. + {names: [.labels[].name]})
+            | map(select((.headRefName | test($re)) or (.names | index($lbl))))
+            | map(select((.isDraft | not) and ([.names[] | select(. as $n | $skips | index($n))] | length == 0)))
+            | sort_by(.updatedAt)
+            | .[:$max]
+            | map(.number)' prs.json > selected.json
+          echo "prs=$(cat selected.json)" >> "$GITHUB_OUTPUT"
+          echo "count=$(jq length selected.json)" >> "$GITHUB_OUTPUT"
+          {
+            echo "### ai-sdlc stall-sweep"
+            echo "open PRs scanned: $(jq length prs.json) · fed to gate (cap $MAX): $(jq -r 'map("#\(.)") | join(", ") | if . == "" then "none" else . end' selected.json)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  gate:
+    needs: discover
+    if: needs.discover.outputs.count != '0'
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        pr: ${{ fromJSON(needs.discover.outputs.prs) }}
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      checks: read
+    uses: ./.github/workflows/ai-sdlc-automerge.yml
+    with:
+      repo: ${{ github.repository }}
+      pr_number: ${{ matrix.pr }}
+      max_repairs: ${{ fromJSON(needs.discover.outputs.max_repairs) }}
+      pending_max_minutes: ${{ fromJSON(needs.discover.outputs.pending_max_minutes) }}
+      merge_method: ${{ needs.discover.outputs.merge_method }}
+    secrets: inherit
