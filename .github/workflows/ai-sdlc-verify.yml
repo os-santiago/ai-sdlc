@@ -1,7 +1,8 @@
 # ai-sdlc-verify — post-merge verification (issue #9)
 #
-# Runs the repo's verify commands after a merge lands. Reads
-# `.ai-sdlc.yaml` `verify.commands` when present, else the explicit input.
+# Runs the repo's verify commands after a merge lands. Commands come from
+# the resolved .ai-sdlc.yaml contract (`verify.commands`, issue #22); the
+# `verify_commands` input is override-only.
 # On failure files an issue (or reverts, when revert_on_failure=true).
 name: ai-sdlc-verify
 
@@ -15,7 +16,7 @@ on:
         type: string
         default: 'main'
       verify_commands:
-        description: 'newline-separated commands; overrides .ai-sdlc.yaml'
+        description: 'newline-separated commands — override; empty = .ai-sdlc.yaml verify.commands'
         type: string
         default: ''
       revert_on_failure:
@@ -49,6 +50,16 @@ jobs:
           ref: ${{ inputs.base }}
           token: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
 
+      - name: Resolve contract (.ai-sdlc.yaml)
+        id: contract
+        uses: os-santiago/ai-sdlc/.github/actions/load-config@main
+        with:
+          repo: ${{ inputs.repo }}
+          ref: ${{ inputs.base }}
+          path: '.'
+          overrides: >-
+            {"verify.commands": ${{ toJSON(inputs.verify_commands) }}}
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -57,25 +68,14 @@ jobs:
       - name: Resolve verify commands
         id: cmds
         env:
-          EXPLICIT: ${{ inputs.verify_commands }}
+          COMMANDS: ${{ steps.contract.outputs.verify_commands }}
           SETUP: ${{ inputs.setup_commands }}
         run: |
           set -euo pipefail
           if [ -n "$SETUP" ]; then echo "$SETUP" | while IFS= read -r c; do [ -n "$c" ] && eval "$c"; done; fi
-          if [ -n "$EXPLICIT" ]; then
-            echo "$EXPLICIT" > verify.cmds
-          elif [ -f .ai-sdlc.yaml ]; then
-            python3 - <<'PY'
-          import re, sys
-          txt = open('.ai-sdlc.yaml').read()
-          m = re.search(r'^\s*verify:\s*\n(?:\s+commands:\s*\n((?:\s+-\s+.+\n)+))?', txt, re.M)
-          cmds = []
-          if m and m.group(1):
-              cmds = [l.split('- ', 1)[1].strip() for l in m.group(1).splitlines() if '- ' in l]
-          open('verify.cmds', 'w').write('\n'.join(cmds))
-          PY
-          else
-            : > verify.cmds
+          printf '%s\n' "$COMMANDS" > verify.cmds
+          if ! grep -q '[^[:space:]]' verify.cmds; then
+            echo "::warning title=ai-sdlc verify::no verify commands resolved (input, .ai-sdlc.yaml verify.commands and defaults are all empty)"
           fi
           cat verify.cmds
 
