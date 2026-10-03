@@ -10,6 +10,7 @@ thin caller workflow + `.ai-sdlc.yaml` and gets the autonomous loop.
 | `ai-sdlc-intake.yml` | DoR validation (R1–R6 per `spec/definition-of-ready.md`), `scc:queued`/`scc:not-ready` labels | `issues.labeled` in caller |
 | `ai-sdlc-implement.yml` | `scc` headless run → branch → PR (`Closes #N`) + manifest/audit artifacts | called on `scc:queued` |
 | `ai-sdlc-automerge.yml` | merge-gate decision table (spec/risk-taxonomy.md): green+mergeable → squash+delete; failing → repair signal; pending/conflict → `needs-human` | `check_run.completed` / `pull_request` / called |
+| `ai-sdlc-sweep.yml` | scheduled stall-sweep: enumerates open pipeline PRs and feeds each to `ai-sdlc-automerge.yml` — no green-idle PRs | `schedule` (every 30 min) / `workflow_dispatch` |
 | `ai-sdlc-verify.yml` | post-merge verify commands (from `.ai-sdlc.yaml` or input); failure → issue (or revert when enabled) | post-merge |
 
 ## Caller example
@@ -79,6 +80,46 @@ OmniRoute route names (`auto/*`, `devin/*`) are Hermes control-plane only —
 unreachable from GHA runners by design (ADR-0001). Per-repo selection will
 come from `.ai-sdlc.yaml` `model.primary`/`fallback` once contract
 resolution lands (#22); inputs are the override surface today.
+
+## Stall-sweep (`ai-sdlc-sweep.yml`)
+
+The merge gate is event-driven, so a missed event (or a PR that went green
+while nothing was listening) would stall silently. The sweep closes that gap
+with the GHA equivalent of Hermes' `pr_merger` poll. **Golden rule: no
+pipeline PR stays open unresolved** — every one is either merged or carries
+`needs-human` with a cause comment.
+
+- **Trigger:** `schedule` at `7,37 * * * *` (every 30 min) plus
+  `workflow_dispatch` (`pr_number` to sweep one PR, `max_prs` to shrink the
+  bound). GitHub only runs `schedule` from the default branch and may delay
+  it under load; public repos with 60 days of inactivity get scheduled
+  workflows disabled.
+- **Discovery:** open PRs on base `main` whose head branch matches
+  `^(feat|fix)/issue-[0-9]+` (what `ai-sdlc-implement` pushes) or that carry
+  the `ai-sdlc` label (opt-in for human-branch PRs). Drafts and skip labels
+  (`needs-human`, `hold`, `do-not-merge`, `wip`) are dropped *before* the
+  bound so human-owned PRs can't starve the scan; the gate re-checks them
+  anyway. Least-recently-updated first, **max 20 per run**.
+- **Gate:** a matrix job (`max-parallel: 4`, `fail-fast: false`) calls
+  `ai-sdlc-automerge.yml` once per PR with `merge.*` settings from
+  `.ai-sdlc.yaml`. The decision table lives only in the gate — the sweep
+  never decides.
+- **Idempotent repair signal:** the gate stamps each repair comment with
+  `<!-- ai-sdlc:repair-signal sha=<head> -->`. A re-poll on the same head
+  SHA holds (`repair-awaiting`) instead of re-commenting; no new push within
+  `pending_max_minutes` → escalate (`repair-stalled`); `max_repairs`
+  distinct SHAs signaled → escalate (`repairs-exhausted`).
+- **Cost:** GitHub bills each job rounded up to a whole minute. One sweep
+  is 1 min (discover) + 1 min per PR fed to the gate, so
+  `48 × (1 + N)` runner-min/day for N actionable PRs (idle repo ≈ 48 min/day;
+  hard ceiling `48 × 21` ≈ 1,008 min/day). Free on public repos.
+
+### Consuming repos
+
+Copy `ai-sdlc-sweep.yml` into the repo and point the `gate` job at
+`os-santiago/ai-sdlc/.github/workflows/ai-sdlc-automerge.yml@main`. Merges
+made with `GITHUB_TOKEN` don't fire `push` workflows (e.g. post-merge
+verify) — provide `AI_SDLC_TOKEN` if that matters.
 
 ## Engine contract
 
