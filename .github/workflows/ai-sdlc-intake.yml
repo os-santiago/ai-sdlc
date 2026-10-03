@@ -1,6 +1,8 @@
 # ai-sdlc-intake — reusable intake stage (issue #8)
 #
-# Validates DoR on a labeled issue and hands off to implementation.
+# Resolves the repo contract (.ai-sdlc.yaml, issue #22), validates DoR on a
+# labeled issue and hands off to implementation. Trigger label and skip
+# labels come from the contract; inputs are override-only.
 # Caller usage (in the consuming repo):
 #
 #   name: ai-sdlc
@@ -27,9 +29,9 @@ on:
         type: number
         required: true
       trigger_label:
-        description: 'label that arms dispatch (overrides .ai-sdlc.yaml)'
+        description: 'label that arms dispatch — override; empty = .ai-sdlc.yaml triggers.issue_label'
         type: string
-        default: 'ready-to-implement'
+        default: ''
     outputs:
       dispatch:
         description: '"true" when the issue passes DoR and is queued'
@@ -43,7 +45,6 @@ env:
   GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
   REPO: ${{ inputs.repo }}
   ISSUE: ${{ inputs.issue_number }}
-  TRIGGER: ${{ inputs.trigger_label }}
 
 permissions:
   issues: write
@@ -56,15 +57,55 @@ jobs:
     outputs:
       dispatch: ${{ steps.dor.outputs.dispatch }}
     steps:
+      - name: Resolve contract (.ai-sdlc.yaml)
+        id: contract
+        uses: os-santiago/ai-sdlc/.github/actions/load-config@main
+        with:
+          repo: ${{ inputs.repo }}
+          checkout: 'true'
+          token: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          overrides: >-
+            {"triggers.issue_label": ${{ toJSON(inputs.trigger_label) }}}
+
+      - name: Contract error → not-ready + comment (no dispatch)
+        if: failure() && steps.contract.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          ERR="$(head -c 3000 "$RUNNER_TEMP/ai-sdlc-contract/error.txt" 2>/dev/null || echo 'unknown error — see workflow logs')"
+          gh issue edit "$ISSUE" -R "$REPO" --add-label "scc:not-ready" || true
+          cat > comment.md <<EOF
+          🛡️ **AI-SDLC intake — \`scc:config-error\`:** the repo contract could not be resolved, so this issue was **not dispatched**.
+
+          \`\`\`
+          ${ERR}
+          \`\`\`
+
+          Fix \`.ai-sdlc.yaml\` (validate locally with \`tools/validate-ai-sdlc-config.sh\`), then re-apply the trigger label.
+          EOF
+          gh issue comment "$ISSUE" -R "$REPO" --body-file comment.md
+
       - name: Validate DoR (R1–R6)
         id: dor
+        env:
+          TRIGGER: ${{ steps.contract.outputs.trigger_label }}
+          SKIP_LABELS: ${{ steps.contract.outputs.skip_labels }}
+          NOT_READY: ${{ steps.contract.outputs.label_not_ready }}
         run: |
           set -euo pipefail
           gh issue view "$ISSUE" -R "$REPO" --json number,title,body,labels > issue.json
           node - <<'NODE'
           const fs = require('fs');
           const i = JSON.parse(fs.readFileSync('issue.json', 'utf8'));
+          const out = (k, v) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${k}=${v}\n`);
           const labels = (i.labels || []).map(l => (l.name || l).toLowerCase());
+          const trigger = process.env.TRIGGER.toLowerCase();
+          const skip = [...JSON.parse(process.env.SKIP_LABELS || '[]'), process.env.NOT_READY]
+            .filter(Boolean).map(l => l.toLowerCase());
+          if (!labels.includes(trigger)) {
+            console.log(`issue does not carry the trigger label "${process.env.TRIGGER}" — not armed, skipping`);
+            out('dispatch', 'false'); out('armed', 'false'); out('failed', '');
+            process.exit(0);
+          }
           const body = i.body || '';
           const acSec = /##\s*(acceptance criteria|ac)\b/i.test(body)
             ? body.split(/##\s*(?:acceptance criteria|ac)\b/i)[1] || '' : '';
@@ -74,24 +115,28 @@ jobs:
             'R2 AC section present': acSec.trim().length > 0,
             'R3 ≥1 AC item': acItems >= 1,
             'R4 non-trivial body': body.trim().length >= 120,
-            'R5 no skip-label': !labels.some(l => ['epic','wontfix','invalid','duplicate','question','dependencies','needs-human','scc:not-ready'].includes(l)),
+            'R5 no skip-label': !labels.some(l => skip.includes(l)),
             'R6 no TBD in AC': !/\bTBD\b|\bTODO\b/i.test(acSec)
           };
           const failed = Object.entries(checks).filter(([, ok]) => !ok).map(([k]) => k);
           console.log('DoR:', JSON.stringify(checks, null, 0));
-          fs.writeFileSync(process.env.GITHUB_OUTPUT, `dispatch=${failed.length ? 'false' : 'true'}\nfailed=${failed.join('|')}\n`);
+          out('dispatch', failed.length ? 'false' : 'true'); out('armed', 'true'); out('failed', failed.join('|'));
           NODE
 
       - name: Outcome → label + comment
+        if: steps.dor.outputs.armed == 'true'
         env:
           PASS: ${{ steps.dor.outputs.dispatch }}
           FAILED: ${{ steps.dor.outputs.failed }}
+          TRIGGER: ${{ steps.contract.outputs.trigger_label }}
+          QUEUED: ${{ steps.contract.outputs.label_queued }}
+          NOT_READY: ${{ steps.contract.outputs.label_not_ready }}
         run: |
           set -euo pipefail
           if [ "$PASS" = "true" ]; then
-            gh issue edit "$ISSUE" -R "$REPO" --add-label "scc:queued"
+            gh issue edit "$ISSUE" -R "$REPO" --add-label "$QUEUED"
             gh issue comment "$ISSUE" -R "$REPO" --body "✅ **AI-SDLC intake:** DoR passed — queued for implementation. Follow the opened PR for progress."
           else
-            gh issue edit "$ISSUE" -R "$REPO" --add-label "scc:not-ready"
+            gh issue edit "$ISSUE" -R "$REPO" --add-label "$NOT_READY"
             gh issue comment "$ISSUE" -R "$REPO" --body "🛡️ **AI-SDLC intake:** Definition-of-Ready failed: \`$FAILED\` — see spec/definition-of-ready.md. Refine and re-apply \`$TRIGGER\`."
           fi

@@ -3,8 +3,10 @@
 # Ports the Hermes pr_merger decision table (spec/risk-taxonomy.md):
 #   green+mergeable → squash+delete-branch; failing checks → bounded repair
 #   signal; pending > cap or conflicts → needs-human escalation.
-# Caller: on check_run.completed / pull_request events, or as a step in a
-# scheduled poll.
+# Caller: on check_run.completed / pull_request events, or per PR from the
+# scheduled stall-sweep (ai-sdlc-sweep.yml). Repair budget, pending cap,
+# merge method, skip labels and the escalation label come from the resolved
+# .ai-sdlc.yaml contract (issue #22); inputs are override-only.
 name: ai-sdlc-automerge
 
 on:
@@ -17,15 +19,21 @@ on:
         type: number
         required: true
       max_repairs:
-        description: 'repair rounds before escalation'
+        description: 'repair rounds before escalation — override; -1 = .ai-sdlc.yaml merge.max_repairs'
         type: number
-        default: 3
+        default: -1
       pending_max_minutes:
+        description: 'pending-checks cap before escalation — override; -1 = .ai-sdlc.yaml merge.pending_max_minutes'
         type: number
-        default: 60
+        default: -1
       merge_method:
+        description: 'squash | merge | rebase — override; empty = .ai-sdlc.yaml merge.method'
         type: string
-        default: 'squash'
+        default: ''
+      base:
+        description: 'ref to read .ai-sdlc.yaml from'
+        type: string
+        default: 'main'
     outputs:
       action:
         description: 'merged | repair-signaled | escalated | held | skipped'
@@ -38,9 +46,6 @@ env:
   GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
   REPO: ${{ inputs.repo }}
   PR: ${{ inputs.pr_number }}
-  MAX_REPAIRS: ${{ inputs.max_repairs }}
-  PENDING_MAX: ${{ inputs.pending_max_minutes }}
-  METHOD: ${{ inputs.merge_method }}
 
 permissions:
   contents: write
@@ -58,18 +63,48 @@ jobs:
     outputs:
       action: ${{ steps.eval.outputs.action }}
     steps:
+      - name: Resolve contract (.ai-sdlc.yaml)
+        id: contract
+        uses: os-santiago/ai-sdlc/.github/actions/load-config@main
+        with:
+          repo: ${{ inputs.repo }}
+          ref: ${{ inputs.base }}
+          checkout: 'true'
+          token: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          overrides: >-
+            {"merge.max_repairs": ${{ inputs.max_repairs }},
+             "merge.pending_max_minutes": ${{ inputs.pending_max_minutes }},
+             "merge.method": ${{ toJSON(inputs.merge_method) }}}
+
       - name: Evaluate merge gate
         id: eval
+        env:
+          PENDING_MAX: ${{ steps.contract.outputs.pending_max_minutes }}
+          SKIP_LABELS: ${{ steps.contract.outputs.merge_skip_labels }}
+          ESCALATION: ${{ steps.contract.outputs.escalation_label }}
         run: |
           set -euo pipefail
-          gh pr view "$PR" -R "$REPO" --json number,title,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,labels,createdAt > pr.json
-          gh pr checks "$PR" -R "$REPO" --json name,state,conclusion > checks.json || true
+          # GitHub computes `mergeable` lazily; an idle PR often reports
+          # UNKNOWN on first read. Re-poll a few times before deciding.
+          for _ in 1 2 3 4; do
+            gh pr view "$PR" -R "$REPO" --json number,title,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,labels,createdAt,comments > pr.json
+            [ "$(jq -r .mergeable pr.json)" != "UNKNOWN" ] && break
+            sleep 5
+          done
+          # `gh pr checks --json` exposes `bucket` (pass|fail|pending|skipping|cancel),
+          # not `conclusion`. "no checks reported" is the only tolerated error —
+          # any other failure must not degrade into a no-checks merge.
+          rc=0; gh pr checks "$PR" -R "$REPO" --json name,state,bucket > checks.json 2> checks.err || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            if grep -qi 'no checks reported' checks.err; then echo '[]' > checks.json
+            else cat checks.err >&2; exit 1; fi
+          fi
           node - <<'NODE'
           const fs = require('fs');
           const pr = JSON.parse(fs.readFileSync('pr.json', 'utf8'));
           const checks = JSON.parse(fs.readFileSync('checks.json', 'utf8') || '[]');
           const labels = (pr.labels || []).map(l => l.name);
-          const SKIP = ['needs-human', 'hold', 'do-not-merge', 'wip'];
+          const SKIP = [...JSON.parse(process.env.SKIP_LABELS || '[]'), process.env.ESCALATION].filter(Boolean);
           const out = (k, v) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${k}=${v}\n`);
 
           // Decision table (spec/risk-taxonomy.md):
@@ -80,10 +115,25 @@ jobs:
           else if (labels.includes('pr:risk-critical') && !labels.includes('pr:risk-accepted')) { action = 'held'; reason = 'risk-critical-unaccepted'; }
           else if (pr.mergeable === 'CONFLICTING') { action = 'escalated'; reason = 'conflict'; }
           else {
-            const failing = checks.filter(c => c.conclusion === 'FAILURE' || c.conclusion === 'TIMED_OUT' || c.conclusion === 'ACTION_REQUIRED');
-            const pending = checks.filter(c => !c.conclusion);
+            const failing = checks.filter(c => c.bucket === 'fail' || c.bucket === 'cancel');
+            const pending = checks.filter(c => c.bucket === 'pending');
             const ageMin = (Date.now() - new Date(pr.createdAt)) / 60000;
-            if (failing.length) { action = 'repair-signaled'; reason = `failing:${failing.map(c => c.name).join(',')}`; }
+            // Repair signals carry a per-head-SHA marker so repeated polls
+            // (scheduled sweep) neither spam nor loop forever.
+            const MARK = /<!-- ai-sdlc:repair-signal sha=([0-9a-f]+) -->/;
+            const signals = (pr.comments || []).map(c => ({ m: MARK.exec(c.body || ''), at: c.createdAt })).filter(x => x.m);
+            const signaledShas = new Set(signals.map(x => x.m[1]));
+            const current = signals.filter(x => x.m[1] === pr.headRefOid);
+            if (failing.length) {
+              const names = failing.map(c => c.name).join(',');
+              if (current.length) {
+                const sinceMin = (Date.now() - new Date(current[0].at)) / 60000;
+                if (sinceMin > Number(process.env.PENDING_MAX)) { action = 'escalated'; reason = `repair-stalled:${names}`; }
+                else { action = 'held'; reason = 'repair-awaiting'; }
+              }
+              else if (signaledShas.size >= Number(process.env.MAX_REPAIRS)) { action = 'escalated'; reason = `repairs-exhausted:${names}`; }
+              else { action = 'repair-signaled'; reason = `failing:${names}`; }
+            }
             else if (pending.length && ageMin > Number(process.env.PENDING_MAX)) { action = 'escalated'; reason = 'pending-timeout'; }
             else if (pending.length) { action = 'held'; reason = 'pending'; }
             else if (pr.mergeable === 'MERGEABLE' && checks.length) { action = 'merged'; reason = 'green'; }
@@ -96,6 +146,8 @@ jobs:
 
       - name: Merge on green
         if: steps.eval.outputs.action == 'merged'
+        env:
+          METHOD: ${{ steps.contract.outputs.merge_method }}
         run: |
           set -euo pipefail
           gh pr merge "$PR" -R "$REPO" --"$METHOD" --delete-branch
@@ -104,15 +156,19 @@ jobs:
         if: steps.eval.outputs.action == 'escalated'
         env:
           REASON: ${{ steps.eval.outputs.reason }}
+          ESCALATION: ${{ steps.contract.outputs.escalation_label }}
         run: |
           set -euo pipefail
-          gh pr edit "$PR" -R "$REPO" --add-label needs-human
-          gh pr comment "$PR" -R "$REPO" --body "⚠️ **AI-SDLC merge gate escalated** — reason: \`$REASON\`. Human review required; remove \`needs-human\` to hand control back."
+          gh pr edit "$PR" -R "$REPO" --add-label "$ESCALATION"
+          gh pr comment "$PR" -R "$REPO" --body "⚠️ **AI-SDLC merge gate escalated** — reason: \`$REASON\`. Human review required; remove \`$ESCALATION\` to hand control back."
 
       - name: Signal repair need
         if: steps.eval.outputs.action == 'repair-signaled'
         env:
           REASON: ${{ steps.eval.outputs.reason }}
+          MAX_REPAIRS: ${{ steps.contract.outputs.max_repairs }}
         run: |
           set -euo pipefail
-          gh pr comment "$PR" -R "$REPO" --body "🔧 **AI-SDLC:** checks failing (\`$REASON\`) — dispatch a bounded repair pass (see docs/runtime.md: repair loop, max $MAX_REPAIRS rounds)."
+          SHA=$(jq -r .headRefOid pr.json)
+          gh pr comment "$PR" -R "$REPO" --body "🔧 **AI-SDLC:** checks failing (\`$REASON\`) — dispatch a bounded repair pass (see docs/runtime.md: repair loop, max $MAX_REPAIRS rounds).
+          <!-- ai-sdlc:repair-signal sha=$SHA -->"
