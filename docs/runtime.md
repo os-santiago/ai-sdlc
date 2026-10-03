@@ -52,15 +52,33 @@ jobs:
 | Input | Default | Purpose |
 |---|---|---|
 | `repo`, `issue_number` | — | target |
-| `model` | `auto/best-coding` | engine model route |
+| `model` | `openai/gpt-4o` | engine model id (provider-native) |
+| `provider_base_url` | `https://models.github.ai/inference` | OpenAI-compatible inference endpoint |
 | `base` | `main` | base branch |
 | `max_seconds` | `900` | engine wall-clock budget (exit 22 on cap) |
 | `max_steps` | `200` | engine tool-step budget |
 
 | Secret | Purpose |
 |---|---|
-| `AI_SDLC_TOKEN` | PAT/App token — required when `GITHUB_TOKEN` can't reach the repo or when PR-opened CI must trigger (`GITHUB_TOKEN`-auth pushes don't fire `pull_request`/`push` events) |
-| `MODEL_API_KEY` | engine inference key (`OPENAI_API_KEY` surface) |
+| `AI_SDLC_TOKEN` | PAT/App token — required when `GITHUB_TOKEN` can't reach the repo or when PR-opened CI must trigger (`GITHUB_TOKEN`-auth pushes don't fire `pull_request`/`push` events). The `ai-sdlc-runtime` GitHub App (#26) is the intended source |
+| `MODEL_API_KEY` | optional — direct provider key. When absent, the engine falls back to `GITHUB_TOKEN` against GitHub Models (zero-secret path; callers must grant `models: read`) |
+
+## Provider resolution
+
+The implement step writes `~/.sc-agent/config.json` on the runner — the
+engine's single source of truth (no env overrides; lesson carried from the
+VPS worker: conflicting flag/env layers caused silent permission loss).
+Resolution order:
+
+1. `MODEL_API_KEY` set → `provider_base_url` + `model` as given (direct
+   provider: NVIDIA, OpenAI, any OpenAI-compatible endpoint).
+2. No `MODEL_API_KEY` → **GitHub Models** default (`models.github.ai`,
+   `GITHUB_TOKEN` as key, caller needs the `models: read` permission).
+
+OmniRoute route names (`auto/*`, `devin/*`) are Hermes control-plane only —
+unreachable from GHA runners by design (ADR-0001). Per-repo selection will
+come from `.ai-sdlc.yaml` `model.primary`/`fallback` once contract
+resolution lands (#22); inputs are the override surface today.
 
 ## Engine contract
 

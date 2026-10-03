@@ -68,8 +68,11 @@ labels:
   no-changes: scc:no-changes
 
 model:
-  primary: devin/swe-2-high      # OmniRoute devin provider (SWE-2, free-tier) — auto/best-coding upstreams quota-dead until ~2026-10-04
-  fallback: devin/swe-2-medium
+  # GHA-native runtime defaults to GitHub Models (zero-secret baseline).
+  # OmniRoute route names (auto/*, devin/*) are Hermes control-plane only —
+  # unreachable from GHA runners by design (ADR-0001).
+  primary: openai/gpt-4o
+  fallback: openai/gpt-4o-mini
 
 engine:
   name: scc
