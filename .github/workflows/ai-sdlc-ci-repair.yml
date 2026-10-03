@@ -400,7 +400,7 @@ jobs:
             pr: Number(e.PR), attempt: Number(e.ATTEMPT), maxRepairs: Number(e.MAX_REPAIRS),
             headSha: e.HEAD_SHA, commit: e.COMMIT || null, engineExitCode: code, outcome,
             failure: { signature: failure.signature, rootCause: failure.rootCause },
-            failingChecks: failure.checks, engineSteps: engine.steps ?? engine.toolSteps ?? null,
+            failingChecks: failure.checks, engineToolCalls: engine.tool_calls_total ?? null, engineIterations: engine.iterations ?? null,
             run: e.RUN_URL,
           };
           fs.writeFileSync(`${W}/ci-repair-manifest.json`, JSON.stringify(manifest, null, 2));
