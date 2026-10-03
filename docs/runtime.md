@@ -11,6 +11,7 @@ thin caller workflow + `.ai-sdlc.yaml` and gets the autonomous loop.
 | `ai-sdlc-implement.yml` | `scc` headless run → branch → PR (`Closes #N`) + manifest/audit artifacts | called on `scc:queued` |
 | `ai-sdlc-automerge.yml` | merge-gate decision table (spec/risk-taxonomy.md): green+mergeable → squash+delete; failing → repair signal; pending/conflict → `needs-human` | `check_run.completed` / `pull_request` / called |
 | `ai-sdlc-sweep.yml` | scheduled stall-sweep: enumerates open pipeline PRs and feeds each to `ai-sdlc-automerge.yml` — no green-idle PRs | `schedule` (every 30 min) / `workflow_dispatch` |
+| `ai-sdlc-ci-repair.yml` | bounded repair loop on red checks: failing-check log tails → `scc` headless on the PR head → commit + push; one comment per attempt; `needs-human` after `max_repairs` | `check_run.completed` (failure) / `workflow_dispatch` / automerge `repair-signaled` |
 | `ai-sdlc-verify.yml` | post-merge verify commands (resolved contract `verify.commands`); failure → issue (or revert when enabled) | post-merge |
 
 Every stage first runs the `load-config` composite action
@@ -168,6 +169,93 @@ unreachable from GHA runners by design (ADR-0001). Per-repo selection comes
 from the resolved contract (`model.primary`/`model.fallback`); workflow
 inputs are the override surface.
 
+### ai-sdlc-ci-repair
+| Input | Default | Purpose |
+|---|---|---|
+| `repo`, `pr_number` | — | target PR |
+| `max_repairs` | `3` | attempts per PR before `needs-human` (mirror `.ai-sdlc.yaml` `merge.max_repairs`) |
+| `model` | `openai/gpt-4o` | engine model id (provider-native) |
+| `provider_base_url` | `https://models.github.ai/inference` | OpenAI-compatible inference endpoint |
+| `max_seconds` / `max_steps` | `900` / `200` | engine budgets (same contract as implement) |
+| `branch_pattern` | `^(feat\|fix)/issue-[0-9]+` | ERE the head branch must match (pipeline PRs only); empty = any same-repo branch |
+| `max_failed_checks` | `5` | failing checks whose output enters the prompt |
+| `log_tail_lines` / `log_max_bytes` | `150` / `12000` | per-check log tail bounds |
+
+Outputs: `action` (`repaired` \| `escalated` \| `skipped`) and `reason`.
+Secrets: same as implement. `AI_SDLC_TOKEN` is required for the loop to
+close — a fix pushed with `GITHUB_TOKEN` does not re-trigger CI (the attempt
+comment flags this). Callers grant `models: read` for the GitHub Models
+fallback.
+
+## Repair loop (`ai-sdlc-ci-repair.yml`)
+
+Implements the merge-gate row *checks red → repair loop (bounded) →
+exhausted → ESCALATE* (`spec/risk-taxonomy.md`). One invocation = at most
+one attempt:
+
+1. **Guard** — skip unless the PR is open, not a draft, carries no skip
+   label (`needs-human`/`hold`/`do-not-merge`/`wip`), its head lives in the
+   base repo (fork heads never run with secrets), the head branch matches
+   `branch_pattern`, and at least one check run (latest per name) or commit
+   status on the head SHA is red. A head SHA already attempted is skipped.
+2. **Budget** — attempts = `<!-- ai-sdlc:ci-repair attempt=N sha=… -->`
+   markers on the PR from bots/collaborators. `attempts >= max_repairs` →
+   `needs-human` + comment with cause, no engine run.
+3. **Context** — failing check names + bounded log tails (Actions job logs;
+   check-run output for other apps), wrapped as untrusted data in the
+   repair prompt (`spec/injection-defense.md`).
+4. **Repair** — checkout the PR head SHA (`persist-credentials: false`),
+   same `scc` build + `Configure scc engine provider` step as implement,
+   headless run with `--prompt-file --no-commit --audit-log --summary-file
+   --max-seconds --max-steps`.
+5. **Push** — real mutations (excluding `.github/workflows/`) are committed
+   and pushed (non-force) to the PR head branch; the new head re-runs CI,
+   and the next red result triggers the next attempt.
+6. **Audit** — exactly one marker comment per attempt (attempt N/M, failing
+   checks, outcome, failure signature, run link) plus artifact
+   `ai-sdlc-ci-repair-<pr>-attempt-<n>` with `ci-repair-manifest.json`
+   (`failure: {signature, rootCause}` for future runbook matching), prompt,
+   audit log and engine manifest.
+7. **Escalate** — any attempt that cannot push a fix (engine no-op/failure,
+   push rejected) labels `needs-human` with the cause immediately, since
+   nothing would re-trigger the loop. Removing the label hands control back.
+
+Caller wiring (event plumbing is the caller's job):
+
+```yaml
+# .github/workflows/ai-sdlc-repair.yml in the consuming repo
+name: ai-sdlc-repair
+on:
+  check_run: { types: [completed] }
+  workflow_dispatch:
+    inputs:
+      pr: { type: number, required: true }
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+  checks: read
+  statuses: read
+  models: read
+
+jobs:
+  ci-repair:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.check_run.conclusion == 'failure' &&
+       github.event.check_run.pull_requests[0] != null)
+    uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-ci-repair.yml@main
+    with:
+      repo: ${{ github.repository }}
+      pr_number: ${{ github.event.inputs.pr || github.event.check_run.pull_requests[0].number }}
+      max_repairs: 3
+    secrets: inherit
+```
+
+The automerge gate's `repair-signaled` action points at this workflow as
+its dispatch target.
 ## Stall-sweep (`ai-sdlc-sweep.yml`)
 
 The merge gate is event-driven, so a missed event (or a PR that went green
@@ -269,9 +357,11 @@ issue labels:
 
 Every mutable step is bounded: job `timeout-minutes`, engine
 `max-seconds`/`max-steps`, per-issue `concurrency` group
-(`cancel-in-progress`). The audit log + run manifest land as workflow
-artifacts (`ai-sdlc-run-<issue>`, plus `ai-sdlc-run.json` and the
-`*.primary.*` files when fallback fired) for postmortem analysis.
+(`cancel-in-progress`), per-PR repair budget (`max_repairs`, queued
+concurrency so every attempt records its comment). The audit log + run
+manifest land as workflow artifacts (`ai-sdlc-run-<issue>`, plus
+`ai-sdlc-run.json` and the `*.primary.*` files when fallback fired) for
+postmortem analysis.
 
 ## Note on workflow-file edits
 
