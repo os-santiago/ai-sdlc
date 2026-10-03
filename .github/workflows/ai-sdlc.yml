@@ -1,8 +1,7 @@
 # Self-dogfooding caller: this repo consumes its own reusable runtime.
 # An issue labeled `ready-to-implement` → DoR intake → implement → PR.
-# Requires repo secrets: MODEL_API_KEY (engine inference). Without it the
-# implement job fails fast and the issue lands on scc:failed — opt-in by
-# label only.
+# Engine inference defaults to GitHub Models (GITHUB_TOKEN, `models: read`);
+# repo secret MODEL_API_KEY switches to a direct provider — opt-in by label.
 name: ai-sdlc (self)
 
 on:
@@ -13,6 +12,7 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
+  models: read
 
 jobs:
   intake:
