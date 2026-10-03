@@ -74,7 +74,6 @@ v1 resolves **defaults → repo → input** only. The org-baseline layer of
 `spec/org-policy.md` (floors/ceilings, union semantics, autonomy caps) is a
 documented no-op hook: the `org-config` input is accepted, emits a
 warning, and `contract.json` records `org_policy: not-applied`.
->>>>>>> origin/main
 
 ## Caller example
 
