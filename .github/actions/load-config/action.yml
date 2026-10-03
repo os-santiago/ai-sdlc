@@ -1,0 +1,154 @@
+# load-config — AI-SDLC contract resolution (issue #22)
+#
+# Every runtime stage runs this first. It locates the target repo's
+# .ai-sdlc.yaml, validates it (spec/ai-sdlc.schema.json + secret scan via
+# tools/validate-ai-sdlc-config.sh), resolves it against runtime defaults
+# and workflow-input overrides, and emits the resolved contract as step
+# outputs plus a contract.json artifact.
+#
+# Precedence: workflow input (override) > .ai-sdlc.yaml > runtime defaults.
+# Missing/invalid contract → the step fails with an `scc:config-error`
+# annotation and writes the reason to "$RUNNER_TEMP/ai-sdlc-contract/error.txt".
+name: ai-sdlc load-config
+description: Resolve and validate the per-repo .ai-sdlc.yaml contract
+
+inputs:
+  repo:
+    description: 'owner/repo whose contract is resolved (used for checkout and provenance)'
+    default: ${{ github.repository }}
+  ref:
+    description: 'ref to read the contract from (empty = default branch). Use a trusted ref (base), never a PR head.'
+    default: ''
+  token:
+    description: 'token for the sparse checkout'
+    default: ${{ github.token }}
+  checkout:
+    description: '"true" = sparse-checkout the contract from repo@ref; "false" = read it from `path` (repo already checked out)'
+    default: 'false'
+  path:
+    description: 'directory holding the checked-out repo when checkout=false'
+    default: '.'
+  config:
+    description: 'contract path relative to the repo root'
+    default: '.ai-sdlc.yaml'
+  overrides:
+    description: 'JSON object of dotted contract paths → workflow-input values; null / "" / negative numbers mean "unset"'
+    default: '{}'
+  org-config:
+    description: 'RESERVED (no-op): org baseline .ai-sdlc.yaml — org-layer resolution per spec/org-policy.md is not implemented yet'
+    default: ''
+  artifact:
+    description: '"true" = upload contract.json as a workflow artifact'
+    default: 'true'
+  artifact-name:
+    description: 'artifact name (default: ai-sdlc-contract-<job>-<run_attempt>)'
+    default: ''
+
+outputs:
+  path:
+    description: 'absolute path of the resolved contract.json'
+    value: ${{ steps.resolve.outputs.path }}
+  json:
+    description: 'resolved contract (compact JSON, includes _sources provenance)'
+    value: ${{ steps.resolve.outputs.json }}
+  spec:
+    value: ${{ steps.resolve.outputs.spec }}
+  autonomy_level:
+    value: ${{ steps.resolve.outputs.autonomy_level }}
+  trigger_label:
+    value: ${{ steps.resolve.outputs.trigger_label }}
+  skip_labels:
+    description: 'triggers.skip_labels (JSON array)'
+    value: ${{ steps.resolve.outputs.skip_labels }}
+  authorized_labelers:
+    description: 'triggers.authorized_labelers (JSON array)'
+    value: ${{ steps.resolve.outputs.authorized_labelers }}
+  model_primary:
+    value: ${{ steps.resolve.outputs.model_primary }}
+  model_fallback:
+    description: 'empty when no fallback is configured'
+    value: ${{ steps.resolve.outputs.model_fallback }}
+  max_seconds:
+    value: ${{ steps.resolve.outputs.max_seconds }}
+  max_steps:
+    value: ${{ steps.resolve.outputs.max_steps }}
+  verify_commands:
+    description: 'verify.commands, newline-separated'
+    value: ${{ steps.resolve.outputs.verify_commands }}
+  verify_timeout_seconds:
+    value: ${{ steps.resolve.outputs.verify_timeout_seconds }}
+  required_checks:
+    description: 'verify.required_checks (JSON array)'
+    value: ${{ steps.resolve.outputs.required_checks }}
+  merge_method:
+    value: ${{ steps.resolve.outputs.merge_method }}
+  merge_delete_branch:
+    value: ${{ steps.resolve.outputs.merge_delete_branch }}
+  max_repairs:
+    value: ${{ steps.resolve.outputs.max_repairs }}
+  pending_max_minutes:
+    value: ${{ steps.resolve.outputs.pending_max_minutes }}
+  merge_skip_labels:
+    description: 'merge.skip_labels (JSON array)'
+    value: ${{ steps.resolve.outputs.merge_skip_labels }}
+  escalation_label:
+    value: ${{ steps.resolve.outputs.escalation_label }}
+  labels:
+    description: 'flow-state labels map (JSON object)'
+    value: ${{ steps.resolve.outputs.labels }}
+  label_queued:
+    value: ${{ steps.resolve.outputs.label_queued }}
+  label_pr_opened:
+    value: ${{ steps.resolve.outputs.label_pr_opened }}
+  label_failed:
+    value: ${{ steps.resolve.outputs.label_failed }}
+  label_not_ready:
+    value: ${{ steps.resolve.outputs.label_not_ready }}
+  label_no_changes:
+    value: ${{ steps.resolve.outputs.label_no_changes }}
+
+runs:
+  using: composite
+  steps:
+    - name: Sparse-checkout contract
+      if: inputs.checkout == 'true'
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.repo }}
+        ref: ${{ inputs.ref }}
+        token: ${{ inputs.token }}
+        path: .ai-sdlc-contract-src
+        fetch-depth: 1
+        persist-credentials: false
+        sparse-checkout: ${{ inputs.config }}
+        sparse-checkout-cone-mode: false
+
+    - name: Validate + resolve contract
+      id: resolve
+      shell: bash
+      env:
+        CONTRACT_ROOT: ${{ inputs.checkout == 'true' && '.ai-sdlc-contract-src' || inputs.path }}
+        CONTRACT_FILE: ${{ inputs.config }}
+        OVERRIDES: ${{ inputs.overrides }}
+        ORG_CONFIG: ${{ inputs.org-config }}
+        SOURCE_REPO: ${{ inputs.repo }}
+        SOURCE_REF: ${{ inputs.ref }}
+        OUT_DIR: ${{ runner.temp }}/ai-sdlc-contract
+      run: bash "$GITHUB_ACTION_PATH/resolve.sh"
+
+    - name: Clean sparse checkout
+      if: always() && inputs.checkout == 'true'
+      shell: bash
+      run: rm -rf .ai-sdlc-contract-src
+
+    - name: Upload contract.json
+      if: always() && inputs.artifact == 'true'
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name || format('ai-sdlc-contract-{0}-{1}', github.job, github.run_attempt) }}
+        path: |
+          ${{ runner.temp }}/ai-sdlc-contract/contract.json
+          ${{ runner.temp }}/ai-sdlc-contract/error.txt
+        if-no-files-found: ignore
+        retention-days: 14
