@@ -115,4 +115,6 @@ jobs:
           REASON: ${{ steps.eval.outputs.reason }}
         run: |
           set -euo pipefail
-          gh pr comment "$PR" -R "$REPO" --body "🔧 **AI-SDLC:** checks failing (\`$REASON\`) — dispatch a bounded repair pass (see docs/runtime.md: repair loop, max $MAX_REPAIRS rounds)."
+          # Dispatch target: ai-sdlc-ci-repair.yml (bounded repair loop, issue #27).
+          # This step only signals; wiring the repair call is the caller's job.
+          gh pr comment "$PR" -R "$REPO" --body "🔧 **AI-SDLC:** checks failing (\`$REASON\`) — dispatch a bounded repair pass via [\`ai-sdlc-ci-repair.yml\`](https://github.com/os-santiago/ai-sdlc/blob/main/.github/workflows/ai-sdlc-ci-repair.yml) (max $MAX_REPAIRS attempts, then \`needs-human\`; see docs/runtime.md: repair loop)."
