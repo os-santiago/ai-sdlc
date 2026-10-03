@@ -116,11 +116,18 @@ jobs:
 |---|---|---|
 | `repo`, `issue_number` | — | target |
 | `model` | `''` → `model.primary` | engine model route |
-| `fallback_model` | `''` → `model.fallback` | one-shot fallback on provider failure (exit 20) |
+| `fallback_model` | `''` → `model.fallback` | one-shot fallback on provider/auth failure (exit 20/21) — see [Model fallback](#model-fallback) |
 | `provider_base_url` | `https://models.github.ai/inference` | OpenAI-compatible inference endpoint |
 | `base` | `main` | base branch (contract is read from here) |
-| `max_seconds` | `-1` → `engine.max_seconds` | engine wall-clock budget (exit 22 on cap) |
-| `max_steps` | `-1` → `engine.max_steps` | engine tool-step budget |
+| `max_seconds` | `-1` → `engine.max_seconds` | engine wall-clock budget per run (exit 22 on cap) |
+| `max_steps` | `-1` → `engine.max_steps` | engine tool-step budget per run |
+
+| Output | Purpose |
+|---|---|
+| `exit_code` | final engine exit (fallback run when it fired, else primary) |
+| `model` | model id of the run that produced `exit_code` |
+| `primary_exit` | engine exit of the primary-model run |
+| `fallback_used` | `true` when the fallback run fired |
 
 ### ai-sdlc-automerge
 | Input | Default | Purpose |
@@ -289,6 +296,47 @@ Copy `ai-sdlc-sweep.yml` into the repo and point the `gate` job at
 made with `GITHUB_TOKEN` don't fire `push` workflows (e.g. post-merge
 verify) — provide `AI_SDLC_TOKEN` if that matters.
 
+## Model fallback
+
+A single dead/quota-exhausted provider must not stall the pipeline. The
+engine step runs `model` first; on a provider-class failure it gets
+**exactly one** fresh retry with `fallback_model`:
+
+| Primary exit | Action |
+|---|---|
+| 20 (provider) / 21 (auth) | one fallback run — unless `fallback_model` is empty or equals `model` |
+| 0 / 10 / 22 (budget) / 23 (livelock) / 1 | final — never retried (not provider problems) |
+
+The fallback run is fresh and bounded:
+
+- primary artifacts are kept as `scc-audit.primary.jsonl` /
+  `scc-manifest.primary.json`; the fallback writes the canonical names;
+- the workspace is reset (`git reset --hard` + `git clean`, keeping the
+  prompt/issue/`scc-*` files) so partial edits from the failed attempt
+  don't leak into the retry;
+- `~/.sc-agent/config.json` is re-rendered with the fallback model
+  (`.model.model`) — still the single source of truth, no `SC_MODEL`;
+- it gets its own `max_seconds`/`max_steps`. There is no loop: total engine
+  time ≤ 2 × `max_seconds`, and the job `timeout-minutes` caps everything.
+
+If the fallback also exits 20/21 the issue gets `scc:failed` **and**
+`needs-human` plus a comment naming both models/exits (escalation). Any
+other fallback exit is labelled like a primary exit.
+
+Every run writes `ai-sdlc-run.json` (artifact + step summary; the PR body
+quotes it):
+
+```json
+{"v": 1, "model": "openai/gpt-4o-mini", "exit_code": 0,
+ "primary_model": "openai/gpt-4o", "primary_exit": 20,
+ "fallback_model": "openai/gpt-4o-mini", "fallback_used": true,
+ "fallback_reason": "provider", "fallback_exit": 0,
+ "budget_per_run": {"max_seconds": 900, "max_steps": 200}}
+```
+
+`fallback_model` will be fed from `.ai-sdlc.yaml` `model.fallback` once
+contract resolution lands (#22); the input is the override surface today.
+
 ## Engine contract
 
 `sc-agent-cli` (`scc`) is built from source on the runner — it is not
@@ -301,14 +349,19 @@ issue labels:
 | 0 | implemented + PR opened | `scc:pr-opened` |
 | 10 | no workspace mutations (clean no-op) | `scc:no-changes` |
 | 20/21/22/23/1 | provider/auth/budget/livelock/fatal | `scc:failed` |
+| 20/21 after fallback | provider/auth on both models | `scc:failed` + `needs-human` |
+
+`exit_code` is the final run's code (see [Model fallback](#model-fallback)).
 
 ## Bounds
 
 Every mutable step is bounded: job `timeout-minutes`, engine
 `max-seconds`/`max-steps`, per-issue `concurrency` group
 (`cancel-in-progress`), per-PR repair budget (`max_repairs`, queued
-concurrency so every attempt records its comment). The audit log + run manifest land as workflow
-artifacts (`ai-sdlc-run-<issue>`) for postmortem analysis.
+concurrency so every attempt records its comment). The audit log + run
+manifest land as workflow artifacts (`ai-sdlc-run-<issue>`, plus
+`ai-sdlc-run.json` and the `*.primary.*` files when fallback fired) for
+postmortem analysis.
 
 ## Note on workflow-file edits
 
