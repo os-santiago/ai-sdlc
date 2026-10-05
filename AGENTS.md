@@ -85,10 +85,14 @@ The cutover executes only after the evidence gate in epic #30 passes.
 ## Validate before opening a PR
 
 ```bash
-# YAML sanity (CI runs actionlint)
-python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ai-sdlc-implement.yml'))"
+# Full repo check — also what `npm test` / `npm run build` run
+bash tools/validate-repo.sh
 
-# Contract validation
+# Workflow lint — same pinned release CI runs (wrapper fetches it on demand;
+# `bash actionlint -color` if a checkout lost the exec bit)
+./actionlint -color
+
+# Contract validation only
 bash tools/validate-ai-sdlc-config.sh .ai-sdlc.yaml spec/ai-sdlc.schema.json
 ```
 
