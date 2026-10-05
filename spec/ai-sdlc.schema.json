@@ -130,7 +130,57 @@
     "labels": {
       "type": "object",
       "additionalProperties": { "type": "string" },
-      "description": "Flow-state label names (scc:* issue flow, pr:* PR states). Keys map canonical states to label names; repos may rename without forking the runtime."
+      "description": "Flow-state label names (scc:* issue flow, pr:* PR states). Keys map canonical states to label names; repos may rename without forking the runtime. `state_machine` is a reserved key holding the issue-label exclusivity/ownership matrix (spec/labels.md).",
+      "properties": {
+        "state_machine": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Issue-label state machine matrix (spec/labels.md): forbidden co-occurrences + per-label write ownership. Janitors evaluate it on drift; the effective forbidden set also includes every triggers.skip_labels entry vetoing triggers.issue_label.",
+          "properties": {
+            "veto_pairs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["winner", "loser"],
+                "properties": {
+                  "winner": {
+                    "type": "string",
+                    "description": "Label that survives when both co-occur (the blocker/run-state)."
+                  },
+                  "loser": {
+                    "type": "string",
+                    "description": "Label stripped by the winner's actor, or by a repairing janitor on drift."
+                  }
+                }
+              },
+              "description": "Forbidden label co-occurrences. An observed pair is a pipeline defect: veto + repair + log, never a silent skip."
+            },
+            "owners": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "set_by": {
+                    "type": "array", "items": { "type": "string" },
+                    "description": "Actor tokens allowed to apply the label (see spec/labels.md actor vocabulary)."
+                  },
+                  "cleared_by": {
+                    "type": "array", "items": { "type": "string" },
+                    "description": "Actor tokens allowed to remove the label. `human`, `janitor`, and a veto pair's winning actor are always implicit."
+                  },
+                  "clear_guard": {
+                    "type": "string",
+                    "description": "Label that must be present before a non-human clears this one (e.g. policy:accepted for a policy-fired needs-human)."
+                  }
+                }
+              },
+              "description": "Label → write-authority map (actor tokens per spec/labels.md)."
+            }
+          }
+        }
+      }
     },
     "model": {
       "type": "object",

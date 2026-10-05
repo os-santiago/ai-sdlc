@@ -1,0 +1,10 @@
+{
+  "name": "ai-sdlc",
+  "version": "0.0.0",
+  "private": true,
+  "description": "AI-SDLC normative spec + GitHub-Actions-native runtime. Shell/YAML repo — this manifest exists so npm-based tooling (npm ci, npm test, npm run build, actions/setup-node npm cache) has a defined contract. Nothing is compiled; `build` and `test` both run the repo validation suite (tools/validate-repo.sh).",
+  "scripts": {
+    "build": "bash tools/validate-repo.sh",
+    "test": "bash tools/validate-repo.sh"
+  }
+}
