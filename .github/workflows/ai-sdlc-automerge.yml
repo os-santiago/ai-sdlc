@@ -34,6 +34,10 @@ on:
         description: 'ref to read .ai-sdlc.yaml from'
         type: string
         default: 'main'
+      org_config:
+        description: 'org baseline contract ref owner/repo[/path][@ref] — org floor per spec/org-policy.md; empty = repo contract + defaults'
+        type: string
+        default: ''
     outputs:
       action:
         description: 'merged | repair-signaled | escalated | held | skipped'
@@ -71,6 +75,7 @@ jobs:
           ref: ${{ inputs.base }}
           checkout: 'true'
           token: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          org-config: ${{ inputs.org_config }}
           overrides: >-
             {"merge.max_repairs": ${{ inputs.max_repairs }},
              "merge.pending_max_minutes": ${{ inputs.pending_max_minutes }},

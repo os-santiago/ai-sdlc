@@ -1,4 +1,4 @@
-# load-config — AI-SDLC contract resolution (issue #22)
+# load-config — AI-SDLC contract resolution (issue #22, org layer #44)
 #
 # Every runtime stage runs this first. It locates the target repo's
 # .ai-sdlc.yaml, validates it (spec/ai-sdlc.schema.json + secret scan via
@@ -6,7 +6,8 @@
 # and workflow-input overrides, and emits the resolved contract as step
 # outputs plus a contract.json artifact.
 #
-# Precedence: workflow input (override) > .ai-sdlc.yaml > runtime defaults.
+# Precedence: workflow input (override) > .ai-sdlc.yaml > org baseline
+# (spec/org-policy.md, via `org-config`) > runtime defaults.
 # Missing/invalid contract → the step fails with an `scc:config-error`
 # annotation and writes the reason to "$RUNNER_TEMP/ai-sdlc-contract/error.txt".
 name: ai-sdlc load-config
@@ -35,7 +36,7 @@ inputs:
     description: 'JSON object of dotted contract paths → workflow-input values; null / "" / negative numbers mean "unset"'
     default: '{}'
   org-config:
-    description: 'RESERVED (no-op): org baseline .ai-sdlc.yaml — org-layer resolution per spec/org-policy.md is not implemented yet'
+    description: 'org baseline contract reference `owner/repo[/path][@ref]` — org floor merges per spec/org-policy.md; empty = repo contract + defaults. `token` must read the org repo (e.g. an org-installed AI_SDLC_TOKEN).'
     default: ''
   artifact:
     description: '"true" = upload contract.json as a workflow artifact'
@@ -53,6 +54,9 @@ outputs:
     value: ${{ steps.resolve.outputs.json }}
   spec:
     value: ${{ steps.resolve.outputs.spec }}
+  org_policy:
+    description: 'org baseline status: applied | exempt | unavailable | not-applied'
+    value: ${{ steps.resolve.outputs.org_policy }}
   autonomy_level:
     value: ${{ steps.resolve.outputs.autonomy_level }}
   trigger_label:
@@ -123,6 +127,40 @@ runs:
         sparse-checkout: ${{ inputs.config }}
         sparse-checkout-cone-mode: false
 
+    - name: Resolve org baseline ref
+      if: inputs.org-config != ''
+      id: orgref
+      shell: bash
+      env:
+        ORG_CONFIG: ${{ inputs.org-config }}
+      run: |
+        spec="$ORG_CONFIG"; ref=""
+        if [[ "$spec" == *@* ]]; then ref="${spec##*@}"; spec="${spec%@*}"; fi
+        owner="${spec%%/*}"; rest="${spec#*/}"; name="${rest%%/*}"; path=""
+        if [[ "$rest" != "$spec" && "$rest" == */* ]]; then path="${rest#*/}"; fi
+        repo="$owner/$name"
+        if [[ "$spec" != */* ]] || ! [[ "$repo" =~ ^[-A-Za-z0-9_.]+/[-A-Za-z0-9_.]+$ ]]; then
+          echo "::error title=ai-sdlc contract (scc:config-error)::org-config must be owner/repo[/path][@ref] — got: $ORG_CONFIG"
+          mkdir -p "$RUNNER_TEMP/ai-sdlc-contract"
+          echo "malformed org-config input (expected owner/repo[/path][@ref]): $ORG_CONFIG" > "$RUNNER_TEMP/ai-sdlc-contract/error.txt"
+          exit 1
+        fi
+        { echo "repo=$repo"; echo "ref=$ref"; echo "path=${path:-.ai-sdlc.yaml}"; } >> "$GITHUB_OUTPUT"
+
+    - name: Sparse-checkout org baseline
+      if: inputs.org-config != ''
+      continue-on-error: true
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ steps.orgref.outputs.repo }}
+        ref: ${{ steps.orgref.outputs.ref }}
+        token: ${{ inputs.token }}
+        path: .ai-sdlc-org-src
+        fetch-depth: 1
+        persist-credentials: false
+        sparse-checkout: ${{ steps.orgref.outputs.path }}
+        sparse-checkout-cone-mode: false
+
     - name: Validate + resolve contract
       id: resolve
       shell: bash
@@ -131,15 +169,19 @@ runs:
         CONTRACT_FILE: ${{ inputs.config }}
         OVERRIDES: ${{ inputs.overrides }}
         ORG_CONFIG: ${{ inputs.org-config }}
+        ORG_ROOT: .ai-sdlc-org-src
+        ORG_REPO: ${{ steps.orgref.outputs.repo }}
+        ORG_REF: ${{ steps.orgref.outputs.ref }}
+        ORG_PATH: ${{ steps.orgref.outputs.path }}
         SOURCE_REPO: ${{ inputs.repo }}
         SOURCE_REF: ${{ inputs.ref }}
         OUT_DIR: ${{ runner.temp }}/ai-sdlc-contract
       run: bash "$GITHUB_ACTION_PATH/resolve.sh"
 
-    - name: Clean sparse checkout
-      if: always() && inputs.checkout == 'true'
+    - name: Clean sparse checkouts
+      if: always() && (inputs.checkout == 'true' || inputs.org-config != '')
       shell: bash
-      run: rm -rf .ai-sdlc-contract-src
+      run: rm -rf .ai-sdlc-contract-src .ai-sdlc-org-src
 
     - name: Upload contract.json
       if: always() && inputs.artifact == 'true'

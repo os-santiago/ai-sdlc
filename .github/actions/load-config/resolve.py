@@ -2,8 +2,16 @@
 """Resolve an already-validated .ai-sdlc.yaml (as JSON) into the runtime contract.
 
 Precedence (highest first): workflow input override > repo .ai-sdlc.yaml >
-runtime defaults. Org baseline resolution (spec/org-policy.md) is not
-applied yet — see docs/runtime.md.
+org baseline (spec/org-policy.md) > runtime defaults.
+
+Field-level merge between contract layers: scalars replace, maps merge
+key-wise, guard-rail lists (triggers.skip_labels, merge.skip_labels,
+verify.required_checks) union strictly-additive, and autonomy.level
+resolves to the lower of the org ceiling and the repo value — repos can
+tighten autonomy, never loosen it. The org baseline may pin floor fields
+via policy_floor.pin: pinned scalars/maps take the org value outright,
+union fields keep org entries (pin = repos cannot relax, may tighten).
+policy_floor.exempt lists repos the baseline skips entirely.
 
 Writes <out-dir>/contract.json and, when GITHUB_OUTPUT is set, flat step
 outputs. Stdlib only.
@@ -51,7 +59,14 @@ DEFAULTS = {
 
 # Sections resolved field-by-field; maps merge key-wise (spec/org-policy.md).
 MAP_FIELDS = {"labels", "model.routing_hints"}
+# Guard-rail lists: strictly-additive union across layers — a layer can
+# add entries but never drop a lower layer's (spec/org-policy.md).
+UNION_FIELDS = {"triggers.skip_labels", "merge.skip_labels", "verify.required_checks"}
+# Meta sections consumed by resolution itself — never merged into fields.
+META_KEYS = {"spec", "repo", "policy_floor"}
 PASSTHROUGH = ("spec", "repo")
+# Trust-ladder order (schema enum order) for the autonomy.level ceiling.
+AUTONOMY_ORDER = ["shadow", "suggest", "auto-pr", "auto-merge-low", "auto-merge-all", "auto-deploy"]
 
 # Override surface: dotted path → kind. Unset = null / "" / negative number.
 OVERRIDABLE = {
@@ -122,24 +137,79 @@ def coerce(path, kind, v):
     raise AssertionError(kind)
 
 
-def resolve(repo_cfg, overrides):
+def union_list(base, extra):
+    return list(dict.fromkeys(list(base or []) + list(extra or [])))
+
+
+def min_level(a, b):
+    if a not in AUTONOMY_ORDER:
+        return b
+    if b not in AUTONOMY_ORDER:
+        return a
+    return a if AUTONOMY_ORDER.index(a) <= AUTONOMY_ORDER.index(b) else b
+
+
+def merge_layer(result, sources, sections, source):
+    for path in leaf_paths(sections):
+        _, value = get_path(sections, path)
+        if path in UNION_FIELDS:
+            set_path(result, path, union_list(get_path(result, path)[1], value))
+        elif path in MAP_FIELDS:
+            merged = dict(get_path(result, path)[1] or {})
+            merged.update(value or {})
+            set_path(result, path, merged)
+        else:
+            set_path(result, path, copy.deepcopy(value))
+        sources[path] = source
+
+
+def resolve(repo_cfg, overrides, org_cfg=None):
+    """Layer defaults < org baseline < repo contract, then input overrides.
+
+    Returns (contract, pinned, enforced): `pinned` is the org-declared
+    policy_floor.pin list; `enforced` is the fields where an org floor
+    actively constrained a repo value (`org-pin` in _sources).
+    """
     result = copy.deepcopy(DEFAULTS)
     sources = {p: "default" for p in leaf_paths(DEFAULTS)}
+
+    org_set = set()
+    pin_set = set()
+    if org_cfg:
+        pin_set = set((org_cfg.get("policy_floor") or {}).get("pin") or [])
+        org_sections = {k: v for k, v in org_cfg.items() if k not in META_KEYS}
+        org_set = set(leaf_paths(org_sections))
+        merge_layer(result, sources, org_sections, "org")
 
     for key in PASSTHROUGH:
         if key in repo_cfg:
             result[key] = copy.deepcopy(repo_cfg[key])
 
-    sections = {k: v for k, v in repo_cfg.items() if k not in PASSTHROUGH}
+    sections = {k: v for k, v in repo_cfg.items() if k not in META_KEYS}
     for path in leaf_paths(sections):
         _, value = get_path(sections, path)
-        if path in MAP_FIELDS:
-            _, base = get_path(result, path)
-            merged = dict(base or {})
+        pinned = path in pin_set and path in org_set
+        if path in UNION_FIELDS:
+            # Strictly additive in every layer — union already keeps the
+            # org/default guard rails; a pin only records the floor.
+            set_path(result, path, union_list(get_path(result, path)[1], value))
+            sources[path] = "org-pin" if pinned else "contract"
+        elif path == "autonomy.level" and path in org_set:
+            level = min_level(get_path(result, path)[1], value)
+            set_path(result, path, level)
+            sources[path] = "contract" if level == value else ("org-pin" if pinned else "org")
+        elif pinned:
+            # Non-overridable floor: the org value stands and the repo's
+            # own value is recorded as suppressed via the org-pin source.
+            sources[path] = "org-pin"
+        elif path in MAP_FIELDS:
+            merged = dict(get_path(result, path)[1] or {})
             merged.update(value or {})
-            value = merged
-        set_path(result, path, copy.deepcopy(value))
-        sources[path] = "contract"
+            set_path(result, path, merged)
+            sources[path] = "contract"
+        else:
+            set_path(result, path, copy.deepcopy(value))
+            sources[path] = "contract"
 
     for path, raw in (overrides or {}).items():
         if path not in OVERRIDABLE:
@@ -157,7 +227,8 @@ def resolve(repo_cfg, overrides):
     if result["engine"]["max_seconds"] < 60 or result["engine"]["max_steps"] < 10:
         raise ContractError("engine budgets below schema minimum (max_seconds ≥ 60, max_steps ≥ 10)")
     result["_sources"] = dict(sorted(sources.items()))
-    return result
+    enforced = sorted(p for p, s in sources.items() if s == "org-pin")
+    return result, sorted(pin_set), enforced
 
 
 def flat_outputs(c):
@@ -165,6 +236,7 @@ def flat_outputs(c):
     labels = c["labels"]
     return {
         "spec": c["spec"],
+        "org_policy": c["_source"]["org_policy"],
         "autonomy_level": c["autonomy"]["level"],
         "trigger_label": c["triggers"]["issue_label"],
         "skip_labels": j(c["triggers"]["skip_labels"]),
@@ -206,6 +278,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True, help="validated contract as JSON")
     ap.add_argument("--overrides", default="{}", help="JSON object: dotted path → value")
+    ap.add_argument("--org", default="", help="validated org baseline as JSON (optional)")
+    ap.add_argument("--org-state", default="", help="org layer status when --org is absent: not-applied|unavailable")
+    ap.add_argument("--org-repo", default="")
+    ap.add_argument("--org-ref", default="")
+    ap.add_argument("--org-path", default="")
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--source-repo", default="")
     ap.add_argument("--source-ref", default="")
@@ -217,13 +294,29 @@ def main():
         repo_cfg = json.loads(raw)
         if not isinstance(repo_cfg, dict):
             raise ContractError("contract root must be a mapping")
+        org_cfg = None
+        org_raw = b""
+        org_state = a.org_state or "not-applied"
+        applied_org = None
+        if a.org:
+            org_raw = open(a.org, "rb").read()
+            org_cfg = json.loads(org_raw)
+            if not isinstance(org_cfg, dict):
+                raise ContractError("org baseline root must be a mapping")
+            org_state = "applied"
+            exempt = (org_cfg.get("policy_floor") or {}).get("exempt") or []
+            repo_name = (a.source_repo or "").rsplit("/", 1)[-1]
+            if a.source_repo in exempt or repo_name in exempt:
+                org_state = "exempt"
+            else:
+                applied_org = org_cfg
         try:
             overrides = json.loads(a.overrides or "{}")
         except json.JSONDecodeError as e:
             raise ContractError(f"overrides is not valid JSON: {e}")
         if not isinstance(overrides, dict):
             raise ContractError("overrides must be a JSON object")
-        contract = resolve(repo_cfg, overrides)
+        contract, pinned, enforced = resolve(repo_cfg, overrides, applied_org)
     except ContractError as e:
         print(str(e), file=sys.stderr)
         return 1
@@ -233,9 +326,20 @@ def main():
         "ref": a.source_ref,
         "path": a.source_path,
         "sha256": hashlib.sha256(raw).hexdigest(),
-        "precedence": ["input", "contract", "default"],
-        "org_policy": "not-applied",
+        "precedence": (["input", "contract", "org", "default"] if org_state == "applied"
+                       else ["input", "contract", "default"]),
+        "org_policy": org_state,
     }
+    if org_cfg is not None:
+        contract["_source"]["org"] = {
+            "repo": a.org_repo,
+            "ref": a.org_ref,
+            "path": a.org_path,
+            "sha256": hashlib.sha256(org_raw).hexdigest(),
+        }
+        if org_state == "applied":
+            contract["_source"]["pinned"] = pinned
+            contract["_source"]["enforced"] = enforced
     os.makedirs(a.out_dir, exist_ok=True)
     out_path = os.path.join(a.out_dir, "contract.json")
     with open(out_path, "w", encoding="utf-8") as fh:
@@ -247,8 +351,10 @@ def main():
     if os.environ.get("GITHUB_OUTPUT"):
         write_github_output(outputs, os.environ["GITHUB_OUTPUT"])
     overridden = [p for p, s in contract["_sources"].items() if s == "input"]
+    note = " repo-policy_floor-ignored" if isinstance(repo_cfg.get("policy_floor"), dict) else ""
     print(f"resolved contract spec={contract['spec']} level={contract['autonomy']['level']} "
-          f"model={contract['model']['primary']} overrides={overridden or 'none'} → {out_path}")
+          f"model={contract['model']['primary']} org={org_state} "
+          f"overrides={overridden or 'none'}{note} → {out_path}")
     return 0
 
 

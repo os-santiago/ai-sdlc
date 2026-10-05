@@ -88,6 +88,9 @@ The cutover executes only after the evidence gate in epic #30 passes.
 # YAML sanity (CI runs actionlint)
 python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ai-sdlc-implement.yml'))"
 
+# Workflow lint — same pinned actionlint release as CI
+bash tools/actionlint.sh
+
 # Contract validation
 bash tools/validate-ai-sdlc-config.sh .ai-sdlc.yaml spec/ai-sdlc.schema.json
 ```

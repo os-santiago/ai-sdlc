@@ -30,6 +30,7 @@ triggers:
 verify:
   commands:
     - bash tools/validate-ai-sdlc-config.sh .ai-sdlc.yaml spec/ai-sdlc.schema.json
+    - bash tools/actionlint.sh
   required_checks: []
   timeout_seconds: 300
 

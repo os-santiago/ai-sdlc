@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # load-config driver: locate → validate (schema + secret scan) → resolve.
 # Inputs via env: CONTRACT_ROOT, CONTRACT_FILE, OVERRIDES, ORG_CONFIG,
-# SOURCE_REPO, SOURCE_REF, OUT_DIR. Fails fast; the failure reason is
-# written to "$OUT_DIR/error.txt" for downstream signal steps.
+# ORG_ROOT, ORG_REPO, ORG_REF, ORG_PATH, SOURCE_REPO, SOURCE_REF, OUT_DIR.
+# Fails fast; the failure reason is written to "$OUT_DIR/error.txt" for
+# downstream signal steps.
 set -euo pipefail
 
 ACTION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,23 +33,47 @@ $report"
 fi
 echo "$report"
 
+yaml_to_json() {
+  if python3 -c 'import yaml' 2>/dev/null; then
+    python3 -c 'import yaml,json,sys; json.dump(yaml.safe_load(open(sys.argv[1])), open(sys.argv[2], "w"))' "$1" "$2"
+  else
+    npx -y -q js-yaml "$1" > "$2"
+  fi
+}
+
+# Org baseline layer (spec/org-policy.md): fetched by the action into
+# ORG_ROOT/ORG_PATH. Unreachable or invalid baselines fail safe to
+# repo + defaults and log once; they never brick the consumer pipeline.
+ORG_JSON=""
+ORG_STATE="not-applied"
 if [ -n "${ORG_CONFIG:-}" ]; then
-  echo "::warning title=ai-sdlc contract::org-config is a reserved hook — org baseline resolution (spec/org-policy.md) is not implemented yet; using repo contract + runtime defaults only."
+  ORG_FILE="${ORG_ROOT:-.ai-sdlc-org-src}/${ORG_PATH:-.ai-sdlc.yaml}"
+  if [ ! -f "$ORG_FILE" ]; then
+    ORG_STATE="unavailable"
+    echo "::warning title=ai-sdlc contract::org baseline ${ORG_CONFIG} was not fetched (${ORG_FILE} missing) — failing safe to repo contract + defaults (spec/org-policy.md)."
+  elif ! orgreport="$(bash "$VALIDATOR" "$ORG_FILE" "$SCHEMA" 2>&1)"; then
+    ORG_STATE="unavailable"
+    echo "::warning title=ai-sdlc contract::org baseline ${ORG_CONFIG} failed validation — failing safe to repo contract + defaults (spec/org-policy.md)."
+    printf '%s\n' "$orgreport"
+  else
+    echo "$orgreport"
+    ORG_JSON="$OUT_DIR/org.json"
+    yaml_to_json "$ORG_FILE" "$ORG_JSON"
+    ORG_STATE="applied"
+  fi
 fi
 
 RAW="$OUT_DIR/raw.json"
-if python3 -c 'import yaml' 2>/dev/null; then
-  python3 -c 'import yaml,json,sys; json.dump(yaml.safe_load(open(sys.argv[1])), open(sys.argv[2], "w"))' "$CFG" "$RAW"
-else
-  npx -y -q js-yaml "$CFG" > "$RAW"
-fi
+yaml_to_json "$CFG" "$RAW"
 
 OVR="${OVERRIDES:-}"; [ -n "${OVR//[[:space:]]/}" ] || OVR='{}'
 if ! err="$(python3 "$ACTION_DIR/resolve.py" --input "$RAW" --overrides "$OVR" \
+      --org "$ORG_JSON" --org-state "$ORG_STATE" \
+      --org-repo "${ORG_REPO:-}" --org-ref "${ORG_REF:-}" --org-path "${ORG_PATH:-.ai-sdlc.yaml}" \
       --out-dir "$OUT_DIR" --source-repo "${SOURCE_REPO:-}" --source-ref "${SOURCE_REF:-}" \
       --source-path "${CONTRACT_FILE:-.ai-sdlc.yaml}" 2>&1)"; then
   fail "contract resolution failed: $WHERE
 $err"
 fi
 echo "$err"
-rm -f "$RAW"
+rm -f "$RAW" ${ORG_JSON:+"$ORG_JSON"}
