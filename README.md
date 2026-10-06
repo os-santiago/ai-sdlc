@@ -64,11 +64,9 @@ A consumer repo needs three things:
      contents: write
      issues: write
      pull-requests: write
-     # `models` is a valid workflow permission scope — it gates access to
-     # GitHub Models inference and is required for the engine's zero-secret
-     # path below (MODEL_API_KEY unset). Omit it only when every caller run
-     # configures a direct provider key.
-     models: read
+     # `models` is a workflow permission scope for accessing GitHub Models
+     # (retired 2026-07-30) — it only gated the retired zero-secret path.
+     # For current usage, set `MODEL_API_KEY` and omit this permission.
 
    jobs:
      intake:
@@ -97,11 +95,13 @@ A consumer repo needs three things:
    scoped to the consumer repos are the intended setup). Every mutation
    stage mints a per-run installation token — fail-closed, no PAT or
    `GITHUB_TOKEN` fallback, so pushes and merges always re-trigger CI.
-   `MODEL_API_KEY` is optional: unset → GitHub Models on `GITHUB_TOKEN`
-   (which is why the caller grants `models: read` — the `GITHUB_TOKEN`
-   scope GitHub requires for Models inference); set → direct
-   OpenAI-compatible provider. Set the repo variable
-   `AI_SDLC_OFF=1` to halt the pipeline without disabling workflows.
+   `MODEL_API_KEY` is required for inference: unset → the engine
+   attempts `GITHUB_TOKEN` against GitHub Models, which was retired
+   2026-07-30, so the run fails. Set it to a provider API key and
+   configure a provider URL (the `provider_base_url` input or the
+   `AI_SDLC_PROVIDER_URL` repository variable) pointing at a live
+   OpenAI-compatible endpoint. Set the repo variable `AI_SDLC_OFF=1`
+   to halt the pipeline without disabling workflows.
 
 ## Documentation
 

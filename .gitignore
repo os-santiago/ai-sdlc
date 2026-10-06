@@ -1,1 +1,8 @@
 node_modules/
+
+# scc engine session artifacts — the implement stage writes run evidence to
+# the workspace root; it ships as workflow artifacts, never in diffs (#68)
+/scc-*.json*
+/ai-sdlc-run.json
+/issue.json
+/task-prompt.md
