@@ -106,6 +106,13 @@ jobs:
     secrets: inherit
 ```
 
+The calling repo must see `AI_SDLC_APP_ID` + `AI_SDLC_APP_PRIVATE_KEY`
+(org secrets scoped to the consumer repos are the intended setup).
+`implement`, `automerge` and `ci-repair` mint a per-run `ai-sdlc` GitHub
+App installation token with `actions/create-github-app-token` and **fail
+closed** when the secrets are absent — no PAT/`GITHUB_TOKEN` fallback, so
+pushes and PRs always fire downstream workflows (issue #26).
+
 ## Inputs / secrets
 
 ### ai-sdlc-intake
@@ -153,7 +160,9 @@ jobs:
 
 | Secret | Purpose |
 |---|---|
-| `AI_SDLC_TOKEN` | PAT/App token — required when `GITHUB_TOKEN` can't reach the repo or when PR-opened CI must trigger (`GITHUB_TOKEN`-auth pushes don't fire `pull_request`/`push` events). The `ai-sdlc-runtime` GitHub App (#26) is the intended source |
+| `AI_SDLC_APP_ID` | **required** by `implement`/`automerge`/`ci-repair` — the `ai-sdlc` GitHub App id; each run mints a repo-scoped installation token (App permissions: contents/pull-requests/issues write, checks read, metadata read). Unset → the stage fails fast with `ai-sdlc auth` error — no PAT/`GITHUB_TOKEN` fallback (issue #26) |
+| `AI_SDLC_APP_PRIVATE_KEY` | **required** — the App's PEM private key. Store both App secrets as org secrets scoped to the consumer repos |
+| `AI_SDLC_TOKEN` | optional legacy slot — still accepted by `intake`/`verify`/`sweep` when `GITHUB_TOKEN` can't reach the target repo for read/issue calls. Unused by `implement`/`automerge`/`ci-repair` |
 | `MODEL_API_KEY` | optional — direct provider key. When absent, the engine falls back to `GITHUB_TOKEN` against GitHub Models (zero-secret path; callers must grant `models: read`) |
 
 ## Provider resolution
@@ -186,10 +195,10 @@ inputs are the override surface.
 | `log_tail_lines` / `log_max_bytes` | `150` / `12000` | per-check log tail bounds |
 
 Outputs: `action` (`repaired` \| `escalated` \| `skipped`) and `reason`.
-Secrets: same as implement. `AI_SDLC_TOKEN` is required for the loop to
-close — a fix pushed with `GITHUB_TOKEN` does not re-trigger CI (the attempt
-comment flags this). Callers grant `models: read` for the GitHub Models
-fallback.
+Secrets: same as implement — `AI_SDLC_APP_ID` + `AI_SDLC_APP_PRIVATE_KEY`
+are required (fail-closed). The pushed fix uses the App installation token,
+so the new head re-triggers CI and the loop closes. Callers grant
+`models: read` for the GitHub Models fallback.
 
 ## Repair loop (`ai-sdlc-ci-repair.yml`)
 
@@ -213,7 +222,9 @@ one attempt:
    headless run with `--prompt-file --no-commit --audit-log --summary-file
    --max-seconds --max-steps`.
 5. **Push** — real mutations (excluding `.github/workflows/`) are committed
-   and pushed (non-force) to the PR head branch; the new head re-runs CI,
+   and pushed (non-force) to the PR head branch under the App installation
+   token (`persist-credentials: false` + explicit auth header, so the token
+   never reaches the workspace the engine reads); the new head re-runs CI,
    and the next red result triggers the next attempt.
 6. **Audit** — exactly one marker comment per attempt (attempt N/M, failing
    checks, outcome, failure signature, run link) plus artifact
@@ -296,9 +307,10 @@ pipeline PR stays open unresolved** — every one is either merged or carries
 ### Consuming repos
 
 Copy `ai-sdlc-sweep.yml` into the repo and point the `gate` job at
-`os-santiago/ai-sdlc/.github/workflows/ai-sdlc-automerge.yml@main`. Merges
-made with `GITHUB_TOKEN` don't fire `push` workflows (e.g. post-merge
-verify) — provide `AI_SDLC_TOKEN` if that matters.
+`os-santiago/ai-sdlc/.github/workflows/ai-sdlc-automerge.yml@main`. The gate
+merges with the `ai-sdlc` App installation token, so merges fire downstream
+`push` workflows (e.g. post-merge verify); the App secrets must be visible
+to the repo running the sweep (`secrets: inherit`).
 
 ## Model fallback
 
@@ -369,7 +381,8 @@ postmortem analysis.
 
 ## Note on workflow-file edits
 
-`GITHUB_TOKEN`-auth pushes cannot commit files under `.github/workflows/`
-— the implement job strips workflow-path changes from the agent diff
-before committing (`git add -A -- ':!.github/workflows'`). Repo opt-in
-workflow edits remain human-authored.
+The `ai-sdlc` App holds `Workflows: no access`, so App-token pushes cannot
+commit files under `.github/workflows/` — the implement job strips
+workflow-path changes from the agent diff before committing
+(`git add -A -- ':!.github/workflows'`). Repo opt-in workflow edits remain
+human-authored.
