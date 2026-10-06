@@ -188,6 +188,7 @@ jobs:
           ref: ${{ inputs.base }}
           checkout: 'true'
           token: ${{ steps.app-token.outputs.token }}
+          required: 'false'
           # review.* input overrides are applied inline in the step env below,
           # not via overrides: the pinned @main action may predate the review.*
           # override keys, and an unknown path hard-fails contract resolution.
