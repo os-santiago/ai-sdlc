@@ -63,7 +63,8 @@ The cutover executes only after the evidence gate in epic #30 passes.
 - **Identity**: pipeline automation runs as `ai-sdlc-runtime[bot]` (GitHub
   App installation tokens via `actions/create-github-app-token`).
   `GITHUB_TOKEN` pushes/PRs do not fire downstream workflows — anything that
-  must trigger CI needs the App token (`AI_SDLC_TOKEN` secret slot).
+  must trigger CI needs the App token (minted per-run from
+  `AI_SDLC_APP_ID` + `AI_SDLC_APP_PRIVATE_KEY`; fail-closed, no PAT fallback).
 - **Golden rule**: no pipeline PR stays open unresolved — merged, or
   `needs-human` with an explicit cause.
 
