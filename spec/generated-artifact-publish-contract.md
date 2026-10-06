@@ -41,10 +41,12 @@ For each artifact class, the pipeline shall maintain:
 - A single open pull request targeting the default branch, whose head is the aforementioned long-lived branch
 
 The pipeline shall update the rolling PR in place by:
-- Amending the commit on the long-lived branch (via `git commit --amend` or equivalent) when new content is to be published
-- Force-pushing is **strictly prohibited**; instead, the pipeline shall reset the branch to the previous commit
-  and create a new amend commit, or use a merge commit if amend is not feasible, ensuring the branch history
-  remains linear and easy to follow.
+- Committing the new artifact content as a new commit on top of the long-lived branch's existing
+  history — either a regular commit, or a merge commit when reconciling with updates on the default branch.
+- Force-pushing and any history-rewriting operation on the rolling branch (`git commit --amend`,
+  `git reset`, or `git rebase` applied to commits already pushed to the remote) is **strictly
+  prohibited**: every update is a regular push that only appends commits, ensuring the branch history
+  remains append-only and easy to follow.
 
 The PR title and body shall be updated to reflect the latest artifact version and publication timestamp.
 
@@ -71,7 +73,10 @@ The circuit-breaker resets automatically after a successful publish or when manu
 An implementation of this contract shall satisfy the following verification criteria:
 - Two consecutive cycles with identical semantic content (after volatile stripping) for any artifact class
   result in zero commits to the rolling PR branch and no PR updates.
-- The rolling PR for each artifact class remains open and is updated in place without force-pushing.
+- The rolling PR for each artifact class remains open and is updated in place without force-pushing
+  or rewriting previously pushed history.
+- A `volatile_patterns` entry that is not a valid regular expression is rejected at configuration-load
+  time as a configuration error and triggers the escalation path instead of a runtime failure.
 - When the scan or write bounds are exceeded, the pipeline halts publishing for that artifact class and
   escalates after `N` consecutive failures.
 
@@ -89,5 +94,12 @@ publish:
     write_limit: 1048576  # 1MB in bytes
   failure_threshold: 3
 ```
+
+`volatile_patterns` entries must be valid regular expressions in the dialect supported by the
+implementation's regex engine. The pipeline shall validate every configured pattern when the
+configuration is loaded, before the first publish cycle. A pattern that fails to compile is a
+configuration error: the pipeline shall count it toward the failure threshold, halt publishing for
+the affected artifact class, and escalate via the `publish:circuit-breaker` label and configured
+contacts — rather than discovering the failure at scan time.
 
 If not specified, the defaults described above shall apply.
