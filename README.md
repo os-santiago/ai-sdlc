@@ -107,6 +107,10 @@ A consumer repo needs three things:
 
 - [docs/runtime.md](docs/runtime.md) — `workflow_call` runtime stages
   reference for adopters.
+- [spec/README.md](spec/README.md) — index of the normative contract
+  surface (schema, labels, trust ladder, DoR, risk taxonomy).
+- [ADR-0001](docs/architecture/adr/0001-homedir-ai-sdlc-sunset-and-cutover.md) —
+  homedir-ai-sdlc sunset and canonical-runtime cutover decision record.
 
 ## Status
 
