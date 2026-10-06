@@ -44,6 +44,12 @@ on:
       AI_SDLC_TOKEN:
         description: 'PAT/App token — needed when GITHUB_TOKEN lacks cross-repo issue access'
         required: false
+      AI_SDLC_APP_ID:
+        description: 'ai-sdlc GitHub App id — mints a per-run installation token for labels/comments; optional (falls back to AI_SDLC_TOKEN/GITHUB_TOKEN, issue #26)'
+        required: false
+      AI_SDLC_APP_PRIVATE_KEY:
+        description: 'ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID'
+        required: false
 
 env:
   GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
