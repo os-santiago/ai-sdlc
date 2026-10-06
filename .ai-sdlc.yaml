@@ -41,7 +41,7 @@ review:
     # Provider-native model for the GHA review stage — OmniRoute route
     # names (auto/*, devin/*) are Hermes control-plane only (ADR-0001)
     # and fall back to model.primary during contract resolution.
-    model: openai/gpt-4o
+    model: deepseek-ai/deepseek-v4.1-flash
     inline_comments: true
     incremental: true
   max_fix_iterations: 3        # bounded review→fix convergence (issue #28)
@@ -97,11 +97,12 @@ labels:
       scc:child: {set_by: [decomposer]}
 
 model:
-  # GHA-native runtime defaults to GitHub Models (zero-secret baseline).
+  # GHA-native runtime resolves provider_base_url → vars.AI_SDLC_PROVIDER_URL
+  # (GitHub Models retired 2026-07-30; current: NVIDIA NIM via MODEL_API_KEY).
   # OmniRoute route names (auto/*, devin/*) are Hermes control-plane only —
   # unreachable from GHA runners by design (ADR-0001).
-  primary: openai/gpt-4o
-  fallback: openai/gpt-4o-mini
+  primary: moonshotai/kimi-k3
+  fallback: deepseek-ai/deepseek-v4.1-flash
 
 engine:
   name: scc
