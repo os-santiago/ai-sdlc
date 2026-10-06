@@ -514,6 +514,18 @@ budget (`review.max_fix_iterations`), the merge-gate review wait cap
 workflow artifacts (`ai-sdlc-run-<issue>`, plus `ai-sdlc-run.json` and the
 `*.primary.*` files when fallback fired) for postmortem analysis.
 
+## Kill-switch (`AI_SDLC_OFF`)
+
+`AI_SDLC_OFF` is the emergency stop, carried as a **repository variable**
+(Settings → Secrets and variables → Actions → *Variables* tab — not a
+secret). Set `AI_SDLC_OFF=1` to halt the pipeline: every stage checks the
+variable at the top of the run and exits before any mutation, so nothing
+new dispatches while in-flight runs finish on their own. The check is
+**per run** — no runner teardown, no workflow disable; unset the variable
+(or set `0`) and the next event resumes the loop. Prefer it over disabling
+workflows during an incident — disabling also silences the sweep and the
+merge gate, leaving pipeline PRs unresolved.
+
 ## Note on workflow-file edits
 
 The `ai-sdlc` App holds `Workflows: no access`, so App-token pushes cannot
