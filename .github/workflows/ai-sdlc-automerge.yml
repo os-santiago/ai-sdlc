@@ -3,6 +3,10 @@
 # Ports the Hermes pr_merger decision table (spec/risk-taxonomy.md):
 #   green+mergeable → squash+delete-branch; failing checks → bounded repair
 #   signal; pending > cap or conflicts → needs-human escalation.
+# Plus the review gate (issue #28): a pending AI-review verdict on the head
+# SHA holds the merge only up to review.wait_max_minutes (default 15), then
+# merges with `review_timeout` recorded — review infra can never deadlock
+# the pipeline. A blocked verdict holds while the bounded fix pass runs.
 # Caller: on check_run.completed / pull_request events, or per PR from the
 # scheduled stall-sweep (ai-sdlc-sweep.yml). Repair budget, pending cap,
 # merge method, skip labels and the escalation label come from the resolved
@@ -30,6 +34,10 @@ on:
         description: 'squash | merge | rebase — override; empty = .ai-sdlc.yaml merge.method'
         type: string
         default: ''
+      review_wait_minutes:
+        description: 'pending-review cap before merging with review_timeout — override; -1 = .ai-sdlc.yaml review.wait_max_minutes'
+        type: number
+        default: -1
       base:
         description: 'ref to read .ai-sdlc.yaml from'
         type: string
@@ -101,6 +109,9 @@ jobs:
           ref: ${{ inputs.base }}
           checkout: 'true'
           token: ${{ steps.app-token.outputs.token }}
+          # review.* inputs are applied inline in the step env below, not via
+          # overrides: the pinned @main action may predate the review.* keys,
+          # and an unknown override path hard-fails contract resolution.
           overrides: >-
             {"merge.max_repairs": ${{ inputs.max_repairs }},
              "merge.pending_max_minutes": ${{ inputs.pending_max_minutes }},
@@ -111,14 +122,18 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PENDING_MAX: ${{ steps.contract.outputs.pending_max_minutes }}
+          MAX_REPAIRS: ${{ steps.contract.outputs.max_repairs }}
           SKIP_LABELS: ${{ steps.contract.outputs.merge_skip_labels }}
           ESCALATION: ${{ steps.contract.outputs.escalation_label }}
+          REVIEW_MODE: ${{ steps.contract.outputs.review_mode || 'ai' }}
+          REVIEW_WAIT: ${{ (inputs.review_wait_minutes != -1 && toJSON(inputs.review_wait_minutes)) || steps.contract.outputs.review_wait_max_minutes || '15' }}
+          EXT: ${{ steps.contract.outputs.review_external_reviewer }}
         run: |
           set -euo pipefail
           # GitHub computes `mergeable` lazily; an idle PR often reports
           # UNKNOWN on first read. Re-poll a few times before deciding.
           for _ in 1 2 3 4; do
-            gh pr view "$PR" -R "$REPO" --json number,title,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,labels,createdAt,comments > pr.json
+            gh pr view "$PR" -R "$REPO" --json number,title,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,labels,createdAt,comments,commits > pr.json
             [ "$(jq -r .mergeable pr.json)" != "UNKNOWN" ] && break
             sleep 5
           done
@@ -129,6 +144,18 @@ jobs:
           if [ "$rc" -ne 0 ]; then
             if grep -qi 'no checks reported' checks.err; then echo '[]' > checks.json
             else cat checks.err >&2; exit 1; fi
+          fi
+          # Review verdict markers — trusted authors only (issue #28): a
+          # forged comment must never steer the merge gate.
+          gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
+            --jq '.[] | select(.user.type == "Bot" or ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR")))
+                  | {body: (.body // ""), created_at}' \
+            | jq -s . > trusted-comments.json
+          echo '[]' > ext-reviews.json
+          if [ -n "$EXT" ]; then
+            gh api --paginate "repos/$REPO/pulls/$PR/reviews?per_page=100" \
+              --jq '.[] | {login: (.user.login // ""), state}' \
+              | jq -s . > ext-reviews.json || echo '[]' > ext-reviews.json
           fi
           node - <<'NODE'
           const fs = require('fs');
@@ -167,8 +194,58 @@ jobs:
             }
             else if (pending.length && ageMin > Number(process.env.PENDING_MAX)) { action = 'escalated'; reason = 'pending-timeout'; }
             else if (pending.length) { action = 'held'; reason = 'pending'; }
-            else if (pr.mergeable === 'MERGEABLE' && checks.length) { action = 'merged'; reason = 'green'; }
-            else if (pr.mergeable === 'MERGEABLE' && !checks.length) { action = 'merged'; reason = 'no-checks'; }
+            else if (pr.mergeable === 'MERGEABLE') {
+              const base = checks.length ? 'green' : 'no-checks';
+              // Review gate (issue #28): verdict markers live on the PR as
+              // trusted-author comments (`<!-- ai-sdlc:review sha=… -->`).
+              // A pending verdict holds the merge only up to
+              // review.wait_max_minutes, then merges with `review_timeout`
+              // recorded — review infra can never deadlock the pipeline
+              // (Hermes PR_REVIEW_WAIT_MINUTES semantics). A blocked verdict
+              // holds while the bounded fix pass owns the branch.
+              const REVIEW_ON = ['ai', 'hybrid'].includes((process.env.REVIEW_MODE || '').toLowerCase());
+              const WAIT = Number(process.env.REVIEW_WAIT) || 15;
+              const VMARK = /<!-- ai-sdlc:review sha=([0-9a-f]{7,40}) verdict=(clean|blocked|inconclusive) -->/;
+              const FMARK = /<!-- ai-sdlc:review-fix attempt=(\d+) sha=([0-9a-f]{7,40})/;
+              const tcomments = JSON.parse(fs.readFileSync('trusted-comments.json', 'utf8') || '[]');
+              const vm = tcomments.map(c => ({ m: VMARK.exec(c.body || ''), at: c.created_at }))
+                .filter(x => x.m && x.m[1] === pr.headRefOid);
+              const fm = tcomments.map(c => ({ m: FMARK.exec(c.body || ''), at: c.created_at }))
+                .filter(x => x.m && x.m[2] === pr.headRefOid);
+              const EXT = (process.env.EXT || '').trim().toLowerCase();
+              const match = (s) => { s = (s || '').toLowerCase(); return EXT && s && (s.includes(EXT) || EXT.startsWith(s)); };
+              const extBad = checks.filter(c => match(c.name) && (c.bucket === 'fail' || c.bucket === 'cancel'));
+              const extPending = checks.filter(c => match(c.name) && c.bucket === 'pending');
+              const lastExt = new Map();
+              const extReviews = JSON.parse(fs.readFileSync('ext-reviews.json', 'utf8') || '[]');
+              for (const r of extReviews.filter(r => match(r.login))) lastExt.set(r.login, r);
+              const extBlocking = extBad.length > 0 || [...lastExt.values()].some(r => r.state === 'CHANGES_REQUESTED');
+              const headAt = new Date(((pr.commits || []).slice(-1)[0] || {}).committedDate || pr.createdAt);
+              const headMin = (Date.now() - headAt) / 60000;
+              const verdict = vm.length ? vm[vm.length - 1].m[2] : '';
+              const vMin = vm.length ? (Date.now() - new Date(vm[vm.length - 1].at)) / 60000 : Infinity;
+              const fMin = fm.length ? (Date.now() - new Date(fm[fm.length - 1].at)) / 60000 : Infinity;
+
+              if (REVIEW_ON && extBlocking) {
+                // The external reviewer wins over the AI verdict (fail-safe);
+                // nothing re-reviews this head on its own → escalate at cap.
+                if (headMin < WAIT) { action = 'held'; reason = 'external-review-blocking'; }
+                else { action = 'escalated'; reason = 'external-review-blocking'; }
+              }
+              else if (REVIEW_ON && verdict === 'blocked') {
+                // The fix pass stamps its marker at dispatch; a fix that
+                // never lands escalates on the async-work cap (PENDING_MAX).
+                if (fm.length && fMin < Number(process.env.PENDING_MAX)) { action = 'held'; reason = 'review-fix-running'; }
+                else if (fm.length) { action = 'escalated'; reason = 'review-fix-stalled'; }
+                else if (vMin < WAIT) { action = 'held'; reason = 'review-blocked'; }
+                else { action = 'escalated'; reason = 'review-fix-not-dispatched'; }
+              }
+              else if (REVIEW_ON && (!verdict || extPending.length)) {
+                if (headMin < WAIT) { action = 'held'; reason = !verdict ? 'review-pending' : 'external-review-pending'; }
+                else { action = 'merged'; reason = `${base}+review_timeout`; }
+              }
+              else { action = 'merged'; reason = base; }
+            }
             else { action = 'held'; reason = `mergeable=${pr.mergeable}`; }
           }
           console.log(`decision: ${action} (${reason})`);
@@ -183,6 +260,19 @@ jobs:
         run: |
           set -euo pipefail
           gh pr merge "$PR" -R "$REPO" --"$METHOD" --delete-branch
+
+      - name: Record review timeout
+        if: steps.eval.outputs.action == 'merged' && contains(steps.eval.outputs.reason, 'review_timeout')
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          WAIT: ${{ (inputs.review_wait_minutes != -1 && toJSON(inputs.review_wait_minutes)) || steps.contract.outputs.review_wait_max_minutes || '15' }}
+        run: |
+          set -euo pipefail
+          SHA=$(jq -r .headRefOid pr.json)
+          # shellcheck disable=SC2016  # literal Markdown backticks
+          printf '⏱️ **AI-SDLC:** merged past the review wait cap (%s min) — the pending review on head `%s` is recorded as `review_timeout`. Review infra can never stall merges beyond the cap (issue #28).\n' \
+            "$WAIT" "${SHA:0:8}" > "$RUNNER_TEMP/review-timeout.md"
+          gh pr comment "$PR" -R "$REPO" --body-file "$RUNNER_TEMP/review-timeout.md"
 
       - name: Escalate to human
         if: steps.eval.outputs.action == 'escalated'
