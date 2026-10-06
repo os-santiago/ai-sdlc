@@ -41,7 +41,7 @@ review:
     # Provider-native model for the GHA review stage — OmniRoute route
     # names (auto/*, devin/*) are Hermes control-plane only (ADR-0001)
     # and fall back to model.primary during contract resolution.
-    model: deepseek-ai/deepseek-v4.1-flash
+    model: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
     inline_comments: true
     incremental: true
   max_fix_iterations: 3        # bounded review→fix convergence (issue #28)
@@ -101,8 +101,8 @@ model:
   # (GitHub Models retired 2026-07-30; current: NVIDIA NIM via MODEL_API_KEY).
   # OmniRoute route names (auto/*, devin/*) are Hermes control-plane only —
   # unreachable from GHA runners by design (ADR-0001).
-  primary: deepseek-ai/deepseek-v4.1-flash
-  fallback: moonshotai/kimi-k3
+  primary: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+  fallback: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
 
 engine:
   name: scc
