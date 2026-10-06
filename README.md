@@ -38,6 +38,11 @@ autonomy driven by a declarative per-repo contract (`.ai-sdlc.yaml`).
   headless contract (`--prompt-file`, `--audit-log`, `--summary-file`,
   `--no-commit`) can slot in.
 
+## Documentation
+
+- [docs/runtime.md](docs/runtime.md) — `workflow_call` runtime stages
+  reference for adopters.
+
 ## Status
 
 Early scaffold. The normative spec issues were transferred from
