@@ -72,8 +72,20 @@ jobs:
           overrides: >-
             {"triggers.issue_label": ${{ toJSON(inputs.trigger_label) }}}
 
+      - name: Mint ai-sdlc App installation token
+        id: app-token
+        if: ${{ !cancelled() }}
+        uses: actions/create-github-app-token@v2
+        continue-on-error: true
+        with:
+          app-id: ${{ secrets.AI_SDLC_APP_ID }}
+          private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
       - name: Contract error → not-ready + comment (no dispatch)
         if: failure() && steps.contract.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           ERR="$(head -c 3000 "$RUNNER_TEMP/ai-sdlc-contract/error.txt" 2>/dev/null || echo 'unknown error — see workflow logs')"
@@ -92,6 +104,7 @@ jobs:
       - name: Validate DoR (R1–R6)
         id: dor
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
           TRIGGER: ${{ steps.contract.outputs.trigger_label }}
           SKIP_LABELS: ${{ steps.contract.outputs.skip_labels }}
           NOT_READY: ${{ steps.contract.outputs.label_not_ready }}
@@ -131,6 +144,7 @@ jobs:
       - name: Outcome → label + comment
         if: steps.dor.outputs.armed == 'true'
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
           PASS: ${{ steps.dor.outputs.dispatch }}
           FAILED: ${{ steps.dor.outputs.failed }}
           TRIGGER: ${{ steps.contract.outputs.trigger_label }}
