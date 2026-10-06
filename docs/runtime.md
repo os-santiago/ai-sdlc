@@ -30,16 +30,25 @@ resolves it before acting:
    `spec/ai-sdlc.schema.json`, plus a secret scan (below).
 3. **Resolve** every field with this precedence:
 
-   **workflow input (override) > `.ai-sdlc.yaml` > runtime defaults**
+   **workflow input (override) > `.ai-sdlc.yaml` > org baseline > runtime defaults**
 
-   Workflow inputs are *override-only*: an empty string (or `-1` for
-   numeric inputs) means "unset", so the contract value wins. Maps
-   (`labels`) merge key-by-key; lists (`verify.commands`, skip labels) are
-   replaced whole.
+   The org baseline applies only when `org-config` is set — see
+   [Org policy](#org-policy). Workflow inputs are *override-only*: an
+   empty string (or `-1` for numeric inputs) means "unset", so the
+   contract value wins. Field-level merge between contract layers
+   (`spec/org-policy.md`): scalars replace; maps (`labels`,
+   `model.routing_hints`) merge key-by-key; guard-rail lists
+   (`triggers.skip_labels`, `merge.skip_labels`,
+   `verify.required_checks`) are *unions* — strictly additive, a repo can
+   add entries but never drop default or org entries; configuration
+   lists (`verify.commands`, `authorized_labelers`, …) are replaced
+   whole; `autonomy.level` is a ceiling — when the org baseline sets it,
+   the resolved level is the *lower* of the org and repo values (repos
+   can tighten, never loosen).
 4. **Emit** step outputs and a `contract.json` artifact
    (`ai-sdlc-contract-<job>-<attempt>`, 14 days) recording the resolved
-   values, the per-field source (`input` / `contract` / `default`) and
-   `org_policy: not-applied`.
+   values, the per-field source (`input` / `contract` / `org` /
+   `org-pin` / `default`) and the org-policy status (below).
 
 | Stage | Consumes | Overridable inputs |
 |---|---|---|
@@ -78,12 +87,56 @@ Only the offending path is reported, never the value. Environment
 references such as `$TOKEN` / `${TOKEN}` are allowed — credentials belong
 in GitHub secrets.
 
-### Org policy (deferred)
+### Org policy
 
-v1 resolves **defaults → repo → input** only. The org-baseline layer of
-`spec/org-policy.md` (floors/ceilings, union semantics, autonomy caps) is a
-documented no-op hook: the `org-config` input is accepted, emits a
-warning, and `contract.json` records `org_policy: not-applied`.
+`load-config` accepts an `org-config` input — the org baseline contract
+per `spec/org-policy.md`. Format: **`owner/repo[/path][@ref]`** (the
+`uses:`-style reference; path defaults to `.ai-sdlc.yaml`, ref to the
+default branch). It is sparse-checked out with the `token` input, which
+must read the org repo (an org-installed `AI_SDLC_TOKEN` covers this).
+Empty `org-config` = repo contract + defaults, unchanged v1 behavior.
+
+The baseline merges as a layer between defaults and the repo contract
+with the collection semantics above: guard-rail lists union (org entries
+can never be dropped), maps merge key-wise, `autonomy.level` clamps to
+the org ceiling, and scalars are inherited unless the repo sets them.
+The baseline may also declare floor fields repos cannot relax:
+
+```yaml
+# org baseline .ai-sdlc.yaml (e.g. os-santiago/.ai-sdlc)
+spec: "1.0.0"
+autonomy:
+  level: auto-merge-low          # ceiling for every non-exempt repo
+review:
+  critical_requires_acceptance: true
+policy_floor:
+  pin:
+    - autonomy.level
+    - review.critical_requires_acceptance
+    - merge.skip_labels
+    - triggers.skip_labels
+    - verify.required_checks
+  exempt:
+    - os-santiago/special-repo   # baseline skipped for this repo
+```
+
+- **Pins:** pinned scalars/maps take the org value outright; pinned union
+  fields stay additive (org entries guaranteed); `autonomy.level` stays a
+  ceiling — tightening below it is still allowed. Pins on fields the
+  baseline does not set are recorded but inert.
+- **Exempt:** `policy_floor.exempt` matches the target repo by
+  `owner/repo` or bare repo name; exempt repos resolve repo + defaults.
+- **Repo-side `policy_floor` is ignored** — floors are org-baseline only.
+- **Fail-safe:** an unreachable or invalid baseline resolves
+  repo + defaults with one warning annotation and
+  `org_policy: unavailable` — a broken org file never bricks consumer
+  pipelines. A malformed `org-config` input fails the step
+  (`scc:config-error`).
+- **Audit:** `contract.json` records `org_policy`
+  (`applied` \| `exempt` \| `unavailable` \| `not-applied`), the baseline
+  sha256 under `_source.org`, `pinned` (declared floors) and `enforced`
+  (fields where a floor suppressed a repo value — `_sources` shows
+  `org-pin`).
 
 ## Caller example
 
@@ -127,6 +180,7 @@ pushes and PRs always fire downstream workflows (issue #26).
 | `repo` | — (required) | owner/repo |
 | `issue_number` | — (required) | issue to validate |
 | `trigger_label` | `''` → `triggers.issue_label` | label that arms dispatch |
+| `org_config` | `''` | org baseline `owner/repo[/path][@ref]` — see [Org policy](#org-policy) |
 
 ### ai-sdlc-implement
 | Input | Default | Purpose |
@@ -138,6 +192,7 @@ pushes and PRs always fire downstream workflows (issue #26).
 | `base` | `main` | base branch (contract is read from here) |
 | `max_seconds` | `-1` → `engine.max_seconds` | engine wall-clock budget per run (exit 22 on cap) |
 | `max_steps` | `-1` → `engine.max_steps` | engine tool-step budget per run |
+| `org_config` | `''` | org baseline `owner/repo[/path][@ref]` — see [Org policy](#org-policy) |
 
 | Output | Purpose |
 |---|---|
@@ -174,6 +229,7 @@ Outputs: `action` (`reviewed` \| `fix-dispatched` \| `escalated` \|
 | `max_repairs` | `-1` → `merge.max_repairs` | repair rounds before escalation |
 | `pending_max_minutes` | `-1` → `merge.pending_max_minutes` | pending-checks cap before escalation |
 | `merge_method` | `''` → `merge.method` | `squash` \| `merge` \| `rebase` |
+| `org_config` | `''` | org baseline `owner/repo[/path][@ref]` — see [Org policy](#org-policy) |
 | `review_wait_minutes` | `-1` → `review.wait_max_minutes` (15) | pending-review cap before merging with `review_timeout` |
 
 ### ai-sdlc-verify
@@ -184,6 +240,7 @@ Outputs: `action` (`reviewed` \| `fix-dispatched` \| `escalated` \|
 | `verify_commands` | `''` → `verify.commands` | newline-separated commands |
 | `setup_commands` | `''` | dependency install before verify |
 | `revert_on_failure` | `false` | revert the merge commit on failure |
+| `org_config` | `''` | org baseline `owner/repo[/path][@ref]` — see [Org policy](#org-policy) |
 
 | Secret | Purpose |
 |---|---|

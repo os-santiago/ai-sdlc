@@ -480,6 +480,7 @@ jobs:
             "$CAUSE" "${FAILING:-n/a}" > "$RUNNER_TEMP/escalation-comment.md"
           gh label create needs-human -R "$REPO" --color B60205 \
             --description "AI-SDLC escalation: human action required" >/dev/null 2>&1 || true
+          gh label create needs-human -R "$REPO" --color D93F0B --description "AI-SDLC: requires human intervention" --force || true
           gh pr edit "$PR" -R "$REPO" --add-label needs-human
           gh pr comment "$PR" -R "$REPO" --body-file "$RUNNER_TEMP/escalation-comment.md"
 

@@ -42,6 +42,10 @@ on:
         description: 'ref to read .ai-sdlc.yaml from'
         type: string
         default: 'main'
+      org_config:
+        description: 'org baseline contract ref owner/repo[/path][@ref] — org floor per spec/org-policy.md; empty = repo contract + defaults'
+        type: string
+        default: ''
     outputs:
       action:
         description: 'merged | repair-signaled | escalated | held | skipped'
@@ -109,6 +113,7 @@ jobs:
           ref: ${{ inputs.base }}
           checkout: 'true'
           token: ${{ steps.app-token.outputs.token }}
+          org-config: ${{ inputs.org_config }}
           # review.* inputs are applied inline in the step env below, not via
           # overrides: the pinned @main action may predate the review.* keys,
           # and an unknown override path hard-fails contract resolution.
@@ -282,6 +287,7 @@ jobs:
           ESCALATION: ${{ steps.contract.outputs.escalation_label }}
         run: |
           set -euo pipefail
+          gh label create "$ESCALATION" -R "$REPO" --color D93F0B --description "AI-SDLC: escalated to human review" --force || true
           gh pr edit "$PR" -R "$REPO" --add-label "$ESCALATION"
           gh pr comment "$PR" -R "$REPO" --body "⚠️ **AI-SDLC merge gate escalated** — reason: \`$REASON\`. Human review required; remove \`$ESCALATION\` to hand control back."
 

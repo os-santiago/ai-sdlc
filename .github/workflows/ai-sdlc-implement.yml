@@ -50,6 +50,10 @@ on:
         description: 'engine tool-step budget override; -1 = .ai-sdlc.yaml engine.max_steps'
         type: number
         default: -1
+      org_config:
+        description: 'org baseline contract ref owner/repo[/path][@ref] — org floor per spec/org-policy.md; empty = repo contract + defaults'
+        type: string
+        default: ''
     secrets:
       AI_SDLC_APP_ID:
         description: 'ai-sdlc GitHub App id — mints the per-run installation token used for all git/gh auth (fail-closed when unset; issue #26)'
@@ -145,6 +149,7 @@ jobs:
           repo: ${{ inputs.repo }}
           ref: ${{ inputs.base }}
           path: '.'
+          org-config: ${{ inputs.org_config }}
           overrides: >-
             {"model.primary": ${{ toJSON(inputs.model) }},
              "model.fallback": ${{ toJSON(inputs.fallback_model) }},

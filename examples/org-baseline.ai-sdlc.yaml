@@ -1,0 +1,31 @@
+# org-baseline.ai-sdlc.yaml — org-wide floor template (spec/org-policy.md)
+#
+# Host in a designated org repo (e.g. <org>/.ai-sdlc) and reference it from
+# consumers via the load-config `org-config` input:
+#   org_config: <org>/.ai-sdlc            # .ai-sdlc.yaml on the default branch
+#   org_config: <org>/policy/baseline.yaml@v1
+#
+# Merge model: the baseline sits between runtime defaults and the repo
+# contract — guard-rail lists union (org entries can never be dropped),
+# maps merge key-wise, scalars are inherited unless the repo sets them,
+# and autonomy.level clamps to this ceiling.
+spec: "1.0.0"
+
+autonomy:
+  level: auto-merge-low                # ceiling: repos may tighten, never loosen
+
+review:
+  critical_requires_acceptance: true   # pr:risk-critical always needs pr:risk-accepted
+
+policy_floor:
+  # Fields repos cannot relax. Pinned scalars take the org value outright;
+  # union fields keep org entries; autonomy.level stays a ceiling.
+  pin:
+    - autonomy.level
+    - review.critical_requires_acceptance
+    - merge.skip_labels
+    - triggers.skip_labels
+    - verify.required_checks
+  # Repos the baseline skips entirely (owner/repo or bare repo name).
+  exempt:
+    - owner/exempt-repo

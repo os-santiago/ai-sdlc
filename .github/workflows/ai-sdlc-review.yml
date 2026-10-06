@@ -575,6 +575,7 @@ jobs:
             # Drop stale tiers — recomputed on every reviewed head.
             [ "$t" = "$TIER" ] || gh pr edit "$PR" -R "$REPO" --remove-label "pr:risk-$t" >/dev/null 2>&1 || true
           done
+          gh label create "pr:risk-$TIER" -R "$REPO" --color FBCA04 --description "AI-SDLC: PR risk tier" --force || true
           gh pr edit "$PR" -R "$REPO" --add-label "pr:risk-$TIER"
 
       - name: Post verdict on PR (review thread + canonical marker comment)
@@ -660,6 +661,7 @@ jobs:
             "$CAUSE" "${REASON:-unknown}" "$ESCALATION" "$RUN_URL" > "$WORK/escalation-comment.md"
           gh label create "$ESCALATION" -R "$REPO" --color B60205 \
             --description "AI-SDLC escalation: human action required" >/dev/null 2>&1 || true
+          gh label create "$ESCALATION" -R "$REPO" --color D93F0B --description "AI-SDLC: escalated to human review" --force || true
           gh pr edit "$PR" -R "$REPO" --add-label "$ESCALATION"
           gh pr comment "$PR" -R "$REPO" --body-file "$WORK/escalation-comment.md"
 
@@ -967,6 +969,7 @@ jobs:
             "$ATTEMPT" "$MAX_FIX" "${OUTCOME:-unknown}" "$ESCALATION" > "$WORK/escalation-comment.md"
           gh label create "$ESCALATION" -R "$REPO" --color B60205 \
             --description "AI-SDLC escalation: human action required" >/dev/null 2>&1 || true
+          gh label create "$ESCALATION" -R "$REPO" --color D93F0B --description "AI-SDLC: escalated to human review" --force || true
           gh pr edit "$PR" -R "$REPO" --add-label "$ESCALATION"
           gh pr comment "$PR" -R "$REPO" --body-file "$WORK/escalation-comment.md"
 

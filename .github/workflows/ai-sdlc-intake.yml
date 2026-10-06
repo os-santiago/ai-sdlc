@@ -32,6 +32,10 @@ on:
         description: 'label that arms dispatch — override; empty = .ai-sdlc.yaml triggers.issue_label'
         type: string
         default: ''
+      org_config:
+        description: 'org baseline contract ref owner/repo[/path][@ref] — org floor per spec/org-policy.md; empty = repo contract + defaults'
+        type: string
+        default: ''
     outputs:
       dispatch:
         description: '"true" when the issue passes DoR and is queued'
@@ -64,6 +68,7 @@ jobs:
           repo: ${{ inputs.repo }}
           checkout: 'true'
           token: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          org-config: ${{ inputs.org_config }}
           overrides: >-
             {"triggers.issue_label": ${{ toJSON(inputs.trigger_label) }}}
 
@@ -133,6 +138,10 @@ jobs:
           NOT_READY: ${{ steps.contract.outputs.label_not_ready }}
         run: |
           set -euo pipefail
+          # Ensure outcome labels exist before applying — gh issue edit
+          # hard-fails on a missing label on a fresh consumer repo.
+          gh label create "$QUEUED" -R "$REPO" --color 0E8A16 --description "AI-SDLC: queued for implementation" --force || true
+          gh label create "$NOT_READY" -R "$REPO" --color D93F0B --description "AI-SDLC: Definition-of-Ready failed" --force || true
           if [ "$PASS" = "true" ]; then
             gh issue edit "$ISSUE" -R "$REPO" --add-label "$QUEUED"
             gh issue comment "$ISSUE" -R "$REPO" --body "✅ **AI-SDLC intake:** DoR passed — queued for implementation. Follow the opened PR for progress."

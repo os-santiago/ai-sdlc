@@ -236,6 +236,23 @@
           "description": "Free-form notification targets (deployment-specific: discord channel ids, slack webhooks names, etc.)"
         }
       }
+    },
+    "policy_floor": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Org-baseline only (spec/org-policy.md): floor fields the org pins so repos cannot relax them, plus per-repo exemptions. Ignored when present in a repo contract.",
+      "properties": {
+        "pin": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Dotted leaf paths enforced as org floors (e.g. autonomy.level, review.critical_requires_acceptance, merge.skip_labels, triggers.skip_labels, verify.required_checks)."
+        },
+        "exempt": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Repos ('owner/repo' or bare repo name) exempt from the org baseline entirely."
+        }
+      }
     }
   }
 }
