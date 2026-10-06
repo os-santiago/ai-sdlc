@@ -13,6 +13,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import sys
 
 DEFAULTS = {
@@ -25,8 +26,12 @@ DEFAULTS = {
     "verify": {"commands": [], "required_checks": [], "timeout_seconds": 900},
     "review": {
         "mode": "ai",
+        "ai_reviewer": {"model": None, "inline_comments": True, "incremental": True},
         "risk_labels": ["pr:risk-low", "pr:risk-medium", "pr:risk-high", "pr:risk-critical", "pr:risk-accepted"],
         "critical_requires_acceptance": True,
+        "max_fix_iterations": 3,
+        "wait_max_minutes": 15,
+        "external_reviewer": "",
     },
     "merge": {
         "method": "squash",
@@ -64,6 +69,11 @@ OVERRIDABLE = {
     "merge.method": "enum:squash,merge,rebase",
     "merge.max_repairs": "int",
     "merge.pending_max_minutes": "int",
+    "review.mode": "enum:ai,human,hybrid",
+    "review.ai_reviewer.model": "str",
+    "review.max_fix_iterations": "int",
+    "review.wait_max_minutes": "int",
+    "review.external_reviewer": "str",
 }
 
 
@@ -160,6 +170,24 @@ def resolve(repo_cfg, overrides):
     return result
 
 
+# OmniRoute route names (auto/*, devin/*) are Hermes control-plane only —
+# unreachable from GHA runners by design (ADR-0001). A contract carrying one
+# for the reviewer falls back to model.primary instead of a dead provider.
+OMNI_ROUTE = re.compile(r"^(?:auto|devin)/")
+
+
+def review_model(c):
+    m = ((c["review"].get("ai_reviewer") or {}).get("model") or "").strip()
+    if OMNI_ROUTE.match(m):
+        m = ""
+    m = m or (c["model"].get("primary") or "")
+    # The fallback can itself be an OmniRoute route (defaults, homedir
+    # contracts) — dead on GHA, so emit nothing rather than a dead provider.
+    if OMNI_ROUTE.match(m):
+        m = ""
+    return m
+
+
 def flat_outputs(c):
     j = lambda v: json.dumps(v, separators=(",", ":"))
     labels = c["labels"]
@@ -181,6 +209,11 @@ def flat_outputs(c):
         "max_repairs": str(c["merge"]["max_repairs"]),
         "pending_max_minutes": str(c["merge"]["pending_max_minutes"]),
         "merge_skip_labels": j(c["merge"]["skip_labels"]),
+        "review_mode": c["review"]["mode"],
+        "review_model": review_model(c),
+        "review_max_fix_iterations": str(c["review"]["max_fix_iterations"]),
+        "review_wait_max_minutes": str(c["review"]["wait_max_minutes"]),
+        "review_external_reviewer": c["review"].get("external_reviewer") or "",
         "escalation_label": c["escalation"]["label"],
         "labels": j(labels),
         "label_queued": labels.get("queued", ""),

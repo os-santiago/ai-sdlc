@@ -38,9 +38,15 @@ verify:
 review:
   mode: ai
   ai_reviewer:
-    model: devin/swe-2-high
+    # Provider-native model for the GHA review stage — OmniRoute route
+    # names (auto/*, devin/*) are Hermes control-plane only (ADR-0001)
+    # and fall back to model.primary during contract resolution.
+    model: openai/gpt-4o
     inline_comments: true
     incremental: true
+  max_fix_iterations: 3        # bounded review→fix convergence (issue #28)
+  wait_max_minutes: 15         # merge-gate cap on a pending verdict → review_timeout
+  external_reviewer: ""        # e.g. coderabbit — empty = AI-only path
   risk_labels:
     - pr:risk-low
     - pr:risk-medium
