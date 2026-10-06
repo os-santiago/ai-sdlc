@@ -76,7 +76,8 @@ An implementation of this contract shall satisfy the following verification crit
 - The rolling PR for each artifact class remains open and is updated in place without force-pushing
   or rewriting previously pushed history.
 - A `volatile_patterns` entry that is not a valid regular expression is rejected at configuration-load
-  time as a configuration error and triggers the escalation path instead of a runtime failure.
+  time as a configuration error — counted as a publish failure toward the `N` consecutive-failure
+  threshold — and escalates via the circuit-breaker path instead of a runtime failure.
 - When the scan or write bounds are exceeded, the pipeline halts publishing for that artifact class and
   escalates after `N` consecutive failures.
 
@@ -98,8 +99,11 @@ publish:
 `volatile_patterns` entries must be valid regular expressions in the dialect supported by the
 implementation's regex engine. The pipeline shall validate every configured pattern when the
 configuration is loaded, before the first publish cycle. A pattern that fails to compile is a
-configuration error: the pipeline shall count it toward the failure threshold, halt publishing for
-the affected artifact class, and escalate via the `publish:circuit-breaker` label and configured
-contacts — rather than discovering the failure at scan time.
+configuration error: it prevents the affected artifact class from publishing and counts as a
+publish failure toward the `N` consecutive-failure threshold defined under Failure Handling —
+the pipeline halts publishing for that class and escalates via the `publish:circuit-breaker`
+label and configured contacts only once the threshold is reached. Because a configuration error
+is deterministic, it recurs on every cycle until the configuration is fixed, so the breaker
+trips after `N` consecutive cycles rather than discovering the failure at scan time.
 
 If not specified, the defaults described above shall apply.
