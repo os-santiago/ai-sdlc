@@ -9,7 +9,8 @@ thin caller workflow + `.ai-sdlc.yaml` and gets the autonomous loop.
 |---|---|---|
 | `ai-sdlc-intake.yml` | DoR validation (R1–R6 per `spec/definition-of-ready.md`), `scc:queued`/`scc:not-ready` labels | `issues.labeled` in caller |
 | `ai-sdlc-implement.yml` | `scc` headless run → branch → PR (`Closes #N`) + manifest/audit artifacts | called on `scc:queued` |
-| `ai-sdlc-automerge.yml` | merge-gate decision table (spec/risk-taxonomy.md): green+mergeable → squash+delete; failing → repair signal; pending/conflict → `needs-human` | `check_run.completed` / `pull_request` / called |
+| `ai-sdlc-automerge.yml` | merge-gate decision table (spec/risk-taxonomy.md): green+mergeable → squash+delete; failing → repair signal; pending/conflict → `needs-human`; pending review holds only up to `review.wait_max_minutes` → `review_timeout` merge | `check_run.completed` / `pull_request` / called |
+| `ai-sdlc-review.yml` | AI review + bounded review-fix convergence: verdict marker per head SHA + `pr:risk-*` tier label; `blocker|major`/`request_changes` → fix pass on the same branch → re-review; `needs-human` after `max_fix_iterations` | `pull_request` (opened/synchronize) / called post-implement |
 | `ai-sdlc-sweep.yml` | scheduled stall-sweep: enumerates open pipeline PRs and feeds each to `ai-sdlc-automerge.yml` — no green-idle PRs | `schedule` (every 30 min) / `workflow_dispatch` |
 | `ai-sdlc-ci-repair.yml` | bounded repair loop on red checks: failing-check log tails → `scc` headless on the PR head → commit + push; one comment per attempt; `needs-human` after `max_repairs` | `check_run.completed` (failure) / `workflow_dispatch` / automerge `repair-signaled` |
 | `ai-sdlc-verify.yml` | post-merge verify commands (resolved contract `verify.commands`); failure → issue (or revert when enabled) | post-merge |
@@ -53,8 +54,13 @@ resolves it before acting:
 |---|---|---|
 | intake | `triggers.issue_label`, `triggers.skip_labels`, `labels.*` | `trigger_label` |
 | implement | `model.primary`, `model.fallback`, `engine.max_seconds`, `engine.max_steps`, `labels.*` | `model`, `fallback_model`, `max_seconds`, `max_steps` |
-| automerge | `merge.max_repairs`, `merge.pending_max_minutes`, `merge.skip_labels`, `merge.method`, `escalation.label` | `max_repairs`, `pending_max_minutes`, `merge_method` |
+| review | `review.mode`, `review.ai_reviewer.model`, `review.max_fix_iterations`, `review.external_reviewer`, `merge.skip_labels`, `engine.*`, `escalation.label` | `model`, `external_reviewer`, `max_fix_iterations`, `max_seconds`, `max_steps` |
+| automerge | `merge.max_repairs`, `merge.pending_max_minutes`, `merge.skip_labels`, `merge.method`, `review.mode`, `review.wait_max_minutes`, `review.external_reviewer`, `escalation.label` | `max_repairs`, `pending_max_minutes`, `merge_method`, `review_wait_minutes` |
 | verify | `verify.commands` | `verify_commands` |
+
+`review.ai_reviewer.model` resolves to `model.primary` when unset **or**
+when it names an OmniRoute route (`auto/*`, `devin/*`) — those are Hermes
+control-plane only and unreachable from GHA runners (ADR-0001).
 
 `labels.state_machine` (spec/labels.md) rides along inside `contract.json`'s
 `labels` map — janitor/drift tooling reads it there; no runtime stage
@@ -194,6 +200,26 @@ pushes and PRs always fire downstream workflows (issue #26).
 | `model` | model id of the run that produced `exit_code` |
 | `primary_exit` | engine exit of the primary-model run |
 | `fallback_used` | `true` when the fallback run fired |
+| `pr_number` | PR opened by the run (empty when `exit_code != 0`) — feeds post-implement review |
+
+### ai-sdlc-review
+| Input | Default | Purpose |
+|---|---|---|
+| `repo`, `pr_number` | — (required) | target |
+| `base` | `main` | ref the contract is read from |
+| `pipeline_author` | `ai-sdlc-runtime[bot]` | PR author login treated as pipeline-managed |
+| `pipeline_label` | `ai-sdlc` | label that also marks a PR pipeline-managed (human-branch opt-in) |
+| `model` | `''` → `review.ai_reviewer.model` → `model.primary` | reviewer model |
+| `provider_base_url` | `https://models.github.ai/inference` | OpenAI-compatible inference endpoint |
+| `external_reviewer` | `''` → `review.external_reviewer` | external reviewer slug prefix (e.g. `coderabbit`); unset = AI-only |
+| `max_fix_iterations` | `-1` → `review.max_fix_iterations` (3) | fix pushes per PR before `needs-human` |
+| `max_seconds` / `max_steps` | `-1` → `engine.*` | engine budgets per run (review AND fix) |
+| `diff_max_bytes` | `150000` | byte cap on the diff embedded in the review prompt |
+| `findings_max` | `20` | findings kept in the verdict record / fix prompt |
+
+Outputs: `action` (`reviewed` \| `fix-dispatched` \| `escalated` \|
+`skipped`), `verdict` (`clean` \| `blocked` \| `inconclusive` \| `none`),
+`reason`, `risk_tier` (`low` \| `medium` \| `high` \| `critical`).
 
 ### ai-sdlc-automerge
 | Input | Default | Purpose |
@@ -204,6 +230,7 @@ pushes and PRs always fire downstream workflows (issue #26).
 | `pending_max_minutes` | `-1` → `merge.pending_max_minutes` | pending-checks cap before escalation |
 | `merge_method` | `''` → `merge.method` | `squash` \| `merge` \| `rebase` |
 | `org_config` | `''` | org baseline `owner/repo[/path][@ref]` — see [Org policy](#org-policy) |
+| `review_wait_minutes` | `-1` → `review.wait_max_minutes` (15) | pending-review cap before merging with `review_timeout` |
 
 ### ai-sdlc-verify
 | Input | Default | Purpose |
@@ -217,7 +244,7 @@ pushes and PRs always fire downstream workflows (issue #26).
 
 | Secret | Purpose |
 |---|---|
-| `AI_SDLC_APP_ID` | **required** by `implement`/`automerge`/`ci-repair` — the `ai-sdlc` GitHub App id; each run mints a repo-scoped installation token (App permissions: contents/pull-requests/issues write, checks read, metadata read). Unset → the stage fails fast with `ai-sdlc auth` error — no PAT/`GITHUB_TOKEN` fallback (issue #26) |
+| `AI_SDLC_APP_ID` | **required** by `implement`/`automerge`/`ci-repair`/`review` — the `ai-sdlc` GitHub App id; each run mints a repo-scoped installation token (App permissions: contents/pull-requests/issues write, checks read, metadata read). Unset → the stage fails fast with `ai-sdlc auth` error — no PAT/`GITHUB_TOKEN` fallback (issue #26) |
 | `AI_SDLC_APP_PRIVATE_KEY` | **required** — the App's PEM private key. Store both App secrets as org secrets scoped to the consumer repos |
 | `AI_SDLC_TOKEN` | optional legacy slot — still accepted by `intake`/`verify`/`sweep` when `GITHUB_TOKEN` can't reach the target repo for read/issue calls. Unused by `implement`/`automerge`/`ci-repair` |
 | `MODEL_API_KEY` | optional — direct provider key. When absent, the engine falls back to `GITHUB_TOKEN` against GitHub Models (zero-secret path; callers must grant `models: read`) |
@@ -328,6 +355,112 @@ jobs:
 
 The automerge gate's `repair-signaled` action points at this workflow as
 its dispatch target.
+
+## Review stage (`ai-sdlc-review.yml`)
+
+Implements the *AI review required* rows of `spec/risk-taxonomy.md`
+(issue #28) — Hermes `pr_reviewer.js` semantics plus optional external
+reviewer ingestion (homedir `coderabbit-integration.sh`). One invocation =
+at most one review pass for the current head SHA plus at most one fix
+dispatch; the loop closes through `pull_request: synchronize` events, not
+an in-run cycle.
+
+1. **Guard** — skip unless the PR is open, not a draft, carries no skip
+   label (`merge.skip_labels` + `escalation.label`), its head lives in the
+   base repo (fork heads never run with secrets), and it is
+   **pipeline-managed**: author == `pipeline_author` (the ai-sdlc App bot
+   identity, `ai-sdlc-runtime[bot]` by default) **or** the PR carries
+   `pipeline_label` (`ai-sdlc`, the opt-in for human branches) — match on
+   author + label per the operator answer on issue #28. `review.mode:
+   human` skips the whole stage. A head SHA that already has a verdict
+   marker is skipped (idempotent re-polls); a *blocked* verdict on the
+   head with no fix marker resumes at the fix dispatch — no second AI
+   pass.
+2. **External ingestion (optional)** — when `review.external_reviewer`
+   names a slug prefix (e.g. `coderabbit`), the guard reads that
+   reviewer's check-run conclusion on the head SHA, pull-request reviews
+   (`CHANGES_REQUESTED`), and inline-comment count. A blocking external
+   signal outranks the AI verdict (fail-safe, operator answer 4). Unset =
+   AI-only path.
+3. **Diff + risk tier** — checkout the head SHA (`persist-credentials:
+   false`), bounded `git diff` vs the merge-base (`diff_max_bytes`), and a
+   *deterministic* tier assignment from the file list/sizes (the taxonomy
+   says the tier SHOULD be computed from the diff, never self-declared;
+   ambiguity resolves UP). The tier is applied as a `pr:risk-*` label.
+4. **AI review** — the diff is fenced as untrusted data
+   (`spec/injection-defense.md`) in a diff-scoped prompt; `scc` runs
+   headless (same engine contract as implement/ci-repair) and writes the
+   machine verdict `ai-sdlc-review-verdict.json`
+   (`{verdict: approve|request_changes|comment, findings: [{severity:
+   blocker|major|minor, path, line, summary}]}`).
+5. **Verdict** — `request_changes` or any `blocker|major` finding or an
+   external blocking signal → `blocked`; `approve`/`comment` → `clean`;
+   a missing/malformed verdict file → `inconclusive` (recorded, never
+   silently blocks — review infra downtime cannot stall merges). The
+   verdict is posted as a best-effort `gh pr review` (falls back to a
+   comment on App-authored PRs, which cannot approve themselves) **and**
+   as the canonical marker comment
+   `<!-- ai-sdlc:review sha=<head> verdict=… -->` — the stateless
+   per-head record the merge gate and future runs read.
+6. **Fix dispatch** — `blocked` with iterations remaining → the `fix`
+   job stamps `<!-- ai-sdlc:review-fix attempt=N sha=<head> -->`
+   (at dispatch, so a dead run is detectable), runs `scc` with the
+   findings prompt on the SAME head branch, commits real mutations
+   (`.github/workflows/` stripped) and pushes under the App installation
+   token — the new head re-triggers review. `blocked` with
+   `attempts >= max_fix_iterations` (default 3) → `needs-human` + cause
+   comment. A fix attempt that produces nothing pushable also escalates
+   (nothing would re-trigger the loop).
+7. **Merge gate interaction** — `ai-sdlc-automerge.yml` holds a
+   mergeable PR while a verdict for the head SHA is pending
+   (`review-pending`), while a blocked verdict awaits its fix
+   (`review-blocked`/`review-fix-running`), or while a configured
+   external reviewer is still running (`external-review-pending`) or
+   blocking (`external-review-blocking`). Pending holds expire at
+   `review.wait_max_minutes` (default 15) → merge proceeds and the PR
+   records `review_timeout`; blocked/fix-running holds escalate to
+   `needs-human` past their caps (`review-fix-stalled`,
+   `review-fix-not-dispatched`, `external-review-blocking`) — the golden
+   rule holds either way: no pipeline PR stays open unresolved.
+
+Caller wiring (event plumbing is the caller's job):
+
+```yaml
+# .github/workflows/ai-sdlc.yml in the consuming repo
+name: ai-sdlc
+on:
+  pull_request: { types: [opened, synchronize] }
+
+jobs:
+  review:
+    # Fork heads carry no secrets — filter them at the caller so they skip
+    # cleanly instead of failing the called workflow's auth check.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-review.yml@main
+    with:
+      repo: ${{ github.repository }}
+      pr_number: ${{ github.event.pull_request.number }}
+    secrets: inherit   # AI_SDLC_APP_ID + AI_SDLC_APP_PRIVATE_KEY
+```
+
+Post-implement chaining (alternative to the event path — `implement`
+exposes `pr_number`):
+
+```yaml
+  review:
+    needs: implement
+    if: needs.implement.outputs.exit_code == '0'
+    uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-review.yml@main
+    with:
+      repo: ${{ github.repository }}
+      pr_number: ${{ needs.implement.outputs.pr_number }}
+    secrets: inherit
+```
+
+Artifacts: `ai-sdlc-review-<pr>-<attempt>` (verdict.json, prompt, bounded
+diff, external signal, scc audit/manifest) and
+`ai-sdlc-review-fix-<pr>-attempt-<n>` (fix manifest, prompt, audit log).
+
 ## Stall-sweep (`ai-sdlc-sweep.yml`)
 
 The merge gate is event-driven, so a missed event (or a PR that went green
@@ -431,10 +564,12 @@ issue labels:
 Every mutable step is bounded: job `timeout-minutes`, engine
 `max-seconds`/`max-steps`, per-issue `concurrency` group
 (`cancel-in-progress`), per-PR repair budget (`max_repairs`, queued
-concurrency so every attempt records its comment). The audit log + run
-manifest land as workflow artifacts (`ai-sdlc-run-<issue>`, plus
-`ai-sdlc-run.json` and the `*.primary.*` files when fallback fired) for
-postmortem analysis.
+concurrency so every attempt records its comment), per-PR review-fix
+budget (`review.max_fix_iterations`), the merge-gate review wait cap
+(`review.wait_max_minutes`), and byte/finding caps on the review prompt
+(`diff_max_bytes`, `findings_max`). The audit log + run manifest land as
+workflow artifacts (`ai-sdlc-run-<issue>`, plus `ai-sdlc-run.json` and the
+`*.primary.*` files when fallback fired) for postmortem analysis.
 
 ## Note on workflow-file edits
 

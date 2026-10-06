@@ -1,5 +1,6 @@
 # Self-dogfooding caller: this repo consumes its own reusable runtime.
 # An issue labeled `ready-to-implement` → DoR intake → implement → PR.
+# Every pull_request open/sync → AI review + bounded review-fix convergence.
 # Engine inference defaults to GitHub Models (GITHUB_TOKEN, `models: read`);
 # repo secret MODEL_API_KEY switches to a direct provider — opt-in by label.
 name: ai-sdlc (self)
@@ -7,6 +8,8 @@ name: ai-sdlc (self)
 on:
   issues:
     types: [labeled]
+  pull_request:
+    types: [opened, synchronize]
 
 permissions:
   contents: write
@@ -30,4 +33,16 @@ jobs:
     with:
       repo: ${{ github.repository }}
       issue_number: ${{ github.event.issue.number }}
+    secrets: inherit
+
+  review:
+    # Fork heads carry no secrets — the called workflow would fail its auth
+    # check rather than skip cleanly, so the event filter lives here.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/ai-sdlc-review.yml
+    with:
+      repo: ${{ github.repository }}
+      pr_number: ${{ github.event.pull_request.number }}
     secrets: inherit

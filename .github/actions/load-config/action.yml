@@ -95,6 +95,21 @@ outputs:
   merge_skip_labels:
     description: 'merge.skip_labels (JSON array)'
     value: ${{ steps.resolve.outputs.merge_skip_labels }}
+  review_mode:
+    description: 'review.mode — ai | human | hybrid'
+    value: ${{ steps.resolve.outputs.review_mode }}
+  review_model:
+    description: 'reviewer model — review.ai_reviewer.model with OmniRoute routes (auto/*, devin/*) falling back to model.primary (ADR-0001)'
+    value: ${{ steps.resolve.outputs.review_model }}
+  review_max_fix_iterations:
+    description: 'review.max_fix_iterations — bounded review→fix convergence per PR'
+    value: ${{ steps.resolve.outputs.review_max_fix_iterations }}
+  review_wait_max_minutes:
+    description: 'review.wait_max_minutes — merge-gate cap on a pending review verdict before review_timeout'
+    value: ${{ steps.resolve.outputs.review_wait_max_minutes }}
+  review_external_reviewer:
+    description: 'review.external_reviewer — external reviewer slug prefix; empty = AI-only path'
+    value: ${{ steps.resolve.outputs.review_external_reviewer }}
   escalation_label:
     value: ${{ steps.resolve.outputs.escalation_label }}
   labels:

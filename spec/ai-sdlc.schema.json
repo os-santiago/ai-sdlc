@@ -108,6 +108,18 @@
         "critical_requires_acceptance": {
           "type": "boolean",
           "description": "pr:risk-critical PRs withhold merge until pr:risk-accepted is applied. Default: true."
+        },
+        "max_fix_iterations": {
+          "type": "integer", "minimum": 0, "maximum": 10, "default": 3,
+          "description": "Bounded review→fix convergence: fix passes pushed to the PR head per pull request before escalating needs-human (issue #28)."
+        },
+        "wait_max_minutes": {
+          "type": "integer", "minimum": 1, "default": 15,
+          "description": "Merge-gate cap on waiting for a pending review verdict on the head SHA. Past the cap automerge proceeds and records review_timeout — review infra can never deadlock the pipeline."
+        },
+        "external_reviewer": {
+          "type": "string", "default": "",
+          "description": "Slug prefix of an external reviewer (e.g. 'coderabbit') whose check-run conclusion and pull-request reviews are ingested; its blocking signal outranks the AI verdict. Empty = AI-only path."
         }
       }
     },
