@@ -41,7 +41,7 @@ review:
     # Provider-native model for the GHA review stage — OmniRoute route
     # names (auto/*, devin/*) are Hermes control-plane only (ADR-0001)
     # and fall back to model.primary during contract resolution.
-    model: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+    model: nvidia/nemotron-3-super-120b-a12b
     inline_comments: true
     incremental: true
   max_fix_iterations: 3        # bounded review→fix convergence (issue #28)
@@ -101,8 +101,8 @@ model:
   # (GitHub Models retired 2026-07-30; current: NVIDIA NIM via MODEL_API_KEY).
   # OmniRoute route names (auto/*, devin/*) are Hermes control-plane only —
   # unreachable from GHA runners by design (ADR-0001).
-  primary: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
-  fallback: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+  primary: nvidia/nemotron-3-super-120b-a12b
+  fallback: nvidia/nemotron-3-ultra-550b-a55b
 
 engine:
   name: scc
