@@ -246,6 +246,9 @@ jobs:
           MAX_STEPS: ${{ steps.contract.outputs.max_steps }}
           SC_PROVIDER_CONNECT_TIMEOUT_MS: '90000'
           SC_PROVIDER_ATTEMPT_TIMEOUT_MS: '300000'
+          # Endpoint-level cascade for saturated NIM workers (503 ResourceExhausted):
+          # free-tier congestion is per-model-worker — a different endpoint often answers.
+          SC_FAILOVER: 'nvidia/nemotron-3-ultra-550b-a55b,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'
         run: |
           set +e
           # Exit contract: 0 ok · 10 no-changes · 20 provider · 21 auth · 22 budget · 23 livelock
