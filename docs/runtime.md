@@ -195,7 +195,7 @@ pushes and PRs always fire downstream workflows (issue #26).
 | `repo`, `issue_number` | — | target |
 | `model` | `''` → `model.primary` | engine model route |
 | `fallback_model` | `''` → `model.fallback` | one-shot fallback on provider/auth failure (exit 20/21) — see [Model fallback](#model-fallback) |
-| `provider_base_url` | `https://models.github.ai/inference` | OpenAI-compatible inference endpoint |
+| `provider_base_url` | `''` → `vars.AI_SDLC_PROVIDER_URL` → legacy default | OpenAI-compatible inference endpoint — see [Provider resolution](#provider-resolution) |
 | `base` | `main` | base branch (contract is read from here) |
 | `max_seconds` | `-1` → `engine.max_seconds` | engine wall-clock budget per run (exit 22 on cap) |
 | `max_steps` | `-1` → `engine.max_steps` | engine tool-step budget per run |
@@ -217,7 +217,7 @@ pushes and PRs always fire downstream workflows (issue #26).
 | `pipeline_author` | `ai-sdlc-runtime[bot]` | PR author login treated as pipeline-managed |
 | `pipeline_label` | `ai-sdlc` | label that also marks a PR pipeline-managed (human-branch opt-in) |
 | `model` | `''` → `review.ai_reviewer.model` → `model.primary` | reviewer model |
-| `provider_base_url` | `https://models.github.ai/inference` | OpenAI-compatible inference endpoint |
+| `provider_base_url` | `''` → `vars.AI_SDLC_PROVIDER_URL` → legacy default | OpenAI-compatible inference endpoint — see [Provider resolution](#provider-resolution) |
 | `external_reviewer` | `''` → `review.external_reviewer` | external reviewer slug prefix (e.g. `coderabbit`); unset = AI-only |
 | `max_fix_iterations` | `-1` → `review.max_fix_iterations` (3) | fix pushes per PR before `needs-human` |
 | `max_seconds` / `max_steps` | `-1` → `engine.*` | engine budgets per run (review AND fix) |
@@ -254,24 +254,37 @@ Outputs: `action` (`reviewed` \| `fix-dispatched` \| `escalated` \|
 | `AI_SDLC_APP_ID` | **required** by `implement`/`automerge`/`ci-repair`/`review` — the `ai-sdlc` GitHub App id; each run mints a repo-scoped installation token (App permissions: contents/pull-requests/issues write, checks read, metadata read). Unset → the stage fails fast with `ai-sdlc auth` error — no PAT/`GITHUB_TOKEN` fallback (issue #26) |
 | `AI_SDLC_APP_PRIVATE_KEY` | **required** — the App's PEM private key. Store both App secrets as org secrets scoped to the consumer repos |
 | `AI_SDLC_TOKEN` | optional legacy slot — still accepted by `intake`/`verify`/`sweep` when `GITHUB_TOKEN` can't reach the target repo for read/issue calls. Unused by `implement`/`automerge`/`ci-repair` |
-| `MODEL_API_KEY` | optional — direct provider key. When absent, the engine falls back to `GITHUB_TOKEN` against GitHub Models (zero-secret path; callers must grant `models: read`) |
+| `MODEL_API_KEY` | API key for the resolved provider endpoint — **required for inference** since GitHub Models retired 2026-07-30. When absent the engine keys with `GITHUB_TOKEN` (legacy zero-secret path; `models: read`), which only GitHub Models ever accepted — see [Provider resolution](#provider-resolution) |
 
 ## Provider resolution
 
 The implement step writes `~/.sc-agent/config.json` on the runner — the
 engine's single source of truth (no env overrides; lesson carried from the
 VPS worker: conflicting flag/env layers caused silent permission loss).
-Resolution order:
+`implement`, `review` and `ci-repair` resolve the endpoint with the same
+expression — first non-empty wins:
 
-1. `MODEL_API_KEY` set → `provider_base_url` + `model` as given (direct
-   provider: NVIDIA, OpenAI, any OpenAI-compatible endpoint).
-2. No `MODEL_API_KEY` → **GitHub Models** default (`models.github.ai`,
-   `GITHUB_TOKEN` as key, caller needs the `models: read` permission).
+1. `provider_base_url` workflow input — per-call override.
+2. `vars.AI_SDLC_PROVIDER_URL` — repository **variable** (Settings →
+   Secrets and variables → Actions → *Variables* tab); the standing
+   per-repo endpoint.
+3. Legacy default `https://models.github.ai/inference`.
+
+The API key resolves independently: `secrets.MODEL_API_KEY` when set, else
+`GITHUB_TOKEN` (the zero-secret path; callers grant `models: read`).
+
+**GitHub Models was retired 2026-07-30** — the legacy default endpoint no
+longer serves inference, so `MODEL_API_KEY` **and** a provider URL (the
+`provider_base_url` input or `AI_SDLC_PROVIDER_URL`) are both required,
+pointing at a live OpenAI-compatible endpoint (NVIDIA NIM, OpenAI, …).
+Left unset, the engine reaches the retired endpoint and exits
+provider/auth-class (20/21 — one `model.fallback` retry per
+[Model fallback](#model-fallback), then `scc:failed` + `needs-human`).
 
 OmniRoute route names (`auto/*`, `devin/*`) are Hermes control-plane only —
 unreachable from GHA runners by design
 ([ADR-0001](architecture/adr/0001-homedir-ai-sdlc-sunset-and-cutover.md)).
-Per-repo selection comes from the resolved contract
+Per-repo model selection comes from the resolved contract
 (`model.primary`/`model.fallback`); workflow inputs are the override
 surface.
 
@@ -281,7 +294,7 @@ surface.
 | `repo`, `pr_number` | — | target PR |
 | `max_repairs` | `3` | attempts per PR before `needs-human` (mirror `.ai-sdlc.yaml` `merge.max_repairs`) |
 | `model` | `openai/gpt-4o` | engine model id (provider-native) |
-| `provider_base_url` | `https://models.github.ai/inference` | OpenAI-compatible inference endpoint |
+| `provider_base_url` | `''` → `vars.AI_SDLC_PROVIDER_URL` → legacy default | OpenAI-compatible inference endpoint — see [Provider resolution](#provider-resolution) |
 | `max_seconds` / `max_steps` | `900` / `200` | engine budgets (same contract as implement) |
 | `branch_pattern` | `^(feat\|fix)/issue-[0-9]+` | ERE the head branch must match (pipeline PRs only); empty = any same-repo branch |
 | `max_failed_checks` | `5` | failing checks whose output enters the prompt |
@@ -290,8 +303,9 @@ surface.
 Outputs: `action` (`repaired` \| `escalated` \| `skipped`) and `reason`.
 Secrets: same as implement — `AI_SDLC_APP_ID` + `AI_SDLC_APP_PRIVATE_KEY`
 are required (fail-closed). The pushed fix uses the App installation token,
-so the new head re-triggers CI and the loop closes. Callers grant
-`models: read` for the GitHub Models fallback.
+so the new head re-triggers CI and the loop closes. Inference resolves the
+same endpoint/key chain as implement — `MODEL_API_KEY` + a provider URL are
+required since the GitHub Models retirement.
 
 ## Repair loop (`ai-sdlc-ci-repair.yml`)
 

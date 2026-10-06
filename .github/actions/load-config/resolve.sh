@@ -23,6 +23,14 @@ fail() {
   exit 1
 }
 
+yaml_to_json() {
+  if python3 -c 'import yaml' 2>/dev/null; then
+    python3 -c 'import yaml,json,sys; json.dump(yaml.safe_load(open(sys.argv[1])), open(sys.argv[2], "w"))' "$1" "$2"
+  else
+    npx -y -q js-yaml "$1" > "$2"
+  fi
+}
+
 RAW="$OUT_DIR/raw.json"
 if [ ! -f "$CFG" ]; then
   if [ "${REQUIRED:-true}" = "true" ]; then
@@ -39,13 +47,6 @@ $report"
   yaml_to_json "$CFG" "$RAW"
 fi
 
-yaml_to_json() {
-  if python3 -c 'import yaml' 2>/dev/null; then
-    python3 -c 'import yaml,json,sys; json.dump(yaml.safe_load(open(sys.argv[1])), open(sys.argv[2], "w"))' "$1" "$2"
-  else
-    npx -y -q js-yaml "$1" > "$2"
-  fi
-}
 
 # Org baseline layer (spec/org-policy.md): fetched by the action into
 # ORG_ROOT/ORG_PATH. Unreachable or invalid baselines fail safe to
