@@ -109,11 +109,13 @@ jobs:
           ref: ${{ inputs.base }}
           checkout: 'true'
           token: ${{ steps.app-token.outputs.token }}
+          # review.* inputs are applied inline in the step env below, not via
+          # overrides: the pinned @main action may predate the review.* keys,
+          # and an unknown override path hard-fails contract resolution.
           overrides: >-
             {"merge.max_repairs": ${{ inputs.max_repairs }},
              "merge.pending_max_minutes": ${{ inputs.pending_max_minutes }},
-             "merge.method": ${{ toJSON(inputs.merge_method) }},
-             "review.wait_max_minutes": ${{ inputs.review_wait_minutes }}}
+             "merge.method": ${{ toJSON(inputs.merge_method) }}}
 
       - name: Evaluate merge gate
         id: eval
@@ -123,8 +125,8 @@ jobs:
           MAX_REPAIRS: ${{ steps.contract.outputs.max_repairs }}
           SKIP_LABELS: ${{ steps.contract.outputs.merge_skip_labels }}
           ESCALATION: ${{ steps.contract.outputs.escalation_label }}
-          REVIEW_MODE: ${{ steps.contract.outputs.review_mode }}
-          REVIEW_WAIT: ${{ steps.contract.outputs.review_wait_max_minutes }}
+          REVIEW_MODE: ${{ steps.contract.outputs.review_mode || 'ai' }}
+          REVIEW_WAIT: ${{ (inputs.review_wait_minutes != -1 && toJSON(inputs.review_wait_minutes)) || steps.contract.outputs.review_wait_max_minutes || '15' }}
           EXT: ${{ steps.contract.outputs.review_external_reviewer }}
         run: |
           set -euo pipefail
@@ -263,7 +265,7 @@ jobs:
         if: steps.eval.outputs.action == 'merged' && contains(steps.eval.outputs.reason, 'review_timeout')
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          WAIT: ${{ steps.contract.outputs.review_wait_max_minutes }}
+          WAIT: ${{ (inputs.review_wait_minutes != -1 && toJSON(inputs.review_wait_minutes)) || steps.contract.outputs.review_wait_max_minutes || '15' }}
         run: |
           set -euo pipefail
           SHA=$(jq -r .headRefOid pr.json)

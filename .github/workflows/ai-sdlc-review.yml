@@ -145,9 +145,9 @@ jobs:
       head_ref: ${{ steps.guard.outputs.head_ref }}
       head_sha: ${{ steps.guard.outputs.head_sha }}
       findings_json: ${{ steps.result.outputs.findings_json }}
-      resolved_model: ${{ steps.contract.outputs.review_model }}
+      resolved_model: ${{ inputs.model || steps.contract.outputs.review_model || steps.contract.outputs.model_primary }}
       escalation_label: ${{ steps.contract.outputs.escalation_label }}
-      max_fix: ${{ steps.contract.outputs.review_max_fix_iterations }}
+      max_fix: ${{ (inputs.max_fix_iterations != -1 && toJSON(inputs.max_fix_iterations)) || steps.contract.outputs.review_max_fix_iterations || '3' }}
       max_seconds: ${{ steps.contract.outputs.max_seconds }}
       max_steps: ${{ steps.contract.outputs.max_steps }}
     steps:
@@ -188,11 +188,11 @@ jobs:
           ref: ${{ inputs.base }}
           checkout: 'true'
           token: ${{ steps.app-token.outputs.token }}
+          # review.* input overrides are applied inline in the step env below,
+          # not via overrides: the pinned @main action may predate the review.*
+          # override keys, and an unknown path hard-fails contract resolution.
           overrides: >-
-            {"review.ai_reviewer.model": ${{ toJSON(inputs.model) }},
-             "review.external_reviewer": ${{ toJSON(inputs.external_reviewer) }},
-             "review.max_fix_iterations": ${{ inputs.max_fix_iterations }},
-             "engine.max_seconds": ${{ inputs.max_seconds }},
+            {"engine.max_seconds": ${{ inputs.max_seconds }},
              "engine.max_steps": ${{ inputs.max_steps }}}
 
       - uses: actions/setup-node@v4
@@ -205,9 +205,9 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PIPELINE_AUTHOR: ${{ inputs.pipeline_author }}
           PIPELINE_LABEL: ${{ inputs.pipeline_label }}
-          REVIEW_MODE: ${{ steps.contract.outputs.review_mode }}
-          EXT: ${{ steps.contract.outputs.review_external_reviewer }}
-          MAX_FIX: ${{ steps.contract.outputs.review_max_fix_iterations }}
+          REVIEW_MODE: ${{ steps.contract.outputs.review_mode || 'ai' }}
+          EXT: ${{ inputs.external_reviewer || steps.contract.outputs.review_external_reviewer }}
+          MAX_FIX: ${{ (inputs.max_fix_iterations != -1 && toJSON(inputs.max_fix_iterations)) || steps.contract.outputs.review_max_fix_iterations || '3' }}
           SKIP_LABELS: ${{ steps.contract.outputs.merge_skip_labels }}
           ESCALATION: ${{ steps.contract.outputs.escalation_label }}
         run: |
@@ -401,7 +401,7 @@ jobs:
         env:
           TIER: ${{ steps.diff.outputs.risk_tier }}
           WHY: ${{ steps.diff.outputs.risk_why }}
-          MODEL: ${{ steps.contract.outputs.review_model }}
+          MODEL: ${{ inputs.model || steps.contract.outputs.review_model || steps.contract.outputs.model_primary }}
         run: |
           set -euo pipefail
           node - <<'NODE'
@@ -454,7 +454,7 @@ jobs:
       - name: Configure scc engine provider
         if: steps.guard.outputs.decision == 'review'
         env:
-          MODEL_NAME: ${{ steps.contract.outputs.review_model }}
+          MODEL_NAME: ${{ inputs.model || steps.contract.outputs.review_model || steps.contract.outputs.model_primary }}
           PROVIDER_BASE_URL: ${{ inputs.provider_base_url }}
           MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
           GH_TOKEN_FOR_MODELS: ${{ secrets.GITHUB_TOKEN }}
@@ -514,7 +514,7 @@ jobs:
           FINDINGS_MAX: ${{ inputs.findings_max }}
           TIER: ${{ steps.diff.outputs.risk_tier }}
           WHY: ${{ steps.diff.outputs.risk_why }}
-          MODEL: ${{ steps.contract.outputs.review_model }}
+          MODEL: ${{ inputs.model || steps.contract.outputs.review_model || steps.contract.outputs.model_primary }}
           HEAD_SHA: ${{ steps.guard.outputs.head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -583,7 +583,7 @@ jobs:
           COUNTS: ${{ steps.verdict.outputs.counts }}
           TIER: ${{ steps.diff.outputs.risk_tier }}
           WHY: ${{ steps.diff.outputs.risk_why }}
-          MODEL: ${{ steps.contract.outputs.review_model }}
+          MODEL: ${{ inputs.model || steps.contract.outputs.review_model || steps.contract.outputs.model_primary }}
           ENGINE_CODE: ${{ steps.engine.outputs.exit_code }}
           HEAD_SHA: ${{ steps.guard.outputs.head_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -643,7 +643,7 @@ jobs:
           DECISION: ${{ steps.guard.outputs.decision }}
           REASON: ${{ steps.guard.outputs.reason }}
           ATTEMPTS: ${{ steps.guard.outputs.attempts }}
-          MAX_FIX: ${{ steps.contract.outputs.review_max_fix_iterations }}
+          MAX_FIX: ${{ (inputs.max_fix_iterations != -1 && toJSON(inputs.max_fix_iterations)) || steps.contract.outputs.review_max_fix_iterations || '3' }}
           ESCALATION: ${{ steps.contract.outputs.escalation_label }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -669,7 +669,7 @@ jobs:
           VERDICT: ${{ steps.verdict.outputs.verdict }}
           GUARD_VERDICT: ${{ steps.guard.outputs.verdict }}
           ATTEMPTS: ${{ steps.guard.outputs.attempts }}
-          MAX_FIX: ${{ steps.contract.outputs.review_max_fix_iterations }}
+          MAX_FIX: ${{ (inputs.max_fix_iterations != -1 && toJSON(inputs.max_fix_iterations)) || steps.contract.outputs.review_max_fix_iterations || '3' }}
           ESCALATED: ${{ steps.escalate.outcome }}
           FJ_REVIEW: ${{ steps.verdict.outputs.findings_json }}
           FJ_GUARD: ${{ steps.guard.outputs.findings_json }}
