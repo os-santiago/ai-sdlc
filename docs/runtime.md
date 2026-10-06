@@ -3,6 +3,12 @@
 The pipeline stages as `workflow_call` workflows. A consuming repo drops a
 thin caller workflow + `.ai-sdlc.yaml` and gets the autonomous loop.
 
+
+## Decision Records
+
+We maintain Architecture Decision Records (ADRs) in the [architecture/adr](./architecture/adr/) directory.
+See [ADR-0001: Homedir AI-SDLC Sunset and Cutover](./architecture/adr/0001-homedir-ai-sdlc-sunset-and-cutover.md) for details on the homedir cutover.
+
 ## Workflows
 
 | Workflow | Stage | Entry |
