@@ -60,7 +60,8 @@ resolves it before acting:
 
 `review.ai_reviewer.model` resolves to `model.primary` when unset **or**
 when it names an OmniRoute route (`auto/*`, `devin/*`) — those are Hermes
-control-plane only and unreachable from GHA runners (ADR-0001).
+control-plane only and unreachable from GHA runners
+([ADR-0001](architecture/adr/0001-homedir-ai-sdlc-sunset-and-cutover.md)).
 
 `labels.state_machine` (spec/labels.md) rides along inside `contract.json`'s
 `labels` map — janitor/drift tooling reads it there; no runtime stage
@@ -262,9 +263,11 @@ Resolution order:
    `GITHUB_TOKEN` as key, caller needs the `models: read` permission).
 
 OmniRoute route names (`auto/*`, `devin/*`) are Hermes control-plane only —
-unreachable from GHA runners by design (ADR-0001). Per-repo selection comes
-from the resolved contract (`model.primary`/`model.fallback`); workflow
-inputs are the override surface.
+unreachable from GHA runners by design
+([ADR-0001](architecture/adr/0001-homedir-ai-sdlc-sunset-and-cutover.md)).
+Per-repo selection comes from the resolved contract
+(`model.primary`/`model.fallback`); workflow inputs are the override
+surface.
 
 ### ai-sdlc-ci-repair
 | Input | Default | Purpose |
@@ -590,3 +593,13 @@ commit files under `.github/workflows/` — the implement job strips
 workflow-path changes from the agent diff before committing
 (`git add -A -- ':!.github/workflows'`). Repo opt-in workflow edits remain
 human-authored.
+
+## Decision records
+
+Architecture decisions live under `docs/architecture/adr/`:
+
+- [ADR-0001: homedir-ai-sdlc sunset and canonical-runtime cutover](architecture/adr/0001-homedir-ai-sdlc-sunset-and-cutover.md)
+  — binding record for the homedir cutover (epic #30): `homedir-ai-sdlc`
+  sunsets once its evidence gate passes, `os-santiago/homedir` migrates to
+  this runtime, and OmniRoute route names (`auto/*`, `devin/*`) stay
+  Hermes control-plane only.
