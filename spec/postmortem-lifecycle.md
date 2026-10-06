@@ -59,6 +59,13 @@ Rules:
   follows the runtime's fenced-comment convention
   (`<!-- ai-sdlc:review sha=… -->`, `<!-- ai-sdlc:ci-repair … -->`):
   `<!-- ai-sdlc:postmortem signature=<signatureHash> -->` in the body.
+- `signatureHash` MUST NOT contain the substring `-->` or any other
+  sequence that would prematurely close the HTML comment — a
+  comment-breaking marker injects arbitrary Markdown/HTML into the
+  issue body. Producers MUST validate `signatureHash` before emitting
+  any marker and MUST NOT emit a marker that fails the check;
+  `normalize()` SHOULD return values from a comment-safe alphabet
+  (hex, base64url, …) so the check passes by construction.
 - A human MAY file an issue colliding with a live signature; it is
   treated like any duplicate — closed in favor of the canonical, or
   adopted as the canonical when it is the lowest-numbered carrier.
@@ -134,9 +141,10 @@ be occurrences observed since the latest `closedAt` (0 while open):
   trade signal latency for tracker quiet.
 - The count resets on every close→reopen cycle. Occurrences landing on
   an `open`/`reopened` canonical are always comment-only (L5).
-- Occurrence and recurrence comments SHOULD carry the marker
-  (`<!-- ai-sdlc:postmortem signature=… count=… -->`) so `count` is
-  re-derivable from the API rather than trusted to producer memory.
+- Occurrence and recurrence comments MUST carry the marker
+  (`<!-- ai-sdlc:postmortem signature=… count=… -->`) with the current
+  `count`, so `count` is re-derivable from the issue timeline alone
+  rather than trusted to producer memory.
 
 ## Runbook ingest on close
 
