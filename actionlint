@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# actionlint — repo-local wrapper that runs the SAME pinned release CI uses
+# (.github/workflows/actionlint.yml). Nothing is vendored: the tarball is
+# fetched once, SHA-256-verified, and cached per user.
+#
+#   ./actionlint -color        # lint .github/workflows/ with CI parity
+#   bash actionlint -color     # same, if a copy lost the exec bit
+#
+# Resolution: a PATH-installed actionlint wins; otherwise the pinned
+# linux/amd64 release is used from ${XDG_CACHE_HOME:-~/.cache}/ai-sdlc/.
+set -euo pipefail
+
+VERSION="1.7.12"  # keep in sync with .github/workflows/actionlint.yml
+SHA256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"  # actionlint_1.7.12_linux_amd64.tar.gz
+
+canon() { (cd "$(dirname "$1")" >/dev/null 2>&1 && pwd -P)/$(basename "$1"); }
+self="$(canon "${BASH_SOURCE[0]}")"
+
+if on_path="$(command -v actionlint 2>/dev/null)"; then
+  on_path_resolved="$on_path"
+  command -v readlink >/dev/null 2>&1 && on_path_resolved="$(readlink -f "$on_path")"
+  # Never exec a PATH entry that resolves back to this script.
+  if [ "$on_path_resolved" != "$self" ] && [ "$(canon "$on_path")" != "$self" ]; then
+    exec "$on_path" "$@"
+  fi
+fi
+
+if [ "$(uname -s)-$(uname -m)" != "Linux-x86_64" ]; then
+  echo "actionlint: pinned binary is linux/amd64 only — install actionlint locally (https://github.com/rhysd/actionlint) so it is on PATH" >&2
+  exit 2
+fi
+
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/ai-sdlc"
+bin="$cache_dir/actionlint-${VERSION}-linux-amd64"
+if [ ! -x "$bin" ]; then
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+  tarball="actionlint_${VERSION}_linux_amd64.tar.gz"
+  curl -fsSL -o "$tmp/$tarball" \
+    "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/${tarball}"
+  (cd "$tmp" && echo "${SHA256}  ${tarball}" | sha256sum -c - >/dev/null)
+  tar -xzf "$tmp/$tarball" -C "$tmp" actionlint
+  mkdir -p "$cache_dir"
+  mv "$tmp/actionlint" "$bin"
+  chmod +x "$bin"
+  rm -rf "$tmp"
+  trap - EXIT
+fi
+exec "$bin" "$@"

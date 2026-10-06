@@ -65,10 +65,11 @@ jobs:
           overrides: >-
             {"verify.commands": ${{ toJSON(inputs.verify_commands) }}}
 
+      # No cache: npm — the target repo may carry no lockfile (setup-node
+      # would fail); verify commands bring their own install step anyway.
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
 
       - name: Resolve verify commands
         id: cmds

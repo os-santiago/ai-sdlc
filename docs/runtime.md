@@ -56,6 +56,10 @@ resolves it before acting:
 | automerge | `merge.max_repairs`, `merge.pending_max_minutes`, `merge.skip_labels`, `merge.method`, `escalation.label` | `max_repairs`, `pending_max_minutes`, `merge_method` |
 | verify | `verify.commands` | `verify_commands` |
 
+`labels.state_machine` (spec/labels.md) rides along inside `contract.json`'s
+`labels` map — janitor/drift tooling reads it there; no runtime stage
+consumes it yet.
+
 `model.fallback` is used **once**, only when the primary route fails with a
 provider error (engine exit 20); both attempts' audit logs are uploaded.
 
