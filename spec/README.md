@@ -14,6 +14,7 @@ implements via `.ai-sdlc.yaml` at its root.
 | [`risk-taxonomy.md`](risk-taxonomy.md) | pr:risk-* tiers + required-evidence matrix + merge-gate decision table | #3 |
 | [`injection-defense.md`](injection-defense.md) | Trust-boundary model, fence+scrub convention, forbidden-action rules | #4 |
 | [`org-policy.md`](org-policy.md) | Field-level merge, pin-able floor fields, resolution algorithm | #6 |
+| [`postmortem-lifecycle.md`](postmortem-lifecycle.md) | Postmortem issue lifecycle — `signatureHash` canonical identity, open+closed dedup on a 90-day `closedAt` window, `POSTMORTEM_REOPEN_MIN` reopen threshold, runbook ingest on close | #20 |
 
 ## Versioning
 
