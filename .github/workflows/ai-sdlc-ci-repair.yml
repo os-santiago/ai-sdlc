@@ -45,9 +45,9 @@ on:
         type: string
         default: 'openai/gpt-4o'
       provider_base_url:
-        description: 'OpenAI-compatible inference base URL (default: GitHub Models)'
+        description: 'OpenAI-compatible inference base URL; empty → vars.AI_SDLC_PROVIDER_URL → GitHub Models default'
         type: string
-        default: 'https://models.github.ai/inference'
+        default: ''
       max_seconds:
         type: number
         default: 900
@@ -326,7 +326,7 @@ jobs:
         if: steps.guard.outputs.decision == 'repair'
         env:
           MODEL_NAME: ${{ inputs.model }}
-          PROVIDER_BASE_URL: ${{ inputs.provider_base_url }}
+          PROVIDER_BASE_URL: ${{ inputs.provider_base_url || vars.AI_SDLC_PROVIDER_URL || 'https://models.github.ai/inference' }}
           MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
           GH_TOKEN_FOR_MODELS: ${{ secrets.GITHUB_TOKEN }}
         run: |
