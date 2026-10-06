@@ -503,7 +503,9 @@ jobs:
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           # The verdict file is the machine contract; anything else the
           # engine wrote stays uncommitted (review never commits).
-          [ -f ai-sdlc-review-verdict.json ] && cp ai-sdlc-review-verdict.json "$WORK/verdict.raw.json" || true
+          if [ -f ai-sdlc-review-verdict.json ]; then
+            cp ai-sdlc-review-verdict.json "$WORK/verdict.raw.json"
+          fi
           exit 0  # never fail the job here — verdict normalized below
 
       - name: Normalize verdict + external signal
@@ -653,6 +655,7 @@ jobs:
           else
             CAUSE="review returned a blocking verdict and the fix budget is already exhausted ($ATTEMPTS/$MAX_FIX)"
           fi
+          # shellcheck disable=SC2016  # literal Markdown backticks
           printf '⚠️ **AI-SDLC review escalated** — cause: %s (`%s`).\n\nHuman review required; remove `%s` (or push a fix) to hand control back. Run: %s\n' \
             "$CAUSE" "${REASON:-unknown}" "$ESCALATION" "$RUN_URL" > "$WORK/escalation-comment.md"
           gh label create "$ESCALATION" -R "$REPO" --color B60205 \
@@ -771,6 +774,7 @@ jobs:
           mkdir -p "$WORK"
           export WORK
           echo "WORK=$WORK" >> "$GITHUB_ENV"
+          # shellcheck disable=SC2016  # literal Markdown backticks
           printf '<!-- ai-sdlc:review-fix attempt=%s sha=%s -->\n🛠️ **AI-SDLC review-fix — attempt %s/%s** dispatched on head `%s` (findings from the blocking verdict). Outcome is recorded when the run finishes; the push re-triggers `pull_request: synchronize` → re-review. Run: %s\n' \
             "$ATTEMPT" "$HEAD_SHA" "$ATTEMPT" "$MAX_FIX" "${HEAD_SHA:0:8}" "$RUN_URL" > "$WORK/attempt-start.md"
           gh pr comment "$PR" -R "$REPO" --body-file "$WORK/attempt-start.md"
@@ -958,6 +962,7 @@ jobs:
           ESCALATION: ${{ needs.review.outputs.escalation_label }}
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2016  # literal Markdown backticks
           printf '⚠️ **AI-SDLC review-fix escalated** — cause: fix attempt %s/%s produced no pushable change (outcome: `%s`) — nothing will re-trigger the convergence loop.\n\nHuman review required; remove `%s` (or push a fix) to hand control back.\n' \
             "$ATTEMPT" "$MAX_FIX" "${OUTCOME:-unknown}" "$ESCALATION" > "$WORK/escalation-comment.md"
           gh label create "$ESCALATION" -R "$REPO" --color B60205 \

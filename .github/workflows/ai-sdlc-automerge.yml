@@ -269,6 +269,7 @@ jobs:
         run: |
           set -euo pipefail
           SHA=$(jq -r .headRefOid pr.json)
+          # shellcheck disable=SC2016  # literal Markdown backticks
           printf '⏱️ **AI-SDLC:** merged past the review wait cap (%s min) — the pending review on head `%s` is recorded as `review_timeout`. Review infra can never stall merges beyond the cap (issue #28).\n' \
             "$WAIT" "${SHA:0:8}" > "$RUNNER_TEMP/review-timeout.md"
           gh pr comment "$PR" -R "$REPO" --body-file "$RUNNER_TEMP/review-timeout.md"
