@@ -23,15 +23,21 @@ fail() {
   exit 1
 }
 
+RAW="$OUT_DIR/raw.json"
 if [ ! -f "$CFG" ]; then
-  fail "contract not found: $WHERE — every AI-SDLC repo must carry a .ai-sdlc.yaml (spec/ai-sdlc.schema.json). The stage refuses to run on implicit defaults."
-fi
-
-if ! report="$(bash "$VALIDATOR" "$CFG" "$SCHEMA" 2>&1)"; then
-  fail "contract invalid: $WHERE
+  if [ "${REQUIRED:-true}" = "true" ]; then
+    fail "contract not found: $WHERE — every AI-SDLC repo must carry a .ai-sdlc.yaml (spec/ai-sdlc.schema.json). The stage refuses to run on implicit defaults."
+  fi
+  echo "::warning title=ai-sdlc contract::contract not found: $WHERE — proceeding on runtime defaults (required=false). Dispatch-affecting stages must keep required=true."
+  echo '{}' > "$RAW"
+else
+  if ! report="$(bash "$VALIDATOR" "$CFG" "$SCHEMA" 2>&1)"; then
+    fail "contract invalid: $WHERE
 $report"
+  fi
+  echo "$report"
+  yaml_to_json "$CFG" "$RAW"
 fi
-echo "$report"
 
 yaml_to_json() {
   if python3 -c 'import yaml' 2>/dev/null; then
@@ -62,9 +68,6 @@ if [ -n "${ORG_CONFIG:-}" ]; then
     ORG_STATE="applied"
   fi
 fi
-
-RAW="$OUT_DIR/raw.json"
-yaml_to_json "$CFG" "$RAW"
 
 OVR="${OVERRIDES:-}"; [ -n "${OVR//[[:space:]]/}" ] || OVR='{}'
 if ! err="$(python3 "$ACTION_DIR/resolve.py" --input "$RAW" --overrides "$OVR" \

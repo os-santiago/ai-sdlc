@@ -35,6 +35,10 @@ inputs:
   overrides:
     description: 'JSON object of dotted contract paths → workflow-input values; null / "" / negative numbers mean "unset"'
     default: '{}'
+  required:
+    description: "'true' (default) fails when the repo contract is missing; 'false' resolves runtime defaults instead — for advisory stages only (review), never dispatch gates"
+    required: false
+    default: 'true'
   org-config:
     description: 'org baseline contract reference `owner/repo[/path][@ref]` — org floor merges per spec/org-policy.md; empty = repo contract + defaults. `token` must read the org repo (e.g. an org-installed AI_SDLC_TOKEN).'
     default: ''
@@ -183,6 +187,7 @@ runs:
         CONTRACT_ROOT: ${{ inputs.checkout == 'true' && '.ai-sdlc-contract-src' || inputs.path }}
         CONTRACT_FILE: ${{ inputs.config }}
         OVERRIDES: ${{ inputs.overrides }}
+        REQUIRED: ${{ inputs.required }}
         ORG_CONFIG: ${{ inputs.org-config }}
         ORG_ROOT: .ai-sdlc-org-src
         ORG_REPO: ${{ steps.orgref.outputs.repo }}
