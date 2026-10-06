@@ -38,6 +38,66 @@ autonomy driven by a declarative per-repo contract (`.ai-sdlc.yaml`).
   headless contract (`--prompt-file`, `--audit-log`, `--summary-file`,
   `--no-commit`) can slot in.
 
+## Adopt this runtime
+
+A consumer repo needs three things: a contract file, a thin caller
+workflow, and the GitHub App.
+
+1. **Contract** — commit `.ai-sdlc.yaml` at the repo root. Start from an
+   archetype in [`examples/`](examples/) (library = conservative,
+   internal-app = aggressive) and set `verify.commands` to the repo's
+   real checks. Every stage validates it against
+   [`spec/ai-sdlc.schema.json`](spec/ai-sdlc.schema.json) before acting —
+   an invalid contract fails fast; nothing dispatches on implicit
+   defaults.
+2. **Caller workflow** — commit `.github/workflows/ai-sdlc.yml` wiring
+   repo events to the reusable stages:
+
+   ```yaml
+   name: ai-sdlc
+   on:
+     issues: { types: [labeled] }
+
+   permissions:
+     contents: write
+     issues: write
+     pull-requests: write
+     models: read   # GitHub Models default for the engine
+
+   jobs:
+     intake:
+       if: github.event.label.name == 'ready-to-implement'
+       uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-intake.yml@main
+       with:
+         repo: ${{ github.repository }}
+         issue_number: ${{ github.event.issue.number }}
+       secrets: inherit
+
+     implement:
+       needs: intake
+       if: needs.intake.outputs.dispatch == 'true'
+       uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-implement.yml@main
+       with:
+         repo: ${{ github.repository }}
+         issue_number: ${{ github.event.issue.number }}
+       secrets: inherit
+   ```
+
+   AI review, the merge gate, ci-repair and the stall-sweep wire up the
+   same way (`uses: os-santiago/ai-sdlc/.github/workflows/*@main`) — see
+   [docs/runtime.md](docs/runtime.md) for each stage's caller snippet.
+3. **App + secrets** — install the `ai-sdlc` GitHub App on the repo and
+   expose `AI_SDLC_APP_ID` + `AI_SDLC_APP_PRIVATE_KEY` to the caller
+   (org secrets scoped to consumer repos are the intended setup). The
+   mutating stages mint a per-run installation token and **fail closed**
+   without them — no PAT fallback, so pushes and PRs always re-fire CI.
+   `MODEL_API_KEY` is optional: set it for a direct provider, or leave it
+   unset for the GitHub Models path (`GITHUB_TOKEN` + `models: read`).
+
+Then create the trigger label once (`gh label create
+ready-to-implement`) and apply it to a DoR-ready issue — intake validates
+and queues it, implement opens the PR.
+
 ## Documentation
 
 - [docs/runtime.md](docs/runtime.md) — `workflow_call` runtime stages
