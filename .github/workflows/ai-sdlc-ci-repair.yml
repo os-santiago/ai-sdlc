@@ -360,6 +360,9 @@ jobs:
         env:
           MAX_SECONDS: ${{ inputs.max_seconds }}
           MAX_STEPS: ${{ inputs.max_steps }}
+          SC_PROVIDER_CONNECT_TIMEOUT_MS: '90000'
+          SC_PROVIDER_ATTEMPT_TIMEOUT_MS: '300000'
+          SC_FAILOVER: 'nvidia/nemotron-3-ultra-550b-a55b,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'
         run: |
           set +e
           scc chat -yq \
