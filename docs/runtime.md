@@ -578,7 +578,12 @@ budget (`review.max_fix_iterations`), the merge-gate review wait cap
 (`review.wait_max_minutes`), and byte/finding caps on the review prompt
 (`diff_max_bytes`, `findings_max`). The audit log + run manifest land as
 workflow artifacts (`ai-sdlc-run-<issue>`, plus `ai-sdlc-run.json` and the
-`*.primary.*` files when fallback fired) for postmortem analysis.
+`*.primary.*` files when fallback fired) for postmortem analysis. Those
+session files live in the workspace root during a run but are excluded
+from the implement stage's `git add` (`:!scc-*.json*`, `:!ai-sdlc-run.json`,
+`:!issue.json`, `:!task-prompt.md`) — and root-ignored in this repo's
+`.gitignore` — so a run's commit only ever carries real source changes
+(issue #68).
 
 ## Kill-switch (`AI_SDLC_OFF`)
 

@@ -346,8 +346,16 @@ jobs:
           set -euo pipefail
           git config user.name "ai-sdlc[bot]"
           git config user.email "ai-sdlc[bot]@users.noreply.github.com"
-          if ! git diff --quiet && git diff --cached --quiet; then
-            git add -A -- ':!.github/workflows'
+          # Engine session artifacts are run evidence uploaded as workflow
+          # artifacts — exclude them so only real source changes land in the
+          # consumer diff (issue #68).
+          git add -A -- . \
+            ':!.github/workflows' \
+            ':!scc-*.json*' \
+            ':!ai-sdlc-run.json' \
+            ':!issue.json' \
+            ':!task-prompt.md'
+          if ! git diff --cached --quiet; then
             git commit -m "feat: implement issue #$ISSUE (ai-sdlc runtime)"
           fi
           SLUG=$(gh issue view "$ISSUE" -R "$REPO" --json title -q '.title' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | cut -c1-40 | sed 's/-*$//')
