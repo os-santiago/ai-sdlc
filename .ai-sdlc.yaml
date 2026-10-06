@@ -101,8 +101,8 @@ model:
   # (GitHub Models retired 2026-07-30; current: NVIDIA NIM via MODEL_API_KEY).
   # OmniRoute route names (auto/*, devin/*) are Hermes control-plane only —
   # unreachable from GHA runners by design (ADR-0001).
-  primary: moonshotai/kimi-k3
-  fallback: deepseek-ai/deepseek-v4.1-flash
+  primary: deepseek-ai/deepseek-v4.1-flash
+  fallback: moonshotai/kimi-k3
 
 engine:
   name: scc
