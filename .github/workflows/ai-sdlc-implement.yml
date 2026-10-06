@@ -13,8 +13,8 @@
 #       with:
 #         repo: ${{ github.repository }}
 #         issue_number: 42
-#       secrets:
-#         AI_SDLC_TOKEN: ${{ secrets.AI_SDLC_TOKEN }}   # optional; see docs/runtime.md
+#       secrets: inherit   # needs AI_SDLC_APP_ID + AI_SDLC_APP_PRIVATE_KEY
+#                          # (ai-sdlc GitHub App, fail-closed — docs/runtime.md)
 name: ai-sdlc-implement
 
 on:
@@ -51,9 +51,12 @@ on:
         type: number
         default: -1
     secrets:
-      AI_SDLC_TOKEN:
-        description: 'PAT/App token for cross-repo write + PR-opened CI trigger'
-        required: false
+      AI_SDLC_APP_ID:
+        description: 'ai-sdlc GitHub App id — mints the per-run installation token used for all git/gh auth (fail-closed when unset; issue #26)'
+        required: true
+      AI_SDLC_APP_PRIVATE_KEY:
+        description: 'ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID'
+        required: true
       MODEL_API_KEY:
         description: 'API key the engine uses (OPENAI_API_KEY surface)'
         required: false
@@ -72,14 +75,11 @@ on:
         value: ${{ jobs.implement.outputs.fallback_used }}
 
 env:
-  GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
   REPO: ${{ inputs.repo }}
 
+# GITHUB_TOKEN only powers GitHub Models inference (GH_TOKEN_FOR_MODELS);
+# every git/gh call uses the minted ai-sdlc App installation token.
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
-  actions: read
   models: read
 
 jobs:
@@ -95,12 +95,44 @@ jobs:
       group: ai-sdlc-${{ inputs.repo }}-${{ inputs.issue_number }}
       cancel-in-progress: true
     steps:
+      - name: Verify ai-sdlc App credentials
+        id: creds
+        env:
+          APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          case "$REPO" in */*) ;; *)
+            echo "::error title=ai-sdlc auth::repo input '$REPO' is not owner/name" >&2
+            exit 1 ;;
+          esac
+          if [ -z "${APP_ID:-}" ] || [ -z "${APP_PRIVATE_KEY:-}" ]; then
+            echo "::error title=ai-sdlc auth::AI_SDLC_APP_ID and AI_SDLC_APP_PRIVATE_KEY must be configured — the ai-sdlc GitHub App is the only pipeline identity for pushes/PRs (fail-closed: no PAT or GITHUB_TOKEN fallback). Install the App on $REPO and add the org secrets; see docs/runtime.md (issue #26)." >&2
+            exit 1
+          fi
+          {
+            echo "owner=${REPO%%/*}"
+            echo "repo_name=${REPO##*/}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Mint ai-sdlc App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.AI_SDLC_APP_ID }}
+          private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+          owner: ${{ steps.creds.outputs.owner }}
+          repositories: ${{ steps.creds.outputs.repo_name }}
+
       - uses: actions/checkout@v4
         with:
           repository: ${{ inputs.repo }}
           ref: ${{ inputs.base }}
           fetch-depth: 0
-          token: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
+          # Keep the push token out of .git/config — the engine runs in this
+          # workspace on untrusted issue text (same posture as ci-repair).
+          persist-credentials: false
 
       - name: Resolve contract (.ai-sdlc.yaml)
         id: contract
@@ -118,6 +150,7 @@ jobs:
       - name: Contract error → not-ready + comment
         if: failure() && steps.contract.outcome == 'failure'
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           ISSUE: ${{ inputs.issue_number }}
         run: |
           set -euo pipefail
@@ -182,6 +215,7 @@ jobs:
 
       - name: Fetch issue → prompt file
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           ISSUE: ${{ inputs.issue_number }}
         run: |
           set -euo pipefail
@@ -290,6 +324,7 @@ jobs:
       - name: Commit + push + open PR
         if: steps.engine.outputs.exit_code == '0'
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           ISSUE: ${{ inputs.issue_number }}
           RUN_ID: ${{ github.run_id }}
         run: |
@@ -302,7 +337,10 @@ jobs:
           fi
           SLUG=$(gh issue view "$ISSUE" -R "$REPO" --json title -q '.title' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | cut -c1-40 | sed 's/-*$//')
           BRANCH="feat/issue-${ISSUE}-${SLUG}"
-          git push origin "HEAD:$BRANCH"
+          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$AUTH"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" \
+            push origin "HEAD:$BRANCH"
           node - <<'NODE' > pr-body.md
           const fs = require('fs');
           const read = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch (e) { return {}; } };
@@ -321,6 +359,7 @@ jobs:
       - name: Label outcome on the issue
         if: always() && steps.contract.outcome == 'success'
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           ISSUE: ${{ inputs.issue_number }}
           CODE: ${{ steps.engine.outputs.exit_code }}
           MODEL: ${{ steps.engine.outputs.model }}

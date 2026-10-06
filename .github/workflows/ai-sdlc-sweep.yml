@@ -102,11 +102,6 @@ jobs:
       max-parallel: 4
       matrix:
         pr: ${{ fromJSON(needs.discover.outputs.prs) }}
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-      checks: read
     uses: ./.github/workflows/ai-sdlc-automerge.yml
     with:
       repo: ${{ github.repository }}

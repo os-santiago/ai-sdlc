@@ -39,19 +39,20 @@ on:
         description: 'merged | repair-signaled | escalated | held | skipped'
         value: ${{ jobs.gate.outputs.action }}
     secrets:
-      AI_SDLC_TOKEN:
-        required: false
+      AI_SDLC_APP_ID:
+        description: 'ai-sdlc GitHub App id — mints the per-run installation token used for all gh auth (fail-closed when unset; issue #26)'
+        required: true
+      AI_SDLC_APP_PRIVATE_KEY:
+        description: 'ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID'
+        required: true
 
 env:
-  GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
   REPO: ${{ inputs.repo }}
   PR: ${{ inputs.pr_number }}
 
-permissions:
-  contents: write
-  pull-requests: write
-  issues: write
-  checks: read
+# Every gh call uses the minted ai-sdlc App installation token — the
+# gate's GITHUB_TOKEN carries no scopes (fail-closed, issue #26).
+permissions: {}
 
 jobs:
   gate:
@@ -63,6 +64,35 @@ jobs:
     outputs:
       action: ${{ steps.eval.outputs.action }}
     steps:
+      - name: Verify ai-sdlc App credentials
+        id: creds
+        env:
+          APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          case "$REPO" in */*) ;; *)
+            echo "::error title=ai-sdlc auth::repo input '$REPO' is not owner/name" >&2
+            exit 1 ;;
+          esac
+          if [ -z "${APP_ID:-}" ] || [ -z "${APP_PRIVATE_KEY:-}" ]; then
+            echo "::error title=ai-sdlc auth::AI_SDLC_APP_ID and AI_SDLC_APP_PRIVATE_KEY must be configured — the ai-sdlc GitHub App is the only pipeline identity for merges/labels (fail-closed: no PAT or GITHUB_TOKEN fallback). Install the App on $REPO and add the org secrets; see docs/runtime.md (issue #26)."
+            exit 1
+          fi
+          {
+            echo "owner=${REPO%%/*}"
+            echo "repo_name=${REPO##*/}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Mint ai-sdlc App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.AI_SDLC_APP_ID }}
+          private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+          owner: ${{ steps.creds.outputs.owner }}
+          repositories: ${{ steps.creds.outputs.repo_name }}
+
       - name: Resolve contract (.ai-sdlc.yaml)
         id: contract
         uses: os-santiago/ai-sdlc/.github/actions/load-config@main
@@ -70,7 +100,7 @@ jobs:
           repo: ${{ inputs.repo }}
           ref: ${{ inputs.base }}
           checkout: 'true'
-          token: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           overrides: >-
             {"merge.max_repairs": ${{ inputs.max_repairs }},
              "merge.pending_max_minutes": ${{ inputs.pending_max_minutes }},
@@ -79,6 +109,7 @@ jobs:
       - name: Evaluate merge gate
         id: eval
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PENDING_MAX: ${{ steps.contract.outputs.pending_max_minutes }}
           SKIP_LABELS: ${{ steps.contract.outputs.merge_skip_labels }}
           ESCALATION: ${{ steps.contract.outputs.escalation_label }}
@@ -147,6 +178,7 @@ jobs:
       - name: Merge on green
         if: steps.eval.outputs.action == 'merged'
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           METHOD: ${{ steps.contract.outputs.merge_method }}
         run: |
           set -euo pipefail
@@ -155,6 +187,7 @@ jobs:
       - name: Escalate to human
         if: steps.eval.outputs.action == 'escalated'
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REASON: ${{ steps.eval.outputs.reason }}
           ESCALATION: ${{ steps.contract.outputs.escalation_label }}
         run: |
@@ -165,6 +198,7 @@ jobs:
       - name: Signal repair need
         if: steps.eval.outputs.action == 'repair-signaled'
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REASON: ${{ steps.eval.outputs.reason }}
           MAX_REPAIRS: ${{ steps.contract.outputs.max_repairs }}
         run: |

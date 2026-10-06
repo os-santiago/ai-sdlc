@@ -11,9 +11,11 @@
 #   → `needs-human` + cause when the budget is exhausted or an attempt
 #     cannot push a fix (nothing would re-trigger the loop).
 #
-# The pushed commit must re-fire CI for the loop to close: pass
-# AI_SDLC_TOKEN (App/PAT) — GITHUB_TOKEN-auth pushes do not trigger
-# downstream workflows.
+# The pushed commit must re-fire CI for the loop to close: all git/gh auth
+# is the ai-sdlc GitHub App installation token, minted per-run from
+# AI_SDLC_APP_ID + AI_SDLC_APP_PRIVATE_KEY — GITHUB_TOKEN-auth pushes do not
+# trigger downstream workflows, and there is no PAT fallback (fail-closed,
+# issue #26).
 #
 # Caller usage (event wiring is the caller's job — see docs/runtime.md):
 #   jobs:
@@ -22,8 +24,7 @@
 #       with:
 #         repo: ${{ github.repository }}
 #         pr_number: 42
-#       secrets:
-#         AI_SDLC_TOKEN: ${{ secrets.AI_SDLC_TOKEN }}
+#       secrets: inherit   # needs AI_SDLC_APP_ID + AI_SDLC_APP_PRIVATE_KEY
 name: ai-sdlc-ci-repair
 
 on:
@@ -77,9 +78,12 @@ on:
         description: 'guard reason or attempt outcome'
         value: ${{ jobs.repair.outputs.reason }}
     secrets:
-      AI_SDLC_TOKEN:
-        description: 'App/PAT token — required for the pushed fix to re-trigger CI'
-        required: false
+      AI_SDLC_APP_ID:
+        description: 'ai-sdlc GitHub App id — mints the installation token the pushed fix uses to re-trigger CI (fail-closed when unset; issue #26)'
+        required: true
+      AI_SDLC_APP_PRIVATE_KEY:
+        description: 'ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID'
+        required: true
       MODEL_API_KEY:
         description: 'optional direct provider key; absent → GitHub Models via GITHUB_TOKEN'
         required: false
@@ -89,13 +93,9 @@ env:
   PR: ${{ inputs.pr_number }}
   MAX_REPAIRS: ${{ inputs.max_repairs }}
 
+# GITHUB_TOKEN only powers GitHub Models inference (GH_TOKEN_FOR_MODELS);
+# every git/gh call uses the minted ai-sdlc App installation token.
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
-  actions: read
-  checks: read
-  statuses: read
   models: read
 
 jobs:
@@ -110,6 +110,35 @@ jobs:
       action: ${{ steps.result.outputs.action }}
       reason: ${{ steps.result.outputs.reason }}
     steps:
+      - name: Verify ai-sdlc App credentials
+        id: creds
+        env:
+          APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          case "$REPO" in */*) ;; *)
+            echo "::error title=ai-sdlc auth::repo input '$REPO' is not owner/name" >&2
+            exit 1 ;;
+          esac
+          if [ -z "${APP_ID:-}" ] || [ -z "${APP_PRIVATE_KEY:-}" ]; then
+            echo "::error title=ai-sdlc auth::AI_SDLC_APP_ID and AI_SDLC_APP_PRIVATE_KEY must be configured — the ai-sdlc GitHub App is the only pipeline identity for pushes/PRs (fail-closed: no PAT or GITHUB_TOKEN fallback). Install the App on $REPO and add the org secrets; see docs/runtime.md (issue #26)." >&2
+            exit 1
+          fi
+          {
+            echo "owner=${REPO%%/*}"
+            echo "repo_name=${REPO##*/}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Mint ai-sdlc App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.AI_SDLC_APP_ID }}
+          private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+          owner: ${{ steps.creds.outputs.owner }}
+          repositories: ${{ steps.creds.outputs.repo_name }}
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -117,7 +146,7 @@ jobs:
       - name: Guard + attempt budget
         id: guard
         env:
-          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           BRANCH_PATTERN: ${{ inputs.branch_pattern }}
           MAX_CHECKS: ${{ inputs.max_failed_checks }}
         run: |
@@ -140,9 +169,15 @@ jobs:
             --jq '.check_runs[] | {id, name, status, conclusion, app: (.app.slug // ""), url: (.html_url // .details_url // ""),
                   output: {title: (.output.title // ""), summary: (.output.summary // ""), text: (.output.text // "")}}' \
             | jq -s . > "$WORK/check-runs.json"
-          gh api "repos/$REPO/commits/$SHA/status" \
-            --jq '[.statuses[] | {context, state, description: (.description // ""), url: (.target_url // "")}]' \
-            > "$WORK/statuses.json"
+          # Commit statuses are a supplementary signal (check runs carry the
+          # primary one). The App scope set lacks `statuses: read`, so a 403
+          # degrades to check-runs-only instead of killing the attempt.
+          if ! gh api "repos/$REPO/commits/$SHA/status" \
+                --jq '[.statuses[] | {context, state, description: (.description // ""), url: (.target_url // "")}]' \
+                > "$WORK/statuses.json" 2> "$WORK/statuses.err"; then
+            echo "::warning::commit statuses unreadable with the App token (grant 'Commit statuses: read' on the ai-sdlc App for full fidelity) — continuing on check runs only"
+            echo '[]' > "$WORK/statuses.json"
+          fi
           node - <<'NODE'
           const fs = require('fs');
           const W = process.env.WORK;
@@ -199,7 +234,7 @@ jobs:
       - name: Collect failing check log tails (bounded)
         if: steps.guard.outputs.decision == 'repair'
         env:
-          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           LINES: ${{ inputs.log_tail_lines }}
           MAX_BYTES: ${{ inputs.log_max_bytes }}
         run: |
@@ -273,7 +308,7 @@ jobs:
         with:
           repository: ${{ inputs.repo }}
           ref: ${{ steps.guard.outputs.head_sha }}
-          token: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           # Keep the push token out of .git/config — the engine reads the
           # workspace and runs shell commands driven by untrusted CI output.
           persist-credentials: false
@@ -343,7 +378,7 @@ jobs:
         id: push
         if: steps.guard.outputs.decision == 'repair' && steps.engine.outputs.exit_code == '0'
         env:
-          PUSH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          PUSH_TOKEN: ${{ steps.app-token.outputs.token }}
           HEAD_REF: ${{ steps.guard.outputs.head_ref }}
           ATTEMPT: ${{ steps.guard.outputs.attempt }}
         run: |
@@ -371,14 +406,13 @@ jobs:
         id: record
         if: always() && steps.guard.outputs.decision == 'repair'
         env:
-          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           ATTEMPT: ${{ steps.guard.outputs.attempt }}
           HEAD_SHA: ${{ steps.guard.outputs.head_sha }}
           FAILING: ${{ steps.guard.outputs.failing }}
           ENGINE_CODE: ${{ steps.engine.outputs.exit_code }}
           PUSH_OUTCOME: ${{ steps.push.outputs.outcome }}
           COMMIT: ${{ steps.push.outputs.commit }}
-          HAS_APP_TOKEN: ${{ secrets.AI_SDLC_TOKEN != '' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -414,9 +448,6 @@ jobs:
             `- failure signature: \`${failure.signature || 'n/a'}\``,
             `- run: ${e.RUN_URL} (prompt, audit log + manifest in artifacts)`,
           ];
-          if (outcome === 'pushed' && e.HAS_APP_TOKEN !== 'true') {
-            lines.push('', '> Pushed with `GITHUB_TOKEN` — CI will not re-trigger automatically; pass `AI_SDLC_TOKEN` to close the loop.');
-          }
           fs.writeFileSync(`${W}/attempt-comment.md`, lines.join('\n') + '\n');
           fs.appendFileSync(e.GITHUB_OUTPUT, `outcome=${outcome}\n`);
           console.log(`attempt ${e.ATTEMPT}/${e.MAX_REPAIRS}: ${outcome}`);
@@ -429,7 +460,7 @@ jobs:
           always() && (steps.guard.outputs.decision == 'escalate' ||
           (steps.guard.outputs.decision == 'repair' && steps.record.outputs.outcome != 'pushed'))
         env:
-          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           DECISION: ${{ steps.guard.outputs.decision }}
           ATTEMPTS: ${{ steps.guard.outputs.attempts }}
           ATTEMPT: ${{ steps.guard.outputs.attempt }}
