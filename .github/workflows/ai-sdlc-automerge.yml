@@ -287,6 +287,7 @@ jobs:
           ESCALATION: ${{ steps.contract.outputs.escalation_label }}
         run: |
           set -euo pipefail
+          gh label create "$ESCALATION" -R "$REPO" --color D93F0B --description "AI-SDLC: escalated to human review" --force || true
           gh pr edit "$PR" -R "$REPO" --add-label "$ESCALATION"
           gh pr comment "$PR" -R "$REPO" --body "⚠️ **AI-SDLC merge gate escalated** — reason: \`$REASON\`. Human review required; remove \`$ESCALATION\` to hand control back."
 
