@@ -9,7 +9,7 @@ Postmortem issues follow this state diagram:
 ```
 [open] --> [closed]
 [closed] --> [reopened]  (when recurrence threshold met)
-[closed] --> [filed]     (via deferred path)
+[closed] --> [filed]
 [deferred] --> [filed]
 ```
 
@@ -56,13 +56,13 @@ Normalization includes:
 
 When a new postmortem candidate is identified:
 1. Search **both open and closed issues** for the same `signatureHash` within the component.
-2. Retention window: 90 days from the `closedAt` timestamp of closed issues.
+2. Retention window: open issues are always eligible for dedup regardless of age. For closed issues, the window is 90 days from the `closedAt` timestamp.
 3. If a matching issue is found within the window:
    - The new occurrence is linked as a recurrence to the canonical issue.
    - A new issue is NOT created.
 4. If no matching issue is found within the window, a new canonical issue is created.
 
-**Note**: The dedup window applies to the `closedAt` timestamp, meaning closed issues older than 90 days are not considered for dedup.
+**Note**: The dedup window applies only to closed issues, measured from the `closedAt` timestamp — closed issues older than 90 days are not considered for dedup. Open issues are always considered, regardless of when they were created.
 
 ## Reopen Policy
 
@@ -102,6 +102,6 @@ Fuzzy text similarity is out of scope for the dedup mechanism; only exact `signa
 The following parameters are configurable per repository or organization:
 
 - `POSTMORTEM_REOPEN_MIN`: Minimum recurrences to trigger reopen (default: 2)
-- `POSTMORTEM_DEDUP_WINDOW_DAYS`: Retention window for dedup in days (default: 90)
+- `POSTMORTEM_DEDUP_WINDOW_DAYS`: Dedup retention window for closed issues, in days (default: 90)
 
 These values MAY be overridden in the repository's `.ai-sdlc.yaml` configuration under a `postmortem` section.
