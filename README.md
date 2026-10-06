@@ -38,6 +38,65 @@ autonomy driven by a declarative per-repo contract (`.ai-sdlc.yaml`).
   headless contract (`--prompt-file`, `--audit-log`, `--summary-file`,
   `--no-commit`) can slot in.
 
+## Adopt this runtime
+
+A consumer repo needs three things:
+
+1. **Contract** — `.ai-sdlc.yaml` at the repo root. Only `spec` is
+   required; every other field resolves from runtime defaults (see
+   `spec/ai-sdlc.schema.json`, archetypes under `examples/`):
+
+   ```yaml
+   spec: "1.0.0"
+   autonomy:
+     level: auto-merge-low   # conservative ceiling; raise as trust accrues
+   ```
+
+2. **Caller workflow** — `.github/workflows/ai-sdlc.yml` dispatching the
+   reusable stages on `@main`:
+
+   ```yaml
+   name: ai-sdlc
+   on:
+     issues: { types: [labeled] }
+
+   permissions:
+     contents: write
+     issues: write
+     pull-requests: write
+     models: read   # GitHub Models engine path (no MODEL_API_KEY)
+
+   jobs:
+     intake:
+       if: github.event.label.name == 'ready-to-implement'
+       uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-intake.yml@main
+       with:
+         repo: ${{ github.repository }}
+         issue_number: ${{ github.event.issue.number }}
+       secrets: inherit
+
+     implement:
+       needs: intake
+       if: needs.intake.outputs.dispatch == 'true'
+       uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-implement.yml@main
+       with:
+         repo: ${{ github.repository }}
+         issue_number: ${{ github.event.issue.number }}
+       secrets: inherit
+   ```
+
+   Review, automerge, ci-repair, sweep and verify wire the same way —
+   [docs/runtime.md](docs/runtime.md) has each stage's caller block.
+
+3. **App + secrets** — install the `ai-sdlc` GitHub App on the repo and
+   expose `AI_SDLC_APP_ID` + `AI_SDLC_APP_PRIVATE_KEY` to it (org secrets
+   scoped to the consumer repos are the intended setup). Every mutation
+   stage mints a per-run installation token — fail-closed, no PAT or
+   `GITHUB_TOKEN` fallback, so pushes and merges always re-trigger CI.
+   `MODEL_API_KEY` is optional: unset → GitHub Models on `GITHUB_TOKEN`;
+   set → direct OpenAI-compatible provider. Set the repo variable
+   `AI_SDLC_OFF=1` to halt the pipeline without disabling workflows.
+
 ## Documentation
 
 - [docs/runtime.md](docs/runtime.md) — `workflow_call` runtime stages
