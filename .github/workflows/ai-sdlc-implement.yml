@@ -35,9 +35,9 @@ on:
         type: string
         default: ''
       provider_base_url:
-        description: 'OpenAI-compatible inference base URL (default: GitHub Models)'
+        description: 'OpenAI-compatible inference base URL; empty → vars.AI_SDLC_PROVIDER_URL → GitHub Models default'
         type: string
-        default: 'https://models.github.ai/inference'
+        default: ''
       base:
         description: 'base branch'
         type: string
@@ -194,7 +194,7 @@ jobs:
       - name: Configure scc engine provider
         env:
           MODEL_NAME: ${{ steps.contract.outputs.model_primary }}
-          PROVIDER_BASE_URL: ${{ inputs.provider_base_url }}
+          PROVIDER_BASE_URL: ${{ inputs.provider_base_url || vars.AI_SDLC_PROVIDER_URL || 'https://models.github.ai/inference' }}
           MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
           GH_TOKEN_FOR_MODELS: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -385,6 +385,9 @@ jobs:
           L_ESCALATE: ${{ steps.contract.outputs.escalation_label }}
         run: |
           set -euo pipefail
+          for L in "$L_QUEUED" "$L_PR_OPENED" "$L_NO_CHANGES" "$L_FAILED" "${L_ESCALATE:-needs-human}"; do
+            gh label create "$L" -R "$REPO" --force || true
+          done
           case "$CODE" in
             0)  gh issue edit "$ISSUE" -R "$REPO" --remove-label "$L_QUEUED" --add-label "$L_PR_OPENED" || true ;;
             10) gh issue edit "$ISSUE" -R "$REPO" --add-label "$L_NO_CHANGES" || true ;;
