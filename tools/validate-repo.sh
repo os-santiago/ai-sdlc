@@ -9,6 +9,7 @@
 #      parse as YAML
 #   4. actionlint, when a binary is already installed (CI owns the pinned
 #      release — .github/workflows/actionlint.yml; ./actionlint fetches it)
+#   5. node --test on */*.test.js, when node and test files are present
 #
 # Exit 0 = clean, 1 = a check failed, 2 = required tooling missing.
 # Safe to run from anywhere: cd's to the repo root first.
@@ -67,6 +68,21 @@ if command -v actionlint >/dev/null 2>&1; then
   echo "[✓] actionlint: workflows clean"
 else
   note "actionlint not on PATH — skipped (CI pin: .github/workflows/actionlint.yml; run ./actionlint -color for full parity)"
+fi
+
+# --- 5. node --test (when node and test files exist) ----------------------------
+if command -v node >/dev/null 2>&1; then
+  tests=()
+  for t in */*.test.js; do
+    [ -f "$t" ] || continue
+    tests+=("$t")
+  done
+  if [ "${#tests[@]}" -gt 0 ]; then
+    node --test "${tests[@]}" || fail "node --test failed"
+    echo "[✓] node --test: ${#tests[@]} file(s) green"
+  fi
+else
+  note "node not on PATH — node --test skipped"
 fi
 
 note "repo validation complete"
