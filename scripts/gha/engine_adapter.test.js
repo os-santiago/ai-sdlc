@@ -155,6 +155,46 @@ describe('EngineAdapterResolver', () => {
       assert.ok(!argv.includes(undefined));
       assert.ok(!argv.includes('undefined'));
     });
+
+    it('should normalize exitCodeMap to numeric keys for JSON registries', () => {
+      const adapter = resolver.getEngineAdapter('scc');
+
+      assert.ok(adapter.exitCodeMap instanceof Map);
+      assert.strictEqual(adapter.exitCodeMap.get(0), 'implemented + PR opened');
+      assert.strictEqual(adapter.exitCodeMap.get(10), 'no workspace mutations (clean no-op)');
+      // Lookup contract is numeric exit codes — string keys must not match
+      assert.strictEqual(adapter.exitCodeMap.get('10'), undefined);
+    });
+
+    it('should normalize exitCodeMap identically for the .js registry', () => {
+      const jsResolver = new EngineAdapterResolver(registryJsPath);
+      const adapter = jsResolver.getEngineAdapter('devin');
+
+      assert.ok(adapter.exitCodeMap instanceof Map);
+      assert.strictEqual(adapter.exitCodeMap.get(2), 'timeout');
+      assert.strictEqual(adapter.exitCodeMap.get(3), 'invalid input');
+    });
+
+    it('should evaluate JSON argvBuilder without access to host globals', () => {
+      const fs = require('fs');
+      const probePath = path.join(__dirname, 'tmp-probe-registry.json');
+      fs.writeFileSync(probePath, JSON.stringify({
+        probe: {
+          binary: 'probe',
+          argvBuilder: "function probeArgs(args) { return [typeof process, typeof require, typeof fetch, String(args.flag)]; }",
+          exitCodeMap: { 0: 'ok' }
+        }
+      }));
+
+      try {
+        const probeResolver = new EngineAdapterResolver(probePath);
+        const adapter = probeResolver.getEngineAdapter('probe');
+        const argv = adapter.argvBuilder({ flag: 'kept' });
+        assert.deepStrictEqual(Array.from(argv), ['undefined', 'undefined', 'undefined', 'kept']);
+      } finally {
+        fs.unlinkSync(probePath);
+      }
+    });
   });
 
   describe('hasEngine', () => {
