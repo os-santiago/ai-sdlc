@@ -1,0 +1,68 @@
+{
+  "scc": {
+    "binary": "scc",
+    "probe": [
+      "scc",
+      "--version"
+    ],
+    "argvBuilder": {
+      "command": "chat",
+      "args": [
+        "--model",
+        "{model}",
+        "--prompt",
+        "{prompt}",
+        "--manifest",
+        "{manifestFile}",
+        "--format",
+        "json"
+      ]
+    },
+    "configRenderer": {
+      "format": "json",
+      "path": "{manifestFile}"
+    },
+    "exitCodeMap": {
+      "10": "ValidationError",
+      "20": "AgentError",
+      "21": "AgentFailedError",
+      "22": "MaxStepsExceeded",
+      "23": "MaxRepairsExceeded",
+      "24": "TimeoutError"
+    },
+    "manifestMap": {
+      "path": "{manifestFile}",
+      "format": "json"
+    }
+  },
+  "devin": {
+    "binary": "devin",
+    "probe": [
+      "devin",
+      "--version"
+    ],
+    "argvBuilder": {
+      "command": "run",
+      "args": [
+        "--prompt",
+        "{prompt}",
+        "--model",
+        "{model}",
+        "--manifest",
+        "{manifestFile}"
+      ]
+    },
+    "configRenderer": {
+      "format": "yaml",
+      "path": "{manifestFile}"
+    },
+    "exitCodeMap": {
+      "0": "Success",
+      "1": "AgentError"
+    },
+    "manifestMap": {
+      "path": "{manifestFile}",
+      "format": "yaml"
+    }
+  }
+}
