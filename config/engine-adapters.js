@@ -8,19 +8,39 @@ module.exports = {
       const argv = [
         '--agent-name', engineArgs.agentName || '(hostname)',
         '--max-steps', String(engineArgs.maxSteps || 200),
-        '--max-seconds', String(engineArgs.maxSeconds || 900),
-        '--runtime-token', engineArgs.runtimeToken,
-        '--prompt-file', engineArgs.promptFile,
-        '--summary-file', engineArgs.summaryFile,
-        '--audit-log', engineArgs.auditLog,
-        '--manifest-file', engineArgs.manifestFile,
-        '--provider-base-url', engineArgs.providerBaseUrl || '',
-        '--model', engineArgs.model,
-        '--api-key', engineArgs.apiKey || '',
-        '--notepad-file', engineArgs.notepadFile,
-        '--seed', engineArgs.seed || '',
-        '--log-level', engineArgs.logLevel || 'info'
+        '--max-seconds', String(engineArgs.maxSeconds || 900)
       ];
+      if (engineArgs.runtimeToken != null) {
+        argv.push('--runtime-token', String(engineArgs.runtimeToken));
+      }
+      if (engineArgs.promptFile != null) {
+        argv.push('--prompt-file', String(engineArgs.promptFile));
+      }
+      if (engineArgs.summaryFile != null) {
+        argv.push('--summary-file', String(engineArgs.summaryFile));
+      }
+      if (engineArgs.auditLog != null) {
+        argv.push('--audit-log', String(engineArgs.auditLog));
+      }
+      if (engineArgs.manifestFile != null) {
+        argv.push('--manifest-file', String(engineArgs.manifestFile));
+      }
+      if (engineArgs.providerBaseUrl != null) {
+        argv.push('--provider-base-url', String(engineArgs.providerBaseUrl));
+      }
+      if (engineArgs.model != null) {
+        argv.push('--model', String(engineArgs.model));
+      }
+      if (engineArgs.apiKey != null) {
+        argv.push('--api-key', String(engineArgs.apiKey));
+      }
+      if (engineArgs.notepadFile != null) {
+        argv.push('--notepad-file', String(engineArgs.notepadFile));
+      }
+      if (engineArgs.seed != null) {
+        argv.push('--seed', String(engineArgs.seed));
+      }
+      argv.push('--log-level', engineArgs.logLevel || 'info');
       // Add any extra flags from engineArgs.extraFlags (array)
       if (Array.isArray(engineArgs.extraFlags)) {
         argv.push(...engineArgs.extraFlags);
@@ -43,17 +63,33 @@ module.exports = {
       const argv = [
         '--agent-name', engineArgs.agentName || '(hostname)',
         '--max-steps', String(engineArgs.maxSteps || 200),
-        '--max-seconds', String(engineArgs.maxSeconds || 900),
-        '--prompt-file', engineArgs.promptFile,
-        '--summary-file', engineArgs.summaryFile,
-        '--audit-log', engineArgs.auditLog,
-        '--manifest-file', engineArgs.manifestFile,
-        '--model', engineArgs.model,
-        '--api-key', engineArgs.apiKey || '',
-        '--notepad-file', engineArgs.notepadFile,
-        '--seed', engineArgs.seed || '',
-        '--log-level', engineArgs.logLevel || 'info'
+        '--max-seconds', String(engineArgs.maxSeconds || 900)
       ];
+      if (engineArgs.promptFile != null) {
+        argv.push('--prompt-file', String(engineArgs.promptFile));
+      }
+      if (engineArgs.summaryFile != null) {
+        argv.push('--summary-file', String(engineArgs.summaryFile));
+      }
+      if (engineArgs.auditLog != null) {
+        argv.push('--audit-log', String(engineArgs.auditLog));
+      }
+      if (engineArgs.manifestFile != null) {
+        argv.push('--manifest-file', String(engineArgs.manifestFile));
+      }
+      if (engineArgs.model != null) {
+        argv.push('--model', String(engineArgs.model));
+      }
+      if (engineArgs.apiKey != null) {
+        argv.push('--api-key', String(engineArgs.apiKey));
+      }
+      if (engineArgs.notepadFile != null) {
+        argv.push('--notepad-file', String(engineArgs.notepadFile));
+      }
+      if (engineArgs.seed != null) {
+        argv.push('--seed', String(engineArgs.seed));
+      }
+      argv.push('--log-level', engineArgs.logLevel || 'info');
       if (Array.isArray(engineArgs.extraFlags)) {
         argv.push(...engineArgs.extraFlags);
       }

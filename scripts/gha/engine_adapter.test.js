@@ -24,7 +24,8 @@ it = function(description, fn) {
   }
 };
 
-const registryPath = path.join(__dirname, '..', 'config', 'engine-adapters.json');
+const registryPath = path.join(__dirname, '..', '..', 'config', 'engine-adapters.json');
+const registryJsPath = path.join(__dirname, '..', '..', 'config', 'engine-adapters.js');
 let resolver;
 
 beforeEach = function() {
@@ -41,6 +42,14 @@ describe('EngineAdapterResolver', () => {
       assert.ok(resolver.registry);
       assert.ok(resolver.registry.scc);
       assert.ok(resolver.registry.devin);
+    });
+
+    it('should also load the .js module registry variant', () => {
+      const jsResolver = new EngineAdapterResolver(registryJsPath);
+      assert.ok(jsResolver.registry.scc);
+      assert.ok(jsResolver.registry.devin);
+      const adapter = jsResolver.getEngineAdapter('scc');
+      assert.strictEqual(typeof adapter.argvBuilder, 'function');
     });
   });
 
@@ -139,6 +148,12 @@ describe('EngineAdapterResolver', () => {
       assert.ok(argv.includes('200')); // Default value
       assert.ok(argv.includes('--max-seconds'));
       assert.ok(argv.includes('900')); // Default value
+      // Missing optional args must not emit flags or 'undefined' values
+      assert.ok(!argv.includes('--runtime-token'));
+      assert.ok(!argv.includes('--prompt-file'));
+      assert.ok(!argv.includes('--seed'));
+      assert.ok(!argv.includes(undefined));
+      assert.ok(!argv.includes('undefined'));
     });
   });
 
@@ -164,29 +179,23 @@ describe('EngineAdapterResolver', () => {
 
   describe('error handling', () => {
     it('should throw error for missing registry file', () => {
-      const invalidResolver = new EngineAdapterResolver('/non/existent/path.json');
-      try {
-        invalidResolver.getEngineAdapter('scc');
-        assert.fail('Expected to throw');
-      } catch (err) {
-        assert.ok(err.message.includes('Engine adapters registry not found'));
-      }
+      assert.throws(
+        () => new EngineAdapterResolver('/non/existent/path.json'),
+        /Engine adapters registry not found/
+      );
     });
 
-    it('should throw error for invalid JSON', () => {
+    it('should throw error for invalid registry file', () => {
       // Create a temporary invalid JSON file
       const invalidPath = path.join(__dirname, 'invalid.json');
       const fs = require('fs');
       fs.writeFileSync(invalidPath, '{ invalid json }');
-      
+
       try {
-        const invalidResolver = new EngineAdapterResolver(invalidPath);
-        try {
-          invalidResolver.getEngineAdapter('scc');
-          assert.fail('Expected to throw');
-        } catch (err) {
-          assert.ok(err.message.includes('Invalid JSON in engine adapters registry'));
-        }
+        assert.throws(
+          () => new EngineAdapterResolver(invalidPath),
+          /Invalid engine adapters registry/
+        );
       } finally {
         fs.unlinkSync(invalidPath);
       }
