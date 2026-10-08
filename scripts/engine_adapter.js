@@ -3,8 +3,10 @@
 
 const devinAdapter = {
   getBinary() {
-    // For devin, the binary is likely 'devin' or from DEVIN_BINARY
-    return process.env.DEVIN_BINARY || 'devin';
+    // For devin, the binary is likely 'devin' or from DEVIN_BINARY.
+    // Trim env-provided values: stray whitespace would make spawn fail ENOENT.
+    const binary = (process.env.DEVIN_BINARY || '').trim();
+    return binary || 'devin';
   },
   buildArgv() {
     const argv = [];
@@ -43,8 +45,10 @@ const devinAdapter = {
 
 const sccAdapter = {
   getBinary() {
-    // For scc, the binary is likely 'scc' or from SCC_BINARY
-    return process.env.SCC_BINARY || 'scc';
+    // For scc, the binary is likely 'scc' or from SCC_BINARY.
+    // Trim env-provided values: stray whitespace would make spawn fail ENOENT.
+    const binary = (process.env.SCC_BINARY || '').trim();
+    return binary || 'scc';
   },
   buildArgv() {
     const argv = [];

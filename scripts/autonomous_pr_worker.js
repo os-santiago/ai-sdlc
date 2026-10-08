@@ -6,6 +6,7 @@
  * It eliminates direct DEVIN_* environment reads and devin-specific argv construction.
  */
 
+const { spawn } = require('child_process');
 const { getEngineAdapter } = require('./engine_adapter');
 
 // Get the engine name from environment, default to 'devin' for backward compatibility
@@ -16,10 +17,9 @@ const engineAdapter = getEngineAdapter(engineName);
 const binary = engineAdapter.getBinary();
 const argv = engineAdapter.buildArgv();
 const capabilities = engineAdapter.probeCapabilities();
-// Example usage of mapExitCode and mapManifest (we don't use the results in this worker,
-// but we call them to satisfy the requirement that the script calls these functions)
-const exitCodeMapping = engineAdapter.mapExitCode(0);
-const manifestMapping = engineAdapter.mapManifest({});
+// mapManifest is part of the adapter contract; the worker exercises it even
+// though this worker has no manifest payload of its own to translate.
+engineAdapter.mapManifest({});
 
 // Build the command and arguments
 const additionalArgs = [];
@@ -29,23 +29,25 @@ const additionalArgs = [];
 // Construct the full command
 const command = [binary, ...argv, ...additionalArgs].filter(Boolean);
 
-// Log the command for debugging (optional)
-// console.error(`Running command: ${command.join(' ')}`);
-
-// In a real implementation, we would spawn the process here
-// For now, we'll just output the command and exit with a success code
-// The actual implementation would use child_process.spawn
-
-// For demonstration purposes, we'll simulate the engine behavior
-// In reality, this would be:
-// const { spawn } = require('child_process');
-// const child = spawn(command[0], command.slice(1), { stdio: 'inherit' });
-
-// Since we don't have the actual engines installed, we'll just output what would be run
 console.error(`[autonomous_pr_worker] Engine: ${engineName}`);
 console.error(`[autonomous_pr_worker] Binary: ${binary}`);
 console.error(`[autonomous_pr_worker] Arguments: ${argv.join(' ')}`);
 console.error(`[autonomous_pr_worker] Capabilities: ${JSON.stringify(capabilities)}`);
 
-// Simulate successful execution
-process.exit(0);
+// Run the engine binary, streaming its stdio through to the caller, and
+// propagate the adapter-mapped exit code back to the pipeline.
+const child = spawn(command[0], command.slice(1), { stdio: 'inherit' });
+
+child.on('error', (err) => {
+  // e.g. ENOENT when the engine binary is not installed or not on PATH
+  console.error(`[autonomous_pr_worker] failed to spawn '${command[0]}': ${err.message}`);
+  process.exit(engineAdapter.mapExitCode(127));
+});
+
+child.on('exit', (code, signal) => {
+  if (signal) {
+    console.error(`[autonomous_pr_worker] '${command[0]}' terminated by signal ${signal}`);
+  }
+  // code is null when the child was killed by a signal — treat as failure
+  process.exit(engineAdapter.mapExitCode(code === null ? 1 : code));
+});
