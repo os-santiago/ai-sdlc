@@ -45,6 +45,10 @@ the layer deliberately does not reach into them.
 
 ### Headless engine contract
 
+Normative reference: [docs/engine_contract.md](engine_contract.md) —
+flags, exit classes, registry descriptors, the conformance-suite
+procedure, and the certification gates summarized below.
+
 A conforming engine is invocable non-interactively, once per run:
 
 - reads the task from `--prompt-file` — issue text arrives fenced as

@@ -35,8 +35,8 @@ autonomy driven by a declarative per-repo contract (`.ai-sdlc.yaml`).
 - **Bounded autonomy**: trust ladder (shadow → suggest → auto-PR →
   auto-merge-low → auto-merge-all → auto-deploy) with per-repo ceilings.
 - **Engine-agnostic contract**: sc-agent-cli today; any tool honoring the
-  headless contract (`--prompt-file`, `--audit-log`, `--summary-file`,
-  `--no-commit`) can slot in.
+  [headless contract](docs/engine_contract.md) (`--prompt-file`,
+  `--audit-log`, `--summary-file`, `--no-commit`) can slot in.
 
 ## Adopt this runtime
 
@@ -110,6 +110,9 @@ A consumer repo needs three things:
 - [docs/positioning.md](docs/positioning.md) — interop posture: the
   governance layer over pluggable engines, the conformance path, and
   the explicit non-goals.
+- [docs/engine_contract.md](docs/engine_contract.md) — headless engine
+  contract and certification: required flags, exit-code classes, adapter
+  registry, conformance-suite guide, per-stage engine selection.
 - [spec/README.md](spec/README.md) — index of the normative contract
   surface (schema, labels, trust ladder, DoR, risk taxonomy).
 - [ADR-0001](docs/architecture/adr/0001-homedir-ai-sdlc-sunset-and-cutover.md) —
