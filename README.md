@@ -114,6 +114,10 @@ A consumer repo needs three things:
   surface (schema, labels, trust ladder, DoR, risk taxonomy).
 - [ADR-0001](docs/architecture/adr/0001-homedir-ai-sdlc-sunset-and-cutover.md) —
   homedir-ai-sdlc sunset and canonical-runtime cutover decision record.
+- [docs/problems/](docs/problems/) — problem docs: options/trade-offs
+  analyses with open questions that feed ADRs.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — DCO sign-off (bot commits exempt),
+  first-time contributor vouch gate, commit conventions.
 
 ## Status
 
