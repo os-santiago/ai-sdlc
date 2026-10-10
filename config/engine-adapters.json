@@ -1,0 +1,25 @@
+{
+  "scc": {
+    "binary": "npx sc-agent-cli@latest",
+    "argvBuilder": "function argvBuilder(engineArgs) {\n  const argv = [\n    '--agent-name', engineArgs.agentName || '(hostname)',\n    '--max-steps', String(engineArgs.maxSteps || 200),\n    '--max-seconds', String(engineArgs.maxSeconds || 900)\n  ];\n  if (engineArgs.runtimeToken != null) {\n    argv.push('--runtime-token', String(engineArgs.runtimeToken));\n  }\n  if (engineArgs.promptFile != null) {\n    argv.push('--prompt-file', String(engineArgs.promptFile));\n  }\n  if (engineArgs.summaryFile != null) {\n    argv.push('--summary-file', String(engineArgs.summaryFile));\n  }\n  if (engineArgs.auditLog != null) {\n    argv.push('--audit-log', String(engineArgs.auditLog));\n  }\n  if (engineArgs.manifestFile != null) {\n    argv.push('--manifest-file', String(engineArgs.manifestFile));\n  }\n  if (engineArgs.providerBaseUrl != null) {\n    argv.push('--provider-base-url', String(engineArgs.providerBaseUrl));\n  }\n  if (engineArgs.model != null) {\n    argv.push('--model', String(engineArgs.model));\n  }\n  if (engineArgs.apiKey != null) {\n    argv.push('--api-key', String(engineArgs.apiKey));\n  }\n  if (engineArgs.notepadFile != null) {\n    argv.push('--notepad-file', String(engineArgs.notepadFile));\n  }\n  if (engineArgs.seed != null) {\n    argv.push('--seed', String(engineArgs.seed));\n  }\n  argv.push('--log-level', engineArgs.logLevel || 'info');\n  if (Array.isArray(engineArgs.extraFlags)) {\n    argv.push(...engineArgs.extraFlags);\n  }\n  return argv;\n}",
+    "exitCodeMap": {
+      "0": "implemented + PR opened",
+      "10": "no workspace mutations (clean no-op)",
+      "20": "provider/auth failure",
+      "21": "provider/auth failure",
+      "22": "budget exceeded",
+      "23": "livelock detected",
+      "1": "fatal error"
+    }
+  },
+  "devin": {
+    "binary": "devin",
+    "argvBuilder": "function argvBuilder(engineArgs) {\n  const argv = [\n    '--agent-name', engineArgs.agentName || '(hostname)',\n    '--max-steps', String(engineArgs.maxSteps || 200),\n    '--max-seconds', String(engineArgs.maxSeconds || 900)\n  ];\n  if (engineArgs.promptFile != null) {\n    argv.push('--prompt-file', String(engineArgs.promptFile));\n  }\n  if (engineArgs.summaryFile != null) {\n    argv.push('--summary-file', String(engineArgs.summaryFile));\n  }\n  if (engineArgs.auditLog != null) {\n    argv.push('--audit-log', String(engineArgs.auditLog));\n  }\n  if (engineArgs.manifestFile != null) {\n    argv.push('--manifest-file', String(engineArgs.manifestFile));\n  }\n  if (engineArgs.model != null) {\n    argv.push('--model', String(engineArgs.model));\n  }\n  if (engineArgs.apiKey != null) {\n    argv.push('--api-key', String(engineArgs.apiKey));\n  }\n  if (engineArgs.notepadFile != null) {\n    argv.push('--notepad-file', String(engineArgs.notepadFile));\n  }\n  if (engineArgs.seed != null) {\n    argv.push('--seed', String(engineArgs.seed));\n  }\n  argv.push('--log-level', engineArgs.logLevel || 'info');\n  if (Array.isArray(engineArgs.extraFlags)) {\n    argv.push(...engineArgs.extraFlags);\n  }\n  return argv;\n}",
+    "exitCodeMap": {
+      "0": "success",
+      "1": "error",
+      "2": "timeout",
+      "3": "invalid input"
+    }
+  }
+}
