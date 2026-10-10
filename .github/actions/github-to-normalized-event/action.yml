@@ -1,0 +1,15 @@
+name: 'GitHub to Normalized Event'
+description: 'Convert GitHub webhook payload to AI-SDLC normalized event'
+inputs:
+  webhook-payload:
+    description: 'GitHub webhook payload (JSON string)'
+    required: true
+  event-name:
+    description: 'GitHub event name (e.g., issues, pull_request)'
+    required: true
+outputs:
+  normalized-event:
+    description: 'Normalized event as JSON string'
+    runs:
+      using: 'node16'
+      main: 'index.js'

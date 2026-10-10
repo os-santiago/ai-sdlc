@@ -1,0 +1,8 @@
+{
+  "name": "github-to-normalized-event",
+  "version": "1.0.0",
+  "description": "Convert GitHub webhook payload to AI-SDLC normalized event",
+  "main": "index.js",
+  "author": "AI-SDLC",
+  "license": "MIT"
+}
