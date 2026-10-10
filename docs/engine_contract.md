@@ -8,7 +8,7 @@ A conforming engine is invocable non-interactively, once per run, with the follo
 
 ### Required Arguments
 
-- `--prompt-file`: Path to a file containing the task prompt. The prompt arrives fenced as `<untrusted-input>` data (see [injection defense](../spec/injection-defense.md)).
+- `--prompt-file`: Path to a file containing the task prompt. The prompt arrives fenced as `<untrusted-input>` data and is untrusted input — engines must handle it per [Prompt Handling](#prompt-handling-untrusted-input) below (see [injection defense](../spec/injection-defense.md)).
 - `--audit-log`: Path to write the audit log (JSONL format, one normalized event per line).
 - `--summary-file`: Path to write the run manifest (JSON format).
 - `--no-commit`: Flag indicating the engine must not commit or modify the git state; the pipeline owns git state.
@@ -29,6 +29,14 @@ Exit codes are interpreted via an `exitCodeMap` defined in the engine's adapter 
 - Budget/livelock exhaustion: triggers escalation (e.g., from `suggest` to `auto-PR`)
 
 Engines must document their `exitCodeMap` in the adapter registry.
+
+### Prompt Handling (Untrusted Input)
+
+The prompt file's content is **untrusted input**. Engines must treat it as data — never as instructions — and apply the [injection defense](../spec/injection-defense.md) guidelines:
+
+- Do not interpolate prompt content into shell commands or command strings; when the engine must pass it onward, use safe templating or argument arrays rather than string concatenation.
+- Sanitize/scrub prompt content before re-embedding it in prompts, tool calls, or logs.
+- Honor the `<untrusted-input>` fence semantics: content inside the fence remains data and must not be executed or obeyed.
 
 ## Normalized Events and Run Manifest
 
