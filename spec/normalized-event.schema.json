@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/os-santiago/ai-sdlc/main/spec/normalized-event.schema.json",
+  "title": "normalized-event — forge-neutral event schema for AI-SDLC",
+  "description": "Versioned JSON schema defining the canonical input to AI-SDLC dispatch logic. Entity kinds: work_item (issues), change_request (pull/merge requests), conversation (comments/discussions). Transitions: forge-neutral actions (labeled, opened, closed, synchronized, etc.). Actor fields: identity and type. Forge-neutral vocabulary maps vendor-specific concepts to common terms. Versioning: breaking changes increment major version (v1 → v2); non-breaking changes increment minor version (v1.1 → v1.2). See spec/normalized-event-versioning.md for detailed rules.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "entity", "transition", "actor"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Schema version (semver). Breaking changes increment major version; non-breaking changes increment minor version; patch version for editorial corrections."
+    },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The forge-neutral entity the event concerns.",
+      "required": ["kind", "id", "title", "state"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["work_item", "change_request", "conversation"],
+          "description": "Entity type: work_item (issue/ticket), change_request (pull/merge request), conversation (comment/discussion thread)."
+        },
+        "id": {
+          "type": "string",
+          "description": "Forge-specific entity ID (e.g., GitHub database ID, GitLab internal ID). Opaque string; not meant for display."
+        },
+        "number": {
+          "type": ["integer", "null"],
+          "description": "Forge-specific sequential number (e.g., GitHub issue #123). Null if forge lacks sequential numbering."
+        },
+        "title": {
+          "type": "string",
+          "description": "Short summary or title of the entity."
+        },
+        "description": {
+          "type": ["string", "null"],
+          "description": "Detailed description or body of the entity (e.g., issue description, PR description, comment body)."
+        },
+        "state": {
+          "type": "string",
+          "description": "Current lifecycle state. Forge-neutral values: open, closed, merged (for change_requests), archived. Adapter maps forge-specific states to this set."
+        },
+        "labels": {
+          "type": ["array", "null"],
+          "items": { "type": "string" },
+          "description": "List of label names applied to the entity. Null if forge lacks labels."
+        },
+        "created_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Timestamp when entity was created (ISO 8601)."
+        },
+        "updated_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Timestamp when entity was last updated (ISO 8601)."
+        }
+      }
+    },
+    "transition": {
+      "type": "string",
+      "description": "Forge-neutral action that triggered the event. Values: opened, closed, reopened, labeled, unlabeled, synchronized, assigned, unassigned, commented, etc. Adapter maps forge-specific actions to this set."
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The entity that caused the transition.",
+      "required": ["id", "type"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Forge-specific actor ID (e.g., GitHub user ID)."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["user", "bot"],
+          "description": "Actor kind: human user or automated bot."
+        },
+        "login": {
+          "type": ["string", "null"],
+          "description": "Username or login (e.g., GitHub handle). Null if unavailable."
+        },
+        "display_name": {
+          "type": ["string", "null"],
+          "description": "Human-readable name (e.g., 'John Doe')."
+        },
+        "avatar_url": {
+          "type": ["string", "null"],
+          "format": "uri-reference",
+          "description": "URL to avatar image."
+        }
+      }
+    },
+    "repository": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "description": "Repository containing the entity. Null for cross-repository events (e.g., comments on a discussion).",
+      "required": ["id", "name"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Forge-specific repository ID."
+        },
+        "name": {
+          "type": "string",
+          "description": "Repository name (e.g., 'owner/repo')."
+        },
+        "url": {
+          "type": ["string", "null"],
+          "format": "uri-reference",
+          "description": "Web URL to the repository."
+        }
+      }
+    }
+  }
+}
