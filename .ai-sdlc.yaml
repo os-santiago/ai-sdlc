@@ -102,7 +102,7 @@ model:
   # OmniRoute route names (auto/*, devin/*) are Hermes control-plane only —
   # unreachable from GHA runners by design (ADR-0001).
   primary: nvidia/nemotron-3-super-120b-a12b
-  fallback: nvidia/nemotron-3-ultra-550b-a55b
+  fallback: nvidia/nemotron-3.5-lightning-30b-a3b
 
 engine:
   name: scc
