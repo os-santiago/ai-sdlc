@@ -293,7 +293,7 @@ surface.
 |---|---|---|
 | `repo`, `pr_number` | — | target PR |
 | `max_repairs` | `3` | attempts per PR before `needs-human` (mirror `.ai-sdlc.yaml` `merge.max_repairs`) |
-| `model` | `openai/gpt-4o` | engine model id (provider-native) |
+| `model` | `nvidia/nemotron-3-super-120b-a12b` | engine model id (provider-native) |
 | `provider_base_url` | `''` → `vars.AI_SDLC_PROVIDER_URL` → legacy default | OpenAI-compatible inference endpoint — see [Provider resolution](#provider-resolution) |
 | `max_seconds` / `max_steps` | `900` / `200` | engine budgets (same contract as implement) |
 | `branch_pattern` | `^(feat\|fix)/issue-[0-9]+` | ERE the head branch must match (pipeline PRs only); empty = any same-repo branch |
@@ -556,9 +556,9 @@ Every run writes `ai-sdlc-run.json` (artifact + step summary; the PR body
 quotes it):
 
 ```json
-{"v": 1, "model": "openai/gpt-4o-mini", "exit_code": 0,
- "primary_model": "openai/gpt-4o", "primary_exit": 20,
- "fallback_model": "openai/gpt-4o-mini", "fallback_used": true,
+{"v": 1, "model": "nvidia/nemotron-3.5-lightning-30b-a3b", "exit_code": 0,
+ "primary_model": "nvidia/nemotron-3-super-120b-a12b", "primary_exit": 20,
+ "fallback_model": "nvidia/nemotron-3.5-lightning-30b-a3b", "fallback_used": true,
  "fallback_reason": "provider", "fallback_exit": 0,
  "budget_per_run": {"max_seconds": 900, "max_steps": 200}}
 ```
