@@ -14,6 +14,7 @@ implements via `.ai-sdlc.yaml` at its root.
 | [`risk-taxonomy.md`](risk-taxonomy.md) | pr:risk-* tiers + required-evidence matrix + merge-gate decision table | #3 |
 | [`injection-defense.md`](injection-defense.md) | Trust-boundary model, fence+scrub convention, forbidden-action rules | #4 |
 | [`org-policy.md`](org-policy.md) | Field-level merge, pin-able floor fields, resolution algorithm | #6 |
+| [`interop-posture.md`](interop-posture.md) | Interop posture — ai-sdlc as the normative governance layer over pluggable engines; the seam (normalized events + headless engine contract), the conformance path, and the non-goals | #216 |
 
 ## Versioning
 
