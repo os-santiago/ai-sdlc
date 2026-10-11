@@ -119,11 +119,3 @@ escalation:
   contacts:
     - "@Axel-DaMage"
   notify_channels: []
-
-promotion:
-  clean_merges_threshold: 3
-  window: 30
-
-demotion:
-  escalation_threshold: 1
-  window: 30
