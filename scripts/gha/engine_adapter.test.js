@@ -175,6 +175,29 @@ describe('EngineAdapterResolver', () => {
       assert.strictEqual(adapter.exitCodeMap.get(3), 'invalid input');
     });
 
+    it('should reject non-decimal exit-code keys (hex, exponent, whitespace)', () => {
+      const fs = require('fs');
+      for (const bad of ['0x10', '1e2', ' 10', '10 ']) {
+        const probePath = path.join(__dirname, 'tmp-badkey-registry.json');
+        fs.writeFileSync(probePath, JSON.stringify({
+          probe: {
+            binary: 'probe',
+            argvBuilder: 'function a(){ return []; }',
+            exitCodeMap: { [bad]: 'sneaky', 0: 'ok' }
+          }
+        }));
+        try {
+          assert.throws(
+            () => new EngineAdapterResolver(probePath).getEngineAdapter('probe'),
+            /Invalid exit code/,
+            `exit-code key ${JSON.stringify(bad)} must be rejected`
+          );
+        } finally {
+          fs.unlinkSync(probePath);
+        }
+      }
+    });
+
     it('should evaluate JSON argvBuilder without access to host globals', () => {
       const fs = require('fs');
       const probePath = path.join(__dirname, 'tmp-probe-registry.json');

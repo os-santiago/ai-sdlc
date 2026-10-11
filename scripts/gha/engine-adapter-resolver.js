@@ -90,9 +90,13 @@ class EngineAdapterResolver {
       : Object.entries(exitCodeMap);
     const normalized = new Map();
     for (const [code, meaning] of entries) {
-      const numericCode = typeof code === 'number' ? code : Number(code);
-      const validKey = typeof code === 'number' ||
-        (typeof code === 'string' && code.trim() !== '');
+      // String keys must be strict decimal integer literals — Number()
+      // silently accepts hex ("0x10"), exponent ("1e2") and whitespace
+      // forms that have no place in an exit-code table.
+      const validKey = typeof code === 'number'
+        ? Number.isInteger(code)
+        : typeof code === 'string' && /^-?\d+$/.test(code);
+      const numericCode = validKey ? Number(code) : NaN;
       if (!validKey || !Number.isInteger(numericCode)) {
         throw new Error(`Invalid exit code "${code}" in exitCodeMap for engine ${engineId}`);
       }
