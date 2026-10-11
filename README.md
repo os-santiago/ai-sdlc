@@ -40,7 +40,22 @@ autonomy driven by a declarative per-repo contract (`.ai-sdlc.yaml`).
 
 ## Adopt this runtime
 
-A consumer repo needs three things:
+**One command.** The [`gh ai-sdlc` extension](https://github.com/os-santiago/gh-ai-sdlc)
+(or the dispatchable bootstrap workflow this repo ships) opens a single
+bootstrap PR on the target — contract, caller workflow, label set,
+secrets checklist — and merging it completes onboarding:
+
+```bash
+gh extension install os-santiago/gh-ai-sdlc
+gh ai-sdlc init   # run inside the target repo checkout
+```
+
+New repos onboard at `shadow`, the observe-only rung of the trust
+ladder, and climb on accumulated run evidence — promotion proposals
+arrive as ordinary reviewed contract PRs. Step-by-step:
+[docs/onboarding.md](docs/onboarding.md).
+
+The bootstrap PR (and the manual path below) wires three things:
 
 1. **Contract** — `.ai-sdlc.yaml` at the repo root. Only `spec` is
    required; every other field resolves from runtime defaults (see
@@ -49,7 +64,7 @@ A consumer repo needs three things:
    ```yaml
    spec: "1.0.0"
    autonomy:
-     level: auto-merge-low   # conservative ceiling; raise as trust accrues
+     level: shadow   # init's starter ceiling — evidence climbs the ladder
    ```
 
 2. **Caller workflow** — `.github/workflows/ai-sdlc.yml` dispatching the
@@ -105,6 +120,8 @@ A consumer repo needs three things:
 
 ## Documentation
 
+- [docs/onboarding.md](docs/onboarding.md) — one-command install
+  (`gh ai-sdlc init`) and the shadow-start trust ramp for new repos.
 - [docs/runtime.md](docs/runtime.md) — `workflow_call` runtime stages
   reference for adopters.
 - [docs/positioning.md](docs/positioning.md) — interop posture: the
