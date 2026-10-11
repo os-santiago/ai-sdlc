@@ -115,3 +115,10 @@ test('placeholder validation patterns reject injection-shaped values where appro
     }
   }
 });
+
+test('getEngineAdapter rejects unknown engine names instead of silently returning devin', () => {
+  const { getEngineAdapter } = require('../scripts/engine_adapter');
+  assert.throws(() => getEngineAdapter('nonexistent-engine'), /Unknown engine adapter/);
+  assert.equal(getEngineAdapter('scc'), require('../scripts/engine_adapter').sccAdapter);
+  assert.equal(getEngineAdapter('devin'), require('../scripts/engine_adapter').devinAdapter);
+});

@@ -84,8 +84,11 @@ function getEngineAdapter(engineName) {
     case 'scc':
       return sccAdapter;
     case 'devin':
-    default:
       return devinAdapter;
+    default:
+      // Unknown engines must fail loudly — silently returning devin
+      // would run an unintended engine contract.
+      throw new Error(`Unknown engine adapter: ${engineName}`);
   }
 }
 
