@@ -6,6 +6,16 @@ AI-SDLC is not an agent product competing on execution quality. Instead, it is a
 
 The AI-SDLC contract (`.ai-sdlc.yaml` + trust ladder + evidence) is the product surface. Engines and harnesses are pluggable components that operate *below* this layer. AI-SDLC provides the governance, policy, and compliance framework; engines provide the execution. This separation allows organizations to choose best-of-breed engines while maintaining a unified standard for safety, reliability, and autonomy.
 
+## What Each Layer Owns
+
+| Governance layer (this repo) | Engine / harness (pluggable below) |
+|---|---|
+| `.ai-sdlc.yaml` — per-repo policy: verify commands, autonomy ceiling, review/merge rules, escalation | prompt execution, tool loop, edit strategy |
+| Trust ladder L0–L5, promotion/demotion gates | model interaction within the routed model |
+| DoR intake (R1–R6), label state machine, risk taxonomy + merge gate | diff quality, step efficiency |
+| Evidence contract: `contract.json`, run manifest, audit event stream | emitting that evidence faithfully |
+| Budgets as enforced ceilings (`max_seconds`, `max_steps`, `max_repairs`) | staying inside them |
+
 ## Non-Goals
 
 - **Do not compete on agent execution quality**: AI-SDLC does not aim to outperform or replace the execution capabilities of specialized engines (e.g., coding agents, test generators, deployers). Execution quality remains the domain of the harness.
@@ -46,17 +56,40 @@ A certified harness must implement a headless (non-interactive) API that:
 
 This contract ensures that the runtime retains governance control (e.g., ability to demote autonomy, freeze execution, or require human approval) while the harness focuses on execution.
 
+### Registration Surface
+`config/engine_adapters.json` is the adapter registry: per engine it declares `binary`, `probe`, `argvBuilder`, `configRenderer`, `exitCodeMap`, and `manifestMap` (`scc` and `devin` are declared). Runtime dispatch is still hardcoded to `scc` in the implement stage — the registry is the seam a multi-engine dispatcher binds to, and adding a descriptor is how a new engine registers without workflow changes.
+
 ## Governance Vocabulary
 
 AI-SDLC contributes the following terms to the ecosystem to enable clear interoperability discussions:
 
-- **Contract**: The normative specification (`.ai-sdlc.yaml` + trust ladder + evidence) that defines what a harness may do.
-- **Autonomy Level**: The current trust-earned capability of the pipeline (shadow, suggest, auto-pr, etc.).
-- **Evidence**: Auditable outputs that demonstrate compliance with the contract.
-- **Conformance**: The state of a harness having passed certification to run under AI-SDLC.
-- **Headless Execution**: Execution without interactive user input, governed entirely by events and contracts.
-- **Integration without Fusion**: The architectural principle that governance and execution remain separate layers.
+| Term | Anchored in | Meaning |
+|---|---|---|
+| `.ai-sdlc.yaml` contract | `spec/ai-sdlc.schema.json` | per-repo declarative policy — verify, autonomy, review, merge, escalation |
+| trust ladder L0–L5 | `spec/trust-ladder.md` | earned autonomy `shadow` → `auto-deploy`; promotion gated on metrics |
+| DoR R1–R6 | `spec/definition-of-ready.md` | machine-checkable issue readiness; vague work is refused, not attempted |
+| `pr:risk-*` + evidence matrix | `spec/risk-taxonomy.md` | PR risk tiers and the review evidence each tier requires before merge |
+| label state machine | `spec/labels.md` | `scc:*` run-states, veto pairs, `needs-human` orthogonal hold |
+| trust boundaries | `spec/injection-defense.md` | T0–T3 content trust, `<untrusted-input>` fencing, forbidden actions |
+| bounded everything | `docs/runtime.md` | `max_seconds` / `max_steps` / `max_repairs` / `max_fix_iterations` — no unbounded loops |
+| evidence artifacts | `docs/runtime.md` | `contract.json`, run manifest, audit JSONL, `ai-sdlc-run.json` |
+
+An engine that speaks this vocabulary can be governed by any conforming runtime; a repo carrying the contract can swap engines without changing policy. That portability is the contribution to the ecosystem.
+
+### Conformance Path — How a Third-Party Engine Certifies
+
+Certification is **behavioral**: asserted against emitted evidence, not against the engine's codebase or benchmark claims. A conforming harness demonstrates, in order:
+
+1. **Invocable** — `probe` passes; `argvBuilder` renders a headless, non-interactive invocation; the run honors `--no-commit` and both budgets.
+2. **Configured** — accepts the rendered config file as its sole provider/permission source; no hidden env or flag layer diverges from it.
+3. **Auditable** — emits the normalized event stream and a run manifest with the required fields; artifacts upload clean as workflow evidence.
+4. **Exit-faithful** — its `exitCodeMap` distinguishes the classes the pipeline acts on, so fallback, no-changes, and escalation semantics hold exactly as declared.
+5. **Soaked** — runs at `shadow`/`suggest` autonomy on real issues; promotion to dispatch-eligible follows the same trust-ladder evidence as any autonomy increase (merge success, revert rate, escalation rate, repair rounds — `spec/trust-ladder.md`).
+
+A certified harness is a first-class engine under the contract. An uncertified one may still run in its own product — the seam is a contract, not a gate on the ecosystem.
 
 ## Conclusion
 
 AI-SDLC’s role is to establish a trusted, verifiable framework under which diverse engines can operate safely and effectively. By focusing on governance rather than execution, AI-SDLC enables organizations to harness the innovation of third-party agents while maintaining consistent standards for risk management, compliance, and operational excellence.
+
+Engines compete on execution; ai-sdlc competes on governance. The contract is the product, evidence is the currency, and the seam — normalized events plus the headless engine contract — is where the two worlds meet without merging.
