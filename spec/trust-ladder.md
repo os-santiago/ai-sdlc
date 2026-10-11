@@ -55,6 +55,14 @@ autonomy:
   level: auto-merge-low        # ceiling for this repo
   merge_requires_checks: true
   freeze_env: AI_SDLC_FREEZE
+
+promotion:                     # evidence gate for raising the level
+  clean_merges_threshold: 3    # clean merges required inside the window
+  window: 30                   # rolling evidence-window size
+
+demotion:                      # evidence trigger for dropping one level
+  escalation_threshold: 1      # needs-human escalations inside the window
+  window: 30
 ```
 
 Newly adopted repos SHOULD start at `shadow` or `suggest` and let evidence

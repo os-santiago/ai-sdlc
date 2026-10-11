@@ -253,6 +253,46 @@
           "description": "Repos ('owner/repo' or bare repo name) exempt from the org baseline entirely."
         }
       }
+    },
+    "promotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Evidence thresholds gating trust-ladder promotion (spec/trust-ladder.md): the pipeline may raise the effective autonomy level only when the recorded evidence clears these bounds inside the rolling window.",
+      "required": ["clean_merges_threshold", "window"],
+      "properties": {
+        "clean_merges_threshold": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3,
+          "description": "Clean merges required inside the evidence window before a promotion is considered."
+        },
+        "window": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 30,
+          "description": "Rolling evidence-window size over which promotion metrics are evaluated (see spec/trust-ladder.md)."
+        }
+      }
+    },
+    "demotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Evidence thresholds forcing trust-ladder demotion (spec/trust-ladder.md): breaching a bound inside the rolling window demotes the effective autonomy level.",
+      "required": ["escalation_threshold", "window"],
+      "properties": {
+        "escalation_threshold": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1,
+          "description": "Escalations (needs-human) inside the evidence window that force a demotion."
+        },
+        "window": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 30,
+          "description": "Rolling evidence-window size over which demotion metrics are evaluated (see spec/trust-ladder.md)."
+        }
+      }
     }
   }
 }
