@@ -1,6 +1,10 @@
 # Self-dogfooding caller: this repo consumes its own reusable runtime.
 # An issue labeled `ready-to-implement` → DoR intake → implement → PR.
 # Every pull_request open/sync → AI review + bounded review-fix convergence.
+# pull_request (and pushes to main) also run the contract↔schema gate —
+# load-config resolves .ai-sdlc.yaml from the BASE ref in every stage, so
+# contract drift is invisible to the runtime until merge, then fails
+# repo-wide (issue #255). The merge ref is the only pre-merge look at it.
 # Engine inference defaults to GitHub Models (GITHUB_TOKEN, `models: read`);
 # repo secret MODEL_API_KEY switches to a direct provider — opt-in by label.
 name: ai-sdlc (self)
@@ -10,6 +14,8 @@ on:
     types: [labeled]
   pull_request:
     types: [opened, synchronize]
+  push:
+    branches: [main]
 
 permissions:
   contents: write
@@ -18,6 +24,27 @@ permissions:
   models: read
 
 jobs:
+  contract:
+    # Same-repo heads only: the suite executes repo code (node --test), so it
+    # must never run on untrusted fork content — same posture as `review`.
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # pull_request checks out the merge ref — exactly what would land on
+      # main; push checks out the pushed head.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate repo (contract ↔ schema + suite)
+        run: bash tools/validate-repo.sh
+
   intake:
     if: github.event.label.name == 'ready-to-implement'
     uses: ./.github/workflows/ai-sdlc-intake.yml

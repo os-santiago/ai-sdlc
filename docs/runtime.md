@@ -324,23 +324,31 @@ one attempt:
 3. **Context** — failing check names + bounded log tails (Actions job logs;
    check-run output for other apps), wrapped as untrusted data in the
    repair prompt (`spec/injection-defense.md`).
-4. **Repair** — checkout the PR head SHA (`persist-credentials: false`),
+4. **Base-fault diagnosis** — a failing check whose log tail or check-run
+   output carries `scc:config-error` means the contract failed validation
+   on the BASE ref: every stage resolves `.ai-sdlc.yaml` from base, never
+   from the PR head, so no push to the branch can green the run. The
+   attempt is recorded as `base-contract-error` and escalated immediately —
+   the engine never runs, converting a guaranteed `no_changes` stall into
+   an explicit cause (issue #255).
+5. **Repair** — checkout the PR head SHA (`persist-credentials: false`),
    same `scc` build + `Configure scc engine provider` step as implement,
    headless run with `--prompt-file --no-commit --audit-log --summary-file
    --max-seconds --max-steps`.
-5. **Push** — real mutations (excluding `.github/workflows/`) are committed
+6. **Push** — real mutations (excluding `.github/workflows/`) are committed
    and pushed (non-force) to the PR head branch under the App installation
    token (`persist-credentials: false` + explicit auth header, so the token
    never reaches the workspace the engine reads); the new head re-runs CI,
    and the next red result triggers the next attempt.
-6. **Audit** — exactly one marker comment per attempt (attempt N/M, failing
+7. **Audit** — exactly one marker comment per attempt (attempt N/M, failing
    checks, outcome, failure signature, run link) plus artifact
    `ai-sdlc-ci-repair-<pr>-attempt-<n>` with `ci-repair-manifest.json`
    (`failure: {signature, rootCause}` for future runbook matching), prompt,
    audit log and engine manifest.
-7. **Escalate** — any attempt that cannot push a fix (engine no-op/failure,
-   push rejected) labels `needs-human` with the cause immediately, since
-   nothing would re-trigger the loop. Removing the label hands control back.
+8. **Escalate** — any attempt that cannot push a fix (engine no-op/failure,
+   push rejected, base-ref contract fault) labels `needs-human` with the
+   cause immediately, since nothing would re-trigger the loop. Removing the
+   label hands control back.
 
 Caller wiring (event plumbing is the caller's job):
 
