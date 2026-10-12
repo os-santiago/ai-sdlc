@@ -1,3 +1,6 @@
+const { describe, it } = require('node:test');
+const { before } = require('node:test');
+const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
@@ -6,86 +9,86 @@ describe('Engine Adapters Registry Config', () => {
 
   describe('registry file', () => {
     it('should exist and be readable', () => {
-      expect(fs.existsSync(registryPath)).toBe(true);
+      assert.strictEqual(fs.existsSync(registryPath), true);
       
       // Should be valid JSON
       const content = fs.readFileSync(registryPath, 'utf8');
       const registry = JSON.parse(content);
-      expect(registry).toBeDefined();
+      assert.notStrictEqual(registry, undefined);
     });
 
     it('should have required engine entries', () => {
       const content = fs.readFileSync(registryPath, 'utf8');
       const registry = JSON.parse(content);
       
-      expect(registry).toHaveProperty('scc');
-      expect(registry).toHaveProperty('devin');
+      assert.ok('scc' in registry, 'missing property ' + 'scc');
+      assert.ok('devin' in registry, 'missing property ' + 'devin');
     });
 
     describe('scc engine configuration', () => {
       let sccConfig;
       
-      beforeEach(() => {
+      before(() => {
         const content = fs.readFileSync(registryPath, 'utf8');
         const registry = JSON.parse(content);
         sccConfig = registry.scc;
       });
 
       it('should have required fields', () => {
-        expect(sccConfig).toHaveProperty('binary');
-        expect(sccConfig).toHaveProperty('argvBuilder');
-        expect(sccConfig).toHaveProperty('exitCodeMap');
+        assert.ok('binary' in sccConfig, 'missing property ' + 'binary');
+        assert.ok('argvBuilder' in sccConfig, 'missing property ' + 'argvBuilder');
+        assert.ok('exitCodeMap' in sccConfig, 'missing property ' + 'exitCodeMap');
       });
 
       it('should have correct binary', () => {
-        expect(sccConfig.binary).toBe('npx sc-agent-cli@latest');
+        assert.strictEqual(sccConfig.binary, 'npx sc-agent-cli@latest');
       });
 
       it('should have argvBuilder as function string', () => {
-        expect(typeof sccConfig.argvBuilder).toBe('string');
+        assert.strictEqual(typeof sccConfig.argvBuilder, 'string');
         // Should contain function body
-        expect(sccConfig.argvBuilder).toContain('function');
-        expect(sccConfig.argvBuilder).toContain('argvBuilder');
+        assert.ok(sccConfig.argvBuilder.includes('function'), 'expected to contain function');
+        assert.ok(sccConfig.argvBuilder.includes('argvBuilder'), 'expected to contain argvBuilder');
       });
 
       it('should have exitCodeMap as object', () => {
-        expect(typeof sccConfig.exitCodeMap).toBe('object');
-        expect(sccConfig.exitCodeMap).toHaveProperty('0');
-        expect(sccConfig.exitCodeMap).toHaveProperty('10');
-        expect(sccConfig.exitCodeMap).toHaveProperty('20');
+        assert.strictEqual(typeof sccConfig.exitCodeMap, 'object');
+        assert.ok(0 in sccConfig.exitCodeMap, 'missing property ' + '0');
+        assert.ok(10 in sccConfig.exitCodeMap, 'missing property ' + '10');
+        assert.ok(20 in sccConfig.exitCodeMap, 'missing property ' + '20');
       });
     });
 
     describe('devin engine configuration', () => {
       let devinConfig;
       
-      beforeEach(() => {
+      before(() => {
         const content = fs.readFileSync(registryPath, 'utf8');
         const registry = JSON.parse(content);
         devinConfig = registry.devin;
       });
 
       it('should have required fields', () => {
-        expect(devinConfig).toHaveProperty('binary');
-        expect(devinConfig).toHaveProperty('argvBuilder');
-        expect(devinConfig).toHaveProperty('exitCodeMap');
+        assert.ok('binary' in devinConfig, 'missing property ' + 'binary');
+        assert.ok('argvBuilder' in devinConfig, 'missing property ' + 'argvBuilder');
+        assert.ok('exitCodeMap' in devinConfig, 'missing property ' + 'exitCodeMap');
       });
 
       it('should have correct binary', () => {
-        expect(devinConfig.binary).toBe('devin');
+        assert.strictEqual(devinConfig.binary, 'devin');
       });
 
       it('should have argvBuilder as function string', () => {
-        expect(typeof devinConfig.argvBuilder).toBe('string');
-        expect(devinConfig.argvBuilder).toContain('function');
-        expect(devinConfig.argvBuilder).toContain('argvBuilder');
+        assert.strictEqual(typeof devinConfig.argvBuilder, 'string');
+        assert.ok(devinConfig.argvBuilder.includes('function'), 'expected to contain function');
+        assert.ok(devinConfig.argvBuilder.includes('argvBuilder'), 'expected to contain argvBuilder');
       });
 
       it('should have exitCodeMap as object', () => {
-        expect(typeof devinConfig.exitCodeMap).toBe('object');
-        expect(devinConfig.exitCodeMap).toHaveProperty('0');
-        expect(devinConfig.exitCodeMap).toHaveProperty('1');
-        expect(devinConfig.exitCodeMap).toHaveProperty('2');
+        assert.strictEqual(typeof devinConfig.exitCodeMap, 'object');
+        assert.ok(0 in devinConfig.exitCodeMap, 'missing property ' + '0');
+        assert.ok(1 in devinConfig.exitCodeMap, 'missing property ' + '1');
+        assert.ok(2 in devinConfig.exitCodeMap, 'missing property ' + '2');
       });
     });
   });
@@ -101,12 +104,12 @@ describe('Engine Adapters Registry Config', () => {
       // Valid entries should have all required fields
       ['scc', 'devin'].forEach(engineId => {
         const config = registry[engineId];
-        expect(config).toBeDefined();
-        expect(config.binary).toBeDefined();
-        expect(typeof config.binary).toBe('string');
-        expect(config.argvBuilder).toBeDefined();
-        expect(config.exitCodeMap).toBeDefined();
-        expect(typeof config.exitCodeMap).toBe('object');
+        assert.notStrictEqual(config, undefined);
+        assert.notStrictEqual(config.binary, undefined);
+        assert.strictEqual(typeof config.binary, 'string');
+        assert.notStrictEqual(config.argvBuilder, undefined);
+        assert.notStrictEqual(config.exitCodeMap, undefined);
+        assert.strictEqual(typeof config.exitCodeMap, 'object');
       });
     });
   });
