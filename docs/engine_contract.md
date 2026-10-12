@@ -133,7 +133,7 @@ If omitted, the runtime defaults to `scc` for all stages.
 
 ## References
 
-- [Positioning — ai-sdlc as the governance layer over agent engines](positioning.md)
+- [Interop Posture — ai-sdlc as the governance layer over agent engines](../spec/interop-posture.md)
 - [Normalized Event Versioning](../spec/normalized-event-versioning.md)
 - [Trust Ladder](../spec/trust-ladder.md)
 - [Definition of Ready](../spec/definition-of-ready.md)

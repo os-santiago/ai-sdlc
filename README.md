@@ -107,7 +107,7 @@ A consumer repo needs three things:
 
 - [docs/runtime.md](docs/runtime.md) — `workflow_call` runtime stages
   reference for adopters.
-- [docs/positioning.md](docs/positioning.md) — interop posture: the
+- [spec/interop-posture.md](spec/interop-posture.md) — interop posture: the
   governance layer over pluggable engines, the conformance path, and
   the explicit non-goals.
 - [spec/README.md](spec/README.md) — index of the normative contract
