@@ -76,6 +76,38 @@
         }
       }
     },
+    "promotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Trust-ladder promotion evidence gates (spec/trust-ladder.md): the contract pre-declares the thresholds its run evidence is measured against. Metrics are computed over the rolling window of completed pipeline runs; passing the gate opens a promotion contract PR (issue #211).",
+      "required": ["clean_merges_threshold", "window"],
+      "properties": {
+        "clean_merges_threshold": {
+          "type": "integer", "minimum": 1, "default": 3,
+          "description": "Clean merges inside the window required before a promotion proposal is opened."
+        },
+        "window": {
+          "type": "integer", "minimum": 10, "default": 30,
+          "description": "Rolling window in completed pipeline runs the promotion evidence is computed over; spec/trust-ladder.md sets 10 as the minimum evidence base."
+        }
+      }
+    },
+    "demotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Trust-ladder demotion triggers (spec/trust-ladder.md): breaching a bound drops one level and opens a demotion PR recording which bound was crossed (issue #211).",
+      "required": ["escalation_threshold", "window"],
+      "properties": {
+        "escalation_threshold": {
+          "type": "integer", "minimum": 1, "default": 1,
+          "description": "needs-human escalations inside the window that trigger a demotion proposal."
+        },
+        "window": {
+          "type": "integer", "minimum": 1, "default": 30,
+          "description": "Rolling window in completed pipeline runs demotion evidence is computed over."
+        }
+      }
+    },
     "triggers": {
       "type": "object",
       "additionalProperties": false,
