@@ -4,7 +4,9 @@
 #
 #   1. .ai-sdlc.yaml + examples/*.ai-sdlc.yaml — JSON-schema conformance and
 #      secret scan via tools/validate-ai-sdlc-config.sh
-#   2. spec/ai-sdlc.schema.json parses as JSON
+#   2. spec/*.json parse as JSON and carry no duplicate keys (a dup key is a
+#      silent spec ambiguity — parsers go last-wins, so the stricter of two
+#      definitions is dead without anyone noticing; issue #255)
 #   3. .github/workflows/*.yml, .github/actions/*/action.yml and the contracts
 #      parse as YAML
 #   4. actionlint, when a binary is already installed (CI owns the pinned
@@ -29,10 +31,52 @@ for cfg in "${contracts[@]}"; do
   bash tools/validate-ai-sdlc-config.sh "$cfg" spec/ai-sdlc.schema.json
 done
 
-# --- 2. Schema parses as JSON ---------------------------------------------------
+# --- 2. Spec JSON parses + no duplicate keys -----------------------------------
 # (the contract validator above already hard-requires python3)
-python3 -c 'import json, sys; json.load(open(sys.argv[1]))' spec/ai-sdlc.schema.json
-echo "[✓] spec/ai-sdlc.schema.json: valid JSON"
+python3 - <<'PY'
+import glob, json, sys
+
+class Obj(dict):
+    """dict that remembers which keys appeared twice while parsing."""
+
+def hook(pairs):
+    o = Obj()
+    o.dupes = []
+    for k, v in pairs:
+        if k in o:
+            o.dupes.append(k)
+        o[k] = v
+    return o
+
+def walk(node, path, out):
+    if isinstance(node, Obj):
+        for k in node.dupes:
+            out.append(f"{path}.{k}" if path else k)
+        for k, v in node.items():
+            walk(v, f"{path}.{k}" if path else k, out)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            walk(v, f"{path}[{i}]", out)
+
+ok = True
+for f in sorted(glob.glob('spec/*.json')):
+    try:
+        doc = json.load(open(f), object_pairs_hook=hook)
+    except Exception as e:
+        print(f"[X] {f}: invalid JSON — {e}", file=sys.stderr)
+        ok = False
+        continue
+    dupes = []
+    walk(doc, '', dupes)
+    if dupes:
+        print(f"[X] {f}: duplicate key(s) {', '.join(dupes)} — last-wins "
+              "parsing leaves one definition dead; a normative spec must be "
+              "unambiguous", file=sys.stderr)
+        ok = False
+    else:
+        print(f"[✓] {f}: valid JSON, no duplicate keys")
+sys.exit(0 if ok else 1)
+PY
 
 # --- 3. Workflow / action / contract files parse as YAML -----------------------
 if python3 -c 'import yaml' 2>/dev/null; then

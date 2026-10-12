@@ -11,6 +11,14 @@
 #   → `needs-human` + cause when the budget is exhausted or an attempt
 #     cannot push a fix (nothing would re-trigger the loop).
 #
+# Base-fault short-circuit (issue #255): a failing check carrying the
+# load-config fail-fast marker `scc:config-error` means the contract failed
+# validation on the BASE ref — every runtime stage resolves .ai-sdlc.yaml
+# from base, never from the PR head, so no push to this branch can green
+# the run. The loop records the attempt as `base-contract-error` and
+# escalates immediately instead of spending an engine run that can only
+# terminate `no_changes` (the repair-stall signature).
+#
 # The pushed commit must re-fire CI for the loop to close: all git/gh auth
 # is the ai-sdlc GitHub App installation token, minted per-run from
 # AI_SDLC_APP_ID + AI_SDLC_APP_PRIVATE_KEY — GITHUB_TOKEN-auth pushes do not
@@ -252,6 +260,7 @@ jobs:
           ls -la "$WORK/logs"
 
       - name: Build repair prompt + failure signature
+        id: prompt
         if: steps.guard.outputs.decision == 'repair'
         env:
           ATTEMPT: ${{ steps.guard.outputs.attempt }}
@@ -271,19 +280,28 @@ jobs:
           const ERR = /##\[error\]|\berror\b|\bfailed\b|\bFAIL\b|exception|traceback/i;
           const norm = (l) => l.replace(/##\[error\]/g, '').replace(/\b[0-9a-f]{7,40}\b/g, 'H').replace(/\d+/g, 'N').trim().slice(0, 200);
 
-          const sections = [], sigParts = [];
+          const sections = [], sigParts = [], baseFaultChecks = [];
           let rootCause = null;
           for (const f of failing) {
             const logFile = `${W}/logs/${f.id}.log`;
+            const outFields = [f.output.title, f.output.summary, f.output.text].filter(Boolean).join('\n');
             let body = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
-            if (!body) body = [f.output.title, f.output.summary, f.output.text].filter(Boolean).join('\n').slice(-cap);
+            if (!body) body = outFields.slice(-cap);
+            // `scc:config-error` is load-config's fail-fast marker; the contract
+            // is always resolved from the BASE ref, so this is a base-side
+            // fault no PR-head push can repair (issue #255).
+            if (/scc:config-error/.test(`${body}\n${outFields}`)) baseFaultChecks.push(f.name);
             const firstErr = body.split('\n').find(l => ERR.test(l)) || '';
             if (!rootCause && firstErr) rootCause = `${f.name}: ${firstErr.replace(/##\[error\]/g, '').trim().slice(0, 300)}`;
             sigParts.push(`${f.name}:${norm(firstErr)}`);
             sections.push(`### ${f.kind} "${esc(f.name)}" — ${f.conclusion}\n${esc(f.url)}\n\n\`\`\`text\n${esc(body) || '(no output captured)'}\n\`\`\``);
           }
+          const baseFault = baseFaultChecks.length > 0;
           const signature = crypto.createHash('sha256').update(sigParts.sort().join('\n')).digest('hex').slice(0, 16);
-          fs.writeFileSync(`${W}/failure.json`, JSON.stringify({ signature, rootCause, checks: failing.map(f => f.name) }, null, 2));
+          fs.writeFileSync(`${W}/failure.json`, JSON.stringify({
+            signature, rootCause, baseFault, baseFaultChecks, checks: failing.map(f => f.name),
+          }, null, 2));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `base_fault=${baseFault}\n`);
 
           const prompt = [
             `You are a senior software engineer repairing failing CI on an open pull request in this repository (branch ${process.env.HEAD_REF}). This is repair attempt ${process.env.ATTEMPT} of ${process.env.MAX_REPAIRS}.`,
@@ -304,7 +322,7 @@ jobs:
           NODE
 
       - uses: actions/checkout@v4
-        if: steps.guard.outputs.decision == 'repair'
+        if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
         with:
           repository: ${{ inputs.repo }}
           ref: ${{ steps.guard.outputs.head_sha }}
@@ -314,7 +332,7 @@ jobs:
           persist-credentials: false
 
       - name: Build scc engine from source
-        if: steps.guard.outputs.decision == 'repair'
+        if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
         run: |
           set -euo pipefail
           git clone --depth 1 https://github.com/os-santiago/sc-agent-cli /tmp/scc-src
@@ -323,7 +341,7 @@ jobs:
           scc --version
 
       - name: Configure scc engine provider
-        if: steps.guard.outputs.decision == 'repair'
+        if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
         env:
           MODEL_NAME: ${{ inputs.model }}
           PROVIDER_BASE_URL: ${{ inputs.provider_base_url || vars.AI_SDLC_PROVIDER_URL || 'https://models.github.ai/inference' }}
@@ -356,7 +374,7 @@ jobs:
 
       - name: Run scc headless repair (bounded)
         id: engine
-        if: steps.guard.outputs.decision == 'repair'
+        if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
         env:
           MAX_SECONDS: ${{ inputs.max_seconds }}
           MAX_STEPS: ${{ inputs.max_steps }}
@@ -379,7 +397,7 @@ jobs:
 
       - name: Commit + push to PR head
         id: push
-        if: steps.guard.outputs.decision == 'repair' && steps.engine.outputs.exit_code == '0'
+        if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true' && steps.engine.outputs.exit_code == '0'
         env:
           PUSH_TOKEN: ${{ steps.app-token.outputs.token }}
           HEAD_REF: ${{ steps.guard.outputs.head_ref }}
@@ -413,6 +431,7 @@ jobs:
           ATTEMPT: ${{ steps.guard.outputs.attempt }}
           HEAD_SHA: ${{ steps.guard.outputs.head_sha }}
           FAILING: ${{ steps.guard.outputs.failing }}
+          BASE_FAULT: ${{ steps.prompt.outputs.base_fault }}
           ENGINE_CODE: ${{ steps.engine.outputs.exit_code }}
           PUSH_OUTCOME: ${{ steps.push.outputs.outcome }}
           COMMIT: ${{ steps.push.outputs.commit }}
@@ -428,15 +447,18 @@ jobs:
           let engine = {};
           try { engine = JSON.parse(fs.readFileSync(`${W}/scc-manifest.json`, 'utf8')); } catch (_) {}
           const code = e.ENGINE_CODE || 'not-run';
+          const baseFault = e.BASE_FAULT === 'true';
           let outcome;
-          if (code === '0') outcome = e.PUSH_OUTCOME || 'commit-failed';
+          if (baseFault) outcome = 'base-contract-error';
+          else if (code === '0') outcome = e.PUSH_OUTCOME || 'commit-failed';
           else if (code === '10') outcome = 'no-changes';
           else outcome = `engine-exit-${code}`;
 
           const manifest = {
             pr: Number(e.PR), attempt: Number(e.ATTEMPT), maxRepairs: Number(e.MAX_REPAIRS),
             headSha: e.HEAD_SHA, commit: e.COMMIT || null, engineExitCode: code, outcome,
-            failure: { signature: failure.signature, rootCause: failure.rootCause },
+            failure: { signature: failure.signature, rootCause: failure.rootCause,
+                       baseFault: failure.baseFault || false, baseFaultChecks: failure.baseFaultChecks || [] },
             failingChecks: failure.checks, engineToolCalls: engine.tool_calls_total ?? null, engineIterations: engine.iterations ?? null,
             run: e.RUN_URL,
           };
@@ -451,6 +473,7 @@ jobs:
             `- failure signature: \`${failure.signature || 'n/a'}\``,
             `- run: ${e.RUN_URL} (prompt, audit log + manifest in artifacts)`,
           ];
+          if (baseFault) lines.push('- diagnosis: `scc:config-error` in the failing check — the contract failed validation on the **base** ref (every stage resolves `.ai-sdlc.yaml` from base, never this head), so no push here can green the run. Escalated without spending an engine run.');
           fs.writeFileSync(`${W}/attempt-comment.md`, lines.join('\n') + '\n');
           fs.appendFileSync(e.GITHUB_OUTPUT, `outcome=${outcome}\n`);
           console.log(`attempt ${e.ATTEMPT}/${e.MAX_REPAIRS}: ${outcome}`);
@@ -473,6 +496,8 @@ jobs:
           set -euo pipefail
           if [ "$DECISION" = "escalate" ]; then
             CAUSE="repair budget exhausted ($ATTEMPTS/$MAX_REPAIRS attempts) and checks are still red"
+          elif [ "${OUTCOME:-}" = "base-contract-error" ]; then
+            CAUSE="failing checks trace to scc:config-error — .ai-sdlc.yaml is invalid against spec/ai-sdlc.schema.json on the base ref, and every stage resolves the contract from base, so no push to this branch can fix it. Land the contract/schema fix on the base branch, then re-run the failed checks (repair will not re-attempt this head)."
           else
             CAUSE="repair attempt $ATTEMPT/$MAX_REPAIRS produced no pushable fix (outcome: ${OUTCOME:-unknown}) — nothing will re-trigger the loop"
           fi

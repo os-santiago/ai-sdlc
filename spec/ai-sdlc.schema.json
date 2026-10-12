@@ -409,40 +409,6 @@
         }
       }
     },
-    "promotion": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Trust-ladder promotion gate (spec/trust-ladder.md): evidence thresholds over a rolling window before autonomy promotion is considered.",
-      "properties": {
-        "clean_merges_threshold": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "Consecutive clean merges required inside the window."
-        },
-        "window": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "Rolling evidence window in days."
-        }
-      }
-    },
-    "demotion": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Trust-ladder demotion trigger (spec/trust-ladder.md): escalation count that forces a demotion inside the window.",
-      "properties": {
-        "escalation_threshold": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "Escalations inside the window that trigger demotion."
-        },
-        "window": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "Rolling evidence window in days."
-        }
-      }
-    },
     "policy_floor": {
       "type": "object",
       "additionalProperties": false,
