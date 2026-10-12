@@ -7,6 +7,25 @@
     ],
     "argvBuilder": {
       "command": "chat",
+      "substitution": {
+        "mode": "argv-element",
+        "shell": "never",
+        "note": "Each {name} token occupies a whole argv element and MUST be replaced atomically with the validated value as one element (no re-splitting, no globbing, no shell joining). Unknown placeholders must be rejected, not substituted.",
+        "placeholders": {
+          "model": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$",
+            "required": true
+          },
+          "prompt": {
+            "pattern": "^[^\\u0000]{1,65536}$",
+            "required": true
+          },
+          "manifestFile": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$",
+            "required": true
+          }
+        }
+      },
       "args": [
         "--model",
         "{model}",
@@ -23,12 +42,14 @@
       "path": "{manifestFile}"
     },
     "exitCodeMap": {
+      "0": "Success",
       "10": "ValidationError",
       "20": "AgentError",
       "21": "AgentFailedError",
       "22": "MaxStepsExceeded",
       "23": "MaxRepairsExceeded",
-      "24": "TimeoutError"
+      "24": "TimeoutError",
+      "default": "AgentError"
     },
     "manifestMap": {
       "path": "{manifestFile}",
@@ -43,6 +64,25 @@
     ],
     "argvBuilder": {
       "command": "run",
+      "substitution": {
+        "mode": "argv-element",
+        "shell": "never",
+        "note": "Each {name} token occupies a whole argv element and MUST be replaced atomically with the validated value as one element (no re-splitting, no globbing, no shell joining). Unknown placeholders must be rejected, not substituted.",
+        "placeholders": {
+          "prompt": {
+            "pattern": "^[^\\u0000]{1,65536}$",
+            "required": true
+          },
+          "model": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$",
+            "required": true
+          },
+          "manifestFile": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$",
+            "required": true
+          }
+        }
+      },
       "args": [
         "--prompt",
         "{prompt}",
@@ -58,7 +98,8 @@
     },
     "exitCodeMap": {
       "0": "Success",
-      "1": "AgentError"
+      "1": "AgentError",
+      "default": "AgentError"
     },
     "manifestMap": {
       "path": "{manifestFile}",
