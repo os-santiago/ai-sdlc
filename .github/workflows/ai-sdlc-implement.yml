@@ -348,9 +348,13 @@ jobs:
           git config user.email "ai-sdlc[bot]@users.noreply.github.com"
           # Engine session artifacts are run evidence uploaded as workflow
           # artifacts — exclude them so only real source changes land in the
-          # consumer diff (issue #68).
-          git add -A -- . \
-            ':!.github/workflows'
+          # consumer diff (issue #68). They are gitignored only in this repo,
+          # and `git add` aborts when a pathspec names an ignored path, so
+          # unstage whatever got staged instead of `:!` pathspec excludes.
+          git add -A -- . ':!.github/workflows'
+          git diff --cached --name-only -z -- \
+            'scc-*.json*' 'ai-sdlc-run.json' 'issue.json' 'task-prompt.md' \
+            | xargs -0 -r git reset -q --
           if ! git diff --cached --quiet; then
             git commit -m "feat: implement issue #$ISSUE (ai-sdlc runtime)"
           fi
