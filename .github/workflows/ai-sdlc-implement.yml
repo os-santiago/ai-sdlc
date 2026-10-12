@@ -350,11 +350,7 @@ jobs:
           # artifacts — exclude them so only real source changes land in the
           # consumer diff (issue #68).
           git add -A -- . \
-            ':!.github/workflows' \
-            ':!scc-*.json*' \
-            ':!ai-sdlc-run.json' \
-            ':!issue.json' \
-            ':!task-prompt.md'
+            ':!.github/workflows'
           if ! git diff --cached --quiet; then
             git commit -m "feat: implement issue #$ISSUE (ai-sdlc runtime)"
           fi
