@@ -16,6 +16,7 @@ See [ADR-0001: Homedir AI-SDLC Sunset and Cutover](./architecture/adr/0001-homed
 | `ai-sdlc-intake.yml` | DoR validation (R1–R6 per `spec/definition-of-ready.md`), `scc:queued`/`scc:not-ready` labels | `issues.labeled` in caller |
 | `ai-sdlc-implement.yml` | `scc` headless run → branch → PR (`Closes #N`) + manifest/audit artifacts | called on `scc:queued` |
 | `ai-sdlc-automerge.yml` | merge-gate decision table (spec/risk-taxonomy.md): green+mergeable → squash+delete; failing → repair signal; pending/conflict → `needs-human`; pending review holds only up to `review.wait_max_minutes` → `review_timeout` merge | `check_run.completed` / `pull_request` / called |
+| `ai-sdlc-classify.yml` | deterministic diff risk classification (`scripts/risk-classifier.js`): path/size/content signals → `pr:risk-*` label on every `pull_request` event — recomputed on each push | `pull_request` (opened/synchronize) |
 | `ai-sdlc-review.yml` | AI review + bounded review-fix convergence: verdict marker per head SHA + `pr:risk-*` tier label; `blocker|major`/`request_changes` → fix pass on the same branch → re-review; `needs-human` after `max_fix_iterations` | `pull_request` (opened/synchronize) / called post-implement |
 | `ai-sdlc-sweep.yml` | scheduled stall-sweep: enumerates open pipeline PRs and feeds each to `ai-sdlc-automerge.yml` — no green-idle PRs | `schedule` (every 30 min) / `workflow_dispatch` |
 | `ai-sdlc-ci-repair.yml` | bounded repair loop on red checks: failing-check log tails → `scc` headless on the PR head → commit + push; one comment per attempt; `needs-human` after `max_repairs` | `check_run.completed` (failure) / `workflow_dispatch` / automerge `repair-signaled` |
@@ -239,6 +240,27 @@ Outputs: `action` (`reviewed` \| `fix-dispatched` \| `escalated` \|
 | `org_config` | `''` | org baseline `owner/repo[/path][@ref]` — see [Org policy](#org-policy) |
 | `review_wait_minutes` | `-1` → `review.wait_max_minutes` (15) | pending-review cap before merging with `review_timeout` |
 
+### ai-sdlc-classify
+| Input | Default | Purpose |
+|---|---|---|
+| `repo`, `pr_number` | — (required) | target |
+| `runtime_ref` | `main` | ref of `os-santiago/ai-sdlc` the classifier (`scripts/risk-classifier.js`) is fetched from — pin to the same ref as the workflow; the script is never read from the PR head or consumer repo |
+| `diff_max_bytes` | `500000` | byte cap on the unified diff scanned for content signals |
+
+Outputs: `action` (`classified` \| `skipped`), `risk_tier` (`low` \|
+`medium` \| `high` \| `critical`).
+
+The stage is deliberately lean — no checkout, no engine, no contract
+resolution — so event→label latency stays inside the taxonomy's labeling
+budget. It applies the canonical `pr:risk-*` set in one bounded `gh pr
+edit` (add winner, remove stale sibling tiers); `pr:risk-accepted` is
+human-owned and never touched. Signals (`spec/risk-taxonomy.md`,
+ambiguity resolves UP): credential/secret material or policy/supply-chain
+surfaces → `critical`; `eval()`/`exec`/shell-injection shapes in added
+diff lines, security-adjacent paths, dependency manifests, >800 diff
+lines, multi-subsystem, public-API deletions → `high`; docs/tests/
+config-text-only → `low`; otherwise `medium`.
+
 ### ai-sdlc-verify
 | Input | Default | Purpose |
 |---|---|---|
@@ -251,7 +273,7 @@ Outputs: `action` (`reviewed` \| `fix-dispatched` \| `escalated` \|
 
 | Secret | Purpose |
 |---|---|
-| `AI_SDLC_APP_ID` | **required** by `implement`/`automerge`/`ci-repair`/`review` — the `ai-sdlc` GitHub App id; each run mints a repo-scoped installation token (App permissions: contents/pull-requests/issues write, checks read, metadata read). Unset → the stage fails fast with `ai-sdlc auth` error — no PAT/`GITHUB_TOKEN` fallback (issue #26) |
+| `AI_SDLC_APP_ID` | **required** by `implement`/`automerge`/`ci-repair`/`review`/`classify` — the `ai-sdlc` GitHub App id; each run mints a repo-scoped installation token (App permissions: contents/pull-requests/issues write, checks read, metadata read). Unset → the stage fails fast with `ai-sdlc auth` error — no PAT/`GITHUB_TOKEN` fallback (issue #26) |
 | `AI_SDLC_APP_PRIVATE_KEY` | **required** — the App's PEM private key. Store both App secrets as org secrets scoped to the consumer repos |
 | `AI_SDLC_TOKEN` | optional legacy slot — still accepted by `intake`/`verify`/`sweep` when `GITHUB_TOKEN` can't reach the target repo for read/issue calls. Unused by `implement`/`automerge`/`ci-repair` |
 | `MODEL_API_KEY` | API key for the resolved provider endpoint — **required for inference** since GitHub Models retired 2026-07-30. When absent the engine keys with `GITHUB_TOKEN` (legacy zero-secret path; `models: read`), which only GitHub Models ever accepted — see [Provider resolution](#provider-resolution) |
@@ -415,9 +437,13 @@ an in-run cycle.
    AI-only path.
 3. **Diff + risk tier** — checkout the head SHA (`persist-credentials:
    false`), bounded `git diff` vs the merge-base (`diff_max_bytes`), and a
-   *deterministic* tier assignment from the file list/sizes (the taxonomy
-   says the tier SHOULD be computed from the diff, never self-declared;
-   ambiguity resolves UP). The tier is applied as a `pr:risk-*` label.
+   *deterministic* tier assignment from the file list/sizes/diff content
+   by `scripts/risk-classifier.js` — the canonical classifier, fetched
+   from the runtime repo pin, never from the head (the taxonomy says the
+   tier SHOULD be computed from the diff, never self-declared; ambiguity
+   resolves UP). The tier is applied as a `pr:risk-*` label; the
+   standalone `ai-sdlc-classify` stage labels every `pull_request` event,
+   pipeline-managed or not.
 4. **AI review** — the diff is fenced as untrusted data
    (`spec/injection-defense.md`) in a diff-scoped prompt; `scc` runs
    headless (same engine contract as implement/ci-repair) and writes the

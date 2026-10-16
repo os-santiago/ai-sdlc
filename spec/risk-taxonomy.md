@@ -45,6 +45,9 @@ every poll (removal hands control back — no sticky latches).
 ## Notes for implementers
 
 - Tier assignment SHOULD be computed from the diff (files/lines/surfaces),
-  not self-declared by the author-agent.
+  not self-declared by the author-agent. Reference implementation:
+  `scripts/risk-classifier.js` + `ai-sdlc-classify.yml` — deterministic
+  path/size/content signals applied on `pull_request` events; the
+  classifier source must come from a trusted ref, never the PR head.
 - The decision table maps to the merger's `decidePrAction` semantics;
   divergences between runtime behavior and this table are bugs.

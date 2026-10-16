@@ -62,6 +62,20 @@ jobs:
       issue_number: ${{ github.event.issue.number }}
     secrets: inherit
 
+  classify:
+    # Deterministic pr:risk-* labeling on every diff event — runs for ALL
+    # same-repo PRs, not just pipeline-managed ones (spec/risk-taxonomy.md:
+    # applied at PR creation, recomputed on new pushes). Fork heads carry
+    # no secrets, so the event filter lives here (same posture as review).
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/ai-sdlc-classify.yml
+    with:
+      repo: ${{ github.repository }}
+      pr_number: ${{ github.event.pull_request.number }}
+    secrets: inherit
+
   review:
     # Fork heads carry no secrets — the called workflow would fail its auth
     # check rather than skip cleanly, so the event filter lives here.

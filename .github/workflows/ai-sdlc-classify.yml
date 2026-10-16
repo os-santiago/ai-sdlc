@@ -1,0 +1,156 @@
+# ai-sdlc-classify — deterministic diff risk classification (issue #204)
+#
+# Implements the taxonomy's labeling contract — "pr:risk-* applied at PR
+# creation, recomputed on new pushes" (spec/risk-taxonomy.md) — for every
+# pull_request diff event, pipeline-managed or not. The tier is computed
+# by scripts/risk-classifier.js from the PR's diff: touched paths, diff
+# size, sensitive surfaces, and added-line content signals (credential
+# material → critical; eval()/exec/shell-injection shapes → high;
+# ambiguity resolves UP).
+#
+# Trust boundary: the classifier source is fetched from the runtime repo
+# pin (inputs.runtime_ref), never from the PR head or the consumer repo —
+# a change must not weaken the heuristic that feeds its own merge gate.
+# If the pin predates the classifier the stage skips cleanly instead of
+# fabricating a tier.
+#
+# Bounded: no checkout, no engine, no contract resolution — a fixed
+# handful of `gh` calls (files + diff + view + label create + one pr
+# edit), keeping event→label latency inside the labeling budget. Risk
+# label names are the canonical `pr:risk-*` set (schema-pinned
+# `^pr:risk-`); `pr:risk-accepted` is human-owned and never touched.
+#
+# Caller usage (event wiring is the caller's job — see docs/runtime.md):
+#   on:
+#     pull_request: { types: [opened, synchronize] }
+#   jobs:
+#     classify:
+#       uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-classify.yml@main
+#       with:
+#         repo: ${{ github.repository }}
+#         pr_number: ${{ github.event.pull_request.number }}
+#       secrets: inherit   # needs AI_SDLC_APP_ID + AI_SDLC_APP_PRIVATE_KEY
+name: ai-sdlc-classify
+
+on:
+  workflow_call:
+    inputs:
+      repo:
+        type: string
+        required: true
+      pr_number:
+        type: number
+        required: true
+      runtime_ref:
+        description: 'ref of os-santiago/ai-sdlc to fetch scripts/risk-classifier.js from — pin to the same ref as this workflow'
+        type: string
+        default: 'main'
+      diff_max_bytes:
+        description: 'byte cap on the unified diff scanned for content signals'
+        type: number
+        default: 500000
+    outputs:
+      action:
+        description: 'classified | skipped'
+        value: ${{ jobs.classify.outputs.action }}
+      risk_tier:
+        description: 'low | medium | high | critical (empty when skipped)'
+        value: ${{ jobs.classify.outputs.risk_tier }}
+    secrets:
+      AI_SDLC_APP_ID:
+        description: 'ai-sdlc GitHub App id — mints the per-run installation token used for all gh auth (fail-closed when unset; issue #26)'
+        required: true
+      AI_SDLC_APP_PRIVATE_KEY:
+        description: 'ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID'
+        required: true
+
+env:
+  REPO: ${{ inputs.repo }}
+  PR: ${{ inputs.pr_number }}
+
+# Every gh call uses the minted ai-sdlc App installation token — the
+# job's GITHUB_TOKEN carries no scopes (fail-closed, issue #26).
+permissions: {}
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: ai-sdlc-classify-${{ inputs.repo }}-${{ inputs.pr_number }}
+      cancel-in-progress: true
+    outputs:
+      action: ${{ steps.eval.outputs.action }}
+      risk_tier: ${{ steps.eval.outputs.risk_tier }}
+    steps:
+      - name: Verify ai-sdlc App credentials
+        id: creds
+        env:
+          APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          case "$REPO" in */*) ;; *)
+            echo "::error title=ai-sdlc auth::repo input '$REPO' is not owner/name" >&2
+            exit 1 ;;
+          esac
+          if [ -z "${APP_ID:-}" ] || [ -z "${APP_PRIVATE_KEY:-}" ]; then
+            echo "::error title=ai-sdlc auth::AI_SDLC_APP_ID and AI_SDLC_APP_PRIVATE_KEY must be configured — the ai-sdlc GitHub App is the only pipeline identity for labels (fail-closed: no PAT or GITHUB_TOKEN fallback). Install the App on $REPO and add the org secrets; see docs/runtime.md (issue #26)."
+            exit 1
+          fi
+          {
+            echo "owner=${REPO%%/*}"
+            echo "repo_name=${REPO##*/}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Mint ai-sdlc App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.AI_SDLC_APP_ID }}
+          private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+          owner: ${{ steps.creds.outputs.owner }}
+          repositories: ${{ steps.creds.outputs.repo_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Classify diff + apply pr:risk-* label
+        id: eval
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RUNTIME_REF: ${{ inputs.runtime_ref }}
+          DIFF_MAX_BYTES: ${{ inputs.diff_max_bytes }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-classify"
+          mkdir -p "$WORK"
+
+          # Trusted code only: fetch the canonical classifier from the
+          # runtime repo pin — never from the PR head or consumer repo.
+          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/risk-classifier.js?ref=$RUNTIME_REF" \
+              -H "Accept: application/vnd.github.raw" > "$WORK/risk-classifier.js" 2>"$WORK/fetch.err"; then
+            echo "::warning::risk classifier unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$WORK/fetch.err")) — skipping classification"
+            echo "action=skipped" >> "$GITHUB_OUTPUT"
+            echo "risk_tier=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node --check "$WORK/risk-classifier.js"
+
+          # Bounded inputs: REST pulls files (paginated) + the unified diff
+          # capped at diff_max_bytes — content signals scan added lines.
+          gh api --paginate "repos/$REPO/pulls/$PR/files?per_page=100" \
+            --jq '.[] | {filename, additions, deletions, status}' | jq -s . > "$WORK/files.json"
+          gh api "repos/$REPO/pulls/$PR" -H "Accept: application/vnd.github.diff" \
+            > "$WORK/diff.patch" || : > "$WORK/diff.patch"
+          head -c "$DIFF_MAX_BYTES" "$WORK/diff.patch" > "$WORK/diff.bounded.patch"
+
+          node "$WORK/risk-classifier.js" \
+            --files "$WORK/files.json" --diff "$WORK/diff.bounded.patch" \
+            --repo "$REPO" --pr "$PR" --apply --json > "$WORK/result.json"
+          cat "$WORK/result.json"
+          {
+            echo "action=classified"
+            jq -r '"risk_tier=\(.tier)"' "$WORK/result.json"
+          } >> "$GITHUB_OUTPUT"
