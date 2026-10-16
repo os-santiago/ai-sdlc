@@ -41,6 +41,7 @@ func Run(metadata Metadata, registrars ...RouteRegistrar) error {
 	}
 
 	address := valueOrDefault("AI_SDLC_HTTP_ADDRESS", ":8080")
+	writeTimeout := durationOrDefault("AI_SDLC_HTTP_WRITE_TIMEOUT", 25*time.Minute)
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("component", metadata.Name)
 
 	mux := http.NewServeMux()
@@ -59,12 +60,25 @@ func Run(metadata Metadata, registrars ...RouteRegistrar) error {
 		}
 	}
 
+	// WriteTimeout defaults to 25 minutes, not the original 15 seconds:
+	// a real dispatch call against the worker's POST /v1/attempts/dispatch
+	// (ADR-0005) invokes SCCEngine, which shells out to `scc` and can run
+	// for minutes. With a 15s WriteTimeout, the handler keeps running to
+	// completion (its logic is unaffected — only the connection's write
+	// deadline expires), but the final service.WriteJSON response write
+	// fails silently (its error is discarded) once that deadline passes,
+	// so the client sees "empty reply from server" no matter what the
+	// handler actually produced. Confirmed via a real end-to-end dispatch
+	// call that logged a ~136s handler duration but delivered zero
+	// response bytes. ReadTimeout/IdleTimeout aren't implicated (request
+	// bodies here are small, and this is the first request on the
+	// connection) so they stay as before.
 	server := &http.Server{
 		Addr:              address,
 		Handler:           requestLog(logger, mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
+		WriteTimeout:      writeTimeout,
 		IdleTimeout:       60 * time.Second,
 	}
 
@@ -116,4 +130,20 @@ func valueOrDefault(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// durationOrDefault parses name as a Go duration string (e.g. "90s",
+// "25m"); an unset or unparsable value falls back to fallback rather than
+// erroring, since a misconfigured timeout shouldn't keep a component from
+// starting.
+func durationOrDefault(name string, fallback time.Duration) time.Duration {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
