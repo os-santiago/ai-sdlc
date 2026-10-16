@@ -40,6 +40,9 @@ on:
       dispatch:
         description: '"true" when the issue passes DoR and is queued'
         value: ${{ jobs.intake.outputs.dispatch }}
+      ledger_head:
+        description: 'sealed run-ledger chain head — pass to the next stage as ledger_head (issue #196)'
+        value: ${{ jobs.intake.outputs.ledger_head }}
     secrets:
       AI_SDLC_TOKEN:
         description: 'PAT/App token — needed when GITHUB_TOKEN lacks cross-repo issue access'
@@ -49,6 +52,9 @@ on:
         required: false
       AI_SDLC_APP_PRIVATE_KEY:
         description: 'ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID'
+        required: false
+      AI_SDLC_LEDGER_KEY:
+        description: 'run-ledger signing key (PEM; Ed25519/RSA) — seals stage evidence; absent = unsigned seal (issue #196)'
         required: false
 
 env:
@@ -66,6 +72,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       dispatch: ${{ steps.dor.outputs.dispatch }}
+      ledger_head: ${{ steps.seal.outputs.head || steps.ledger.outputs.head }}
     steps:
       - name: Resolve contract (.ai-sdlc.yaml)
         id: contract
@@ -169,3 +176,36 @@ jobs:
             gh issue edit "$ISSUE" -R "$REPO" --add-label "$NOT_READY"
             gh issue comment "$ISSUE" -R "$REPO" --body "🛡️ **AI-SDLC intake:** Definition-of-Ready failed: \`$FAILED\` — see spec/definition-of-ready.md. Refine and re-apply \`$TRIGGER\`."
           fi
+
+      # Tamper-evident run evidence (issue #196): one hash-chained entry +
+      # sealed head, uploaded as an artifact. Never fails the job.
+      - name: Run ledger — append stage record
+        id: ledger
+        if: always()
+        continue-on-error: true
+        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
+        with:
+          op: append
+          stage: intake
+          repo: ${{ inputs.repo }}
+          issue: ${{ inputs.issue_number }}
+          data: ${{ toJSON(steps.dor.outputs) }}
+
+      - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)
+        id: seal
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
+        with:
+          op: seal
+          stage: intake
+          signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        with:
+          name: ai-sdlc-ledger-intake-${{ inputs.issue_number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ai-sdlc-ledger/ledger-intake.jsonl
+          if-no-files-found: ignore
+          retention-days: 14

@@ -95,6 +95,10 @@ on:
         description: 'findings kept in the verdict record and the fix prompt'
         type: number
         default: 20
+      ledger_head:
+        description: 'upstream run-ledger chain head — seeds this stage entry prev; empty = recover the ai-sdlc:ledger-head marker on the PR (issue #196)'
+        type: string
+        default: ''
     outputs:
       action:
         description: 'reviewed | fix-dispatched | escalated | skipped'
@@ -108,6 +112,9 @@ on:
       risk_tier:
         description: 'deterministic diff tier: low | medium | high | critical (empty when skipped)'
         value: ${{ jobs.review.outputs.risk_tier }}
+      ledger_head:
+        description: 'sealed run-ledger chain head for this review run (issue #196)'
+        value: ${{ jobs.review.outputs.ledger_head }}
     secrets:
       AI_SDLC_APP_ID:
         description: 'ai-sdlc GitHub App id — mints the per-run installation token used for all git/gh auth (fail-closed when unset; issue #26)'
@@ -115,6 +122,9 @@ on:
       AI_SDLC_APP_PRIVATE_KEY:
         description: 'ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID'
         required: true
+      AI_SDLC_LEDGER_KEY:
+        description: 'run-ledger signing key (PEM; Ed25519/RSA) — seals stage evidence; absent = unsigned seal (issue #196)'
+        required: false
       MODEL_API_KEY:
         description: 'optional direct provider key; absent → GitHub Models via GITHUB_TOKEN'
         required: false
@@ -150,6 +160,7 @@ jobs:
       max_fix: ${{ (inputs.max_fix_iterations != -1 && toJSON(inputs.max_fix_iterations)) || steps.contract.outputs.review_max_fix_iterations || '3' }}
       max_seconds: ${{ steps.contract.outputs.max_seconds }}
       max_steps: ${{ steps.contract.outputs.max_steps }}
+      ledger_head: ${{ steps.seal.outputs.head || steps.ledger.outputs.head }}
     steps:
       - name: Verify ai-sdlc App credentials
         id: creds
@@ -721,6 +732,47 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      # Tamper-evident run evidence (issue #196): guard decision + verdict
+      # hashed into a chain entry seeded from the last published ledger head
+      # on the PR (recover-prev), sealed and uploaded. Never fails the job.
+      - name: Run ledger — append stage record
+        id: ledger
+        if: always()
+        continue-on-error: true
+        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
+        with:
+          op: append
+          stage: review
+          repo: ${{ inputs.repo }}
+          pr: ${{ inputs.pr_number }}
+          prev: ${{ inputs.ledger_head }}
+          recover-prev: 'true'
+          token: ${{ steps.app-token.outputs.token }}
+          data: >-
+            {"decision":${{ toJSON(steps.guard.outputs.decision) }},"guard_reason":${{ toJSON(steps.guard.outputs.reason) }},"head_sha":${{ toJSON(steps.guard.outputs.head_sha) }},"result":${{ toJSON(steps.result.outputs.action) }},"verdict":${{ toJSON(steps.result.outputs.verdict) }},"reason":${{ toJSON(steps.result.outputs.reason) }},"risk_tier":${{ toJSON(steps.result.outputs.risk_tier) }}}
+          data-files: |
+            ${{ runner.temp }}/ai-sdlc-review/verdict.json
+            ${{ runner.temp }}/ai-sdlc-review/external.json
+
+      - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)
+        id: seal
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
+        with:
+          op: seal
+          stage: review
+          signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        with:
+          name: ai-sdlc-ledger-review-${{ inputs.pr_number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ai-sdlc-ledger/ledger-review.jsonl
+          if-no-files-found: ignore
+          retention-days: 14
+
   fix:
     needs: review
     if: needs.review.outputs.action == 'fix-dispatched'
@@ -988,5 +1040,44 @@ jobs:
             ${{ runner.temp }}/ai-sdlc-review-fix/fix-prompt.md
             ${{ runner.temp }}/ai-sdlc-review-fix/scc-audit.jsonl
             ${{ runner.temp }}/ai-sdlc-review-fix/scc-manifest.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Tamper-evident run evidence (issue #196): fix-attempt outcome hashed
+      # into a chain entry seeded from the last published ledger head on the
+      # PR (recover-prev), sealed and uploaded. Never fails the job.
+      - name: Run ledger — append stage record
+        id: ledger
+        if: always()
+        continue-on-error: true
+        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
+        with:
+          op: append
+          stage: review-fix
+          repo: ${{ inputs.repo }}
+          pr: ${{ inputs.pr_number }}
+          recover-prev: 'true'
+          token: ${{ steps.app-token.outputs.token }}
+          data: >-
+            {"attempt":${{ toJSON(needs.review.outputs.fix_attempt) }},"consumed_sha":${{ toJSON(needs.review.outputs.head_sha) }},"engine_exit":${{ toJSON(steps.engine.outputs.exit_code) }},"outcome":${{ toJSON(steps.record.outputs.outcome) }},"commit":${{ toJSON(steps.push.outputs.commit) }}}
+          data-files: |
+            ${{ runner.temp }}/ai-sdlc-review-fix/review-fix-manifest.json
+
+      - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)
+        id: seal
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
+        with:
+          op: seal
+          stage: review-fix
+          signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        with:
+          name: ai-sdlc-ledger-review-fix-${{ inputs.pr_number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ai-sdlc-ledger/ledger-review-fix.jsonl
           if-no-files-found: ignore
           retention-days: 14

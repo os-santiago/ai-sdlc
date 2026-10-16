@@ -54,6 +54,10 @@ on:
         description: 'org baseline contract ref owner/repo[/path][@ref] — org floor per spec/org-policy.md; empty = repo contract + defaults'
         type: string
         default: ''
+      ledger_head:
+        description: 'upstream run-ledger chain head (e.g. needs.intake.outputs.ledger_head) — seeds this stage entry prev; empty = genesis (issue #196)'
+        type: string
+        default: ''
     secrets:
       AI_SDLC_APP_ID:
         description: 'ai-sdlc GitHub App id — mints the per-run installation token used for all git/gh auth (fail-closed when unset; issue #26)'
@@ -61,6 +65,9 @@ on:
       AI_SDLC_APP_PRIVATE_KEY:
         description: 'ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID'
         required: true
+      AI_SDLC_LEDGER_KEY:
+        description: 'run-ledger signing key (PEM; Ed25519/RSA) — seals stage evidence; absent = unsigned seal (issue #196)'
+        required: false
       MODEL_API_KEY:
         description: 'API key the engine uses (OPENAI_API_KEY surface)'
         required: false
@@ -80,6 +87,9 @@ on:
       pr_number:
         description: 'PR opened by this run (empty when exit_code != 0); feeds post-implement review (issue #28)'
         value: ${{ jobs.implement.outputs.pr_number }}
+      ledger_head:
+        description: 'sealed run-ledger chain head — also stamped on the PR as an ai-sdlc:ledger-head marker (issue #196)'
+        value: ${{ jobs.implement.outputs.ledger_head }}
 
 env:
   REPO: ${{ inputs.repo }}
@@ -99,6 +109,7 @@ jobs:
       primary_exit: ${{ steps.engine.outputs.primary_exit }}
       fallback_used: ${{ steps.engine.outputs.fallback_used }}
       pr_number: ${{ steps.pr.outputs.pr_number }}
+      ledger_head: ${{ steps.seal.outputs.head || steps.ledger.outputs.head }}
     concurrency:
       group: ai-sdlc-${{ inputs.repo }}-${{ inputs.issue_number }}
       cancel-in-progress: true
@@ -412,6 +423,48 @@ jobs:
             gh issue comment "$ISSUE" -R "$REPO" --body "ai-sdlc: engine provider/auth failure on both models — primary \`$PRIMARY_MODEL\` exit $PRIMARY_EXIT, fallback \`$MODEL\` exit $CODE. Escalating (\`needs-human\`). Run: $RUN_URL" || true
           fi
 
+      # Tamper-evident run evidence (issue #196): hash-chained entry seeded
+      # by the upstream stage head (inputs.ledger_head), sealed, uploaded —
+      # and the head stamped on the PR as an ai-sdlc:ledger-head marker so
+      # downstream stages (review/automerge/ci-repair/verify) can chain.
+      - name: Run ledger — append stage record
+        id: ledger
+        if: always()
+        continue-on-error: true
+        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
+        with:
+          op: append
+          stage: implement
+          repo: ${{ inputs.repo }}
+          issue: ${{ inputs.issue_number }}
+          pr: ${{ steps.pr.outputs.pr_number || 0 }}
+          prev: ${{ inputs.ledger_head }}
+          data: ${{ toJSON(steps.engine.outputs) }}
+          data-files: |
+            ai-sdlc-run.json
+            scc-manifest.json
+            scc-audit.jsonl
+
+      - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)
+        id: seal
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
+        with:
+          op: seal
+          stage: implement
+          signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
+
+      - name: Publish ledger head marker on the PR
+        if: always() && steps.pr.outputs.pr_number != '' && steps.seal.outputs.head != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          LEDGER_HEAD: ${{ steps.seal.outputs.head }}
+        run: |
+          set -euo pipefail
+          gh pr comment "${{ steps.pr.outputs.pr_number }}" -R "$REPO" --body "📎 **AI-SDLC run ledger** — stage \`implement\` sealed (head \`${LEDGER_HEAD}\`). Downstream stages chain their evidence from this entry; sealed ledgers live in the run artifacts.<!-- ai-sdlc:ledger-head ${LEDGER_HEAD} -->"
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -425,5 +478,14 @@ jobs:
             ai-sdlc-run.json
             task-prompt.md
             issue.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        with:
+          name: ai-sdlc-ledger-implement-${{ inputs.issue_number }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ai-sdlc-ledger/ledger-implement.jsonl
           if-no-files-found: ignore
           retention-days: 14

@@ -117,7 +117,9 @@ fi
 # --- 5. node --test (when node and test files exist) ----------------------------
 if command -v node >/dev/null 2>&1; then
   tests=()
-  for t in */*.test.js; do
+  # */*.test.js misses action-dir tests (.github/actions/*/) and nested
+  # scripts (scripts/gha/) — enumerate both explicitly.
+  for t in */*.test.js .github/actions/*/*.test.js scripts/**/*.test.js; do
     [ -f "$t" ] || continue
     tests+=("$t")
   done

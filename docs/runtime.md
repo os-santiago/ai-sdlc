@@ -23,7 +23,9 @@ See [ADR-0001: Homedir AI-SDLC Sunset and Cutover](./architecture/adr/0001-homed
 
 Every stage first runs the `load-config` composite action
 (`.github/actions/load-config/`) and acts only on the resolved contract —
-see [Contract resolution](#contract-resolution).
+see [Contract resolution](#contract-resolution). Every stage also appends a
+hash-chained record to the run ledger and uploads the sealed file as an
+artifact (`ai-sdlc-ledger-<stage>-…`) — see [Run ledger](#run-ledger).
 
 ## Contract resolution
 
@@ -189,6 +191,9 @@ pushes and PRs always fire downstream workflows (issue #26).
 | `trigger_label` | `''` → `triggers.issue_label` | label that arms dispatch |
 | `org_config` | `''` | org baseline `owner/repo[/path][@ref]` — see [Org policy](#org-policy) |
 
+Outputs: `dispatch`, `ledger_head` (sealed chain head — feed it to the next
+stage's `ledger_head` input).
+
 ### ai-sdlc-implement
 | Input | Default | Purpose |
 |---|---|---|
@@ -200,6 +205,7 @@ pushes and PRs always fire downstream workflows (issue #26).
 | `max_seconds` | `-1` → `engine.max_seconds` | engine wall-clock budget per run (exit 22 on cap) |
 | `max_steps` | `-1` → `engine.max_steps` | engine tool-step budget per run |
 | `org_config` | `''` | org baseline `owner/repo[/path][@ref]` — see [Org policy](#org-policy) |
+| `ledger_head` | `''` | upstream ledger head (e.g. `needs.intake.outputs.ledger_head`) — seeds the entry `prev`; empty = genesis |
 
 | Output | Purpose |
 |---|---|
@@ -208,6 +214,7 @@ pushes and PRs always fire downstream workflows (issue #26).
 | `primary_exit` | engine exit of the primary-model run |
 | `fallback_used` | `true` when the fallback run fired |
 | `pr_number` | PR opened by the run (empty when `exit_code != 0`) — feeds post-implement review |
+| `ledger_head` | sealed chain head — also stamped on the PR as an `ai-sdlc:ledger-head` marker |
 
 ### ai-sdlc-review
 | Input | Default | Purpose |
@@ -223,10 +230,12 @@ pushes and PRs always fire downstream workflows (issue #26).
 | `max_seconds` / `max_steps` | `-1` → `engine.*` | engine budgets per run (review AND fix) |
 | `diff_max_bytes` | `150000` | byte cap on the diff embedded in the review prompt |
 | `findings_max` | `20` | findings kept in the verdict record / fix prompt |
+| `ledger_head` | `''` | upstream ledger head; empty = recover the `ai-sdlc:ledger-head` marker on the PR |
 
 Outputs: `action` (`reviewed` \| `fix-dispatched` \| `escalated` \|
 `skipped`), `verdict` (`clean` \| `blocked` \| `inconclusive` \| `none`),
-`reason`, `risk_tier` (`low` \| `medium` \| `high` \| `critical`).
+`reason`, `risk_tier` (`low` \| `medium` \| `high` \| `critical`),
+`ledger_head`.
 
 ### ai-sdlc-automerge
 | Input | Default | Purpose |
@@ -238,6 +247,7 @@ Outputs: `action` (`reviewed` \| `fix-dispatched` \| `escalated` \|
 | `merge_method` | `''` → `merge.method` | `squash` \| `merge` \| `rebase` |
 | `org_config` | `''` | org baseline `owner/repo[/path][@ref]` — see [Org policy](#org-policy) |
 | `review_wait_minutes` | `-1` → `review.wait_max_minutes` (15) | pending-review cap before merging with `review_timeout` |
+| `ledger_head` | `''` | upstream ledger head; empty = recover the `ai-sdlc:ledger-head` marker on the PR |
 
 ### ai-sdlc-verify
 | Input | Default | Purpose |
@@ -248,12 +258,15 @@ Outputs: `action` (`reviewed` \| `fix-dispatched` \| `escalated` \|
 | `setup_commands` | `''` | dependency install before verify |
 | `revert_on_failure` | `false` | revert the merge commit on failure |
 | `org_config` | `''` | org baseline `owner/repo[/path][@ref]` — see [Org policy](#org-policy) |
+| `pr_number` | `0` | merged PR — recorded on the ledger entry and used for marker recovery |
+| `ledger_head` | `''` | upstream ledger head; empty = recover the `ai-sdlc:ledger-head` marker on `pr_number` |
 
 | Secret | Purpose |
 |---|---|
 | `AI_SDLC_APP_ID` | **required** by `implement`/`automerge`/`ci-repair`/`review` — the `ai-sdlc` GitHub App id; each run mints a repo-scoped installation token (App permissions: contents/pull-requests/issues write, checks read, metadata read). Unset → the stage fails fast with `ai-sdlc auth` error — no PAT/`GITHUB_TOKEN` fallback (issue #26) |
 | `AI_SDLC_APP_PRIVATE_KEY` | **required** — the App's PEM private key. Store both App secrets as org secrets scoped to the consumer repos |
 | `AI_SDLC_TOKEN` | optional legacy slot — still accepted by `intake`/`verify`/`sweep` when `GITHUB_TOKEN` can't reach the target repo for read/issue calls. Unused by `implement`/`automerge`/`ci-repair` |
+| `AI_SDLC_LEDGER_KEY` | optional — run-ledger signing key (PEM, Ed25519 or RSA). Seals are signed when set, unsigned otherwise; unsigned chains stay hash-linked but carry no cryptographic attribution. See [Run ledger](#run-ledger) |
 | `MODEL_API_KEY` | API key for the resolved provider endpoint — **required for inference** since GitHub Models retired 2026-07-30. When absent the engine keys with `GITHUB_TOKEN` (legacy zero-secret path; `models: read`), which only GitHub Models ever accepted — see [Provider resolution](#provider-resolution) |
 
 ## Provider resolution
@@ -299,8 +312,10 @@ surface.
 | `branch_pattern` | `^(feat\|fix)/issue-[0-9]+` | ERE the head branch must match (pipeline PRs only); empty = any same-repo branch |
 | `max_failed_checks` | `5` | failing checks whose output enters the prompt |
 | `log_tail_lines` / `log_max_bytes` | `150` / `12000` | per-check log tail bounds |
+| `ledger_head` | `''` | upstream ledger head; empty = recover the `ai-sdlc:ledger-head` marker on the PR |
 
-Outputs: `action` (`repaired` \| `escalated` \| `skipped`) and `reason`.
+Outputs: `action` (`repaired` \| `escalated` \| `skipped`), `reason` and
+`ledger_head`.
 Secrets: same as implement — `AI_SDLC_APP_ID` + `AI_SDLC_APP_PRIVATE_KEY`
 are required (fail-closed). The pushed fix uses the App installation token,
 so the new head re-triggers CI and the loop closes. Inference resolves the
@@ -589,6 +604,74 @@ issue labels:
 | 20/21 after fallback | provider/auth on both models | `scc:failed` + `needs-human` |
 
 `exit_code` is the final run's code (see [Model fallback](#model-fallback)).
+
+## Run ledger
+
+Tamper-evident per-stage run evidence (issue #196, epic #148). Every stage
+appends a hash-chained record and seals the file at run completion:
+
+- **Entry** (`append`): `{v, seq, stage, ts, repo, issue, pr, run, data,
+  data_sha256, prev, hash}` — `data_sha256` is the SHA-256 of the
+  canonicalized stage payload (step outputs plus digests of stage files
+  under `data.files`); `prev` is the previous entry's `hash` (genesis =
+  `0×64`, or an upstream stage's head); `hash` is the SHA-256 of the
+  canonical entry.
+- **Seal**: the last record of every ledger file — `{type: "seal", head,
+  entries, alg, signed, key_id, sig}`. `head` is the last entry's `hash`;
+  when the `AI_SDLC_LEDGER_KEY` secret is set the seal signs
+  `{type: "ai-sdlc-run-ledger-seal", head, entries}` — Ed25519 (or
+  RSA-SHA256 for RSA PEMs). Absent the secret the seal records
+  `signed: false` — the chain stays tamper-evident, attribution needs the
+  key.
+- **Cross-stage chaining**: stages run in separate workflow invocations, so
+  the chain links across runs through the `prev` seed. The caller passes
+  `needs.<stage>.outputs.ledger_head` forward (`intake → implement` in
+  `ai-sdlc.yml`); implement additionally stamps the sealed head on the PR
+  as `<!-- ai-sdlc:ledger-head <64-hex> -->`, and the PR-scoped stages
+  (review, automerge, ci-repair, verify) recover the *latest* trusted-author
+  marker (`recover-prev`). Stages with no resolvable seed start a genesis
+  segment — a fork or a gap is reported, never forged.
+- **Artifacts**: each stage uploads
+  `ai-sdlc-ledger-<stage>-<id>-<run_attempt>` (14-day retention, same as the
+  other run artifacts). Ledger steps run `if: always()` +
+  `continue-on-error` — evidence collection can never fail the pipeline.
+- **Bounds**: per-file caps — `AI_SDLC_LEDGER_MAX_ENTRIES` (1000),
+  `AI_SDLC_LEDGER_MAX_BYTES` (4 MiB), `AI_SDLC_LEDGER_MAX_DATA_BYTES`
+  (64 KiB per entry), `AI_SDLC_LEDGER_MAX_FILES` (20) /
+  `AI_SDLC_LEDGER_MAX_FILE_BYTES` (8 MiB) for hashed evidence files.
+
+### Verifying a run offline
+
+Download the `ai-sdlc-ledger-*` artifacts for the run set, then:
+
+```bash
+# single ledger
+node .github/actions/run-ledger/run-ledger.js verify ledger-intake.jsonl \
+  --pubkey-file ai-sdlc-ledger.pub.pem
+
+# a whole bundle: files stitch into chains by prev→head matching
+node .github/actions/run-ledger/run-ledger.js verify ./artifacts-dir/ \
+  --pubkey-file ai-sdlc-ledger.pub.pem
+```
+
+`verify` recomputes every `data_sha256` and entry `hash`, checks `prev`
+links and seq ordering, and verifies the seal signature and `key_id`
+against the public key. Any modification — edited field, dropped or
+reordered entry, re-signed seal — exits 1; warnings (unsigned seal,
+unresolved cross-file links) exit 0 unless `--strict`.
+
+### Signing key
+
+```bash
+node .github/actions/run-ledger/run-ledger.js keygen --out-dir /tmp/ledger-key
+# private PEM → GitHub secret AI_SDLC_LEDGER_KEY (org secret scoped to
+#   consumer repos — never committed)
+# public  PEM → commit/publish; auditors pass it to verify --pubkey-file
+```
+
+The key is a dedicated secret (key separation from the App's
+`AI_SDLC_APP_PRIVATE_KEY`); `secrets: inherit` callers pass it through
+automatically once defined.
 
 ## Bounds
 

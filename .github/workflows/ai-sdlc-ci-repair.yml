@@ -78,6 +78,10 @@ on:
         description: 'byte cap per failing check log tail'
         type: number
         default: 12000
+      ledger_head:
+        description: 'upstream run-ledger chain head — seeds this stage entry prev; empty = recover the ai-sdlc:ledger-head marker on the PR (issue #196)'
+        type: string
+        default: ''
     outputs:
       action:
         description: 'repaired | escalated | skipped'
@@ -85,6 +89,9 @@ on:
       reason:
         description: 'guard reason or attempt outcome'
         value: ${{ jobs.repair.outputs.reason }}
+      ledger_head:
+        description: 'sealed run-ledger chain head for this repair run (issue #196)'
+        value: ${{ jobs.repair.outputs.ledger_head }}
     secrets:
       AI_SDLC_APP_ID:
         description: 'ai-sdlc GitHub App id — mints the installation token the pushed fix uses to re-trigger CI (fail-closed when unset; issue #26)'
@@ -92,6 +99,9 @@ on:
       AI_SDLC_APP_PRIVATE_KEY:
         description: 'ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID'
         required: true
+      AI_SDLC_LEDGER_KEY:
+        description: 'run-ledger signing key (PEM; Ed25519/RSA) — seals stage evidence; absent = unsigned seal (issue #196)'
+        required: false
       MODEL_API_KEY:
         description: 'optional direct provider key; absent → GitHub Models via GITHUB_TOKEN'
         required: false
@@ -117,6 +127,7 @@ jobs:
     outputs:
       action: ${{ steps.result.outputs.action }}
       reason: ${{ steps.result.outputs.reason }}
+      ledger_head: ${{ steps.seal.outputs.head || steps.ledger.outputs.head }}
     steps:
       - name: Verify ai-sdlc App credentials
         id: creds
@@ -540,5 +551,46 @@ jobs:
             ${{ runner.temp }}/ci-repair/scc-audit.jsonl
             ${{ runner.temp }}/ci-repair/scc-manifest.json
             ${{ runner.temp }}/ci-repair/failing.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Tamper-evident run evidence (issue #196): the attempt outcome is
+      # hashed into a chain entry seeded from the last published ledger head
+      # on the PR (recover-prev), sealed and uploaded. Never fails the job.
+      - name: Run ledger — append stage record
+        id: ledger
+        if: always()
+        continue-on-error: true
+        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
+        with:
+          op: append
+          stage: ci-repair
+          repo: ${{ inputs.repo }}
+          pr: ${{ inputs.pr_number }}
+          prev: ${{ inputs.ledger_head }}
+          recover-prev: 'true'
+          token: ${{ steps.app-token.outputs.token }}
+          data: >-
+            {"guard":${{ toJSON(steps.guard.outputs) }},"record":${{ toJSON(steps.record.outputs) }},"result":${{ toJSON(steps.result.outputs) }}}
+          data-files: |
+            ${{ runner.temp }}/ci-repair/ci-repair-manifest.json
+            ${{ runner.temp }}/ci-repair/failure.json
+
+      - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)
+        id: seal
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
+        with:
+          op: seal
+          stage: ci-repair
+          signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        with:
+          name: ai-sdlc-ledger-ci-repair-${{ inputs.pr_number }}-attempt-${{ steps.guard.outputs.attempt || '0' }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ai-sdlc-ledger/ledger-ci-repair.jsonl
           if-no-files-found: ignore
           retention-days: 14
