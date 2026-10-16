@@ -10,6 +10,19 @@ import (
 	"testing"
 )
 
+func TestStaticTokenAlwaysReturnsTheSameToken(t *testing.T) {
+	ts := StaticToken("pat-abc123")
+	for _, repository := range []string{"owner/repo", "other/thing", ""} {
+		token, err := ts(context.Background(), repository)
+		if err != nil {
+			t.Fatalf("StaticToken()(%q) error = %v", repository, err)
+		}
+		if token != "pat-abc123" {
+			t.Fatalf("StaticToken()(%q) = %q, want %q", repository, token, "pat-abc123")
+		}
+	}
+}
+
 func TestAuthenticatedURLEmbedsTokenForHTTPS(t *testing.T) {
 	got := authenticatedURL("https://github.com/os-santiago/homedir.git", "ghs_abc123")
 	want := "https://x-access-token:ghs_abc123@github.com/os-santiago/homedir.git"

@@ -72,24 +72,38 @@ modelProvider:
     name: ai-sdlc-model-provider
     key: apiKey
 
-# githubApp configures the Checker (internal/checkout.GitCheckout, via
-# internal/githubapp) that makes workspaceDir above a clean checkout of
-# the work item's repository/BaseRef before every attempt. This is the
-# only auth model wired in — a GitHub App installation token, matching
-# .github/workflows/ai-sdlc-implement.yml's fail-closed stance (no PAT,
-# no GITHUB_TOKEN fallback). Neither the App ID nor the private key is
-# ever set here. Create the Secret out-of-band:
+# githubApp and githubPat configure the Checker (internal/checkout.
+# GitCheckout) that makes workspaceDir above a clean checkout of the
+# work item's repository/BaseRef before every attempt. selectCheckout
+# (cmd/main.go) tries githubApp first, then githubPat, then gives up
+# (workspaceDir must already be a checkout, managed externally —
+# SCCEngine still runs; fine for a public repo, since checkout is
+# currently read-only).
+#
+# githubApp: a GitHub App installation token, matching
+# .github/workflows/ai-sdlc-implement.yml's fail-closed stance. Requires
+# admin access to that specific App to mint it a private key. Neither
+# value is ever set here. Create the Secret out-of-band:
 #   kubectl create secret generic ai-sdlc-github-app \
 #     --namespace <release-namespace> \
 #     --from-literal=appId=<app-id> --from-file=privateKey=<path-to-pem>
-# If this Secret does not exist, selectCheckout (cmd/main.go) returns
-# nil and workspaceDir must already be a checkout, managed externally —
-# SCCEngine still runs.
 githubApp:
   secret:
     name: ai-sdlc-github-app
     appIdKey: appId
     privateKeyKey: privateKey
+
+# githubPat: a fallback for operators who don't control the App above
+# but do control a GitHub account with write access to the target
+# repo(s). Use a fine-grained PAT scoped to one repo (Contents: Read &
+# write, Pull requests: Read & write) with an expiration date — not a
+# broad personal token. Create the Secret out-of-band:
+#   kubectl create secret generic ai-sdlc-github-pat \
+#     --namespace <release-namespace> --from-literal=token=<pat>
+githubPat:
+  secret:
+    name: ai-sdlc-github-pat
+    tokenKey: token
 
 components:
   admissionController:

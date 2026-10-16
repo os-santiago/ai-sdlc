@@ -25,12 +25,35 @@ import (
 
 // TokenSource returns a short-lived credential for repository
 // ("owner/name"). nil means anonymous — no credential is embedded, which
-// only works for a public repo. The GitHub App-backed implementation
-// this runtime wires in (components/worker/cmd/main.go, backed by
-// internal/githubapp.App.InstallationToken) is deliberately the only one
-// shipped: no PAT, no GITHUB_TOKEN fallback (CLAUDE.md "Critical
-// Lessons"; ai-sdlc-implement.yml's fail-closed App-only posture).
+// only works for a public repo (plain `git clone`/`fetch` needs no auth
+// to read one; this is enough for checkout as it stands today, since
+// nothing in this package pushes — see GitCheckout's doc comment).
+//
+// components/worker/cmd/main.go wires one of two implementations,
+// preferring the first that's configured:
+//  1. A GitHub App installation token (internal/githubapp.App.
+//     InstallationToken) — matches .github/workflows/ai-sdlc-implement.
+//     yml's fail-closed, App-only posture (CLAUDE.md "Critical Lessons").
+//     Requires admin access to the App itself to mint its private key;
+//     the App backing AI_SDLC_APP_ID/AI_SDLC_APP_PRIVATE_KEY in this
+//     repo's own GitHub Actions secrets (os-santiago/ai-sdlc) is owned
+//     by an individual account, not the org, so not every operator can
+//     generate a key for it.
+//  2. StaticToken wrapping a fine-grained personal access token — a
+//     pragmatic fallback for whoever is standing up this runtime but
+//     doesn't control the App above. Scope it to the minimum needed
+//     (Contents: Read & write, Pull requests: Read & write, one repo,
+//     an expiration date) rather than reusing a broad personal token.
 type TokenSource func(ctx context.Context, repository string) (token string, err error)
+
+// StaticToken wraps a single pre-minted credential (e.g. a personal
+// access token) as a TokenSource, for callers that don't need per-call
+// minting the way a GitHub App installation token does.
+func StaticToken(token string) TokenSource {
+	return func(_ context.Context, _ string) (string, error) {
+		return token, nil
+	}
+}
 
 // GitCheckout is the Checker internal/engine.SCCEngine.Checkout expects.
 type GitCheckout struct {

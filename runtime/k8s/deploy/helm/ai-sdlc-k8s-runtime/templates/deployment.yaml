@@ -93,6 +93,9 @@ spec:
             - name: AI_SDLC_GH_APP_PRIVATE_KEY
               valueFrom:
                 secretKeyRef: {name: {{ .Values.githubApp.secret.name }}, key: {{ .Values.githubApp.secret.privateKeyKey }}, optional: true}
+            - name: AI_SDLC_GH_PAT
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.githubPat.secret.name }}, key: {{ .Values.githubPat.secret.tokenKey }}, optional: true}
           ports:
             - {name: worker, containerPort: {{ .Values.components.worker.port }}}
           readinessProbe:

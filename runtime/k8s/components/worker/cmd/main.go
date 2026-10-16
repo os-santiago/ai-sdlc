@@ -96,34 +96,47 @@ func selectSCCEngine() engine.Engine {
 }
 
 // selectCheckout builds the engine.Checker SCCEngine uses to make
-// WorkDir a clean checkout before every attempt. It requires
-// AI_SDLC_GH_APP_ID and AI_SDLC_GH_APP_PRIVATE_KEY (a PEM-encoded RSA
-// private key, sourced from a Kubernetes Secret created out-of-band —
-// never a committed manifest, same posture as MODEL_API_KEY). This is
-// deliberately the only auth model wired in: a GitHub App installation
-// token, matching .github/workflows/ai-sdlc-implement.yml's fail-closed
-// stance (no PAT, no GITHUB_TOKEN fallback — CLAUDE.md "Critical
-// Lessons"). Returns nil when either is unset, in which case WorkDir
-// must already be a checkout, managed externally — SCCEngine runs
-// unchanged in that case (see engine.Checker's doc comment).
+// WorkDir a clean checkout before every attempt. Tries two credential
+// sources, in order (see checkout.TokenSource's doc comment for why
+// both exist):
+//
+//  1. AI_SDLC_GH_APP_ID + AI_SDLC_GH_APP_PRIVATE_KEY — a GitHub App
+//     installation token, matching .github/workflows/ai-sdlc-implement.
+//     yml's fail-closed posture. Requires admin access to that specific
+//     App to mint a private key for it.
+//  2. AI_SDLC_GH_PAT — a fine-grained personal access token, for
+//     operators who don't control the App above but do control a
+//     GitHub account with write access to the target repo(s).
+//
+// Returns nil when neither is set, in which case WorkDir must already
+// be a checkout, managed externally — fine for a public repo today,
+// since checkout only reads (see checkout.GitCheckout's doc comment);
+// SCCEngine runs unchanged in that case (see engine.Checker's doc
+// comment). Both credentials are sourced from a Kubernetes Secret
+// created out-of-band — never a committed manifest, same posture as
+// MODEL_API_KEY.
 func selectCheckout() engine.Checker {
 	appID := os.Getenv("AI_SDLC_GH_APP_ID")
 	privateKey := os.Getenv("AI_SDLC_GH_APP_PRIVATE_KEY")
-	if appID == "" || privateKey == "" {
-		log.Printf("worker: AI_SDLC_GH_APP_ID/AI_SDLC_GH_APP_PRIVATE_KEY not set; SCCEngine will not check out the target repo itself (have: AI_SDLC_GH_APP_ID=%v, AI_SDLC_GH_APP_PRIVATE_KEY=%v); AI_SDLC_WORKSPACE_DIR must already be a checkout, managed externally",
-			appID != "", privateKey != "")
-		return nil
+	if appID != "" && privateKey != "" {
+		app := githubapp.App{AppID: appID, PrivateKey: []byte(privateKey)}
+		return checkout.GitCheckout{
+			Tokens: func(ctx context.Context, repository string) (string, error) {
+				token, err := app.InstallationToken(ctx, repository)
+				if err != nil {
+					return "", err
+				}
+				return token.Value, nil
+			},
+		}
 	}
-	app := githubapp.App{AppID: appID, PrivateKey: []byte(privateKey)}
-	return checkout.GitCheckout{
-		Tokens: func(ctx context.Context, repository string) (string, error) {
-			token, err := app.InstallationToken(ctx, repository)
-			if err != nil {
-				return "", err
-			}
-			return token.Value, nil
-		},
+
+	if pat := os.Getenv("AI_SDLC_GH_PAT"); pat != "" {
+		return checkout.GitCheckout{Tokens: checkout.StaticToken(pat)}
 	}
+
+	log.Printf("worker: no checkout credential configured (AI_SDLC_GH_APP_ID/AI_SDLC_GH_APP_PRIVATE_KEY or AI_SDLC_GH_PAT); SCCEngine will not check out the target repo itself — AI_SDLC_WORKSPACE_DIR must already be a checkout, managed externally")
+	return nil
 }
 
 func valueOrDefault(name, fallback string) string {

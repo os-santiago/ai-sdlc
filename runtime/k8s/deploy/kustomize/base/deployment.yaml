@@ -114,9 +114,22 @@ spec:
                 #     --from-literal=appId=<app-id> \
                 #     --from-file=privateKey=<path-to-pem>
                 # optional: true: without this, selectCheckout (cmd/main.go)
-                # returns nil and AI_SDLC_WORKSPACE_DIR must already be a
-                # checkout, managed externally — SCCEngine still runs.
+                # falls through to AI_SDLC_GH_PAT below, then to nil
+                # (AI_SDLC_WORKSPACE_DIR must already be a checkout,
+                # managed externally) — SCCEngine still runs either way.
                 secretKeyRef: {name: ai-sdlc-github-app, key: privateKey, optional: true}
+            - name: AI_SDLC_GH_PAT
+              valueFrom:
+                # Fallback credential for selectCheckout when the GitHub
+                # App above isn't available (e.g. it's owned by an
+                # individual account you don't control). Create
+                # out-of-band, never in a committed manifest:
+                #   kubectl create secret generic ai-sdlc-github-pat \
+                #     --namespace ai-sdlc-runtime --from-literal=token=<pat>
+                # Use a fine-grained PAT scoped to one repo (Contents:
+                # Read & write, Pull requests: Read & write) with an
+                # expiration date — not a broad personal token.
+                secretKeyRef: {name: ai-sdlc-github-pat, key: token, optional: true}
           ports:
             - name: worker
               containerPort: 8083
