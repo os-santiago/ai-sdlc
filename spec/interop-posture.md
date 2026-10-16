@@ -90,8 +90,12 @@ record so the seam can evolve without breaking conforming engines.
 
 [`config/engine_adapters.json`](../config/engine_adapters.json) is the
 adapter registry — the registry of approved engines. Per engine it
-declares `binary`, `probe`, `argvBuilder`, `configRenderer`,
+declares `binary`, `probe`, `capabilities`, `argvBuilder` (a declarative
+placeholder contract, never evaluated code), `configRenderer`,
 `exitCodeMap`, and `manifestMap` (`scc` and `devin` are declared).
+[`scripts/engine_adapter.js`](../scripts/engine_adapter.js) is the
+canonical interpreter both runtime paths bind to (the container worker
+directly, the GHA path via `scripts/gha/engine-adapter-resolver.js`).
 Runtime dispatch is still hardcoded to `scc` in the implement stage —
 the registry is the seam a multi-engine dispatcher binds to, and adding
 a descriptor is how a new engine registers without workflow changes.

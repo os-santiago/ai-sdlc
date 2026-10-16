@@ -5,6 +5,11 @@
       "scc",
       "--version"
     ],
+    "capabilities": {
+      "supportsWorkspaceTrust": false,
+      "modelConfigurable": true,
+      "projectIdRequired": true
+    },
     "argvBuilder": {
       "command": "chat",
       "substitution": {
@@ -62,6 +67,11 @@
       "devin",
       "--version"
     ],
+    "capabilities": {
+      "supportsWorkspaceTrust": true,
+      "modelConfigurable": true,
+      "projectIdRequired": true
+    },
     "argvBuilder": {
       "command": "run",
       "substitution": {
