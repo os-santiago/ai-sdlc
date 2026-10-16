@@ -1,0 +1,25 @@
+{{- if .Values.postgres.cloudNativePG.enabled }}
+# CloudNativePG Cluster (ADR-0005): durable workflow state + the
+# transactional outbox for all five components. Requires the CloudNativePG
+# operator installed cluster-wide first (OperatorHub on OpenShift; see
+# https://cloudnative-pg.io/documentation/current/installation_upgrade/ on
+# vanilla Kubernetes) — a one-time, cluster-scoped prerequisite outside
+# this chart. Set postgres.cloudNativePG.enabled: false to skip this
+# resource and point postgres.databaseURLSecret at an existing instance
+# instead.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ .Values.postgres.cloudNativePG.clusterName }}
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.postgres.cloudNativePG.instances }}
+  storage:
+    size: {{ .Values.postgres.cloudNativePG.storageSize }}
+  bootstrap:
+    initdb:
+      database: ai_sdlc
+      owner: ai_sdlc
+{{- end }}

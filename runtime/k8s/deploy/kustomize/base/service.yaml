@@ -11,3 +11,4 @@ spec:
     - {name: orchestrator, port: 8082, targetPort: orchestrator}
     - {name: worker, port: 8083, targetPort: worker}
     - {name: release, port: 8084, targetPort: release}
+    - {name: relay, port: 8085, targetPort: relay}

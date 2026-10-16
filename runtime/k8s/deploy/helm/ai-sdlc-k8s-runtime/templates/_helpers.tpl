@@ -66,3 +66,31 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+ADR-0005: name of the Secret every component's DATABASE_URL env var reads
+from. When postgres.cloudNativePG.enabled is true this is the Secret
+CloudNativePG itself generates for the Cluster (<clusterName>-app);
+otherwise it is databaseURLSecret.name, pointing at an existing instance.
+*/}}
+{{- define "ai-sdlc-k8s-runtime.databaseSecretName" -}}
+{{- if .Values.postgres.cloudNativePG.enabled }}
+{{- printf "%s-app" .Values.postgres.cloudNativePG.clusterName }}
+{{- else }}
+{{- .Values.postgres.databaseURLSecret.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+ADR-0005: key within the database Secret holding a ready-to-use
+postgresql:// connection string. CloudNativePG's generated Secret calls
+this key "uri"; databaseURLSecret.key overrides it for an existing
+instance whose Secret uses a different key name.
+*/}}
+{{- define "ai-sdlc-k8s-runtime.databaseSecretKey" -}}
+{{- if .Values.postgres.cloudNativePG.enabled }}
+{{- "uri" }}
+{{- else }}
+{{- .Values.postgres.databaseURLSecret.key }}
+{{- end }}
+{{- end }}

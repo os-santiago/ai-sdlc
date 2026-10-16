@@ -37,3 +37,12 @@ metadata:
 spec:
   lookupPolicy:
     local: true
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: relay
+  namespace: ai-sdlc-runtime
+spec:
+  lookupPolicy:
+    local: true

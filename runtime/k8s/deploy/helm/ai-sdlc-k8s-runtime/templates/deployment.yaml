@@ -31,6 +31,9 @@ spec:
             - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
           env:
             - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ .Values.components.admissionController.port }}"}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" . }}, key: {{ include "ai-sdlc-k8s-runtime.databaseSecretKey" . }}}
           ports:
             - {name: admission, containerPort: {{ .Values.components.admissionController.port }}}
           readinessProbe:
@@ -52,6 +55,9 @@ spec:
             - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
           env:
             - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ .Values.components.orchestrator.port }}"}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" . }}, key: {{ include "ai-sdlc-k8s-runtime.databaseSecretKey" . }}}
           ports:
             - {name: orchestrator, containerPort: {{ .Values.components.orchestrator.port }}}
           readinessProbe:
@@ -71,6 +77,10 @@ spec:
             - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
           env:
             - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ .Values.components.worker.port }}"}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" . }}, key: {{ include "ai-sdlc-k8s-runtime.databaseSecretKey" . }}}
+            - {name: AI_SDLC_ENGINE, value: {{ .Values.engine | quote }}}
           ports:
             - {name: worker, containerPort: {{ .Values.components.worker.port }}}
           readinessProbe:
@@ -93,6 +103,9 @@ spec:
             - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
           env:
             - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ .Values.components.releaseManager.port }}"}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" . }}, key: {{ include "ai-sdlc-k8s-runtime.databaseSecretKey" . }}}
           ports:
             - {name: release, containerPort: {{ .Values.components.releaseManager.port }}}
           readinessProbe:
@@ -107,6 +120,31 @@ spec:
             readOnlyRootFilesystem: true
           volumeMounts:
             - {name: contract, mountPath: /etc/ai-sdlc/contract, readOnly: true}
+        # relay (ADR-0005): co-located so it reaches the other four
+        # components over localhost (internal/outbox.DefaultRoutes) — no
+        # NetworkPolicy egress rule needed for that traffic.
+        - name: relay
+          image: "{{ .Values.image.registry }}/{{ .Values.components.relay.image }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
+          env:
+            - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ .Values.components.relay.port }}"}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" . }}, key: {{ include "ai-sdlc-k8s-runtime.databaseSecretKey" . }}}
+          ports:
+            - {name: relay, containerPort: {{ .Values.components.relay.port }}}
+          readinessProbe:
+            httpGet: {path: /readyz, port: relay}
+          livenessProbe:
+            httpGet: {path: /healthz, port: relay}
+          resources:
+            {{- toYaml .Values.components.relay.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
       volumes:
         - name: workspaces
           emptyDir:

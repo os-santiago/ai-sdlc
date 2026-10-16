@@ -26,3 +26,6 @@ images:
   - name: ghcr.io/os-santiago/ai-sdlc-release-manager
     newName: image-registry.openshift-image-registry.svc:5000/ai-sdlc-runtime/release-manager
     newTag: latest
+  - name: ghcr.io/os-santiago/ai-sdlc-relay
+    newName: image-registry.openshift-image-registry.svc:5000/ai-sdlc-runtime/relay
+    newTag: latest

@@ -5,6 +5,7 @@ resources:
   - ../../base
 patches:
   - path: environment.yaml
+  - path: postgres-cluster-patch.yaml
 images:
   - name: ghcr.io/os-santiago/ai-sdlc-admission-controller
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
@@ -13,4 +14,6 @@ images:
   - name: ghcr.io/os-santiago/ai-sdlc-worker
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
   - name: ghcr.io/os-santiago/ai-sdlc-release-manager
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: ghcr.io/os-santiago/ai-sdlc-relay
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

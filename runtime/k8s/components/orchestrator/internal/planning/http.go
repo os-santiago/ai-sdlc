@@ -1,27 +1,9 @@
 package planning
 
-import (
-	"net/http"
-
-	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
-)
-
+// reconcileRequest is the body for the stateless, dependency-free
+// /v1/plans/reconcile dry-run endpoint (registered in events.go's Routes,
+// alongside the two event-ingress endpoints ADR-0005 added).
 type reconcileRequest struct {
 	Plan          Plan `json:"plan"`
 	MaxConcurrent int  `json:"maxConcurrent"`
-}
-
-func Routes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /v1/plans/reconcile", func(w http.ResponseWriter, r *http.Request) {
-		var request reconcileRequest
-		if !service.DecodeJSON(w, r, &request) {
-			return
-		}
-		plan, ready, err := Reconcile(request.Plan, request.MaxConcurrent)
-		if err != nil {
-			service.WriteJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
-			return
-		}
-		service.WriteJSON(w, http.StatusOK, map[string]any{"plan": plan, "ready": ready})
-	})
 }

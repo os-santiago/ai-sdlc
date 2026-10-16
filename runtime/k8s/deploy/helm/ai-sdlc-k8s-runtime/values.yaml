@@ -28,6 +28,33 @@ contract:
 
 logLevel: info
 
+# Durable state + the transactional outbox (ADR-0005). When
+# postgres.cloudNativePG.enabled is true, templates/postgres-cluster.yaml
+# renders a CloudNativePG Cluster CR (requires the CloudNativePG operator
+# installed cluster-wide first — see ../../README.md "Deploy") and every
+# component's DATABASE_URL is sourced from the Secret CloudNativePG
+# generates (<cluster name>-app, key "uri"). Set enabled: false and
+# databaseURLSecret to point at your own Postgres instead — no component
+# depends on CloudNativePG specifically, only on DATABASE_URL resolving to
+# a reachable connection string.
+postgres:
+  cloudNativePG:
+    enabled: true
+    clusterName: ai-sdlc-postgres
+    instances: 1
+    storageSize: 1Gi
+  # Used when cloudNativePG.enabled is false, or to override the secret
+  # name/key CloudNativePG itself would otherwise generate.
+  databaseURLSecret:
+    name: ai-sdlc-postgres-app
+    key: uri
+
+# Selects components/worker's Engine implementation. "stub" (default) is
+# the only one implemented — see internal/engine and ADR-0005 "Explicitly
+# still out of scope". "scc" is reserved for the real sc-agent-cli
+# subprocess engine.
+engine: stub
+
 components:
   admissionController:
     image: ai-sdlc-admission-controller
@@ -54,10 +81,20 @@ components:
     resources:
       requests: {cpu: 25m, memory: 32Mi}
       limits: {cpu: 250m, memory: 128Mi}
+  # relay (ADR-0005): polls the outbox table and delivers events/commands
+  # to the other four components over localhost — it is co-located in the
+  # same pod, same as the others, so no NetworkPolicy egress rule is
+  # needed for that traffic.
+  relay:
+    image: ai-sdlc-relay
+    port: 8085
+    resources:
+      requests: {cpu: 25m, memory: 32Mi}
+      limits: {cpu: 250m, memory: 128Mi}
 
 networkPolicy:
   enabled: true
-  allowedEgressPorts: [443, 4222, 5432, 4317]
+  allowedEgressPorts: [443, 5432, 4317]
 
 # OpenShift-only. Ignored (and safe to leave enabled: true) on vanilla
 # Kubernetes clusters that lack the route.openshift.io/v1 API — the

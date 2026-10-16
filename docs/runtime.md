@@ -13,7 +13,11 @@ See [ADR-0004: Cloud-native (Kubernetes/OpenShift) alternate control plane](./ar
 for adopters who cannot run GitHub Actions. GHA stays the default below;
 [`runtime/k8s/`](../runtime/k8s/README.md) is an opt-in alternative reading
 the same `.ai-sdlc.yaml` contract and `spec/normalized-event.schema.json`
-intake payload.
+intake payload. See
+[ADR-0005: Durable state, transactional outbox and engine invocation for runtime/k8s](./architecture/adr/0005-runtime-k8s-event-bus-and-engine-invocation.md)
+for how that control plane's components are actually wired together
+(PostgreSQL + outbox, no message broker) and its current limits (stub
+engine only, no GitHub webhook adapter yet).
 
 ## Workflows
 

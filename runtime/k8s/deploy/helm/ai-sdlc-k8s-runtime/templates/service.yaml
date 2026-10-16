@@ -13,3 +13,4 @@ spec:
     - {name: orchestrator, port: {{ .Values.components.orchestrator.port }}, targetPort: orchestrator}
     - {name: worker, port: {{ .Values.components.worker.port }}, targetPort: worker}
     - {name: release, port: {{ .Values.components.releaseManager.port }}, targetPort: release}
+    - {name: relay, port: {{ .Values.components.relay.port }}, targetPort: relay}

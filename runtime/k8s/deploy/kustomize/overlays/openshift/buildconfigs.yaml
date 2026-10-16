@@ -88,3 +88,24 @@ spec:
     to:
       kind: ImageStreamTag
       name: release-manager:latest
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: relay
+  namespace: ai-sdlc-runtime
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://github.com/os-santiago/ai-sdlc.git
+      ref: main
+    contextDir: runtime/k8s
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: components/relay/Containerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: relay:latest

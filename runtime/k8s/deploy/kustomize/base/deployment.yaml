@@ -30,6 +30,9 @@ spec:
           env:
             - name: AI_SDLC_HTTP_ADDRESS
               value: :8081
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: ai-sdlc-postgres-app, key: uri}
           ports:
             - name: admission
               containerPort: 8081
@@ -53,6 +56,9 @@ spec:
           env:
             - name: AI_SDLC_HTTP_ADDRESS
               value: :8082
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: ai-sdlc-postgres-app, key: uri}
           ports:
             - name: orchestrator
               containerPort: 8082
@@ -74,6 +80,11 @@ spec:
           env:
             - name: AI_SDLC_HTTP_ADDRESS
               value: :8083
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: ai-sdlc-postgres-app, key: uri}
+            - name: AI_SDLC_ENGINE
+              value: stub # "scc" is reserved for the real sc-agent-cli subprocess engine (ADR-0005) — not implemented yet.
           ports:
             - name: worker
               containerPort: 8083
@@ -99,6 +110,9 @@ spec:
           env:
             - name: AI_SDLC_HTTP_ADDRESS
               value: :8084
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: ai-sdlc-postgres-app, key: uri}
           ports:
             - name: release
               containerPort: 8084
@@ -115,6 +129,34 @@ spec:
             readOnlyRootFilesystem: true
           volumeMounts:
             - {name: contract, mountPath: /etc/ai-sdlc/contract, readOnly: true}
+        # relay (ADR-0005): the 5th container, co-located in this pod so it
+        # reaches the other four over localhost (see internal/outbox.
+        # DefaultRoutes) with no NetworkPolicy egress rule needed for that
+        # traffic. Its only external dependency is Postgres.
+        - name: relay
+          image: ghcr.io/os-santiago/ai-sdlc-relay:development
+          envFrom:
+            - configMapRef: {name: ai-sdlc-k8s-runtime-config}
+          env:
+            - name: AI_SDLC_HTTP_ADDRESS
+              value: :8085
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: ai-sdlc-postgres-app, key: uri}
+          ports:
+            - name: relay
+              containerPort: 8085
+          readinessProbe:
+            httpGet: {path: /readyz, port: relay}
+          livenessProbe:
+            httpGet: {path: /healthz, port: relay}
+          resources:
+            requests: {cpu: 25m, memory: 32Mi}
+            limits: {cpu: 250m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
       volumes:
         - name: workspaces
           emptyDir:

@@ -5,6 +5,7 @@ resources:
   - service-account.yaml
   - configmap.yaml
   - contract-configmap.yaml
+  - postgres-cluster.yaml
   - deployment.yaml
   - service.yaml
   - network-policy.yaml

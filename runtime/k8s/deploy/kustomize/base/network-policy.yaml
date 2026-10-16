@@ -23,6 +23,9 @@ spec:
         - {protocol: TCP, port: 53}
     - ports:
         - {protocol: TCP, port: 443}   # GitHub API / App token minting / model provider
-        - {protocol: TCP, port: 4222}  # event bus (NATS), if deployed
-        - {protocol: TCP, port: 5432}  # durable state store, if deployed
+        - {protocol: TCP, port: 5432}  # Postgres (CloudNativePG Cluster service) — durable state + outbox, ADR-0005
         - {protocol: TCP, port: 4317}  # OpenTelemetry collector
+    # No egress rule is needed between admission-controller/orchestrator/
+    # worker/release-manager/relay: deployment.yaml co-locates all five as
+    # containers in one pod, so that traffic is loopback and never crosses
+    # a NetworkPolicy boundary (ADR-0005).

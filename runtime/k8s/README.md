@@ -10,7 +10,10 @@ Same spec, different compute: both control planes read the same
 See [ADR-0004](../../docs/architecture/adr/0004-cloud-native-k8s-openshift-runtime.md)
 for the full decision record, including provenance (ported from
 `os-santiago/homedir-ai-sdlc`'s unreleased `future-go/` prototype) and the
-schema gaps this port surfaced.
+schema gaps this port surfaced, and
+[ADR-0005](../../docs/architecture/adr/0005-runtime-k8s-event-bus-and-engine-invocation.md)
+for the durable-state/event-bus/engine-invocation wiring that turns this
+from a buildable scaffold into an actually-running pipeline.
 
 ## Components
 
@@ -18,15 +21,26 @@ schema gaps this port surfaced.
 |---|---|---|
 | `admission-controller` | Admission | `components/admission-controller/internal/admission` |
 | `orchestrator` | Plan | `components/orchestrator/internal/planning` |
-| `worker` | Bounded edit (attempt evaluation only — see Non-goals) | `components/worker/internal/cycle` |
+| `worker` | Bounded edit (engine invocation via `internal/engine` — stub only, see Non-goals) | `components/worker/internal/cycle` |
 | `release-manager` | Publish/review, Release | `components/release-manager/internal/gates` |
+| `relay` | — (infrastructure, not a pipeline stage) | `internal/outbox` |
 
-Each is a standalone HTTP service (`internal/platform/service`): one pure,
-synchronous `Evaluate(...)` function per component, wrapped by a thin HTTP
-handler and a `main.go` that just calls `service.Run`. No component talks to
-another directly — they are meant to sit behind an event bus (not wired up
-yet; see ADR-0004 "Explicitly out of scope"), the same way future-go left
-them.
+Each of the first four is a standalone HTTP service
+(`internal/platform/service`): one pure, synchronous `Evaluate(...)`
+function per component, wrapped by a thin HTTP handler. `relay` is the
+5th container: it polls the `outbox` table (`internal/store`,
+`internal/outbox`) and delivers unpublished events/commands to the other
+four over HTTP (localhost — all five are co-located in one pod, see
+`deploy/kustomize/base/deployment.yaml`), closing the "wiring to a real
+event bus" gap ADR-0004 left open, without a message broker
+(ADR-0005: PostgreSQL + a transactional outbox, matching
+`homedir-ai-sdlc`'s own prior ADR-0002).
+
+Set `DATABASE_URL` on any of the first four components to enable
+persistence + outbox emission around their existing `Evaluate` call; leave
+it unset and they behave exactly as ADR-0004 shipped them (stateless,
+dry-run only). `relay` requires `DATABASE_URL` — polling the outbox is its
+only job.
 
 ## Spec integration
 
@@ -48,8 +62,17 @@ go vet ./...
 go test ./...
 ```
 
-No external services required — every test is a pure unit test (see
-`go test ./... -v`: 25 tests, 0 skips, no network).
+The pure domain packages (`admission`, `cycle`, `planning`, `gates`,
+`engine`) and most of `internal/outbox` need no external services — those
+tests are pure unit tests, no network. `internal/store` and a few
+persistence-path tests in `admission`/`outbox` are the deliberate
+exception: they talk to a real Postgres and skip cleanly when
+`AI_SDLC_TEST_DATABASE_URL` is unset. To run them:
+
+```bash
+export AI_SDLC_TEST_DATABASE_URL=postgres://ai_sdlc:ai_sdlc@localhost:5432/ai_sdlc_test
+go test ./... -v
+```
 
 ## Deploy
 
@@ -72,7 +95,15 @@ helm template deploy/helm/ai-sdlc-k8s-runtime \
 ```
 
 `make render-k8s`, `make render-openshift` and `make helm-lint` wrap the
-above. `make containers` builds all four images locally with Podman.
+above. `make containers` builds all five images locally with Podman.
+
+Every surface needs a Postgres reachable via `DATABASE_URL` before the
+pipeline does anything beyond respond-and-discard (ADR-0005). The default
+path is a [CloudNativePG](https://cloudnative-pg.io/) `Cluster`, rendered
+from `deploy/kustomize/base/postgres-cluster.yaml` / Helm's
+`postgres.cloudNativePG` values — see
+[deploy/kustomize/base/README.md](deploy/kustomize/base/README.md)
+"Durable state" for the one-time operator install.
 
 See [deploy/kustomize/base/README.md](deploy/kustomize/base/README.md) for
 the GitOps promotion model (immutable image digests, no runtime mutation)
@@ -83,16 +114,25 @@ SCC with no custom SCC object).
 
 ## Non-goals
 
-- **Reimplementing engine invocation.** `worker` evaluates bounded
-  attempts; it does not call `sc-agent-cli` itself. The headless contract
+- **A real engine subprocess.** `worker` runs the full bounded-edit loop
+  (`internal/engine.Engine` interface, `/v1/attempts/dispatch`) but the
+  only shipped `Engine` is `StubEngine` — deterministic, no subprocess, no
+  network. Shelling out to `sc-agent-cli` with the headless contract
   (`--prompt-file --audit-log --summary-file --no-commit`, see root
-  README and `.ai-sdlc.yaml`'s `engine` block) is one integration point
-  shared with the GHA runtime, not duplicated here.
+  README and `.ai-sdlc.yaml`'s `engine` block) is tracked follow-up
+  (ADR-0005 "Explicitly still out of scope") — it needs a target repo,
+  model provider and credentials this environment does not have.
 - **Replacing the GHA-native runtime.** GHA stays the default,
   zero-infrastructure path for any repo that can use it (root README
   "Adopt this runtime"). This directory is an opt-in alternative.
-- **Wiring a real event bus or durable store.** Components are
-  independently buildable/testable/deployable today; making this an
-  actually-running pipeline is tracked as follow-up work (ADR-0004).
+- **A GitHub webhook adapter.** `admission-controller`'s Route (OpenShift
+  overlay) exists, but translating a GitHub webhook payload into
+  `spec/normalized-event.schema.json` is separate, reviewable follow-up —
+  mirroring the GHA intake stage's existing logic (ADR-0005).
 - **A dashboard.** ADR-0001 already decided GitHub-native observability
   suffices for a single consumer.
+
+~~Wiring a real event bus or durable store~~ — closed by ADR-0005:
+PostgreSQL + a transactional outbox (`internal/store`, `internal/outbox`),
+polled and delivered by the new `relay` component. See ADR-0005 for why
+this isn't a message broker (NATS/Kafka) and why CloudNativePG.

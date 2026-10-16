@@ -16,6 +16,7 @@
     "risk": {"enum": ["low", "medium", "high", "critical"]},
     "policyVersion": {"type": "string", "minLength": 1},
     "reasons": {"type": "array", "items": {"type": "string"}},
-    "requiredGates": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+    "requiredGates": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "acceptanceCriteria": {"type": "array", "items": {"type": "string"}, "description": "Added in ADR-0005 so the orchestrator can build a work item without a second round-trip to re-fetch the issue."}
   }
 }
