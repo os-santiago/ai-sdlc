@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -235,6 +236,36 @@ func TestInvokeWithNilCheckoutIsUnaffected(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "checkout") {
 		t.Fatalf("Invoke() error = %v, want no mention of checkout when Checkout is nil", err)
+	}
+}
+
+// TestInvokeCreatesTempDirRootWhenMissing is a regression test for a bug
+// found by running a real dispatch against the OpenShift deployment:
+// pointing $TMPDIR at an as-yet-nonexistent subdirectory of a fresh
+// emptyDir volume (os.MkdirTemp does not create its own parent) failed
+// before this engine ever got to exec'ing the (here, deliberately
+// nonexistent) binary.
+func TestInvokeCreatesTempDirRootWhenMissing(t *testing.T) {
+	missingTempRoot := filepath.Join(t.TempDir(), "does-not-exist-yet")
+	// os.TempDir() reads $TMPDIR on Unix but %TMP%/%TEMP% on Windows —
+	// set all three so this test exercises the fix on whichever platform
+	// it runs on (this engine ships to Linux containers, but CI/dev may
+	// run on either).
+	t.Setenv("TMPDIR", missingTempRoot)
+	t.Setenv("TMP", missingTempRoot)
+	t.Setenv("TEMP", missingTempRoot)
+
+	dir := t.TempDir()
+	eng := SCCEngine{Binary: "scc-binary-that-does-not-exist", WorkDir: dir}
+	_, err := eng.Invoke(context.Background(), Request{Repository: "os-santiago/homedir", BaseRef: "main"})
+	if err == nil {
+		t.Fatal("Invoke() with a nonexistent binary, want error")
+	}
+	if strings.Contains(err.Error(), "create temp dir root") || strings.Contains(err.Error(), "create attempt run dir") {
+		t.Fatalf("Invoke() error = %v, want the missing TMPDIR root to have been created, not to fail", err)
+	}
+	if info, statErr := os.Stat(missingTempRoot); statErr != nil || !info.IsDir() {
+		t.Fatalf("expected %s to have been created as a directory, stat err = %v", missingTempRoot, statErr)
 	}
 }
 

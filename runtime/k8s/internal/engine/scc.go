@@ -168,6 +168,16 @@ func (e SCCEngine) Invoke(ctx context.Context, request Request) (Result, error) 
 		return Result{}, fmt.Errorf("write sc-agent config: %w", err)
 	}
 
+	// os.MkdirTemp doesn't create its parent (os.TempDir(), i.e. $TMPDIR
+	// or /tmp) — fine when that's a pre-existing directory on a normal
+	// filesystem, but not when it's an unpopulated path on a fresh
+	// emptyDir volume under readOnlyRootFilesystem (a real dispatch call
+	// against the plain /tmp default hit "mkdir ...: read-only file
+	// system"; pointing TMPDIR at the workspaces emptyDir instead still
+	// needs this MkdirAll, since nothing else creates that subdirectory).
+	if err := os.MkdirAll(os.TempDir(), 0o700); err != nil {
+		return Result{}, fmt.Errorf("create temp dir root: %w", err)
+	}
 	runDir, err := os.MkdirTemp("", "ai-sdlc-attempt-*")
 	if err != nil {
 		return Result{}, fmt.Errorf("create attempt run dir: %w", err)

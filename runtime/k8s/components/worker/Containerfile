@@ -40,10 +40,14 @@ RUN git clone --depth 1 https://github.com/os-santiago/sc-agent-cli /opt/scc \
 # anywhere this image reads from, and the pod sets runAsNonRoot/
 # allowPrivilegeEscalation:false/capabilities:drop:[ALL] exactly like the
 # distroless components (see deploy/kustomize/base/README.md "Security
-# posture"). HOME is set under /workspaces (the same emptyDir volume
-# AI_SDLC_WORKSPACE_DIR lives on) so SCCConfig's $HOME/.sc-agent/config.json
-# write and npm/node's own cache writes have somewhere to go despite
-# readOnlyRootFilesystem: true — no extra volume needed.
+# posture"). HOME and TMPDIR are both set under /workspaces (the same
+# emptyDir volume AI_SDLC_WORKSPACE_DIR lives on) so SCCConfig's
+# $HOME/.sc-agent/config.json write, npm/node's own cache writes, and
+# SCCEngine.Invoke's os.MkdirTemp("", "ai-sdlc-attempt-*") call (which
+# defaults to /tmp — part of the read-only root filesystem, confirmed by
+# running a real dispatch against this image and hitting "mkdir
+# /tmp/ai-sdlc-attempt-...: read-only file system") all have somewhere
+# to go despite readOnlyRootFilesystem: true — no extra volume needed.
 FROM docker.io/library/node:22-alpine
 RUN apk add --no-cache git
 COPY --from=sccbuild /opt/scc /opt/scc
@@ -56,6 +60,7 @@ RUN printf '#!/usr/bin/env node\nimport "/opt/scc/dist/cli.js";\n' > /usr/local/
     && chmod +x /usr/local/bin/scc
 COPY --from=build /out/component /component
 ENV HOME=/workspaces/home
+ENV TMPDIR=/workspaces/tmp
 USER node
 EXPOSE 8080
 ENTRYPOINT ["/component"]
