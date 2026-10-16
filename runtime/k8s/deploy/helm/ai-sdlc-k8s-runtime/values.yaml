@@ -61,7 +61,13 @@ engine: scc
 
 modelProvider:
   baseURL: https://integrate.api.nvidia.com/v1
-  model: nvidia/nemotron-3-ultra-550b-a55b
+  # nemotron-3-ultra-550b-a55b (550B) consistently exceeded sc-agent-cli's
+  # provider connect/attempt timeouts (30s/120s default) in a real
+  # end-to-end test against this endpoint — not even a trivial 16-token
+  # completion returned headers within 4+ minutes. llama-3.1-nemotron-70b-
+  # instruct is ~8x smaller and responds in seconds against the same
+  # endpoint/key.
+  model: nvidia/llama-3.1-nemotron-70b-instruct
   workspaceDir: /workspaces/target-repo
   # The API key itself is NEVER set here. Create the Secret out-of-band:
   #   kubectl create secret generic ai-sdlc-model-provider \

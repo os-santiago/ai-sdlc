@@ -88,7 +88,14 @@ spec:
             - name: AI_SDLC_PROVIDER_BASE_URL
               value: https://integrate.api.nvidia.com/v1
             - name: AI_SDLC_MODEL
-              value: nvidia/nemotron-3-ultra-550b-a55b
+              # nemotron-3-ultra-550b-a55b (the previous default) is a 550B
+              # reasoning model that, on this NVIDIA endpoint, consistently
+              # exceeded sc-agent-cli's provider connect/attempt timeouts
+              # (30s/120s default) during a real end-to-end test — not even
+              # a trivial 16-token completion returned headers within 4+
+              # minutes. llama-3.1-nemotron-70b-instruct is ~8x smaller and
+              # responds in seconds against the same endpoint/key.
+              value: nvidia/llama-3.1-nemotron-70b-instruct
             - name: AI_SDLC_WORKSPACE_DIR
               value: /workspaces/target-repo
             - name: MODEL_API_KEY
