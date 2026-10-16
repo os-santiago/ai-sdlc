@@ -87,27 +87,53 @@ the GHA-native one.
    analogous to how Hermes is an optional control-plane surface per the
    root README's layering diagram.
 
-## Schema gaps found while porting
+## Schema gaps closed
 
-Porting `admission-controller` and `worker` surfaced two fields with no
-`spec/ai-sdlc.schema.json` equivalent:
+Porting `admission-controller` and `worker` originally surfaced two fields
+with no `spec/ai-sdlc.schema.json` equivalent. Both are now closed, as an
+explicitly **additive, opt-in** schema change — no existing `.ai-sdlc.yaml`
+(including this repo's own, and every file under `examples/`) required any
+edit; all four re-validated against the updated schema unchanged.
 
-- **Atomicity/decomposition bounds** (`maximumAcceptanceCriteria`,
-  `minimumTitleLength`, `minimumBodyLength`). `spec/definition-of-ready.md`
-  documents "1-8 criteria... >8 probably not atomic" and R1-R6 as prose/CI
-  rules, but the schema has no `triggers.*` or `review.*` field encoding
-  them. `admission.DefaultPolicy()` keeps the DoR-documented numbers as a
-  local fallback; a future schema revision should add something like
-  `triggers.acceptance_criteria.{min,max}` so both control planes read one
-  number.
-- **Maximum changed files per attempt** (`cycle.Policy.MaximumChangedFiles`,
-  "atomic file limit"). No `.ai-sdlc.yaml` field bounds blast radius by file
-  count today; `spec/definition-of-ready.md`'s atomicity rules describe this
-  qualitatively ("touch one subsystem") but not as a machine-checkable
-  number. Kept as a local default pending a schema field.
+- **`triggers.min_body_length`** (default **120**) and
+  **`triggers.acceptance_criteria.{min,max}`** (defaults **1** / **null**).
+  `spec/definition-of-ready.md` documents R4 ("body length ≥ 120 chars")
+  and the atomicity ceiling ("1-8 criteria... >8 probably not atomic") as
+  prose/CI rules; they now have a schema home. `min_body_length` and
+  `acceptance_criteria.min` default to the exact numbers
+  `.github/workflows/ai-sdlc-intake.yml` already hardcodes (120, 1) — zero
+  behavior change for the live pipeline if it is ever wired to read them.
+  `acceptance_criteria.max` defaults to **null (unbounded)**, because the
+  live intake workflow does not enforce a ceiling today; the field is
+  opt-in so adding it cannot retroactively fail an issue no repo asked to
+  bound.
+- **`review.max_changed_files`** (default **null/unbounded**), the
+  bounded-edit "atomic file limit". No runtime stage enforces this today,
+  so it is opt-in for the same reason.
+- `minimumTitleLength` stays local-only (`admission.DefaultPolicy`, no
+  schema field): DoR R1 is a title-prefix regex, not a numeric floor, so
+  there is no real spec number to promote.
 
-Two fields that *did* map cleanly, and are now contract-driven instead of
-hardcoded (future-go had them as constants):
+`runtime/k8s` is fully wired to the new fields: `admission.PolicyFromContract`
+reads `min_body_length` and the acceptance-criteria ceiling (0 = unbounded
+sentinel, guarded in `Evaluate` so it is never misread as "zero allowed");
+`cycle.PolicyFromContract` reads `max_changed_files` the same way.
+`admission.DefaultPolicy()`'s standalone body-length floor was also
+corrected from future-go's arbitrary 30 to the real DoR number (120), since
+nothing depended on the old value beyond this repo's own tests.
+
+**Deliberately not touched**: `.github/workflows/ai-sdlc-intake.yml` and
+`.github/actions/load-config/` (`resolve.py`/`resolve.sh`). Those drive the
+actual, currently-running GHA pipeline for this repo (and any adopter) —
+wiring their hardcoded R3/R4 checks to the new fields is real, valuable
+follow-up work, but it touches the composite action every stage calls
+first and was explicitly out of scope for "close the schema gap without
+disrupting the current implementation." The schema now has a stable home
+for these numbers; migrating the GHA checks to read them is a separate,
+reviewable PR.
+
+Two fields that *did* map cleanly in the original port, and are
+contract-driven instead of hardcoded (future-go had them as constants):
 
 - `release-manager`'s `MaximumRemediation` now defaults from
   `merge.max_repairs` (schema default 3) instead of future-go's hardcoded 5.

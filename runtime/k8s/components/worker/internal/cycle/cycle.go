@@ -50,31 +50,39 @@ type Decision struct {
 	Reprompt bool    `json:"reprompt"`
 }
 
-// DefaultPolicy returns the standalone (contract-free) policy.
-// MaximumChangedFiles has no spec/ai-sdlc.schema.json equivalent today — a
-// gap this port surfaces; see the ADR.
+// DefaultPolicy returns the standalone (contract-free) policy, used only
+// when no .ai-sdlc.yaml is available (e.g. local unit tests, dry-run CLI).
 func DefaultPolicy() Policy {
 	return Policy{MaximumAttempts: 5, MaximumChangedFiles: 5}
 }
 
 // PolicyFromContract sources MaximumAttempts from review.max_fix_iterations
 // (spec/ai-sdlc.schema.json default: 3 — the "bounded review→fix
-// convergence" field, issue #28). MaximumChangedFiles keeps the DoR
-// atomicity-adjacent local default.
+// convergence" field, issue #28) and MaximumChangedFiles from
+// review.max_changed_files (schema field closed in this port — see
+// docs/architecture/adr/0004 "Schema gaps closed"). MaximumChangedFiles is
+// 0 (unbounded) unless the contract sets an explicit ceiling, so adopting
+// this policy changes no existing attempt's outcome until a repo opts in.
 func PolicyFromContract(c contract.Contract) Policy {
 	policy := DefaultPolicy()
 	policy.MaximumAttempts = c.MaxFixIterationsOrDefault()
+	policy.MaximumChangedFiles = c.MaxChangedFilesOrUnbounded()
 	return policy
 }
 
 func Evaluate(attempt Attempt, policy Policy) (Decision, error) {
-	if attempt.Number < 1 || policy.MaximumAttempts < 1 || policy.MaximumChangedFiles < 1 {
-		return Decision{}, errors.New("attempt and policy limits must be positive")
+	// MaximumChangedFiles == 0 means unbounded (contract: review.
+	// max_changed_files unset) — never treated as "zero files allowed", so
+	// it is excluded from this positivity check. MaximumAttempts has no
+	// unbounded mode: ADR-0003's bounded-delivery principle requires every
+	// attempt loop to terminate.
+	if attempt.Number < 1 || policy.MaximumAttempts < 1 || policy.MaximumChangedFiles < 0 {
+		return Decision{}, errors.New("attempt number and maximum attempts must be positive; maximum changed files must not be negative")
 	}
 	if attempt.UnsafeOrAmbiguous {
 		return Decision{Outcome: Escalated, Reason: "Implementation requires unsafe or business-sensitive judgment."}, nil
 	}
-	if len(attempt.ChangedFiles) > policy.MaximumChangedFiles {
+	if policy.MaximumChangedFiles > 0 && len(attempt.ChangedFiles) > policy.MaximumChangedFiles {
 		return Decision{Outcome: Escalated, Reason: "Change exceeds the configured atomic file limit."}, nil
 	}
 	if attempt.TimedOut {

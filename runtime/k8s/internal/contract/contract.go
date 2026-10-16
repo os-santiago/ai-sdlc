@@ -41,9 +41,20 @@ type Autonomy struct {
 }
 
 type Triggers struct {
-	IssueLabel         string   `yaml:"issue_label"`
-	SkipLabels         []string `yaml:"skip_labels"`
-	AuthorizedLabelers []string `yaml:"authorized_labelers"`
+	IssueLabel         string                   `yaml:"issue_label"`
+	SkipLabels         []string                 `yaml:"skip_labels"`
+	AuthorizedLabelers []string                 `yaml:"authorized_labelers"`
+	MinBodyLength      int                      `yaml:"min_body_length"`
+	AcceptanceCriteria AcceptanceCriteriaBounds `yaml:"acceptance_criteria"`
+}
+
+// AcceptanceCriteriaBounds mirrors triggers.acceptance_criteria
+// (spec/ai-sdlc.schema.json). Max is a pointer: nil means "unbounded",
+// matching the schema's null default — the atomicity ceiling is opt-in,
+// not retroactively enforced on repos that never configured one.
+type AcceptanceCriteriaBounds struct {
+	Min int  `yaml:"min"`
+	Max *int `yaml:"max"`
 }
 
 type Verify struct {
@@ -56,6 +67,9 @@ type Review struct {
 	RiskLabels                 []string `yaml:"risk_labels"`
 	CriticalRequiresAcceptance *bool    `yaml:"critical_requires_acceptance"`
 	MaxFixIterations           *int     `yaml:"max_fix_iterations"`
+	// MaxChangedFiles mirrors review.max_changed_files. nil = unbounded
+	// (schema default) — the atomic-blast-radius ceiling is opt-in.
+	MaxChangedFiles *int `yaml:"max_changed_files"`
 }
 
 type Merge struct {
@@ -82,7 +96,9 @@ func Default() Contract {
 			FreezeEnv: "AI_SDLC_FREEZE",
 		},
 		Triggers: Triggers{
-			IssueLabel: "ready-to-implement",
+			IssueLabel:         "ready-to-implement",
+			MinBodyLength:      120, // spec/definition-of-ready.md R4; matches ai-sdlc-intake.yml's existing floor
+			AcceptanceCriteria: AcceptanceCriteriaBounds{Min: 1, Max: nil},
 		},
 		Verify: Verify{
 			TimeoutSeconds: 900,
@@ -159,4 +175,24 @@ func (c Contract) CriticalRequiresAcceptanceOrDefault() bool {
 		return *c.Review.CriticalRequiresAcceptance
 	}
 	return true
+}
+
+// MaxChangedFilesOrUnbounded returns review.max_changed_files, or 0 when
+// unset. Callers treat 0 as "no ceiling enforced" (schema default: null),
+// never as "zero files allowed".
+func (c Contract) MaxChangedFilesOrUnbounded() int {
+	if c.Review.MaxChangedFiles != nil {
+		return *c.Review.MaxChangedFiles
+	}
+	return 0
+}
+
+// MaxAcceptanceCriteriaOrUnbounded returns triggers.acceptance_criteria.max,
+// or 0 when unset. Callers treat 0 as "no ceiling enforced" (schema
+// default: null), never as "zero criteria allowed".
+func (c Contract) MaxAcceptanceCriteriaOrUnbounded() int {
+	if c.Triggers.AcceptanceCriteria.Max != nil {
+		return *c.Triggers.AcceptanceCriteria.Max
+	}
+	return 0
 }

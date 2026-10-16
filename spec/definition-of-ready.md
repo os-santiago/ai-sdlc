@@ -75,6 +75,14 @@ These rules map 1:1 onto intake validators — e.g. the intake reusable
 workflow (`ai-sdlc-intake.yml`) SHOULD evaluate R1–R6 and apply
 `scc:not-ready` on failure.
 
+R4's floor and the atomicity ceiling now have a schema home
+(`ai-sdlc.schema.json`): `triggers.min_body_length` (default 120, matching
+R4) and `triggers.acceptance_criteria.{min,max}` (`min` default 1, matching
+R3; `max` default null/unbounded — opt-in, since no runtime stage enforces
+a ceiling today). `runtime/k8s` reads both; `ai-sdlc-intake.yml` still
+hardcodes the R3/R4 numbers inline — migrating it to read the contract
+fields is tracked follow-up work (ADR-0004), not yet done.
+
 ## Issue-template mapping
 
 For a repo with a `bug` and `feature` template:

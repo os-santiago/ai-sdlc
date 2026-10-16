@@ -41,9 +41,11 @@ type Issue struct {
 
 // Policy mirrors spec/definition-of-ready.md's machine-checkable rules
 // (R1-R6) plus the atomicity bound (DoR: "1-8 criteria ... >8 probably not
-// atomic"). minimumTitleLength/minimumBodyLength/maximumAcceptanceCriteria
-// have no field in spec/ai-sdlc.schema.json today — a gap this port
-// surfaces rather than invents; see the ADR's "Schema gaps found" section.
+// atomic"). MinimumBodyLength (R4) and MaximumAcceptanceCriteria now have
+// schema fields (triggers.min_body_length, triggers.acceptance_criteria —
+// see ADR-0004 "Schema gaps closed"); MinimumTitleLength still has no
+// schema equivalent since DoR R1 is a title-prefix regex, not a numeric
+// floor, and keeps a local default.
 type Policy struct {
 	Version                    string   `json:"version"`
 	MinimumTitleLength         int      `json:"minimumTitleLength"`
@@ -86,12 +88,17 @@ var elevatedRiskPatterns = compileAll(
 
 // DefaultPolicy returns the standalone (contract-free) policy, used only
 // when no .ai-sdlc.yaml is available (e.g. local unit tests, dry-run CLI).
+// MinimumBodyLength (120) and MaximumAcceptanceCriteria (8) now match the
+// actual spec/definition-of-ready.md R4 floor and atomicity ceiling
+// (future-go's standalone defaults were 30 and 8 respectively; 30 had no
+// basis in this repo's DoR doc, so it is corrected here rather than
+// carried forward).
 func DefaultPolicy() Policy {
 	return Policy{
 		Version:                    "1.0.0",
 		MinimumTitleLength:         8,
-		MinimumBodyLength:          30,
-		MaximumAcceptanceCriteria:  8, // spec/definition-of-ready.md: "1-8 criteria"
+		MinimumBodyLength:          120, // spec/definition-of-ready.md R4
+		MaximumAcceptanceCriteria:  8,   // spec/definition-of-ready.md: "1-8 criteria"
 		RequireAcceptanceCriteria:  true,
 		RequireAuthorizedAdmission: true,
 		RequiredGates:              []string{"tests", "quality", "security", "issue-coverage"},
@@ -99,12 +106,20 @@ func DefaultPolicy() Policy {
 }
 
 // PolicyFromContract derives admission policy from a repo's .ai-sdlc.yaml.
-// Fields with a direct schema equivalent are sourced from the contract;
-// fields with no schema equivalent (title/body length floors, the DoR
-// atomicity bound) keep the DoR-documented defaults.
+// MinimumBodyLength and MaximumAcceptanceCriteria now source from
+// triggers.min_body_length / triggers.acceptance_criteria (schema fields
+// closed in this port — see docs/architecture/adr/0004 "Schema gaps
+// closed"). MaximumAcceptanceCriteria is 0 (unbounded) unless the contract
+// sets an explicit max, so adopting this policy changes no existing repo's
+// admission outcome until it opts into the ceiling.
+// MinimumTitleLength has no schema equivalent (spec/definition-of-ready.md
+// R1 is a regex, not a numeric floor) and keeps the local DoR-adjacent
+// default.
 func PolicyFromContract(c contract.Contract) Policy {
 	policy := DefaultPolicy()
 	policy.Version = c.Spec
+	policy.MinimumBodyLength = c.Triggers.MinBodyLength
+	policy.MaximumAcceptanceCriteria = c.MaxAcceptanceCriteriaOrUnbounded()
 	policy.RequireAuthorizedAdmission = len(c.Triggers.AuthorizedLabelers) > 0
 	if len(c.Verify.RequiredChecks) > 0 {
 		gates := append([]string{}, c.Verify.RequiredChecks...)
@@ -167,7 +182,9 @@ func Evaluate(issue Issue, policy Policy) Result {
 		result.Risk = "high"
 		result.Reasons = append(result.Reasons, "Issue may weaken operational or engineering guardrails.")
 	}
-	if len(issue.AcceptanceCriteria) > policy.MaximumAcceptanceCriteria {
+	// MaximumAcceptanceCriteria == 0 means unbounded (contract: triggers.
+	// acceptance_criteria.max unset) — never treated as "zero allowed".
+	if policy.MaximumAcceptanceCriteria > 0 && len(issue.AcceptanceCriteria) > policy.MaximumAcceptanceCriteria {
 		result.Decision = NeedsDecomposition
 		result.Reasons = append(result.Reasons, "Issue exceeds the configured atomic work limit.")
 	}

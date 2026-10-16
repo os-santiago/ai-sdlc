@@ -26,6 +26,24 @@ func TestDefaultMatchesSchemaDocumentedDefaults(t *testing.T) {
 	if got.Engine.MaxSteps != 400 || got.Engine.MaxSeconds != 1500 {
 		t.Fatalf("engine defaults = %+v", got.Engine)
 	}
+	if got.Triggers.MinBodyLength != 120 {
+		t.Fatalf("triggers.min_body_length default = %d, want 120", got.Triggers.MinBodyLength)
+	}
+	if got.Triggers.AcceptanceCriteria.Min != 1 {
+		t.Fatalf("triggers.acceptance_criteria.min default = %d, want 1", got.Triggers.AcceptanceCriteria.Min)
+	}
+	if got.Triggers.AcceptanceCriteria.Max != nil {
+		t.Fatalf("triggers.acceptance_criteria.max default should be nil (unbounded), got %v", *got.Triggers.AcceptanceCriteria.Max)
+	}
+	if got.MaxAcceptanceCriteriaOrUnbounded() != 0 {
+		t.Fatalf("MaxAcceptanceCriteriaOrUnbounded() = %d, want 0", got.MaxAcceptanceCriteriaOrUnbounded())
+	}
+	if got.Review.MaxChangedFiles != nil {
+		t.Fatalf("review.max_changed_files default should be nil (unbounded), got %v", *got.Review.MaxChangedFiles)
+	}
+	if got.MaxChangedFilesOrUnbounded() != 0 {
+		t.Fatalf("MaxChangedFilesOrUnbounded() = %d, want 0", got.MaxChangedFilesOrUnbounded())
+	}
 }
 
 func TestLoadOverridesDefaultsFromFile(t *testing.T) {
@@ -66,6 +84,42 @@ triggers:
 	}
 	if len(got.Triggers.SkipLabels) != 3 {
 		t.Fatalf("triggers.skip_labels = %v", got.Triggers.SkipLabels)
+	}
+}
+
+func TestLoadOverridesNestedPartialAcceptanceCriteria(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".ai-sdlc.yaml")
+	// Only sets acceptance_criteria.max — min must still come from the
+	// schema default (1), confirming the nested-struct merge behaves like
+	// the flat-field merge (absent keys keep Default()'s value, not zero).
+	contents := []byte(`
+spec: "1.0.0"
+triggers:
+  acceptance_criteria:
+    max: 8
+review:
+  max_changed_files: 5
+`)
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.Triggers.AcceptanceCriteria.Min != 1 {
+		t.Fatalf("acceptance_criteria.min should keep default 1 when only max is set, got %d", got.Triggers.AcceptanceCriteria.Min)
+	}
+	if got.MaxAcceptanceCriteriaOrUnbounded() != 8 {
+		t.Fatalf("MaxAcceptanceCriteriaOrUnbounded() = %d, want 8", got.MaxAcceptanceCriteriaOrUnbounded())
+	}
+	if got.MaxChangedFilesOrUnbounded() != 5 {
+		t.Fatalf("MaxChangedFilesOrUnbounded() = %d, want 5", got.MaxChangedFilesOrUnbounded())
+	}
+	if got.Triggers.MinBodyLength != 120 {
+		t.Fatalf("min_body_length should keep default 120 when unset, got %d", got.Triggers.MinBodyLength)
 	}
 }
 

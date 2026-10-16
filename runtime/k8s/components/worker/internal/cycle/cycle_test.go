@@ -38,6 +38,40 @@ func TestEvaluateContainsOversizedChange(t *testing.T) {
 	}
 }
 
+func TestPolicyFromContractIsUnboundedChangedFilesByDefault(t *testing.T) {
+	policy := PolicyFromContract(contract.Default())
+	if policy.MaximumChangedFiles != 0 {
+		t.Fatalf("expected unbounded (0) changed-files ceiling by default, got %d", policy.MaximumChangedFiles)
+	}
+
+	got, err := Evaluate(Attempt{
+		Number: 1, ChangedFiles: make([]string, 50), ValidationPassed: true,
+	}, policy)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Outcome == Escalated {
+		t.Fatalf("expected no file-count ceiling by default (opt-in), got %#v", got)
+	}
+}
+
+func TestPolicyFromContractEnforcesConfiguredChangedFilesCeiling(t *testing.T) {
+	c := contract.Default()
+	max := 3
+	c.Review.MaxChangedFiles = &max
+	policy := PolicyFromContract(c)
+
+	got, err := Evaluate(Attempt{
+		Number: 1, ChangedFiles: []string{"a", "b", "c", "d"}, ValidationPassed: true,
+	}, policy)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Outcome != Escalated {
+		t.Fatalf("expected escalation once the contract sets a changed-files ceiling, got %#v", got)
+	}
+}
+
 func TestPolicyFromContractUsesMaxFixIterations(t *testing.T) {
 	c := contract.Default()
 	iterations := 2
