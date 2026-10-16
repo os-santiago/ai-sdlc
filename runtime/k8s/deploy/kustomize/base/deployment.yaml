@@ -84,7 +84,7 @@ spec:
               valueFrom:
                 secretKeyRef: {name: ai-sdlc-postgres-app, key: uri}
             - name: AI_SDLC_ENGINE
-              value: stub # set to "scc" once the worker image is Node-capable (ADR-0005; see internal/engine.SCCEngine's doc comment) and ai-sdlc-model-provider exists.
+              value: scc # worker's Containerfile is Node-capable (sc-agent-cli + git). Still degrades to the stub at runtime if MODEL_API_KEY/ai-sdlc-model-provider is missing — see selectSCCEngine in cmd/main.go.
             - name: AI_SDLC_PROVIDER_BASE_URL
               value: https://integrate.api.nvidia.com/v1
             - name: AI_SDLC_MODEL

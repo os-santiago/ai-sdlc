@@ -21,7 +21,7 @@ from a buildable scaffold into an actually-running pipeline.
 |---|---|---|
 | `admission-controller` | Admission | `components/admission-controller/internal/admission` |
 | `orchestrator` | Plan | `components/orchestrator/internal/planning` |
-| `worker` | Bounded edit (engine invocation via `internal/engine` — stub only, see Non-goals) | `components/worker/internal/cycle` |
+| `worker` | Bounded edit (engine invocation via `internal/engine`; `StubEngine` by default, `SCCEngine` when `AI_SDLC_ENGINE=scc` — see `internal/engine/scc.go`) | `components/worker/internal/cycle` |
 | `release-manager` | Publish/review, Release | `components/release-manager/internal/gates` |
 | `relay` | — (infrastructure, not a pipeline stage) | `internal/outbox` |
 
@@ -109,19 +109,14 @@ See [deploy/kustomize/base/README.md](deploy/kustomize/base/README.md) for
 the GitOps promotion model (immutable image digests, no runtime mutation)
 and the security posture (Pod Security `restricted`, default-deny
 `NetworkPolicy`, dropped capabilities, read-only root filesystem,
-distroless non-root images — satisfies OpenShift's default `restricted-v2`
-SCC with no custom SCC object).
+non-root images — satisfies OpenShift's default `restricted-v2` SCC with
+no custom SCC object). `worker` is the one component image that is not
+distroless (it needs a Node runtime for `scc` and a `git` binary for
+`internal/checkout` — see `components/worker/Containerfile`); the other
+four stay distroless/static.
 
 ## Non-goals
 
-- **A real engine subprocess.** `worker` runs the full bounded-edit loop
-  (`internal/engine.Engine` interface, `/v1/attempts/dispatch`) but the
-  only shipped `Engine` is `StubEngine` — deterministic, no subprocess, no
-  network. Shelling out to `sc-agent-cli` with the headless contract
-  (`--prompt-file --audit-log --summary-file --no-commit`, see root
-  README and `.ai-sdlc.yaml`'s `engine` block) is tracked follow-up
-  (ADR-0005 "Explicitly still out of scope") — it needs a target repo,
-  model provider and credentials this environment does not have.
 - **Replacing the GHA-native runtime.** GHA stays the default,
   zero-infrastructure path for any repo that can use it (root README
   "Adopt this runtime"). This directory is an opt-in alternative.

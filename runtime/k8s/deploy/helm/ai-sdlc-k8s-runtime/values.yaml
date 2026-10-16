@@ -50,14 +50,14 @@ postgres:
     key: uri
 
 # Selects components/worker's Engine implementation (internal/engine).
-# "stub" (default) is a no-op. "scc" invokes the real sc-agent-cli
-# subprocess engine (internal/engine.SCCEngine) — requires modelProvider
-# below configured. The worker image must also be Node-capable
-# (currently distroless/static — see internal/engine.SCCEngine's doc
-# comment); worker degrades to the stub at runtime if either that or
-# MODEL_API_KEY is missing — see selectSCCEngine in
-# components/worker/cmd/main.go.
-engine: stub
+# "scc" (default) invokes the real sc-agent-cli subprocess engine
+# (internal/engine.SCCEngine) — worker's image (components/worker/
+# Containerfile) is Node-capable (sc-agent-cli + git) specifically to
+# support this. Still requires modelProvider below configured; worker
+# degrades to "stub" at runtime if MODEL_API_KEY is missing — see
+# selectSCCEngine in components/worker/cmd/main.go. Set to "stub" to
+# force the deterministic no-op engine regardless of modelProvider.
+engine: scc
 
 modelProvider:
   baseURL: https://integrate.api.nvidia.com/v1

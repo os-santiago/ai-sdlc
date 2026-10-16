@@ -50,9 +50,14 @@ no application code is CloudNativePG-specific.
 
 ## Security posture
 
-Every container runs non-root (distroless `nonroot` base image, fixed
-UID 65532), with `allowPrivilegeEscalation: false`,
-`capabilities: {drop: [ALL]}` and `readOnlyRootFilesystem: true`. The
+Every container runs non-root, with `allowPrivilegeEscalation: false`,
+`capabilities: {drop: [ALL]}` and `readOnlyRootFilesystem: true`. Four of
+the five components (`admission-controller`, `orchestrator`,
+`release-manager`, `relay`) use a distroless `nonroot` base image (fixed
+UID 65532). `worker` is the exception: it needs a Node runtime (to run
+`sc-agent-cli`/`scc`) and a `git` binary (`internal/checkout`), so it's
+built on `node:alpine` instead, running as that image's non-root `node`
+user (UID 1000) — see `components/worker/Containerfile`. The
 namespace enforces the Pod Security `restricted` profile. A default-deny
 `NetworkPolicy` only opens DNS, HTTPS, Postgres and the OTel collector
 ports for control-plane pods — `relay`'s traffic to the other four
