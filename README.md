@@ -8,7 +8,7 @@ autonomy driven by a declarative per-repo contract (`.ai-sdlc.yaml`).
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ doctrine — why & how we build (book, patterns, evidence)│
+│ doctrine — why & how we build (book, patterns, evidence).│
 │   Axel-DaMage/adev (methodology) · adev-pattern-bridge  │
 ├─────────────────────────────────────────────────────────┤
 │ THIS REPO — spec + runtime (the missing piece)          │
