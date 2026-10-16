@@ -1,0 +1,39 @@
+# ImageStreams give OpenShift's internal registry a stable logical name for
+# each component image, independent of where the bytes land (in-cluster
+# BuildConfig output, or an external push from CI). Deployments in this
+# overlay reference these via the `images:` transformer in kustomization.yaml.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: admission-controller
+  namespace: ai-sdlc-runtime
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: orchestrator
+  namespace: ai-sdlc-runtime
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: worker
+  namespace: ai-sdlc-runtime
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: release-manager
+  namespace: ai-sdlc-runtime
+spec:
+  lookupPolicy:
+    local: true

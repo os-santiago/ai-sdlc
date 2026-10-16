@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ai-sdlc-runtime
+resources:
+  - ../../base
+patches:
+  - path: environment.yaml
+images:
+  - name: ghcr.io/os-santiago/ai-sdlc-admission-controller
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: ghcr.io/os-santiago/ai-sdlc-orchestrator
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: ghcr.io/os-santiago/ai-sdlc-worker
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: ghcr.io/os-santiago/ai-sdlc-release-manager
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

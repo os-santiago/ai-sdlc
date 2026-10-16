@@ -131,6 +131,10 @@ The bootstrap PR (and the manual path below) wires three things:
   surface (schema, labels, trust ladder, DoR, risk taxonomy).
 - [ADR-0001](docs/architecture/adr/0001-homedir-ai-sdlc-sunset-and-cutover.md) —
   homedir-ai-sdlc sunset and canonical-runtime cutover decision record.
+- [runtime/k8s/README.md](runtime/k8s/README.md) /
+  [ADR-0004](docs/architecture/adr/0004-cloud-native-k8s-openshift-runtime.md) —
+  optional Kubernetes/OpenShift-native control plane for adopters who
+  cannot run GitHub Actions. GHA remains the default below.
 
 ## Status
 

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/os-santiago/ai-sdlc/main/runtime/k8s/contracts/events/v1/release-gate-decided.schema.json",
+  "title": "ReleaseGateDecided.v1",
+  "description": "Emitted by the release-manager component after evaluating merge/release gates (components/release-manager/internal/gates). New in this port; mirrors gates.Result 1:1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventId", "occurredAt", "correlationId", "repository", "pullRequest", "state", "reasons"],
+  "properties": {
+    "eventId": {"type": "string", "format": "uuid"},
+    "occurredAt": {"type": "string", "format": "date-time"},
+    "correlationId": {"type": "string", "minLength": 1},
+    "repository": {"type": "string", "pattern": "^[^/]+/[^/]+$"},
+    "pullRequest": {"type": "integer", "minimum": 1},
+    "state": {"enum": ["waiting", "remediation-required", "approved", "production-verified", "needs-human"]},
+    "reasons": {"type": "array", "items": {"type": "string"}, "minItems": 1}
+  }
+}

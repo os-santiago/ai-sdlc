@@ -1,0 +1,21 @@
+# Route is the OpenShift-native equivalent of a Kubernetes Ingress. Only
+# admission-controller is exposed externally — it is the pipeline's intake
+# boundary (receives the forge webhook / normalized-event payload); the
+# other three components stay cluster-internal, reachable only through the
+# default-deny NetworkPolicy's control-plane pod-to-pod exception
+# (deploy/kustomize/base/network-policy.yaml).
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ai-sdlc-admission
+  namespace: ai-sdlc-runtime
+spec:
+  to:
+    kind: Service
+    name: ai-sdlc-k8s-runtime
+  port:
+    targetPort: admission
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

@@ -1,0 +1,90 @@
+# Docker-strategy BuildConfigs build each component straight from this
+# repo's runtime/k8s/components/<name>/Containerfile — no external CI
+# required to get a running pod on an OpenShift cluster with source access.
+# Trigger a build with: oc start-build <component> -n ai-sdlc-runtime
+#
+# contextDir is runtime/k8s because every Containerfile here expects that
+# directory as its build context (go.mod + internal/ + components/<name>).
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: admission-controller
+  namespace: ai-sdlc-runtime
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://github.com/os-santiago/ai-sdlc.git
+      ref: main
+    contextDir: runtime/k8s
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: components/admission-controller/Containerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: admission-controller:latest
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: orchestrator
+  namespace: ai-sdlc-runtime
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://github.com/os-santiago/ai-sdlc.git
+      ref: main
+    contextDir: runtime/k8s
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: components/orchestrator/Containerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: orchestrator:latest
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: worker
+  namespace: ai-sdlc-runtime
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://github.com/os-santiago/ai-sdlc.git
+      ref: main
+    contextDir: runtime/k8s
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: components/worker/Containerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: worker:latest
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: release-manager
+  namespace: ai-sdlc-runtime
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://github.com/os-santiago/ai-sdlc.git
+      ref: main
+    contextDir: runtime/k8s
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: components/release-manager/Containerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: release-manager:latest

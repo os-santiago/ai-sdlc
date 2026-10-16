@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-sdlc-k8s-runtime-config
+  namespace: ai-sdlc-runtime
+data:
+  AI_SDLC_ENVIRONMENT: base
+  AI_SDLC_LOG_LEVEL: info
+  # Path to the target repo's .ai-sdlc.yaml, mounted read-only from the
+  # ConfigMap/Secret an adopting repo's bootstrap PR creates alongside this
+  # chart (see runtime/k8s/README.md). Components fall back to
+  # spec/ai-sdlc.schema.json documented defaults when unset or unreadable.
+  AI_SDLC_CONTRACT_PATH: /etc/ai-sdlc/contract/.ai-sdlc.yaml

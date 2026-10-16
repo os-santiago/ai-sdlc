@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "ai-sdlc-k8s-runtime.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: admission-controller
+          image: "{{ .Values.image.registry }}/{{ .Values.components.admissionController.image }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
+          env:
+            - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ .Values.components.admissionController.port }}"}
+          ports:
+            - {name: admission, containerPort: {{ .Values.components.admissionController.port }}}
+          readinessProbe:
+            httpGet: {path: /readyz, port: admission}
+          livenessProbe:
+            httpGet: {path: /healthz, port: admission}
+          resources:
+            {{- toYaml .Values.components.admissionController.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: contract, mountPath: /etc/ai-sdlc/contract, readOnly: true}
+        - name: orchestrator
+          image: "{{ .Values.image.registry }}/{{ .Values.components.orchestrator.image }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
+          env:
+            - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ .Values.components.orchestrator.port }}"}
+          ports:
+            - {name: orchestrator, containerPort: {{ .Values.components.orchestrator.port }}}
+          readinessProbe:
+            httpGet: {path: /readyz, port: orchestrator}
+          livenessProbe:
+            httpGet: {path: /healthz, port: orchestrator}
+          resources:
+            {{- toYaml .Values.components.orchestrator.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+        - name: worker
+          image: "{{ .Values.image.registry }}/{{ .Values.components.worker.image }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
+          env:
+            - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ .Values.components.worker.port }}"}
+          ports:
+            - {name: worker, containerPort: {{ .Values.components.worker.port }}}
+          readinessProbe:
+            httpGet: {path: /readyz, port: worker}
+          livenessProbe:
+            httpGet: {path: /healthz, port: worker}
+          resources:
+            {{- toYaml .Values.components.worker.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: workspaces, mountPath: /workspaces}
+            - {name: contract, mountPath: /etc/ai-sdlc/contract, readOnly: true}
+        - name: release-manager
+          image: "{{ .Values.image.registry }}/{{ .Values.components.releaseManager.image }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
+          env:
+            - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ .Values.components.releaseManager.port }}"}
+          ports:
+            - {name: release, containerPort: {{ .Values.components.releaseManager.port }}}
+          readinessProbe:
+            httpGet: {path: /readyz, port: release}
+          livenessProbe:
+            httpGet: {path: /healthz, port: release}
+          resources:
+            {{- toYaml .Values.components.releaseManager.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: contract, mountPath: /etc/ai-sdlc/contract, readOnly: true}
+      volumes:
+        - name: workspaces
+          emptyDir:
+            sizeLimit: {{ .Values.components.worker.workspaceSizeLimit }}
+        - name: contract
+          configMap:
+            name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-contract

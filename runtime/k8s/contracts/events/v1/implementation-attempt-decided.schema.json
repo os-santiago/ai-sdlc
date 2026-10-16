@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/os-santiago/ai-sdlc/main/runtime/k8s/contracts/events/v1/implementation-attempt-decided.schema.json",
+  "title": "ImplementationAttemptDecided.v1",
+  "description": "Emitted by the worker component after evaluating one bounded implementation attempt (components/worker/internal/cycle). New in this port; mirrors cycle.Decision 1:1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventId", "occurredAt", "correlationId", "workItemId", "attemptNumber", "outcome", "reason"],
+  "properties": {
+    "eventId": {"type": "string", "format": "uuid"},
+    "occurredAt": {"type": "string", "format": "date-time"},
+    "correlationId": {"type": "string", "minLength": 1},
+    "workItemId": {"type": "string", "format": "uuid"},
+    "attemptNumber": {"type": "integer", "minimum": 1},
+    "outcome": {"enum": ["continue", "completed", "failed", "needs-human"]},
+    "reason": {"type": "string", "minLength": 1},
+    "reprompt": {"type": "boolean"}
+  }
+}

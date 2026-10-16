@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-sdlc-k8s-runtime-config
+  namespace: ai-sdlc-runtime
+data:
+  AI_SDLC_ENVIRONMENT: openshift
+  AI_SDLC_LOG_LEVEL: info
+  AI_SDLC_CONTRACT_PATH: /etc/ai-sdlc/contract/.ai-sdlc.yaml

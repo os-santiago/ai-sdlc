@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: ai-sdlc-runtime
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-control-plane-egress
+  namespace: ai-sdlc-runtime
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ai-sdlc-k8s-runtime
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - ports:
+        - {protocol: TCP, port: 443}   # GitHub API / App token minting / model provider
+        - {protocol: TCP, port: 4222}  # event bus (NATS), if deployed
+        - {protocol: TCP, port: 5432}  # durable state store, if deployed
+        - {protocol: TCP, port: 4317}  # OpenTelemetry collector
