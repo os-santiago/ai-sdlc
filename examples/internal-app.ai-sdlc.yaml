@@ -78,6 +78,14 @@ engine:
     - --summary-file
     - --prompt-file
 
+# Per-stage engine selection (issue #205): stage → certified adapter id.
+# Any stage omitted here falls back to engine.name (scc). Both the bare-id
+# shorthand and the stage-definition object form are accepted.
+engines:
+  implement: scc
+  review:
+    engine: scc
+
 escalation:
   label: needs-human
   contacts:
