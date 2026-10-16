@@ -365,37 +365,63 @@ jobs:
           head -c "$DIFF_MAX_BYTES" "$WORK/diff-full.patch" > "$WORK/diff.patch"
           rm -f "$WORK/diff-full.patch"
           wc -l "$WORK/numstat.txt"; wc -c "$WORK/diff.patch"
-          node - <<'NODE'
-          const fs = require('fs');
-          const W = process.env.WORK;
-          const rows = fs.readFileSync(`${W}/numstat.txt`, 'utf8').split('\n').filter(Boolean)
-            .map(l => { const [a, d, ...p] = l.split('\t'); return { add: +a || 0, del: +d || 0, path: p.join('\t') }; });
-          const out = (k, v) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${k}=${v}\n`);
-          // Ordered top-down — ambiguity resolves UP (spec/risk-taxonomy.md).
-          const CRIT = [/^\.github\/workflows\//, /^actionlint$/, /^tools\/validate-/i, /^spec\//,
-            /(^|\/)\.env(\.|$)/i, /\.(pem|key|p12|pfx|jks)$/i, /id_rsa|credentials|secrets?\//i,
-            /auth|login|session|oauth|token/i, /(^|\/)migrations?\//i, /(^|\/)deploy|terraform|\.tf$/i,
-            /payment|billing|invoice|payout/i, /destroy|purge|wipe|drop[-_]?table/i];
-          const HIGH = [/^\.github\//,
-            /(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.lock|go\.sum|requirements.*\.txt|pyproject\.toml|Gemfile(\.lock)?)$/i,
-            /security|permission|rbac|policy|firewall|cors/i, /Dockerfile|docker-compose/i];
-          const TEXT = /\.(md|markdown|rst|txt|adoc)$/i;
-          const TEST = /(^|\/)(tests?|__tests__|fixtures?)\/|\.(test|spec)\.[a-z]+$/i;
-          const CONF = /\.(ya?ml|json|toml|ini|cfg|conf|xml)$/i;
-          const files = rows.map(r => r.path);
-          const lines = rows.reduce((s, r) => s + r.add + r.del, 0);
-          const dirs = new Set(files.map(f => f.split('/')[0] || '.'));
-          let tier, why;
-          if (files.some(f => CRIT.some(rx => rx.test(f)))) { tier = 'critical'; why = 'policy/secret/supply-chain/deploy surface touched'; }
-          else if (files.some(f => HIGH.some(rx => rx.test(f))) || lines > 800 || dirs.size >= 3) { tier = 'high'; why = 'security-adjacent/dependency surface, >800 diff lines, or multi-subsystem'; }
-          else if (files.every(f => TEXT.test(f) || TEST.test(f))) { tier = 'low'; why = 'docs/tests only'; }
-          else if (files.every(f => TEXT.test(f) || TEST.test(f) || CONF.test(f)) && lines <= 300) { tier = 'low'; why = 'config-text additive under 300 lines'; }
-          else { tier = 'medium'; why = 'behavioral change'; }
-          fs.writeFileSync(`${W}/files.json`, JSON.stringify({ files, lines, dirs: [...dirs] }, null, 2));
-          console.log(`risk tier: pr:risk-${tier} (${why}) — ${files.length} files, ${lines} lines, ${dirs.size} top-level dirs`);
-          out('risk_tier', tier); out('risk_why', why);
-          out('diff_files', files.length); out('diff_lines', lines);
+          # Canonical classifier (issue #204): scripts/risk-classifier.js in
+          # os-santiago/ai-sdlc, fetched from the trusted runtime pin — never
+          # from the PR head (a change must not weaken the heuristic feeding
+          # its own merge gate). The inline block below is the bootstrap
+          # fallback for refs that predate the script.
+          if gh api "repos/os-santiago/ai-sdlc/contents/scripts/risk-classifier.js?ref=main" \
+              -H "Accept: application/vnd.github.raw" > "$WORK/risk-classifier.js" 2>/dev/null \
+              && node --check "$WORK/risk-classifier.js" 2>/dev/null; then
+            node "$WORK/risk-classifier.js" \
+              --numstat "$WORK/numstat.txt" --diff "$WORK/diff.patch" --json \
+              > "$WORK/risk.json"
+            node - <<'NODE'
+            const fs = require('fs');
+            const W = process.env.WORK;
+            const r = JSON.parse(fs.readFileSync(`${W}/risk.json`, 'utf8'));
+            const out = (k, v) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${k}=${v}\n`);
+            fs.writeFileSync(`${W}/files.json`, JSON.stringify({ files: r.paths, lines: r.lines, dirs: r.dirs }, null, 2));
+            console.log(`risk tier: ${r.label} (${r.why}) — ${r.files} files, ${r.lines} lines, ${r.dirs.length} top-level dirs`);
+            out('risk_tier', r.tier); out('risk_why', r.why);
+            out('diff_files', r.files); out('diff_lines', r.lines);
           NODE
+          else
+            # Drop a partial/corrupt fetch so later steps (label apply)
+            # never execute it.
+            rm -f "$WORK/risk-classifier.js"
+            node - <<'NODE'
+            const fs = require('fs');
+            const W = process.env.WORK;
+            const rows = fs.readFileSync(`${W}/numstat.txt`, 'utf8').split('\n').filter(Boolean)
+              .map(l => { const [a, d, ...p] = l.split('\t'); return { add: +a || 0, del: +d || 0, path: p.join('\t') }; });
+            const out = (k, v) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${k}=${v}\n`);
+            // Ordered top-down — ambiguity resolves UP (spec/risk-taxonomy.md).
+            const CRIT = [/^\.github\/workflows\//, /^actionlint$/, /^tools\/validate-/i, /^spec\//,
+              /(^|\/)\.env(\.|$)/i, /\.(pem|key|p12|pfx|jks)$/i, /id_rsa|credentials|secrets?\//i,
+              /auth|login|session|oauth|token/i, /(^|\/)migrations?\//i, /(^|\/)deploy|terraform|\.tf$/i,
+              /payment|billing|invoice|payout/i, /destroy|purge|wipe|drop[-_]?table/i];
+            const HIGH = [/^\.github\//,
+              /(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.lock|go\.sum|requirements.*\.txt|pyproject\.toml|Gemfile(\.lock)?)$/i,
+              /security|permission|rbac|policy|firewall|cors/i, /Dockerfile|docker-compose/i];
+            const TEXT = /\.(md|markdown|rst|txt|adoc)$/i;
+            const TEST = /(^|\/)(tests?|__tests__|fixtures?)\/|\.(test|spec)\.[a-z]+$/i;
+            const CONF = /\.(ya?ml|json|toml|ini|cfg|conf|xml)$/i;
+            const files = rows.map(r => r.path);
+            const lines = rows.reduce((s, r) => s + r.add + r.del, 0);
+            const dirs = new Set(files.map(f => f.split('/')[0] || '.'));
+            let tier, why;
+            if (files.some(f => CRIT.some(rx => rx.test(f)))) { tier = 'critical'; why = 'policy/secret/supply-chain/deploy surface touched'; }
+            else if (files.some(f => HIGH.some(rx => rx.test(f))) || lines > 800 || dirs.size >= 3) { tier = 'high'; why = 'security-adjacent/dependency surface, >800 diff lines, or multi-subsystem'; }
+            else if (files.every(f => TEXT.test(f) || TEST.test(f))) { tier = 'low'; why = 'docs/tests only'; }
+            else if (files.every(f => TEXT.test(f) || TEST.test(f) || CONF.test(f)) && lines <= 300) { tier = 'low'; why = 'config-text additive under 300 lines'; }
+            else { tier = 'medium'; why = 'behavioral change'; }
+            fs.writeFileSync(`${W}/files.json`, JSON.stringify({ files, lines, dirs: [...dirs] }, null, 2));
+            console.log(`risk tier: pr:risk-${tier} (${why}) — ${files.length} files, ${lines} lines, ${dirs.size} top-level dirs`);
+            out('risk_tier', tier); out('risk_why', why);
+            out('diff_files', files.length); out('diff_lines', lines);
+          NODE
+          fi
 
       - name: Build review prompt (untrusted-fenced diff)
         if: steps.guard.outputs.decision == 'review'
@@ -575,14 +601,22 @@ jobs:
           TIER: ${{ steps.diff.outputs.risk_tier }}
         run: |
           set -euo pipefail
-          for t in low medium high critical; do
-            gh label create "pr:risk-$t" -R "$REPO" --color D4C5F9 \
-              --description "AI-SDLC risk tier: $t (spec/risk-taxonomy.md)" >/dev/null 2>&1 || true
-            # Drop stale tiers — recomputed on every reviewed head.
-            [ "$t" = "$TIER" ] || gh pr edit "$PR" -R "$REPO" --remove-label "pr:risk-$t" >/dev/null 2>&1 || true
-          done
-          gh label create "pr:risk-$TIER" -R "$REPO" --color FBCA04 --description "AI-SDLC: PR risk tier" --force || true
-          gh pr edit "$PR" -R "$REPO" --add-label "pr:risk-$TIER"
+          if [ -f "$WORK/risk-classifier.js" ]; then
+            # Canonical labeler (issue #204): one bounded edit — adds the
+            # winner, removes stale sibling tiers, never touches
+            # pr:risk-accepted.
+            node "$WORK/risk-classifier.js" \
+              --repo "$REPO" --pr "$PR" --tier "$TIER" --apply --json
+          else
+            for t in low medium high critical; do
+              gh label create "pr:risk-$t" -R "$REPO" --color D4C5F9 \
+                --description "AI-SDLC risk tier: $t (spec/risk-taxonomy.md)" >/dev/null 2>&1 || true
+              # Drop stale tiers — recomputed on every reviewed head.
+              [ "$t" = "$TIER" ] || gh pr edit "$PR" -R "$REPO" --remove-label "pr:risk-$t" >/dev/null 2>&1 || true
+            done
+            gh label create "pr:risk-$TIER" -R "$REPO" --color FBCA04 --description "AI-SDLC: PR risk tier" --force || true
+            gh pr edit "$PR" -R "$REPO" --add-label "pr:risk-$TIER"
+          fi
 
       - name: Post verdict on PR (review thread + canonical marker comment)
         if: steps.guard.outputs.decision == 'review'
