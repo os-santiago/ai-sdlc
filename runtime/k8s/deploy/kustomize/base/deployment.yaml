@@ -84,7 +84,22 @@ spec:
               valueFrom:
                 secretKeyRef: {name: ai-sdlc-postgres-app, key: uri}
             - name: AI_SDLC_ENGINE
-              value: stub # "scc" is reserved for the real sc-agent-cli subprocess engine (ADR-0005) — not implemented yet.
+              value: stub # set to "scc" once AI_SDLC_WORKSPACE_DIR is populated by a checkout step (ADR-0005 prerequisite #2) and ai-sdlc-model-provider exists.
+            - name: AI_SDLC_PROVIDER_BASE_URL
+              value: https://integrate.api.nvidia.com/v1
+            - name: AI_SDLC_MODEL
+              value: nvidia/nemotron-3-ultra-550b-a55b
+            - name: AI_SDLC_WORKSPACE_DIR
+              value: /workspaces/target-repo
+            - name: MODEL_API_KEY
+              valueFrom:
+                # Create out-of-band, never in a committed manifest:
+                #   kubectl create secret generic ai-sdlc-model-provider \
+                #     --namespace ai-sdlc-runtime --from-literal=apiKey=<key>
+                # optional: true keeps the pod starting (degrades to the
+                # stub engine, see selectSCCEngine in cmd/main.go) when the
+                # secret hasn't been created yet.
+                secretKeyRef: {name: ai-sdlc-model-provider, key: apiKey, optional: true}
           ports:
             - name: worker
               containerPort: 8083

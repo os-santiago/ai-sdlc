@@ -81,6 +81,12 @@ spec:
               valueFrom:
                 secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" . }}, key: {{ include "ai-sdlc-k8s-runtime.databaseSecretKey" . }}}
             - {name: AI_SDLC_ENGINE, value: {{ .Values.engine | quote }}}
+            - {name: AI_SDLC_PROVIDER_BASE_URL, value: {{ .Values.modelProvider.baseURL | quote }}}
+            - {name: AI_SDLC_MODEL, value: {{ .Values.modelProvider.model | quote }}}
+            - {name: AI_SDLC_WORKSPACE_DIR, value: {{ .Values.modelProvider.workspaceDir | quote }}}
+            - name: MODEL_API_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.modelProvider.apiKeySecret.name }}, key: {{ .Values.modelProvider.apiKeySecret.key }}, optional: true}
           ports:
             - {name: worker, containerPort: {{ .Values.components.worker.port }}}
           readinessProbe:

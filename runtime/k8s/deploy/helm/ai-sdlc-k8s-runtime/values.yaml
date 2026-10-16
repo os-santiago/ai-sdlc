@@ -49,11 +49,27 @@ postgres:
     name: ai-sdlc-postgres-app
     key: uri
 
-# Selects components/worker's Engine implementation. "stub" (default) is
-# the only one implemented — see internal/engine and ADR-0005 "Explicitly
-# still out of scope". "scc" is reserved for the real sc-agent-cli
-# subprocess engine.
+# Selects components/worker's Engine implementation (internal/engine).
+# "stub" (default) is a no-op. "scc" invokes the real sc-agent-cli
+# subprocess engine (internal/engine.SCCEngine) — requires modelProvider
+# below configured and AI_SDLC_WORKSPACE_DIR populated by a repo-checkout
+# step (ADR-0005 prerequisite #2, not implemented by this chart). Worker
+# degrades to the stub at runtime if either is missing — see
+# selectSCCEngine in components/worker/cmd/main.go.
 engine: stub
+
+modelProvider:
+  baseURL: https://integrate.api.nvidia.com/v1
+  model: nvidia/nemotron-3-ultra-550b-a55b
+  workspaceDir: /workspaces/target-repo
+  # The API key itself is NEVER set here. Create the Secret out-of-band:
+  #   kubectl create secret generic ai-sdlc-model-provider \
+  #     --namespace <release-namespace> --from-literal=apiKey=<key>
+  # or point apiKeySecret at an existing Secret (e.g. one managed by
+  # External Secrets / Sealed Secrets).
+  apiKeySecret:
+    name: ai-sdlc-model-provider
+    key: apiKey
 
 components:
   admissionController:
