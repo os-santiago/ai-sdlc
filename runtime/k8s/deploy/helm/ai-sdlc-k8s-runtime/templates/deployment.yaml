@@ -87,6 +87,12 @@ spec:
             - name: MODEL_API_KEY
               valueFrom:
                 secretKeyRef: {name: {{ .Values.modelProvider.apiKeySecret.name }}, key: {{ .Values.modelProvider.apiKeySecret.key }}, optional: true}
+            - name: AI_SDLC_GH_APP_ID
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.githubApp.secret.name }}, key: {{ .Values.githubApp.secret.appIdKey }}, optional: true}
+            - name: AI_SDLC_GH_APP_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.githubApp.secret.name }}, key: {{ .Values.githubApp.secret.privateKeyKey }}, optional: true}
           ports:
             - {name: worker, containerPort: {{ .Values.components.worker.port }}}
           readinessProbe:

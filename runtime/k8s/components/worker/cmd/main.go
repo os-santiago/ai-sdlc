@@ -7,8 +7,10 @@ import (
 	"os"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/components/worker/internal/cycle"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/checkout"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/contract"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/engine"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/githubapp"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
@@ -63,13 +65,15 @@ func selectEngine() engine.Engine {
 //     Source this from a Kubernetes Secret created out-of-band
 //     (`kubectl create secret` or an External Secret), never a committed
 //     manifest — see deploy/kustomize/base/README.md.
-//   - AI_SDLC_WORKSPACE_DIR: must already be a checkout of the target
-//     repo at the work item's BaseRef. Nothing in this runtime clones a
-//     repo yet (see internal/engine.SCCEngine's doc comment, prerequisite
-//     #2) — set this once that step exists.
+//   - AI_SDLC_WORKSPACE_DIR: the directory SCCEngine runs in. If
+//     AI_SDLC_GH_APP_ID/AI_SDLC_GH_APP_PRIVATE_KEY are also set,
+//     selectCheckout wires a Checker that makes this a clean checkout of
+//     the work item's repository/BaseRef before every attempt; otherwise
+//     it must already be a checkout, managed externally.
 //
-// Missing either means AI_SDLC_ENGINE=scc degrades to StubEngine, logged
-// once at startup so the gap is visible without crash-looping the pod.
+// Missing either MODEL_API_KEY or AI_SDLC_WORKSPACE_DIR means
+// AI_SDLC_ENGINE=scc degrades to StubEngine, logged once at startup so
+// the gap is visible without crash-looping the pod.
 func selectSCCEngine() engine.Engine {
 	apiKey := os.Getenv("MODEL_API_KEY")
 	workDir := os.Getenv("AI_SDLC_WORKSPACE_DIR")
@@ -82,11 +86,43 @@ func selectSCCEngine() engine.Engine {
 	return engine.SCCEngine{
 		Binary:          valueOrDefault("SCC_BINARY", "scc"),
 		WorkDir:         workDir,
+		Checkout:        selectCheckout(),
 		ProviderBaseURL: valueOrDefault("AI_SDLC_PROVIDER_BASE_URL", "https://integrate.api.nvidia.com/v1"),
 		APIKey:          apiKey,
 		Model:           valueOrDefault("AI_SDLC_MODEL", "nvidia/nemotron-3-ultra-550b-a55b"),
 		MaxSteps:        c.Engine.MaxSteps,
 		MaxSeconds:      c.Engine.MaxSeconds,
+	}
+}
+
+// selectCheckout builds the engine.Checker SCCEngine uses to make
+// WorkDir a clean checkout before every attempt. It requires
+// AI_SDLC_GH_APP_ID and AI_SDLC_GH_APP_PRIVATE_KEY (a PEM-encoded RSA
+// private key, sourced from a Kubernetes Secret created out-of-band —
+// never a committed manifest, same posture as MODEL_API_KEY). This is
+// deliberately the only auth model wired in: a GitHub App installation
+// token, matching .github/workflows/ai-sdlc-implement.yml's fail-closed
+// stance (no PAT, no GITHUB_TOKEN fallback — CLAUDE.md "Critical
+// Lessons"). Returns nil when either is unset, in which case WorkDir
+// must already be a checkout, managed externally — SCCEngine runs
+// unchanged in that case (see engine.Checker's doc comment).
+func selectCheckout() engine.Checker {
+	appID := os.Getenv("AI_SDLC_GH_APP_ID")
+	privateKey := os.Getenv("AI_SDLC_GH_APP_PRIVATE_KEY")
+	if appID == "" || privateKey == "" {
+		log.Printf("worker: AI_SDLC_GH_APP_ID/AI_SDLC_GH_APP_PRIVATE_KEY not set; SCCEngine will not check out the target repo itself (have: AI_SDLC_GH_APP_ID=%v, AI_SDLC_GH_APP_PRIVATE_KEY=%v); AI_SDLC_WORKSPACE_DIR must already be a checkout, managed externally",
+			appID != "", privateKey != "")
+		return nil
+	}
+	app := githubapp.App{AppID: appID, PrivateKey: []byte(privateKey)}
+	return checkout.GitCheckout{
+		Tokens: func(ctx context.Context, repository string) (string, error) {
+			token, err := app.InstallationToken(ctx, repository)
+			if err != nil {
+				return "", err
+			}
+			return token.Value, nil
+		},
 	}
 }
 

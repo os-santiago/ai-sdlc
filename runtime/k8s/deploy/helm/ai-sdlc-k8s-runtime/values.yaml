@@ -52,10 +52,11 @@ postgres:
 # Selects components/worker's Engine implementation (internal/engine).
 # "stub" (default) is a no-op. "scc" invokes the real sc-agent-cli
 # subprocess engine (internal/engine.SCCEngine) — requires modelProvider
-# below configured and AI_SDLC_WORKSPACE_DIR populated by a repo-checkout
-# step (ADR-0005 prerequisite #2, not implemented by this chart). Worker
-# degrades to the stub at runtime if either is missing — see
-# selectSCCEngine in components/worker/cmd/main.go.
+# below configured. The worker image must also be Node-capable
+# (currently distroless/static — see internal/engine.SCCEngine's doc
+# comment); worker degrades to the stub at runtime if either that or
+# MODEL_API_KEY is missing — see selectSCCEngine in
+# components/worker/cmd/main.go.
 engine: stub
 
 modelProvider:
@@ -70,6 +71,25 @@ modelProvider:
   apiKeySecret:
     name: ai-sdlc-model-provider
     key: apiKey
+
+# githubApp configures the Checker (internal/checkout.GitCheckout, via
+# internal/githubapp) that makes workspaceDir above a clean checkout of
+# the work item's repository/BaseRef before every attempt. This is the
+# only auth model wired in — a GitHub App installation token, matching
+# .github/workflows/ai-sdlc-implement.yml's fail-closed stance (no PAT,
+# no GITHUB_TOKEN fallback). Neither the App ID nor the private key is
+# ever set here. Create the Secret out-of-band:
+#   kubectl create secret generic ai-sdlc-github-app \
+#     --namespace <release-namespace> \
+#     --from-literal=appId=<app-id> --from-file=privateKey=<path-to-pem>
+# If this Secret does not exist, selectCheckout (cmd/main.go) returns
+# nil and workspaceDir must already be a checkout, managed externally —
+# SCCEngine still runs.
+githubApp:
+  secret:
+    name: ai-sdlc-github-app
+    appIdKey: appId
+    privateKeyKey: privateKey
 
 components:
   admissionController:

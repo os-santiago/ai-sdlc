@@ -84,7 +84,7 @@ spec:
               valueFrom:
                 secretKeyRef: {name: ai-sdlc-postgres-app, key: uri}
             - name: AI_SDLC_ENGINE
-              value: stub # set to "scc" once AI_SDLC_WORKSPACE_DIR is populated by a checkout step (ADR-0005 prerequisite #2) and ai-sdlc-model-provider exists.
+              value: stub # set to "scc" once the worker image is Node-capable (ADR-0005; see internal/engine.SCCEngine's doc comment) and ai-sdlc-model-provider exists.
             - name: AI_SDLC_PROVIDER_BASE_URL
               value: https://integrate.api.nvidia.com/v1
             - name: AI_SDLC_MODEL
@@ -100,6 +100,23 @@ spec:
                 # stub engine, see selectSCCEngine in cmd/main.go) when the
                 # secret hasn't been created yet.
                 secretKeyRef: {name: ai-sdlc-model-provider, key: apiKey, optional: true}
+            - name: AI_SDLC_GH_APP_ID
+              valueFrom:
+                # Non-secret: a GitHub App ID is public-ish metadata, but
+                # it is still sourced from the same Secret as the private
+                # key so both are created/rotated together.
+                secretKeyRef: {name: ai-sdlc-github-app, key: appId, optional: true}
+            - name: AI_SDLC_GH_APP_PRIVATE_KEY
+              valueFrom:
+                # Create out-of-band, never in a committed manifest:
+                #   kubectl create secret generic ai-sdlc-github-app \
+                #     --namespace ai-sdlc-runtime \
+                #     --from-literal=appId=<app-id> \
+                #     --from-file=privateKey=<path-to-pem>
+                # optional: true: without this, selectCheckout (cmd/main.go)
+                # returns nil and AI_SDLC_WORKSPACE_DIR must already be a
+                # checkout, managed externally — SCCEngine still runs.
+                secretKeyRef: {name: ai-sdlc-github-app, key: privateKey, optional: true}
           ports:
             - name: worker
               containerPort: 8083

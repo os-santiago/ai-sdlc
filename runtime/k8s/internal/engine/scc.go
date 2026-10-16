@@ -77,6 +77,20 @@ type manifest struct {
 	Error        string   `json:"error"`
 }
 
+// Checker ensures WorkDir is a clean checkout of a repository at a ref
+// immediately before each invocation — internal/checkout.GitCheckout is
+// the implementation this runtime wires in (components/worker/cmd/main.go),
+// backed by a GitHub App installation token
+// (internal/githubapp.App.InstallationToken), the same auth model
+// .github/workflows/ai-sdlc-implement.yml uses and the only one this
+// project ships (fail-closed: no PAT, no GITHUB_TOKEN fallback). nil
+// means the operator already guarantees WorkDir is a checkout by some
+// other means — SCCEngine runs scc there unchanged, exactly as before
+// this field existed.
+type Checker interface {
+	EnsureClean(ctx context.Context, repository, ref, dir string) error
+}
+
 // SCCEngine shells out to sc-agent-cli (`scc`) with the headless contract
 // (docs/engine_contract.md) — the same invocation
 // .github/workflows/ai-sdlc-implement.yml's "Run scc headless" step uses:
@@ -86,31 +100,20 @@ type manifest struct {
 //	  --max-seconds <n> --max-steps <n>
 //
 // configured solely via a rendered config.json (never CLI flags for
-// model/apiKey — see SCCConfig).
-//
-// Two prerequisites this wrapper deliberately does NOT handle, and which
-// must land before AI_SDLC_ENGINE=scc does anything useful in a real
-// cluster:
-//
-//  1. `scc` (sc-agent-cli, an npm package) must be present in the worker
-//     container image. ADR-0004's image is distroless/static — no Node.js,
-//     no shell. See components/worker/Containerfile's second stage for the
-//     node-based image this requires, and the explicit security-posture
-//     tradeoff noted there.
-//  2. WorkDir must already be a checkout of the target repo at BaseRef.
-//     Nothing in this runtime clones a repo yet — the GHA runtime's
-//     equivalent step is `actions/checkout` plus a minted GitHub App
-//     installation token (ai-sdlc-implement.yml). That auth model (App vs.
-//     PAT vs. a mounted deploy key) is a decision for whoever operates
-//     this control plane, not something to default silently — tracked as
-//     explicit follow-up, not built here.
-//
-// Until both exist, components/worker/cmd/main.go keeps defaulting to
-// StubEngine even when AI_SDLC_ENGINE=scc is set.
+// model/apiKey — see SCCConfig). Checkout handles the repo-checkout
+// prerequisite (see Checker's doc comment); the other prerequisite this
+// wrapper still does not handle: `scc` (an npm package) must be present
+// in the worker container image, which is currently distroless/static —
+// no Node.js, no shell. See components/worker/Containerfile's second
+// stage for the node-based image this requires, and the explicit
+// security-posture tradeoff noted there. Until that lands,
+// components/worker/cmd/main.go keeps defaulting to StubEngine even when
+// AI_SDLC_ENGINE=scc is set.
 type SCCEngine struct {
-	Binary          string // default "scc"
-	WorkDir         string // target repo checkout; required
-	ConfigPath      string // default $HOME/.sc-agent/config.json
+	Binary          string  // default "scc"
+	WorkDir         string  // target repo checkout; required
+	Checkout        Checker // nil = WorkDir is managed externally
+	ConfigPath      string  // default $HOME/.sc-agent/config.json
 	ProviderBaseURL string
 	APIKey          string
 	Model           string
@@ -143,6 +146,11 @@ func (e SCCEngine) configPath() (string, error) {
 func (e SCCEngine) Invoke(ctx context.Context, request Request) (Result, error) {
 	if e.WorkDir == "" {
 		return Result{}, errors.New("scc engine: WorkDir is required (must be a checkout of the target repo)")
+	}
+	if e.Checkout != nil {
+		if err := e.Checkout.EnsureClean(ctx, request.Repository, request.BaseRef, e.WorkDir); err != nil {
+			return Result{}, fmt.Errorf("scc engine: checkout %s@%s: %w", request.Repository, request.BaseRef, err)
+		}
 	}
 
 	configPath, err := e.configPath()

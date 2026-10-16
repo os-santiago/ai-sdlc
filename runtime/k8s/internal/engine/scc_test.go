@@ -3,11 +3,14 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
 )
+
+var errCheckoutFixture = errors.New("checkout fixture failure")
 
 func TestSCCConfigRenderMatchesEngineContract(t *testing.T) {
 	raw, err := (SCCConfig{ProviderBaseURL: "https://example.com", APIKey: "secret-key", Model: "test-model"}).render()
@@ -176,6 +179,62 @@ func TestInvokeRequiresWorkDir(t *testing.T) {
 	_, err := SCCEngine{}.Invoke(context.Background(), Request{})
 	if err == nil {
 		t.Fatal("Invoke() with no WorkDir, want error")
+	}
+}
+
+// fakeChecker is a test double for Checker.
+type fakeChecker struct {
+	err                                    error
+	calledRepository, calledRef, calledDir string
+	calls                                  int
+}
+
+func (f *fakeChecker) EnsureClean(_ context.Context, repository, ref, dir string) error {
+	f.calls++
+	f.calledRepository, f.calledRef, f.calledDir = repository, ref, dir
+	return f.err
+}
+
+func TestInvokeCallsCheckoutWithRequestFields(t *testing.T) {
+	dir := t.TempDir()
+	checker := &fakeChecker{}
+	eng := SCCEngine{Binary: "scc-binary-that-does-not-exist", WorkDir: dir, Checkout: checker}
+	// The scc binary itself does not exist, so Invoke fails after the
+	// checkout step — this test only cares that EnsureClean was called
+	// first, with exactly the request's repository/ref and the engine's
+	// WorkDir.
+	_, _ = eng.Invoke(context.Background(), Request{Repository: "os-santiago/homedir", BaseRef: "main"})
+	if checker.calls != 1 {
+		t.Fatalf("EnsureClean called %d times, want 1", checker.calls)
+	}
+	if checker.calledRepository != "os-santiago/homedir" || checker.calledRef != "main" || checker.calledDir != dir {
+		t.Fatalf("EnsureClean called with (%q, %q, %q), want (%q, %q, %q)",
+			checker.calledRepository, checker.calledRef, checker.calledDir,
+			"os-santiago/homedir", "main", dir)
+	}
+}
+
+func TestInvokePropagatesCheckoutError(t *testing.T) {
+	dir := t.TempDir()
+	checker := &fakeChecker{err: errCheckoutFixture}
+	eng := SCCEngine{Binary: "scc-binary-that-does-not-exist", WorkDir: dir, Checkout: checker}
+	_, err := eng.Invoke(context.Background(), Request{Repository: "os-santiago/homedir", BaseRef: "main"})
+	if err == nil || !strings.Contains(err.Error(), errCheckoutFixture.Error()) {
+		t.Fatalf("Invoke() error = %v, want it to wrap %v", err, errCheckoutFixture)
+	}
+}
+
+func TestInvokeWithNilCheckoutIsUnaffected(t *testing.T) {
+	// nil Checkout (the zero value) must behave exactly as before this
+	// field existed: Invoke proceeds straight to the subprocess attempt.
+	dir := t.TempDir()
+	eng := SCCEngine{Binary: "scc-binary-that-does-not-exist", WorkDir: dir}
+	_, err := eng.Invoke(context.Background(), Request{Repository: "os-santiago/homedir", BaseRef: "main"})
+	if err == nil {
+		t.Fatal("Invoke() with a nonexistent binary, want error")
+	}
+	if strings.Contains(err.Error(), "checkout") {
+		t.Fatalf("Invoke() error = %v, want no mention of checkout when Checkout is nil", err)
 	}
 }
 

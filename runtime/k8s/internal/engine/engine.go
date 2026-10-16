@@ -9,13 +9,14 @@
 // components/worker calls Engine.Invoke and never knows whether the
 // implementation underneath is a real subprocess or a test double.
 //
-// StubEngine is the only implementation shipped here. The real
-// subprocess-based implementation (shelling out to scc with the headless
-// contract, parsing --summary-file into a Result) is tracked follow-up
-// work — it needs a target repo, a model provider and credentials this
-// environment does not have (see
-// docs/architecture/adr/0005-runtime-k8s-event-bus-and-engine-invocation.md
-// "Explicitly still out of scope").
+// StubEngine and SCCEngine (scc.go) are the two implementations shipped
+// here. SCCEngine shells out to sc-agent-cli with the headless contract
+// and (via Checker) checks out the target repo with a GitHub App
+// installation token first — see scc.go and internal/checkout. The one
+// remaining prerequisite before AI_SDLC_ENGINE=scc does anything in a
+// real cluster is a Node-capable worker image (currently
+// distroless/static — see scc.go's SCCEngine doc comment and
+// docs/architecture/adr/0005-runtime-k8s-event-bus-and-engine-invocation.md).
 package engine
 
 import "context"
