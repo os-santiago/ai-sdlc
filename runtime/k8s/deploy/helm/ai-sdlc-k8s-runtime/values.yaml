@@ -110,7 +110,8 @@ components:
 
 networkPolicy:
   enabled: true
-  allowedEgressPorts: [443, 5432, 4317]
+  # Ingress-only by design — see templates/networkpolicy.yaml for why an
+  # Egress-type rule is deliberately not included.
 
 # OpenShift-only. Ignored (and safe to leave enabled: true) on vanilla
 # Kubernetes clusters that lack the route.openshift.io/v1 API — the
