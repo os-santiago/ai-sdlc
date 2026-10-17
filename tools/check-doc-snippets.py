@@ -298,9 +298,9 @@ def main():
             if in_fence and fence_lang in ('bash', 'sh', 'console'):
                 tokens += re.findall(
                     r'(?<![\w./-])((?:scripts|tools|docs|spec|tests|examples|'
-                    r'config|runtime|\.github)/[\w./@-]+|\.ai-sdlc\.yaml)', l)
+                    r'config|runtime|\.github)/[\w./@-]+|\.ai-sdlc\.yaml)', l.replace('\\.', '.'))
             for t in tokens:
-                t = t.rstrip('.,;:')
+                t = t.replace('\\.', '.').rstrip('.,;:')
                 if any(c in PLACEHOLDER for c in t):
                     continue
                 if (doc, t) in seen:
