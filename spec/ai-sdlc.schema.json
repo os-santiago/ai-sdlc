@@ -74,6 +74,9 @@
           "type": "integer",
           "minimum": 10,
           "description": "Window override for this target level; the >=10 minimum evidence base still applies."
+        }
+      }
+    },
     "alert_route": {
       "type": "object",
       "additionalProperties": false,
