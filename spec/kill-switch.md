@@ -52,6 +52,7 @@ never from a consumer checkout or PR head.
 | `ai-sdlc-ci-repair` | gate step fails → no repair attempt |
 | `ai-sdlc-sweep` (discover) | gate step fails → no PR is fed to the merge gate |
 | `ai-sdlc-review` | soft variant (`--soft` + `continue-on-error`): guard resolves `decision=skip` with `reason=kill-switch:*` — review runs on human PRs too, so a kill must not red-mark them |
+| `ai-sdlc-verify` | gate step fails → no post-merge revert or issue filing |
 
 `ai-sdlc-classify` is deliberately ungated: it applies advisory `pr:risk-*`
 metadata consumed by the merge gate and schedules no work — denying it
