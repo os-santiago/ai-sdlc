@@ -200,6 +200,32 @@ App installation token with `actions/create-github-app-token` and **fail
 closed** when the secrets are absent — no PAT/`GITHUB_TOKEN` fallback, so
 pushes and PRs always fire downstream workflows (issue #26).
 
+## Forge credential isolation (trust boundary)
+
+In `ai-sdlc-implement` the engine never holds a forge write credential
+(issue #210). Two scoped installation tokens are minted per run instead of
+one full-scope token:
+
+- **`FORGE_TOKEN_READ`** — minted up front with
+  `contents/issues/pull-requests: read` only. It backs the checkout, the
+  issue fetch and the engine's own environment (`GH_TOKEN` inside the
+  engine step is this token, so even a `gh` call issued by the agent can
+  only read). A live probe before the engine run posts a label write that
+  must be rejected (403/404); a 2xx fails the job closed.
+- **`FORGE_TOKEN_WRITE`** — minted *after the engine exits* with
+  `contents/issues/pull-requests: write`, and exported only to
+  deterministic post-script steps: the `apply-publish` composite action
+  (commit → push → `gh pr create`) and the fixed label/comment steps
+  (outcome labels, config-error comment, ledger-head marker). No agent
+  output is executed on this side of the boundary — the apply step only
+  commits the diff the engine left in the workspace, so a fully
+  manipulated agent can at most emit changes a human or the review stage
+  would reject; it cannot push, label or comment itself.
+
+`tests/credential_isolation.test.js` asserts the boundary structurally
+(token ordering, engine env, post-script exclusivity) on every repo
+validation run.
+
 ## Inputs / secrets
 
 ### ai-sdlc-intake
