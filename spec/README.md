@@ -9,7 +9,7 @@ implements via `.ai-sdlc.yaml` at its root.
 |---|---|---|
 | [`ai-sdlc.schema.json`](ai-sdlc.schema.json) | JSON Schema (draft 2020-12) for `.ai-sdlc.yaml` — repo contract: verify commands, autonomy ceiling, review policy, labels, model routing, escalation | #2 |
 | [`labels.md`](labels.md) | Issue-label state machine — intake trio exclusivity, transition table, veto-pair matrix (`labels.state_machine`), janitor repair rule; `scc:*` flow vs `pr:*` states | #18 |
-| [`trust-ladder.md`](trust-ladder.md) | Six-level progressive autonomy: levels, promotion gates, demotion triggers, freeze | #5 |
+| [`trust-ladder.md`](trust-ladder.md) | Six-level progressive autonomy: levels, four-signal promotion evidence, per-rung thresholds, contract-PR promotion/demotion, freeze | #5, #179 |
 | [`definition-of-ready.md`](definition-of-ready.md) | DoR fields, AC format, atomicity rules, R1–R6 machine-checkable validation | #1 |
 | [`risk-taxonomy.md`](risk-taxonomy.md) | pr:risk-* tiers + required-evidence matrix + merge-gate decision table | #3 |
 | [`injection-defense.md`](injection-defense.md) | Trust-boundary model, fence+scrub convention, forbidden-action rules | #4 |

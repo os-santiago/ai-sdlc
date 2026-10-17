@@ -39,6 +39,28 @@
           "description": "Stage-definition form: `engine` selects the certified adapter for the stage. An object (not a bare id) so per-stage engine overrides can grow fields without a schema break."
         }
       ]
+    },
+    "promotion_thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-target-level promotion thresholds (spec/trust-ladder.md — Thresholds per rung): each field overrides the scalar `promotion.*` default for that target level only. Values below the rung's normative floor are invalid per spec.",
+      "properties": {
+        "clean_runs_threshold": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Clean completed runs required — the evidence unit for pre-merge rungs (`suggest`, `auto-pr`), which produce no merges yet."
+        },
+        "clean_merges_threshold": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Clean merges required for this target level."
+        },
+        "window": {
+          "type": "integer",
+          "minimum": 10,
+          "description": "Window override for this target level; the >=10 minimum evidence base still applies."
+        }
+      }
     }
   },
   "properties": {
@@ -122,6 +144,41 @@
         "window": {
           "type": "integer", "minimum": 10, "default": 30,
           "description": "Rolling window in completed pipeline runs the promotion evidence is computed over; spec/trust-ladder.md sets 10 as the minimum evidence base."
+        },
+        "required_signals": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "static-config",
+              "behavioral-eval",
+              "audit-trail",
+              "track-record"
+            ]
+          },
+          "uniqueItems": true,
+          "minItems": 2,
+          "contains": {"const": "track-record"},
+          "minContains": 1,
+          "default": [
+            "static-config",
+            "behavioral-eval",
+            "audit-trail",
+            "track-record"
+          ],
+          "description": "Evidence signals the promotion gate requires to report `pass` (spec/trust-ladder.md — The four signal types). Default: all four. `track-record` is mandatory and may never be the only required signal — clean merges alone never earn autonomy."
+        },
+        "overrides": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Per-target-level threshold overrides (spec/trust-ladder.md — Thresholds per rung): keys are the promotable ladder levels; each entry overrides the scalar promotion.* defaults for that target only.",
+          "properties": {
+            "suggest": {"$ref": "#/$defs/promotion_thresholds"},
+            "auto-pr": {"$ref": "#/$defs/promotion_thresholds"},
+            "auto-merge-low": {"$ref": "#/$defs/promotion_thresholds"},
+            "auto-merge-all": {"$ref": "#/$defs/promotion_thresholds"},
+            "auto-deploy": {"$ref": "#/$defs/promotion_thresholds"}
+          }
         }
       }
     },
@@ -138,6 +195,11 @@
         "window": {
           "type": "integer", "minimum": 1, "default": 30,
           "description": "Rolling window in completed pipeline runs demotion evidence is computed over."
+        },
+        "priority_label": {
+          "type": "string",
+          "default": "priority:P0",
+          "description": "Label applied to demotion PRs triggered by a sentinel halt (spec/trust-ladder.md — Demotion and freeze)."
         }
       }
     },
