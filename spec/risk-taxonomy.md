@@ -42,6 +42,44 @@ IF checks green AND mergeable AND tier evidence satisfied → MERGE (squash)
 `HOLD` = wait for the missing condition; the label state is re-evaluated
 every poll (removal hands control back — no sticky latches).
 
+## Failure classes and alert routing (normative)
+
+Every ESCALATE — and every stage failure that pages a human — carries a
+canonical **failure class**. The class decides WHO is notified via the
+contract's `escalation.routes` map (`failure-class → route`), so a
+supply-chain halt and a stalled dep-update no longer land identically.
+
+| Class | Emitted when | Decision-table source |
+|---|---|---|
+| `conflict` | `mergeable=CONFLICTING` survives the update-branch attempt | conflict → ESCALATE |
+| `checks-stalled` | checks pending past `merge.pending_max_minutes` | pending-timeout → ESCALATE |
+| `repair-stalled` | a repair signal on the head produced no new head within the cap | repair-stalled → ESCALATE |
+| `repairs-exhausted` | the bounded repair budget is consumed with checks still red | repairs-exhausted → ESCALATE |
+| `repair-failed` | a repair attempt produced no pushable fix (no-changes, engine/provider exit, push rejected) | ci-repair escalate |
+| `review-blocked` | an external/AI blocking verdict holds past the wait cap | external-review-blocking → ESCALATE |
+| `review-fix-failed` | the review→fix pass stalled or was never dispatched | review-fix-stalled / review-fix-not-dispatched → ESCALATE |
+| `supply-chain` | dependency violations on dep manifests/lockfiles | dep violations → ESCALATE |
+| `contract-error` | `.ai-sdlc.yaml` fails schema validation on the base ref (`scc:config-error`) | ci-repair base-fault short-circuit |
+| `verify-failure` | post-merge `verify.commands` fail on the merge commit | verify stage |
+| `security` | secret-scan / credential-material findings | runtime scanners |
+| `policy-hold` | `pr:risk-critical` awaiting human `pr:risk-accepted` | risk-critical → HOLD |
+| `unknown` | no pattern matched — the reserved fallback class | any failure surface |
+
+**Route resolution** (implemented by `scripts/alert-router.js`):
+
+```
+route = escalation.routes.<class>
+      → escalation.routes.default          (reserved fallback class)
+      → escalation.contacts/notify_channels (synthesized default)
+```
+
+A route is `{mentions: [@handles|org/team], labels: [...], channel: <id>}`.
+An undeclared or unmatched class ALWAYS resolves to the default route —
+alerting is never silent. Every emitted notification carries an audit
+marker (`<!-- ai-sdlc:alert-route class=… key=… -->`); re-notifications of
+the same class+signature on the same thread are deduplicated on that
+marker so repeat escalations don't page twice for one failure.
+
 ## Notes for implementers
 
 - Tier assignment SHOULD be computed from the diff (files/lines/surfaces),

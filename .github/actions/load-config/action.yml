@@ -152,6 +152,12 @@ outputs:
     value: ${{ steps.resolve.outputs.review_adversarial_max_seconds }}
   escalation_label:
     value: ${{ steps.resolve.outputs.escalation_label }}
+  escalation_contacts:
+    description: 'escalation.contacts (JSON array) — default-route mention fallback'
+    value: ${{ steps.resolve.outputs.escalation_contacts }}
+  escalation_routes:
+    description: 'escalation.routes (JSON object) — failure-class → notification route map (issue #175)'
+    value: ${{ steps.resolve.outputs.escalation_routes }}
   labels:
     description: 'flow-state labels map (JSON object)'
     value: ${{ steps.resolve.outputs.labels }}

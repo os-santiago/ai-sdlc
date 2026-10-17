@@ -116,3 +116,11 @@ escalation:
     - "@Axel-DaMage"
   notify_channels:
     - discord:ops
+  # Failure-class → notification route map (spec/risk-taxonomy.md). Unknown
+  # classes fall back to `default` — alerting is never silent.
+  routes:
+    security:          {mentions: ["@Axel-DaMage", "my-org/security-team"], labels: ["priority:P0"], channel: discord:ops}
+    contract-error:    {mentions: ["@Axel-DaMage"], labels: ["priority:P0"], channel: issue-comment}
+    supply-chain:      {mentions: ["my-org/security-team"], labels: ["priority:P1"], channel: issue-comment}
+    verify-failure:    {mentions: ["@Axel-DaMage"], labels: ["priority:P1"], channel: discord:ops}
+    default:           {mentions: ["@Axel-DaMage"], channel: issue-comment}

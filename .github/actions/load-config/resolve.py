@@ -79,11 +79,11 @@ DEFAULTS = {
     "model": {"primary": "auto/best-coding", "fallback": None, "routing_hints": {}},
     "engine": {"name": "scc", "max_steps": 200, "max_seconds": 900, "flags": []},
     "engines": {},
-    "escalation": {"label": "needs-human", "contacts": [], "notify_channels": []},
+    "escalation": {"label": "needs-human", "contacts": [], "notify_channels": [], "routes": {}},
 }
 
 # Sections resolved field-by-field; maps merge key-wise (spec/org-policy.md).
-MAP_FIELDS = {"labels", "model.routing_hints"}
+MAP_FIELDS = {"labels", "model.routing_hints", "escalation.routes"}
 # Guard-rail lists: strictly-additive union across layers — a layer can
 # add entries but never drop a lower layer's (spec/org-policy.md).
 UNION_FIELDS = {"triggers.skip_labels", "merge.skip_labels", "verify.required_checks"}
@@ -466,6 +466,8 @@ def flat_outputs(c):
         "review_adversarial_max_attacks": str((c["review"].get("adversarial") or {}).get("max_attacks") or 16),
         "review_adversarial_max_seconds": str((c["review"].get("adversarial") or {}).get("max_seconds") or 600),
         "escalation_label": c["escalation"]["label"],
+        "escalation_contacts": j(c["escalation"].get("contacts") or []),
+        "escalation_routes": j(c["escalation"].get("routes") or {}),
         "labels": j(labels),
         "label_queued": labels.get("queued", ""),
         "label_pr_opened": labels.get("pr-opened", ""),

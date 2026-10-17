@@ -3,6 +3,9 @@
 # Ports the Hermes pr_merger decision table (spec/risk-taxonomy.md):
 #   green+mergeable → squash+delete-branch; failing checks → bounded repair
 #   signal; pending > cap or conflicts → needs-human escalation.
+# Escalations are routed by failure class (issue #175): the reason maps to a
+# canonical class (spec/risk-taxonomy.md) whose escalation.routes entry picks
+# the notified maintainers/labels — unknown classes hit the default route.
 # Plus the review gate (issue #28): a pending AI-review verdict on the head
 # SHA holds the merge only up to review.wait_max_minutes (default 15), then
 # merges with `review_timeout` recorded — review infra can never deadlock
@@ -44,6 +47,10 @@ on:
         default: -1
       base:
         description: 'ref to read .ai-sdlc.yaml from'
+        type: string
+        default: 'main'
+      runtime_ref:
+        description: 'ref of os-santiago/ai-sdlc to fetch scripts/alert-router.js from — pin to the same ref as this workflow'
         type: string
         default: 'main'
       org_config:
@@ -386,17 +393,60 @@ jobs:
             "$WAIT" "${SHA:0:8}" > "$RUNNER_TEMP/review-timeout.md"
           gh pr comment "$PR" -R "$REPO" --body-file "$RUNNER_TEMP/review-timeout.md"
 
+      # Alert routing (issue #175): the escalation reason classifies into a
+      # canonical failure class (spec/risk-taxonomy.md) and resolves WHO is
+      # notified via the contract's escalation.routes map — the router comes
+      # from the trusted runtime pin, never the PR head. Dedup reads only
+      # trusted-author comments (bots/collaborators) so a forged marker can
+      # never suppress a real alert.
+      - name: Route escalation alert
+        if: steps.eval.outputs.action == 'escalated'
+        id: route
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REASON: ${{ steps.eval.outputs.reason }}
+          CONTRACT: ${{ steps.contract.outputs.path }}
+          RUNTIME_REF: ${{ inputs.runtime_ref }}
+        run: |
+          set -euo pipefail
+          W="$RUNNER_TEMP/ai-sdlc-alert"
+          mkdir -p "$W"
+          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/alert-router.js?ref=$RUNTIME_REF" \
+              -H "Accept: application/vnd.github.raw" > "$W/alert-router.js" 2>"$W/fetch.err" \
+             || ! node --check "$W/alert-router.js"; then
+            echo "::warning::alert router unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$W/fetch.err" 2>/dev/null)) — escalation proceeds unrouted"
+            exit 0
+          fi
+          jq '.escalation // {}' "$CONTRACT" > "$W/escalation.json" 2>/dev/null || echo '{}' > "$W/escalation.json"
+          node "$W/alert-router.js" --escalation "$W/escalation.json" \
+            --repo "$REPO" --pr "$PR" --reason "$REASON" \
+            --comments trusted-comments.json \
+            --github-output --json | tee "$W/route.json" || true
+
       - name: Escalate to human
         if: steps.eval.outputs.action == 'escalated'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REASON: ${{ steps.eval.outputs.reason }}
           ESCALATION: ${{ steps.contract.outputs.escalation_label }}
+          ALERT_MENTIONS: ${{ steps.route.outputs.alert_mentions }}
+          ALERT_LABELS: ${{ steps.route.outputs.alert_labels }}
+          ALERT_MARKER: ${{ steps.route.outputs.alert_marker }}
         run: |
           set -euo pipefail
           gh label create "$ESCALATION" -R "$REPO" --color D93F0B --description "AI-SDLC: escalated to human review" --force || true
           gh pr edit "$PR" -R "$REPO" --add-label "$ESCALATION"
-          gh pr comment "$PR" -R "$REPO" --body "⚠️ **AI-SDLC merge gate escalated** — reason: \`$REASON\`. Human review required; remove \`$ESCALATION\` to hand control back."
+          # Route-declared labels classify the failure for the notified owner.
+          jq -r '.[]?' <<<"${ALERT_LABELS:-[]}" | while IFS= read -r lbl; do
+            gh label create "$lbl" -R "$REPO" --force || true
+            gh pr edit "$PR" -R "$REPO" --add-label "$lbl" || true
+          done
+          {
+            printf '⚠️ **AI-SDLC merge gate escalated** — reason: `%s`. Human review required; remove `%s` to hand control back.\n' "$REASON" "$ESCALATION"
+            [ -n "${ALERT_MENTIONS:-}" ] && printf '\ncc %s\n' "$ALERT_MENTIONS"
+            [ -n "${ALERT_MARKER:-}" ] && printf '%s\n' "$ALERT_MARKER"
+          } > "$RUNNER_TEMP/escalation-comment.md"
+          gh pr comment "$PR" -R "$REPO" --body-file "$RUNNER_TEMP/escalation-comment.md"
 
       - name: Signal repair need
         if: steps.eval.outputs.action == 'repair-signaled'

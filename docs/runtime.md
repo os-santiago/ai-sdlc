@@ -81,6 +81,8 @@ resolves it before acting:
 | automerge | `merge.max_repairs`, `merge.pending_max_minutes`, `merge.skip_labels`, `merge.method`, `review.mode`, `review.wait_max_minutes`, `review.external_reviewer`, `escalation.label` | `max_repairs`, `pending_max_minutes`, `merge_method`, `review_wait_minutes` |
 | verify | `verify.commands` | `verify_commands` |
 | dep-update | `dependencies.*` (enabled, ecosystems, min_release_age_days, target, auto_kinds, max_updates, branch, labels, egress_profile) | `max_updates`, `target` |
+| automerge | `merge.max_repairs`, `merge.pending_max_minutes`, `merge.skip_labels`, `merge.method`, `review.mode`, `review.wait_max_minutes`, `review.external_reviewer`, `escalation.label`, `escalation.routes` | `max_repairs`, `pending_max_minutes`, `merge_method`, `review_wait_minutes` |
+| verify | `verify.commands`, `escalation.routes` | `verify_commands` |
 
 The top-level `engines` map (issue #205) selects the certified adapter a
 stage dispatches to — `engines.<stage>` may be a bare engine id or a
@@ -346,6 +348,7 @@ Outputs: `action` (`reviewed` \| `fix-dispatched` \| `escalated` \|
 |---|---|---|
 | `repo`, `pr_number` | — (required) | target |
 | `base` | `main` | ref the contract is read from |
+| `runtime_ref` | `main` | ref of `os-santiago/ai-sdlc` the alert router (`scripts/alert-router.js`) is fetched from — pin to the same ref as the workflow |
 | `max_repairs` | `-1` → `merge.max_repairs` | repair rounds before escalation |
 | `pending_max_minutes` | `-1` → `merge.pending_max_minutes` | pending-checks cap before escalation |
 | `merge_method` | `''` → `merge.method` | `squash` \| `merge` \| `rebase` |
@@ -420,6 +423,7 @@ One invocation = one bounded scan (see
 |---|---|---|
 | `repo` | — (required) | target |
 | `base` | `main` | branch verified (contract is read from here) |
+| `runtime_ref` | `main` | ref of `os-santiago/ai-sdlc` the alert router (`scripts/alert-router.js`) is fetched from — pin to the same ref as the workflow |
 | `verify_commands` | `''` → `verify.commands` | newline-separated commands |
 | `setup_commands` | `''` | dependency install before verify |
 | `revert_on_failure` | `false` | revert the merge commit on failure |
@@ -505,6 +509,7 @@ surface.
 | `branch_pattern` | `^(feat\|fix)/issue-[0-9]+` | ERE the head branch must match (pipeline PRs only); empty = any same-repo branch |
 | `max_failed_checks` | `5` | failing checks whose output enters the prompt |
 | `log_tail_lines` / `log_max_bytes` | `150` / `12000` | per-check log tail bounds |
+| `runtime_ref` | `main` | ref of `os-santiago/ai-sdlc` the alert router (`scripts/alert-router.js`) is fetched from — pin to the same ref as the workflow |
 | `ledger_head` | `''` | upstream ledger head; empty = recover the `ai-sdlc:ledger-head` marker on the PR |
 | `runbook_max_bytes` | `1400` | byte cap on the injected runbook advisory (0 disables injection; issue #188) |
 
@@ -917,6 +922,7 @@ anything: this sweep keeps the divergence visible instead of silent.
 - **Trust boundary:** script and `config/engine_adapters.json` are fetched
   from the `os-santiago/ai-sdlc` pin (`runtime_ref`) — never from the
   caller checkout.
+
 ## Release manager (`ai-sdlc-release.yml`)
 
 Maintainer-dispatched release driver backed by `scripts/release-manager.js`
@@ -946,6 +952,46 @@ Maintainer-dispatched release driver backed by `scripts/release-manager.js`
 - **CLI parity:** `node scripts/release-manager.js --repo OWNER/NAME
   [--bump B] [--spec-bump B|none] [--ref REF] [--publish] [--json]` —
   default is always a dry run; nothing mutates without `--publish`.
+
+## Alert routing (failure-class → maintainer)
+
+Escalations no longer land as a generic `needs-human` label: every failure
+surface classifies its reason into a canonical **failure class**
+(`spec/risk-taxonomy.md` — "Failure classes and alert routing") and the
+contract's `escalation.routes` map decides WHO is notified (issue #175;
+port of Hermes `scripts/alert_router.js` minus the Discord transport).
+
+```yaml
+# .ai-sdlc.yaml
+escalation:
+  label: needs-human
+  contacts: ["@oncall"]
+  routes:
+    contract-error: {mentions: ["@spec-owner"], labels: ["priority:P0"]}
+    supply-chain:   {mentions: ["org/security-team"], labels: ["priority:P1"]}
+    default:        {mentions: ["@oncall"]}            # reserved fallback
+```
+
+- **Resolution** (`scripts/alert-router.js`): `routes.<class>` →
+  `routes.default` → synthesized from `escalation.contacts` /
+  `notify_channels`. An unmatched or undeclared class always lands on the
+  default route — alerting is never silent.
+- **Delivery**: the escalation comment gains a `cc @handles` line and the
+  route's `labels` are applied next to `needs-human`; `channel` names the
+  deployment-specific target (`issue-comment` is the in-band floor).
+- **Audit + dedup**: every routed notification carries
+  `<!-- ai-sdlc:alert-route class=… key=… -->` (key = repo|target|class|
+  normalized-signature hash). A repeat of the same class+signature on the
+  same thread is deduplicated on that marker — mentions suppressed, labels
+  still applied. Dedup reads **trusted-author comments only**
+  (bots/collaborators): a forged marker in a third-party comment can never
+  suppress a real alert.
+- **Wired where failures surface**: `ai-sdlc-automerge` (all ESCALATE
+  reasons), `ai-sdlc-ci-repair` (budget exhausted / base-contract-error /
+  no pushable fix), `ai-sdlc-verify` (`verify-failure` on the filed issue).
+  The router script is fetched from the `runtime_ref` pin — never from the
+  PR head — and its unavailability degrades to the unrouted escalation,
+  never to a dropped one.
 
 ## Dependency-update stage (`ai-sdlc-dep-update.yml`)
 

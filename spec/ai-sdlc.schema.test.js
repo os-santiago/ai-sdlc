@@ -378,6 +378,33 @@ describe('per-stage model selection by task class (issue #171)', () => {
     const r = schemaValidate({
       spec: '1.0.0',
       engines: { review: { model: 'openai/o3' }, 'ci-repair': { model: 'auto/best-reasoning' } },
+describe('escalation.routes — failure-class alert routing (issue #175)', () => {
+  it('declares routes as an open failure-class → alert_route map under escalation', () => {
+    const e = schema.properties.escalation;
+    assert.ok(e, 'missing properties.escalation');
+    assert.ok(e.properties.routes, 'missing escalation.routes');
+    assert.strictEqual(e.properties.routes.type, 'object');
+    assert.deepStrictEqual(e.properties.routes.additionalProperties, { $ref: '#/$defs/alert_route' });
+  });
+
+  it('alert_route is a closed {mentions, labels, channel} shape', () => {
+    const r = schema.$defs.alert_route;
+    assert.ok(r, 'missing $defs.alert_route');
+    assert.strictEqual(r.type, 'object');
+    assert.strictEqual(r.additionalProperties, false);
+    assert.deepStrictEqual(Object.keys(r.properties).sort(), ['channel', 'labels', 'mentions']);
+  });
+
+  it('accepts a contract with class routes + a default route', { skip: !HAS_PY }, () => {
+    const r = schemaValidate({
+      spec: '1.0.0',
+      escalation: {
+        label: 'needs-human',
+        routes: {
+          'contract-error': { mentions: ['@ops'], labels: ['priority:P0'], channel: 'issue-comment' },
+          default: { mentions: ['@oncall'] },
+        },
+      },
     });
     assert.deepStrictEqual(r.errors, []);
     assert.ok(r.valid);
@@ -471,6 +498,27 @@ describe('per-stage model selection by task class (issue #171)', () => {
       // intake dropped (OmniRoute) — resolves to model_primary on GHA;
       // verify absent (no model declared).
     });
+  it('rejects a route with an undeclared property', { skip: !HAS_PY }, () => {
+    const r = schemaValidate({
+      spec: '1.0.0',
+      escalation: { routes: { security: { mentions: ['@x'], webhook: 'https://evil' } } },
+    });
+    assert.strictEqual(r.valid, false);
+    assert.ok(r.errors.some(e => /webhook/.test(e)), `error should name the stray key: ${r.errors}`);
+  });
+
+  it('resolved contract carries routes merged key-wise (load-config)', { skip: !HAS_PY }, () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-sdlc-resolve-'));
+    const input = path.join(dir, 'in.json');
+    fs.writeFileSync(input, JSON.stringify({
+      spec: '1.0.0',
+      escalation: { routes: { conflict: { mentions: ['@a'] }, default: { mentions: ['@d'] } } },
+    }));
+    const r = spawnSync('python3', [RESOLVER, '--input', input, '--out-dir', dir], { encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, `resolve.py failed: ${r.stderr}`);
+    const contract = JSON.parse(fs.readFileSync(path.join(dir, 'contract.json'), 'utf8'));
+    assert.deepStrictEqual(contract.escalation.routes.conflict.mentions, ['@a']);
+    assert.deepStrictEqual(contract.escalation.routes.default.mentions, ['@d']);
   });
 });
 
