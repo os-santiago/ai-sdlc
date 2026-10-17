@@ -70,6 +70,7 @@
     "exitCodeMap": {
       "0": "Success",
       "10": "ValidationError",
+      "11": "not_actionable",
       "20": "AgentError",
       "21": "AgentFailedError",
       "22": "MaxStepsExceeded",
@@ -79,6 +80,7 @@
     },
     "stallClassMap": {
       "10": "spec",
+      "11": "spec",
       "20": "transport",
       "21": "tooling",
       "22": "budget",

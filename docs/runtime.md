@@ -105,7 +105,8 @@ the engine. `implement` and `ci-repair` run the selected engine —
 contract (`--run`): the scc descriptor builds the tuned
 `scc chat -yq --prompt-file … --no-commit --audit-log … --summary-file …
 --max-seconds … --max-steps` argv and declares `dispatch.rawExitCodes`,
-so the engine's raw exit taxonomy (0/10/20/21/22/23) reaches the
+so the engine's raw exit taxonomy (0/1/10/11/20/21/22/23/24 — normative in
+[spec/engine-exit-codes.md](../spec/engine-exit-codes.md)) reaches the
 workflow — that is what drives the [Model fallback](#model-fallback)
 loop and the `no-changes` outcome. `review`'s scc passes still invoke
 the same tuned argv inline; their non-scc dispatch goes through `--run`.
@@ -1166,8 +1167,8 @@ engine step runs `model` first; on a provider-class failure it gets
 
 | Primary exit | Action |
 |---|---|
-| 20 (provider) / 21 (auth) | one fallback run — unless `fallback_model` is empty or equals `model` |
-| 0 / 10 / 22 (budget) / 23 (livelock) / 1 | final — never retried (not provider problems) |
+| 20 (provider) / 21 (auth) — or a `transport` stall verdict | one fallback run — unless `fallback_model` is empty or equals `model` |
+| 0 / 10 / 11 / 22 (budget) / 23 (livelock) / 24 (chain exhausted) / 1 | final — never retried (not provider problems) |
 
 The fallback run is fresh and bounded:
 
@@ -1203,14 +1204,19 @@ contract resolution lands (#22); the input is the override surface today.
 
 `sc-agent-cli` (`scc`) is built from source on the runner — it is not
 published on npm. Headless flags used: `--prompt-file --no-commit
---audit-log --summary-file --max-seconds --max-steps`. Exit codes drive
-issue labels:
+--audit-log --summary-file --max-seconds --max-steps`. The raw exit-code
+taxonomy is a cross-repo contract: emission semantics are normative in
+[`sc-agent-cli` `docs/exit-codes.md`](https://github.com/os-santiago/sc-agent-cli/blob/main/docs/exit-codes.md)
+and the runtime's consumption of them in
+[spec/engine-exit-codes.md](../spec/engine-exit-codes.md) (drift-checked by
+`tests/exit_code_contract.test.js`). Codes drive issue labels:
 
 | Code | Meaning | Label |
 |---|---|---|
 | 0 | implemented + PR opened | `scc:pr-opened` |
-| 10 | no workspace mutations (clean no-op) | `scc:no-changes` |
-| 20/21/22/23/1 | provider/auth/budget/livelock/fatal | `scc:failed` |
+| 10 | no workspace mutations (clean no-op) | `scc:no-changes` + `scc:not-ready` |
+| 11 | not actionable / blocked | `scc:failed` + `scc:not-ready` (spec route) |
+| 20/21/22/23/24/1 | provider/auth/budget/livelock/exhausted/fatal | `scc:failed` (stall-class routing) |
 | 20/21 after fallback | provider/auth on both models | `scc:failed` + `needs-human` |
 
 `exit_code` is the final run's code (see [Model fallback](#model-fallback)).
