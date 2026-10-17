@@ -849,6 +849,35 @@ anything: this sweep keeps the divergence visible instead of silent.
 - **Trust boundary:** script and `config/engine_adapters.json` are fetched
   from the `os-santiago/ai-sdlc` pin (`runtime_ref`) — never from the
   caller checkout.
+## Release manager (`ai-sdlc-release.yml`)
+
+Maintainer-dispatched release driver backed by `scripts/release-manager.js`
+(issue #178). One job, two modes over the same code path:
+
+- **Trigger:** `workflow_dispatch` only — releases are a human decision.
+  `dry_run=true` (the default) prints the full plan to the step summary and
+  mutates nothing; `dry_run=false` publishes.
+- **Semver:** computed from conventional commits since the newest `v*.*.*`
+  tag — `BREAKING CHANGE`/`type!:` → major, `feat` → minor, else patch.
+  `bump` / `spec_bump` inputs override the computed value.
+- **Spec stream:** AGENTS.md makes spec changes semver-sensitive. Commits
+  touching `spec/` drive a separate `spec/v*.*.*` tag whose bump is computed
+  from the spec-touching commits alone; a breaking spec change yields a
+  MAJOR spec bump and the changelog calls out the migration-note
+  requirement. `--spec-bump none` skips the spec tag.
+- **Publish sequence:** annotated tag → push → spec tag (if any) →
+  `POST /repos/{repo}/releases` with the generated changelog →
+  `git archive` tarball attached to the release →
+  `actions/attest-build-provenance` (SHA-pinned) attests the artifact —
+  the SLSA L3-class provenance shape of issue #100. The `release:
+  published` event is the subscription point for downstream signing stages
+  (issue #103); publish uses `AI_SDLC_TOKEN` when present because a release
+  created by `GITHUB_TOKEN` does not fire downstream workflows.
+- **Verify an artifact:** `gh attestation verify dist/ai-sdlc-<tag>.tar.gz
+  -R os-santiago/ai-sdlc`.
+- **CLI parity:** `node scripts/release-manager.js --repo OWNER/NAME
+  [--bump B] [--spec-bump B|none] [--ref REF] [--publish] [--json]` —
+  default is always a dry run; nothing mutates without `--publish`.
 
 ## Dependency-update stage (`ai-sdlc-dep-update.yml`)
 
