@@ -1,0 +1,162 @@
+# Default values for ai-sdlc-k8s-runtime.
+
+namespace:
+  create: true
+  name: ai-sdlc-runtime
+
+image:
+  registry: ghcr.io/os-santiago
+  tag: development
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  name: ""
+  automountServiceAccountToken: false
+
+# Inline .ai-sdlc.yaml mounted read-only into every component at
+# /etc/ai-sdlc/contract/.ai-sdlc.yaml (AI_SDLC_CONTRACT_PATH). Production
+# deployments SHOULD source this from the target repo via GitOps rather
+# than `helm --set` — see ../../../docs/onboarding.md. The shadow-level
+# placeholder below is intentionally conservative: it only observes, never
+# mutates, until a real contract is wired in.
+contract:
+  inline: |
+    spec: "1.0.0"
+    autonomy:
+      level: shadow
+
+logLevel: info
+
+# Durable state + the transactional outbox (ADR-0005). When
+# postgres.cloudNativePG.enabled is true, templates/postgres-cluster.yaml
+# renders a CloudNativePG Cluster CR (requires the CloudNativePG operator
+# installed cluster-wide first — see ../../README.md "Deploy") and every
+# component's DATABASE_URL is sourced from the Secret CloudNativePG
+# generates (<cluster name>-app, key "uri"). Set enabled: false and
+# databaseURLSecret to point at your own Postgres instead — no component
+# depends on CloudNativePG specifically, only on DATABASE_URL resolving to
+# a reachable connection string.
+postgres:
+  cloudNativePG:
+    enabled: true
+    clusterName: ai-sdlc-postgres
+    instances: 1
+    storageSize: 1Gi
+  # Used when cloudNativePG.enabled is false, or to override the secret
+  # name/key CloudNativePG itself would otherwise generate.
+  databaseURLSecret:
+    name: ai-sdlc-postgres-app
+    key: uri
+
+# Selects components/worker's Engine implementation (internal/engine).
+# "scc" (default) invokes the real sc-agent-cli subprocess engine
+# (internal/engine.SCCEngine) — worker's image (components/worker/
+# Containerfile) is Node-capable (sc-agent-cli + git) specifically to
+# support this. Still requires modelProvider below configured; worker
+# degrades to "stub" at runtime if MODEL_API_KEY is missing — see
+# selectSCCEngine in components/worker/cmd/main.go. Set to "stub" to
+# force the deterministic no-op engine regardless of modelProvider.
+engine: scc
+
+modelProvider:
+  baseURL: https://integrate.api.nvidia.com/v1
+  # nemotron-3-ultra-550b-a55b (550B) consistently exceeded sc-agent-cli's
+  # provider connect/attempt timeouts (30s/120s default) in a real
+  # end-to-end test against this endpoint — not even a trivial 16-token
+  # completion returned headers within 4+ minutes. llama-3.1-nemotron-70b-
+  # instruct is ~8x smaller and responds in seconds against the same
+  # endpoint/key.
+  model: nvidia/llama-3.1-nemotron-70b-instruct
+  workspaceDir: /workspaces/target-repo
+  # The API key itself is NEVER set here. Create the Secret out-of-band:
+  #   kubectl create secret generic ai-sdlc-model-provider \
+  #     --namespace <release-namespace> --from-literal=apiKey=<key>
+  # or point apiKeySecret at an existing Secret (e.g. one managed by
+  # External Secrets / Sealed Secrets).
+  apiKeySecret:
+    name: ai-sdlc-model-provider
+    key: apiKey
+
+# githubApp and githubPat configure the Checker (internal/checkout.
+# GitCheckout) that makes workspaceDir above a clean checkout of the
+# work item's repository/BaseRef before every attempt. selectCheckout
+# (cmd/main.go) tries githubApp first, then githubPat, then gives up
+# (workspaceDir must already be a checkout, managed externally —
+# SCCEngine still runs; fine for a public repo, since checkout is
+# currently read-only).
+#
+# githubApp: a GitHub App installation token, matching
+# .github/workflows/ai-sdlc-implement.yml's fail-closed stance. Requires
+# admin access to that specific App to mint it a private key. Neither
+# value is ever set here. Create the Secret out-of-band:
+#   kubectl create secret generic ai-sdlc-github-app \
+#     --namespace <release-namespace> \
+#     --from-literal=appId=<app-id> --from-file=privateKey=<path-to-pem>
+githubApp:
+  secret:
+    name: ai-sdlc-github-app
+    appIdKey: appId
+    privateKeyKey: privateKey
+
+# githubPat: a fallback for operators who don't control the App above
+# but do control a GitHub account with write access to the target
+# repo(s). Use a fine-grained PAT scoped to one repo (Contents: Read &
+# write, Pull requests: Read & write) with an expiration date — not a
+# broad personal token. Create the Secret out-of-band:
+#   kubectl create secret generic ai-sdlc-github-pat \
+#     --namespace <release-namespace> --from-literal=token=<pat>
+githubPat:
+  secret:
+    name: ai-sdlc-github-pat
+    tokenKey: token
+
+components:
+  admissionController:
+    image: ai-sdlc-admission-controller
+    port: 8081
+    resources:
+      requests: {cpu: 25m, memory: 32Mi}
+      limits: {cpu: 250m, memory: 128Mi}
+  orchestrator:
+    image: ai-sdlc-orchestrator
+    port: 8082
+    resources:
+      requests: {cpu: 25m, memory: 32Mi}
+      limits: {cpu: 250m, memory: 128Mi}
+  worker:
+    image: ai-sdlc-worker
+    port: 8083
+    resources:
+      requests: {cpu: 250m, memory: 256Mi}
+      limits: {cpu: "2", memory: 2Gi}
+    workspaceSizeLimit: 10Gi
+  releaseManager:
+    image: ai-sdlc-release-manager
+    port: 8084
+    resources:
+      requests: {cpu: 25m, memory: 32Mi}
+      limits: {cpu: 250m, memory: 128Mi}
+  # relay (ADR-0005): polls the outbox table and delivers events/commands
+  # to the other four components over localhost — it is co-located in the
+  # same pod, same as the others, so no NetworkPolicy egress rule is
+  # needed for that traffic.
+  relay:
+    image: ai-sdlc-relay
+    port: 8085
+    resources:
+      requests: {cpu: 25m, memory: 32Mi}
+      limits: {cpu: 250m, memory: 128Mi}
+
+networkPolicy:
+  enabled: true
+  # Ingress-only by design — see templates/networkpolicy.yaml for why an
+  # Egress-type rule is deliberately not included.
+
+# OpenShift-only. Ignored (and safe to leave enabled: true) on vanilla
+# Kubernetes clusters that lack the route.openshift.io/v1 API — the
+# template guards on .Capabilities.APIVersions.
+openshift:
+  route:
+    enabled: false
+    host: ""

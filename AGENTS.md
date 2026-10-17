@@ -18,6 +18,9 @@ operating context for every agent (Devin sessions, scc workers, maintainers).
 - `docs/` — `runtime.md` (workflow reference) + `architecture/adr/`
 - `examples/` — archetype contracts (library = conservative, internal-app
   = aggressive)
+- `runtime/k8s/` — optional Kubernetes/OpenShift-native control plane
+  (Go microservices + Kustomize/Helm manifests) for adopters who cannot run
+  GitHub Actions. GHA remains the default; see ADR-0004.
 
 ## Ecosystem layering (do not violate boundaries)
 

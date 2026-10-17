@@ -163,6 +163,31 @@
             "type": "string"
           },
           "description": "GitHub logins whose labels trigger dispatch. Empty = anyone."
+        },
+        "min_body_length": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 120,
+          "description": "Definition-of-Ready R4 (spec/definition-of-ready.md): minimum issue-body length in characters for a 'non-trivial description'. Default (120) matches ai-sdlc-intake.yml's existing hardcoded floor \u2014 making it configurable changes no repo's current behavior until it is overridden."
+        },
+        "acceptance_criteria": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Definition-of-Ready atomicity bounds for the acceptance-criteria checklist (spec/definition-of-ready.md: '1\u20138 criteria ... >8 probably not atomic').",
+          "properties": {
+            "min": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 1,
+              "description": "Below this many checklist items, DoR R3 treats the issue as not ready. Default (1) matches ai-sdlc-intake.yml's existing hardcoded floor."
+            },
+            "max": {
+              "type": ["integer", "null"],
+              "minimum": 1,
+              "default": null,
+              "description": "Above this many checklist items, the issue is probably not atomic and should decompose. null (default) = unbounded \u2014 ai-sdlc-intake.yml does not enforce a ceiling today, so this field is opt-in; set to 8 to match the DoR-recommended bound."
+            }
+          }
         }
       }
     },
@@ -241,6 +266,12 @@
           "maximum": 10,
           "default": 3,
           "description": "Bounded review\u2192fix convergence: fix passes pushed to the PR head per pull request before escalating needs-human (issue #28)."
+        },
+        "max_changed_files": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "default": null,
+          "description": "Bounded-edit atomic-blast-radius ceiling (ADR-0003 'atomic file limit'): maximum files a single implementation attempt may change before escalating needs-human. null (default) = unbounded \u2014 no runtime stage enforces a ceiling today, so this field is opt-in; 5 is a reasonable starting value."
         },
         "wait_max_minutes": {
           "type": "integer",

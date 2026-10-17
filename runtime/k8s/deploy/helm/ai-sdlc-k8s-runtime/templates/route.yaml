@@ -1,0 +1,22 @@
+{{- if and .Values.openshift.route.enabled (.Capabilities.APIVersions.Has "route.openshift.io/v1") }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-admission
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.openshift.route.host }}
+  host: {{ .Values.openshift.route.host }}
+  {{- end }}
+  to:
+    kind: Service
+    name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}
+  port:
+    targetPort: admission
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
+{{- end }}

@@ -1,0 +1,21 @@
+apiVersion: v2
+name: ai-sdlc-k8s-runtime
+description: >
+  AI-SDLC cloud-native control plane (admission-controller, orchestrator,
+  worker, release-manager) — a Kubernetes/OpenShift-native alternative to
+  the GHA-native runtime, driven by the same .ai-sdlc.yaml contract.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/os-santiago/ai-sdlc
+sources:
+  - https://github.com/os-santiago/ai-sdlc/tree/main/runtime/k8s
+maintainers:
+  - name: os-santiago
+    email: hello@opensourcesantiago.io
+keywords:
+  - ai-sdlc
+  - kubernetes
+  - openshift
+  - cloud-native
+  - control-plane

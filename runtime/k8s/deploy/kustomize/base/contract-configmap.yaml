@@ -1,0 +1,16 @@
+# Placeholder — overlays (or an adopting repo's bootstrap PR, per
+# docs/onboarding.md) replace this with the target repo's real
+# .ai-sdlc.yaml via a ConfigMapGenerator/kustomize patch or an External
+# Secret. Components fall back to schema defaults if this ever drifts to
+# invalid YAML (internal/contract.LoadFromEnv), so a bad contract degrades
+# gracefully instead of crash-looping the pod.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-sdlc-contract
+  namespace: ai-sdlc-runtime
+data:
+  .ai-sdlc.yaml: |
+    spec: "1.0.0"
+    autonomy:
+      level: shadow

@@ -1,0 +1,218 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-sdlc-k8s-runtime
+  namespace: ai-sdlc-runtime
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ai-sdlc-k8s-runtime
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ai-sdlc-k8s-runtime
+    spec:
+      serviceAccountName: ai-sdlc-runtime
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: admission-controller
+          image: ghcr.io/os-santiago/ai-sdlc-admission-controller:development
+          envFrom:
+            - configMapRef:
+                name: ai-sdlc-k8s-runtime-config
+          env:
+            - name: AI_SDLC_HTTP_ADDRESS
+              value: :8081
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: ai-sdlc-postgres-app, key: uri}
+          ports:
+            - name: admission
+              containerPort: 8081
+          readinessProbe:
+            httpGet: {path: /readyz, port: admission}
+          livenessProbe:
+            httpGet: {path: /healthz, port: admission}
+          resources:
+            requests: {cpu: 25m, memory: 32Mi}
+            limits: {cpu: 250m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: contract, mountPath: /etc/ai-sdlc/contract, readOnly: true}
+        - name: orchestrator
+          image: ghcr.io/os-santiago/ai-sdlc-orchestrator:development
+          envFrom:
+            - configMapRef: {name: ai-sdlc-k8s-runtime-config}
+          env:
+            - name: AI_SDLC_HTTP_ADDRESS
+              value: :8082
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: ai-sdlc-postgres-app, key: uri}
+          ports:
+            - name: orchestrator
+              containerPort: 8082
+          readinessProbe:
+            httpGet: {path: /readyz, port: orchestrator}
+          livenessProbe:
+            httpGet: {path: /healthz, port: orchestrator}
+          resources:
+            requests: {cpu: 25m, memory: 32Mi}
+            limits: {cpu: 250m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+        - name: worker
+          image: ghcr.io/os-santiago/ai-sdlc-worker:development
+          envFrom:
+            - configMapRef: {name: ai-sdlc-k8s-runtime-config}
+          env:
+            - name: AI_SDLC_HTTP_ADDRESS
+              value: :8083
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: ai-sdlc-postgres-app, key: uri}
+            - name: AI_SDLC_ENGINE
+              value: scc # worker's Containerfile is Node-capable (sc-agent-cli + git). Still degrades to the stub at runtime if MODEL_API_KEY/ai-sdlc-model-provider is missing — see selectSCCEngine in cmd/main.go.
+            - name: AI_SDLC_PROVIDER_BASE_URL
+              value: https://integrate.api.nvidia.com/v1
+            - name: AI_SDLC_MODEL
+              # nemotron-3-ultra-550b-a55b (the previous default) is a 550B
+              # reasoning model that, on this NVIDIA endpoint, consistently
+              # exceeded sc-agent-cli's provider connect/attempt timeouts
+              # (30s/120s default) during a real end-to-end test — not even
+              # a trivial 16-token completion returned headers within 4+
+              # minutes. llama-3.1-nemotron-70b-instruct is ~8x smaller and
+              # responds in seconds against the same endpoint/key.
+              value: nvidia/llama-3.1-nemotron-70b-instruct
+            - name: AI_SDLC_WORKSPACE_DIR
+              value: /workspaces/target-repo
+            - name: MODEL_API_KEY
+              valueFrom:
+                # Create out-of-band, never in a committed manifest:
+                #   kubectl create secret generic ai-sdlc-model-provider \
+                #     --namespace ai-sdlc-runtime --from-literal=apiKey=<key>
+                # optional: true keeps the pod starting (degrades to the
+                # stub engine, see selectSCCEngine in cmd/main.go) when the
+                # secret hasn't been created yet.
+                secretKeyRef: {name: ai-sdlc-model-provider, key: apiKey, optional: true}
+            - name: AI_SDLC_GH_APP_ID
+              valueFrom:
+                # Non-secret: a GitHub App ID is public-ish metadata, but
+                # it is still sourced from the same Secret as the private
+                # key so both are created/rotated together.
+                secretKeyRef: {name: ai-sdlc-github-app, key: appId, optional: true}
+            - name: AI_SDLC_GH_APP_PRIVATE_KEY
+              valueFrom:
+                # Create out-of-band, never in a committed manifest:
+                #   kubectl create secret generic ai-sdlc-github-app \
+                #     --namespace ai-sdlc-runtime \
+                #     --from-literal=appId=<app-id> \
+                #     --from-file=privateKey=<path-to-pem>
+                # optional: true: without this, selectCheckout (cmd/main.go)
+                # falls through to AI_SDLC_GH_PAT below, then to nil
+                # (AI_SDLC_WORKSPACE_DIR must already be a checkout,
+                # managed externally) — SCCEngine still runs either way.
+                secretKeyRef: {name: ai-sdlc-github-app, key: privateKey, optional: true}
+            - name: AI_SDLC_GH_PAT
+              valueFrom:
+                # Fallback credential for selectCheckout when the GitHub
+                # App above isn't available (e.g. it's owned by an
+                # individual account you don't control). Create
+                # out-of-band, never in a committed manifest:
+                #   kubectl create secret generic ai-sdlc-github-pat \
+                #     --namespace ai-sdlc-runtime --from-literal=token=<pat>
+                # Use a fine-grained PAT scoped to one repo (Contents:
+                # Read & write, Pull requests: Read & write) with an
+                # expiration date — not a broad personal token.
+                secretKeyRef: {name: ai-sdlc-github-pat, key: token, optional: true}
+          ports:
+            - name: worker
+              containerPort: 8083
+          readinessProbe:
+            httpGet: {path: /readyz, port: worker}
+          livenessProbe:
+            httpGet: {path: /healthz, port: worker}
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {cpu: "2", memory: 2Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: workspaces
+              mountPath: /workspaces
+            - {name: contract, mountPath: /etc/ai-sdlc/contract, readOnly: true}
+        - name: release-manager
+          image: ghcr.io/os-santiago/ai-sdlc-release-manager:development
+          envFrom:
+            - configMapRef: {name: ai-sdlc-k8s-runtime-config}
+          env:
+            - name: AI_SDLC_HTTP_ADDRESS
+              value: :8084
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: ai-sdlc-postgres-app, key: uri}
+          ports:
+            - name: release
+              containerPort: 8084
+          readinessProbe:
+            httpGet: {path: /readyz, port: release}
+          livenessProbe:
+            httpGet: {path: /healthz, port: release}
+          resources:
+            requests: {cpu: 25m, memory: 32Mi}
+            limits: {cpu: 250m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: contract, mountPath: /etc/ai-sdlc/contract, readOnly: true}
+        # relay (ADR-0005): the 5th container, co-located in this pod so it
+        # reaches the other four over localhost (see internal/outbox.
+        # DefaultRoutes) with no NetworkPolicy egress rule needed for that
+        # traffic. Its only external dependency is Postgres.
+        - name: relay
+          image: ghcr.io/os-santiago/ai-sdlc-relay:development
+          envFrom:
+            - configMapRef: {name: ai-sdlc-k8s-runtime-config}
+          env:
+            - name: AI_SDLC_HTTP_ADDRESS
+              value: :8085
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: ai-sdlc-postgres-app, key: uri}
+          ports:
+            - name: relay
+              containerPort: 8085
+          readinessProbe:
+            httpGet: {path: /readyz, port: relay}
+          livenessProbe:
+            httpGet: {path: /healthz, port: relay}
+          resources:
+            requests: {cpu: 25m, memory: 32Mi}
+            limits: {cpu: 250m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: workspaces
+          emptyDir:
+            sizeLimit: 10Gi
+        - name: contract
+          configMap:
+            name: ai-sdlc-contract

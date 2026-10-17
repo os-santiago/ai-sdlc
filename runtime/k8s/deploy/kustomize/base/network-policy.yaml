@@ -1,0 +1,50 @@
+# Scoped to this app's own pod label, NOT podSelector: {}. ai-sdlc-runtime
+# also hosts the CloudNativePG operator + its managed Postgres cluster
+# pods (ADR-0005) — third-party workloads with their own labels that this
+# app does not own the egress/ingress needs of (operator -> kube-apiserver,
+# Postgres primary <-> replica streaming, cert rotation, etc.). A blanket
+# podSelector: {} silently strangled the operator's apiserver access
+# ("dial tcp <apiserver-ip>:443: i/o timeout") the first time this was
+# deployed to a real cluster. Scope any future AI-SDLC-owned deny/allow
+# rule to app.kubernetes.io/name: ai-sdlc-k8s-runtime; leave CloudNativePG
+# to its own upstream-recommended network posture.
+#
+# Ingress-only. An Egress-type NetworkPolicy was deployed and verified
+# here first (see commit history) but was removed after live testing on
+# OpenShift 4.22 / OVN-Kubernetes: once a pod is selected by ANY
+# Egress-type NetworkPolicy, this cluster's build stops matching
+# ClusterIP Service traffic to its allow rules correctly after the
+# Service's DNAT (confirmed for both openshift-dns's ClusterIP, port 53,
+# and the "kubernetes" apiserver Service, port 443) — connections hang
+# until timeout even with an explicit `ports: [{protocol: UDP/TCP, port:
+# 53}]` + ipBlock 0.0.0.0/0 rule. Direct pod-to-pod traffic in the SAME
+# namespace (e.g. to the CloudNativePG-managed Postgres ClusterIP) was
+# unaffected — only same-cluster, different-namespace Service traffic
+# broke. Removing policyTypes: Egress here (ingress-only default-deny)
+# reproducibly fixes it. Re-add an Egress rule only after confirming this
+# specific symptom is absent on the target cluster/OVN build.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: ai-sdlc-runtime
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ai-sdlc-k8s-runtime
+  policyTypes: [Ingress]
+  ingress:
+    # The OpenShift Route (route.yaml) connects the default router pod
+    # directly to this pod's admission port, bypassing the Service — that
+    # traffic is still subject to this Ingress-type NetworkPolicy and was
+    # observed returning 503 ("Application is not available") with no
+    # ingress rule present at all. network.openshift.io/policy-group:
+    # ingress is the OpenShift-wide label every router/ingress namespace
+    # carries for exactly this purpose. kubelet-sourced readiness/liveness
+    # probes are unaffected either way — they bypass NetworkPolicy.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: ingress
+      ports:
+        - {protocol: TCP, port: 8081}

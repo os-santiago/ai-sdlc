@@ -1,0 +1,31 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ai-sdlc-runtime
+resources:
+  - ../../base
+  - route.yaml
+  - imagestreams.yaml
+  - buildconfigs.yaml
+patches:
+  - path: environment.yaml
+images:
+  # OpenShift-native path: ImageStreams track
+  # image-registry.openshift-image-registry.svc:5000/ai-sdlc-runtime/<component>:latest
+  # once buildconfigs.yaml's BuildConfigs run (`oc start-build <component>`).
+  # ghcr.io digests (production overlay) remain a valid alternative when a
+  # cluster is not configured to build in-cluster.
+  - name: ghcr.io/os-santiago/ai-sdlc-admission-controller
+    newName: image-registry.openshift-image-registry.svc:5000/ai-sdlc-runtime/admission-controller
+    newTag: latest
+  - name: ghcr.io/os-santiago/ai-sdlc-orchestrator
+    newName: image-registry.openshift-image-registry.svc:5000/ai-sdlc-runtime/orchestrator
+    newTag: latest
+  - name: ghcr.io/os-santiago/ai-sdlc-worker
+    newName: image-registry.openshift-image-registry.svc:5000/ai-sdlc-runtime/worker
+    newTag: latest
+  - name: ghcr.io/os-santiago/ai-sdlc-release-manager
+    newName: image-registry.openshift-image-registry.svc:5000/ai-sdlc-runtime/release-manager
+    newTag: latest
+  - name: ghcr.io/os-santiago/ai-sdlc-relay
+    newName: image-registry.openshift-image-registry.svc:5000/ai-sdlc-runtime/relay
+    newTag: latest

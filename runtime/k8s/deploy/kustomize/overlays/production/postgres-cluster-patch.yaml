@@ -1,0 +1,9 @@
+# Production runs CloudNativePG with 3 instances (primary + 2 replicas)
+# instead of base's single-instance default — ADR-0005.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: ai-sdlc-postgres
+  namespace: ai-sdlc-runtime
+spec:
+  instances: 3

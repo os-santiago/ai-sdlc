@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 4 }}
+  ports:
+    - {name: admission, port: {{ .Values.components.admissionController.port }}, targetPort: admission}
+    - {name: orchestrator, port: {{ .Values.components.orchestrator.port }}, targetPort: orchestrator}
+    - {name: worker, port: {{ .Values.components.worker.port }}, targetPort: worker}
+    - {name: release, port: {{ .Values.components.releaseManager.port }}, targetPort: release}
+    - {name: relay, port: {{ .Values.components.relay.port }}, targetPort: relay}

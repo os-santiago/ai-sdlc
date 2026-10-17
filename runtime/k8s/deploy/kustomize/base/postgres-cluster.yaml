@@ -1,0 +1,29 @@
+# CloudNativePG Cluster (ADR-0005): durable workflow state + the
+# transactional outbox (internal/store, internal/outbox) for all five
+# components. Requires the CloudNativePG operator installed cluster-wide
+# first — on OpenShift, subscribe to "CloudNativePG" from OperatorHub; on
+# vanilla Kubernetes, see https://cloudnative-pg.io/documentation/current/installation_upgrade/.
+# That operator install is a one-time, cluster-scoped prerequisite outside
+# this Kustomize tree (see ../../README.md "Deploy").
+#
+# If your cluster already runs a different Postgres operator or a managed
+# instance, delete this resource from the overlay's kustomization.yaml and
+# point the ai-sdlc-postgres-app Secret (or your own) at it instead — no
+# application code depends on CloudNativePG specifically, only on a
+# DATABASE_URL env var resolving to a reachable Postgres connection string.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: ai-sdlc-postgres
+  namespace: ai-sdlc-runtime
+spec:
+  instances: 1
+  storage:
+    size: 1Gi
+  bootstrap:
+    initdb:
+      database: ai_sdlc
+      owner: ai_sdlc
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 512Mi}

@@ -9,6 +9,16 @@ thin caller workflow + `.ai-sdlc.yaml` and gets the autonomous loop.
 We maintain Architecture Decision Records (ADRs) in the [architecture/adr](./architecture/adr/) directory.
 See [ADR-0001: Homedir AI-SDLC Sunset and Cutover](./architecture/adr/0001-homedir-ai-sdlc-sunset-and-cutover.md) for details on the homedir cutover.
 
+See [ADR-0004: Cloud-native (Kubernetes/OpenShift) alternate control plane](./architecture/adr/0004-cloud-native-k8s-openshift-runtime.md)
+for adopters who cannot run GitHub Actions. GHA stays the default below;
+[`runtime/k8s/`](../runtime/k8s/README.md) is an opt-in alternative reading
+the same `.ai-sdlc.yaml` contract and `spec/normalized-event.schema.json`
+intake payload. See
+[ADR-0005: Durable state, transactional outbox and engine invocation for runtime/k8s](./architecture/adr/0005-runtime-k8s-event-bus-and-engine-invocation.md)
+for how that control plane's components are actually wired together
+(PostgreSQL + outbox, no message broker) and its current limits (stub
+engine only, no GitHub webhook adapter yet).
+
 ## Workflows
 
 | Workflow | Stage | Entry |

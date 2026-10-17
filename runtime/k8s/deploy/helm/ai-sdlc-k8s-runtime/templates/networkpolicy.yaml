@@ -1,0 +1,40 @@
+{{- if .Values.networkPolicy.enabled }}
+# Ingress-only, scoped to this app's own pod label — NOT podSelector: {}
+# and NO Egress policyType. Both were tried and reverted after live
+# testing on OpenShift 4.22 / OVN-Kubernetes (see
+# deploy/kustomize/base/network-policy.yaml for the full writeup):
+#   1. podSelector: {} strangled the CloudNativePG operator's own
+#      kube-apiserver access (it shares this namespace per ADR-0005).
+#   2. Any Egress-type NetworkPolicy on this cluster build breaks
+#      ClusterIP Service traffic after DNAT (DNS port 53, apiserver port
+#      443) even with correct allow rules — same-namespace pod-to-pod
+#      traffic (e.g. to Postgres) was unaffected, only cross-namespace
+#      Service traffic broke. Re-add an Egress rule only after
+#      confirming this symptom is absent on the target cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    # OpenShift-specific (harmless no-op on vanilla Kubernetes, where no
+    # namespace carries this label and the Route resource in this chart
+    # is also gated out): the default Route-based router connects
+    # directly to this pod's admission port, bypassing the Service, and
+    # that traffic is still subject to this Ingress-type NetworkPolicy.
+    # Observed as a 503 ("Application is not available") with no rule
+    # present at all. kubelet-sourced probes are unaffected either way.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: ingress
+      ports:
+        - {protocol: TCP, port: {{ .Values.components.admissionController.port }}}
+{{- end }}
