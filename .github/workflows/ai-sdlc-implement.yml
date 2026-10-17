@@ -624,6 +624,7 @@ jobs:
       - name: Label outcome on the issue
         # Post-script: deterministic label mutation under FORGE_TOKEN_WRITE.
         if: always() && steps.contract.outcome == 'success'
+        env:
           RUN_ID: ${{ github.run_id }}
           ENGINE_NAME: ${{ steps.contract.outputs.engine_name }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
