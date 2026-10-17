@@ -162,6 +162,17 @@ escalation:
   contacts:
     - "@Axel-DaMage"
   notify_channels: []
+  # Failure-class → notification route map (spec/risk-taxonomy.md "Failure
+  # classes and alert routing", issue #175): routes.<class> wins, `default`
+  # is the reserved fallback — an unmatched class still pages the default
+  # owner, never silently.
+  routes:
+    contract-error:    {mentions: ["@Axel-DaMage"], labels: ["priority:P0"], channel: issue-comment}
+    security:          {mentions: ["@Axel-DaMage"], labels: ["priority:P0"], channel: issue-comment}
+    supply-chain:      {mentions: ["@Axel-DaMage"], labels: ["priority:P1"], channel: issue-comment}
+    verify-failure:    {mentions: ["@Axel-DaMage"], labels: ["priority:P1"], channel: issue-comment}
+    repairs-exhausted: {mentions: ["@Axel-DaMage"], labels: ["priority:P1"], channel: issue-comment}
+    default:           {mentions: ["@Axel-DaMage"], labels: [], channel: issue-comment}
 
 promotion:
   clean_merges_threshold: 3

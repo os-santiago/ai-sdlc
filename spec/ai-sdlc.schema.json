@@ -76,6 +76,34 @@
           "description": "Window override for this target level; the >=10 minimum evidence base still applies."
         }
       }
+    },
+    "alert_route": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Notification route for one failure class (spec/risk-taxonomy.md, issue #175). The reserved key `default` in escalation.routes is the fallback consulted when a failure signature maps to no declared class — a failure is never silent.",
+      "properties": {
+        "mentions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "GitHub handles or org/team slugs @-mentioned in the escalation notification for this failure class (e.g. '@oncall', 'my-org/runtime-team')."
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra labels applied next to escalation.label when this class routes (e.g. 'priority:P0')."
+        },
+        "channel": {
+          "type": "string",
+          "default": "issue-comment",
+          "description": "Notification channel identifier — deployment-specific (issue-comment, discord channel id, slack webhook name, etc.)."
+        }
+      }
     }
   },
   "properties": {
@@ -736,6 +764,13 @@
             "type": "string"
           },
           "description": "Free-form notification targets (deployment-specific: discord channel ids, slack webhooks names, etc.)"
+        },
+        "routes": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/alert_route"
+          },
+          "description": "Failure-class → notification route map (issue #175). Keys are kebab-case failure-class identifiers (canonical vocabulary: spec/risk-taxonomy.md); `default` is the reserved fallback route for undeclared classes. Resolution: routes.<class> → routes.default → contacts/notify_channels synthesized default. Unknown classes always resolve to the default route — alerting is never silent."
         }
       }
     },

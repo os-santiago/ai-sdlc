@@ -64,7 +64,7 @@ on:
         type: number
         default: 3
       runtime_ref:
-        description: 'ref of os-santiago/ai-sdlc to fetch trusted runtime scripts (repair-stall-guard.js, failure-runbook.js) from — pin to the same ref as this workflow'
+        description: 'ref of os-santiago/ai-sdlc to fetch trusted runtime scripts (repair-stall-guard.js, failure-runbook.js, alert-router.js) from — pin to the same ref as this workflow'
         type: string
         default: 'main'
       model:
@@ -687,6 +687,47 @@ jobs:
           NODE
           gh pr comment "$PR" -R "$REPO" --body-file "$WORK/attempt-comment.md"
 
+      # Alert routing (issue #175): the escalation cause classifies into a
+      # canonical failure class (spec/risk-taxonomy.md) and resolves WHO is
+      # notified via escalation.routes in the BASE-ref contract — the router
+      # comes from the trusted runtime pin, never the PR head.
+      - name: Route escalation alert
+        id: route
+        if: >-
+          always() && (steps.guard.outputs.decision == 'escalate' ||
+          (steps.guard.outputs.decision == 'repair' && steps.record.outputs.outcome != 'pushed'))
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ROUTE_REASON: ${{ steps.guard.outputs.decision == 'escalate' && steps.guard.outputs.reason || steps.record.outputs.outcome }}
+          RUNTIME_REF: ${{ inputs.runtime_ref }}
+        run: |
+          set -euo pipefail
+          W="$WORK/alert"
+          mkdir -p "$W"
+          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/alert-router.js?ref=$RUNTIME_REF" \
+              -H "Accept: application/vnd.github.raw" > "$W/alert-router.js" 2>"$W/fetch.err" \
+             || ! node --check "$W/alert-router.js"; then
+            echo "::warning::alert router unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$W/fetch.err" 2>/dev/null)) — escalation proceeds unrouted"
+            exit 0
+          fi
+          # ci-repair resolves no contract — read the escalation section from
+          # the repo's DEFAULT-branch .ai-sdlc.yaml (base config, never head).
+          if gh api "repos/$REPO/contents/.ai-sdlc.yaml" -H "Accept: application/vnd.github.raw" \
+              > "$W/contract.yaml" 2>/dev/null && command -v yq >/dev/null; then
+            yq -o=json '.escalation // {}' "$W/contract.yaml" > "$W/escalation.json" 2>/dev/null || echo '{}' > "$W/escalation.json"
+          else
+            echo '{}' > "$W/escalation.json"
+          fi
+          # Trusted-author comments only — a forged marker must never dedup
+          # a real alert.
+          gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
+            --jq '.[] | select(.user.type == "Bot" or ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR"))) | {body: (.body // ""), created_at}' \
+            | jq -s . > "$W/trusted-comments.json" 2>/dev/null || echo '[]' > "$W/trusted-comments.json"
+          node "$W/alert-router.js" --escalation "$W/escalation.json" \
+            --repo "$REPO" --pr "$PR" --reason "$ROUTE_REASON" \
+            --comments "$W/trusted-comments.json" \
+            --github-output --json | tee "$W/route.json" || true
+
       - name: Escalate to human
         id: escalate
         if: >-
@@ -701,6 +742,9 @@ jobs:
           STALL_COUNT: ${{ steps.guard.outputs.stall_count }}
           FAILING: ${{ steps.guard.outputs.failing }}
           OUTCOME: ${{ steps.record.outputs.outcome }}
+          ALERT_MENTIONS: ${{ steps.route.outputs.alert_mentions }}
+          ALERT_LABELS: ${{ steps.route.outputs.alert_labels }}
+          ALERT_MARKER: ${{ steps.route.outputs.alert_marker }}
         run: |
           set -euo pipefail
           if [ "$DECISION" = "escalate" ] && [ "${REASON%%:*}" = "repair-stall" ]; then
@@ -715,12 +759,21 @@ jobs:
           # printf (not an inline double-quoted body): check names are untrusted
           # and backticks in a double-quoted string would be command-substituted.
           # shellcheck disable=SC2016  # literal Markdown backticks
-          printf '⚠️ **AI-SDLC ci-repair escalated** — cause: %s.\n\nFailing: `%s`\n\nHuman review required; remove `needs-human` (or push a fix) to hand control back.\n' \
-            "$CAUSE" "${FAILING:-n/a}" > "$RUNNER_TEMP/escalation-comment.md"
+          {
+            printf '⚠️ **AI-SDLC ci-repair escalated** — cause: %s.\n\nFailing: `%s`\n\nHuman review required; remove `needs-human` (or push a fix) to hand control back.\n' \
+              "$CAUSE" "${FAILING:-n/a}"
+            [ -n "${ALERT_MENTIONS:-}" ] && printf '\ncc %s\n' "$ALERT_MENTIONS"
+            [ -n "${ALERT_MARKER:-}" ] && printf '%s\n' "$ALERT_MARKER"
+          } > "$RUNNER_TEMP/escalation-comment.md"
           gh label create needs-human -R "$REPO" --color B60205 \
             --description "AI-SDLC escalation: human action required" >/dev/null 2>&1 || true
           gh label create needs-human -R "$REPO" --color D93F0B --description "AI-SDLC: requires human intervention" --force || true
           gh pr edit "$PR" -R "$REPO" --add-label needs-human
+          # Route-declared labels classify the failure for the notified owner.
+          jq -r '.[]?' <<<"${ALERT_LABELS:-[]}" | while IFS= read -r lbl; do
+            gh label create "$lbl" -R "$REPO" --force || true
+            gh pr edit "$PR" -R "$REPO" --add-label "$lbl" || true
+          done
           gh pr comment "$PR" -R "$REPO" --body-file "$RUNNER_TEMP/escalation-comment.md"
 
       - name: Result

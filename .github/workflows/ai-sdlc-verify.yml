@@ -28,7 +28,7 @@ on:
         type: string
         default: ''
       runtime_ref:
-        description: 'ref of os-santiago/ai-sdlc to fetch scripts/postmortem.js from — pin to the same ref as this workflow'
+        description: 'ref of os-santiago/ai-sdlc to fetch trusted runtime scripts (postmortem.js, alert-router.js) from — pin to the same ref as this workflow'
         type: string
         default: 'main'
       org_config:
@@ -139,6 +139,31 @@ jobs:
           done < verify.cmds
           echo "failed=$failed" >> "$GITHUB_OUTPUT"
 
+      # Alert routing (issue #175): a post-merge verify failure classifies as
+      # `verify-failure` and resolves WHO is notified via escalation.routes in
+      # the resolved contract — the router comes from the trusted runtime pin.
+      - name: Route verify-failure alert
+        if: steps.run.outputs.failed == '1'
+        id: route
+        env:
+          CONTRACT: ${{ steps.contract.outputs.path }}
+          RUNTIME_REF: ${{ inputs.runtime_ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          W="$RUNNER_TEMP/ai-sdlc-alert"
+          mkdir -p "$W"
+          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/alert-router.js?ref=$RUNTIME_REF" \
+              -H "Accept: application/vnd.github.raw" > "$W/alert-router.js" 2>"$W/fetch.err" \
+             || ! node --check "$W/alert-router.js"; then
+            echo "::warning::alert router unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$W/fetch.err" 2>/dev/null)) — report proceeds unrouted"
+            exit 0
+          fi
+          jq '.escalation // {}' "$CONTRACT" > "$W/escalation.json" 2>/dev/null || echo '{}' > "$W/escalation.json"
+          node "$W/alert-router.js" --escalation "$W/escalation.json" \
+            --repo "$REPO" --class verify-failure --reason "post-merge verify commands failed on $SHA" \
+            --github-output --json | tee "$W/route.json" || true
+
       - name: Report on failure
         if: steps.run.outputs.failed == '1'
         env:
@@ -148,8 +173,21 @@ jobs:
           RUNTIME_REF: ${{ inputs.runtime_ref }}
           REOPEN_MIN: ${{ steps.contract.outputs.postmortem_reopen_min }}
           DEDUP_DAYS: ${{ steps.contract.outputs.postmortem_dedup_window_days }}
+          ALERT_MENTIONS: ${{ steps.route.outputs.alert_mentions }}
+          ALERT_LABELS: ${{ steps.route.outputs.alert_labels }}
+          ALERT_MARKER: ${{ steps.route.outputs.alert_marker }}
         run: |
           set -euo pipefail
+          # Route-declared labels classify the failure — create them first so
+          # a missing label can never abort the issue filing itself.
+          jq -r '.[]?' <<<"${ALERT_LABELS:-[]}" | while IFS= read -r lbl; do
+            gh label create "$lbl" -R "$REPO" --force || true
+          done
+          ROUTE_LABELS=$(jq -r 'map("," + .) | join("")' <<<"${ALERT_LABELS:-[]}")
+          NOTIFY=""
+          [ -n "${ALERT_MENTIONS:-}" ] && NOTIFY=$(printf '\n\ncc %s' "$ALERT_MENTIONS")
+          MARKER=""
+          [ -n "${ALERT_MARKER:-}" ] && MARKER=$(printf '\n\n%s' "$ALERT_MARKER")
           REVERTED=""
           if [ "$REVERT" = "true" ]; then
             git config user.name "ai-sdlc[bot]"; git config user.email "ai-sdlc[bot]@users.noreply.github.com"
@@ -177,18 +215,18 @@ jobs:
             node "$WORK/postmortem.js" --repo "$REPO" \
               --component verify --class post-merge-verify-failure \
               --location "$LOCATION" \
-              --title "$TITLE" --body "$BODY" --context-file failed.cmds \
+              --title "$TITLE" --body "${BODY}${NOTIFY}${MARKER}" --context-file failed.cmds \
               --occurrence-id "verify-$SHA" --run-url "$RUN_URL" \
               --reopen-min "${REOPEN_MIN:-2}" --dedup-window-days "${DEDUP_DAYS:-90}" \
-              --labels "ai-sdlc,postmortem,priority:P1" --json || true
+              --labels "ai-sdlc,postmortem,priority:P1${ROUTE_LABELS}" --json || true
           else
             # Filer unavailable at the pinned ref — fail open to the legacy
             # one-shot filing so the failure is never lost silently.
             echo "::warning title=ai-sdlc verify::postmortem filer unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$WORK/fetch.err" 2>/dev/null)) — filing without dedup"
             if [ -n "$REVERTED" ]; then
-              gh issue create -R "$REPO" --title "verify: post-merge checks failed — reverted $SHA" --body "Post-merge verify failed on \`$SHA\`; change reverted. See workflow run for logs." --label "ai-sdlc,priority:P1"
+              gh issue create -R "$REPO" --title "verify: post-merge checks failed — reverted $SHA" --body "Post-merge verify failed on \`$SHA\`; change reverted. See workflow run for logs.${NOTIFY}${MARKER}" --label "ai-sdlc,priority:P1${ROUTE_LABELS}"
             else
-              gh issue create -R "$REPO" --title "verify: post-merge checks failed on $SHA" --body "Post-merge verify commands failed on \`$SHA\`. See workflow run for logs; revert_on_failure is disabled." --label "ai-sdlc,priority:P1"
+              gh issue create -R "$REPO" --title "verify: post-merge checks failed on $SHA" --body "Post-merge verify commands failed on \`$SHA\`. See workflow run for logs; revert_on_failure is disabled.${NOTIFY}${MARKER}" --label "ai-sdlc,priority:P1${ROUTE_LABELS}"
             fi
           fi
           exit 1
