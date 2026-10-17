@@ -37,7 +37,7 @@ on:
         type: string
         default: ''
       runtime_ref:
-        description: 'ref of os-santiago/ai-sdlc to fetch runtime scripts (intake-refiner.js, epic-decomposer.js) from — pin to the same ref as this workflow'
+        description: 'ref of os-santiago/ai-sdlc to fetch runtime scripts (intake-refiner.js, dup-detector.js, epic-decomposer.js) from — pin to the same ref as this workflow'
         type: string
         default: 'main'
     outputs:
@@ -191,6 +191,45 @@ jobs:
             { echo "status=error"; echo "fingerprint="; } >> "$GITHUB_OUTPUT"
           fi
           cat "$WORK/refine.out" || true
+
+      # Duplicate detection (issue #161, epic #147): deterministic,
+      # embedding-free similarity — normalized token Jaccard weighted
+      # toward titles + marker-key matching (postmortem signatures,
+      # epic-child keys) — scores the issue against the open backlog and
+      # reports likely duplicates in ONE fingerprinted upsert comment.
+      # Advisory only: never closes an issue, never applies the
+      # `duplicate` label (spec/labels.md T10 — `dedup`/`human` own that
+      # transition). Fail-open like the refiner: additive intelligence,
+      # not a dispatch gate.
+      - name: Duplicate scan (backlog dedup)
+        id: dup
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          RUNTIME_REF: ${{ inputs.runtime_ref }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-dup"
+          mkdir -p "$WORK"
+
+          # Trusted code only: canonical detector from the runtime repo
+          # pin — never from the consumer repo (same trust boundary as
+          # classify/refine).
+          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/dup-detector.js?ref=$RUNTIME_REF" \
+              -H "Accept: application/vnd.github.raw" > "$WORK/dup-detector.js" 2>"$WORK/fetch.err"; then
+            echo "::warning::dup detector unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$WORK/fetch.err")) — skipping dedup scan"
+            echo "status=skipped" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node --check "$WORK/dup-detector.js"
+
+          if ! node "$WORK/dup-detector.js" \
+              --repo "$REPO" --issue "$ISSUE" \
+              --apply --json --github-output > "$WORK/dup.out" 2>"$WORK/dup.err"; then
+            echo "::warning::dup scan failed ($(head -c 200 "$WORK/dup.err")) — continuing to DoR"
+            echo "status=error" >> "$GITHUB_OUTPUT"
+          fi
+          cat "$WORK/dup.out" || true
+
       # Epic intake (issue #198): the `epic` label is terminal — never
       # dispatched (spec/labels.md T10) — so instead of the DoR gate the
       # issue is decomposed into bounded `scc:child` sub-issues, each filed

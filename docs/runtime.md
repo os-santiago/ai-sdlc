@@ -23,7 +23,7 @@ engine only, no GitHub webhook adapter yet).
 
 | Workflow | Stage | Entry |
 |---|---|---|
-| `ai-sdlc-intake.yml` | conversational refinement (`scripts/intake-refiner.js`): spec-completeness check → one upserted comment (clarifying questions or derived ACs) + `scc:not-ready` hold, fingerprint-retriggered on edits/replies; then DoR validation (R1–R6 per `spec/definition-of-ready.md`), `scc:queued`/`scc:not-ready` labels | `issues` (labeled/opened/edited) + `issue_comment` in caller |
+| `ai-sdlc-intake.yml` | conversational refinement (`scripts/intake-refiner.js`): spec-completeness check → one upserted comment (clarifying questions or derived ACs) + `scc:not-ready` hold, fingerprint-retriggered on edits/replies; duplicate scan (`scripts/dup-detector.js`): token-Jaccard + marker-key similarity over the open backlog → one advisory upserted comment (never closes, never label-blocks); then DoR validation (R1–R6 per `spec/definition-of-ready.md`), `scc:queued`/`scc:not-ready` labels | `issues` (labeled/opened/edited) + `issue_comment` in caller |
 | `ai-sdlc-intake.yml` | Epic decomposition (`epic` → `scc:child` sub-issues) or DoR validation (R1–R6 per `spec/definition-of-ready.md`), `scc:queued`/`scc:not-ready` labels | `issues.labeled` in caller |
 | `ai-sdlc-implement.yml` | `scc` headless run → branch → PR (`Closes #N`) + manifest/audit artifacts | called on `scc:queued` |
 | `ai-sdlc-automerge.yml` | merge-gate decision table (spec/risk-taxonomy.md): green+mergeable → squash+delete; failing → repair signal; pending/conflict → `needs-human`; pending review holds only up to `review.wait_max_minutes` → `review_timeout` merge | `check_run.completed` / `pull_request` / called |
@@ -267,7 +267,7 @@ validation run.
 | `issue_number` | — (required) | issue to validate |
 | `trigger_label` | `''` → `triggers.issue_label` | label that arms dispatch |
 | `org_config` | `''` | org baseline `owner/repo[/path][@ref]` — see [Org policy](#org-policy) |
-| `runtime_ref` | `main` | ai-sdlc ref to fetch `scripts/intake-refiner.js` from — pin with the workflow ref |
+| `runtime_ref` | `main` | ai-sdlc ref to fetch runtime scripts (`intake-refiner.js`, `dup-detector.js`, `epic-decomposer.js`) from — pin with the workflow ref |
 
 Before DoR, the stage runs conversational refinement
 (`scripts/intake-refiner.js`, issue #197): a spec-completeness check posts
@@ -280,6 +280,25 @@ lives in the comment marker, so edits and author replies re-trigger the
 check while identical content never double-posts. The refiner never edits
 the issue body and honors `triggers.skip_labels` (plus the run-state
 bindings as trigger-restoration vetoes).
+
+**Duplicate detection** (issue #161): alongside refinement, the stage runs
+`scripts/dup-detector.js` — deterministic, embedding-free similarity over
+the open backlog (normalized token Jaccard weighted 0.7 title / 0.3 body,
+plus marker-key matching for machine-filed bodies: a shared
+`ai-sdlc-failure-signature` sigHash or a repeated
+`hermes:epic-child key:"…" parent:#N` is a certain duplicate, while a
+signature pair with different hashes is never one — each filing is
+canonical for its signature, spec/postmortem-lifecycle.md). Candidates at
+or above `AI_SDLC_DUP_THRESHOLD` (default 0.60; related band at
+`AI_SDLC_RELATED_THRESHOLD`, default 0.30) are reported in ONE upserted
+`<!-- ai-sdlc:dup-scan fp:"…" -->` comment fingerprinted over the match
+set — identical findings never re-post, a changed set PATCHes in place, an
+emptied set rewrites the comment to a cleared notice. Detection is
+advisory only: it never closes an issue and never applies the `duplicate`
+label (spec/labels.md T10 — `dedup`/`human` own that transition); the
+comment suggests confirmation or dismissal. Fail-open like the refiner —
+a detector error never wedges a DoR-ready issue. A backlog-wide pairwise
+audit is available manually via `--sweep` (report-only unless `--apply`).
 | `runtime_ref` | `main` | ai-sdlc ref the epic decomposer is fetched from — pin to the workflow ref |
 
 Outputs: `dispatch`, `ledger_head` (sealed chain head — feed it to the next
