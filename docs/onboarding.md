@@ -95,7 +95,8 @@ credential-shaped values ([runtime.md](runtime.md)). The checklist is:
 | `AI_SDLC_APP_ID` + `AI_SDLC_APP_PRIVATE_KEY` | yes | every mutation stage mints a per-run App installation token — fail-closed, no PAT/`GITHUB_TOKEN` fallback |
 | `MODEL_API_KEY` | yes, for inference | API key for the resolved provider endpoint (GitHub Models retired 2026-07-30) |
 | `AI_SDLC_PROVIDER_URL` (repo **variable**) | yes | OpenAI-compatible inference endpoint the engine resolves |
-| `AI_SDLC_OFF` (repo variable) | optional | `=1` halts dispatch per run — the emergency stop |
+| `AI_SDLC_OFF` / `AI_SDLC_KILL` (repo or org variable) | optional | truthy halts dispatch per run — the emergency stop (org-scoped = fleet-wide; spec/kill-switch.md) |
+| `AI_SDLC_CONTROL_REPO` (repo variable) | optional | control repo holding the `ai-sdlc:off` kill issue — set on enrolled repos for the fleet channel (default: the repo itself) |
 | `AI_SDLC_FREEZE` | optional | contract-named freeze env; pins the effective level to `shadow` while set |
 
 The end-state the installer targets (#185): a shared public App whose

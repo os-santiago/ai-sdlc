@@ -1,0 +1,109 @@
+# ai-sdlc-kill — org kill-switch: one action revokes autonomy fleet-wide
+# (issue #172, epic #149; normative contract: spec/kill-switch.md)
+#
+# `engage` opens (or re-stamps) the `ai-sdlc:off` control issue in this
+# repo; `release` comments + closes it. Every enrolled stage's autonomy
+# gate reads that issue on each run — one dispatch here halts dispatch
+# everywhere within one cycle. Equivalent manual signals: open/close an
+# `ai-sdlc:off` issue by hand, or set the repo/org variable
+# AI_SDLC_KILL=true / AI_SDLC_OFF=1.
+#
+# Audit: the issue body + comments record actor and ISO-8601 timestamp,
+# the issue timeline records every state transition, and each dispatch
+# appends a tamper-evident run-ledger entry (stage `kill-switch`, issue
+# #196). The dispatching run itself is the GitHub-side who/when record.
+#
+# One action:
+#   gh workflow run ai-sdlc-kill.yml -f action=engage -f reason="incident-42"
+#   gh workflow run ai-sdlc-kill.yml -f action=release -f reason="resolved"
+#
+# `repo` targets a different control repo only when this token can write
+# it — normally the control repo IS this repo (fleet enrollment: set
+# vars.AI_SDLC_CONTROL_REPO=<owner>/<control-repo> on each consumer).
+name: ai-sdlc-kill
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'engage revokes autonomy; release restores it'
+        required: true
+        type: choice
+        options:
+          - engage
+          - release
+      reason:
+        description: 'recorded on the control issue + run ledger'
+        type: string
+        default: ''
+      repo:
+        description: 'control repo holding the ai-sdlc:off issue; empty = this repo'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ai-sdlc-kill
+  cancel-in-progress: false
+
+jobs:
+  switch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TARGET: ${{ inputs.repo || github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ${{ inputs.action }} autonomy kill-switch
+        id: kill
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          node scripts/kill-switch.js "${{ inputs.action }}" --repo "$TARGET" \
+            --actor "${{ github.actor }}" --reason "${{ inputs.reason }}" \
+            --json > kill-result.json
+          cat kill-result.json
+          {
+            echo "### ai-sdlc kill-switch — ${{ inputs.action }}"
+            echo '```json'; cat kill-result.json; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Tamper-evident run evidence (issue #196): the transition is hashed
+      # into a chain entry, sealed, and uploaded — never fails the job.
+      - name: Run ledger — append stage record
+        id: ledger
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/run-ledger
+        with:
+          op: append
+          stage: kill-switch
+          repo: ${{ inputs.repo || github.repository }}
+          data: >-
+            {"action":${{ toJSON(inputs.action) }},"actor":${{ toJSON(github.actor) }},"reason":${{ toJSON(inputs.reason) }},"result":${{ toJSON(steps.kill.outputs) }}}
+          data-files: |
+            kill-result.json
+
+      - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)
+        id: seal
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        uses: ./.github/actions/run-ledger
+        with:
+          op: seal
+          stage: kill-switch
+          signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        with:
+          name: ai-sdlc-ledger-kill-switch-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ai-sdlc-ledger/ledger-kill-switch.jsonl
+          if-no-files-found: ignore
+          retention-days: 14

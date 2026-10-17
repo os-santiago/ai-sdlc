@@ -115,8 +115,10 @@ The bootstrap PR (and the manual path below) wires three things:
    2026-07-30, so the run fails. Set it to a provider API key and
    configure a provider URL (the `provider_base_url` input or the
    `AI_SDLC_PROVIDER_URL` repository variable) pointing at a live
-   OpenAI-compatible endpoint. Set the repo variable `AI_SDLC_OFF=1`
-   to halt the pipeline without disabling workflows.
+   OpenAI-compatible endpoint. Set the variable `AI_SDLC_OFF=1` /
+   `AI_SDLC_KILL=true` (repo- or org-scoped) or open an `ai-sdlc:off`
+   control issue to halt the pipeline without disabling workflows
+   (spec/kill-switch.md).
 
 ## Documentation
 
