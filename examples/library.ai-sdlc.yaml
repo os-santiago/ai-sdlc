@@ -92,6 +92,18 @@ model:
   routing_hints:
     docs_tasks: auto/best-fast
 
+# Per-task-class model routing (issue #171; spec/model-routing.md):
+# stage keys are the task classes. Model-only entries keep the default
+# adapter (engine.name = scc); a missing model falls back to
+# model.primary.
+engines:
+  intake:
+    model: auto/best-fast          # cheap class for mechanical triage
+  implement:
+    engine: scc                    # adapter pinned; model.primary (best-coding)
+  review:
+    model: auto/best-reasoning     # frontier class where review quality pays
+
 engine:
   name: scc
   max_steps: 400

@@ -259,7 +259,7 @@ describe('per-stage engine selection (issue #205)', () => {
     // ('scc' here, i.e. sc-agent-cli), per the contract's default chain.
     assert.ok(!('review' in contract.engines));
     assert.strictEqual(contract.engine.name, 'scc');
-    assert.strictEqual(contract._sources['engines.implement'], 'contract');
+    assert.strictEqual(contract._sources['engines.implement.engine'], 'contract');
 
     // AC: stage_engine(contract, stage) — engines.<stage> wins, then the
     // global engine.name, then the built-in sc-agent-cli default.
@@ -302,6 +302,141 @@ describe('per-stage engine selection (issue #205)', () => {
     assert.deepStrictEqual(JSON.parse(probe.stdout), {
       implement: 'claude-code',
       review: 'devin',   // stage omitted → global engine.name, not the scc built-in
+    });
+  });
+});
+
+describe('per-stage model selection by task class (issue #171)', () => {
+  // Probe helper: load resolve.py as a module and evaluate an expression
+  // against a resolved contract.json — same pattern as the stage_engine
+  // probes above.
+  function probeResolver(expr, contractPath) {
+    const probe = spawnSync('python3', ['-c', [
+      'import sys; sys.dont_write_bytecode = True',
+      'import importlib.util, json',
+      'spec = importlib.util.spec_from_file_location("resolve", sys.argv[1])',
+      'm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)',
+      'c = json.load(open(sys.argv[2]))',
+      `print(json.dumps(${expr}))`,
+    ].join('\n'), RESOLVER, contractPath], { encoding: 'utf8' });
+    assert.strictEqual(probe.status, 0, `resolver probe failed: ${probe.stderr}`);
+    return JSON.parse(probe.stdout);
+  }
+
+  function resolveContract(cfg) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-sdlc-resolve-'));
+    const input = path.join(dir, 'in.json');
+    fs.writeFileSync(input, JSON.stringify(cfg));
+    const r = spawnSync('python3', [RESOLVER, '--input', input, '--out-dir', dir], { encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, `resolve.py failed: ${r.stderr}`);
+    return path.join(dir, 'contract.json');
+  }
+
+  it('accepts a stage definition carrying engine + model', { skip: !HAS_PY }, () => {
+    const r = schemaValidate({
+      spec: '1.0.0',
+      engines: { implement: { engine: 'scc', model: 'openai/gpt-4o' } },
+    });
+    assert.deepStrictEqual(r.errors, []);
+    assert.ok(r.valid);
+  });
+
+  it('accepts a model-only stage definition — model routing without an adapter pin', { skip: !HAS_PY }, () => {
+    const r = schemaValidate({
+      spec: '1.0.0',
+      engines: { review: { model: 'openai/o3' }, 'ci-repair': { model: 'auto/best-reasoning' } },
+    });
+    assert.deepStrictEqual(r.errors, []);
+    assert.ok(r.valid);
+  });
+
+  it('rejects an empty stage definition and unknown fields in one', { skip: !HAS_PY }, () => {
+    assert.strictEqual(schemaValidate({ spec: '1.0.0', engines: { implement: {} } }).valid, false);
+    assert.strictEqual(
+      schemaValidate({ spec: '1.0.0', engines: { implement: { engine: 'scc', temperature: 0.5 } } }).valid,
+      false);
+  });
+
+  it('rejects a non-string or empty stage model', { skip: !HAS_PY }, () => {
+    assert.strictEqual(schemaValidate({ spec: '1.0.0', engines: { review: { model: '' } } }).valid, false);
+    assert.strictEqual(schemaValidate({ spec: '1.0.0', engines: { review: { model: 42 } } }).valid, false);
+  });
+
+  it('still rejects an unknown engine id inside a stage definition that also names a model', { skip: !HAS_PY }, () => {
+    const r = schemaValidate({
+      spec: '1.0.0',
+      engines: { implement: { engine: 'not-an-engine', model: 'openai/gpt-4o' } },
+    });
+    assert.strictEqual(r.valid, false);
+  });
+
+  it('resolves stage_model → model.primary and preserves the engine.name chain', { skip: !HAS_PY }, () => {
+    const contractPath = resolveContract({
+      spec: '1.0.0',
+      model: { primary: 'openai/gpt-4o' },
+      engines: {
+        implement: { engine: 'scc', model: 'anthropic/claude-sonnet' },
+        review: { model: 'openai/o3' },
+        'ci-repair': 'scc',
+        intake: { model: 'auto/best-fast' },   // OmniRoute route — dead on GHA
+      },
+    });
+    const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+    // Entries declaring a model keep the object form; {engine}-only
+    // entries flatten back to the bare id — pre-#171 resolved shape.
+    assert.deepStrictEqual(contract.engines.implement, { engine: 'scc', model: 'anthropic/claude-sonnet' });
+    assert.deepStrictEqual(contract.engines.review, { model: 'openai/o3' });
+    assert.strictEqual(contract.engines['ci-repair'], 'scc');
+
+    assert.deepStrictEqual(probeResolver(
+      '{s: m.stage_model(c, s) for s in ["implement", "review", "ci-repair", "intake", "sweep"]}',
+      contractPath), {
+        implement: 'anthropic/claude-sonnet',   // declared stage model wins
+        review: 'openai/o3',                    // model-only entry still routes
+        'ci-repair': 'openai/gpt-4o',           // no model → model.primary
+        intake: 'openai/gpt-4o',                // OmniRoute route filtered → model.primary
+        sweep: 'openai/gpt-4o',                 // no entry → model.primary
+      });
+    // The engine chain is unaffected by a model-only entry.
+    assert.deepStrictEqual(probeResolver(
+      '{s: m.stage_engine(c, s) for s in ["implement", "review"]}',
+      contractPath), { implement: 'scc', review: 'scc' });
+  });
+
+  it('lets the dedicated review.ai_reviewer.model outrank engines.review.model', { skip: !HAS_PY }, () => {
+    const contractPath = resolveContract({
+      spec: '1.0.0',
+      model: { primary: 'openai/gpt-4o' },
+      review: { ai_reviewer: { model: 'openai/o3-mini' } },
+      engines: { review: { model: 'openai/o3' } },
+    });
+    assert.strictEqual(probeResolver('m.review_model(c)', contractPath), 'openai/o3-mini');
+
+    // … and engines.review.model feeds the reviewer when the dedicated
+    // field is unset — one resolution chain, documented in
+    // spec/model-routing.md.
+    const contractPath2 = resolveContract({
+      spec: '1.0.0',
+      model: { primary: 'openai/gpt-4o' },
+      engines: { review: { model: 'openai/o3' } },
+    });
+    assert.strictEqual(probeResolver('m.review_model(c)', contractPath2), 'openai/o3');
+  });
+
+  it('emits the stage_models output with OmniRoute routes filtered', { skip: !HAS_PY }, () => {
+    const contractPath = resolveContract({
+      spec: '1.0.0',
+      model: { primary: 'openai/gpt-4o' },
+      engines: {
+        implement: { model: 'anthropic/claude-sonnet' },
+        intake: { model: 'auto/best-fast' },
+        verify: { engine: 'scc' },
+      },
+    });
+    assert.deepStrictEqual(probeResolver('m.stage_models(c)', contractPath), {
+      implement: 'anthropic/claude-sonnet',
+      // intake dropped (OmniRoute) — resolves to model_primary on GHA;
+      // verify absent (no model declared).
     });
   });
 });

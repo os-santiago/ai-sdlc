@@ -154,43 +154,125 @@ def union_list(base, extra):
 
 
 def normalize_engines(sections, source):
-    """Flatten an `engines` section to a plain stage → engine-id map.
+    """Canonicalize an `engines` section to a stage → stage-definition map.
 
-    The schema accepts two equivalent forms per stage — the shorthand
-    `implement: devin` and the stage-definition object
-    `implement: {engine: devin}` — and guarantees every key is a known
-    stage and every id a certified adapter. Resolution flattens both to
-    `engines.<stage> = <id>` so each key merges layer-wise as a scalar
-    and dispatch (issue #206) reads one shape. A stage without an entry
-    falls back to `engine.name` (default `scc`).
+    The schema accepts three forms per stage — the shorthand
+    `implement: devin`, the stage-definition object
+    `implement: {engine: devin}`, and (issue #171) definitions carrying a
+    `model` (`implement: {engine: devin, model: openai/gpt-4o}` or
+    `implement: {model: openai/gpt-4o}`). Resolution canonicalizes every
+    entry to the object form so `engines.<stage>.engine` and
+    `engines.<stage>.model` merge layer-wise as leaf fields — an org
+    baseline can pin the adapter while the repo picks the model.
+    `flatten_engines` restores the bare-id shape for entries that declare
+    no model before the contract is emitted, so consumers keep reading
+    one shape per entry (issue #206). A stage without an `engine` falls
+    back to `engine.name` (default `scc`); a stage without a `model`
+    falls back to `model.primary` (spec/model-routing.md).
 
-    Mutates nothing: writes the flattened map back onto `sections`.
+    Mutates nothing: writes the canonical map back onto `sections`.
     """
     raw = sections.get("engines")
     if raw is None:
         return
     if not isinstance(raw, dict):
-        raise ContractError(f"engines: expected a stage → engine map ({source})")
-    flat = {}
+        raise ContractError(f"engines: expected a stage → stage-definition map ({source})")
+    canon = {}
     for stage, val in raw.items():
-        if isinstance(val, dict):
-            val = val.get("engine")
-        if not isinstance(val, str) or not val.strip():
+        if isinstance(val, str):
+            if not val.strip():
+                raise ContractError(
+                    f"engines.{stage}: expected a certified engine id string or a "
+                    f"stage definition object ({source})")
+            canon[stage] = {"engine": val.strip()}
+            continue
+        if not isinstance(val, dict):
             raise ContractError(
-                f"engines.{stage}: expected a certified engine id string or an "
-                f"{{engine: <id>}} stage definition ({source})")
-        flat[stage] = val.strip()
-    sections["engines"] = flat
+                f"engines.{stage}: expected a certified engine id string or a "
+                f"stage definition object ({source})")
+        entry = {}
+        eng = val.get("engine")
+        if eng is not None:
+            if not isinstance(eng, str) or not eng.strip():
+                raise ContractError(
+                    f"engines.{stage}.engine: expected a certified engine id "
+                    f"string ({source})")
+            entry["engine"] = eng.strip()
+        mdl = val.get("model")
+        if mdl is not None:
+            if not isinstance(mdl, str) or not mdl.strip():
+                raise ContractError(
+                    f"engines.{stage}.model: expected a model id string ({source})")
+            entry["model"] = mdl.strip()
+        if not entry:
+            raise ContractError(
+                f"engines.{stage}: stage definition declares neither engine "
+                f"nor model ({source})")
+        canon[stage] = entry
+    sections["engines"] = canon
+
+
+def flatten_engines(contract):
+    """Restore the bare-id shape for stage entries that declare no model.
+
+    Internal merge canonicalizes every `engines.<stage>` to an object;
+    the emitted contract flattens `{engine: <id>}` back to `<id>` so the
+    resolved shape is unchanged for contracts that predate per-stage
+    models. Entries carrying `model` keep the object form — the only
+    shape that can carry it.
+    """
+    engines = contract.get("engines")
+    if not isinstance(engines, dict):
+        return
+    for stage, val in engines.items():
+        if isinstance(val, dict) and set(val) == {"engine"}:
+            engines[stage] = val["engine"]
 
 
 def stage_engine(contract, stage):
-    """Resolved engine id for a pipeline stage: engines.<stage> wins,
+    """Resolved engine id for a pipeline stage: engines.<stage>.engine wins,
     then the global engine.name, which itself defaults to `scc`."""
     engines = contract.get("engines") or {}
     entry = engines.get(stage)
     if isinstance(entry, dict):
         entry = entry.get("engine")
     return entry or (contract.get("engine") or {}).get("name") or "scc"
+
+
+def stage_model(contract, stage):
+    """Resolved model for a pipeline stage's task class (issue #171;
+    spec/model-routing.md): engines.<stage>.model wins, then
+    model.primary. OmniRoute route names (auto/*, devin/*) are Hermes
+    control-plane only — unreachable from GHA runners (ADR-0001) — so a
+    stage model naming one falls through to a non-OmniRoute
+    model.primary, and an OmniRoute primary yields "" rather than a dead
+    provider (same posture as review_model)."""
+    engines = contract.get("engines") or {}
+    entry = engines.get(stage)
+    m = ""
+    if isinstance(entry, dict):
+        m = (entry.get("model") or "").strip()
+    if OMNI_ROUTE.match(m):
+        m = ""
+    m = m or ((contract.get("model") or {}).get("primary") or "")
+    if OMNI_ROUTE.match(m):
+        m = ""
+    return m
+
+
+def stage_models(contract):
+    """Map of stage → declared stage model that survives the OmniRoute
+    filter — the `stage_models` step output. Stages without a `model`
+    (or whose declared model is unreachable from GHA) are absent and
+    resolve to model.primary via stage_model."""
+    out = {}
+    for stage, entry in (contract.get("engines") or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        m = (entry.get("model") or "").strip()
+        if m and not OMNI_ROUTE.match(m):
+            out[stage] = m
+    return out
 
 
 def min_level(a, b):
@@ -280,6 +362,7 @@ def resolve(repo_cfg, overrides, org_cfg=None):
         raise ContractError("resolved contract has no spec version")
     if result["engine"]["max_seconds"] < 60 or result["engine"]["max_steps"] < 10:
         raise ContractError("engine budgets below schema minimum (max_seconds ≥ 60, max_steps ≥ 10)")
+    flatten_engines(result)
     result["_sources"] = dict(sorted(sources.items()))
     enforced = sorted(p for p, s in sources.items() if s == "org-pin")
     return result, sorted(pin_set), enforced
@@ -292,14 +375,12 @@ OMNI_ROUTE = re.compile(r"^(?:auto|devin)/")
 
 
 def review_model(c):
+    # Dedicated review field wins; the per-stage model (issue #171) sits
+    # between it and model.primary — same chain stage_model documents.
     m = ((c["review"].get("ai_reviewer") or {}).get("model") or "").strip()
     if OMNI_ROUTE.match(m):
         m = ""
-    m = m or (c["model"].get("primary") or "")
-    # The fallback can itself be an OmniRoute route (defaults, homedir
-    # contracts) — dead on GHA, so emit nothing rather than a dead provider.
-    if OMNI_ROUTE.match(m):
-        m = ""
+    m = m or stage_model(c, "review")
     return m
 
 
@@ -318,6 +399,7 @@ def flat_outputs(c):
         # engine.name = adapter id (config/engine-adapters.json registry key);
         # ledger entries and run records carry it as `engine` (issue #230).
         "engine_name": c["engine"]["name"],
+        "stage_models": j(stage_models(c)),
         "max_seconds": str(c["engine"]["max_seconds"]),
         "max_steps": str(c["engine"]["max_steps"]),
         "verify_commands": "\n".join(c["verify"]["commands"]),

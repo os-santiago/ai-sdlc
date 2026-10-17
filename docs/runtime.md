@@ -83,7 +83,8 @@ stage dispatches to — `engines.<stage>` may be a bare engine id or a
 stage-definition object `{engine: <id>}`; both normalize to the same
 resolved value in `contract.json`. A stage without an entry falls back to
 `engine.name` (default `scc`). Stage dispatch to non-`scc` engines lands
-with issue #206; until then the field is contract surface only.
+with issue #206; until then the field is contract surface only. The
+stage-definition object may also carry `model` — see below.
 
 `review.ai_reviewer.model` resolves to `model.primary` when unset **or**
 when it names an OmniRoute route (`auto/*`, `devin/*`) — those are Hermes
@@ -93,6 +94,16 @@ control-plane only and unreachable from GHA runners
 `labels.state_machine` (spec/labels.md) rides along inside `contract.json`'s
 `labels` map — janitor/drift tooling reads it there; no runtime stage
 consumes it yet.
+
+`engines.<stage>` may also declare `model` (issue #171;
+spec/model-routing.md) — task-class → model routing. The resolved stage →
+model map is emitted as the `stage_models` output (OmniRoute routes
+filtered, same posture as `review_model`); stages absent from it resolve
+to `model_primary`. For `review`, the dedicated
+`review.ai_reviewer.model` still wins, then `engines.review.model`, then
+`model.primary` — `engines.review.model` feeds the reviewer with no
+workflow change. Other stages consume `stage_models` when engine
+dispatch lands (issue #206).
 
 `model.fallback` is used **once**, only when the primary route fails with a
 provider error (engine exit 20); both attempts' audit logs are uploaded.

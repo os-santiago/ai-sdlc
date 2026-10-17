@@ -176,6 +176,34 @@ adapter-registry entry before dispatch can run it. A stage without an
 `engines` entry falls back to the global `engine.name`, which itself
 defaults to `scc` (sc-agent-cli).
 
+### Per-stage model selection (task classes)
+
+The stage-definition object also carries an optional `model` field
+(issue #171; [spec/model-routing.md](../spec/model-routing.md)) — the
+contract's task-class → model routing. Each stage key is a task class;
+`model` routes that class to a model without pinning the adapter, and
+may be declared alone:
+
+```yaml
+engines:
+  implement:
+    model: auto/best-coding       # adapter still resolves from engine.name
+  review:
+    engine: scc
+    model: auto/best-reasoning    # frontier class where quality pays
+  intake:
+    model: auto/best-fast         # cheap mechanical class
+```
+
+A stage without `model` falls back to `model.primary`; the dedicated
+`review.ai_reviewer.model` still outranks `engines.review.model` for the
+reviewer. Engine selection (`engines.<stage>.engine` → `engine.name` →
+`scc`) and model selection are independent axes — a model-only entry
+does not change which adapter runs the stage. The resolved stage →
+model map ships in the `stage_models` step output; conformance to the
+headless contract above guarantees any certified adapter can fill a
+stage slot regardless of which model it routes to.
+
 ## References
 
 - [Interop Posture — ai-sdlc as the governance layer over agent engines](../spec/interop-posture.md)
