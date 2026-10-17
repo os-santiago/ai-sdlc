@@ -437,7 +437,7 @@ jobs:
           gh label create "$ESCALATION" -R "$REPO" --color D93F0B --description "AI-SDLC: escalated to human review" --force || true
           gh pr edit "$PR" -R "$REPO" --add-label "$ESCALATION"
           # Route-declared labels classify the failure for the notified owner.
-          jq -r '.[]?' <<<"${ALERT_LABELS:-[]}" | while IFS= read -r lbl; do
+          jq -r ".[]?" <<<"${ALERT_LABELS:-[]}" | while IFS= read -r lbl; do
             gh label create "$lbl" -R "$REPO" --force || true
             gh pr edit "$PR" -R "$REPO" --add-label "$lbl" || true
           done
