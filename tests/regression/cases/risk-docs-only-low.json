@@ -1,0 +1,11 @@
+{
+  "id": "risk-docs-only-low",
+  "type": "risk-classify",
+  "title": "docs-only diff classifies pr:risk-low",
+  "input": {
+    "files": [
+      { "path": "docs/runtime.md", "add": 40, "del": 5, "status": "modified" },
+      { "path": "README.md", "add": 3, "del": 1, "status": "modified" }
+    ]
+  }
+}

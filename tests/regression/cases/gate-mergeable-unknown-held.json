@@ -1,0 +1,16 @@
+{
+  "id": "gate-mergeable-unknown-held",
+  "type": "merge-gate",
+  "title": "non-MERGEABLE non-CONFLICTING state is held, not merged",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "env": { "REVIEW_MODE": "human" },
+    "pr": {
+      "number": 56, "isDraft": false, "mergeable": "UNSTABLE",
+      "headRefOid": "a1b2c3d", "baseRefName": "main",
+      "labels": [],
+      "createdAt": "2026-10-17T11:00:00Z", "comments": [], "commits": []
+    },
+    "checks": []
+  }
+}

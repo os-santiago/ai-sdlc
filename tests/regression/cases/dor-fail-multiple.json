@@ -1,0 +1,15 @@
+{
+  "id": "dor-fail-multiple",
+  "type": "intake-dor",
+  "title": "thin body without an AC section fails R2+R3+R4",
+  "input": {
+    "issue": {
+      "number": 11,
+      "title": "fix: small",
+      "body": "too short",
+      "labels": [{ "name": "ready-to-implement" }]
+    },
+    "trigger": "ready-to-implement",
+    "skip_labels": ["needs-human"]
+  }
+}

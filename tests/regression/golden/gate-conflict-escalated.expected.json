@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "escalated",
+    "reason": "conflict"
+  },
+  "log": [
+    "decision: escalated (conflict)"
+  ],
+  "exitCode": 0,
+  "error": null
+}

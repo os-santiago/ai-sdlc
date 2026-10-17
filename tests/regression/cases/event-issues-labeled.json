@@ -1,0 +1,19 @@
+{
+  "id": "event-issues-labeled",
+  "type": "normalized-event",
+  "title": "issues.labeled webhook normalizes to a work_item",
+  "input": {
+    "event_name": "issues",
+    "payload": {
+      "action": "labeled",
+      "sender": { "id": 1001, "login": "alice", "type": "User", "name": "Alice", "avatar_url": "https://example.test/a.png" },
+      "repository": { "id": 9001, "full_name": "fixtures/repo", "html_url": "https://example.test/r" },
+      "issue": {
+        "id": 5001, "number": 7, "title": "feat: thing",
+        "body": "body text", "state": "open",
+        "labels": [{ "name": "ready-to-implement" }, { "name": "bug" }],
+        "created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-02T00:00:00Z"
+      }
+    }
+  }
+}

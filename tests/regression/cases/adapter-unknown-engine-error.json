@@ -1,0 +1,6 @@
+{
+  "id": "adapter-unknown-engine-error",
+  "type": "engine-adapter",
+  "title": "unknown engine ids fail loudly, never fall back",
+  "input": { "engine": "not-an-engine", "op": "argv", "values": {} }
+}

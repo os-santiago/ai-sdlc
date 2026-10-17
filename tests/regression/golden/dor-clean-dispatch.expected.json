@@ -1,0 +1,20 @@
+{
+  "outputs": {
+    "dispatch": "true",
+    "armed": "true",
+    "failed": ""
+  },
+  "checks": {
+    "R1 conventional title": true,
+    "R2 AC section present": true,
+    "R3 ≥1 AC item": true,
+    "R4 non-trivial body": true,
+    "R5 no skip-label": true,
+    "R6 no TBD in AC": true
+  },
+  "log": [
+    "DoR: {\"R1 conventional title\":true,\"R2 AC section present\":true,\"R3 ≥1 AC item\":true,\"R4 non-trivial body\":true,\"R5 no skip-label\":true,\"R6 no TBD in AC\":true}"
+  ],
+  "exitCode": 0,
+  "error": null
+}

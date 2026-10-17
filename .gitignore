@@ -9,3 +9,7 @@ node_modules/
 # per-stage token/cost usage ledger — run evidence, ships as workflow
 # artifact, never in diffs (issue #195)
 /ai-sdlc-usage.jsonl
+
+# Regression-harness run artifacts — diff reports are written per-run for
+# debugging (tests/regression_harness.js --report); never diff inputs.
+/tests/regression/results/

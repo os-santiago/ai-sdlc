@@ -1,0 +1,31 @@
+{
+  "event": {
+    "version": "1.0.0",
+    "entity": {
+      "kind": "change_request",
+      "id": "6001",
+      "number": 11,
+      "title": "feat: thing",
+      "description": "pr body",
+      "state": "open",
+      "labels": [
+        "pr:risk-low"
+      ],
+      "created_at": "2026-10-01T00:00:00Z",
+      "updated_at": "2026-10-01T01:00:00Z"
+    },
+    "transition": "opened",
+    "actor": {
+      "id": "1002",
+      "type": "bot",
+      "login": "bot-lane",
+      "display_name": null,
+      "avatar_url": null
+    },
+    "repository": {
+      "id": "9001",
+      "name": "fixtures/repo",
+      "url": "https://example.test/r"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "held",
+    "reason": "repair-awaiting"
+  },
+  "log": [
+    "decision: held (repair-awaiting)"
+  ],
+  "exitCode": 0,
+  "error": null
+}

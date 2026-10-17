@@ -1,0 +1,9 @@
+{
+  "id": "adapter-devin-binary-override",
+  "type": "engine-adapter",
+  "title": "{ENGINE}_BINARY trims and overrides the registry binary",
+  "input": {
+    "engine": "devin", "op": "binary",
+    "env": { "DEVIN_BINARY": "  /opt/devin/bin  " }
+  }
+}

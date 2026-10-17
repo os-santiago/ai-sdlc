@@ -1,0 +1,18 @@
+{
+  "id": "gate-review-pending-timeout-merge",
+  "type": "merge-gate",
+  "title": "no review verdict past review.wait_max_minutes merges with review_timeout",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "env": { "REVIEW_MODE": "ai", "REVIEW_WAIT": "15" },
+    "pr": {
+      "number": 54, "isDraft": false, "mergeable": "MERGEABLE",
+      "headRefOid": "a1b2c3d4e5f6", "baseRefName": "main",
+      "labels": [],
+      "createdAt": "2026-10-17T10:00:00Z", "comments": [],
+      "commits": [{ "committedDate": "2026-10-17T10:30:00Z" }]
+    },
+    "checks": [{ "name": "contract", "bucket": "pass" }],
+    "trusted_comments": []
+  }
+}

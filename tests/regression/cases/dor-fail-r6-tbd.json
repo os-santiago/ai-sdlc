@@ -1,0 +1,15 @@
+{
+  "id": "dor-fail-r6-tbd",
+  "type": "intake-dor",
+  "title": "TBD placeholder inside the AC section fails R6",
+  "input": {
+    "issue": {
+      "number": 10,
+      "title": "fix: resolve the crash",
+      "body": "## Problem\nSomething needs doing and this description is long enough to satisfy the non-trivial body requirement easily.\n\n## Acceptance criteria\n- [ ] TBD\n",
+      "labels": [{ "name": "ready-to-implement" }]
+    },
+    "trigger": "ready-to-implement",
+    "skip_labels": ["needs-human"]
+  }
+}

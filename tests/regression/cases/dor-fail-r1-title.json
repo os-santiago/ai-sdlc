@@ -1,0 +1,15 @@
+{
+  "id": "dor-fail-r1-title",
+  "type": "intake-dor",
+  "title": "non-conventional title fails R1 only",
+  "input": {
+    "issue": {
+      "number": 8,
+      "title": "add the thing",
+      "body": "## Problem\nSomething needs doing and this description is long enough to satisfy the non-trivial body requirement easily.\n\n## Acceptance criteria\n- [ ] The thing is added\n",
+      "labels": [{ "name": "ready-to-implement" }]
+    },
+    "trigger": "ready-to-implement",
+    "skip_labels": ["needs-human"]
+  }
+}

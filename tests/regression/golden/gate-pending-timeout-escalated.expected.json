@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "escalated",
+    "reason": "pending-timeout"
+  },
+  "log": [
+    "decision: escalated (pending-timeout)"
+  ],
+  "exitCode": 0,
+  "error": null
+}

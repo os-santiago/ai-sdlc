@@ -1,0 +1,6 @@
+{
+  "id": "adapter-scc-exit-map",
+  "type": "engine-adapter",
+  "title": "scc exit-code classification + success normalization",
+  "input": { "engine": "scc", "op": "exit-codes", "codes": [0, 10, 24, 9999] }
+}

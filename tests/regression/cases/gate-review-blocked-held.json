@@ -1,0 +1,24 @@
+{
+  "id": "gate-review-blocked-held",
+  "type": "merge-gate",
+  "title": "blocked verdict within the wait window holds the merge",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "env": { "REVIEW_MODE": "ai", "REVIEW_WAIT": "15", "PENDING_MAX": "60" },
+    "pr": {
+      "number": 55, "isDraft": false, "mergeable": "MERGEABLE",
+      "headRefOid": "a1b2c3d4e5f6", "baseRefName": "main",
+      "labels": [],
+      "createdAt": "2026-10-17T11:00:00Z",
+      "comments": [],
+      "commits": [{ "committedDate": "2026-10-17T11:20:00Z" }]
+    },
+    "checks": [{ "name": "contract", "bucket": "pass" }],
+    "trusted_comments": [
+      {
+        "body": "issues found <!-- ai-sdlc:review sha=a1b2c3d4e5f6 verdict=blocked -->",
+        "created_at": "2026-10-17T11:55:00Z"
+      }
+    ]
+  }
+}

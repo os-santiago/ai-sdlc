@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "run",
+    "--prompt",
+    "env prompt",
+    "--model",
+    "env-model",
+    "--manifest",
+    "env/manifest.json"
+  ]
+}

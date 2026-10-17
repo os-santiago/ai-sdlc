@@ -1,0 +1,16 @@
+{
+  "id": "dor-not-ready-label-counts-as-skip",
+  "type": "intake-dor",
+  "title": "the not-ready flow label itself vetoes redispatch (R5)",
+  "input": {
+    "issue": {
+      "number": 12,
+      "title": "fix: resolve the crash",
+      "body": "## Problem\nSomething needs doing and this description is long enough to satisfy the non-trivial body requirement easily.\n\n## Acceptance criteria\n- [ ] Crash resolved\n",
+      "labels": [{ "name": "ready-to-implement" }, { "name": "scc:not-ready" }]
+    },
+    "trigger": "ready-to-implement",
+    "skip_labels": ["needs-human"],
+    "not_ready_label": "scc:not-ready"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "held",
+    "reason": "pending"
+  },
+  "log": [
+    "decision: held (pending)"
+  ],
+  "exitCode": 0,
+  "error": null
+}

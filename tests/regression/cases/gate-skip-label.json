@@ -1,0 +1,16 @@
+{
+  "id": "gate-skip-label",
+  "type": "merge-gate",
+  "title": "merge.skip_labels veto the gate",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "env": { "SKIP_LABELS": "[\"needs-human\",\"hold\",\"do-not-merge\",\"wip\"]" },
+    "pr": {
+      "number": 44, "isDraft": false, "mergeable": "MERGEABLE",
+      "headRefOid": "a1b2c3d", "baseRefName": "main",
+      "labels": [{ "name": "do-not-merge" }],
+      "createdAt": "2026-10-17T11:00:00Z", "comments": [], "commits": []
+    },
+    "checks": [{ "name": "contract", "bucket": "pass" }]
+  }
+}

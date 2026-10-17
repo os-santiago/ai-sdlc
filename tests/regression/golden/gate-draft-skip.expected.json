@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "skipped",
+    "reason": "draft"
+  },
+  "log": [
+    "decision: skipped (draft)"
+  ],
+  "exitCode": 0,
+  "error": null
+}

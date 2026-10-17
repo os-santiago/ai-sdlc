@@ -1,0 +1,18 @@
+{
+  "id": "gate-failing-signals-repair",
+  "type": "merge-gate",
+  "title": "failing checks with no repair signal yet -> repair-signaled",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "pr": {
+      "number": 49, "isDraft": false, "mergeable": "MERGEABLE",
+      "headRefOid": "a1b2c3d", "baseRefName": "main",
+      "labels": [],
+      "createdAt": "2026-10-17T11:00:00Z", "comments": [], "commits": []
+    },
+    "checks": [
+      { "name": "ci", "bucket": "fail" },
+      { "name": "contract", "bucket": "pass" }
+    ]
+  }
+}

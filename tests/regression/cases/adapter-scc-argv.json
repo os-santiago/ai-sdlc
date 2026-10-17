@@ -1,0 +1,13 @@
+{
+  "id": "adapter-scc-argv",
+  "type": "engine-adapter",
+  "title": "scc argv substitution is atomic and ordered",
+  "input": {
+    "engine": "scc", "op": "argv",
+    "values": {
+      "model": "claude-3-opus",
+      "prompt": "a;b c $(id)",
+      "manifestFile": "out/manifest.json"
+    }
+  }
+}

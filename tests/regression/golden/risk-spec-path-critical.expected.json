@@ -1,0 +1,18 @@
+{
+  "result": {
+    "tier": "critical",
+    "label": "pr:risk-critical",
+    "why": "policy/secret/supply-chain/deploy surface touched (spec/risk-taxonomy.md)",
+    "files": 1,
+    "lines": 4,
+    "dirs": [
+      "spec"
+    ],
+    "paths": [
+      "spec/risk-taxonomy.md"
+    ],
+    "signals": [
+      "path:spec/risk-taxonomy.md"
+    ]
+  }
+}

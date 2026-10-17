@@ -1,0 +1,18 @@
+{
+  "result": {
+    "tier": "high",
+    "label": "pr:risk-high",
+    "why": "dangerous execution / injection-shaped pattern in added lines (eval-call)",
+    "files": 1,
+    "lines": 6,
+    "dirs": [
+      "tools"
+    ],
+    "paths": [
+      "tools/run.sh"
+    ],
+    "signals": [
+      "content:eval-call"
+    ]
+  }
+}

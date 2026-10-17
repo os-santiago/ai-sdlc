@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "held",
+    "reason": "risk-critical-unaccepted"
+  },
+  "log": [
+    "decision: held (risk-critical-unaccepted)"
+  ],
+  "exitCode": 0,
+  "error": null
+}

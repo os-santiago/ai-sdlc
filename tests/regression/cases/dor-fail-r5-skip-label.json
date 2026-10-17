@@ -1,0 +1,15 @@
+{
+  "id": "dor-fail-r5-skip-label",
+  "type": "intake-dor",
+  "title": "skip label vetoes dispatch even when armed (R5)",
+  "input": {
+    "issue": {
+      "number": 9,
+      "title": "feat(scope): real work item",
+      "body": "## Problem\nSomething needs doing and this description is long enough to satisfy the non-trivial body requirement easily.\n\n## Acceptance criteria\n- [ ] Work is done\n",
+      "labels": [{ "name": "ready-to-implement" }, { "name": "needs-human" }]
+    },
+    "trigger": "ready-to-implement",
+    "skip_labels": ["epic", "wontfix", "needs-human"]
+  }
+}

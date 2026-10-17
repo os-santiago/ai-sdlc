@@ -1,0 +1,20 @@
+{
+  "id": "gate-repair-awaiting-held",
+  "type": "merge-gate",
+  "title": "failing checks with a live repair signal on the current head -> held",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "env": { "MAX_REPAIRS": "3", "PENDING_MAX": "60" },
+    "pr": {
+      "number": 51, "isDraft": false, "mergeable": "MERGEABLE",
+      "headRefOid": "aaa1111", "baseRefName": "main",
+      "labels": [],
+      "createdAt": "2026-10-17T09:00:00Z",
+      "comments": [
+        { "body": "repair dispatched <!-- ai-sdlc:repair-signal sha=aaa1111 -->", "createdAt": "2026-10-17T11:30:00Z" }
+      ],
+      "commits": []
+    },
+    "checks": [{ "name": "ci", "bucket": "fail" }]
+  }
+}

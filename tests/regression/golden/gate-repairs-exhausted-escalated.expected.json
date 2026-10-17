@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "escalated",
+    "reason": "repairs-exhausted:ci"
+  },
+  "log": [
+    "decision: escalated (repairs-exhausted:ci)"
+  ],
+  "exitCode": 0,
+  "error": null
+}

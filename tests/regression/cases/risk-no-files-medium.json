@@ -1,0 +1,6 @@
+{
+  "id": "risk-no-files-medium",
+  "type": "risk-classify",
+  "title": "no diff information defaults to medium, never low",
+  "input": { "files": [] }
+}

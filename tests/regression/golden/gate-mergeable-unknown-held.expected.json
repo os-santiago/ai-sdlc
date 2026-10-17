@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "held",
+    "reason": "mergeable=UNSTABLE"
+  },
+  "log": [
+    "decision: held (mergeable=UNSTABLE)"
+  ],
+  "exitCode": 0,
+  "error": null
+}

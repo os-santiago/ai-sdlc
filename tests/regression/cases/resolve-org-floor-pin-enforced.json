@@ -1,0 +1,23 @@
+{
+  "id": "resolve-org-floor-pin-enforced",
+  "type": "contract-resolve",
+  "title": "org policy_floor pin overrides the repo value (org-pin source)",
+  "requires": ["python3"],
+  "input": {
+    "repo_cfg": {
+      "spec": "1.0.0",
+      "autonomy": { "level": "auto-merge-all" },
+      "triggers": { "skip_labels": ["repo-added-skip"] }
+    },
+    "org": {
+      "spec": "1.0.0",
+      "policy_floor": { "pin": ["autonomy.level"] },
+      "autonomy": { "level": "suggest" },
+      "triggers": { "skip_labels": ["org-floor-skip"] }
+    },
+    "overrides": {},
+    "org_repo": "fixtures/org",
+    "org_ref": "main"
+  },
+  "compare": { "omit": ["outputs.path"] }
+}

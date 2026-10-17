@@ -1,0 +1,175 @@
+{
+  "exitStatus": 0,
+  "stderr": null,
+  "contract": {
+    "_source": {
+      "org_policy": "not-applied",
+      "path": ".ai-sdlc.yaml",
+      "precedence": [
+        "input",
+        "contract",
+        "default"
+      ],
+      "ref": "main",
+      "repo": "fixtures/repo",
+      "sha256": "c0fb3e53689d6677feb742df39c3c0808beb4a78238d73c2bc2f5d0515581825"
+    },
+    "_sources": {
+      "autonomy.freeze_env": "default",
+      "autonomy.level": "contract",
+      "autonomy.merge_requires_checks": "default",
+      "engine.flags": "default",
+      "engine.max_seconds": "default",
+      "engine.max_steps": "default",
+      "engine.name": "default",
+      "engines.implement": "contract",
+      "engines.review": "contract",
+      "escalation.contacts": "default",
+      "escalation.label": "default",
+      "escalation.notify_channels": "default",
+      "labels": "default",
+      "merge.delete_branch": "default",
+      "merge.grace_minutes": "default",
+      "merge.max_repairs": "default",
+      "merge.method": "default",
+      "merge.pending_max_minutes": "default",
+      "merge.skip_labels": "default",
+      "model.fallback": "default",
+      "model.primary": "contract",
+      "model.routing_hints": "default",
+      "review.ai_reviewer.incremental": "default",
+      "review.ai_reviewer.inline_comments": "default",
+      "review.ai_reviewer.model": "default",
+      "review.critical_requires_acceptance": "default",
+      "review.external_reviewer": "default",
+      "review.max_fix_iterations": "default",
+      "review.mode": "default",
+      "review.risk_labels": "default",
+      "review.wait_max_minutes": "default",
+      "triggers.authorized_labelers": "default",
+      "triggers.issue_label": "default",
+      "triggers.skip_labels": "default",
+      "verify.commands": "default",
+      "verify.required_checks": "default",
+      "verify.timeout_seconds": "default"
+    },
+    "autonomy": {
+      "freeze_env": "AI_SDLC_FREEZE",
+      "level": "auto-pr",
+      "merge_requires_checks": true
+    },
+    "engine": {
+      "flags": [],
+      "max_seconds": 900,
+      "max_steps": 200,
+      "name": "scc"
+    },
+    "engines": {
+      "implement": "devin",
+      "review": "scc"
+    },
+    "escalation": {
+      "contacts": [],
+      "label": "needs-human",
+      "notify_channels": []
+    },
+    "labels": {
+      "failed": "scc:failed",
+      "in-progress": "scc:in-progress",
+      "no-changes": "scc:no-changes",
+      "not-ready": "scc:not-ready",
+      "pr-opened": "scc:pr-opened",
+      "queued": "scc:queued"
+    },
+    "merge": {
+      "delete_branch": true,
+      "grace_minutes": 10,
+      "max_repairs": 3,
+      "method": "squash",
+      "pending_max_minutes": 60,
+      "skip_labels": [
+        "needs-human",
+        "hold",
+        "do-not-merge",
+        "wip"
+      ]
+    },
+    "model": {
+      "fallback": null,
+      "primary": "nvidia/fixture-model",
+      "routing_hints": {}
+    },
+    "review": {
+      "ai_reviewer": {
+        "incremental": true,
+        "inline_comments": true,
+        "model": null
+      },
+      "critical_requires_acceptance": true,
+      "external_reviewer": "",
+      "max_fix_iterations": 3,
+      "mode": "ai",
+      "risk_labels": [
+        "pr:risk-low",
+        "pr:risk-medium",
+        "pr:risk-high",
+        "pr:risk-critical",
+        "pr:risk-accepted"
+      ],
+      "wait_max_minutes": 15
+    },
+    "spec": "1.0.0",
+    "triggers": {
+      "authorized_labelers": [],
+      "issue_label": "ready-to-implement",
+      "skip_labels": [
+        "epic",
+        "wontfix",
+        "invalid",
+        "duplicate",
+        "question",
+        "dependencies",
+        "needs-human"
+      ]
+    },
+    "verify": {
+      "commands": [],
+      "required_checks": [],
+      "timeout_seconds": 900
+    }
+  },
+  "outputs": {
+    "spec": "1.0.0",
+    "org_policy": "not-applied",
+    "autonomy_level": "auto-pr",
+    "trigger_label": "ready-to-implement",
+    "skip_labels": "[\"epic\",\"wontfix\",\"invalid\",\"duplicate\",\"question\",\"dependencies\",\"needs-human\"]",
+    "authorized_labelers": "[]",
+    "model_primary": "nvidia/fixture-model",
+    "model_fallback": "",
+    "max_seconds": "900",
+    "max_steps": "200",
+    "verify_commands": "",
+    "verify_timeout_seconds": "900",
+    "required_checks": "[]",
+    "merge_method": "squash",
+    "merge_delete_branch": "true",
+    "max_repairs": "3",
+    "pending_max_minutes": "60",
+    "merge_skip_labels": "[\"needs-human\",\"hold\",\"do-not-merge\",\"wip\"]",
+    "review_mode": "ai",
+    "review_model": "nvidia/fixture-model",
+    "review_max_fix_iterations": "3",
+    "review_wait_max_minutes": "15",
+    "review_external_reviewer": "",
+    "escalation_label": "needs-human",
+    "labels": "{\"queued\":\"scc:queued\",\"in-progress\":\"scc:in-progress\",\"pr-opened\":\"scc:pr-opened\",\"failed\":\"scc:failed\",\"not-ready\":\"scc:not-ready\",\"no-changes\":\"scc:no-changes\"}",
+    "label_queued": "scc:queued",
+    "label_pr_opened": "scc:pr-opened",
+    "label_failed": "scc:failed",
+    "label_not_ready": "scc:not-ready",
+    "label_no_changes": "scc:no-changes",
+    "json": "{\"autonomy\":{\"level\":\"auto-pr\",\"merge_requires_checks\":true,\"freeze_env\":\"AI_SDLC_FREEZE\"},\"triggers\":{\"issue_label\":\"ready-to-implement\",\"skip_labels\":[\"epic\",\"wontfix\",\"invalid\",\"duplicate\",\"question\",\"dependencies\",\"needs-human\"],\"authorized_labelers\":[]},\"verify\":{\"commands\":[],\"required_checks\":[],\"timeout_seconds\":900},\"review\":{\"mode\":\"ai\",\"ai_reviewer\":{\"model\":null,\"inline_comments\":true,\"incremental\":true},\"risk_labels\":[\"pr:risk-low\",\"pr:risk-medium\",\"pr:risk-high\",\"pr:risk-critical\",\"pr:risk-accepted\"],\"critical_requires_acceptance\":true,\"max_fix_iterations\":3,\"wait_max_minutes\":15,\"external_reviewer\":\"\"},\"merge\":{\"method\":\"squash\",\"delete_branch\":true,\"max_repairs\":3,\"pending_max_minutes\":60,\"grace_minutes\":10,\"skip_labels\":[\"needs-human\",\"hold\",\"do-not-merge\",\"wip\"]},\"labels\":{\"queued\":\"scc:queued\",\"in-progress\":\"scc:in-progress\",\"pr-opened\":\"scc:pr-opened\",\"failed\":\"scc:failed\",\"not-ready\":\"scc:not-ready\",\"no-changes\":\"scc:no-changes\"},\"model\":{\"primary\":\"nvidia/fixture-model\",\"fallback\":null,\"routing_hints\":{}},\"engine\":{\"name\":\"scc\",\"max_steps\":200,\"max_seconds\":900,\"flags\":[]},\"engines\":{\"implement\":\"devin\",\"review\":\"scc\"},\"escalation\":{\"label\":\"needs-human\",\"contacts\":[],\"notify_channels\":[]},\"spec\":\"1.0.0\",\"_sources\":{\"autonomy.freeze_env\":\"default\",\"autonomy.level\":\"contract\",\"autonomy.merge_requires_checks\":\"default\",\"engine.flags\":\"default\",\"engine.max_seconds\":\"default\",\"engine.max_steps\":\"default\",\"engine.name\":\"default\",\"engines.implement\":\"contract\",\"engines.review\":\"contract\",\"escalation.contacts\":\"default\",\"escalation.label\":\"default\",\"escalation.notify_channels\":\"default\",\"labels\":\"default\",\"merge.delete_branch\":\"default\",\"merge.grace_minutes\":\"default\",\"merge.max_repairs\":\"default\",\"merge.method\":\"default\",\"merge.pending_max_minutes\":\"default\",\"merge.skip_labels\":\"default\",\"model.fallback\":\"default\",\"model.primary\":\"contract\",\"model.routing_hints\":\"default\",\"review.ai_reviewer.incremental\":\"default\",\"review.ai_reviewer.inline_comments\":\"default\",\"review.ai_reviewer.model\":\"default\",\"review.critical_requires_acceptance\":\"default\",\"review.external_reviewer\":\"default\",\"review.max_fix_iterations\":\"default\",\"review.mode\":\"default\",\"review.risk_labels\":\"default\",\"review.wait_max_minutes\":\"default\",\"triggers.authorized_labelers\":\"default\",\"triggers.issue_label\":\"default\",\"triggers.skip_labels\":\"default\",\"verify.commands\":\"default\",\"verify.required_checks\":\"default\",\"verify.timeout_seconds\":\"default\"},\"_source\":{\"repo\":\"fixtures/repo\",\"ref\":\"main\",\"path\":\".ai-sdlc.yaml\",\"sha256\":\"c0fb3e53689d6677feb742df39c3c0808beb4a78238d73c2bc2f5d0515581825\",\"precedence\":[\"input\",\"contract\",\"default\"],\"org_policy\":\"not-applied\"}}",
+    "path": "<out-dir>/contract.json"
+  }
+}

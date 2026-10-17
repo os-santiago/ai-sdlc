@@ -1,0 +1,9 @@
+{
+  "id": "event-unsupported-type-error",
+  "type": "normalized-event",
+  "title": "unsupported event names fail loudly",
+  "input": {
+    "event_name": "push",
+    "payload": { "action": "push", "sender": { "id": 1, "login": "x", "type": "User" } }
+  }
+}
