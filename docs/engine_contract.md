@@ -28,7 +28,11 @@ Exit codes are interpreted via an `exitCodeMap` defined in the engine's adapter 
 - Provider failure, auth failure: may trigger a `model.fallback` retry (if configured)
 - Budget/livelock exhaustion: triggers escalation (e.g., from `suggest` to `auto-PR`)
 
-Engines must document their `exitCodeMap` in the adapter registry.
+Engines must document their `exitCodeMap` in the adapter registry. For `scc`
+specifically, the raw taxonomy the pipeline branches on (0/1/10/11/20–24,
+the `{20,21}` one-shot fallback gate, stall-class routing) is normative in
+[spec/engine-exit-codes.md](../spec/engine-exit-codes.md) and drift-checked
+by `tests/exit_code_contract.test.js`.
 
 ### Prompt Handling (Untrusted Input)
 
