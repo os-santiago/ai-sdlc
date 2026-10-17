@@ -386,6 +386,13 @@ jobs:
           if gh api "repos/os-santiago/ai-sdlc/contents/scripts/risk-classifier.js?ref=main" \
               -H "Accept: application/vnd.github.raw" > "$WORK/risk-classifier.js" 2>/dev/null \
               && node --check "$WORK/risk-classifier.js" 2>/dev/null; then
+            # The dep-diff fast path (issue #177) needs scripts/dep-update.js
+            # alongside — optional: without it dep surfaces stay on the
+            # generic (high) path. Fail-safe upward.
+            gh api "repos/os-santiago/ai-sdlc/contents/scripts/dep-update.js?ref=main" \
+              -H "Accept: application/vnd.github.raw" > "$WORK/dep-update.js" 2>/dev/null \
+              && node --check "$WORK/dep-update.js" 2>/dev/null \
+              || rm -f "$WORK/dep-update.js"
             node "$WORK/risk-classifier.js" \
               --numstat "$WORK/numstat.txt" --diff "$WORK/diff.patch" --json \
               > "$WORK/risk.json"

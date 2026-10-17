@@ -17,6 +17,12 @@ autonomy:
 review:
   critical_requires_acceptance: true   # pr:risk-critical always needs pr:risk-accepted
 
+# Supply-chain floor for the dep-update worker (issue #177): the pin below
+# takes this value outright for every non-exempt repo — the release-age
+# gate cannot be relaxed below the org floor.
+dependencies:
+  min_release_age_days: 14
+
 policy_floor:
   # Fields repos cannot relax. Pinned scalars take the org value outright;
   # union fields keep org entries; autonomy.level stays a ceiling.
@@ -26,6 +32,7 @@ policy_floor:
     - merge.skip_labels
     - triggers.skip_labels
     - verify.required_checks
+    - dependencies.min_release_age_days
   # Repos the baseline skips entirely (owner/repo or bare repo name).
   exempt:
     - owner/exempt-repo

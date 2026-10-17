@@ -32,6 +32,7 @@ engine only, no GitHub webhook adapter yet).
 | `ai-sdlc-metrics.yml` | scheduled SLO report (`scripts/slo-metrics.js`): time-to-merge, iterations-to-green, escalation rate → step summary + JSON/Prometheus artifacts | `schedule` (daily) / `workflow_dispatch` / `workflow_call` |
 | `ai-sdlc-ci-repair.yml` | bounded repair loop on red checks: failing-check log tails → `scc` headless on the PR head → commit + push; one comment per attempt; `needs-human` after `max_repairs` | `check_run.completed` (failure) / `workflow_dispatch` / automerge `repair-signaled` |
 | `ai-sdlc-verify.yml` | post-merge verify commands (resolved contract `verify.commands`); failure → canonical postmortem issue via `scripts/postmortem.js` — signature-deduped: open canonical comments, closed canonical reopens at `postmortem.reopen_min` (spec/postmortem-lifecycle.md) — or revert when enabled | post-merge |
+| `ai-sdlc-dep-update.yml` | scheduled dependency scan → vetted dep-update PR (`scripts/dep-update.js`): release-age gate, license allowlist, typosquat distance, OSV → one bounded consolidated PR + deduped flagged-for-human issue | `schedule` / `workflow_dispatch` / called |
 
 Every stage first runs the `load-config` composite action
 (`.github/actions/load-config/`) and acts only on the resolved contract —
@@ -77,6 +78,7 @@ resolves it before acting:
 | review | `review.mode`, `review.ai_reviewer.model`, `review.max_fix_iterations`, `review.external_reviewer`, `merge.skip_labels`, `engine.*`, `escalation.label` | `model`, `external_reviewer`, `max_fix_iterations`, `max_seconds`, `max_steps` |
 | automerge | `merge.max_repairs`, `merge.pending_max_minutes`, `merge.skip_labels`, `merge.method`, `review.mode`, `review.wait_max_minutes`, `review.external_reviewer`, `escalation.label` | `max_repairs`, `pending_max_minutes`, `merge_method`, `review_wait_minutes` |
 | verify | `verify.commands` | `verify_commands` |
+| dep-update | `dependencies.*` (enabled, ecosystems, min_release_age_days, target, auto_kinds, max_updates, branch, labels, egress_profile) | `max_updates`, `target` |
 
 The top-level `engines` map (issue #205) selects the certified adapter a
 stage dispatches to — `engines.<stage>` may be a bare engine id or a
@@ -288,6 +290,26 @@ surfaces → `critical`; `eval()`/`exec`/shell-injection shapes in added
 diff lines, security-adjacent paths, dependency manifests, >800 diff
 lines, multi-subsystem, public-API deletions → `high`; docs/tests/
 config-text-only → `low`; otherwise `medium`.
+
+### ai-sdlc-dep-update
+| Input | Default | Purpose |
+|---|---|---|
+| `repo` | — (required) | target repo |
+| `base` | `main` | base branch scanned and targeted by the PR (contract is read from here) |
+| `dry_run` | `false` | scan + vet only — no branch, PR or issue mutations |
+| `max_updates` | `-1` → `dependencies.max_updates` (10) | updates landed in the consolidated PR |
+| `target` | `''` → `dependencies.target` (`wanted`) | `wanted` stays inside declared semver ranges; `latest` may cross majors |
+| `org_config` | `''` | org baseline `owner/repo[/path][@ref]` — see [Org policy](#org-policy) |
+| `runtime_ref` | `main` | ref of `os-santiago/ai-sdlc` the worker (`scripts/dep-update.js`) is fetched from — pin to the same ref as the workflow |
+| `ledger_head` | `''` | upstream ledger head; empty = genesis segment |
+
+Outputs: `action` (`open-pr` \| `existing-pr` \| `flagged` \| `none` \|
+`skipped` \| `dry-run`), `pr_number`, `updates`, `flagged`, `ledger_head`.
+Secrets: same as implement — `AI_SDLC_APP_ID` + `AI_SDLC_APP_PRIVATE_KEY`
+are required (fail-closed; App-token pushes re-fire CI/classify/review).
+
+One invocation = one bounded scan (see
+[Dependency-update stage](#dependency-update-stage-ai-sdlc-dep-updateyml)).
 
 ### ai-sdlc-verify
 | Input | Default | Purpose |
@@ -665,6 +687,72 @@ without a run ledger. A **pipeline PR** is the sweep's surface: head branch
   runs fetch marks the PR unsampled instead of sinking the report.
 - **Trust boundary:** the workflow fetches the canonical script from the
   `os-santiago/ai-sdlc` pin (`runtime_ref`) — never from the caller repo.
+
+## Dependency-update stage (`ai-sdlc-dep-update.yml`)
+
+The GHA port of the Hermes dependency worker (issue #177, epic #150) —
+reasoned, vetted dep updates instead of raw Dependabot PRs. Opt-in via the
+contract (`dependencies.enabled`, default off). One invocation = one bounded
+scan:
+
+1. **Config** — `load-config` resolves `dependencies.*` from the base ref:
+   `ecosystems` (v1: npm), `cadence` (audit record; the caller's cron owns
+   the real schedule), `min_release_age_days`, `target` (`wanted` stays
+   inside declared ranges / `latest` crosses majors), `include_dev`,
+   `auto_kinds` (risk threshold — default `patch,minor`), `max_updates`,
+   `branch`, `labels`, `egress_profile`. Disabled → `skipped`.
+2. **Scan** — checkout `repo@base`, `npm ci --ignore-scripts` (no lifecycle
+   script executes), `npm outdated --json` → candidates, prod-first sorted.
+3. **Vet** — `scripts/dep-update.js` (fetched from the trusted runtime pin,
+   never the scanned repo) checks each candidate's *target* release:
+   release age ≥ `min_release_age_days` (fresh releases are
+   disproportionately malicious), registry existence, license allowlist,
+   typosquat/edit-distance vs popular names, OSV vulnerabilities. Every
+   fetch is bounded by the named egress profile (`npm-vet` =
+   registry.npmjs.org + api.osv.dev; `off` = no network → everything flags
+   fail-closed). Registry metadata is untrusted T3 input
+   (`spec/injection-defense.md`) — markdown-escaped into the PR body, never
+   instructions.
+4. **Plan** — candidates in `auto_kinds` with zero findings → the batch
+   (bounded by `max_updates`, remainder deferred to a later scan); majors,
+   `unknown` specs, and any finding → flagged for human review.
+5. **PR** — the batch applies via `npm install <name>@<target>
+   --package-lock-only --ignore-scripts` on `dependencies.branch`, the
+   diff is re-classified (manifest/lockfile-only, patch|minor — fail-closed
+   abort otherwise) and pushed non-force under the App installation token.
+   At most one open batch PR per repo; a human-closed batch signature is
+   not retried until versions drift. Labels: `dependencies`, `ai-sdlc`
+   (pipeline-managed → normal review/automerge path) and the vetting
+   verdict's `pr:risk-*` — the canonical classifier's dep fast-path maps
+   clean manifest/lockfile patch|minor diffs to `pr:risk-low`; majors, new
+   direct deps and non-dep files never take it.
+6. **Flag for human** — flagged candidates are recorded in the step
+   summary + run ledger and collected into ONE deduped open issue
+   (`<!-- ai-sdlc:dep-flagged -->` marker; `dependencies` +
+   `escalation.label`), updated on subsequent runs instead of spammed.
+   Flagged updates are never auto-landed.
+
+Caller wiring (consumers pick their own cadence):
+
+```yaml
+name: ai-sdlc-dep-update
+on:
+  schedule: [{ cron: '41 5 * * *' }]
+  workflow_dispatch:
+
+jobs:
+  dep-update:
+    uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-dep-update.yml@main
+    with:
+      repo: ${{ github.repository }}
+    secrets: inherit   # AI_SDLC_APP_ID + AI_SDLC_APP_PRIVATE_KEY
+```
+
+Artifacts: `ai-sdlc-dep-update-<attempt>` (plan.json, outdated.json, PR
+body, batch diff verdict, flagged body) + the sealed run-ledger entry
+(`stage: dep-update`).
+
+
 
 ## Model fallback
 

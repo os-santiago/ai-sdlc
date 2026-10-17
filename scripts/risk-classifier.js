@@ -39,6 +39,15 @@
 const fs = require('fs');
 const { execFileSync } = require('child_process');
 
+// Optional dep-diff classifier (issue #177): when scripts/dep-update.js is
+// present, a diff bounded to dependency manifests/lockfiles that carries
+// only patch|minor bumps with no new direct deps takes the low-risk path —
+// the taxonomy's lowest-evidence change. When the module is absent (older
+// runtime pins fetch only this file) the generic path keeps dep surfaces
+// high — fail-safe upward, never a silent downgrade.
+let depClassifier = null;
+try { depClassifier = require('./dep-update'); } catch (e) { depClassifier = null; }
+
 const TIERS = ['low', 'medium', 'high', 'critical'];
 const LABEL_PREFIX = 'pr:risk-';
 // Human-owned acceptance label — the classifier never adds or removes it.
@@ -185,6 +194,23 @@ function classifyDiff({ files, diffText, diffMaxBytes } = {}) {
   const highPath = paths.find((f) => HIGH_PATHS.some((rx) => rx.test(f)));
   const apiDelete = rows.find((r) => r.status === 'removed' || (r.add === 0 && r.del > 0 && PUBLIC_API.test(r.path)));
 
+  // Dep-update fast path (issue #177): only evaluated when every touched
+  // file is a dep manifest/lockfile AND the parsed diff stays inside dep
+  // files. Eligibility itself is fail-closed — majors, unknown specs, new
+  // direct deps and empty diffs are ineligible and fall through to the
+  // generic path (dep surfaces land high there). Credential/secret and
+  // exec-shape content signals run FIRST so a smuggled line inside a
+  // lockfile or manifest still resolves UP.
+  let depEligible = null;
+  if (depClassifier && rows.length
+      && rows.every((r) => depClassifier.DEP_DIFF_FILE_RE.test(r.path))) {
+    const cls = depClassifier.classifyDepUpdateDiff(diffText);
+    if (!cls.nonDepFiles.length) {
+      const v = depClassifier.depUpdateVerdict(cls);
+      if (v.eligible) depEligible = v;
+    }
+  }
+
   let tier, why;
   if (critContent.length) {
     tier = 'critical';
@@ -198,6 +224,10 @@ function classifyDiff({ files, diffText, diffMaxBytes } = {}) {
     tier = 'high';
     why = `dangerous execution / injection-shaped pattern in added lines (${highContent.join(', ')})`;
     signals.push(...highContent.map((s) => `content:${s}`));
+  } else if (depEligible) {
+    tier = 'low';
+    why = `vetted dep-only diff — ${depEligible.reason}`;
+    signals.push('dep-diff', `dep:${depEligible.kind}`);
   } else if (highPath || apiDelete || lines > 800 || dirs.length >= 3) {
     tier = 'high';
     const bits = [];

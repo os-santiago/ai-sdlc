@@ -106,8 +106,76 @@ describe('classifyDiff — high tier', () => {
     assert.equal(r.tier, 'high');
   });
 
+  it('a major dep bump stays high (dep fast-path is fail-closed)', () => {
+    const d = [
+      'diff --git a/package.json b/package.json',
+      '--- a/package.json', '+++ b/package.json', '@@ -1,2 +1,2 @@',
+      '-    "chalk": "^4.1.2"', '+    "chalk": "^5.3.0"',
+    ].join('\n');
+    const r = classifyDiff({ files: [file('package.json', 1, 1)], diffText: d });
+    assert.equal(r.tier, 'high');
+  });
+
+  it('a dep bump plus a new direct dep stays high (flagged for human)', () => {
+    const d = [
+      'diff --git a/package.json b/package.json',
+      '--- a/package.json', '+++ b/package.json', '@@ -1,3 +1,4 @@',
+      '-    "express": "^4.18.0"', '+    "express": "^4.18.2"',
+      '+    "leftpad": "^1.0.0"',
+    ].join('\n');
+    const r = classifyDiff({ files: [file('package.json', 2, 1)], diffText: d });
+    assert.equal(r.tier, 'high');
+  });
+
   it('public-API surface deletion is high', () => {
     const r = classifyDiff({ files: [{ path: 'src/api/users.js', add: 0, del: 120, status: 'removed' }] });
+    assert.equal(r.tier, 'high');
+  });
+});
+
+// --- dep-update fast path (issue #177) ---------------------------------------
+describe('classifyDiff — dep-update fast path', () => {
+  const bump = (from, to, name = 'express') => [
+    'diff --git a/package.json b/package.json',
+    '--- a/package.json', '+++ b/package.json', '@@ -1,2 +1,2 @@',
+    `-    "${name}": "${from}",`, `+    "${name}": "${to}",`,
+  ].join('\n');
+
+  it('a vetted patch bump on dep files only classifies low', () => {
+    const r = classifyDiff({ files: [file('package.json', 1, 1)], diffText: bump('^4.18.0', '^4.18.2') });
+    assert.equal(r.tier, 'low');
+    assert.equal(r.label, 'pr:risk-low');
+    assert.ok(r.signals.includes('dep:patch'));
+  });
+
+  it('a vetted minor bump across manifest+lockfile classifies low', () => {
+    const d = [
+      'diff --git a/package.json b/package.json',
+      '--- a/package.json', '+++ b/package.json', '@@ -1,2 +1,2 @@',
+      '-    "chalk": "^5.2.0"', '+    "chalk": "^5.3.0"',
+      'diff --git a/package-lock.json b/package-lock.json',
+      '--- a/package-lock.json', '+++ b/package-lock.json', '@@ -10,4 +10,4 @@',
+      '     "node_modules/chalk": {',
+      '-      "version": "5.2.0",',
+      '+      "version": "5.3.0",',
+    ].join('\n');
+    const r = classifyDiff({ files: [file('package.json', 1, 1), file('package-lock.json', 2, 2)], diffText: d });
+    assert.equal(r.tier, 'low');
+    assert.ok(r.signals.includes('dep:minor'));
+  });
+
+  it('credential content inside a dep-file diff still resolves UP to critical', () => {
+    const d = bump('^4.18.0', '^4.18.2') + '\n+' + '-----BEGIN OPENSSH PRIVATE KEY-----';
+    const r = classifyDiff({ files: [file('package.json', 2, 1)], diffText: d });
+    assert.equal(r.tier, 'critical');
+  });
+
+  it('dep bump plus non-dep file does not take the fast path', () => {
+    const d = bump('^4.18.0', '^4.18.2') + '\n' + [
+      'diff --git a/src/app.js b/src/app.js',
+      '--- a/src/app.js', '+++ b/src/app.js', '@@ -1 +1 @@', '-x', '+y',
+    ].join('\n');
+    const r = classifyDiff({ files: [file('package.json', 1, 1), file('src/app.js', 1, 1)], diffText: d });
     assert.equal(r.tier, 'high');
   });
 });
