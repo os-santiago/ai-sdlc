@@ -12,9 +12,27 @@ self-accrediting ramp [#186](https://github.com/os-santiago/ai-sdlc/issues/186).
 
 ## `gh ai-sdlc init`, step by step
 
-Two official entrypoints produce the same bootstrap PR (issue #185
-packages the Hermes `repo_installer` flow for both):
+Three entrypoints produce the same bootstrap PR — all over the shared
+installer engine `tools/ai-sdlc-init.js` shipped by this repo
+(issue #185):
 
+- **the installer script** — from an ai-sdlc checkout, point it at the
+  target (or run it inside the target's checkout by path):
+
+  ```bash
+  node tools/ai-sdlc-init.js /path/to/target        # writes .ai-sdlc.yaml +
+                                                    # caller + sweep
+  node tools/ai-sdlc-init.js /path/to/target --pr   # also branches, commits,
+                                                    # pushes, opens the
+                                                    # bootstrap PR (needs gh)
+  node tools/ai-sdlc-init.js . --dry-run            # plan + schema
+                                                    # validation, no writes
+  ```
+
+  Idempotent: identical files report `unchanged`, divergent files are kept
+  unless `--force`. The generated contract is validated against
+  `spec/ai-sdlc.schema.json` (tools/validate-ai-sdlc-config.sh) before
+  anything is written.
 - **the `gh` extension** —
   [`os-santiago/gh-ai-sdlc`](https://github.com/os-santiago/gh-ai-sdlc);
   install once, run in any repo.
@@ -23,9 +41,9 @@ packages the Hermes `repo_installer` flow for both):
   dispatchable installer workflow that opens the identical PR — the
   entrypoint for orgs onboarding a fleet without a local `gh`.
 
-> The installer ships with epic #153 (#185). Until it lands, the
-> [manual path](#manual-onboarding) produces the identical result — the
-> bootstrap PR is automation over that path, not a separate mechanism.
+> The [manual path](#manual-onboarding) produces the identical result —
+> the bootstrap PR is automation over that path, not a separate
+> mechanism.
 
 1. **Prerequisites** — the [`gh` CLI](https://cli.github.com),
    authenticated (`gh auth login`), with admin rights on the target
