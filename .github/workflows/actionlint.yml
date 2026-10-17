@@ -18,6 +18,11 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - name: Check shellcheck is available
+        # actionlint only pipes workflow `run:` blocks through shellcheck
+        # when the binary is on PATH — fail loudly if the runner image ever
+        # drops it instead of silently degrading the gate (issue #129).
+        run: shellcheck --version
       - name: Run actionlint
         # Pinned release + SHA-256 live in the script (single source of truth
         # shared with local/pre-PR runs — issue #44).

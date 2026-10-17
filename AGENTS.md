@@ -93,8 +93,13 @@ The cutover executes only after the evidence gate in epic #30 passes.
 bash tools/validate-repo.sh
 
 # Workflow lint — same pinned release CI runs (wrapper fetches it on demand;
-# `bash actionlint -color` if a checkout lost the exec bit)
+# `bash actionlint -color` if a checkout lost the exec bit). With shellcheck
+# on PATH it also lints every workflow `run:` block.
 ./actionlint -color
+
+# Shellcheck — validate-repo.sh runs it over standalone scripts when the
+# binary is installed; this fetches the pinned release for exact parity
+bash tools/shellcheck.sh tools/*.sh .github/actions/*/*.sh tests/*.sh
 
 # Contract validation only
 bash tools/validate-ai-sdlc-config.sh .ai-sdlc.yaml spec/ai-sdlc.schema.json
