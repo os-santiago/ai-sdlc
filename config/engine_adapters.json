@@ -77,6 +77,14 @@
       "24": "TimeoutError",
       "default": "AgentError"
     },
+    "stallClassMap": {
+      "10": "spec",
+      "20": "transport",
+      "21": "tooling",
+      "22": "budget",
+      "23": "livelock",
+      "24": "timeout"
+    },
     "manifestMap": {
       "path": "{manifestFile}",
       "format": "json"
