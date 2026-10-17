@@ -132,11 +132,14 @@ test('resolveStageAdapter returns the registered adapter for the stage engine', 
 });
 
 test('certified-but-unregistered adapter id fails loudly, naming the engine', () => {
-  // `codex` is a certified schema id (spec $defs.engine_id) with no registry
-  // entry — dispatch must refuse it instead of silently running scc.
+  // `codex` is a certified schema id (spec $defs.engine_id) — the canonical
+  // registry now ships an entry for it, so the gate is exercised against a
+  // fixture registry that omits it: dispatch must still refuse an id the
+  // schema admits instead of silently running scc.
+  const resolver = fixtureResolver();
   const contract = { spec: '1.0.0', engine: { name: 'scc' }, engines: { implement: 'codex' } };
   assert.throws(
-    () => resolveStageAdapter(contract, 'implement', REGISTRY),
+    () => resolveStageAdapter(contract, 'implement', resolver),
     (err) => {
       assert.ok(err instanceof StageEngineError);
       assert.match(err.message, /codex/);
@@ -147,7 +150,7 @@ test('certified-but-unregistered adapter id fails loudly, naming the engine', ()
   );
   // Same for the global engine when it names an unregistered id.
   assert.throws(
-    () => resolveStageAdapter({ spec: '1.0.0', engine: { name: 'codex' } }, 'review', REGISTRY),
+    () => resolveStageAdapter({ spec: '1.0.0', engine: { name: 'codex' } }, 'review', resolver),
     /codex/
   );
 });
@@ -312,7 +315,9 @@ test('CLI exits 1 with a clear message naming the unknown adapter', () => {
   const contract = writeJson(dir, 'contract.json', {
     spec: '1.0.0', engine: { name: 'scc' }, engines: { implement: 'codex' },
   });
-  const r = runCli(['--stage', 'implement', '--contract', contract, '--registry', REGISTRY]);
+  // Fixture registry without `codex` — the canonical registry registers it.
+  const registry = writeJson(dir, 'registry.json', FIXTURE_REGISTRY);
+  const r = runCli(['--stage', 'implement', '--contract', contract, '--registry', registry]);
   assert.equal(r.status, 1, `expected exit 1, got ${r.status}: ${r.stdout}${r.stderr}`);
   const log = r.stdout + r.stderr;
   assert.match(log, /codex/);

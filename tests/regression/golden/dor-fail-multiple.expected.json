@@ -2,7 +2,9 @@
   "outputs": {
     "dispatch": "false",
     "armed": "true",
-    "failed": "R2 AC section present|R3 ≥1 AC item|R4 non-trivial body"
+    "failed": "R2 AC section present|R3 ≥1 AC item|R4 non-trivial body",
+    "refine": "skipped",
+    "refine_fp": ""
   },
   "checks": {
     "R1 conventional title": true,

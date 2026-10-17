@@ -2,7 +2,9 @@
   "outputs": {
     "dispatch": "true",
     "armed": "true",
-    "failed": ""
+    "failed": "",
+    "refine": "skipped",
+    "refine_fp": ""
   },
   "checks": {
     "R1 conventional title": true,

@@ -2,7 +2,9 @@
   "outputs": {
     "dispatch": "false",
     "armed": "true",
-    "failed": "R6 no TBD in AC"
+    "failed": "R6 no TBD in AC",
+    "refine": "skipped",
+    "refine_fp": ""
   },
   "checks": {
     "R1 conventional title": true,
