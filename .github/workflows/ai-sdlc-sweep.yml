@@ -117,9 +117,9 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "max_repairs=$(yq -r '.merge.max_repairs // 3' .ai-sdlc.yaml)"
-            echo "pending_max_minutes=$(yq -r '.merge.pending_max_minutes // 60' .ai-sdlc.yaml)"
-            echo "merge_method=$(yq -r '.merge.method // "squash"' .ai-sdlc.yaml)"
+            echo "max_repairs=$(yq -r ".merge.max_repairs // 3" .ai-sdlc.yaml)"
+            echo "pending_max_minutes=$(yq -r ".merge.pending_max_minutes // 60" .ai-sdlc.yaml)"
+            echo "merge_method=$(yq -r ".merge.method // \"squash\"" .ai-sdlc.yaml)"
           } >> "$GITHUB_OUTPUT"
 
       - name: Enumerate pipeline PRs
