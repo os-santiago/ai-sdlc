@@ -213,7 +213,9 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
         with:
-          files: scripts/dep-update.js
+          files: |
+            scripts/dep-update.js
+            scripts/dep-flagged-body.js
           ref: ${{ inputs.runtime_ref || 'main' }}
           dest: ${{ runner.temp }}/ai-sdlc-dep-update
           label: dep-update worker
@@ -427,22 +429,7 @@ jobs:
           set -euo pipefail
           WORK="$RUNNER_TEMP/ai-sdlc-dep-update"
           MARKER='<!-- ai-sdlc:dep-flagged -->'
-          node - <<'NODE' > "$WORK/flagged-body.md"
-          const fs = require('fs');
-          const W = process.env.RUNNER_TEMP + '/ai-sdlc-dep-update';
-          const plan = JSON.parse(fs.readFileSync(`${W}/plan.json`, 'utf8'));
-          const esc = (s) => String(s == null ? '' : s).replace(/[<>`|\\\[\]]/g, c => '\\' + c).slice(0, 120);
-          const lines = ['## Dependency updates flagged for human review', '',
-            'The scheduled dep-update worker vetted these candidates and did **not** land them — majors, unknown specs, or supply-chain findings require human judgment (issue #177).', ''];
-          for (const f of plan.flagged) {
-            const why = [];
-            if (!['patch', 'minor'].includes(f.kind)) why.push(`${f.kind} bump`);
-            for (const g of f.findings || []) why.push(`${g.severity}: ${esc(g.detail)}`);
-            lines.push(`- \`${esc(f.name)}\` ${esc(f.current)} → ${esc(f.target)} — ${why.join('; ') || 'policy flag'}`);
-          }
-          lines.push('', '<!-- ai-sdlc:dep-flagged -->');
-          process.stdout.write(lines.join('\n') + '\n');
-          NODE
+          node "$WORK/scripts/dep-flagged-body.js" --plan "$WORK/plan.json" > "$WORK/flagged-body.md"
           EXISTING=$(gh issue list -R "$REPO" --state open --limit 100 \
             --json number,body | jq -r --arg m "$MARKER" '[.[] | select(.body | contains($m))] | .[0].number // ""')
           gh label create "$ESCALATION" -R "$REPO" --color D93F0B --force >/dev/null 2>&1 || true

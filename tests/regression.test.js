@@ -55,12 +55,17 @@ test('regression suite: every fixture case matches its golden', async (t) => {
 
 // --- Harness internals ---------------------------------------------------------
 
-test('extractNodeHeredoc pulls the shipped DoR script, not a copy', () => {
-  const src = extractNodeHeredoc(
-    path.join(__dirname, '..', '.github', 'workflows', 'ai-sdlc-intake.yml'),
-    { mustContain: 'const checks = {' });
-  assert.match(src, /const checks = \{/);
+test('the shipped DoR decision table lives in scripts/dor-check.js (issue #127)', () => {
+  // The heredoc extraction moved the R1–R6 logic out of the workflow; the
+  // workflow must now call the canonical module, and the module must still
+  // carry the decision table the goldens pin.
+  const wf = fs.readFileSync(
+    path.join(__dirname, '..', '.github', 'workflows', 'ai-sdlc-intake.yml'), 'utf8');
+  assert.match(wf, /dor-check\.js/);
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'scripts', 'dor-check.js'), 'utf8');
   assert.match(src, /R1 conventional title/);
+  assert.match(src, /evaluateDor/);
 });
 
 test('extractNodeHeredoc fails loudly when the decision code moved', () => {
