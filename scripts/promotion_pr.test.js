@@ -80,9 +80,9 @@ describe('readAutonomyLevel', () => {
     assert.deepEqual(readAutonomyLevel(CONTRACT), { level: 'auto-merge-low', explicit: true });
   });
 
-  it('falls back to the schema default (suggest) when level is absent', () => {
+  it('falls back to the schema default (shadow) when level is absent', () => {
     const c = 'autonomy:\n  freeze_env: AI_SDLC_FREEZE\n';
-    assert.deepEqual(readAutonomyLevel(c), { level: 'suggest', explicit: false });
+    assert.deepEqual(readAutonomyLevel(c), { level: 'shadow', explicit: false });
   });
 
   it('handles single- and double-quoted values', () => {

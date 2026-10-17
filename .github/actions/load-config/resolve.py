@@ -25,7 +25,10 @@ import re
 import sys
 
 DEFAULTS = {
-    "autonomy": {"level": "suggest", "merge_requires_checks": True, "freeze_env": "AI_SDLC_FREEZE"},
+    # shadow-first default (issue #186): a contract that omits
+    # autonomy.level resolves to observe-only and climbs the trust
+    # ladder on evidence — silence never grants privilege.
+    "autonomy": {"level": "shadow", "merge_requires_checks": True, "freeze_env": "AI_SDLC_FREEZE"},
     "triggers": {
         "issue_label": "ready-to-implement",
         "skip_labels": ["epic", "wontfix", "invalid", "duplicate", "question", "dependencies", "needs-human"],
