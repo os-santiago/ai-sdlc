@@ -56,6 +56,7 @@ DEFAULTS = {
         "max_fix_iterations": 3,
         "wait_max_minutes": 15,
         "external_reviewer": "",
+        "adversarial": {"enabled": True, "min_tier": "high", "max_attacks": 16, "max_seconds": 600},
     },
     "merge": {
         "method": "squash",
@@ -115,6 +116,9 @@ OVERRIDABLE = {
     "dependencies.max_updates": "int",
     "dependencies.min_release_age_days": "int",
     "dependencies.egress_profile": "str",
+    "review.adversarial.min_tier": "enum:low,medium,high,critical",
+    "review.adversarial.max_attacks": "int",
+    "review.adversarial.max_seconds": "int",
 }
 
 
@@ -457,6 +461,10 @@ def flat_outputs(c):
         "review_wait_max_minutes": str(c["review"]["wait_max_minutes"]),
         "review_external_reviewer": c["review"].get("external_reviewer") or "",
         "dep_updates": j(c.get("dependencies") or {}),
+        "review_adversarial_enabled": "true" if (c["review"].get("adversarial") or {}).get("enabled", True) else "false",
+        "review_adversarial_min_tier": (c["review"].get("adversarial") or {}).get("min_tier") or "high",
+        "review_adversarial_max_attacks": str((c["review"].get("adversarial") or {}).get("max_attacks") or 16),
+        "review_adversarial_max_seconds": str((c["review"].get("adversarial") or {}).get("max_seconds") or 600),
         "escalation_label": c["escalation"]["label"],
         "labels": j(labels),
         "label_queued": labels.get("queued", ""),

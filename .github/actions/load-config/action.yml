@@ -138,6 +138,18 @@ outputs:
   dep_updates:
     description: 'resolved dependencies section (JSON object: enabled, ecosystems, cadence, min_release_age_days, target, auto_kinds, max_updates, branch, labels, egress_profile — issue #177)'
     value: ${{ steps.resolve.outputs.dep_updates }}
+  review_adversarial_enabled:
+    description: 'review.adversarial.enabled — master switch for the adversarial review pass (issue #180)'
+    value: ${{ steps.resolve.outputs.review_adversarial_enabled }}
+  review_adversarial_min_tier:
+    description: 'review.adversarial.min_tier — contract-declared risk tier that triggers the adversarial pass'
+    value: ${{ steps.resolve.outputs.review_adversarial_min_tier }}
+  review_adversarial_max_attacks:
+    description: 'review.adversarial.max_attacks — cap on generated attack probes per run'
+    value: ${{ steps.resolve.outputs.review_adversarial_max_attacks }}
+  review_adversarial_max_seconds:
+    description: 'review.adversarial.max_seconds — wall-clock budget for the adversarial engine run'
+    value: ${{ steps.resolve.outputs.review_adversarial_max_seconds }}
   escalation_label:
     value: ${{ steps.resolve.outputs.escalation_label }}
   labels:

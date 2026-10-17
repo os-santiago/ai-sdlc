@@ -438,6 +438,42 @@
           "type": "string",
           "default": "",
           "description": "Slug prefix of an external reviewer (e.g. 'coderabbit') whose check-run conclusion and pull-request reviews are ingested; its blocking signal outranks the AI verdict. Empty = AI-only path."
+        },
+        "adversarial": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Adversarial review pass (issue #180, epic #151): diffs whose deterministic risk tier reaches min_tier receive a hostile second pass — generated injection probes (scripts/adversarial.js) plus abuse-case framing — whose findings enter the normal review-fix loop.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Master switch for the adversarial review pass."
+            },
+            "min_tier": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ],
+              "default": "high",
+              "description": "Trigger threshold — the contract-declared tier at or above which a PR diff receives the adversarial pass. pr:risk-high and pr:risk-critical are covered by the default."
+            },
+            "max_attacks": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64,
+              "default": 16,
+              "description": "Cap on generated attack probes embedded in the adversarial prompt."
+            },
+            "max_seconds": {
+              "type": "integer",
+              "minimum": 60,
+              "default": 600,
+              "description": "Wall-clock budget for the adversarial engine run; the runtime also clamps it to engine.max_seconds."
+            }
+          }
         }
       }
     },

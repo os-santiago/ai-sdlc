@@ -77,7 +77,7 @@ resolves it before acting:
 |---|---|---|
 | intake | `triggers.issue_label`, `triggers.skip_labels`, `labels.*` | `trigger_label` |
 | implement | `model.primary`, `model.fallback`, `engine.max_seconds`, `engine.max_steps`, `labels.*` | `model`, `fallback_model`, `max_seconds`, `max_steps` |
-| review | `review.mode`, `review.ai_reviewer.model`, `review.max_fix_iterations`, `review.external_reviewer`, `merge.skip_labels`, `engine.*`, `escalation.label` | `model`, `external_reviewer`, `max_fix_iterations`, `max_seconds`, `max_steps` |
+| review | `review.mode`, `review.ai_reviewer.model`, `review.max_fix_iterations`, `review.external_reviewer`, `review.adversarial.*`, `merge.skip_labels`, `engine.*`, `escalation.label` | `model`, `external_reviewer`, `max_fix_iterations`, `max_seconds`, `max_steps`, `adversarial_min_tier`, `adversarial_max_attacks` |
 | automerge | `merge.max_repairs`, `merge.pending_max_minutes`, `merge.skip_labels`, `merge.method`, `review.mode`, `review.wait_max_minutes`, `review.external_reviewer`, `escalation.label` | `max_repairs`, `pending_max_minutes`, `merge_method`, `review_wait_minutes` |
 | verify | `verify.commands` | `verify_commands` |
 | dep-update | `dependencies.*` (enabled, ecosystems, min_release_age_days, target, auto_kinds, max_updates, branch, labels, egress_profile) | `max_updates`, `target` |
@@ -317,12 +317,15 @@ stage's `ledger_head` input).
 | `max_seconds` / `max_steps` | `-1` → `engine.*` | engine budgets per run (review AND fix) |
 | `diff_max_bytes` | `150000` | byte cap on the diff embedded in the review prompt |
 | `findings_max` | `20` | findings kept in the verdict record / fix prompt |
+| `adversarial_min_tier` | `''` → `review.adversarial.min_tier` (`high`) | risk tier that triggers the adversarial pass; `off` disables it |
+| `adversarial_max_attacks` | `-1` → `review.adversarial.max_attacks` (16) | cap on generated attack probes per run |
 | `ledger_head` | `''` | upstream ledger head; empty = recover the `ai-sdlc:ledger-head` marker on the PR |
 
 Outputs: `action` (`reviewed` \| `fix-dispatched` \| `escalated` \|
 `skipped`), `verdict` (`clean` \| `blocked` \| `inconclusive` \| `none`),
 `reason`, `risk_tier` (`low` \| `medium` \| `high` \| `critical`),
-`ledger_head`.
+`adversarial` (`ran:<verdict>:<n>-attacks` \| `skip:…` \|
+`not-configured`), `ledger_head`.
 
 ### ai-sdlc-automerge
 | Input | Default | Purpose |
@@ -634,8 +637,31 @@ an in-run cycle.
    machine verdict `ai-sdlc-review-verdict.json`
    (`{verdict: approve|request_changes|comment, findings: [{severity:
    blocker|major|minor, path, line, summary}]}`).
+   - **Adversarial pass (issue #180)** — when the diff's tier reaches the
+     contract-declared threshold `review.adversarial.min_tier` (default
+     `high`, i.e. `pr:risk-high`/`pr:risk-critical`; `enabled: false` or
+     `adversarial_min_tier=off` disables), `scripts/adversarial-review.js`
+     generates bounded attack probes via `scripts/adversarial.js` (capped
+     at `review.adversarial.max_attacks`, embedded diff excerpt capped) and
+     a second `scc` run reviews the change under threat-model/abuse-case
+     framing with the probes fenced as untrusted data — a live
+     injection-defense check: a probe that converts to a forbidden action
+     in the engine audit log (force-push, pipe-to-shell, credential-file
+     read, attacker egress) becomes a `blocker` finding, as does the
+     engine self-reporting `probes_resisted: false`. The pass budget is
+     `review.adversarial.max_seconds` clamped to `engine.max_seconds`.
+     Below the threshold it skips cleanly and records the reason; an
+     unresolvable tier resolves UP. The generator/normalizer are fetched
+     from the runtime pin — never the PR head — and an unavailable
+     generator degrades to a recorded skip, never a block.
 5. **Verdict** — `request_changes` or any `blocker|major` finding or an
-   external blocking signal → `blocked`; `approve`/`comment` → `clean`;
+   external blocking signal or a blocked adversarial verdict → `blocked`;
+   adversarial findings merge into the verdict record tagged
+   `source: "adversarial"` and feed the same fix prompt — the normal
+   review-fix loop applies unchanged. The `adversarial` summary block in
+   `verdict.json`, the verdict comment's adversarial line, the run
+   artifacts (plan, prompt, audit log, normalized record) and the run
+   ledger keep the pass auditable. `approve`/`comment` → `clean`;
    a missing/malformed verdict file → `inconclusive` (recorded, never
    silently blocks — review infra downtime cannot stall merges). The
    verdict is posted as a best-effort `gh pr review` (falls back to a

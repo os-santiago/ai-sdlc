@@ -63,6 +63,15 @@ review:
   max_fix_iterations: 3        # bounded review→fix convergence (issue #28)
   wait_max_minutes: 15         # merge-gate cap on a pending verdict → review_timeout
   external_reviewer: ""        # e.g. coderabbit — empty = AI-only path
+  adversarial:
+    # Hostile second pass on high-risk diffs (issue #180, epic #151):
+    # the trigger threshold is declared HERE — pr diffs classified at or
+    # above min_tier get generated injection probes + abuse-case review;
+    # findings enter the same review-fix loop as normal findings.
+    enabled: true
+    min_tier: high             # pr:risk-high | pr:risk-critical
+    max_attacks: 16            # cap on generated probes per run
+    max_seconds: 600           # engine wall-clock budget for the pass
   risk_labels:
     - pr:risk-low
     - pr:risk-medium
