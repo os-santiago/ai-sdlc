@@ -528,6 +528,206 @@ describe('escalation.routes — failure-class alert routing (issue #175)', () =>
   });
 });
 
+describe('security gate contract + org floor (issues #107, #108)', () => {
+  it('declares a closed security section with the floor fields', () => {
+    const s = schema.properties.security;
+    assert.ok(s, 'missing properties.security');
+    assert.strictEqual(s.type, 'object');
+    assert.strictEqual(s.additionalProperties, false);
+    // Floor fields per spec/org-policy.md — Security Gate.
+    assert.strictEqual(s.properties.enabled.type, 'boolean');
+    assert.strictEqual(s.properties.enabled.default, true);
+    assert.deepStrictEqual(s.properties.min_severity.enum, ['low', 'medium', 'high', 'critical']);
+    assert.strictEqual(s.properties.min_severity.default, 'high');
+    assert.strictEqual(s.properties.block_on_secret.type, 'boolean');
+    assert.strictEqual(s.properties.block_on_secret.default, true);
+  });
+
+  it('declares severity_matrix as a closed pr:risk-* → outcome map', () => {
+    const m = schema.properties.security.properties.severity_matrix;
+    assert.ok(m, 'missing security.severity_matrix');
+    assert.strictEqual(m.additionalProperties, false);
+    assert.deepStrictEqual(
+      Object.keys(m.properties).sort(),
+      ['pr:risk-critical', 'pr:risk-high', 'pr:risk-low', 'pr:risk-medium'],
+    );
+    // Issue #108 AC: pr:risk-high and pr:risk-critical default to
+    // blocking-when-fix-available (else report-only); low/medium stay
+    // report-only.
+    assert.strictEqual(m.properties['pr:risk-high'].default, 'blocking-if-fix-available');
+    assert.strictEqual(m.properties['pr:risk-critical'].default, 'blocking-if-fix-available');
+    assert.strictEqual(m.properties['pr:risk-low'].default, 'report-only');
+    assert.strictEqual(m.properties['pr:risk-medium'].default, 'report-only');
+    for (const k of Object.keys(m.properties)) {
+      assert.strictEqual(m.properties[k].$ref, '#/$defs/security_gate_outcome');
+    }
+    const out = schema.$defs.security_gate_outcome;
+    assert.ok(out, 'missing $defs.security_gate_outcome');
+    assert.deepStrictEqual(
+      out.enum.slice().sort(),
+      ['blocking', 'blocking-if-fix-available', 'report-only'],
+    );
+  });
+
+  it('accepts a security block; rejects unknown tiers, outcomes and severities', { skip: !HAS_PY }, () => {
+    const ok = schemaValidate({
+      spec: '1.0.0',
+      security: {
+        enabled: true,
+        min_severity: 'high',
+        block_on_secret: true,
+        severity_matrix: { 'pr:risk-high': 'blocking', 'pr:risk-low': 'report-only' },
+      },
+    });
+    assert.deepStrictEqual(ok.errors, []);
+    assert.ok(ok.valid);
+
+    assert.strictEqual(schemaValidate({
+      spec: '1.0.0',
+      security: { severity_matrix: { 'pr:risk-high': 'sometimes' } },
+    }).valid, false);
+    assert.strictEqual(schemaValidate({
+      spec: '1.0.0',
+      security: { severity_matrix: { 'pr:risk-accepted': 'blocking' } },
+    }).valid, false);
+    assert.strictEqual(schemaValidate({
+      spec: '1.0.0',
+      security: { min_severity: 'fatal' },
+    }).valid, false);
+    assert.strictEqual(schemaValidate({
+      spec: '1.0.0',
+      security: { scanner: 'trivy' },   // undeclared leaf — closed object
+    }).valid, false);
+  });
+
+  it('org floor survives repo loosening; repo tightening still lands (load-config)', { skip: !HAS_PY }, () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-sdlc-resolve-'));
+    const input = path.join(dir, 'in.json');
+    const orgFile = path.join(dir, 'org.json');
+    // Repo tries to relax every floor the org pinned; tightening
+    // pr:risk-medium must still land.
+    fs.writeFileSync(input, JSON.stringify({
+      spec: '1.0.0',
+      verify: { required_checks: [] },
+      security: {
+        enabled: false,
+        min_severity: 'critical',
+        block_on_secret: false,
+        severity_matrix: { 'pr:risk-high': 'report-only', 'pr:risk-medium': 'blocking' },
+      },
+    }));
+    fs.writeFileSync(orgFile, JSON.stringify({
+      spec: '1.0.0',
+      verify: { required_checks: ['ai-sdlc-security'] },
+      security: {
+        enabled: true,
+        min_severity: 'high',
+        block_on_secret: true,
+        severity_matrix: {
+          'pr:risk-low': 'report-only',
+          'pr:risk-medium': 'report-only',
+          'pr:risk-high': 'blocking-if-fix-available',
+          'pr:risk-critical': 'blocking-if-fix-available',
+        },
+      },
+      policy_floor: {
+        pin: [
+          'security.enabled', 'security.min_severity', 'security.block_on_secret',
+          'security.severity_matrix.pr:risk-high', 'security.severity_matrix.pr:risk-critical',
+          'verify.required_checks',
+        ],
+      },
+    }));
+    const r = spawnSync('python3', [
+      RESOLVER, '--input', input, '--out-dir', dir,
+      '--org', orgFile, '--org-repo', 'fixtures/org', '--org-ref', 'main',
+    ], { encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, `resolve.py failed: ${r.stderr}`);
+    const contract = JSON.parse(fs.readFileSync(path.join(dir, 'contract.json'), 'utf8'));
+
+    // Loosening is suppressed — the org floor stands everywhere.
+    assert.strictEqual(contract.security.enabled, true);
+    assert.strictEqual(contract.security.min_severity, 'high');
+    assert.strictEqual(contract.security.block_on_secret, true);
+    assert.strictEqual(contract.security.severity_matrix['pr:risk-high'], 'blocking-if-fix-available');
+    assert.strictEqual(contract.security.severity_matrix['pr:risk-critical'], 'blocking-if-fix-available');
+    assert.strictEqual(contract.security.severity_matrix['pr:risk-low'], 'report-only');
+    // Tightening is still allowed (epic #87: repos can tighten, never loosen).
+    assert.strictEqual(contract.security.severity_matrix['pr:risk-medium'], 'blocking');
+    // Union keeps the org-mandated check even when the repo lists none.
+    assert.ok(contract.verify.required_checks.includes('ai-sdlc-security'));
+    // Audit trail records the enforcement.
+    for (const p of ['security.enabled', 'security.min_severity', 'security.block_on_secret',
+      'security.severity_matrix.pr:risk-high']) {
+      assert.strictEqual(contract._sources[p], 'org-pin', `${p} should be org-pin`);
+    }
+    assert.strictEqual(contract._sources['security.severity_matrix.pr:risk-medium'], 'contract');
+  });
+
+  it('a blocking finding fails the required check (issue #108)', { skip: !HAS_PY }, () => {
+    // The gate outcome is a pure function of the resolved contract: a
+    // finding is blocking-class when it is a secret (block_on_secret) or
+    // its severity reaches min_severity; the severity_matrix then maps the
+    // PR's pr:risk-* tier to the gate outcome. Evaluate that rule against
+    // the shipped org baseline to prove a blocking finding fails the
+    // required ai-sdlc-security check.
+    const org = JSON.parse(spawnSync('python3', [
+      '-c', 'import yaml,json,sys; json.dump(yaml.safe_load(open(sys.argv[1])), sys.stdout)',
+      path.join(ROOT, 'examples', 'org-baseline.ai-sdlc.yaml'),
+    ], { encoding: 'utf8' }).stdout);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-sdlc-resolve-'));
+    const input = path.join(dir, 'in.json');
+    const orgFile = path.join(dir, 'org.json');
+    fs.writeFileSync(input, JSON.stringify({ spec: '1.0.0' }));
+    fs.writeFileSync(orgFile, JSON.stringify(org));
+    const r = spawnSync('python3', [
+      RESOLVER, '--input', input, '--out-dir', dir,
+      '--org', orgFile, '--org-repo', 'fixtures/org', '--org-ref', 'main',
+    ], { encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, `resolve.py failed: ${r.stderr}`);
+    const c = JSON.parse(fs.readFileSync(path.join(dir, 'contract.json'), 'utf8'));
+
+    const SEVERITY = ['low', 'medium', 'high', 'critical'];
+    const gateFails = ({ tier, secret, severity, fixAvailable }) => {
+      if (!c.security.enabled) return false;
+      // Secrets block unconditionally — the severity matrix only arbitrates
+      // severity-class findings (spec/org-policy.md — Security Gate).
+      if (c.security.block_on_secret && secret) return true;
+      if (SEVERITY.indexOf(severity) < SEVERITY.indexOf(c.security.min_severity)) return false;
+      const outcome = c.security.severity_matrix[tier] || 'report-only';
+      return outcome === 'blocking'
+        || (outcome === 'blocking-if-fix-available' && fixAvailable);
+    };
+
+    // Blocking finding: critical CVE with an upstream fix on a risk-high PR.
+    assert.ok(gateFails({ tier: 'pr:risk-high', secret: false, severity: 'critical', fixAvailable: true }));
+    assert.ok(gateFails({ tier: 'pr:risk-critical', secret: false, severity: 'high', fixAvailable: true }));
+    // Secret material blocks unconditionally under the org floor.
+    assert.ok(gateFails({ tier: 'pr:risk-low', secret: true, severity: 'low', fixAvailable: false }));
+    // Unfixable findings and low/medium tiers stay report-only.
+    assert.ok(!gateFails({ tier: 'pr:risk-high', secret: false, severity: 'critical', fixAvailable: false }));
+    assert.ok(!gateFails({ tier: 'pr:risk-low', secret: false, severity: 'critical', fixAvailable: true }));
+    // …and the check the gate emits is a required one — a red
+    // ai-sdlc-security holds the merge via the existing check-gate table.
+    assert.ok(c.verify.required_checks.includes('ai-sdlc-security'));
+  });
+
+  it('org baseline example carries the gate + floor and still validates', { skip: !HAS_PY }, () => {
+    const file = path.join(ROOT, 'examples', 'org-baseline.ai-sdlc.yaml');
+    const org = JSON.parse(spawnSync('python3', [
+      '-c', 'import yaml,json,sys; json.dump(yaml.safe_load(open(sys.argv[1])), sys.stdout)', file,
+    ], { encoding: 'utf8' }).stdout);
+    const v = schemaValidate(org);
+    assert.deepStrictEqual(v.errors, []);
+    assert.ok(v.valid);
+    assert.ok(org.verify.required_checks.includes('ai-sdlc-security'),
+      'org baseline must pin ai-sdlc-security as a required check');
+    for (const pin of ['security.min_severity', 'security.block_on_secret']) {
+      assert.ok(org.policy_floor.pin.includes(pin), `policy_floor.pin missing ${pin}`);
+    }
+  });
+});
+
 describe('contract ↔ schema drift guard (issue #255)', () => {
   // Regression: a contract key merged without a matching schema property
   // fails `additionalProperties: false` — but only on main, where every

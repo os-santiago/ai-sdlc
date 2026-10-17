@@ -51,6 +51,7 @@ field is enforced even if the repo attempts to override:
 | `autonomy.level` (ceiling, e.g. org-wide `auto-merge-low`) | Blast-radius control. |
 | `triggers.skip_labels` (union-includes `needs-human`) | Intake-side human override. |
 | `verify.required_checks` (union) | Org-mandated gates always run. |
+| `security.*` gate floors (`enabled`, `min_severity`, `block_on_secret`, `severity_matrix.*`) | The deterministic security gate cannot be relaxed — see [Security Gate](#security-gate). |
 
 The org baseline declares pins explicitly:
 
@@ -63,6 +64,51 @@ policy_floor:
     - autonomy.level
 ```
 
+## Security Gate
+
+Epic #87 mandates a deterministic supply-chain security gate — secret and
+dependency findings evaluated by code, never by generative judgment. The
+gate runs as the required check `ai-sdlc-security`, carried by the
+`verify.required_checks` union (strictly additive — a repo can add checks
+but can never drop an org-mandated one). The contract surface is the
+`security` section of [`ai-sdlc.schema.json`](ai-sdlc.schema.json); this
+spec owns the contract and the merge semantics, the stage that emits the
+check is specified separately.
+
+### Floor fields
+
+Unlike generic pins (org value outright), the security floors are
+*clamps* — they apply whenever the org baseline declares the field, and
+they still allow repo-side tightening. Listing them in
+`policy_floor.pin` records the floor in the resolved contract's
+`pinned`/`enforced` audit fields (the same double-declaration
+`autonomy.level` uses):
+
+| Field | Floor semantics |
+|---|---|
+| `security.enabled` | Boolean floor — an org `true` cannot be relaxed to `false` (repo opt-out of the gate is a non-goal); a repo `true` under an org `false` only tightens. |
+| `security.min_severity` | Severity floor — resolves to the *stricter* (lower-rank) of the org and repo values: `low` < `medium` < `high` < `critical`. Findings at/above the resolved threshold are blocking-class; below it they are always report-only. |
+| `security.block_on_secret` | Boolean floor — org `true` stands; secret/credential-material findings always block, regardless of severity or `pr:risk-*` tier. |
+| `security.severity_matrix.<pr:risk-*>` | Strictest-outcome floor per leaf the org declares — outcomes rank `report-only` < `blocking-if-fix-available` < `blocking`; a repo may harden a tier, never soften it. |
+
+### Severity matrix
+
+`security.severity_matrix` maps a `pr:risk-*` tier (spec/risk-taxonomy.md)
+to the gate outcome for blocking-class findings on that PR:
+
+| pr:risk-* tier | Normative default | Meaning |
+|---|---|---|
+| `pr:risk-low` | `report-only` | Findings recorded on the check, never fail it. |
+| `pr:risk-medium` | `report-only` | Findings recorded on the check, never fail it. |
+| `pr:risk-high` | `blocking-if-fix-available` | Fails `ai-sdlc-security` when a finding ≥ `min_severity` ships with an upstream fix; unfixable findings degrade to report-only. |
+| `pr:risk-critical` | `blocking-if-fix-available` | Same as high — blocking when a fix exists, report-only otherwise. |
+
+`blocking` (opt-in, stricter than any default) fails the check
+unconditionally. `blocking-if-fix-available` exists so the loop is never
+paralyzed by findings nobody can act on (CVEs without an upstream fix).
+License observations and lower-severity findings stay report-only under
+every tier.
+
 ## Resolution algorithm
 
 ```
@@ -70,11 +116,11 @@ resolve(org_cfg, repo_cfg):
   result = deep_copy(defaults)
   for layer in [org_cfg, repo_cfg]:
     for each leaf path p in layer:
-      if pinned(p) and layer == repo_cfg: continue        # pin wins
-      if isUnionField(p):  result[p] = union(result[p], layer[p])
-      elif isMapField(p):  result[p] = mergeMaps(result[p], layer[p])
-      elif p == 'autonomy.level': result[p] = min_level(result[p], layer[p])
-      else:                result[p] = layer[p]
+      if isUnionField(p):    result[p] = union(result[p], layer[p])
+      elif isFloorClamp(p):  result[p] = clamp(result[p], layer[p])   # autonomy.level ceiling + security.* floors — tightening wins even under a pin
+      elif pinned(p) and layer == repo_cfg: continue                  # pin wins outright
+      elif isMapField(p):    result[p] = mergeMaps(result[p], layer[p])
+      else:                  result[p] = layer[p]
   validate(result)  # MUST pass ai-sdlc.schema.json
   return result
 ```

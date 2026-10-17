@@ -1,0 +1,50 @@
+{
+  "id": "resolve-org-security-floor",
+  "type": "contract-resolve",
+  "title": "org security floor clamps repo loosening; tightening still lands (epic #87)",
+  "requires": ["python3"],
+  "input": {
+    "repo_cfg": {
+      "spec": "1.0.0",
+      "verify": { "required_checks": [] },
+      "security": {
+        "enabled": false,
+        "min_severity": "critical",
+        "block_on_secret": false,
+        "severity_matrix": {
+          "pr:risk-high": "report-only",
+          "pr:risk-medium": "blocking"
+        }
+      }
+    },
+    "org": {
+      "spec": "1.0.0",
+      "verify": { "required_checks": ["ai-sdlc-security"] },
+      "security": {
+        "enabled": true,
+        "min_severity": "high",
+        "block_on_secret": true,
+        "severity_matrix": {
+          "pr:risk-low": "report-only",
+          "pr:risk-medium": "report-only",
+          "pr:risk-high": "blocking-if-fix-available",
+          "pr:risk-critical": "blocking-if-fix-available"
+        }
+      },
+      "policy_floor": {
+        "pin": [
+          "security.enabled",
+          "security.min_severity",
+          "security.block_on_secret",
+          "security.severity_matrix.pr:risk-high",
+          "security.severity_matrix.pr:risk-critical",
+          "verify.required_checks"
+        ]
+      }
+    },
+    "overrides": {},
+    "org_repo": "fixtures/org",
+    "org_ref": "main"
+  },
+  "compare": { "omit": ["outputs.path"] }
+}
