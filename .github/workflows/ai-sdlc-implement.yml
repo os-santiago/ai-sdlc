@@ -952,7 +952,7 @@ jobs:
           export GH_TOKEN="$FORGE_TOKEN_WRITE"
           gh pr comment "${{ steps.pr.outputs.pr_number }}" -R "$REPO" --body "📎 **AI-SDLC run ledger** — stage \`implement\` sealed (head \`${LEDGER_HEAD}\`). Downstream stages chain their evidence from this entry; sealed ledgers live in the run artifacts.<!-- ai-sdlc:ledger-head ${LEDGER_HEAD} -->"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: ai-sdlc-run-${{ inputs.issue_number }}
@@ -977,7 +977,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && steps.ledger.outputs.head != ''
         continue-on-error: true
         with:

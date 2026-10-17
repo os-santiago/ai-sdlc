@@ -1063,7 +1063,7 @@ jobs:
             scc-audit.jsonl scc-manifest.json verdict.json verdict.raw.json \
             review-prompt.md 2>/dev/null || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && steps.guard.outputs.decision != 'skip'
         with:
           name: ai-sdlc-review-${{ inputs.pr_number }}-${{ steps.guard.outputs.attempt }}
@@ -1122,7 +1122,7 @@ jobs:
           stage: review
           signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && steps.ledger.outputs.head != ''
         continue-on-error: true
         with:
@@ -1510,7 +1510,7 @@ jobs:
             scc-audit.jsonl scc-manifest.json review-fix-manifest.json \
             fix-prompt.md 2>/dev/null || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: ai-sdlc-review-fix-${{ inputs.pr_number }}-attempt-${{ needs.review.outputs.fix_attempt }}
@@ -1555,7 +1555,7 @@ jobs:
           stage: review-fix
           signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && steps.ledger.outputs.head != ''
         continue-on-error: true
         with:

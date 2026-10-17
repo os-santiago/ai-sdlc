@@ -122,7 +122,7 @@ jobs:
             echo "- action: \`$(jq -r .action drift-report.json)\` · findings: $(jq -r '.findings | length' drift-report.json)"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ai-sdlc-drift-report
           path: |
