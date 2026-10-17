@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "description": "A/B experiment declarations for the eval-evidence promotion decision layer (issue #192; epic #148). Variants carry the traffic split (relative `weight`, normalized at read time) plus the subject under test (model / promptRef / engine flags); `metric` names the eval evidence the arms are compared on. Lifecycle status here is the desired state — promotions and rollbacks the evaluator applies live in the state file (AI_SDLC_AB_STATE / --state), never in this committed config.",
+  "experiments": [
+    {
+      "id": "primary-model-quality",
+      "description": "Candidate model vs the declared model.primary, gated on the functional eval suite pass rate. Draft: declared for wiring; no live traffic is routed by this repo — the decision layer consumes eval result artifacts only.",
+      "status": "draft",
+      "control": "primary",
+      "metric": { "name": "pass_rate", "direction": "higher" },
+      "alpha": 0.05,
+      "minSamplesPerArm": 30,
+      "window": 200,
+      "variants": [
+        { "name": "primary", "weight": 0.5, "model": "nvidia/nemotron-3-super-120b-a12b" },
+        { "name": "candidate", "weight": 0.5, "model": "nvidia/nemotron-3.5-lightning-30b-a3b" }
+      ]
+    }
+  ]
+}

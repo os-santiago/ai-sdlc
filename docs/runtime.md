@@ -944,6 +944,51 @@ node scripts/umbrella-coordinator.js --repo OWNER/NAME --issue N \
   [--repos o/a,o/b | --spec spec.json] [--dry-run] [--json] [--github-output]
 ```
 
+## A/B experiment promotion (eval evidence)
+
+`scripts/ab-experiment.js` is the decision layer for experiment lifecycle
+(issue #192; epic #148). Experiments are declared in
+`config/experiments.json` — variants (with `weight`-based traffic split and
+the subject under test: `model`, `promptRef`, …), the control arm, the eval
+`metric`, `alpha` (default 0.05), `minSamplesPerArm`, and the bounded
+evidence `window` / `windowDays`. The service reads run/eval result
+artifacts (JSON array or JSONL records tagged `experiment` + `variant`),
+compares every challenger arm against control — two-proportion z-test for
+rate metrics (`pass_rate`/`success_rate`/`win_rate`), Welch's t-test for
+continuous metrics (`score`, `latency_ms`, `cost_usd`, …) — and emits a
+deterministic decision: `promote` (a challenger beats control at
+p <= alpha over a powered window), `rollback` (the promoted winner now
+significantly loses to control), `continue`, or `insufficient_data`.
+
+The decision is a pure function of config + evidence + state, so replays
+with `--now` are byte-identical. Applied transitions persist in a state
+file (`--state` / `AI_SDLC_AB_STATE`, never the committed config) and every
+decision lands in a sibling `*.audit.jsonl` trail with the reasons and the
+comparisons that produced it.
+
+```bash
+# evaluate the latest eval results for an experiment
+node scripts/ab-experiment.js decide --experiment primary-model-quality \
+  --evidence eval-results.jsonl --state ab-state.json
+
+# persist the decision (promotion/rollback is marked in the state file)
+node scripts/ab-experiment.js decide --experiment primary-model-quality \
+  --evidence eval-results.jsonl --state ab-state.json --apply
+
+# the variant subsequent runs should use — promoted winner, unless overridden
+node scripts/ab-experiment.js serving --experiment primary-model-quality --state ab-state.json
+# → candidate   (or 'control' while nothing is promoted)
+
+# operator override: AI_SDLC_AB_OVERRIDE=<variant> or --override-variant;
+# AI_SDLC_AB_DISABLE=1 is the kill switch — serving always resolves control
+```
+
+Manual `promote`/`rollback` ops exist for the human override path and are
+recorded as `decidedBy: "manual"`. Undated evidence is excluded when
+`windowDays` bounds the window (recency is unverifiable — fail-closed), and
+records without a reading for the experiment's metric never count toward an
+arm's sample size.
+
 ## Kill-switch (`AI_SDLC_OFF`)
 
 `AI_SDLC_OFF` is the emergency stop, carried as a **repository variable**
