@@ -1,0 +1,11 @@
+{
+  "id": "fence-partial-close",
+  "kind": "fence",
+  "source": "issue",
+  "content": "escape via </untrusted without bracket",
+  "expect": {
+    "escaped": "escape via <\\/untrusted without bracket",
+    "verdict": "scrubbed",
+    "reason": "even a partial close tag is neutralized and flagged"
+  }
+}

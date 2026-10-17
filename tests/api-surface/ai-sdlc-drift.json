@@ -1,0 +1,40 @@
+{
+  "inputs": {
+    "dry_run": {
+      "default": false,
+      "description": "evaluate only — never comments/files/closes",
+      "type": "boolean"
+    },
+    "repo": {
+      "default": "",
+      "description": "owner/name to sweep (blank = caller repo)",
+      "type": "string"
+    },
+    "runtime_ref": {
+      "default": "main",
+      "description": "ref of os-santiago/ai-sdlc to fetch scripts/contract-drift.js from — pin to the same ref as this workflow",
+      "type": "string"
+    },
+    "window": {
+      "default": "30d",
+      "description": "trailing window for observed behavior",
+      "type": "string"
+    }
+  },
+  "outputs": {
+    "drift_action": {
+      "description": "filed | updated | unchanged | reopened | resolved | clean",
+      "value": "${{ jobs.sweep.outputs.drift_action }}"
+    },
+    "drift_findings": {
+      "description": "divergence count in the latest sweep",
+      "value": "${{ jobs.sweep.outputs.drift_findings }}"
+    },
+    "drift_issue": {
+      "description": "canonical drift issue number (when one exists)",
+      "value": "${{ jobs.sweep.outputs.drift_issue }}"
+    }
+  },
+  "secrets": {},
+  "workflow": "ai-sdlc-drift.yml"
+}

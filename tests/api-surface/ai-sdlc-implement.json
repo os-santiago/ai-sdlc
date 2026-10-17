@@ -1,0 +1,106 @@
+{
+  "inputs": {
+    "base": {
+      "default": "main",
+      "description": "base branch",
+      "type": "string"
+    },
+    "fallback_model": {
+      "default": "",
+      "description": "one-shot fallback override on provider/auth failure (exit 20/21); empty = .ai-sdlc.yaml model.fallback",
+      "type": "string"
+    },
+    "issue_number": {
+      "required": true,
+      "type": "number"
+    },
+    "ledger_head": {
+      "default": "",
+      "description": "upstream run-ledger chain head (e.g. needs.intake.outputs.ledger_head) — seeds this stage entry prev; empty = genesis (issue #196)",
+      "type": "string"
+    },
+    "max_seconds": {
+      "default": -1,
+      "description": "engine wall-clock budget override; -1 = .ai-sdlc.yaml engine.max_seconds",
+      "type": "number"
+    },
+    "max_steps": {
+      "default": -1,
+      "description": "engine tool-step budget override; -1 = .ai-sdlc.yaml engine.max_steps",
+      "type": "number"
+    },
+    "model": {
+      "default": "",
+      "description": "engine model route override; empty = .ai-sdlc.yaml model.primary",
+      "type": "string"
+    },
+    "org_config": {
+      "default": "",
+      "description": "org baseline contract ref owner/repo[/path][@ref] — org floor per spec/org-policy.md; empty = repo contract + defaults",
+      "type": "string"
+    },
+    "provider_base_url": {
+      "default": "",
+      "description": "OpenAI-compatible inference base URL; empty → vars.AI_SDLC_PROVIDER_URL → GitHub Models default",
+      "type": "string"
+    },
+    "repo": {
+      "required": true,
+      "type": "string"
+    },
+    "runtime_ref": {
+      "default": "main",
+      "description": "ref of os-santiago/ai-sdlc to fetch runtime scripts/actions from",
+      "type": "string"
+    }
+  },
+  "outputs": {
+    "exit_code": {
+      "description": "final engine exit code (fallback run when it fired, else primary)",
+      "value": "${{ jobs.implement.outputs.exit_code }}"
+    },
+    "fallback_used": {
+      "description": "'true' when the fallback model run fired",
+      "value": "${{ jobs.implement.outputs.fallback_used }}"
+    },
+    "ledger_head": {
+      "description": "sealed run-ledger chain head — also stamped on the PR as an ai-sdlc:ledger-head marker (issue #196)",
+      "value": "${{ jobs.implement.outputs.ledger_head }}"
+    },
+    "model": {
+      "description": "model id of the run that produced exit_code",
+      "value": "${{ jobs.implement.outputs.model }}"
+    },
+    "pr_number": {
+      "description": "PR opened by this run (empty when exit_code != 0); feeds post-implement review (issue #28)",
+      "value": "${{ jobs.implement.outputs.pr_number }}"
+    },
+    "primary_exit": {
+      "description": "engine exit code of the primary-model run",
+      "value": "${{ jobs.implement.outputs.primary_exit }}"
+    },
+    "stall_class": {
+      "description": "engine-stall classification of the final run (ok|transport|tooling|spec|budget|livelock; issue #158); empty = unclassified",
+      "value": "${{ jobs.implement.outputs.stall_class }}"
+    }
+  },
+  "secrets": {
+    "AI_SDLC_APP_ID": {
+      "description": "ai-sdlc GitHub App id — mints the per-run installation token used for all git/gh auth (fail-closed when unset; issue #26)",
+      "required": true
+    },
+    "AI_SDLC_APP_PRIVATE_KEY": {
+      "description": "ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID",
+      "required": true
+    },
+    "AI_SDLC_LEDGER_KEY": {
+      "description": "run-ledger signing key (PEM; Ed25519/RSA) — seals stage evidence; absent = unsigned seal (issue #196)",
+      "required": false
+    },
+    "MODEL_API_KEY": {
+      "description": "API key the engine uses (OPENAI_API_KEY surface)",
+      "required": false
+    }
+  },
+  "workflow": "ai-sdlc-implement.yml"
+}

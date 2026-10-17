@@ -1,0 +1,43 @@
+{
+  "inputs": {
+    "diff_max_bytes": {
+      "default": 500000,
+      "description": "byte cap on the unified diff scanned for content signals",
+      "type": "number"
+    },
+    "pr_number": {
+      "required": true,
+      "type": "number"
+    },
+    "repo": {
+      "required": true,
+      "type": "string"
+    },
+    "runtime_ref": {
+      "default": "main",
+      "description": "ref of os-santiago/ai-sdlc to fetch scripts/risk-classifier.js from — pin to the same ref as this workflow",
+      "type": "string"
+    }
+  },
+  "outputs": {
+    "action": {
+      "description": "classified | skipped",
+      "value": "${{ jobs.classify.outputs.action }}"
+    },
+    "risk_tier": {
+      "description": "low | medium | high | critical (empty when skipped)",
+      "value": "${{ jobs.classify.outputs.risk_tier }}"
+    }
+  },
+  "secrets": {
+    "AI_SDLC_APP_ID": {
+      "description": "ai-sdlc GitHub App id — mints the per-run installation token used for all gh auth (fail-closed when unset; issue #26)",
+      "required": true
+    },
+    "AI_SDLC_APP_PRIVATE_KEY": {
+      "description": "ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID",
+      "required": true
+    }
+  },
+  "workflow": "ai-sdlc-classify.yml"
+}

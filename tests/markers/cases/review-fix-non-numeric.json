@@ -1,0 +1,6 @@
+{
+  "id": "review-fix-non-numeric",
+  "marker": "review-fix",
+  "body": "<!-- ai-sdlc:review-fix attempt=two sha=a1b2c3d4 -->",
+  "expect": { "match": false, "reason": "attempt must be numeric" }
+}

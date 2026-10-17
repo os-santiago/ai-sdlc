@@ -289,6 +289,17 @@ validation run.
 
 ## Inputs / secrets
 
+> **Contract surface gate (issue #135):** the tables below are mirrored by
+> machine snapshots — `tests/api-surface/*.json` holds the normalized
+> `workflow_call` interface (inputs/outputs/secrets) of every reusable
+> stage, diffed in CI by `tests/api_surface.js` via the `contract` job. Any
+> interface change must update the snapshot (`node tests/api_surface.js
+> --bless`); removing/renaming inputs or outputs or changing a type is a
+> breaking change — flag it per spec semver rules (see
+> `tests/api-surface/README.md`). Comment markers (`<!-- ai-sdlc:* -->`)
+> have the same treatment via `scripts/comment-markers.js` +
+> `tests/markers/cases/` (issue #131).
+
 ### ai-sdlc-intake
 | Input | Default | Purpose |
 |---|---|---|

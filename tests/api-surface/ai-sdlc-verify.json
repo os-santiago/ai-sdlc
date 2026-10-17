@@ -1,0 +1,63 @@
+{
+  "inputs": {
+    "base": {
+      "default": "main",
+      "type": "string"
+    },
+    "ledger_head": {
+      "default": "",
+      "description": "upstream run-ledger chain head — seeds this stage entry prev; empty = recover the marker on pr_number (issue #196)",
+      "type": "string"
+    },
+    "org_config": {
+      "default": "",
+      "description": "org baseline contract ref owner/repo[/path][@ref] — org floor per spec/org-policy.md; empty = repo contract + defaults",
+      "type": "string"
+    },
+    "pr_number": {
+      "default": 0,
+      "description": "merged PR number — recorded on the ledger entry and used to recover the ai-sdlc:ledger-head marker (0 = none)",
+      "type": "number"
+    },
+    "repo": {
+      "required": true,
+      "type": "string"
+    },
+    "revert_on_failure": {
+      "default": false,
+      "description": "git revert the merge commit on verify failure",
+      "type": "boolean"
+    },
+    "runtime_ref": {
+      "default": "main",
+      "description": "ref of os-santiago/ai-sdlc to fetch trusted runtime scripts (postmortem.js, alert-router.js) from — pin to the same ref as this workflow",
+      "type": "string"
+    },
+    "setup_commands": {
+      "default": "",
+      "description": "newline-separated dependency install (e.g. npm ci)",
+      "type": "string"
+    },
+    "verify_commands": {
+      "default": "",
+      "description": "newline-separated commands — override; empty = .ai-sdlc.yaml verify.commands",
+      "type": "string"
+    }
+  },
+  "outputs": {
+    "ledger_head": {
+      "description": "sealed run-ledger chain head for this verify run (issue #196)",
+      "value": "${{ jobs.verify.outputs.ledger_head }}"
+    }
+  },
+  "secrets": {
+    "AI_SDLC_LEDGER_KEY": {
+      "description": "run-ledger signing key (PEM; Ed25519/RSA) — seals stage evidence; absent = unsigned seal (issue #196)",
+      "required": false
+    },
+    "AI_SDLC_TOKEN": {
+      "required": false
+    }
+  },
+  "workflow": "ai-sdlc-verify.yml"
+}

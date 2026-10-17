@@ -1,0 +1,132 @@
+{
+  "inputs": {
+    "adversarial_max_attacks": {
+      "default": -1,
+      "description": "cap on generated attack probes per run — override; -1 = .ai-sdlc.yaml review.adversarial.max_attacks",
+      "type": "number"
+    },
+    "adversarial_min_tier": {
+      "default": "",
+      "description": "adversarial pass trigger tier (low|medium|high|critical) or \"off\"; empty = .ai-sdlc.yaml review.adversarial.min_tier (issue #180)",
+      "type": "string"
+    },
+    "base": {
+      "default": "main",
+      "description": "ref to read .ai-sdlc.yaml from",
+      "type": "string"
+    },
+    "diff_max_bytes": {
+      "default": 150000,
+      "description": "byte cap on the diff embedded in the review prompt",
+      "type": "number"
+    },
+    "external_reviewer": {
+      "default": "",
+      "description": "external reviewer slug prefix (e.g. coderabbit) — override; empty = .ai-sdlc.yaml review.external_reviewer (unset there = AI-only path)",
+      "type": "string"
+    },
+    "findings_max": {
+      "default": 20,
+      "description": "findings kept in the verdict record and the fix prompt",
+      "type": "number"
+    },
+    "ledger_head": {
+      "default": "",
+      "description": "upstream run-ledger chain head — seeds this stage entry prev; empty = recover the ai-sdlc:ledger-head marker on the PR (issue #196)",
+      "type": "string"
+    },
+    "max_fix_iterations": {
+      "default": -1,
+      "description": "fix pushes per PR before needs-human — override; -1 = .ai-sdlc.yaml review.max_fix_iterations",
+      "type": "number"
+    },
+    "max_seconds": {
+      "default": -1,
+      "description": "engine wall-clock budget per run — override; -1 = .ai-sdlc.yaml engine.max_seconds",
+      "type": "number"
+    },
+    "max_steps": {
+      "default": -1,
+      "description": "engine tool-step budget per run — override; -1 = .ai-sdlc.yaml engine.max_steps",
+      "type": "number"
+    },
+    "model": {
+      "default": "",
+      "description": "reviewer model override; empty = .ai-sdlc.yaml review.ai_reviewer.model → model.primary",
+      "type": "string"
+    },
+    "pipeline_author": {
+      "default": "ai-sdlc-runtime[bot]",
+      "description": "PR author login treated as pipeline-managed (the ai-sdlc App bot identity)",
+      "type": "string"
+    },
+    "pipeline_label": {
+      "default": "ai-sdlc",
+      "description": "label that also marks a PR as pipeline-managed (human-branch opt-in)",
+      "type": "string"
+    },
+    "pr_number": {
+      "required": true,
+      "type": "number"
+    },
+    "provider_base_url": {
+      "default": "",
+      "description": "OpenAI-compatible inference base URL; empty → vars.AI_SDLC_PROVIDER_URL → GitHub Models default",
+      "type": "string"
+    },
+    "repo": {
+      "required": true,
+      "type": "string"
+    },
+    "runtime_ref": {
+      "default": "main",
+      "description": "ref of os-santiago/ai-sdlc to fetch runtime scripts/actions from",
+      "type": "string"
+    }
+  },
+  "outputs": {
+    "action": {
+      "description": "reviewed | fix-dispatched | escalated | skipped",
+      "value": "${{ jobs.review.outputs.action }}"
+    },
+    "adversarial": {
+      "description": "adversarial pass summary: ran:<verdict>:<n>-attacks | skip:<verdict>:<n>-attacks | not-configured",
+      "value": "${{ jobs.review.outputs.adversarial }}"
+    },
+    "ledger_head": {
+      "description": "sealed run-ledger chain head for this review run (issue #196)",
+      "value": "${{ jobs.review.outputs.ledger_head }}"
+    },
+    "reason": {
+      "description": "guard reason or outcome detail",
+      "value": "${{ jobs.review.outputs.reason }}"
+    },
+    "risk_tier": {
+      "description": "deterministic diff tier: low | medium | high | critical (empty when skipped)",
+      "value": "${{ jobs.review.outputs.risk_tier }}"
+    },
+    "verdict": {
+      "description": "clean | blocked | inconclusive | none",
+      "value": "${{ jobs.review.outputs.verdict }}"
+    }
+  },
+  "secrets": {
+    "AI_SDLC_APP_ID": {
+      "description": "ai-sdlc GitHub App id — mints the per-run installation token used for all git/gh auth (fail-closed when unset; issue #26)",
+      "required": true
+    },
+    "AI_SDLC_APP_PRIVATE_KEY": {
+      "description": "ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID",
+      "required": true
+    },
+    "AI_SDLC_LEDGER_KEY": {
+      "description": "run-ledger signing key (PEM; Ed25519/RSA) — seals stage evidence; absent = unsigned seal (issue #196)",
+      "required": false
+    },
+    "MODEL_API_KEY": {
+      "description": "optional direct provider key; absent → GitHub Models via GITHUB_TOKEN",
+      "required": false
+    }
+  },
+  "workflow": "ai-sdlc-review.yml"
+}

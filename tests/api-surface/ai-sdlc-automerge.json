@@ -1,0 +1,96 @@
+{
+  "inputs": {
+    "base": {
+      "default": "main",
+      "description": "ref to read .ai-sdlc.yaml from",
+      "type": "string"
+    },
+    "ledger_head": {
+      "default": "",
+      "description": "upstream run-ledger chain head — seeds this stage entry prev; empty = recover the ai-sdlc:ledger-head marker on the PR (issue #196)",
+      "type": "string"
+    },
+    "main_guard": {
+      "default": "",
+      "description": "sentinel switch — true|false; empty = .ai-sdlc.yaml merge.main_guard.enabled (default true)",
+      "type": "string"
+    },
+    "main_guard_max_age_hours": {
+      "default": -1,
+      "description": "gate-run freshness window — override; -1 = .ai-sdlc.yaml merge.main_guard.max_age_hours (72)",
+      "type": "number"
+    },
+    "main_guard_workflows": {
+      "default": "",
+      "description": "csv gate workflow names — override; empty = .ai-sdlc.yaml merge.main_guard.workflows (default ci)",
+      "type": "string"
+    },
+    "max_repairs": {
+      "default": -1,
+      "description": "repair rounds before escalation — override; -1 = .ai-sdlc.yaml merge.max_repairs",
+      "type": "number"
+    },
+    "merge_method": {
+      "default": "",
+      "description": "squash | merge | rebase — override; empty = .ai-sdlc.yaml merge.method",
+      "type": "string"
+    },
+    "org_config": {
+      "default": "",
+      "description": "org baseline contract ref owner/repo[/path][@ref] — org floor per spec/org-policy.md; empty = repo contract + defaults",
+      "type": "string"
+    },
+    "pending_max_minutes": {
+      "default": -1,
+      "description": "pending-checks cap before escalation — override; -1 = .ai-sdlc.yaml merge.pending_max_minutes",
+      "type": "number"
+    },
+    "pr_number": {
+      "required": true,
+      "type": "number"
+    },
+    "repo": {
+      "required": true,
+      "type": "string"
+    },
+    "review_wait_minutes": {
+      "default": -1,
+      "description": "pending-review cap before merging with review_timeout — override; -1 = .ai-sdlc.yaml review.wait_max_minutes",
+      "type": "number"
+    },
+    "runtime_ref": {
+      "default": "main",
+      "description": "ref of os-santiago/ai-sdlc to fetch trusted runtime scripts (main-guard.js, alert-router.js) from — pin to the same ref as this workflow",
+      "type": "string"
+    }
+  },
+  "outputs": {
+    "action": {
+      "description": "merged | repair-signaled | escalated | held | skipped",
+      "value": "${{ jobs.gate.outputs.action }}"
+    },
+    "ledger_head": {
+      "description": "sealed run-ledger chain head for this gate run (issue #196)",
+      "value": "${{ jobs.gate.outputs.ledger_head }}"
+    },
+    "main_guard": {
+      "description": "halt | cleared | ok — base-branch sentinel result (issue #189)",
+      "value": "${{ jobs.gate.outputs.main_guard }}"
+    }
+  },
+  "secrets": {
+    "AI_SDLC_APP_ID": {
+      "description": "ai-sdlc GitHub App id — mints the per-run installation token used for all gh auth (fail-closed when unset; issue #26)",
+      "required": true
+    },
+    "AI_SDLC_APP_PRIVATE_KEY": {
+      "description": "ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID",
+      "required": true
+    },
+    "AI_SDLC_LEDGER_KEY": {
+      "description": "run-ledger signing key (PEM; Ed25519/RSA) — seals stage evidence; absent = unsigned seal (issue #196)",
+      "required": false
+    }
+  },
+  "workflow": "ai-sdlc-automerge.yml"
+}

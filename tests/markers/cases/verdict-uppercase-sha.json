@@ -1,0 +1,6 @@
+{
+  "id": "verdict-uppercase-sha",
+  "marker": "review-verdict",
+  "body": "<!-- ai-sdlc:review sha=A1B2C3D4 verdict=clean -->",
+  "expect": { "match": false, "reason": "SHA must be lowercase hex" }
+}

@@ -1,0 +1,10 @@
+{
+  "id": "fence-clean",
+  "kind": "fence",
+  "source": "issue",
+  "content": "a perfectly normal issue body with no tags",
+  "expect": {
+    "escaped": "a perfectly normal issue body with no tags",
+    "verdict": "clean"
+  }
+}

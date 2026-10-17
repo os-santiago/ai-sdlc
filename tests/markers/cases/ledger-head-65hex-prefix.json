@@ -1,0 +1,10 @@
+{
+  "id": "ledger-head-65hex-prefix",
+  "marker": "ledger-head",
+  "body": "<!-- ai-sdlc:ledger-head 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef9 -->",
+  "expect": {
+    "match": true,
+    "captures": { "head": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" },
+    "reason": "shipped jq `match` is unanchored — a 65-hex run still matches its first 64 chars; pinned as current behavior, not a bug to fix here"
+  }
+}

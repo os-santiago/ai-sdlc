@@ -94,7 +94,9 @@ bash tools/validate-repo.sh
 
 # Workflow lint — same pinned release CI runs (wrapper fetches it on demand;
 # `bash actionlint -color` if a checkout lost the exec bit). With shellcheck
-# on PATH it also lints every workflow `run:` block.
+# on PATH it also lints every workflow `run:` block. Composite actions are
+# covered too: a generated caller workflow `uses:` every
+# .github/actions/*/action.yml (issue #130).
 ./actionlint -color
 
 # Shellcheck — validate-repo.sh runs it over standalone scripts when the

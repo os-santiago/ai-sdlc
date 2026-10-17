@@ -1,0 +1,6 @@
+{
+  "id": "ledger-head-63hex",
+  "marker": "ledger-head",
+  "body": "<!-- ai-sdlc:ledger-head 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde -->",
+  "expect": { "match": false, "reason": "ledger head is exactly 64 hex — a truncated chain head must never seed the evidence chain" }
+}

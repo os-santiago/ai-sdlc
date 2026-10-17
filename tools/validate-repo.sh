@@ -16,6 +16,9 @@
 #   5. actionlint, when a binary is already installed (CI owns the pinned
 #      release — .github/workflows/actionlint.yml; ./actionlint fetches it).
 #      With shellcheck on PATH it also lints every workflow `run:` block.
+#      Composite actions are covered by a generated caller workflow that
+#      `uses:` every .github/actions/*/action.yml — actionlint checks action
+#      files only transitively, never as direct operands (issue #130).
 #   6. shellcheck over the repo's standalone scripts (issue #129): the
 #      ./actionlint shim, tools/*.sh, .github/actions/*/*.sh, tests/*.sh —
 #      when a binary is installed (CI runners ship one; tools/shellcheck.sh
@@ -175,6 +178,19 @@ PY
 if command -v actionlint >/dev/null 2>&1; then
   actionlint || fail "actionlint reported workflow violations"
   echo "[✓] actionlint: workflows clean"
+  # Composite-action sweep (issue #130): actionlint checks action.yml files
+  # only transitively via `uses:`, so lint a generated caller referencing
+  # every local action — placed inside the repo for ./.github/actions
+  # resolution, removed after the lint.
+  sweep=".actionlint-sweep.$$.yml"
+  if python3 tools/actionlint_sweep.py .github/actions "$sweep"; then
+    actionlint "$sweep" || { rm -f "$sweep"; fail "actionlint reported composite-action violations"; }
+    rm -f "$sweep"
+    echo "[✓] actionlint: composite actions clean"
+  else
+    rm -f "$sweep"
+    note "actionlint sweep generator failed — composite-action lint skipped"
+  fi
 else
   note "actionlint not on PATH — skipped (CI pin: .github/workflows/actionlint.yml; run ./actionlint -color for full parity)"
 fi

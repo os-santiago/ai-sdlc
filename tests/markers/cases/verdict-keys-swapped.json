@@ -1,0 +1,6 @@
+{
+  "id": "verdict-keys-swapped",
+  "marker": "review-verdict",
+  "body": "<!-- ai-sdlc:review verdict=blocked sha=a1b2c3d4 -->",
+  "expect": { "match": false, "reason": "field order is part of the format — swapped keys must not parse" }
+}

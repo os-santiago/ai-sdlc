@@ -1,0 +1,10 @@
+{
+  "id": "repair-signal",
+  "marker": "repair-signal",
+  "fields": { "sha": "aaa1111bbb2222ccc3333ddd4444eeee5555" },
+  "body": "🔧 **AI-SDLC:** checks failing (`ci/test`) — dispatch a bounded repair pass via `ai-sdlc-ci-repair.yml` (max 3 attempts, then `needs-human`).\n<!-- ai-sdlc:repair-signal sha=aaa1111bbb2222ccc3333ddd4444eeee5555 -->",
+  "expect": {
+    "match": true,
+    "captures": { "sha": "aaa1111bbb2222ccc3333ddd4444eeee5555" }
+  }
+}

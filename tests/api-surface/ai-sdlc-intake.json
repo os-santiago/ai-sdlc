@@ -1,0 +1,58 @@
+{
+  "inputs": {
+    "issue_number": {
+      "description": "issue to validate and queue",
+      "required": true,
+      "type": "number"
+    },
+    "org_config": {
+      "default": "",
+      "description": "org baseline contract ref owner/repo[/path][@ref] — org floor per spec/org-policy.md; empty = repo contract + defaults",
+      "type": "string"
+    },
+    "repo": {
+      "description": "owner/repo being processed",
+      "required": true,
+      "type": "string"
+    },
+    "runtime_ref": {
+      "default": "main",
+      "description": "ref of os-santiago/ai-sdlc to fetch runtime scripts (intake-refiner.js, dup-detector.js, epic-decomposer.js) from — pin to the same ref as this workflow",
+      "type": "string"
+    },
+    "trigger_label": {
+      "default": "",
+      "description": "label that arms dispatch — override; empty = .ai-sdlc.yaml triggers.issue_label",
+      "type": "string"
+    }
+  },
+  "outputs": {
+    "dispatch": {
+      "description": "\"true\" when the issue passes DoR and is queued",
+      "value": "${{ jobs.intake.outputs.dispatch }}"
+    },
+    "ledger_head": {
+      "description": "sealed run-ledger chain head — pass to the next stage as ledger_head (issue #196)",
+      "value": "${{ jobs.intake.outputs.ledger_head }}"
+    }
+  },
+  "secrets": {
+    "AI_SDLC_APP_ID": {
+      "description": "ai-sdlc GitHub App id — mints a per-run installation token for labels/comments; optional (falls back to AI_SDLC_TOKEN/GITHUB_TOKEN, issue #26)",
+      "required": false
+    },
+    "AI_SDLC_APP_PRIVATE_KEY": {
+      "description": "ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID",
+      "required": false
+    },
+    "AI_SDLC_LEDGER_KEY": {
+      "description": "run-ledger signing key (PEM; Ed25519/RSA) — seals stage evidence; absent = unsigned seal (issue #196)",
+      "required": false
+    },
+    "AI_SDLC_TOKEN": {
+      "description": "PAT/App token — needed when GITHUB_TOKEN lacks cross-repo issue access",
+      "required": false
+    }
+  },
+  "workflow": "ai-sdlc-intake.yml"
+}

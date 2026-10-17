@@ -1,0 +1,113 @@
+{
+  "inputs": {
+    "branch_pattern": {
+      "default": "^(feat|fix)/issue-[0-9]+",
+      "description": "ERE the PR head branch must match (pipeline PRs only); empty = any same-repo branch",
+      "type": "string"
+    },
+    "engine": {
+      "default": "scc",
+      "description": "engine adapter id recorded on the ledger entry (issue #230) — the engine this stage invokes; callers pass the resolved .ai-sdlc.yaml engine.name when per-stage dispatch lands (epic #220)",
+      "type": "string"
+    },
+    "ledger_head": {
+      "default": "",
+      "description": "upstream run-ledger chain head — seeds this stage entry prev; empty = recover the ai-sdlc:ledger-head marker on the PR (issue #196)",
+      "type": "string"
+    },
+    "log_max_bytes": {
+      "default": 12000,
+      "description": "byte cap per failing check log tail",
+      "type": "number"
+    },
+    "log_tail_lines": {
+      "default": 150,
+      "description": "log lines kept per failing check",
+      "type": "number"
+    },
+    "max_failed_checks": {
+      "default": 5,
+      "description": "failing checks whose logs go into the repair prompt",
+      "type": "number"
+    },
+    "max_repairs": {
+      "default": 3,
+      "description": "repair attempts per PR before needs-human (.ai-sdlc.yaml merge.max_repairs)",
+      "type": "number"
+    },
+    "max_seconds": {
+      "default": 900,
+      "type": "number"
+    },
+    "max_steps": {
+      "default": 200,
+      "type": "number"
+    },
+    "model": {
+      "default": "openai/gpt-4o",
+      "description": "engine model id (provider-native, e.g. openai/gpt-4o)",
+      "type": "string"
+    },
+    "pr_number": {
+      "required": true,
+      "type": "number"
+    },
+    "provider_base_url": {
+      "default": "",
+      "description": "OpenAI-compatible inference base URL; empty → vars.AI_SDLC_PROVIDER_URL → GitHub Models default",
+      "type": "string"
+    },
+    "repo": {
+      "required": true,
+      "type": "string"
+    },
+    "runbook_max_bytes": {
+      "default": 1400,
+      "description": "byte cap on the injected runbook advisory (0 disables injection; issue #188)",
+      "type": "number"
+    },
+    "runtime_ref": {
+      "default": "main",
+      "description": "ref of os-santiago/ai-sdlc to fetch trusted runtime scripts (repair-stall-guard.js, failure-runbook.js, alert-router.js) from — pin to the same ref as this workflow",
+      "type": "string"
+    },
+    "stall_max": {
+      "default": 3,
+      "description": "repair attempts tolerated per identical failing-check signature before needs-human; 0 disables the stall guard (issue #190)",
+      "type": "number"
+    }
+  },
+  "outputs": {
+    "action": {
+      "description": "repaired | escalated | skipped",
+      "value": "${{ jobs.repair.outputs.action }}"
+    },
+    "ledger_head": {
+      "description": "sealed run-ledger chain head for this repair run (issue #196)",
+      "value": "${{ jobs.repair.outputs.ledger_head }}"
+    },
+    "reason": {
+      "description": "guard reason or attempt outcome",
+      "value": "${{ jobs.repair.outputs.reason }}"
+    }
+  },
+  "secrets": {
+    "AI_SDLC_APP_ID": {
+      "description": "ai-sdlc GitHub App id — mints the installation token the pushed fix uses to re-trigger CI (fail-closed when unset; issue #26)",
+      "required": true
+    },
+    "AI_SDLC_APP_PRIVATE_KEY": {
+      "description": "ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID",
+      "required": true
+    },
+    "AI_SDLC_LEDGER_KEY": {
+      "description": "run-ledger signing key (PEM; Ed25519/RSA) — seals stage evidence; absent = unsigned seal (issue #196)",
+      "required": false
+    },
+    "MODEL_API_KEY": {
+      "description": "optional direct provider key; absent → GitHub Models via GITHUB_TOKEN",
+      "required": false
+    }
+  },
+  "workflow": "ai-sdlc-ci-repair.yml"
+}
