@@ -460,6 +460,25 @@ jobs:
         # FORGE_TOKEN_WRITE. On this path the engine step was skipped, so
         # isolation is trivially preserved.
         if: failure() && steps.contract.outcome == 'failure'
+        env:
+          FORGE_TOKEN_WRITE: ${{ steps.app-token-write.outputs.token }}
+          ISSUE: ${{ inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          export GH_TOKEN="$FORGE_TOKEN_WRITE"
+          ERR="$(head -c 3000 "$RUNNER_TEMP/ai-sdlc-contract/error.txt" 2>/dev/null || echo 'unknown error — see workflow logs')"
+          gh issue edit "$ISSUE" -R "$REPO" --remove-label "scc:queued" --add-label "scc:not-ready" || true
+          cat > comment.md <<EOF
+          🛡️ **AI-SDLC implement — \`scc:config-error\`:** the repo contract could not be resolved; the engine was **not run**.
+
+          \`\`\`
+          ${ERR}
+          \`\`\`
+
+          Fix \`.ai-sdlc.yaml\` on \`${{ inputs.base }}\` (validate with \`tools/validate-ai-sdlc-config.sh\`), then re-apply the trigger label.
+          EOF
+          gh issue comment "$ISSUE" -R "$REPO" --body-file comment.md
+
       # Credential isolation (issue #212): the engine's only deliverable is a
       # git-format patch artifact — it never commits, pushes or touches the
       # forge. Freeze every worktree change into ai-sdlc-engine.patch, then
@@ -495,7 +514,7 @@ jobs:
         id: apply
         if: steps.engine.outputs.exit_code == '0'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token-read.outputs.token }}
         run: |
           set -euo pipefail
           V="$RUNNER_TEMP/ai-sdlc-apply/apply-patch.js"
@@ -507,36 +526,13 @@ jobs:
             echo "applied=true" >> "$GITHUB_OUTPUT"
           else
             echo "applied=false" >> "$GITHUB_OUTPUT"
-            node -e 'const r=require("./apply-result.json");for(const x of r.rejects||[])console.log(`::error::apply-patch rejected ${x.where}: ${x.path||"-"} — ${x.reason}`)' || cat apply-result.json >&2 || true
+            node -e 'const r=require("./apply-result.json");for(const x of r.rejects||[])console.log("::error::apply-patch rejected "+x.where+": "+(x.path||"-")+" — "+x.reason)' || cat apply-result.json >&2 || true
             exit 1
           fi
 
-      - name: Commit + push + open PR
-        id: pr
-        if: steps.engine.outputs.exit_code == '0' && steps.apply.outputs.applied == 'true'
-        env:
-          FORGE_TOKEN_WRITE: ${{ steps.app-token-write.outputs.token }}
-          ISSUE: ${{ inputs.issue_number }}
-
-        run: |
-          set -euo pipefail
-          export GH_TOKEN="$FORGE_TOKEN_WRITE"
-          ERR="$(head -c 3000 "$RUNNER_TEMP/ai-sdlc-contract/error.txt" 2>/dev/null || echo 'unknown error — see workflow logs')"
-          gh issue edit "$ISSUE" -R "$REPO" --remove-label "scc:queued" --add-label "scc:not-ready" || true
-          cat > comment.md <<EOF
-          🛡️ **AI-SDLC implement — \`scc:config-error\`:** the repo contract could not be resolved; the engine was **not run**.
-
-          \`\`\`
-          ${ERR}
-          \`\`\`
-
-          Fix \`.ai-sdlc.yaml\` on \`${{ inputs.base }}\` (validate with \`tools/validate-ai-sdlc-config.sh\`), then re-apply the trigger label.
-          EOF
-          gh issue comment "$ISSUE" -R "$REPO" --body-file comment.md
-
       - name: Apply diff + publish PR (deterministic post-script)
         id: pr
-        if: steps.engine.outputs.exit_code == '0'
+        if: steps.engine.outputs.exit_code == '0' && steps.apply.outputs.applied == 'true'
         uses: ./.github/actions/apply-publish
         with:
           repo: ${{ inputs.repo }}
@@ -579,16 +575,16 @@ jobs:
                 # rejected its output (issue #212) — surface as failed with
                 # the validator's audit trail, never as a phantom PR-opened.
                 gh issue edit "$ISSUE" -R "$REPO" --add-label "$L_FAILED" || true
-                REJECTS=$(node -e 'try{const r=require("./ai-sdlc-apply-report.json");console.log((r.rejects||[]).map(x=>`${x.where}: ${x.path||"-"} — ${x.reason}`).join("\\n")||"unknown")}catch(e){console.log("no audit report")}' || echo 'no audit report')
+                REJECTS=$(node -e 'try{const r=require("./ai-sdlc-apply-report.json");console.log((r.rejects||[]).map(x=>x.where+": "+(x.path||"-")+" — "+x.reason).join("\\n")||"unknown")}catch(e){console.log("no audit report")}' || echo 'no audit report')
                 cat > apply-reject-comment.md <<EOF
-                🛡️ **AI-SDLC implement — apply gate rejected engine output:** the deterministic patch validator refused the engine's diff; nothing was committed or pushed. Rejections:
+          🛡️ **AI-SDLC implement — apply gate rejected engine output:** the deterministic patch validator refused the engine's diff; nothing was committed or pushed. Rejections:
 
-                \`\`\`
-                ${REJECTS}
-                \`\`\`
+          \`\`\`
+          ${REJECTS}
+          \`\`\`
 
-                The audit report (\`ai-sdlc-apply-report.json\`) is in the run artifacts. Run: ${RUN_URL}
-                EOF
+          The audit report (\`ai-sdlc-apply-report.json\`) is in the run artifacts. Run: ${RUN_URL}
+          EOF
                 gh issue comment "$ISSUE" -R "$REPO" --body-file apply-reject-comment.md || true
               fi ;;
             10) gh issue edit "$ISSUE" -R "$REPO" --add-label "$L_NO_CHANGES" || true ;;
