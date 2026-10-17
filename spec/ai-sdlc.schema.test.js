@@ -79,6 +79,32 @@ describe('ai-sdlc.schema.json — contract surface', () => {
     assert.strictEqual(d.properties.window.type, 'integer');
     assert.strictEqual(d.properties.window.minimum, 1);
   });
+
+  it('declares postmortem with the spec lifecycle knobs (issue #191)', () => {
+    const p = schema.properties.postmortem;
+    assert.ok(p, 'missing properties.postmortem');
+    assert.strictEqual(p.type, 'object');
+    assert.strictEqual(p.additionalProperties, false);
+    // spec/postmortem-lifecycle.md: reopen threshold + closed-issue window.
+    assert.strictEqual(p.properties.reopen_min.type, 'integer');
+    assert.strictEqual(p.properties.reopen_min.minimum, 1);
+    assert.strictEqual(p.properties.dedup_window_days.type, 'integer');
+    assert.strictEqual(p.properties.dedup_window_days.minimum, 1);
+  });
+
+  it('accepts a postmortem section and resolves its defaults (load-config)', { skip: !HAS_PY }, () => {
+    const r = schemaValidate({ spec: '1.0.0', postmortem: { reopen_min: 3, dedup_window_days: 30 } });
+    assert.deepStrictEqual(r.errors, []);
+    assert.ok(r.valid);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-sdlc-resolve-'));
+    const input = path.join(dir, 'in.json');
+    fs.writeFileSync(input, JSON.stringify({ spec: '1.0.0' }));
+    const rr = spawnSync('python3', [RESOLVER, '--input', input, '--out-dir', dir], { encoding: 'utf8' });
+    assert.strictEqual(rr.status, 0, `resolve.py failed: ${rr.stderr}`);
+    const contract = JSON.parse(fs.readFileSync(path.join(dir, 'contract.json'), 'utf8'));
+    assert.deepStrictEqual(contract.postmortem, { reopen_min: 2, dedup_window_days: 90 });
+    assert.strictEqual(contract._sources['postmortem.reopen_min'], 'default');
+  });
 });
 
 describe('per-stage engine selection (issue #205)', () => {

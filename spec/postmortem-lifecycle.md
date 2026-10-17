@@ -104,4 +104,11 @@ The following parameters are configurable per repository or organization:
 - `POSTMORTEM_REOPEN_MIN`: Minimum recurrences to trigger reopen (default: 2)
 - `POSTMORTEM_DEDUP_WINDOW_DAYS`: Dedup retention window for closed issues, in days (default: 90)
 
-These values MAY be overridden in the repository's `.ai-sdlc.yaml` configuration under a `postmortem` section.
+These values MAY be overridden in the repository's `.ai-sdlc.yaml` configuration under a `postmortem` section:
+
+- `postmortem.reopen_min` ↔ `POSTMORTEM_REOPEN_MIN`
+- `postmortem.dedup_window_days` ↔ `POSTMORTEM_DEDUP_WINDOW_DAYS`
+
+## Implementation
+
+The GHA-native runtime implements this lifecycle in `scripts/postmortem.js` (issue #191), invoked by `ai-sdlc-verify.yml` on post-merge verify failure. Canonical identity is carried by a hidden marker in the issue body (`<!-- ai-sdlc-failure-signature: <hash> -->`); each recurrence is recorded as a comment carrying `<!-- ai-sdlc-postmortem-recurrence sig=<hash> occ=<id> -->`, which doubles as durable cross-run state: post-close recurrence counts are derived from marked comments newer than `closedAt`, and `occ` ids make repeated reports of the same occurrence idempotent.

@@ -30,7 +30,7 @@ engine only, no GitHub webhook adapter yet).
 | `ai-sdlc-review.yml` | AI review + bounded review-fix convergence: verdict marker per head SHA + `pr:risk-*` tier label; `blocker|major`/`request_changes` → fix pass on the same branch → re-review; `needs-human` after `max_fix_iterations` | `pull_request` (opened/synchronize) / called post-implement |
 | `ai-sdlc-sweep.yml` | scheduled stall-sweep: enumerates open pipeline PRs and feeds each to `ai-sdlc-automerge.yml` — no green-idle PRs | `schedule` (every 30 min) / `workflow_dispatch` |
 | `ai-sdlc-ci-repair.yml` | bounded repair loop on red checks: failing-check log tails → `scc` headless on the PR head → commit + push; one comment per attempt; `needs-human` after `max_repairs` | `check_run.completed` (failure) / `workflow_dispatch` / automerge `repair-signaled` |
-| `ai-sdlc-verify.yml` | post-merge verify commands (resolved contract `verify.commands`); failure → issue (or revert when enabled) | post-merge |
+| `ai-sdlc-verify.yml` | post-merge verify commands (resolved contract `verify.commands`); failure → canonical postmortem issue via `scripts/postmortem.js` — signature-deduped: open canonical comments, closed canonical reopens at `postmortem.reopen_min` (spec/postmortem-lifecycle.md) — or revert when enabled | post-merge |
 
 Every stage first runs the `load-config` composite action
 (`.github/actions/load-config/`) and acts only on the resolved contract —
@@ -286,7 +286,17 @@ config-text-only → `low`; otherwise `medium`.
 | `verify_commands` | `''` → `verify.commands` | newline-separated commands |
 | `setup_commands` | `''` | dependency install before verify |
 | `revert_on_failure` | `false` | revert the merge commit on failure |
+| `runtime_ref` | `main` | `os-santiago/ai-sdlc` ref to fetch `scripts/postmortem.js` from |
 | `org_config` | `''` | org baseline `owner/repo[/path][@ref]` — see [Org policy](#org-policy) |
+
+On verify failure the stage files a **canonical postmortem** through
+`scripts/postmortem.js` (issue #191, spec/postmortem-lifecycle.md): the
+failure signature `verify / post-merge-verify-failure / <failed commands>`
+is hashed; an existing canonical issue gets a bounded recurrence comment
+(reopened once post-close recurrences reach `postmortem.reopen_min`,
+default 2; closed canonicals dedup for `postmortem.dedup_window_days`,
+default 90) instead of a duplicate filing. When the filer can't be fetched
+the stage fails open to a plain issue so the failure is never lost.
 
 | Secret | Purpose |
 |---|---|

@@ -49,6 +49,7 @@ DEFAULTS = {
         "grace_minutes": 10,
         "skip_labels": ["needs-human", "hold", "do-not-merge", "wip"],
     },
+    "postmortem": {"reopen_min": 2, "dedup_window_days": 90},
     "labels": {
         "queued": "scc:queued",
         "in-progress": "scc:in-progress",
@@ -324,6 +325,8 @@ def flat_outputs(c):
         "max_repairs": str(c["merge"]["max_repairs"]),
         "pending_max_minutes": str(c["merge"]["pending_max_minutes"]),
         "merge_skip_labels": j(c["merge"]["skip_labels"]),
+        "postmortem_reopen_min": str(c["postmortem"]["reopen_min"]),
+        "postmortem_dedup_window_days": str(c["postmortem"]["dedup_window_days"]),
         "review_mode": c["review"]["mode"],
         "review_model": review_model(c),
         "review_max_fix_iterations": str(c["review"]["max_fix_iterations"]),

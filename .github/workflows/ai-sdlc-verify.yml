@@ -27,6 +27,10 @@ on:
         description: 'newline-separated dependency install (e.g. npm ci)'
         type: string
         default: ''
+      runtime_ref:
+        description: 'ref of os-santiago/ai-sdlc to fetch scripts/postmortem.js from — pin to the same ref as this workflow'
+        type: string
+        default: 'main'
       org_config:
         description: 'org baseline contract ref owner/repo[/path][@ref] — org floor per spec/org-policy.md; empty = repo contract + defaults'
         type: string
@@ -90,10 +94,11 @@ jobs:
         run: |
           set +e
           failed=0
+          : > failed.cmds
           while IFS= read -r cmd; do
             [ -z "$cmd" ] && continue
             echo "::group::$cmd"
-            eval "$cmd" || failed=1
+            if ! eval "$cmd"; then failed=1; echo "$cmd" >> failed.cmds; fi
             echo "::endgroup::"
           done < verify.cmds
           echo "failed=$failed" >> "$GITHUB_OUTPUT"
@@ -103,13 +108,51 @@ jobs:
         env:
           REVERT: ${{ inputs.revert_on_failure }}
           SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUNTIME_REF: ${{ inputs.runtime_ref }}
+          REOPEN_MIN: ${{ steps.contract.outputs.postmortem_reopen_min }}
+          DEDUP_DAYS: ${{ steps.contract.outputs.postmortem_dedup_window_days }}
         run: |
           set -euo pipefail
+          REVERTED=""
           if [ "$REVERT" = "true" ]; then
             git config user.name "ai-sdlc[bot]"; git config user.email "ai-sdlc[bot]@users.noreply.github.com"
-            git revert --no-edit "$SHA" && git push origin "${{ inputs.base }}"
-            gh issue create -R "$REPO" --title "verify: post-merge checks failed — reverted $SHA" --body "Post-merge verify failed on \`$SHA\`; change reverted. See workflow run for logs." --label "ai-sdlc,priority:P1"
+            git revert --no-edit "$SHA" && git push origin "${{ inputs.base }}" && REVERTED="1"
+          fi
+
+          # Canonical postmortem lifecycle (issue #191, spec/postmortem-lifecycle.md):
+          # the same failure signature must never file a duplicate issue — an
+          # open canonical gets a recurrence comment; a closed one inside the
+          # dedup window accumulates post-close comments and reopens at
+          # postmortem.reopen_min. The filer is fetched from the trusted
+          # runtime ref — never the consumer checkout.
+          WORK="$RUNNER_TEMP/ai-sdlc-postmortem"; mkdir -p "$WORK"
+          if gh api "repos/os-santiago/ai-sdlc/contents/scripts/postmortem.js?ref=$RUNTIME_REF" \
+              -H "Accept: application/vnd.github.raw" > "$WORK/postmortem.js" 2>"$WORK/fetch.err" \
+              && node --check "$WORK/postmortem.js"; then
+            LOCATION="$(paste -sd';' failed.cmds 2>/dev/null | head -c 200)"; LOCATION="${LOCATION:-verify.commands}"
+            if [ -n "$REVERTED" ]; then
+              TITLE="verify: post-merge checks failed — reverted $SHA"
+              BODY="Post-merge verify failed on \`$SHA\`; change reverted. See workflow run for logs."
+            else
+              TITLE="verify: post-merge checks failed on $SHA"
+              BODY="Post-merge verify commands failed on \`$SHA\`. See workflow run for logs; revert_on_failure is disabled."
+            fi
+            node "$WORK/postmortem.js" --repo "$REPO" \
+              --component verify --class post-merge-verify-failure \
+              --location "$LOCATION" \
+              --title "$TITLE" --body "$BODY" --context-file failed.cmds \
+              --occurrence-id "verify-$SHA" --run-url "$RUN_URL" \
+              --reopen-min "${REOPEN_MIN:-2}" --dedup-window-days "${DEDUP_DAYS:-90}" \
+              --labels "ai-sdlc,postmortem,priority:P1" --json || true
           else
-            gh issue create -R "$REPO" --title "verify: post-merge checks failed on $SHA" --body "Post-merge verify commands failed on \`$SHA\`. See workflow run for logs; revert_on_failure is disabled." --label "ai-sdlc,priority:P1"
+            # Filer unavailable at the pinned ref — fail open to the legacy
+            # one-shot filing so the failure is never lost silently.
+            echo "::warning title=ai-sdlc verify::postmortem filer unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$WORK/fetch.err" 2>/dev/null)) — filing without dedup"
+            if [ -n "$REVERTED" ]; then
+              gh issue create -R "$REPO" --title "verify: post-merge checks failed — reverted $SHA" --body "Post-merge verify failed on \`$SHA\`; change reverted. See workflow run for logs." --label "ai-sdlc,priority:P1"
+            else
+              gh issue create -R "$REPO" --title "verify: post-merge checks failed on $SHA" --body "Post-merge verify commands failed on \`$SHA\`. See workflow run for logs; revert_on_failure is disabled." --label "ai-sdlc,priority:P1"
+            fi
           fi
           exit 1
