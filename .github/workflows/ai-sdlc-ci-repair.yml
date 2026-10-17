@@ -11,6 +11,15 @@
 #   → `needs-human` + cause when the budget is exhausted or an attempt
 #     cannot push a fix (nothing would re-trigger the loop).
 #
+# Repair-stall guard (issue #190, port of Hermes pr_merger repairSigs /
+# issue #199): each attempt marker records the failing-check signature
+# (sorted check names, sha256-16). When the identical signature has already
+# burned `stall_max` repair attempts the guard escalates to `needs-human`
+# instead of spending another engine run on a failure that is not moving;
+# `stall_max: 0` disables the guard. Canonical logic:
+# scripts/repair-stall-guard.js, fetched from inputs.runtime_ref — never
+# from the PR head.
+#
 # Base-fault short-circuit (issue #255): a failing check carrying the
 # load-config fail-fast marker `scc:config-error` means the contract failed
 # validation on the BASE ref — every runtime stage resolves .ai-sdlc.yaml
@@ -48,6 +57,14 @@ on:
         description: 'repair attempts per PR before needs-human (.ai-sdlc.yaml merge.max_repairs)'
         type: number
         default: 3
+      stall_max:
+        description: 'repair attempts tolerated per identical failing-check signature before needs-human; 0 disables the stall guard (issue #190)'
+        type: number
+        default: 3
+      runtime_ref:
+        description: 'ref of os-santiago/ai-sdlc to fetch scripts/repair-stall-guard.js from — pin to the same ref as this workflow'
+        type: string
+        default: 'main'
       model:
         description: 'engine model id (provider-native, e.g. openai/gpt-4o)'
         type: string
@@ -110,6 +127,7 @@ env:
   REPO: ${{ inputs.repo }}
   PR: ${{ inputs.pr_number }}
   MAX_REPAIRS: ${{ inputs.max_repairs }}
+  STALL_MAX: ${{ inputs.stall_max }}
 
 # GITHUB_TOKEN only powers GitHub Models inference (GH_TOKEN_FOR_MODELS);
 # every git/gh call uses the minted ai-sdlc App installation token.
@@ -168,21 +186,36 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           BRANCH_PATTERN: ${{ inputs.branch_pattern }}
           MAX_CHECKS: ${{ inputs.max_failed_checks }}
+          RUNTIME_REF: ${{ inputs.runtime_ref }}
         run: |
           set -euo pipefail
           WORK="$RUNNER_TEMP/ci-repair"
           mkdir -p "$WORK/logs"
           echo "WORK=$WORK" >> "$GITHUB_ENV"
+          # Repair-stall guard (issue #190): trusted code only, fetched from
+          # the runtime repo pin — never from the PR head or consumer repo.
+          # Unavailable → guard disabled (fail-open); the flat max_repairs
+          # budget still bounds the loop.
+          if gh api "repos/os-santiago/ai-sdlc/contents/scripts/repair-stall-guard.js?ref=$RUNTIME_REF" \
+              -H "Accept: application/vnd.github.raw" > "$WORK/repair-stall-guard.js" 2>/dev/null \
+              && node --check "$WORK/repair-stall-guard.js" 2>/dev/null; then
+            echo "stall guard: scripts/repair-stall-guard.js@$RUNTIME_REF"
+          else
+            echo "::warning::repair-stall guard unavailable at os-santiago/ai-sdlc@$RUNTIME_REF — continuing without per-signature stall memory"
+            rm -f "$WORK/repair-stall-guard.js"
+          fi
           gh pr view "$PR" -R "$REPO" \
             --json number,title,state,isDraft,labels,headRefName,headRefOid,headRepositoryOwner,isCrossRepository,baseRefName \
             > "$WORK/pr.json"
           SHA=$(jq -r .headRefOid "$WORK/pr.json")
           # Attempt markers — only from bots / repo collaborators, so a
-          # third-party comment cannot forge budget state.
+          # third-party comment cannot forge budget state. `sig` is the
+          # failing-check signature stamped since issue #190; pre-guard
+          # markers parse with sig=null.
           gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
             --jq '.[] | select(.user.type == "Bot" or ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR")))
                   | (.body // "") | select(contains("<!-- ai-sdlc:ci-repair "))
-                  | capture("<!-- ai-sdlc:ci-repair attempt=(?<attempt>[0-9]+) sha=(?<sha>[0-9a-f]+) -->")' \
+                  | capture("<!-- ai-sdlc:ci-repair attempt=(?<attempt>[0-9]+) sha=(?<sha>[0-9a-f]+)( sig=(?<sig>[0-9a-f]+))? -->")' \
             | jq -s . > "$WORK/markers.json"
           gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
             --jq '.check_runs[] | {id, name, status, conclusion, app: (.app.slug // ""), url: (.html_url // .details_url // ""),
@@ -226,6 +259,21 @@ jobs:
           const pending = [...latest.values()].filter(r => r.status !== 'completed').map(r => r.name);
           const attempts = markers.length;
 
+          // Repair-stall guard (issue #190): per-signature burn count from
+          // the canonical script fetched above; absent/unreadable source →
+          // guard disabled (fail-open, flat budget still applies).
+          let stall = { signature: '', count: 0, escalated: false };
+          const guardPath = `${W}/repair-stall-guard.js`;
+          if (fs.existsSync(guardPath)) {
+            try {
+              stall = require(guardPath).evaluateStall({
+                markers, checkNames: failing.map(f => f.name), maxStall: Number(process.env.STALL_MAX),
+              });
+            } catch (e) {
+              console.log(`::warning::stall guard eval failed (${e.message.split('\n')[0]}) — continuing without it`);
+            }
+          }
+
           let decision = 'skip', reason = '';
           if (pr.state !== 'OPEN') reason = `pr-${String(pr.state).toLowerCase()}`;
           else if (pr.isDraft) reason = 'draft';
@@ -234,13 +282,14 @@ jobs:
           else if (pattern && !new RegExp(pattern).test(pr.headRefName)) reason = 'non-pipeline-branch';
           else if (!failing.length) reason = 'no-failing-checks';
           else if (markers.some(m => m.sha === pr.headRefOid)) reason = 'head-already-attempted';
+          else if (stall.escalated) { decision = 'escalate'; reason = `repair-stall:${stall.signature}`; }
           else if (attempts >= max) { decision = 'escalate'; reason = 'repairs-exhausted'; }
           else { decision = 'repair'; reason = 'failing-checks'; }
 
           fs.writeFileSync(`${W}/failing.json`, JSON.stringify(failing.slice(0, maxChecks), null, 2));
           fs.writeFileSync(`${W}/pending.json`, JSON.stringify(pending));
           const names = failing.map(f => f.name).join(', ').replace(/[\r\n]/g, ' ').slice(0, 500);
-          console.log(`decision: ${decision} (${reason}) attempts=${attempts}/${max} failing=[${names}]`);
+          console.log(`decision: ${decision} (${reason}) attempts=${attempts}/${max} stall=${stall.count}/${process.env.STALL_MAX} failing=[${names}]`);
           out('decision', decision);
           out('reason', reason);
           out('attempt', attempts + 1);
@@ -248,6 +297,8 @@ jobs:
           out('head_ref', pr.headRefName);
           out('head_sha', pr.headRefOid);
           out('failing', names);
+          out('stall_sig', stall.signature);
+          out('stall_count', stall.count);
           NODE
 
       - name: Collect failing check log tails (bounded)
@@ -441,6 +492,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           ATTEMPT: ${{ steps.guard.outputs.attempt }}
           HEAD_SHA: ${{ steps.guard.outputs.head_sha }}
+          STALL_SIG: ${{ steps.guard.outputs.stall_sig }}
           FAILING: ${{ steps.guard.outputs.failing }}
           BASE_FAULT: ${{ steps.prompt.outputs.base_fault }}
           ENGINE_CODE: ${{ steps.engine.outputs.exit_code }}
@@ -476,7 +528,7 @@ jobs:
           fs.writeFileSync(`${W}/ci-repair-manifest.json`, JSON.stringify(manifest, null, 2));
 
           const lines = [
-            `<!-- ai-sdlc:ci-repair attempt=${e.ATTEMPT} sha=${e.HEAD_SHA} -->`,
+            `<!-- ai-sdlc:ci-repair attempt=${e.ATTEMPT} sha=${e.HEAD_SHA}${e.STALL_SIG ? ` sig=${e.STALL_SIG}` : ''} -->`,
             `🔧 **AI-SDLC ci-repair — attempt ${e.ATTEMPT}/${e.MAX_REPAIRS}**`,
             '',
             `- failing: \`${e.FAILING || 'n/a'}\``,
@@ -499,13 +551,17 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           DECISION: ${{ steps.guard.outputs.decision }}
+          REASON: ${{ steps.guard.outputs.reason }}
           ATTEMPTS: ${{ steps.guard.outputs.attempts }}
           ATTEMPT: ${{ steps.guard.outputs.attempt }}
+          STALL_COUNT: ${{ steps.guard.outputs.stall_count }}
           FAILING: ${{ steps.guard.outputs.failing }}
           OUTCOME: ${{ steps.record.outputs.outcome }}
         run: |
           set -euo pipefail
-          if [ "$DECISION" = "escalate" ]; then
+          if [ "$DECISION" = "escalate" ] && [ "${REASON%%:*}" = "repair-stall" ]; then
+            CAUSE="repair stall — the identical failing-check signature (${REASON#repair-stall:}) already burned $STALL_COUNT/$STALL_MAX repair attempts without the failure surface moving; escalating instead of re-burning budget (issue #190)"
+          elif [ "$DECISION" = "escalate" ]; then
             CAUSE="repair budget exhausted ($ATTEMPTS/$MAX_REPAIRS attempts) and checks are still red"
           elif [ "${OUTCOME:-}" = "base-contract-error" ]; then
             CAUSE="failing checks trace to scc:config-error — .ai-sdlc.yaml is invalid against spec/ai-sdlc.schema.json on the base ref, and every stage resolves the contract from base, so no push to this branch can fix it. Land the contract/schema fix on the base branch, then re-run the failed checks (repair will not re-attempt this head)."
