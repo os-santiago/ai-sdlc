@@ -69,14 +69,14 @@ jobs:
       release_status: ${{ steps.rel.outputs.release_status }}
       release_tag: ${{ steps.rel.outputs.release_tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0     # full history + tags: bump is computed from log
 
       - name: Fetch all tags (release base detection)
         run: git fetch --tags --force origin
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with:
           node-version: 22
 
@@ -120,7 +120,7 @@ jobs:
 
       - name: Publish artifact to the provenance job
         if: steps.rel.outputs.release_status == 'released'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: ai-sdlc-${{ steps.rel.outputs.release_tag }}
           path: dist/
@@ -137,12 +137,12 @@ jobs:
       attestations: write  # store the attestation in the repo attestations API
     steps:
       - name: Download release artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           name: ai-sdlc-${{ needs.release.outputs.release_tag }}
           path: dist/
 
-      - uses: actions/checkout@v7   # for .ai-sdlc.yaml (release.* contract)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7 — for .ai-sdlc.yaml (release.* contract)
 
       - name: Read release contract (signing/provenance posture)
         id: contract
