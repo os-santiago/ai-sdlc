@@ -227,7 +227,7 @@ jobs:
             ARGS+=(--sweep --max 200)
           fi
           node scripts/label-contradiction.js "${ARGS[@]}" | tee repairs.json
-          node -e '
+          node - <<'NODE'
             const fs = require("fs");
             const r = JSON.parse(fs.readFileSync("repairs.json", "utf8"));
             const repairs = r.repairs || (r.contradictions ? [r] : []);
@@ -238,4 +238,4 @@ jobs:
               ...repairs.map((x) => `- #${x.issue}: removed \`${(x.removed || []).join("`, `")}\` — vetoed by \`${(x.vetoes || []).join("`, `")}\`${x.escalated ? " · escalated needs-human (label-drift-loop)" : ""}${x.error ? ` · ERROR: ${x.error}` : ""}`),
             ];
             fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
-          '
+          NODE
