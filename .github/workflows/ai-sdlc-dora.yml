@@ -1,0 +1,128 @@
+# ai-sdlc-dora — scheduled DORA metrics report (issues #101/#102, epic #88)
+#
+# Emits the four DORA metrics — deployment frequency, lead time for
+# changes, change failure rate, MTTR — from GitHub API data via
+# scripts/dora-metrics.js, each split by authorType (agentic vs human per
+# the epic #88 definitions: merge to the base branch = deployment,
+# ready-to-implement → merge = lead time, red-main/revert/non-converging =
+# change failure, main red → green = time to restore).
+#
+# Outputs: the computed JSON lands as the `dora-metrics-json` workflow
+# artifact (90d retention); the markdown render is committed to
+# docs/metrics/dora.md (diff-gated — spec/generated-artifact-publish-contract.md)
+# on scheduled/dispatch runs of this repo. `workflow_call` consumers get
+# the JSON artifact + step summary only — the commit step stays off for
+# caller repos.
+#
+# Trust boundary: the metrics script is fetched from the os-santiago/ai-sdlc
+# pin (runtime_ref) — never from the consumer checkout — same posture as
+# ai-sdlc-metrics.yml.
+#
+# Cost: one collection = 1 pr list + 1 issue list + 1 run list +
+# 1 release list + ≤ --max-prs timeline calls, all read-only.
+# Scheduled self-report runs weekly, Mondays 06:07 UTC.
+name: ai-sdlc-dora
+
+on:
+  schedule:
+    - cron: '7 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 'owner/name to report on (blank = this repo)'
+        type: string
+        default: ''
+      window:
+        description: 'trailing window for the report'
+        type: choice
+        options: ['7d', '30d', '90d']
+        default: '30d'
+  workflow_call:
+    inputs:
+      repo:
+        description: 'owner/name to report on (blank = caller repo)'
+        type: string
+        default: ''
+      window:
+        description: 'trailing window for the report'
+        type: string
+        default: '30d'
+      runtime_ref:
+        description: 'ref of os-santiago/ai-sdlc to fetch scripts/dora-metrics.js from — pin to the same ref as this workflow'
+        type: string
+        default: 'main'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-sdlc-dora-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  report:
+    # Kill-switch: AI_SDLC_OFF halts every pipeline mutation, including
+    # commits of generated artifacts to main.
+    if: vars.AI_SDLC_OFF != '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # committed docs/metrics/dora.md (diff-gated)
+      issues: read
+      pull-requests: read
+      actions: read
+    env:
+      REPO: ${{ inputs.repo || github.repository }}
+      WINDOW: ${{ inputs.window || '30d' }}
+      RUNTIME_REF: ${{ inputs.runtime_ref || 'main' }}
+    steps:
+      # Needed only to commit docs/metrics/dora.md back on self-repo runs;
+      # the script itself is never taken from this checkout (trust pin).
+      - uses: actions/checkout@v4
+
+      - name: Collect + render DORA metrics
+        env:
+          # Token with read reach into the target repo. GITHUB_TOKEN suffices
+          # when reporting on the repo running the workflow.
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-dora"
+          mkdir -p "$WORK"
+
+          # Trusted code only: fetch the canonical reporter from the runtime
+          # repo pin — never from the caller checkout.
+          gh api "repos/os-santiago/ai-sdlc/contents/scripts/dora-metrics.js?ref=$RUNTIME_REF" \
+            -H "Accept: application/vnd.github.raw" > "$WORK/dora-metrics.js"
+          node --check "$WORK/dora-metrics.js"
+
+          # One live collection → JSON artifact + committed markdown report
+          # rendered from the same report object — they can never drift.
+          node "$WORK/dora-metrics.js" --repo "$REPO" --window "$WINDOW" \
+            --out dora-metrics.json --report docs/metrics/dora.md \
+            --github-summary --github-output --dump-input "$WORK/dora-input.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dora-metrics-json
+          path: |
+            dora-metrics.json
+            ${{ runner.temp }}/ai-sdlc-dora/dora-input.json
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Commit report (diff-gated)
+        if: github.event_name != 'workflow_call'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/metrics/dora.md
+          if git diff --cached --quiet; then
+            echo "report unchanged — no commit"
+          else
+            git commit -m "docs(metrics): refresh DORA report [skip ci]"
+            git push
+          fi

@@ -33,6 +33,7 @@ engine only, no GitHub webhook adapter yet).
 | `ai-sdlc-review.yml` | AI review + bounded review-fix convergence: verdict marker per head SHA + `pr:risk-*` tier label; `blocker|major`/`request_changes` → fix pass on the same branch → re-review; `needs-human` after `max_fix_iterations` | `pull_request` (opened/synchronize) / called post-implement |
 | `ai-sdlc-sweep.yml` | scheduled stall-sweep: enumerates open pipeline PRs and feeds each to `ai-sdlc-automerge.yml` — no green-idle PRs | `schedule` (every 30 min) / `workflow_dispatch` |
 | `ai-sdlc-metrics.yml` | scheduled SLO report (`scripts/slo-metrics.js`): time-to-merge, iterations-to-green, escalation rate → step summary + JSON/Prometheus artifacts | `schedule` (daily) / `workflow_dispatch` / `workflow_call` |
+| `ai-sdlc-dora.yml` | scheduled DORA report (`scripts/dora-metrics.js`): deployment frequency, lead time, change failure rate, MTTR — agentic vs human → committed `docs/metrics/dora.md` + `dora-metrics-json` artifact | `schedule` (weekly) / `workflow_dispatch` / `workflow_call` |
 | `ai-sdlc-drift.yml` | scheduled contract-drift sweep (`scripts/contract-drift.js`): declared `.ai-sdlc.yaml` vs observed runs/labels/merges → one canonical deduped issue per repo | `schedule` (daily) / `workflow_dispatch` / `workflow_call` |
 | `ai-sdlc-sweep.yml` | scheduled stall-sweep: enumerates open pipeline PRs and feeds each to `ai-sdlc-automerge.yml` — no green-idle PRs; also repairs issue-label contradictions (skip-label vetoing `ready-to-implement`, spec/labels.md) via `scripts/label-contradiction.js`, and scores the armed ready queue (`scripts/prioritize-queue.js`, `prioritize.*` rubric) into an ordered JSON+markdown queue | `schedule` (every 30 min) / `issues.labeled` / `workflow_dispatch` |
 | `ai-sdlc-ci-repair.yml` | bounded repair loop on red checks: failing-check log tails → `scc` headless on the PR head → commit + push; one comment per attempt; `needs-human` after `max_repairs` | `check_run.completed` (failure) / `workflow_dispatch` / automerge `repair-signaled` |
@@ -511,6 +512,17 @@ the stage fails open to a plain issue so the failure is never lost.
 | `repo` | `''` → caller repo | `owner/name` to report on |
 | `window` | `'30d'` | trailing window (`m`/`h`/`d`) |
 | `runtime_ref` | `'main'` | ref of `os-santiago/ai-sdlc` to fetch `scripts/slo-metrics.js` from — pin to the same ref as this workflow |
+
+### ai-sdlc-dora
+| Input | Default | Purpose |
+|---|---|---|
+| `repo` | `''` → caller repo | `owner/name` to report on |
+| `window` | `'30d'` | trailing window (`m`/`h`/`d`) |
+| `runtime_ref` | `'main'` | ref of `os-santiago/ai-sdlc` to fetch `scripts/dora-metrics.js` from — pin to the same ref as this workflow |
+
+The scheduled/dispatch run commits `docs/metrics/dora.md` (diff-gated) in
+addition to the `dora-metrics-json` artifact; `workflow_call` consumers
+receive the artifact + step summary only.
 
 ### ai-sdlc-drift
 | Input | Default | Purpose |
