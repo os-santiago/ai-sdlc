@@ -1,0 +1,132 @@
+# ai-sdlc-drift — scheduled contract drift sweep (issue #176)
+#
+# Diffs the declared contract (.ai-sdlc.yaml) against observed pipeline
+# behavior — stage invocations (workflow runs), labels applied, merges and
+# check rollups — via scripts/contract-drift.js. Every divergence lands on
+# ONE canonical per-repo issue (deduped by a drift-signature marker +
+# findings fingerprint): filed on first drift, commented when the finding
+# set changes, closed when the drift clears. No drift → no issue.
+#
+# Trust boundary: the script and the certified adapter registry are fetched
+# from the os-santiago/ai-sdlc pin (runtime_ref) — never from the caller
+# checkout — same posture as ai-sdlc-metrics.yml.
+#
+# Reusable: consumer repos call this workflow (`uses:`) with their own
+# repo/window inputs, exactly like the metrics workflow. needs `issues:
+# write` to file/close the canonical issue.
+#
+# Cost: one collection = 1 contents fetch + 1 run list + 1 pr list +
+# 1 issue list + ≤10 commit probes (merge-parent evidence). Scheduled
+# self-sweep runs daily at 06:41 UTC.
+name: ai-sdlc-drift
+
+on:
+  schedule:
+    - cron: '41 6 * * *'
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 'owner/name to sweep (blank = this repo)'
+        type: string
+        default: ''
+      window:
+        description: 'trailing window for observed behavior'
+        type: choice
+        options: ['7d', '30d', '90d']
+        default: '30d'
+      dry_run:
+        description: 'evaluate only — never comments/files/closes'
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      repo:
+        description: 'owner/name to sweep (blank = caller repo)'
+        type: string
+        default: ''
+      window:
+        description: 'trailing window for observed behavior'
+        type: string
+        default: '30d'
+      dry_run:
+        description: 'evaluate only — never comments/files/closes'
+        type: boolean
+        default: false
+      runtime_ref:
+        description: 'ref of os-santiago/ai-sdlc to fetch scripts/contract-drift.js from — pin to the same ref as this workflow'
+        type: string
+        default: 'main'
+    outputs:
+      drift_action:
+        description: 'filed | updated | unchanged | reopened | resolved | clean'
+        value: ${{ jobs.sweep.outputs.drift_action }}
+      drift_issue:
+        description: 'canonical drift issue number (when one exists)'
+        value: ${{ jobs.sweep.outputs.drift_issue }}
+      drift_findings:
+        description: 'divergence count in the latest sweep'
+        value: ${{ jobs.sweep.outputs.drift_findings }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-sdlc-drift-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write        # canonical drift issue file/comment/close
+      pull-requests: read  # observed merges, labels, check rollups
+      actions: read        # observed stage invocations (workflow runs)
+    outputs:
+      drift_action: ${{ steps.drift.outputs.drift_action }}
+      drift_issue: ${{ steps.drift.outputs.drift_issue }}
+      drift_findings: ${{ steps.drift.outputs.drift_findings }}
+    env:
+      REPO: ${{ inputs.repo || github.repository }}
+      WINDOW: ${{ inputs.window || '30d' }}
+      RUNTIME_REF: ${{ inputs.runtime_ref || 'main' }}
+      DRY_RUN: ${{ inputs.dry_run == true && '1' || '0' }}
+    steps:
+      - name: Sweep contract drift
+        id: drift
+        env:
+          # Token with issue write + read reach into the target repo.
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-drift"
+          mkdir -p "$WORK"
+
+          # Trusted code only: fetch the canonical sweep + the certified
+          # adapter registry from the runtime pin — never the caller checkout.
+          gh api "repos/os-santiago/ai-sdlc/contents/scripts/contract-drift.js?ref=$RUNTIME_REF" \
+            -H "Accept: application/vnd.github.raw" > "$WORK/contract-drift.js"
+          node --check "$WORK/contract-drift.js"
+          gh api "repos/os-santiago/ai-sdlc/contents/config/engine_adapters.json?ref=$RUNTIME_REF" \
+            -H "Accept: application/vnd.github.raw" > "$WORK/engine_adapters.json"
+
+          ARGS=(--repo "$REPO" --window "$WINDOW" --registry "$WORK/engine_adapters.json"
+                --json --github-output --dump-report drift-report.json --dump-input drift-input.json)
+          [ "$DRY_RUN" = "1" ] && ARGS+=(--dry-run)
+          node "$WORK/contract-drift.js" "${ARGS[@]}"
+
+          {
+            echo "### ai-sdlc contract-drift sweep"
+            echo "- repo: \`$REPO\` · window: \`$WINDOW\`"
+            echo "- action: \`$(jq -r .action drift-report.json)\` · findings: $(jq -r '.findings | length' drift-report.json)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-sdlc-drift-report
+          path: |
+            drift-report.json
+            drift-input.json
+          retention-days: 90
+          if-no-files-found: error

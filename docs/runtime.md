@@ -30,6 +30,7 @@ engine only, no GitHub webhook adapter yet).
 | `ai-sdlc-review.yml` | AI review + bounded review-fix convergence: verdict marker per head SHA + `pr:risk-*` tier label; `blocker|major`/`request_changes` → fix pass on the same branch → re-review; `needs-human` after `max_fix_iterations` | `pull_request` (opened/synchronize) / called post-implement |
 | `ai-sdlc-sweep.yml` | scheduled stall-sweep: enumerates open pipeline PRs and feeds each to `ai-sdlc-automerge.yml` — no green-idle PRs | `schedule` (every 30 min) / `workflow_dispatch` |
 | `ai-sdlc-metrics.yml` | scheduled SLO report (`scripts/slo-metrics.js`): time-to-merge, iterations-to-green, escalation rate → step summary + JSON/Prometheus artifacts | `schedule` (daily) / `workflow_dispatch` / `workflow_call` |
+| `ai-sdlc-drift.yml` | scheduled contract-drift sweep (`scripts/contract-drift.js`): declared `.ai-sdlc.yaml` vs observed runs/labels/merges → one canonical deduped issue per repo | `schedule` (daily) / `workflow_dispatch` / `workflow_call` |
 | `ai-sdlc-ci-repair.yml` | bounded repair loop on red checks: failing-check log tails → `scc` headless on the PR head → commit + push; one comment per attempt; `needs-human` after `max_repairs` | `check_run.completed` (failure) / `workflow_dispatch` / automerge `repair-signaled` |
 | `ai-sdlc-verify.yml` | post-merge verify commands (resolved contract `verify.commands`); failure → canonical postmortem issue via `scripts/postmortem.js` — signature-deduped: open canonical comments, closed canonical reopens at `postmortem.reopen_min` (spec/postmortem-lifecycle.md) — or revert when enabled | post-merge |
 
@@ -317,6 +318,14 @@ the stage fails open to a plain issue so the failure is never lost.
 | `repo` | `''` → caller repo | `owner/name` to report on |
 | `window` | `'30d'` | trailing window (`m`/`h`/`d`) |
 | `runtime_ref` | `'main'` | ref of `os-santiago/ai-sdlc` to fetch `scripts/slo-metrics.js` from — pin to the same ref as this workflow |
+
+### ai-sdlc-drift
+| Input | Default | Purpose |
+|---|---|---|
+| `repo` | `''` → caller repo | `owner/name` to sweep for contract drift |
+| `window` | `'30d'` | trailing window for observed behavior |
+| `dry_run` | `false` | evaluate only — never comments/files/closes |
+| `runtime_ref` | `'main'` | ref of `os-santiago/ai-sdlc` to fetch `scripts/contract-drift.js` + `config/engine_adapters.json` from — pin to the same ref as this workflow |
 
 | Secret | Purpose |
 |---|---|
@@ -648,6 +657,47 @@ without a run ledger. A **pipeline PR** is the sweep's surface: head branch
   runs fetch marks the PR unsampled instead of sinking the report.
 - **Trust boundary:** the workflow fetches the canonical script from the
   `os-santiago/ai-sdlc` pin (`runtime_ref`) — never from the caller repo.
+
+## Contract drift (`ai-sdlc-drift.yml`)
+
+`scripts/contract-drift.js` diffs the declared `.ai-sdlc.yaml` against
+observed pipeline behavior — the issue-#176 sweep under epic #149 (fleet
+operations). A contract that no longer matches reality stops meaning
+anything: this sweep keeps the divergence visible instead of silent.
+
+- **Observed surface:** `gh` list APIs only — workflow runs (stage
+  invocations), pull requests (merges, labels, check rollups) and issues
+  (label state), plus a bounded probe (≤10) of merge-commit parents for
+  merge-method evidence. Deployments with a run ledger can feed stage→engine
+  records through `--observed FILE` (`observed.stages.<stage>.engines`).
+- **Checks:** `engine-unregistered` (declared engine absent from the
+  certified adapter registry), `stage-engine-mismatch` /
+  `declared-engine-unused`, `stage-never-invoked` (evidence demands a stage
+  — PRs → implement, merges → automerge/verify — yet zero runs),
+  `autonomy-exceeded` (merges below the `auto-merge-low` ceiling),
+  `merge-checks-bypassed`, `required-check-missing`,
+  `merge-method-mismatch`, `skip-label-violation`, and
+  `label-veto-violation` (spec/labels.md forbidden pairs — declared
+  `veto_pairs` ∪ `triggers.skip_labels` vetoing the trigger).
+- **Fail-open on partial data:** every check requires its evidence to exist
+  — no engine records, rollups or merge-parent probes → the check is
+  skipped, never a false positive.
+- **Canonical issue, deduped:** one issue per repo carries
+  `<!-- ai-sdlc-drift-signature: <sha256(repo)[:16]> -->`. A changed finding
+  set comments; an identical set is a no-op (`unchanged`); a resolved set
+  comments + closes. A closed canonical is reopened on recurring drift —
+  comment first so evidence survives a failed reopen.
+- **Trigger:** `schedule` daily (06:41 UTC), `workflow_dispatch` (`repo`,
+  `window`, `dry_run`) and `workflow_call` (same inputs + `runtime_ref`;
+  outputs `drift_action`, `drift_issue`, `drift_findings`).
+- **Input contract:** `--input`/`--dump-input` replay the collected model
+  deterministically — the same fixture format the tests use; `--now` pins
+  the window end.
+- **Bounded:** one contents fetch + one `run list` + one `pr list` + one
+  `issue list` + ≤10 commit probes; list bounds default 200 (cap 500).
+- **Trust boundary:** script and `config/engine_adapters.json` are fetched
+  from the `os-santiago/ai-sdlc` pin (`runtime_ref`) — never from the
+  caller checkout.
 
 ## Model fallback
 
