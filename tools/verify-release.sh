@@ -58,8 +58,12 @@ mkdir -p "$DIR"
 # The Fulcio certificate SAN for keyless sign-blob is the workflow-ref URL;
 # releases are maintainer-dispatched, so the ref is the dispatch ref
 # (refs/heads/main) — tag refs are allowed for future tag-triggered runs.
+# NOTE: `[.]` (not `\.`) for literal dots — the repo doc-snippet linter
+# (tools/check-doc-snippets.py, issue #138) would otherwise read the escaped
+# `\.github/...` as a truncated path reference when this regex is quoted in
+# docs. Both forms match a literal dot.
 REPO_RE="$(printf '%s' "$REPO" | sed 's/[][.^$*\\]/\\&/g')"
-IDENT_RE="^https://github\\.com/${REPO_RE}/\\.github/workflows/ai-sdlc-release\\.yml@refs/(heads/main|tags/v.+)\$"
+IDENT_RE="^https://github[.]com/${REPO_RE}/[.]github/workflows/ai-sdlc-release[.]yml@refs/(heads/main|tags/v.+)$"
 ISSUER="https://token.actions.githubusercontent.com"
 
 ART_NAME="ai-sdlc-${TAG}.tar.gz"

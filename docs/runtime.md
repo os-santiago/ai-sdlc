@@ -1170,7 +1170,7 @@ Maintainer-dispatched release driver backed by `scripts/release-manager.js`
   cosign verify-blob --signature ai-sdlc-<tag>.tar.gz.sig \
     --certificate ai-sdlc-<tag>.tar.gz.crt \
     --certificate-identity-regexp \
-      '^https://github\.com/os-santiago/ai-sdlc/\.github/workflows/ai-sdlc-release\.yml@refs/(heads/main|tags/v.+)$' \
+      '^https://github[.]com/os-santiago/ai-sdlc/[.]github/workflows/ai-sdlc-release[.]yml@refs/(heads/main|tags/v.+)$' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     ai-sdlc-<tag>.tar.gz
 
