@@ -1,0 +1,10 @@
+{
+  "id": "ci-repair-no-sig",
+  "marker": "ci-repair-attempt",
+  "fields": { "attempt": "2", "sha": "aaa1111bbb2222" },
+  "body": "<!-- ai-sdlc:ci-repair attempt=2 sha=aaa1111bbb2222 -->\n🔧 **AI-SDLC ci-repair — attempt 2/3**",
+  "expect": {
+    "match": true,
+    "captures": { "attempt": "2", "sha": "aaa1111bbb2222", "sig": null }
+  }
+}

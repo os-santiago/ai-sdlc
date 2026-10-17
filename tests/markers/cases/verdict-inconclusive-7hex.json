@@ -1,0 +1,10 @@
+{
+  "id": "verdict-inconclusive-7hex",
+  "marker": "review-verdict",
+  "fields": { "sha": "deadbee", "verdict": "inconclusive" },
+  "body": "<!-- ai-sdlc:review sha=deadbee verdict=inconclusive -->",
+  "expect": {
+    "match": true,
+    "captures": { "sha": "deadbee", "verdict": "inconclusive" }
+  }
+}

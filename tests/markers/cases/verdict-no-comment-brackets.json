@@ -1,0 +1,6 @@
+{
+  "id": "verdict-no-comment-brackets",
+  "marker": "review-verdict",
+  "body": "ai-sdlc:review sha=a1b2c3d4 verdict=clean",
+  "expect": { "match": false, "reason": "marker without the HTML-comment wrapper is not a marker" }
+}

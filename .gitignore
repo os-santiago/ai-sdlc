@@ -13,3 +13,8 @@ node_modules/
 # Regression-harness run artifacts — diff reports are written per-run for
 # debugging (tests/regression_harness.js --report); never diff inputs.
 /tests/regression/results/
+
+# Generated composite-action sweep for the actionlint gate (issue #130) —
+# created transiently by tools/actionlint.sh / validate-repo.sh and removed
+# on exit; ignored in case a hard kill leaves residue.
+/.actionlint-sweep.*.yml

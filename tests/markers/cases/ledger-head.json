@@ -1,0 +1,10 @@
+{
+  "id": "ledger-head",
+  "marker": "ledger-head",
+  "fields": { "head": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" },
+  "body": "📎 **AI-SDLC run ledger** — stage `implement` sealed (head `01234567`). Downstream stages chain their evidence from this entry; sealed ledgers live in the run artifacts.<!-- ai-sdlc:ledger-head 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef -->",
+  "expect": {
+    "match": true,
+    "captures": { "head": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
+  }
+}

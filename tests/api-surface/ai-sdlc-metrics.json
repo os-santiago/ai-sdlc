@@ -1,0 +1,22 @@
+{
+  "inputs": {
+    "repo": {
+      "default": "",
+      "description": "owner/name to report on (blank = caller repo)",
+      "type": "string"
+    },
+    "runtime_ref": {
+      "default": "main",
+      "description": "ref of os-santiago/ai-sdlc to fetch scripts/slo-metrics.js from — pin to the same ref as this workflow",
+      "type": "string"
+    },
+    "window": {
+      "default": "30d",
+      "description": "trailing window for the report",
+      "type": "string"
+    }
+  },
+  "outputs": {},
+  "secrets": {},
+  "workflow": "ai-sdlc-metrics.yml"
+}

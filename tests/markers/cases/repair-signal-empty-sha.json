@@ -1,0 +1,6 @@
+{
+  "id": "repair-signal-empty-sha",
+  "marker": "repair-signal",
+  "body": "<!-- ai-sdlc:repair-signal sha= -->",
+  "expect": { "match": false, "reason": "empty sha must not parse" }
+}

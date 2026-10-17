@@ -1,0 +1,6 @@
+{
+  "id": "verdict-sha-too-short",
+  "marker": "review-verdict",
+  "body": "<!-- ai-sdlc:review sha=abc123 verdict=clean -->",
+  "expect": { "match": false, "reason": "6-hex SHA is below the 7..40 bound" }
+}

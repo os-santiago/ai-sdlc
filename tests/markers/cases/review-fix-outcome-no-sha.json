@@ -1,0 +1,6 @@
+{
+  "id": "review-fix-outcome-no-sha",
+  "marker": "review-fix-outcome",
+  "body": "<!-- ai-sdlc:review-fix-outcome attempt=2 -->",
+  "expect": { "match": false, "reason": "sha is required" }
+}

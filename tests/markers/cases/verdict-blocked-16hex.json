@@ -1,0 +1,10 @@
+{
+  "id": "verdict-blocked-16hex",
+  "marker": "review-verdict",
+  "fields": { "sha": "a1b2c3d4e5f6a7b8", "verdict": "blocked" },
+  "body": "issues found <!-- ai-sdlc:review sha=a1b2c3d4e5f6a7b8 verdict=blocked -->\ntrailing text after the marker",
+  "expect": {
+    "match": true,
+    "captures": { "sha": "a1b2c3d4e5f6a7b8", "verdict": "blocked" }
+  }
+}

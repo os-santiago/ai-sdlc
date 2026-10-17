@@ -1,0 +1,6 @@
+{
+  "id": "ci-repair-bad-attempt",
+  "marker": "ci-repair-attempt",
+  "body": "<!-- ai-sdlc:ci-repair attempt=x sha=aaa1111 -->",
+  "expect": { "match": false, "reason": "attempt must be numeric" }
+}

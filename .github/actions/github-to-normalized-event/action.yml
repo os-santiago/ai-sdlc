@@ -10,6 +10,6 @@ inputs:
 outputs:
   normalized-event:
     description: 'Normalized event as JSON string'
-    runs:
-      using: 'node16'
-      main: 'index.js'
+runs:
+  using: 'node20'
+  main: 'index.js'

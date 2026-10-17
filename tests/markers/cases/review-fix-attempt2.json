@@ -1,0 +1,10 @@
+{
+  "id": "review-fix-attempt2",
+  "marker": "review-fix",
+  "fields": { "attempt": "2", "sha": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9" },
+  "body": "<!-- ai-sdlc:review-fix attempt=2 sha=a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9 -->\n🛠️ **AI-SDLC review-fix — attempt 2/3** dispatched on head `a1b2c3d4` (findings from the blocking verdict). Run: https://github.com/o/r/actions/runs/1",
+  "expect": {
+    "match": true,
+    "captures": { "attempt": "2", "sha": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9" }
+  }
+}

@@ -1,13 +1,16 @@
 # CI gate: invalid workflow files must fail PR checks instead of landing on
-# main and producing phantom 0-job failed runs (issue #15).
+# main and producing phantom 0-job failed runs (issue #15). The trigger also
+# covers .github/actions/** — composite actions are linted transitively by a
+# generated caller workflow inside tools/actionlint.sh (issue #130); without
+# the path a broken action.yml could merge unlinted.
 name: actionlint
 
 on:
   pull_request:
-    paths: ['.github/workflows/**']
+    paths: ['.github/workflows/**', '.github/actions/**']
   push:
     branches: [main]
-    paths: ['.github/workflows/**']
+    paths: ['.github/workflows/**', '.github/actions/**']
 
 permissions:
   contents: read
@@ -25,5 +28,8 @@ jobs:
         run: shellcheck --version
       - name: Run actionlint
         # Pinned release + SHA-256 live in the script (single source of truth
-        # shared with local/pre-PR runs — issue #44).
+        # shared with local/pre-PR runs — issue #44). With no file operands
+        # the script also lints a generated caller workflow that `uses:` every
+        # .github/actions/*/action.yml — actionlint only checks composite
+        # actions transitively, never as direct file operands (issue #130).
         run: bash tools/actionlint.sh -color

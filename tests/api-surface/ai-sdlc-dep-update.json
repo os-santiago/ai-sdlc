@@ -1,0 +1,80 @@
+{
+  "inputs": {
+    "base": {
+      "default": "main",
+      "description": "base branch the scan and the PR target",
+      "type": "string"
+    },
+    "dry_run": {
+      "default": false,
+      "description": "scan + vet only — no mutations",
+      "type": "boolean"
+    },
+    "ledger_head": {
+      "default": "",
+      "description": "upstream run-ledger chain head (issue #196); empty = genesis segment",
+      "type": "string"
+    },
+    "max_updates": {
+      "default": -1,
+      "description": "override; -1 = contract dependencies.max_updates",
+      "type": "number"
+    },
+    "org_config": {
+      "default": "",
+      "description": "org baseline contract ref owner/repo[/path][@ref] — org floor per spec/org-policy.md",
+      "type": "string"
+    },
+    "repo": {
+      "required": true,
+      "type": "string"
+    },
+    "runtime_ref": {
+      "default": "main",
+      "description": "ref of os-santiago/ai-sdlc to fetch scripts/dep-update.js from — pin to the same ref as this workflow",
+      "type": "string"
+    },
+    "target": {
+      "default": "",
+      "description": "override; empty = contract dependencies.target",
+      "type": "string"
+    }
+  },
+  "outputs": {
+    "action": {
+      "description": "open-pr | existing-pr | flagged | flagged-only | none | skipped | dry-run",
+      "value": "${{ jobs.update.outputs.action }}"
+    },
+    "flagged": {
+      "description": "updates flagged for human review (not landed)",
+      "value": "${{ jobs.update.outputs.flagged }}"
+    },
+    "ledger_head": {
+      "description": "sealed run-ledger chain head for this scan (issue #196)",
+      "value": "${{ jobs.update.outputs.ledger_head }}"
+    },
+    "pr_number": {
+      "description": "consolidated dep-update PR number (empty when none opened)",
+      "value": "${{ jobs.update.outputs.pr_number }}"
+    },
+    "updates": {
+      "description": "updates landed in the batch",
+      "value": "${{ jobs.update.outputs.updates }}"
+    }
+  },
+  "secrets": {
+    "AI_SDLC_APP_ID": {
+      "description": "ai-sdlc GitHub App id — mints the per-run installation token used for all gh auth + pushes (fail-closed when unset; issue #26)",
+      "required": true
+    },
+    "AI_SDLC_APP_PRIVATE_KEY": {
+      "description": "ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID",
+      "required": true
+    },
+    "AI_SDLC_LEDGER_KEY": {
+      "description": "run-ledger signing key (PEM; Ed25519/RSA) — seals stage evidence; absent = unsigned seal (issue #196)",
+      "required": false
+    }
+  },
+  "workflow": "ai-sdlc-dep-update.yml"
+}

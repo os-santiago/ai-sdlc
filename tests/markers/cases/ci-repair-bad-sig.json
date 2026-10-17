@@ -1,0 +1,6 @@
+{
+  "id": "ci-repair-bad-sig",
+  "marker": "ci-repair-attempt",
+  "body": "<!-- ai-sdlc:ci-repair attempt=1 sha=aaa1111 sig=ZZZ -->",
+  "expect": { "match": false, "reason": "sig must be lowercase hex when present" }
+}
