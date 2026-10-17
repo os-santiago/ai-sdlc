@@ -140,6 +140,9 @@ The bootstrap PR (and the manual path below) wires three things:
   [ADR-0004](docs/architecture/adr/0004-cloud-native-k8s-openshift-runtime.md) —
   optional Kubernetes/OpenShift-native control plane for adopters who
   cannot run GitHub Actions. GHA remains the default below.
+- [SECURITY.md](SECURITY.md) — vulnerability disclosure policy: private
+  reporting channel, response timeline and coordinated disclosure,
+  plus a consumer-repo template note.
 
 ## Status
 
