@@ -37,7 +37,7 @@ test('file ends with a trailing newline', () => {
 });
 
 test('registry contains the expected engines', () => {
-  assert.deepEqual(Object.keys(registry).sort(), ['devin', 'scc']);
+  assert.deepEqual(Object.keys(registry).sort(), ['devin', 'mimoclaw', 'scc']);
 });
 
 test('every adapter declares binary, probe, capabilities, argvBuilder, and exitCodeMap', () => {
@@ -145,13 +145,13 @@ test('GHA resolver path re-exports the canonical resolver class', () => {
 
 test('resolver loads the canonical registry by default', () => {
   const resolver = new EngineAdapterResolver();
-  assert.deepEqual(resolver.getRegisteredEngines().sort(), ['devin', 'scc']);
+  assert.deepEqual(resolver.getRegisteredEngines().sort(), ['devin', 'mimoclaw', 'scc']);
   assert.ok(resolver.hasEngine('scc'));
   assert.ok(!resolver.hasEngine('unknown'));
 });
 
 test('module facade resolves adapters from the canonical registry', () => {
-  assert.deepEqual(getRegisteredEngines().sort(), ['devin', 'scc']);
+  assert.deepEqual(getRegisteredEngines().sort(), ['devin', 'mimoclaw', 'scc']);
   assert.ok(hasEngine('devin'));
   const adapter = getEngineAdapter('scc');
   assert.equal(adapter.name, 'scc');
@@ -338,7 +338,7 @@ test('classifyExitCode maps declared codes and falls back to default', () => {
 });
 
 test('mapExitCode normalizes to 0 only for the declared success class', () => {
-  for (const name of ['scc', 'devin']) {
+  for (const name of ['scc', 'devin', 'mimoclaw']) {
     const adapter = getEngineAdapter(name);
     assert.equal(adapter.mapExitCode(0), 0, `${name}: success must exit 0`);
     for (const code of [1, 10, 20, 24, 127, 9999]) {

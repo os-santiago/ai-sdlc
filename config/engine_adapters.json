@@ -115,5 +115,84 @@
       "path": "{manifestFile}",
       "format": "yaml"
     }
+  },
+  "mimoclaw": {
+    "binary": "mimoclaw",
+    "probe": [
+      "mimoclaw",
+      "--version"
+    ],
+    "capabilities": {
+      "supportsWorkspaceTrust": false,
+      "modelConfigurable": true,
+      "projectIdRequired": false
+    },
+    "argvBuilder": {
+      "command": "run",
+      "substitution": {
+        "mode": "argv-element",
+        "shell": "never",
+        "note": "Each {name} token occupies a whole argv element and MUST be replaced atomically with the validated value as one element (no re-splitting, no globbing, no shell joining). Unknown placeholders must be rejected, not substituted.",
+        "placeholders": {
+          "promptFile": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$",
+            "required": true
+          },
+          "model": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$",
+            "required": true
+          },
+          "manifestFile": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$",
+            "required": true
+          },
+          "auditLog": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$",
+            "required": false
+          },
+          "maxSeconds": {
+            "pattern": "^(0|[1-9][0-9]{0,9})$",
+            "required": false
+          },
+          "maxSteps": {
+            "pattern": "^(0|[1-9][0-9]{0,9})$",
+            "required": false
+          }
+        }
+      },
+      "args": [
+        "--prompt-file",
+        "{promptFile}",
+        "--model",
+        "{model}",
+        "--summary-file",
+        "{manifestFile}",
+        "--audit-log",
+        "{auditLog}",
+        "--max-seconds",
+        "{maxSeconds}",
+        "--max-steps",
+        "{maxSteps}",
+        "--no-commit"
+      ]
+    },
+    "configRenderer": {
+      "format": "json",
+      "path": "~/.mimoclaw/config.json"
+    },
+    "exitCodeMap": {
+      "0": "completed",
+      "1": "error",
+      "10": "no_changes",
+      "11": "not_actionable",
+      "12": "blocked",
+      "22": "budget_exceeded",
+      "24": "budget_exceeded",
+      "default": "error"
+    },
+    "manifestMap": {
+      "path": "{manifestFile}",
+      "format": "json"
+    }
   }
 }

@@ -170,7 +170,8 @@ Known stage keys are `intake`, `implement`, `review`, `automerge`,
 engine ids are rejected at contract validation. The engine ids the
 contract accepts are the certified adapter names declared in
 `spec/ai-sdlc.schema.json` (`$defs.engine_id`) — `scc`, `devin`,
-`claude-code`, `codex`, `openhands` — and a certified id still needs an
+`claude-code`, `codex`, `openhands`, `mimoclaw` — and a certified id still
+needs an
 adapter-registry entry before dispatch can run it. A stage without an
 `engines` entry falls back to the global `engine.name`, which itself
 defaults to `scc` (sc-agent-cli).

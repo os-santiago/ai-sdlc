@@ -16,7 +16,8 @@
         "devin",
         "claude-code",
         "codex",
-        "openhands"
+        "openhands",
+        "mimoclaw"
       ],
       "description": "Certified adapter identifier (epic #152). `scc` is the sc-agent-cli reference engine; the remaining ids certify through the conformance suite in docs/engine_contract.md. A certified id still needs a config/engine_adapters.json entry before a stage can dispatch to it — the contract certifies names, the registry implements them. Unknown values are rejected here, not at dispatch time."
     },
