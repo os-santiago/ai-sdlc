@@ -389,6 +389,31 @@
             "type": "string"
           },
           "description": "Labels that block merge unconditionally. Default: needs-human, hold, do-not-merge, wip."
+        },
+        "main_guard": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Main-guard sentinel (issue #189; Hermes MAIN_GUARD port): halt automerge while the base branch's newest completed gate-workflow run is red — files one deduplicated postmortem issue per episode and holds merges; a green base closes the sentinel issue and lifts the halt; a stale/absent gate signal is 'unknown' and fails open.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Sentinel switch. false = the gate never evaluates base health (MAIN_GUARD=0 equivalent)."
+            },
+            "workflows": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Gate workflow names matched case-insensitively against workflowName of completed runs on the base branch. Union semantics: red if ANY gate's freshest in-window run failed. Default: [ci]."
+            },
+            "max_age_hours": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 72,
+              "description": "Freshness window for gate runs: a completed run older than this is history, not signal — all-stale falls back to the newest completed run of any workflow, then 'unknown' (fail-open). Default 72 (Hermes MAIN_GUARD_MAX_AGE_H)."
+            }
+          }
         }
       }
     },

@@ -48,6 +48,7 @@ DEFAULTS = {
         "pending_max_minutes": 60,
         "grace_minutes": 10,
         "skip_labels": ["needs-human", "hold", "do-not-merge", "wip"],
+        "main_guard": {"enabled": True, "workflows": ["ci"], "max_age_hours": 72},
     },
     "postmortem": {"reopen_min": 2, "dedup_window_days": 90},
     "labels": {
@@ -86,6 +87,9 @@ OVERRIDABLE = {
     "merge.method": "enum:squash,merge,rebase",
     "merge.max_repairs": "int",
     "merge.pending_max_minutes": "int",
+    "merge.main_guard.enabled": "bool",
+    "merge.main_guard.workflows": "csv",
+    "merge.main_guard.max_age_hours": "int",
     "review.mode": "enum:ai,human,hybrid",
     "review.ai_reviewer.model": "str",
     "review.max_fix_iterations": "int",
@@ -130,6 +134,18 @@ def is_unset(v):
 def coerce(path, kind, v):
     if kind == "str":
         return str(v).strip()
+    if kind == "bool":
+        if isinstance(v, bool):
+            return v
+        s = str(v).strip().lower()
+        if s in ("true", "1", "yes", "on"):
+            return True
+        if s in ("false", "0", "no", "off"):
+            return False
+        raise ContractError(f"override {path}: expected a boolean, got {v!r}")
+    if kind == "csv":
+        items = v if isinstance(v, list) else str(v).split(",")
+        return [str(c).strip() for c in items if str(c).strip()]
     if kind == "int":
         try:
             f = float(v)
@@ -330,6 +346,9 @@ def flat_outputs(c):
         "merge_skip_labels": j(c["merge"]["skip_labels"]),
         "postmortem_reopen_min": str(c["postmortem"]["reopen_min"]),
         "postmortem_dedup_window_days": str(c["postmortem"]["dedup_window_days"]),
+        "main_guard_enabled": "true" if c["merge"].get("main_guard", {}).get("enabled", True) else "false",
+        "main_guard_workflows": ",".join(c["merge"].get("main_guard", {}).get("workflows") or ["ci"]),
+        "main_guard_max_age_hours": str(c["merge"].get("main_guard", {}).get("max_age_hours") or 72),
         "review_mode": c["review"]["mode"],
         "review_model": review_model(c),
         "review_max_fix_iterations": str(c["review"]["max_fix_iterations"]),

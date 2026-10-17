@@ -267,6 +267,27 @@ Outputs: `action` (`reviewed` \| `fix-dispatched` \| `escalated` \|
 | `org_config` | `''` | org baseline `owner/repo[/path][@ref]` — see [Org policy](#org-policy) |
 | `review_wait_minutes` | `-1` → `review.wait_max_minutes` (15) | pending-review cap before merging with `review_timeout` |
 | `ledger_head` | `''` | upstream ledger head; empty = recover the `ai-sdlc:ledger-head` marker on the PR |
+| `runtime_ref` | `main` | ref of `os-santiago/ai-sdlc` the sentinel (`scripts/main-guard.js`) is fetched from |
+| `main_guard` | `''` → `merge.main_guard.enabled` (true) | sentinel switch — `false` disables base-branch gating |
+| `main_guard_workflows` | `''` → `merge.main_guard.workflows` (ci) | csv gate workflow names for the base-branch verdict |
+| `main_guard_max_age_hours` | `-1` → `merge.main_guard.max_age_hours` (72) | freshness window for gate runs |
+
+#### Main-guard sentinel (issue #189)
+
+Before the PR decision table runs, the gate evaluates `scripts/main-guard.js`
+(Hermes `MAIN_GUARD` port): the newest *completed* run of each configured
+gate workflow on `main` — union semantics, **red if ANY gate failed**
+(`failure`/`cancelled`/`timed_out`), green only when every gate is
+green-or-unknown; all-unknown falls back to the newest completed run of
+any workflow inside `max_age_hours`, then `unknown` (**fail-open** — a
+stale signal never stalls merges). A red verdict holds the merge
+(`held`, `main-guard:*`), files **one deduplicated postmortem issue**
+(`fix(ci): main red — sentinel halt on <repo>`, labels `postmortem`,
+`ai-sdlc`, `priority:P1`) — that open issue *is* the durable halt latch —
+and comments once per episode on the held PR. A green verdict while the
+latch is held closes the issue (`cleared`); comments fire only on the
+red↔green transition. Sentinel infra failures (script fetch/eval) also
+fail open. `merge.main_guard.enabled: false` (or `MAIN_GUARD=0`) disables.
 
 ### ai-sdlc-classify
 | Input | Default | Purpose |
@@ -608,6 +629,10 @@ pipeline PR stays open unresolved** — every one is either merged or carries
   `ai-sdlc-automerge.yml` once per PR with `merge.*` settings from
   `.ai-sdlc.yaml`. The decision table lives only in the gate — the sweep
   never decides.
+- **Sentinel:** the `sentinel` job runs `scripts/main-guard.js --apply` on
+  every sweep — including zero-PR runs — so a red base files its deduped
+  postmortem promptly and a red→green recovery lifts the halt (closes the
+  sentinel issue) without waiting for the next PR event (issue #189).
 - **Idempotent repair signal:** the gate stamps each repair comment with
   `<!-- ai-sdlc:repair-signal sha=<head> -->`. A re-poll on the same head
   SHA holds (`repair-awaiting`) instead of re-commenting; no new push within

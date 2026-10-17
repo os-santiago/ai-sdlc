@@ -10,6 +10,11 @@
 # or labeled PIPELINE_LABEL. Drafts and skip-labeled PRs are dropped before
 # the bound is applied (the gate would skip them anyway) so human-owned PRs
 # can't starve the scan. Cost: see docs/runtime.md § Stall-sweep.
+#
+# The `sentinel` job is the poll-side of the main-guard (issue #189): it
+# evaluates the base branch on every sweep even when no PRs are open, so a
+# red→green recovery lifts the halt (closes the sentinel issue) without
+# waiting for the next PR event. The merge-blocking side lives in the gate.
 name: ai-sdlc-sweep
 
 on:
@@ -34,6 +39,50 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  sentinel:
+    # Main-guard poll (issue #189): files/clears the halt latch on every
+    # sweep — including runs that feed zero PRs to the gate.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .ai-sdlc.yaml
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Evaluate main-guard sentinel
+        env:
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-main-guard"; mkdir -p "$WORK"
+          ENABLED="$(yq -r '.merge.main_guard.enabled // true' .ai-sdlc.yaml)"
+          WFS="$(yq -r '[(.merge.main_guard.workflows // ["ci"])[]] | join(",")' .ai-sdlc.yaml)"
+          MAXAGE="$(yq -r '.merge.main_guard.max_age_hours // 72' .ai-sdlc.yaml)"
+          # Trusted code only: canonical sentinel from the runtime pin.
+          # Unavailable → skip cleanly (fail-open; same posture as classify).
+          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/main-guard.js?ref=main" \
+              -H "Accept: application/vnd.github.raw" > "$WORK/main-guard.js" 2>"$WORK/fetch.err" \
+              || ! node --check "$WORK/main-guard.js" 2>/dev/null; then
+            echo "::warning title=main-guard::sentinel unavailable ($(head -c 160 "$WORK/fetch.err")) — skipping (fail-open)"
+            exit 0
+          fi
+          EXTRA=()
+          [ "$ENABLED" = "false" ] && EXTRA+=(--disabled)
+          node "$WORK/main-guard.js" --repo "$REPO" --base main \
+            --gate-workflows "$WFS" --max-age-hours "$MAXAGE" \
+            --apply --json "${EXTRA[@]}" \
+            || echo "::warning title=main-guard::sentinel evaluation failed — fail-open"
+
   discover:
     runs-on: ubuntu-latest
     timeout-minutes: 5
