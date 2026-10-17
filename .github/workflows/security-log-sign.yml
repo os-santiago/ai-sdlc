@@ -1,0 +1,85 @@
+# security-log-sign — weekly cosign attestation over SECURITY_LOG.md
+# (issue #106; epic #89 "EU CRA alignment").
+#
+# The hash chain (security-log-validate.yml) catches edits to any entry
+# that has a successor; the chain tip is pinned by this weekly signature.
+# cosign signs the whole log file with Sigstore keyless signing (workflow
+# OIDC identity → Fulcio short-lived cert → Rekor transparency log), so no
+# long-lived key material is stored anywhere. The signature bundle is
+# uploaded as an asset on the rolling `security-log-signatures` release,
+# one asset per run, named by UTC date: SECURITY_LOG-YYYY-MM-DD.sig.json.
+#
+# Auditors verify offline:
+#   cosign verify-blob --bundle SECURITY_LOG-YYYY-MM-DD.sig.json \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+#     --certificate-identity-regexp 'https://github.com/os-santiago/ai-sdlc/' \
+#     SECURITY_LOG.md
+# See docs/security-log.md.
+name: security-log-sign
+
+on:
+  schedule:
+    - cron: '23 4 * * 1'   # weekly, Monday 04:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-log-sign
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write   # create/update the security-log-signatures release
+      id-token: write   # Sigstore OIDC for cosign keyless signing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: sigstore/cosign-installer@v4.1.2
+        with:
+          cosign-release: 'v3.0.6'   # >= 3.0.6: CVE-2026-39395 fix
+
+      - name: Verify chain before signing
+        run: |
+          if [ ! -f SECURITY_LOG.md ]; then
+            echo "SECURITY_LOG.md absent — nothing to sign this week"
+            echo "absent=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node scripts/security-log.js verify --log SECURITY_LOG.md --strict
+        id: check
+
+      - name: Sign SECURITY_LOG.md (cosign keyless)
+        if: steps.check.outputs.absent != 'true'
+        run: |
+          stamp="$(date -u +%F)"
+          cosign sign-blob --yes \
+            --bundle "SECURITY_LOG-${stamp}.sig.json" \
+            SECURITY_LOG.md
+          echo "stamp=${stamp}" >> "$GITHUB_OUTPUT"
+        id: sign
+
+      - name: Publish signature bundle as release asset
+        if: steps.check.outputs.absent != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STAMP: ${{ steps.sign.outputs.stamp }}
+        run: |
+          set -euo pipefail
+          tag="security-log-signatures"
+          asset="SECURITY_LOG-${STAMP}.sig.json"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --title "Security log signatures" \
+              --notes "Rolling release holding weekly cosign signature bundles over SECURITY_LOG.md (issue #106). Verify per docs/security-log.md."
+          fi
+          gh release upload "$tag" "$asset" --clobber
+          echo "Published ${asset} on release ${tag}"
