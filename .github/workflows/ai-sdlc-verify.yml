@@ -75,18 +75,12 @@ jobs:
       # channel denies too.
       - name: Autonomy gate — org kill-switch
         id: kill
-        env:
-          AI_SDLC_KILL: ${{ vars.AI_SDLC_KILL }}
-          AI_SDLC_OFF: ${{ vars.AI_SDLC_OFF }}
-          AI_SDLC_CONTROL_REPO: ${{ vars.AI_SDLC_CONTROL_REPO }}
-        run: |
-          set -euo pipefail
-          # Trusted code only — fetched from the runtime pin, never the
-          # consumer/PR head (same posture as scripts/risk-classifier.js).
-          gh api "repos/os-santiago/ai-sdlc/contents/scripts/kill-switch.js?ref=main" \
-            -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/kill-switch.js"
-          node --check "$RUNNER_TEMP/kill-switch.js"
-          node "$RUNNER_TEMP/kill-switch.js" check --repo "$REPO" --json
+        uses: os-santiago/ai-sdlc/.github/actions/autonomy-gate@ai-sdlc/issue-139-actions
+        with:
+          repo: ${{ inputs.repo }}
+          kill-var: ${{ vars.AI_SDLC_KILL }}
+          off-var: ${{ vars.AI_SDLC_OFF }}
+          control-repo: ${{ vars.AI_SDLC_CONTROL_REPO }}
 
       - uses: actions/checkout@v4
         with:
@@ -142,31 +136,54 @@ jobs:
       # Alert routing (issue #175): a post-merge verify failure classifies as
       # `verify-failure` and resolves WHO is notified via escalation.routes in
       # the resolved contract — the router comes from the trusted runtime pin.
+      - name: Fetch alert router (trusted runtime pin)
+        if: steps.run.outputs.failed == '1'
+        id: route-fetch
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: scripts/alert-router.js
+          ref: ${{ inputs.runtime_ref }}
+          dest: ${{ runner.temp }}/ai-sdlc-alert
+          label: alert router
+          fallback: report proceeds unrouted
+
       - name: Route verify-failure alert
         if: steps.run.outputs.failed == '1'
         id: route
         env:
           CONTRACT: ${{ steps.contract.outputs.path }}
           RUNTIME_REF: ${{ inputs.runtime_ref }}
+          FETCHED: ${{ steps.route-fetch.outputs.fetched }}
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           W="$RUNNER_TEMP/ai-sdlc-alert"
           mkdir -p "$W"
-          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/alert-router.js?ref=$RUNTIME_REF" \
-              -H "Accept: application/vnd.github.raw" > "$W/alert-router.js" 2>"$W/fetch.err" \
-             || ! node --check "$W/alert-router.js"; then
-            echo "::warning::alert router unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$W/fetch.err" 2>/dev/null)) — report proceeds unrouted"
+          if [ "$FETCHED" != "true" ]; then
             exit 0
           fi
           jq '.escalation // {}' "$CONTRACT" > "$W/escalation.json" 2>/dev/null || echo '{}' > "$W/escalation.json"
-          node "$W/alert-router.js" --escalation "$W/escalation.json" \
+          node "$W/scripts/alert-router.js" --escalation "$W/escalation.json" \
             --repo "$REPO" --class verify-failure --reason "post-merge verify commands failed on $SHA" \
             --github-output --json | tee "$W/route.json" || true
+
+      # Canonical postmortem filer (issue #191): trusted code from the
+      # runtime pin — never the consumer checkout.
+      - name: Fetch postmortem filer (trusted runtime pin)
+        if: steps.run.outputs.failed == '1'
+        id: pm-fetch
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: scripts/postmortem.js
+          ref: ${{ inputs.runtime_ref }}
+          dest: ${{ runner.temp }}/ai-sdlc-postmortem
+          label: postmortem filer
+          fallback: filing without dedup
 
       - name: Report on failure
         if: steps.run.outputs.failed == '1'
         env:
+          PM_FETCHED: ${{ steps.pm-fetch.outputs.fetched }}
           REVERT: ${{ inputs.revert_on_failure }}
           SHA: ${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -201,9 +218,7 @@ jobs:
           # postmortem.reopen_min. The filer is fetched from the trusted
           # runtime ref — never the consumer checkout.
           WORK="$RUNNER_TEMP/ai-sdlc-postmortem"; mkdir -p "$WORK"
-          if gh api "repos/os-santiago/ai-sdlc/contents/scripts/postmortem.js?ref=$RUNTIME_REF" \
-              -H "Accept: application/vnd.github.raw" > "$WORK/postmortem.js" 2>"$WORK/fetch.err" \
-              && node --check "$WORK/postmortem.js"; then
+          if [ "$PM_FETCHED" = "true" ]; then
             LOCATION="$(paste -sd';' failed.cmds 2>/dev/null | head -c 200)"; LOCATION="${LOCATION:-verify.commands}"
             if [ -n "$REVERTED" ]; then
               TITLE="verify: post-merge checks failed — reverted $SHA"
@@ -212,7 +227,7 @@ jobs:
               TITLE="verify: post-merge checks failed on $SHA"
               BODY="Post-merge verify commands failed on \`$SHA\`. See workflow run for logs; revert_on_failure is disabled."
             fi
-            node "$WORK/postmortem.js" --repo "$REPO" \
+            node "$WORK/scripts/postmortem.js" --repo "$REPO" \
               --component verify --class post-merge-verify-failure \
               --location "$LOCATION" \
               --title "$TITLE" --body "${BODY}${NOTIFY}${MARKER}" --context-file failed.cmds \
@@ -251,21 +266,12 @@ jobs:
           data: >-
             {"failed":${{ toJSON(steps.run.outputs.failed) }},"base":${{ toJSON(inputs.base) }},"sha":${{ toJSON(github.sha) }}}
 
-      - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)
+      - name: Run ledger — seal + publish
         id: seal
         if: always() && steps.ledger.outputs.head != ''
         continue-on-error: true
-        uses: ./.github/actions/run-ledger
+        uses: os-santiago/ai-sdlc/.github/actions/seal-ledger@ai-sdlc/issue-139-actions
         with:
-          op: seal
           stage: verify
           signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
-
-      - uses: actions/upload-artifact@v7
-        if: always() && steps.ledger.outputs.head != ''
-        continue-on-error: true
-        with:
-          name: ai-sdlc-ledger-verify-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/ai-sdlc-ledger/ledger-verify.jsonl
-          if-no-files-found: ignore
-          retention-days: 14
+          artifact-name: ai-sdlc-ledger-verify-${{ github.run_attempt }}

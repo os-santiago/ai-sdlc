@@ -73,8 +73,20 @@ jobs:
         with:
           node-version: '22'
 
+      # Trusted code only: canonical sentinel from the runtime pin.
+      - name: Fetch main-guard sentinel (trusted runtime pin)
+        id: mainguard-fetch
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: scripts/main-guard.js
+          ref: main
+          dest: ${{ runner.temp }}/ai-sdlc-main-guard
+          label: main-guard
+          fallback: skipping (fail-open)
+
       - name: Evaluate main-guard sentinel
         env:
+          FETCHED: ${{ steps.mainguard-fetch.outputs.fetched }}
           GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
@@ -83,17 +95,14 @@ jobs:
           ENABLED="$(yq -r '.merge.main_guard.enabled // true' .ai-sdlc.yaml)"
           WFS="$(yq -r '[(.merge.main_guard.workflows // ["ci"])[]] | join(",")' .ai-sdlc.yaml)"
           MAXAGE="$(yq -r '.merge.main_guard.max_age_hours // 72' .ai-sdlc.yaml)"
-          # Trusted code only: canonical sentinel from the runtime pin.
-          # Unavailable → skip cleanly (fail-open; same posture as classify).
-          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/main-guard.js?ref=main" \
-              -H "Accept: application/vnd.github.raw" > "$WORK/main-guard.js" 2>"$WORK/fetch.err" \
-              || ! node --check "$WORK/main-guard.js" 2>/dev/null; then
-            echo "::warning title=main-guard::sentinel unavailable ($(head -c 160 "$WORK/fetch.err")) — skipping (fail-open)"
+          # Trusted code only: canonical sentinel from the runtime pin —
+          # fetched by the step above; unavailable → skip cleanly (fail-open).
+          if [ "$FETCHED" != "true" ]; then
             exit 0
           fi
           EXTRA=()
           [ "$ENABLED" = "false" ] && EXTRA+=(--disabled)
-          node "$WORK/main-guard.js" --repo "$REPO" --base main \
+          node "$WORK/scripts/main-guard.js" --repo "$REPO" --base main \
             --gate-workflows "$WFS" --max-age-hours "$MAXAGE" \
             --apply --json "${EXTRA[@]}" \
             || echo "::warning title=main-guard::sentinel evaluation failed — fail-open"
@@ -121,18 +130,12 @@ jobs:
         id: kill
         env:
           GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          AI_SDLC_KILL: ${{ vars.AI_SDLC_KILL }}
-          AI_SDLC_OFF: ${{ vars.AI_SDLC_OFF }}
-          AI_SDLC_CONTROL_REPO: ${{ vars.AI_SDLC_CONTROL_REPO }}
-        run: |
-          set -euo pipefail
-          # Trusted code only — fetched from the runtime pin, never the
-          # consumer/PR head (same posture as scripts/risk-classifier.js).
-          gh api "repos/os-santiago/ai-sdlc/contents/scripts/kill-switch.js?ref=main" \
-            -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/kill-switch.js"
-          node --check "$RUNNER_TEMP/kill-switch.js"
-          node "$RUNNER_TEMP/kill-switch.js" check --repo "$REPO" --json
+        uses: os-santiago/ai-sdlc/.github/actions/autonomy-gate@ai-sdlc/issue-139-actions
+        with:
+          repo: ${{ github.repository }}
+          kill-var: ${{ vars.AI_SDLC_KILL }}
+          off-var: ${{ vars.AI_SDLC_OFF }}
+          control-repo: ${{ vars.AI_SDLC_CONTROL_REPO }}
 
       - uses: actions/checkout@v4
         with:

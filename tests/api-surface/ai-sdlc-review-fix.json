@@ -1,0 +1,97 @@
+{
+  "inputs": {
+    "base": {
+      "default": "main",
+      "description": "ref to read .ai-sdlc.yaml from (advisory — falls back to default engine)",
+      "type": "string"
+    },
+    "engine_name": {
+      "default": "",
+      "description": "resolved engine adapter id — recorded on the ledger entry",
+      "type": "string"
+    },
+    "escalation_label": {
+      "default": "needs-human",
+      "description": "resolved escalation label applied when the fix produces no push",
+      "type": "string"
+    },
+    "findings_json": {
+      "default": "[]",
+      "description": "bounded findings JSON from the verdict record",
+      "type": "string"
+    },
+    "fix_attempt": {
+      "description": "fix attempt number (from the review stage fix_attempt output)",
+      "required": true,
+      "type": "string"
+    },
+    "head_ref": {
+      "description": "PR head branch to push to",
+      "required": true,
+      "type": "string"
+    },
+    "head_sha": {
+      "description": "PR head SHA the blocking verdict consumed",
+      "required": true,
+      "type": "string"
+    },
+    "max_fix": {
+      "description": "resolved fix budget (review.max_fix_iterations)",
+      "required": true,
+      "type": "string"
+    },
+    "max_seconds": {
+      "description": "resolved engine wall-clock budget",
+      "required": true,
+      "type": "string"
+    },
+    "max_steps": {
+      "description": "resolved engine tool-step budget",
+      "required": true,
+      "type": "string"
+    },
+    "pr_number": {
+      "required": true,
+      "type": "number"
+    },
+    "provider_base_url": {
+      "default": "",
+      "description": "OpenAI-compatible inference base URL; empty → vars.AI_SDLC_PROVIDER_URL → GitHub Models default",
+      "type": "string"
+    },
+    "repo": {
+      "required": true,
+      "type": "string"
+    },
+    "resolved_model": {
+      "default": "",
+      "description": "resolved reviewer model id",
+      "type": "string"
+    },
+    "runtime_ref": {
+      "default": "main",
+      "description": "ref of os-santiago/ai-sdlc to fetch runtime scripts/actions from",
+      "type": "string"
+    }
+  },
+  "outputs": {},
+  "secrets": {
+    "AI_SDLC_APP_ID": {
+      "description": "ai-sdlc GitHub App id (fail-closed when unset; issue #26)",
+      "required": true
+    },
+    "AI_SDLC_APP_PRIVATE_KEY": {
+      "description": "ai-sdlc GitHub App private key (PEM)",
+      "required": true
+    },
+    "AI_SDLC_LEDGER_KEY": {
+      "description": "run-ledger signing key (PEM); absent = unsigned seal",
+      "required": false
+    },
+    "MODEL_API_KEY": {
+      "description": "optional direct provider key; absent → GitHub Models via GITHUB_TOKEN",
+      "required": false
+    }
+  },
+  "workflow": "ai-sdlc-review-fix.yml"
+}

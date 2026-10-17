@@ -93,6 +93,23 @@ jobs:
       RUNTIME_REF: ${{ inputs.runtime_ref || 'main' }}
       DRY_RUN: ${{ inputs.dry_run == true && '1' || '0' }}
     steps:
+      # Trusted code only: the canonical sweep + the certified adapter
+      # registry from the runtime pin — never the caller checkout.
+      - name: Fetch contract-drift sweep (trusted runtime pin)
+        id: drift-fetch
+        env:
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: |
+            scripts/contract-drift.js
+            config/engine_adapters.json
+          ref: ${{ inputs.runtime_ref || 'main' }}
+          dest: ${{ runner.temp }}/ai-sdlc-drift
+          label: contract-drift sweep
+          fallback: sweep aborted
+          required: 'true'
+
       - name: Sweep contract drift
         id: drift
         env:
@@ -103,18 +120,10 @@ jobs:
           WORK="$RUNNER_TEMP/ai-sdlc-drift"
           mkdir -p "$WORK"
 
-          # Trusted code only: fetch the canonical sweep + the certified
-          # adapter registry from the runtime pin — never the caller checkout.
-          gh api "repos/os-santiago/ai-sdlc/contents/scripts/contract-drift.js?ref=$RUNTIME_REF" \
-            -H "Accept: application/vnd.github.raw" > "$WORK/contract-drift.js"
-          node --check "$WORK/contract-drift.js"
-          gh api "repos/os-santiago/ai-sdlc/contents/config/engine_adapters.json?ref=$RUNTIME_REF" \
-            -H "Accept: application/vnd.github.raw" > "$WORK/engine_adapters.json"
-
-          ARGS=(--repo "$REPO" --window "$WINDOW" --registry "$WORK/engine_adapters.json"
+          ARGS=(--repo "$REPO" --window "$WINDOW" --registry "$WORK/config/engine_adapters.json"
                 --json --github-output --dump-report drift-report.json --dump-input drift-input.json)
           [ "$DRY_RUN" = "1" ] && ARGS+=(--dry-run)
-          node "$WORK/contract-drift.js" "${ARGS[@]}"
+          node "$WORK/scripts/contract-drift.js" "${ARGS[@]}"
 
           {
             echo "### ai-sdlc contract-drift sweep"

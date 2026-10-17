@@ -91,7 +91,7 @@ the linter reads the block, humans read the table.
       "id": "review-bundle",
       "match": "ai-sdlc-review-<e>-<e>",
       "files": [
-        ".github/workflows/ai-sdlc-review.yml"
+        ".github/workflows/ai-sdlc-review-run.yml"
       ],
       "class": "engine-session",
       "path_root": "runner_temp",
@@ -101,7 +101,7 @@ the linter reads the block, humans read the table.
       "id": "review-fix-bundle",
       "match": "ai-sdlc-review-fix-<e>-attempt-<e>",
       "files": [
-        ".github/workflows/ai-sdlc-review.yml"
+        ".github/workflows/ai-sdlc-review-fix.yml"
       ],
       "class": "engine-session",
       "path_root": "runner_temp",
@@ -141,19 +141,22 @@ the linter reads the block, humans read the table.
       "id": "ledger-segment",
       "regex": "^ai-sdlc-ledger-(intake|implement|review|review-fix|ci-repair|automerge|dep-update|verify|kill-switch|drift|fleet|metrics|sweep|canary)-",
       "files": [
-        ".github/workflows/ai-sdlc-intake.yml",
-        ".github/workflows/ai-sdlc-implement.yml",
-        ".github/workflows/ai-sdlc-review.yml",
-        ".github/workflows/ai-sdlc-ci-repair.yml",
-        ".github/workflows/ai-sdlc-automerge.yml",
-        ".github/workflows/ai-sdlc-dep-update.yml",
-        ".github/workflows/ai-sdlc-verify.yml",
         ".github/workflows/ai-sdlc-kill.yml",
         ".github/workflows/ai-sdlc-canary.yml"
       ],
       "class": "ledger",
       "path_root": "runner_temp",
       "retention": 14
+    },
+    {
+      "id": "seal-ledger-upload",
+      "comment": "the canonical ledger-segment upload now lives in the seal-ledger composite — callers pass artifact-name: ai-sdlc-ledger-<stage>-<subject>-<attempt> (the ledger-segment shape above); the literal name is the ${{ inputs.artifact-name }} expression so the regex pins the input indirection itself; retention arrives via inputs.retention-days (callers pass 14)",
+      "regex": "^\\$\\{\\{ inputs\\.artifact-name \\}\\}$",
+      "files": [
+        ".github/actions/seal-ledger/action.yml"
+      ],
+      "class": "ledger",
+      "path_root": "runner_temp"
     },
     {
       "id": "ready-queue",

@@ -129,34 +129,14 @@ jobs:
       flagged: ${{ steps.plan.outputs.flagged }}
       ledger_head: ${{ steps.seal.outputs.head || steps.ledger.outputs.head }}
     steps:
-      - name: Verify ai-sdlc App credentials
-        id: creds
-        env:
-          APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
-          APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          case "$REPO" in */*) ;; *)
-            echo "::error title=ai-sdlc auth::repo input '$REPO' is not owner/name" >&2
-            exit 1 ;;
-          esac
-          if [ -z "${APP_ID:-}" ] || [ -z "${APP_PRIVATE_KEY:-}" ]; then
-            echo "::error title=ai-sdlc auth::AI_SDLC_APP_ID and AI_SDLC_APP_PRIVATE_KEY must be configured — the ai-sdlc GitHub App is the only pipeline identity for pushes/PRs/labels (fail-closed: no PAT or GITHUB_TOKEN fallback). Install the App on $REPO and add the org secrets; see docs/runtime.md (issue #26)."
-            exit 1
-          fi
-          {
-            echo "owner=${REPO%%/*}"
-            echo "repo_name=${REPO##*/}"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Mint ai-sdlc App installation token
+      - name: Verify credentials + mint ai-sdlc App token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@ai-sdlc/issue-139-actions
         with:
+          repo: ${{ inputs.repo }}
           app-id: ${{ secrets.AI_SDLC_APP_ID }}
-          private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
-          owner: ${{ steps.creds.outputs.owner }}
-          repositories: ${{ steps.creds.outputs.repo_name }}
+          app-private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+          purpose: pushes/PRs/labels
 
       - name: Resolve contract (.ai-sdlc.yaml)
         id: contract
@@ -228,24 +208,33 @@ jobs:
 
       - name: Fetch dep-update worker from the runtime pin
         if: steps.cfg.outputs.action == 'continue'
-        id: worker
+        id: worker-fetch
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          RUNTIME_REF: ${{ inputs.runtime_ref || 'main' }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: scripts/dep-update.js
+          ref: ${{ inputs.runtime_ref || 'main' }}
+          dest: ${{ runner.temp }}/ai-sdlc-dep-update
+          label: dep-update worker
+          fallback: skipping scan
+
+      # Trusted code only: the worker comes from the runtime repo pin —
+      # never from the scanned repo's checkout.
+      - name: Check dep-update worker
+        if: steps.cfg.outputs.action == 'continue'
+        id: worker
+        env:
+          FETCHED: ${{ steps.worker-fetch.outputs.fetched }}
         run: |
           set -euo pipefail
           WORK="$RUNNER_TEMP/ai-sdlc-dep-update"
           mkdir -p "$WORK"
-          # Trusted code only: the worker comes from the runtime repo pin —
-          # never from the scanned repo's checkout.
-          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/dep-update.js?ref=$RUNTIME_REF" \
-              -H "Accept: application/vnd.github.raw" > "$WORK/dep-update.js" 2>"$WORK/fetch.err"; then
-            echo "::warning::dep-update worker unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$WORK/fetch.err")) — skipping scan"
+          if [ "$FETCHED" != "true" ]; then
             echo "action=skipped" >> "$GITHUB_OUTPUT"
             echo "reason=worker-unavailable" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          node --check "$WORK/dep-update.js"
           echo "action=continue" >> "$GITHUB_OUTPUT"
 
       - name: Enumerate outdated npm deps
@@ -288,7 +277,7 @@ jobs:
           WORK="$RUNNER_TEMP/ai-sdlc-dep-update"
           DEV_FLAG=""; [ "$INCLUDE_DEV" = "false" ] && DEV_FLAG="--no-dev"
           # shellcheck disable=SC2086  # DEV_FLAG is either empty or a fixed flag
-          node "$WORK/dep-update.js" plan \
+          node "$WORK/scripts/dep-update.js" plan \
             --outdated "$WORK/outdated.json" \
             --min-age-days "$MIN_AGE" --target "$TARGET" \
             --auto-kinds "$AUTO_KINDS" --max-updates "$MAX_UPDATES" \
@@ -364,7 +353,7 @@ jobs:
           # The dep-diff classifier records the audit verdict on the exact
           # pushed diff — it must classify patch|minor-only to have shipped.
           git diff "$BASE_SHA..HEAD" > "$WORK/batch.patch"
-          node "$WORK/dep-update.js" classify --diff "$WORK/batch.patch" > "$WORK/batch-verdict.json"
+          node "$WORK/scripts/dep-update.js" classify --diff "$WORK/batch.patch" > "$WORK/batch-verdict.json"
           jq -c '.verdict | {eligible, kind, reason}' "$WORK/batch-verdict.json"
           [ "$(jq -r '.verdict.eligible' "$WORK/batch-verdict.json")" = "true" ] || {
             echo "::error::pushed diff failed dep-diff eligibility ($(jq -r '.verdict.reason' "$WORK/batch-verdict.json")) — refusing to open the PR" >&2

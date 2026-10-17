@@ -85,68 +85,64 @@ jobs:
       action: ${{ steps.eval.outputs.action }}
       risk_tier: ${{ steps.eval.outputs.risk_tier }}
     steps:
-      - name: Verify ai-sdlc App credentials
-        id: creds
-        env:
-          APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
-          APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          case "$REPO" in */*) ;; *)
-            echo "::error title=ai-sdlc auth::repo input '$REPO' is not owner/name" >&2
-            exit 1 ;;
-          esac
-          if [ -z "${APP_ID:-}" ] || [ -z "${APP_PRIVATE_KEY:-}" ]; then
-            echo "::error title=ai-sdlc auth::AI_SDLC_APP_ID and AI_SDLC_APP_PRIVATE_KEY must be configured — the ai-sdlc GitHub App is the only pipeline identity for labels (fail-closed: no PAT or GITHUB_TOKEN fallback). Install the App on $REPO and add the org secrets; see docs/runtime.md (issue #26)."
-            exit 1
-          fi
-          {
-            echo "owner=${REPO%%/*}"
-            echo "repo_name=${REPO##*/}"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Mint ai-sdlc App installation token
+      - name: Verify credentials + mint ai-sdlc App token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@ai-sdlc/issue-139-actions
         with:
+          repo: ${{ inputs.repo }}
           app-id: ${{ secrets.AI_SDLC_APP_ID }}
-          private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
-          owner: ${{ steps.creds.outputs.owner }}
-          repositories: ${{ steps.creds.outputs.repo_name }}
+          app-private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+          purpose: labels
 
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+
+      # Trusted code only: the canonical classifier from the runtime repo
+      # pin — never from the PR head or consumer repo. The dep-diff fast
+      # path (issue #177) needs scripts/dep-update.js alongside — optional:
+      # older pins skip it and dep surfaces stay on the generic (high) path.
+      - name: Fetch risk classifier (trusted runtime pin)
+        id: eval-fetch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: scripts/risk-classifier.js
+          ref: ${{ inputs.runtime_ref }}
+          dest: ${{ runner.temp }}/ai-sdlc-classify
+          label: risk classifier
+          fallback: skipping classification
+
+      - name: Fetch dep-diff fast path (optional)
+        id: eval-fetch-dep
+        if: steps.eval-fetch.outputs.fetched == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: scripts/dep-update.js
+          ref: ${{ inputs.runtime_ref }}
+          dest: ${{ runner.temp }}/ai-sdlc-classify
+          label: dep-diff fast path
+          fallback: dep surfaces stay on the generic path
 
       - name: Classify diff + apply pr:risk-* label
         id: eval
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           RUNTIME_REF: ${{ inputs.runtime_ref }}
+          FETCHED: ${{ steps.eval-fetch.outputs.fetched }}
           DIFF_MAX_BYTES: ${{ inputs.diff_max_bytes }}
         run: |
           set -euo pipefail
           WORK="$RUNNER_TEMP/ai-sdlc-classify"
           mkdir -p "$WORK"
-
-          # Trusted code only: fetch the canonical classifier from the
-          # runtime repo pin — never from the PR head or consumer repo.
-          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/risk-classifier.js?ref=$RUNTIME_REF" \
-              -H "Accept: application/vnd.github.raw" > "$WORK/risk-classifier.js" 2>"$WORK/fetch.err"; then
-            echo "::warning::risk classifier unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$WORK/fetch.err")) — skipping classification"
+          if [ "$FETCHED" != "true" ]; then
             echo "action=skipped" >> "$GITHUB_OUTPUT"
             echo "risk_tier=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # The dep-diff fast path (issue #177) needs scripts/dep-update.js
-          # alongside the classifier — optional: older pins skip it and dep
-          # surfaces stay on the generic (high) path. Fail-safe upward.
-          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/dep-update.js?ref=$RUNTIME_REF" \
-            -H "Accept: application/vnd.github.raw" > "$WORK/dep-update.js" 2>/dev/null \
-            || ! node --check "$WORK/dep-update.js" 2>/dev/null; then
-            rm -f "$WORK/dep-update.js"
-          fi
-          node --check "$WORK/risk-classifier.js"
 
           # Bounded inputs: REST pulls files (paginated) + the unified diff
           # capped at diff_max_bytes — content signals scan added lines.
@@ -156,7 +152,7 @@ jobs:
             > "$WORK/diff.patch" || : > "$WORK/diff.patch"
           head -c "$DIFF_MAX_BYTES" "$WORK/diff.patch" > "$WORK/diff.bounded.patch"
 
-          node "$WORK/risk-classifier.js" \
+          node "$WORK/scripts/risk-classifier.js" \
             --files "$WORK/files.json" --diff "$WORK/diff.bounded.patch" \
             --repo "$REPO" --pr "$PR" --apply --json > "$WORK/result.json"
           cat "$WORK/result.json"

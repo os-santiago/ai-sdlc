@@ -36,7 +36,8 @@
 // `ai-sdlc:runbook-entry` (scripts/failure-runbook.js).
 'use strict';
 
-const REVIEW_YML = '.github/workflows/ai-sdlc-review.yml';
+const REVIEW_RUN_YML = '.github/workflows/ai-sdlc-review-run.yml';
+const REVIEW_FIX_YML = '.github/workflows/ai-sdlc-review-fix.yml';
 const AUTOMERGE_YML = '.github/workflows/ai-sdlc-automerge.yml';
 const CI_REPAIR_YML = '.github/workflows/ai-sdlc-ci-repair.yml';
 const IMPLEMENT_YML = '.github/workflows/ai-sdlc-implement.yml';
@@ -110,13 +111,13 @@ const MARKERS = {
     },
     emitSites: [
       {
-        file: REVIEW_YML,
+        file: REVIEW_RUN_YML,
         mustContain: '`<!-- ai-sdlc:review sha=${rec.head_sha} verdict=${rec.verdict} -->`',
         template: '<!-- ai-sdlc:review sha=${rec.head_sha} verdict=${rec.verdict} -->',
       },
     ],
     parseSites: [
-      { file: REVIEW_YML, kind: 'js-regex', mustContain: 'const VMARK = ', trusted: true },
+      { file: REVIEW_RUN_YML, kind: 'js-regex', mustContain: 'const VMARK = ', trusted: true },
       { file: AUTOMERGE_YML, kind: 'js-regex', mustContain: 'const VMARK = ', trusted: true },
     ],
   },
@@ -136,13 +137,13 @@ const MARKERS = {
     },
     emitSites: [
       {
-        file: REVIEW_YML,
+        file: REVIEW_FIX_YML,
         mustContain: "printf '<!-- ai-sdlc:review-fix attempt=%s sha=%s -->",
         template: '<!-- ai-sdlc:review-fix attempt=%s sha=%s -->',
       },
     ],
     parseSites: [
-      { file: REVIEW_YML, kind: 'js-regex', mustContain: 'const FMARK = ', trusted: true },
+      { file: REVIEW_RUN_YML, kind: 'js-regex', mustContain: 'const FMARK = ', trusted: true },
       { file: AUTOMERGE_YML, kind: 'js-regex', mustContain: 'const FMARK = ', trusted: true },
     ],
   },
@@ -160,7 +161,7 @@ const MARKERS = {
     },
     emitSites: [
       {
-        file: REVIEW_YML,
+        file: REVIEW_FIX_YML,
         mustContain: '`<!-- ai-sdlc:review-fix-outcome attempt=${e.ATTEMPT} sha=${e.HEAD_SHA} -->`',
         template: '<!-- ai-sdlc:review-fix-outcome attempt=${e.ATTEMPT} sha=${e.HEAD_SHA} -->',
       },

@@ -161,34 +161,14 @@ jobs:
       reason: ${{ steps.result.outputs.reason }}
       ledger_head: ${{ steps.seal.outputs.head || steps.ledger.outputs.head }}
     steps:
-      - name: Verify ai-sdlc App credentials
-        id: creds
-        env:
-          APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
-          APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          case "$REPO" in */*) ;; *)
-            echo "::error title=ai-sdlc auth::repo input '$REPO' is not owner/name" >&2
-            exit 1 ;;
-          esac
-          if [ -z "${APP_ID:-}" ] || [ -z "${APP_PRIVATE_KEY:-}" ]; then
-            echo "::error title=ai-sdlc auth::AI_SDLC_APP_ID and AI_SDLC_APP_PRIVATE_KEY must be configured — the ai-sdlc GitHub App is the only pipeline identity for pushes/PRs (fail-closed: no PAT or GITHUB_TOKEN fallback). Install the App on $REPO and add the org secrets; see docs/runtime.md (issue #26)." >&2
-            exit 1
-          fi
-          {
-            echo "owner=${REPO%%/*}"
-            echo "repo_name=${REPO##*/}"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Mint ai-sdlc App installation token
+      - name: Verify credentials + mint ai-sdlc App token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@ai-sdlc/issue-139-actions
         with:
+          repo: ${{ inputs.repo }}
           app-id: ${{ secrets.AI_SDLC_APP_ID }}
-          private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
-          owner: ${{ steps.creds.outputs.owner }}
-          repositories: ${{ steps.creds.outputs.repo_name }}
+          app-private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+          purpose: pushes/PRs
 
       # Pre-dispatch authorization gate (issue #172): one engaged channel —
       # vars.AI_SDLC_KILL/AI_SDLC_OFF, or an open ai-sdlc:off issue in the
@@ -199,21 +179,32 @@ jobs:
         id: kill
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          AI_SDLC_KILL: ${{ vars.AI_SDLC_KILL }}
-          AI_SDLC_OFF: ${{ vars.AI_SDLC_OFF }}
-          AI_SDLC_CONTROL_REPO: ${{ vars.AI_SDLC_CONTROL_REPO }}
-        run: |
-          set -euo pipefail
-          # Trusted code only — fetched from the runtime pin, never the
-          # consumer/PR head (same posture as scripts/risk-classifier.js).
-          gh api "repos/os-santiago/ai-sdlc/contents/scripts/kill-switch.js?ref=main" \
-            -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/kill-switch.js"
-          node --check "$RUNNER_TEMP/kill-switch.js"
-          node "$RUNNER_TEMP/kill-switch.js" check --repo "$REPO" --json
+        uses: os-santiago/ai-sdlc/.github/actions/autonomy-gate@ai-sdlc/issue-139-actions
+        with:
+          repo: ${{ inputs.repo }}
+          kill-var: ${{ vars.AI_SDLC_KILL }}
+          off-var: ${{ vars.AI_SDLC_OFF }}
+          control-repo: ${{ vars.AI_SDLC_CONTROL_REPO }}
 
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+
+      # Repair-stall guard (issue #190): trusted code only, fetched from
+      # the runtime repo pin — never the PR head or consumer repo.
+      # Unavailable → guard disabled (fail-open); the flat max_repairs
+      # budget still bounds the loop.
+      - name: Fetch repair-stall guard (trusted runtime pin)
+        id: stall-guard-fetch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: scripts/repair-stall-guard.js
+          ref: ${{ inputs.runtime_ref }}
+          dest: ${{ runner.temp }}/ci-repair
+          label: repair-stall guard
+          fallback: continuing without per-signature stall memory
 
       - name: Guard + attempt budget
         id: guard
@@ -222,6 +213,7 @@ jobs:
           BRANCH_PATTERN: ${{ inputs.branch_pattern }}
           MAX_CHECKS: ${{ inputs.max_failed_checks }}
           RUNTIME_REF: ${{ inputs.runtime_ref }}
+          STALL_FETCHED: ${{ steps.stall-guard-fetch.outputs.fetched }}
         run: |
           set -euo pipefail
           WORK="$RUNNER_TEMP/ai-sdlc-ci-repair"
@@ -231,13 +223,10 @@ jobs:
           # the runtime repo pin — never from the PR head or consumer repo.
           # Unavailable → guard disabled (fail-open); the flat max_repairs
           # budget still bounds the loop.
-          if gh api "repos/os-santiago/ai-sdlc/contents/scripts/repair-stall-guard.js?ref=$RUNTIME_REF" \
-              -H "Accept: application/vnd.github.raw" > "$WORK/repair-stall-guard.js" 2>/dev/null \
-              && node --check "$WORK/repair-stall-guard.js" 2>/dev/null; then
+          if [ "$STALL_FETCHED" = "true" ]; then
             echo "stall guard: scripts/repair-stall-guard.js@$RUNTIME_REF"
           else
             echo "::warning::repair-stall guard unavailable at os-santiago/ai-sdlc@$RUNTIME_REF — continuing without per-signature stall memory"
-            rm -f "$WORK/repair-stall-guard.js"
           fi
           gh pr view "$PR" -R "$REPO" \
             --json number,title,state,isDraft,labels,headRefName,headRefOid,headRepositoryOwner,isCrossRepository,baseRefName \
@@ -298,7 +287,7 @@ jobs:
           // the canonical script fetched above; absent/unreadable source →
           // guard disabled (fail-open, flat budget still applies).
           let stall = { signature: '', count: 0, escalated: false };
-          const guardPath = `${W}/repair-stall-guard.js`;
+          const guardPath = `${W}/scripts/repair-stall-guard.js`;
           if (fs.existsSync(guardPath)) {
             try {
               stall = require(guardPath).evaluateStall({
@@ -337,6 +326,21 @@ jobs:
           out('stall_count', stall.count);
           NODE
 
+      # Canonical injection-defense stage (issue #181,
+      # spec/injection-defense.md): CI log output is T2 untrusted text —
+      # fetched from the trusted runtime pin, never from the PR head.
+      - name: Fetch injection-defense sanitizer (trusted runtime pin)
+        id: sanitize-fetch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: scripts/injection_defense.js
+          ref: ${{ inputs.runtime_ref }}
+          dest: ${{ runner.temp }}/ci-repair
+          label: injection_defense.js
+          fallback: falling back to inline fencing
+
       - name: Collect failing check log tails (bounded)
         if: steps.guard.outputs.decision == 'repair'
         env:
@@ -367,17 +371,6 @@ jobs:
           MAX_BYTES: ${{ inputs.log_max_bytes }}
         run: |
           set -euo pipefail
-          # Canonical injection-defense stage (issue #181,
-          # spec/injection-defense.md): CI log output is T2 untrusted text —
-          # fetched from the trusted runtime pin, never from the PR head.
-          # Missing script → legacy inline fencing below (status quo).
-          SAN="$WORK/injection_defense.js"
-          if ! { gh api "repos/os-santiago/ai-sdlc/contents/scripts/injection_defense.js?ref=main" \
-              -H "Accept: application/vnd.github.raw" > "$SAN" 2>/dev/null \
-              && node --check "$SAN" 2>/dev/null; }; then
-            rm -f "$SAN"
-            echo "::warning::injection_defense.js unavailable — falling back to inline fencing"
-          fi
           node - <<'NODE'
           const fs = require('fs');
           const crypto = require('crypto');
@@ -388,7 +381,7 @@ jobs:
           const cap = Number(process.env.MAX_BYTES);
           const audit = `${W}/injection-audit.jsonl`;
           let san = null;
-          try { san = require(`${W}/injection_defense.js`); } catch (e) {}
+          try { san = require(`${W}/scripts/injection_defense.js`); } catch (e) {}
           const ORDER = ['clean', 'scrubbed', 'blocked'];
           const findingsAgg = {};
           let sanitizeVerdict = 'clean';
@@ -452,24 +445,35 @@ jobs:
           console.log(`signature=${signature} prompt_bytes=${Buffer.byteLength(prompt)}`);
           NODE
 
+      # Trusted code only: the lookup script comes from the runtime repo
+      # pin — never the PR head (same boundary as risk-classifier.js,
+      # issue #204). An unavailable pin degrades to a no-op consult.
+      - name: Fetch failure-runbook consult (trusted runtime pin)
+        if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
+        id: runbook-fetch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: scripts/failure-runbook.js
+          ref: ${{ inputs.runtime_ref }}
+          dest: ${{ runner.temp }}/ci-repair
+          label: failure-runbook.js
+          fallback: repair continues without runbook injection
+
       - name: Consult failure runbook (issue #188)
         id: runbook
         if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           RUNTIME_REF: ${{ inputs.runtime_ref }}
+          RUNBOOK_FETCHED: ${{ steps.runbook-fetch.outputs.fetched }}
           BASE_REF: ${{ steps.guard.outputs.base_ref }}
           RUNBOOK_MAX_BYTES: ${{ inputs.runbook_max_bytes }}
         run: |
           set -euo pipefail
           echo '{"hit":false,"injected":false}' > "$WORK/runbook.json"
-          # Trusted code only: the lookup script comes from the runtime repo
-          # pin — never the PR head (same boundary as risk-classifier.js,
-          # issue #204). An unavailable pin degrades to a no-op consult.
-          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/failure-runbook.js?ref=$RUNTIME_REF" \
-              -H "Accept: application/vnd.github.raw" > "$WORK/failure-runbook.js" 2>/dev/null \
-              || ! node --check "$WORK/failure-runbook.js" 2>/dev/null; then
-            echo "::warning::failure-runbook.js unavailable at os-santiago/ai-sdlc@$RUNTIME_REF — repair continues without runbook injection"
+          if [ "$RUNBOOK_FETCHED" != "true" ]; then
             exit 0
           fi
           # The store is DATA: consumer repo's BASE ref first (repo-local
@@ -481,7 +485,7 @@ jobs:
               -H "Accept: application/vnd.github.raw" > "$WORK/runbook.md" 2>/dev/null || : > "$WORK/runbook.md"
           fi
           head -c 262144 "$WORK/runbook.md" > "$WORK/runbook.bounded.md" && mv "$WORK/runbook.bounded.md" "$WORK/runbook.md"
-          node "$WORK/failure-runbook.js" \
+          node "$WORK/scripts/failure-runbook.js" \
             --runbook "$WORK/runbook.md" --context "$WORK/failure.json" \
             --prompt-file "$WORK/repair-prompt.md" --max-bytes "$RUNBOOK_MAX_BYTES" \
             --json > "$WORK/runbook.json" \
@@ -524,24 +528,33 @@ jobs:
 
       # Stage dispatch (issue #206): engines.ci-repair selects the adapter —
       # an unregistered id fails loudly instead of silently running scc.
+      - name: Fetch stage-engine bundle (trusted runtime pin)
+        id: stage-engine-fetch
+        if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: |
+            scripts/engine_adapter.js
+            scripts/gha/stage-engine-resolver.js
+            config/engine_adapters.json
+          ref: ${{ inputs.runtime_ref || 'main' }}
+          dest: ${{ runner.temp }}/ai-sdlc-engine
+          label: stage-engine resolver
+          fallback: defaulting to scc
+
       - name: Resolve stage engine (.ai-sdlc.yaml engines)
         id: stage-engine
         if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          RUNTIME_REF: ${{ inputs.runtime_ref || 'main' }}
+          FETCHED: ${{ steps.stage-engine-fetch.outputs.fetched }}
           STAGE: ci-repair
           REQUIRED: 'false'
         run: |
           set -euo pipefail
           DEST="$RUNNER_TEMP/ai-sdlc-engine"
-          mkdir -p "$DEST/scripts/gha" "$DEST/config"
-          ok=1
-          for f in scripts/engine_adapter.js scripts/gha/stage-engine-resolver.js config/engine_adapters.json; do
-            if ! gh api "repos/os-santiago/ai-sdlc/contents/$f?ref=$RUNTIME_REF" -H "Accept: application/vnd.github.raw" > "$DEST/$f" 2>/dev/null; then ok=0; break; fi
-          done
-          if [ "$ok" = 0 ] || ! node --check "$DEST/scripts/gha/stage-engine-resolver.js" 2>/dev/null; then
-            echo "::warning::stage-engine resolver unavailable at os-santiago/ai-sdlc@$RUNTIME_REF — defaulting to scc"
+          if [ "$FETCHED" != "true" ]; then
             { echo "engine=scc"; echo "engine_source=default"; echo "engine_binary=scc"; } >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -559,46 +572,14 @@ jobs:
           # workspace and runs shell commands driven by untrusted CI output.
           persist-credentials: false
 
-      - name: Build scc engine from source
+      - name: Bootstrap scc engine (build + provider config)
         if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true' && steps.stage-engine.outputs.engine == 'scc' && steps.prompt.outputs.sanitize_verdict != 'blocked'
-        run: |
-          set -euo pipefail
-          git clone --depth 1 https://github.com/os-santiago/sc-agent-cli /tmp/scc-src
-          cd /tmp/scc-src && npm ci && npm run build
-          npm link >/dev/null 2>&1 || true
-          scc --version
-
-      - name: Configure scc engine provider
-        if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true' && steps.stage-engine.outputs.engine == 'scc' && steps.prompt.outputs.sanitize_verdict != 'blocked'
-        env:
-          MODEL_NAME: ${{ inputs.model }}
-          PROVIDER_BASE_URL: ${{ inputs.provider_base_url || vars.AI_SDLC_PROVIDER_URL || 'https://models.github.ai/inference' }}
-          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
-          GH_TOKEN_FOR_MODELS: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.sc-agent"
-          API_KEY="${MODEL_API_KEY:-$GH_TOKEN_FOR_MODELS}"
-          cat > "$HOME/.sc-agent/config.json" <<JSON
-          {
-            "model": {
-              "provider": "openai-compatible",
-              "baseUrl": "${PROVIDER_BASE_URL}",
-              "apiKey": "${API_KEY}",
-              "model": "${MODEL_NAME}",
-              "temperature": 0.2,
-              "maxTokens": 8192,
-              "stream": false
-            },
-            "permissions": {
-              "autoApprove": ["read_file","list_dir","search_text","web_fetch","memory_read","write_file","edit_file","run_shell","git","memory_write"],
-              "denyPaths": [".env",".env.*","**/*.key","**/*.pem","**/id_rsa*","**/.ssh/*","**/credentials*"]
-            }
-          }
-          JSON
-          KEY_SRC="MODEL_API_KEY"
-          [ -z "${MODEL_API_KEY:-}" ] && KEY_SRC="GITHUB_TOKEN (GitHub Models)"
-          echo "scc provider → baseUrl=${PROVIDER_BASE_URL} model=${MODEL_NAME} key=${KEY_SRC}"
+        uses: os-santiago/ai-sdlc/.github/actions/bootstrap-scc@ai-sdlc/issue-139-actions
+        with:
+          model: ${{ inputs.model }}
+          provider-base-url: ${{ inputs.provider_base_url || vars.AI_SDLC_PROVIDER_URL || 'https://models.github.ai/inference' }}
+          model-api-key: ${{ secrets.MODEL_API_KEY }}
+          models-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run stage engine headless repair (bounded)
         id: engine
@@ -686,6 +667,24 @@ jobs:
             echo "outcome=push-rejected" >> "$GITHUB_OUTPUT"
           fi
 
+      # Engine-stall classification (issue #158): trusted code from the
+      # runtime pin, fail-open — when available, the engine run's own
+      # failure class is recorded into the attempt manifest.
+      - name: Fetch stall classifier (trusted runtime pin, fail-open)
+        id: stall-fetch
+        if: >-
+          always() && steps.guard.outputs.decision == 'repair'
+          && steps.prompt.outputs.sanitize_verdict != 'blocked'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: scripts/stall-classifier.js
+          ref: ${{ inputs.runtime_ref }}
+          dest: ${{ runner.temp }}/ci-repair
+          label: stall-classifier.js
+          fallback: attempt recorded unclassified
+
       - name: Record attempt on PR
         id: record
         if: >-
@@ -693,6 +692,7 @@ jobs:
           && steps.prompt.outputs.sanitize_verdict != 'blocked'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          STALL_FETCHED: ${{ steps.stall-fetch.outputs.fetched }}
           ATTEMPT: ${{ steps.guard.outputs.attempt }}
           HEAD_SHA: ${{ steps.guard.outputs.head_sha }}
           STALL_SIG: ${{ steps.guard.outputs.stall_sig }}
@@ -711,9 +711,7 @@ jobs:
           # failure class is recorded into the attempt manifest. Skipped when
           # the engine never ran (base-fault path) — there is nothing to
           # classify.
-          if [ -n "$ENGINE_CODE" ] && gh api "repos/os-santiago/ai-sdlc/contents/scripts/stall-classifier.js?ref=$RUNTIME_REF" \
-              -H "Accept: application/vnd.github.raw" > "$WORK/stall-classifier.js" 2>/dev/null \
-              && node --check "$WORK/stall-classifier.js" 2>/dev/null; then
+          if [ -n "$ENGINE_CODE" ] && [ "$STALL_FETCHED" = "true" ]; then
             gh api "repos/os-santiago/ai-sdlc/contents/config/engine_adapters.json?ref=$RUNTIME_REF" \
               -H "Accept: application/vnd.github.raw" > "$WORK/engine_adapters.json" 2>/dev/null || true
             args=(--engine "$ENGINE" --exit-code "${ENGINE_CODE:-1}"
@@ -721,7 +719,7 @@ jobs:
               --mutations "$([ "$PUSH_OUTCOME" = "pushed" ] && echo 1 || echo 0)"
               --out "$WORK/stall.json" --json)
             [ -f "$WORK/engine_adapters.json" ] && args+=(--registry "$WORK/engine_adapters.json")
-            node "$WORK/stall-classifier.js" "${args[@]}" || true
+            node "$WORK/scripts/stall-classifier.js" "${args[@]}" || true
           elif [ -n "$ENGINE_CODE" ]; then
             echo "::warning::stall-classifier.js unavailable at os-santiago/ai-sdlc@$RUNTIME_REF — attempt recorded unclassified"
           fi
@@ -784,6 +782,21 @@ jobs:
       # canonical failure class (spec/risk-taxonomy.md) and resolves WHO is
       # notified via escalation.routes in the BASE-ref contract — the router
       # comes from the trusted runtime pin, never the PR head.
+      - name: Fetch alert router (trusted runtime pin)
+        id: route-fetch
+        if: >-
+          always() && (steps.guard.outputs.decision == 'escalate' ||
+          (steps.guard.outputs.decision == 'repair' && steps.record.outputs.outcome != 'pushed'))
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: scripts/alert-router.js
+          ref: ${{ inputs.runtime_ref }}
+          dest: ${{ runner.temp }}/ci-repair/alert
+          label: alert router
+          fallback: escalation proceeds unrouted
+
       - name: Route escalation alert
         id: route
         if: >-
@@ -793,14 +806,12 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           ROUTE_REASON: ${{ steps.guard.outputs.decision == 'escalate' && steps.guard.outputs.reason || steps.record.outputs.outcome }}
           RUNTIME_REF: ${{ inputs.runtime_ref }}
+          ROUTE_FETCHED: ${{ steps.route-fetch.outputs.fetched }}
         run: |
           set -euo pipefail
           W="$WORK/alert"
           mkdir -p "$W"
-          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/alert-router.js?ref=$RUNTIME_REF" \
-              -H "Accept: application/vnd.github.raw" > "$W/alert-router.js" 2>"$W/fetch.err" \
-             || ! node --check "$W/alert-router.js"; then
-            echo "::warning::alert router unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$W/fetch.err" 2>/dev/null)) — escalation proceeds unrouted"
+          if [ "$ROUTE_FETCHED" != "true" ]; then
             exit 0
           fi
           # ci-repair resolves no contract — read the escalation section from
@@ -816,7 +827,7 @@ jobs:
           gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
             --jq '.[] | select(.user.type == "Bot" or ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR"))) | {body: (.body // ""), created_at}' \
             | jq -s . > "$W/trusted-comments.json" 2>/dev/null || echo '[]' > "$W/trusted-comments.json"
-          node "$W/alert-router.js" --escalation "$W/escalation.json" \
+          node "$W/scripts/alert-router.js" --escalation "$W/escalation.json" \
             --repo "$REPO" --pr "$PR" --reason "$ROUTE_REASON" \
             --comments "$W/trusted-comments.json" \
             --github-output --json | tee "$W/route.json" || true
@@ -944,21 +955,12 @@ jobs:
             ${{ runner.temp }}/ai-sdlc-ci-repair/ci-repair-manifest.json
             ${{ runner.temp }}/ai-sdlc-ci-repair/failure.json
 
-      - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)
+      - name: Run ledger — seal + publish
         id: seal
         if: always() && steps.ledger.outputs.head != ''
         continue-on-error: true
-        uses: ./.github/actions/run-ledger
+        uses: os-santiago/ai-sdlc/.github/actions/seal-ledger@ai-sdlc/issue-139-actions
         with:
-          op: seal
           stage: ci-repair
           signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
-
-      - uses: actions/upload-artifact@v7
-        if: always() && steps.ledger.outputs.head != ''
-        continue-on-error: true
-        with:
-          name: ai-sdlc-ledger-ci-repair-${{ inputs.pr_number }}-attempt-${{ steps.guard.outputs.attempt || '0' }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/ai-sdlc-ledger/ledger-ci-repair.jsonl
-          if-no-files-found: ignore
-          retention-days: 14
+          artifact-name: ai-sdlc-ledger-ci-repair-${{ inputs.pr_number }}-attempt-${{ steps.guard.outputs.attempt || '0' }}-${{ github.run_attempt }}

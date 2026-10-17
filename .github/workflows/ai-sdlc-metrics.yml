@@ -69,6 +69,21 @@ jobs:
       WINDOW: ${{ inputs.window || '30d' }}
       RUNTIME_REF: ${{ inputs.runtime_ref || 'main' }}
     steps:
+      # Trusted code only: the canonical reporter from the runtime repo
+      # pin — never from the caller checkout.
+      - name: Fetch slo-metrics reporter (trusted runtime pin)
+        id: metrics-fetch
+        env:
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: scripts/slo-metrics.js
+          ref: ${{ inputs.runtime_ref || 'main' }}
+          dest: ${{ runner.temp }}/ai-sdlc-metrics
+          label: slo-metrics reporter
+          fallback: metrics collection aborted
+          required: 'true'
+
       - name: Collect + report SLOs
         env:
           # Token with read reach into the target repo. GITHUB_TOKEN suffices
@@ -79,19 +94,13 @@ jobs:
           WORK="$RUNNER_TEMP/ai-sdlc-metrics"
           mkdir -p "$WORK"
 
-          # Trusted code only: fetch the canonical reporter from the runtime
-          # repo pin — never from the caller checkout.
-          gh api "repos/os-santiago/ai-sdlc/contents/scripts/slo-metrics.js?ref=$RUNTIME_REF" \
-            -H "Accept: application/vnd.github.raw" > "$WORK/slo-metrics.js"
-          node --check "$WORK/slo-metrics.js"
-
           # One live collection; all renderings replay the same model so the
           # JSON report, the .prom exposition and the summary can never drift.
-          node "$WORK/slo-metrics.js" --repo "$REPO" --window "$WINDOW" \
+          node "$WORK/scripts/slo-metrics.js" --repo "$REPO" --window "$WINDOW" \
             --format json --out slo-metrics.json --dump-input slo-input.json
-          node "$WORK/slo-metrics.js" --input slo-input.json --window "$WINDOW" \
+          node "$WORK/scripts/slo-metrics.js" --input slo-input.json --window "$WINDOW" \
             --format prometheus --out slo-metrics.prom
-          node "$WORK/slo-metrics.js" --input slo-input.json --window "$WINDOW" \
+          node "$WORK/scripts/slo-metrics.js" --input slo-input.json --window "$WINDOW" \
             --format markdown --github-summary >/dev/null
 
       - uses: actions/upload-artifact@v7
