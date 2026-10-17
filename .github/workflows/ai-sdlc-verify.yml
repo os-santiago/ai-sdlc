@@ -31,8 +31,23 @@ on:
         description: 'org baseline contract ref owner/repo[/path][@ref] — org floor per spec/org-policy.md; empty = repo contract + defaults'
         type: string
         default: ''
+      pr_number:
+        description: 'merged PR number — recorded on the ledger entry and used to recover the ai-sdlc:ledger-head marker (0 = none)'
+        type: number
+        default: 0
+      ledger_head:
+        description: 'upstream run-ledger chain head — seeds this stage entry prev; empty = recover the marker on pr_number (issue #196)'
+        type: string
+        default: ''
+    outputs:
+      ledger_head:
+        description: 'sealed run-ledger chain head for this verify run (issue #196)'
+        value: ${{ jobs.verify.outputs.ledger_head }}
     secrets:
       AI_SDLC_TOKEN:
+        required: false
+      AI_SDLC_LEDGER_KEY:
+        description: 'run-ledger signing key (PEM; Ed25519/RSA) — seals stage evidence; absent = unsigned seal (issue #196)'
         required: false
 
 env:
@@ -47,6 +62,8 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      ledger_head: ${{ steps.seal.outputs.head || steps.ledger.outputs.head }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -113,3 +130,41 @@ jobs:
             gh issue create -R "$REPO" --title "verify: post-merge checks failed on $SHA" --body "Post-merge verify commands failed on \`$SHA\`. See workflow run for logs; revert_on_failure is disabled." --label "ai-sdlc,priority:P1"
           fi
           exit 1
+
+      # Tamper-evident run evidence (issue #196): the verify outcome is hashed
+      # into a chain entry seeded from the last published ledger head on the
+      # merged PR (recover-prev), sealed and uploaded. Never fails the job.
+      - name: Run ledger — append stage record
+        id: ledger
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/run-ledger
+        with:
+          op: append
+          stage: verify
+          repo: ${{ inputs.repo }}
+          pr: ${{ inputs.pr_number }}
+          prev: ${{ inputs.ledger_head }}
+          recover-prev: 'true'
+          token: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          data: >-
+            {"failed":${{ toJSON(steps.run.outputs.failed) }},"base":${{ toJSON(inputs.base) }},"sha":${{ toJSON(github.sha) }}}
+
+      - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)
+        id: seal
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        uses: ./.github/actions/run-ledger
+        with:
+          op: seal
+          stage: verify
+          signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        with:
+          name: ai-sdlc-ledger-verify-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ai-sdlc-ledger/ledger-verify.jsonl
+          if-no-files-found: ignore
+          retention-days: 14

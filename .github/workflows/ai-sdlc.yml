@@ -60,6 +60,8 @@ jobs:
     with:
       repo: ${{ github.repository }}
       issue_number: ${{ github.event.issue.number }}
+      # Chain the implement ledger entry to the intake head (issue #196).
+      ledger_head: ${{ needs.intake.outputs.ledger_head }}
     secrets: inherit
 
   classify:

@@ -1,0 +1,119 @@
+# run-ledger — AI-SDLC tamper-evident run ledger (issue #196)
+#
+# Wraps run-ledger.js for the reusable stage workflows. `append` writes one
+# hash-chained entry (stage name, timestamp, SHA-256 of the stage data,
+# previous-entry hash); `seal` closes the file at run completion, signing
+# the chain head when a signing key is provided (Ed25519 or RSA PEM).
+#
+# Ledgers are uploaded as workflow artifacts by the caller. The chain spans
+# workflow runs via the `prev` seed: pass an upstream `ledger_head` output
+# directly, or set `recover-prev: 'true'` + `pr` + `token` to read the latest
+# `<!-- ai-sdlc:ledger-head <64-hex> -->` marker left on the PR by the
+# implement stage (trusted-author comments only — bots/collaborators, same
+# posture as the review/repair markers).
+#
+# Evidence must never break the pipeline: callers run both ops under
+# `if: always()` + `continue-on-error: true`.
+name: ai-sdlc run-ledger
+description: Append and seal a tamper-evident hash-chained stage record
+
+inputs:
+  op:
+    description: 'append | seal | head'
+    required: true
+  ledger-file:
+    description: 'ledger JSONL path (default: $RUNNER_TEMP/ai-sdlc-ledger/ledger-<stage>.jsonl)'
+    default: ''
+  stage:
+    description: 'stage name for append ([a-z0-9-], e.g. intake|implement|review|automerge|ci-repair|verify)'
+    default: ''
+  repo:
+    description: 'owner/repo the record describes (default: github.repository)'
+    default: ''
+  issue:
+    description: 'issue number recorded on the entry (0 = none)'
+    default: '0'
+  pr:
+    description: 'PR number recorded on the entry / marker source for recover-prev (0 = none)'
+    default: '0'
+  data:
+    description: 'JSON object — stage inputs/outputs digested into data_sha256'
+    default: '{}'
+  data-files:
+    description: 'newline-separated file paths whose SHA-256 is recorded under data.files'
+    default: ''
+  prev:
+    description: 'seed for the first entry prev (64-hex head of the previous stage ledger); empty = genesis/recover'
+    default: ''
+  recover-prev:
+    description: '"true" = read the latest ai-sdlc:ledger-head marker on `pr` when `prev` is empty'
+    default: 'false'
+  token:
+    description: 'token for the recover-prev comments read'
+    default: ''
+  signing-key:
+    description: 'Ed25519/RSA private key PEM for seal — pass secrets.AI_SDLC_LEDGER_KEY; empty = unsigned seal'
+    default: ''
+
+outputs:
+  head:
+    description: 'chain head — SHA-256 of the last entry (seed for the next stage)'
+    value: ${{ steps.run.outputs.head }}
+  entries:
+    description: 'entry count'
+    value: ${{ steps.run.outputs.entries }}
+  signed:
+    description: '"true" when the seal was cryptographically signed'
+    value: ${{ steps.run.outputs.signed }}
+
+runs:
+  using: composite
+  steps:
+    - name: run-ledger ${{ inputs.op }}
+      id: run
+      shell: bash
+      env:
+        LEDGER_OP: ${{ inputs.op }}
+        LEDGER_STAGE: ${{ inputs.stage }}
+        LEDGER_REPO: ${{ inputs.repo }}
+        LEDGER_ISSUE: ${{ inputs.issue }}
+        LEDGER_PR: ${{ inputs.pr }}
+        LEDGER_DATA: ${{ inputs.data }}
+        LEDGER_DATA_FILES: ${{ inputs.data-files }}
+        LEDGER_PREV: ${{ inputs.prev }}
+        LEDGER_RECOVER_PREV: ${{ inputs.recover-prev }}
+        LEDGER_TOKEN: ${{ inputs.token }}
+        LEDGER_SIGNING_KEY: ${{ inputs.signing-key }}
+        LEDGER_FILE_IN: ${{ inputs.ledger-file }}
+      run: |
+        set -euo pipefail
+        FILE="${LEDGER_FILE_IN:-$RUNNER_TEMP/ai-sdlc-ledger/ledger-${LEDGER_STAGE:-run}.jsonl}"
+        args=("$LEDGER_OP" --ledger "$FILE")
+        case "$LEDGER_OP" in
+          append)
+            [ -n "$LEDGER_STAGE" ] && args+=(--stage "$LEDGER_STAGE")
+            [ -n "$LEDGER_REPO" ] && args+=(--repo "$LEDGER_REPO")
+            [ "${LEDGER_ISSUE:-0}" != "0" ] && args+=(--issue "$LEDGER_ISSUE")
+            [ "${LEDGER_PR:-0}" != "0" ] && args+=(--pr "$LEDGER_PR")
+            [ -n "$LEDGER_DATA" ] && args+=(--data "$LEDGER_DATA")
+            # Chain seed: explicit prev > latest PR marker > genesis. Markers
+            # are trusted-author only (Bot/OWNER/MEMBER/COLLABORATOR) — a
+            # forged comment can never steer the chain.
+            if [ -z "$LEDGER_PREV" ] && [ "$LEDGER_RECOVER_PREV" = "true" ] \
+                && [ "${LEDGER_PR:-0}" != "0" ] && [ -n "$LEDGER_REPO" ] && [ -n "$LEDGER_TOKEN" ]; then
+              LEDGER_PREV=$(GH_TOKEN="$LEDGER_TOKEN" gh api --paginate \
+                "repos/$LEDGER_REPO/issues/$LEDGER_PR/comments?per_page=100" \
+                --jq '.[] | select(.user.type == "Bot" or ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR")))
+                      | (.body // "") | (match("ai-sdlc:ledger-head ([0-9a-f]{64})") // empty) | .captures[0].string' \
+                2>/dev/null | tail -n1) || true
+            fi
+            [ -n "$LEDGER_PREV" ] && args+=(--prev "$LEDGER_PREV")
+            while IFS= read -r f; do
+              [ -n "$f" ] && args+=(--data-file "$f")
+            done <<< "$LEDGER_DATA_FILES"
+            ;;
+          seal)
+            [ -n "$LEDGER_SIGNING_KEY" ] && args+=(--key-env LEDGER_SIGNING_KEY)
+            ;;
+        esac
+        node "$GITHUB_ACTION_PATH/run-ledger.js" "${args[@]}"
