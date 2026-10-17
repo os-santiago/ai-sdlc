@@ -214,7 +214,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -f .ai-sdlc.yaml ]; then
-            yq -o=json '.' .ai-sdlc.yaml > contract.json
+            yq -o=json "." .ai-sdlc.yaml > contract.json
           else
             echo '{}' > contract.json   # no contract → canonical-name defaults
           fi
