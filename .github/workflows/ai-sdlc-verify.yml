@@ -28,17 +28,13 @@ on:
         type: string
         default: ''
       runtime_ref:
-        description: 'ref of os-santiago/ai-sdlc to fetch scripts/postmortem.js from — pin to the same ref as this workflow'
+        description: 'ref of os-santiago/ai-sdlc to fetch trusted runtime scripts (postmortem.js, alert-router.js) from — pin to the same ref as this workflow'
         type: string
         default: 'main'
       org_config:
         description: 'org baseline contract ref owner/repo[/path][@ref] — org floor per spec/org-policy.md; empty = repo contract + defaults'
         type: string
         default: ''
-      runtime_ref:
-        description: 'ref of os-santiago/ai-sdlc to fetch scripts/alert-router.js from — pin to the same ref as this workflow'
-        type: string
-        default: 'main'
       pr_number:
         description: 'merged PR number — recorded on the ledger entry and used to recover the ai-sdlc:ledger-head marker (0 = none)'
         type: number

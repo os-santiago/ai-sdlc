@@ -64,7 +64,7 @@ on:
         type: number
         default: 3
       runtime_ref:
-        description: 'ref of os-santiago/ai-sdlc to fetch trusted runtime scripts (repair-stall-guard.js, failure-runbook.js) from — pin to the same ref as this workflow'
+        description: 'ref of os-santiago/ai-sdlc to fetch trusted runtime scripts (repair-stall-guard.js, failure-runbook.js, alert-router.js) from — pin to the same ref as this workflow'
         type: string
         default: 'main'
       model:
@@ -101,10 +101,6 @@ on:
         description: 'byte cap per failing check log tail'
         type: number
         default: 12000
-      runtime_ref:
-        description: 'ref of os-santiago/ai-sdlc to fetch scripts/alert-router.js from — pin to the same ref as this workflow'
-        type: string
-        default: 'main'
       ledger_head:
         description: 'upstream run-ledger chain head — seeds this stage entry prev; empty = recover the ai-sdlc:ledger-head marker on the PR (issue #196)'
         type: string

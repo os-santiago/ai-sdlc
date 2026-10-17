@@ -378,38 +378,10 @@ describe('per-stage model selection by task class (issue #171)', () => {
     const r = schemaValidate({
       spec: '1.0.0',
       engines: { review: { model: 'openai/o3' }, 'ci-repair': { model: 'auto/best-reasoning' } },
-describe('escalation.routes — failure-class alert routing (issue #175)', () => {
-  it('declares routes as an open failure-class → alert_route map under escalation', () => {
-    const e = schema.properties.escalation;
-    assert.ok(e, 'missing properties.escalation');
-    assert.ok(e.properties.routes, 'missing escalation.routes');
-    assert.strictEqual(e.properties.routes.type, 'object');
-    assert.deepStrictEqual(e.properties.routes.additionalProperties, { $ref: '#/$defs/alert_route' });
-  });
-
-  it('alert_route is a closed {mentions, labels, channel} shape', () => {
-    const r = schema.$defs.alert_route;
-    assert.ok(r, 'missing $defs.alert_route');
-    assert.strictEqual(r.type, 'object');
-    assert.strictEqual(r.additionalProperties, false);
-    assert.deepStrictEqual(Object.keys(r.properties).sort(), ['channel', 'labels', 'mentions']);
-  });
-
-  it('accepts a contract with class routes + a default route', { skip: !HAS_PY }, () => {
-    const r = schemaValidate({
-      spec: '1.0.0',
-      escalation: {
-        label: 'needs-human',
-        routes: {
-          'contract-error': { mentions: ['@ops'], labels: ['priority:P0'], channel: 'issue-comment' },
-          default: { mentions: ['@oncall'] },
-        },
-      },
     });
     assert.deepStrictEqual(r.errors, []);
     assert.ok(r.valid);
   });
-
   it('rejects an empty stage definition and unknown fields in one', { skip: !HAS_PY }, () => {
     assert.strictEqual(schemaValidate({ spec: '1.0.0', engines: { implement: {} } }).valid, false);
     assert.strictEqual(
@@ -498,6 +470,40 @@ describe('escalation.routes — failure-class alert routing (issue #175)', () =>
       // intake dropped (OmniRoute) — resolves to model_primary on GHA;
       // verify absent (no model declared).
     });
+  });
+});
+
+describe('escalation.routes — failure-class alert routing (issue #175)', () => {
+  it('declares routes as an open failure-class → alert_route map under escalation', () => {
+    const e = schema.properties.escalation;
+    assert.ok(e, 'missing properties.escalation');
+    assert.ok(e.properties.routes, 'missing escalation.routes');
+    assert.strictEqual(e.properties.routes.type, 'object');
+    assert.deepStrictEqual(e.properties.routes.additionalProperties, { $ref: '#/$defs/alert_route' });
+  });
+
+  it('alert_route is a closed {mentions, labels, channel} shape', () => {
+    const r = schema.$defs.alert_route;
+    assert.ok(r, 'missing $defs.alert_route');
+    assert.strictEqual(r.type, 'object');
+    assert.strictEqual(r.additionalProperties, false);
+    assert.deepStrictEqual(Object.keys(r.properties).sort(), ['channel', 'labels', 'mentions']);
+  });
+
+  it('accepts a contract with class routes + a default route', { skip: !HAS_PY }, () => {
+    const r = schemaValidate({
+      spec: '1.0.0',
+      escalation: {
+        label: 'needs-human',
+        routes: {
+          'contract-error': { mentions: ['@ops'], labels: ['priority:P0'], channel: 'issue-comment' },
+          default: { mentions: ['@oncall'] },
+        },
+      },
+    });
+    assert.deepStrictEqual(r.errors, []);
+    assert.ok(r.valid);
+  });
   it('rejects a route with an undeclared property', { skip: !HAS_PY }, () => {
     const r = schemaValidate({
       spec: '1.0.0',

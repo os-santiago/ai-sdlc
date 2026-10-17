@@ -50,7 +50,7 @@ on:
         type: string
         default: 'main'
       runtime_ref:
-        description: 'ref of os-santiago/ai-sdlc to fetch scripts/alert-router.js from — pin to the same ref as this workflow'
+        description: 'ref of os-santiago/ai-sdlc to fetch trusted runtime scripts (main-guard.js, alert-router.js) from — pin to the same ref as this workflow'
         type: string
         default: 'main'
       org_config:
@@ -61,10 +61,6 @@ on:
         description: 'upstream run-ledger chain head — seeds this stage entry prev; empty = recover the ai-sdlc:ledger-head marker on the PR (issue #196)'
         type: string
         default: ''
-      runtime_ref:
-        description: 'ref of os-santiago/ai-sdlc to fetch scripts/main-guard.js from — pin to the same ref as this workflow'
-        type: string
-        default: 'main'
       main_guard:
         description: 'sentinel switch — true|false; empty = .ai-sdlc.yaml merge.main_guard.enabled (default true)'
         type: string
@@ -442,7 +438,7 @@ jobs:
             gh pr edit "$PR" -R "$REPO" --add-label "$lbl" || true
           done
           {
-            printf '⚠️ **AI-SDLC merge gate escalated** — reason: `%s`. Human review required; remove `%s` to hand control back.\n' "$REASON" "$ESCALATION"
+            printf "⚠️ **AI-SDLC merge gate escalated** — reason: \`%s\`. Human review required; remove \`%s\` to hand control back.\n" "$REASON" "$ESCALATION"
             [ -n "${ALERT_MENTIONS:-}" ] && printf '\ncc %s\n' "$ALERT_MENTIONS"
             [ -n "${ALERT_MARKER:-}" ] && printf '%s\n' "$ALERT_MARKER"
           } > "$RUNNER_TEMP/escalation-comment.md"
