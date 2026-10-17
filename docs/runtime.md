@@ -773,6 +773,35 @@ against the public key. Any modification — edited field, dropped or
 reordered entry, re-signed seal — exits 1; warnings (unsigned seal,
 unresolved cross-file links) exit 0 unless `--strict`.
 
+### Audit query — "why did the agent do X"
+
+`scripts/audit-query.js` (issue #174) turns a downloaded ledger bundle into
+answers: it stitches the per-stage files into the causal chain and extracts
+the decision each stage recorded (intake DoR verdict, engine model/exit,
+review verdict, automerge action, escalation) — citing the entry hash so
+every claim is verifiable back to the sealed evidence.
+
+```bash
+gh run download <RUN_ID> -D artifacts/ -p 'ai-sdlc-ledger-*'   # any bundle dir works
+
+# full stage-by-stage trail for an issue (issue↔pr linkage pulls in the
+# PR-scoped stages the issue dispatched) — or --pr N / --run <id>
+node scripts/audit-query.js trace --dir artifacts/ --issue 174
+
+# structured answers: escalated|skipped|labeled|merged|held|failed|dispatched
+node scripts/audit-query.js why escalated --dir artifacts/ --pr 42
+node scripts/audit-query.js labels --dir artifacts/ --issue 174
+node scripts/audit-query.js trace --dir artifacts/ --issue 174 --json \
+  --pubkey-file ai-sdlc-ledger.pub.pem --strict
+```
+
+Entries that fail the hash/signature recompute stay in the trail marked
+`TAMPER` with the exact problem — a miss ("no ledger entries explain X")
+and malformed/partial ledgers are reported, never fatal (`--strict` exits 1
+on any integrity problem). Label names in `labels` output are the canonical
+defaults — the ledger records the decision; the resolved `labels.*` /
+`escalation.label` names live in the `contract.json` artifact.
+
 ### Signing key
 
 ```bash
