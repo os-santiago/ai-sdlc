@@ -303,6 +303,20 @@ stage's `ledger_head` input).
 | `pr_number` | PR opened by the run (empty when `exit_code != 0`) — feeds post-implement review |
 | `ledger_head` | sealed chain head — also stamped on the PR as an `ai-sdlc:ledger-head` marker |
 
+**Deterministic apply gate (issue #212 — credential isolation).** The engine
+runs with no forge credentials in its environment (`persist-credentials:
+false`, the App token only enters later steps' env) and its only deliverable
+is a git-format patch: the run freezes the worktree delta into
+`ai-sdlc-engine.patch`, restores a pristine tree, and
+`scripts/apply-patch.js` — fetched from the trusted `os-santiago/ai-sdlc`
+pin, never from the consumer checkout — validates the patch (bounded size,
+path hygiene, `.github/workflows/**` deny, no symlink/gitlink/binary
+payloads, `git apply --check`) before applying it. Only then does the
+commit → push → PR step run. A rejection fails the job fail-closed, labels
+the issue `scc:failed`, and posts the audit trail
+(`ai-sdlc-apply-report.json`, also hashed into the run ledger). A
+compromised or manipulated engine can emit output — it cannot push it.
+
 ### ai-sdlc-review
 | Input | Default | Purpose |
 |---|---|---|
