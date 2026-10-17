@@ -51,7 +51,7 @@ field is enforced even if the repo attempts to override:
 | `autonomy.level` (ceiling, e.g. org-wide `auto-merge-low`) | Blast-radius control. |
 | `triggers.skip_labels` (union-includes `needs-human`) | Intake-side human override. |
 | `verify.required_checks` (union) | Org-mandated gates always run. |
-| `security.*` gate floors (`enabled`, `min_severity`, `block_on_secret`, `severity_matrix.*`) | The deterministic security gate cannot be relaxed — see [Security Gate](#security-gate). |
+| `security.*` gate floors (`enabled`, `min_severity`, `block_on_secret`, `severity_matrix.*`, scan modes `secrets_scan`/`dependency_audit`/`license_check`, `sbom.enabled`, `sbom.attach_to`) | The deterministic security gate cannot be relaxed — see [Security Gate](#security-gate). |
 
 The org baseline declares pins explicitly:
 
@@ -89,6 +89,12 @@ they still allow repo-side tightening. Listing them in
 | `security.enabled` | Boolean floor — an org `true` cannot be relaxed to `false` (repo opt-out of the gate is a non-goal); a repo `true` under an org `false` only tightens. |
 | `security.min_severity` | Severity floor — resolves to the *stricter* (lower-rank) of the org and repo values: `low` < `medium` < `high` < `critical`. Findings at/above the resolved threshold are blocking-class; below it they are always report-only. |
 | `security.block_on_secret` | Boolean floor — org `true` stands; secret/credential-material findings always block, regardless of severity or `pr:risk-*` tier. |
+| `security.secrets_scan` | Scan-mode floor (issue #90) — resolves strictest-wins over `off` < `report` < `enforce`: a repo cannot silence or downgrade an org-mandated secrets scan. |
+| `security.dependency_audit` | Scan-mode floor — same ranked clamp; a repo may audit harder, never weaker. |
+| `security.license_check` | Scan-mode floor — same ranked clamp. Normative default is `report` (license observations stay advisory); an org may raise it to `enforce` fleet-wide. |
+| `security.sbom.enabled` | Boolean floor — an org `true` cannot be relaxed to `false` (issue #92: the baseline can pin the SBOM artifact on). |
+| `security.sbom.format` | Not a strictness dimension — no clamp. An org pins a format outright via `policy_floor.pin` (`cyclonedx` is the normative default). |
+| `security.sbom.attach_to` | Guard-rail list — union strictly-additive like `verify.required_checks`: a repo may attach the SBOM to more surfaces (`pr`, `release`), never drop an org-declared one. |
 | `security.severity_matrix.<pr:risk-*>` | Strictest-outcome floor per leaf the org declares — outcomes rank `report-only` < `blocking-if-fix-available` < `blocking`; a repo may harden a tier, never soften it. |
 
 ### Severity matrix
@@ -106,8 +112,11 @@ to the gate outcome for blocking-class findings on that PR:
 `blocking` (opt-in, stricter than any default) fails the check
 unconditionally. `blocking-if-fix-available` exists so the loop is never
 paralyzed by findings nobody can act on (CVEs without an upstream fix).
-License observations and lower-severity findings stay report-only under
-every tier.
+Findings below `min_severity` stay report-only under every tier; license
+observations are not severity-classed and follow `security.license_check`
+(report-only at the normative `report` default). The full finding-class →
+verdict calibration lives in
+[docs/security/gate-calibration.md](../docs/security/gate-calibration.md).
 
 ## Resolution algorithm
 

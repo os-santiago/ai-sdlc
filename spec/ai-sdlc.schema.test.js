@@ -230,6 +230,52 @@ describe('ai-sdlc.schema.json — contract surface', () => {
     assert.strictEqual(bad.valid, false);
     assert.ok(bad.errors.length >= 2, `expected enum + additionalProperties errors: ${bad.errors}`);
   });
+
+  it('declares the issue-#90 scan modes and sbom contract on security.*', () => {
+    const sec = schema.properties.security;
+    assert.ok(sec, 'missing properties.security');
+    const mode = schema.$defs.security_scan_mode;
+    assert.ok(mode, 'missing $defs.security_scan_mode');
+    assert.deepStrictEqual(mode.enum, ['off', 'report', 'enforce']);
+    for (const f of ['secrets_scan', 'dependency_audit', 'license_check']) {
+      assert.strictEqual(sec.properties[f].$ref, '#/$defs/security_scan_mode',
+        `security.${f} must share the security_scan_mode taxonomy`);
+    }
+    assert.strictEqual(sec.properties.secrets_scan.default, 'enforce');
+    assert.strictEqual(sec.properties.dependency_audit.default, 'enforce');
+    assert.strictEqual(sec.properties.license_check.default, 'report');
+    const sbom = sec.properties.sbom;
+    assert.ok(sbom, 'missing security.sbom');
+    assert.strictEqual(sbom.type, 'object');
+    assert.strictEqual(sbom.additionalProperties, false);
+    assert.strictEqual(sbom.properties.enabled.type, 'boolean');
+    assert.strictEqual(sbom.properties.enabled.default, false);
+    assert.deepStrictEqual(sbom.properties.format.enum, ['cyclonedx', 'spdx']);
+    assert.strictEqual(sbom.properties.format.default, 'cyclonedx');
+    assert.deepStrictEqual(sbom.properties.attach_to.items.enum, ['pr', 'release']);
+    assert.strictEqual(sbom.properties.attach_to.uniqueItems, true);
+    assert.deepStrictEqual(sbom.properties.attach_to.default, ['pr']);
+  });
+
+  it('accepts the richer security surface and rejects off-taxonomy values', { skip: !HAS_PY }, () => {
+    const ok = schemaValidate({
+      spec: '1.0.0',
+      security: {
+        secrets_scan: 'enforce',
+        dependency_audit: 'report',
+        license_check: 'enforce',
+        sbom: { enabled: true, format: 'spdx', attach_to: ['pr', 'release'] },
+      },
+    });
+    assert.deepStrictEqual(ok.errors, []);
+    assert.ok(ok.valid);
+    const bad = schemaValidate({
+      spec: '1.0.0',
+      security: { secrets_scan: 'paranoid', sbom: { attach_to: ['slack'], bogus: 1 } },
+    });
+    assert.strictEqual(bad.valid, false);
+    assert.ok(bad.errors.length >= 3, `expected enum + enum + additionalProperties errors: ${bad.errors}`);
+  });
 });
 
 describe('per-stage engine selection (issue #205)', () => {

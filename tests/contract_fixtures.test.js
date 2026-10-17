@@ -188,6 +188,13 @@ const INLINE_INVALID = [
   // security
   ['security.min_severity: closed enum', { spec: SPEC, security: { min_severity: 'ultra' } }, /not one of/],
   ['security.block_on_secret: wrong type', { spec: SPEC, security: { block_on_secret: 'no' } }, /not of type/],
+  ['security.secrets_scan: closed enum', { spec: SPEC, security: { secrets_scan: 'paranoid' } }, /not one of/],
+  ['security.dependency_audit: closed enum', { spec: SPEC, security: { dependency_audit: 'sometimes' } }, /not one of/],
+  ['security.license_check: closed enum', { spec: SPEC, security: { license_check: 'nag' } }, /not one of/],
+  ['security.sbom.enabled: wrong type', { spec: SPEC, security: { sbom: { enabled: 'yes' } } }, /not of type/],
+  ['security.sbom.format: closed enum', { spec: SPEC, security: { sbom: { format: 'maven-pom' } } }, /not one of/],
+  ['security.sbom.attach_to: closed target set', { spec: SPEC, security: { sbom: { attach_to: ['slack'] } } }, /not one of/],
+  ['security.sbom: undeclared field rejected', { spec: SPEC, security: { sbom: { compress: true } } }, /Additional properties/],
   ['security.severity_matrix: unknown tier key', { spec: SPEC, security: { severity_matrix: { 'pr:risk-extreme': 'blocking' } } }, /Additional properties/],
   // triggers
   ['triggers.min_body_length: below DoR floor', { spec: SPEC, triggers: { min_body_length: 0 } }, /less than the minimum/],
@@ -332,6 +339,57 @@ describe('org-floor enforcement — repo cannot relax an org baseline', { skip: 
       'a repo may harden a tier, never soften it');
     for (const p of ['security.enabled', 'security.block_on_secret', 'security.min_severity',
       'security.severity_matrix.pr:risk-low']) {
+      assert.strictEqual(contract._sources[p], 'org-pin', `${p} must resolve org-pin`);
+    }
+  });
+
+  it('scan-mode + sbom floors clamp repo loosening; repo tightening still lands (issue #90)', () => {
+    const { status, stderr, contract } = runResolver({
+      repo: {
+        spec: SPEC,
+        security: {
+          secrets_scan: 'off',           // silencing an org-mandated scan
+          dependency_audit: 'report',    // downgrading enforce → report
+          license_check: 'enforce',      // tightening report → enforce (allowed)
+          sbom: { enabled: false, format: 'spdx', attach_to: ['pr'] },
+        },
+      },
+      org: {
+        spec: SPEC,
+        security: {
+          secrets_scan: 'enforce',
+          dependency_audit: 'enforce',
+          license_check: 'report',
+          sbom: { enabled: true, format: 'cyclonedx', attach_to: ['release'] },
+        },
+        policy_floor: {
+          pin: [
+            'security.secrets_scan',
+            'security.dependency_audit',
+            'security.license_check',
+            'security.sbom.enabled',
+            'security.sbom.format',
+            'security.sbom.attach_to',
+          ],
+        },
+      },
+    });
+    assert.strictEqual(status, 0, stderr);
+    assert.strictEqual(contract.security.secrets_scan, 'enforce',
+      'off < report < enforce — the org scan mode stands');
+    assert.strictEqual(contract.security.dependency_audit, 'enforce',
+      'a repo cannot downgrade an org-enforced audit');
+    assert.strictEqual(contract.security.license_check, 'enforce',
+      'a repo raising the scan mode is tightening — it lands');
+    assert.strictEqual(contract._sources['security.license_check'], 'contract');
+    assert.strictEqual(contract.security.sbom.enabled, true,
+      'an org-enabled SBOM cannot be switched off');
+    assert.strictEqual(contract.security.sbom.format, 'cyclonedx',
+      'a pinned scalar takes the org format outright');
+    assert.deepStrictEqual(contract.security.sbom.attach_to, ['release', 'pr'],
+      'attach_to unions strictly-additive — org targets cannot be dropped');
+    for (const p of ['security.secrets_scan', 'security.dependency_audit',
+      'security.sbom.enabled', 'security.sbom.format', 'security.sbom.attach_to']) {
       assert.strictEqual(contract._sources[p], 'org-pin', `${p} must resolve org-pin`);
     }
   });

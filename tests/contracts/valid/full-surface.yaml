@@ -43,6 +43,13 @@ security:
   enabled: true
   min_severity: high
   block_on_secret: true
+  secrets_scan: enforce
+  dependency_audit: enforce
+  license_check: report
+  sbom:
+    enabled: true
+    format: cyclonedx
+    attach_to: [pr, release]
   severity_matrix:
     pr:risk-low: report-only
     pr:risk-medium: report-only

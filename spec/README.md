@@ -24,7 +24,7 @@ implements via `.ai-sdlc.yaml` at its root.
 
 ## Versioning
 
-**Declared version:** `spec/v1.0.0` — bumped in the same PR that changes
+**Declared version:** `spec/v1.1.0` — bumped in the same PR that changes
 `spec/**`; `.github/workflows/ai-sdlc-spec-tag.yml` verifies it against the
 diff classification and publishes the tag on merge to `main`.
 

@@ -49,6 +49,22 @@ dependencies:
   labels: [dependencies, ai-sdlc]
   egress_profile: npm-vet
 
+# Security gate (epic #87; spec/org-policy.md — Security Gate): a public
+# library keeps the normative defaults — secrets block, fixable
+# high/critical findings gate high-risk tiers, licenses report — and
+# publishes a CycloneDX SBOM on PRs and releases (issue #92).
+security:
+  enabled: true
+  min_severity: high
+  block_on_secret: true
+  secrets_scan: enforce
+  dependency_audit: enforce
+  license_check: report
+  sbom:
+    enabled: true
+    format: cyclonedx
+    attach_to: [pr, release]
+
 review:
   mode: ai
   ai_reviewer:

@@ -50,6 +50,28 @@ dependencies:
   labels: [dependencies, ai-sdlc]
   egress_profile: npm-vet
 
+# Security gate (epic #87; spec/org-policy.md — Security Gate). An
+# internal app tightens past the normative defaults: medium-risk PRs
+# also block on fixable findings, and the SBOM attaches to both
+# surfaces. Any org baseline floors still clamp from above — these are
+# tightenings, so they always land.
+security:
+  enabled: true
+  min_severity: high
+  block_on_secret: true
+  secrets_scan: enforce
+  dependency_audit: enforce
+  license_check: report
+  sbom:
+    enabled: true
+    format: cyclonedx
+    attach_to: [pr, release]
+  severity_matrix:
+    pr:risk-low: report-only
+    pr:risk-medium: blocking-if-fix-available   # hardened past the report-only default
+    pr:risk-high: blocking-if-fix-available
+    pr:risk-critical: blocking                  # fixless findings block too
+
 review:
   mode: hybrid            # AI reviews every PR; humans spot-check
   ai_reviewer:

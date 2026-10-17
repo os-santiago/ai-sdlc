@@ -34,6 +34,19 @@ demotion:
   escalation_threshold: 1     # escalations in the window → demotion PR
   window: 30
 
+# Security gate (epic #87): the deterministic `ai-sdlc-security` check
+# rides under the contract even at shadow — secrets always block, fixable
+# findings >= min_severity gate per pr:risk-* tier, everything else
+# reports. Defaults shown explicitly; an org baseline can floor any
+# leaf (spec/org-policy.md — Security Gate; docs/security/gate-calibration.md).
+security:
+  enabled: true
+  block_on_secret: true
+  secrets_scan: enforce
+  dependency_audit: enforce
+  license_check: report
+  min_severity: high
+
 # Release provenance (issues #100/#103): secure posture is the resolved
 # default — declared so onboarding wires it, not just trusts defaults.
 release:
