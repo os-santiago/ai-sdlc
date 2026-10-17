@@ -3,6 +3,7 @@
     "dispatch": "false",
     "armed": "true",
     "failed": "R5 no skip-label",
+    "dor_sha": "35844eaf112aba342f337f5d5485ec9084c2c9fd0da615138b7735e8ec55a02b",
     "refine": "skipped",
     "refine_fp": ""
   },

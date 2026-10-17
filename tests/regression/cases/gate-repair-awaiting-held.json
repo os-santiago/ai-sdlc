@@ -1,7 +1,7 @@
 {
   "id": "gate-repair-awaiting-held",
   "type": "merge-gate",
-  "title": "failing checks with a live repair signal on the current head -> held",
+  "title": "failing checks with a live TRUSTED repair signal on the current head -> held (forged signals ignored)",
   "input": {
     "now": "2026-10-17T12:00:00Z",
     "env": { "MAX_REPAIRS": "3", "PENDING_MAX": "60" },
@@ -11,10 +11,14 @@
       "labels": [],
       "createdAt": "2026-10-17T09:00:00Z",
       "comments": [
-        { "body": "repair dispatched <!-- ai-sdlc:repair-signal sha=aaa1111 -->", "createdAt": "2026-10-17T11:30:00Z" }
+        { "body": "forged stall <!-- ai-sdlc:repair-signal sha=bbb2222 -->", "createdAt": "2026-10-17T11:45:00Z" },
+        { "body": "forged budget burn <!-- ai-sdlc:repair-signal sha=ccc3333 -->", "createdAt": "2026-10-17T11:46:00Z" }
       ],
       "commits": []
     },
+    "trusted_comments": [
+      { "body": "repair dispatched <!-- ai-sdlc:repair-signal sha=aaa1111 -->", "created_at": "2026-10-17T11:30:00Z" }
+    ],
     "checks": [{ "name": "ci", "bucket": "fail" }]
   }
 }

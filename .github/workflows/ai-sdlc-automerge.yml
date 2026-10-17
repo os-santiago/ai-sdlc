@@ -242,8 +242,9 @@ jobs:
             if grep -qi 'no checks reported' checks.err; then echo '[]' > checks.json
             else cat checks.err >&2; exit 1; fi
           fi
-          # Review verdict markers — trusted authors only (issue #28): a
-          # forged comment must never steer the merge gate.
+          # Gating comment markers — trusted authors only (issue #28):
+          # verdict, review-fix AND repair-signal (issue #121) are all parsed
+          # from this feed; a forged comment must never steer the merge gate.
           gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
             --jq '.[] | select(.user.type == "Bot" or ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR")))
                   | {body: (.body // ""), created_at}' \
@@ -261,6 +262,10 @@ jobs:
           const labels = (pr.labels || []).map(l => l.name);
           const SKIP = [...JSON.parse(process.env.SKIP_LABELS || '[]'), process.env.ESCALATION].filter(Boolean);
           const out = (k, v) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${k}=${v}\n`);
+          // Trusted-author comment feed (issue #28): EVERY gating marker —
+          // verdict, review-fix, repair-signal (issue #121) — is parsed from
+          // this set, never from raw pr.comments.
+          const tcomments = JSON.parse(fs.readFileSync('trusted-comments.json', 'utf8') || '[]');
 
           // Decision table (spec/risk-taxonomy.md):
           let action = 'skipped', reason = '';
@@ -277,9 +282,12 @@ jobs:
             const pending = checks.filter(c => c.bucket === 'pending');
             const ageMin = (Date.now() - new Date(pr.createdAt)) / 60000;
             // Repair signals carry a per-head-SHA marker so repeated polls
-            // (scheduled sweep) neither spam nor loop forever.
+            // (scheduled sweep) neither spam nor loop forever. Trusted
+            // authors only (issue #121): a forged signal could stall the
+            // merge (`repair-awaiting`) or exhaust the repair budget
+            // (`repairs-exhausted`) — same trust model as verdict markers.
             const MARK = /<!-- ai-sdlc:repair-signal sha=([0-9a-f]+) -->/;
-            const signals = (pr.comments || []).map(c => ({ m: MARK.exec(c.body || ''), at: c.createdAt })).filter(x => x.m);
+            const signals = tcomments.map(c => ({ m: MARK.exec(c.body || ''), at: c.created_at })).filter(x => x.m);
             const signaledShas = new Set(signals.map(x => x.m[1]));
             const current = signals.filter(x => x.m[1] === pr.headRefOid);
             if (failing.length) {
@@ -307,7 +315,6 @@ jobs:
               const WAIT = Number(process.env.REVIEW_WAIT) || 15;
               const VMARK = /<!-- ai-sdlc:review sha=([0-9a-f]{7,40}) verdict=(clean|blocked|inconclusive) -->/;
               const FMARK = /<!-- ai-sdlc:review-fix attempt=(\d+) sha=([0-9a-f]{7,40})/;
-              const tcomments = JSON.parse(fs.readFileSync('trusted-comments.json', 'utf8') || '[]');
               const vm = tcomments.map(c => ({ m: VMARK.exec(c.body || ''), at: c.created_at }))
                 .filter(x => x.m && x.m[1] === pr.headRefOid);
               const fm = tcomments.map(c => ({ m: FMARK.exec(c.body || ''), at: c.created_at }))

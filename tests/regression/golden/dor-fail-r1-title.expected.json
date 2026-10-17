@@ -3,6 +3,7 @@
     "dispatch": "false",
     "armed": "true",
     "failed": "R1 conventional title",
+    "dor_sha": "2d22f020633c7a3f0138ea538f447d47a1c079fc5239ef635bb5d98f12f36112",
     "refine": "skipped",
     "refine_fp": ""
   },

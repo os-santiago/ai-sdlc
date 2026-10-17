@@ -399,6 +399,18 @@ arms each one independently.
 | `pr_number` | PR opened by the run (empty when `exit_code != 0`) — feeds post-implement review |
 | `ledger_head` | sealed chain head — also stamped on the PR as an `ai-sdlc:ledger-head` marker |
 
+**DoR surface pin (issue #122 — intake→implement TOCTOU).** Intake stamps
+the sha256 of the exact title+body it approved as a trusted-author marker
+comment (`<!-- ai-sdlc:dor sha256=… -->`). The sanitize step re-hashes the
+dispatch-time fetch and compares it against the LATEST trusted stamp:
+`verified` proceeds; `drift` gates the engine off (empty prompt — the
+unapproved surface is never rendered) and quarantines the issue to
+`needs-human` with a comment naming both hashes — the text the engine
+would have received is not the text that was approved. `unverified` (no
+recorded approval — a standalone dispatch that never ran intake) fails
+open and is logged. Re-arming a legitimate edit is re-applying the trigger
+label: intake re-approves and re-pins the surface, latest stamp wins.
+
 **Deterministic apply gate (issue #212 — credential isolation).** The engine
 runs with no forge credentials in its environment (`persist-credentials:
 false`, the App token only enters later steps' env) and its only deliverable
@@ -892,7 +904,10 @@ pipeline PR stays open unresolved** — every one is either merged or carries
   postmortem promptly and a red→green recovery lifts the halt (closes the
   sentinel issue) without waiting for the next PR event (issue #189).
 - **Idempotent repair signal:** the gate stamps each repair comment with
-  `<!-- ai-sdlc:repair-signal sha=<head> -->`. A re-poll on the same head
+  `<!-- ai-sdlc:repair-signal sha=<head> -->`. Signals are parsed from the
+  trusted-author comment feed only (issue #121 — same trust model as the
+  review-verdict markers: a forged signal could otherwise stall the merge
+  or burn the repair budget). A re-poll on the same head
   SHA holds (`repair-awaiting`) instead of re-commenting; no new push within
   `pending_max_minutes` → escalate (`repair-stalled`); `max_repairs`
   distinct SHAs signaled → escalate (`repairs-exhausted`).

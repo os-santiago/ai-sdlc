@@ -3,6 +3,7 @@
     "dispatch": "false",
     "armed": "true",
     "failed": "R6 no TBD in AC",
+    "dor_sha": "6778531835e4254a641b3830d25e02b04562cf6e1d0749d97d50557a217a542c",
     "refine": "skipped",
     "refine_fp": ""
   },

@@ -322,6 +322,7 @@ jobs:
           if (!labels.includes(trigger)) {
             console.log(`issue does not carry the trigger label "${process.env.TRIGGER}" — not armed, skipping`);
             out('dispatch', 'false'); out('armed', 'false'); out('failed', '');
+            out('dor_sha', '');
             out('refine', process.env.REFINE_STATUS || 'skipped');
             out('refine_fp', process.env.REFINE_FP || '');
             process.exit(0);
@@ -341,6 +342,14 @@ jobs:
           const failed = Object.entries(checks).filter(([, ok]) => !ok).map(([k]) => k);
           console.log('DoR:', JSON.stringify(checks, null, 0));
           out('dispatch', failed.length ? 'false' : 'true'); out('armed', 'true'); out('failed', failed.join('|'));
+          // DoR surface pin (issue #122): sha256 of the exact title+body
+          // this verdict evaluated. The outcome step stamps it on the issue
+          // as a trusted-author marker (`<!-- ai-sdlc:dor sha256=… -->`);
+          // implement re-hashes its dispatch-time fetch and holds the run
+          // on drift, so a body edited after approval can never reach the
+          // engine prompt. Recipe pinned by scripts/comment-markers.js —
+          // keep byte-identical to the verify side in ai-sdlc-implement.yml.
+          out('dor_sha', require('crypto').createHash('sha256').update(`${i.title || ''}\n${i.body || ''}`).digest('hex'));
           // Refinement evidence rides the same ledger record (issue #197).
           out('refine', process.env.REFINE_STATUS || 'skipped');
           out('refine_fp', process.env.REFINE_FP || '');
@@ -352,6 +361,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
           PASS: ${{ steps.dor.outputs.dispatch }}
           FAILED: ${{ steps.dor.outputs.failed }}
+          DORSHA: ${{ steps.dor.outputs.dor_sha }}
           TRIGGER: ${{ steps.contract.outputs.trigger_label }}
           QUEUED: ${{ steps.contract.outputs.label_queued }}
           NOT_READY: ${{ steps.contract.outputs.label_not_ready }}
@@ -363,7 +373,14 @@ jobs:
           gh label create "$NOT_READY" -R "$REPO" --color D93F0B --description "AI-SDLC: Definition-of-Ready failed" --force || true
           if [ "$PASS" = "true" ]; then
             gh issue edit "$ISSUE" -R "$REPO" --add-label "$QUEUED"
-            gh issue comment "$ISSUE" -R "$REPO" --body "✅ **AI-SDLC intake:** DoR passed — queued for implementation. Follow the opened PR for progress."
+            # DoR surface pin (issue #122): stamp the evaluated title+body
+            # hash as a trusted-author marker — implement refuses to run the
+            # engine when its dispatch-time fetch hashes differently.
+            MARKER=""
+            if [ -n "$DORSHA" ]; then
+              MARKER=$'\n'"<!-- ai-sdlc:dor sha256=$DORSHA -->"
+            fi
+            gh issue comment "$ISSUE" -R "$REPO" --body "✅ **AI-SDLC intake:** DoR passed — queued for implementation (approved surface \`${DORSHA:0:12}\`). Follow the opened PR for progress.$MARKER"
           else
             gh issue edit "$ISSUE" -R "$REPO" --add-label "$NOT_READY"
             gh issue comment "$ISSUE" -R "$REPO" --body "🛡️ **AI-SDLC intake:** Definition-of-Ready failed: \`$FAILED\` — see spec/definition-of-ready.md. Refine and re-apply \`$TRIGGER\`."

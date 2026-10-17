@@ -1,0 +1,15 @@
+{
+  "id": "implement-dor-unverified",
+  "type": "implement-sanitize",
+  "title": "no DoR stamp on record (standalone dispatch) -> dor=unverified, fail-open prompt render",
+  "input": {
+    "issue": {
+      "number": 122,
+      "title": "security(intake): issue body TOCTOU between DoR approval and implement dispatch",
+      "body": "## Summary\n\nIntake evaluates DoR on the issue body at label time; implement re-fetches title+body at dispatch time.\n\n## Acceptance criteria\n- [ ] Body edits after DoR approval are detected before the engine run\n- [ ] Drift is surfaced to maintainers via label + comment\n"
+    },
+    "trusted_comments": [
+      { "body": "some ordinary trusted comment with no marker", "created_at": "2026-10-17T09:00:00Z" }
+    ]
+  }
+}
