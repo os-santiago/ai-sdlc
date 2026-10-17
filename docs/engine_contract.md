@@ -102,13 +102,30 @@ Once these are satisfied, the engine is a first-class engine under the contract 
 
 ## Adapter Registry
 
-The adapter registry (`config/engine_adapters.json`) declares per-engine descriptors:
-- `binary`: path or name of the engine executable
-- `probe`: optional command to verify engine availability
-- `argvBuilder`: function that builds the argument vector from runtime inputs
-- `configRenderer`: function that renders the engine's config file from the runtime config
-- `exitCodeMap`: mapping from engine exit codes to pipeline classes
+The adapter registry (`config/engine_adapters.json`) is the single canonical
+adapter contract. It declares per-engine descriptors:
+
+- `binary`: path or name of the engine executable (`{ENGINE}_BINARY` overrides it at dispatch)
+- `probe`: argv that verifies engine availability
+- `capabilities`: declared capability flags returned by `probeCapabilities()`
+- `argvBuilder`: **declarative** argument-vector spec — `command` plus `args` with
+  whole-element `{placeholder}` tokens and a `substitution` contract
+  (`mode: argv-element`, `shell: never`, per-placeholder validation `pattern`
+  and `required`). It is data, never code: no serialized functions are stored
+  or evaluated.
+- `configRenderer`: descriptor for the engine's rendered config file
+- `exitCodeMap`: mapping from engine exit codes to pipeline classes, with a
+  mandatory `default` fallback
 - `manifestMap`: mapping for run manifest fields (if needed)
+
+`scripts/engine_adapter.js` is the canonical interpreter: it loads the
+registry, validates each descriptor, and resolves adapter objects exposing
+`getBinary()`, `buildArgv(values)` (atomic, pattern-validated placeholder
+substitution), `probeCapabilities()`, `classifyExitCode()`, `mapExitCode()`,
+and `mapManifest()`. Both runtime consumers share it — the container worker
+imports it directly, and the GHA path reaches the same class through
+`scripts/gha/engine-adapter-resolver.js`. There is no second registry or
+resolver implementation.
 
 Adding a descriptor registers a new engine without workflow changes.
 

@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 /**
- * Autonomous PR Worker - Refactored to use engine adapter resolver
- * 
- * This script runs the pipeline using the configured engine adapter.
- * It eliminates direct DEVIN_* environment reads and devin-specific argv construction.
+ * Autonomous PR Worker - runs the pipeline through the canonical engine
+ * adapter contract (config/engine_adapters.json via scripts/engine_adapter.js).
+ *
+ * There is no engine-specific logic here: the adapter resolves the binary,
+ * builds argv by validated placeholder substitution (values come from the
+ * {ENGINE}_{PLACEHOLDER} environment variables, e.g. DEVIN_MODEL,
+ * DEVIN_MANIFEST_FILE), and classifies exit codes from the shared registry.
  */
 
 const { spawn } = require('child_process');
