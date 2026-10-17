@@ -123,7 +123,7 @@ describe('per-stage engine selection (issue #205)', () => {
     assert.ok(ids, 'missing $defs.engine_id');
     // claude-code must be a contract-valid id (epic #152 certification
     // target) even before its adapter registry entry lands (issue #184).
-    for (const id of ['scc', 'devin', 'claude-code', 'codex', 'openhands']) {
+    for (const id of ['scc', 'devin', 'claude-code', 'codex', 'openhands', 'mimoclaw']) {
       assert.ok(ids.enum.includes(id), `engine_id enum missing ${id}`);
     }
   });
