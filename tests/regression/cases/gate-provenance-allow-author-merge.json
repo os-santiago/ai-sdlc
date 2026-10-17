@@ -1,0 +1,27 @@
+{
+  "id": "gate-provenance-allow-author-merge",
+  "type": "merge-gate",
+  "title": "same-repo head by a merge.allow_authors entry merges (issue #119 opt-in)",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "env": {
+      "REVIEW_MODE": "human",
+      "ALLOW_AUTHORS": "[\"dependabot[bot]\"]"
+    },
+    "pr": {
+      "number": 73, "title": "chore(deps): bump x", "isDraft": false,
+      "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
+      "headRefOid": "deadbeef0123456789abcdef0123456789abcdef",
+      "baseRefName": "main",
+      "labels": [],
+      "createdAt": "2026-10-17T11:00:00Z",
+      "comments": [],
+      "commits": [{ "committedDate": "2026-10-17T11:30:00Z" }],
+      "author": { "login": "dependabot[bot]", "is_bot": true, "type": "Bot" },
+      "isCrossRepository": false,
+      "headRepositoryOwner": { "login": "owner" },
+      "headRepository": { "name": "repo" }
+    },
+    "checks": [{ "name": "contract", "state": "SUCCESS", "bucket": "pass" }]
+  }
+}

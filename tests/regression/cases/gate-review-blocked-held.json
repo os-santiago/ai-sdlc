@@ -11,7 +11,11 @@
       "labels": [],
       "createdAt": "2026-10-17T11:00:00Z",
       "comments": [],
-      "commits": [{ "committedDate": "2026-10-17T11:20:00Z" }]
+      "commits": [{ "committedDate": "2026-10-17T11:20:00Z" }],
+      "author": { "login": "ai-sdlc-runtime[bot]", "is_bot": true, "type": "Bot" },
+      "isCrossRepository": false,
+      "headRepositoryOwner": { "login": "owner" },
+      "headRepository": { "name": "repo" }
     },
     "checks": [{ "name": "contract", "bucket": "pass" }],
     "trusted_comments": [

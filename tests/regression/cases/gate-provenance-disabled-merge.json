@@ -1,0 +1,27 @@
+{
+  "id": "gate-provenance-disabled-merge",
+  "type": "merge-gate",
+  "title": "merge.require_pipeline_provenance:false restores legacy any-author merge (issue #119 opt-out)",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "env": {
+      "REVIEW_MODE": "human",
+      "REQUIRE_PROV": "false"
+    },
+    "pr": {
+      "number": 74, "title": "feat: external work", "isDraft": false,
+      "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
+      "headRefOid": "deadbeef0123456789abcdef0123456789abcdef",
+      "baseRefName": "main",
+      "labels": [],
+      "createdAt": "2026-10-17T11:00:00Z",
+      "comments": [],
+      "commits": [{ "committedDate": "2026-10-17T11:30:00Z" }],
+      "author": { "login": "mallory", "is_bot": false, "type": "User" },
+      "isCrossRepository": true,
+      "headRepositoryOwner": { "login": "mallory" },
+      "headRepository": { "name": "repo" }
+    },
+    "checks": [{ "name": "contract", "state": "SUCCESS", "bucket": "pass" }]
+  }
+}

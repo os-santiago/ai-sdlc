@@ -13,7 +13,11 @@
       "comments": [
         { "body": "repair dispatched <!-- ai-sdlc:repair-signal sha=aaa1111 -->", "createdAt": "2026-10-17T11:30:00Z" }
       ],
-      "commits": []
+      "commits": [],
+      "author": { "login": "ai-sdlc-runtime[bot]", "is_bot": true, "type": "Bot" },
+      "isCrossRepository": false,
+      "headRepositoryOwner": { "login": "owner" },
+      "headRepository": { "name": "repo" }
     },
     "checks": [{ "name": "ci", "bucket": "fail" }]
   }

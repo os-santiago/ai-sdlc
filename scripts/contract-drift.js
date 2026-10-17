@@ -375,7 +375,13 @@ function evaluateDrift(model, opts = {}) {
   }
 
   // -- merge-checks-bypassed -----------------------------------------------------
-  if ((contract.autonomy || {}).merge_requires_checks !== false) {
+  // Effective switch (issue #120): merge.require_checks overrides the
+  // trust-ladder declaration when explicitly set; unset it inherits
+  // autonomy.merge_requires_checks (same rule resolve.py applies).
+  const mergeRequireChecks = (contract.merge && contract.merge.require_checks !== undefined)
+    ? contract.merge.require_checks !== false
+    : (contract.autonomy || {}).merge_requires_checks !== false;
+  if (mergeRequireChecks) {
     for (const pr of obs.mergedPrs) {
       if (rollupHasFailures(pr)) {
         find('merge-checks-bypassed', `pr:${pr.number}`, 'merge_requires_checks=true',

@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "escalated",
+    "reason": "provenance:untrusted-author"
+  },
+  "log": [
+    "decision: escalated (provenance:untrusted-author)"
+  ],
+  "exitCode": 0,
+  "error": null
+}

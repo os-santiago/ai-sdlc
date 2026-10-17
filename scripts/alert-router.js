@@ -55,6 +55,7 @@ const FAILURE_CLASSES = [
   'contract-error',
   'verify-failure',
   'security',
+  'provenance',
   'policy-hold',
   'unknown',
 ];
@@ -70,12 +71,13 @@ const DEFAULT_DEDUP_WINDOW_MINUTES = 0;
 const CLASS_PATTERNS = [
   { cls: 'contract-error', re: /scc:config-error|base-contract-error|contract.{0,40}(invalid|error|failed)|invalid.{0,20}contract/i },
   { cls: 'security', re: /secret[\s-]?scan|credential|leaked?|gitleaks|private[\s_-]?key|token.{0,15}(exposed|committed)/i },
+  { cls: 'provenance', re: /provenance|fork[\s-]?head|untrusted[\s-]?author/i },
   { cls: 'supply-chain', re: /supply[\s-]?chain|dep(?:endenc(?:y|ies)|s)?[\s-]?violat|dep[\s-]?update/i },
   { cls: 'repairs-exhausted', re: /repairs?-exhausted|repair budget exhausted/i },
   { cls: 'review-fix-failed', re: /review-fix-(stalled|not-dispatched|failed)|fix pass.{0,20}(stalled|failed)/i },
   { cls: 'review-blocked', re: /external-review-blocking|review[\s-]?blocked|changes[\s_-]?requested/i },
   { cls: 'repair-stalled', re: /repair-stalled/i },
-  { cls: 'checks-stalled', re: /pending-timeout|checks?[\s-]?(stalled|pending)|pending.{0,15}(>|timeout|cap)/i },
+  { cls: 'checks-stalled', re: /pending-timeout|no-checks|checks?[\s-]?(stalled|pending|absent|missing)|pending.{0,15}(>|timeout|cap)/i },
   { cls: 'conflict', re: /conflict/i },
   { cls: 'verify-failure', re: /post-merge|verify[\s-]?(fail|check|command)/i },
   { cls: 'policy-hold', re: /risk-critical|policy[\s-]?hold|unaccepted/i },

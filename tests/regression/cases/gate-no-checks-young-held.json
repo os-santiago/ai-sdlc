@@ -1,0 +1,24 @@
+{
+  "id": "gate-no-checks-young-held",
+  "type": "merge-gate",
+  "title": "mergeable PR with ZERO check-runs holds under merge.require_checks (issue #120)",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "env": { "PENDING_MAX": "60" },
+    "pr": {
+      "number": 75, "title": "feat: no ci yet", "isDraft": false,
+      "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
+      "headRefOid": "deadbeef0123456789abcdef0123456789abcdef",
+      "baseRefName": "main",
+      "labels": [],
+      "createdAt": "2026-10-17T11:30:00Z",
+      "comments": [],
+      "commits": [{ "committedDate": "2026-10-17T11:50:00Z" }],
+      "author": { "login": "ai-sdlc-runtime[bot]", "is_bot": true, "type": "Bot" },
+      "isCrossRepository": false,
+      "headRepositoryOwner": { "login": "owner" },
+      "headRepository": { "name": "repo" }
+    },
+    "checks": []
+  }
+}

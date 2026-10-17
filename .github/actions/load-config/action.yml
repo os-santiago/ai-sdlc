@@ -105,6 +105,18 @@ outputs:
   merge_skip_labels:
     description: 'merge.skip_labels (JSON array)'
     value: ${{ steps.resolve.outputs.merge_skip_labels }}
+  merge_require_checks:
+    description: 'merge.require_checks — zero-check fail-closed switch; unset resolves from autonomy.merge_requires_checks (issue #120)'
+    value: ${{ steps.resolve.outputs.merge_require_checks }}
+  merge_require_pipeline_provenance:
+    description: 'merge.require_pipeline_provenance — same-repo + allowlisted-author gate on automerge (issue #119)'
+    value: ${{ steps.resolve.outputs.merge_require_pipeline_provenance }}
+  merge_pipeline_author:
+    description: 'merge.pipeline_author — bot login the provenance gate always allows'
+    value: ${{ steps.resolve.outputs.merge_pipeline_author }}
+  merge_allow_authors:
+    description: 'merge.allow_authors (JSON array) — extra author logins the provenance gate may auto-merge'
+    value: ${{ steps.resolve.outputs.merge_allow_authors }}
   postmortem_reopen_min:
     description: 'postmortem.reopen_min — post-close recurrences before a closed canonical reopens (spec/postmortem-lifecycle.md)'
     value: ${{ steps.resolve.outputs.postmortem_reopen_min }}

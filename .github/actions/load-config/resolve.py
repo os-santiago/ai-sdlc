@@ -58,6 +58,10 @@ DEFAULTS = {
         "external_reviewer": "",
         "adversarial": {"enabled": True, "min_tier": "high", "max_attacks": 16, "max_seconds": 600},
     },
+    # merge.require_checks is deliberately absent: an unset value resolves
+    # post-merge from autonomy.merge_requires_checks (see resolve()), so the
+    # trust-ladder declaration remains the single point of truth unless the
+    # merge gate is overridden explicitly (issue #120).
     "merge": {
         "method": "squash",
         "delete_branch": True,
@@ -65,6 +69,12 @@ DEFAULTS = {
         "pending_max_minutes": 60,
         "grace_minutes": 10,
         "skip_labels": ["needs-human", "hold", "do-not-merge", "wip"],
+        # Automerge hardening (issues #119/#120): the provenance gate admits
+        # only same-repo heads authored by the pipeline app or an explicit
+        # allow_authors entry; everything else escalates.
+        "require_pipeline_provenance": True,
+        "pipeline_author": "ai-sdlc-runtime[bot]",
+        "allow_authors": [],
         "main_guard": {"enabled": True, "workflows": ["ci"], "max_age_hours": 72},
     },
     "postmortem": {"reopen_min": 2, "dedup_window_days": 90},
@@ -448,6 +458,18 @@ def resolve(repo_cfg, overrides, org_cfg=None):
         set_path(result, path, value)
         sources[path] = "input"
 
+    # merge.require_checks fallback (issue #120): when no layer set it, the
+    # resolved trust-ladder declaration (autonomy.merge_requires_checks, default
+    # true) is the operative default — a repo that declared checkless autonomy
+    # keeps it, and silence still fails closed.
+    if "merge.require_checks" not in sources:
+        set_path(result, "merge.require_checks",
+                 bool(result["autonomy"].get("merge_requires_checks", True)))
+        sources["merge.require_checks"] = (
+            "default" if sources.get("autonomy.merge_requires_checks") == "default"
+            else "autonomy"
+        )
+
     if not result.get("spec"):
         raise ContractError("resolved contract has no spec version")
     if result["engine"]["max_seconds"] < 60 or result["engine"]["max_steps"] < 10:
@@ -500,6 +522,10 @@ def flat_outputs(c):
         "max_repairs": str(c["merge"]["max_repairs"]),
         "pending_max_minutes": str(c["merge"]["pending_max_minutes"]),
         "merge_skip_labels": j(c["merge"]["skip_labels"]),
+        "merge_require_checks": "true" if c["merge"].get("require_checks", True) else "false",
+        "merge_require_pipeline_provenance": "true" if c["merge"].get("require_pipeline_provenance", True) else "false",
+        "merge_pipeline_author": c["merge"].get("pipeline_author") or "ai-sdlc-runtime[bot]",
+        "merge_allow_authors": j(c["merge"].get("allow_authors") or []),
         "postmortem_reopen_min": str(c["postmortem"]["reopen_min"]),
         "postmortem_dedup_window_days": str(c["postmortem"]["dedup_window_days"]),
         "main_guard_enabled": "true" if c["merge"].get("main_guard", {}).get("enabled", True) else "false",

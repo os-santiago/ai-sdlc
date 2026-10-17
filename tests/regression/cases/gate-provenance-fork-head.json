@@ -1,0 +1,23 @@
+{
+  "id": "gate-provenance-fork-head",
+  "type": "merge-gate",
+  "title": "cross-repo (fork) head escalates — a check-green fork PR never merges (issue #119)",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "pr": {
+      "number": 71, "title": "feat: innocuous", "isDraft": false,
+      "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
+      "headRefOid": "deadbeef0123456789abcdef0123456789abcdef",
+      "baseRefName": "main",
+      "labels": [],
+      "createdAt": "2026-10-17T11:00:00Z",
+      "comments": [],
+      "commits": [{ "committedDate": "2026-10-17T11:30:00Z" }],
+      "author": { "login": "mallory", "is_bot": false, "type": "User" },
+      "isCrossRepository": true,
+      "headRepositoryOwner": { "login": "mallory" },
+      "headRepository": { "name": "repo" }
+    },
+    "checks": [{ "name": "contract", "state": "SUCCESS", "bucket": "pass" }]
+  }
+}

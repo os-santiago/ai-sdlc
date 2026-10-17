@@ -14,7 +14,11 @@
         { "body": "fix attempt 1 <!-- ai-sdlc:repair-signal sha=aaa1111 -->", "createdAt": "2026-10-17T10:00:00Z" },
         { "body": "fix attempt 2 <!-- ai-sdlc:repair-signal sha=bbb2222 -->", "createdAt": "2026-10-17T11:00:00Z" }
       ],
-      "commits": []
+      "commits": [],
+      "author": { "login": "ai-sdlc-runtime[bot]", "is_bot": true, "type": "Bot" },
+      "isCrossRepository": false,
+      "headRepositoryOwner": { "login": "owner" },
+      "headRepository": { "name": "repo" }
     },
     "checks": [{ "name": "ci", "bucket": "fail" }]
   }

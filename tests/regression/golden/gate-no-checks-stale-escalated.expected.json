@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "escalated",
+    "reason": "no-checks"
+  },
+  "log": [
+    "decision: escalated (no-checks)"
+  ],
+  "exitCode": 0,
+  "error": null
+}

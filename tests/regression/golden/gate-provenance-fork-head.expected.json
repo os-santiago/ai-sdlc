@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "escalated",
+    "reason": "provenance:fork-head"
+  },
+  "log": [
+    "decision: escalated (provenance:fork-head)"
+  ],
+  "exitCode": 0,
+  "error": null
+}

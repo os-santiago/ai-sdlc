@@ -105,6 +105,15 @@ merge:
   max_repairs: 3
   pending_max_minutes: 60
   grace_minutes: 10
+  # Automerge hardening (issues #119/#120) — defaults are already the
+  # secure posture; declared here as the audit record. require_checks:
+  # a zero-check rollup is held/escalated, never merged. Provenance:
+  # only same-repo heads by the pipeline app or allow_authors merge.
+  require_checks: true
+  require_pipeline_provenance: true
+  pipeline_author: ai-sdlc-runtime[bot]
+  allow_authors:
+    - dependabot[bot]   # dep-update fast path stays autonomous
   skip_labels:
     - needs-human
     - hold
@@ -188,6 +197,7 @@ escalation:
   routes:
     contract-error:    {mentions: ["@Axel-DaMage"], labels: ["priority:P0"], channel: issue-comment}
     security:          {mentions: ["@Axel-DaMage"], labels: ["priority:P0"], channel: issue-comment}
+    provenance:        {mentions: ["@Axel-DaMage"], labels: ["priority:P0"], channel: issue-comment}
     supply-chain:      {mentions: ["@Axel-DaMage"], labels: ["priority:P1"], channel: issue-comment}
     verify-failure:    {mentions: ["@Axel-DaMage"], labels: ["priority:P1"], channel: issue-comment}
     repairs-exhausted: {mentions: ["@Axel-DaMage"], labels: ["priority:P1"], channel: issue-comment}

@@ -69,6 +69,12 @@ merge:
   max_repairs: 3
   pending_max_minutes: 60
   grace_minutes: 10
+  # Hardening gates (issues #119/#120, spec/risk-taxonomy.md): a public
+  # repo keeps both defaults — zero-check rollups never merge, and only
+  # same-repo heads by the pipeline bot or allow_authors may auto-merge
+  # (fork/external heads escalate to needs-human, never merge).
+  require_checks: true
+  require_pipeline_provenance: true
   skip_labels:
     - needs-human
     - hold
