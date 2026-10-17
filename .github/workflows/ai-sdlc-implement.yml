@@ -158,7 +158,7 @@ jobs:
       # is only ever exported to deterministic post-script steps.
       - name: Mint read-scoped forge token (engine boundary)
         id: app-token-read
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.AI_SDLC_APP_ID }}
           private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
@@ -628,7 +628,7 @@ jobs:
         # always(): the early-exit contract-error post-script below also
         # needs the write token when the engine never ran.
         if: always() && steps.creds.outputs.owner != ''
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.AI_SDLC_APP_ID }}
           private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}

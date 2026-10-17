@@ -118,7 +118,7 @@ jobs:
       - name: Mint ai-sdlc App installation token
         id: app-token
         if: ${{ !cancelled() }}
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         continue-on-error: true
         with:
           app-id: ${{ secrets.AI_SDLC_APP_ID }}
