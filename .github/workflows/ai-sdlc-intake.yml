@@ -297,6 +297,23 @@ jobs:
           fi
           node "$WORK/scripts/epic-decomposer.js" --repo "$REPO" --issue "$ISSUE" --json --github-output || true
 
+      # The DoR gate is decision logic (issue #127): canonical script at
+      # the runtime pin, fail-closed — an unavailable gate denies dispatch
+      # rather than waving an unvetted issue through.
+      - name: Fetch DoR gate (trusted runtime pin)
+        id: dor-fetch
+        if: steps.epic.outputs.is_epic != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
+        with:
+          files: scripts/dor-check.js
+          ref: ${{ inputs.runtime_ref }}
+          dest: ${{ runner.temp }}/ai-sdlc-dor
+          label: DoR gate
+          fallback: dispatch denied (gate unavailable)
+          required: 'true'
+
       - name: Validate DoR (R1–R6)
         id: dor
         if: steps.epic.outputs.is_epic != 'true'
@@ -311,49 +328,7 @@ jobs:
           set -euo pipefail
           # issue.json may already exist — the epic step fetches it first.
           [ -f issue.json ] || gh issue view "$ISSUE" -R "$REPO" --json number,title,body,labels > issue.json
-          node - <<'NODE'
-          const fs = require('fs');
-          const i = JSON.parse(fs.readFileSync('issue.json', 'utf8'));
-          const out = (k, v) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${k}=${v}\n`);
-          const labels = (i.labels || []).map(l => (l.name || l).toLowerCase());
-          const trigger = process.env.TRIGGER.toLowerCase();
-          const skip = [...JSON.parse(process.env.SKIP_LABELS || '[]'), process.env.NOT_READY]
-            .filter(Boolean).map(l => l.toLowerCase());
-          if (!labels.includes(trigger)) {
-            console.log(`issue does not carry the trigger label "${process.env.TRIGGER}" — not armed, skipping`);
-            out('dispatch', 'false'); out('armed', 'false'); out('failed', '');
-            out('dor_sha', '');
-            out('refine', process.env.REFINE_STATUS || 'skipped');
-            out('refine_fp', process.env.REFINE_FP || '');
-            process.exit(0);
-          }
-          const body = i.body || '';
-          const acSec = /##\s*(acceptance criteria|ac)\b/i.test(body)
-            ? body.split(/##\s*(?:acceptance criteria|ac)\b/i)[1] || '' : '';
-          const acItems = (acSec.match(/^\s*(?:-|\*|\d+\.)\s+/gm) || []).length;
-          const checks = {
-            'R1 conventional title': /^(feat|fix|docs|chore|refactor|perf|test|build|ci|security)(\(.+\))?: .{5,}/.test(i.title),
-            'R2 AC section present': acSec.trim().length > 0,
-            'R3 ≥1 AC item': acItems >= 1,
-            'R4 non-trivial body': body.trim().length >= 120,
-            'R5 no skip-label': !labels.some(l => skip.includes(l)),
-            'R6 no TBD in AC': !/\bTBD\b|\bTODO\b/i.test(acSec)
-          };
-          const failed = Object.entries(checks).filter(([, ok]) => !ok).map(([k]) => k);
-          console.log('DoR:', JSON.stringify(checks, null, 0));
-          out('dispatch', failed.length ? 'false' : 'true'); out('armed', 'true'); out('failed', failed.join('|'));
-          // DoR surface pin (issue #122): sha256 of the exact title+body
-          // this verdict evaluated. The outcome step stamps it on the issue
-          // as a trusted-author marker (`<!-- ai-sdlc:dor sha256=… -->`);
-          // implement re-hashes its dispatch-time fetch and holds the run
-          // on drift, so a body edited after approval can never reach the
-          // engine prompt. Recipe pinned by scripts/comment-markers.js —
-          // keep byte-identical to the verify side in ai-sdlc-implement.yml.
-          out('dor_sha', require('crypto').createHash('sha256').update(`${i.title || ''}\n${i.body || ''}`).digest('hex'));
-          // Refinement evidence rides the same ledger record (issue #197).
-          out('refine', process.env.REFINE_STATUS || 'skipped');
-          out('refine_fp', process.env.REFINE_FP || '');
-          NODE
+          node "$RUNNER_TEMP/ai-sdlc-dor/scripts/dor-check.js" --issue issue.json
 
       - name: Outcome → label + comment
         if: steps.dor.outputs.armed == 'true'
