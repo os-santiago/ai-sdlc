@@ -342,7 +342,7 @@ async function resolveManifestDeps(manifestDeps, fetchVersions) {
 
 async function fetchPackumentVersions(name, fetchJson, registryBase) {
   const base = registryBase || NPM_REGISTRY;
-  const j = await fetchJson(`${base}/${encodeURIComponent(name).replace('%40', '@')}`);
+  const j = await fetchJson(`${base}/${encodeURIComponent(name).replace(/%40/g, '@')}`);
   if (!j || j.__status === 404 || !j.versions) return [];
   return Object.keys(j.versions);
 }
