@@ -24,8 +24,31 @@ implements via `.ai-sdlc.yaml` at its root.
 
 ## Versioning
 
+**Declared version:** `spec/v1.0.0` — bumped in the same PR that changes
+`spec/**`; `.github/workflows/ai-sdlc-spec-tag.yml` verifies it against the
+diff classification and publishes the tag on merge to `main`.
+
 The spec is semver-tagged (`spec/vX.Y.Z` tags). Workflows pin to a spec
 version; breaking schema changes bump MAJOR and ship a migration note.
+
+Bump classification (`scripts/spec-version.js` — diff-aware, not just
+conventional commits):
+
+- **MAJOR** — removed/renamed spec file or schema field, newly required
+  field, narrowed enum/type, added or tightened constraint
+  (`minimum`↑, `maxLength`↓, `pattern`, `additionalProperties: false`,
+  dropped `anyOf`/`oneOf` branch, added `allOf`/`not`, …)
+- **MINOR** — new spec file, new optional field, widened enum/type,
+  loosened constraint
+- **PATCH** — docs-only (`.md`) or annotation-only edits
+  (`description`, `title`, `examples`, `default`, `$comment`)
+
+The commit signal still applies: a `type!:` / `BREAKING CHANGE` commit
+touching `spec/` forces MAJOR even when the structural diff looks additive
+(prose semantics a classifier cannot see). `--bump` overrides; the
+`ai-sdlc-spec-tag` workflow's `bump` dispatch input does the same
+server-side. Declared-vs-computed mismatches fail the run — a spec change
+that forgets its version bump never tags silently.
 
 ## Validation in CI
 
