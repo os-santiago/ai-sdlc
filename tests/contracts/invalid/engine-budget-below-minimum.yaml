@@ -1,0 +1,8 @@
+# expect: schema
+# match: less than the minimum
+# Bounded-everything floor — engine.max_seconds minimum is 60 and
+# max_steps minimum is 10. Sub-floor budgets are rejected by the schema
+# and again by the resolver's budget guard.
+spec: "1.0.0"
+engine:
+  max_seconds: 30

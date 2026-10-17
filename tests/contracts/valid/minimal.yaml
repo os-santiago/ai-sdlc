@@ -1,0 +1,4 @@
+# Valid fixture — the smallest conforming contract.
+# `spec` is the only required key; everything else resolves through
+# defaults (shadow-first autonomy, scc engine, empty verify surface).
+spec: "1.0.0"

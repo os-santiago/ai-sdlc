@@ -1,0 +1,9 @@
+# expect: schema
+# match: not one of
+# Enum violation — security.severity_matrix leaves are constrained to the
+# security_gate_outcome taxonomy (report-only|blocking-if-fix-available|
+# blocking). An invented verdict would silently weaken the gate.
+spec: "1.0.0"
+security:
+  severity_matrix:
+    pr:risk-low: napalm

@@ -1,0 +1,7 @@
+# expect: schema
+# match: Additional properties
+# Root additionalProperties:false — an undeclared top-level key is a hard
+# rejection in every load-config stage (the drift tripwire, issue #255).
+spec: "1.0.0"
+mystery_section:
+  enabled: true

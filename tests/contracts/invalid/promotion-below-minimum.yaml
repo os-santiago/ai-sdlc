@@ -1,0 +1,9 @@
+# expect: schema
+# match: less than the minimum
+# Below-minimum bounds — promotion.window floors at 10 completed runs
+# (spec/trust-ladder.md minimum evidence base) and clean_merges_threshold
+# at 1. Values under the floor are invalid, never clamped.
+spec: "1.0.0"
+promotion:
+  clean_merges_threshold: 0
+  window: 5

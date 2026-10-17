@@ -1,0 +1,8 @@
+# expect: schema
+# match: not one of
+# Enum violation — autonomy.level is the closed trust-ladder taxonomy
+# (spec/trust-ladder.md): shadow|suggest|auto-pr|auto-merge-low|
+# auto-merge-all|auto-deploy. Anything else is rejected, not clamped.
+spec: "1.0.0"
+autonomy:
+  level: sentient

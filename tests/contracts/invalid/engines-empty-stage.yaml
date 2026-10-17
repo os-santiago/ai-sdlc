@@ -1,0 +1,8 @@
+# expect: schema
+# match: not valid under any of the given schemas
+# Empty stage definition — the object form of $defs.stage_engine requires
+# at least one of engine|model (anyOf). `{}` fails both branches of the
+# oneOf and must be rejected, not resolved to a quiet default.
+spec: "1.0.0"
+engines:
+  implement: {}

@@ -1,0 +1,8 @@
+# expect: schema
+# match: not one of
+# Enum violation — engine.name is constrained to the certified adapter set
+# in $defs.engine_id. Unknown ids are rejected at contract time, not at
+# dispatch time.
+spec: "1.0.0"
+engine:
+  name: hal-9000

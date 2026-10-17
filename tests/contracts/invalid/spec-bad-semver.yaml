@@ -1,0 +1,5 @@
+# expect: schema
+# match: does not match
+# Pattern violation — spec must be strict MAJOR.MINOR.PATCH
+# (^\d+\.\d+\.\d+$): no v-prefix, no two-part versions, no suffixes.
+spec: "v1.0"
