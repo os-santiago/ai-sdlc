@@ -788,7 +788,7 @@ function main(argv) {
   const normalized = normalizeObserved(model, { startMs, endMs });
   const findings = evaluateDrift({ ...model, __normalized: normalized }, { startMs, endMs });
 
-  const client = a.client || ghClient();
+  const client = ghClient();
   const result = handleDrift({
     repo, findings, now: new Date(endMs), dryRun, labels: a.labels,
   }, client);
