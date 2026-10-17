@@ -40,6 +40,7 @@ engine only, no GitHub webhook adapter yet).
 | `ai-sdlc-verify.yml` | post-merge verify commands (resolved contract `verify.commands`); failure → canonical postmortem issue via `scripts/postmortem.js` — signature-deduped: open canonical comments, closed canonical reopens at `postmortem.reopen_min` (spec/postmortem-lifecycle.md) — or revert when enabled | post-merge |
 | `ai-sdlc-dep-update.yml` | scheduled dependency scan → vetted dep-update PR (`scripts/dep-update.js`): release-age gate, license allowlist, typosquat distance, OSV → one bounded consolidated PR + deduped flagged-for-human issue | `schedule` / `workflow_dispatch` / called |
 | `ai-sdlc-canary.yml` | scheduled end-to-end smoke of the intake→implement→PR loop: files a synthetic `<!-- ai-sdlc:canary -->` fixture issue, arms it with the contract trigger, observes `scc:queued`→`scc:pr-opened`, asserts PR/artifact/ledger shape, cleans up; failure → signature-deduped `postmortem` issue | `schedule` (daily) / `workflow_dispatch` (`mode`) |
+| `ai-sdlc-spec-tag.yml` | spec/v* semver machinery (`scripts/spec-version.js`): classifies the `spec/**` diff since the last `spec/v*` tag (breaking → MAJOR, additive → MINOR, editorial → PATCH), gates on the `**Declared version:**` marker in `spec/README.md`, and tags + releases on merge to `main` | `push`/`pull_request` (`spec/**` paths) / `workflow_dispatch` (`bump`, `dry_run`) |
 
 Every stage first runs the `load-config` composite action
 (`.github/actions/load-config/`) and acts only on the resolved contract —
@@ -1258,6 +1259,46 @@ Maintainer-dispatched release driver backed by `scripts/release-manager.js`
 - **CLI parity:** `node scripts/release-manager.js --repo OWNER/NAME
   [--bump B] [--spec-bump B|none] [--ref REF] [--publish] [--json]` —
   default is always a dry run; nothing mutates without `--publish`.
+
+## Spec tagger (`ai-sdlc-spec-tag.yml`)
+
+Diff-aware `spec/v*.*.*` machinery backed by `scripts/spec-version.js`
+(issue #134) — the code side of the semver contract spec/README.md
+documents. Where the release manager derives the spec bump from
+conventional commits alone, this workflow classifies the `spec/**` tree
+diff itself and gates it against the declared version.
+
+- **Triggers:** `pull_request` on `spec/**` (plan-only gate) · `push` to
+  `main` on `spec/**` (auto-tag on merge) · `workflow_dispatch`
+  (`bump` override, `dry_run` default true).
+- **Classification** — the highest severity across the diff wins:
+  - **MAJOR** — deleted/renamed spec file; removed or renamed schema
+    property; newly `required` field; narrowed `enum`/`type`; added or
+    tightened constraint (`minimum`↑/`maximum`↓, `pattern`, `format`,
+    `additionalProperties:false`, `uniqueItems:true`, dropped
+    `anyOf`/`oneOf` branch, added `allOf`/`not`, removed keyword).
+  - **MINOR** — new spec file; new optional property; widened
+    `enum`/`type`; relaxed bound; removed constraint.
+  - **PATCH** — `.md` edits and annotation-only keyword changes
+    (`description`, `title`, `examples`, `default`, `$comment`, …).
+  - Prose is editorial to a structural classifier: a `type!:` /
+    `BREAKING CHANGE` commit touching `spec/` still forces MAJOR, and
+    `--bump`/the dispatch input overrides either way.
+- **Declared-version gate:** `spec/README.md` carries
+  `**Declared version:** spec/vX.Y.Z`. The plan fails closed when the
+  declared version ≠ the computed next tag — so a spec-changing PR must
+  carry its version bump in the same diff, and a merge can never tag a
+  version the docs don't declare.
+- **Publish:** `contents:write`-only job — annotated tag → push →
+  `POST /repos/{repo}/releases` with the per-file classification as notes;
+  MAJOR releases embed the migration-note template AGENTS.md requires.
+  Idempotent — an existing tag reports `exists` and exits green.
+- **Bootstrap:** with no `spec/v*` tag at all there is nothing to diff —
+  the declared version IS the first tag (the inaugural spec/v1.0.0 is
+  cut by the merge that lands this machinery).
+- **CLI parity:** `node scripts/spec-version.js [--base TAG] [--bump B]
+  [--ref REF] [--readme FILE] [--no-verify-declared] [--publish] [--json]`
+  — default is a dry run; nothing mutates without `--publish`.
 
 ## Alert routing (failure-class → maintainer)
 

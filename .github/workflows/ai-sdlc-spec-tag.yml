@@ -1,0 +1,122 @@
+# ai-sdlc-spec-tag — spec/vX.Y.Z tagging machinery (issue #134)
+#
+# Makes the documented semver contract real (spec/README.md, AGENTS.md):
+# every spec/** change is classified and the next spec/v* tag is gated on
+# the declared version in spec/README.md.
+#
+#   plan    (contents: read) — runs on every trigger. Computes the diff
+#     classification (breaking → MAJOR, additive → MINOR, editorial →
+#     PATCH) plus the conventional-commit signal, and verifies that the
+#     "**Declared version:** spec/vX.Y.Z" marker in spec/README.md equals
+#     the computed next tag. On a PR this is the gate: a spec change must
+#     carry its version bump in the same diff.
+#
+#   publish (contents: write) — runs on push to main (auto-tag on merge)
+#     or on manual dispatch with dry_run=false. Annotates + pushes the tag
+#     and creates the GitHub release; MAJOR bumps carry the migration-note
+#     template required by AGENTS.md. Idempotent: an existing tag exits
+#     green as `exists`. Manual `bump` input overrides the computed level.
+#
+# Bootstrap: with no spec/v* tag at all, the declared version IS the first
+# tag — merging a spec change publishes spec/v<declared>.
+name: ai-sdlc-spec-tag
+
+on:
+  push:
+    branches: [main]
+    paths: ['spec/**']
+  pull_request:
+    paths: ['spec/**']
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'spec/v* bump override (auto = compute from the spec diff)'
+        type: choice
+        options: [auto, major, minor, patch]
+        default: auto
+      dry_run:
+        description: 'plan + verify only — no tag, push, or release'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-sdlc-spec-tag
+  cancel-in-progress: false   # serialized — a tag publish never races a rerun
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read        # history + tags only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 0     # full history + tags: diff base is the last spec tag
+
+      - name: Fetch all tags (spec base detection)
+        run: git fetch --tags --force origin
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
+        with:
+          node-version: 22
+
+      - name: Classify spec diff + verify declared version
+        env:
+          BUMP: ${{ github.event.inputs.bump || 'auto' }}
+        run: |
+          set -euo pipefail
+          node scripts/spec-version.js --bump "$BUMP" --json \
+            | tee "$RUNNER_TEMP/spec-plan.json"
+          {
+            echo '### spec/v* plan'
+            echo ''
+            echo '```json'
+            cat "$RUNNER_TEMP/spec-plan.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: plan
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)
+    permissions:
+      contents: write       # tag push + release create
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all tags (spec base detection)
+        run: git fetch --tags --force origin
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
+        with:
+          node-version: 22
+
+      - name: Publish spec tag + release
+        id: spec
+        env:
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          BUMP: ${{ github.event.inputs.bump || 'auto' }}
+        run: |
+          set -euo pipefail
+          # Detached HEAD on checkout — resolve the ref to a SHA so it is
+          # valid both as `git tag` target and release target_commitish.
+          SHA=$(git rev-parse HEAD)
+          node scripts/spec-version.js --repo "$GITHUB_REPOSITORY" \
+            --bump "$BUMP" --ref "$SHA" --publish --json --github-output \
+            | tee "$RUNNER_TEMP/spec-release.json"
+          {
+            echo '### spec/v* release'
+            echo ''
+            echo '```json'
+            cat "$RUNNER_TEMP/spec-release.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

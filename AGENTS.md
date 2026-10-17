@@ -90,7 +90,10 @@ The cutover executes only after the evidence gate in epic #30 passes.
   `docs/<slug>`. PRs reference issues (`Closes #N` / `Refs #N`), squash
   merge, delete branch.
 - Spec changes are semver-sensitive: a breaking schema change = MAJOR bump
-  of `spec/v*` tags + migration note.
+  of `spec/v*` tags + migration note. Enforced by
+  `scripts/spec-version.js` + `ai-sdlc-spec-tag.yml` — every `spec/**` PR
+  must bump the `**Declared version:**` marker in `spec/README.md` to the
+  classified next tag.
 
 ## Validate before opening a PR
 
