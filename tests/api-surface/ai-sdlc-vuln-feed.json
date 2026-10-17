@@ -1,0 +1,45 @@
+{
+  "inputs": {
+    "dry_run": {
+      "default": false,
+      "description": "scan + report only — never files issues",
+      "type": "boolean"
+    },
+    "max_findings": {
+      "default": 5,
+      "description": "max new issues filed per repo per run",
+      "type": "number"
+    },
+    "repo": {
+      "default": "",
+      "description": "owner/name to scan (blank = repos input / caller repo fleet list)",
+      "type": "string"
+    },
+    "repos": {
+      "default": "",
+      "description": "csv of owner/name to scan (blank = caller repo config/fleet.json)",
+      "type": "string"
+    },
+    "runtime_ref": {
+      "default": "main",
+      "description": "ref of os-santiago/ai-sdlc to fetch scripts/vuln-feed.js + scripts/dep-update.js from — pin to the same ref as this workflow",
+      "type": "string"
+    }
+  },
+  "outputs": {
+    "action": {
+      "description": "filed | deduped | clean | skipped | mixed — aggregate over scanned repos",
+      "value": "${{ jobs.scan.outputs.action }}"
+    },
+    "filed": {
+      "description": "advisory issues filed this run (all repos)",
+      "value": "${{ jobs.scan.outputs.filed }}"
+    },
+    "findings": {
+      "description": "unique advisory+package findings observed (all repos)",
+      "value": "${{ jobs.scan.outputs.findings }}"
+    }
+  },
+  "secrets": {},
+  "workflow": "ai-sdlc-vuln-feed.yml"
+}
