@@ -40,7 +40,10 @@ verify:
 # ai-sdlc-release attaches it to the release as an attested asset.
 # Boolean floor — an org baseline's `true` pins it on org-wide.
 security:
-  sbom: true
+  sbom:
+    enabled: true
+    format: cyclonedx
+    attach_to: [pr, release]
 
 # Ready-queue prioritization (issue #162, epic #147): the sweep scores every
 # armed issue — trigger label present, no veto label per spec/labels.md —

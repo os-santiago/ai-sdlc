@@ -52,7 +52,8 @@ jobs:
           npx -y -q js-yaml .ai-sdlc.yaml > "$RUNNER_TEMP/contract.json"
           node -e '
             const c = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")) || {};
-            console.log("enabled=" + String((c.security || {}).sbom === true));
+            const sbom = (c.security || {}).sbom;
+            console.log("enabled=" + String(sbom === true || (sbom || {}).enabled === true));
           ' "$RUNNER_TEMP/contract.json" >> "$GITHUB_OUTPUT"
 
       - name: Generate CycloneDX SBOM (npm surface)
