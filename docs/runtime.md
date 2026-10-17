@@ -31,6 +31,7 @@ engine only, no GitHub webhook adapter yet).
 | `ai-sdlc-sweep.yml` | scheduled stall-sweep: enumerates open pipeline PRs and feeds each to `ai-sdlc-automerge.yml` — no green-idle PRs | `schedule` (every 30 min) / `workflow_dispatch` |
 | `ai-sdlc-metrics.yml` | scheduled SLO report (`scripts/slo-metrics.js`): time-to-merge, iterations-to-green, escalation rate → step summary + JSON/Prometheus artifacts | `schedule` (daily) / `workflow_dispatch` / `workflow_call` |
 | `ai-sdlc-drift.yml` | scheduled contract-drift sweep (`scripts/contract-drift.js`): declared `.ai-sdlc.yaml` vs observed runs/labels/merges → one canonical deduped issue per repo | `schedule` (daily) / `workflow_dispatch` / `workflow_call` |
+| `ai-sdlc-sweep.yml` | scheduled stall-sweep: enumerates open pipeline PRs and feeds each to `ai-sdlc-automerge.yml` — no green-idle PRs; also repairs issue-label contradictions (skip-label vetoing `ready-to-implement`, spec/labels.md) via `scripts/label-contradiction.js` | `schedule` (every 30 min) / `issues.labeled` / `workflow_dispatch` |
 | `ai-sdlc-ci-repair.yml` | bounded repair loop on red checks: failing-check log tails → `scc` headless on the PR head → commit + push; one comment per attempt; `needs-human` after `max_repairs` | `check_run.completed` (failure) / `workflow_dispatch` / automerge `repair-signaled` |
 | `ai-sdlc-verify.yml` | post-merge verify commands (resolved contract `verify.commands`); failure → canonical postmortem issue via `scripts/postmortem.js` — signature-deduped: open canonical comments, closed canonical reopens at `postmortem.reopen_min` (spec/postmortem-lifecycle.md) — or revert when enabled | post-merge |
 | `ai-sdlc-dep-update.yml` | scheduled dependency scan → vetted dep-update PR (`scripts/dep-update.js`): release-age gate, license allowlist, typosquat distance, OSV → one bounded consolidated PR + deduped flagged-for-human issue | `schedule` / `workflow_dispatch` / called |
@@ -737,6 +738,33 @@ pipeline PR stays open unresolved** — every one is either merged or carries
   is 1 min (discover) + 1 min per PR fed to the gate, so
   `48 × (1 + N)` runner-min/day for N actionable PRs (idle repo ≈ 48 min/day;
   hard ceiling `48 × 21` ≈ 1,008 min/day). Free on public repos.
+
+### Label-contradiction repair (issue #200)
+
+A forbidden label pair on an issue — e.g. a skip label coexisting with
+`ready-to-implement` — is a pipeline defect, never a legitimate state
+(spec/labels.md → "Forbidden combinations" / "Drift rule"). The sweep's
+`label-repair` job runs `scripts/label-contradiction.js`:
+
+- **Triggers:** every `issues.labeled` event (repairs only that issue —
+  the label that just landed may have created the pair) plus the scheduled
+  / dispatched sweep (`≤200` open issues per run; `workflow_dispatch` input
+  `issue_number` scopes to one issue).
+- **Forbidden set:** `labels.state_machine.veto_pairs` ∪ every
+  `triggers.skip_labels` entry vetoing `triggers.issue_label`, plus the
+  derived precedence rules (hold > refinement-hold > run-state > trigger)
+  resolved from the contract — labels are bindings, not constants.
+- **Repair is label-only:** the loser is stripped (`gh issue edit
+  --remove-label`), the winner survives, and an audit comment stamped
+  `<!-- ai-sdlc:label-veto -->` records the ISO timestamp and the vetoing
+  label(s). The job never dispatches and never touches unrelated labels.
+- **Bounded drift:** prior repairs are counted from marker comments; a
+  pair that keeps reappearing is escalated to `needs-human` with cause
+  `label-drift-loop` instead of being fought silently (default cap: 2
+  prior repairs).
+- **Consumer repos:** the job pulls the script from
+  `os-santiago/ai-sdlc@main` when the consumer repo doesn't vendor it; a
+  vendored `scripts/label-contradiction.js` always wins.
 
 ### Consuming repos
 

@@ -20,6 +20,11 @@ name: ai-sdlc-sweep
 on:
   schedule:
     - cron: '7,37 * * * *'
+  issues:
+    # Label-contradiction repair is also event-driven (issue #200): a label
+    # that just landed may have created a forbidden pair — repair it now
+    # instead of waiting for the next scheduled pass.
+    types: [labeled]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -30,6 +35,10 @@ on:
         description: 'PRs fed to the gate per run (capped at 20)'
         type: number
         default: 20
+      issue_number:
+        description: 'repair only this issue (blank = all open issues)'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -84,6 +93,8 @@ jobs:
             || echo "::warning title=main-guard::sentinel evaluation failed — fail-open"
 
   discover:
+    # PR stall-sweep — skipped on `issues` events (label-repair owns those).
+    if: github.event_name != 'issues'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -159,3 +170,72 @@ jobs:
       pending_max_minutes: ${{ fromJSON(needs.discover.outputs.pending_max_minutes) }}
       merge_method: ${{ needs.discover.outputs.merge_method }}
     secrets: inherit
+
+  label-repair:
+    # Issue-label contradiction repair (issue #200; spec/labels.md →
+    # "Forbidden combinations" / "Drift rule"): a skip/blocker label
+    # coexisting with the dispatch trigger is a pipeline defect — veto,
+    # strip the loser, post the audit comment. Event-driven on
+    # `issues.labeled` (repairs only that issue) and bound-swept on
+    # schedule/dispatch (≤200 open issues per run).
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .ai-sdlc.yaml
+            scripts/label-contradiction.js
+          sparse-checkout-cone-mode: false
+
+      - name: Fetch repair script from the runtime repo (when not vendored)
+        # Consumer repos carry only .ai-sdlc.yaml — pull the canonical
+        # script from the runtime repo. A vendored copy always wins, so a
+        # fork/PR can override it.
+        if: ${{ hashFiles('scripts/label-contradiction.js') == '' }}
+        env:
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p scripts
+          gh api 'repos/os-santiago/ai-sdlc/contents/scripts/label-contradiction.js?ref=main' \
+            -H 'Accept: application/vnd.github.raw' > scripts/label-contradiction.js
+
+      - name: Repair label contradictions on open issues
+        env:
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          EVENT_ISSUE: ${{ github.event.issue.number }}
+          ONLY_ISSUE: ${{ inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          if [ -f .ai-sdlc.yaml ]; then
+            yq -o=json '.' .ai-sdlc.yaml > contract.json
+          else
+            echo '{}' > contract.json   # no contract → canonical-name defaults
+          fi
+          ARGS=(--repo "$REPO" --contract contract.json --apply --json --github-output)
+          if [ "$EVENT" = "issues" ]; then
+            ARGS+=(--issue "$EVENT_ISSUE")
+          elif [ -n "$ONLY_ISSUE" ]; then
+            ARGS+=(--issue "$ONLY_ISSUE")
+          else
+            ARGS+=(--sweep --max 200)
+          fi
+          node scripts/label-contradiction.js "${ARGS[@]}" | tee repairs.json
+          node -e '
+            const fs = require("fs");
+            const r = JSON.parse(fs.readFileSync("repairs.json", "utf8"));
+            const repairs = r.repairs || (r.contradictions ? [r] : []);
+            const fixed = typeof r.repaired === "number" ? r.repaired : (r.repaired ? 1 : 0);
+            const lines = [
+              "### ai-sdlc label-contradiction repair",
+              `issues scanned: ${r.scanned ?? 1} · contradictions: ${r.contradictions || 0} · repaired: ${fixed}`,
+              ...repairs.map((x) => `- #${x.issue}: removed \`${(x.removed || []).join("`, `")}\` — vetoed by \`${(x.vetoes || []).join("`, `")}\`${x.escalated ? " · escalated needs-human (label-drift-loop)" : ""}${x.error ? ` · ERROR: ${x.error}` : ""}`),
+            ];
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
+          '
