@@ -35,6 +35,21 @@ verify:
     - sanity
   timeout_seconds: 600
 
+# Dependency-update worker (issue #177): internal app = aggressive.
+# Latest-target scans, patch+minor auto-land — majors still flag human.
+dependencies:
+  enabled: true
+  ecosystems: [npm]
+  cadence: daily
+  min_release_age_days: 7
+  target: latest
+  include_dev: true
+  auto_kinds: [patch, minor]
+  max_updates: 20
+  branch: chore/dep-updates
+  labels: [dependencies, ai-sdlc]
+  egress_profile: npm-vet
+
 review:
   mode: hybrid            # AI reviews every PR; humans spot-check
   ai_reviewer:

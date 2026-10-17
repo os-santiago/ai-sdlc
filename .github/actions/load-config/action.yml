@@ -135,6 +135,9 @@ outputs:
   review_external_reviewer:
     description: 'review.external_reviewer — external reviewer slug prefix; empty = AI-only path'
     value: ${{ steps.resolve.outputs.review_external_reviewer }}
+  dep_updates:
+    description: 'resolved dependencies section (JSON object: enabled, ecosystems, cadence, min_release_age_days, target, auto_kinds, max_updates, branch, labels, egress_profile — issue #177)'
+    value: ${{ steps.resolve.outputs.dep_updates }}
   escalation_label:
     value: ${{ steps.resolve.outputs.escalation_label }}
   labels:

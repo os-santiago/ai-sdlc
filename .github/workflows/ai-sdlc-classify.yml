@@ -136,6 +136,13 @@ jobs:
             echo "risk_tier=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # The dep-diff fast path (issue #177) needs scripts/dep-update.js
+          # alongside the classifier — optional: older pins skip it and dep
+          # surfaces stay on the generic (high) path. Fail-safe upward.
+          gh api "repos/os-santiago/ai-sdlc/contents/scripts/dep-update.js?ref=$RUNTIME_REF" \
+            -H "Accept: application/vnd.github.raw" > "$WORK/dep-update.js" 2>/dev/null \
+            && node --check "$WORK/dep-update.js" 2>/dev/null \
+            || rm -f "$WORK/dep-update.js"
           node --check "$WORK/risk-classifier.js"
 
           # Bounded inputs: REST pulls files (paginated) + the unified diff

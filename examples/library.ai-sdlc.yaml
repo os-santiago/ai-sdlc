@@ -34,6 +34,21 @@ verify:
   required_checks: []
   timeout_seconds: 900
 
+# Dependency-update worker (issue #177): library archetype = conservative.
+# Patch bumps only may auto-land; minors/majors flag for human review.
+dependencies:
+  enabled: true
+  ecosystems: [npm]
+  cadence: weekly
+  min_release_age_days: 7
+  target: wanted
+  include_dev: true
+  auto_kinds: [patch]
+  max_updates: 10
+  branch: chore/dep-updates
+  labels: [dependencies, ai-sdlc]
+  egress_profile: npm-vet
+
 review:
   mode: ai
   ai_reviewer:

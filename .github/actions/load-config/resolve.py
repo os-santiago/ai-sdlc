@@ -35,6 +35,19 @@ DEFAULTS = {
         "authorized_labelers": [],
     },
     "verify": {"commands": [], "required_checks": [], "timeout_seconds": 900},
+    "dependencies": {
+        "enabled": False,
+        "ecosystems": ["npm"],
+        "cadence": "daily",
+        "min_release_age_days": 7,
+        "target": "wanted",
+        "include_dev": True,
+        "auto_kinds": ["patch", "minor"],
+        "max_updates": 10,
+        "branch": "chore/dep-updates",
+        "labels": ["dependencies", "ai-sdlc"],
+        "egress_profile": "npm-vet",
+    },
     "review": {
         "mode": "ai",
         "ai_reviewer": {"model": None, "inline_comments": True, "incremental": True},
@@ -98,6 +111,10 @@ OVERRIDABLE = {
     "review.max_fix_iterations": "int",
     "review.wait_max_minutes": "int",
     "review.external_reviewer": "str",
+    "dependencies.target": "enum:wanted,latest",
+    "dependencies.max_updates": "int",
+    "dependencies.min_release_age_days": "int",
+    "dependencies.egress_profile": "str",
 }
 
 
@@ -439,6 +456,7 @@ def flat_outputs(c):
         "review_max_fix_iterations": str(c["review"]["max_fix_iterations"]),
         "review_wait_max_minutes": str(c["review"]["wait_max_minutes"]),
         "review_external_reviewer": c["review"].get("external_reviewer") or "",
+        "dep_updates": j(c.get("dependencies") or {}),
         "escalation_label": c["escalation"]["label"],
         "labels": j(labels),
         "label_queued": labels.get("queued", ""),

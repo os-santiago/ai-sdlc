@@ -1,0 +1,511 @@
+# ai-sdlc-dep-update — scheduled dependency scan → vetted dep-update PRs
+# (issue #177, epic #150)
+#
+# The GHA port of Hermes dep_update_worker.js + dep_vetter.js: a scheduled
+# run enumerates outdated npm deps, vets each candidate target under the
+# resolved `dependencies` contract (release-age gate, license allowlist,
+# typosquat distance, OSV — the supply-chain hygiene Dependabot never
+# reasons about), lands the bounded vetted set on ONE consolidated PR, and
+# flags majors / unknown specs / any-finding updates for human review in a
+# deduped issue. Flagged updates are never auto-landed.
+#
+# The PR goes through the normal pipeline path end-to-end: the `ai-sdlc`
+# label marks it pipeline-managed for review/automerge, and the canonical
+# risk classifier's dep fast-path maps the vetted manifest/lockfile-only
+# patch|minor diff to `pr:risk-low` (spec/risk-taxonomy.md). Majors,
+# new direct deps, non-dep files and unparseable diffs never take that
+# path — fail-closed.
+#
+# Vetting fetches are bounded by the contract's named egress profile
+# (`dependencies.egress_profile`, default `npm-vet` = registry.npmjs.org +
+# api.osv.dev); registry metadata is untrusted input
+# (spec/injection-defense.md T3) — it lands in the PR body only as
+# markdown-escaped data, never as instructions.
+#
+# Triggers: `schedule` (dogfooded self-run on this repo), `workflow_dispatch`
+# (manual scan, `dry_run` supported), and `workflow_call` so consumer repos
+# wire their own cadence from a thin caller. App-token pushes re-fire CI,
+# classify and review (issue #26 — fail-closed, no PAT/GITHUB_TOKEN
+# fallback).
+name: ai-sdlc-dep-update
+
+on:
+  schedule:
+    - cron: '41 5 * * *'        # daily 05:41 UTC — off the top of the hour
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'scan + vet only — no branch, PR or issue mutations'
+        type: boolean
+        default: false
+      max_updates:
+        description: 'updates landed in the consolidated PR (-1 = contract dependencies.max_updates)'
+        type: number
+        default: -1
+      target:
+        description: 'wanted | latest (empty = contract dependencies.target)'
+        type: string
+        default: ''
+  workflow_call:
+    inputs:
+      repo:
+        type: string
+        required: true
+      base:
+        description: 'base branch the scan and the PR target'
+        type: string
+        default: 'main'
+      dry_run:
+        description: 'scan + vet only — no mutations'
+        type: boolean
+        default: false
+      max_updates:
+        description: 'override; -1 = contract dependencies.max_updates'
+        type: number
+        default: -1
+      target:
+        description: 'override; empty = contract dependencies.target'
+        type: string
+        default: ''
+      org_config:
+        description: 'org baseline contract ref owner/repo[/path][@ref] — org floor per spec/org-policy.md'
+        type: string
+        default: ''
+      runtime_ref:
+        description: 'ref of os-santiago/ai-sdlc to fetch scripts/dep-update.js from — pin to the same ref as this workflow'
+        type: string
+        default: 'main'
+      ledger_head:
+        description: 'upstream run-ledger chain head (issue #196); empty = genesis segment'
+        type: string
+        default: ''
+    outputs:
+      action:
+        description: 'open-pr | existing-pr | flagged | flagged-only | none | skipped | dry-run'
+        value: ${{ jobs.update.outputs.action }}
+      pr_number:
+        description: 'consolidated dep-update PR number (empty when none opened)'
+        value: ${{ jobs.update.outputs.pr_number }}
+      updates:
+        description: 'updates landed in the batch'
+        value: ${{ jobs.update.outputs.updates }}
+      flagged:
+        description: 'updates flagged for human review (not landed)'
+        value: ${{ jobs.update.outputs.flagged }}
+      ledger_head:
+        description: 'sealed run-ledger chain head for this scan (issue #196)'
+        value: ${{ jobs.update.outputs.ledger_head }}
+    secrets:
+      AI_SDLC_APP_ID:
+        description: 'ai-sdlc GitHub App id — mints the per-run installation token used for all gh auth + pushes (fail-closed when unset; issue #26)'
+        required: true
+      AI_SDLC_APP_PRIVATE_KEY:
+        description: 'ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID'
+        required: true
+      AI_SDLC_LEDGER_KEY:
+        description: 'run-ledger signing key (PEM; Ed25519/RSA) — seals stage evidence; absent = unsigned seal (issue #196)'
+        required: false
+
+env:
+  REPO: ${{ inputs.repo || github.repository }}
+  BASE: ${{ inputs.base || 'main' }}
+
+# Every gh call + push uses the minted ai-sdlc App installation token — the
+# job's GITHUB_TOKEN carries no scopes (fail-closed, issue #26).
+permissions: {}
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      # Never cancel mid-push; at most one scan per repo at a time.
+      group: ai-sdlc-dep-update-${{ env.REPO }}
+      cancel-in-progress: false
+    outputs:
+      action: ${{ steps.out.outputs.action }}
+      pr_number: ${{ steps.pr.outputs.number }}
+      updates: ${{ steps.plan.outputs.updates }}
+      flagged: ${{ steps.plan.outputs.flagged }}
+      ledger_head: ${{ steps.seal.outputs.head || steps.ledger.outputs.head }}
+    steps:
+      - name: Verify ai-sdlc App credentials
+        id: creds
+        env:
+          APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          case "$REPO" in */*) ;; *)
+            echo "::error title=ai-sdlc auth::repo input '$REPO' is not owner/name" >&2
+            exit 1 ;;
+          esac
+          if [ -z "${APP_ID:-}" ] || [ -z "${APP_PRIVATE_KEY:-}" ]; then
+            echo "::error title=ai-sdlc auth::AI_SDLC_APP_ID and AI_SDLC_APP_PRIVATE_KEY must be configured — the ai-sdlc GitHub App is the only pipeline identity for pushes/PRs/labels (fail-closed: no PAT or GITHUB_TOKEN fallback). Install the App on $REPO and add the org secrets; see docs/runtime.md (issue #26)."
+            exit 1
+          fi
+          {
+            echo "owner=${REPO%%/*}"
+            echo "repo_name=${REPO##*/}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Mint ai-sdlc App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.AI_SDLC_APP_ID }}
+          private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+          owner: ${{ steps.creds.outputs.owner }}
+          repositories: ${{ steps.creds.outputs.repo_name }}
+
+      - name: Resolve contract (.ai-sdlc.yaml)
+        id: contract
+        uses: os-santiago/ai-sdlc/.github/actions/load-config@main
+        with:
+          repo: ${{ env.REPO }}
+          ref: ${{ env.BASE }}
+          checkout: 'true'
+          token: ${{ steps.app-token.outputs.token }}
+          org-config: ${{ inputs.org_config || '' }}
+          overrides: >-
+            {"dependencies.max_updates": ${{ inputs.max_updates || -1 }},
+             "dependencies.target": ${{ toJSON(inputs.target || '') }}}
+
+      - name: Read resolved dependencies config
+        id: cfg
+        env:
+          DEP: ${{ steps.contract.outputs.dep_updates }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+        run: |
+          set -euo pipefail
+          echo "$DEP" | jq '{ecosystems, cadence, min_release_age_days, target, include_dev, auto_kinds, max_updates, branch, labels, egress_profile}'
+          ENABLED=$(jq -r '.enabled // false' <<<"$DEP")
+          {
+            echo "enabled=$ENABLED"
+            echo "ecosystems=$(jq -rc '.ecosystems // ["npm"]' <<<"$DEP")"
+            echo "min_age=$(jq -r '.min_release_age_days // 7' <<<"$DEP")"
+            echo "target=$(jq -r '.target // "wanted"' <<<"$DEP")"
+            echo "include_dev=$(jq -r '.include_dev // true' <<<"$DEP")"
+            echo "auto_kinds=$(jq -r '.auto_kinds // ["patch","minor"] | join(",")' <<<"$DEP")"
+            echo "max_updates=$(jq -r '.max_updates // 10' <<<"$DEP")"
+            echo "branch=$(jq -r '.branch // "chore/dep-updates"' <<<"$DEP")"
+            echo "labels=$(jq -r '.labels // ["dependencies","ai-sdlc"] | join(",")' <<<"$DEP")"
+            echo "egress=$(jq -r '.egress_profile // "npm-vet"' <<<"$DEP")"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### ai-sdlc dep-update — config"
+            echo "- repo: \`$REPO\` base: \`$BASE\` enabled: \`$ENABLED\` dry_run: \`$DRY_RUN\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$ENABLED" != "true" ]; then
+            echo "action=skipped" >> "$GITHUB_OUTPUT"
+            echo "reason=disabled" >> "$GITHUB_OUTPUT"
+            echo "- action: \`skipped\` (dependencies.enabled is not true)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! jq -e 'index("npm")' <<<"$(jq -c '.ecosystems // ["npm"]' <<<"$DEP")" >/dev/null; then
+            echo "action=skipped" >> "$GITHUB_OUTPUT"
+            echo "reason=no-npm-ecosystem" >> "$GITHUB_OUTPUT"
+            echo "- action: \`skipped\` (ecosystems excludes npm — v1 implements npm only)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "action=continue" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repo
+        if: steps.cfg.outputs.action == 'continue'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.REPO }}
+          ref: ${{ env.BASE }}
+          token: ${{ steps.app-token.outputs.token }}
+          # Keep the push token out of .git/config — registry metadata and
+          # npm output (untrusted input) is read in this workspace.
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        if: steps.cfg.outputs.action == 'continue'
+        with:
+          node-version: '22'
+
+      - name: Fetch dep-update worker from the runtime pin
+        if: steps.cfg.outputs.action == 'continue'
+        id: worker
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RUNTIME_REF: ${{ inputs.runtime_ref || 'main' }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-dep-update"
+          mkdir -p "$WORK"
+          # Trusted code only: the worker comes from the runtime repo pin —
+          # never from the scanned repo's checkout.
+          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/dep-update.js?ref=$RUNTIME_REF" \
+              -H "Accept: application/vnd.github.raw" > "$WORK/dep-update.js" 2>"$WORK/fetch.err"; then
+            echo "::warning::dep-update worker unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$WORK/fetch.err")) — skipping scan"
+            echo "action=skipped" >> "$GITHUB_OUTPUT"
+            echo "reason=worker-unavailable" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node --check "$WORK/dep-update.js"
+          echo "action=continue" >> "$GITHUB_OUTPUT"
+
+      - name: Enumerate outdated npm deps
+        if: steps.cfg.outputs.action == 'continue' && steps.worker.outputs.action == 'continue'
+        id: scan
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-dep-update"
+          if [ ! -f package.json ]; then
+            echo "action=skipped" >> "$GITHUB_OUTPUT"
+            echo "reason=no-package-json" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Baseline tree: `current` resolution comes from the lockfile /
+          # installed tree. --ignore-scripts bounds the supply-chain surface
+          # — no lifecycle script from any dependency executes on the runner.
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+            timeout 420 npm ci --ignore-scripts --no-audit --no-fund
+          else
+            timeout 420 npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          fi
+          # npm outdated exits 1 when updates exist — stdout is valid either way.
+          timeout 120 npm outdated --json > "$WORK/outdated.json" || true
+          wc -c "$WORK/outdated.json"
+          echo "action=continue" >> "$GITHUB_OUTPUT"
+
+      - name: Vet + plan the update batch
+        if: steps.cfg.outputs.action == 'continue' && steps.worker.outputs.action == 'continue' && steps.scan.outputs.action == 'continue'
+        id: plan
+        env:
+          MIN_AGE: ${{ steps.cfg.outputs.min_age }}
+          TARGET: ${{ steps.cfg.outputs.target }}
+          INCLUDE_DEV: ${{ steps.cfg.outputs.include_dev }}
+          AUTO_KINDS: ${{ steps.cfg.outputs.auto_kinds }}
+          MAX_UPDATES: ${{ steps.cfg.outputs.max_updates }}
+          EGRESS: ${{ steps.cfg.outputs.egress }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-dep-update"
+          DEV_FLAG=""; [ "$INCLUDE_DEV" = "false" ] && DEV_FLAG="--no-dev"
+          # shellcheck disable=SC2086  # DEV_FLAG is either empty or a fixed flag
+          node "$WORK/dep-update.js" plan \
+            --outdated "$WORK/outdated.json" \
+            --min-age-days "$MIN_AGE" --target "$TARGET" \
+            --auto-kinds "$AUTO_KINDS" --max-updates "$MAX_UPDATES" \
+            --egress-profile "$EGRESS" $DEV_FLAG \
+            --body-file "$WORK/pr-body.md" > "$WORK/plan.json"
+          ACTION=$(jq -r '.action' "$WORK/plan.json")
+          if [ "$DRY_RUN" = "true" ] && [ "$ACTION" != "none" ]; then ACTION="dry-run"; fi
+          {
+            echo "action=$ACTION"
+            echo "updates=$(jq '.updates | length' "$WORK/plan.json")"
+            echo "flagged=$(jq '.flagged | length' "$WORK/plan.json")"
+            echo "deferred=$(jq '.deferred | length' "$WORK/plan.json")"
+            echo "sig=$(jq -r '.sig' "$WORK/plan.json")"
+            echo "risk_tier=$(jq -r '.riskTier' "$WORK/plan.json")"
+          } >> "$GITHUB_OUTPUT"
+          jq -r '"planned: \(.updates | length) update(s), \(.flagged | length) flagged, \(.deferred | length) deferred — sig \(.sig)"' "$WORK/plan.json"
+          {
+            echo ""
+            echo "- updates: \`$(jq '.updates | length' "$WORK/plan.json")\` flagged: \`$(jq '.flagged | length' "$WORK/plan.json")\` deferred: \`$(jq '.deferred | length' "$WORK/plan.json")\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Apply batch + open consolidated PR
+        if: steps.plan.outputs.action == 'open-pr'
+        id: pr
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PUSH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: ${{ steps.cfg.outputs.branch }}
+          LABELS: ${{ steps.cfg.outputs.labels }}
+          RISK_TIER: ${{ steps.plan.outputs.risk_tier }}
+          SIG: ${{ steps.plan.outputs.sig }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-dep-update"
+
+          # Idempotency: at most one open batch PR per repo. A human-closed
+          # batch signature is not retried until versions drift.
+          gh pr list -R "$REPO" --state all --head "$BRANCH" --limit 20 \
+            --json number,state,body > "$WORK/prs.json"
+          OPEN=$(jq -r '[.[] | select(.state == "OPEN")] | .[0].number // ""' "$WORK/prs.json")
+          if [ -n "$OPEN" ]; then
+            echo "number=$OPEN" >> "$GITHUB_OUTPUT"
+            echo "existing open dep-update PR #$OPEN on $BRANCH — leaving it to the pipeline path"
+            exit 0
+          fi
+          if jq -e --arg sig "$SIG" '[.[] | select(.state != "OPEN" and (.body // "" | contains($sig)))] | length > 0' "$WORK/prs.json" >/dev/null; then
+            echo "number=" >> "$GITHUB_OUTPUT"
+            echo "batch signature $SIG was closed by a human — not retrying until versions drift"
+            exit 0
+          fi
+
+          # Apply the vetted set only — lockfile+manifest, no lifecycle scripts.
+          BASE_SHA=$(git rev-parse HEAD)
+          git checkout -B "$BRANCH"
+          jq -r '.updates[] | "\(.name)@\(.target)"' "$WORK/plan.json" > "$WORK/apply.txt"
+          while IFS= read -r spec; do
+            timeout 120 npm install "$spec" --package-lock-only --ignore-scripts --no-audit --no-fund
+          done < "$WORK/apply.txt"
+
+          # Manifest/lockfile-only guard (fail-closed): anything outside the
+          # dep-file set aborts the batch — never pushed, never a PR.
+          git status --porcelain | awk '{print $2}' > "$WORK/changed.txt"
+          if grep -vqE '^(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml)$' "$WORK/changed.txt"; then
+            echo "::error::batch mutated files outside the dep-manifest/lockfile set:" >&2
+            cat "$WORK/changed.txt" >&2
+            exit 1
+          fi
+
+          git config user.name "ai-sdlc-runtime[bot]"
+          git config user.email "ai-sdlc-runtime[bot]@users.noreply.github.com"
+          git add package.json package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml 2>/dev/null || true
+          git commit -m "chore(deps): vetted dependency updates (sig $SIG)"
+          # The dep-diff classifier records the audit verdict on the exact
+          # pushed diff — it must classify patch|minor-only to have shipped.
+          git diff "$BASE_SHA..HEAD" > "$WORK/batch.patch"
+          node "$WORK/dep-update.js" classify --diff "$WORK/batch.patch" > "$WORK/batch-verdict.json"
+          jq -c '.verdict | {eligible, kind, reason}' "$WORK/batch-verdict.json"
+          [ "$(jq -r '.verdict.eligible' "$WORK/batch-verdict.json")" = "true" ] || {
+            echo "::error::pushed diff failed dep-diff eligibility ($(jq -r '.verdict.reason' "$WORK/batch-verdict.json")) — refusing to open the PR" >&2
+            exit 1
+          }
+
+          AUTH=$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 -w0)
+          echo "::add-mask::$AUTH"
+          # Plain (non-force) push — never force (repo rule). A stale remote
+          # branch (old closed batch, different signature) is deleted first;
+          # a rejection after that means a real race and fails loudly.
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" \
+            push origin --delete "$BRANCH" 2>/dev/null || true
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" \
+            push origin "HEAD:refs/heads/$BRANCH"
+
+          gh pr create -R "$REPO" --base "$BASE" --head "$BRANCH" \
+            --title "chore(deps): vetted dependency updates" \
+            --body-file "$WORK/pr-body.md" > "$WORK/pr.url"
+          PR_NUMBER=$(basename "$(cat "$WORK/pr.url")")
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+
+          # Labels: dependencies/ai-sdlc mark it pipeline-managed; the
+          # vetting verdict's pr:risk-* is applied for callers without the
+          # classify stage wired (the classifier computes the same label).
+          for L in ${LABELS//,/ } "pr:risk-${RISK_TIER}"; do
+            gh label create "$L" -R "$REPO" --force --color FBCA04 >/dev/null 2>&1 || true
+            gh pr edit "$PR_NUMBER" -R "$REPO" --add-label "$L"
+          done
+          gh pr view "$PR_NUMBER" -R "$REPO" --json number,url -q '"opened PR #\(.number): \(.url)"'
+
+      - name: Record outcome
+        id: out
+        if: always() && steps.cfg.outputs.action != ''
+        env:
+          CFG_ACTION: ${{ steps.cfg.outputs.action }}
+          WORKER_ACTION: ${{ steps.worker.outputs.action }}
+          SCAN_ACTION: ${{ steps.scan.outputs.action }}
+          PLAN_ACTION: ${{ steps.plan.outputs.action }}
+          FLAGGED: ${{ steps.plan.outputs.flagged }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          # Terminal action for callers + the ledger: skip reasons propagate,
+          # an existing PR still counts as handled, flagged runs report.
+          ACTION="skipped"
+          case "$PLAN_ACTION" in
+            open-pr|dry-run) ACTION="$PLAN_ACTION" ;;
+            none)
+              if [ "$FLAGGED" != "0" ] && [ -n "$FLAGGED" ]; then ACTION="flagged"; else ACTION="none"; fi ;;
+            *)
+              for A in "$SCAN_ACTION" "$WORKER_ACTION" "$CFG_ACTION"; do
+                case "$A" in
+                  open-pr|flagged-only|flagged|dry-run|none) ACTION="$A"; break ;;
+                esac
+              done ;;
+          esac
+          if [ "$ACTION" = "open-pr" ] && [ -z "$PR_NUMBER" ]; then
+            # plan said open-pr but the apply step found an existing batch PR.
+            ACTION="existing-pr"
+          fi
+          echo "action=$ACTION" >> "$GITHUB_OUTPUT"
+          echo "action=$ACTION"
+
+      - name: Flag majors/findings for human review (deduped issue)
+        if: steps.plan.outputs.flagged != '0' && steps.plan.outputs.flagged != '' && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ESCALATION: ${{ steps.contract.outputs.escalation_label }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-dep-update"
+          MARKER='<!-- ai-sdlc:dep-flagged -->'
+          node - <<'NODE' > "$WORK/flagged-body.md"
+          const fs = require('fs');
+          const W = process.env.RUNNER_TEMP + '/ai-sdlc-dep-update';
+          const plan = JSON.parse(fs.readFileSync(`${W}/plan.json`, 'utf8'));
+          const esc = (s) => String(s == null ? '' : s).replace(/[<>`|\\\[\]]/g, c => '\\' + c).slice(0, 120);
+          const lines = ['## Dependency updates flagged for human review', '',
+            'The scheduled dep-update worker vetted these candidates and did **not** land them — majors, unknown specs, or supply-chain findings require human judgment (issue #177).', ''];
+          for (const f of plan.flagged) {
+            const why = [];
+            if (!['patch', 'minor'].includes(f.kind)) why.push(`${f.kind} bump`);
+            for (const g of f.findings || []) why.push(`${g.severity}: ${esc(g.detail)}`);
+            lines.push(`- \`${esc(f.name)}\` ${esc(f.current)} → ${esc(f.target)} — ${why.join('; ') || 'policy flag'}`);
+          }
+          lines.push('', '<!-- ai-sdlc:dep-flagged -->');
+          process.stdout.write(lines.join('\n') + '\n');
+          NODE
+          EXISTING=$(gh issue list -R "$REPO" --state open --limit 100 \
+            --json number,body | jq -r --arg m "$MARKER" '[.[] | select(.body | contains($m))] | .[0].number // ""')
+          gh label create "$ESCALATION" -R "$REPO" --color D93F0B --force >/dev/null 2>&1 || true
+          gh label create "dependencies" -R "$REPO" --force --color 0366D6 >/dev/null 2>&1 || true
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" -R "$REPO" --body-file "$WORK/flagged-body.md"
+            echo "updated flagged-issue #$EXISTING"
+          else
+            gh issue create -R "$REPO" --title "dep-update: flagged dependency updates need human review" \
+              --body-file "$WORK/flagged-body.md" --label "$ESCALATION" --label "dependencies"
+          fi
+
+      # Tamper-evident run evidence (issue #196): scan outcome is hashed
+      # into a chain entry, sealed and uploaded. Never fails the job.
+      - name: Run ledger — append stage record
+        id: ledger
+        if: always() && steps.cfg.outputs.action != ''
+        continue-on-error: true
+        uses: ./.github/actions/run-ledger
+        with:
+          op: append
+          stage: dep-update
+          repo: ${{ env.REPO }}
+          prev: ${{ inputs.ledger_head || '' }}
+          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          data: ${{ toJSON(steps.plan.outputs) }}
+          data-files: |
+            ${{ runner.temp }}/ai-sdlc-dep-update/plan.json
+            ${{ runner.temp }}/ai-sdlc-dep-update/outdated.json
+
+      - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)
+        id: seal
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        uses: ./.github/actions/run-ledger
+        with:
+          op: seal
+          stage: dep-update
+          signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
+
+      - name: Upload run artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-sdlc-dep-update-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ai-sdlc-dep-update/plan.json
+            ${{ runner.temp }}/ai-sdlc-dep-update/outdated.json
+            ${{ runner.temp }}/ai-sdlc-dep-update/pr-body.md
+            ${{ runner.temp }}/ai-sdlc-dep-update/batch-verdict.json
+            ${{ runner.temp }}/ai-sdlc-dep-update/flagged-body.md
+            ${{ runner.temp }}/ai-sdlc-ledger/ledger-dep-update.jsonl
+          if-no-files-found: ignore
+          retention-days: 14

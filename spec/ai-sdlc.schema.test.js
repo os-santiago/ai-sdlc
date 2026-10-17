@@ -176,10 +176,33 @@ describe('ai-sdlc.schema.json — contract surface', () => {
     assert.deepStrictEqual(contract.postmortem, { reopen_min: 2, dedup_window_days: 90 });
     assert.strictEqual(contract._sources['postmortem.reopen_min'], 'default');
   });
+
+  it('declares dependencies with the issue-#177 dep-update worker shape', () => {
+    const d = schema.properties.dependencies;
+    assert.ok(d, 'missing properties.dependencies');
+    assert.strictEqual(d.type, 'object');
+    assert.strictEqual(d.additionalProperties, false);
+    // Supply-chain age gate + risk thresholds must be contract-declared.
+    assert.strictEqual(d.properties.min_release_age_days.type, 'integer');
+    assert.strictEqual(d.properties.min_release_age_days.default, 7);
+    assert.deepStrictEqual(d.properties.auto_kinds.items.enum.sort(), ['minor', 'patch']);
+    assert.deepStrictEqual(d.properties.target.enum, ['wanted', 'latest']);
+    assert.strictEqual(d.properties.enabled.default, false);
+    assert.ok(d.properties.egress_profile, 'missing egress_profile (named network allowlist)');
+  });
+
+  it('accepts a dependencies block and rejects undeclared fields', { skip: !HAS_PY }, () => {
+    const ok = schemaValidate({ spec: '1.0.0', dependencies: { enabled: true, auto_kinds: ['patch'] } });
+    assert.deepStrictEqual(ok.errors, []);
+    assert.ok(ok.valid);
+    const bad = schemaValidate({ spec: '1.0.0', dependencies: { enabled: true, auto_kinds: ['major'], bogus: 1 } });
+    assert.strictEqual(bad.valid, false);
+    assert.ok(bad.errors.length >= 2, `expected enum + additionalProperties errors: ${bad.errors}`);
+  });
 });
 
 describe('per-stage engine selection (issue #205)', () => {
-  const STAGES = ['intake', 'implement', 'review', 'automerge', 'verify', 'ci-repair', 'sweep'];
+  const STAGES = ['intake', 'implement', 'review', 'automerge', 'verify', 'ci-repair', 'sweep', 'dep-update'];
 
   it('declares engines as a closed stage → adapter map over the known pipeline stages', () => {
     const e = schema.properties.engines;

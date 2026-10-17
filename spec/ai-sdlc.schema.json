@@ -218,6 +218,84 @@
         }
       }
     },
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Dependency-update worker contract (issue #177, epic #150): scheduled dep scans produce vetted dep-update PRs through the normal pipeline path. Ecosystems, cadence and risk thresholds are per-repo; org baselines may pin floors (e.g. dependencies.min_release_age_days) via policy_floor.pin. Disabled by default — opt-in.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Master switch for the scheduled dep-update stage."
+        },
+        "ecosystems": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["npm", "pip", "go", "cargo", "gem", "composer"]
+          },
+          "default": ["npm"],
+          "description": "Package ecosystems the worker scans. v1 implements npm; other entries are contract surface for later providers."
+        },
+        "cadence": {
+          "type": "string",
+          "enum": ["hourly", "daily", "weekly"],
+          "default": "daily",
+          "description": "Declared scan cadence — the caller's cron carries the actual schedule; the contract value is the audit record."
+        },
+        "min_release_age_days": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 7,
+          "description": "Supply-chain age gate: a release younger than this many days is flagged for human review (freshly-published packages are disproportionately malicious). Org baselines SHOULD pin a floor here."
+        },
+        "target": {
+          "type": "string",
+          "enum": ["wanted", "latest"],
+          "default": "wanted",
+          "description": "'wanted' stays inside declared semver ranges; 'latest' may cross majors (majors are always flagged for human review regardless)."
+        },
+        "include_dev": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include devDependencies in the scan."
+        },
+        "auto_kinds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["patch", "minor"]
+          },
+          "default": ["patch", "minor"],
+          "description": "Risk threshold: bump kinds eligible for the automated PR path. Kinds outside this set (majors, unknown specs) are flagged for human review."
+        },
+        "max_updates": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 10,
+          "description": "Bound on updates landed in one consolidated PR; the remainder defers to a later scan."
+        },
+        "branch": {
+          "type": "string",
+          "default": "chore/dep-updates",
+          "description": "Branch the consolidated dep-update PR is pushed from. At most one open batch PR per repo."
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["dependencies", "ai-sdlc"],
+          "description": "Labels applied to dep-update PRs. 'ai-sdlc' marks the PR pipeline-managed for review/automerge; 'dependencies' is the Dependabot convention."
+        },
+        "egress_profile": {
+          "type": "string",
+          "default": "npm-vet",
+          "description": "Named egress profile (network allowlist) the vetting stage runs under — 'npm-vet' allows registry.npmjs.org + api.osv.dev, 'off' disables vetting fetches (everything flags fail-closed). Runner/network-level enforcement is the deployment's job."
+        }
+      }
+    },
     "triggers": {
       "type": "object",
       "additionalProperties": false,
@@ -593,6 +671,9 @@
           "$ref": "#/$defs/stage_engine"
         },
         "sweep": {
+          "$ref": "#/$defs/stage_engine"
+        },
+        "dep-update": {
           "$ref": "#/$defs/stage_engine"
         }
       }
