@@ -36,6 +36,10 @@ on:
         description: 'org baseline contract ref owner/repo[/path][@ref] — org floor per spec/org-policy.md; empty = repo contract + defaults'
         type: string
         default: ''
+      runtime_ref:
+        description: 'ref of os-santiago/ai-sdlc to fetch scripts/intake-refiner.js from — pin to the same ref as this workflow'
+        type: string
+        default: 'main'
     outputs:
       dispatch:
         description: '"true" when the issue passes DoR and is queued'
@@ -70,6 +74,13 @@ jobs:
   intake:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    concurrency:
+      # One intake pass per issue at a time — refinement's upsert and the
+      # hold→re-arm transitions must not race a second event (edit, reply,
+      # re-label) mid-flight. Queued, never cancelled: a re-arm event must
+      # run to completion or the restored trigger never reaches DoR.
+      group: ai-sdlc-intake-${{ inputs.repo }}-${{ inputs.issue_number }}
+      cancel-in-progress: false
     outputs:
       dispatch: ${{ steps.dor.outputs.dispatch }}
       ledger_head: ${{ steps.seal.outputs.head || steps.ledger.outputs.head }}
@@ -114,6 +125,47 @@ jobs:
           EOF
           gh issue comment "$ISSUE" -R "$REPO" --body-file comment.md
 
+      # Conversational refinement (issue #197): spec-completeness check →
+      # one upserted comment (clarifying questions when under-specified,
+      # derived acceptance criteria when ready) + the refinement-hold
+      # label. Runs BEFORE the DoR gate so a hold strips the trigger first
+      # (labels.md F2) and the armed check stays honest. Idempotent by
+      # content fingerprint — an edit or author reply re-triggers it.
+      - name: Refine spec (conversational intake)
+        id: refine
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          RUNTIME_REF: ${{ inputs.runtime_ref }}
+          TRIGGER: ${{ steps.contract.outputs.trigger_label }}
+          SKIP_LABELS: ${{ steps.contract.outputs.skip_labels }}
+          NOT_READY: ${{ steps.contract.outputs.label_not_ready }}
+          LABELS_MAP: ${{ steps.contract.outputs.labels }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-refine"
+          mkdir -p "$WORK"
+
+          # Trusted code only: canonical refiner from the runtime repo pin —
+          # never from the consumer repo (same posture as ai-sdlc-classify).
+          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/intake-refiner.js?ref=$RUNTIME_REF" \
+              -H "Accept: application/vnd.github.raw" > "$WORK/intake-refiner.js" 2>"$WORK/fetch.err"; then
+            echo "::warning::intake refiner unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$WORK/fetch.err")) — skipping refinement"
+            { echo "status=skipped"; echo "fingerprint="; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node --check "$WORK/intake-refiner.js"
+
+          # Labels that veto trigger restoration: contract skip labels ∪
+          # active run-state bindings (labels.md F4/F5).
+          VETO=$(jq -nc --argjson s "$SKIP_LABELS" --argjson m "$LABELS_MAP" \
+            '($s + [$m["queued"], $m["in-progress"], $m["pr-opened"]] | map(select(. != null))) | unique')
+
+          node "$WORK/intake-refiner.js" \
+            --repo "$REPO" --issue "$ISSUE" \
+            --trigger "$TRIGGER" --hold "$NOT_READY" \
+            --skip-labels "$SKIP_LABELS" --veto-labels "$VETO" \
+            --apply --json --github-output
+
       - name: Validate DoR (R1–R6)
         id: dor
         env:
@@ -121,6 +173,8 @@ jobs:
           TRIGGER: ${{ steps.contract.outputs.trigger_label }}
           SKIP_LABELS: ${{ steps.contract.outputs.skip_labels }}
           NOT_READY: ${{ steps.contract.outputs.label_not_ready }}
+          REFINE_STATUS: ${{ steps.refine.outputs.status }}
+          REFINE_FP: ${{ steps.refine.outputs.fingerprint }}
         run: |
           set -euo pipefail
           gh issue view "$ISSUE" -R "$REPO" --json number,title,body,labels > issue.json
@@ -135,6 +189,8 @@ jobs:
           if (!labels.includes(trigger)) {
             console.log(`issue does not carry the trigger label "${process.env.TRIGGER}" — not armed, skipping`);
             out('dispatch', 'false'); out('armed', 'false'); out('failed', '');
+            out('refine', process.env.REFINE_STATUS || 'skipped');
+            out('refine_fp', process.env.REFINE_FP || '');
             process.exit(0);
           }
           const body = i.body || '';
@@ -152,6 +208,9 @@ jobs:
           const failed = Object.entries(checks).filter(([, ok]) => !ok).map(([k]) => k);
           console.log('DoR:', JSON.stringify(checks, null, 0));
           out('dispatch', failed.length ? 'false' : 'true'); out('armed', 'true'); out('failed', failed.join('|'));
+          // Refinement evidence rides the same ledger record (issue #197).
+          out('refine', process.env.REFINE_STATUS || 'skipped');
+          out('refine_fp', process.env.REFINE_FP || '');
           NODE
 
       - name: Outcome → label + comment

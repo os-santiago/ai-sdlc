@@ -11,7 +11,12 @@ name: ai-sdlc (self)
 
 on:
   issues:
-    types: [labeled]
+    # labeled arms dispatch; opened/edited feed conversational refinement
+    # (issue #197 — a spec edit must re-run the intake check).
+    types: [labeled, opened, edited]
+  issue_comment:
+    # An author reply is part of the spec — it re-triggers refinement.
+    types: [created]
   pull_request:
     types: [opened, synchronize]
   push:
@@ -46,7 +51,13 @@ jobs:
         run: bash tools/validate-repo.sh
 
   intake:
-    if: github.event.label.name == 'ready-to-implement'
+    # Armed: the trigger label event. Refinement: every other issue event —
+    # opened/edited plus author replies (issue_comment on non-PR issues);
+    # the refiner fingerprint no-ops when the spec source didn't move.
+    if: >-
+      github.event.label.name == 'ready-to-implement' ||
+      (github.event_name == 'issues' && github.event.action != 'labeled') ||
+      (github.event_name == 'issue_comment' && !github.event.issue.pull_request)
     uses: ./.github/workflows/ai-sdlc-intake.yml
     with:
       repo: ${{ github.repository }}
