@@ -1,0 +1,42 @@
+{
+  "v": 1,
+  "currency": "USD",
+  "budgets": {
+    "per_issue_usd": 2.5,
+    "per_issue_tokens": 500000,
+    "daily_usd": 5.0,
+    "weekly_usd": 15.0,
+    "monthly_usd": 50.0
+  },
+  "alert_thresholds": [0.5, 0.8, 1.0],
+  "models": {
+    "nvidia/nemotron-3-super-120b-a12b": {
+      "input_per_m": 0.0,
+      "output_per_m": 0.0,
+      "note": "current model.primary — NVIDIA NIM free-tier endpoint; declare real prices here when the provider bills"
+    },
+    "nvidia/nemotron-3.5-lightning-30b-a3b": {
+      "input_per_m": 0.0,
+      "output_per_m": 0.0,
+      "note": "current model.fallback — NIM free-tier"
+    },
+    "nvidia/nemotron-3-ultra-550b-a55b": {
+      "input_per_m": 0.0,
+      "output_per_m": 0.0,
+      "note": "in-run failover endpoint (SC_FAILOVER) — NIM free-tier"
+    },
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning": {
+      "input_per_m": 0.0,
+      "output_per_m": 0.0,
+      "note": "in-run failover endpoint (SC_FAILOVER) — NIM free-tier"
+    },
+    "openai/gpt-4o": { "input_per_m": 2.5, "output_per_m": 10.0 },
+    "openai/gpt-4o-mini": { "input_per_m": 0.15, "output_per_m": 0.6 },
+    "anthropic/claude-sonnet-4": { "input_per_m": 3.0, "output_per_m": 15.0 },
+    "default": {
+      "input_per_m": 1.0,
+      "output_per_m": 3.0,
+      "note": "applied to any model id with no exact entry — never silently price unknowns at zero"
+    }
+  }
+}
