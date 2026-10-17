@@ -1132,6 +1132,54 @@ issue labels:
 
 `exit_code` is the final run's code (see [Model fallback](#model-fallback)).
 
+## Injection defense (`scripts/injection_defense.js`)
+
+The sanitization stage of spec/injection-defense.md (issue #181, epic
+#151). Every untrusted field — issue title/body (implement), PR title,
+diff stat and patch (review), review findings (review-fix), CI log tails
+and check names (ci-repair) — passes through the canonical sanitizer
+**before** the prompt file is assembled. The script is fetched from the
+`os-santiago/ai-sdlc@main` pin in each prompt-build step (same trust
+posture as `scripts/risk-classifier.js` — never from the PR head or the
+consumer checkout); when the pin predates it the stage falls back to the
+previous inline `</untrusted` escaping.
+
+Per field the stage applies: size cap → non-rendering Unicode strip (Tag
+chars, zero-width, bidi overrides, interlinear anchors — steganographic
+injection; variation selectors are flagged, not stripped) →
+imperative-override scrub (`ignore previous instructions`, `system:`,
+`you are now…`, chat-template tags, fake tool results, fake authority —
+neutralized in place) → forbidden-directive detection (force-push,
+pipe-to-shell, credential egress, policy self-modify, permission/token
+escalation, fence escapes) → secret-shape redaction (PEM blocks, token
+shapes, dotenv assignments, URL credentials, live env literals) →
+fence-escape neutralization.
+
+Verdict classes, auditable and never silent:
+
+- `clean` — no findings; fenced as-is.
+- `scrubbed` — findings neutralized/redacted; fenced.
+- `blocked` — high-confidence hostile (fence escape + hostile signal,
+  credential egress to an endpoint, embedded private-key material, or a
+  weighted hostile score ≥ 6). The content never reaches the engine: the
+  run is gated off and the source issue/PR is quarantined to
+  `needs-human` with a comment naming the block reasons.
+
+Detection telemetry appends count-only JSONL records
+(`prompt_injection_scrubbed` / the spec's refusal class
+`prompt_injection_blocked` — pattern names + counts, never the matched
+text) and ships as `injection-audit.jsonl` in the run artifacts.
+
+Output-side redaction (`redactOutput`, the spec's "redaction applies to
+ALL agent output"): a `Redact run artifacts` step in implement, review,
+review-fix and ci-repair passes the secret+PII pass over every
+engine-emitted artifact (scc audit log, manifest, verdict, prompt files)
+before the ledger append + upload — hashed evidence matches the uploaded
+artifacts. Output magnitude (`checkProportion`): implement additionally
+gates the push on a disproportion check — a staged diff over 100 files /
+5000 lines, or >1000 lines against a ≤200-char trigger, escalates to
+`needs-human` uncommitted instead of pushing.
+
 ## Run ledger
 
 Tamper-evident per-stage run evidence (issue #196, epic #148). Every stage
