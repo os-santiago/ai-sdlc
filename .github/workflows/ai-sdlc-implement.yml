@@ -1,10 +1,12 @@
 # ai-sdlc-implement — reusable implementation stage (issue #8)
 #
-# Runs the sc-agent-cli engine headless against an issue: produces a
+# Runs the stage-selected engine headless against an issue: produces a
 # branch + PR with bounded budgets, uploads the run manifest + audit log
 # as artifacts, and posts the manifest on the PR. Model route, fallback,
 # budgets and flow labels come from the resolved .ai-sdlc.yaml contract
-# (issue #22); inputs are override-only.
+# (issue #22); inputs are override-only. The engine itself comes from the
+# contract too: `engines.implement` wins over the global `engine.name`
+# (issue #206) — an id with no registered adapter fails before dispatch.
 #
 # Forge credential isolation (issue #210): the engine and every step up to
 # it run under FORGE_TOKEN_READ — a read-scoped ai-sdlc App installation
@@ -48,6 +50,10 @@ on:
         default: ''
       base:
         description: 'base branch'
+        type: string
+        default: 'main'
+      runtime_ref:
+        description: 'ref of os-santiago/ai-sdlc to fetch runtime scripts/actions from'
         type: string
         default: 'main'
       max_seconds:
@@ -190,7 +196,36 @@ jobs:
         with:
           node-version: '22'
 
+      # Stage dispatch (issue #206): engines.implement in the resolved
+      # contract selects the adapter — unknown/unregistered ids fail here
+      # with exit 1 before any engine run.
+      - name: Resolve stage engine (.ai-sdlc.yaml engines)
+        id: stage-engine
+        env:
+          GH_TOKEN: ${{ steps.app-token-read.outputs.token }}
+          RUNTIME_REF: ${{ inputs.runtime_ref || 'main' }}
+          STAGE: implement
+          REQUIRED: 'true'
+          CONTRACT_PATH: ${{ runner.temp }}/ai-sdlc-contract/contract.json
+        run: |
+          set -euo pipefail
+          DEST="$RUNNER_TEMP/ai-sdlc-engine"
+          mkdir -p "$DEST/scripts/gha" "$DEST/config"
+          ok=1
+          for f in scripts/engine_adapter.js scripts/gha/stage-engine-resolver.js config/engine_adapters.json; do
+            if ! gh api "repos/os-santiago/ai-sdlc/contents/$f?ref=$RUNTIME_REF" -H "Accept: application/vnd.github.raw" > "$DEST/$f" 2>/dev/null; then ok=0; break; fi
+          done
+          if [ "$ok" = 0 ] || ! node --check "$DEST/scripts/gha/stage-engine-resolver.js" 2>/dev/null; then
+            echo "::warning::stage-engine resolver unavailable at os-santiago/ai-sdlc@$RUNTIME_REF — defaulting to scc"
+            { echo "engine=scc"; echo "engine_source=default"; echo "engine_binary=scc"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node "$DEST/scripts/gha/stage-engine-resolver.js" --stage "$STAGE" \
+            --contract "${CONTRACT_PATH:-$RUNNER_TEMP/ai-sdlc-contract/contract.json}" \
+            --registry "$DEST/config/engine_adapters.json" --required "$REQUIRED"
+
       - name: Build scc engine from source
+        if: steps.stage-engine.outputs.engine == 'scc'
         run: |
           set -euo pipefail
           git clone --depth 1 https://github.com/os-santiago/sc-agent-cli /tmp/scc-src
@@ -199,6 +234,7 @@ jobs:
           scc --version
 
       - name: Configure scc engine provider
+        if: steps.stage-engine.outputs.engine == 'scc'
         env:
           MODEL_NAME: ${{ steps.contract.outputs.model_primary }}
           PROVIDER_BASE_URL: ${{ inputs.provider_base_url || vars.AI_SDLC_PROVIDER_URL || 'https://models.github.ai/inference' }}
@@ -270,7 +306,7 @@ jobs:
               echo "::warning title=credential isolation::probe inconclusive (HTTP '$status') — continuing; FORGE_TOKEN_WRITE still never enters the engine environment" ;;
           esac
 
-      - name: Run scc headless (bounded, one fallback on provider/auth failure)
+      - name: Run stage engine headless (bounded, one model fallback on scc)
         id: engine
         env:
           # Trust boundary (issue #210): the engine process sees ONLY the
@@ -279,6 +315,7 @@ jobs:
           FORGE_TOKEN_READ: ${{ steps.app-token-read.outputs.token }}
           GH_TOKEN: ${{ steps.app-token-read.outputs.token }}
           ISSUE: ${{ inputs.issue_number }}
+          STAGE_ENGINE: ${{ steps.stage-engine.outputs.engine }}
           PRIMARY_MODEL: ${{ steps.contract.outputs.model_primary }}
           FALLBACK_MODEL: ${{ steps.contract.outputs.model_fallback }}
           MAX_SECONDS: ${{ steps.contract.outputs.max_seconds }}
@@ -290,7 +327,27 @@ jobs:
           SC_FAILOVER: 'nvidia/nemotron-3-ultra-550b-a55b,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'
         run: |
           set +e
-          # Exit contract: 0 ok · 10 no-changes · 20 provider · 21 auth · 22 budget · 23 livelock
+          ENGINE_DIR="$RUNNER_TEMP/ai-sdlc-engine"
+          if [ "$STAGE_ENGINE" != "scc" ]; then
+            # Stage dispatch (issue #206): the contract selected a non-scc
+            # engine — invoke it through the canonical adapter argv contract.
+            # Exit code is already adapter-mapped by the resolver.
+            node "$ENGINE_DIR/scripts/gha/stage-engine-resolver.js" \
+              --stage implement \
+              --contract "$RUNNER_TEMP/ai-sdlc-contract/contract.json" \
+              --registry "$ENGINE_DIR/config/engine_adapters.json" \
+              --run \
+              --model "$PRIMARY_MODEL" \
+              --prompt-file task-prompt.md \
+              --manifest scc-manifest.json
+            primary_exit=$?
+            exit_code=$primary_exit
+            model="$PRIMARY_MODEL"
+            fallback_used=false
+            fallback_reason=""
+            fallback_exit=""
+          else
+          # scc exit contract: 0 ok · 10 no-changes · 20 provider · 21 auth · 22 budget · 23 livelock
           # Only 20/21 earn exactly ONE fallback run; every other code is final.
           CONFIG="$HOME/.sc-agent/config.json"
           run_engine() {  # $1 audit log · $2 run manifest — own max-seconds/max-steps per run
@@ -338,6 +395,7 @@ jobs:
               fi
               ;;
           esac
+          fi
 
           jq -n \
             --arg primary_model "$PRIMARY_MODEL" \
@@ -433,7 +491,6 @@ jobs:
           run-id: ${{ github.run_id }}
           engine: ${{ steps['stage-engine'].outputs.engine || steps.contract.outputs.engine_name }}
           token: ${{ steps.app-token-write.outputs.token }}
-
 
       - name: Label outcome on the issue
         # Post-script: deterministic label mutation under FORGE_TOKEN_WRITE.

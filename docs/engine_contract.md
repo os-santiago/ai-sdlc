@@ -207,6 +207,19 @@ does not change which adapter runs the stage. The resolved stage →
 model map ships in the `stage_models` step output; conformance to the
 headless contract above guarantees any certified adapter can fill a
 stage slot regardless of which model it routes to.
+## Stage Dispatch
+
+`scripts/gha/stage-engine-resolver.js` is the dispatch point (issue #206),
+exercised by every engine-running reusable workflow through the
+`resolve-stage-engine` composite action: it reads the resolved contract
+(`engines.<stage>` → `engine.name` → `scc`), verifies the selected id has
+a registered adapter, and — for non-scc engines — invokes the adapter
+binary via the registry `argvBuilder` contract with adapter-mapped exit
+codes (`--run`). A stage selecting an engine with no registry entry fails
+with exit 1 naming the engine — dispatch never silently falls back to the
+wrong adapter. `scc` keeps its tuned workflow invocation (headless
+contract flags + the model-fallback loop); other registered engines go
+through the generic `--run` path.
 
 ## References
 

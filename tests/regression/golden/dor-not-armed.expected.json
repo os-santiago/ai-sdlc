@@ -2,7 +2,9 @@
   "outputs": {
     "dispatch": "false",
     "armed": "false",
-    "failed": ""
+    "failed": "",
+    "refine": "skipped",
+    "refine_fp": ""
   },
   "checks": null,
   "log": [

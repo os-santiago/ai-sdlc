@@ -88,6 +88,13 @@ resolved value in `contract.json`. A stage without an entry falls back to
 `engine.name` (default `scc`). Stage dispatch to non-`scc` engines lands
 with issue #206; until then the field is contract surface only. The
 stage-definition object may also carry `model` — see below.
+`engine.name` (default `scc`). Engine-running stages (`implement`,
+`review` — including the review-fix pass — and `ci-repair`) dispatch
+through `scripts/gha/stage-engine-resolver.js` via the
+`resolve-stage-engine` composite action (issue #206): the resolved id must
+have a `config/engine_adapters.json` entry or the stage exits 1 naming
+the engine, `scc` keeps its tuned invocation, and any other registered
+engine runs through the registry `argvBuilder` contract (`--run`).
 
 `review.ai_reviewer.model` resolves to `model.primary` when unset **or**
 when it names an OmniRoute route (`auto/*`, `devin/*`) — those are Hermes

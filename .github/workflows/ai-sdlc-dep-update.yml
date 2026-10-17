@@ -120,7 +120,7 @@ jobs:
     timeout-minutes: 15
     concurrency:
       # Never cancel mid-push; at most one scan per repo at a time.
-      group: ai-sdlc-dep-update-${{ env.REPO }}
+      group: ai-sdlc-dep-update-${{ inputs.repo || github.repository }}
       cancel-in-progress: false
     outputs:
       action: ${{ steps.out.outputs.action }}

@@ -11,7 +11,8 @@
 #      parse as YAML
 #   4. actionlint, when a binary is already installed (CI owns the pinned
 #      release — .github/workflows/actionlint.yml; ./actionlint fetches it)
-#   5. node --test on */*.test.js, when node and test files are present
+#   5. node --test on */*.test.js + scripts/gha/*.test.js, when node and
+#      test files are present
 #
 # Exit 0 = clean, 1 = a check failed, 2 = required tooling missing.
 # Safe to run from anywhere: cd's to the repo root first.

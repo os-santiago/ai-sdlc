@@ -34,8 +34,6 @@ inputs:
   engine:
     description: 'resolved engine adapter id stamped in the PR body (issue #230)'
     default: 'scc'
-    description: 'resolved engine adapter id stamped in the PR body (issue #230)'
-    default: 'scc'
 
 outputs:
   pr_number:
