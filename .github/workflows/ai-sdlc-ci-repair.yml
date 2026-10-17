@@ -397,6 +397,7 @@ jobs:
           console.log(`signature=${signature} prompt_bytes=${Buffer.byteLength(prompt)}`);
           NODE
 
+<<<<<<< HEAD
       - name: Consult failure runbook (issue #188)
         id: runbook
         if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
@@ -437,6 +438,30 @@ jobs:
             echo "entry=$(jq -r '.entry // ""' "$WORK/runbook.json")"
           } >> "$GITHUB_OUTPUT"
 
+      # Contract is read from the PR base (trusted ref), advisory — a broken
+      # contract is exactly what this stage exists to repair, so resolution
+      # failure degrades to the default engine, never a block.
+      - name: Resolve contract (.ai-sdlc.yaml)
+        id: contract
+        if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
+        uses: os-santiago/ai-sdlc/.github/actions/load-config@main
+        with:
+          repo: ${{ inputs.repo }}
+          ref: ${{ steps.guard.outputs.base_ref }}
+          checkout: 'true'
+          token: ${{ steps.app-token.outputs.token }}
+          required: 'false'
+
+      # Stage dispatch (issue #206): engines.ci-repair selects the adapter —
+      # an unregistered id fails loudly instead of silently running scc.
+      - name: Resolve stage engine (.ai-sdlc.yaml engines)
+        id: stage-engine
+        if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
+        uses: ./.github/actions/resolve-stage-engine
+        with:
+          stage: ci-repair
+          required: 'false'
+
       - uses: actions/checkout@v4
         if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
         with:
@@ -448,7 +473,7 @@ jobs:
           persist-credentials: false
 
       - name: Build scc engine from source
-        if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
+        if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true' && steps.stage-engine.outputs.engine == 'scc'
         run: |
           set -euo pipefail
           git clone --depth 1 https://github.com/os-santiago/sc-agent-cli /tmp/scc-src
@@ -457,7 +482,7 @@ jobs:
           scc --version
 
       - name: Configure scc engine provider
-        if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
+        if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true' && steps.stage-engine.outputs.engine == 'scc'
         env:
           MODEL_NAME: ${{ inputs.model }}
           PROVIDER_BASE_URL: ${{ inputs.provider_base_url || vars.AI_SDLC_PROVIDER_URL || 'https://models.github.ai/inference' }}
@@ -488,10 +513,12 @@ jobs:
           [ -z "${MODEL_API_KEY:-}" ] && KEY_SRC="GITHUB_TOKEN (GitHub Models)"
           echo "scc provider → baseUrl=${PROVIDER_BASE_URL} model=${MODEL_NAME} key=${KEY_SRC}"
 
-      - name: Run scc headless repair (bounded)
+      - name: Run stage engine headless repair (bounded)
         id: engine
         if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
         env:
+          STAGE_ENGINE: ${{ steps.stage-engine.outputs.engine }}
+          MODEL: ${{ inputs.model }}
           MAX_SECONDS: ${{ inputs.max_seconds }}
           MAX_STEPS: ${{ inputs.max_steps }}
           SC_PROVIDER_CONNECT_TIMEOUT_MS: '90000'
@@ -499,6 +526,23 @@ jobs:
           SC_FAILOVER: 'nvidia/nemotron-3-ultra-550b-a55b,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'
         run: |
           set +e
+          if [ "${STAGE_ENGINE:-scc}" != "scc" ]; then
+            # Stage dispatch (issue #206): non-scc adapter selected for
+            # ci-repair — invoke through the registry argv contract. Exit
+            # code is already adapter-mapped by the resolver.
+            ENGINE_DIR="$RUNNER_TEMP/ai-sdlc-engine"
+            node "$ENGINE_DIR/scripts/gha/stage-engine-resolver.js" \
+              --stage ci-repair \
+              --contract "$RUNNER_TEMP/ai-sdlc-contract/contract.json" \
+              --registry "$ENGINE_DIR/config/engine_adapters.json" \
+              --required false \
+              --run \
+              --model "$MODEL" \
+              --prompt-file "$WORK/repair-prompt.md" \
+              --manifest "$WORK/engine-manifest.json"
+            code=$?
+          else
+          # scc exit contract: 0 ok · 10 no-changes · 20 provider · 21 auth · 22 budget · 23 livelock
           scc chat -yq \
             --prompt-file "$WORK/repair-prompt.md" \
             --no-commit \
@@ -507,8 +551,8 @@ jobs:
             --max-seconds "$MAX_SECONDS" \
             --max-steps "$MAX_STEPS"
           code=$?
+          fi
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          # 0 ok · 10 no-changes · 20 provider · 21 auth · 22 budget · 23 livelock
           exit 0  # never fail the job here — outcome recorded below
 
       - name: Commit + push to PR head
@@ -666,6 +710,7 @@ jobs:
             ${{ runner.temp }}/ci-repair/repair-prompt.md
             ${{ runner.temp }}/ci-repair/scc-audit.jsonl
             ${{ runner.temp }}/ci-repair/scc-manifest.json
+            ${{ runner.temp }}/ci-repair/engine-manifest.json
             ${{ runner.temp }}/ci-repair/failing.json
             ${{ runner.temp }}/ci-repair/runbook.json
           if-no-files-found: ignore

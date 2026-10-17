@@ -1,10 +1,12 @@
 # ai-sdlc-implement — reusable implementation stage (issue #8)
 #
-# Runs the sc-agent-cli engine headless against an issue: produces a
+# Runs the stage-selected engine headless against an issue: produces a
 # branch + PR with bounded budgets, uploads the run manifest + audit log
 # as artifacts, and posts the manifest on the PR. Model route, fallback,
 # budgets and flow labels come from the resolved .ai-sdlc.yaml contract
-# (issue #22); inputs are override-only.
+# (issue #22); inputs are override-only. The engine itself comes from the
+# contract too: `engines.implement` wins over the global `engine.name`
+# (issue #206) — an id with no registered adapter fails before dispatch.
 #
 # Forge credential isolation (issue #210): the engine and every step up to
 # it run under FORGE_TOKEN_READ — a read-scoped ai-sdlc App installation
@@ -190,7 +192,18 @@ jobs:
         with:
           node-version: '22'
 
+      # Stage dispatch (issue #206): engines.implement in the resolved
+      # contract selects the adapter — unknown/unregistered ids fail here
+      # with exit 1 before any engine run.
+      - name: Resolve stage engine (.ai-sdlc.yaml engines)
+        id: stage-engine
+        uses: os-santiago/ai-sdlc/.github/actions/resolve-stage-engine@main
+        with:
+          stage: implement
+          contract: ${{ runner.temp }}/ai-sdlc-contract/contract.json
+
       - name: Build scc engine from source
+        if: steps.stage-engine.outputs.engine == 'scc'
         run: |
           set -euo pipefail
           git clone --depth 1 https://github.com/os-santiago/sc-agent-cli /tmp/scc-src
@@ -199,6 +212,7 @@ jobs:
           scc --version
 
       - name: Configure scc engine provider
+        if: steps.stage-engine.outputs.engine == 'scc'
         env:
           MODEL_NAME: ${{ steps.contract.outputs.model_primary }}
           PROVIDER_BASE_URL: ${{ inputs.provider_base_url || vars.AI_SDLC_PROVIDER_URL || 'https://models.github.ai/inference' }}
@@ -271,6 +285,7 @@ jobs:
           esac
 
       - name: Run scc headless (bounded, one fallback on provider/auth failure)
+      - name: Run stage engine headless (bounded, one model fallback on scc)
         id: engine
         env:
           # Trust boundary (issue #210): the engine process sees ONLY the
@@ -279,6 +294,7 @@ jobs:
           FORGE_TOKEN_READ: ${{ steps.app-token-read.outputs.token }}
           GH_TOKEN: ${{ steps.app-token-read.outputs.token }}
           ISSUE: ${{ inputs.issue_number }}
+          STAGE_ENGINE: ${{ steps.stage-engine.outputs.engine }}
           PRIMARY_MODEL: ${{ steps.contract.outputs.model_primary }}
           FALLBACK_MODEL: ${{ steps.contract.outputs.model_fallback }}
           MAX_SECONDS: ${{ steps.contract.outputs.max_seconds }}
@@ -290,7 +306,27 @@ jobs:
           SC_FAILOVER: 'nvidia/nemotron-3-ultra-550b-a55b,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'
         run: |
           set +e
-          # Exit contract: 0 ok · 10 no-changes · 20 provider · 21 auth · 22 budget · 23 livelock
+          ENGINE_DIR="$RUNNER_TEMP/ai-sdlc-engine"
+          if [ "$STAGE_ENGINE" != "scc" ]; then
+            # Stage dispatch (issue #206): the contract selected a non-scc
+            # engine — invoke it through the canonical adapter argv contract.
+            # Exit code is already adapter-mapped by the resolver.
+            node "$ENGINE_DIR/scripts/gha/stage-engine-resolver.js" \
+              --stage implement \
+              --contract "$RUNNER_TEMP/ai-sdlc-contract/contract.json" \
+              --registry "$ENGINE_DIR/config/engine_adapters.json" \
+              --run \
+              --model "$PRIMARY_MODEL" \
+              --prompt-file task-prompt.md \
+              --manifest scc-manifest.json
+            primary_exit=$?
+            exit_code=$primary_exit
+            model="$PRIMARY_MODEL"
+            fallback_used=false
+            fallback_reason=""
+            fallback_exit=""
+          else
+          # scc exit contract: 0 ok · 10 no-changes · 20 provider · 21 auth · 22 budget · 23 livelock
           # Only 20/21 earn exactly ONE fallback run; every other code is final.
           CONFIG="$HOME/.sc-agent/config.json"
           run_engine() {  # $1 audit log · $2 run manifest — own max-seconds/max-steps per run
@@ -338,6 +374,7 @@ jobs:
               fi
               ;;
           esac
+          fi
 
           jq -n \
             --arg primary_model "$PRIMARY_MODEL" \
@@ -434,6 +471,50 @@ jobs:
           engine: ${{ steps['stage-engine'].outputs.engine || steps.contract.outputs.engine_name }}
           token: ${{ steps.app-token-write.outputs.token }}
 
+          RUN_ID: ${{ github.run_id }}
+          ENGINE_NAME: ${{ steps.contract.outputs.engine_name }}
+          STAGE_ENGINE: ${{ steps.stage-engine.outputs.engine }}
+        run: |
+          set -euo pipefail
+          git config user.name "ai-sdlc[bot]"
+          git config user.email "ai-sdlc[bot]@users.noreply.github.com"
+          # Engine session artifacts are run evidence uploaded as workflow
+          # artifacts — exclude them so only real source changes land in the
+          # consumer diff (issue #68). They are gitignored only in this repo,
+          # and `git add` aborts when a pathspec names an ignored path, so
+          # unstage whatever got staged instead of `:!` pathspec excludes.
+          git add -A -- . ':!.github/workflows'
+          git diff --cached --name-only -z -- \
+            'scc-*.json*' 'ai-sdlc-run.json' 'issue.json' 'task-prompt.md' \
+            | xargs -0 -r git reset -q --
+          if ! git diff --cached --quiet; then
+            git commit -m "feat: implement issue #$ISSUE (ai-sdlc runtime)"
+          fi
+          SLUG=$(gh issue view "$ISSUE" -R "$REPO" --json title -q '.title' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | cut -c1-40 | sed 's/-*$//')
+          BRANCH="feat/issue-${ISSUE}-${SLUG}"
+          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$AUTH"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" \
+            push origin "HEAD:$BRANCH"
+          node - <<'NODE' > pr-body.md
+          const fs = require('fs');
+          const read = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch (e) { return {}; } };
+          const manifest = read('scc-manifest.json');
+          const run = read('ai-sdlc-run.json');
+          const steps = manifest.tool_calls_total ?? manifest.steps ?? 'n/a';
+          // Engine is referenced by adapter id (issue #230): resolved
+          // engine.name → contract.json on the runner → runtime default 'scc'.
+          const contract = read(`${process.env.RUNNER_TEMP}/ai-sdlc-contract/contract.json`);
+          const engineId = process.env.STAGE_ENGINE || process.env.ENGINE_NAME || (contract.engine || {}).name || 'scc';
+          const fallback = run.fallback_used
+            ? `yes — primary \`${run.primary_model}\` exited ${run.primary_exit} (${run.fallback_reason})`
+            : 'no';
+          fs.writeFileSync('pr-body.md', `## AI-SDLC autonomous implementation\n\nImplements issue per \`.ai-sdlc.yaml\` contract.\n\n**Run manifest:** model=\`${run.model ?? manifest.model ?? 'n/a'}\` · fallback=${fallback} · steps=${steps} · engine=${engineId} · audit log + \`ai-sdlc-run.json\` attached as workflow artifact.\n\nCloses #${process.env.ISSUE}\n\n_Generated by ai-sdlc-implement (run ${process.env.RUN_ID})_\n`);
+          NODE
+          PR_URL=$(gh pr create -R "$REPO" --base "${{ inputs.base }}" --head "$BRANCH" \
+            --title "$(gh issue view "$ISSUE" -R "$REPO" --json title -q .title)" \
+            --body-file pr-body.md)
+          echo "pr_number=${PR_URL##*/}" >> "$GITHUB_OUTPUT"
 
       - name: Label outcome on the issue
         # Post-script: deterministic label mutation under FORGE_TOKEN_WRITE.

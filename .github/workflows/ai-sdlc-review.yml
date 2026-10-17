@@ -214,6 +214,16 @@ jobs:
         with:
           node-version: '22'
 
+      # Stage dispatch (issue #206): engines.review selects the adapter —
+      # required=false mirrors this stage's advisory contract resolution
+      # (missing contract → global default engine, never a block).
+      - name: Resolve stage engine (.ai-sdlc.yaml engines)
+        id: stage-engine
+        uses: os-santiago/ai-sdlc/.github/actions/resolve-stage-engine@main
+        with:
+          stage: review
+          required: 'false'
+
       - name: Guard + ingest external reviewer signal
         id: guard
         env:
@@ -491,7 +501,7 @@ jobs:
           NODE
 
       - name: Build scc engine from source
-        if: steps.guard.outputs.decision == 'review'
+        if: steps.guard.outputs.decision == 'review' && steps.stage-engine.outputs.engine == 'scc'
         run: |
           set -euo pipefail
           git clone --depth 1 https://github.com/os-santiago/sc-agent-cli /tmp/scc-src
@@ -500,7 +510,7 @@ jobs:
           scc --version
 
       - name: Configure scc engine provider
-        if: steps.guard.outputs.decision == 'review'
+        if: steps.guard.outputs.decision == 'review' && steps.stage-engine.outputs.engine == 'scc'
         env:
           MODEL_NAME: ${{ inputs.model || steps.contract.outputs.review_model || steps.contract.outputs.model_primary }}
           PROVIDER_BASE_URL: ${{ inputs.provider_base_url || vars.AI_SDLC_PROVIDER_URL || 'https://models.github.ai/inference' }}
@@ -531,10 +541,12 @@ jobs:
           [ -z "${MODEL_API_KEY:-}" ] && KEY_SRC="GITHUB_TOKEN (GitHub Models)"
           echo "scc provider → baseUrl=${PROVIDER_BASE_URL} model=${MODEL_NAME} key=${KEY_SRC}"
 
-      - name: Run scc headless review (bounded)
+      - name: Run stage engine headless review (bounded)
         id: engine
         if: steps.guard.outputs.decision == 'review'
         env:
+          STAGE_ENGINE: ${{ steps.stage-engine.outputs.engine }}
+          MODEL: ${{ inputs.model || steps.contract.outputs.review_model || steps.contract.outputs.model_primary }}
           MAX_SECONDS: ${{ steps.contract.outputs.max_seconds }}
           MAX_STEPS: ${{ steps.contract.outputs.max_steps }}
           SC_PROVIDER_CONNECT_TIMEOUT_MS: '90000'
@@ -544,7 +556,23 @@ jobs:
           SC_FAILOVER: 'nvidia/nemotron-3-ultra-550b-a55b,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'
         run: |
           set +e
-          # Exit contract: 0 ok · 10 no-changes · 20 provider · 21 auth · 22 budget · 23 livelock
+          if [ "${STAGE_ENGINE:-scc}" != "scc" ]; then
+            # Stage dispatch (issue #206): the contract selected a non-scc
+            # engine — invoke it through the canonical adapter argv contract.
+            # Exit code is already adapter-mapped by the resolver.
+            ENGINE_DIR="$RUNNER_TEMP/ai-sdlc-engine"
+            node "$ENGINE_DIR/scripts/gha/stage-engine-resolver.js" \
+              --stage review \
+              --contract "$RUNNER_TEMP/ai-sdlc-contract/contract.json" \
+              --registry "$ENGINE_DIR/config/engine_adapters.json" \
+              --required false \
+              --run \
+              --model "$MODEL" \
+              --prompt-file "$WORK/review-prompt.md" \
+              --manifest "$WORK/engine-manifest.json"
+            code=$?
+          else
+          # scc exit contract: 0 ok · 10 no-changes · 20 provider · 21 auth · 22 budget · 23 livelock
           scc chat -yq \
             --prompt-file "$WORK/review-prompt.md" \
             --no-commit \
@@ -553,6 +581,7 @@ jobs:
             --max-seconds "$MAX_SECONDS" \
             --max-steps "$MAX_STEPS"
           code=$?
+          fi
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           # The verdict file is the machine contract; anything else the
           # engine wrote stays uncommitted (review never commits).
@@ -780,6 +809,7 @@ jobs:
             ${{ runner.temp }}/ai-sdlc-review/fix-findings.json
             ${{ runner.temp }}/ai-sdlc-review/scc-audit.jsonl
             ${{ runner.temp }}/ai-sdlc-review/scc-manifest.json
+            ${{ runner.temp }}/ai-sdlc-review/engine-manifest.json
           if-no-files-found: ignore
           retention-days: 14
 
@@ -869,6 +899,28 @@ jobs:
         with:
           node-version: '22'
 
+      # Contract is read from the PR base (trusted ref), advisory — a broken
+      # contract degrades to the default engine rather than blocking a fix
+      # pass the review stage already dispatched.
+      - name: Resolve contract (.ai-sdlc.yaml)
+        id: contract
+        uses: os-santiago/ai-sdlc/.github/actions/load-config@main
+        with:
+          repo: ${{ inputs.repo }}
+          ref: ${{ inputs.base }}
+          checkout: 'true'
+          token: ${{ steps.app-token.outputs.token }}
+          required: 'false'
+
+      # Stage dispatch (issue #206): the fix pass is part of the review
+      # stage — it runs whichever adapter `engines.review` selects.
+      - name: Resolve stage engine (.ai-sdlc.yaml engines)
+        id: stage-engine
+        uses: os-santiago/ai-sdlc/.github/actions/resolve-stage-engine@main
+        with:
+          stage: review
+          required: 'false'
+
       - name: Mark fix attempt on PR
         # Stamped at DISPATCH, not at completion: the merge gate holds
         # `review-fix-running` only while a fix marker exists, and a fix job
@@ -932,6 +984,7 @@ jobs:
           NODE
 
       - name: Build scc engine from source
+        if: steps.stage-engine.outputs.engine == 'scc'
         run: |
           set -euo pipefail
           git clone --depth 1 https://github.com/os-santiago/sc-agent-cli /tmp/scc-src
@@ -940,6 +993,7 @@ jobs:
           scc --version
 
       - name: Configure scc engine provider
+        if: steps.stage-engine.outputs.engine == 'scc'
         env:
           MODEL_NAME: ${{ needs.review.outputs.resolved_model }}
           PROVIDER_BASE_URL: ${{ inputs.provider_base_url || vars.AI_SDLC_PROVIDER_URL || 'https://models.github.ai/inference' }}
@@ -970,13 +1024,32 @@ jobs:
           [ -z "${MODEL_API_KEY:-}" ] && KEY_SRC="GITHUB_TOKEN (GitHub Models)"
           echo "scc provider → baseUrl=${PROVIDER_BASE_URL} model=${MODEL_NAME} key=${KEY_SRC}"
 
-      - name: Run scc headless fix (bounded)
+      - name: Run stage engine headless fix (bounded)
         id: engine
         env:
+          STAGE_ENGINE: ${{ steps.stage-engine.outputs.engine }}
+          MODEL: ${{ needs.review.outputs.resolved_model }}
           MAX_SECONDS: ${{ needs.review.outputs.max_seconds }}
           MAX_STEPS: ${{ needs.review.outputs.max_steps }}
         run: |
           set +e
+          if [ "${STAGE_ENGINE:-scc}" != "scc" ]; then
+            # Stage dispatch (issue #206): non-scc adapter selected for the
+            # review stage — invoke through the registry argv contract.
+            # Exit code is already adapter-mapped by the resolver.
+            ENGINE_DIR="$RUNNER_TEMP/ai-sdlc-engine"
+            node "$ENGINE_DIR/scripts/gha/stage-engine-resolver.js" \
+              --stage review \
+              --contract "$RUNNER_TEMP/ai-sdlc-contract/contract.json" \
+              --registry "$ENGINE_DIR/config/engine_adapters.json" \
+              --required false \
+              --run \
+              --model "$MODEL" \
+              --prompt-file "$WORK/fix-prompt.md" \
+              --manifest "$WORK/engine-manifest.json"
+            code=$?
+          else
+          # scc exit contract: 0 ok · 10 no-changes · 20 provider · 21 auth · 22 budget · 23 livelock
           scc chat -yq \
             --prompt-file "$WORK/fix-prompt.md" \
             --no-commit \
@@ -985,8 +1058,8 @@ jobs:
             --max-seconds "$MAX_SECONDS" \
             --max-steps "$MAX_STEPS"
           code=$?
+          fi
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          # 0 ok · 10 no-changes · 20 provider · 21 auth · 22 budget · 23 livelock
           exit 0  # never fail the job here — outcome recorded below
 
       - name: Commit + push to PR head
@@ -1092,6 +1165,7 @@ jobs:
             ${{ runner.temp }}/ai-sdlc-review-fix/fix-prompt.md
             ${{ runner.temp }}/ai-sdlc-review-fix/scc-audit.jsonl
             ${{ runner.temp }}/ai-sdlc-review-fix/scc-manifest.json
+            ${{ runner.temp }}/ai-sdlc-review-fix/engine-manifest.json
           if-no-files-found: ignore
           retention-days: 14
 

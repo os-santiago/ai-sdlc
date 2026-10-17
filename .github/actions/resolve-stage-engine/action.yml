@@ -1,0 +1,80 @@
+# resolve-stage-engine — per-stage engine dispatch gate (issue #206, epic #152)
+#
+# Reads the resolved contract (load-config's contract.json) for the stage's
+# `engines.<stage>` entry — falling back to the global `engine.name`, itself
+# defaulting to `scc` — and verifies the selected engine has a registered
+# adapter in config/engine_adapters.json. A stage that selects an engine
+# with no registered adapter fails the step (exit 1) with the engine named:
+# a contract-certified but unimplemented id can never silently dispatch to
+# the wrong engine.
+#
+# The resolver + adapter layer + registry are staged into
+# $RUNNER_TEMP/ai-sdlc-engine/ so the workflow's run step can dispatch a
+# non-scc engine through the registry argv contract:
+#
+#   node "$RUNNER_TEMP/ai-sdlc-engine/scripts/gha/stage-engine-resolver.js" \
+#     --stage <stage> --contract <contract.json> \
+#     --registry "$RUNNER_TEMP/ai-sdlc-engine/config/engine_adapters.json" \
+#     --run --model "$MODEL" --prompt-file <prompt> --manifest <manifest>
+#
+# (the --run exit code is already adapter-mapped via the registry's
+# exitCodeMap).
+name: ai-sdlc resolve-stage-engine
+description: Resolve the stage engine from .ai-sdlc.yaml engines and verify its adapter registration
+
+inputs:
+  stage:
+    description: 'pipeline stage key (intake | implement | review | automerge | verify | ci-repair | sweep)'
+    required: true
+  contract:
+    description: 'resolved contract.json path (load-config output); empty = $RUNNER_TEMP/ai-sdlc-contract/contract.json'
+    required: false
+    default: ''
+  required:
+    description: "'true' (default) fails when the contract file is absent; 'false' falls back to the global default engine — for advisory stages whose load-config runs with required=false"
+    required: false
+    default: 'true'
+
+outputs:
+  engine:
+    description: 'engine id resolved for the stage (engines.<stage> → engine.name → scc)'
+    value: ${{ steps.resolve.outputs.engine }}
+  engine_source:
+    description: 'provenance of the resolved id: engines.<stage> | engine.name | default'
+    value: ${{ steps.resolve.outputs.engine_source }}
+  engine_binary:
+    description: 'adapter binary invoked at dispatch ({ENGINE}_BINARY override applies)'
+    value: ${{ steps.resolve.outputs.engine_binary }}
+
+runs:
+  using: composite
+  steps:
+    - name: Stage resolver + registry
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Composite actions materialize the whole runtime repo at the pin —
+        # $GITHUB_ACTION_PATH/../../.. is the repo root (same layout the
+        # load-config action uses to reach spec/ and tools/).
+        ROOT="$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)"
+        DEST="$RUNNER_TEMP/ai-sdlc-engine"
+        mkdir -p "$DEST/scripts/gha" "$DEST/config"
+        cp "$ROOT/scripts/engine_adapter.js" "$DEST/scripts/engine_adapter.js"
+        cp "$ROOT/scripts/gha/stage-engine-resolver.js" "$DEST/scripts/gha/stage-engine-resolver.js"
+        cp "$ROOT/config/engine_adapters.json" "$DEST/config/engine_adapters.json"
+
+    - name: Resolve stage engine
+      id: resolve
+      shell: bash
+      env:
+        STAGE: ${{ inputs.stage }}
+        CONTRACT_PATH: ${{ inputs.contract }}
+        REQUIRED: ${{ inputs.required }}
+      run: |
+        set -euo pipefail
+        DEST="$RUNNER_TEMP/ai-sdlc-engine"
+        node "$DEST/scripts/gha/stage-engine-resolver.js" \
+          --stage "$STAGE" \
+          --contract "${CONTRACT_PATH:-$RUNNER_TEMP/ai-sdlc-contract/contract.json}" \
+          --registry "$DEST/config/engine_adapters.json" \
+          --required "$REQUIRED"
