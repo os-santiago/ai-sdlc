@@ -138,7 +138,7 @@ jobs:
         id: ledger
         if: always()
         continue-on-error: true
-        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
+        uses: ./.github/actions/run-ledger
         with:
           op: append
           stage: verify
@@ -154,7 +154,7 @@ jobs:
         id: seal
         if: always() && steps.ledger.outputs.head != ''
         continue-on-error: true
-        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
+        uses: ./.github/actions/run-ledger
         with:
           op: seal
           stage: verify
