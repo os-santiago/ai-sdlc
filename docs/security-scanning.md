@@ -22,6 +22,50 @@ The pipeline integration applies to Dependabot only: its PRs carry the
 `dependencies` label → the classifier's dep fast-path → review →
 automerge, identical to the vetted sweep (`ai-sdlc-dep-update.yml`).
 
+## SHA-pinned `uses:` refs (issues #118/#123)
+
+Every third-party `uses:` across `.github/workflows/*.yml` and
+`.github/actions/*/action.yml` is pinned to a **full commit SHA** with a
+`# <version>` comment — never a mutable tag or branch:
+
+```yaml
+- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+```
+
+Tags are movable: a retagged or hijacked action release would execute
+inside jobs holding `AI_SDLC_APP_PRIVATE_KEY` and minted installation
+tokens. `tools/pin-actions.py` resolves `owner/repo@<tag>` to its commit
+SHA and rewrites in place; `--check` runs inside `tools/validate-repo.sh`
+so an unpinned ref fails local validation and CI.
+
+Pinning does **not** freeze versions — Dependabot's `github-actions`
+ecosystem (above) reads the `# <version>` comment and opens update PRs
+that bump the SHA and the comment together.
+
+**Exempt by design:** `os-santiago/ai-sdlc` self-refs stay on the
+`runtime_ref` convention — each reusable stage declares a `runtime_ref`
+input (default `main`) so the workflow ref and the runtime scripts it
+fetches move together; local `./.github/...` refs are pinned by the
+checkout itself.
+
+**Consumer guidance:** caller workflows in consuming repos should pin
+the same way — reference the reusable stages by commit SHA (or a `vX.Y.Z`
+tag once the release-tag scheme lands) and set the stage's `runtime_ref`
+input to the same ref:
+
+```yaml
+uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-intake.yml@<commit-sha>
+with:
+  repo: ${{ github.repository }}
+  issue_number: ${{ github.event.issue.number }}
+  runtime_ref: <commit-sha>
+```
+
+`@main` tracks bleeding edge — fine for evaluation, discouraged for
+production lanes where an unreviewed upstream push would change pipeline
+behavior between runs. Consumer-side Dependabot keeps SHA-pinned
+workflow refs fresh exactly like action refs.
+
 ## Repo-settings toggles (admin scope — cannot ship in YAML)
 
 `dependabot.yml` only configures **version** updates. The **security** side

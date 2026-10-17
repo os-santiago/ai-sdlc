@@ -119,6 +119,12 @@ The bootstrap PR (and the manual path below) wires three things:
    Review, automerge, ci-repair, sweep and verify wire the same way —
    [docs/runtime.md](docs/runtime.md) has each stage's caller block.
 
+   The examples track `@main` for readability — for production, pin the
+   `uses:` ref to a commit SHA (or a `vX.Y.Z` tag once the release-tag
+   scheme lands) and set the stage's `runtime_ref` input to the same
+   ref; Dependabot keeps SHA-pinned refs fresh. See
+   [docs/security-scanning.md](docs/security-scanning.md#sha-pinned-uses-refs-issues-118123).
+
 3. **App + secrets** — install the `ai-sdlc` GitHub App on the repo and
    expose `AI_SDLC_APP_ID` + `AI_SDLC_APP_PRIVATE_KEY` to it (org secrets
    scoped to the consumer repos are the intended setup). Every mutation

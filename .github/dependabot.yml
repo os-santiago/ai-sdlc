@@ -5,7 +5,16 @@
 #                      manifest under .github/actions/ declares zero deps,
 #                      so a single root entry covers the real surface.
 #   - github-actions → every `uses:` pin across .github/workflows/ and
-#                      .github/actions/.
+#                      .github/actions/. All third-party refs are pinned
+#                      to full commit SHAs with a `# <version>` comment
+#                      (issues #118/#123, enforced by tools/pin-actions.py
+#                      --check in tools/validate-repo.sh); Dependabot
+#                      updates the SHA and refreshes the comment, so
+#                      pinning changes *immutability*, not freshness.
+#                      os-santiago/ai-sdlc self-refs stay on the
+#                      runtime_ref convention and are not Dependabot's
+#                      concern — consumers pin them in their own caller
+#                      workflows.
 #
 # Bounded per the every-mutable-step-is-bounded rule: at most 5 open PRs
 # per ecosystem, and minor+patch bumps are grouped into ONE consolidated

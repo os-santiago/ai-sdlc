@@ -94,7 +94,7 @@ jobs:
           app-private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
           purpose: labels
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with:
           node-version: '22'
 

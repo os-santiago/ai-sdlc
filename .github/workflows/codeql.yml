@@ -43,12 +43,12 @@ jobs:
       actions: read            # required for CodeQL on private repos
     steps:
       - name: checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
 
       - name: initialize codeql
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@ce5e7eeac396d720fe2d802714996c8ce561e311  # v3
         with:
           languages: javascript
 
       - name: analyze
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@ce5e7eeac396d720fe2d802714996c8ce561e311  # v3

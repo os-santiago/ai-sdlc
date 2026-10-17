@@ -103,7 +103,7 @@ jobs:
           node "$WORK/scripts/slo-metrics.js" --input slo-input.json --window "$WINDOW" \
             --format markdown --github-summary >/dev/null
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: ai-sdlc-slo-metrics
           path: |

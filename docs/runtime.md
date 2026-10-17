@@ -280,6 +280,29 @@ App installation token with `actions/create-github-app-token` and **fail
 closed** when the secrets are absent — no PAT/`GITHUB_TOKEN` fallback, so
 pushes and PRs always fire downstream workflows (issue #26).
 
+### Pin the workflow ref (issues #118/#123)
+
+The examples use `@main` — a mutable ref that makes an upstream push
+change the consumer's CI between runs. For production lanes, pin the
+`uses:` ref to a **full commit SHA** (or a `vX.Y.Z` tag once the
+release-tag scheme lands) and set `runtime_ref` to the same ref so the
+workflow file and the runtime scripts it fetches stay version-locked:
+
+```yaml
+uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-intake.yml@<commit-sha>
+with:
+  repo: ${{ github.repository }}
+  issue_number: ${{ github.event.issue.number }}
+  runtime_ref: <commit-sha>
+```
+
+Consumer-side Dependabot (`github-actions` ecosystem) updates SHA-pinned
+workflow refs and their `# <version>` comments — pinning buys
+immutability without losing freshness. The runtime repo applies the same
+rule internally: every third-party `uses:` is SHA-pinned and enforced by
+`tools/pin-actions.py --check`. Full posture:
+[security-scanning.md](security-scanning.md#sha-pinned-uses-refs-issues-118123).
+
 ## Forge credential isolation (trust boundary)
 
 In `ai-sdlc-implement` the engine never holds a forge write credential
