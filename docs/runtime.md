@@ -791,6 +791,75 @@ from the implement stage's `git add` (`:!scc-*.json*`, `:!ai-sdlc-run.json`,
 `.gitignore` — so a run's commit only ever carries real source changes
 (issue #68).
 
+## Cost accounting (issue→merge)
+
+`scripts/cost-accounting.js` records prompt/completion token usage for every
+LLM-bearing stage into a JSONL usage ledger (`ai-sdlc-usage.jsonl`) and
+prices each record against the declared table in `config/cost_models.json`
+(issue #195; epic #148). Cost is always computed from the table — the
+engine's own `estimated_cost_usd` is preserved on the record as
+`engine_cost_usd` for auditing, never trusted for rollup math. Everything
+is bounded (`AI_SDLC_COST_MAX_LEDGER_BYTES`, `AI_SDLC_COST_MAX_ENTRIES`)
+and malformed ledger lines are skipped — accounting must never break the
+pipeline.
+
+```bash
+# implement stage — after the engine run, one record per manifest
+node scripts/cost-accounting.js record --ledger ai-sdlc-usage.jsonl \
+  --stage implement --issue "$ISSUE" --manifest scc-manifest.json \
+  --outcome "$(jq -r '.exit_reason // .resolution // empty' scc-manifest.json)" \
+  --github-output
+# …and again with scc-manifest.primary.json when the fallback fired
+# (stage stays `implement`; the manifest carries its own model).
+
+# review / ci-repair stages — same op, their own stage + manifest
+node scripts/cost-accounting.js record --ledger ai-sdlc-usage.jsonl \
+  --stage review --issue "$ISSUE" --pr "$PR" --manifest scc-manifest.json
+
+# issue→merge rollup, queryable at any point in the lifecycle
+node scripts/cost-accounting.js rollup --ledger ai-sdlc-usage.jsonl --issue "$ISSUE"
+node scripts/cost-accounting.js rollup --ledger ai-sdlc-usage.jsonl --markdown
+
+# budget thresholds — advisory by default; --strict exits 1 on `exceeded`
+node scripts/cost-accounting.js check --ledger ai-sdlc-usage.jsonl
+node scripts/cost-accounting.js check --ledger ai-sdlc-usage.jsonl --strict
+```
+
+**Wiring points** (record ops run under `if: always()` +
+`continue-on-error: true`, same posture as other evidence steps):
+
+- `ai-sdlc-implement.yml` — after the *Run scc headless* step: `record`
+  with `--manifest scc-manifest.json` (and `scc-manifest.primary.json`
+  when `fallback_used=true`), `--stage implement`, `--issue`, and
+  `--outcome` from the manifest; add `ai-sdlc-usage.jsonl` to the
+  `ai-sdlc-run-<issue>` artifact paths.
+- `ai-sdlc-review.yml` — `record --stage review --pr` after each reviewer
+  engine invocation; include the ledger in the review artifact upload.
+- `ai-sdlc-ci-repair.yml` — `record --stage ci-repair --pr` per repair
+  attempt, so repair cost accrues to the issue.
+- `ai-sdlc-intake.yml` / `ai-sdlc-automerge.yml` / `ai-sdlc-verify.yml` —
+  `record` with the matching stage when the stage makes LLM calls;
+  `automerge` records mark the rollup lifecycle `merged`.
+- Post-merge economics — a workflow (or the sweep) downloads the stage
+  artifacts and runs `rollup --issue` / `check`; the per-issue total is
+  the acceptance artifact for "cost per issue→merge run".
+
+**Run-ledger forward-compat** (issue #196): each record is a JSON object
+with the same envelope fields the signed run ledger digests
+(`v`/`stage`/`ts`/`repo`/`issue`/`pr`/`run`), so `record` output can be
+passed verbatim as the `--data` payload of a ledger `append` — and
+`normalizeRecord` unwraps usage records embedded in `data` on the way
+back, so rollups keep working once stage ledgers become the transport.
+
+**Pricing**: `config/cost_models.json` keys are provider-qualified model
+ids (`openai/gpt-4o`, `nvidia/nemotron-3-super-120b-a12b`); lookup is
+exact → case-insensitive → provider-suffix → `default` (never silent-zero
+for unknowns). Update prices there when the provider or tier changes;
+NIM free-tier endpoints are declared at `0.0` explicitly. Budget caps
+(`per_issue_usd`, `per_issue_tokens`, `daily/weekly/monthly_usd`) and
+`alert_thresholds` live in the same file; `AI_SDLC_COST_CONFIG` points at
+an override.
+
 ## Kill-switch (`AI_SDLC_OFF`)
 
 `AI_SDLC_OFF` is the emergency stop, carried as a **repository variable**

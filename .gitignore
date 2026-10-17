@@ -6,3 +6,6 @@ node_modules/
 /ai-sdlc-run.json
 /issue.json
 /task-prompt.md
+# per-stage token/cost usage ledger — run evidence, ships as workflow
+# artifact, never in diffs (issue #195)
+/ai-sdlc-usage.jsonl
