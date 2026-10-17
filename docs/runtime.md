@@ -28,7 +28,7 @@ engine only, no GitHub webhook adapter yet).
 | `ai-sdlc-intake.yml` | conversational refinement (`scripts/intake-refiner.js`): spec-completeness check → one upserted comment (clarifying questions or derived ACs) + `scc:not-ready` hold, fingerprint-retriggered on edits/replies; duplicate scan (`scripts/dup-detector.js`): token-Jaccard + marker-key similarity over the open backlog → one advisory upserted comment (never closes, never label-blocks); then DoR validation (R1–R6 per `spec/definition-of-ready.md`), `scc:queued`/`scc:not-ready` labels | `issues` (labeled/opened/edited) + `issue_comment` in caller |
 | `ai-sdlc-intake.yml` | Epic decomposition (`epic` → `scc:child` sub-issues) or DoR validation (R1–R6 per `spec/definition-of-ready.md`), `scc:queued`/`scc:not-ready` labels | `issues.labeled` in caller |
 | `ai-sdlc-implement.yml` | `scc` headless run → branch → PR (`Closes #N`) + manifest/audit artifacts | called on `scc:queued` |
-| `ai-sdlc-automerge.yml` | merge-gate decision table (spec/risk-taxonomy.md): green+mergeable → squash+delete; failing → repair signal; pending/conflict → `needs-human`; pending review holds only up to `review.wait_max_minutes` → `review_timeout` merge | `check_run.completed` / `pull_request` / called |
+| `ai-sdlc-automerge.yml` | merge-gate decision table (spec/risk-taxonomy.md): green+mergeable → squash+delete; failing → repair signal; pending/conflict → `needs-human`; pending review holds only up to `review.wait_max_minutes` → `review_timeout` merge; fork/external heads and zero-check rollups fail closed → `needs-human`, never merge | `check_run.completed` / `pull_request` / called |
 | `ai-sdlc-classify.yml` | deterministic diff risk classification (`scripts/risk-classifier.js`): path/size/content signals → `pr:risk-*` label on every `pull_request` event — recomputed on each push | `pull_request` (opened/synchronize) |
 | `ai-sdlc-review.yml` | AI review + bounded review-fix convergence: verdict marker per head SHA + `pr:risk-*` tier label; `blocker|major`/`request_changes` → fix pass on the same branch → re-review; `needs-human` after `max_fix_iterations` | `pull_request` (opened/synchronize) / called post-implement |
 | `ai-sdlc-sweep.yml` | scheduled stall-sweep: enumerates open pipeline PRs and feeds each to `ai-sdlc-automerge.yml` — no green-idle PRs | `schedule` (every 30 min) / `workflow_dispatch` |
@@ -505,6 +505,35 @@ and comments once per episode on the held PR. A green verdict while the
 latch is held closes the issue (`cleared`); comments fire only on the
 red↔green transition. Sentinel infra failures (script fetch/eval) also
 fail open. `merge.main_guard.enabled: false` (or `MAIN_GUARD=0`) disables.
+
+#### Automerge hardening gates (issues #119/#120)
+
+Two contract gates run inside the eval's decision table before any merge —
+both default **on** and fail closed; opting out is an explicit contract
+declaration, never silence:
+
+- **Provenance gate** — `merge.require_pipeline_provenance` (default
+  `true`): only a same-repo head (`isCrossRepository` false, head owner
+  and repo matching the target) authored by `merge.pipeline_author`
+  (default `ai-sdlc-runtime[bot]`) or an explicit `merge.allow_authors`
+  entry may auto-merge. A fork head escalates `provenance:fork-head`; any
+  other author escalates `provenance:untrusted-author` — both land the
+  escalation label (`needs-human`) and route via the `provenance` failure
+  class (spec/risk-taxonomy.md). Missing head/author fields fail closed.
+  `false` restores the legacy any-author behavior.
+- **Zero-check gate** — `merge.require_checks`: a mergeable head
+  reporting **zero** check-runs is a missing signal, not a green rollup —
+  `held` (`no-checks`) while the head is younger than
+  `merge.pending_max_minutes`, then `escalated` (`no-checks` →
+  `checks-stalled` class) so a repo with no CI surfaces as needs-human
+  instead of merging blind. `false` restores legacy checkless merging.
+  When unset, the field resolves from `autonomy.merge_requires_checks`
+  (default `true`) — the trust-ladder declaration stays the single point
+  of truth.
+
+To keep trusted automation flowing (e.g. dependabot), list the bot logins
+in `merge.allow_authors`; a differently-named runtime app sets
+`merge.pipeline_author`.
 
 ### ai-sdlc-classify
 | Input | Default | Purpose |

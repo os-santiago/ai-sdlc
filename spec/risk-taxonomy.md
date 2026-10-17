@@ -29,14 +29,35 @@ Ambiguity resolves UP: when signals straddle tiers, the higher tier wins.
 
 ```
 IF draft OR skip-label (needs-human|hold|do-not-merge|wip) → HOLD (human owns)
+IF require_pipeline_provenance (default on):
+   fork/cross-repo head OR author outside {pipeline_author} ∪ allow_authors
+   → ESCALATE (needs-human, provenance) — never merge
 IF checks red    → repair loop (bounded) → exhausted → ESCALATE
 IF checks pending > pending_max → ESCALATE
+IF ZERO checks reported AND require_checks (default on):
+   head age ≤ pending_max → HOLD (rollup may still be registering)
+   head age > pending_max → ESCALATE (needs-human, checks-stalled)
 IF conflict      → one update-branch attempt → still conflicting → ESCALATE
 IF dep violations → ESCALATE (needs-human, supply-chain)
 IF risk-critical AND NOT risk-accepted → HOLD
 IF risk-high/medium AND blocking review findings unresolved → repair loop
 IF checks green AND mergeable AND tier evidence satisfied → MERGE (squash)
 ```
+
+Provenance gate (issue #119): a green check rollup is only meaningful on a
+trusted head. `merge.require_pipeline_provenance` (default `true`) admits
+only same-repo heads authored by `merge.pipeline_author` (the runtime's
+GitHub App, default `ai-sdlc-runtime[bot]`) or an explicit
+`merge.allow_authors` entry; anything else escalates `provenance:*` —
+a check-green external PR can never self-merge into main. `false`
+restores the legacy any-author behavior.
+
+Zero-check fail-closed (issue #120): `merge.require_checks` treats a
+check-free rollup as a missing signal, not a vacuous pass — the head is
+`held` while young and escalates past `merge.pending_max_minutes`. A repo
+with no CI must opt out explicitly (`merge.require_checks: false`); when
+the field is unset it resolves from `autonomy.merge_requires_checks`
+(itself default `true`).
 
 `ESCALATE` = `needs-human` label + explanatory comment + notification.
 `HOLD` = wait for the missing condition; the label state is re-evaluated
@@ -52,7 +73,8 @@ supply-chain halt and a stalled dep-update no longer land identically.
 | Class | Emitted when | Decision-table source |
 |---|---|---|
 | `conflict` | `mergeable=CONFLICTING` survives the update-branch attempt | conflict → ESCALATE |
-| `checks-stalled` | checks pending past `merge.pending_max_minutes` | pending-timeout → ESCALATE |
+| `checks-stalled` | checks pending past `merge.pending_max_minutes`, or zero check-runs past the cap under `merge.require_checks` | pending-timeout / no-checks → ESCALATE |
+| `provenance` | fork/cross-repo head or a non-pipeline, non-allowlisted author on the head branch | provenance:fork-head / provenance:untrusted-author → ESCALATE |
 | `repair-stalled` | a repair signal on the head produced no new head within the cap | repair-stalled → ESCALATE |
 | `repairs-exhausted` | the bounded repair budget is consumed with checks still red | repairs-exhausted → ESCALATE |
 | `repair-failed` | a repair attempt produced no pushable fix (no-changes, engine/provider exit, push rejected) | ci-repair escalate |

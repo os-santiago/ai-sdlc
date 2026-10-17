@@ -70,6 +70,15 @@ merge:
   max_repairs: 5           # internal velocity > bounded repair count
   pending_max_minutes: 45
   grace_minutes: 5
+  # Hardening gates (issues #119/#120, spec/risk-taxonomy.md) — both
+  # default on; declared for the audit record. require_checks holds a
+  # zero-check rollup (never merges blind); the provenance gate admits
+  # only same-repo heads by the pipeline bot or allow_authors.
+  require_checks: true
+  require_pipeline_provenance: true
+  pipeline_author: ai-sdlc-runtime[bot]
+  allow_authors:
+    - dependabot[bot]    # dep-update worker PRs stay autonomous
   skip_labels:
     - needs-human
     - hold
@@ -120,6 +129,7 @@ escalation:
   # classes fall back to `default` — alerting is never silent.
   routes:
     security:          {mentions: ["@Axel-DaMage", "my-org/security-team"], labels: ["priority:P0"], channel: discord:ops}
+    provenance:        {mentions: ["@Axel-DaMage", "my-org/security-team"], labels: ["priority:P0"], channel: discord:ops}
     contract-error:    {mentions: ["@Axel-DaMage"], labels: ["priority:P0"], channel: issue-comment}
     supply-chain:      {mentions: ["my-org/security-team"], labels: ["priority:P1"], channel: issue-comment}
     verify-failure:    {mentions: ["@Axel-DaMage"], labels: ["priority:P1"], channel: discord:ops}

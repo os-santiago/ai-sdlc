@@ -1,0 +1,20 @@
+{
+  "id": "resolve-merge-hardening-explicit",
+  "type": "contract-resolve",
+  "title": "explicit merge.* hardening opt-outs and allow_authors win over the autonomy fallback (issues #119/#120)",
+  "requires": ["python3"],
+  "input": {
+    "repo_cfg": {
+      "spec": "1.0.0",
+      "autonomy": { "level": "auto-merge-all", "merge_requires_checks": true },
+      "merge": {
+        "require_checks": false,
+        "require_pipeline_provenance": false,
+        "pipeline_author": "acme-pipeline[bot]",
+        "allow_authors": ["dependabot[bot]", "renovate[bot]"]
+      }
+    },
+    "overrides": {}
+  },
+  "compare": { "omit": ["outputs.path"] }
+}

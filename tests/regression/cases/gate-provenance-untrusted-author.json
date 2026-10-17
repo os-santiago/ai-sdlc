@@ -1,0 +1,23 @@
+{
+  "id": "gate-provenance-untrusted-author",
+  "type": "merge-gate",
+  "title": "same-repo head by a non-pipeline, non-allowlisted author escalates (issue #119)",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "pr": {
+      "number": 72, "title": "feat: looks fine", "isDraft": false,
+      "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
+      "headRefOid": "deadbeef0123456789abcdef0123456789abcdef",
+      "baseRefName": "main",
+      "labels": [],
+      "createdAt": "2026-10-17T11:00:00Z",
+      "comments": [],
+      "commits": [{ "committedDate": "2026-10-17T11:30:00Z" }],
+      "author": { "login": "some-contributor", "is_bot": false, "type": "User" },
+      "isCrossRepository": false,
+      "headRepositoryOwner": { "login": "owner" },
+      "headRepository": { "name": "repo" }
+    },
+    "checks": [{ "name": "contract", "state": "SUCCESS", "bucket": "pass" }]
+  }
+}

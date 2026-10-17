@@ -10,7 +10,11 @@
       "headRefOid": "a1b2c3d", "baseRefName": "main",
       "labels": [{ "name": "pr:risk-critical" }, { "name": "pr:risk-accepted" }],
       "createdAt": "2026-10-17T11:00:00Z", "comments": [],
-      "commits": [{ "committedDate": "2026-10-17T11:30:00Z" }]
+      "commits": [{ "committedDate": "2026-10-17T11:30:00Z" }],
+      "author": { "login": "ai-sdlc-runtime[bot]", "is_bot": true, "type": "Bot" },
+      "isCrossRepository": false,
+      "headRepositoryOwner": { "login": "owner" },
+      "headRepository": { "name": "repo" }
     },
     "checks": [{ "name": "contract", "bucket": "pass" }]
   }

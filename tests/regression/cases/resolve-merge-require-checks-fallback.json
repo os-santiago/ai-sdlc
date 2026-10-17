@@ -1,0 +1,14 @@
+{
+  "id": "resolve-merge-require-checks-fallback",
+  "type": "contract-resolve",
+  "title": "unset merge.require_checks inherits autonomy.merge_requires_checks (issue #120)",
+  "requires": ["python3"],
+  "input": {
+    "repo_cfg": {
+      "spec": "1.0.0",
+      "autonomy": { "level": "auto-merge-all", "merge_requires_checks": false }
+    },
+    "overrides": {}
+  },
+  "compare": { "omit": ["outputs.path"] }
+}

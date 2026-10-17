@@ -1,0 +1,24 @@
+{
+  "id": "gate-no-checks-stale-escalated",
+  "type": "merge-gate",
+  "title": "check-free head past pending_max_minutes escalates — a no-CI repo never merges blind (issue #120)",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "env": { "PENDING_MAX": "60" },
+    "pr": {
+      "number": 76, "title": "feat: still no ci", "isDraft": false,
+      "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
+      "headRefOid": "deadbeef0123456789abcdef0123456789abcdef",
+      "baseRefName": "main",
+      "labels": [],
+      "createdAt": "2026-10-17T08:00:00Z",
+      "comments": [],
+      "commits": [{ "committedDate": "2026-10-17T10:00:00Z" }],
+      "author": { "login": "ai-sdlc-runtime[bot]", "is_bot": true, "type": "Bot" },
+      "isCrossRepository": false,
+      "headRepositoryOwner": { "login": "owner" },
+      "headRepository": { "name": "repo" }
+    },
+    "checks": []
+  }
+}

@@ -8,7 +8,11 @@
       "number": 43, "isDraft": true, "mergeable": "MERGEABLE",
       "headRefOid": "a1b2c3d", "baseRefName": "main",
       "labels": ["needs-human"],
-      "createdAt": "2026-10-17T11:00:00Z", "comments": [], "commits": []
+      "createdAt": "2026-10-17T11:00:00Z", "comments": [], "commits": [],
+      "author": { "login": "ai-sdlc-runtime[bot]", "is_bot": true, "type": "Bot" },
+      "isCrossRepository": false,
+      "headRepositoryOwner": { "login": "owner" },
+      "headRepository": { "name": "repo" }
     },
     "checks": [{ "name": "contract", "bucket": "fail" }]
   }

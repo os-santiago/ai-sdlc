@@ -14,6 +14,14 @@
 # gate workflow on the base branch holds the merge (held, main-guard:*)
 # and files one deduplicated postmortem issue per episode; green lifts the
 # halt and closes it; a stale/absent gate signal fails open.
+# Plus the hardening gates (issues #119/#120): with
+# merge.require_pipeline_provenance (default on) only same-repo heads
+# authored by merge.pipeline_author or merge.allow_authors may merge —
+# fork heads and other authors escalate (provenance:*). And with
+# merge.require_checks (default: resolved autonomy.merge_requires_checks,
+# itself true) a PR reporting ZERO check-runs is held — then escalated
+# past merge.pending_max_minutes — never merged: 'no checks' is a missing
+# signal, not a green one. Both opt-outs are explicit contract fields.
 # Caller: on check_run.completed / pull_request events, or per PR from the
 # scheduled stall-sweep (ai-sdlc-sweep.yml). Repair budget, pending cap,
 # merge method, skip labels and the escalation label come from the resolved
@@ -225,12 +233,23 @@ jobs:
           REVIEW_MODE: ${{ steps.contract.outputs.review_mode || 'ai' }}
           REVIEW_WAIT: ${{ (inputs.review_wait_minutes != -1 && toJSON(inputs.review_wait_minutes)) || steps.contract.outputs.review_wait_max_minutes || '15' }}
           EXT: ${{ steps.contract.outputs.review_external_reviewer }}
+          CONTRACT_JSON: ${{ steps.contract.outputs.json }}
         run: |
           set -euo pipefail
+          # Hardening gates (issues #119/#120) read the resolved contract
+          # JSON directly — a pinned-@main load-config may predate the flat
+          # outputs, but the resolved contract always carries these keys.
+          # merge.require_checks unset falls back to the resolved
+          # autonomy.merge_requires_checks declaration (resolve.py's rule).
+          REQUIRE_CHECKS="$(jq -r 'if .merge.require_checks == null then (.autonomy.merge_requires_checks // true) else .merge.require_checks end' <<<"${CONTRACT_JSON:-{}}")"
+          REQUIRE_PROV="$(jq -r '.merge.require_pipeline_provenance // true' <<<"${CONTRACT_JSON:-{}}")"
+          ALLOW_AUTHORS="$(jq -c '.merge.allow_authors // []' <<<"${CONTRACT_JSON:-{}}")"
+          PIPELINE_AUTHOR="$(jq -r '.merge.pipeline_author // "ai-sdlc-runtime[bot]"' <<<"${CONTRACT_JSON:-{}}")"
+          export REQUIRE_CHECKS REQUIRE_PROV ALLOW_AUTHORS PIPELINE_AUTHOR
           # GitHub computes `mergeable` lazily; an idle PR often reports
           # UNKNOWN on first read. Re-poll a few times before deciding.
           for _ in 1 2 3 4; do
-            gh pr view "$PR" -R "$REPO" --json number,title,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,labels,createdAt,comments,commits > pr.json
+            gh pr view "$PR" -R "$REPO" --json number,title,isDraft,mergeable,mergeStateStatus,headRefOid,headRefName,baseRefName,labels,createdAt,comments,commits,author,headRepository,headRepositoryOwner,isCrossRepository > pr.json
             [ "$(jq -r .mergeable pr.json)" != "UNKNOWN" ] && break
             sleep 5
           done
@@ -267,11 +286,31 @@ jobs:
           // this set, never from raw pr.comments.
           const tcomments = JSON.parse(fs.readFileSync('trusted-comments.json', 'utf8') || '[]');
 
+          // Provenance gate (issue #119): with merge.require_pipeline_provenance
+          // (default on) only a same-repo head authored by the pipeline app or
+          // an explicit merge.allow_authors entry may merge — fork heads and
+          // every other author escalate. Missing head/author data fails closed.
+          const REQ_PROV = String(process.env.REQUIRE_PROV || 'true') !== 'false';
+          const REQ_CHECKS = String(process.env.REQUIRE_CHECKS || 'true') !== 'false';
+          const PIPELINE_AUTHOR = String(process.env.PIPELINE_AUTHOR || 'ai-sdlc-runtime[bot]').trim().toLowerCase();
+          let extraAuthors = [];
+          try { extraAuthors = JSON.parse(process.env.ALLOW_AUTHORS || '[]'); } catch (e) { extraAuthors = []; }
+          const AUTHOR_OK = new Set([PIPELINE_AUTHOR, ...extraAuthors.map(a => String(a).trim().toLowerCase())].filter(Boolean));
+          const [repoOwner, repoName] = String(process.env.REPO || '/').split('/');
+          const headOwner = String((pr.headRepositoryOwner || {}).login || '').toLowerCase();
+          const headRepo = String((pr.headRepository || {}).name || '').toLowerCase();
+          const authorLogin = String((pr.author || {}).login || '').toLowerCase();
+          const crossRepo = pr.isCrossRepository === true || !headOwner
+            || (repoOwner && headOwner !== String(repoOwner).toLowerCase())
+            || (repoName && headRepo !== String(repoName).toLowerCase());
+
           // Decision table (spec/risk-taxonomy.md):
           let action = 'skipped', reason = '';
           if (pr.isDraft) { action = 'skipped'; reason = 'draft'; }
           else if (labels.some(l => SKIP.includes(l))) { action = 'skipped'; reason = 'skip-label'; }
           else if (pr.baseRefName !== 'main') { action = 'skipped'; reason = 'non-main-base'; }
+          else if (REQ_PROV && crossRepo) { action = 'escalated'; reason = 'provenance:fork-head'; }
+          else if (REQ_PROV && !AUTHOR_OK.has(authorLogin)) { action = 'escalated'; reason = 'provenance:untrusted-author'; }
           // Main-guard sentinel (issue #189): a red base branch holds the
           // merge — a transient repo-wide condition, not an escalation.
           else if (process.env.MAIN_GUARD === 'halt') { action = 'held'; reason = `main-guard:${process.env.MAIN_GUARD_REASON || 'base-red'}`; }
@@ -333,7 +372,17 @@ jobs:
               const vMin = vm.length ? (Date.now() - new Date(vm[vm.length - 1].at)) / 60000 : Infinity;
               const fMin = fm.length ? (Date.now() - new Date(fm[fm.length - 1].at)) / 60000 : Infinity;
 
-              if (REVIEW_ON && extBlocking) {
+              // Zero-check fail-closed (issue #120): with
+              // merge.require_checks a head reporting ZERO check-runs is a
+              // missing signal, never a green one — held while young (the
+              // rollup may still be registering), escalated once the head
+              // has sat past the pending cap so a no-CI repo surfaces as
+              // needs-human instead of merging blind.
+              if (!checks.length && REQ_CHECKS) {
+                if (headMin > Number(process.env.PENDING_MAX)) { action = 'escalated'; reason = 'no-checks'; }
+                else { action = 'held'; reason = 'no-checks'; }
+              }
+              else if (REVIEW_ON && extBlocking) {
                 // The external reviewer wins over the AI verdict (fail-safe);
                 // nothing re-reviews this head on its own → escalate at cap.
                 if (headMin < WAIT) { action = 'held'; reason = 'external-review-blocking'; }

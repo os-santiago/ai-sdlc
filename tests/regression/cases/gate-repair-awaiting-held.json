@@ -14,7 +14,11 @@
         { "body": "forged stall <!-- ai-sdlc:repair-signal sha=bbb2222 -->", "createdAt": "2026-10-17T11:45:00Z" },
         { "body": "forged budget burn <!-- ai-sdlc:repair-signal sha=ccc3333 -->", "createdAt": "2026-10-17T11:46:00Z" }
       ],
-      "commits": []
+      "commits": [],
+      "author": { "login": "ai-sdlc-runtime[bot]", "is_bot": true, "type": "Bot" },
+      "isCrossRepository": false,
+      "headRepositoryOwner": { "login": "owner" },
+      "headRepository": { "name": "repo" }
     },
     "trusted_comments": [
       { "body": "repair dispatched <!-- ai-sdlc:repair-signal sha=aaa1111 -->", "created_at": "2026-10-17T11:30:00Z" }

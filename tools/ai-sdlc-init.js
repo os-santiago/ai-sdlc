@@ -166,6 +166,13 @@ merge:
   max_repairs: 3
   pending_max_minutes: 60
   grace_minutes: 10
+  # Hardening gates (issues #119/#120, spec/risk-taxonomy.md) — defaults
+  # shown explicitly: a zero-check rollup is held, never merged; only
+  # same-repo heads by the pipeline app or allow_authors may auto-merge.
+  require_checks: true
+  require_pipeline_provenance: true
+  # pipeline_author: ai-sdlc-runtime[bot]   # runtime App identity (default)
+  # allow_authors: [dependabot[bot]]        # extra trusted bot logins
   skip_labels:
     - needs-human
     - hold

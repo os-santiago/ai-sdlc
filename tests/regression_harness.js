@@ -300,6 +300,11 @@ const REPLAYERS = {
       REVIEW_MODE: 'ai',
       REVIEW_WAIT: '15',
       EXT: '',
+      REPO: 'owner/repo',
+      REQUIRE_CHECKS: 'true',
+      REQUIRE_PROV: 'true',
+      PIPELINE_AUTHOR: 'ai-sdlc-runtime[bot]',
+      ALLOW_AUTHORS: '[]',
       GITHUB_OUTPUT: '__github_output__',
       ...(input.env || {}),
     };

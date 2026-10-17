@@ -686,6 +686,27 @@
           },
           "description": "Labels that block merge unconditionally. Default: needs-human, hold, do-not-merge, wip."
         },
+        "require_checks": {
+          "type": "boolean",
+          "description": "Zero-check fail-closed (issue #120): when true, a mergeable PR reporting ZERO check-runs is held (then escalated past merge.pending_max_minutes), never merged — 'no checks' is a missing signal, not a green one. false restores legacy checkless merging for repos with no CI. When unset, resolves from autonomy.merge_requires_checks (itself default true)."
+        },
+        "require_pipeline_provenance": {
+          "type": "boolean",
+          "default": true,
+          "description": "Provenance gate (issue #119): when true, only a same-repo head authored by merge.pipeline_author or an explicit merge.allow_authors entry may auto-merge — fork heads and any other author escalate to the escalation label, so a check-green external PR can never self-merge into main. false disables the gate entirely (legacy behavior: any green+mergeable PR merges)."
+        },
+        "pipeline_author": {
+          "type": "string",
+          "default": "ai-sdlc-runtime[bot]",
+          "description": "Bot login the runtime's GitHub App pushes PRs as — always allowed by the provenance gate when require_pipeline_provenance is on."
+        },
+        "allow_authors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional author logins (case-insensitive) the provenance gate may auto-merge — e.g. dependabot[bot] or a trusted maintainer. The pipeline bot (merge.pipeline_author) is always allowed; every other author escalates. Default: []."
+        },
         "main_guard": {
           "type": "object",
           "additionalProperties": false,

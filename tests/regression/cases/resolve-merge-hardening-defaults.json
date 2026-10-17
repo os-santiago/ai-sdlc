@@ -1,0 +1,14 @@
+{
+  "id": "resolve-merge-hardening-defaults",
+  "type": "contract-resolve",
+  "title": "automerge hardening fields resolve to the secure defaults (issues #119/#120)",
+  "requires": ["python3"],
+  "input": {
+    "repo_cfg": {
+      "spec": "1.0.0",
+      "autonomy": { "level": "auto-merge-low" }
+    },
+    "overrides": {}
+  },
+  "compare": { "omit": ["outputs.path"] }
+}

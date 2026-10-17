@@ -1,0 +1,27 @@
+{
+  "id": "gate-no-checks-optout-merge",
+  "type": "merge-gate",
+  "title": "merge.require_checks:false restores the legacy checkless merge (issue #120 opt-out)",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "env": {
+      "REVIEW_MODE": "human",
+      "REQUIRE_CHECKS": "false"
+    },
+    "pr": {
+      "number": 77, "title": "docs: readme", "isDraft": false,
+      "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
+      "headRefOid": "deadbeef0123456789abcdef0123456789abcdef",
+      "baseRefName": "main",
+      "labels": [],
+      "createdAt": "2026-10-17T11:00:00Z",
+      "comments": [],
+      "commits": [{ "committedDate": "2026-10-17T11:30:00Z" }],
+      "author": { "login": "ai-sdlc-runtime[bot]", "is_bot": true, "type": "Bot" },
+      "isCrossRepository": false,
+      "headRepositoryOwner": { "login": "owner" },
+      "headRepository": { "name": "repo" }
+    },
+    "checks": []
+  }
+}

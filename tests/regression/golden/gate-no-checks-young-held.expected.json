@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "held",
+    "reason": "no-checks"
+  },
+  "log": [
+    "decision: held (no-checks)"
+  ],
+  "exitCode": 0,
+  "error": null
+}
