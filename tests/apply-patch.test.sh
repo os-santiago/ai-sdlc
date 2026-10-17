@@ -81,7 +81,7 @@ head -c 3000 /dev/zero | tr '\0' 'x' > "$WORK/big.patch"
 
 # --- assertions ------------------------------------------------------------------
 expect 0 "clean patch applies"               "$WORK/clean.patch"
-[ "$(cat "$WORK/x.js")" = "new" ] && ok "applied content landed" || bad "applied content missing"
+if [ "$(cat "$WORK/x.js")" = "new" ]; then ok "applied content landed"; else bad "applied content missing"; fi
 
 expect 2 "dotdot traversal rejected"         "$WORK/traverse.patch"
 expect 2 "workflow path rejected"            "$WORK/workflow.patch"
@@ -91,7 +91,7 @@ expect 2 "non-patch input rejected"          "$WORK/notpatch.txt"
 expect 2 "oversized patch rejected"          "$WORK/big.patch" --max-bytes 100
 printf 'old\n' > "$WORK/x.js"  # restore pre-patch content for a clean check
 expect 0 "check-only validates, no mutation" "$WORK/clean.patch" --check-only
-[ "$(cat "$WORK/x.js")" = "old" ] && ok "check-only left worktree untouched" || bad "check-only mutated the worktree"
+if [ "$(cat "$WORK/x.js")" = "old" ]; then ok "check-only left worktree untouched"; else bad "check-only mutated the worktree"; fi
 
 # git apply --check failure is a rejection (exit 2), not a crash
 cat > "$WORK/stale.patch" <<'EOF'
@@ -105,8 +105,8 @@ index 1111111..2222222 100644
 EOF
 expect 2 "stale/forged context rejected"     "$WORK/stale.patch"
 
-[ -e "$WORK/../evil.sh" ] && bad "traversal escaped the worktree" || true
-[ -e "$WORK/.github" ]    && bad "workflow path was written"      || true
+if [ -e "$WORK/../evil.sh" ]; then bad "traversal escaped the worktree"; fi
+if [ -e "$WORK/.github" ];    then bad "workflow path was written"; fi
 
 printf '%s\n' "--- $pass passed, $fail failed ---"
 [ "$fail" -eq 0 ]

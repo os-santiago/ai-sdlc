@@ -14,10 +14,15 @@
 #      `uses:` can't carry the key — the callee's job-level bound applies;
 #      issue #136)
 #   5. actionlint, when a binary is already installed (CI owns the pinned
-#      release — .github/workflows/actionlint.yml; ./actionlint fetches it)
-#   6. node --test on */*.test.js + scripts/gha/*.test.js, when node and
+#      release — .github/workflows/actionlint.yml; ./actionlint fetches it).
+#      With shellcheck on PATH it also lints every workflow `run:` block.
+#   6. shellcheck over the repo's standalone scripts (issue #129): the
+#      ./actionlint shim, tools/*.sh, .github/actions/*/*.sh, tests/*.sh —
+#      when a binary is installed (CI runners ship one; tools/shellcheck.sh
+#      fetches the pinned release for local parity)
+#   7. node --test on */*.test.js + scripts/gha/*.test.js, when node and
 #      test files are present
-#   7. shell e2e tests (tests/*.test.sh) — CLI-level contracts that assert
+#   8. shell e2e tests (tests/*.test.sh) — CLI-level contracts that assert
 #      process exit codes, which node --test can't cover as directly
 #
 # Exit 0 = clean, 1 = a check failed, 2 = required tooling missing.
@@ -174,7 +179,27 @@ else
   note "actionlint not on PATH — skipped (CI pin: .github/workflows/actionlint.yml; run ./actionlint -color for full parity)"
 fi
 
-# --- 6. node --test (when node and test files exist) ----------------------------
+# --- 6. shellcheck over standalone scripts (when installed) ---------------------
+# Workflow `run:` blocks are not listed here: actionlint already pipes them
+# through shellcheck when the binary is on PATH (CI asserts it in
+# .github/workflows/actionlint.yml) with proper ${{ }} masking and inline
+# disable support — re-extracting them would duplicate that pass badly.
+if command -v shellcheck >/dev/null 2>&1; then
+  shfiles=()
+  for s in actionlint tools/*.sh .github/actions/*/*.sh tests/*.sh; do
+    [ -f "$s" ] || continue
+    shfiles+=("$s")
+  done
+  if [ "${#shfiles[@]}" -gt 0 ]; then
+    shellcheck "${shfiles[@]}" \
+      || fail "shellcheck reported violations — fix, or inline-disable with a reason"
+    echo "[✓] shellcheck: ${#shfiles[@]} script(s) clean"
+  fi
+else
+  note "shellcheck not on PATH — skipped (CI runners ship it; local parity: bash tools/shellcheck.sh <files>)"
+fi
+
+# --- 7. node --test (when node and test files exist) ----------------------------
 if command -v node >/dev/null 2>&1; then
   tests=()
   # */*.test.js misses action-dir tests (.github/actions/*/), nested
@@ -191,7 +216,7 @@ else
   note "node not on PATH — node --test skipped"
 fi
 
-# --- 7. shell e2e tests ---------------------------------------------------------
+# --- 8. shell e2e tests ---------------------------------------------------------
 ran=0
 for t in tests/*.test.sh; do
   [ -f "$t" ] || continue
