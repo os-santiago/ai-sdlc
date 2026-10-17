@@ -156,6 +156,8 @@ jobs:
       head_sha: ${{ steps.guard.outputs.head_sha }}
       findings_json: ${{ steps.result.outputs.findings_json }}
       resolved_model: ${{ inputs.model || steps.contract.outputs.review_model || steps.contract.outputs.model_primary }}
+      # Adapter id (engine.name) carried to the fix job's ledger entry (issue #230).
+      engine_name: ${{ steps.contract.outputs.engine_name }}
       escalation_label: ${{ steps.contract.outputs.escalation_label }}
       max_fix: ${{ (inputs.max_fix_iterations != -1 && toJSON(inputs.max_fix_iterations)) || steps.contract.outputs.review_max_fix_iterations || '3' }}
       max_seconds: ${{ steps.contract.outputs.max_seconds }}
@@ -556,6 +558,7 @@ jobs:
         if: steps.guard.outputs.decision == 'review'
         env:
           ENGINE_CODE: ${{ steps.engine.outputs.exit_code }}
+          ENGINE_NAME: ${{ steps.contract.outputs.engine_name }}
           FINDINGS_MAX: ${{ inputs.findings_max }}
           TIER: ${{ steps.diff.outputs.risk_tier }}
           WHY: ${{ steps.diff.outputs.risk_why }}
@@ -591,9 +594,15 @@ jobs:
           const blocked = verdict === 'blocked' || blockingFinding || ext.blocking;
           const final = blocked ? 'blocked' : verdict;
           const counts = SEV.map(s => `${s}: ${findings.filter(f => f.severity === s).length}`).join(' · ');
+          // Engine is recorded as the adapter id (issue #230): the resolved
+          // contract engine.name, else contract.json on the runner, else the
+          // runtime default 'scc' (resolve.py DEFAULTS — contract unresolved).
+          let contractEngine = null;
+          try { contractEngine = (JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/ai-sdlc-contract/contract.json`, 'utf8')).engine || {}).name || null; } catch (e) {}
+          const engineId = process.env.ENGINE_NAME || contractEngine || 'scc';
           const record = {
             v: 1, pr: Number(process.env.PR), head_sha: process.env.HEAD_SHA,
-            verdict: final, model: process.env.MODEL, engine_exit: process.env.ENGINE_CODE,
+            verdict: final, engine: engineId, model: process.env.MODEL, engine_exit: process.env.ENGINE_CODE,
             risk_tier: process.env.TIER, risk_why: process.env.WHY,
             findings, summary: String(raw.summary || '').slice(0, 2000),
             external: ext, run: process.env.RUN_URL,
@@ -659,7 +668,7 @@ jobs:
             `- risk tier: \`pr:risk-${rec.risk_tier}\` — ${rec.risk_why}`,
             `- findings: ${process.env.COUNTS || `${rec.findings.length}`}`,
             `- external reviewer: ${extLine}`,
-            `- engine: \`${rec.model}\` exit ${rec.engine_exit} · run: ${rec.run}`,
+            `- engine: \`${rec.engine || 'scc'}\` · model: \`${rec.model}\` exit ${rec.engine_exit} · run: ${rec.run}`,
             '',
             rec.summary ? `> ${rec.summary}` : '',
             rec.findings.length ? '**Findings**\n\n| severity | location | summary |\n|---|---|---|\n' + rows.join('\n') : '',
@@ -780,6 +789,7 @@ jobs:
           repo: ${{ inputs.repo }}
           pr: ${{ inputs.pr_number }}
           prev: ${{ inputs.ledger_head }}
+          engine: ${{ steps.contract.outputs.engine_name }}
           recover-prev: 'true'
           token: ${{ steps.app-token.outputs.token }}
           data: >-
@@ -1090,6 +1100,7 @@ jobs:
           stage: review-fix
           repo: ${{ inputs.repo }}
           pr: ${{ inputs.pr_number }}
+          engine: ${{ needs.review.outputs.engine_name }}
           recover-prev: 'true'
           token: ${{ steps.app-token.outputs.token }}
           data: >-

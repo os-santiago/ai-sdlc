@@ -189,6 +189,7 @@ jobs:
           stage: intake
           repo: ${{ inputs.repo }}
           issue: ${{ inputs.issue_number }}
+          engine: ${{ steps.contract.outputs.engine_name }}
           data: ${{ toJSON(steps.dor.outputs) }}
 
       - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)

@@ -213,6 +213,100 @@ test('data-files: file digests land under data.files and are covered by data_sha
   assert.equal(e.data.files[0].sha256, crypto.createHash('sha256').update('{"tool_calls_total":12}').digest('hex'));
 });
 
+/* ---------------- engine adapter id on entries (issue #230) ---------------- */
+
+const REPO_ROOT = path.join(__dirname, '..', '..', '..');
+const { EngineAdapterResolver, DEFAULT_REGISTRY_PATH: DEFAULT_REGISTRY } =
+  require(path.join(REPO_ROOT, 'scripts', 'engine_adapter.js'));
+
+test('engine field: append --engine records the registered adapter id (scc/devin)', () => {
+  const resolver = new EngineAdapterResolver(DEFAULT_REGISTRY);
+  for (const id of resolver.getRegisteredEngines()) {
+    const d = tmpdir();
+    const ledger = path.join(d, 'ledger.jsonl');
+    run(['append', '--ledger', ledger, '--stage', 'implement', '--engine', id]);
+    const [e] = readJsonl(ledger);
+    assert.equal(e.engine, id);                       // adapter id, not a literal
+    assert.equal(e.engine, resolver.getEngineAdapter(id).name); // == descriptor id
+    assert.ok(resolver.getRegisteredEngines().includes(e.engine));
+    assert.doesNotThrow(() => resolver.getEngineAdapter(e.engine));
+  }
+});
+
+test('engine field: unregistered engine id fails loudly (exit 2), nothing recorded', () => {
+  const d = tmpdir();
+  const ledger = path.join(d, 'ledger.jsonl');
+  const v = runFail(['append', '--ledger', ledger, '--stage', 'implement', '--engine', 'not-an-engine']);
+  assert.equal(v.code, 2);
+  assert.match(v.stderr, /not a registered adapter id|Unknown engine ID/);
+  assert.equal(fs.existsSync(ledger), false);
+});
+
+test('engine field: absent --engine records null', () => {
+  const d = tmpdir();
+  const ledger = path.join(d, 'ledger.jsonl');
+  run(['append', '--ledger', ledger, '--stage', 'intake']);
+  const [e] = readJsonl(ledger);
+  assert.equal(e.engine, null);
+});
+
+/* Minimal declarative descriptor conforming to config/engine_adapters.json's
+ * contract (scripts/engine_adapter.js validateDescriptor). */
+function customRegistry(dir, engineId) {
+  const registry = path.join(dir, 'custom-adapters.json');
+  fs.writeFileSync(registry, JSON.stringify({
+    [engineId]: {
+      binary: engineId,
+      argvBuilder: {
+        command: 'run',
+        args: ['--prompt', '{prompt}'],
+        substitution: {
+          mode: 'argv-element',
+          shell: 'never',
+          placeholders: { prompt: { pattern: '^[^\\u0000]{1,65536}$', required: true } },
+        },
+      },
+      exitCodeMap: { 0: 'Success', default: 'AgentError' },
+    },
+  }));
+  return registry;
+}
+
+test('engine field: --engine-registry resolves ids from a custom registry', () => {
+  const d = tmpdir();
+  const registry = customRegistry(d, 'mimoclaw');
+  const ledger = path.join(d, 'ledger.jsonl');
+  run(['append', '--ledger', ledger, '--stage', 'implement', '--engine', 'mimoclaw', '--engine-registry', registry]);
+  const [e] = readJsonl(ledger);
+  assert.equal(e.engine, 'mimoclaw');
+});
+
+test('engine field: AI_SDLC_ENGINE_REGISTRY env overrides the default registry', () => {
+  const d = tmpdir();
+  const registry = customRegistry(d, 'customeng');
+  const ledger = path.join(d, 'ledger.jsonl');
+  run(['append', '--ledger', ledger, '--stage', 'implement', '--engine', 'customeng'], { env: { AI_SDLC_ENGINE_REGISTRY: registry } });
+  const [e] = readJsonl(ledger);
+  assert.equal(e.engine, 'customeng');
+  // And the same id is rejected when the custom registry is not in play.
+  const v = runFail(['append', '--ledger', ledger + '2', '--stage', 'implement', '--engine', 'customeng']);
+  assert.equal(v.code, 2);
+});
+
+test('engine field: covered by the entry hash — seal + verify stay green', () => {
+  const d = tmpdir();
+  const ledger = path.join(d, 'ledger.jsonl');
+  const { priv, pub } = keypair(d);
+  run(['append', '--ledger', ledger, '--stage', 'implement', '--engine', 'scc']);
+  run(['seal', '--ledger', ledger, '--key-file', priv]);
+  const recs = readJsonl(ledger);
+  recs[0].engine = 'devin'; // tamper with the recorded adapter id
+  fs.writeFileSync(ledger, recs.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  const v = runFail(['verify', ledger, '--pubkey-file', pub]);
+  assert.equal(v.code, 1);
+  assert.match(v.stdout + v.stderr, /hash mismatch|FAILED/);
+});
+
 test('keygen writes a usable ed25519 pair', () => {
   const d = tmpdir();
   const out = run(['keygen', '--out-dir', d]);

@@ -20,10 +20,21 @@
  * Ops:
  *   append --ledger F --stage S [--repo o/r] [--issue N] [--pr N]
  *          [--data JSON] [--data-file PATH]... [--prev HEX]
+ *          [--engine ID] [--engine-registry PATH]
  *   seal   --ledger F [--key-file F | --key-env VAR | --key PEM]
  *   verify FILE_OR_DIR... [--pubkey-file F | --pubkey-env VAR] [--strict]
  *   head   --ledger F          # print the current chain head (last entry hash)
  *   keygen [--out-dir DIR]     # Ed25519 pair: private → secret, public → committed
+ *
+ * Engine (issue #230): `entry.engine` records the engine adapter id that
+ * produced the stage — never a literal engine name. `--engine ID` is
+ * validated against the adapter registry (EngineAdapterResolver +
+ * config/engine_adapters.json; override with --engine-registry or
+ * AI_SDLC_ENGINE_REGISTRY): an id that resolves no adapter fails loudly
+ * instead of leaking a non-adapter string into evidence. Absent --engine
+ * the field is null — the stage ran no resolvable engine (e.g. intake on
+ * an unresolvable contract). Registered ids 'scc'/'devin' record exactly
+ * the previous literals.
  *
  * Bounds (env-overridable): AI_SDLC_LEDGER_MAX_ENTRIES=1000,
  *   AI_SDLC_LEDGER_MAX_BYTES=4MiB (ledger file), AI_SDLC_LEDGER_MAX_DATA_BYTES=64KiB
@@ -89,6 +100,40 @@ function readLedger(file) {
     }
   }
   return out;
+}
+
+/* The engine adapter contract ships in the same repository as this action
+ * (repo root = three levels up from .github/actions/run-ledger). The
+ * require stays lazy so `verify`/`keygen` offline use never touches it. */
+function engineRegistryPath(override, canonicalDefault) {
+  return override || process.env.AI_SDLC_ENGINE_REGISTRY
+    || canonicalDefault
+    || path.join(__dirname, '..', '..', '..', 'config', 'engine_adapters.json');
+}
+
+/* Validate an engine id against the adapter contract and return the
+ * adapter's registered id (descriptor `name`) for the ledger entry.
+ * Unknown ids and malformed descriptors die — a value that resolves no
+ * adapter must never land in evidence under the `engine` field
+ * (issue #230). */
+function resolveEngineId(engineId, registryOverride) {
+  const repoRoot = path.join(__dirname, '..', '..', '..');
+  const { EngineAdapterResolver, DEFAULT_REGISTRY_PATH } =
+    require(path.join(repoRoot, 'scripts', 'engine_adapter.js'));
+  const registry = engineRegistryPath(registryOverride, DEFAULT_REGISTRY_PATH);
+  let resolver;
+  try {
+    resolver = new EngineAdapterResolver(registry);
+  } catch (e) {
+    die(`engine adapter registry unavailable (${e.message})`);
+  }
+  let adapter;
+  try {
+    adapter = resolver.getEngineAdapter(engineId);
+  } catch (e) {
+    die(`engine "${engineId}" is not a registered adapter id: ${e.message}`);
+  }
+  return adapter.name;
 }
 
 function emitOutput(kv) {
@@ -157,6 +202,10 @@ function cmdAppend(opts) {
     : (opts.prev || GENESIS);
   if (prev !== GENESIS && !/^[0-9a-f]{64}$/.test(prev)) die(`invalid --prev hash: ${prev}`);
 
+  const engine = (opts.engine || '').trim()
+    ? resolveEngineId(opts.engine.trim(), opts['engine-registry'])
+    : null;
+
   const entry = {
     v: FORMAT_V,
     seq: prevList.entries.length + 1,
@@ -165,6 +214,7 @@ function cmdAppend(opts) {
     repo: opts.repo || process.env.GITHUB_REPOSITORY || null,
     issue: opts.issue ? Number(opts.issue) : null,
     pr: opts.pr ? Number(opts.pr) : null,
+    engine,
     run: runContext(),
     data,
     data_sha256: sha256(dataJson),
@@ -175,7 +225,7 @@ function cmdAppend(opts) {
   fs.mkdirSync(path.dirname(ledger), { recursive: true });
   fs.appendFileSync(ledger, JSON.stringify(entry) + '\n');
 
-  console.log(`run-ledger: appended seq=${entry.seq} stage=${stage} hash=${entry.hash} prev=${prev.slice(0, 16)}…`);
+  console.log(`run-ledger: appended seq=${entry.seq} stage=${stage} engine=${engine ?? '—'} hash=${entry.hash} prev=${prev.slice(0, 16)}…`);
   emitOutput({ head: entry.hash, entries: entry.seq });
   return entry;
 }
@@ -426,4 +476,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { canonical, sha256, readLedger, sealPayload, GENESIS };
+module.exports = { canonical, sha256, readLedger, sealPayload, resolveEngineId, engineRegistryPath, GENESIS };

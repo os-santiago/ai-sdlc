@@ -69,6 +69,10 @@ on:
         description: 'engine model id (provider-native, e.g. openai/gpt-4o)'
         type: string
         default: 'openai/gpt-4o'
+      engine:
+        description: 'engine adapter id recorded on the ledger entry (issue #230) — the engine this stage invokes; callers pass the resolved .ai-sdlc.yaml engine.name when per-stage dispatch lands (epic #220)'
+        type: string
+        default: 'scc'
       provider_base_url:
         description: 'OpenAI-compatible inference base URL; empty → vars.AI_SDLC_PROVIDER_URL → GitHub Models default'
         type: string
@@ -624,6 +628,7 @@ jobs:
           repo: ${{ inputs.repo }}
           pr: ${{ inputs.pr_number }}
           prev: ${{ inputs.ledger_head }}
+          engine: ${{ inputs.engine }}
           recover-prev: 'true'
           token: ${{ steps.app-token.outputs.token }}
           data: >-
