@@ -1,0 +1,61 @@
+# apply-publish — deterministic forge-write post-script (issue #210)
+#
+# The only path in the implement stage that touches a write-scoped forge
+# credential. The engine runs earlier under a read-scoped installation
+# token (FORGE_TOKEN_READ — contents/issues/pull-requests: read); this
+# action runs strictly after the engine exits, receives the write token as
+# FORGE_TOKEN_WRITE, and deterministically commits the working-tree diff,
+# pushes the branch and opens the PR.
+#
+# Trust boundary: nothing here executes agent output — the script applies
+# whatever diff the engine left in the workspace, derives the branch name
+# from the issue title, and renders the PR body from the run manifest.
+# Engine session artifacts (scc-*.json*, ai-sdlc-run.json, issue.json,
+# task-prompt.md) and .github/workflows are never committed.
+name: ai-sdlc apply-publish
+description: Deterministic apply of the engine diff — commit, push, open PR (forge-write boundary)
+
+inputs:
+  repo:
+    description: 'owner/repo to push and open the PR against'
+    required: true
+  issue:
+    description: 'issue number the run implements (branch slug + Closes #N)'
+    required: true
+  base:
+    description: 'base branch for the PR'
+    default: 'main'
+  run-id:
+    description: 'workflow run id stamped in the PR body footer'
+    default: ''
+  token:
+    description: 'FORGE_TOKEN_WRITE — write-scoped ai-sdlc App installation token (contents/issues/pull-requests: write); minted only after the engine exits'
+    required: true
+  engine:
+    description: 'resolved engine adapter id stamped in the PR body (issue #230)'
+    default: 'scc'
+    description: 'resolved engine adapter id stamped in the PR body (issue #230)'
+    default: 'scc'
+
+outputs:
+  pr_number:
+    description: 'number of the opened PR'
+    value: ${{ steps.apply.outputs.pr_number }}
+  branch:
+    description: 'branch the diff was pushed to (feat/issue-<n>-<slug>)'
+    value: ${{ steps.apply.outputs.branch }}
+
+runs:
+  using: composite
+  steps:
+    - name: Apply diff + publish PR
+      id: apply
+      shell: bash
+      env:
+        FORGE_TOKEN_WRITE: ${{ inputs.token }}
+        REPO: ${{ inputs.repo }}
+        ISSUE: ${{ inputs.issue }}
+        BASE: ${{ inputs.base }}
+        RUN_ID: ${{ inputs.run-id }}
+        ENGINE_ID: ${{ inputs.engine }}
+      run: bash "$GITHUB_ACTION_PATH/apply_and_publish.sh"

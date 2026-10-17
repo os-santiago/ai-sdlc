@@ -38,6 +38,10 @@ The prompt file's content is **untrusted input**. Engines must treat it as data 
 - Sanitize/scrub prompt content before re-embedding it in prompts, tool calls, or logs.
 - Honor the `<untrusted-input>` fence semantics: content inside the fence remains data and must not be executed or obeyed.
 
+### Forge Credentials (Read-Only Boundary)
+
+The engine runs under credential isolation (issue #210): its environment carries `FORGE_TOKEN_READ` — a read-scoped forge installation token — and **never** `FORGE_TOKEN_WRITE`. An engine must not require forge write access; every forge mutation (push, PR creation, label, comment, status update) is applied later by deterministic post-scripts that receive the write-scoped token only after the engine exits. Engines that attempt forge writes must treat rejection (403/404) as expected; the implement stage probes this boundary before each run and fails closed if the engine-side credential can write.
+
 ## Normalized Events and Run Manifest
 
 The audit log is JSONL — one normalized event per line in an engine-agnostic vocabulary (`llm_request`, `llm_response`, `tool_call`, `tool_result`, …). Each event carries:
