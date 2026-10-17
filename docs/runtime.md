@@ -38,6 +38,7 @@ engine only, no GitHub webhook adapter yet).
 | `ai-sdlc-ci-repair.yml` | bounded repair loop on red checks: failing-check log tails → `scc` headless on the PR head → commit + push; one comment per attempt; `needs-human` after `max_repairs` | `check_run.completed` (failure) / `workflow_dispatch` / automerge `repair-signaled` |
 | `ai-sdlc-verify.yml` | post-merge verify commands (resolved contract `verify.commands`); failure → canonical postmortem issue via `scripts/postmortem.js` — signature-deduped: open canonical comments, closed canonical reopens at `postmortem.reopen_min` (spec/postmortem-lifecycle.md) — or revert when enabled | post-merge |
 | `ai-sdlc-dep-update.yml` | scheduled dependency scan → vetted dep-update PR (`scripts/dep-update.js`): release-age gate, license allowlist, typosquat distance, OSV → one bounded consolidated PR + deduped flagged-for-human issue | `schedule` / `workflow_dispatch` / called |
+| `ai-sdlc-canary.yml` | scheduled end-to-end smoke of the intake→implement→PR loop: files a synthetic `<!-- ai-sdlc:canary -->` fixture issue, arms it with the contract trigger, observes `scc:queued`→`scc:pr-opened`, asserts PR/artifact/ledger shape, cleans up; failure → signature-deduped `postmortem` issue | `schedule` (daily) / `workflow_dispatch` (`mode`) |
 
 Every stage first runs the `load-config` composite action
 (`.github/actions/load-config/`) and acts only on the resolved contract —
@@ -1022,6 +1023,57 @@ anything: this sweep keeps the divergence visible instead of silent.
 - **Trust boundary:** script and `config/engine_adapters.json` are fetched
   from the `os-santiago/ai-sdlc` pin (`runtime_ref`) — never from the
   caller checkout.
+
+## Canary smoke (`ai-sdlc-canary.yml`)
+
+The pipeline dogfoods itself (`ai-sdlc.yml`), but nothing *asserts* the
+loop works — a silent dispatch breakage is discovered only when a real
+issue stalls (issue #132). The canary closes that gap: a scheduled run
+files a synthetic fixture issue, arms it with the contract trigger label
+(`triggers.issue_label`, resolved from `.ai-sdlc.yaml` — never hardcoded),
+and observes the label state machine plus run evidence.
+
+- **Fixture:** one open canary at a time. The issue carries the `canary`
+  label + `<!-- ai-sdlc:canary -->` body marker and a
+  conventional-commit title (`test(e2e): canary smoke …` — DoR R1 makes a
+  literal `canary:` prefix self-defeating). Its `## Acceptance criteria`
+  asks the engine for exactly one file (`canary/<run-stamp>.txt`), so the
+  implement diff is minimal. Stale fixtures from crashed runs are swept at
+  arm time (≤20 open `canary` issues, plus open canary-titled PRs).
+- **Modes:** `mode=intake` (the scheduled path, per the issue AC
+  "implement optional/opt-in for cost") asserts the arm reaches
+  `scc:queued`, then cancels the dispatched `ai-sdlc (self)` run before
+  the engine spends tokens. `mode=full` (dispatch opt-in) waits for
+  `scc:pr-opened`, then asserts PR shape — head `feat|fix/issue-<N>-*`,
+  base `main`, `Closes #N` in the body — and run evidence: the
+  `ai-sdlc-run-<N>` artifact must contain `ai-sdlc-run.json`, and the
+  `ai-sdlc-ledger-implement-<N>-*` artifact must carry a
+  `stage=implement, issue=N` entry. Artifacts are matched by name against
+  the repo artifact list, so no run-id resolution is needed.
+- **Alerting vs fail-open:** the canary never gates merges or dispatch —
+  fail-open relative to the pipeline. A canary failure is loud: the run
+  goes red AND files a canonical signature-deduped `postmortem` issue via
+  `scripts/postmortem.js` (`component=canary`, `class=e2e-loop-failure`,
+  `location=stage:<failed-stage>`) — daily recurrences comment on the same
+  issue instead of spamming new filings. Engaged kill-switch → the run
+  skips green (a revoked pipeline is not a broken pipeline); missing App
+  secrets → fail + alert (without the pipeline identity the loop cannot
+  run — that *is* the breakage).
+- **Cleanup:** `always()` — the fixture issue is de-armed + closed, the
+  canary PR is `do-not-merge`-labeled (a `merge.skip_labels` entry, so the
+  stall-sweep never feeds it to automerge even if cleanup dies), closed
+  and branch-deleted. Cleanup is fail-soft and never masks the verdict.
+- **Least privilege:** the workflow `GITHUB_TOKEN` carries `contents:read`
+  (sparse checkout of trusted scripts), `issues:write` (postmortem alert
+  fallback) and `actions:write` (locate/cancel the dispatched run, read
+  artifacts). Every forge mutation uses the minted `ai-sdlc-runtime[bot]`
+  installation token — required anyway, since `GITHUB_TOKEN` events never
+  fire downstream workflows and arming with one would exercise nothing.
+- **Bounded:** `observe_minutes` input caps the label poll (default 20,
+  hard cap 30 — the issue's specified bound), artifact polling ≤8 min,
+  `timeout-minutes: 45` on the job, serialized via a concurrency group.
+  Every verdict — pass, fail, or kill-switch skip — is recorded on the
+  run ledger (stage `canary`) and a `canary-report.json` artifact.
 
 ## Release manager (`ai-sdlc-release.yml`)
 

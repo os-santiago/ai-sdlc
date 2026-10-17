@@ -1,0 +1,645 @@
+# ai-sdlc-canary — scheduled end-to-end smoke of the intake→implement→PR
+# loop (issue #132).
+#
+# The pipeline dogfoods itself (ai-sdlc.yml), but nothing asserts the loop
+# works — a silent dispatch breakage is discovered only when a real issue
+# stalls. This workflow is the canary: it files a synthetic issue marked
+# `<!-- ai-sdlc:canary -->` + the `canary` label, arms it with the contract
+# trigger label, and observes the label state machine (`scc:queued` →
+# `scc:pr-opened`) plus the run artifacts the implement stage publishes.
+#
+# Modes (`mode` dispatch input):
+#   intake  (scheduled default) — assert the arm reaches `scc:queued`, then
+#           cancel the dispatched `ai-sdlc (self)` run before the engine
+#           spends tokens. Exercises intake at minimum per the issue AC.
+#   full    (dispatch opt-in)   — wait for `scc:pr-opened`, then assert the
+#           PR shape (branch `feat/issue-<N>-*`, base `main`, `Closes #N`)
+#           and run evidence (`ai-sdlc-run-<N>` artifact containing
+#           `ai-sdlc-run.json`, `ai-sdlc-ledger-implement-<N>-*` ledger
+#           entry). Costs one bounded engine run + one review pass.
+#
+# Fail-open vs alerting (issue AC "failure surfaces as an issue/alert, not
+# silent staleness"):
+#   - The canary never gates anything: it mutates no pipeline state beyond
+#     its own fixture (issue/PR/branch) and can never block a merge or a
+#     dispatch — fail-open relative to the pipeline.
+#   - A canary failure is loud: the run goes red AND a canonical
+#     signature-deduped postmortem issue is filed via scripts/postmortem.js
+#     (labels ai-sdlc,postmortem,priority:P1) — recurrences comment on the
+#     same issue instead of spamming daily filings.
+#   - Kill-switch engaged → the run skips green: a deliberately revoked
+#     pipeline is not a broken pipeline.
+#   - Missing ai-sdlc App secrets → fail + alert: without the pipeline
+#     identity the loop cannot run — that IS the breakage being detected.
+#
+# Least privilege: the workflow GITHUB_TOKEN carries only contents:read
+# (sparse checkout), issues:write (postmortem alert fallback) and
+# actions:write (find/cancel the triggered run, read artifacts). All forge
+# mutations (issue, labels, PR, branch) go through the minted
+# ai-sdlc-runtime[bot] installation token — the same identity the runtime
+# uses — which is also required so the `issues: labeled` event actually
+# fires ai-sdlc.yml (GITHUB_TOKEN events never trigger workflows).
+#
+# Bounded: one issue create/edit, ≤ ~90 label polls, ≤24 artifact polls,
+# ≤20 stale-fixture sweeps, job timeout 45 min. Concurrency is serialized —
+# two canaries can never run at once.
+name: ai-sdlc-canary
+
+on:
+  schedule:
+    - cron: '30 4 * * *'   # 04:30 UTC daily (issue #132)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: >-
+          intake = assert the arm reaches scc:queued then cancel the
+          dispatched run (cheap). full = wait for the implement PR and
+          assert branch/PR/run-ledger/artifact shape (burns one engine run).
+        type: choice
+        options:
+          - intake
+          - full
+        default: full
+      observe_minutes:
+        description: 'bound on observing scc:queued / scc:pr-opened after arming (hard cap 30)'
+        type: number
+        default: 20
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-sdlc-canary-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read      # sparse checkout of trusted scripts only
+      issues: write       # postmortem alert fallback when App secrets are absent
+      actions: write      # locate/cancel the triggered self-pipeline run + read artifacts
+    env:
+      REPO: ${{ github.repository }}
+      MODE: ${{ inputs.mode || 'intake' }}
+      OBSERVE_MINUTES: ${{ inputs.observe_minutes || 20 }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .ai-sdlc.yaml
+            scripts/kill-switch.js
+            scripts/postmortem.js
+            .github/actions/run-ledger
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Pre-dispatch authorization gate (issue #172): with autonomy revoked
+      # the arm can never dispatch and the canary would false-positive, so
+      # engaged/unreadable skips the whole run green — recorded as `skip`.
+      - name: Autonomy gate — kill-switch respected
+        id: kill
+        env:
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          AI_SDLC_KILL: ${{ vars.AI_SDLC_KILL }}
+          AI_SDLC_OFF: ${{ vars.AI_SDLC_OFF }}
+          AI_SDLC_CONTROL_REPO: ${{ vars.AI_SDLC_CONTROL_REPO }}
+        run: |
+          set -euo pipefail
+          node --check scripts/kill-switch.js
+          node scripts/kill-switch.js check --repo "$REPO" --json --soft > kill.json
+          cat kill.json
+          echo "allowed=$(jq -r '.allowed' kill.json)" >> "$GITHUB_OUTPUT"
+
+      # Forge identity (issue #26): the App token's `issues` events fire
+      # downstream workflows — GITHUB_TOKEN events never do, so arming with
+      # it would exercise nothing. Mint fails → arm stage reports it.
+      - name: Mint ai-sdlc App token (forge identity)
+        id: app
+        if: steps.kill.outputs.allowed == 'true'
+        uses: actions/create-github-app-token@v2
+        continue-on-error: true
+        with:
+          app-id: ${{ secrets.AI_SDLC_APP_ID }}
+          private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Arm canary issue (file + trigger label)
+        id: arm
+        if: steps.kill.outputs.allowed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          fail() {
+            printf 'STAGE=%s\nREASON=%s\n' "arm" "$1" > "$RUNNER_TEMP/canary-fail.env"
+            echo "::error title=ai-sdlc canary::$1"
+            exit 1
+          }
+          [ -n "${GH_TOKEN:-}" ] || fail "ai-sdlc App token could not be minted — AI_SDLC_APP_ID/AI_SDLC_APP_PRIVATE_KEY missing or the installation lacks contents/issues/pull-requests write on $REPO; the pipeline identity is broken (fail-closed, same posture as ai-sdlc-implement)"
+
+          # Label bindings come from the contract, never hardcoded.
+          TRIGGER="$(yq -r '.triggers.issue_label // "ready-to-implement"' .ai-sdlc.yaml)"
+
+          # Fixture hygiene (one open canary at a time): leftovers from a
+          # crashed run would corrupt this run's assertions — close them
+          # first, bounded. Canary issues carry the `canary` label; orphaned
+          # canary PRs are found by title (the pipeline copies it).
+          gh label create canary -R "$REPO" --color FBCA04 \
+            --description "AI-SDLC canary fixture — filed/armed/cleaned by ai-sdlc-canary.yml (issue #132)" --force || true
+          gh label create do-not-merge -R "$REPO" --color B60205 \
+            --description "AI-SDLC merge-gate skip label (merge.skip_labels)" --force || true
+          gh issue list -R "$REPO" --state open --label canary --limit 20 --json number > stale-issues.json
+          for n in $(jq -r '.[].number' stale-issues.json); do
+            echo "closing stale canary issue #$n"
+            gh issue close "$n" -R "$REPO" || true
+          done
+          gh pr list -R "$REPO" --state open --limit 20 --search 'canary smoke in:title' \
+            --json number,headRefName > stale-prs.json
+          while read -r p; do
+            [ -n "$p" ] || continue
+            echo "closing stale canary PR #$p"
+            gh pr close "$p" -R "$REPO" --delete-branch || true
+          done < <(jq -r '.[].number' stale-prs.json)
+
+          # T0 precedes the issue create so the `opened`-event self-run also
+          # falls inside the run/artifact correlation window.
+          T0=$(date -u +%s)
+          T0ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          STAMP="$(date -u +%Y%m%d-%H%M%S)-${GITHUB_RUN_ID:-0}"
+          # R1 in the DoR gate requires a conventional-commit title, so the
+          # literal `canary: <date>` from the issue comment would fail its
+          # own intake — `test(e2e): canary smoke …` satisfies both.
+          TITLE="test(e2e): canary smoke $STAMP"
+          CANARY_FILE="canary/${STAMP}.txt"
+          cat > canary-body.md <<EOF
+          <!-- ai-sdlc:canary -->
+
+          ## Problem
+
+          This is a synthetic canary filed by the \`ai-sdlc-canary\` smoke workflow
+          (run: ${RUN_URL}) to prove the intake → implement → PR loop is alive. It
+          must be implemented by the pipeline engine exactly as specified — never
+          by hand, never merged.
+
+          ## Expected behavior
+
+          Create a new file \`${CANARY_FILE}\` at the repository root containing
+          exactly one line: \`ai-sdlc canary ${STAMP}\`. No other repository file
+          may be added, modified or deleted.
+
+          ## Acceptance criteria
+
+          - [ ] A file \`${CANARY_FILE}\` exists containing the single line \`ai-sdlc canary ${STAMP}\`.
+          - [ ] No other repository files are added, modified, or deleted.
+          EOF
+          URL=$(gh issue create -R "$REPO" --title "$TITLE" --body-file canary-body.md --label canary)
+          ISSUE="${URL##*/}"
+          echo "canary issue: $URL"
+          # `issues: opened` already fired the self-pipeline's refinement
+          # pass; arming applies the contract trigger → `issues: labeled` →
+          # intake → DoR → scc:queued → implement dispatch.
+          gh issue edit "$ISSUE" -R "$REPO" --add-label "$TRIGGER"
+          {
+            echo "issue=$ISSUE"
+            echo "issue_url=$URL"
+            echo "title=$TITLE"
+            echo "t0=$T0"
+            echo "t0_iso=$T0ISO"
+            echo "canary_file=$CANARY_FILE"
+          } >> "$GITHUB_OUTPUT"
+
+      # Poll the label state machine until the mode's terminal observation.
+      # `scc:in-progress` is declared in the contract map but never applied
+      # by the GHA implement stage — asserted transitions are queued and
+      # pr-opened per the issue AC.
+      - name: Observe label transitions (bounded)
+        id: observe
+        if: steps.arm.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          ISSUE: ${{ steps.arm.outputs.issue }}
+          T0: ${{ steps.arm.outputs.t0 }}
+        run: |
+          set -euo pipefail
+          OBS="${OBSERVE_MINUTES:-20}"
+          case "$OBS" in ''|*[!0-9]*) OBS=20 ;; esac
+          [ "$OBS" -gt 30 ] && OBS=30
+          [ "$OBS" -lt 2 ] && OBS=2
+          L_QUEUED="$(yq -r '.labels.queued // "scc:queued"' .ai-sdlc.yaml | tr '[:upper:]' '[:lower:]')"
+          L_PR_OPENED="$(yq -r '.labels["pr-opened"] // "scc:pr-opened"' .ai-sdlc.yaml | tr '[:upper:]' '[:lower:]')"
+          TERMINAL_LABELS="$(yq -o=json '[.labels["not-ready"] // "scc:not-ready", .labels.failed // "scc:failed", .labels["no-changes"] // "scc:no-changes", .escalation.label // "needs-human"] | map(ascii_downcase)' .ai-sdlc.yaml)"
+
+          DEADLINE=$(( $(date -u +%s) + OBS * 60 ))
+          SAW_QUEUED=false
+          QUEUED_AT=""
+          OUTCOME=timeout
+          TERMINAL=""
+          while [ "$(date -u +%s)" -lt "$DEADLINE" ]; do
+            if ! gh issue view "$ISSUE" -R "$REPO" --json labels \
+                --jq '[.labels[].name | ascii_downcase]' > labels.json 2>/dev/null; then
+              echo "issue view failed — retrying"
+              sleep 15
+              continue
+            fi
+            NOW=$(date -u +%s)
+            ELAPSED=$(( NOW - T0 ))
+            if jq -e --arg p "$L_PR_OPENED" 'index($p)' labels.json >/dev/null; then
+              OUTCOME=pr-opened
+              echo "transition observed: $L_PR_OPENED at +${ELAPSED}s"
+              break
+            fi
+            if jq -e --argjson term "$TERMINAL_LABELS" '[.[] as $l | $term | index($l)] | any' labels.json >/dev/null; then
+              TERMINAL=$(jq -r --argjson term "$TERMINAL_LABELS" '[.[] as $l | select($term | index($l))] | join(",")' labels.json)
+              OUTCOME=terminal
+              echo "terminal label observed at +${ELAPSED}s: $TERMINAL"
+              break
+            fi
+            if [ "$SAW_QUEUED" = false ] && jq -e --arg q "$L_QUEUED" 'index($q)' labels.json >/dev/null; then
+              SAW_QUEUED=true
+              QUEUED_AT=$ELAPSED
+              echo "transition observed: $L_QUEUED at +${ELAPSED}s"
+              if [ "$MODE" = "intake" ]; then
+                OUTCOME=queued
+                break
+              fi
+            fi
+            echo "… +${ELAPSED}s labels=$(jq -c '.' labels.json)"
+            sleep 20
+          done
+
+          # Locate the implement PR the moment pr-opened lands and pin it out
+          # of the merge gate: `do-not-merge` is a merge.skip_labels entry, so
+          # the stall-sweep never feeds the canary PR to automerge even if
+          # cleanup dies mid-run.
+          PR_NUMBER=""
+          PR_URL=""
+          BRANCH=""
+          if [ "$OUTCOME" = "pr-opened" ]; then
+            gh pr list -R "$REPO" --state all --limit 50 \
+              --json number,headRefName,state,url,createdAt > prs.json
+            PR_NUMBER=$(jq -r --arg re "^(feat|fix)/issue-${ISSUE}-" \
+              '[.[] | select(.headRefName | test($re))] | sort_by(.createdAt) | last | .number // empty' prs.json)
+            if [ -n "$PR_NUMBER" ]; then
+              BRANCH=$(jq -r --arg re "^(feat|fix)/issue-${ISSUE}-" \
+                '[.[] | select(.headRefName | test($re))] | sort_by(.createdAt) | last | .headRefName' prs.json)
+              PR_URL=$(jq -r --arg re "^(feat|fix)/issue-${ISSUE}-" \
+                '[.[] | select(.headRefName | test($re))] | sort_by(.createdAt) | last | .url' prs.json)
+              gh pr edit "$PR_NUMBER" -R "$REPO" --add-label "do-not-merge,canary" || true
+            else
+              OUTCOME=pr-missing
+              echo "::warning::$L_PR_OPENED applied but no PR head matching ^(feat|fix)/issue-$ISSUE- found"
+            fi
+          fi
+
+          jq -n --arg outcome "$OUTCOME" --arg terminal "$TERMINAL" \
+            --argjson saw_queued "$SAW_QUEUED" --argjson queued_at "${QUEUED_AT:-0}" \
+            --arg pr "$PR_NUMBER" --arg pr_url "$PR_URL" --arg branch "$BRANCH" \
+            '{outcome: $outcome, terminal: ($terminal | select(. != "") // null),
+              saw_queued: $saw_queued, queued_at_s: $queued_at,
+              pr_number: $pr, pr_url: $pr_url, branch: $branch}' > canary-observe.json
+          cat canary-observe.json
+          {
+            echo "outcome=$OUTCOME"
+            echo "terminal=$TERMINAL"
+            echo "saw_queued=$SAW_QUEUED"
+            echo "pr_number=$PR_NUMBER"
+            echo "pr_url=$PR_URL"
+            echo "branch=$BRANCH"
+          } >> "$GITHUB_OUTPUT"
+
+      # Intake mode is the cheap path: once `scc:queued` is observed the loop
+      # is proven — cancel the dispatched `ai-sdlc (self)` run before the
+      # engine burns tokens. Best-effort: a miss only costs one engine run.
+      # GITHUB_TOKEN (actions: write) — not the forge identity.
+      - name: Cancel dispatched self-run (intake mode)
+        id: cancel
+        if: steps.observe.outputs.outcome == 'queued'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          T0ISO: ${{ steps.arm.outputs.t0_iso }}
+          TITLE: ${{ steps.arm.outputs.title }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/actions/workflows/ai-sdlc.yml/runs?per_page=30" > runs.json
+          IDS=$(jq -r --arg t0 "$T0ISO" --arg title "$TITLE" \
+            '.workflow_runs[]
+             | select(.event == "issues" and .created_at >= $t0
+                      and .display_title == $title and .status != "completed")
+             | .id' runs.json)
+          N=0
+          for id in $IDS; do
+            if gh api -X POST "repos/$REPO/actions/runs/$id/cancel" >/dev/null 2>&1; then
+              N=$((N + 1))
+              echo "cancelled self-pipeline run $id"
+            else
+              echo "::warning::could not cancel run $id — the engine run proceeds (cost only)"
+            fi
+          done
+          echo "cancelled=$N" >> "$GITHUB_OUTPUT"
+          [ "$N" -ge 1 ] || echo "::notice::no in-progress self-run matched (title=$TITLE, t0=$T0ISO) — dispatch may already have completed"
+
+      # Full-mode assertions: PR shape + run evidence. The pr-opened label
+      # lands before the implement job's artifact uploads, so artifacts are
+      # polled on their own bound (8 min) after the observe bound closed.
+      - name: Assert PR shape + run artifacts (full mode)
+        id: assert
+        if: steps.observe.outputs.outcome == 'pr-opened'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          ACTIONS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ steps.arm.outputs.issue }}
+          PR_NUMBER: ${{ steps.observe.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          fail() {
+            printf 'STAGE=%s\nREASON=%s\n' "assert" "$1" > "$RUNNER_TEMP/canary-fail.env"
+            echo "::error title=ai-sdlc canary::$1"
+            exit 1
+          }
+          # Belt-and-suspenders: keep the fixture PR out of the merge gate.
+          gh pr edit "$PR_NUMBER" -R "$REPO" --add-label "do-not-merge,canary" || true
+
+          gh pr view "$PR_NUMBER" -R "$REPO" \
+            --json number,state,headRefName,baseRefName,body,url > pr.json
+          BRANCH=$(jq -r '.headRefName' pr.json)
+          echo "$BRANCH" | grep -qE "^(feat|fix)/issue-${ISSUE}-" \
+            || fail "PR #$PR_NUMBER head '$BRANCH' does not match ^(feat|fix)/issue-$ISSUE-*"
+          [ "$(jq -r '.state' pr.json)" = "OPEN" ] \
+            || fail "PR #$PR_NUMBER state is $(jq -r '.state' pr.json), expected OPEN"
+          [ "$(jq -r '.baseRefName' pr.json)" = "main" ] \
+            || fail "PR #$PR_NUMBER base is '$(jq -r '.baseRefName' pr.json)', expected main"
+          jq -r '.body' pr.json | grep -q "Closes #$ISSUE" \
+            || fail "PR #$PR_NUMBER body lacks the 'Closes #$ISSUE' reference"
+
+          # Run evidence: artifacts are named after the issue number, which
+          # makes them unambiguous without resolving the workflow run id.
+          export GH_TOKEN="$ACTIONS_TOKEN"
+          ART_DEADLINE=$(( $(date -u +%s) + 480 ))
+          RUN_AID=""; LED_INTAKE=0; LED_IMPL=0
+          while :; do
+            GH_TOKEN="$ACTIONS_TOKEN" gh api "repos/$REPO/actions/artifacts?per_page=100" > arts.json
+            RUN_AID=$(jq -r --arg n "ai-sdlc-run-$ISSUE" \
+              '[.artifacts[] | select(.name == $n and (.expired | not)) | .id] | max // empty' arts.json)
+            LED_INTAKE=$(jq -r --arg p "ai-sdlc-ledger-intake-$ISSUE-" \
+              '[.artifacts[] | select(.name | startswith($p))] | length' arts.json)
+            LED_IMPL=$(jq -r --arg p "ai-sdlc-ledger-implement-$ISSUE-" \
+              '[.artifacts[] | select(.name | startswith($p))] | length' arts.json)
+            [ -n "$RUN_AID" ] && [ "$LED_IMPL" -ge 1 ] && break
+            [ "$(date -u +%s)" -lt "$ART_DEADLINE" ] \
+              || fail "run artifacts absent after 8m — ai-sdlc-run-$ISSUE=${RUN_AID:-none} ledger-intake=$LED_INTAKE ledger-implement=$LED_IMPL"
+            sleep 20
+          done
+          GH_TOKEN="$ACTIONS_TOKEN" gh api "repos/$REPO/actions/artifacts/$RUN_AID/zip" > run-artifact.zip
+          unzip -l run-artifact.zip | grep -q 'ai-sdlc-run.json' \
+            || fail "artifact ai-sdlc-run-$ISSUE does not contain ai-sdlc-run.json"
+          rm -f ai-sdlc-run.json && unzip -o -q run-artifact.zip ai-sdlc-run.json
+          jq -e '.exit_code' ai-sdlc-run.json >/dev/null \
+            || fail "ai-sdlc-run.json lacks exit_code"
+          echo "run manifest: $(jq -c '{exit_code, model, stall_class}' ai-sdlc-run.json)"
+
+          LED_AID=$(jq -r --arg p "ai-sdlc-ledger-implement-$ISSUE-" \
+            '[.artifacts[] | select(.name | startswith($p)) | .id] | max // empty' arts.json)
+          GH_TOKEN="$ACTIONS_TOKEN" gh api "repos/$REPO/actions/artifacts/$LED_AID/zip" > ledger-artifact.zip
+          rm -rf ledger-unpack && mkdir ledger-unpack && unzip -o -q ledger-artifact.zip -d ledger-unpack
+          grep -rlq '"stage":"implement"' ledger-unpack/ \
+            || fail "ledger implement artifact carries no stage=implement entry"
+          grep -rq "\"issue\":$ISSUE" ledger-unpack/ \
+            || fail "ledger implement artifact has no entry for issue $ISSUE"
+          echo "run-ledger entry verified: stage=implement issue=$ISSUE"
+          {
+            echo "ledger_intake=$LED_INTAKE"
+            echo "ledger_implement=$LED_IMPL"
+            echo "branch=$BRANCH"
+          } >> "$GITHUB_OUTPUT"
+
+      # Always-on cleanup: close the canary issue and any PR/branch the run
+      # produced. Never fails the job — a cleanup error warns and is reported
+      # in the postmortem body instead of masking the verdict.
+      - name: Cleanup canary state
+        id: cleanup
+        if: always() && steps.arm.outputs.issue != ''
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          ISSUE: ${{ steps.arm.outputs.issue }}
+          PR_NUMBER: ${{ steps.observe.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          [ -n "${GH_TOKEN:-}" ] || { echo "::warning::no App token — canary state left for the next run's sweep"; exit 0; }
+          TRIGGER="$(yq -r '.triggers.issue_label // "ready-to-implement"' .ai-sdlc.yaml)"
+          # Strip the trigger before closing: a reopened fixture must not
+          # look armed (label events on a closed issue are inert anyway).
+          gh issue edit "$ISSUE" -R "$REPO" --remove-label "$TRIGGER" || true
+          gh issue close "$ISSUE" -R "$REPO" || true
+          if [ -n "${PR_NUMBER:-}" ]; then
+            gh pr close "$PR_NUMBER" -R "$REPO" --delete-branch || true
+          fi
+          echo "cleanup done: issue #$ISSUE closed${PR_NUMBER:+, PR #$PR_NUMBER closed + branch deleted}"
+
+      # The verdict never throws: every outcome (including skipped steps and
+      # unexpected step errors) lands on pass|fail|skip so the alert step
+      # below is guaranteed a decision. Job redness comes from `gate` at the
+      # end — after the alert has had its chance to file.
+      - name: Verdict
+        id: verdict
+        if: always()
+        env:
+          ALLOWED: ${{ steps.kill.outputs.allowed }}
+          ARM_OUTCOME: ${{ steps.arm.outcome }}
+          OBS_STEP: ${{ steps.observe.outcome }}
+          OBS_OUTCOME: ${{ steps.observe.outputs.outcome }}
+          OBS_TERMINAL: ${{ steps.observe.outputs.terminal }}
+          OBS_QUEUED: ${{ steps.observe.outputs.saw_queued }}
+          ASSERT_STEP: ${{ steps.assert.outcome }}
+          ISSUE: ${{ steps.arm.outputs.issue }}
+        run: |
+          set -euo pipefail
+          V=pass; STAGE=""; REASON=""
+          if [ "$ALLOWED" != "true" ]; then
+            V=skip; REASON="kill-switch engaged or unreadable — canary suppressed by design"
+          elif [ "$ARM_OUTCOME" != "success" ]; then
+            V=fail; STAGE=arm; REASON="arm step failed — see run log (App token mint or issue create)"
+          elif [ "$OBS_STEP" != "success" ]; then
+            V=fail; STAGE=observe; REASON="observe step errored — see run log"
+          else
+            case "$OBS_OUTCOME" in
+              queued)
+                [ "$MODE" = "intake" ] || { V=fail; STAGE=observe; REASON="full mode stopped at scc:queued"; } ;;
+              pr-opened)
+                if [ "$ASSERT_STEP" != "success" ] && [ "$ASSERT_STEP" != "skipped" ]; then
+                  V=fail; STAGE=assert; REASON="artifact/PR-shape assertion failed — see run log"
+                elif [ "$MODE" = "full" ] && [ "$ASSERT_STEP" != "success" ]; then
+                  V=fail; STAGE=assert; REASON="full mode: assertion step did not run"
+                fi ;;
+              pr-missing)
+                V=fail; STAGE=observe; REASON="scc:pr-opened applied but no feat|fix/issue-$ISSUE-* PR exists — publish path broken" ;;
+              terminal)
+                V=fail; STAGE=observe; REASON="pipeline landed on terminal label(s): ${OBS_TERMINAL:-?} — intake/implement rejected the canary" ;;
+              *)
+                if [ "$OBS_QUEUED" = "true" ]; then
+                  V=fail; STAGE=observe; REASON="scc:queued observed but scc:pr-opened never arrived within ${OBSERVE_MINUTES:-20}m — implement stage stalled after dispatch"
+                else
+                  V=fail; STAGE=observe; REASON="no scc:queued / scc:pr-opened within ${OBSERVE_MINUTES:-20}m — dispatch silently stalled"
+                fi ;;
+            esac
+            # Soft inconsistency: pr-opened without a queued sample is a
+            # missed poll window, not a failure — queued is removed when
+            # pr-opened lands, so a slow first sample can skip it.
+            if [ "$OBS_OUTCOME" = "pr-opened" ] && [ "$OBS_QUEUED" != "true" ]; then
+              echo "::notice::scc:queued was not sampled before scc:pr-opened (poll granularity) — transition order still asserted"
+            fi
+          fi
+          # A stage that called fail() left the precise reason on disk —
+          # it wins over the generic verdict-derived strings above.
+          if [ -f "$RUNNER_TEMP/canary-fail.env" ]; then
+            . "$RUNNER_TEMP/canary-fail.env"
+          fi
+          STAGE="${STAGE:-unknown}"; REASON="${REASON:-unknown}"
+          jq -n --arg v "$V" --arg stage "$STAGE" --arg reason "$REASON" --arg mode "$MODE" \
+            '{verdict: $v, stage: $stage, reason: $reason, mode: $mode}' > canary-verdict.json
+          cat canary-verdict.json
+          {
+            echo "verdict=$V"
+            echo "stage=$STAGE"
+            echo "reason=$REASON"
+          } >> "$GITHUB_OUTPUT"
+
+      # Alert path: canonical postmortem lifecycle (issue #191,
+      # spec/postmortem-lifecycle.md) — one signature-deduped issue per
+      # failure stage; daily recurrences comment there instead of spamming.
+      - name: Alert — canary failure postmortem
+        id: alert
+        # verdict==fail is the normal path; a crashed verdict step still
+        # routes here so a broken reporter can never mute the alert.
+        if: always() && (steps.verdict.outputs.verdict == 'fail' || steps.verdict.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ steps.arm.outputs.issue }}
+          STAGE: ${{ steps.verdict.outputs.stage }}
+          REASON: ${{ steps.verdict.outputs.reason }}
+          PR_URL: ${{ steps.observe.outputs.pr_url }}
+        run: |
+          set -euo pipefail
+          cat > canary-alert.md <<EOF
+          The scheduled end-to-end canary (\`ai-sdlc-canary.yml\`, issue #132) detected a broken intake→implement→PR loop.
+
+          | field | value |
+          |---|---|
+          | mode | \`${MODE:-?}\` |
+          | failed stage | \`${STAGE:-?}\` |
+          | reason | ${REASON:-?} |
+          | canary issue | ${ISSUE:+#${ISSUE}} |
+          | canary PR | ${PR_URL:-none} |
+          | canary run | ${RUN_URL} |
+
+          The canary issue/PR have been cleaned up. Investigate the linked run and the \`ai-sdlc (self)\` runs around it; when fixed, the next scheduled canary closing green should auto-resolve this episode (recurrences dedupe here by signature).
+          EOF
+          if ! node scripts/postmortem.js --repo "$REPO" \
+              --component canary --class e2e-loop-failure \
+              --location "stage:${STAGE:-unknown}" \
+              --title "canary: intake→implement loop failed — ${STAGE:-unknown}" \
+              --body-file canary-alert.md \
+              --occurrence-id "canary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              --run-url "$RUN_URL" \
+              --reopen-min 2 --dedup-window-days 90 \
+              --labels "ai-sdlc,postmortem,priority:P1" --json; then
+            # Fail-open on the filer itself: the alert must never be lost —
+            # labels are best-effort, the filing is not.
+            echo "::warning::postmortem filer failed — filing without dedup"
+            gh issue create -R "$REPO" \
+              --title "canary: intake→implement loop failed — ${STAGE:-unknown}" \
+              --body-file canary-alert.md --label "ai-sdlc,priority:P1" \
+              || gh issue create -R "$REPO" \
+                --title "canary: intake→implement loop failed — ${STAGE:-unknown}" \
+                --body-file canary-alert.md || true
+          fi
+
+      # Tamper-evident run evidence (issue #196): the canary verdict rides
+      # the same ledger contract as every runtime stage. Never fails the job.
+      - name: Run ledger — append stage record
+        id: ledger
+        if: always()
+        continue-on-error: true
+        uses: ./.github/actions/run-ledger
+        with:
+          op: append
+          stage: canary
+          repo: ${{ github.repository }}
+          issue: ${{ steps.arm.outputs.issue || 0 }}
+          pr: ${{ steps.observe.outputs.pr_number || 0 }}
+          data: ${{ toJSON(steps.verdict.outputs) }}
+          data-files: |
+            canary-observe.json
+            canary-verdict.json
+
+      - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)
+        id: seal
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        uses: ./.github/actions/run-ledger
+        with:
+          op: seal
+          stage: canary
+          signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
+
+      - name: Report
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "### ai-sdlc canary ($MODE)"
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| issue | ${{ steps.arm.outputs.issue_url }} |"
+            echo "| outcome | ${{ steps.observe.outputs.outcome }} |"
+            echo "| scc:queued seen | ${{ steps.observe.outputs.saw_queued }} |"
+            echo "| PR | ${{ steps.observe.outputs.pr_url }} |"
+            echo "| branch | ${{ steps.observe.outputs.branch }} |"
+            echo "| verdict | ${{ steps.verdict.outputs.verdict }} — ${{ steps.verdict.outputs.reason }} |"
+            echo "| run | $RUN_URL |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          jq -n \
+            --arg mode "$MODE" --arg run_url "$RUN_URL" \
+            --argjson observe "$(cat canary-observe.json 2>/dev/null || echo '{}')" \
+            --argjson verdict "$(cat canary-verdict.json 2>/dev/null || echo '{}')" \
+            '{v: 1, mode: $mode, run_url: $run_url, observe: $observe, verdict: $verdict}' \
+            > canary-report.json
+          cat canary-report.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: ai-sdlc-canary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            canary-report.json
+            canary-observe.json
+            canary-verdict.json
+            kill.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        with:
+          name: ai-sdlc-ledger-canary-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ai-sdlc-ledger/ledger-canary.jsonl
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Terminal gate: redness lands only after cleanup + alert + ledger.
+      - name: Gate — fail the run on a canary failure
+        if: always() && (steps.verdict.outputs.verdict == 'fail' || steps.verdict.outcome == 'failure')
+        run: |
+          set -euo pipefail
+          echo "::error title=ai-sdlc canary::${{ steps.verdict.outputs.reason || 'verdict step crashed — see run log' }}"
+          exit 1
