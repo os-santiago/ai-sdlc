@@ -25,7 +25,6 @@
 #      Composite actions are covered by a generated caller workflow that
 #      `uses:` every .github/actions/*/action.yml — actionlint checks action
 #      files only transitively, never as direct operands (issue #130).
-#   6. shellcheck over the repo's standalone scripts (issue #129): the
 #   7. shellcheck over the repo's standalone scripts (issue #129): the
 #      ./actionlint shim, tools/*.sh, .github/actions/*/*.sh, tests/*.sh —
 #      when a binary is installed (CI runners ship one; tools/shellcheck.sh
