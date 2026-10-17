@@ -365,24 +365,6 @@ jobs:
             *)
               echo "::warning title=credential isolation::probe inconclusive (HTTP '$status') — continuing; FORGE_TOKEN_WRITE still never enters the engine environment" ;;
           esac
-      - name: Quarantine hostile issue content
-        if: steps.sanitize.outputs.verdict == 'blocked'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          ISSUE: ${{ inputs.issue_number }}
-          L_QUEUED: ${{ steps.contract.outputs.label_queued }}
-          ESCALATION: ${{ steps.contract.outputs.escalation_label }}
-          REASONS: ${{ steps.sanitize.outputs.reasons }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          L="${ESCALATION:-needs-human}"
-          gh label create "$L" -R "$REPO" --force || true
-          gh issue edit "$ISSUE" -R "$REPO" --add-label "$L" || true
-          if [ -n "${L_QUEUED:-}" ]; then
-            gh issue edit "$ISSUE" -R "$REPO" --remove-label "$L_QUEUED" || true
-          fi
-          gh issue comment "$ISSUE" -R "$REPO" --body "🛡️ **AI-SDLC injection defense — content quarantined.** The issue text was blocked by the sanitization stage before reaching the engine (${REASONS:-hostile content}). Detection events are in the run audit (prompt_injection_blocked). Remove \`$L\` after human review to re-arm dispatch. Run: $RUN_URL" || true
 
       - name: Run stage engine headless (bounded, one model fallback on scc)
         id: engine
@@ -533,6 +515,30 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
 
+      # Quarantine is a forge write — it runs after the write-token mint.
+      # The engine step is already vetoed by sanitize_verdict == 'blocked',
+      # so placing the labeling post-script here changes no security
+      # invariant (the write token still never enters the engine env).
+      - name: Quarantine hostile issue content
+        if: always() && steps.sanitize.outputs.verdict == 'blocked'
+        env:
+          FORGE_TOKEN_WRITE: ${{ steps.app-token-write.outputs.token }}
+          ISSUE: ${{ inputs.issue_number }}
+          L_QUEUED: ${{ steps.contract.outputs.label_queued }}
+          ESCALATION: ${{ steps.contract.outputs.escalation_label }}
+          REASONS: ${{ steps.sanitize.outputs.reasons }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          export GH_TOKEN="$FORGE_TOKEN_WRITE"
+          L="${ESCALATION:-needs-human}"
+          gh label create "$L" -R "$REPO" --force || true
+          gh issue edit "$ISSUE" -R "$REPO" --add-label "$L" || true
+          if [ -n "${L_QUEUED:-}" ]; then
+            gh issue edit "$ISSUE" -R "$REPO" --remove-label "$L_QUEUED" || true
+          fi
+          gh issue comment "$ISSUE" -R "$REPO" --body "🛡️ **AI-SDLC injection defense — content quarantined.** The issue text was blocked by the sanitization stage before reaching the engine (${REASONS:-hostile content}). Detection events are in the run audit (prompt_injection_blocked). Remove \`$L\` after human review to re-arm dispatch. Run: $RUN_URL" || true
+
       - name: Contract error → not-ready + comment
         # Post-script (deterministic, no agent context): lives after the
         # write-token mint because every forge write in this stage uses
@@ -609,9 +615,48 @@ jobs:
             exit 1
           fi
 
+      # Output-magnitude gate (issue #181, spec/injection-defense.md): a
+      # diff wildly disproportionate to its triggering issue escalates to
+      # needs-human instead of being published. The change stays in the
+      # worktree — unstaged by the reset below, never committed nor pushed.
+      # Lives as its own post-script between the write-token mint and the
+      # publish step so apply-publish stays the ONLY publish path.
+      - name: Output-magnitude gate (injection defense)
+        id: propgate
+        if: steps.engine.outputs.exit_code == '0'
+        env:
+          FORGE_TOKEN_WRITE: ${{ steps.app-token-write.outputs.token }}
+          ISSUE: ${{ inputs.issue_number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          SAN="$RUNNER_TEMP/ai-sdlc-sanitize/injection_defense.js"
+          [ -f "$SAN" ] || exit 0
+          git add -A -- . ':!.github/workflows'
+          git diff --cached --name-only -z -- \
+            'scc-*.json*' 'ai-sdlc-run.json' 'issue.json' 'task-prompt.md' \
+            | xargs -0 -r git reset -q --
+          git diff --cached --quiet && exit 0
+          read -r PF PL <<< "$(git diff --cached --numstat | awk '{a+=$1; d+=$2; f++} END{printf "%d %d", f+0, a+d+0}')"
+          TCHARS=$(node -e 'try{const i=JSON.parse(require("fs").readFileSync("issue.json","utf8"));console.log((i.title||"").length+(i.body||"").length)}catch(e){console.log(0)}')
+          set +e
+          node "$SAN" --proportion --trigger issue --trigger-chars "$TCHARS" --files "$PF" --lines "$PL" --json > "$RUNNER_TEMP/proportion.json"
+          pcode=$?
+          set -e
+          if [ "$pcode" = 3 ]; then
+            WHY=$(jq -r '.why | join("; ")' "$RUNNER_TEMP/proportion.json" 2>/dev/null || echo "disproportionate scope")
+            echo "::warning::disproportionate output — $WHY"
+            export GH_TOKEN="$FORGE_TOKEN_WRITE"
+            gh label create needs-human -R "$REPO" --force || true
+            gh issue edit "$ISSUE" -R "$REPO" --add-label needs-human || true
+            gh issue comment "$ISSUE" -R "$REPO" --body "🛡️ **AI-SDLC injection defense — disproportionate output.** The engine produced a staged diff of ${PF} files / ${PL} lines against a ${TCHARS}-char trigger (${WHY}). The change was left uncommitted and never pushed; human review required. Run: $RUN_URL" || true
+            git reset -q
+            echo "escalated=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Apply diff + publish PR (deterministic post-script)
         id: pr
-        if: steps.engine.outputs.exit_code == '0' && steps.apply.outputs.applied == 'true'
+        if: steps.engine.outputs.exit_code == '0' && steps.apply.outputs.applied == 'true' && steps.propgate.outputs.escalated != 'true'
         uses: ./.github/actions/apply-publish
         with:
           repo: ${{ inputs.repo }}
@@ -622,81 +667,10 @@ jobs:
           token: ${{ steps.app-token-write.outputs.token }}
 
       - name: Label outcome on the issue
-        # Post-script: deterministic label mutation under FORGE_TOKEN_WRITE.
-        if: always() && steps.contract.outcome == 'success'
-        env:
-          RUN_ID: ${{ github.run_id }}
-          ENGINE_NAME: ${{ steps.contract.outputs.engine_name }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          git config user.name "ai-sdlc[bot]"
-          git config user.email "ai-sdlc[bot]@users.noreply.github.com"
-          # Engine session artifacts are run evidence uploaded as workflow
-          # artifacts — exclude them so only real source changes land in the
-          # consumer diff (issue #68). They are gitignored only in this repo,
-          # and `git add` aborts when a pathspec names an ignored path, so
-          # unstage whatever got staged instead of `:!` pathspec excludes.
-          git add -A -- . ':!.github/workflows'
-          git diff --cached --name-only -z -- \
-            'scc-*.json*' 'ai-sdlc-run.json' 'issue.json' 'task-prompt.md' \
-            | xargs -0 -r git reset -q --
-          if ! git diff --cached --quiet; then
-            # Output-magnitude gate (issue #181, spec/injection-defense.md):
-            # a diff wildly disproportionate to its triggering issue
-            # escalates to needs-human instead of being pushed. The change
-            # stays in the worktree — uncommitted, never pushed.
-            SAN="$RUNNER_TEMP/ai-sdlc-sanitize/injection_defense.js"
-            if [ -f "$SAN" ]; then
-              read -r PF PL <<< "$(git diff --cached --numstat | awk '{a+=$1; d+=$2; f++} END{printf "%d %d", f+0, a+d+0}')"
-              TCHARS=$(node -e 'try{const i=JSON.parse(require("fs").readFileSync("issue.json","utf8"));console.log((i.title||"").length+(i.body||"").length)}catch(e){console.log(0)}')
-              set +e
-              node "$SAN" --proportion --trigger issue --trigger-chars "$TCHARS" --files "$PF" --lines "$PL" --json > "$RUNNER_TEMP/proportion.json"
-              pcode=$?
-              set -e
-              if [ "$pcode" = 3 ]; then
-                WHY=$(jq -r '.why | join("; ")' "$RUNNER_TEMP/proportion.json" 2>/dev/null || echo "disproportionate scope")
-                echo "::warning::disproportionate output — $WHY"
-                gh label create needs-human -R "$REPO" --force || true
-                gh issue edit "$ISSUE" -R "$REPO" --add-label needs-human || true
-                gh issue comment "$ISSUE" -R "$REPO" --body "🛡️ **AI-SDLC injection defense — disproportionate output.** The engine produced a staged diff of ${PF} files / ${PL} lines against a ${TCHARS}-char trigger (${WHY}). The change was left uncommitted and never pushed; human review required. Run: $RUN_URL" || true
-                echo "escalated=true" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-            fi
-            git commit -m "feat: implement issue #$ISSUE (ai-sdlc runtime)"
-          fi
-          SLUG=$(gh issue view "$ISSUE" -R "$REPO" --json title -q '.title' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | cut -c1-40 | sed 's/-*$//')
-          BRANCH="feat/issue-${ISSUE}-${SLUG}"
-          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
-          echo "::add-mask::$AUTH"
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" \
-            push origin "HEAD:$BRANCH"
-          node - <<'NODE' > pr-body.md
-          const fs = require('fs');
-          const read = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch (e) { return {}; } };
-          const manifest = read('scc-manifest.json');
-          const run = read('ai-sdlc-run.json');
-          const steps = manifest.tool_calls_total ?? manifest.steps ?? 'n/a';
-          // Engine is referenced by adapter id (issue #230): resolved
-          // engine.name → contract.json on the runner → runtime default 'scc'.
-          const contract = read(`${process.env.RUNNER_TEMP}/ai-sdlc-contract/contract.json`);
-          const engineId = process.env.ENGINE_NAME || (contract.engine || {}).name || 'scc';
-          const fallback = run.fallback_used
-            ? `yes — primary \`${run.primary_model}\` exited ${run.primary_exit} (${run.fallback_reason})`
-            : 'no';
-          fs.writeFileSync('pr-body.md', `## AI-SDLC autonomous implementation\n\nImplements issue per \`.ai-sdlc.yaml\` contract.\n\n**Run manifest:** model=\`${run.model ?? manifest.model ?? 'n/a'}\` · fallback=${fallback} · steps=${steps} · engine=${engineId} · audit log + \`ai-sdlc-run.json\` attached as workflow artifact.\n\nCloses #${process.env.ISSUE}\n\n_Generated by ai-sdlc-implement (run ${process.env.RUN_ID})_\n`);
-          NODE
-          PR_URL=$(gh pr create -R "$REPO" --base "${{ inputs.base }}" --head "$BRANCH" \
-            --title "$(gh issue view "$ISSUE" -R "$REPO" --json title -q .title)" \
-            --body-file pr-body.md)
-          echo "pr_number=${PR_URL##*/}" >> "$GITHUB_OUTPUT"
-
-      - name: Label outcome on the issue
         if: >-
           always() && steps.contract.outcome == 'success'
           && steps.sanitize.outputs.verdict != 'blocked'
-          && steps.pr.outputs.escalated != 'true'
+          && steps.propgate.outputs.escalated != 'true'
         env:
           FORGE_TOKEN_WRITE: ${{ steps.app-token-write.outputs.token }}
           ISSUE: ${{ inputs.issue_number }}
@@ -765,8 +739,9 @@ jobs:
             scc-manifest.primary.json ai-sdlc-run.json task-prompt.md \
             issue.json 2>/dev/null || true
           # Ship the count-only sanitize audit with the run evidence.
-          [ -f "$RUNNER_TEMP/ai-sdlc-sanitize/audit.jsonl" ] \
-            && cp "$RUNNER_TEMP/ai-sdlc-sanitize/audit.jsonl" injection-audit.jsonl || true
+          if [ -f "$RUNNER_TEMP/ai-sdlc-sanitize/audit.jsonl" ]; then
+            cp "$RUNNER_TEMP/ai-sdlc-sanitize/audit.jsonl" injection-audit.jsonl || true
+          fi
 
       # Tamper-evident run evidence (issue #196): hash-chained entry seeded
       # by the upstream stage head (inputs.ledger_head), sealed, uploaded —
