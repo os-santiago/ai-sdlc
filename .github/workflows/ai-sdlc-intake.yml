@@ -160,11 +160,18 @@ jobs:
           VETO=$(jq -nc --argjson s "$SKIP_LABELS" --argjson m "$LABELS_MAP" \
             '($s + [$m["queued"], $m["in-progress"], $m["pr-opened"]] | map(select(. != null))) | unique')
 
-          node "$WORK/intake-refiner.js" \
-            --repo "$REPO" --issue "$ISSUE" \
-            --trigger "$TRIGGER" --hold "$NOT_READY" \
-            --skip-labels "$SKIP_LABELS" --veto-labels "$VETO" \
-            --apply --json --github-output
+          # Fail-open: refinement is additive intelligence, not a dispatch
+          # gate — a refiner error must not wedge an otherwise DoR-ready
+          # issue (the R1–R6 check below still gates dispatch).
+          if ! node "$WORK/intake-refiner.js" \
+              --repo "$REPO" --issue "$ISSUE" \
+              --trigger "$TRIGGER" --hold "$NOT_READY" \
+              --skip-labels "$SKIP_LABELS" --veto-labels "$VETO" \
+              --apply --json --github-output > "$WORK/refine.out" 2>"$WORK/refine.err"; then
+            echo "::warning::intake refiner failed ($(head -c 200 "$WORK/refine.err")) — continuing to DoR"
+            { echo "status=error"; echo "fingerprint="; } >> "$GITHUB_OUTPUT"
+          fi
+          cat "$WORK/refine.out" || true
 
       - name: Validate DoR (R1–R6)
         id: dor
