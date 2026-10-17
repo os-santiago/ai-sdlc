@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "repair-signaled",
+    "reason": "failing:ci"
+  },
+  "log": [
+    "decision: repair-signaled (failing:ci)"
+  ],
+  "exitCode": 0,
+  "error": null
+}

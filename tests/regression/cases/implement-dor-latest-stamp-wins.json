@@ -1,0 +1,16 @@
+{
+  "id": "implement-dor-latest-stamp-wins",
+  "type": "implement-sanitize",
+  "title": "re-armed surface: stale stamp then fresh stamp -> the LATEST trusted marker wins -> dor=verified",
+  "input": {
+    "issue": {
+      "number": 122,
+      "title": "security(intake): issue body TOCTOU between DoR approval and implement dispatch",
+      "body": "## Summary\n\nIntake evaluates DoR on the issue body at label time; implement re-fetches title+body at dispatch time.\n\n## Acceptance criteria\n- [ ] Body edits after DoR approval are detected before the engine run\n- [ ] Drift is surfaced to maintainers via label + comment\n"
+    },
+    "trusted_comments": [
+      { "body": "stale approval <!-- ai-sdlc:dor sha256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef -->", "created_at": "2026-10-17T10:00:00Z" },
+      { "body": "fresh approval <!-- ai-sdlc:dor sha256=b570a621e936889d7e4954f36aef8a74f5df3d7676d8823010c36127d2759b79 -->", "created_at": "2026-10-17T11:00:00Z" }
+    ]
+  }
+}

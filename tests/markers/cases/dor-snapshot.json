@@ -1,0 +1,10 @@
+{
+  "id": "dor-snapshot",
+  "marker": "dor-snapshot",
+  "fields": { "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" },
+  "body": "✅ **AI-SDLC intake:** DoR passed — queued for implementation (approved surface `9f86d081884c`). Follow the opened PR for progress.\n<!-- ai-sdlc:dor sha256=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 -->",
+  "expect": {
+    "match": true,
+    "captures": { "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" }
+  }
+}

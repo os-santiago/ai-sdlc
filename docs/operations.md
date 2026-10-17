@@ -116,7 +116,8 @@ Marker comments are the durable cross-run state: `<!-- ai-sdlc:ledger-head
 <64-hex> -->` (chain recovery on the PR), `<!-- ai-sdlc:review sha=… -->`
 (per-head verdict), `<!-- ai-sdlc:ci-repair attempt=N sha=… sig=… -->`
 (repair budget + stall signature), `<!-- ai-sdlc:repair-signal sha=… -->`,
-`<!-- ai-sdlc:label-veto -->` (janitor repair), `<!-- hermes:refinement
+`<!-- ai-sdlc:dor sha256=… -->` (DoR-approved issue surface pin, issue
+#122), `<!-- ai-sdlc:label-veto -->` (janitor repair), `<!-- hermes:refinement
 fp:"…" -->` (DoR fingerprint).
 
 ## Kill-switch

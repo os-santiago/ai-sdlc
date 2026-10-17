@@ -3,6 +3,7 @@
     "dispatch": "false",
     "armed": "true",
     "failed": "R2 AC section present|R3 ≥1 AC item|R4 non-trivial body",
+    "dor_sha": "3a9d0fd26819aa0f2a50650f87920ba4baaf7e472e8c388ab78b595e309ee295",
     "refine": "skipped",
     "refine_fp": ""
   },

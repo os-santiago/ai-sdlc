@@ -1,0 +1,15 @@
+{
+  "id": "implement-dor-verified",
+  "type": "implement-sanitize",
+  "title": "fetched issue surface matches the stamped DoR hash -> dor=verified, fenced prompt rendered",
+  "input": {
+    "issue": {
+      "number": 122,
+      "title": "security(intake): issue body TOCTOU between DoR approval and implement dispatch",
+      "body": "## Summary\n\nIntake evaluates DoR on the issue body at label time; implement re-fetches title+body at dispatch time.\n\n## Acceptance criteria\n- [ ] Body edits after DoR approval are detected before the engine run\n- [ ] Drift is surfaced to maintainers via label + comment\n"
+    },
+    "trusted_comments": [
+      { "body": "✅ **AI-SDLC intake:** DoR passed — queued for implementation (approved surface `b570a621e936`). Follow the opened PR for progress.\n<!-- ai-sdlc:dor sha256=b570a621e936889d7e4954f36aef8a74f5df3d7676d8823010c36127d2759b79 -->", "created_at": "2026-10-17T10:00:00Z" }
+    ]
+  }
+}

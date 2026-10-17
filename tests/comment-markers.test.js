@@ -101,6 +101,19 @@ test('parse sites: consumer pattern is present verbatim and equals the canonical
   }
 });
 
+test('code pins: shared recipe fragments appear verbatim in every pinned file', async (t) => {
+  for (const [id, def] of Object.entries(cm.MARKERS)) {
+    for (const pin of def.codePins || []) {
+      await t.test(`${id} @ ${pin.file}`, () => {
+        const text = readRepo(pin.file);
+        assert.ok(
+          text.includes(pin.mustContain),
+          `${id}: pinned recipe fragment not found in ${pin.file} — the duplicated code drifted; a one-sided recipe change is a silent security defect, update both copies + the pin intentionally`);
+      });
+    }
+  }
+});
+
 // --- 2 + 3. Fixture replay: round-trip and negatives ---------------------------
 
 test('marker fixtures: emit → parse round-trip plus negative cases', async (t) => {

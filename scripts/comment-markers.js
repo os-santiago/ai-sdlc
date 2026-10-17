@@ -20,6 +20,11 @@
 //                           Bot / OWNER / MEMBER / COLLABORATOR authors;
 //                           the test pins the jq select clause so a forged
 //                           comment can never steer the gate
+//   - codePins[]           verbatim pins for code DUPLICATED across inline
+//                          workflow scripts — a one-sided refactor of a
+//                          shared recipe (e.g. the DoR surface hash) is a
+//                          silent security drift, so both copies are pinned
+//                          byte-for-byte here
 //
 // tests/comment-markers.test.js replays emit→parse round-trips and negative
 // cases from tests/markers/cases/*.json against THIS module while asserting
@@ -27,7 +32,8 @@
 // same "replay the real code, never a copy" posture as
 // tests/regression_harness.js.
 //
-// Scope: the review/verdict gating surface (issue #131). Other marker
+// Scope: the review/verdict gating surface (issue #131) plus the
+// intake→implement DoR surface pin (`ai-sdlc:dor`, issue #122). Other marker
 // families live in their own modules with dedicated unit tests —
 // `ai-sdlc:refinement` (scripts/intake-refiner.js), `ai-sdlc:dup-scan`
 // (scripts/dup-detector.js), `ai-sdlc:alert-route` (scripts/alert-router.js),
@@ -40,6 +46,7 @@ const REVIEW_RUN_YML = '.github/workflows/ai-sdlc-review-run.yml';
 const REVIEW_FIX_YML = '.github/workflows/ai-sdlc-review-fix.yml';
 const AUTOMERGE_YML = '.github/workflows/ai-sdlc-automerge.yml';
 const CI_REPAIR_YML = '.github/workflows/ai-sdlc-ci-repair.yml';
+const INTAKE_YML = '.github/workflows/ai-sdlc-intake.yml';
 const IMPLEMENT_YML = '.github/workflows/ai-sdlc-implement.yml';
 const RUN_LEDGER_ACTION = '.github/actions/run-ledger/action.yml';
 
@@ -186,11 +193,55 @@ const MARKERS = {
         template: '<!-- ai-sdlc:repair-signal sha=$SHA -->',
       },
     ],
-    // Consumed from the PR's raw comment feed (pr.comments), not the
-    // trusted-author set — a forged signal can only stall or exhaust the
-    // repair budget on the forger's own PR, never merge code.
+    // Consumed from the trusted-author comment feed (issue #121) — the
+    // same source as the verdict markers: a forged signal could stall the
+    // merge indefinitely (`repair-awaiting`) or exhaust the repair budget
+    // (`repairs-exhausted`) on demand, so arbitrary commenters must never
+    // steer it.
     parseSites: [
-      { file: AUTOMERGE_YML, kind: 'js-regex', mustContain: 'const MARK = ', trusted: false },
+      { file: AUTOMERGE_YML, kind: 'js-regex', mustContain: 'const MARK = ', trusted: true },
+    ],
+  },
+
+  // DoR surface snapshot — the intake→implement TOCTOU pin (issue #122).
+  // Intake stamps the sha256 of the exact title+body it approved as a
+  // trusted-author comment; implement re-hashes its dispatch-time fetch
+  // and holds the engine on drift, so a body edited after approval can
+  // never smuggle post-approval content into the engine prompt.
+  'dor-snapshot': {
+    summary: 'sha256 pin of the DoR-approved issue title+body — dispatch-time drift detection (issue #122)',
+    fields: ['sha256'],
+    template: '<!-- ai-sdlc:dor sha256={sha256} -->',
+    parse: {
+      regex: /<!-- ai-sdlc:dor sha256=([0-9a-f]{64}) -->/,
+      fields: ['sha256'],
+    },
+    emitSites: [
+      {
+        file: INTAKE_YML,
+        mustContain: '<!-- ai-sdlc:dor sha256=$DORSHA -->',
+        template: '<!-- ai-sdlc:dor sha256=$DORSHA -->',
+      },
+    ],
+    // The verify side reads ONLY the trusted-author issue-comment feed —
+    // a forged `ai-sdlc:dor` stamp from an arbitrary commenter must never
+    // pass the drift check.
+    parseSites: [
+      { file: IMPLEMENT_YML, kind: 'js-regex', mustContain: 'const DORMARK = ', trusted: true },
+    ],
+    // The hash recipe is duplicated across two inline node scripts —
+    // intake stamps, implement verifies. Both copies are pinned verbatim:
+    // a one-sided change would make every dispatch read as drift (or
+    // silently pass it), with no failing check to explain why.
+    codePins: [
+      {
+        file: INTAKE_YML,
+        mustContain: "createHash('sha256').update(`${i.title || ''}\\n${i.body || ''}`).digest('hex')",
+      },
+      {
+        file: IMPLEMENT_YML,
+        mustContain: "createHash('sha256').update(`${i.title || ''}\\n${i.body || ''}`).digest('hex')",
+      },
     ],
   },
 

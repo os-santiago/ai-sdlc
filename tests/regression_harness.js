@@ -18,6 +18,12 @@
 //                     .github/workflows/ai-sdlc-automerge.yml, with the
 //                     fetched pr/checks/comment JSONs and Date.now() fixed
 //                     by the fixture.
+//   implement-sanitize  sanitize + DoR-surface check — replays the inline
+//                     node script of the "Fetch issue → sanitize → prompt
+//                     file" step in .github/workflows/ai-sdlc-implement.yml,
+//                     with issue.json + trusted-issue-comments.json as
+//                     fixtures (issue #122 drift verdicts + the fenced
+//                     prompt it writes).
 //   risk-classify     scripts/risk-classifier.js classifyDiff() — the
 //                     pr:risk-* taxonomy assignment.
 //   label-ops         scripts/risk-classifier.js applyRiskLabel() against a
@@ -53,6 +59,7 @@ const RESULTS_DIR = path.join(__dirname, 'regression', 'results');
 
 const INTAKE_WORKFLOW = path.join(ROOT, '.github', 'workflows', 'ai-sdlc-intake.yml');
 const AUTOMERGE_WORKFLOW = path.join(ROOT, '.github', 'workflows', 'ai-sdlc-automerge.yml');
+const IMPLEMENT_WORKFLOW = path.join(ROOT, '.github', 'workflows', 'ai-sdlc-implement.yml');
 const RESOLVE_PY = path.join(ROOT, '.github', 'actions', 'load-config', 'resolve.py');
 const NORMALIZED_EVENT = path.join(ROOT, '.github', 'actions', 'github-to-normalized-event', 'index.js');
 
@@ -307,6 +314,38 @@ const REPLAYERS = {
       nowMs: Date.parse(input.now || '2026-01-01T00:00:00Z'),
     });
     return { outputs: r.outputs, log: r.log, exitCode: r.exitCode, error: r.error };
+  },
+
+  // Implement sanitize + DoR-surface pin — replays the shipped inline
+  // script verbatim with the fetched JSONs as fixtures. The fetched
+  // sanitizer module is intentionally absent in the sandbox → the script
+  // exercises its inline-fencing fallback path, which is deterministic.
+  'implement-sanitize': (input) => {
+    const src = extractNodeHeredoc(IMPLEMENT_WORKFLOW, {
+      index: input.scriptIndex || 0,
+      mustContain: input.mustContain || 'const DORMARK = ',
+    });
+    const env = {
+      RUNNER_TEMP: '/tmp/ai-sdlc-regression-fixture',
+      GITHUB_OUTPUT: '__github_output__',
+      ...(input.env || {}),
+    };
+    const r = replayInlineScript(src, {
+      files: {
+        'issue.json': JSON.stringify(input.issue || {}),
+        'trusted-issue-comments.json': JSON.stringify(input.trusted_comments || []),
+      },
+      env,
+      nowMs: input.now ? Date.parse(input.now) : undefined,
+    });
+    return {
+      outputs: r.outputs,
+      // '' = an empty prompt file was written (blocked/drift); null = none.
+      prompt: r.written['task-prompt.md'] ?? null,
+      log: r.log,
+      exitCode: r.exitCode,
+      error: r.error,
+    };
   },
 
   // Risk taxonomy — classifyDiff over a fixture diff.

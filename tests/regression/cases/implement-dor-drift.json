@@ -1,0 +1,15 @@
+{
+  "id": "implement-dor-drift",
+  "type": "implement-sanitize",
+  "title": "post-approval body edit -> fetched surface hashes differently than the stamp -> dor=drift, empty prompt (issue #122)",
+  "input": {
+    "issue": {
+      "number": 122,
+      "title": "security(intake): issue body TOCTOU between DoR approval and implement dispatch",
+      "body": "## Summary\n\nIntake evaluates DoR on the issue body at label time; implement re-fetches title+body at dispatch time.\n\n## Acceptance criteria\n- [ ] Body edits after DoR approval are detected before the engine run\n- [ ] Drift is surfaced to maintainers via label + comment\n"
+    },
+    "trusted_comments": [
+      { "body": "✅ **AI-SDLC intake:** DoR passed — queued for implementation.\n<!-- ai-sdlc:dor sha256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef -->", "created_at": "2026-10-17T10:00:00Z" }
+    ]
+  }
+}

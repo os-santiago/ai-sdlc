@@ -3,6 +3,7 @@
     "dispatch": "true",
     "armed": "true",
     "failed": "",
+    "dor_sha": "bf9b436befc47de60712173fa30f3e9a8531a5f824560fc61dc8cf7158b11d70",
     "refine": "skipped",
     "refine_fp": ""
   },

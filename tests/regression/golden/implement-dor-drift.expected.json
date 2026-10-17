@@ -1,0 +1,16 @@
+{
+  "outputs": {
+    "dor": "drift",
+    "dor_approved": "0123456789ab",
+    "dor_actual": "b570a621e936",
+    "verdict": "clean",
+    "reasons": "none"
+  },
+  "prompt": "",
+  "log": [
+    "dor-surface: drift (approved=0123456789ab actual=b570a621e936)",
+    "injection-defense: verdict=clean (no reasons) findings={}"
+  ],
+  "exitCode": 0,
+  "error": null
+}
