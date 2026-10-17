@@ -58,28 +58,41 @@ the linter reads the block, humans read the table.
 | `ai-sdlc-ready-queue-<run>-<attempt>` | sweep | workspace-report | `ready-queue.json`/`ready-queue.md` at root | 30d |
 | `ai-sdlc-slo-metrics` | metrics | workspace-report | `slo-metrics.json`/`.prom`, `slo-input.json` at root | 90d |
 | `ai-sdlc-drift-report` | drift | workspace-report | `drift-report.json`, `drift-input.json` at root | 90d |
+| `ai-sdlc-canary-<run>-<attempt>` | canary | workspace-report | `canary-*.json`, `kill.json` at root | 30d |
+| `dora-metrics-json` | dora | workspace-report | `dora-metrics.json`, `dora-input.json` at root | 90d |
 | `ai-sdlc-<tag>` | release | build | `dist/` — the shipped artifact, not run evidence | 30d |
 
 <!-- ai-sdlc:run-evidence -->
 ```json
 {
   "version": 1,
-  "comment": "machine-readable run-evidence layout — tools/check-run-evidence.py consumes this; keep the table above in sync. match templates use <e> for one ${{ }} expression; 'regex' matches the raw name text; files scopes the artifact to workflow/action files; path_root runner_temp requires every path under ${{ runner.temp }}/ai-sdlc-, workspace requires every path to match the declared paths globs.",
+  "comment": "machine-readable run-evidence layout \u2014 tools/check-run-evidence.py consumes this; keep the table above in sync. match templates use <e> for one ${{ }} expression; 'regex' matches the raw name text; files scopes the artifact to workflow/action files; path_root runner_temp requires every path under ${{ runner.temp }}/ai-sdlc-, workspace requires every path to match the declared paths globs.",
   "artifacts": [
     {
       "id": "implement-run",
       "match": "ai-sdlc-run-<e>",
-      "files": [".github/workflows/ai-sdlc-implement.yml"],
+      "files": [
+        ".github/workflows/ai-sdlc-implement.yml"
+      ],
       "class": "workspace-session",
       "path_root": "workspace",
-      "paths": ["scc-*", "engine-run*", "ai-sdlc-*", "apply-result.json",
-                "issue.json", "task-prompt.md", "injection-audit.jsonl"],
+      "paths": [
+        "scc-*",
+        "engine-run*",
+        "ai-sdlc-*",
+        "apply-result.json",
+        "issue.json",
+        "task-prompt.md",
+        "injection-audit.jsonl"
+      ],
       "retention": 14
     },
     {
       "id": "review-bundle",
       "match": "ai-sdlc-review-<e>-<e>",
-      "files": [".github/workflows/ai-sdlc-review.yml"],
+      "files": [
+        ".github/workflows/ai-sdlc-review.yml"
+      ],
       "class": "engine-session",
       "path_root": "runner_temp",
       "retention": 14
@@ -87,7 +100,9 @@ the linter reads the block, humans read the table.
     {
       "id": "review-fix-bundle",
       "match": "ai-sdlc-review-fix-<e>-attempt-<e>",
-      "files": [".github/workflows/ai-sdlc-review.yml"],
+      "files": [
+        ".github/workflows/ai-sdlc-review.yml"
+      ],
       "class": "engine-session",
       "path_root": "runner_temp",
       "retention": 14
@@ -95,7 +110,9 @@ the linter reads the block, humans read the table.
     {
       "id": "ci-repair-bundle",
       "match": "ai-sdlc-ci-repair-<e>-attempt-<e>",
-      "files": [".github/workflows/ai-sdlc-ci-repair.yml"],
+      "files": [
+        ".github/workflows/ai-sdlc-ci-repair.yml"
+      ],
       "class": "engine-session",
       "path_root": "runner_temp",
       "retention": 14
@@ -103,7 +120,9 @@ the linter reads the block, humans read the table.
     {
       "id": "dep-update-bundle",
       "match": "ai-sdlc-dep-update-<e>",
-      "files": [".github/workflows/ai-sdlc-dep-update.yml"],
+      "files": [
+        ".github/workflows/ai-sdlc-dep-update.yml"
+      ],
       "class": "engine-session",
       "path_root": "runner_temp",
       "retention": 14
@@ -111,22 +130,27 @@ the linter reads the block, humans read the table.
     {
       "id": "contract-bundle",
       "regex": "ai-sdlc-contract-",
-      "files": [".github/actions/load-config/action.yml"],
+      "files": [
+        ".github/actions/load-config/action.yml"
+      ],
       "class": "contract",
       "path_root": "runner_temp",
       "retention": 14
     },
     {
       "id": "ledger-segment",
-      "regex": "^ai-sdlc-ledger-(intake|implement|review|review-fix|ci-repair|automerge|dep-update|verify|kill-switch|drift|fleet|metrics|sweep)-",
-      "files": [".github/workflows/ai-sdlc-intake.yml",
-                ".github/workflows/ai-sdlc-implement.yml",
-                ".github/workflows/ai-sdlc-review.yml",
-                ".github/workflows/ai-sdlc-ci-repair.yml",
-                ".github/workflows/ai-sdlc-automerge.yml",
-                ".github/workflows/ai-sdlc-dep-update.yml",
-                ".github/workflows/ai-sdlc-verify.yml",
-                ".github/workflows/ai-sdlc-kill.yml"],
+      "regex": "^ai-sdlc-ledger-(intake|implement|review|review-fix|ci-repair|automerge|dep-update|verify|kill-switch|drift|fleet|metrics|sweep|canary)-",
+      "files": [
+        ".github/workflows/ai-sdlc-intake.yml",
+        ".github/workflows/ai-sdlc-implement.yml",
+        ".github/workflows/ai-sdlc-review.yml",
+        ".github/workflows/ai-sdlc-ci-repair.yml",
+        ".github/workflows/ai-sdlc-automerge.yml",
+        ".github/workflows/ai-sdlc-dep-update.yml",
+        ".github/workflows/ai-sdlc-verify.yml",
+        ".github/workflows/ai-sdlc-kill.yml",
+        ".github/workflows/ai-sdlc-canary.yml"
+      ],
       "class": "ledger",
       "path_root": "runner_temp",
       "retention": 14
@@ -134,38 +158,88 @@ the linter reads the block, humans read the table.
     {
       "id": "ready-queue",
       "match": "ai-sdlc-ready-queue-<e>-<e>",
-      "files": [".github/workflows/ai-sdlc-sweep.yml"],
+      "files": [
+        ".github/workflows/ai-sdlc-sweep.yml"
+      ],
       "class": "workspace-report",
       "path_root": "workspace",
-      "paths": ["ready-queue.json", "ready-queue.md"],
+      "paths": [
+        "ready-queue.json",
+        "ready-queue.md"
+      ],
       "retention": 30
     },
     {
       "id": "slo-metrics",
       "match": "ai-sdlc-slo-metrics",
-      "files": [".github/workflows/ai-sdlc-metrics.yml"],
+      "files": [
+        ".github/workflows/ai-sdlc-metrics.yml"
+      ],
       "class": "workspace-report",
       "path_root": "workspace",
-      "paths": ["slo-metrics.json", "slo-metrics.prom", "slo-input.json"],
+      "paths": [
+        "slo-metrics.json",
+        "slo-metrics.prom",
+        "slo-input.json"
+      ],
       "retention": 90
     },
     {
       "id": "drift-report",
       "match": "ai-sdlc-drift-report",
-      "files": [".github/workflows/ai-sdlc-drift.yml"],
+      "files": [
+        ".github/workflows/ai-sdlc-drift.yml"
+      ],
       "class": "workspace-report",
       "path_root": "workspace",
-      "paths": ["drift-report.json", "drift-input.json"],
+      "paths": [
+        "drift-report.json",
+        "drift-input.json"
+      ],
       "retention": 90
     },
     {
       "id": "release-bundle",
       "match": "ai-sdlc-<e>",
-      "files": [".github/workflows/ai-sdlc-release.yml"],
+      "files": [
+        ".github/workflows/ai-sdlc-release.yml"
+      ],
       "class": "build",
       "path_root": "workspace",
-      "paths": ["dist/"],
+      "paths": [
+        "dist/"
+      ],
       "retention": 30
+    },
+    {
+      "id": "canary-report",
+      "match": "ai-sdlc-canary-<e>-<e>",
+      "files": [
+        ".github/workflows/ai-sdlc-canary.yml"
+      ],
+      "class": "workspace-report",
+      "path_root": "workspace",
+      "paths": [
+        "canary-report.json",
+        "canary-observe.json",
+        "canary-verdict.json",
+        "kill.json"
+      ],
+      "retention": 30
+    },
+    {
+      "id": "dora-metrics",
+      "match": "dora-metrics-json",
+      "files": [
+        ".github/workflows/ai-sdlc-dora.yml"
+      ],
+      "class": "workspace-report",
+      "path_root": "workspace",
+      "paths": [
+        "dora-metrics.json",
+        "dora-input.json"
+      ],
+      "retention": 90
     }
   ]
 }

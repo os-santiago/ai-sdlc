@@ -100,14 +100,14 @@ jobs:
           # rendered from the same report object — they can never drift.
           node "$WORK/dora-metrics.js" --repo "$REPO" --window "$WINDOW" \
             --out dora-metrics.json --report docs/metrics/dora.md \
-            --github-summary --github-output --dump-input "$WORK/dora-input.json"
+            --github-summary --github-output --dump-input dora-input.json
 
       - uses: actions/upload-artifact@v4
         with:
           name: dora-metrics-json
           path: |
             dora-metrics.json
-            ${{ runner.temp }}/ai-sdlc-dora/dora-input.json
+            dora-input.json
           retention-days: 90
           if-no-files-found: error
 
