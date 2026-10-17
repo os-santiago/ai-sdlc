@@ -32,7 +32,7 @@ engine only, no GitHub webhook adapter yet).
 | `ai-sdlc-sweep.yml` | scheduled stall-sweep: enumerates open pipeline PRs and feeds each to `ai-sdlc-automerge.yml` — no green-idle PRs | `schedule` (every 30 min) / `workflow_dispatch` |
 | `ai-sdlc-metrics.yml` | scheduled SLO report (`scripts/slo-metrics.js`): time-to-merge, iterations-to-green, escalation rate → step summary + JSON/Prometheus artifacts | `schedule` (daily) / `workflow_dispatch` / `workflow_call` |
 | `ai-sdlc-drift.yml` | scheduled contract-drift sweep (`scripts/contract-drift.js`): declared `.ai-sdlc.yaml` vs observed runs/labels/merges → one canonical deduped issue per repo | `schedule` (daily) / `workflow_dispatch` / `workflow_call` |
-| `ai-sdlc-sweep.yml` | scheduled stall-sweep: enumerates open pipeline PRs and feeds each to `ai-sdlc-automerge.yml` — no green-idle PRs; also repairs issue-label contradictions (skip-label vetoing `ready-to-implement`, spec/labels.md) via `scripts/label-contradiction.js` | `schedule` (every 30 min) / `issues.labeled` / `workflow_dispatch` |
+| `ai-sdlc-sweep.yml` | scheduled stall-sweep: enumerates open pipeline PRs and feeds each to `ai-sdlc-automerge.yml` — no green-idle PRs; also repairs issue-label contradictions (skip-label vetoing `ready-to-implement`, spec/labels.md) via `scripts/label-contradiction.js`, and scores the armed ready queue (`scripts/prioritize-queue.js`, `prioritize.*` rubric) into an ordered JSON+markdown queue | `schedule` (every 30 min) / `issues.labeled` / `workflow_dispatch` |
 | `ai-sdlc-ci-repair.yml` | bounded repair loop on red checks: failing-check log tails → `scc` headless on the PR head → commit + push; one comment per attempt; `needs-human` after `max_repairs` | `check_run.completed` (failure) / `workflow_dispatch` / automerge `repair-signaled` |
 | `ai-sdlc-verify.yml` | post-merge verify commands (resolved contract `verify.commands`); failure → canonical postmortem issue via `scripts/postmortem.js` — signature-deduped: open canonical comments, closed canonical reopens at `postmortem.reopen_min` (spec/postmortem-lifecycle.md) — or revert when enabled | post-merge |
 | `ai-sdlc-dep-update.yml` | scheduled dependency scan → vetted dep-update PR (`scripts/dep-update.js`): release-age gate, license allowlist, typosquat distance, OSV → one bounded consolidated PR + deduped flagged-for-human issue | `schedule` / `workflow_dispatch` / called |
@@ -826,6 +826,41 @@ A forbidden label pair on an issue — e.g. a skip label coexisting with
 - **Consumer repos:** the job pulls the script from
   `os-santiago/ai-sdlc@main` when the consumer repo doesn't vendor it; a
   vendored `scripts/label-contradiction.js` always wins.
+
+### Ready-queue prioritization (issue #162)
+
+Dispatch is event-driven FIFO by label application — high-value issues wait
+behind trivia. The sweep's `prioritize` job runs `scripts/prioritize-queue.js`
+to give the ready queue an economic ordering:
+
+- **Queue membership (spec/labels.md):** an issue is *armed* when it carries
+  `triggers.issue_label` and no label that vetoes the trigger — the same
+  forbidden-pair derivation the label-repair job uses (declared `veto_pairs`
+  ∪ `triggers.skip_labels` ∪ the hold/refinement-hold/run-state precedence).
+  Armed-but-vetoed drift is excluded from the queue and reported; repair is
+  label-repair's job, the scorer never touches labels.
+- **Scoring rubric** is declared in `.ai-sdlc.yaml` under `prioritize`
+  (opt-in, `enabled: false` by default — an undeclared contract emits an
+  empty queue and exits clean):
+  `score = weights.priority[P<tier>] + age_per_day×min(age_days, age_cap_days)
+  + epic_linked×[epic child] + blocking×#(open issues this blocks)
+  + blocked×#(open blockers)`. Dependency data comes from GitHub issue
+  dependencies (`blockedBy`/`blocking` on the issue-list payload); when the
+  fields are unavailable the components score 0 and the evidence carries
+  `deps: false` (fail-open).
+- **Dispatch order:** with `priority_override` (default on) the queue is
+  tier-first — priority labels override raw score and **P0 always dispatches
+  first**, even if a repo zeroes its weight; within a tier, score desc then
+  age asc. `priority_override: false` is pure score-first ordering.
+- **Evidence:** the ordered queue is the stage artifact — a markdown table
+  in the step summary plus `ready-queue.json`/`ready-queue.md` uploaded per
+  run (30d). Every entry carries `score`, the per-component `reason` string,
+  and `rank`; `queue_head`/`queue_size` go to step outputs. The artifact's
+  head→tail order is the dispatch order for any consumer that pops the
+  queue; the scorer itself never dispatches.
+- **Bounded:** one `issue list` call, capped at `prioritize.max` (default 50,
+  hard ceiling 200). Deterministic — equal inputs produce byte-identical
+  output (`--now` pins `generatedAt`; `--issues FILE` replays a fixture).
 
 ### Consuming repos
 

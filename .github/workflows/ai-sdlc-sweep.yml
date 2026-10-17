@@ -15,6 +15,12 @@
 # evaluates the base branch on every sweep even when no PRs are open, so a
 # red→green recovery lifts the halt (closes the sentinel issue) without
 # waiting for the next PR event. The merge-blocking side lives in the gate.
+#
+# The `prioritize` job is the ready-queue scorer (issue #162, epic #147):
+# every sweep ranks the armed issues — trigger label present, no veto label
+# per spec/labels.md — by the `prioritize.*` rubric in .ai-sdlc.yaml and
+# publishes the ordered dispatch queue as run evidence (step summary + JSON
+# artifact). Read-only: it never labels, comments, or dispatches.
 name: ai-sdlc-sweep
 
 on:
@@ -260,3 +266,76 @@ jobs:
             ];
             fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
           NODE
+
+  prioritize:
+    # Ready-queue scoring (issue #162, epic #147): ranks every armed issue —
+    # trigger label present, no veto label per spec/labels.md — by the
+    # `prioritize.*` rubric in .ai-sdlc.yaml and publishes the ordered queue
+    # as run evidence (step summary + artifact + queue_head output). The
+    # artifact IS the dispatch order for queue consumers: head first, with
+    # priority labels able to override raw score (P0 always first when
+    # prioritize.priority_override is on). Read-only, runs on every sweep
+    # trigger — including issues.labeled, where a just-armed issue is
+    # scored in place. Disabled contracts emit an empty queue, exit clean.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .ai-sdlc.yaml
+            scripts/prioritize-queue.js
+            scripts/label-contradiction.js
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Fetch scorer from the runtime repo (when not vendored)
+        # Consumer repos carry only .ai-sdlc.yaml — pull the canonical
+        # scripts from the runtime repo (vendored copies always win).
+        # label-contradiction.js is a hard dependency: the veto set the
+        # scorer filters on is derived there (spec/labels.md single source).
+        env:
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p scripts
+          for f in prioritize-queue.js label-contradiction.js; do
+            if [ ! -f "scripts/$f" ]; then
+              gh api "repos/os-santiago/ai-sdlc/contents/scripts/$f?ref=main" \
+                -H 'Accept: application/vnd.github.raw' > "scripts/$f"
+            fi
+            node --check "scripts/$f"
+          done
+
+      - name: Score the ready queue
+        id: score
+        env:
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -f .ai-sdlc.yaml ]; then
+            yq -o=json "." .ai-sdlc.yaml > contract.json
+          else
+            echo '{}' > contract.json   # no contract → stage disabled, empty queue
+          fi
+          node scripts/prioritize-queue.js --repo "$REPO" --contract contract.json \
+            --format both --out ready-queue --json --github-output | tee queue.json
+          [ ! -f ready-queue.md ] || cat ready-queue.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: ai-sdlc-ready-queue-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ready-queue.json
+            ready-queue.md
+          if-no-files-found: ignore
+          retention-days: 30

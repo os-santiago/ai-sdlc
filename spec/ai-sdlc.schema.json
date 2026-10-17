@@ -374,6 +374,86 @@
         }
       }
     },
+    "prioritize": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Ready-queue scoring rubric (issue #162, epic #147): a scheduled pass scores every armed issue (triggers.issue_label present, no veto label per spec/labels.md) and emits the ordered dispatch queue. Disabled by default — opt-in.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "When false the stage emits an empty queue (enabled:false) and exits clean."
+        },
+        "priority_override": {
+          "type": "boolean",
+          "default": true,
+          "description": "true = tier-first ordering: priority labels override raw score and P0 always dispatches first; false = pure score-first ordering (tier only as tiebreak)."
+        },
+        "max": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "default": 50,
+          "description": "Cap on armed issues fetched and ranked per pass."
+        },
+        "epic_child_label": {
+          "type": "string",
+          "default": "scc:child",
+          "description": "Label binding marking an issue as an epic/umbrella child for the epic_linked component. The decomposer's `parent:#N` body marker also counts as linkage."
+        },
+        "weights": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Scoring function: score = priority[tier] + age_per_day×min(age_days, age_cap_days) + epic_linked×[epic child] + blocking×#(open issues this blocks) + blocked×#(open blockers).",
+          "properties": {
+            "priority": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "number"
+              },
+              "default": {
+                "P0": 1000,
+                "P1": 300,
+                "P2": 100,
+                "P3": 25
+              },
+              "description": "Base weight per priority tier — keys are P<n> matching the priority:P<n> label. Undeclared tiers and unlabeled issues fall back to weights.unlabeled."
+            },
+            "unlabeled": {
+              "type": "number",
+              "default": 0,
+              "description": "Base weight for issues with no priority:P* label."
+            },
+            "age_per_day": {
+              "type": "number",
+              "default": 2,
+              "description": "Points per day of issue age (waiting-time decay), capped by age_cap_days."
+            },
+            "age_cap_days": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 30,
+              "description": "Ceiling on the age component — beyond this many days the age term stops growing."
+            },
+            "epic_linked": {
+              "type": "number",
+              "default": 25,
+              "description": "Bonus when the issue is linked to an epic/umbrella (epic_child_label or a parent:#N body marker) — epic momentum."
+            },
+            "blocking": {
+              "type": "number",
+              "default": 15,
+              "description": "Bonus per OPEN issue this issue blocks (GitHub issue dependencies) — unblocking others ranks it higher."
+            },
+            "blocked": {
+              "type": "number",
+              "default": -20,
+              "description": "Weight per OPEN issue still blocking this one — negative (the default) penalizes gated work."
+            }
+          }
+        }
+      }
+    },
     "verify": {
       "type": "object",
       "additionalProperties": false,
