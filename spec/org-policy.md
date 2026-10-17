@@ -96,6 +96,7 @@ they still allow repo-side tightening. Listing them in
 | `security.sbom.format` | Not a strictness dimension — no clamp. An org pins a format outright via `policy_floor.pin` (`cyclonedx` is the normative default). |
 | `security.sbom.attach_to` | Guard-rail list — union strictly-additive like `verify.required_checks`: a repo may attach the SBOM to more surfaces (`pr`, `release`), never drop an org-declared one. |
 | `security.severity_matrix.<pr:risk-*>` | Strictest-outcome floor per leaf the org declares — outcomes rank `report-only` < `blocking-if-fix-available` < `blocking`; a repo may harden a tier, never soften it. |
+| `security.sbom` | Boolean floor — org `true` pins CycloneDX SBOM emission on org-wide (PR artifact + attested release asset; issue #92); a repo `true` under an org `false` only tightens. Evidence-only — never gates a check. |
 
 ### Severity matrix
 

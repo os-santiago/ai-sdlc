@@ -8,6 +8,9 @@
 #   <artifact>.crt             Fulcio-issued certificate for the ephemeral key
 #   <artifact>.sigstore.json   Sigstore bundle (sig + cert + Rekor inclusion)
 #   <artifact>.attestation.jsonl  SLSA build-provenance attestation bundle
+#   ai-sdlc-<tag>.cdx.json     CycloneDX SBOM (npm surface) when the
+#                              security.sbom contract is on — attested
+#                              alongside the tarball (issue #92)
 #
 # This script downloads the asset set with `gh release download` and
 # verifies BOTH trust surfaces:
@@ -28,7 +31,7 @@
 # Exit 0 = all checks green · 1 = verification failed · 2 = usage/tooling.
 set -euo pipefail
 
-usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; }
 
 REPO="os-santiago/ai-sdlc"
 DIR=""

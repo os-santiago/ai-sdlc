@@ -4,8 +4,11 @@
 #
 #   release    (contents: write only) — compute the plan, annotate + push
 #     the tag(s), create the GitHub release, package the `git archive`
-#     source tarball, publish it as a run artifact. dry_run=true (the
-#     default) prints the plan to the step summary and mutates nothing.
+#     source tarball, publish it as a run artifact. When the contract
+#     enables `security.sbom` (issue #92), a CycloneDX SBOM of the npm
+#     dependency surface is emitted into dist/ alongside the tarball and
+#     ships as a release asset. dry_run=true (the default) prints the
+#     plan to the step summary and mutates nothing.
 #
 #   provenance (contents: write + id-token: write + attestations: write) —
 #     runs only when a release was actually published. Reads the
@@ -15,8 +18,10 @@
 #     SHA-pinned actions/attest-build-provenance (SLSA L3-class), attaches
 #     the artifact + .sig/.crt/.sigstore.json to the release, and exports
 #     the attestation bundle (.jsonl) as a release asset for offline
-#     verification. Any signing/attestation failure fails the job — a
-#     release never ships partially-provenanced assets silently.
+#     verification. The SBOM (when emitted) is an attestation subject too —
+#     every shipped asset lands provenanced or the job fails. Any
+#     signing/attestation failure fails the job — a release never ships
+#     partially-provenanced assets silently.
 #
 # Consumer verification: tools/verify-release.sh, or manually —
 #   cosign verify-blob --signature <art>.sig --certificate <art>.crt \
@@ -118,6 +123,43 @@ jobs:
             --output="dist/ai-sdlc-${TAG}.tar.gz" "$TAG"
           sha256sum "dist/ai-sdlc-${TAG}.tar.gz" >> "$GITHUB_STEP_SUMMARY"
 
+      # CycloneDX SBOM of the npm dependency surface (issue #92): emitted
+      # when the contract's security.sbom floor is on. Lands in dist/ so it
+      # rides the run artifact below and ships as an attested release asset.
+      - name: Read security.sbom contract posture
+        if: steps.rel.outputs.release_status == 'released'
+        id: sbom_contract
+        run: |
+          set -euo pipefail
+          npx -y -q js-yaml .ai-sdlc.yaml > "$RUNNER_TEMP/contract.json"
+          node -e '
+            const c = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")) || {};
+            console.log("enabled=" + String((c.security || {}).sbom === true));
+          ' "$RUNNER_TEMP/contract.json" >> "$GITHUB_OUTPUT"
+
+      - name: Generate CycloneDX SBOM (npm surface)
+        if: steps.rel.outputs.release_status == 'released' && steps.sbom_contract.outputs.enabled == 'true'
+        uses: anchore/sbom-action@fffec3d851af758d56fee099cf3fbf8aa8779843  # v0.24.3
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: dist/ai-sdlc-${{ steps.rel.outputs.release_tag }}.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Verify SBOM (CycloneDX JSON, fail-closed)
+        if: steps.rel.outputs.release_status == 'released' && steps.sbom_contract.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          F="dist/ai-sdlc-${{ steps.rel.outputs.release_tag }}.cdx.json"
+          [ -s "$F" ] || { echo "::error::syft produced no SBOM"; exit 1; }
+          node -e '
+            const d = require(process.argv[1]);
+            if (d.bomFormat !== "CycloneDX") throw new Error("SBOM is not CycloneDX JSON");
+            console.log("CycloneDX specVersion=" + d.specVersion +
+              " components=" + (d.components || []).length);
+          ' "$F"
+
       - name: Publish artifact to the provenance job
         if: steps.rel.outputs.release_status == 'released'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
@@ -182,24 +224,43 @@ jobs:
             [ -s "$f" ] || { echo "::error::cosign did not produce $f"; exit 1; }
           done
 
-      # SLSA L3-class provenance for the release artifact (issue #100 shape).
-      # SHA-pinned; verify downstream with:
+      # SLSA L3-class provenance for the release artifacts (issue #100 shape;
+      # SBOM subject added by issue #92). Every subject listed gets an
+      # attestation — verify downstream with:
       #   gh attestation verify dist/ai-sdlc-<tag>.tar.gz -R os-santiago/ai-sdlc
+      - name: Resolve attestation subjects
+        if: steps.contract.outputs.attest == 'true'
+        id: subj
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.release.outputs.release_tag }}"
+          {
+            echo 'paths<<AI_SDLC_SUBJECTS'
+            echo "dist/ai-sdlc-${TAG}.tar.gz"
+            # The SBOM is a subject when the security.sbom contract emitted it.
+            [ -f "dist/ai-sdlc-${TAG}.cdx.json" ] && echo "dist/ai-sdlc-${TAG}.cdx.json"
+            echo 'AI_SDLC_SUBJECTS'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Attest build provenance
         if: steps.contract.outputs.attest == 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/ai-sdlc-${{ needs.release.outputs.release_tag }}.tar.gz
+          subject-path: ${{ steps.subj.outputs.paths }}
 
       - name: Attach artifact + signatures to the GitHub release
         env:
           GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Glob covers the tarball plus .sig/.crt/.sigstore.json when the
-          # contract enabled signing; the tarball always matches.
-          gh release upload "${{ needs.release.outputs.release_tag }}" \
-            dist/ai-sdlc-${{ needs.release.outputs.release_tag }}.tar.gz* --clobber
+          TAG="${{ needs.release.outputs.release_tag }}"
+          # Globs cover the tarball plus .sig/.crt/.sigstore.json when the
+          # contract enabled signing, and the .cdx.json SBOM when
+          # security.sbom emitted one; the tarball always matches.
+          shopt -s nullglob
+          files=(dist/"ai-sdlc-${TAG}".tar.gz* dist/"ai-sdlc-${TAG}".cdx.json)
+          [ "${#files[@]}" -gt 0 ] || { echo "::error::no release artifacts under dist/"; exit 1; }
+          gh release upload "$TAG" "${files[@]}" --clobber
 
       # Attach the attestation bundle itself so consumers can verify offline:
       #   gh attestation verify <art> -R <owner>/<repo> \

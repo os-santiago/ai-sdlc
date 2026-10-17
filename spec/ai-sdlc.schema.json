@@ -441,6 +441,11 @@
               "default": "blocking-if-fix-available"
             }
           }
+        },
+        "sbom": {
+          "type": "boolean",
+          "default": false,
+          "description": "Emit a CycloneDX SBOM of the dependency surface as run evidence — a workflow artifact on every PR and an attested asset on release runs (issue #92, epic #87). Evidence-only: it never gates a check. Boolean floor — an org baseline's `true` pins it on org-wide and a repo cannot relax an org-mandated `true`; a repo `true` under an org `false` only tightens."
         }
       }
     },
