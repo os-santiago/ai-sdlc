@@ -34,7 +34,6 @@ inputs:
   engine:
     description: 'resolved engine adapter id stamped in the PR body (issue #230)'
     default: 'scc'
-  engine:
     description: 'resolved engine adapter id stamped in the PR body (issue #230)'
     default: 'scc'
 
@@ -58,6 +57,5 @@ runs:
         ISSUE: ${{ inputs.issue }}
         BASE: ${{ inputs.base }}
         RUN_ID: ${{ inputs.run-id }}
-        ENGINE_ID: ${{ inputs.engine }}
         ENGINE_ID: ${{ inputs.engine }}
       run: bash "$GITHUB_ACTION_PATH/apply_and_publish.sh"
