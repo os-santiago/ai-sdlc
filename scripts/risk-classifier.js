@@ -325,7 +325,7 @@ function usage() {
     'usage: risk-classifier.js [--repo OWNER/NAME --pr N] [--numstat F|--files F]',
     '                          [--diff F] [--tier low|medium|high|critical]',
     '                          [--apply] [--json] [--github-output]',
-    '                          [--diff-max-bytes N]',
+    '                          [--files-out F] [--diff-max-bytes N]',
   ].join('\n');
 }
 
@@ -347,6 +347,7 @@ function parseArgs(argv) {
     else if (a === '--apply') opts.apply = true;
     else if (a === '--json') opts.json = true;
     else if (a === '--github-output') opts.githubOutput = true;
+    else if (a === '--files-out') opts.filesOut = next();
     else if (a === '--diff-max-bytes') opts.diffMaxBytes = Number(next());
     else if (a === '--help' || a === '-h') { console.log(usage()); process.exit(0); }
     else throw new Error(`unknown argument: ${a}`);
@@ -380,6 +381,14 @@ function main(argv, { exec, stdout } = {}) {
   if (opts.apply) {
     if (!opts.repo || !opts.pr) throw new Error('--apply requires --repo and --pr');
     result.applied = applyRiskLabel({ repo: opts.repo, pr: opts.pr, tier: result.tier, exec });
+  }
+
+  // Sidecar consumed by the review stage's prompt + adversarial plan
+  // (issue #127 extraction): {files: touched paths, lines, dirs}.
+  if (opts.filesOut) {
+    fs.writeFileSync(opts.filesOut, JSON.stringify({
+      files: result.paths || [], lines: result.lines || 0, dirs: result.dirs || [],
+    }, null, 2));
   }
 
   if (opts.githubOutput && process.env.GITHUB_OUTPUT) {

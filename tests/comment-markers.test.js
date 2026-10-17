@@ -81,6 +81,10 @@ test('parse sites: consumer pattern is present verbatim and equals the canonical
           assert.ok(
             text.includes(def.parse.regex.source),
             `${id}: shipped JS regex in ${site.file} drifted from the canonical pattern ${def.parse.regex}`);
+        } else if (site.kind === 'text') {
+          // mustContain-only pin (issue #127): marks sites whose artifact
+          // is shipped text rather than the canonical regex — e.g. the
+          // trusted-author jq filter that still lives in the workflow.
         } else {
           assert.ok(def.parse.jq, `${id}: ${site.kind} site declared without a canonical jq pattern`);
           assert.ok(
