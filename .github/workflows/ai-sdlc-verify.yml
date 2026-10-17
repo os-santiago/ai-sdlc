@@ -93,6 +93,12 @@ jobs:
           repository: ${{ inputs.repo }}
           ref: ${{ inputs.base }}
           token: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          # A contents:write token must not sit in .git/config while
+          # repo-supplied verify/setup commands execute (issue #124 — every
+          # other stage already pins persist-credentials: false). Steps that
+          # write authenticate explicitly (gh via GH_TOKEN; the revert push
+          # via a scoped extraheader below).
+          persist-credentials: false
 
       - name: Resolve contract (.ai-sdlc.yaml)
         id: contract
@@ -191,7 +197,16 @@ jobs:
           REVERTED=""
           if [ "$REVERT" = "true" ]; then
             git config user.name "ai-sdlc[bot]"; git config user.email "ai-sdlc[bot]@users.noreply.github.com"
-            git revert --no-edit "$SHA" && git push origin "${{ inputs.base }}" && REVERTED="1"
+            # Checkout is persist-credentials: false (issue #124) — the push
+            # carries its own scoped credential via extraheader, same idiom
+            # as ai-sdlc-ci-repair.yml. GH_TOKEN is masked, and so is AUTH.
+            AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+            echo "::add-mask::$AUTH"
+            if git revert --no-edit "$SHA" \
+               && git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" \
+                    push origin "HEAD:refs/heads/${{ inputs.base }}"; then
+              REVERTED="1"
+            fi
           fi
 
           # Canonical postmortem lifecycle (issue #191, spec/postmortem-lifecycle.md):

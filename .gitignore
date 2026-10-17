@@ -3,12 +3,16 @@ node_modules/
 # scc engine session artifacts — the implement stage writes run evidence to
 # the workspace root; it ships as workflow artifacts, never in diffs (#68)
 /scc-*.json*
-/ai-sdlc-run.json
 /issue.json
 /task-prompt.md
-# per-stage token/cost usage ledger — run evidence, ships as workflow
-# artifact, never in diffs (issue #195)
-/ai-sdlc-usage.jsonl
+# Pipeline run evidence written to the workspace root — run records, stall
+# reports, apply reports, review/adversarial verdicts, injection-audit and
+# per-stage token/cost ledgers (issues #68, #142, #195). Broad globs on
+# purpose: stages keep adding evidence filenames, and an enumerated list
+# drifts behind them — any ai-sdlc-*.json(l) at root ships as a workflow
+# artifact, never in diffs.
+/ai-sdlc-*.json
+/ai-sdlc-*.jsonl
 
 # Regression-harness run artifacts — diff reports are written per-run for
 # debugging (tests/regression_harness.js --report); never diff inputs.
