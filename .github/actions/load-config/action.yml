@@ -76,6 +76,9 @@ outputs:
   model_fallback:
     description: 'empty when no fallback is configured'
     value: ${{ steps.resolve.outputs.model_fallback }}
+  engine_name:
+    description: 'engine.name — the engine adapter id (config/engine-adapters.json registry key) recorded on ledger entries and run records (issue #230)'
+    value: ${{ steps.resolve.outputs.engine_name }}
   max_seconds:
     value: ${{ steps.resolve.outputs.max_seconds }}
   max_steps:

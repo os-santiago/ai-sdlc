@@ -315,6 +315,9 @@ def flat_outputs(c):
         "authorized_labelers": j(c["triggers"]["authorized_labelers"]),
         "model_primary": c["model"]["primary"] or "",
         "model_fallback": c["model"]["fallback"] or "",
+        # engine.name = adapter id (config/engine-adapters.json registry key);
+        # ledger entries and run records carry it as `engine` (issue #230).
+        "engine_name": c["engine"]["name"],
         "max_seconds": str(c["engine"]["max_seconds"]),
         "max_steps": str(c["engine"]["max_steps"]),
         "verify_commands": "\n".join(c["verify"]["commands"]),

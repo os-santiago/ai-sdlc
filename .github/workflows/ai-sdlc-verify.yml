@@ -188,6 +188,7 @@ jobs:
           repo: ${{ inputs.repo }}
           pr: ${{ inputs.pr_number }}
           prev: ${{ inputs.ledger_head }}
+          engine: ${{ steps.contract.outputs.engine_name }}
           recover-prev: 'true'
           token: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
           data: >-

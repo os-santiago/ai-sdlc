@@ -45,6 +45,9 @@ inputs:
   prev:
     description: 'seed for the first entry prev (64-hex head of the previous stage ledger); empty = genesis/recover'
     default: ''
+  engine:
+    description: 'engine adapter id recorded on the entry (resolved .ai-sdlc.yaml engine.name, validated against config/engine_adapters.json — issue #230); empty = read engine.name from the resolved contract.json, else recorded null'
+    default: ''
   recover-prev:
     description: '"true" = read the latest ai-sdlc:ledger-head marker on `pr` when `prev` is empty'
     default: 'false'
@@ -81,6 +84,7 @@ runs:
         LEDGER_DATA: ${{ inputs.data }}
         LEDGER_DATA_FILES: ${{ inputs.data-files }}
         LEDGER_PREV: ${{ inputs.prev }}
+        LEDGER_ENGINE: ${{ inputs.engine }}
         LEDGER_RECOVER_PREV: ${{ inputs.recover-prev }}
         LEDGER_TOKEN: ${{ inputs.token }}
         LEDGER_SIGNING_KEY: ${{ inputs.signing-key }}
@@ -96,6 +100,15 @@ runs:
             [ "${LEDGER_ISSUE:-0}" != "0" ] && args+=(--issue "$LEDGER_ISSUE")
             [ "${LEDGER_PR:-0}" != "0" ] && args+=(--pr "$LEDGER_PR")
             [ -n "$LEDGER_DATA" ] && args+=(--data "$LEDGER_DATA")
+            # Engine adapter id (issue #230): the explicit input wins;
+            # otherwise fall back to the resolved contract.json load-config
+            # leaves on the runner ($RUNNER_TEMP/ai-sdlc-contract/). Stages
+            # with neither (no contract resolved) record engine=null.
+            LEDGER_ENGINE_RESOLVED="$LEDGER_ENGINE"
+            if [ -z "$LEDGER_ENGINE_RESOLVED" ] && [ -f "$RUNNER_TEMP/ai-sdlc-contract/contract.json" ]; then
+              LEDGER_ENGINE_RESOLVED=$(node -e 'try { const c = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(String((c.engine && c.engine.name) || "")); } catch (e) {}' "$RUNNER_TEMP/ai-sdlc-contract/contract.json") || true
+            fi
+            [ -n "$LEDGER_ENGINE_RESOLVED" ] && args+=(--engine "$LEDGER_ENGINE_RESOLVED")
             # Chain seed: explicit prev > latest PR marker > genesis. Markers
             # are trusted-author only (Bot/OWNER/MEMBER/COLLABORATOR) — a
             # forged comment can never steer the chain.

@@ -720,8 +720,11 @@ issue labels:
 Tamper-evident per-stage run evidence (issue #196, epic #148). Every stage
 appends a hash-chained record and seals the file at run completion:
 
-- **Entry** (`append`): `{v, seq, stage, ts, repo, issue, pr, run, data,
-  data_sha256, prev, hash}` — `data_sha256` is the SHA-256 of the
+- **Entry** (`append`): `{v, seq, stage, ts, repo, issue, pr, engine, run,
+  data, data_sha256, prev, hash}` — `engine` is the engine adapter id
+  (`engine.name` resolved from the contract, validated against
+  `config/engine_adapters.json` — issue #230; `null` when the stage ran no
+  resolvable engine); `data_sha256` is the SHA-256 of the
   canonicalized stage payload (step outputs plus digests of stage files
   under `data.files`); `prev` is the previous entry's `hash` (genesis =
   `0×64`, or an upstream stage's head); `hash` is the SHA-256 of the

@@ -330,6 +330,7 @@ jobs:
           repo: ${{ inputs.repo }}
           pr: ${{ inputs.pr_number }}
           prev: ${{ inputs.ledger_head }}
+          engine: ${{ steps.contract.outputs.engine_name }}
           recover-prev: 'true'
           token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
           data: ${{ toJSON(steps.eval.outputs) }}
