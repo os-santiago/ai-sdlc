@@ -329,6 +329,25 @@
         }
       }
     },
+    "postmortem": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Canonical postmortem lifecycle knobs (spec/postmortem-lifecycle.md) — signature dedup window and reopen-on-recurrence threshold, consumed by scripts/postmortem.js.",
+      "properties": {
+        "reopen_min": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2,
+          "description": "Post-close recurrences of a signature required before the closed canonical issue reopens (spec POSTMORTEM_REOPEN_MIN). Below the threshold a recurrence only comments."
+        },
+        "dedup_window_days": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 90,
+          "description": "Dedup retention window for closed postmortem issues, measured from closedAt (spec POSTMORTEM_DEDUP_WINDOW_DAYS). Open issues dedup regardless of age."
+        }
+      }
+    },
     "labels": {
       "type": "object",
       "additionalProperties": {

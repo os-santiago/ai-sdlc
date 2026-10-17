@@ -99,6 +99,12 @@ outputs:
   merge_skip_labels:
     description: 'merge.skip_labels (JSON array)'
     value: ${{ steps.resolve.outputs.merge_skip_labels }}
+  postmortem_reopen_min:
+    description: 'postmortem.reopen_min — post-close recurrences before a closed canonical reopens (spec/postmortem-lifecycle.md)'
+    value: ${{ steps.resolve.outputs.postmortem_reopen_min }}
+  postmortem_dedup_window_days:
+    description: 'postmortem.dedup_window_days — closed-issue dedup window measured from closedAt'
+    value: ${{ steps.resolve.outputs.postmortem_dedup_window_days }}
   review_mode:
     description: 'review.mode — ai | human | hybrid'
     value: ${{ steps.resolve.outputs.review_mode }}
