@@ -1,3 +1,9 @@
+---
+lastVerified: 2026-10-17T20:57:00Z
+verifiedAgainst: 0b7af3fe9843bcd46bfa0af218d054433467e702
+sources: [.ai-sdlc.yaml, spec/, .github/workflows/, tools/validate-repo.sh, tools/validate-ai-sdlc-config.sh, docs/architecture/adr/0001-homedir-ai-sdlc-sunset-and-cutover.md, examples/]
+freshnessWindowDays: 14
+---
 # AGENTS.md — os-santiago/ai-sdlc
 
 Canonical, repo-agnostic AI-SDLC: normative spec + GitHub-Actions-native
