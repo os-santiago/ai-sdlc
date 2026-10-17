@@ -562,7 +562,7 @@ jobs:
             --contract "${CONTRACT_PATH:-$RUNNER_TEMP/ai-sdlc-contract/contract.json}" \
             --registry "$DEST/config/engine_adapters.json" --required "$REQUIRED"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true' && steps.prompt.outputs.sanitize_verdict != 'blocked'
         with:
           repository: ${{ inputs.repo }}

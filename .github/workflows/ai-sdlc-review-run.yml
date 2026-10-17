@@ -438,7 +438,7 @@ jobs:
           out('findings_json', findings);
           NODE
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: steps.guard.outputs.decision == 'review'
         with:
           repository: ${{ inputs.repo }}

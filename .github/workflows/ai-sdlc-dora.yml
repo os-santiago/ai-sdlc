@@ -78,7 +78,7 @@ jobs:
     steps:
       # Needed only to commit docs/metrics/dora.md back on self-repo runs;
       # the script itself is never taken from this checkout (trust pin).
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Collect + render DORA metrics
         env:
