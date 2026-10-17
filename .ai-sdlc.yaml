@@ -35,6 +35,25 @@ verify:
   required_checks: []
   timeout_seconds: 300
 
+# Ready-queue prioritization (issue #162, epic #147): the sweep scores every
+# armed issue — trigger label present, no veto label per spec/labels.md —
+# and publishes the ordered dispatch queue as run evidence (step summary +
+# JSON artifact). Read-only: it never labels, comments, or dispatches.
+prioritize:
+  enabled: true
+  priority_override: true        # priority tier outranks raw score — P0 always first
+  max: 50
+  weights:
+    # score = priority[tier] + age_per_day×min(age, cap) + epic_linked +
+    #         blocking×#(open blocked) + blocked×#(open blockers)
+    priority: {P0: 1000, P1: 300, P2: 100, P3: 25}
+    unlabeled: 0
+    age_per_day: 2               # reward waiting time, capped by age_cap_days
+    age_cap_days: 30
+    epic_linked: 25              # scc:child label or parent:#N marker → epic momentum
+    blocking: 15                 # per open issue this issue blocks
+    blocked: -20                 # per open blocker still gating it
+
 # Dependency-update worker (issue #177): scheduled scan → vetted dep PRs.
 # This repo's package.json exists for tooling metadata only, so a run is a
 # no-op today — the block is the dogfooded contract surface.
