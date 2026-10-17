@@ -126,6 +126,9 @@ The bootstrap PR (and the manual path below) wires three things:
   (`gh ai-sdlc init`) and the shadow-start trust ramp for new repos.
 - [docs/runtime.md](docs/runtime.md) — `workflow_call` runtime stages
   reference for adopters.
+- [docs/operations.md](docs/operations.md) — operations runbook:
+  `scc:*` label states, failure modes, artifacts, kill-switch and
+  recovery paths.
 - [spec/interop-posture.md](spec/interop-posture.md) — interop posture: the
   governance layer over pluggable engines, the conformance path, and
   the explicit non-goals.
