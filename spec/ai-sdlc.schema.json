@@ -77,6 +77,15 @@
         }
       }
     },
+    "security_gate_outcome": {
+      "type": "string",
+      "enum": [
+        "report-only",
+        "blocking-if-fix-available",
+        "blocking"
+      ],
+      "description": "Gate verdict for one pr:risk-* tier (spec/org-policy.md — Security Gate; epic #87). `report-only` records findings without failing the `ai-sdlc-security` check; `blocking-if-fix-available` fails the check when a finding at/above `security.min_severity` ships with an upstream fix (unfixable findings degrade to report-only — the loop is never paralyzed by what cannot be fixed); `blocking` fails the check unconditionally. Strictness order for the org floor: report-only < blocking-if-fix-available < blocking."
+    },
     "alert_route": {
       "type": "object",
       "additionalProperties": false,
@@ -321,6 +330,57 @@
           "type": "string",
           "default": "npm-vet",
           "description": "Named egress profile (network allowlist) the vetting stage runs under — 'npm-vet' allows registry.npmjs.org + api.osv.dev, 'off' disables vetting fetches (everything flags fail-closed). Runner/network-level enforcement is the deployment's job."
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Deterministic supply-chain security gate contract (epic #87; spec/org-policy.md — Security Gate). The gate runs as the required check `ai-sdlc-security` (wired via verify.required_checks) and evaluates secret + dependency findings deterministically — never via generative judgment. Org-declared values are floors (repos may tighten, never loosen): `enabled` and `block_on_secret` are boolean floors, `min_severity` clamps to the stricter threshold, and each `severity_matrix` leaf resolves strictest-wins.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Master switch for the security gate. An org baseline's `true` is a floor — a repo cannot disable an org-mandated gate (epic #87: repo-level opt-out is a non-goal)."
+        },
+        "min_severity": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "default": "high",
+          "description": "Minimum finding severity treated as blocking-class: findings at or above this tier consult severity_matrix for the gate outcome; below it they are always report-only. Org-declared values clamp to the stricter (lower-rank) threshold — repos may report more, never less."
+        },
+        "block_on_secret": {
+          "type": "boolean",
+          "default": true,
+          "description": "Secret/credential-material findings always produce a blocking verdict, regardless of severity or pr:risk-* tier (failure class `security`, spec/risk-taxonomy.md). Org-declared `true` is a floor — a repo cannot de-fang it."
+        },
+        "severity_matrix": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "pr:risk-* tier → gate outcome for blocking-class findings (issue #108). Normative defaults per spec/org-policy.md: pr:risk-low/medium report-only; pr:risk-high/critical blocking-if-fix-available. Org-declared leaves resolve strictest-wins — a repo may harden a tier, never soften it.",
+          "properties": {
+            "pr:risk-low": {
+              "$ref": "#/$defs/security_gate_outcome",
+              "default": "report-only"
+            },
+            "pr:risk-medium": {
+              "$ref": "#/$defs/security_gate_outcome",
+              "default": "report-only"
+            },
+            "pr:risk-high": {
+              "$ref": "#/$defs/security_gate_outcome",
+              "default": "blocking-if-fix-available"
+            },
+            "pr:risk-critical": {
+              "$ref": "#/$defs/security_gate_outcome",
+              "default": "blocking-if-fix-available"
+            }
+          }
         }
       }
     },

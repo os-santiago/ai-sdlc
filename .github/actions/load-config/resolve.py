@@ -92,6 +92,18 @@ META_KEYS = {"spec", "repo", "policy_floor"}
 PASSTHROUGH = ("spec", "repo")
 # Trust-ladder order (schema enum order) for the autonomy.level ceiling.
 AUTONOMY_ORDER = ["shadow", "suggest", "auto-pr", "auto-merge-low", "auto-merge-all", "auto-deploy"]
+# Security-gate floor orders (spec/org-policy.md — Security Gate; epic #87).
+# SEVERITY_ORDER ranks findings low→critical; a lower threshold is the
+# stricter gate, so the floor resolves to the LOWER rank of the org and
+# repo values. GATE_OUTCOME_ORDER ranks severity-matrix verdicts
+# report-only→blocking; the floor resolves to the HIGHER rank — a repo may
+# harden a tier, never soften it.
+SEVERITY_ORDER = ["low", "medium", "high", "critical"]
+GATE_OUTCOME_ORDER = ["report-only", "blocking-if-fix-available", "blocking"]
+# security.* leaves that are boolean floors: an org `true` cannot be
+# relaxed to `false`; a repo `true` under an org `false` only tightens.
+SECURITY_BOOL_FLOORS = {"security.enabled", "security.block_on_secret"}
+SECURITY_MATRIX_PREFIX = "security.severity_matrix."
 
 # Override surface: dotted path → kind. Unset = null / "" / negative number.
 OVERRIDABLE = {
@@ -323,6 +335,24 @@ def min_level(a, b):
     return a if AUTONOMY_ORDER.index(a) <= AUTONOMY_ORDER.index(b) else b
 
 
+def lower_rank(order, a, b):
+    """Lower-indexed of two ranked values; unknowns defer to the known side."""
+    if a not in order:
+        return b
+    if b not in order:
+        return a
+    return a if order.index(a) <= order.index(b) else b
+
+
+def higher_rank(order, a, b):
+    """Higher-indexed of two ranked values; unknowns defer to the known side."""
+    if a not in order:
+        return b
+    if b not in order:
+        return a
+    return a if order.index(a) >= order.index(b) else b
+
+
 def merge_layer(result, sources, sections, source):
     for path in leaf_paths(sections):
         _, value = get_path(sections, path)
@@ -374,6 +404,26 @@ def resolve(repo_cfg, overrides, org_cfg=None):
             level = min_level(get_path(result, path)[1], value)
             set_path(result, path, level)
             sources[path] = "contract" if level == value else ("org-pin" if pinned else "org")
+        elif path == "security.min_severity" and path in org_set:
+            # Security floor (spec/org-policy.md — Security Gate; epic #87):
+            # repos tighten (a lower threshold blocks more findings),
+            # never loosen — the stricter of the two severities stands.
+            floor = lower_rank(SEVERITY_ORDER, get_path(result, path)[1], value)
+            set_path(result, path, floor)
+            sources[path] = "contract" if floor == value else ("org-pin" if pinned else "org")
+        elif path in SECURITY_BOOL_FLOORS and path in org_set:
+            # Boolean floor: an org `true` stands (the gate cannot be
+            # switched off or de-fanged downstream); a repo `true` under an
+            # org `false` only tightens.
+            resolved = bool(get_path(result, path)[1]) or bool(value)
+            set_path(result, path, resolved)
+            sources[path] = "contract" if resolved == value else ("org-pin" if pinned else "org")
+        elif path.startswith(SECURITY_MATRIX_PREFIX) and path in org_set:
+            # Severity-matrix floor: the stricter outcome wins per leaf the
+            # org declares — a repo may harden a tier, never soften it.
+            outcome = higher_rank(GATE_OUTCOME_ORDER, get_path(result, path)[1], value)
+            set_path(result, path, outcome)
+            sources[path] = "contract" if outcome == value else ("org-pin" if pinned else "org")
         elif pinned:
             # Non-overridable floor: the org value stands and the repo's
             # own value is recorded as suppressed via the org-pin source.
