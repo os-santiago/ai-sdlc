@@ -29,7 +29,9 @@
 #       with:
 #         repo: ${{ github.repository }}
 #         pr_number: ${{ github.event.pull_request.number }}
-#       secrets: inherit   # needs AI_SDLC_APP_ID + AI_SDLC_APP_PRIVATE_KEY
+#       secrets:   # explicit map — this stage declares only the App pair (#137)
+#         AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+#         AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
 name: ai-sdlc-classify
 
 on:

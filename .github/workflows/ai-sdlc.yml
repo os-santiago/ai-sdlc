@@ -65,7 +65,15 @@ jobs:
     with:
       repo: ${{ github.repository }}
       issue_number: ${{ github.event.issue.number }}
-    secrets: inherit
+    # Explicit per-stage secret map (issue #137): pass only what the callee
+    # declares in its workflow_call secrets block — auditable, and the
+    # pattern consumers copy. All four are optional for intake (App pair +
+    # PAT fallback + ledger signer).
+    secrets:
+      AI_SDLC_TOKEN: ${{ secrets.AI_SDLC_TOKEN }}
+      AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+      AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+      AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}
 
   implement:
     needs: intake
@@ -76,7 +84,12 @@ jobs:
       issue_number: ${{ github.event.issue.number }}
       # Chain the implement ledger entry to the intake head (issue #196).
       ledger_head: ${{ needs.intake.outputs.ledger_head }}
-    secrets: inherit
+    # Implement declares App pair (required) + ledger signer + model key.
+    secrets:
+      AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+      AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+      AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
 
   classify:
     # Deterministic pr:risk-* labeling on every diff event — runs for ALL
@@ -90,7 +103,10 @@ jobs:
     with:
       repo: ${{ github.repository }}
       pr_number: ${{ github.event.pull_request.number }}
-    secrets: inherit
+    # Classify declares only the App pair (required) — no engine, no ledger.
+    secrets:
+      AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+      AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
 
   review:
     # Fork heads carry no secrets — the called workflow would fail its auth
@@ -102,4 +118,9 @@ jobs:
     with:
       repo: ${{ github.repository }}
       pr_number: ${{ github.event.pull_request.number }}
-    secrets: inherit
+    # Review declares App pair (required) + ledger signer + model key.
+    secrets:
+      AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+      AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+      AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}

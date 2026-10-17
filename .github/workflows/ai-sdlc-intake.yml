@@ -14,7 +14,11 @@
 #       with:
 #         repo: ${{ github.repository }}
 #         issue_number: ${{ github.event.issue.number }}
-#       secrets: inherit
+#       secrets:   # explicit map — pass only what this stage declares (#137)
+#         AI_SDLC_TOKEN: ${{ secrets.AI_SDLC_TOKEN }}                    # optional cross-repo token
+#         AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}                  # optional — App pair preferred
+#         AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+#         AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}          # optional ledger signing
 name: ai-sdlc-intake
 
 on:
