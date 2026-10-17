@@ -66,6 +66,15 @@ merge:
     - hold
     - do-not-merge
     - wip
+  main_guard:
+    # Sentinel (issue #189): halt automerge while a gate workflow's newest
+    # completed run on main is red; file one deduped postmortem; clear on
+    # green. This repo's gates: the self-dogfood contract suite + actionlint.
+    enabled: true
+    workflows:
+      - ai-sdlc (self)
+      - actionlint
+    max_age_hours: 72
 
 labels:
   queued: scc:queued

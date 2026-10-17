@@ -7,6 +7,10 @@
 # SHA holds the merge only up to review.wait_max_minutes (default 15), then
 # merges with `review_timeout` recorded — review infra can never deadlock
 # the pipeline. A blocked verdict holds while the bounded fix pass runs.
+# Plus the main-guard sentinel (issue #189; Hermes MAIN_GUARD port): a red
+# gate workflow on the base branch holds the merge (held, main-guard:*)
+# and files one deduplicated postmortem issue per episode; green lifts the
+# halt and closes it; a stale/absent gate signal fails open.
 # Caller: on check_run.completed / pull_request events, or per PR from the
 # scheduled stall-sweep (ai-sdlc-sweep.yml). Repair budget, pending cap,
 # merge method, skip labels and the escalation label come from the resolved
@@ -50,6 +54,22 @@ on:
         description: 'upstream run-ledger chain head — seeds this stage entry prev; empty = recover the ai-sdlc:ledger-head marker on the PR (issue #196)'
         type: string
         default: ''
+      runtime_ref:
+        description: 'ref of os-santiago/ai-sdlc to fetch scripts/main-guard.js from — pin to the same ref as this workflow'
+        type: string
+        default: 'main'
+      main_guard:
+        description: 'sentinel switch — true|false; empty = .ai-sdlc.yaml merge.main_guard.enabled (default true)'
+        type: string
+        default: ''
+      main_guard_workflows:
+        description: 'csv gate workflow names — override; empty = .ai-sdlc.yaml merge.main_guard.workflows (default ci)'
+        type: string
+        default: ''
+      main_guard_max_age_hours:
+        description: 'gate-run freshness window — override; -1 = .ai-sdlc.yaml merge.main_guard.max_age_hours (72)'
+        type: number
+        default: -1
     outputs:
       action:
         description: 'merged | repair-signaled | escalated | held | skipped'
@@ -57,6 +77,9 @@ on:
       ledger_head:
         description: 'sealed run-ledger chain head for this gate run (issue #196)'
         value: ${{ jobs.gate.outputs.ledger_head }}
+      main_guard:
+        description: 'halt | cleared | ok — base-branch sentinel result (issue #189)'
+        value: ${{ jobs.gate.outputs.main_guard }}
     secrets:
       AI_SDLC_APP_ID:
         description: 'ai-sdlc GitHub App id — mints the per-run installation token used for all gh auth (fail-closed when unset; issue #26)'
@@ -86,6 +109,7 @@ jobs:
     outputs:
       action: ${{ steps.eval.outputs.action }}
       ledger_head: ${{ steps.seal.outputs.head || steps.ledger.outputs.head }}
+      main_guard: ${{ steps.mainguard.outputs.main_guard }}
     steps:
       - name: Verify ai-sdlc App credentials
         id: creds
@@ -133,10 +157,58 @@ jobs:
              "merge.pending_max_minutes": ${{ inputs.pending_max_minutes }},
              "merge.method": ${{ toJSON(inputs.merge_method) }}}
 
+      # Main-guard sentinel (issue #189): evaluates the base branch's gate
+      # workflows BEFORE the PR decision. Red → the eval holds (main-guard:*)
+      # and the sentinel files one deduplicated postmortem issue per episode;
+      # green closes it; stale/absent signal fails open. merge.main_guard.*
+      # inputs are applied inline — never via contract `overrides` — because
+      # the pinned @main action may predate the keys (same trap as review.*).
+      - name: Main-guard sentinel
+        id: mainguard
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RUNTIME_REF: ${{ inputs.runtime_ref }}
+          CONTRACT_JSON: ${{ steps.contract.outputs.json }}
+          MG_ENABLED_IN: ${{ inputs.main_guard }}
+          MG_WORKFLOWS_IN: ${{ inputs.main_guard_workflows }}
+          MG_MAX_AGE_IN: ${{ inputs.main_guard_max_age_hours }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-main-guard"; mkdir -p "$WORK"
+          ENABLED="$(jq -r '.merge.main_guard.enabled // true' <<<"${CONTRACT_JSON:-{}}")"
+          WFS="$(jq -r '[(.merge.main_guard.workflows // ["ci"])[]] | join(",")' <<<"${CONTRACT_JSON:-{}}")"
+          MAXAGE="$(jq -r '.merge.main_guard.max_age_hours // 72' <<<"${CONTRACT_JSON:-{}}")"
+          [ -n "$MG_ENABLED_IN" ] && ENABLED="$MG_ENABLED_IN"
+          [ -n "$MG_WORKFLOWS_IN" ] && WFS="$MG_WORKFLOWS_IN"
+          [ "$MG_MAX_AGE_IN" != "-1" ] && MAXAGE="$MG_MAX_AGE_IN"
+          # Trusted code only: fetch the canonical sentinel from the runtime
+          # pin — never from the PR head or consumer repo. An unreachable
+          # script fails open: sentinel infra must never stall merges.
+          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/main-guard.js?ref=$RUNTIME_REF" \
+              -H "Accept: application/vnd.github.raw" > "$WORK/main-guard.js" 2>"$WORK/fetch.err" \
+              || ! node --check "$WORK/main-guard.js" 2>/dev/null; then
+            echo "::warning title=main-guard::sentinel unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$WORK/fetch.err")) — proceeding (fail-open)"
+            { echo "main_guard=ok"; echo "main_guard_reason=sentinel-unavailable"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          EXTRA=()
+          [ "$ENABLED" = "false" ] && EXTRA+=(--disabled)
+          if ! node "$WORK/main-guard.js" --repo "$REPO" --base main \
+              --gate-workflows "$WFS" --max-age-hours "$MAXAGE" --pr "$PR" \
+              --apply --json --github-output "${EXTRA[@]}" \
+              > "$WORK/result.json" 2>"$WORK/err.log"; then
+            echo "::warning title=main-guard::sentinel evaluation failed ($(head -c 200 "$WORK/err.log")) — proceeding (fail-open)"
+            { echo "main_guard=ok"; echo "main_guard_reason=sentinel-error"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cat "$WORK/result.json"
+
       - name: Evaluate merge gate
         id: eval
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          MAIN_GUARD: ${{ steps.mainguard.outputs.main_guard }}
+          MAIN_GUARD_REASON: ${{ steps.mainguard.outputs.main_guard_reason }}
           PENDING_MAX: ${{ steps.contract.outputs.pending_max_minutes }}
           MAX_REPAIRS: ${{ steps.contract.outputs.max_repairs }}
           SKIP_LABELS: ${{ steps.contract.outputs.merge_skip_labels }}
@@ -186,6 +258,9 @@ jobs:
           if (pr.isDraft) { action = 'skipped'; reason = 'draft'; }
           else if (labels.some(l => SKIP.includes(l))) { action = 'skipped'; reason = 'skip-label'; }
           else if (pr.baseRefName !== 'main') { action = 'skipped'; reason = 'non-main-base'; }
+          // Main-guard sentinel (issue #189): a red base branch holds the
+          // merge — a transient repo-wide condition, not an escalation.
+          else if (process.env.MAIN_GUARD === 'halt') { action = 'held'; reason = `main-guard:${process.env.MAIN_GUARD_REASON || 'base-red'}`; }
           else if (labels.includes('pr:risk-critical') && !labels.includes('pr:risk-accepted')) { action = 'held'; reason = 'risk-critical-unaccepted'; }
           else if (pr.mergeable === 'CONFLICTING') { action = 'escalated'; reason = 'conflict'; }
           else {

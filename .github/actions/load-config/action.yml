@@ -108,6 +108,15 @@ outputs:
   postmortem_dedup_window_days:
     description: 'postmortem.dedup_window_days — closed-issue dedup window measured from closedAt'
     value: ${{ steps.resolve.outputs.postmortem_dedup_window_days }}
+  main_guard_enabled:
+    description: 'merge.main_guard.enabled — main-guard sentinel switch (issue #189)'
+    value: ${{ steps.resolve.outputs.main_guard_enabled }}
+  main_guard_workflows:
+    description: 'merge.main_guard.workflows (csv) — base-branch gate workflow names'
+    value: ${{ steps.resolve.outputs.main_guard_workflows }}
+  main_guard_max_age_hours:
+    description: 'merge.main_guard.max_age_hours — gate-run freshness window'
+    value: ${{ steps.resolve.outputs.main_guard_max_age_hours }}
   review_mode:
     description: 'review.mode — ai | human | hybrid'
     value: ${{ steps.resolve.outputs.review_mode }}
