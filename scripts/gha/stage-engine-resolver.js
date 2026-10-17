@@ -36,9 +36,14 @@
 // invokes the engine — `adapter.getBinary()` + `adapter.buildArgv(values)`
 // spawned without a shell — and exits with the adapter-mapped code
 // (`adapter.mapExitCode`), also appending `exit_code`, `engine_exit_code`,
-// `engine_classification` to $GITHUB_OUTPUT. `--set name=@path` reads the
-// value from a file; `--model`/`--prompt-file`/`--manifest` are shortcuts
-// for the conventional `model` / `prompt` / `manifestFile` placeholders.
+// `engine_classification` to $GITHUB_OUTPUT. An adapter declaring
+// `dispatch.rawExitCodes` (scc — issue #228) instead surfaces the engine's
+// raw exit code: the caller acts on the engine's own taxonomy (scc's
+// 10/20/21/22/23 contract drives the one-shot model fallback and the
+// outcome labels), while `engine_classification` still carries the mapped
+// class. `--set name=@path` reads the value from a file;
+// `--model`/`--prompt-file`/`--manifest` are shortcuts for the conventional
+// `model` / `prompt` / `manifestFile` placeholders.
 
 'use strict';
 
@@ -169,6 +174,11 @@ function dispatchStageEngine(contract, stage, opts = {}) {
   const spawnOpts = { stdio: opts.stdio || 'inherit' };
   if (opts.cwd) spawnOpts.cwd = opts.cwd;
   if (opts.env) spawnOpts.env = opts.env;
+  // Adapters declaring dispatch.rawExitCodes surface the engine's raw exit
+  // code (the caller interprets the engine's own taxonomy — scc's 10/20/21
+  // provider/auth contract drives the one-shot model fallback); everyone
+  // else gets the exitCodeMap-normalized 0/1.
+  const rawCodes = adapter.dispatch && adapter.dispatch.rawExitCodes === true;
   const result = spawnImpl(command, argv, spawnOpts);
 
   if (result && result.error) {
@@ -179,7 +189,7 @@ function dispatchStageEngine(contract, stage, opts = {}) {
       engineExitCode: null,
       spawnError: result.error.message,
       classification: adapter.classifyExitCode(127),
-      exitCode: adapter.mapExitCode(127),
+      exitCode: rawCodes ? 127 : adapter.mapExitCode(127),
     };
   }
   const raw = result && result.status != null ? result.status : 1;
@@ -187,7 +197,7 @@ function dispatchStageEngine(contract, stage, opts = {}) {
     stage, engine, source: resolved.source, command, argv,
     engineExitCode: raw,
     classification: adapter.classifyExitCode(raw),
-    exitCode: adapter.mapExitCode(raw),
+    exitCode: rawCodes ? raw : adapter.mapExitCode(raw),
   };
 }
 

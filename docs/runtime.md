@@ -89,16 +89,24 @@ The top-level `engines` map (issue #205) selects the certified adapter a
 stage dispatches to — `engines.<stage>` may be a bare engine id or a
 stage-definition object `{engine: <id>}`; both normalize to the same
 resolved value in `contract.json`. A stage without an entry falls back to
-`engine.name` (default `scc`). Stage dispatch to non-`scc` engines lands
-with issue #206; until then the field is contract surface only. The
-stage-definition object may also carry `model` — see below.
+`engine.name` (default `scc`). Per-stage engine dispatch lands with
+issue #206 (non-scc adapters) and issue #228 (scc through the same
+registry argv contract). The stage-definition object may also carry
+`model` — see below.
 `engine.name` (default `scc`). Engine-running stages (`implement`,
 `review` — including the review-fix pass — and `ci-repair`) dispatch
 through `scripts/gha/stage-engine-resolver.js` via the
 `resolve-stage-engine` composite action (issue #206): the resolved id must
 have a `config/engine_adapters.json` entry or the stage exits 1 naming
-the engine, `scc` keeps its tuned invocation, and any other registered
-engine runs through the registry `argvBuilder` contract (`--run`).
+the engine. `implement` and `ci-repair` run the selected engine —
+`scc` included (issue #228) — through the registry `argvBuilder`
+contract (`--run`): the scc descriptor builds the tuned
+`scc chat -yq --prompt-file … --no-commit --audit-log … --summary-file …
+--max-seconds … --max-steps` argv and declares `dispatch.rawExitCodes`,
+so the engine's raw exit taxonomy (0/10/20/21/22/23) reaches the
+workflow — that is what drives the [Model fallback](#model-fallback)
+loop and the `no-changes` outcome. `review`'s scc passes still invoke
+the same tuned argv inline; their non-scc dispatch goes through `--run`.
 
 `review.ai_reviewer.model` resolves to `model.primary` when unset **or**
 when it names an OmniRoute route (`auto/*`, `devin/*`) — those are Hermes

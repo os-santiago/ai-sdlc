@@ -121,6 +121,14 @@ adapter contract. It declares per-engine descriptors:
 - `exitCodeMap`: mapping from engine exit codes to pipeline classes, with a
   mandatory `default` fallback
 - `manifestMap`: mapping for run manifest fields (if needed)
+- `dispatch` (optional): dispatch-time options — `rawExitCodes: true` makes
+  the dispatch path surface the engine's **raw** exit code instead of the
+  exitCodeMap-normalized 0/1 (scc declares it: the pipeline acts on the
+  10/20/21/22/23 taxonomy directly — the one-shot model fallback triggers
+  on raw 20/21 — while `classifyExitCode()` still reports the mapped class)
+- `envPassthrough` (optional): env var names the engine honors through the
+  inherited environment (e.g. scc's `SC_PROVIDER_*`/`SC_FAILOVER` knobs) —
+  declared so no engine configuration stays hidden
 
 `scripts/engine_adapter.js` is the canonical interpreter: it loads the
 registry, validates each descriptor, and resolves adapter objects exposing
@@ -213,13 +221,18 @@ stage slot regardless of which model it routes to.
 exercised by every engine-running reusable workflow through the
 `resolve-stage-engine` composite action: it reads the resolved contract
 (`engines.<stage>` → `engine.name` → `scc`), verifies the selected id has
-a registered adapter, and — for non-scc engines — invokes the adapter
-binary via the registry `argvBuilder` contract with adapter-mapped exit
-codes (`--run`). A stage selecting an engine with no registry entry fails
+a registered adapter, and invokes the adapter binary via the registry
+`argvBuilder` contract with adapter-driven exit-code semantics (`--run`). A stage selecting an engine with no registry entry fails
 with exit 1 naming the engine — dispatch never silently falls back to the
-wrong adapter. `scc` keeps its tuned workflow invocation (headless
-contract flags + the model-fallback loop); other registered engines go
-through the generic `--run` path.
+wrong adapter. Every registered engine — scc included (issue #228) —
+dispatches through the registry `argvBuilder` contract: the scc
+descriptor's argv IS the tuned headless call (`chat -yq --prompt-file
+… --no-commit --audit-log … --summary-file … --max-seconds … --max-steps`),
+its `dispatch.rawExitCodes` keeps the engine's raw exit taxonomy visible
+to the caller so the one-shot model-fallback loop (raw 20/21 → one retry
+on `model.fallback`, re-rendering `~/.sc-agent/config.json`) works
+unchanged, and the `SC_*` env knobs reach the engine through the
+inherited environment (`envPassthrough`).
 
 ## References
 

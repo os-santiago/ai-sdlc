@@ -59,8 +59,12 @@ const PLACEHOLDER_RE = /^\{([A-Za-z][A-Za-z0-9]*)\}$/;
 
 const KNOWN_GOOD = {
   prompt: 'conformance probe: implement the adapter contract (free text; punctuation allowed)',
+  promptFile: 'conformance/task-prompt.md',
+  auditLog: 'conformance/audit.jsonl',
   model: 'conformance-model.v1',
   manifestFile: 'conformance/run-manifest.json',
+  maxSeconds: '600',
+  maxSteps: '200',
 };
 
 const GENERIC_CANDIDATES = [

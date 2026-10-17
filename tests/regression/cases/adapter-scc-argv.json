@@ -1,13 +1,15 @@
 {
   "id": "adapter-scc-argv",
   "type": "engine-adapter",
-  "title": "scc argv substitution is atomic and ordered",
+  "title": "scc argv substitution is atomic and matches the tuned headless call (issue #228)",
   "input": {
     "engine": "scc", "op": "argv",
     "values": {
-      "model": "claude-3-opus",
-      "prompt": "a;b c $(id)",
-      "manifestFile": "out/manifest.json"
+      "promptFile": "task-prompt.md",
+      "auditLog": "out/scc-audit.jsonl",
+      "manifestFile": "out/scc-manifest.json",
+      "maxSeconds": "900",
+      "maxSteps": "200"
     }
   }
 }
