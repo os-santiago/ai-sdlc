@@ -127,7 +127,21 @@ imports it directly, and the GHA path reaches the same class through
 `scripts/gha/engine-adapter-resolver.js`. There is no second registry or
 resolver implementation.
 
-Adding a descriptor registers a new engine without workflow changes.
+Adding a descriptor registers a new engine without workflow changes — and
+automatically subjects it to the conformance harness
+(`tests/engine_conformance_harness.js`, invocable via `make test-conformance`
+or directly as `node tests/engine_conformance_harness.js`). The harness
+certifies the registry-declared surface for every registered adapter —
+resolution, `{ENGINE}_BINARY`-aware `getBinary()`, atomic argv-element
+`buildArgv()` substitution (pattern-validated, deterministic,
+required-placeholder enforcement, `{ENGINE}_{PLACEHOLDER}` env fallback),
+exit-code classification and success-class normalization, capabilities,
+manifest passthrough, probe declaration, and registry isolation — and exits
+non-zero if any adapter fails any check. `node --test` runs the same suite
+through `tests/engine_conformance.test.js` (wired into
+`tools/validate-repo.sh`, hence CI); `--live` additionally executes each
+declared probe against the installed binary, and `--report PATH` emits the
+machine-readable report artifact.
 
 ## Example .ai-sdlc.yaml with Per-Stage Engine Selection
 
