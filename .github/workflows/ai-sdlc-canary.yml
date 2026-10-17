@@ -122,7 +122,7 @@ jobs:
       - name: Mint ai-sdlc App token (forge identity)
         id: app
         if: steps.kill.outputs.allowed == 'true'
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349  # v2
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
         continue-on-error: true
         with:
           app-id: ${{ secrets.AI_SDLC_APP_ID }}
