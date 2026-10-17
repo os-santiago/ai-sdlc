@@ -1,0 +1,26 @@
+# CODEOWNERS — required reviewers on the trust-boundary surfaces (issue #144).
+#
+# This repo is the normative spec + the reusable runtime every consumer
+# executes. The pipeline automates merges, so the paths below get a named
+# human owner: a change to spec/ rewrites the contract consumers validate
+# against, and a change to .github/workflows|actions/ is code that runs
+# inside every enrolled repo's CI.
+#
+# Enforcement note: required code-owner review activates only once branch
+# protection lands (tracked in issue #126); until then this file documents
+# ownership and routes review requests.
+
+# Default owner for anything not listed below.
+*                       @Axel-DaMage
+
+# Normative spec — semver-sensitive contract surface (schema, trust ladder,
+# risk taxonomy, labels, injection defense, threat model).
+/spec/**                @Axel-DaMage @scanalesespinoza
+
+# Runtime — reusable workflow_call stages and composite actions executed
+# by every consumer repo.
+/.github/workflows/**   @Axel-DaMage @scanalesespinoza
+/.github/actions/**     @Axel-DaMage @scanalesespinoza
+
+# Validation tooling — the local suite that CI and `npm test` trust.
+/tools/**               @Axel-DaMage @scanalesespinoza
