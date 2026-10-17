@@ -200,3 +200,10 @@ promotion:
 demotion:
   escalation_threshold: 1
   window: 30
+# Release provenance (issues #100/#103): the ai-sdlc-release workflow reads
+# these fields to gate SLSA attestation and cosign keyless signing of the
+# published git-archive artifact. Defaults are already the secure posture —
+# declared here as the audit record.
+release:
+  provenance: attest         # actions/attest-build-provenance (SLSA L3-class)
+  signing: cosign-keyless    # Fulcio cert minted from the runner's OIDC identity

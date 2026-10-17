@@ -209,6 +209,27 @@ describe('ai-sdlc.schema.json — contract surface', () => {
     assert.strictEqual(bad.valid, false);
     assert.ok(bad.errors.length >= 2, `expected enum + additionalProperties errors: ${bad.errors}`);
   });
+
+  it('declares release with the issue-#100/#103 provenance shape', () => {
+    const r = schema.properties.release;
+    assert.ok(r, 'missing properties.release');
+    assert.strictEqual(r.type, 'object');
+    assert.strictEqual(r.additionalProperties, false);
+    // Secure postures are the resolved defaults — opting out is explicit.
+    assert.deepStrictEqual(r.properties.provenance.enum, ['attest', 'none']);
+    assert.strictEqual(r.properties.provenance.default, 'attest');
+    assert.deepStrictEqual(r.properties.signing.enum, ['cosign-keyless', 'none']);
+    assert.strictEqual(r.properties.signing.default, 'cosign-keyless');
+  });
+
+  it('accepts a release block and rejects undeclared fields', { skip: !HAS_PY }, () => {
+    const ok = schemaValidate({ spec: '1.0.0', release: { provenance: 'attest', signing: 'cosign-keyless' } });
+    assert.deepStrictEqual(ok.errors, []);
+    assert.ok(ok.valid);
+    const bad = schemaValidate({ spec: '1.0.0', release: { provenance: 'sigstore', bogus: 1 } });
+    assert.strictEqual(bad.valid, false);
+    assert.ok(bad.errors.length >= 2, `expected enum + additionalProperties errors: ${bad.errors}`);
+  });
 });
 
 describe('per-stage engine selection (issue #205)', () => {

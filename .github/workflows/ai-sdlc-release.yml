@@ -1,24 +1,33 @@
 # ai-sdlc-release — maintainer-dispatched release driver (issue #178)
 #
-# One job, two modes, same code path (scripts/release-manager.js):
+# Two jobs, least-privilege split:
 #
-#   dry_run=true  (default) — compute the plan only: semver bump from
-#     conventional commits since the last v*.*.* tag, generated changelog,
-#     and the spec/v* stream verdict when spec/ changed. Nothing is tagged,
-#     pushed, or released. Safe to run anytime.
+#   release    (contents: write only) — compute the plan, annotate + push
+#     the tag(s), create the GitHub release, package the `git archive`
+#     source tarball, publish it as a run artifact. dry_run=true (the
+#     default) prints the plan to the step summary and mutates nothing.
 #
-#   dry_run=false — annotate + push the runtime tag (and spec/v* tag when
-#     spec/ changed since the last spec tag), create the GitHub release
-#     with the changelog, then package `git archive` source artifacts,
-#     attach them to the release, and attest them via
-#     actions/attest-build-provenance (SLSA L3-class provenance, issue
-#     #100). The `release: published` event is the hook downstream
-#     signing/provenance stages (e.g. #103 cosign) subscribe to — publish
-#     therefore uses AI_SDLC_TOKEN (App/PAT-class) when present, because a
-#     release created by GITHUB_TOKEN does not fire downstream workflows.
+#   provenance (contents: write + id-token: write + attestations: write) —
+#     runs only when a release was actually published. Reads the
+#     `release.*` contract (issues #100, #103) and, per its posture,
+#     cosign sign-blob keyless-signs the tarball under the runner's GitHub
+#     OIDC identity (Fulcio cert, Rekor transparency log), attests it via
+#     SHA-pinned actions/attest-build-provenance (SLSA L3-class), attaches
+#     the artifact + .sig/.crt/.sigstore.json to the release, and exports
+#     the attestation bundle (.jsonl) as a release asset for offline
+#     verification. Any signing/attestation failure fails the job — a
+#     release never ships partially-provenanced assets silently.
 #
-# Spec semver sensitivity (AGENTS.md): a BREAKING spec change yields a MAJOR
-# spec/v* bump and must carry a migration note — the changelog calls it out.
+# Consumer verification: tools/verify-release.sh, or manually —
+#   cosign verify-blob --signature <art>.sig --certificate <art>.crt \
+#     --certificate-identity-regexp 'WORKFLOW_RE' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+#     <art>
+#   gh attestation verify <art> -R <owner>/<repo>
+#
+# Spec semver sensitivity (AGENTS.md): a BREAKING spec change yields a
+# MAJOR spec/v* bump and must carry a migration note — the changelog
+# calls it out.
 name: ai-sdlc-release
 
 on:
@@ -55,9 +64,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write      # tag push + release create + asset upload
-      id-token: write      # Sigstore OIDC for build provenance attestation
-      attestations: write  # store the attestation in the repo attestations API
+      contents: write      # tag push + release create
+    outputs:
+      release_status: ${{ steps.rel.outputs.release_status }}
+      release_tag: ${{ steps.rel.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -99,7 +109,6 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Package source artifact (git archive)
-        id: pkg
         if: steps.rel.outputs.release_status == 'released'
         run: |
           set -euo pipefail
@@ -107,10 +116,9 @@ jobs:
           mkdir -p dist
           git archive --format=tar.gz --prefix="ai-sdlc-${TAG}/" \
             --output="dist/ai-sdlc-${TAG}.tar.gz" "$TAG"
-          echo "artifact=dist/ai-sdlc-${TAG}.tar.gz" >> "$GITHUB_OUTPUT"
           sha256sum "dist/ai-sdlc-${TAG}.tar.gz" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload artifact
+      - name: Publish artifact to the provenance job
         if: steps.rel.outputs.release_status == 'released'
         uses: actions/upload-artifact@v7
         with:
@@ -118,17 +126,101 @@ jobs:
           path: dist/
           retention-days: 30
 
-      - name: Attach artifact to the GitHub release
-        if: steps.rel.outputs.release_status == 'released'
-        env:
-          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ steps.rel.outputs.release_tag }}" "${{ steps.pkg.outputs.artifact }}" --clobber
+  provenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: release
+    if: needs.release.outputs.release_status == 'released'
+    permissions:
+      contents: write      # attach signature/cert/attestation assets to the release
+      id-token: write      # Sigstore OIDC — cosign keyless identity + attestation
+      attestations: write  # store the attestation in the repo attestations API
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-sdlc-${{ needs.release.outputs.release_tag }}
+          path: dist/
+
+      - uses: actions/checkout@v4   # for .ai-sdlc.yaml (release.* contract)
+
+      - name: Read release contract (signing/provenance posture)
+        id: contract
+        run: |
+          set -euo pipefail
+          # release.signing / release.provenance gate this job's steps;
+          # the resolved default is the secure posture — 'none' opts out.
+          npx -y -q js-yaml .ai-sdlc.yaml > "$RUNNER_TEMP/contract.json"
+          node -e '
+            const c = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")) || {};
+            const r = c.release || {};
+            console.log("sign=" + String((r.signing || "cosign-keyless") !== "none"));
+            console.log("attest=" + String((r.provenance || "attest") !== "none"));
+          ' "$RUNNER_TEMP/contract.json" >> "$GITHUB_OUTPUT"
+
+      - name: Install cosign (keyless OIDC signing)
+        if: steps.contract.outputs.sign == 'true'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: 'v3.1.3'
+
+      # Keyless sign-blob: the runner's OIDC token mints a short-lived Fulcio
+      # certificate bound to this workflow's identity; the signature + cert +
+      # Rekor bundle land next to the artifact. Signing failure = job failure
+      # (issue #103: the workflow fails if signing fails).
+      - name: Sign artifact (cosign sign-blob, keyless)
+        if: steps.contract.outputs.sign == 'true'
+        run: |
+          set -euo pipefail
+          ART="dist/ai-sdlc-${{ needs.release.outputs.release_tag }}.tar.gz"
+          cosign sign-blob --yes \
+            --output-signature "${ART}.sig" \
+            --output-certificate "${ART}.crt" \
+            --bundle "${ART}.sigstore.json" \
+            "$ART"
+          for f in "${ART}.sig" "${ART}.crt" "${ART}.sigstore.json"; do
+            [ -s "$f" ] || { echo "::error::cosign did not produce $f"; exit 1; }
+          done
 
       # SLSA L3-class provenance for the release artifact (issue #100 shape).
       # SHA-pinned; verify downstream with:
       #   gh attestation verify dist/ai-sdlc-<tag>.tar.gz -R os-santiago/ai-sdlc
       - name: Attest build provenance
-        if: steps.rel.outputs.release_status == 'released'
+        if: steps.contract.outputs.attest == 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: ${{ steps.pkg.outputs.artifact }}
+          subject-path: dist/ai-sdlc-${{ needs.release.outputs.release_tag }}.tar.gz
+
+      - name: Attach artifact + signatures to the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Glob covers the tarball plus .sig/.crt/.sigstore.json when the
+          # contract enabled signing; the tarball always matches.
+          gh release upload "${{ needs.release.outputs.release_tag }}" \
+            dist/ai-sdlc-${{ needs.release.outputs.release_tag }}.tar.gz* --clobber
+
+      # Attach the attestation bundle itself so consumers can verify offline:
+      #   gh attestation verify <art> -R <owner>/<repo> \
+      #     --bundle <art>.attestation.jsonl --custom-trusted-root <(gh attestation trusted-root)
+      - name: Export attestation bundle to the release
+        if: steps.contract.outputs.attest == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          ART="dist/ai-sdlc-${TAG}.tar.gz"
+          mkdir -p attest && cd attest
+          # Bounded retry: the attestation store can lag the attest step.
+          for attempt in 1 2 3; do
+            gh attestation download "../$ART" -R "$GITHUB_REPOSITORY" && break
+            [ "$attempt" -lt 3 ] || { echo "::error::attestation bundle never exported"; exit 1; }
+            sleep 10
+          done
+          shopt -s nullglob
+          bundles=(./*.jsonl)
+          [ "${#bundles[@]}" -gt 0 ] || { echo "::error::no attestation bundle exported"; exit 1; }
+          mv "${bundles[0]}" "ai-sdlc-${TAG}.tar.gz.attestation.jsonl"
+          gh release upload "$TAG" "ai-sdlc-${TAG}.tar.gz.attestation.jsonl" --clobber

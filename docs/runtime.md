@@ -86,6 +86,7 @@ resolves it before acting:
 | automerge | `merge.max_repairs`, `merge.pending_max_minutes`, `merge.skip_labels`, `merge.method`, `review.mode`, `review.wait_max_minutes`, `review.external_reviewer`, `escalation.label` | `max_repairs`, `pending_max_minutes`, `merge_method`, `review_wait_minutes` |
 | verify | `verify.commands` | `verify_commands` |
 | dep-update | `dependencies.*` (enabled, ecosystems, min_release_age_days, target, auto_kinds, max_updates, branch, labels, egress_profile) | `max_updates`, `target` |
+| release | `release.provenance`, `release.signing` (both gate the provenance job of `ai-sdlc-release.yml`; `none` opts out) | — |
 | automerge | `merge.max_repairs`, `merge.pending_max_minutes`, `merge.skip_labels`, `merge.method`, `review.mode`, `review.wait_max_minutes`, `review.external_reviewer`, `escalation.label`, `escalation.routes` | `max_repairs`, `pending_max_minutes`, `merge_method`, `review_wait_minutes` |
 | verify | `verify.commands`, `escalation.routes` | `verify_commands` |
 
@@ -1114,16 +1115,51 @@ Maintainer-dispatched release driver backed by `scripts/release-manager.js`
   from the spec-touching commits alone; a breaking spec change yields a
   MAJOR spec bump and the changelog calls out the migration-note
   requirement. `--spec-bump none` skips the spec tag.
-- **Publish sequence:** annotated tag → push → spec tag (if any) →
-  `POST /repos/{repo}/releases` with the generated changelog →
-  `git archive` tarball attached to the release →
-  `actions/attest-build-provenance` (SHA-pinned) attests the artifact —
-  the SLSA L3-class provenance shape of issue #100. The `release:
-  published` event is the subscription point for downstream signing stages
-  (issue #103); publish uses `AI_SDLC_TOKEN` when present because a release
-  created by `GITHUB_TOKEN` does not fire downstream workflows.
-- **Verify an artifact:** `gh attestation verify dist/ai-sdlc-<tag>.tar.gz
-  -R os-santiago/ai-sdlc`.
+- **Publish sequence (least-privilege two-job split):** the `release` job
+  (`contents: write` only) annotates + pushes the tag → spec tag (if any) →
+  `POST /repos/{repo}/releases` with the generated changelog → packages the
+  `git archive` tarball as a run artifact. The `provenance` job
+  (`id-token: write` + `attestations: write` + `contents: write`) runs only
+  on `released`, reads the `release.*` contract block, and then:
+  `cosign sign-blob` keyless-signs the tarball under the runner's GitHub
+  OIDC identity (Fulcio certificate + Rekor transparency log, issue #103) →
+  `actions/attest-build-provenance` (SHA-pinned) issues the SLSA L3-class
+  attestation (issue #100) → the release carries
+  `ai-sdlc-<tag>.tar.gz` + `.sig` + `.crt` + `.sigstore.json` +
+  `.attestation.jsonl` (exported bundle for offline verification). Publish
+  uses `AI_SDLC_TOKEN` when present because a release created by
+  `GITHUB_TOKEN` does not fire downstream workflows. A signing or
+  attestation failure fails the job — the release never ships silently
+  unsigned assets.
+- **Contract gates:** `release.provenance: attest|none` and
+  `release.signing: cosign-keyless|none` (schema defaults are the secure
+  posture). `none` skips the corresponding step; the declared value is the
+  audit record.
+- **Verify an artifact:** `tools/verify-release.sh <tag>` downloads the
+  asset set and runs every check below; or manually —
+  ```bash
+  # cosign signature + Fulcio cert bound to the release workflow's OIDC identity
+  cosign verify-blob --signature ai-sdlc-<tag>.tar.gz.sig \
+    --certificate ai-sdlc-<tag>.tar.gz.crt \
+    --certificate-identity-regexp \
+      '^https://github\.com/os-santiago/ai-sdlc/\.github/workflows/ai-sdlc-release\.yml@refs/(heads/main|tags/v.+)$' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    ai-sdlc-<tag>.tar.gz
+
+  # or the Sigstore bundle (carries the Rekor inclusion proof):
+  cosign verify-blob --bundle ai-sdlc-<tag>.tar.gz.sigstore.json \
+    --certificate-identity-regexp '…same…' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    ai-sdlc-<tag>.tar.gz
+
+  # SLSA build provenance via GitHub Artifact Attestations:
+  gh attestation verify ai-sdlc-<tag>.tar.gz -R os-santiago/ai-sdlc
+
+  # offline: the release ships the exported bundle + you supply the trusted root
+  gh attestation verify ai-sdlc-<tag>.tar.gz -R os-santiago/ai-sdlc \
+    --bundle ai-sdlc-<tag>.tar.gz.attestation.jsonl \
+    --custom-trusted-root <(gh attestation trusted-root)
+  ```
 - **CLI parity:** `node scripts/release-manager.js --repo OWNER/NAME
   [--bump B] [--spec-bump B|none] [--ref REF] [--publish] [--json]` —
   default is always a dry run; nothing mutates without `--publish`.
