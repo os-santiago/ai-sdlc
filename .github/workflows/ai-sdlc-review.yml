@@ -248,7 +248,7 @@ jobs:
             {"engine.max_seconds": ${{ inputs.max_seconds }},
              "engine.max_steps": ${{ inputs.max_steps }}}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -1171,7 +1171,7 @@ jobs:
           owner: ${{ steps.creds.outputs.owner }}
           repositories: ${{ steps.creds.outputs.repo_name }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 

@@ -112,7 +112,7 @@ jobs:
           owner: ${{ steps.creds.outputs.owner }}
           repositories: ${{ steps.creds.outputs.repo_name }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 

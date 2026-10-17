@@ -221,7 +221,7 @@ jobs:
           # npm output (untrusted input) is read in this workspace.
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: steps.cfg.outputs.action == 'continue'
         with:
           node-version: '22'

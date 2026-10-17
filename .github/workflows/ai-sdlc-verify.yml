@@ -107,7 +107,7 @@ jobs:
 
       # No cache: npm — the target repo may carry no lockfile (setup-node
       # would fail); verify commands bring their own install step anyway.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 

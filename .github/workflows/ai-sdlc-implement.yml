@@ -216,7 +216,7 @@ jobs:
       # No cache: npm — the checked-out repo is the target repo (a consumer
       # may carry no lockfile, which makes setup-node fail); the npm deps
       # live in /tmp/scc-src, so a consumer-keyed cache would miss anyway.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
