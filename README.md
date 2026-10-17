@@ -1,3 +1,9 @@
+---
+lastVerified: 2026-10-17T20:57:00Z
+verifiedAgainst: 0b7af3fe9843bcd46bfa0af218d054433467e702
+sources: [.ai-sdlc.yaml, spec/, .github/workflows/, docs/runtime.md, docs/onboarding.md, docs/operations.md, tools/verify-release.sh, runtime/k8s/README.md, examples/]
+freshnessWindowDays: 30
+---
 # ai-sdlc — Canonical AI Software Delivery Lifecycle Runtime
 
 Repo-agnostic, GitHub-Actions-native implementation of the AI-SDLC pipeline:
