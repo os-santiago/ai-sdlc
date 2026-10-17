@@ -92,7 +92,9 @@ func Default() Contract {
 	return Contract{
 		Spec: "1.0.0",
 		Autonomy: Autonomy{
-			Level:     "suggest",
+			// shadow-first default (issue #186): an omitted
+			// autonomy.level resolves to observe-only.
+			Level:     "shadow",
 			FreezeEnv: "AI_SDLC_FREEZE",
 		},
 		Triggers: Triggers{

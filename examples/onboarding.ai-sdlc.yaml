@@ -1,0 +1,35 @@
+# Archetype: fresh onboarding — shadow-first, self-accrediting.
+# Mirrors the starter contract `gh ai-sdlc init` writes (docs/onboarding.md):
+# the repo enters the trust ladder at `shadow` — observe-only, zero
+# mutations — and climbs on accumulated run evidence, not promises
+# (spec/trust-ladder.md, issue #186).
+#
+# Two properties make the ramp self-accrediting:
+#   1. The contract pre-declares the promotion/demotion evidence gates
+#      below — the repo knows from day one what it must demonstrate.
+#   2. When the evidence passes the gate, the promotion proposal arrives
+#      as a normal reviewed contract PR raising autonomy.level — the
+#      pipeline accredits itself with data; a maintainer merges it.
+spec: "1.0.0"
+
+repo:
+  archetype: app
+  primary_language: other
+  deploys_to: none
+
+autonomy:
+  # shadow is also the schema's resolved default — omitting autonomy
+  # entirely still starts observe-only (silence never grants privilege).
+  level: shadow
+  merge_requires_checks: true
+  freeze_env: AI_SDLC_FREEZE
+
+# Evidence thresholds (spec/trust-ladder.md): the gates this repo's clean
+# runs accumulate toward. Values shown are the schema defaults — declared
+# explicitly so onboarding wires the ramp, not just the level.
+promotion:
+  clean_merges_threshold: 3   # clean merges in the window → promotion PR
+  window: 30                  # rolling evidence window, completed runs
+demotion:
+  escalation_threshold: 1     # escalations in the window → demotion PR
+  window: 30

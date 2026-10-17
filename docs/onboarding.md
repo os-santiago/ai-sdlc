@@ -80,7 +80,7 @@ installer engine `tools/ai-sdlc-init.js` shipped by this repo
 
 | Artifact | Purpose |
 |---|---|
-| `.ai-sdlc.yaml` | Starter contract pinned to `autonomy.level: shadow` — see [the trust ramp](#the-trust-ramp--start-at-shadow-climb-on-evidence) |
+| `.ai-sdlc.yaml` | Starter contract pinned to `autonomy.level: shadow` with the `promotion:`/`demotion:` evidence gates pre-declared — see [the trust ramp](#the-trust-ramp--start-at-shadow-climb-on-evidence) |
 | `.github/workflows/ai-sdlc.yml` | Thin caller dispatching the reusable stages (`intake` on `issues.labeled`, `implement` on dispatch; `review` / `automerge` / `ci-repair` / `sweep` / `verify` wire the same way — [runtime.md](runtime.md)) |
 | Label bootstrap | The canonical set — `ready-to-implement`, `scc:*` run states, `pr:risk-*` tiers, `needs-human`, skip labels ([spec/labels.md](../spec/labels.md)) — created by the PR itself; no direct API label writes before merge |
 | PR body | Secrets checklist + the post-merge dispatch instructions above |
@@ -106,16 +106,28 @@ regulated or air-gapped environments.
 ## The trust ramp — start at `shadow`, climb on evidence
 
 The starter contract pins the lowest rung of the
-[trust ladder](../spec/trust-ladder.md):
+[trust ladder](../spec/trust-ladder.md) **and pre-declares the evidence
+thresholds it climbs against** — onboarding wires a level *and* the
+gates, not just a level:
 
 ```yaml
 # .ai-sdlc.yaml — as written by gh ai-sdlc init
 spec: "1.0.0"
 autonomy:
-  level: shadow   # observe-only: reports, never mutates
+  level: shadow   # observe-only: reports, never mutates (also the
+                  # resolved default when autonomy.level is omitted)
+promotion:
+  clean_merges_threshold: 3   # clean merges in the window → promotion PR
+  window: 30                  # rolling evidence window, completed runs
+demotion:
+  escalation_threshold: 1     # escalations in the window → demotion PR
+  window: 30
 ```
 
-`shadow` is a ceiling, not a dead end. From the first labeled issue the
+`shadow` is a ceiling, not a dead end — and not just a convention:
+`shadow` is the schema's resolved default, so a contract that omits
+`autonomy.level` still starts observe-only (silence never grants
+privilege). From the first labeled issue the
 repo accumulates the exact evidence the ladder measures — merge success
 rate, revert rate, escalation rate, repair rounds per PR — over a
 rolling window of completed runs (default N = 20; at least 10 before any
@@ -157,7 +169,10 @@ App + secrets setup. Validate the contract against
 `spec/ai-sdlc.schema.json` with
 [tools/validate-ai-sdlc-config.sh](../tools/validate-ai-sdlc-config.sh);
 the archetypes under [examples/](../examples/) are the reference
-starting points. To mirror the guided path, set `autonomy.level: shadow`
+starting points — [onboarding.ai-sdlc.yaml](../examples/onboarding.ai-sdlc.yaml)
+mirrors the bootstrap starter above. To mirror the guided path,
+set `autonomy.level: shadow` (or omit `autonomy` — `shadow` is the
+resolved default), pre-declare the `promotion:`/`demotion:` thresholds,
 and let evidence drive promotion.
 
 ## See also

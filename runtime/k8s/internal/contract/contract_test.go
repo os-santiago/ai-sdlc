@@ -8,8 +8,8 @@ import (
 
 func TestDefaultMatchesSchemaDocumentedDefaults(t *testing.T) {
 	got := Default()
-	if got.Autonomy.Level != "suggest" {
-		t.Fatalf("autonomy.level default = %q, want suggest", got.Autonomy.Level)
+	if got.Autonomy.Level != "shadow" {
+		t.Fatalf("autonomy.level default = %q, want shadow", got.Autonomy.Level)
 	}
 	if got.Triggers.IssueLabel != "ready-to-implement" {
 		t.Fatalf("triggers.issue_label default = %q", got.Triggers.IssueLabel)

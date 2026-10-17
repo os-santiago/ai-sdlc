@@ -120,7 +120,7 @@
             "auto-merge-all",
             "auto-deploy"
           ],
-          "description": "Progressive-autonomy ceiling (see spec/trust-ladder.md). Default: suggest."
+          "description": "Progressive-autonomy ceiling (see spec/trust-ladder.md). Default: shadow — a repo that omits the field resolves to observe-only and climbs on evidence (self-accrediting onboarding, issue #186)."
         },
         "merge_requires_checks": {
           "type": "boolean",

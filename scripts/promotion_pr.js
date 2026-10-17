@@ -40,8 +40,9 @@ const { execFileSync } = require('child_process');
 const LADDER = ['shadow', 'suggest', 'auto-pr', 'auto-merge-low', 'auto-merge-all', 'auto-deploy'];
 
 // Schema default when the contract omits `autonomy.level`
-// (spec/ai-sdlc.schema.json: "Default: suggest").
-const DEFAULT_LEVEL = 'suggest';
+// (spec/ai-sdlc.schema.json: "Default: shadow" — shadow-first
+// onboarding, issue #186).
+const DEFAULT_LEVEL = 'shadow';
 
 const CONTRACT_PATH = '.ai-sdlc.yaml';
 const PR_TITLE_PREFIX = 'feat(promotion): bump autonomy level to ';

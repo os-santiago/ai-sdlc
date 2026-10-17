@@ -220,3 +220,31 @@ evidence drive promotion.
 - The evidence engine is deterministic: identical inputs MUST produce
   identical verdicts. Evidence computation never routes through the
   model — signals are queries and counts, not judgments.
+## Onboarding — shadow-first and self-accrediting
+
+A repo that omits `autonomy.level` resolves to `shadow`: the ladder's
+observe-only floor is the contract default, so silence never grants
+privilege (issue #186). Newly adopted repos SHOULD onboard explicitly at
+`shadow` and let evidence drive every step above it.
+
+Self-accrediting means the climb needs no separate audit and no human
+reminding the system to revisit trust:
+
+1. **Thresholds are pre-declared.** The bootstrap contract declares the
+   `promotion:` and `demotion:` evidence gates it climbs against (the
+   contract blocks in [`ai-sdlc.schema.json`](ai-sdlc.schema.json)) —
+   from day one the repo knows exactly what it must demonstrate.
+2. **Evidence accrues automatically.** Completed pipeline runs and the
+   repo's merge history accumulate into the rolling window the
+   transition criteria above measure — no manual scorekeeping, no
+   separate attestation step.
+3. **Promotion arrives as a contract PR.** When the evidence passes the
+   promotion gate, the pipeline files a normal reviewed PR raising
+   `autonomy.level` in `.ai-sdlc.yaml` — autonomy changes ride the same
+   governance surface as every other change, and a maintainer merges
+   the promotion. The pipeline accredits itself with data; it does not
+   grant itself privileges. The promotion/demotion machinery that
+   evaluates the gate and opens those PRs is the runtime's trust
+   machinery (epic #151); this document fixes only the contract
+   surface — the level default, the gates, and the guarantee that
+   onboarding wires into them.
