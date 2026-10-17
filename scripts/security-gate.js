@@ -278,7 +278,7 @@ function evaluateFinding(f, cfg, tier) {
 // ---------------------------------------------------------------------------
 
 function esc(s) {
-  return String(s == null ? '' : s).replace(/\|/g, '\\|').replace(/\n/g, ' ').slice(0, 160);
+  return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n/g, ' ').slice(0, 160);
 }
 
 function buildSummary(result) {
