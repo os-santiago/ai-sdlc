@@ -136,6 +136,14 @@ describe('ai-sdlc.schema.json — contract surface', () => {
       promotion: { clean_merges_threshold: 3, window: 30, overrides: { 'auto-yolo': { clean_merges_threshold: 5 } } },
     });
     assert.strictEqual(badRung.valid, false);
+  it('declares review.adversarial with the contract-owned trigger threshold (issue #180)', () => {
+    const r = schema.properties.review;
+    assert.ok(r, 'missing properties.review');
+    const adv = r.properties.adversarial;
+    assert.ok(adv, 'missing review.adversarial — the adversarial trigger threshold must be contract-declared');
+    assert.strictEqual(adv.properties.min_tier.default, 'high');
+    assert.deepStrictEqual(adv.properties.min_tier.enum, ['low', 'medium', 'high', 'critical']);
+    assert.strictEqual(adv.properties.max_attacks.type, 'integer');
   });
 
   it('declares demotion with the issue-#211 trigger shape', () => {

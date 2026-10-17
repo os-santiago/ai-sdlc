@@ -99,6 +99,14 @@ on:
         description: 'findings kept in the verdict record and the fix prompt'
         type: number
         default: 20
+      adversarial_min_tier:
+        description: 'adversarial pass trigger tier (low|medium|high|critical) or "off"; empty = .ai-sdlc.yaml review.adversarial.min_tier (issue #180)'
+        type: string
+        default: ''
+      adversarial_max_attacks:
+        description: 'cap on generated attack probes per run — override; -1 = .ai-sdlc.yaml review.adversarial.max_attacks'
+        type: number
+        default: -1
       ledger_head:
         description: 'upstream run-ledger chain head — seeds this stage entry prev; empty = recover the ai-sdlc:ledger-head marker on the PR (issue #196)'
         type: string
@@ -116,6 +124,9 @@ on:
       risk_tier:
         description: 'deterministic diff tier: low | medium | high | critical (empty when skipped)'
         value: ${{ jobs.review.outputs.risk_tier }}
+      adversarial:
+        description: 'adversarial pass summary: ran:<verdict>:<n>-attacks | skip:<verdict>:<n>-attacks | not-configured'
+        value: ${{ jobs.review.outputs.adversarial }}
       ledger_head:
         description: 'sealed run-ledger chain head for this review run (issue #196)'
         value: ${{ jobs.review.outputs.ledger_head }}
@@ -155,6 +166,7 @@ jobs:
       verdict: ${{ steps.result.outputs.verdict }}
       reason: ${{ steps.result.outputs.reason }}
       risk_tier: ${{ steps.result.outputs.risk_tier }}
+      adversarial: ${{ steps.verdict.outputs.adversarial }}
       fix_attempt: ${{ steps.guard.outputs.attempt }}
       head_ref: ${{ steps.guard.outputs.head_ref }}
       head_sha: ${{ steps.guard.outputs.head_sha }}
@@ -522,6 +534,56 @@ jobs:
           console.log(`prompt_bytes=${Buffer.byteLength(prompt)} model=${process.env.MODEL}`);
           NODE
 
+      # Adversarial second pass (issue #180, epic #151): diffs whose
+      # deterministic risk tier reaches the contract-declared threshold
+      # (review.adversarial.min_tier, default pr:risk-high) get a hostile
+      # review run — generated injection probes (scripts/adversarial.js)
+      # plus abuse-case framing — whose findings merge into the normal
+      # verdict and feed the same review-fix loop. Scripts are fetched
+      # from the trusted runtime pin, never the PR head; an unavailable
+      # generator degrades to a recorded skip, never a block.
+      - name: Build adversarial pass (review.adversarial gate)
+        id: adversarial
+        if: steps.guard.outputs.decision == 'review'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TIER: ${{ steps.diff.outputs.risk_tier }}
+          ENABLED: ${{ steps.contract.outputs.review_adversarial_enabled || 'true' }}
+          MIN_TIER: ${{ inputs.adversarial_min_tier || steps.contract.outputs.review_adversarial_min_tier || 'high' }}
+          MAX_ATTACKS: ${{ (inputs.adversarial_max_attacks != -1 && toJSON(inputs.adversarial_max_attacks)) || steps.contract.outputs.review_adversarial_max_attacks || '16' }}
+          WHY: ${{ steps.diff.outputs.risk_why }}
+        run: |
+          set -euo pipefail
+          ok=1
+          for s in risk-classifier.js adversarial.js adversarial-review.js; do
+            if ! { gh api "repos/os-santiago/ai-sdlc/contents/scripts/$s?ref=main" \
+                -H "Accept: application/vnd.github.raw" > "$WORK/$s" 2>/dev/null \
+                && node --check "$WORK/$s" 2>/dev/null; }; then
+              ok=0; rm -f "$WORK/$s"; break
+            fi
+          done
+          if [ "$ok" = 1 ]; then
+            node "$WORK/adversarial-review.js" plan \
+              --diff "$WORK/diff.patch" --files "$WORK/files.json" \
+              --stat "$WORK/diff-stat.txt" \
+              --tier "$TIER" --min-tier "$MIN_TIER" --enabled "$ENABLED" \
+              --max-attacks "$MAX_ATTACKS" --why "$WHY" \
+              --pr "$PR" --title "$(jq -r .title "$WORK/pr.json")" \
+              --base-ref "$(jq -r .baseRefName "$WORK/pr.json")" \
+              --head-ref "$(jq -r .headRefName "$WORK/pr.json")" \
+              --out-dir "$WORK" --json > /dev/null
+          else
+            printf '{"v":1,"run":false,"reason":"generator-unavailable","tier":"%s","min_tier":"%s","attacks":[]}\n' \
+              "$TIER" "$MIN_TIER" > "$WORK/adversarial-plan.json"
+          fi
+          RUN=$(jq -r .run "$WORK/adversarial-plan.json")
+          {
+            echo "run=$RUN"
+            echo "attacks=$(jq '.attacks | length' "$WORK/adversarial-plan.json")"
+            echo "reason=$(jq -r .reason "$WORK/adversarial-plan.json")"
+          } >> "$GITHUB_OUTPUT"
+          echo "adversarial pass: run=$RUN ($(jq -r .reason "$WORK/adversarial-plan.json"))"
+
       - name: Build scc engine from source
         if: steps.guard.outputs.decision == 'review' && steps.stage-engine.outputs.engine == 'scc'
         run: |
@@ -612,6 +674,58 @@ jobs:
           fi
           exit 0  # never fail the job here — verdict normalized below
 
+      - name: Run scc headless adversarial pass (bounded)
+        id: adversarial-engine
+        if: steps.guard.outputs.decision == 'review' && steps.adversarial.outputs.run == 'true'
+        env:
+          MAX_SECONDS: ${{ steps.contract.outputs.review_adversarial_max_seconds || '600' }}
+          ENGINE_MAX_SECONDS: ${{ steps.contract.outputs.max_seconds }}
+          MAX_STEPS: ${{ steps.contract.outputs.max_steps }}
+          SC_PROVIDER_CONNECT_TIMEOUT_MS: '90000'
+          SC_PROVIDER_ATTEMPT_TIMEOUT_MS: '300000'
+          SC_FAILOVER: 'nvidia/nemotron-3-ultra-550b-a55b,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'
+        run: |
+          set +e
+          # The adversarial budget is the lower of its contract cap and the
+          # stage engine budget — the pass must never outspend the review.
+          SECONDS_CAP="$MAX_SECONDS"
+          if [ "${ENGINE_MAX_SECONDS:-0}" -gt 0 ] 2>/dev/null && [ "$ENGINE_MAX_SECONDS" -lt "$SECONDS_CAP" ]; then
+            SECONDS_CAP="$ENGINE_MAX_SECONDS"
+          fi
+          # Exit contract: 0 ok · 10 no-changes · 20 provider · 21 auth · 22 budget · 23 livelock
+          scc chat -yq \
+            --prompt-file "$WORK/adversarial-prompt.md" \
+            --no-commit \
+            --audit-log "$WORK/scc-audit-adversarial.jsonl" \
+            --summary-file "$WORK/scc-manifest-adversarial.json" \
+            --max-seconds "$SECONDS_CAP" \
+            --max-steps "$MAX_STEPS"
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ -f ai-sdlc-adversarial-verdict.json ]; then
+            cp ai-sdlc-adversarial-verdict.json "$WORK/adversarial-verdict.raw.json"
+          fi
+          exit 0  # never fail the job here — normalized below
+
+      - name: Normalize adversarial verdict
+        id: adversarial-verdict
+        if: steps.guard.outputs.decision == 'review' && steps.adversarial.outputs.run == 'true'
+        env:
+          ENGINE_CODE: ${{ steps.adversarial-engine.outputs.exit_code }}
+          FINDINGS_MAX: ${{ inputs.findings_max }}
+        run: |
+          set -euo pipefail
+          # Probe-violation scan of the audit log + verdict normalization —
+          # a probe that converted to a forbidden action becomes a blocker.
+          node "$WORK/adversarial-review.js" normalize \
+            --raw "$WORK/adversarial-verdict.raw.json" \
+            --plan "$WORK/adversarial-plan.json" \
+            --audit-log "$WORK/scc-audit-adversarial.jsonl" \
+            --engine-exit "$ENGINE_CODE" \
+            --findings-max "$FINDINGS_MAX" \
+            --out "$WORK/adversarial.json"
+          jq '{ran, verdict, attacks, parse_ok, probes, findings: (.findings | length)}' "$WORK/adversarial.json"
+
       - name: Normalize verdict + external signal
         id: verdict
         if: steps.guard.outputs.decision == 'review'
@@ -649,6 +763,25 @@ jobs:
           else if (['approve', 'approved', 'comment', 'clean', 'lgtm'].includes(v)) verdict = 'clean';
           else verdict = 'inconclusive';
           if (!parseOk) verdict = 'inconclusive';   // engine gave no usable verdict — recorded, never stalls merges
+          // Adversarial pass (issue #180): merge its tagged findings BEFORE
+          // the blocked decision — they enter the same review-fix loop. A
+          // skipped/unavailable pass is still recorded (auditable).
+          let advSummary = null;
+          try {
+            if (fs.existsSync(`${W}/adversarial.json`) && fs.existsSync(`${W}/adversarial-review.js`)) {
+              const adv = JSON.parse(fs.readFileSync(`${W}/adversarial.json`, 'utf8'));
+              const merged = { verdict, findings, adversarial: null };
+              require(`${W}/adversarial-review.js`).mergeAdversarial({ record: merged, adv, findingsMax: MAXF, byteCap: 8000 });
+              findings = merged.findings;
+              advSummary = merged.adversarial;
+              if (merged.verdict === 'blocked') verdict = 'blocked';
+            } else if (fs.existsSync(`${W}/adversarial-plan.json`)) {
+              const plan = JSON.parse(fs.readFileSync(`${W}/adversarial-plan.json`, 'utf8'));
+              advSummary = { ran: false, reason: plan.reason || 'not-run', tier: plan.tier || null, attacks: (plan.attacks || []).length, verdict: 'none' };
+            }
+          } catch (e) {
+            advSummary = { ran: false, reason: `normalize-error:${String((e && e.message) || e).slice(0, 80)}`, verdict: 'none' };
+          }
           const blockingFinding = findings.some(f => f.severity !== 'minor');
           const blocked = verdict === 'blocked' || blockingFinding || ext.blocking;
           const final = blocked ? 'blocked' : verdict;
@@ -663,14 +796,17 @@ jobs:
             v: 1, pr: Number(process.env.PR), head_sha: process.env.HEAD_SHA,
             verdict: final, engine: engineId, model: process.env.MODEL, engine_exit: process.env.ENGINE_CODE,
             risk_tier: process.env.TIER, risk_why: process.env.WHY,
+            adversarial: advSummary,
             findings, summary: String(raw.summary || '').slice(0, 2000),
             external: ext, run: process.env.RUN_URL,
           };
           fs.writeFileSync(`${W}/verdict.json`, JSON.stringify(record, null, 2));
-          console.log(`verdict: ${final} (ai=${verdict} parse_ok=${parseOk} ext_blocking=${ext.blocking}) findings[${counts}]`);
+          const advOut = advSummary ? `${advSummary.ran ? 'ran' : 'skip'}:${advSummary.verdict}:${advSummary.attacks || 0}-attacks` : 'not-configured';
+          console.log(`verdict: ${final} (ai=${verdict} parse_ok=${parseOk} ext_blocking=${ext.blocking} adversarial=${advOut}) findings[${counts}]`);
           out('verdict', final);
           out('findings_json', JSON.stringify(findings));
           out('counts', counts);
+          out('adversarial', advOut);
           NODE
 
       - name: Apply risk tier label
@@ -719,7 +855,11 @@ jobs:
           const extLine = ext.reviewer
             ? `\`${ext.reviewer}\` — blocking: ${ext.blocking}${ext.blocking_checks.length ? ` (${ext.blocking_checks.join(', ')})` : ''}${ext.changes_requested_by.length ? `, CHANGES_REQUESTED by ${ext.changes_requested_by.join(', ')}` : ''}, inline comments: ${ext.inline_comments}`
             : 'not configured — AI-only path';
-          const rows = rec.findings.map(f => `| ${f.severity} | \`${f.path}${f.line ? ':' + f.line : ''}\` | ${f.summary.replace(/\|/g, '\\|')} |`);
+          const adv = rec.adversarial;
+          const advLine = !adv ? 'not run'
+            : adv.ran ? `\`${adv.verdict}\` — ${adv.attacks} probes embedded, resisted: ${adv.probes_resisted === null ? 'unknown' : adv.probes_resisted}`
+            : `skipped (${adv.reason})`;
+          const rows = rec.findings.map(f => `| ${f.severity}${f.source === 'adversarial' ? ' ⚔' : ''} | \`${f.path}${f.line ? ':' + f.line : ''}\` | ${f.summary.replace(/\|/g, '\\|')} |`);
           const body = [
             `<!-- ai-sdlc:review sha=${rec.head_sha} verdict=${rec.verdict} -->`,
             `🔍 **AI-SDLC review — verdict \`${rec.verdict}\`** on head \`${rec.head_sha.slice(0, 8)}\``,
@@ -728,6 +868,8 @@ jobs:
             `- findings: ${process.env.COUNTS || `${rec.findings.length}`}`,
             `- external reviewer: ${extLine}`,
             `- engine: \`${rec.engine || 'scc'}\` · model: \`${rec.model}\` exit ${rec.engine_exit} · run: ${rec.run}`,
+            `- adversarial pass: ${advLine}`,
+            `- engine: \`${rec.model}\` exit ${rec.engine_exit} · run: ${rec.run}`,
             '',
             rec.summary ? `> ${rec.summary}` : '',
             rec.findings.length ? '**Findings**\n\n| severity | location | summary |\n|---|---|---|\n' + rows.join('\n') : '',
@@ -832,6 +974,12 @@ jobs:
             ${{ runner.temp }}/ai-sdlc-review/scc-audit.jsonl
             ${{ runner.temp }}/ai-sdlc-review/scc-manifest.json
             ${{ runner.temp }}/ai-sdlc-review/engine-manifest.json
+            ${{ runner.temp }}/ai-sdlc-review/adversarial-plan.json
+            ${{ runner.temp }}/ai-sdlc-review/adversarial-prompt.md
+            ${{ runner.temp }}/ai-sdlc-review/adversarial-verdict.raw.json
+            ${{ runner.temp }}/ai-sdlc-review/adversarial.json
+            ${{ runner.temp }}/ai-sdlc-review/scc-audit-adversarial.jsonl
+            ${{ runner.temp }}/ai-sdlc-review/scc-manifest-adversarial.json
           if-no-files-found: ignore
           retention-days: 14
 
@@ -853,10 +1001,11 @@ jobs:
           recover-prev: 'true'
           token: ${{ steps.app-token.outputs.token }}
           data: >-
-            {"decision":${{ toJSON(steps.guard.outputs.decision) }},"guard_reason":${{ toJSON(steps.guard.outputs.reason) }},"head_sha":${{ toJSON(steps.guard.outputs.head_sha) }},"result":${{ toJSON(steps.result.outputs.action) }},"verdict":${{ toJSON(steps.result.outputs.verdict) }},"reason":${{ toJSON(steps.result.outputs.reason) }},"risk_tier":${{ toJSON(steps.result.outputs.risk_tier) }}}
+            {"decision":${{ toJSON(steps.guard.outputs.decision) }},"guard_reason":${{ toJSON(steps.guard.outputs.reason) }},"head_sha":${{ toJSON(steps.guard.outputs.head_sha) }},"result":${{ toJSON(steps.result.outputs.action) }},"verdict":${{ toJSON(steps.result.outputs.verdict) }},"reason":${{ toJSON(steps.result.outputs.reason) }},"risk_tier":${{ toJSON(steps.result.outputs.risk_tier) }},"adversarial":${{ toJSON(steps.verdict.outputs.adversarial) }}}
           data-files: |
             ${{ runner.temp }}/ai-sdlc-review/verdict.json
             ${{ runner.temp }}/ai-sdlc-review/external.json
+            ${{ runner.temp }}/ai-sdlc-review/adversarial.json
 
       - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)
         id: seal
