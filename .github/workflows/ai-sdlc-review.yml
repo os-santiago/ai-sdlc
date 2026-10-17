@@ -55,6 +55,10 @@ on:
         description: 'ref to read .ai-sdlc.yaml from'
         type: string
         default: 'main'
+      runtime_ref:
+        description: 'ref of os-santiago/ai-sdlc to fetch runtime scripts/actions from'
+        type: string
+        default: 'main'
       pipeline_author:
         description: 'PR author login treated as pipeline-managed (the ai-sdlc App bot identity)'
         type: string
@@ -219,10 +223,27 @@ jobs:
       # (missing contract → global default engine, never a block).
       - name: Resolve stage engine (.ai-sdlc.yaml engines)
         id: stage-engine
-        uses: ./.github/actions/resolve-stage-engine
-        with:
-          stage: review
-          required: 'false'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RUNTIME_REF: ${{ inputs.runtime_ref || 'main' }}
+          STAGE: review
+          REQUIRED: 'false'
+        run: |
+          set -euo pipefail
+          DEST="$RUNNER_TEMP/ai-sdlc-engine"
+          mkdir -p "$DEST/scripts/gha" "$DEST/config"
+          ok=1
+          for f in scripts/engine_adapter.js scripts/gha/stage-engine-resolver.js config/engine_adapters.json; do
+            if ! gh api "repos/os-santiago/ai-sdlc/contents/$f?ref=$RUNTIME_REF" -H "Accept: application/vnd.github.raw" > "$DEST/$f" 2>/dev/null; then ok=0; break; fi
+          done
+          if [ "$ok" = 0 ] || ! node --check "$DEST/scripts/gha/stage-engine-resolver.js" 2>/dev/null; then
+            echo "::warning::stage-engine resolver unavailable at os-santiago/ai-sdlc@$RUNTIME_REF — defaulting to scc"
+            { echo "engine=scc"; echo "engine_source=default"; echo "engine_binary=scc"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node "$DEST/scripts/gha/stage-engine-resolver.js" --stage "$STAGE" \
+            --contract "${CONTRACT_PATH:-$RUNNER_TEMP/ai-sdlc-contract/contract.json}" \
+            --registry "$DEST/config/engine_adapters.json" --required "$REQUIRED"
 
       - name: Guard + ingest external reviewer signal
         id: guard
@@ -919,10 +940,27 @@ jobs:
       # stage — it runs whichever adapter `engines.review` selects.
       - name: Resolve stage engine (.ai-sdlc.yaml engines)
         id: stage-engine
-        uses: ./.github/actions/resolve-stage-engine
-        with:
-          stage: review
-          required: 'false'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RUNTIME_REF: ${{ inputs.runtime_ref || 'main' }}
+          STAGE: review
+          REQUIRED: 'false'
+        run: |
+          set -euo pipefail
+          DEST="$RUNNER_TEMP/ai-sdlc-engine"
+          mkdir -p "$DEST/scripts/gha" "$DEST/config"
+          ok=1
+          for f in scripts/engine_adapter.js scripts/gha/stage-engine-resolver.js config/engine_adapters.json; do
+            if ! gh api "repos/os-santiago/ai-sdlc/contents/$f?ref=$RUNTIME_REF" -H "Accept: application/vnd.github.raw" > "$DEST/$f" 2>/dev/null; then ok=0; break; fi
+          done
+          if [ "$ok" = 0 ] || ! node --check "$DEST/scripts/gha/stage-engine-resolver.js" 2>/dev/null; then
+            echo "::warning::stage-engine resolver unavailable at os-santiago/ai-sdlc@$RUNTIME_REF — defaulting to scc"
+            { echo "engine=scc"; echo "engine_source=default"; echo "engine_binary=scc"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node "$DEST/scripts/gha/stage-engine-resolver.js" --stage "$STAGE" \
+            --contract "${CONTRACT_PATH:-$RUNNER_TEMP/ai-sdlc-contract/contract.json}" \
+            --registry "$DEST/config/engine_adapters.json" --required "$REQUIRED"
 
       - name: Mark fix attempt on PR
         # Stamped at DISPATCH, not at completion: the merge gate holds
