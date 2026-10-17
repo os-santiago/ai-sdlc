@@ -1,0 +1,16 @@
+{
+  "id": "resolve-defaults-and-stage-engines",
+  "type": "contract-resolve",
+  "title": "defaults merge + per-stage engine map flattens to stage→id",
+  "requires": ["python3"],
+  "input": {
+    "repo_cfg": {
+      "spec": "1.0.0",
+      "autonomy": { "level": "auto-pr" },
+      "engines": { "implement": { "engine": "devin" }, "review": "scc" },
+      "model": { "primary": "nvidia/fixture-model" }
+    },
+    "overrides": {}
+  },
+  "compare": { "omit": ["outputs.path"] }
+}

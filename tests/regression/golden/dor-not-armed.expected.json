@@ -1,0 +1,13 @@
+{
+  "outputs": {
+    "dispatch": "false",
+    "armed": "false",
+    "failed": ""
+  },
+  "checks": null,
+  "log": [
+    "issue does not carry the trigger label \"ready-to-implement\" — not armed, skipping"
+  ],
+  "exitCode": 0,
+  "error": null
+}

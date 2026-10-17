@@ -1,0 +1,9 @@
+{
+  "id": "risk-eval-removed-stays-low",
+  "type": "risk-classify",
+  "title": "eval() in a removed line does not raise the tier",
+  "input": {
+    "files": [{ "path": "docs/notes.md", "add": 1, "del": 3, "status": "modified" }],
+    "diffText": "diff --git a/docs/notes.md b/docs/notes.md\n--- a/docs/notes.md\n+++ b/docs/notes.md\n@@ -1,2 +1,1 @@\n-mention eval(dirty) in prose\n+safe\n"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "result": {
+    "label": "pr:risk-medium",
+    "added": [],
+    "removed": [],
+    "skipped": true
+  },
+  "calls": [
+    "pr view 9 -R fixture/repo --json labels",
+    "label create pr:risk-medium -R fixture/repo --color FBCA04 --description AI-SDLC risk tier: medium (spec/risk-taxonomy.md) --force"
+  ]
+}

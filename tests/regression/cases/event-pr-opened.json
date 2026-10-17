@@ -1,0 +1,19 @@
+{
+  "id": "event-pr-opened",
+  "type": "normalized-event",
+  "title": "pull_request.opened webhook normalizes to a change_request",
+  "input": {
+    "event_name": "pull_request",
+    "payload": {
+      "action": "opened",
+      "sender": { "id": 1002, "login": "bot-lane", "type": "Bot" },
+      "repository": { "id": 9001, "full_name": "fixtures/repo", "html_url": "https://example.test/r" },
+      "pull_request": {
+        "id": 6001, "number": 11, "title": "feat: thing",
+        "body": "pr body", "state": "open", "merged": false,
+        "labels": [{ "name": "pr:risk-low" }],
+        "created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-01T01:00:00Z"
+      }
+    }
+  }
+}

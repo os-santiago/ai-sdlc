@@ -1,0 +1,13 @@
+{
+  "id": "adapter-devin-env-fallback",
+  "type": "engine-adapter",
+  "title": "devin placeholders resolve from {ENGINE}_{PLACEHOLDER} env",
+  "input": {
+    "engine": "devin", "op": "argv",
+    "env": {
+      "DEVIN_MODEL": "env-model",
+      "DEVIN_PROMPT": "env prompt",
+      "DEVIN_MANIFEST_FILE": "env/manifest.json"
+    }
+  }
+}

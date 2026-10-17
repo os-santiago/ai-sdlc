@@ -1,0 +1,14 @@
+{
+  "result": {
+    "tier": "medium",
+    "label": "pr:risk-medium",
+    "why": "no diff file information — defaulting to medium",
+    "files": 0,
+    "lines": 0,
+    "dirs": [],
+    "paths": [],
+    "signals": [
+      "no-files"
+    ]
+  }
+}

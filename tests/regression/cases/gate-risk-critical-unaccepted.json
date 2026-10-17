@@ -1,0 +1,15 @@
+{
+  "id": "gate-risk-critical-unaccepted",
+  "type": "merge-gate",
+  "title": "pr:risk-critical without pr:risk-accepted is held",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "pr": {
+      "number": 46, "isDraft": false, "mergeable": "MERGEABLE",
+      "headRefOid": "a1b2c3d", "baseRefName": "main",
+      "labels": [{ "name": "pr:risk-critical" }],
+      "createdAt": "2026-10-17T11:00:00Z", "comments": [], "commits": []
+    },
+    "checks": [{ "name": "contract", "bucket": "pass" }]
+  }
+}

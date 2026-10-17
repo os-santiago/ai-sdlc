@@ -1,0 +1,17 @@
+{
+  "id": "gate-risk-critical-accepted-merges",
+  "type": "merge-gate",
+  "title": "human-accepted critical PR passes the risk hold",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "env": { "REVIEW_MODE": "human" },
+    "pr": {
+      "number": 47, "isDraft": false, "mergeable": "MERGEABLE",
+      "headRefOid": "a1b2c3d", "baseRefName": "main",
+      "labels": [{ "name": "pr:risk-critical" }, { "name": "pr:risk-accepted" }],
+      "createdAt": "2026-10-17T11:00:00Z", "comments": [],
+      "commits": [{ "committedDate": "2026-10-17T11:30:00Z" }]
+    },
+    "checks": [{ "name": "contract", "bucket": "pass" }]
+  }
+}

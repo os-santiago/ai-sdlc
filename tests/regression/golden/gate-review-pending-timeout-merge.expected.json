@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "merged",
+    "reason": "green+review_timeout"
+  },
+  "log": [
+    "decision: merged (green+review_timeout)"
+  ],
+  "exitCode": 0,
+  "error": null
+}

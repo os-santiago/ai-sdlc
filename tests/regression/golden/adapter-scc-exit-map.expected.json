@@ -1,0 +1,20 @@
+{
+  "exitCodes": {
+    "0": {
+      "classification": "Success",
+      "mapped": 0
+    },
+    "10": {
+      "classification": "ValidationError",
+      "mapped": 1
+    },
+    "24": {
+      "classification": "TimeoutError",
+      "mapped": 1
+    },
+    "9999": {
+      "classification": "AgentError",
+      "mapped": 1
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "adapter-devin-injection-rejected",
+  "type": "engine-adapter",
+  "title": "injection-shaped placeholder value is rejected, never substituted",
+  "input": {
+    "engine": "devin", "op": "argv",
+    "values": { "prompt": "p", "model": "a;rm -rf /", "manifestFile": "m.json" }
+  }
+}

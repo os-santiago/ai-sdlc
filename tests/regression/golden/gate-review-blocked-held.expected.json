@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "held",
+    "reason": "review-blocked"
+  },
+  "log": [
+    "decision: held (review-blocked)"
+  ],
+  "exitCode": 0,
+  "error": null
+}

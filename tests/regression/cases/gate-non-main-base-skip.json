@@ -1,0 +1,15 @@
+{
+  "id": "gate-non-main-base-skip",
+  "type": "merge-gate",
+  "title": "PRs targeting a non-main base are skipped",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "pr": {
+      "number": 45, "isDraft": false, "mergeable": "MERGEABLE",
+      "headRefOid": "a1b2c3d", "baseRefName": "develop",
+      "labels": [],
+      "createdAt": "2026-10-17T11:00:00Z", "comments": [], "commits": []
+    },
+    "checks": [{ "name": "contract", "bucket": "pass" }]
+  }
+}

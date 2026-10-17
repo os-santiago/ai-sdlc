@@ -1,0 +1,16 @@
+{
+  "id": "gate-pending-young-held",
+  "type": "merge-gate",
+  "title": "pending checks on a young PR hold the gate",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "env": { "PENDING_MAX": "60" },
+    "pr": {
+      "number": 52, "isDraft": false, "mergeable": "MERGEABLE",
+      "headRefOid": "a1b2c3d", "baseRefName": "main",
+      "labels": [],
+      "createdAt": "2026-10-17T11:30:00Z", "comments": [], "commits": []
+    },
+    "checks": [{ "name": "contract", "bucket": "pending" }]
+  }
+}

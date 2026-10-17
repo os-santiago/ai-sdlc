@@ -1,0 +1,15 @@
+{
+  "id": "gate-draft-skip",
+  "type": "merge-gate",
+  "title": "draft PR is skipped before any other check",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "pr": {
+      "number": 43, "isDraft": true, "mergeable": "MERGEABLE",
+      "headRefOid": "a1b2c3d", "baseRefName": "main",
+      "labels": ["needs-human"],
+      "createdAt": "2026-10-17T11:00:00Z", "comments": [], "commits": []
+    },
+    "checks": [{ "name": "contract", "bucket": "fail" }]
+  }
+}

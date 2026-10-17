@@ -1,0 +1,18 @@
+{
+  "result": {
+    "tier": "low",
+    "label": "pr:risk-low",
+    "why": "docs/tests only",
+    "files": 2,
+    "lines": 49,
+    "dirs": [
+      "docs",
+      "README.md"
+    ],
+    "paths": [
+      "docs/runtime.md",
+      "README.md"
+    ],
+    "signals": []
+  }
+}

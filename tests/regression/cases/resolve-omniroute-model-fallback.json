@@ -1,0 +1,15 @@
+{
+  "id": "resolve-omniroute-model-fallback",
+  "type": "contract-resolve",
+  "title": "OmniRoute review model falls back to model.primary on GHA (ADR-0001)",
+  "requires": ["python3"],
+  "input": {
+    "repo_cfg": {
+      "spec": "1.0.0",
+      "model": { "primary": "nvidia/plain-model" },
+      "review": { "ai_reviewer": { "model": "auto/best-coding" } }
+    },
+    "overrides": {}
+  },
+  "compare": { "omit": ["outputs.path"] }
+}

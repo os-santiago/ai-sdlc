@@ -1,0 +1,15 @@
+{
+  "id": "dor-not-armed",
+  "type": "intake-dor",
+  "title": "issue without the trigger label is not armed",
+  "input": {
+    "issue": {
+      "number": 7,
+      "title": "fix: correct thing",
+      "body": "## Problem\nSomething is broken and this body is long enough to pass the non-trivial check without any problem at all for sure.\n\n## Acceptance criteria\n- [ ] It is fixed\n",
+      "labels": [{ "name": "bug" }]
+    },
+    "trigger": "ready-to-implement",
+    "skip_labels": ["needs-human"]
+  }
+}

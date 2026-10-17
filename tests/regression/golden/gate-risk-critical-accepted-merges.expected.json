@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "merged",
+    "reason": "green"
+  },
+  "log": [
+    "decision: merged (green)"
+  ],
+  "exitCode": 0,
+  "error": null
+}

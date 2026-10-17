@@ -1,0 +1,11 @@
+{
+  "id": "risk-ambiguity-resolves-up",
+  "type": "risk-classify",
+  "title": "docs + workflow surface resolves UP to critical",
+  "input": {
+    "files": [
+      { "path": "README.md", "add": 4, "del": 0, "status": "modified" },
+      { "path": ".github/workflows/ci.yml", "add": 4, "del": 0, "status": "modified" }
+    ]
+  }
+}

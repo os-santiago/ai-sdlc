@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "skipped",
+    "reason": "skip-label"
+  },
+  "log": [
+    "decision: skipped (skip-label)"
+  ],
+  "exitCode": 0,
+  "error": null
+}

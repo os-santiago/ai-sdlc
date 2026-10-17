@@ -1,0 +1,16 @@
+{
+  "result": {
+    "tier": "low",
+    "label": "pr:risk-low",
+    "why": "docs/tests only",
+    "files": 1,
+    "lines": 4,
+    "dirs": [
+      "docs"
+    ],
+    "paths": [
+      "docs/notes.md"
+    ],
+    "signals": []
+  }
+}

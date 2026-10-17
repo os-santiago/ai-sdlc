@@ -1,0 +1,8 @@
+{
+  "id": "risk-spec-path-critical",
+  "type": "risk-classify",
+  "title": "spec/ surface classifies pr:risk-critical",
+  "input": {
+    "files": [{ "path": "spec/risk-taxonomy.md", "add": 3, "del": 1, "status": "modified" }]
+  }
+}

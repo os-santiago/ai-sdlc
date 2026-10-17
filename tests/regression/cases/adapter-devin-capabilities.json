@@ -1,0 +1,6 @@
+{
+  "id": "adapter-devin-capabilities",
+  "type": "engine-adapter",
+  "title": "devin capabilities descriptor",
+  "input": { "engine": "devin", "op": "capabilities" }
+}

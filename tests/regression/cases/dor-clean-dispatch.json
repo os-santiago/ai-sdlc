@@ -1,0 +1,15 @@
+{
+  "id": "dor-clean-dispatch",
+  "type": "intake-dor",
+  "title": "armed issue satisfying R1-R6 dispatches",
+  "input": {
+    "issue": {
+      "number": 193,
+      "title": "feat(runtime): implement regression harness for pipeline behavior",
+      "body": "## Problem\nBuild a harness that runs a set of golden tasks against the pipeline and compares outputs to baseline, failing on regression.\n\n## Context\nLocated in runtime/eval_suite.py; invokes pipeline as a library; no external services.\n\n## Acceptance criteria\n- [ ] Harness executes all golden tasks and produces a pass/fail report\n- [ ] Any deviation beyond allowed tolerance marks the run as failed\n- [ ] Failed runs produce a diff artifact for debugging\n",
+      "labels": [{ "name": "ready-to-implement" }, { "name": "priority:P1" }]
+    },
+    "trigger": "ready-to-implement",
+    "skip_labels": ["epic", "wontfix", "invalid", "duplicate", "question", "dependencies", "needs-human"]
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "label-ops-invalid-tier-error",
+  "type": "label-ops",
+  "title": "a non-taxonomy tier is rejected before any gh mutation",
+  "input": {
+    "repo": "fixture/repo", "pr": 1, "tier": "extreme",
+    "labels": []
+  }
+}

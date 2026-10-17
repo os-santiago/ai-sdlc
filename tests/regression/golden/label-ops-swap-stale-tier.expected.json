@@ -1,0 +1,17 @@
+{
+  "result": {
+    "label": "pr:risk-high",
+    "added": [
+      "pr:risk-high"
+    ],
+    "removed": [
+      "pr:risk-low"
+    ],
+    "skipped": false
+  },
+  "calls": [
+    "pr view 7 -R fixture/repo --json labels",
+    "label create pr:risk-high -R fixture/repo --color D93F0B --description AI-SDLC risk tier: high (spec/risk-taxonomy.md) --force",
+    "pr edit 7 -R fixture/repo --add-label pr:risk-high --remove-label pr:risk-low"
+  ]
+}

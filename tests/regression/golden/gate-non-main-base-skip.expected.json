@@ -1,0 +1,11 @@
+{
+  "outputs": {
+    "action": "skipped",
+    "reason": "non-main-base"
+  },
+  "log": [
+    "decision: skipped (non-main-base)"
+  ],
+  "exitCode": 0,
+  "error": null
+}

@@ -1,0 +1,9 @@
+{
+  "id": "label-ops-swap-stale-tier",
+  "type": "label-ops",
+  "title": "tier change adds the winner and removes only stale risk labels",
+  "input": {
+    "repo": "fixture/repo", "pr": 7, "tier": "high",
+    "labels": ["pr:risk-low", "pr:risk-accepted", "bug"]
+  }
+}

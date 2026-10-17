@@ -1,0 +1,7 @@
+{
+  "capabilities": {
+    "supportsWorkspaceTrust": true,
+    "modelConfigurable": true,
+    "projectIdRequired": true
+  }
+}

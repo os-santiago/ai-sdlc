@@ -1,0 +1,16 @@
+{
+  "id": "gate-pending-timeout-escalated",
+  "type": "merge-gate",
+  "title": "pending checks past pending_max_minutes escalate",
+  "input": {
+    "now": "2026-10-17T12:00:00Z",
+    "env": { "PENDING_MAX": "30" },
+    "pr": {
+      "number": 53, "isDraft": false, "mergeable": "MERGEABLE",
+      "headRefOid": "a1b2c3d", "baseRefName": "main",
+      "labels": [],
+      "createdAt": "2026-10-17T10:00:00Z", "comments": [], "commits": []
+    },
+    "checks": [{ "name": "contract", "bucket": "pending" }]
+  }
+}

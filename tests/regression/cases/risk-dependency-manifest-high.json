@@ -1,0 +1,8 @@
+{
+  "id": "risk-dependency-manifest-high",
+  "type": "risk-classify",
+  "title": "lockfile change classifies pr:risk-high",
+  "input": {
+    "files": [{ "path": "package-lock.json", "add": 50, "del": 50, "status": "modified" }]
+  }
+}

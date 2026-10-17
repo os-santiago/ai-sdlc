@@ -1,0 +1,15 @@
+{
+  "id": "resolve-override-wins",
+  "type": "contract-resolve",
+  "title": "workflow-input override beats the repo contract (_sources=input)",
+  "requires": ["python3"],
+  "input": {
+    "repo_cfg": {
+      "spec": "1.0.0",
+      "triggers": { "issue_label": "ready-to-implement" },
+      "merge": { "method": "squash", "max_repairs": 3 }
+    },
+    "overrides": { "merge.method": "merge", "merge.max_repairs": "5" }
+  },
+  "compare": { "omit": ["outputs.path"] }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "risk-eval-content-high",
+  "type": "risk-classify",
+  "title": "eval() in an added line classifies pr:risk-high",
+  "input": {
+    "files": [{ "path": "tools/run.sh", "add": 5, "del": 1, "status": "modified" }],
+    "diffText": "diff --git a/tools/run.sh b/tools/run.sh\n--- a/tools/run.sh\n+++ b/tools/run.sh\n@@ -1,1 +1,1 @@\n+const out = eval(userInput);\n"
+  }
+}

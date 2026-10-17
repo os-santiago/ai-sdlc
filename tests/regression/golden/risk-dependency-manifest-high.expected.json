@@ -1,0 +1,18 @@
+{
+  "result": {
+    "tier": "high",
+    "label": "pr:risk-high",
+    "why": "security-adjacent/dependency surface (package-lock.json)",
+    "files": 1,
+    "lines": 100,
+    "dirs": [
+      "package-lock.json"
+    ],
+    "paths": [
+      "package-lock.json"
+    ],
+    "signals": [
+      "path:package-lock.json"
+    ]
+  }
+}

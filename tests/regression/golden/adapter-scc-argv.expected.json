@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "chat",
+    "--model",
+    "claude-3-opus",
+    "--prompt",
+    "a;b c $(id)",
+    "--manifest",
+    "out/manifest.json",
+    "--format",
+    "json"
+  ]
+}
