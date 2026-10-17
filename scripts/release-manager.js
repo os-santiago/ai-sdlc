@@ -29,8 +29,9 @@
 // Provenance wiring: the manager emits the released tag + changelog so the
 // caller (ai-sdlc-release.yml) can package `git archive` artifacts, upload
 // them to the release, and attest them via actions/attest-build-provenance
-// (SLSA L3-class, issue #100). The manager itself never signs — signing is
-// a runner-side stage keyed on the release event.
+// (SLSA L3-class, issue #100). The manager itself never signs — cosign
+// keyless signing lives in the workflow's least-privilege `provenance` job
+// (issue #103), gated on release_status == 'released'.
 //
 // Bounded: pure string assembly over bounded git output — no engine, no
 // model. `--publish` performs a fixed call sequence (verify → tag → push →

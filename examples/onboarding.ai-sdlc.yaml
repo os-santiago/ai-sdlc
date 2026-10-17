@@ -33,3 +33,9 @@ promotion:
 demotion:
   escalation_threshold: 1     # escalations in the window → demotion PR
   window: 30
+
+# Release provenance (issues #100/#103): secure posture is the resolved
+# default — declared so onboarding wires it, not just trusts defaults.
+release:
+  provenance: attest
+  signing: cosign-keyless

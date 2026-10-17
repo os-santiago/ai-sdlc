@@ -120,6 +120,38 @@ The bootstrap PR (and the manual path below) wires three things:
    control issue to halt the pipeline without disabling workflows
    (spec/kill-switch.md).
 
+## Verifying release provenance
+
+Every release artifact (`ai-sdlc-<tag>.tar.gz`) is cosign-sign-blobbed
+keyless under the release workflow's GitHub OIDC identity (Fulcio cert +
+Rekor log) and attested via GitHub Artifact Attestations (SLSA L3-class).
+Releases carry `<artifact>.sig`, `.crt`, `.sigstore.json` and
+`.attestation.jsonl` next to the tarball.
+
+One command downloads the asset set and verifies both surfaces:
+
+```bash
+tools/verify-release.sh <tag>   # e.g. v0.4.2 — needs `gh` + `cosign`
+```
+
+Or manually:
+
+```bash
+gh release download <tag> -R os-santiago/ai-sdlc -p 'ai-sdlc-<tag>.tar.gz*'
+
+cosign verify-blob --signature ai-sdlc-<tag>.tar.gz.sig \
+  --certificate ai-sdlc-<tag>.tar.gz.crt \
+  --certificate-identity-regexp \
+    '^https://github\.com/os-santiago/ai-sdlc/\.github/workflows/ai-sdlc-release\.yml@refs/(heads/main|tags/v.+)$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ai-sdlc-<tag>.tar.gz
+
+gh attestation verify ai-sdlc-<tag>.tar.gz -R os-santiago/ai-sdlc
+```
+
+Details and the offline (exported-bundle) path:
+[docs/runtime.md](docs/runtime.md#release-manager-ai-sdlc-releaseyml).
+
 ## Documentation
 
 - [docs/onboarding.md](docs/onboarding.md) — one-command install

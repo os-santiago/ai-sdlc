@@ -732,6 +732,25 @@
         }
       }
     },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Release provenance contract (issues #100, #103): declares the signing/attestation posture the ai-sdlc-release stage applies to published artifacts. Both fields default to the secure posture — a consumer opts OUT explicitly and the declared value is the audit record.",
+      "properties": {
+        "provenance": {
+          "type": "string",
+          "enum": ["attest", "none"],
+          "default": "attest",
+          "description": "SLSA build-provenance posture. 'attest' = the release stage runs SHA-pinned actions/attest-build-provenance over each release artifact (SLSA L3-class on GitHub-hosted runners; consumers verify via `gh attestation verify`). 'none' skips attestation."
+        },
+        "signing": {
+          "type": "string",
+          "enum": ["cosign-keyless", "none"],
+          "default": "cosign-keyless",
+          "description": "Artifact signing posture. 'cosign-keyless' = cosign sign-blob under the runner's GitHub OIDC identity (Fulcio short-lived certificate, Rekor transparency log); the release carries <artifact>.sig + <artifact>.crt + <artifact>.sigstore.json for verification. 'none' skips signing."
+        }
+      }
+    },
     "labels": {
       "type": "object",
       "additionalProperties": {

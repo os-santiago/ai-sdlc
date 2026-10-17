@@ -62,6 +62,14 @@ policy_floor:
     - security.block_on_secret
     - security.severity_matrix.pr:risk-high
     - security.severity_matrix.pr:risk-critical
+    - release.provenance
+    - release.signing
   # Repos the baseline skips entirely (owner/repo or bare repo name).
   exempt:
     - owner/exempt-repo
+
+# Release provenance floor (issues #100/#103): org-mandated posture — repos
+# cannot publish unattested/unsigned release artifacts under this baseline.
+release:
+  provenance: attest
+  signing: cosign-keyless

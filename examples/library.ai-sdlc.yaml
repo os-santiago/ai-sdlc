@@ -134,3 +134,9 @@ escalation:
   contacts:
     - "@Axel-DaMage"
   notify_channels: []
+
+# Release provenance (issues #100/#103): a published library ships signed,
+# attested artifacts — consumers verify via tools/verify-release.sh.
+release:
+  provenance: attest
+  signing: cosign-keyless
