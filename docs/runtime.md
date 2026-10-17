@@ -29,6 +29,7 @@ engine only, no GitHub webhook adapter yet).
 | `ai-sdlc-classify.yml` | deterministic diff risk classification (`scripts/risk-classifier.js`): path/size/content signals → `pr:risk-*` label on every `pull_request` event — recomputed on each push | `pull_request` (opened/synchronize) |
 | `ai-sdlc-review.yml` | AI review + bounded review-fix convergence: verdict marker per head SHA + `pr:risk-*` tier label; `blocker|major`/`request_changes` → fix pass on the same branch → re-review; `needs-human` after `max_fix_iterations` | `pull_request` (opened/synchronize) / called post-implement |
 | `ai-sdlc-sweep.yml` | scheduled stall-sweep: enumerates open pipeline PRs and feeds each to `ai-sdlc-automerge.yml` — no green-idle PRs | `schedule` (every 30 min) / `workflow_dispatch` |
+| `ai-sdlc-metrics.yml` | scheduled SLO report (`scripts/slo-metrics.js`): time-to-merge, iterations-to-green, escalation rate → step summary + JSON/Prometheus artifacts | `schedule` (daily) / `workflow_dispatch` / `workflow_call` |
 | `ai-sdlc-ci-repair.yml` | bounded repair loop on red checks: failing-check log tails → `scc` headless on the PR head → commit + push; one comment per attempt; `needs-human` after `max_repairs` | `check_run.completed` (failure) / `workflow_dispatch` / automerge `repair-signaled` |
 | `ai-sdlc-verify.yml` | post-merge verify commands (resolved contract `verify.commands`); failure → issue (or revert when enabled) | post-merge |
 
@@ -287,6 +288,13 @@ config-text-only → `low`; otherwise `medium`.
 | `setup_commands` | `''` | dependency install before verify |
 | `revert_on_failure` | `false` | revert the merge commit on failure |
 | `org_config` | `''` | org baseline `owner/repo[/path][@ref]` — see [Org policy](#org-policy) |
+
+### ai-sdlc-metrics
+| Input | Default | Purpose |
+|---|---|---|
+| `repo` | `''` → caller repo | `owner/name` to report on |
+| `window` | `'30d'` | trailing window (`m`/`h`/`d`) |
+| `runtime_ref` | `'main'` | ref of `os-santiago/ai-sdlc` to fetch `scripts/slo-metrics.js` from — pin to the same ref as this workflow |
 
 | Secret | Purpose |
 |---|---|
@@ -575,6 +583,46 @@ Copy `ai-sdlc-sweep.yml` into the repo and point the `gate` job at
 merges with the `ai-sdlc` App installation token, so merges fire downstream
 `push` workflows (e.g. post-merge verify); the App secrets must be visible
 to the repo running the sweep (`secrets: inherit`).
+
+## SLO metrics (`ai-sdlc-metrics.yml`)
+
+`scripts/slo-metrics.js` computes the agentic SLOs the trust ladder gates on
+(spec/trust-ladder.md § Transition criteria) entirely from GitHub API data —
+PRs, issues, labels and workflow runs — so any consumer repo can be measured
+without a run ledger. A **pipeline PR** is the sweep's surface: head branch
+`^(feat|fix)/issue-N` or the `ai-sdlc` label.
+
+- **time-to-merge** — seconds from the linked issue's `createdAt` to the PR's
+  merge event (linked via the branch's `issue-N`, else a `Closes #N`-style
+  keyword in the body; falls back to PR creation, flagged
+  `basis: pr_created`).
+- **iterations-to-green** — workflow runs on the PR head branch until the
+  first completed run with `conclusion: success` (1-based; every run counts).
+  PRs that never went green report the attempts observed (`green: false`).
+- **escalation rate** — window subjects holding `needs-human` / all window
+  subjects. A subject is a work item — the linked issue when resolvable, else
+  the PR — so a hold on either side of an issue↔PR pair escalates once.
+  Issues with no pipeline PR count only when pipeline-flagged
+  (`needs-human` or an `scc:*` label). A live hold joins the denominator even
+  off-window: the list APIs expose `needs-human` as current state only.
+
+- **Trigger:** `schedule` daily (06:13 UTC), `workflow_dispatch`, and
+  `workflow_call` (`repo`, `window`, `runtime_ref`) for consumer repos.
+- **Output contract:** `--format json` (versioned report object),
+  `--format markdown` (step-summary table), `--format prometheus` (text
+  exposition — `ai_sdlc_time_to_merge_seconds` and
+  `ai_sdlc_iterations_to_green` histograms, `ai_sdlc_escalations_total` /
+  `ai_sdlc_pipeline_subjects_total` counters, `ai_sdlc_escalation_ratio` and
+  `ai_sdlc_pipeline_prs_not_green` gauges; all labeled `repo=`). The run
+  uploads `slo-metrics.json`, `slo-metrics.prom` and the raw collected model
+  (`slo-input.json`) as artifacts (90d). `--input`/`--dump-input` replay a
+  collected model offline — the same fixture format the tests use; `--now`
+  pins the window end for deterministic output.
+- **Bounded:** one `pr list` + one `issue list` + at most `--max-prs`
+  (default 100, cap 500) `run list` calls, deduped by head branch; a failed
+  runs fetch marks the PR unsampled instead of sinking the report.
+- **Trust boundary:** the workflow fetches the canonical script from the
+  `os-santiago/ai-sdlc` pin (`runtime_ref`) — never from the caller repo.
 
 ## Model fallback
 

@@ -1,0 +1,105 @@
+# ai-sdlc-metrics — scheduled agentic SLO report (issue #194)
+#
+# Emits the trust-ladder SLOs (spec/trust-ladder.md § Transition criteria)
+# from GitHub API data via scripts/slo-metrics.js: time-to-merge,
+# iterations-to-green, escalation rate. Read-only: pulls `pr list`,
+# `issue list` and `run list`, writes a markdown report to the step summary
+# plus JSON + Prometheus text exposition as artifacts (90d retention) — the
+# .prom file is the hand-off point for a pushgateway or scrape job.
+#
+# Trust boundary: the metrics script is fetched from the os-santiago/ai-sdlc
+# pin (runtime_ref) — never from the consumer repo — same posture as
+# ai-sdlc-classify.yml.
+#
+# Reusable: consumer repos call this workflow (`uses:`) with their own
+# repo/window inputs, exactly like the sweep.
+#
+# Cost: one collection = 1 pr list + 1 issue list + ≤ --max-prs `run list`
+# calls, then two offline renders replayed from the dumped input model.
+# Scheduled self-report runs daily at 06:13 UTC.
+name: ai-sdlc-metrics
+
+on:
+  schedule:
+    - cron: '13 6 * * *'
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 'owner/name to report on (blank = this repo)'
+        type: string
+        default: ''
+      window:
+        description: 'trailing window for the report'
+        type: choice
+        options: ['7d', '30d', '90d']
+        default: '30d'
+  workflow_call:
+    inputs:
+      repo:
+        description: 'owner/name to report on (blank = caller repo)'
+        type: string
+        default: ''
+      window:
+        description: 'trailing window for the report'
+        type: string
+        default: '30d'
+      runtime_ref:
+        description: 'ref of os-santiago/ai-sdlc to fetch scripts/slo-metrics.js from — pin to the same ref as this workflow'
+        type: string
+        default: 'main'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-sdlc-metrics-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read
+    env:
+      REPO: ${{ inputs.repo || github.repository }}
+      WINDOW: ${{ inputs.window || '30d' }}
+      RUNTIME_REF: ${{ inputs.runtime_ref || 'main' }}
+    steps:
+      - name: Collect + report SLOs
+        env:
+          # Token with read reach into the target repo. GITHUB_TOKEN suffices
+          # when reporting on the repo running the workflow.
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-metrics"
+          mkdir -p "$WORK"
+
+          # Trusted code only: fetch the canonical reporter from the runtime
+          # repo pin — never from the caller checkout.
+          gh api "repos/os-santiago/ai-sdlc/contents/scripts/slo-metrics.js?ref=$RUNTIME_REF" \
+            -H "Accept: application/vnd.github.raw" > "$WORK/slo-metrics.js"
+          node --check "$WORK/slo-metrics.js"
+
+          # One live collection; all renderings replay the same model so the
+          # JSON report, the .prom exposition and the summary can never drift.
+          node "$WORK/slo-metrics.js" --repo "$REPO" --window "$WINDOW" \
+            --format json --out slo-metrics.json --dump-input slo-input.json
+          node "$WORK/slo-metrics.js" --input slo-input.json --window "$WINDOW" \
+            --format prometheus --out slo-metrics.prom
+          node "$WORK/slo-metrics.js" --input slo-input.json --window "$WINDOW" \
+            --format markdown --github-summary >/dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-sdlc-slo-metrics
+          path: |
+            slo-metrics.json
+            slo-metrics.prom
+            slo-input.json
+          retention-days: 90
+          if-no-files-found: error
