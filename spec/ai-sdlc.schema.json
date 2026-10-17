@@ -932,6 +932,11 @@
           "$ref": "#/$defs/engine_id",
           "default": "scc"
         },
+        "pin": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{40}|v?[0-9]+\\.[0-9]+\\.[0-9]+([-.][0-9A-Za-z.-]+)?)$",
+          "description": "Engine source pin (issue #117): the immutable ref the runtime fetches when it builds the engine from source — a full 40-char commit SHA or a semver tag (vX.Y.Z). Mutable refs (branch names, HEAD) are rejected at contract validation: whatever the ref resolves to runs beside minted App tokens and provider credentials. Unset resolves to the runtime-pinned default."
+        },
         "max_steps": {
           "type": "integer",
           "minimum": 10,

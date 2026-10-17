@@ -341,6 +341,38 @@ describe('per-stage engine selection (issue #205)', () => {
     assert.strictEqual(r.valid, false);
   });
 
+  it('constrains engine.pin to immutable refs — commit SHA or semver tag (issue #117)', { skip: !HAS_PY }, () => {
+    for (const ref of ['8430737505d306c3edf921eb5a1aa8a7ddfb4d77', 'v0.3.3', '1.2.3-rc.1']) {
+      const r = schemaValidate({ spec: '1.0.0', engine: { pin: ref } });
+      assert.ok(r.valid, `immutable ref ${ref} must validate: ${r.errors}`);
+    }
+    for (const ref of ['main', 'HEAD', 'feature/foo', 'v0.3', '8430737']) {
+      const r = schemaValidate({ spec: '1.0.0', engine: { pin: ref } });
+      assert.strictEqual(r.valid, false, `mutable/invalid ref ${ref} must be rejected`);
+    }
+  });
+
+  it('emits the resolved engine.pin — contract wins, then the runtime-pinned default', { skip: !HAS_PY }, () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-sdlc-resolve-'));
+    const input = path.join(dir, 'in.json');
+    fs.writeFileSync(input, JSON.stringify({ spec: '1.0.0' }));
+    const r = spawnSync('python3', [RESOLVER, '--input', input, '--out-dir', dir], { encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, `resolve.py failed: ${r.stderr}`);
+    const contract = JSON.parse(fs.readFileSync(path.join(dir, 'contract.json'), 'utf8'));
+    // The default is a 40-char commit SHA — never a branch name.
+    assert.match(contract.engine.pin, /^[0-9a-f]{40}$/);
+    assert.strictEqual(contract._sources['engine.pin'], 'default');
+
+    const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-sdlc-resolve-'));
+    const input2 = path.join(dir2, 'in.json');
+    fs.writeFileSync(input2, JSON.stringify({ spec: '1.0.0', engine: { pin: 'v0.3.3' } }));
+    const r2 = spawnSync('python3', [RESOLVER, '--input', input2, '--out-dir', dir2], { encoding: 'utf8' });
+    assert.strictEqual(r2.status, 0, `resolve.py failed: ${r2.stderr}`);
+    const contract2 = JSON.parse(fs.readFileSync(path.join(dir2, 'contract.json'), 'utf8'));
+    assert.strictEqual(contract2.engine.pin, 'v0.3.3');
+    assert.strictEqual(contract2._sources['engine.pin'], 'contract');
+  });
+
   it('resolves the parsed structure and the engine.name → scc fallback (load-config)', { skip: !HAS_PY }, () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-sdlc-resolve-'));
     const input = path.join(dir, 'in.json');

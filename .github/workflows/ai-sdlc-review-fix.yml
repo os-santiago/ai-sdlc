@@ -249,6 +249,7 @@ jobs:
         uses: os-santiago/ai-sdlc/.github/actions/bootstrap-scc@main
         with:
           model: ${{ inputs.resolved_model }}
+          pin: ${{ steps.contract.outputs.engine_pin }}
           provider-base-url: ${{ inputs.provider_base_url || vars.AI_SDLC_PROVIDER_URL || 'https://models.github.ai/inference' }}
           model-api-key: ${{ secrets.MODEL_API_KEY }}
           models-token: ${{ secrets.GITHUB_TOKEN }}

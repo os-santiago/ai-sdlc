@@ -198,6 +198,9 @@ model:
 
 engine:
   name: scc                    # sc-agent-cli — the certified reference engine
+  # pin: <sha-or-vX.Y.Z>       # optional engine source pin — unset resolves to
+                               # the runtime-pinned default (issue #117); branch
+                               # names are rejected — immutable refs only
   max_steps: 200
   max_seconds: 900
 
