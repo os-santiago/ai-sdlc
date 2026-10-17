@@ -1,0 +1,17 @@
+# .gitleaksignore — fingerprints of known, triaged gitleaks findings.
+# gitleaks auto-loads this file from the repo root on every `git`/`dir`
+# scan; a finding whose fingerprint is listed here is suppressed.
+#
+# Rules (docs/security/baseline-scan.md is the human-facing register):
+#   - every fingerprint below MUST be triaged there with a status of
+#     `false-positive` or `historical-revoked` — never suppress a live
+#     credential; rotate it instead
+#   - fingerprints embed the commit SHA — the same secret re-committed in
+#     a NEW commit is a NEW finding and fails the gate, as it should
+#
+# Baseline of the one-time full-history scan (issue #125): 4 findings,
+# all synthetic test fixtures — see docs/security/baseline-scan.md.
+24ef86baa1bde6249b27ba07d2b62dab3adf3855:scripts/injection_defense.test.js:private-key:123
+bffb60238b6ab08f398cde166f29b962356f52e7:scripts/injection_defense.test.js:private-key:123
+bfdeee1638b1aa49466de4d1139541aafb545f24:scripts/risk-classifier.test.js:generic-api-key:125
+e54412ba8a62e920eb31520a0497832c0555737e:scripts/risk-classifier.test.js:generic-api-key:125
