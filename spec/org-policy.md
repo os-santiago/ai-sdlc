@@ -17,7 +17,8 @@ Three layers, in precedence order (lowest → highest):
 
 Resolution is **field-level merge**: for each top-level section
 (`autonomy`, `triggers`, `verify`, `review`, `merge`, `model`, `engine`,
-`escalation`, `labels`), each leaf field resolves to the value from the
+`engines`, `escalation`, `labels`), each leaf field resolves to the value
+from the
 highest layer that sets it. Absent fields inherit downward; a field is
 never "deleted" by a lower-precedence absence.
 

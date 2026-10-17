@@ -59,6 +59,7 @@ DEFAULTS = {
     },
     "model": {"primary": "auto/best-coding", "fallback": None, "routing_hints": {}},
     "engine": {"name": "scc", "max_steps": 200, "max_seconds": 900, "flags": []},
+    "engines": {},
     "escalation": {"label": "needs-human", "contacts": [], "notify_channels": []},
 }
 
@@ -151,6 +152,46 @@ def union_list(base, extra):
     return list(dict.fromkeys(list(base or []) + list(extra or [])))
 
 
+def normalize_engines(sections, source):
+    """Flatten an `engines` section to a plain stage → engine-id map.
+
+    The schema accepts two equivalent forms per stage — the shorthand
+    `implement: devin` and the stage-definition object
+    `implement: {engine: devin}` — and guarantees every key is a known
+    stage and every id a certified adapter. Resolution flattens both to
+    `engines.<stage> = <id>` so each key merges layer-wise as a scalar
+    and dispatch (issue #206) reads one shape. A stage without an entry
+    falls back to `engine.name` (default `scc`).
+
+    Mutates nothing: writes the flattened map back onto `sections`.
+    """
+    raw = sections.get("engines")
+    if raw is None:
+        return
+    if not isinstance(raw, dict):
+        raise ContractError(f"engines: expected a stage → engine map ({source})")
+    flat = {}
+    for stage, val in raw.items():
+        if isinstance(val, dict):
+            val = val.get("engine")
+        if not isinstance(val, str) or not val.strip():
+            raise ContractError(
+                f"engines.{stage}: expected a certified engine id string or an "
+                f"{{engine: <id>}} stage definition ({source})")
+        flat[stage] = val.strip()
+    sections["engines"] = flat
+
+
+def stage_engine(contract, stage):
+    """Resolved engine id for a pipeline stage: engines.<stage> wins,
+    then the global engine.name, which itself defaults to `scc`."""
+    engines = contract.get("engines") or {}
+    entry = engines.get(stage)
+    if isinstance(entry, dict):
+        entry = entry.get("engine")
+    return entry or (contract.get("engine") or {}).get("name") or "scc"
+
+
 def min_level(a, b):
     if a not in AUTONOMY_ORDER:
         return b
@@ -188,6 +229,7 @@ def resolve(repo_cfg, overrides, org_cfg=None):
     if org_cfg:
         pin_set = set((org_cfg.get("policy_floor") or {}).get("pin") or [])
         org_sections = {k: v for k, v in org_cfg.items() if k not in META_KEYS}
+        normalize_engines(org_sections, "org baseline")
         org_set = set(leaf_paths(org_sections))
         merge_layer(result, sources, org_sections, "org")
 
@@ -196,6 +238,7 @@ def resolve(repo_cfg, overrides, org_cfg=None):
             result[key] = copy.deepcopy(repo_cfg[key])
 
     sections = {k: v for k, v in repo_cfg.items() if k not in META_KEYS}
+    normalize_engines(sections, "repo contract")
     for path in leaf_paths(sections):
         _, value = get_path(sections, path)
         pinned = path in pin_set and path in org_set

@@ -65,6 +65,13 @@ resolves it before acting:
 | automerge | `merge.max_repairs`, `merge.pending_max_minutes`, `merge.skip_labels`, `merge.method`, `review.mode`, `review.wait_max_minutes`, `review.external_reviewer`, `escalation.label` | `max_repairs`, `pending_max_minutes`, `merge_method`, `review_wait_minutes` |
 | verify | `verify.commands` | `verify_commands` |
 
+The top-level `engines` map (issue #205) selects the certified adapter a
+stage dispatches to — `engines.<stage>` may be a bare engine id or a
+stage-definition object `{engine: <id>}`; both normalize to the same
+resolved value in `contract.json`. A stage without an entry falls back to
+`engine.name` (default `scc`). Stage dispatch to non-`scc` engines lands
+with issue #206; until then the field is contract surface only.
+
 `review.ai_reviewer.model` resolves to `model.primary` when unset **or**
 when it names an OmniRoute route (`auto/*`, `devin/*`) — those are Hermes
 control-plane only and unreachable from GHA runners

@@ -95,8 +95,11 @@ declares `binary`, `probe`, `argvBuilder`, `configRenderer`,
 Runtime dispatch is still hardcoded to `scc` in the implement stage —
 the registry is the seam a multi-engine dispatcher binds to, and adding
 a descriptor is how a new engine registers without workflow changes.
-Once registered, a certified engine can be selected via `engine.name`
-in `.ai-sdlc.yaml`; omitted, the runtime defaults to `scc`.
+Once certified, an engine name is contract-valid — the schema's
+`$defs.engine_id` enum is the certification list — and once registered it
+can be selected globally via `engine.name` or per stage via the `engines`
+map (`engines.implement`, `engines.review`, …; issue #205); a stage
+without an entry falls back to `engine.name`, which defaults to `scc`.
 
 ## Conformance path — how a third-party engine certifies
 

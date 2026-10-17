@@ -114,7 +114,11 @@ Adding a descriptor registers a new engine without workflow changes.
 
 ## Example .ai-sdlc.yaml with Per-Stage Engine Selection
 
-The `.ai-sdlc.yaml` can specify an engine per stage using the `engine` field under an `engines` section:
+The `.ai-sdlc.yaml` selects an engine per stage via the top-level `engines`
+map (issue #205). Each stage entry is either the certified adapter id
+(shorthand) or a stage-definition object carrying an `engine` field — the
+object form leaves room for per-stage engine settings without a schema
+break:
 
 ```yaml
 spec: "1.0.0"
@@ -123,13 +127,22 @@ autonomy:
 
 engines:
   intake: scc
-  implement: my-third-party-engine   # <- third-party engine for implementation
+  implement:
+    engine: claude-code   # <- third-party engine for implementation
   ci-repair: scc
   automerge: scc
   verify: scc
 ```
 
-If omitted, the runtime defaults to `scc` for all stages.
+Known stage keys are `intake`, `implement`, `review`, `automerge`,
+`verify`, `ci-repair`, `sweep`; unknown stage keys and non-certified
+engine ids are rejected at contract validation. The engine ids the
+contract accepts are the certified adapter names declared in
+`spec/ai-sdlc.schema.json` (`$defs.engine_id`) — `scc`, `devin`,
+`claude-code`, `codex`, `openhands` — and a certified id still needs an
+adapter-registry entry before dispatch can run it. A stage without an
+`engines` entry falls back to the global `engine.name`, which itself
+defaults to `scc` (sc-agent-cli).
 
 ## References
 

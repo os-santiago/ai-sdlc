@@ -8,6 +8,39 @@
   "required": [
     "spec"
   ],
+  "$defs": {
+    "engine_id": {
+      "type": "string",
+      "enum": [
+        "scc",
+        "devin",
+        "claude-code",
+        "codex",
+        "openhands"
+      ],
+      "description": "Certified adapter identifier (epic #152). `scc` is the sc-agent-cli reference engine; the remaining ids certify through the conformance suite in docs/engine_contract.md. A certified id still needs a config/engine_adapters.json entry before a stage can dispatch to it — the contract certifies names, the registry implements them. Unknown values are rejected here, not at dispatch time."
+    },
+    "stage_engine": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/engine_id"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "engine"
+          ],
+          "properties": {
+            "engine": {
+              "$ref": "#/$defs/engine_id"
+            }
+          },
+          "description": "Stage-definition form: `engine` selects the certified adapter for the stage. An object (not a bare id) so per-stage engine overrides can grow fields without a schema break."
+        }
+      ]
+    }
+  },
   "properties": {
     "spec": {
       "type": "string",
@@ -359,10 +392,10 @@
     "engine": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Engine invocation contract (sc-agent-cli today; any tool honoring the headless contract).",
+      "description": "Engine invocation contract (sc-agent-cli today; any tool honoring the headless contract). `name` is the global default engine — per-stage selection lives in `engines`.",
       "properties": {
         "name": {
-          "type": "string",
+          "$ref": "#/$defs/engine_id",
           "default": "scc"
         },
         "max_steps": {
@@ -381,6 +414,34 @@
             "type": "string"
           },
           "description": "Extra headless flags (e.g. --no-commit --audit-log --summary-file --prompt-file)."
+        }
+      }
+    },
+    "engines": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-stage engine selection (issue #205; docs/engine_contract.md): stage → certified adapter. Both `implement: devin` (shorthand) and `implement: {engine: devin}` (stage-definition form) are accepted and normalize to the same resolved value. A stage without an entry falls back to `engine.name`, which itself defaults to `scc` (sc-agent-cli). Unknown stage keys and non-certified engine ids are rejected.",
+      "properties": {
+        "intake": {
+          "$ref": "#/$defs/stage_engine"
+        },
+        "implement": {
+          "$ref": "#/$defs/stage_engine"
+        },
+        "review": {
+          "$ref": "#/$defs/stage_engine"
+        },
+        "automerge": {
+          "$ref": "#/$defs/stage_engine"
+        },
+        "verify": {
+          "$ref": "#/$defs/stage_engine"
+        },
+        "ci-repair": {
+          "$ref": "#/$defs/stage_engine"
+        },
+        "sweep": {
+          "$ref": "#/$defs/stage_engine"
         }
       }
     },
