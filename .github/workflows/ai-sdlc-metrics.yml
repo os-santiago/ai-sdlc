@@ -75,7 +75,7 @@ jobs:
         id: metrics-fetch
         env:
           GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
-        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
         with:
           files: scripts/slo-metrics.js
           ref: ${{ inputs.runtime_ref || 'main' }}

@@ -95,7 +95,7 @@ jobs:
       # Fail-closed: an unreadable channel denies too.
       - name: Autonomy gate — org kill-switch
         id: kill
-        uses: os-santiago/ai-sdlc/.github/actions/autonomy-gate@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/autonomy-gate@main
         with:
           repo: ${{ inputs.repo }}
           kill-var: ${{ vars.AI_SDLC_KILL }}
@@ -116,7 +116,7 @@ jobs:
       - name: Mint ai-sdlc App installation token
         id: app-token
         if: ${{ !cancelled() }}
-        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@main
         continue-on-error: true
         with:
           repo: ${{ inputs.repo }}
@@ -156,7 +156,7 @@ jobs:
         id: refine-fetch
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
-        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
         with:
           files: scripts/intake-refiner.js
           ref: ${{ inputs.runtime_ref }}
@@ -217,7 +217,7 @@ jobs:
         id: dup-fetch
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
-        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
         with:
           files: scripts/dup-detector.js
           ref: ${{ inputs.runtime_ref }}
@@ -275,7 +275,7 @@ jobs:
         if: steps.epic.outputs.is_epic == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
-        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
         with:
           files: scripts/epic-decomposer.js
           ref: ${{ inputs.runtime_ref }}
@@ -388,7 +388,7 @@ jobs:
         id: seal
         if: always() && steps.ledger.outputs.head != ''
         continue-on-error: true
-        uses: os-santiago/ai-sdlc/.github/actions/seal-ledger@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/seal-ledger@main
         with:
           stage: intake
           signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}

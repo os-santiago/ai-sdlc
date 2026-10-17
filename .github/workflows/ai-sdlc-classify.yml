@@ -87,7 +87,7 @@ jobs:
     steps:
       - name: Verify credentials + mint ai-sdlc App token
         id: app-token
-        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@main
         with:
           repo: ${{ inputs.repo }}
           app-id: ${{ secrets.AI_SDLC_APP_ID }}
@@ -106,7 +106,7 @@ jobs:
         id: eval-fetch
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
         with:
           files: scripts/risk-classifier.js
           ref: ${{ inputs.runtime_ref }}
@@ -119,7 +119,7 @@ jobs:
         if: steps.eval-fetch.outputs.fetched == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
         with:
           files: scripts/dep-update.js
           ref: ${{ inputs.runtime_ref }}

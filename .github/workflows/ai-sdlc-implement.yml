@@ -141,7 +141,7 @@ jobs:
       # is only ever exported to deterministic post-script steps.
       - name: Verify credentials + mint read-scoped forge token (engine boundary)
         id: app-token-read
-        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@main
         with:
           repo: ${{ inputs.repo }}
           app-id: ${{ secrets.AI_SDLC_APP_ID }}
@@ -159,7 +159,7 @@ jobs:
         id: kill
         env:
           GH_TOKEN: ${{ steps.app-token-read.outputs.token }}
-        uses: os-santiago/ai-sdlc/.github/actions/autonomy-gate@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/autonomy-gate@main
         with:
           repo: ${{ inputs.repo }}
           kill-var: ${{ vars.AI_SDLC_KILL }}
@@ -205,7 +205,7 @@ jobs:
         id: stage-engine-fetch
         env:
           GH_TOKEN: ${{ steps.app-token-read.outputs.token }}
-        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
         with:
           files: |
             scripts/engine_adapter.js
@@ -236,7 +236,7 @@ jobs:
 
       - name: Bootstrap scc engine (build + provider config)
         if: steps.stage-engine.outputs.engine == 'scc'
-        uses: os-santiago/ai-sdlc/.github/actions/bootstrap-scc@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/bootstrap-scc@main
         with:
           model: ${{ steps.contract.outputs.model_primary }}
           provider-base-url: ${{ inputs.provider_base_url || vars.AI_SDLC_PROVIDER_URL || 'https://models.github.ai/inference' }}
@@ -250,7 +250,7 @@ jobs:
         id: sanitize-fetch
         env:
           GH_TOKEN: ${{ steps.app-token-read.outputs.token }}
-        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
         with:
           files: scripts/injection_defense.js
           ref: ${{ inputs.runtime_ref || 'main' }}
@@ -331,7 +331,7 @@ jobs:
         id: stall-fetch
         env:
           GH_TOKEN: ${{ steps.app-token-read.outputs.token }}
-        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
         with:
           files: scripts/stall-classifier.js
           ref: ${{ inputs.runtime_ref || 'main' }}
@@ -592,7 +592,7 @@ jobs:
         # always(): the early-exit contract-error post-script below also
         # needs the write token when the engine never ran.
         if: always() && steps.app-token-read.outputs.owner != ''
-        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@main
         with:
           repo: ${{ inputs.repo }}
           app-id: ${{ secrets.AI_SDLC_APP_ID }}
@@ -687,7 +687,7 @@ jobs:
         id: apply-fetch
         env:
           GH_TOKEN: ${{ steps.app-token-read.outputs.token }}
-        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
         with:
           files: scripts/apply-patch.js
           ref: ${{ env.AI_SDLC_RUNTIME_REF || 'main' }}
@@ -905,7 +905,7 @@ jobs:
         id: seal
         if: always() && steps.ledger.outputs.head != ''
         continue-on-error: true
-        uses: os-santiago/ai-sdlc/.github/actions/seal-ledger@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/seal-ledger@main
         with:
           stage: implement
           signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
