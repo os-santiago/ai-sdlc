@@ -17,35 +17,56 @@
         "shell": "never",
         "note": "Each {name} token occupies a whole argv element and MUST be replaced atomically with the validated value as one element (no re-splitting, no globbing, no shell joining). Unknown placeholders must be rejected, not substituted.",
         "placeholders": {
-          "model": {
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$",
+          "promptFile": {
+            "pattern": "^/?[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$",
             "required": true
           },
-          "prompt": {
-            "pattern": "^[^\\u0000]{1,65536}$",
+          "auditLog": {
+            "pattern": "^/?[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$",
             "required": true
           },
           "manifestFile": {
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$",
+            "pattern": "^/?[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$",
+            "required": true
+          },
+          "maxSeconds": {
+            "pattern": "^(0|[1-9][0-9]{0,9})$",
+            "required": true
+          },
+          "maxSteps": {
+            "pattern": "^(0|[1-9][0-9]{0,9})$",
             "required": true
           }
         }
       },
       "args": [
-        "--model",
-        "{model}",
-        "--prompt",
-        "{prompt}",
-        "--manifest",
+        "-yq",
+        "--prompt-file",
+        "{promptFile}",
+        "--no-commit",
+        "--audit-log",
+        "{auditLog}",
+        "--summary-file",
         "{manifestFile}",
-        "--format",
-        "json"
+        "--max-seconds",
+        "{maxSeconds}",
+        "--max-steps",
+        "{maxSteps}"
       ]
     },
     "configRenderer": {
       "format": "json",
-      "path": "{manifestFile}"
+      "path": "~/.sc-agent/config.json"
     },
+    "dispatch": {
+      "rawExitCodes": true,
+      "note": "The pipeline acts on the raw scc exit taxonomy (0 ok · 10 no-changes · 20 provider · 21 auth · 22 budget · 23 livelock) — e.g. the one-shot model-fallback on 20/21 — so dispatch returns the engine's raw code instead of the exitCodeMap-normalized 0/1. classifyExitCode()/mapExitCode() remain available for canonical classification."
+    },
+    "envPassthrough": [
+      "SC_PROVIDER_CONNECT_TIMEOUT_MS",
+      "SC_PROVIDER_ATTEMPT_TIMEOUT_MS",
+      "SC_FAILOVER"
+    ],
     "exitCodeMap": {
       "0": "Success",
       "10": "ValidationError",

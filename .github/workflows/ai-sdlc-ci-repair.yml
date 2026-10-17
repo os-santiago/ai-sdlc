@@ -609,11 +609,11 @@ jobs:
           SC_FAILOVER: 'nvidia/nemotron-3-ultra-550b-a55b,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'
         run: |
           set +e
+          ENGINE_DIR="$RUNNER_TEMP/ai-sdlc-engine"
           if [ "${STAGE_ENGINE:-scc}" != "scc" ]; then
             # Stage dispatch (issue #206): non-scc adapter selected for
             # ci-repair — invoke through the registry argv contract. Exit
             # code is already adapter-mapped by the resolver.
-            ENGINE_DIR="$RUNNER_TEMP/ai-sdlc-engine"
             node "$ENGINE_DIR/scripts/gha/stage-engine-resolver.js" \
               --stage ci-repair \
               --contract "$RUNNER_TEMP/ai-sdlc-contract/contract.json" \
@@ -625,15 +625,31 @@ jobs:
               --manifest "$WORK/engine-manifest.json"
             code=$?
           else
+          # scc dispatch (issue #228): same registry argv contract — the scc
+          # descriptor builds the tuned `scc chat -yq` headless argv and
+          # declares dispatch.rawExitCodes, so the engine's raw exit code
+          # reaches `code` (and the SC_* env knobs reach it via inherited env).
           # scc exit contract: 0 ok · 10 no-changes · 20 provider · 21 auth · 22 budget · 23 livelock
-          scc chat -yq \
-            --prompt-file "$WORK/repair-prompt.md" \
-            --no-commit \
-            --audit-log "$WORK/scc-audit.jsonl" \
-            --summary-file "$WORK/scc-manifest.json" \
-            --max-seconds "$MAX_SECONDS" \
-            --max-steps "$MAX_STEPS"
+          if [ ! -f "$ENGINE_DIR/scripts/gha/stage-engine-resolver.js" ]; then
+            # Resolve step degraded (resolver bundle unfetchable): no
+            # inline fallback — fail the run loudly instead of bypassing
+            # the adapter layer (issue #228).
+            echo "::error::stage-engine resolver bundle unavailable at $ENGINE_DIR — scc dispatch requires the registry adapter contract (issue #228)"
+            code=1
+          else
+          node "$ENGINE_DIR/scripts/gha/stage-engine-resolver.js" \
+            --stage ci-repair \
+            --contract "$RUNNER_TEMP/ai-sdlc-contract/contract.json" \
+            --registry "$ENGINE_DIR/config/engine_adapters.json" \
+            --required false \
+            --run \
+            --set "promptFile=$WORK/repair-prompt.md" \
+            --set "auditLog=$WORK/scc-audit.jsonl" \
+            --manifest "$WORK/scc-manifest.json" \
+            --set "maxSeconds=$MAX_SECONDS" \
+            --set "maxSteps=$MAX_STEPS"
           code=$?
+          fi
           fi
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0  # never fail the job here — outcome recorded below

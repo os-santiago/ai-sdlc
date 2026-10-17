@@ -19,6 +19,12 @@
 //   configRenderer        rendered-config descriptor (engine's config surface)
 //   exitCodeMap           engine exit code -> pipeline classification (+ "default")
 //   manifestMap           run-manifest descriptor (path + format)
+//   dispatch              dispatch-time options (rawExitCodes: return the
+//                         engine's raw exit code instead of the mapped 0/1 —
+//                         for engines whose exit taxonomy the pipeline acts
+//                         on directly, like scc's 10/20/21/22/23 contract)
+//   envPassthrough        env var names the engine honors (inherited env —
+//                         declared so no engine knob stays hidden config)
 //   getBinary()           {ENGINE}_BINARY env override (trimmed) ?? binary
 //   buildArgv(values)     validated placeholder substitution -> [command, ...args]
 //   probeCapabilities()   -> capabilities
@@ -184,6 +190,28 @@ class EngineAdapterResolver {
         fail(`${key} must be an object`);
       }
     }
+
+    // dispatch: optional dispatch-time options. rawExitCodes tells the
+    // dispatch path to surface the engine's raw exit code (the caller
+    // interprets the engine's own taxonomy) rather than the mapped 0/1.
+    if (d.dispatch !== undefined) {
+      if (typeof d.dispatch !== 'object' || d.dispatch === null || Array.isArray(d.dispatch)) {
+        fail('dispatch must be an object');
+      }
+      if (d.dispatch.rawExitCodes !== undefined && typeof d.dispatch.rawExitCodes !== 'boolean') {
+        fail('dispatch.rawExitCodes must be a boolean');
+      }
+    }
+    // envPassthrough: optional list of env var names the engine consumes —
+    // dispatch inherits the caller's environment; the declaration keeps
+    // engine-specific knobs (e.g. scc's SC_* timeouts/failover) visible in
+    // the registry instead of hidden config.
+    if (d.envPassthrough !== undefined) {
+      if (!Array.isArray(d.envPassthrough)
+          || d.envPassthrough.some((e) => typeof e !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(e))) {
+        fail('envPassthrough must be an array of env var names');
+      }
+    }
   }
 
   /**
@@ -281,6 +309,8 @@ class EngineAdapterResolver {
       configRenderer: d.configRenderer,
       exitCodeMap: d.exitCodeMap,
       manifestMap: d.manifestMap,
+      dispatch: d.dispatch || {},
+      envPassthrough: d.envPassthrough || [],
 
       getBinary() {
         // {ENGINE}_BINARY override; trim — stray whitespace makes spawn fail ENOENT.

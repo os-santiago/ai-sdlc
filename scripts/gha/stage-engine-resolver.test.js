@@ -195,15 +195,72 @@ test('dispatch invokes the stage-selected adapter with its contract argv', () =>
   assert.equal(calls[1].cmd, 'openhands');
 
   // A stage without an entry dispatches the global engine (scc) — fallback
-  // path also goes through dispatch, not just resolution.
+  // path also goes through dispatch, not just resolution. The scc argv is
+  // the tuned headless contract call (issue #228).
   const fallback = dispatchStageEngine(contract, 'sweep', {
     resolver: REGISTRY,
     spawnImpl: spawn,
-    values: { prompt: 'p', model: 'm', manifestFile: 'm.json' },
+    values: {
+      promptFile: 'task-prompt.md', auditLog: 'scc-audit.jsonl',
+      manifestFile: 'scc-manifest.json', maxSeconds: '900', maxSteps: '200',
+    },
   });
   assert.equal(fallback.engine, 'scc');
   assert.equal(calls[2].cmd, 'scc');
-  assert.deepEqual(calls[2].argv, ['chat', '--model', 'm', '--prompt', 'p', '--manifest', 'm.json', '--format', 'json']);
+  assert.deepEqual(calls[2].argv, [
+    'chat', '-yq',
+    '--prompt-file', 'task-prompt.md',
+    '--no-commit',
+    '--audit-log', 'scc-audit.jsonl',
+    '--summary-file', 'scc-manifest.json',
+    '--max-seconds', '900',
+    '--max-steps', '200',
+  ]);
+});
+
+test('scc dispatch argv is the tuned headless call, byte for byte (issue #228)', () => {
+  // Parity with the workflow's legacy inline invocation:
+  //   scc chat -yq --prompt-file task-prompt.md --no-commit \
+  //     --audit-log <a> --summary-file <m> --max-seconds <s> --max-steps <t>
+  const resolver = new EngineAdapterResolver(REGISTRY);
+  const adapter = resolver.getEngineAdapter('scc');
+  assert.deepEqual(
+    adapter.buildArgv({
+      promptFile: 'task-prompt.md',
+      auditLog: 'scc-audit.jsonl',
+      manifestFile: 'scc-manifest.json',
+      maxSeconds: '900',
+      maxSteps: '200',
+    }),
+    ['chat', '-yq',
+      '--prompt-file', 'task-prompt.md',
+      '--no-commit',
+      '--audit-log', 'scc-audit.jsonl',
+      '--summary-file', 'scc-manifest.json',
+      '--max-seconds', '900',
+      '--max-steps', '200']
+  );
+  // Absolute paths (RUNNER_TEMP work dirs) satisfy the path patterns.
+  assert.deepEqual(
+    adapter.buildArgv({
+      promptFile: '/tmp/ci-repair/repair-prompt.md',
+      auditLog: '/tmp/ci-repair/scc-audit.jsonl',
+      manifestFile: '/tmp/ci-repair/scc-manifest.json',
+      maxSeconds: '900',
+      maxSteps: '200',
+    })[3],
+    '/tmp/ci-repair/repair-prompt.md'
+  );
+  // The model is NOT an argv placeholder — it lives in the rendered
+  // config.json (engine's single source of truth); the fallback loop
+  // re-renders it instead of passing a flag.
+  assert.ok(!adapter.argvBuilder.args.includes('{model}'));
+  // The declared SC_* env knobs stay visible in the descriptor.
+  assert.deepEqual(adapter.envPassthrough, [
+    'SC_PROVIDER_CONNECT_TIMEOUT_MS',
+    'SC_PROVIDER_ATTEMPT_TIMEOUT_MS',
+    'SC_FAILOVER',
+  ]);
 });
 
 test('dispatch maps the engine exit code through the adapter exitCodeMap', () => {
@@ -218,6 +275,35 @@ test('dispatch maps the engine exit code through the adapter exitCodeMap', () =>
   assert.equal(r.engineExitCode, 10);
   assert.equal(r.classification, 'NoChanges');
   assert.equal(r.exitCode, 1);
+});
+
+test('scc dispatch surfaces the raw engine exit code — the fallback taxonomy (issue #228)', () => {
+  // dispatch.rawExitCodes on the scc descriptor keeps the engine's own
+  // exit contract visible to the caller: 20/21 earn the one-shot model
+  // fallback, 10 is no-changes — none may be flattened to a mapped 1.
+  const contract = { spec: '1.0.0', engine: { name: 'scc' }, engines: { implement: 'scc' } };
+  const values = {
+    promptFile: 'p.md', auditLog: 'a.jsonl', manifestFile: 'm.json',
+    maxSeconds: '60', maxSteps: '10',
+  };
+  for (const raw of [0, 10, 20, 21, 22, 23, 24, 1]) {
+    const r = dispatchStageEngine(contract, 'implement', {
+      resolver: REGISTRY,
+      spawnImpl: () => ({ status: raw }),
+      values,
+    });
+    assert.equal(r.engine, 'scc');
+    assert.equal(r.engineExitCode, raw);
+    assert.equal(r.exitCode, raw, `raw exit code ${raw} must pass through unmapped`);
+  }
+  const r10 = dispatchStageEngine(contract, 'implement', {
+    resolver: REGISTRY, spawnImpl: () => ({ status: 10 }), values,
+  });
+  assert.equal(r10.classification, 'ValidationError');
+  const r21 = dispatchStageEngine(contract, 'implement', {
+    resolver: REGISTRY, spawnImpl: () => ({ status: 21 }), values,
+  });
+  assert.equal(r21.classification, 'AgentFailedError');
 });
 
 test('dispatch treats a missing binary (spawn error) as an adapter failure, never success', () => {
@@ -404,4 +490,72 @@ test('CLI --run invokes the adapter binary with registry argv and maps the exit 
   );
   assert.equal(r.status, 1);
   assert.match(r.stdout + r.stderr, /failed to spawn/);
+});
+
+test('CLI --run scc dispatches the tuned argv and exits with the raw engine code (issue #228)', () => {
+  const dir = tmpdir();
+  // Fake scc binary: records argv, then exits per FAKE_SCC_EXIT. Exercised
+  // through the {ENGINE}_BINARY override on the CANONICAL registry — the
+  // descriptor under test is the shipped scc adapter, not a fixture.
+  const fake = path.join(dir, 'fake-scc');
+  fs.writeFileSync(fake, [
+    '#!/usr/bin/env node',
+    "require('fs').writeFileSync(process.env.FAKE_SCC_ARGV_OUT, JSON.stringify(process.argv.slice(2)));",
+    'process.exit(Number(process.env.FAKE_SCC_EXIT || 0));',
+    '',
+  ].join('\n'));
+  fs.chmodSync(fake, 0o755);
+  const contract = writeJson(dir, 'contract.json', {
+    spec: '1.0.0', engine: { name: 'scc' }, engines: { implement: 'scc' },
+  });
+  const argvOut = path.join(dir, 'argv.json');
+  const ghOut = path.join(dir, 'gh-output');
+  fs.writeFileSync(ghOut, '');
+  const args = [
+    '--stage', 'implement', '--contract', contract, '--registry', REGISTRY,
+    '--run',
+    '--set', 'promptFile=task-prompt.md',
+    '--set', 'auditLog=scc-audit.jsonl',
+    '--manifest', 'scc-manifest.json',
+    '--set', 'maxSeconds=900',
+    '--set', 'maxSteps=200',
+  ];
+  const env = { SCC_BINARY: fake, FAKE_SCC_ARGV_OUT: argvOut, GITHUB_OUTPUT: ghOut };
+
+  // The workflow's legacy inline call, argv for argv:
+  //   scc chat -yq --prompt-file task-prompt.md --no-commit \
+  //     --audit-log scc-audit.jsonl --summary-file scc-manifest.json \
+  //     --max-seconds 900 --max-steps 200
+  let r = runCli(args, { ...env, FAKE_SCC_EXIT: '0' });
+  assert.equal(r.status, 0, `${r.stdout}${r.stderr}`);
+  assert.deepEqual(JSON.parse(fs.readFileSync(argvOut, 'utf8')), [
+    'chat', '-yq',
+    '--prompt-file', 'task-prompt.md',
+    '--no-commit',
+    '--audit-log', 'scc-audit.jsonl',
+    '--summary-file', 'scc-manifest.json',
+    '--max-seconds', '900',
+    '--max-steps', '200',
+  ]);
+
+  // Raw-exit dispatch: the engine's own taxonomy reaches the caller —
+  // 10 no-changes and 20 provider-failure (the fallback trigger) must NOT
+  // collapse to the mapped 1.
+  for (const code of ['10', '20']) {
+    r = runCli(args, { ...env, FAKE_SCC_EXIT: code });
+    assert.equal(r.status, Number(code), `expected raw exit ${code}, got ${r.status}: ${r.stdout}${r.stderr}`);
+  }
+  r = runCli(args, { ...env, FAKE_SCC_EXIT: '20' });
+  assert.match(r.stdout, /classification=AgentError/);
+  assert.match(fs.readFileSync(ghOut, 'utf8'), /^exit_code=20$/m);
+  assert.match(fs.readFileSync(ghOut, 'utf8'), /^engine_exit_code=20$/m);
+
+  // A missing placeholder fails before spawn (bounded contract) — never
+  // substitutes garbage argv.
+  r = runCli(
+    ['--stage', 'implement', '--contract', contract, '--registry', REGISTRY,
+      '--run', '--set', 'promptFile=task-prompt.md'],
+    { SCC_BINARY: fake, FAKE_SCC_ARGV_OUT: argvOut }
+  );
+  assert.equal(r.status, 1);
 });

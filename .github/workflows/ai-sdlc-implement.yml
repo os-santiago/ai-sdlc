@@ -408,21 +408,38 @@ jobs:
             fallback_reason=""
             fallback_exit=""
           else
+          # scc dispatch (issue #228): argv comes from the registry adapter
+          # contract — the scc descriptor builds the tuned `scc chat -yq`
+          # headless argv and declares dispatch.rawExitCodes, so the
+          # resolver exits with the engine's raw code and the SC_* env knobs
+          # reach it through the inherited environment.
           # scc exit contract: 0 ok · 10 no-changes · 20 provider · 21 auth · 22 budget · 23 livelock
           # Only 20/21 earn exactly ONE fallback run; every other code is final.
           CONFIG="$HOME/.sc-agent/config.json"
           run_engine() {  # $1 audit log · $2 run manifest — own max-seconds/max-steps per run
-            scc chat -yq \
-              --prompt-file task-prompt.md \
-              --no-commit \
-              --audit-log "$1" \
-              --summary-file "$2" \
-              --max-seconds "$MAX_SECONDS" \
-              --max-steps "$MAX_STEPS"
+            node "$ENGINE_DIR/scripts/gha/stage-engine-resolver.js" \
+              --stage implement \
+              --contract "$RUNNER_TEMP/ai-sdlc-contract/contract.json" \
+              --registry "$ENGINE_DIR/config/engine_adapters.json" \
+              --run \
+              --set promptFile=task-prompt.md \
+              --set "auditLog=$1" \
+              --manifest "$2" \
+              --set "maxSeconds=$MAX_SECONDS" \
+              --set "maxSteps=$MAX_STEPS"
           }
 
-          run_engine scc-audit.jsonl scc-manifest.json
-          primary_exit=$?
+          if [ ! -f "$ENGINE_DIR/scripts/gha/stage-engine-resolver.js" ]; then
+            # Resolve step degraded (resolver bundle unfetchable): scc now
+            # dispatches through the registry contract, so there is no
+            # inline fallback — fail the run loudly instead of bypassing
+            # the adapter layer.
+            echo "::error::stage-engine resolver bundle unavailable at $ENGINE_DIR — scc dispatch requires the registry adapter contract (issue #228)"
+            primary_exit=1
+          else
+            run_engine scc-audit.jsonl scc-manifest.json
+            primary_exit=$?
+          fi
           exit_code=$primary_exit
           model="$PRIMARY_MODEL"
           fallback_used=false

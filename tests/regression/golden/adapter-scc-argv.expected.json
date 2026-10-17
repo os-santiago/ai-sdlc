@@ -1,13 +1,17 @@
 {
   "argv": [
     "chat",
-    "--model",
-    "claude-3-opus",
-    "--prompt",
-    "a;b c $(id)",
-    "--manifest",
-    "out/manifest.json",
-    "--format",
-    "json"
+    "-yq",
+    "--prompt-file",
+    "task-prompt.md",
+    "--no-commit",
+    "--audit-log",
+    "out/scc-audit.jsonl",
+    "--summary-file",
+    "out/scc-manifest.json",
+    "--max-seconds",
+    "900",
+    "--max-steps",
+    "200"
   ]
 }

@@ -17,8 +17,9 @@
 #     --registry "$RUNNER_TEMP/ai-sdlc-engine/config/engine_adapters.json" \
 #     --run --model "$MODEL" --prompt-file <prompt> --manifest <manifest>
 #
-# (the --run exit code is already adapter-mapped via the registry's
-# exitCodeMap).
+# (the --run exit code is adapter-mapped via the registry's exitCodeMap —
+# or the engine's raw code when the descriptor declares
+# dispatch.rawExitCodes, as scc does for its 10/20/21 fallback taxonomy).
 name: ai-sdlc resolve-stage-engine
 description: Resolve the stage engine from .ai-sdlc.yaml engines and verify its adapter registration
 

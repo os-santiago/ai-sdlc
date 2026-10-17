@@ -116,20 +116,28 @@ test('every placeholder is declared and validated in the substitution contract',
 });
 
 test('placeholder validation patterns reject injection-shaped values where appropriate', () => {
-  // model and manifestFile are constrained tokens: they must not accept
-  // whitespace, quotes, or shell metacharacters that could split an argument.
+  // Constrained tokens (model ids, file paths) must not accept whitespace,
+  // quotes, or shell metacharacters that could split an argument. An
+  // adapter only gets tested on the constrained placeholders it declares —
+  // scc takes no model argv (the model lives in the rendered config.json,
+  // issue #228), and prompt-style free-text placeholders legitimately
+  // accept spaces as a single argv element.
+  const CONSTRAINED = ['model', 'manifestFile', 'promptFile', 'auditLog', 'maxSeconds', 'maxSteps'];
   for (const [name, adapter] of Object.entries(registry)) {
     const placeholders = adapter.argvBuilder.substitution.placeholders;
-    for (const key of ['model', 'manifestFile']) {
+    const declared = CONSTRAINED.filter((k) => placeholders[k]);
+    assert.ok(declared.length > 0, `${name} must declare at least one constrained placeholder`);
+    for (const key of declared) {
       const spec = placeholders[key];
-      assert.ok(spec, `${name} must declare "{${key}}"`);
       const re = new RegExp(spec.pattern);
       for (const hostile of ['a;rm -rf /', '$(id)', '`id`', 'a"b', 'a b', 'a\nb', 'a|b', 'a&b', 'a>b']) {
         assert.equal(re.test(hostile), false,
           `${name}: "{${key}}" pattern must reject ${JSON.stringify(hostile)}`);
       }
       // Legitimate values must still pass.
-      assert.equal(re.test(key === 'model' ? 'claude-3-opus' : 'path/to/manifest.json'), true,
+      const ordinary = { model: 'claude-3-opus', maxSeconds: '900', maxSteps: '200' }[key]
+        || 'path/to/manifest.json';
+      assert.equal(re.test(ordinary), true,
         `${name}: "{${key}}" pattern must accept ordinary values`);
     }
   }
@@ -248,18 +256,37 @@ test('resolver rejects malformed descriptors at load time', () => {
 });
 
 test('buildArgv substitutes placeholders atomically and prepends command', () => {
-  const adapter = getEngineAdapter('scc');
-  const argv = adapter.buildArgv({
+  // scc (issue #228): the tuned headless contract argv — the model stays
+  // out of argv (rendered config.json is the engine's source of truth).
+  const scc = getEngineAdapter('scc');
+  assert.deepEqual(scc.buildArgv({
+    promptFile: 'task-prompt.md',
+    auditLog: 'out/scc-audit.jsonl',
+    manifestFile: 'out/scc-manifest.json',
+    maxSeconds: '900',
+    maxSteps: '200',
+  }), [
+    'chat', '-yq',
+    '--prompt-file', 'task-prompt.md',
+    '--no-commit',
+    '--audit-log', 'out/scc-audit.jsonl',
+    '--summary-file', 'out/scc-manifest.json',
+    '--max-seconds', '900',
+    '--max-steps', '200',
+  ]);
+  // Atomicity on a free-text placeholder: a value with spaces/metachars
+  // must land as exactly ONE argv element.
+  const devin = getEngineAdapter('devin');
+  const argv = devin.buildArgv({
     model: 'claude-3-opus',
-    prompt: 'a;b c $(id)', // prompt pattern permits free text — must stay ONE argv element
+    prompt: 'a;b c $(id)',
     manifestFile: 'out/manifest.json',
   });
   assert.deepEqual(argv, [
-    'chat',
-    '--model', 'claude-3-opus',
+    'run',
     '--prompt', 'a;b c $(id)',
+    '--model', 'claude-3-opus',
     '--manifest', 'out/manifest.json',
-    '--format', 'json',
   ]);
 });
 
