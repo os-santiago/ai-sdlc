@@ -364,7 +364,7 @@ surface.
 | `repo`, `pr_number` | — | target PR |
 | `max_repairs` | `3` | attempts per PR before `needs-human` (mirror `.ai-sdlc.yaml` `merge.max_repairs`) |
 | `stall_max` | `3` | attempts tolerated per identical failing-check signature before `needs-human` (issue #190); `0` disables the stall guard |
-| `runtime_ref` | `main` | ref of `os-santiago/ai-sdlc` the stall guard (`scripts/repair-stall-guard.js`) is fetched from — pin to the same ref as the workflow; the script is never read from the PR head or consumer repo |
+| `runtime_ref` | `main` | ref of `os-santiago/ai-sdlc` the trusted runtime scripts (`scripts/repair-stall-guard.js`, `scripts/failure-runbook.js`) are fetched from — pin to the same ref as the workflow; the scripts are never read from the PR head or consumer repo |
 | `model` | `nvidia/nemotron-3-super-120b-a12b` | engine model id (provider-native) |
 | `provider_base_url` | `''` → `vars.AI_SDLC_PROVIDER_URL` → legacy default | OpenAI-compatible inference endpoint — see [Provider resolution](#provider-resolution) |
 | `max_seconds` / `max_steps` | `900` / `200` | engine budgets (same contract as implement) |
@@ -372,6 +372,7 @@ surface.
 | `max_failed_checks` | `5` | failing checks whose output enters the prompt |
 | `log_tail_lines` / `log_max_bytes` | `150` / `12000` | per-check log tail bounds |
 | `ledger_head` | `''` | upstream ledger head; empty = recover the `ai-sdlc:ledger-head` marker on the PR |
+| `runbook_max_bytes` | `1400` | byte cap on the injected runbook advisory (0 disables injection; issue #188) |
 
 Outputs: `action` (`repaired` \| `escalated` \| `skipped`), `reason` and
 `ledger_head`.
@@ -412,21 +413,28 @@ one attempt:
    attempt is recorded as `base-contract-error` and escalated immediately —
    the engine never runs, converting a guaranteed `no_changes` stall into
    an explicit cause (issue #255).
-5. **Repair** — checkout the PR head SHA (`persist-credentials: false`),
+5. **Runbook consult** — `scripts/failure-runbook.js` (fetched from the
+   `runtime_ref` pin, never the PR head) maps the failure signature onto
+   `docs/runbooks/failure_modes.md` — the consumer repo's base-ref copy
+   first, the runtime repo's bundled store as fallback. A known signature
+   prepends a bounded (`runbook_max_bytes`) advisory with the recorded
+   root cause + fix + prevention to the repair brief; a miss leaves the
+   brief byte-identical (issue #188).
+6. **Repair** — checkout the PR head SHA (`persist-credentials: false`),
    same `scc` build + `Configure scc engine provider` step as implement,
    headless run with `--prompt-file --no-commit --audit-log --summary-file
    --max-seconds --max-steps`.
-6. **Push** — real mutations (excluding `.github/workflows/`) are committed
+7. **Push** — real mutations (excluding `.github/workflows/`) are committed
    and pushed (non-force) to the PR head branch under the App installation
    token (`persist-credentials: false` + explicit auth header, so the token
    never reaches the workspace the engine reads); the new head re-runs CI,
    and the next red result triggers the next attempt.
-7. **Audit** — exactly one marker comment per attempt (attempt N/M, failing
-   checks, outcome, failure signature, run link) plus artifact
+8. **Audit** — exactly one marker comment per attempt (attempt N/M, failing
+   checks, outcome, failure signature, runbook hit, run link) plus artifact
    `ai-sdlc-ci-repair-<pr>-attempt-<n>` with `ci-repair-manifest.json`
-   (`failure: {signature, rootCause}` for future runbook matching), prompt,
-   audit log and engine manifest.
-8. **Escalate** — any attempt that cannot push a fix (engine no-op/failure,
+   (`failure: {signature, rootCause, runbookHit}`), prompt, audit log,
+   engine manifest and the runbook verdict (`runbook.json`).
+9. **Escalate** — any attempt that cannot push a fix (engine no-op/failure,
    push rejected, base-ref contract fault) labels `needs-human` with the
    cause immediately, since nothing would re-trigger the loop. Removing the
    label hands control back.

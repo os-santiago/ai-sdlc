@@ -5,6 +5,8 @@
 # repair attempt:
 #   guard (draft / skip-label / fork head / non-pipeline branch / budget)
 #   → failing check names + bounded log tails → repair prompt
+#   → runbook consult: a failure signature matching a known entry injects
+#     the recorded fix into the brief (issue #188); a miss adds no noise
 #   → scc headless on the PR head (same engine contract as implement)
 #   → commit + push to the PR head branch when there are real mutations
 #   → one marker comment per attempt (bounded audit trail on the PR)
@@ -62,7 +64,7 @@ on:
         type: number
         default: 3
       runtime_ref:
-        description: 'ref of os-santiago/ai-sdlc to fetch scripts/repair-stall-guard.js from — pin to the same ref as this workflow'
+        description: 'ref of os-santiago/ai-sdlc to fetch trusted runtime scripts (repair-stall-guard.js, failure-runbook.js) from — pin to the same ref as this workflow'
         type: string
         default: 'main'
       model:
@@ -103,6 +105,10 @@ on:
         description: 'upstream run-ledger chain head — seeds this stage entry prev; empty = recover the ai-sdlc:ledger-head marker on the PR (issue #196)'
         type: string
         default: ''
+      runbook_max_bytes:
+        description: 'byte cap on the injected runbook advisory (0 disables injection; issue #188)'
+        type: number
+        default: 1400
     outputs:
       action:
         description: 'repaired | escalated | skipped'
@@ -300,6 +306,7 @@ jobs:
           out('attempts', attempts);
           out('head_ref', pr.headRefName);
           out('head_sha', pr.headRefOid);
+          out('base_ref', pr.baseRefName);
           out('failing', names);
           out('stall_sig', stall.signature);
           out('stall_count', stall.count);
@@ -364,8 +371,11 @@ jobs:
           }
           const baseFault = baseFaultChecks.length > 0;
           const signature = crypto.createHash('sha256').update(sigParts.sort().join('\n')).digest('hex').slice(0, 16);
+          // signatureParts is the normalized match surface the runbook consult
+          // (issue #188) tests entry patterns against — bounded by
+          // max_failed_checks × 200 chars.
           fs.writeFileSync(`${W}/failure.json`, JSON.stringify({
-            signature, rootCause, baseFault, baseFaultChecks, checks: failing.map(f => f.name),
+            signature, signatureParts: sigParts, rootCause, baseFault, baseFaultChecks, checks: failing.map(f => f.name),
           }, null, 2));
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `base_fault=${baseFault}\n`);
 
@@ -386,6 +396,46 @@ jobs:
           fs.writeFileSync(`${W}/repair-prompt.md`, prompt);
           console.log(`signature=${signature} prompt_bytes=${Buffer.byteLength(prompt)}`);
           NODE
+
+      - name: Consult failure runbook (issue #188)
+        id: runbook
+        if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RUNTIME_REF: ${{ inputs.runtime_ref }}
+          BASE_REF: ${{ steps.guard.outputs.base_ref }}
+          RUNBOOK_MAX_BYTES: ${{ inputs.runbook_max_bytes }}
+        run: |
+          set -euo pipefail
+          echo '{"hit":false,"injected":false}' > "$WORK/runbook.json"
+          # Trusted code only: the lookup script comes from the runtime repo
+          # pin — never the PR head (same boundary as risk-classifier.js,
+          # issue #204). An unavailable pin degrades to a no-op consult.
+          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/failure-runbook.js?ref=$RUNTIME_REF" \
+              -H "Accept: application/vnd.github.raw" > "$WORK/failure-runbook.js" 2>/dev/null \
+              || ! node --check "$WORK/failure-runbook.js" 2>/dev/null; then
+            echo "::warning::failure-runbook.js unavailable at os-santiago/ai-sdlc@$RUNTIME_REF — repair continues without runbook injection"
+            exit 0
+          fi
+          # The store is DATA: consumer repo's BASE ref first (repo-local
+          # failure memory lands via reviewed merges — the PR head cannot
+          # forge its own advisory), runtime repo's bundled store as fallback.
+          if ! gh api "repos/$REPO/contents/docs/runbooks/failure_modes.md?ref=$BASE_REF" \
+              -H "Accept: application/vnd.github.raw" > "$WORK/runbook.md" 2>/dev/null; then
+            gh api "repos/os-santiago/ai-sdlc/contents/docs/runbooks/failure_modes.md?ref=$RUNTIME_REF" \
+              -H "Accept: application/vnd.github.raw" > "$WORK/runbook.md" 2>/dev/null || : > "$WORK/runbook.md"
+          fi
+          head -c 262144 "$WORK/runbook.md" > "$WORK/runbook.bounded.md" && mv "$WORK/runbook.bounded.md" "$WORK/runbook.md"
+          node "$WORK/failure-runbook.js" \
+            --runbook "$WORK/runbook.md" --context "$WORK/failure.json" \
+            --prompt-file "$WORK/repair-prompt.md" --max-bytes "$RUNBOOK_MAX_BYTES" \
+            --json > "$WORK/runbook.json" \
+            || echo '{"hit":false,"injected":false}' > "$WORK/runbook.json"
+          cat "$WORK/runbook.json"
+          {
+            echo "hit=$(jq -r '.hit // false' "$WORK/runbook.json")"
+            echo "entry=$(jq -r '.entry // ""' "$WORK/runbook.json")"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
@@ -513,6 +563,8 @@ jobs:
           try { failure = JSON.parse(fs.readFileSync(`${W}/failure.json`, 'utf8')); } catch (_) {}
           let engine = {};
           try { engine = JSON.parse(fs.readFileSync(`${W}/scc-manifest.json`, 'utf8')); } catch (_) {}
+          let runbook = {};
+          try { runbook = JSON.parse(fs.readFileSync(`${W}/runbook.json`, 'utf8')); } catch (_) {}
           const code = e.ENGINE_CODE || 'not-run';
           const baseFault = e.BASE_FAULT === 'true';
           let outcome;
@@ -525,7 +577,8 @@ jobs:
             pr: Number(e.PR), attempt: Number(e.ATTEMPT), maxRepairs: Number(e.MAX_REPAIRS),
             headSha: e.HEAD_SHA, commit: e.COMMIT || null, engineExitCode: code, outcome,
             failure: { signature: failure.signature, rootCause: failure.rootCause,
-                       baseFault: failure.baseFault || false, baseFaultChecks: failure.baseFaultChecks || [] },
+                       baseFault: failure.baseFault || false, baseFaultChecks: failure.baseFaultChecks || [],
+                       runbookHit: runbook.hit ? runbook.entry : null },
             failingChecks: failure.checks, engineToolCalls: engine.tool_calls_total ?? null, engineIterations: engine.iterations ?? null,
             run: e.RUN_URL,
           };
@@ -540,6 +593,9 @@ jobs:
             `- failure signature: \`${failure.signature || 'n/a'}\``,
             `- run: ${e.RUN_URL} (prompt, audit log + manifest in artifacts)`,
           ];
+          if (runbook.hit && runbook.entry) {
+            lines.push(`- runbook: \`${runbook.entry}\` — prior fix injected into the repair brief`);
+          }
           if (baseFault) lines.push('- diagnosis: `scc:config-error` in the failing check — the contract failed validation on the **base** ref (every stage resolves `.ai-sdlc.yaml` from base, never this head), so no push here can green the run. Escalated without spending an engine run.');
           fs.writeFileSync(`${W}/attempt-comment.md`, lines.join('\n') + '\n');
           fs.appendFileSync(e.GITHUB_OUTPUT, `outcome=${outcome}\n`);
@@ -611,6 +667,7 @@ jobs:
             ${{ runner.temp }}/ci-repair/scc-audit.jsonl
             ${{ runner.temp }}/ci-repair/scc-manifest.json
             ${{ runner.temp }}/ci-repair/failing.json
+            ${{ runner.temp }}/ci-repair/runbook.json
           if-no-files-found: ignore
           retention-days: 14
 
