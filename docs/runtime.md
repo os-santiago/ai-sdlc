@@ -2,6 +2,8 @@
 
 The pipeline stages as `workflow_call` workflows. A consuming repo drops a
 thin caller workflow + `.ai-sdlc.yaml` and gets the autonomous loop.
+Operating it — `scc:*` states, failure modes, kill-switch and recovery —
+lives in [operations.md](operations.md).
 
 
 ## Decision Records
