@@ -483,7 +483,6 @@ jobs:
         env:
           FORGE_TOKEN_WRITE: ${{ steps.app-token-write.outputs.token }}
           ISSUE: ${{ inputs.issue_number }}
-
         run: |
           set -euo pipefail
           export GH_TOKEN="$FORGE_TOKEN_WRITE"
@@ -500,9 +499,60 @@ jobs:
           EOF
           gh issue comment "$ISSUE" -R "$REPO" --body-file comment.md
 
+      # Credential isolation (issue #212): the engine's only deliverable is a
+      # git-format patch artifact — it never commits, pushes or touches the
+      # forge. Freeze every worktree change into ai-sdlc-engine.patch, then
+      # restore a pristine worktree so the validated apply step below is the
+      # ONLY path by which engine output can land on the branch.
+      - name: Capture engine output → patch artifact
+        id: capture
+        if: steps.engine.outputs.exit_code == '0'
+        run: |
+          set -euo pipefail
+          git add -A -- .
+          # Run artifacts are pipeline evidence, not engine output — exclude
+          # them from the patch (same list the commit step unstages, #68).
+          git diff --cached --name-only -z -- \
+            'scc-*.json*' 'ai-sdlc-run.json' 'issue.json' 'task-prompt.md' \
+            | xargs -0 -r git reset -q --
+          # --binary so binary payloads exist to be REJECTED by the validator
+          # (omitting it would silently drop binary edits from the audit).
+          git diff --cached --binary --full-index > ai-sdlc-engine.patch
+          git reset -q
+          git checkout -- .
+          git clean -fdq \
+            -e ai-sdlc-engine.patch -e ai-sdlc-run.json -e ai-sdlc-apply-report.json \
+            -e issue.json -e task-prompt.md -e 'scc-*' -e pr-body.md -e comment.md
+          wc -c ai-sdlc-engine.patch
+
+      # The validator is fetched from the trusted runtime pin — never from
+      # the consumer checkout: engine output must not weaken the gate that
+      # applies it (same posture as scripts/risk-classifier.js in review).
+      # Fail-closed: a rejection fails the step → no commit/push/PR, and the
+      # outcome-labeling step marks the issue scc:failed with the audit.
+      - name: Validate + apply engine patch (deterministic, fail-closed)
+        id: apply
+        if: steps.engine.outputs.exit_code == '0'
+        env:
+          GH_TOKEN: ${{ steps.app-token-read.outputs.token }}
+        run: |
+          set -euo pipefail
+          V="$RUNNER_TEMP/ai-sdlc-apply/apply-patch.js"
+          mkdir -p "$(dirname "$V")"
+          gh api "repos/os-santiago/ai-sdlc/contents/scripts/apply-patch.js?ref=${AI_SDLC_RUNTIME_REF:-main}" \
+            -H "Accept: application/vnd.github.raw" > "$V"
+          node --check "$V"
+          if node "$V" --patch ai-sdlc-engine.patch --repo . --audit ai-sdlc-apply-report.json --json > apply-result.json; then
+            echo "applied=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "applied=false" >> "$GITHUB_OUTPUT"
+            node -e 'const r=require("./apply-result.json");for(const x of r.rejects||[])console.log("::error::apply-patch rejected "+x.where+": "+(x.path||"-")+" — "+x.reason)' || cat apply-result.json >&2 || true
+            exit 1
+          fi
+
       - name: Apply diff + publish PR (deterministic post-script)
         id: pr
-        if: steps.engine.outputs.exit_code == '0'
+        if: steps.engine.outputs.exit_code == '0' && steps.apply.outputs.applied == 'true'
         uses: ./.github/actions/apply-publish
         with:
           repo: ${{ inputs.repo }}
@@ -519,6 +569,7 @@ jobs:
           FORGE_TOKEN_WRITE: ${{ steps.app-token-write.outputs.token }}
           ISSUE: ${{ inputs.issue_number }}
           CODE: ${{ steps.engine.outputs.exit_code }}
+          APPLIED: ${{ steps.apply.outputs.applied }}
           MODEL: ${{ steps.engine.outputs.model }}
           PRIMARY_MODEL: ${{ steps.contract.outputs.model_primary }}
           PRIMARY_EXIT: ${{ steps.engine.outputs.primary_exit }}
@@ -536,7 +587,26 @@ jobs:
             gh label create "$L" -R "$REPO" --force || true
           done
           case "$CODE" in
-            0)  gh issue edit "$ISSUE" -R "$REPO" --remove-label "$L_QUEUED" --add-label "$L_PR_OPENED" || true ;;
+            0)
+              if [ "$APPLIED" = "true" ]; then
+                gh issue edit "$ISSUE" -R "$REPO" --remove-label "$L_QUEUED" --add-label "$L_PR_OPENED" || true
+              else
+                # Engine claimed success but the deterministic apply gate
+                # rejected its output (issue #212) — surface as failed with
+                # the validator's audit trail, never as a phantom PR-opened.
+                gh issue edit "$ISSUE" -R "$REPO" --add-label "$L_FAILED" || true
+                REJECTS=$(node -e 'try{const r=require("./ai-sdlc-apply-report.json");console.log((r.rejects||[]).map(x=>x.where+": "+(x.path||"-")+" — "+x.reason).join("\\n")||"unknown")}catch(e){console.log("no audit report")}' || echo 'no audit report')
+                cat > apply-reject-comment.md <<EOF
+          🛡️ **AI-SDLC implement — apply gate rejected engine output:** the deterministic patch validator refused the engine's diff; nothing was committed or pushed. Rejections:
+
+          \`\`\`
+          ${REJECTS}
+          \`\`\`
+
+          The audit report (\`ai-sdlc-apply-report.json\`) is in the run artifacts. Run: ${RUN_URL}
+          EOF
+                gh issue comment "$ISSUE" -R "$REPO" --body-file apply-reject-comment.md || true
+              fi ;;
             10) gh issue edit "$ISSUE" -R "$REPO" --add-label "$L_NO_CHANGES" || true ;;
             *)  gh issue edit "$ISSUE" -R "$REPO" --add-label "$L_FAILED" || true ;;
           esac
@@ -568,6 +638,8 @@ jobs:
             ai-sdlc-run.json
             scc-manifest.json
             scc-audit.jsonl
+            ai-sdlc-engine.patch
+            ai-sdlc-apply-report.json
 
       - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)
         id: seal
@@ -601,6 +673,9 @@ jobs:
             scc-audit.primary.jsonl
             scc-manifest.primary.json
             ai-sdlc-run.json
+            ai-sdlc-engine.patch
+            ai-sdlc-apply-report.json
+            apply-result.json
             task-prompt.md
             issue.json
           if-no-files-found: ignore

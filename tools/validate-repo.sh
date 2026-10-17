@@ -13,6 +13,8 @@
 #      release — .github/workflows/actionlint.yml; ./actionlint fetches it)
 #   5. node --test on */*.test.js + scripts/gha/*.test.js, when node and
 #      test files are present
+#   6. shell e2e tests (tests/*.test.sh) — CLI-level contracts that assert
+#      process exit codes, which node --test can't cover as directly
 #
 # Exit 0 = clean, 1 = a check failed, 2 = required tooling missing.
 # Safe to run from anywhere: cd's to the repo root first.
@@ -131,5 +133,14 @@ if command -v node >/dev/null 2>&1; then
 else
   note "node not on PATH — node --test skipped"
 fi
+
+# --- 6. shell e2e tests ---------------------------------------------------------
+ran=0
+for t in tests/*.test.sh; do
+  [ -f "$t" ] || continue
+  ran=$((ran + 1))
+  bash "$t" || fail "shell test failed: $t"
+done
+[ "$ran" -gt 0 ] && echo "[✓] shell tests: $ran file(s) green"
 
 note "repo validation complete"

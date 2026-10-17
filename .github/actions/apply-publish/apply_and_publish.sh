@@ -44,6 +44,7 @@ git config user.email "ai-sdlc[bot]@users.noreply.github.com"
 git add -A -- . ':!.github/workflows'
 git diff --cached --name-only -z -- \
   'scc-*.json*' 'ai-sdlc-run.json' 'issue.json' 'task-prompt.md' \
+  'ai-sdlc-engine.patch' 'ai-sdlc-apply-report.json' 'apply-result.json' \
   | xargs -0 -r git reset -q --
 
 committed=false
