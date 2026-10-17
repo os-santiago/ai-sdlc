@@ -104,6 +104,44 @@ tokens are OIDC-minted per run — the org installs the App and manages
 **zero** secrets; self-managed per-org secrets remain the path for
 regulated or air-gapped environments.
 
+## The security gate — what the contract enforces
+
+The bootstrap contract rides under the deterministic supply-chain
+security gate (epic #87) — a required `ai-sdlc-security` check that
+evaluates secret and dependency findings by code, not by generative
+judgment. Consumers declare (and an org baseline can floor) the
+`security:` section of `.ai-sdlc.yaml`:
+
+```yaml
+security:
+  enabled: true                 # org floor — a baseline's `true` cannot be relaxed
+  min_severity: high            # findings >= high are blocking-class
+  block_on_secret: true         # credential material always blocks
+  secrets_scan: enforce         # off | report | enforce
+  dependency_audit: enforce     # off | report | enforce
+  license_check: report         # license observations stay advisory
+  sbom:                         # CycloneDX SBOM evidence (never blocks)
+    enabled: true
+    format: cyclonedx
+    attach_to: [pr, release]
+  severity_matrix:              # pr:risk-* tier → outcome for blocking-class findings
+    pr:risk-low: report-only
+    pr:risk-medium: report-only
+    pr:risk-high: blocking-if-fix-available
+    pr:risk-critical: blocking-if-fix-available
+```
+
+Two rules matter to a consumer: **secrets always block**
+(`block_on_secret`), and **only fixable findings at/above
+`min_severity` can block** on high/critical-risk PRs — fixless CVEs and
+lower severities stay report-only so the loop never stalls on what
+nobody can act on. Under an org baseline every `security.*` leaf is a
+floor: the repo may tighten (harden a tier to `blocking`, lower
+`min_severity`, raise a scan mode) but never weaken it. The verdict
+calibration is [docs/security/gate-calibration.md](security/gate-calibration.md);
+the merge semantics are
+[spec/org-policy.md](../spec/org-policy.md#security-gate).
+
 ## The trust ramp — start at `shadow`, climb on evidence
 
 The starter contract pins the lowest rung of the

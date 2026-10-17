@@ -16,4 +16,5 @@ stage reference and the architecture decision records (ADRs) that bind it.
 | [`security-log.md`](security-log.md) | Tamper-evident `SECURITY_LOG.md` — hash-chained security event log, `verify`/seal/cosign attestation, auditor verification steps | #106 |
 | [`security-scanning.md`](security-scanning.md) | Repo self-scanning posture — Dependabot + CodeQL + gitleaks secret scan, and the admin-scope repo-settings toggles that cannot ship in YAML | #105, #125 |
 | [`security/baseline-scan.md`](security/baseline-scan.md) | Gitleaks full-history baseline — findings register, triage statuses (`false-positive` / `historical-revoked`), `.gitleaksignore` procedure | #125 |
+| [`security/gate-calibration.md`](security/gate-calibration.md) | Security-gate calibration — which finding classes and `pr:risk-*` tiers block vs report the `ai-sdlc-security` check, and the org-floor semantics per `security.*` field | #90, #93 |
 | [`architecture/adr/`](architecture/adr/) | Architecture Decision Records — binding decisions; currently ADR-0001 (homedir-ai-sdlc sunset and cutover) | #30 |

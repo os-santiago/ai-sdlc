@@ -1,0 +1,48 @@
+{
+  "id": "resolve-org-security-scan-floor",
+  "type": "contract-resolve",
+  "title": "org scan-mode + sbom floors clamp repo loosening; tightening still lands (issue #90)",
+  "requires": ["python3"],
+  "input": {
+    "repo_cfg": {
+      "spec": "1.0.0",
+      "security": {
+        "secrets_scan": "off",
+        "dependency_audit": "report",
+        "license_check": "enforce",
+        "sbom": {
+          "enabled": false,
+          "format": "spdx",
+          "attach_to": ["pr"]
+        }
+      }
+    },
+    "org": {
+      "spec": "1.0.0",
+      "security": {
+        "secrets_scan": "enforce",
+        "dependency_audit": "enforce",
+        "license_check": "report",
+        "sbom": {
+          "enabled": true,
+          "format": "cyclonedx",
+          "attach_to": ["release"]
+        }
+      },
+      "policy_floor": {
+        "pin": [
+          "security.secrets_scan",
+          "security.dependency_audit",
+          "security.license_check",
+          "security.sbom.enabled",
+          "security.sbom.format",
+          "security.sbom.attach_to"
+        ]
+      }
+    },
+    "overrides": {},
+    "org_repo": "fixtures/org",
+    "org_ref": "main"
+  },
+  "compare": { "omit": ["outputs.path"] }
+}

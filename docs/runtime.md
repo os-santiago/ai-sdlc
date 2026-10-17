@@ -68,7 +68,7 @@ resolves it before acting:
    (`spec/org-policy.md`): scalars replace; maps (`labels`,
    `model.routing_hints`) merge key-by-key; guard-rail lists
    (`triggers.skip_labels`, `merge.skip_labels`,
-   `verify.required_checks`) are *unions* — strictly additive, a repo can
+   `verify.required_checks`, `security.sbom.attach_to`) are *unions* — strictly additive, a repo can
    add entries but never drop default or org entries; configuration
    lists (`verify.commands`, `authorized_labelers`, …) are replaced
    whole; `autonomy.level` is a ceiling — when the org baseline sets it,
@@ -224,6 +224,38 @@ policy_floor:
   sha256 under `_source.org`, `pinned` (declared floors) and `enforced`
   (fields where a floor suppressed a repo value — `_sources` shows
   `org-pin`).
+
+### Security gate (epic #87)
+
+The `security:` contract section declares the deterministic supply-chain
+gate — secret and dependency findings evaluated by code, never by
+generative judgment. The gate runs as the required check
+`ai-sdlc-security`, carried into consumers by the
+`verify.required_checks` union (a repo can add checks, never drop the
+org-mandated one). Resolved `security.*` fields ride inside
+`contract.json` for the `ai-sdlc-security` stage (issue #91) to consume:
+
+| Field | Default | Semantics |
+|---|---|---|
+| `enabled` | `true` | Master switch — an org `true` is a floor (repo opt-out is a non-goal) |
+| `min_severity` | `high` | Findings at/above are blocking-class; org floor clamps to the stricter threshold |
+| `block_on_secret` | `true` | Secret findings always block, every tier — boolean floor |
+| `secrets_scan` / `dependency_audit` | `enforce` | Per-scanner mode `off`\|`report`\|`enforce` — org floor resolves strictest-wins |
+| `license_check` | `report` | Same ranked floor; license observations stay advisory at the default |
+| `sbom.enabled` | `false` | SBOM artifact switch — boolean floor (issue #92) |
+| `sbom.format` | `cyclonedx` | `cyclonedx`\|`spdx` — pin-able scalar, not a strictness dimension |
+| `sbom.attach_to` | `[pr]` | `pr`\|`release` attach targets — strictly-additive union |
+| `severity_matrix.<pr:risk-*>` | see below | `report-only`\|`blocking-if-fix-available`\|`blocking` — strictest-wins floor |
+
+`severity_matrix` normative defaults: `pr:risk-low`/`medium` report-only,
+`pr:risk-high`/`critical` `blocking-if-fix-available` — a fixable finding
+≥ `min_severity` fails the check; fixless findings degrade to
+report-only so the loop never stalls on what cannot be fixed. The full
+finding-class → verdict matrix is
+[docs/security/gate-calibration.md](security/gate-calibration.md); merge
+and floor semantics are normative in
+[spec/org-policy.md](../spec/org-policy.md#security-gate) — Security
+Gate.
 
 ## Caller example
 

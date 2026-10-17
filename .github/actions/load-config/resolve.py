@@ -6,7 +6,7 @@ org baseline (spec/org-policy.md) > runtime defaults.
 
 Field-level merge between contract layers: scalars replace, maps merge
 key-wise, guard-rail lists (triggers.skip_labels, merge.skip_labels,
-verify.required_checks) union strictly-additive, and autonomy.level
+verify.required_checks, security.sbom.attach_to) union strictly-additive, and autonomy.level
 resolves to the lower of the org ceiling and the repo value — repos can
 tighten autonomy, never loosen it. The org baseline may pin floor fields
 via policy_floor.pin: pinned scalars/maps take the org value outright,
@@ -96,7 +96,10 @@ DEFAULTS = {
 MAP_FIELDS = {"labels", "model.routing_hints", "escalation.routes"}
 # Guard-rail lists: strictly-additive union across layers — a layer can
 # add entries but never drop a lower layer's (spec/org-policy.md).
-UNION_FIELDS = {"triggers.skip_labels", "merge.skip_labels", "verify.required_checks"}
+# security.sbom.attach_to joins the guard rails (issue #90): an
+# org-declared SBOM attach target cannot be dropped downstream.
+UNION_FIELDS = {"triggers.skip_labels", "merge.skip_labels", "verify.required_checks",
+                "security.sbom.attach_to"}
 # Meta sections consumed by resolution itself — never merged into fields.
 META_KEYS = {"spec", "repo", "policy_floor"}
 PASSTHROUGH = ("spec", "repo")
@@ -110,9 +113,19 @@ AUTONOMY_ORDER = ["shadow", "suggest", "auto-pr", "auto-merge-low", "auto-merge-
 # harden a tier, never soften it.
 SEVERITY_ORDER = ["low", "medium", "high", "critical"]
 GATE_OUTCOME_ORDER = ["report-only", "blocking-if-fix-available", "blocking"]
+# Scan-mode floors (issue #90): off < report < enforce — the stricter of
+# the org and repo modes stands. A repo may harden a scanner (report →
+# enforce), never soften or silence an org-mandated one.
+SCAN_MODE_ORDER = ["off", "report", "enforce"]
 # security.* leaves that are boolean floors: an org `true` cannot be
 # relaxed to `false`; a repo `true` under an org `false` only tightens.
-SECURITY_BOOL_FLOORS = {"security.enabled", "security.block_on_secret"}
+# security.sbom.enabled joins them (issues #90/#92): the baseline can pin
+# the SBOM artifact on fleet-wide.
+SECURITY_BOOL_FLOORS = {"security.enabled", "security.block_on_secret",
+                        "security.sbom.enabled"}
+# Ranked-enum floors — off < report < enforce (SCAN_MODE_ORDER).
+SECURITY_ENUM_FLOORS = {"security.secrets_scan", "security.dependency_audit",
+                        "security.license_check"}
 SECURITY_MATRIX_PREFIX = "security.severity_matrix."
 
 # Override surface: dotted path → kind. Unset = null / "" / negative number.
@@ -428,6 +441,13 @@ def resolve(repo_cfg, overrides, org_cfg=None):
             resolved = bool(get_path(result, path)[1]) or bool(value)
             set_path(result, path, resolved)
             sources[path] = "contract" if resolved == value else ("org-pin" if pinned else "org")
+        elif path in SECURITY_ENUM_FLOORS and path in org_set:
+            # Scan-mode floor (issue #90): off < report < enforce — a repo
+            # may harden a scanner, never soften or silence one the org
+            # mandates.
+            mode = higher_rank(SCAN_MODE_ORDER, get_path(result, path)[1], value)
+            set_path(result, path, mode)
+            sources[path] = "contract" if mode == value else ("org-pin" if pinned else "org")
         elif path.startswith(SECURITY_MATRIX_PREFIX) and path in org_set:
             # Severity-matrix floor: the stricter outcome wins per leaf the
             # org declares — a repo may harden a tier, never soften it.

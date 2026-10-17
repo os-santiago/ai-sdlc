@@ -33,11 +33,19 @@ verify:
 
 # Security gate floor (epic #87). Org-declared values are clamps: repos
 # may tighten — a lower min_severity, a stricter severity_matrix outcome,
-# enabling the gate where the org left it off — but can never loosen them.
+# a higher scan mode, enabling the gate where the org left it off — but
+# can never loosen them. Calibration: docs/security/gate-calibration.md.
 security:
   enabled: true
   min_severity: high            # findings >= high are blocking-class
   block_on_secret: true         # credential material always blocks
+  secrets_scan: enforce         # gitleaks-class scan — repos cannot silence it
+  dependency_audit: enforce     # osv-scanner-class audit — repos cannot weaken it
+  license_check: report         # license observations stay advisory (org may raise to enforce)
+  sbom:                         # SBOM evidence (issue #92 — never blocks the gate)
+    enabled: true
+    format: cyclonedx
+    attach_to: [pr, release]    # union-additive: repos may attach more, never fewer
   severity_matrix:              # pr:risk-* tier → gate outcome
     pr:risk-low: report-only
     pr:risk-medium: report-only
@@ -60,6 +68,12 @@ policy_floor:
     - security.enabled
     - security.min_severity
     - security.block_on_secret
+    - security.secrets_scan
+    - security.dependency_audit
+    - security.license_check
+    - security.sbom.enabled
+    - security.sbom.format        # scalar pin — org format stands outright
+    - security.sbom.attach_to
     - security.severity_matrix.pr:risk-high
     - security.severity_matrix.pr:risk-critical
     - release.provenance
