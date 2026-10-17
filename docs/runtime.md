@@ -332,6 +332,8 @@ surface.
 |---|---|---|
 | `repo`, `pr_number` | — | target PR |
 | `max_repairs` | `3` | attempts per PR before `needs-human` (mirror `.ai-sdlc.yaml` `merge.max_repairs`) |
+| `stall_max` | `3` | attempts tolerated per identical failing-check signature before `needs-human` (issue #190); `0` disables the stall guard |
+| `runtime_ref` | `main` | ref of `os-santiago/ai-sdlc` the stall guard (`scripts/repair-stall-guard.js`) is fetched from — pin to the same ref as the workflow; the script is never read from the PR head or consumer repo |
 | `model` | `nvidia/nemotron-3-super-120b-a12b` | engine model id (provider-native) |
 | `provider_base_url` | `''` → `vars.AI_SDLC_PROVIDER_URL` → legacy default | OpenAI-compatible inference endpoint — see [Provider resolution](#provider-resolution) |
 | `max_seconds` / `max_steps` | `900` / `200` | engine budgets (same contract as implement) |
@@ -357,9 +359,16 @@ one attempt:
    base repo (fork heads never run with secrets), the head branch matches
    `branch_pattern`, and at least one check run (latest per name) or commit
    status on the head SHA is red. A head SHA already attempted is skipped.
-2. **Budget** — attempts = `<!-- ai-sdlc:ci-repair attempt=N sha=… -->`
+2. **Budget** — attempts = `<!-- ai-sdlc:ci-repair attempt=N sha=… sig=… -->`
    markers on the PR from bots/collaborators. `attempts >= max_repairs` →
    `needs-human` + comment with cause, no engine run.
+   **Stall guard** (issue #190, port of the Hermes `repairSigs` rule): `sig`
+   is the sha256-16 of the sorted failing check names. When the identical
+   signature already burned `stall_max` recorded attempts — a repair that
+   pushed but left the same checks red, or exited `no_changes` — the guard
+   escalates (`repair-stall:<sig>`) instead of spending another engine run.
+   A changed failing surface is a different signature and restarts the
+   count; `stall_max: 0` disables the guard.
 3. **Context** — failing check names + bounded log tails (Actions job logs;
    check-run output for other apps), wrapped as untrusted data in the
    repair prompt (`spec/injection-defense.md`).
