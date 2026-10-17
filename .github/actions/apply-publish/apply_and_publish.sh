@@ -43,7 +43,8 @@ git config user.email "ai-sdlc[bot]@users.noreply.github.com"
 # the pipeline never edits workflow files in consumer repos (AGENTS.md).
 git add -A -- . ':!.github/workflows'
 git diff --cached --name-only -z -- \
-  'scc-*.json*' 'ai-sdlc-run.json' 'issue.json' 'task-prompt.md' \
+  'scc-*.json*' 'scc-*.log' 'engine-run*.log' 'ai-sdlc-run.json' \
+  'ai-sdlc-stall.json' 'issue.json' 'task-prompt.md' \
   'ai-sdlc-engine.patch' 'ai-sdlc-apply-report.json' 'apply-result.json' \
   | xargs -0 -r git reset -q --
 

@@ -18,6 +18,8 @@
 //   argvBuilder           raw declarative argv spec (command + args + substitution)
 //   configRenderer        rendered-config descriptor (engine's config surface)
 //   exitCodeMap           engine exit code -> pipeline classification (+ "default")
+//   stallClassMap         optional engine exit code -> stall class override
+//                         (scripts/stall-classifier.js, issue #158)
 //   manifestMap           run-manifest descriptor (path + format)
 //   dispatch              dispatch-time options (rawExitCodes: return the
 //                         engine's raw exit code instead of the mapped 0/1 —
@@ -184,6 +186,21 @@ class EngineAdapterResolver {
       if (typeof cls !== 'string') fail(`exitCodeMap["${code}"] must be a classification string`);
     }
 
+    // stallClassMap (optional, issue #158): per-code stall-class overrides
+    // for codes whose exitCodeMap label is ambiguous in stall space (scc
+    // exit 20 is 'AgentError' by label but a provider/transport death).
+    // Consumed by scripts/stall-classifier.js; 'timeout' is a pseudo-class
+    // the classifier resolves against mutation/signature evidence.
+    const scm = d.stallClassMap;
+    if (scm !== undefined) {
+      const VALID = new Set(['ok', 'transport', 'tooling', 'spec', 'budget', 'livelock', 'timeout']);
+      if (!scm || typeof scm !== 'object' || Array.isArray(scm)) fail('stallClassMap must be an object');
+      for (const [code, cls] of Object.entries(scm)) {
+        if (!EXIT_CODE_KEY_RE.test(code)) fail(`stallClassMap key "${code}" is not a decimal exit code`);
+        if (!VALID.has(cls)) fail(`stallClassMap["${code}"] must be one of: ${[...VALID].join(', ')}`);
+      }
+    }
+
     for (const key of ['configRenderer', 'manifestMap']) {
       if (d[key] !== undefined
           && (typeof d[key] !== 'object' || d[key] === null || Array.isArray(d[key]))) {
@@ -308,6 +325,7 @@ class EngineAdapterResolver {
       argvBuilder: d.argvBuilder,
       configRenderer: d.configRenderer,
       exitCodeMap: d.exitCodeMap,
+      stallClassMap: d.stallClassMap || {},
       manifestMap: d.manifestMap,
       dispatch: d.dispatch || {},
       envPassthrough: d.envPassthrough || [],

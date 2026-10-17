@@ -98,6 +98,9 @@ on:
       fallback_used:
         description: "'true' when the fallback model run fired"
         value: ${{ jobs.implement.outputs.fallback_used }}
+      stall_class:
+        description: 'engine-stall classification of the final run (ok|transport|tooling|spec|budget|livelock; issue #158); empty = unclassified'
+        value: ${{ jobs.implement.outputs.stall_class }}
       pr_number:
         description: 'PR opened by this run (empty when exit_code != 0); feeds post-implement review (issue #28)'
         value: ${{ jobs.implement.outputs.pr_number }}
@@ -122,6 +125,7 @@ jobs:
       model: ${{ steps.engine.outputs.model }}
       primary_exit: ${{ steps.engine.outputs.primary_exit }}
       fallback_used: ${{ steps.engine.outputs.fallback_used }}
+      stall_class: ${{ steps.engine.outputs.stall_class }}
       pr_number: ${{ steps.pr.outputs.pr_number }}
       ledger_head: ${{ steps.seal.outputs.head || steps.ledger.outputs.head }}
     concurrency:
@@ -366,7 +370,7 @@ jobs:
               echo "::warning title=credential isolation::probe inconclusive (HTTP '$status') — continuing; FORGE_TOKEN_WRITE still never enters the engine environment" ;;
           esac
 
-      - name: Run stage engine headless (bounded, one model fallback on scc)
+      - name: Run stage engine headless (bounded, one model fallback on transport death)
         id: engine
         if: steps.sanitize.outputs.verdict != 'blocked'
         env:
@@ -381,6 +385,7 @@ jobs:
           FALLBACK_MODEL: ${{ steps.contract.outputs.model_fallback }}
           MAX_SECONDS: ${{ steps.contract.outputs.max_seconds }}
           MAX_STEPS: ${{ steps.contract.outputs.max_steps }}
+          RUNTIME_REF: ${{ inputs.runtime_ref || 'main' }}
           SC_PROVIDER_CONNECT_TIMEOUT_MS: '90000'
           SC_PROVIDER_ATTEMPT_TIMEOUT_MS: '300000'
           # Endpoint-level cascade for saturated NIM workers (503 ResourceExhausted):
@@ -389,34 +394,102 @@ jobs:
         run: |
           set +e
           ENGINE_DIR="$RUNNER_TEMP/ai-sdlc-engine"
+          CLASSIFIER="$ENGINE_DIR/scripts/stall-classifier.js"
+          REGISTRY="$ENGINE_DIR/config/engine_adapters.json"
+          mkdir -p "$(dirname "$CLASSIFIER")"
+          # Engine-stall classification (issue #158): trusted code fetched
+          # from the runtime pin, fail-open — an unavailable pin records the
+          # run unclassified instead of failing the job.
+          if ! { gh api "repos/os-santiago/ai-sdlc/contents/scripts/stall-classifier.js?ref=$RUNTIME_REF" \
+              -H "Accept: application/vnd.github.raw" > "$CLASSIFIER" 2>/dev/null \
+              && node --check "$CLASSIFIER" 2>/dev/null; }; then
+            CLASSIFIER=""
+            echo "::warning::stall-classifier.js unavailable at os-santiago/ai-sdlc@$RUNTIME_REF — engine runs recorded unclassified"
+          fi
+          [ -f "$REGISTRY" ] || REGISTRY=""
+
+          # Real workspace mutations = dirty-tree entries minus the pipeline's
+          # own run artifacts (the same surface the capture step unstages).
+          mutation_count() {
+            git status --porcelain --untracked-files=all -- \
+              . ':(exclude)scc-*.json*' ':(exclude)scc-*.log' \
+              ':(exclude)ai-sdlc-*.json' ':(exclude)issue.json' \
+              ':(exclude)task-prompt.md' ':(exclude)comment*.md' \
+              ':(exclude)pr-body.md' ':(exclude)apply-*.json' \
+              ':(exclude)*-run*.log' \
+              2>/dev/null | wc -l
+          }
+
+          # classify_run EXIT [MANIFEST] [AUDIT] [LOG] — prints the stall
+          # class (ok|transport|tooling|spec|budget|livelock) or nothing when
+          # the classifier is unavailable.
+          classify_run() {
+            [ -n "$CLASSIFIER" ] || return 0
+            local args=(--engine "${STAGE_ENGINE:-scc}" --exit-code "${1:-1}"
+              --mutations "$(mutation_count)" --field class)
+            [ -n "$REGISTRY" ] && args+=(--registry "$REGISTRY")
+            [ -n "${2:-}" ] && [ -f "$2" ] && args+=(--manifest "$2")
+            [ -n "${3:-}" ] && [ -f "$3" ] && args+=(--audit "$3")
+            [ -n "${4:-}" ] && [ -f "$4" ] && args+=(--log "$4")
+            node "$CLASSIFIER" "${args[@]}" 2>/dev/null || true
+          }
+
           if [ "$STAGE_ENGINE" != "scc" ]; then
             # Stage dispatch (issue #206): the contract selected a non-scc
             # engine — invoke it through the canonical adapter argv contract.
-            # Exit code is already adapter-mapped by the resolver.
-            node "$ENGINE_DIR/scripts/gha/stage-engine-resolver.js" \
-              --stage implement \
-              --contract "$RUNNER_TEMP/ai-sdlc-contract/contract.json" \
-              --registry "$ENGINE_DIR/config/engine_adapters.json" \
-              --run \
-              --model "$PRIMARY_MODEL" \
-              --prompt-file task-prompt.md \
-              --manifest scc-manifest.json
+            # Exit code is already adapter-mapped by the resolver. Output is
+            # tee'd to a log artifact for stall-signature evidence (#158).
+            run_adapter() {  # $1 model · $2 manifest · $3 captured output log
+              node "$ENGINE_DIR/scripts/gha/stage-engine-resolver.js" \
+                --stage implement \
+                --contract "$RUNNER_TEMP/ai-sdlc-contract/contract.json" \
+                --registry "$ENGINE_DIR/config/engine_adapters.json" \
+                --run \
+                --model "$1" \
+                --prompt-file task-prompt.md \
+                --manifest "$2" 2>&1 | tee "$3"
+              return "${PIPESTATUS[0]}"
+            }
+
+            run_adapter "$PRIMARY_MODEL" scc-manifest.json engine-run.log
             primary_exit=$?
+            primary_class=$(classify_run "$primary_exit" scc-manifest.json "" engine-run.log)
             exit_code=$primary_exit
             model="$PRIMARY_MODEL"
             fallback_used=false
             fallback_reason=""
             fallback_exit=""
+
+            # Bounded transport retry (issue #158): a transport verdict on
+            # the adapter path earns exactly ONE fallback-model run — the
+            # same ladder as the scc 20/21 gate below.
+            if [ "$primary_class" = "transport" ] && [ -n "$FALLBACK_MODEL" ] && [ "$FALLBACK_MODEL" != "$PRIMARY_MODEL" ]; then
+              fallback_reason=transport
+              echo "::warning::primary run classified transport (exit $primary_exit) — one fallback run with '$FALLBACK_MODEL'"
+              [ -f scc-manifest.json ] && mv scc-manifest.json scc-manifest.primary.json
+              [ -f engine-run.log ] && mv engine-run.log engine-run.primary.log
+              git reset --hard -q HEAD
+              git clean -fdq -e task-prompt.md -e issue.json -e 'scc-*' -e 'engine-run*'
+              fallback_used=true
+              run_adapter "$FALLBACK_MODEL" scc-manifest.json engine-run.log
+              fallback_exit=$?
+              exit_code=$fallback_exit
+              model="$FALLBACK_MODEL"
+            elif [ "$primary_class" = "transport" ]; then
+              echo "::warning::primary run classified transport (exit $primary_exit); no distinct fallback_model configured — not retrying"
+            fi
           else
           # scc dispatch (issue #228): argv comes from the registry adapter
           # contract — the scc descriptor builds the tuned `scc chat -yq`
           # headless argv and declares dispatch.rawExitCodes, so the
           # resolver exits with the engine's raw code and the SC_* env knobs
           # reach it through the inherited environment.
-          # scc exit contract: 0 ok · 10 no-changes · 20 provider · 21 auth · 22 budget · 23 livelock
-          # Only 20/21 earn exactly ONE fallback run; every other code is final.
+          # scc exit contract: 0 ok · 10 no-changes · 20 provider · 21 auth · 22 budget · 23 livelock · 24 timeout
+          # 20/21 earn exactly ONE fallback run; issue #158 extends the same
+          # one-shot ladder to any primary run the stall classifier verdicts
+          # 'transport'. Every other code/class is final.
           CONFIG="$HOME/.sc-agent/config.json"
-          run_engine() {  # $1 audit log · $2 run manifest — own max-seconds/max-steps per run
+          run_engine() {  # $1 audit log · $2 run manifest · $3 captured output log — own max-seconds/max-steps per run
             node "$ENGINE_DIR/scripts/gha/stage-engine-resolver.js" \
               --stage implement \
               --contract "$RUNNER_TEMP/ai-sdlc-contract/contract.json" \
@@ -426,7 +499,8 @@ jobs:
               --set "auditLog=$1" \
               --manifest "$2" \
               --set "maxSeconds=$MAX_SECONDS" \
-              --set "maxSteps=$MAX_STEPS"
+              --set "maxSteps=$MAX_STEPS" 2>&1 | tee "$3"
+            return "${PIPESTATUS[0]}"
           }
 
           if [ ! -f "$ENGINE_DIR/scripts/gha/stage-engine-resolver.js" ]; then
@@ -436,9 +510,11 @@ jobs:
             # the adapter layer.
             echo "::error::stage-engine resolver bundle unavailable at $ENGINE_DIR — scc dispatch requires the registry adapter contract (issue #228)"
             primary_exit=1
+            primary_class=$(classify_run 1 "" "" "")
           else
-            run_engine scc-audit.jsonl scc-manifest.json
+            run_engine scc-audit.jsonl scc-manifest.json scc-run.log
             primary_exit=$?
+            primary_class=$(classify_run "$primary_exit" scc-manifest.json scc-audit.jsonl scc-run.log)
           fi
           exit_code=$primary_exit
           model="$PRIMARY_MODEL"
@@ -446,33 +522,57 @@ jobs:
           fallback_reason=""
           fallback_exit=""
 
-          case "$primary_exit" in
-            20|21)
-              [ "$primary_exit" = 20 ] && fallback_reason=provider || fallback_reason=auth
-              if [ -z "$FALLBACK_MODEL" ] || [ "$FALLBACK_MODEL" = "$PRIMARY_MODEL" ]; then
-                echo "::warning::primary model '$PRIMARY_MODEL' failed ($fallback_reason, exit $primary_exit); no distinct fallback_model configured — not retrying"
+          if [ "$primary_exit" = 20 ] || [ "$primary_exit" = 21 ] || [ "$primary_class" = "transport" ]; then
+            case "$primary_exit" in
+              20) fallback_reason=provider ;;
+              21) fallback_reason=auth ;;
+              *)  fallback_reason=transport ;;
+            esac
+            if [ -z "$FALLBACK_MODEL" ] || [ "$FALLBACK_MODEL" = "$PRIMARY_MODEL" ]; then
+              echo "::warning::primary model '$PRIMARY_MODEL' failed ($fallback_reason, exit $primary_exit${primary_class:+, class $primary_class}); no distinct fallback_model configured — not retrying"
+            else
+              echo "::warning::primary model '$PRIMARY_MODEL' failed ($fallback_reason, exit $primary_exit${primary_class:+, class $primary_class}) — one fallback run with '$FALLBACK_MODEL'"
+              # Keep primary evidence; the fallback writes the canonical artifact names.
+              [ -f scc-audit.jsonl ] && mv scc-audit.jsonl scc-audit.primary.jsonl
+              [ -f scc-manifest.json ] && mv scc-manifest.json scc-manifest.primary.json
+              [ -f scc-run.log ] && mv scc-run.log scc-run.primary.log
+              # Fresh run: drop partial edits from the failed primary attempt.
+              git reset --hard -q HEAD
+              git clean -fdq -e task-prompt.md -e issue.json -e 'scc-*'
+              # Re-render config.json (engine's single source of truth) with the fallback model.
+              if jq --arg m "$FALLBACK_MODEL" '.model.model = $m' "$CONFIG" > "$CONFIG.tmp" \
+                  && mv "$CONFIG.tmp" "$CONFIG"; then
+                fallback_used=true
+                run_engine scc-audit.jsonl scc-manifest.json scc-run.log
+                fallback_exit=$?
+                exit_code=$fallback_exit
+                model="$FALLBACK_MODEL"
               else
-                echo "::warning::primary model '$PRIMARY_MODEL' failed ($fallback_reason, exit $primary_exit) — one fallback run with '$FALLBACK_MODEL'"
-                # Keep primary evidence; the fallback writes the canonical artifact names.
-                [ -f scc-audit.jsonl ] && mv scc-audit.jsonl scc-audit.primary.jsonl
-                [ -f scc-manifest.json ] && mv scc-manifest.json scc-manifest.primary.json
-                # Fresh run: drop partial edits from the failed primary attempt.
-                git reset --hard -q HEAD
-                git clean -fdq -e task-prompt.md -e issue.json -e 'scc-*'
-                # Re-render config.json (engine's single source of truth) with the fallback model.
-                if jq --arg m "$FALLBACK_MODEL" '.model.model = $m' "$CONFIG" > "$CONFIG.tmp" \
-                    && mv "$CONFIG.tmp" "$CONFIG"; then
-                  fallback_used=true
-                  run_engine scc-audit.jsonl scc-manifest.json
-                  fallback_exit=$?
-                  exit_code=$fallback_exit
-                  model="$FALLBACK_MODEL"
-                else
-                  echo "::error::could not re-render $CONFIG with fallback model — keeping primary result"
-                fi
+                echo "::error::could not re-render $CONFIG with fallback model — keeping primary result"
               fi
-              ;;
-          esac
+            fi
+          fi
+          fi
+
+          # Final stall classification of the run that produced exit_code
+          # (fallback when it fired, else primary) — the verdict is the run
+          # evidence the outcome-labeling step routes on (issue #158).
+          stall_class=""
+          stall_route=""
+          if [ -n "$CLASSIFIER" ]; then
+            stall_args=(--engine "${STAGE_ENGINE:-scc}" --exit-code "${exit_code:-1}"
+              --mutations "$(mutation_count)" --out ai-sdlc-stall.json)
+            [ -n "$REGISTRY" ] && stall_args+=(--registry "$REGISTRY")
+            [ -f scc-manifest.json ] && stall_args+=(--manifest scc-manifest.json)
+            [ -f scc-audit.jsonl ] && stall_args+=(--audit scc-audit.jsonl)
+            [ -f scc-run.log ] && stall_args+=(--log scc-run.log)
+            [ -f engine-run.log ] && stall_args+=(--log engine-run.log)
+            node "$CLASSIFIER" "${stall_args[@]}" >/dev/null 2>&1 || true
+            if [ -f ai-sdlc-stall.json ]; then
+              stall_class=$(jq -r '.class // ""' ai-sdlc-stall.json 2>/dev/null || true)
+              stall_route=$(jq -r '.route // ""' ai-sdlc-stall.json 2>/dev/null || true)
+              echo "stall classification: class=$stall_class route=$stall_route ($(jq -r '.reason // ""' ai-sdlc-stall.json))"
+            fi
           fi
 
           jq -n \
@@ -484,6 +584,8 @@ jobs:
             --arg fallback_exit "$fallback_exit" \
             --arg model "$model" \
             --argjson exit_code "$exit_code" \
+            --arg stall_class "${stall_class:-}" \
+            --arg stall_route "${stall_route:-}" \
             --argjson max_seconds "$MAX_SECONDS" \
             --argjson max_steps "$MAX_STEPS" \
             '{v: 1, model: $model, exit_code: $exit_code,
@@ -492,6 +594,8 @@ jobs:
               fallback_used: $fallback_used,
               fallback_reason: (if $fallback_reason == "" then null else $fallback_reason end),
               fallback_exit: (if $fallback_exit == "" then null else ($fallback_exit | tonumber) end),
+              stall_class: (if $stall_class == "" then null else $stall_class end),
+              stall_route: (if $stall_route == "" then null else $stall_route end),
               budget_per_run: {max_seconds: $max_seconds, max_steps: $max_steps}}' \
             > ai-sdlc-run.json
 
@@ -501,12 +605,14 @@ jobs:
             echo "primary_exit=$primary_exit"
             echo "fallback_used=$fallback_used"
             echo "fallback_exit=$fallback_exit"
+            echo "stall_class=${stall_class:-}"
+            echo "stall_route=${stall_route:-}"
           } >> "$GITHUB_OUTPUT"
           {
             echo "### ai-sdlc engine run"
-            echo "| model | exit | primary_model | primary_exit | fallback_used | fallback_reason |"
-            echo "|---|---|---|---|---|---|"
-            echo "| \`$model\` | $exit_code | \`$PRIMARY_MODEL\` | $primary_exit | $fallback_used | ${fallback_reason:-—} |"
+            echo "| model | exit | primary_model | primary_exit | fallback_used | fallback_reason | stall_class |"
+            echo "|---|---|---|---|---|---|---|"
+            echo "| \`$model\` | $exit_code | \`$PRIMARY_MODEL\` | $primary_exit | $fallback_used | ${fallback_reason:-—} | ${stall_class:-—} |"
           } >> "$GITHUB_STEP_SUMMARY"
           exit 0  # never fail the job here — verdict computed below
 
@@ -595,7 +701,8 @@ jobs:
           # Run artifacts are pipeline evidence, not engine output — exclude
           # them from the patch (same list the commit step unstages, #68).
           git diff --cached --name-only -z -- \
-            'scc-*.json*' 'ai-sdlc-run.json' 'issue.json' 'task-prompt.md' \
+            'scc-*.json*' 'scc-*.log' 'engine-run*.log' 'ai-sdlc-run.json' \
+            'ai-sdlc-stall.json' 'issue.json' 'task-prompt.md' \
             | xargs -0 -r git reset -q --
           # --binary so binary payloads exist to be REJECTED by the validator
           # (omitting it would silently drop binary edits from the audit).
@@ -603,8 +710,8 @@ jobs:
           git reset -q
           git checkout -- .
           git clean -fdq \
-            -e ai-sdlc-engine.patch -e ai-sdlc-run.json -e ai-sdlc-apply-report.json \
-            -e issue.json -e task-prompt.md -e 'scc-*' -e pr-body.md -e comment.md
+            -e ai-sdlc-engine.patch -e ai-sdlc-run.json -e ai-sdlc-stall.json -e ai-sdlc-apply-report.json \
+            -e issue.json -e task-prompt.md -e 'scc-*' -e 'engine-run*' -e pr-body.md -e comment.md
           wc -c ai-sdlc-engine.patch
 
       # The validator is fetched from the trusted runtime pin — never from
@@ -651,7 +758,8 @@ jobs:
           [ -f "$SAN" ] || exit 0
           git add -A -- . ':!.github/workflows'
           git diff --cached --name-only -z -- \
-            'scc-*.json*' 'ai-sdlc-run.json' 'issue.json' 'task-prompt.md' \
+            'scc-*.json*' 'scc-*.log' 'engine-run*.log' 'ai-sdlc-run.json' \
+            'ai-sdlc-stall.json' 'issue.json' 'task-prompt.md' \
             | xargs -0 -r git reset -q --
           git diff --cached --quiet && exit 0
           read -r PF PL <<< "$(git diff --cached --numstat | awk '{a+=$1; d+=$2; f++} END{printf "%d %d", f+0, a+d+0}')"
@@ -697,18 +805,25 @@ jobs:
           PRIMARY_MODEL: ${{ steps.contract.outputs.model_primary }}
           PRIMARY_EXIT: ${{ steps.engine.outputs.primary_exit }}
           FALLBACK_USED: ${{ steps.engine.outputs.fallback_used }}
+          STALL_CLASS: ${{ steps.engine.outputs.stall_class }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           L_QUEUED: ${{ steps.contract.outputs.label_queued }}
           L_PR_OPENED: ${{ steps.contract.outputs.label_pr_opened }}
           L_NO_CHANGES: ${{ steps.contract.outputs.label_no_changes }}
           L_FAILED: ${{ steps.contract.outputs.label_failed }}
+          L_NOT_READY: ${{ steps.contract.outputs.label_not_ready }}
           L_ESCALATE: ${{ steps.contract.outputs.escalation_label }}
         run: |
           set -euo pipefail
           export GH_TOKEN="$FORGE_TOKEN_WRITE"
-          for L in "$L_QUEUED" "$L_PR_OPENED" "$L_NO_CHANGES" "$L_FAILED" "${L_ESCALATE:-needs-human}"; do
+          for L in "$L_QUEUED" "$L_PR_OPENED" "$L_NO_CHANGES" "$L_FAILED" "${L_NOT_READY:-scc:not-ready}" "${L_ESCALATE:-needs-human}"; do
             gh label create "$L" -R "$REPO" --force || true
           done
+          # spec routing (issue #158): the refinement hold sends
+          # no-changes/stalled-spec runs back to the issue author.
+          label_not_ready() {
+            gh issue edit "$ISSUE" -R "$REPO" --remove-label "$L_QUEUED" --add-label "${L_NOT_READY:-scc:not-ready}" || true
+          }
           case "$CODE" in
             0)
               if [ "$APPLIED" = "true" ]; then
@@ -730,8 +845,36 @@ jobs:
           EOF
                 gh issue comment "$ISSUE" -R "$REPO" --body-file apply-reject-comment.md || true
               fi ;;
-            10) gh issue edit "$ISSUE" -R "$REPO" --add-label "$L_NO_CHANGES" || true ;;
-            *)  gh issue edit "$ISSUE" -R "$REPO" --add-label "$L_FAILED" || true ;;
+            10)
+              gh issue edit "$ISSUE" -R "$REPO" --add-label "$L_NO_CHANGES" || true
+              # Engine-stall classification (issue #158): a spec-class no-op
+              # (exit 10 / manifest no_changes) routes back to the author
+              # under the refinement hold.
+              label_not_ready
+              gh issue comment "$ISSUE" -R "$REPO" --body "ai-sdlc: the engine resolved this issue without producing changes (exit $CODE${STALL_CLASS:+, stall class \`$STALL_CLASS\`}) — treating the spec as not actionable in its current form. Refine the issue (scope, acceptance criteria) and re-apply the trigger label to re-dispatch. Run: $RUN_URL" || true ;;
+            *)
+              gh issue edit "$ISSUE" -R "$REPO" --add-label "$L_FAILED" || true
+              # Engine-stall routing (issue #158): each class lands on a
+              # distinct terminal state — transport/tooling/livelock escalate
+              # to humans (transport's bounded retry already fired in the
+              # engine step); spec/budget go back to the issue author.
+              case "${STALL_CLASS:-}" in
+                transport)
+                  gh issue edit "$ISSUE" -R "$REPO" --add-label "${L_ESCALATE:-needs-human}" || true
+                  gh issue comment "$ISSUE" -R "$REPO" --body "ai-sdlc: engine run died on a transport-class failure (provider/network/quota, exit $CODE). The bounded retry ladder already fired inside the run; this is infra, not a code defect. Run: $RUN_URL" || true ;;
+                tooling)
+                  gh issue edit "$ISSUE" -R "$REPO" --add-label "${L_ESCALATE:-needs-human}" || true
+                  gh issue comment "$ISSUE" -R "$REPO" --body "ai-sdlc: engine run died on a tooling-class failure (exit $CODE) — the engine/worker crashed or could not launch. Escalating for a postmortem on the engine repo (os-santiago/sc-agent-cli). Run: $RUN_URL" || true ;;
+                livelock)
+                  gh issue edit "$ISSUE" -R "$REPO" --add-label "${L_ESCALATE:-needs-human}" || true
+                  gh issue comment "$ISSUE" -R "$REPO" --body "ai-sdlc: engine run stalled — zero-mutation livelock (exit $CODE): the model consumed its bound without producing workspace changes. Run: $RUN_URL" || true ;;
+                spec)
+                  label_not_ready
+                  gh issue comment "$ISSUE" -R "$REPO" --body "ai-sdlc: the engine resolved this issue without producing changes (exit $CODE, stall class \`spec\`) — the spec is not actionable in its current form. Refine the issue and re-apply the trigger label to re-dispatch. Run: $RUN_URL" || true ;;
+                budget)
+                  label_not_ready
+                  gh issue comment "$ISSUE" -R "$REPO" --body "ai-sdlc: the engine exhausted its bounded budget before finishing (exit $CODE, stall class \`budget\`) — re-scope the issue into a smaller task or raise \`engine.max_seconds\`/\`engine.max_steps\` in .ai-sdlc.yaml, then re-apply the trigger label. Run: $RUN_URL" || true ;;
+              esac ;;
           esac
           # Primary AND fallback both hit provider/auth → escalate (contract escalation.label).
           if [ "$FALLBACK_USED" = "true" ] && { [ "$CODE" = 20 ] || [ "$CODE" = 21 ]; }; then
@@ -753,7 +896,9 @@ jobs:
           [ -f "$SAN" ] || exit 0
           node "$SAN" --redact \
             scc-audit.jsonl scc-audit.primary.jsonl scc-manifest.json \
-            scc-manifest.primary.json ai-sdlc-run.json task-prompt.md \
+            scc-manifest.primary.json ai-sdlc-run.json ai-sdlc-stall.json \
+            scc-run.log scc-run.primary.log engine-run.log engine-run.primary.log \
+            task-prompt.md \
             issue.json 2>/dev/null || true
           # Ship the count-only sanitize audit with the run evidence.
           if [ -f "$RUNNER_TEMP/ai-sdlc-sanitize/audit.jsonl" ]; then
@@ -780,6 +925,7 @@ jobs:
           data: ${{ toJSON(steps.engine.outputs) }}
           data-files: |
             ai-sdlc-run.json
+            ai-sdlc-stall.json
             scc-manifest.json
             scc-audit.jsonl
             ai-sdlc-engine.patch
@@ -816,7 +962,12 @@ jobs:
             scc-manifest.json
             scc-audit.primary.jsonl
             scc-manifest.primary.json
+            scc-run.log
+            scc-run.primary.log
+            engine-run.log
+            engine-run.primary.log
             ai-sdlc-run.json
+            ai-sdlc-stall.json
             ai-sdlc-engine.patch
             ai-sdlc-apply-report.json
             apply-result.json

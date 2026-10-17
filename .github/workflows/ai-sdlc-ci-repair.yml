@@ -697,9 +697,30 @@ jobs:
           ENGINE_CODE: ${{ steps.engine.outputs.exit_code }}
           PUSH_OUTCOME: ${{ steps.push.outputs.outcome }}
           COMMIT: ${{ steps.push.outputs.commit }}
+          ENGINE: ${{ steps.stage-engine.outputs.engine || 'scc' }}
+          RUNTIME_REF: ${{ inputs.runtime_ref }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          # Engine-stall classification (issue #158): trusted code from the
+          # runtime pin, fail-open — when available, the engine run's own
+          # failure class is recorded into the attempt manifest. Skipped when
+          # the engine never ran (base-fault path) — there is nothing to
+          # classify.
+          if [ -n "$ENGINE_CODE" ] && gh api "repos/os-santiago/ai-sdlc/contents/scripts/stall-classifier.js?ref=$RUNTIME_REF" \
+              -H "Accept: application/vnd.github.raw" > "$WORK/stall-classifier.js" 2>/dev/null \
+              && node --check "$WORK/stall-classifier.js" 2>/dev/null; then
+            gh api "repos/os-santiago/ai-sdlc/contents/config/engine_adapters.json?ref=$RUNTIME_REF" \
+              -H "Accept: application/vnd.github.raw" > "$WORK/engine_adapters.json" 2>/dev/null || true
+            args=(--engine "$ENGINE" --exit-code "${ENGINE_CODE:-1}"
+              --manifest "$WORK/scc-manifest.json" --audit "$WORK/scc-audit.jsonl"
+              --mutations "$([ "$PUSH_OUTCOME" = "pushed" ] && echo 1 || echo 0)"
+              --out "$WORK/stall.json" --json)
+            [ -f "$WORK/engine_adapters.json" ] && args+=(--registry "$WORK/engine_adapters.json")
+            node "$WORK/stall-classifier.js" "${args[@]}" || true
+          elif [ -n "$ENGINE_CODE" ]; then
+            echo "::warning::stall-classifier.js unavailable at os-santiago/ai-sdlc@$RUNTIME_REF — attempt recorded unclassified"
+          fi
           node - <<'NODE'
           const fs = require('fs');
           const W = process.env.WORK;
@@ -708,6 +729,8 @@ jobs:
           try { failure = JSON.parse(fs.readFileSync(`${W}/failure.json`, 'utf8')); } catch (_) {}
           let engine = {};
           try { engine = JSON.parse(fs.readFileSync(`${W}/scc-manifest.json`, 'utf8')); } catch (_) {}
+          let stall = null;
+          try { stall = JSON.parse(fs.readFileSync(`${W}/stall.json`, 'utf8')); } catch (_) {}
           let runbook = {};
           try { runbook = JSON.parse(fs.readFileSync(`${W}/runbook.json`, 'utf8')); } catch (_) {}
           const code = e.ENGINE_CODE || 'not-run';
@@ -725,6 +748,10 @@ jobs:
                        baseFault: failure.baseFault || false, baseFaultChecks: failure.baseFaultChecks || [],
                        runbookHit: runbook.hit ? runbook.entry : null },
             failingChecks: failure.checks, engineToolCalls: engine.tool_calls_total ?? null, engineIterations: engine.iterations ?? null,
+            // Engine-stall classification (issue #158): the engine run's own
+            // failure class + terminal route, when the classifier was
+            // available at the runtime pin.
+            engineStall: stall ? { class: stall.class, route: stall.route, terminal: stall.terminal, reason: stall.reason } : null,
             run: e.RUN_URL,
           };
           fs.writeFileSync(`${W}/ci-repair-manifest.json`, JSON.stringify(manifest, null, 2));
@@ -741,6 +768,7 @@ jobs:
           if (runbook.hit && runbook.entry) {
             lines.push(`- runbook: \`${runbook.entry}\` — prior fix injected into the repair brief`);
           }
+          if (stall) lines.push(`- engine stall class: \`${stall.class}\` → \`${stall.route}\` (${stall.terminal})`);
           if (baseFault) lines.push('- diagnosis: `scc:config-error` in the failing check — the contract failed validation on the **base** ref (every stage resolves `.ai-sdlc.yaml` from base, never this head), so no push here can green the run. Escalated without spending an engine run.');
           fs.writeFileSync(`${W}/attempt-comment.md`, lines.join('\n') + '\n');
           fs.appendFileSync(e.GITHUB_OUTPUT, `outcome=${outcome}\n`);
@@ -878,6 +906,7 @@ jobs:
           name: ai-sdlc-ci-repair-${{ inputs.pr_number }}-attempt-${{ steps.guard.outputs.attempt }}
           path: |
             ${{ runner.temp }}/ci-repair/ci-repair-manifest.json
+            ${{ runner.temp }}/ci-repair/stall.json
             ${{ runner.temp }}/ci-repair/repair-prompt.md
             ${{ runner.temp }}/ci-repair/scc-audit.jsonl
             ${{ runner.temp }}/ci-repair/scc-manifest.json

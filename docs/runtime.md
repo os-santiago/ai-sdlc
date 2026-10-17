@@ -130,7 +130,26 @@ workflow change. Other stages consume `stage_models` when engine
 dispatch lands (issue #206).
 
 `model.fallback` is used **once**, only when the primary route fails with a
-provider error (engine exit 20); both attempts' audit logs are uploaded.
+provider error (engine exit 20) or the stall classifier verdicts the primary
+run `transport` (below); both attempts' audit logs are uploaded.
+
+### Engine-stall classification
+
+Every engine run in `implement` is classified after exit by
+`scripts/stall-classifier.js` (issue #158) into one of
+`ok | transport | tooling | spec | budget | livelock`, driven by the
+adapter's `exitCodeMap` + optional `stallClassMap` in
+`config/engine_adapters.json`, the run manifest's terminal resolution, and
+mutation/tool-call evidence from the worktree and audit log. The verdict
+lands in `ai-sdlc-stall.json` (artifact + ledger data-file) and the
+`stall_class` workflow output. Routes: `transport` → one bounded
+fallback-model retry, then `needs-human`; `tooling` → `needs-human`
+(postmortem on the engine repo); `spec`/`budget` → the refinement hold
+(`labels.not-ready`, back to the issue author); `livelock` → `needs-human`.
+Zero-mutation timeouts classify `livelock`/`transport`, never as a crash.
+`ci-repair` records the same verdict as `engineStall` in
+`ci-repair-manifest.json`. An unavailable classifier at the runtime pin
+fails open — the run is recorded unclassified.
 
 ### Fail-fast
 
