@@ -58,6 +58,8 @@ the linter reads the block, humans read the table.
 | `ai-sdlc-ready-queue-<run>-<attempt>` | sweep | workspace-report | `ready-queue.json`/`ready-queue.md` at root | 30d |
 | `ai-sdlc-slo-metrics` | metrics | workspace-report | `slo-metrics.json`/`.prom`, `slo-input.json` at root | 90d |
 | `ai-sdlc-drift-report` | drift | workspace-report | `drift-report.json`, `drift-input.json` at root | 90d |
+| `ai-sdlc-canary-<run>-<attempt>` | canary | workspace-report | `canary-report.json`, `canary-observe.json`, `canary-verdict.json`, `kill.json` at root | 30d |
+| `ai-sdlc-dora-metrics` | dora | metrics-report | `${{ runner.temp }}/ai-sdlc-dora/` (metrics + input JSON) | 90d |
 | `ai-sdlc-<tag>` | release | build | `dist/` — the shipped artifact, not run evidence | 30d |
 
 <!-- ai-sdlc:run-evidence -->
@@ -118,7 +120,7 @@ the linter reads the block, humans read the table.
     },
     {
       "id": "ledger-segment",
-      "regex": "^ai-sdlc-ledger-(intake|implement|review|review-fix|ci-repair|automerge|dep-update|verify|kill-switch|drift|fleet|metrics|sweep)-",
+      "regex": "^ai-sdlc-ledger-(intake|implement|review|review-fix|ci-repair|automerge|dep-update|verify|kill-switch|drift|fleet|metrics|sweep|canary)-",
       "files": [".github/workflows/ai-sdlc-intake.yml",
                 ".github/workflows/ai-sdlc-implement.yml",
                 ".github/workflows/ai-sdlc-review.yml",
@@ -126,7 +128,8 @@ the linter reads the block, humans read the table.
                 ".github/workflows/ai-sdlc-automerge.yml",
                 ".github/workflows/ai-sdlc-dep-update.yml",
                 ".github/workflows/ai-sdlc-verify.yml",
-                ".github/workflows/ai-sdlc-kill.yml"],
+                ".github/workflows/ai-sdlc-kill.yml",
+                ".github/workflows/ai-sdlc-canary.yml"],
       "class": "ledger",
       "path_root": "runner_temp",
       "retention": 14
@@ -156,6 +159,24 @@ the linter reads the block, humans read the table.
       "class": "workspace-report",
       "path_root": "workspace",
       "paths": ["drift-report.json", "drift-input.json"],
+      "retention": 90
+    },
+    {
+      "id": "canary-report",
+      "match": "ai-sdlc-canary-<e>-<e>",
+      "files": [".github/workflows/ai-sdlc-canary.yml"],
+      "class": "workspace-report",
+      "path_root": "workspace",
+      "paths": ["canary-report.json", "canary-observe.json",
+                "canary-verdict.json", "kill.json"],
+      "retention": 30
+    },
+    {
+      "id": "dora-metrics",
+      "match": "ai-sdlc-dora-metrics",
+      "files": [".github/workflows/ai-sdlc-dora.yml"],
+      "class": "metrics-report",
+      "path_root": "runner_temp",
       "retention": 90
     },
     {

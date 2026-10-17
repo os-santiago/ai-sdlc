@@ -7,7 +7,7 @@
 # ready-to-implement → merge = lead time, red-main/revert/non-converging =
 # change failure, main red → green = time to restore).
 #
-# Outputs: the computed JSON lands as the `dora-metrics-json` workflow
+# Outputs: the computed JSON lands as the `ai-sdlc-dora-metrics` workflow
 # artifact (90d retention); the markdown render is committed to
 # docs/metrics/dora.md (diff-gated — spec/generated-artifact-publish-contract.md)
 # on scheduled/dispatch runs of this repo. `workflow_call` consumers get
@@ -99,14 +99,14 @@ jobs:
           # One live collection → JSON artifact + committed markdown report
           # rendered from the same report object — they can never drift.
           node "$WORK/dora-metrics.js" --repo "$REPO" --window "$WINDOW" \
-            --out dora-metrics.json --report docs/metrics/dora.md \
+            --out "$WORK/dora-metrics.json" --report docs/metrics/dora.md \
             --github-summary --github-output --dump-input "$WORK/dora-input.json"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dora-metrics-json
+          name: ai-sdlc-dora-metrics
           path: |
-            dora-metrics.json
+            ${{ runner.temp }}/ai-sdlc-dora/dora-metrics.json
             ${{ runner.temp }}/ai-sdlc-dora/dora-input.json
           retention-days: 90
           if-no-files-found: error
