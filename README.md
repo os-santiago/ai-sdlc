@@ -90,7 +90,11 @@ The bootstrap PR (and the manual path below) wires three things:
        with:
          repo: ${{ github.repository }}
          issue_number: ${{ github.event.issue.number }}
-       secrets: inherit
+       secrets:   # explicit map — pass only what the stage declares
+         AI_SDLC_TOKEN: ${{ secrets.AI_SDLC_TOKEN }}                    # optional
+         AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+         AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+         AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}          # optional
 
      implement:
        needs: intake
@@ -99,7 +103,11 @@ The bootstrap PR (and the manual path below) wires three things:
        with:
          repo: ${{ github.repository }}
          issue_number: ${{ github.event.issue.number }}
-       secrets: inherit
+       secrets:
+         AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}                  # required
+         AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }} # required
+         AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}          # optional
+         MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}                    # optional
    ```
 
    Review, automerge, ci-repair, sweep and verify wire the same way —

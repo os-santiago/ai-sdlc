@@ -39,7 +39,11 @@
 #       with:
 #         repo: ${{ github.repository }}
 #         pr_number: ${{ github.event.pull_request.number }}
-#       secrets: inherit   # needs AI_SDLC_APP_ID + AI_SDLC_APP_PRIVATE_KEY
+#       secrets:   # explicit map — pass only what this stage declares (#137)
+#         AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}                  # required — ai-sdlc App, fail-closed
+#         AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }} # required — docs/runtime.md
+#         AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}          # optional ledger signing
+#         MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}                    # optional inference key
 name: ai-sdlc-review
 
 on:

@@ -13,19 +13,25 @@
 #      (bounded-everything doctrine; jobs calling reusable workflows via
 #      `uses:` can't carry the key — the callee's job-level bound applies;
 #      issue #136)
-#   5. actionlint, when a binary is already installed (CI owns the pinned
+#   5. doc/caller hygiene (issues #137, #138, #141):
+#      tools/check-doc-snippets.py — caller snippets in docs/runtime.md +
+#      README and real `uses:` calls resolve against the callees'
+#      workflow_call contracts; `secrets: inherit` is rejected;
+#      tools/check-run-evidence.py — every upload-artifact name/path/
+#      retention conforms to spec/run-evidence.md
+#   6. actionlint, when a binary is already installed (CI owns the pinned
 #      release — .github/workflows/actionlint.yml; ./actionlint fetches it).
 #      With shellcheck on PATH it also lints every workflow `run:` block.
 #      Composite actions are covered by a generated caller workflow that
 #      `uses:` every .github/actions/*/action.yml — actionlint checks action
 #      files only transitively, never as direct operands (issue #130).
-#   6. shellcheck over the repo's standalone scripts (issue #129): the
+#   7. shellcheck over the repo's standalone scripts (issue #129): the
 #      ./actionlint shim, tools/*.sh, .github/actions/*/*.sh, tests/*.sh —
 #      when a binary is installed (CI runners ship one; tools/shellcheck.sh
 #      fetches the pinned release for local parity)
-#   7. node --test on */*.test.js + scripts/gha/*.test.js, when node and
+#   8. node --test on */*.test.js + scripts/gha/*.test.js, when node and
 #      test files are present
-#   8. shell e2e tests (tests/*.test.sh) — CLI-level contracts that assert
+#   9. shell e2e tests (tests/*.test.sh) — CLI-level contracts that assert
 #      process exit codes, which node --test can't cover as directly
 #
 # Exit 0 = clean, 1 = a check failed, 2 = required tooling missing.
@@ -174,7 +180,14 @@ if bad:
 print("[✓] workflows: every step-running job declares timeout-minutes")
 PY
 
-# --- 5. actionlint (when installed) ---------------------------------------------
+# --- 5. Doc/caller + run-evidence hygiene (issues #137/#138/#141) ----------------
+# Both checkers are dependency-free (indentation parsing — no PyYAML needed).
+python3 tools/check-doc-snippets.py \
+  || fail "doc caller snippets drifted from workflow_call contracts (issue #138)"
+python3 tools/check-run-evidence.py \
+  || fail "upload-artifact names/paths violate spec/run-evidence.md (issue #141)"
+
+# --- 6. actionlint (when installed) ---------------------------------------------
 if command -v actionlint >/dev/null 2>&1; then
   actionlint || fail "actionlint reported workflow violations"
   echo "[✓] actionlint: workflows clean"
@@ -195,7 +208,7 @@ else
   note "actionlint not on PATH — skipped (CI pin: .github/workflows/actionlint.yml; run ./actionlint -color for full parity)"
 fi
 
-# --- 6. shellcheck over standalone scripts (when installed) ---------------------
+# --- 7. shellcheck over standalone scripts (when installed) ---------------------
 # Workflow `run:` blocks are not listed here: actionlint already pipes them
 # through shellcheck when the binary is on PATH (CI asserts it in
 # .github/workflows/actionlint.yml) with proper ${{ }} masking and inline
@@ -215,7 +228,7 @@ else
   note "shellcheck not on PATH — skipped (CI runners ship it; local parity: bash tools/shellcheck.sh <files>)"
 fi
 
-# --- 7. node --test (when node and test files exist) ----------------------------
+# --- 8. node --test (when node and test files exist) ----------------------------
 if command -v node >/dev/null 2>&1; then
   tests=()
   # */*.test.js misses action-dir tests (.github/actions/*/), nested
@@ -232,7 +245,7 @@ else
   note "node not on PATH — node --test skipped"
 fi
 
-# --- 8. shell e2e tests ---------------------------------------------------------
+# --- 9. shell e2e tests ---------------------------------------------------------
 ran=0
 for t in tests/*.test.sh; do
   [ -f "$t" ] || continue

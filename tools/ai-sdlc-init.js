@@ -203,6 +203,11 @@ escalation:
 
 function callerWorkflow({ runtime = DEFAULT_RUNTIME, ref = DEFAULT_REF, base = 'main' } = {}) {
   const uses = (wf) => `${runtime}/.github/workflows/${wf}@${ref}`;
+  // Explicit per-stage secret maps (issue #137): the generated caller is the
+  // canonical consumer artifact — pass only what each callee declares in its
+  // workflow_call secrets block, so the mapping is auditable in the PR.
+  const smap = (names) =>
+    `secrets:\n${names.map((n) => `      ${n}: \${{ secrets.${n} }}`).join('\n')}`;
   const labelSteps = LABELS
     .map(([n, c, d]) => `            create ${JSON.stringify(n)} ${c} ${JSON.stringify(d)}`)
     .join('\n');
@@ -270,7 +275,7 @@ ${labelSteps}
     with:
       repo: \${{ github.repository }}
       issue_number: \${{ github.event.issue.number }}
-    secrets: inherit
+    ${smap(['AI_SDLC_TOKEN', 'AI_SDLC_APP_ID', 'AI_SDLC_APP_PRIVATE_KEY', 'AI_SDLC_LEDGER_KEY'])}
 
   implement:
     needs: intake
@@ -280,7 +285,7 @@ ${labelSteps}
       repo: \${{ github.repository }}
       issue_number: \${{ github.event.issue.number }}
       ledger_head: \${{ needs.intake.outputs.ledger_head }}
-    secrets: inherit
+    ${smap(['AI_SDLC_APP_ID', 'AI_SDLC_APP_PRIVATE_KEY', 'AI_SDLC_LEDGER_KEY', 'MODEL_API_KEY'])}
 
   # Deterministic pr:risk-* labeling on every same-repo PR head.
   classify:
@@ -291,7 +296,7 @@ ${labelSteps}
     with:
       repo: \${{ github.repository }}
       pr_number: \${{ github.event.pull_request.number }}
-    secrets: inherit
+    ${smap(['AI_SDLC_APP_ID', 'AI_SDLC_APP_PRIVATE_KEY'])}
 
   # AI review + bounded review-fix convergence. Fork heads carry no
   # secrets — filtered here so they skip cleanly.
@@ -303,7 +308,7 @@ ${labelSteps}
     with:
       repo: \${{ github.repository }}
       pr_number: \${{ github.event.pull_request.number }}
-    secrets: inherit
+    ${smap(['AI_SDLC_APP_ID', 'AI_SDLC_APP_PRIVATE_KEY', 'AI_SDLC_LEDGER_KEY', 'MODEL_API_KEY'])}
 
   # Merge gate: on PR events, on check completion, and manually
   # (Actions → ai-sdlc → Run workflow with a PR number).
@@ -318,7 +323,7 @@ ${labelSteps}
     with:
       repo: \${{ github.repository }}
       pr_number: \${{ github.event.inputs.pr || github.event.pull_request.number || github.event.check_run.pull_requests[0].number }}
-    secrets: inherit
+    ${smap(['AI_SDLC_APP_ID', 'AI_SDLC_APP_PRIVATE_KEY', 'AI_SDLC_LEDGER_KEY'])}
 
   # Bounded CI repair on red checks associated with a PR.
   ci-repair:
@@ -330,7 +335,7 @@ ${labelSteps}
     with:
       repo: \${{ github.repository }}
       pr_number: \${{ github.event.check_run.pull_requests[0].number }}
-    secrets: inherit
+    ${smap(['AI_SDLC_APP_ID', 'AI_SDLC_APP_PRIVATE_KEY', 'AI_SDLC_LEDGER_KEY', 'MODEL_API_KEY'])}
 
   # Post-merge verify of the contract's verify.commands on the base branch.
   verify:
@@ -339,7 +344,7 @@ ${labelSteps}
     with:
       repo: \${{ github.repository }}
       base: ${base}
-    secrets: inherit
+    ${smap(['AI_SDLC_TOKEN', 'AI_SDLC_LEDGER_KEY'])}
 `;
 }
 

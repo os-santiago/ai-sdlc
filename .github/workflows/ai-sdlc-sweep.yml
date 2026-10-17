@@ -196,7 +196,12 @@ jobs:
       max_repairs: ${{ fromJSON(needs.discover.outputs.max_repairs) }}
       pending_max_minutes: ${{ fromJSON(needs.discover.outputs.pending_max_minutes) }}
       merge_method: ${{ needs.discover.outputs.merge_method }}
-    secrets: inherit
+    # Explicit per-stage secret map (issue #137): the gate declares the App
+    # pair (required) + the optional ledger signer — nothing else.
+    secrets:
+      AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+      AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+      AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}
 
   label-repair:
     # Issue-label contradiction repair (issue #200; spec/labels.md →

@@ -246,7 +246,11 @@ jobs:
     with:
       repo: ${{ github.repository }}
       issue_number: ${{ github.event.issue.number }}
-    secrets: inherit
+    secrets:   # explicit map — pass only what the stage declares (#137)
+      AI_SDLC_TOKEN: ${{ secrets.AI_SDLC_TOKEN }}                    # optional cross-repo token
+      AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+      AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+      AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}          # optional ledger signing
 
   implement:
     needs: intake
@@ -255,8 +259,19 @@ jobs:
     with:
       repo: ${{ github.repository }}
       issue_number: ${{ github.event.issue.number }}
-    secrets: inherit
+    secrets:
+      AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}                  # required — fail-closed
+      AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }} # required
+      AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}          # optional ledger signing
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}                    # optional inference key
 ```
+
+Secrets are mapped **explicitly per stage** — never `secrets: inherit`.
+Pass only what the callee's `workflow_call.secrets` declares
+(`tools/check-doc-snippets.py` enforces this against the caller snippets
+here and in the README): the App pair is required by mutation stages,
+`AI_SDLC_LEDGER_KEY` and `MODEL_API_KEY` are optional everywhere they are
+declared, `AI_SDLC_TOKEN` is the cross-repo fallback intake/verify accept.
 
 The calling repo must see `AI_SDLC_APP_ID` + `AI_SDLC_APP_PRIVATE_KEY`
 (org secrets scoped to the consumer repos are the intended setup).
@@ -699,7 +714,11 @@ jobs:
       repo: ${{ github.repository }}
       pr_number: ${{ github.event.inputs.pr || github.event.check_run.pull_requests[0].number }}
       max_repairs: 3
-    secrets: inherit
+    secrets:
+      AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}                  # required — fail-closed
+      AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }} # required
+      AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}          # optional ledger signing
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}                    # optional inference key
 ```
 
 The automerge gate's `repair-signaled` action points at this workflow as
@@ -816,7 +835,11 @@ jobs:
     with:
       repo: ${{ github.repository }}
       pr_number: ${{ github.event.pull_request.number }}
-    secrets: inherit   # AI_SDLC_APP_ID + AI_SDLC_APP_PRIVATE_KEY
+    secrets:
+      AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}                  # required
+      AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }} # required
+      AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}          # optional
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}                    # optional
 ```
 
 Post-implement chaining (alternative to the event path — `implement`
@@ -830,7 +853,11 @@ exposes `pr_number`):
     with:
       repo: ${{ github.repository }}
       pr_number: ${{ needs.implement.outputs.pr_number }}
-    secrets: inherit
+    secrets:
+      AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+      AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+      AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
 ```
 
 Artifacts: `ai-sdlc-review-<pr>-<attempt>` (verdict.json, prompt, bounded
@@ -942,7 +969,8 @@ Copy `ai-sdlc-sweep.yml` into the repo and point the `gate` job at
 `os-santiago/ai-sdlc/.github/workflows/ai-sdlc-automerge.yml@main`. The gate
 merges with the `ai-sdlc` App installation token, so merges fire downstream
 `push` workflows (e.g. post-merge verify); the App secrets must be visible
-to the repo running the sweep (`secrets: inherit`).
+to the repo running the sweep (mapped explicitly on the `gate` job's
+`secrets:` — see `.github/workflows/ai-sdlc-sweep.yml` for the shape).
 
 ## SLO metrics (`ai-sdlc-metrics.yml`)
 
@@ -1261,7 +1289,10 @@ jobs:
     uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-dep-update.yml@main
     with:
       repo: ${{ github.repository }}
-    secrets: inherit   # AI_SDLC_APP_ID + AI_SDLC_APP_PRIVATE_KEY
+    secrets:
+      AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}                  # required
+      AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }} # required
+      AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}          # optional
 ```
 
 Artifacts: `ai-sdlc-dep-update-<attempt>` (plan.json, outdated.json, PR
@@ -1418,6 +1449,25 @@ appends a hash-chained record and seals the file at run completion:
   (64 KiB per entry), `AI_SDLC_LEDGER_MAX_FILES` (20) /
   `AI_SDLC_LEDGER_MAX_FILE_BYTES` (8 MiB) for hashed evidence files.
 
+## Run-evidence layout
+
+The canonical artifact layout is normative in
+[spec/run-evidence.md](../spec/run-evidence.md) (issue #141) and enforced
+by `tools/check-run-evidence.py` in `tools/validate-repo.sh`:
+
+- Working evidence lives under `${{ runner.temp }}/ai-sdlc-<stage>/` —
+  one directory per stage — and uploads as
+  `ai-sdlc-<stage>-<subject>[-attempt-<n>]`. Sealed ledger segments live
+  under `${{ runner.temp }}/ai-sdlc-ledger/ledger-<stage>.jsonl`, contract
+  resolution under `${{ runner.temp }}/ai-sdlc-contract/`.
+- Workspace-root uploads are a closed, enumerated class: the implement
+  stage's engine session files (the engine CLI and `git` operate on the
+  checkout — the set is `git add`-excluded and root-`.gitignore`d; its
+  migration to `${{ runner.temp }}` is the tracked remainder of #141),
+  the sweep's `ready-queue.*`, metrics `slo-*`, drift `drift-*`, and the
+  release `dist/` bundle. New workspace writes outside the declared set
+  fail the repo check.
+
 ### Verifying a run offline
 
 Download the `ai-sdlc-ledger-*` artifacts for the run set, then:
@@ -1477,8 +1527,9 @@ node .github/actions/run-ledger/run-ledger.js keygen --out-dir /tmp/ledger-key
 ```
 
 The key is a dedicated secret (key separation from the App's
-`AI_SDLC_APP_PRIVATE_KEY`); `secrets: inherit` callers pass it through
-automatically once defined.
+`AI_SDLC_APP_PRIVATE_KEY`); callers map it explicitly as
+`AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}` on the stages that
+declare it.
 
 ## Bounds
 
@@ -1491,7 +1542,9 @@ budget (`review.max_fix_iterations`), the merge-gate review wait cap
 (`diff_max_bytes`, `findings_max`). The audit log + run manifest land as
 workflow artifacts (`ai-sdlc-run-<issue>`, plus `ai-sdlc-run.json` and the
 `*.primary.*` files when fallback fired) for postmortem analysis. Those
-session files live in the workspace root during a run but are excluded
+session files live in the workspace root during a run — the declared
+workspace-session class of the run-evidence layout
+([spec/run-evidence.md](../spec/run-evidence.md)) — but are excluded
 from the implement stage's `git add` (`:!scc-*.json*`, `:!ai-sdlc-run.json`,
 `:!issue.json`, `:!task-prompt.md`) — and root-ignored in this repo's
 `.gitignore` — so a run's commit only ever carries real source changes

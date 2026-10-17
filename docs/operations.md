@@ -97,7 +97,9 @@ so re-arming always means re-applying it — never assume it survived.
 
 ## Artifacts
 
-Per-run uploads (14-day retention):
+Canonical names, locations and retentions are normative in
+`spec/run-evidence.md` (enforced by `tools/check-run-evidence.py`).
+Per-run uploads (14-day retention unless noted there):
 
 | Artifact | Content |
 |---|---|

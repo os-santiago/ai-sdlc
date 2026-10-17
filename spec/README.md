@@ -20,6 +20,7 @@ implements via `.ai-sdlc.yaml` at its root.
 | [`engine-exit-codes.md`](engine-exit-codes.md) | scc raw exit-code taxonomy — registry labels, stall classes, the `{20,21}` fallback gate, outcome routing; drift-checked by `tests/exit_code_contract.test.js` | #133 |
 | [`model-routing.md`](model-routing.md) | Task-class → model routing: `engines.<stage>.model`, the resolution chain, OmniRoute/fallback rules, benchmark-informed per-class defaults | #171 |
 | [`kill-switch.md`](kill-switch.md) | Org kill-switch — one action revokes autonomy fleet-wide: signal channels (variable / `ai-sdlc:off` control issue), fail-closed verdict, enforced-stage table, audit contract | #172 |
+| [`run-evidence.md`](run-evidence.md) | Canonical run-evidence layout — `${{ runner.temp }}/ai-sdlc-<stage>/` evidence dirs, `ai-sdlc-<stage>-<subject>` artifact naming, enumerated workspace classes; enforced by `tools/check-run-evidence.py` | #141 |
 
 ## Versioning
 

@@ -55,9 +55,18 @@ test('callerWorkflow references every reusable stage at the pinned ref', { skip:
   for (const stage of ['intake', 'implement', 'classify', 'review', 'automerge', 'ci-repair', 'verify']) {
     assert.match(wf, new RegExp(`uses: os-santiago/ai-sdlc/\\.github/workflows/ai-sdlc-${stage}\\.yml@v9`), stage);
   }
-  // Fork guard + secrets inheritance on every reusable call.
+  // Fork guard + explicit per-stage secret maps on every reusable call —
+  // `secrets: inherit` is banned (issue #137); each call maps only what its
+  // callee declares.
   assert.match(wf, /head\.repo\.full_name == github\.repository/);
-  assert.equal((wf.match(/secrets: inherit/g) || []).length, 7);
+  assert.doesNotMatch(wf, /secrets: inherit/);
+  assert.equal((wf.match(/^    secrets:$/gm) || []).length, 7);
+  for (const req of ['AI_SDLC_APP_ID', 'AI_SDLC_APP_PRIVATE_KEY']) {
+    assert.equal((wf.match(new RegExp(`${req}: \\$\\{\\{ secrets\\.${req} \\}\\}`, 'g')) || []).length, 6, req);
+  }
+  for (const opt of ['AI_SDLC_LEDGER_KEY', 'MODEL_API_KEY']) {
+    assert.match(wf, new RegExp(`${opt}: \\$\\{\\{ secrets\\.${opt} \\}\\}`));
+  }
   // Label bootstrap inside the PR — no direct API writes pre-merge.
   assert.match(wf, /labels-bootstrap:/);
   assert.match(wf, /gh label create/);
@@ -78,10 +87,10 @@ test('callerWorkflow pins a custom runtime repo', () => {
 test('sweepWorkflow re-points the gate job at the cross-repo automerge', () => {
   const dir = tmpdir();
   const src = path.join(dir, 'sweep.yml');
-  fs.writeFileSync(src, 'jobs:\n  gate:\n    uses: ./.github/workflows/ai-sdlc-automerge.yml\n    secrets: inherit\n');
+  fs.writeFileSync(src, 'jobs:\n  gate:\n    uses: ./.github/workflows/ai-sdlc-automerge.yml\n    secrets:\n      AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}\n');
   const out = init.sweepWorkflow({ runtime: 'os-santiago/ai-sdlc', ref: 'main', sweepSource: src });
   assert.match(out, /uses: os-santiago\/ai-sdlc\/\.github\/workflows\/ai-sdlc-automerge\.yml@main/);
-  assert.match(out, /secrets: inherit/);
+  assert.match(out, /AI_SDLC_APP_ID: \$\{\{ secrets\.AI_SDLC_APP_ID \}\}/);
   assert.doesNotMatch(out, /uses: \.\/\.github\/workflows/);
 });
 

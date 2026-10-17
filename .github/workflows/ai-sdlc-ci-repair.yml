@@ -43,7 +43,11 @@
 #       with:
 #         repo: ${{ github.repository }}
 #         pr_number: 42
-#       secrets: inherit   # needs AI_SDLC_APP_ID + AI_SDLC_APP_PRIVATE_KEY
+#       secrets:   # explicit map — pass only what this stage declares (#137)
+#         AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}                  # required — ai-sdlc App, fail-closed
+#         AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }} # required — docs/runtime.md
+#         AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}          # optional ledger signing
+#         MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}                    # optional inference key
 name: ai-sdlc-ci-repair
 
 on:
@@ -220,7 +224,7 @@ jobs:
           RUNTIME_REF: ${{ inputs.runtime_ref }}
         run: |
           set -euo pipefail
-          WORK="$RUNNER_TEMP/ci-repair"
+          WORK="$RUNNER_TEMP/ai-sdlc-ci-repair"
           mkdir -p "$WORK/logs"
           echo "WORK=$WORK" >> "$GITHUB_ENV"
           # Repair-stall guard (issue #190): trusted code only, fetched from
@@ -893,9 +897,9 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          SAN="$RUNNER_TEMP/ci-repair/injection_defense.js"
+          SAN="$RUNNER_TEMP/ai-sdlc-ci-repair/injection_defense.js"
           [ -f "$SAN" ] || exit 0
-          cd "$RUNNER_TEMP/ci-repair"
+          cd "$RUNNER_TEMP/ai-sdlc-ci-repair"
           node "$SAN" --redact \
             scc-audit.jsonl scc-manifest.json ci-repair-manifest.json \
             repair-prompt.md failing.json 2>/dev/null || true
@@ -905,15 +909,15 @@ jobs:
         with:
           name: ai-sdlc-ci-repair-${{ inputs.pr_number }}-attempt-${{ steps.guard.outputs.attempt }}
           path: |
-            ${{ runner.temp }}/ci-repair/ci-repair-manifest.json
-            ${{ runner.temp }}/ci-repair/stall.json
-            ${{ runner.temp }}/ci-repair/repair-prompt.md
-            ${{ runner.temp }}/ci-repair/scc-audit.jsonl
-            ${{ runner.temp }}/ci-repair/scc-manifest.json
-            ${{ runner.temp }}/ci-repair/engine-manifest.json
-            ${{ runner.temp }}/ci-repair/failing.json
-            ${{ runner.temp }}/ci-repair/runbook.json
-            ${{ runner.temp }}/ci-repair/injection-audit.jsonl
+            ${{ runner.temp }}/ai-sdlc-ci-repair/ci-repair-manifest.json
+            ${{ runner.temp }}/ai-sdlc-ci-repair/stall.json
+            ${{ runner.temp }}/ai-sdlc-ci-repair/repair-prompt.md
+            ${{ runner.temp }}/ai-sdlc-ci-repair/scc-audit.jsonl
+            ${{ runner.temp }}/ai-sdlc-ci-repair/scc-manifest.json
+            ${{ runner.temp }}/ai-sdlc-ci-repair/engine-manifest.json
+            ${{ runner.temp }}/ai-sdlc-ci-repair/failing.json
+            ${{ runner.temp }}/ai-sdlc-ci-repair/runbook.json
+            ${{ runner.temp }}/ai-sdlc-ci-repair/injection-audit.jsonl
           if-no-files-found: ignore
           retention-days: 14
 
@@ -937,8 +941,8 @@ jobs:
           data: >-
             {"guard":${{ toJSON(steps.guard.outputs) }},"record":${{ toJSON(steps.record.outputs) }},"result":${{ toJSON(steps.result.outputs) }}}
           data-files: |
-            ${{ runner.temp }}/ci-repair/ci-repair-manifest.json
-            ${{ runner.temp }}/ci-repair/failure.json
+            ${{ runner.temp }}/ai-sdlc-ci-repair/ci-repair-manifest.json
+            ${{ runner.temp }}/ai-sdlc-ci-repair/failure.json
 
       - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)
         id: seal
