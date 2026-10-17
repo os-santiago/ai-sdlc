@@ -1,0 +1,52 @@
+# dependabot.yml — automated dependency-update PRs (issue #105, epic #89)
+#
+# Two ecosystems, both weekly (Monday 05:00 UTC):
+#   - npm            → root package.json + package-lock.json. The nested
+#                      manifest under .github/actions/ declares zero deps,
+#                      so a single root entry covers the real surface.
+#   - github-actions → every `uses:` pin across .github/workflows/ and
+#                      .github/actions/.
+#
+# Bounded per the every-mutable-step-is-bounded rule: at most 5 open PRs
+# per ecosystem, and minor+patch bumps are grouped into ONE consolidated
+# PR so review surface stays small — a major always gets its own PR since
+# it carries breaking-change surface the grouped diff must not hide.
+#
+# Division of labor: this file covers version freshness and the GitHub
+# Advisory Database security-update path (once the admin toggle in
+# docs/security-scanning.md is on); the pipeline-side vetted sweep
+# (ai-sdlc-dep-update.yml, issue #177) remains the canonical supply-chain
+# gate — release-age, license allowlist, typosquat distance, OSV vetting.
+# Dependabot PRs flow through the same classify → review → automerge lane
+# as every other dep PR (label `dependencies` → dep fast-path).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    groups:
+      minor-patch:
+        update-types: [minor, patch]
+    labels: [dependencies, security]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    groups:
+      minor-patch:
+        update-types: [minor, patch]
+    labels: [dependencies]
+    commit-message:
+      prefix: "chore(ci)"

@@ -1,0 +1,54 @@
+# codeql — static-analysis security scanning (issue #105, epic #89)
+#
+# Repo self-scan only — this is NOT a reusable ai-sdlc-* stage: consumer
+# repos enable their own code scanning under their own security posture
+# and contract. Language set is `javascript` (interpreted — no build step;
+# autobuild does not apply). The default query suite is deliberate:
+# `security-extended` roughly doubles alert volume for marginal signal —
+# the CRA posture wants actionable findings, not triage fatigue.
+#
+# Results upload as SARIF to the Security → Code scanning tab. Whether a
+# finding FAILS the PR check is governed by the repo's code-scanning
+# configuration (Settings → Code security → Code scanning → check-runs
+# failure threshold) — an admin-scope API toggle documented in
+# docs/security-scanning.md, not something workflow YAML can express.
+#
+# Triggers: push + PR to main, weekly cron (Thursday 03:27 UTC, off the
+# top of the hour) so drifted/new advisories catch the untouched tree,
+# and workflow_dispatch for manual re-scans.
+#
+# Cost: one CodeQL database extraction + one query-pack evaluation over
+# the repo's JS surface — bounded at timeout-minutes: 15.
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '27 3 * * 4'        # weekly Thursday 03:27 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  analyze:
+    name: codeql (javascript)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      security-events: write   # SARIF upload → code scanning alerts
+      contents: read           # checkout + CodeQL pack resolution
+      actions: read            # required for CodeQL on private repos
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: initialize codeql
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+
+      - name: analyze
+        uses: github/codeql-action/analyze@v3
