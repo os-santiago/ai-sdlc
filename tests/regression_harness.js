@@ -9,21 +9,21 @@
 // diff here.
 //
 // Case types (the deterministic decision surfaces of the pipeline):
-//   intake-dor        DoR (R1–R6) intake verdict — replays the inline
-//                     `node - <<'NODE'` script of the "Validate DoR" step in
-//                     .github/workflows/ai-sdlc-intake.yml verbatim, in a
-//                     sandboxed fs/env/process.
-//   merge-gate        merge-gate decision table — replays the inline node
-//                     script of the "Evaluate merge gate" step in
-//                     .github/workflows/ai-sdlc-automerge.yml, with the
-//                     fetched pr/checks/comment JSONs and Date.now() fixed
-//                     by the fixture.
-//   implement-sanitize  sanitize + DoR-surface check — replays the inline
-//                     node script of the "Fetch issue → sanitize → prompt
-//                     file" step in .github/workflows/ai-sdlc-implement.yml,
-//                     with issue.json + trusted-issue-comments.json as
-//                     fixtures (issue #122 drift verdicts + the fenced
-//                     prompt it writes).
+//   intake-dor        DoR (R1–R6) intake verdict — replays
+//                     scripts/dor-check.js (the module the "Validate DoR"
+//                     step of .github/workflows/ai-sdlc-intake.yml calls,
+//                     issue #127) over the fixture issue.
+//   merge-gate        merge-gate decision table — replays
+//                     scripts/automerge-eval.js (the module the "Evaluate
+//                     merge gate" step of ai-sdlc-automerge.yml calls) with
+//                     the fetched pr/checks/comment JSONs and Date.now()
+//                     fixed by the fixture.
+//   implement-sanitize  sanitize + DoR-surface check — replays
+//                     scripts/implement-prompt.js (the module the "Fetch
+//                     issue → sanitize → prompt file" step of
+//                     ai-sdlc-implement.yml calls) with issue.json +
+//                     trusted-issue-comments.json as fixtures (issue #122
+//                     drift verdicts + the fenced prompt it writes).
 //   risk-classify     scripts/risk-classifier.js classifyDiff() — the
 //                     pr:risk-* taxonomy assignment.
 //   label-ops         scripts/risk-classifier.js applyRiskLabel() against a
@@ -59,12 +59,20 @@ const RESULTS_DIR = path.join(__dirname, 'regression', 'results');
 
 const INTAKE_WORKFLOW = path.join(ROOT, '.github', 'workflows', 'ai-sdlc-intake.yml');
 const AUTOMERGE_WORKFLOW = path.join(ROOT, '.github', 'workflows', 'ai-sdlc-automerge.yml');
-const IMPLEMENT_WORKFLOW = path.join(ROOT, '.github', 'workflows', 'ai-sdlc-implement.yml');
 const RESOLVE_PY = path.join(ROOT, '.github', 'actions', 'load-config', 'resolve.py');
 const NORMALIZED_EVENT = path.join(ROOT, '.github', 'actions', 'github-to-normalized-event', 'index.js');
 
 const { classifyDiff, applyRiskLabel } = require('../scripts/risk-classifier');
 const { getEngineAdapter } = require('../scripts/engine_adapter');
+// Issue #127: the DoR + merge-gate + sanitize/prompt decision logic was
+// extracted from workflow heredocs into these modules — the replayers
+// exercise the shipped code directly (same coverage, now unit-testable).
+const { evaluateDor } = require('../scripts/dor-check');
+const { evaluateMergeGate } = require('../scripts/automerge-eval');
+const { verifyDorStamp, buildImplementPrompt } = require('../scripts/implement-prompt');
+const DOR_SCRIPT = path.join(ROOT, 'scripts', 'dor-check.js');
+const AUTOMERGE_EVAL_SCRIPT = path.join(ROOT, 'scripts', 'automerge-eval.js');
+const IMPLEMENT_PROMPT_SCRIPT = path.join(ROOT, 'scripts', 'implement-prompt.js');
 
 // --- Tool probes --------------------------------------------------------------
 
@@ -257,41 +265,48 @@ function omitPaths(obj, paths) {
 // --- Replayers ---------------------------------------------------------------
 
 const REPLAYERS = {
-  // Intake DoR verdict — replays the shipped inline script verbatim.
+  // Intake DoR verdict — replays the shipped module the workflow now calls
+  // (scripts/dor-check.js, extracted under issue #127). The
+  // `mustContain` pin keeps the identity check: the canonical file must
+  // still carry the decision table.
   'intake-dor': (input) => {
-    const src = extractNodeHeredoc(INTAKE_WORKFLOW, {
-      index: input.scriptIndex || 0,
-      mustContain: input.mustContain || 'const checks = {',
-    });
+    const mustContain = input.mustContain || 'R1 conventional title';
+    const dorSrc = fs.readFileSync(DOR_SCRIPT, 'utf8');
+    if (!dorSrc.includes(mustContain)) {
+      return { outputs: null, checks: null, log: [], exitCode: null, error: `scripts/dor-check.js no longer contains marker ${JSON.stringify(mustContain)} — the decision code moved or was rewritten` };
+    }
     const env = {
       TRIGGER: input.trigger ?? 'ready-to-implement',
       SKIP_LABELS: JSON.stringify(input.skip_labels ?? []),
       NOT_READY: input.not_ready_label ?? 'scc:not-ready',
-      GITHUB_OUTPUT: '__github_output__',
       ...(input.env || {}),
     };
-    const r = replayInlineScript(src, {
-      files: { 'issue.json': JSON.stringify(input.issue || {}) },
-      env,
-      nowMs: input.now ? Date.parse(input.now) : undefined,
-    });
-    const checksLine = r.log.find((l) => l.startsWith('DoR: '));
+    const r = evaluateDor({ issue: input.issue || {}, env });
+    const log = r.armed === 'true'
+      ? [`DoR: ${JSON.stringify(r.checks, null, 0)}`]
+      : [`issue does not carry the trigger label "${env.TRIGGER}" — not armed, skipping`];
     return {
-      outputs: r.outputs,
-      checks: checksLine ? JSON.parse(checksLine.slice('DoR:'.length).trim()) : null,
-      log: r.log,
-      exitCode: r.exitCode,
-      error: r.error,
+      outputs: {
+        dispatch: r.dispatch, armed: r.armed, failed: r.failed,
+        dor_sha: r.dor_sha,
+        refine: r.refine, refine_fp: r.refine_fp,
+      },
+      checks: r.checks,
+      log,
+      exitCode: 0,
+      error: null,
     };
   },
 
-  // Merge-gate decision table — replays the shipped inline script verbatim
-  // with the fetched JSONs as fixtures and the clock pinned by `input.now`.
+  // Merge-gate decision table — replays the shipped module the workflow now
+  // calls (scripts/automerge-eval.js, extracted under issue #127) with the
+  // fetched JSONs as fixtures and the clock pinned by `input.now`.
   'merge-gate': (input) => {
-    const src = extractNodeHeredoc(AUTOMERGE_WORKFLOW, {
-      index: input.scriptIndex || 0,
-      mustContain: input.mustContain || 'decision:',
-    });
+    const mustContain = input.mustContain || 'decision table';
+    const gateSrc = fs.readFileSync(AUTOMERGE_EVAL_SCRIPT, 'utf8');
+    if (!gateSrc.includes(mustContain)) {
+      return { outputs: null, log: [], exitCode: null, error: `scripts/automerge-eval.js no longer contains marker ${JSON.stringify(mustContain)} — the decision code moved or was rewritten` };
+    }
     const env = {
       SKIP_LABELS: '[]',
       ESCALATION: 'needs-human',
@@ -308,48 +323,54 @@ const REPLAYERS = {
       GITHUB_OUTPUT: '__github_output__',
       ...(input.env || {}),
     };
-    const r = replayInlineScript(src, {
-      files: {
-        'pr.json': JSON.stringify(input.pr || {}),
-        'checks.json': JSON.stringify(input.checks || []),
-        'trusted-comments.json': JSON.stringify(input.trusted_comments || []),
-        'ext-reviews.json': JSON.stringify(input.ext_reviews || []),
-      },
+    const r = evaluateMergeGate({
+      pr: input.pr || {},
+      checks: input.checks || [],
+      trustedComments: input.trusted_comments || [],
+      extReviews: input.ext_reviews || [],
       env,
       nowMs: Date.parse(input.now || '2026-01-01T00:00:00Z'),
     });
-    return { outputs: r.outputs, log: r.log, exitCode: r.exitCode, error: r.error };
+    return {
+      outputs: { action: r.action, reason: r.reason },
+      log: [`decision: ${r.action} (${r.reason})`],
+      exitCode: 0,
+      error: null,
+    };
   },
 
-  // Implement sanitize + DoR-surface pin — replays the shipped inline
-  // script verbatim with the fetched JSONs as fixtures. The fetched
-  // sanitizer module is intentionally absent in the sandbox → the script
-  // exercises its inline-fencing fallback path, which is deterministic.
+  // Implement sanitize + DoR-surface pin — replays the shipped module the
+  // workflow now calls (scripts/implement-prompt.js, extracted under issue
+  // #127) with issue + trusted-comment fixtures. The sanitizer is
+  // intentionally absent → the module exercises its legacy inline-fencing
+  // fallback path, which is deterministic.
   'implement-sanitize': (input) => {
-    const src = extractNodeHeredoc(IMPLEMENT_WORKFLOW, {
-      index: input.scriptIndex || 0,
-      mustContain: input.mustContain || 'const DORMARK = ',
-    });
-    const env = {
-      RUNNER_TEMP: '/tmp/ai-sdlc-regression-fixture',
-      GITHUB_OUTPUT: '__github_output__',
-      ...(input.env || {}),
-    };
-    const r = replayInlineScript(src, {
-      files: {
-        'issue.json': JSON.stringify(input.issue || {}),
-        'trusted-issue-comments.json': JSON.stringify(input.trusted_comments || []),
-      },
-      env,
-      nowMs: input.now ? Date.parse(input.now) : undefined,
-    });
+    const mustContain = input.mustContain || 'const DORMARK = ';
+    const src = fs.readFileSync(IMPLEMENT_PROMPT_SCRIPT, 'utf8');
+    if (!src.includes(mustContain)) {
+      return { outputs: null, prompt: null, log: [], exitCode: null, error: `scripts/implement-prompt.js no longer contains marker ${JSON.stringify(mustContain)} — the decision code moved or was rewritten` };
+    }
+    const issue = input.issue || {};
+    const d = verifyDorStamp({ issue, trustedComments: input.trusted_comments || [] });
+    const r = buildImplementPrompt({ issue, san: null, dor: d.dor });
+    const approved12 = d.approved ? d.approved.slice(0, 12) : '';
+    const actual12 = d.dorSha.slice(0, 12);
     return {
-      outputs: r.outputs,
-      // '' = an empty prompt file was written (blocked/drift); null = none.
-      prompt: r.written['task-prompt.md'] ?? null,
-      log: r.log,
-      exitCode: r.exitCode,
-      error: r.error,
+      outputs: {
+        dor: d.dor,
+        dor_approved: approved12,
+        dor_actual: actual12,
+        verdict: r.verdict,
+        reasons: r.reasons,
+      },
+      // '' = an empty prompt file was written (blocked/drift).
+      prompt: r.prompt,
+      log: [
+        `dor-surface: ${d.dor} (approved=${approved12 || 'none'} actual=${actual12})`,
+        `injection-defense: verdict=${r.verdict} (${r.reasons === 'none' ? 'no reasons' : r.reasons}) findings=${JSON.stringify(r.findings)}`,
+      ],
+      exitCode: 0,
+      error: null,
     };
   },
 

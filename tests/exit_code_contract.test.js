@@ -222,7 +222,9 @@ test('implement outcome labeler keys only on documented codes', () => {
 });
 
 test('ci-repair ledger keys only on documented codes', () => {
-  const yml = fs.readFileSync(CI_REPAIR_YML, 'utf8');
+  // Issue #127: the outcome mapping moved out of the workflow heredoc into
+  // scripts/ci-repair-record.js — pin the shipped module, not a copy.
+  const yml = fs.readFileSync(path.join(ROOT, 'scripts', 'ci-repair-record.js'), 'utf8');
   const docCodes = new Set(CODE_ROWS.map((r) => r.numeric));
   const codes = [...yml.matchAll(/code === '(\d+)'/g)].map((m) => Number(m[1]));
   assert.deepEqual([...new Set(codes)].sort((a, b) => a - b), [0, 10],

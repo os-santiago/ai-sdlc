@@ -20,11 +20,11 @@
 //                           Bot / OWNER / MEMBER / COLLABORATOR authors;
 //                           the test pins the jq select clause so a forged
 //                           comment can never steer the gate
-//   - codePins[]           verbatim pins for code DUPLICATED across inline
-//                          workflow scripts — a one-sided refactor of a
-//                          shared recipe (e.g. the DoR surface hash) is a
-//                          silent security drift, so both copies are pinned
-//                          byte-for-byte here
+//   - codePins[]           verbatim pins for code DUPLICATED across stage
+//                          scripts (post-#127 extraction) — a one-sided
+//                          refactor of a shared recipe (e.g. the DoR
+//                          surface hash) is a silent security drift, so
+//                          both copies are pinned byte-for-byte here
 //
 // tests/comment-markers.test.js replays emit→parse round-trips and negative
 // cases from tests/markers/cases/*.json against THIS module while asserting
@@ -49,6 +49,16 @@ const CI_REPAIR_YML = '.github/workflows/ai-sdlc-ci-repair.yml';
 const INTAKE_YML = '.github/workflows/ai-sdlc-intake.yml';
 const IMPLEMENT_YML = '.github/workflows/ai-sdlc-implement.yml';
 const RUN_LEDGER_ACTION = '.github/actions/run-ledger/action.yml';
+// Post-#127 extraction: marker emit/parse code lives in the stage scripts;
+// the workflow files keep the trusted-author comment feed (jq select), the
+// scripts carry the marker emit + canonical JS regexes.
+const REVIEW_COMMENT_JS = 'scripts/review-comment.js';
+const REVIEW_FIX_RECORD_JS = 'scripts/review-fix-record.js';
+const CI_REPAIR_RECORD_JS = 'scripts/ci-repair-record.js';
+const REVIEW_GUARD_JS = 'scripts/review-guard.js';
+const AUTOMERGE_EVAL_JS = 'scripts/automerge-eval.js';
+const DOR_CHECK_JS = 'scripts/dor-check.js';
+const IMPLEMENT_PROMPT_JS = 'scripts/implement-prompt.js';
 
 // jq clause every trusted-author comment feed carries — forged comments
 // from arbitrary authors must never steer gating state.
@@ -118,14 +128,18 @@ const MARKERS = {
     },
     emitSites: [
       {
-        file: REVIEW_RUN_YML,
+        file: REVIEW_COMMENT_JS,
         mustContain: '`<!-- ai-sdlc:review sha=${rec.head_sha} verdict=${rec.verdict} -->`',
         template: '<!-- ai-sdlc:review sha=${rec.head_sha} verdict=${rec.verdict} -->',
       },
     ],
     parseSites: [
-      { file: REVIEW_RUN_YML, kind: 'js-regex', mustContain: 'const VMARK = ', trusted: true },
-      { file: AUTOMERGE_YML, kind: 'js-regex', mustContain: 'const VMARK = ', trusted: true },
+      { file: REVIEW_GUARD_JS, kind: 'js-regex', mustContain: 'const VERDICT_MARK = ' },
+      { file: AUTOMERGE_EVAL_JS, kind: 'js-regex', mustContain: 'const VERDICT_MARK = ' },
+      // Trusted-author comment feed stays pinned on the workflows — the
+      // jq select clause is the forge boundary, not the regex.
+      { file: REVIEW_RUN_YML, kind: 'text', mustContain: 'IN("OWNER","MEMBER","COLLABORATOR")' },
+      { file: AUTOMERGE_YML, kind: 'text', mustContain: 'IN("OWNER","MEMBER","COLLABORATOR")' },
     ],
   },
 
@@ -150,8 +164,10 @@ const MARKERS = {
       },
     ],
     parseSites: [
-      { file: REVIEW_RUN_YML, kind: 'js-regex', mustContain: 'const FMARK = ', trusted: true },
-      { file: AUTOMERGE_YML, kind: 'js-regex', mustContain: 'const FMARK = ', trusted: true },
+      { file: REVIEW_GUARD_JS, kind: 'js-regex', mustContain: 'const FIX_MARK = ' },
+      { file: AUTOMERGE_EVAL_JS, kind: 'js-regex', mustContain: 'const FIX_MARK = ' },
+      { file: REVIEW_RUN_YML, kind: 'text', mustContain: 'IN("OWNER","MEMBER","COLLABORATOR")' },
+      { file: AUTOMERGE_YML, kind: 'text', mustContain: 'IN("OWNER","MEMBER","COLLABORATOR")' },
     ],
   },
 
@@ -168,7 +184,7 @@ const MARKERS = {
     },
     emitSites: [
       {
-        file: REVIEW_FIX_YML,
+        file: REVIEW_FIX_RECORD_JS,
         mustContain: '`<!-- ai-sdlc:review-fix-outcome attempt=${e.ATTEMPT} sha=${e.HEAD_SHA} -->`',
         template: '<!-- ai-sdlc:review-fix-outcome attempt=${e.ATTEMPT} sha=${e.HEAD_SHA} -->',
       },
@@ -199,7 +215,11 @@ const MARKERS = {
     // (`repairs-exhausted`) on demand, so arbitrary commenters must never
     // steer it.
     parseSites: [
-      { file: AUTOMERGE_YML, kind: 'js-regex', mustContain: 'const MARK = ', trusted: true },
+      // The shipped parser regex lives in the extracted eval module
+      // (issue #127); the trusted-author feed it reads stays pinned on the
+      // workflow — same emit/parse split as review-verdict above.
+      { file: AUTOMERGE_EVAL_JS, kind: 'js-regex', mustContain: 'const REPAIR_MARK = ' },
+      { file: AUTOMERGE_YML, kind: 'text', mustContain: 'IN("OWNER","MEMBER","COLLABORATOR")' },
     ],
   },
 
@@ -225,21 +245,25 @@ const MARKERS = {
     ],
     // The verify side reads ONLY the trusted-author issue-comment feed —
     // a forged `ai-sdlc:dor` stamp from an arbitrary commenter must never
-    // pass the drift check.
+    // pass the drift check. The parser regex ships in the extracted
+    // implement-prompt module (issue #127); the workflow keeps the
+    // trusted-author filter pin.
     parseSites: [
-      { file: IMPLEMENT_YML, kind: 'js-regex', mustContain: 'const DORMARK = ', trusted: true },
+      { file: IMPLEMENT_PROMPT_JS, kind: 'js-regex', mustContain: 'const DORMARK = ' },
+      { file: IMPLEMENT_YML, kind: 'text', mustContain: 'IN("OWNER","MEMBER","COLLABORATOR")' },
     ],
-    // The hash recipe is duplicated across two inline node scripts —
-    // intake stamps, implement verifies. Both copies are pinned verbatim:
-    // a one-sided change would make every dispatch read as drift (or
-    // silently pass it), with no failing check to explain why.
+    // The hash recipe is duplicated across two stage scripts — intake's
+    // dor-check stamps, implement's implement-prompt verifies. Both copies
+    // are pinned verbatim: a one-sided change would make every dispatch
+    // read as drift (or silently pass it), with no failing check to
+    // explain why.
     codePins: [
       {
-        file: INTAKE_YML,
+        file: DOR_CHECK_JS,
         mustContain: "createHash('sha256').update(`${i.title || ''}\\n${i.body || ''}`).digest('hex')",
       },
       {
-        file: IMPLEMENT_YML,
+        file: IMPLEMENT_PROMPT_JS,
         mustContain: "createHash('sha256').update(`${i.title || ''}\\n${i.body || ''}`).digest('hex')",
       },
     ],
@@ -264,7 +288,7 @@ const MARKERS = {
     },
     emitSites: [
       {
-        file: CI_REPAIR_YML,
+        file: CI_REPAIR_RECORD_JS,
         mustContain: '`<!-- ai-sdlc:ci-repair attempt=${e.ATTEMPT} sha=${e.HEAD_SHA}${e.STALL_SIG ? ` sig=${e.STALL_SIG}` : \'\'} -->`',
         template: '<!-- ai-sdlc:ci-repair attempt=${e.ATTEMPT} sha=${e.HEAD_SHA}${e.STALL_SIG ? ` sig=${e.STALL_SIG}` : \'\'} -->',
       },

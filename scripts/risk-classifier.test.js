@@ -322,4 +322,15 @@ describe('cli', () => {
     assert.equal(r.tier, 'low');
     assert.equal(JSON.parse(out).label, 'pr:risk-low');
   });
+
+  it('--files-out writes the review-stage sidecar (issue #127)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rc-'));
+    const nf = path.join(dir, 'numstat.txt');
+    const ff = path.join(dir, 'files.json');
+    fs.writeFileSync(nf, '40\t5\tdocs/a.md\n10\t0\tspec/x.md\n');
+    main(['--numstat', nf, '--files-out', ff]);
+    assert.deepEqual(JSON.parse(fs.readFileSync(ff, 'utf8')), {
+      files: ['docs/a.md', 'spec/x.md'], lines: 55, dirs: ['docs', 'spec'],
+    });
+  });
 });
