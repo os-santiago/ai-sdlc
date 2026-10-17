@@ -99,7 +99,7 @@ jobs:
           stage: kill-switch
           signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && steps.ledger.outputs.head != ''
         continue-on-error: true
         with:

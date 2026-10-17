@@ -900,7 +900,7 @@ jobs:
             scc-audit.jsonl scc-manifest.json ci-repair-manifest.json \
             repair-prompt.md failing.json 2>/dev/null || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && steps.guard.outputs.decision == 'repair'
         with:
           name: ai-sdlc-ci-repair-${{ inputs.pr_number }}-attempt-${{ steps.guard.outputs.attempt }}
@@ -950,7 +950,7 @@ jobs:
           stage: ci-repair
           signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && steps.ledger.outputs.head != ''
         continue-on-error: true
         with:
