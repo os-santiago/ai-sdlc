@@ -198,6 +198,28 @@ jobs:
           owner: ${{ steps.creds.outputs.owner }}
           repositories: ${{ steps.creds.outputs.repo_name }}
 
+      # Pre-dispatch authorization gate (issue #172): soft variant — review
+      # runs on every same-repo PR (including human-owned ones), so a
+      # revoked/unreadable verdict must not fail the run; it feeds the
+      # guard below and resolves to decision=skip with reason kill-switch.
+      # Fail-closed: a missing/unreadable check resolves to 'unreadable'.
+      - name: Autonomy gate — org kill-switch
+        id: kill
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          AI_SDLC_KILL: ${{ vars.AI_SDLC_KILL }}
+          AI_SDLC_OFF: ${{ vars.AI_SDLC_OFF }}
+          AI_SDLC_CONTROL_REPO: ${{ vars.AI_SDLC_CONTROL_REPO }}
+        run: |
+          set -euo pipefail
+          # Trusted code only — fetched from the runtime pin, never the
+          # consumer/PR head (same posture as scripts/risk-classifier.js).
+          gh api "repos/os-santiago/ai-sdlc/contents/scripts/kill-switch.js?ref=main" \
+            -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/kill-switch.js"
+          node --check "$RUNNER_TEMP/kill-switch.js"
+          node "$RUNNER_TEMP/kill-switch.js" check --repo "$REPO" --json --github-output --soft
+
       - name: Resolve contract (.ai-sdlc.yaml)
         id: contract
         uses: os-santiago/ai-sdlc/.github/actions/load-config@main
@@ -256,6 +278,8 @@ jobs:
           MAX_FIX: ${{ (inputs.max_fix_iterations != -1 && toJSON(inputs.max_fix_iterations)) || steps.contract.outputs.review_max_fix_iterations || '3' }}
           SKIP_LABELS: ${{ steps.contract.outputs.merge_skip_labels }}
           ESCALATION: ${{ steps.contract.outputs.escalation_label }}
+          KILL_STATE: ${{ steps.kill.outputs.state || 'unreadable' }}
+          KILL_REASON: ${{ steps.kill.outputs.reason }}
         run: |
           set -euo pipefail
           WORK="$RUNNER_TEMP/ai-sdlc-review"
@@ -342,7 +366,11 @@ jobs:
           const pipeline = isBot || labels.includes(process.env.PIPELINE_LABEL);
 
           let decision = 'skip', reason = '';
-          if (pr.state !== 'OPEN') reason = `pr-${String(pr.state).toLowerCase()}`;
+          // Autonomy gate first (issue #172): a revoked or unreadable
+          // kill-switch soft-skips review — no verdict, no fix dispatch.
+          const killState = (process.env.KILL_STATE || 'unreadable').toLowerCase();
+          if (killState !== 'clear') reason = `kill-switch:${killState === 'unreadable' ? 'unreadable-fail-closed' : 'engaged'}`;
+          else if (pr.state !== 'OPEN') reason = `pr-${String(pr.state).toLowerCase()}`;
           else if (pr.isDraft) reason = 'draft';
           else if (labels.some(l => SKIP.includes(l))) reason = 'skip-label';
           else if (pr.isCrossRepository || (pr.headRepositoryOwner || {}).login !== owner) reason = 'fork-head';

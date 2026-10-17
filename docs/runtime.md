@@ -1250,6 +1250,40 @@ new dispatches while in-flight runs finish on their own. The check is
 (or set `0`) and the next event resumes the loop. Prefer it over disabling
 workflows during an incident — disabling also silences the sweep and the
 merge gate, leaving pipeline PRs unresolved.
+## Kill-switch (org autonomy revocation — issue #172)
+
+Normative contract: **spec/kill-switch.md**. Implementation:
+`scripts/kill-switch.js` + the "Autonomy gate — org kill-switch" step in
+every stage workflow + `ai-sdlc-kill.yml` (engage/release dispatch).
+
+`AI_SDLC_OFF` (and `AI_SDLC_KILL`) is the emergency stop, carried as a
+**repository variable** (Settings → Secrets and variables → Actions →
+*Variables* tab — not a secret); an **org-level variable** visible to
+enrolled repos engages the switch fleet-wide with zero per-repo config.
+A second channel is the `ai-sdlc:off` control issue: open it in the
+control repo (`vars.AI_SDLC_CONTROL_REPO`, default the repo itself) and
+every enrolled stage's gate denies on its next check — one open issue
+halts the fleet.
+
+Every stage checks at the top of the run and exits before any mutation
+(review soft-skips: it also runs on human PRs, so it must not red-mark
+them). The check is **per run** — no runner teardown, no workflow
+disable; in-flight engine runs halt at the next gate. The verdict is
+**fail-closed**: a channel that cannot be read denies (`unreadable`) —
+autonomy defaults OFF. Unset the signal and the next event resumes the
+loop. Prefer it over disabling workflows during an incident — disabling
+also silences the sweep and the merge gate, leaving pipeline PRs
+unresolved.
+
+Canonical audited operation (control repo):
+
+```bash
+gh workflow run ai-sdlc-kill.yml -f action=engage  -f reason="incident-42"
+gh workflow run ai-sdlc-kill.yml -f action=release -f reason="resolved"
+```
+
+Engagement/release is recorded with actor + ISO-8601 timestamp on the
+control issue and in a `stage: kill-switch` run-ledger entry.
 
 ## Note on workflow-file edits
 

@@ -18,6 +18,7 @@ implements via `.ai-sdlc.yaml` at its root.
 | [`interop-posture.md`](interop-posture.md) | Interop posture — ai-sdlc as the normative governance layer over pluggable engines; the seam (normalized events + headless engine contract), the conformance path, and the non-goals | #216 |
 | [`engine-conformance.md`](engine-conformance.md) | Engine conformance — descriptor contract, resolved adapter surface, check catalog, static/live levels, and the certification procedure enforced by `tests/engine_conformance_harness.js` | #183 |
 | [`model-routing.md`](model-routing.md) | Task-class → model routing: `engines.<stage>.model`, the resolution chain, OmniRoute/fallback rules, benchmark-informed per-class defaults | #171 |
+| [`kill-switch.md`](kill-switch.md) | Org kill-switch — one action revokes autonomy fleet-wide: signal channels (variable / `ai-sdlc:off` control issue), fail-closed verdict, enforced-stage table, audit contract | #172 |
 
 ## Versioning
 

@@ -186,6 +186,27 @@ jobs:
           owner: ${{ steps.creds.outputs.owner }}
           repositories: ${{ steps.creds.outputs.repo_name }}
 
+      # Pre-dispatch authorization gate (issue #172): one engaged channel —
+      # vars.AI_SDLC_KILL/AI_SDLC_OFF, or an open ai-sdlc:off issue in the
+      # control/target repo — fails this step; the repair engine never
+      # starts and the PR is left for the human. Fail-closed: an
+      # unreadable channel denies too.
+      - name: Autonomy gate — org kill-switch
+        id: kill
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          AI_SDLC_KILL: ${{ vars.AI_SDLC_KILL }}
+          AI_SDLC_OFF: ${{ vars.AI_SDLC_OFF }}
+          AI_SDLC_CONTROL_REPO: ${{ vars.AI_SDLC_CONTROL_REPO }}
+        run: |
+          set -euo pipefail
+          # Trusted code only — fetched from the runtime pin, never the
+          # consumer/PR head (same posture as scripts/risk-classifier.js).
+          gh api "repos/os-santiago/ai-sdlc/contents/scripts/kill-switch.js?ref=main" \
+            -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/kill-switch.js"
+          node --check "$RUNNER_TEMP/kill-switch.js"
+          node "$RUNNER_TEMP/kill-switch.js" check --repo "$REPO" --json
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
