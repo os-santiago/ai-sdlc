@@ -1,0 +1,134 @@
+# ai-sdlc-release — maintainer-dispatched release driver (issue #178)
+#
+# One job, two modes, same code path (scripts/release-manager.js):
+#
+#   dry_run=true  (default) — compute the plan only: semver bump from
+#     conventional commits since the last v*.*.* tag, generated changelog,
+#     and the spec/v* stream verdict when spec/ changed. Nothing is tagged,
+#     pushed, or released. Safe to run anytime.
+#
+#   dry_run=false — annotate + push the runtime tag (and spec/v* tag when
+#     spec/ changed since the last spec tag), create the GitHub release
+#     with the changelog, then package `git archive` source artifacts,
+#     attach them to the release, and attest them via
+#     actions/attest-build-provenance (SLSA L3-class provenance, issue
+#     #100). The `release: published` event is the hook downstream
+#     signing/provenance stages (e.g. #103 cosign) subscribe to — publish
+#     therefore uses AI_SDLC_TOKEN (App/PAT-class) when present, because a
+#     release created by GITHUB_TOKEN does not fire downstream workflows.
+#
+# Spec semver sensitivity (AGENTS.md): a BREAKING spec change yields a MAJOR
+# spec/v* bump and must carry a migration note — the changelog calls it out.
+name: ai-sdlc-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'runtime semver bump (auto = compute from conventional commits)'
+        type: choice
+        options: [auto, major, minor, patch]
+        default: auto
+      spec_bump:
+        description: 'spec/v* bump when spec/ changed (none = skip spec tag)'
+        type: choice
+        options: [auto, major, minor, patch, none]
+        default: auto
+      ref:
+        description: 'commit-ish to tag'
+        type: string
+        default: 'main'
+      dry_run:
+        description: 'plan only — no tag, push, or release'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-sdlc-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write      # tag push + release create + asset upload
+      id-token: write      # Sigstore OIDC for build provenance attestation
+      attestations: write  # store the attestation in the repo attestations API
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # full history + tags: bump is computed from log
+
+      - name: Fetch all tags (release base detection)
+        run: git fetch --tags --force origin
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Compute release plan / publish
+        id: rel
+        env:
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          BUMP: ${{ inputs.bump }}
+          SPEC_BUMP: ${{ inputs.spec_bump }}
+          REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          # Resolve the input ref to a SHA — checkout leaves a detached HEAD,
+          # so a bare branch name may not exist locally. The SHA is valid both
+          # as `git tag` target and as the release target_commitish.
+          SHA=$(git rev-parse "origin/$REF" 2>/dev/null || git rev-parse "$REF")
+          echo "resolved_ref=$SHA" >> "$GITHUB_OUTPUT"
+          args=(--repo "$GITHUB_REPOSITORY" --bump "$BUMP" --spec-bump "$SPEC_BUMP" \
+                --ref "$SHA" --json --github-output \
+                --changelog-file "$RUNNER_TEMP/release-notes.md")
+          [ "$DRY_RUN" = "true" ] || args+=(--publish)
+          node scripts/release-manager.js "${args[@]}" | tee "$RUNNER_TEMP/release-plan.json"
+          {
+            echo '### ai-sdlc release plan'
+            echo ''
+            echo '```json'
+            cat "$RUNNER_TEMP/release-plan.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package source artifact (git archive)
+        id: pkg
+        if: steps.rel.outputs.release_status == 'released'
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.rel.outputs.release_tag }}"
+          mkdir -p dist
+          git archive --format=tar.gz --prefix="ai-sdlc-${TAG}/" \
+            --output="dist/ai-sdlc-${TAG}.tar.gz" "$TAG"
+          echo "artifact=dist/ai-sdlc-${TAG}.tar.gz" >> "$GITHUB_OUTPUT"
+          sha256sum "dist/ai-sdlc-${TAG}.tar.gz" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifact
+        if: steps.rel.outputs.release_status == 'released'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-sdlc-${{ steps.rel.outputs.release_tag }}
+          path: dist/
+          retention-days: 30
+
+      - name: Attach artifact to the GitHub release
+        if: steps.rel.outputs.release_status == 'released'
+        env:
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ steps.rel.outputs.release_tag }}" "${{ steps.pkg.outputs.artifact }}" --clobber
+
+      # SLSA L3-class provenance for the release artifact (issue #100 shape).
+      # SHA-pinned; verify downstream with:
+      #   gh attestation verify dist/ai-sdlc-<tag>.tar.gz -R os-santiago/ai-sdlc
+      - name: Attest build provenance
+        if: steps.rel.outputs.release_status == 'released'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.pkg.outputs.artifact }}
