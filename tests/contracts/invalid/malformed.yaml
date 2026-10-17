@@ -1,0 +1,7 @@
+# expect: yaml
+# Malformed YAML — the flow sequence below is never closed, so the
+# YAML→JSON step fails before schema validation. The validator must exit
+# non-zero with a diagnostic, never silently pass a file it cannot parse.
+spec: "1.0.0"
+triggers:
+  skip_labels: [epic, wontfix

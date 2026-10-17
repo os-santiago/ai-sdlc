@@ -1,0 +1,6 @@
+# expect: schema
+# match: 'spec' is a required property
+# Missing required field — `spec` is the only required key and lets the
+# runtime refuse unknown contracts.
+autonomy:
+  level: suggest

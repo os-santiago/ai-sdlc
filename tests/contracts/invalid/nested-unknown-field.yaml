@@ -1,0 +1,8 @@
+# expect: schema
+# match: Additional properties
+# Nested additionalProperties:false — every contract section is a closed
+# object; misspelled or invented fields must not be silently dropped.
+spec: "1.0.0"
+review:
+  mode: ai
+  psychic: true

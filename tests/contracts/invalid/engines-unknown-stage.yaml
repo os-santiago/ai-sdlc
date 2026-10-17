@@ -1,0 +1,8 @@
+# expect: schema
+# match: Additional properties
+# Unknown stage key — engines is a closed map over the known pipeline
+# stages (intake|implement|review|automerge|verify|ci-repair|sweep|
+# dep-update). A typo'd stage must not be silently ignored.
+spec: "1.0.0"
+engines:
+  qa-fixer: scc

@@ -1,0 +1,5 @@
+# expect: schema
+# match: not of type
+# Wrong type — spec is a string ("1.0.0"), not a number. Unquoted YAML
+# scalars coerce: this file parses to spec: 1.0 (a float).
+spec: 1.0

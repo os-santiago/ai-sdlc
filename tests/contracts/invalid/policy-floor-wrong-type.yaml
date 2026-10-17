@@ -1,0 +1,7 @@
+# expect: schema
+# match: not of type
+# Org-floor surface — policy_floor.pin must be an array of dotted leaf
+# paths. A bare string is a type violation, not a single-entry list.
+spec: "1.0.0"
+policy_floor:
+  pin: autonomy.level

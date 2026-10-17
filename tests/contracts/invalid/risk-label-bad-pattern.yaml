@@ -1,0 +1,10 @@
+# expect: schema
+# match: does not match
+# Pattern violation — review.risk_labels entries must match ^pr:risk-
+# (the canonical risk taxonomy prefix). A label without the prefix would
+# never classify.
+spec: "1.0.0"
+review:
+  risk_labels:
+    - pr:risk-low
+    - risk-ultra

@@ -1,0 +1,143 @@
+# Valid fixture — exercises every top-level schema section with conforming
+# values. If a future schema change tightens a section, this file is the
+# regression tripwire proving a real-world-shaped contract still parses.
+spec: "1.0.0"
+
+repo:
+  archetype: tooling
+  primary_language: shell
+  deploys_to: none
+
+autonomy:
+  level: auto-merge-low
+  merge_requires_checks: true
+  freeze_env: AI_SDLC_FREEZE
+
+promotion:
+  clean_merges_threshold: 3
+  window: 30
+  required_signals: [static-config, behavioral-eval, audit-trail, track-record]
+  overrides:
+    auto-pr: {clean_runs_threshold: 5}
+    auto-merge-low: {clean_merges_threshold: 10, window: 40}
+
+demotion:
+  escalation_threshold: 1
+  window: 30
+  priority_label: priority:P0
+
+dependencies:
+  enabled: true
+  ecosystems: [npm]
+  cadence: daily
+  min_release_age_days: 7
+  target: wanted
+  include_dev: true
+  auto_kinds: [patch, minor]
+  max_updates: 10
+  branch: chore/dep-updates
+  labels: [dependencies, ai-sdlc]
+  egress_profile: npm-vet
+
+security:
+  enabled: true
+  min_severity: high
+  block_on_secret: true
+  severity_matrix:
+    pr:risk-low: report-only
+    pr:risk-medium: report-only
+    pr:risk-high: blocking-if-fix-available
+    pr:risk-critical: blocking
+
+triggers:
+  issue_label: ready-to-implement
+  skip_labels: [epic, wontfix, needs-human]
+  authorized_labelers: ["@maintainer"]
+  min_body_length: 120
+  acceptance_criteria: {min: 1, max: 8}
+
+prioritize:
+  enabled: true
+  priority_override: true
+  max: 50
+  epic_child_label: scc:child
+  weights:
+    priority: {P0: 1000, P1: 300, P2: 100, P3: 25}
+    unlabeled: 0
+    age_per_day: 2
+    age_cap_days: 30
+    epic_linked: 25
+    blocking: 15
+    blocked: -20
+
+verify:
+  commands: ["bash tools/validate-repo.sh"]
+  required_checks: [ci]
+  timeout_seconds: 300
+
+review:
+  mode: ai
+  ai_reviewer: {model: openai/gpt-4o, inline_comments: true, incremental: true}
+  risk_labels: [pr:risk-low, pr:risk-medium, pr:risk-high, pr:risk-critical, pr:risk-accepted]
+  critical_requires_acceptance: true
+  max_fix_iterations: 3
+  max_changed_files: 25
+  wait_max_minutes: 15
+  external_reviewer: coderabbit
+  adversarial: {enabled: true, min_tier: high, max_attacks: 16, max_seconds: 600}
+
+merge:
+  method: squash
+  delete_branch: true
+  max_repairs: 3
+  pending_max_minutes: 60
+  grace_minutes: 10
+  skip_labels: [needs-human, hold, do-not-merge, wip]
+  main_guard: {enabled: true, workflows: [ci], max_age_hours: 72}
+
+postmortem:
+  reopen_min: 2
+  dedup_window_days: 90
+
+release:
+  provenance: attest
+  signing: cosign-keyless
+
+labels:
+  queued: scc:queued
+  in-progress: scc:in-progress
+  state_machine:
+    veto_pairs:
+      - {winner: needs-human, loser: ready-to-implement}
+    owners:
+      ready-to-implement: {set_by: [authorized-labeler], cleared_by: [dispatch, human]}
+
+model:
+  primary: openai/gpt-4o
+  fallback: openai/gpt-4o-mini
+  routing_hints: {fast_tasks: openai/gpt-4o-mini}
+
+engine:
+  name: scc
+  max_steps: 200
+  max_seconds: 900
+  flags: [--no-commit, --audit-log]
+
+engines:
+  implement: scc
+  review: {engine: devin}
+  ci-repair: {engine: scc, model: openai/gpt-4o}
+
+escalation:
+  label: needs-human
+  contacts: ["@oncall"]
+  notify_channels: [issue-comment]
+  routes:
+    contract-error: {mentions: ["@oncall"], labels: ["priority:P0"], channel: issue-comment}
+    default: {mentions: ["@oncall"]}
+
+# Org-baseline surface — schema-valid in a contract file; the resolver
+# ignores it in a *repo* contract (asserted in the fixture test).
+policy_floor:
+  pin: [autonomy.level, merge.skip_labels]
+  exempt: [owner/exempt-repo]
