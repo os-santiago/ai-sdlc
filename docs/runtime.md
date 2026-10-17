@@ -23,7 +23,7 @@ engine only, no GitHub webhook adapter yet).
 
 | Workflow | Stage | Entry |
 |---|---|---|
-| `ai-sdlc-intake.yml` | DoR validation (R1–R6 per `spec/definition-of-ready.md`), `scc:queued`/`scc:not-ready` labels | `issues.labeled` in caller |
+| `ai-sdlc-intake.yml` | conversational refinement (`scripts/intake-refiner.js`): spec-completeness check → one upserted comment (clarifying questions or derived ACs) + `scc:not-ready` hold, fingerprint-retriggered on edits/replies; then DoR validation (R1–R6 per `spec/definition-of-ready.md`), `scc:queued`/`scc:not-ready` labels | `issues` (labeled/opened/edited) + `issue_comment` in caller |
 | `ai-sdlc-implement.yml` | `scc` headless run → branch → PR (`Closes #N`) + manifest/audit artifacts | called on `scc:queued` |
 | `ai-sdlc-automerge.yml` | merge-gate decision table (spec/risk-taxonomy.md): green+mergeable → squash+delete; failing → repair signal; pending/conflict → `needs-human`; pending review holds only up to `review.wait_max_minutes` → `review_timeout` merge | `check_run.completed` / `pull_request` / called |
 | `ai-sdlc-classify.yml` | deterministic diff risk classification (`scripts/risk-classifier.js`): path/size/content signals → `pr:risk-*` label on every `pull_request` event — recomputed on each push | `pull_request` (opened/synchronize) |
@@ -184,11 +184,18 @@ policy_floor:
 # .github/workflows/ai-sdlc.yml in the consuming repo
 name: ai-sdlc
 on:
-  issues: { types: [labeled] }
+  issues: { types: [labeled, opened, edited] }
+  issue_comment: { types: [created] }
 
 jobs:
   intake:
-    if: github.event.label.name == 'ready-to-implement'
+    # `ready-to-implement` arms dispatch; opened/edited and author replies
+    # feed the conversational refiner (its fingerprint no-ops unchanged
+    # specs — a narrower `on:` is fine if you only want the armed path).
+    if: >-
+      github.event.label.name == 'ready-to-implement' ||
+      (github.event_name == 'issues' && github.event.action != 'labeled') ||
+      (github.event_name == 'issue_comment' && !github.event.issue.pull_request)
     uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-intake.yml@main
     with:
       repo: ${{ github.repository }}
@@ -221,6 +228,19 @@ pushes and PRs always fire downstream workflows (issue #26).
 | `issue_number` | — (required) | issue to validate |
 | `trigger_label` | `''` → `triggers.issue_label` | label that arms dispatch |
 | `org_config` | `''` | org baseline `owner/repo[/path][@ref]` — see [Org policy](#org-policy) |
+| `runtime_ref` | `main` | ai-sdlc ref to fetch `scripts/intake-refiner.js` from — pin with the workflow ref |
+
+Before DoR, the stage runs conversational refinement
+(`scripts/intake-refiner.js`, issue #197): a spec-completeness check posts
+ONE upserted comment — clarifying questions plus the `labels.not-ready`
+hold when under-specified (the hold strips the trigger in the same op,
+spec/labels.md F2), or the derived acceptance-criteria checklist when
+ready (a hold it placed is cleared, and a trigger it stripped is
+restored — T3). A `sha256` fingerprint over title+body+author replies
+lives in the comment marker, so edits and author replies re-trigger the
+check while identical content never double-posts. The refiner never edits
+the issue body and honors `triggers.skip_labels` (plus the run-state
+bindings as trigger-restoration vetoes).
 
 Outputs: `dispatch`, `ledger_head` (sealed chain head — feed it to the next
 stage's `ledger_head` input).
