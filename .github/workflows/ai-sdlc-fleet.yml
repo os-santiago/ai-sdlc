@@ -1,0 +1,72 @@
+# ai-sdlc-fleet — scheduled fleet dashboard (issue #173)
+#
+# Renders the enrolled-repo fleet view (scripts/fleet-dashboard.js) into
+# docs/fleet-dashboard.md and commits it back — the "committed markdown"
+# publish path, no extra infra. Commit is diff-gated: identical semantic
+# output produces zero commits (spec/generated-artifact-publish-contract.md).
+#
+# Fleet membership: config/fleet.json, overridable per-run via the
+# `repos` dispatch input or the AI_SDLC_FLEET_REPOS repo variable.
+# Cross-repo reads (contracts + workflow runs) authenticate with
+# AI_SDLC_TOKEN when present (private consumers) else GITHUB_TOKEN
+# (public repos only).
+name: ai-sdlc-fleet
+
+on:
+  schedule:
+    - cron: '41 5 * * *'
+  workflow_dispatch:
+    inputs:
+      repos:
+        description: 'csv override for the fleet list (blank = config/fleet.json)'
+        type: string
+        default: ''
+      window:
+        description: 'reporting window (e.g. 24h, 7d)'
+        type: string
+        default: '7d'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ai-sdlc-fleet
+  cancel-in-progress: false
+
+jobs:
+  dashboard:
+    # Kill-switch: AI_SDLC_OFF halts every pipeline mutation, including
+    # commits of generated artifacts to main.
+    if: vars.AI_SDLC_OFF != '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Render fleet dashboard
+        env:
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          AI_SDLC_FLEET_REPOS: ${{ inputs.repos || vars.AI_SDLC_FLEET_REPOS }}
+        run: |
+          set -euo pipefail
+          args=(--window "${{ inputs.window || '7d' }}" --out docs/fleet-dashboard.md --github-summary --json)
+          node scripts/fleet-dashboard.js "${args[@]}" > /tmp/fleet.json
+          jq '.fleet' /tmp/fleet.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit dashboard (diff-gated)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/fleet-dashboard.md
+          if git diff --cached --quiet; then
+            echo "dashboard unchanged — no commit"
+          else
+            git commit -m "docs(fleet): refresh fleet dashboard [skip ci]"
+            git push
+          fi

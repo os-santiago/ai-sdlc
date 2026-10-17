@@ -690,6 +690,29 @@ without a run ledger. A **pipeline PR** is the sweep's surface: head branch
   runs fetch marks the PR unsampled instead of sinking the report.
 - **Trust boundary:** the workflow fetches the canonical script from the
   `os-santiago/ai-sdlc` pin (`runtime_ref`) — never from the caller repo.
+## Fleet dashboard (`ai-sdlc-fleet.yml`)
+
+`scripts/fleet-dashboard.js` renders the org fleet view — the GHA-native
+port of Hermes' `fleet_dashboard.js`: every enrolled repo with its contract
+`autonomy.level`, recent run health (`healthy`/`degraded`/`critical`/`idle`;
+`unknown` when the API can't reach the repo), and flags (`unreachable`,
+`no-contract`, `stale`).
+
+- **Fleet list:** `config/fleet.json` (`{"repos": ["owner/name", …]}`),
+  overridable per run via the `repos` dispatch input, the
+  `AI_SDLC_FLEET_REPOS` variable/env, or `--repos` on the CLI. Resolution
+  order: CLI > env > config file > `GITHUB_REPOSITORY` (self).
+- **Schedule:** `41 5 * * *` daily plus `workflow_dispatch` (`repos`,
+  `window`). The rendered table goes to the job summary and to
+  `docs/fleet-dashboard.md`, committed back to `main` only when the content
+  changed (diff-gated — spec/generated-artifact-publish-contract.md).
+- **Reads:** `.ai-sdlc.yaml` raw via `gh api repos/{r}/contents/` and
+  `actions/runs` (≤30/repo, ≤100 repos — bounded). Uses `AI_SDLC_TOKEN`
+  when the secret exists (private consumers), else `GITHUB_TOKEN` (public
+  repos only — unreachable repos report `unknown`, never abort the run).
+- **Kill-switch:** `AI_SDLC_OFF=1` halts the job like every other stage.
+- **Determinism:** `--now <ISO>` pins `generatedAt`; equal inputs produce
+  byte-identical output (`node --test scripts/fleet-dashboard.test.js`).
 
 ## Model fallback
 
