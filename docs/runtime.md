@@ -860,6 +860,41 @@ NIM free-tier endpoints are declared at `0.0` explicitly. Budget caps
 `alert_thresholds` live in the same file; `AI_SDLC_COST_CONFIG` points at
 an override.
 
+## Umbrella coordination (`scripts/umbrella-coordinator.js`)
+
+Contract-spanning work (an API bump, a shared protocol field, a dependency
+couple) is coordinated from ONE `umbrella`-labeled hub issue: the
+coordinator files a scoped child issue in each participating repo and keeps
+a single upserted status comment on the umbrella as the live hub checklist
+(issue #199, epic #147; ported from the Hermes control plane).
+
+- **Declaration.** The umbrella body declares participating repos in a
+  fenced ```` ```ai-sdlc:umbrella ```` block (JSON `items`/`repos`, or
+  `o/r — title` lines; the legacy `hermes:umbrella` fence is accepted) or
+  as plain bullets: `- o/r — feat(api): …`, `- o/r` (inherits the umbrella
+  title), `- o/r#N` (adopt an existing issue). `--repos o/a,o/b` or
+  `--spec spec.json` override body declarations outright.
+- **Children.** One child per repo, filed as `scc:child` with a DoR-shaped
+  body, a link back to the umbrella, and an
+  `<!-- ai-sdlc-umbrella-child key:"…" umbrella:"o/r#N" -->` marker. No
+  dispatch trigger is applied — a human arms `ready-to-implement` per repo,
+  same contract as epic-decomposer children.
+- **Hub state.** A single `<!-- ai-sdlc-umbrella-status -->` comment on the
+  umbrella renders every repo row — pending → open → closed (closed
+  children auto-check). Re-runs update that comment in place; it never
+  stacks.
+- **Idempotent.** Every write is keyed on a marker the next pass reads
+  back: a marker-carrying child is adopted (never re-filed) and the status
+  comment is upserted, so a repeated run converges to zero mutations.
+- **Bounded.** `--max-repos` (default `UMBRELLA_MAX_REPOS=8`) caps
+  participating repos; child scans are ≤100 issues per state per repo and
+  status-comment lookup ≤300 comments.
+
+```bash
+node scripts/umbrella-coordinator.js --repo OWNER/NAME --issue N \
+  [--repos o/a,o/b | --spec spec.json] [--dry-run] [--json] [--github-output]
+```
+
 ## Kill-switch (`AI_SDLC_OFF`)
 
 `AI_SDLC_OFF` is the emergency stop, carried as a **repository variable**
