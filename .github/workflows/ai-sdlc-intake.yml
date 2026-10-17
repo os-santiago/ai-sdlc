@@ -38,6 +38,7 @@ on:
         default: ''
       runtime_ref:
         description: 'ref of os-santiago/ai-sdlc to fetch scripts/intake-refiner.js from — pin to the same ref as this workflow'
+        description: 'ref of os-santiago/ai-sdlc to fetch scripts/epic-decomposer.js from — pin to the same ref as this workflow'
         type: string
         default: 'main'
     outputs:
@@ -191,9 +192,41 @@ jobs:
             { echo "status=error"; echo "fingerprint="; } >> "$GITHUB_OUTPUT"
           fi
           cat "$WORK/refine.out" || true
+      # Epic intake (issue #198): the `epic` label is terminal — never
+      # dispatched (spec/labels.md T10) — so instead of the DoR gate the
+      # issue is decomposed into bounded `scc:child` sub-issues, each filed
+      # with acceptance criteria + a parent marker, and the epic body gets a
+      # live checklist. Idempotent on re-runs via the marker index.
+      - name: Epic decomposition (epic-labeled issues)
+        id: epic
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          RUNTIME_REF: ${{ inputs.runtime_ref }}
+        run: |
+          set -euo pipefail
+          gh issue view "$ISSUE" -R "$REPO" --json number,title,body,labels > issue.json
+          if ! jq -e '[.labels[].name | ascii_downcase] | index("epic")' issue.json >/dev/null; then
+            echo "is_epic=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "is_epic=true" >> "$GITHUB_OUTPUT"
+          echo "::notice title=ai-sdlc intake::issue #$ISSUE carries 'epic' — decomposing into scc:child sub-issues instead of DoR dispatch"
+
+          # Trusted code only: the decomposer is fetched from the runtime
+          # pin (inputs.runtime_ref), never from the consumer checkout —
+          # same trust boundary as classify/verify.
+          WORK="$RUNNER_TEMP/ai-sdlc-epic-decomposer"; mkdir -p "$WORK"
+          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/epic-decomposer.js?ref=$RUNTIME_REF" \
+              -H "Accept: application/vnd.github.raw" > "$WORK/epic-decomposer.js" 2>"$WORK/fetch.err"; then
+            echo "::warning::epic decomposer unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$WORK/fetch.err")) — skipping decomposition"
+            exit 0
+          fi
+          node --check "$WORK/epic-decomposer.js"
+          node "$WORK/epic-decomposer.js" --repo "$REPO" --issue "$ISSUE" --json --github-output || true
 
       - name: Validate DoR (R1–R6)
         id: dor
+        if: steps.epic.outputs.is_epic != 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
           TRIGGER: ${{ steps.contract.outputs.trigger_label }}
@@ -203,7 +236,8 @@ jobs:
           REFINE_FP: ${{ steps.refine.outputs.fingerprint }}
         run: |
           set -euo pipefail
-          gh issue view "$ISSUE" -R "$REPO" --json number,title,body,labels > issue.json
+          # issue.json may already exist — the epic step fetches it first.
+          [ -f issue.json ] || gh issue view "$ISSUE" -R "$REPO" --json number,title,body,labels > issue.json
           node - <<'NODE'
           const fs = require('fs');
           const i = JSON.parse(fs.readFileSync('issue.json', 'utf8'));

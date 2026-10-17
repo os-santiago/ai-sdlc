@@ -24,6 +24,7 @@ engine only, no GitHub webhook adapter yet).
 | Workflow | Stage | Entry |
 |---|---|---|
 | `ai-sdlc-intake.yml` | conversational refinement (`scripts/intake-refiner.js`): spec-completeness check → one upserted comment (clarifying questions or derived ACs) + `scc:not-ready` hold, fingerprint-retriggered on edits/replies; then DoR validation (R1–R6 per `spec/definition-of-ready.md`), `scc:queued`/`scc:not-ready` labels | `issues` (labeled/opened/edited) + `issue_comment` in caller |
+| `ai-sdlc-intake.yml` | Epic decomposition (`epic` → `scc:child` sub-issues) or DoR validation (R1–R6 per `spec/definition-of-ready.md`), `scc:queued`/`scc:not-ready` labels | `issues.labeled` in caller |
 | `ai-sdlc-implement.yml` | `scc` headless run → branch → PR (`Closes #N`) + manifest/audit artifacts | called on `scc:queued` |
 | `ai-sdlc-automerge.yml` | merge-gate decision table (spec/risk-taxonomy.md): green+mergeable → squash+delete; failing → repair signal; pending/conflict → `needs-human`; pending review holds only up to `review.wait_max_minutes` → `review_timeout` merge | `check_run.completed` / `pull_request` / called |
 | `ai-sdlc-classify.yml` | deterministic diff risk classification (`scripts/risk-classifier.js`): path/size/content signals → `pr:risk-*` label on every `pull_request` event — recomputed on each push | `pull_request` (opened/synchronize) |
@@ -277,9 +278,24 @@ lives in the comment marker, so edits and author replies re-trigger the
 check while identical content never double-posts. The refiner never edits
 the issue body and honors `triggers.skip_labels` (plus the run-state
 bindings as trigger-restoration vetoes).
+| `runtime_ref` | `main` | ai-sdlc ref the epic decomposer is fetched from — pin to the workflow ref |
 
 Outputs: `dispatch`, `ledger_head` (sealed chain head — feed it to the next
 stage's `ledger_head` input).
+
+**Epic decomposition** (issue #198): when the issue carries the `epic`
+label — terminal, never dispatched (spec/labels.md T10) — intake runs
+`scripts/epic-decomposer.js` instead of the DoR gate. The decomposer splits
+the epic's work-item sections (`## Scope`, `## Children`, `## Work items`,
+…; falling back to the epic-level acceptance criteria) into a bounded set
+of `scc:child` issues (`--max-children`, default 8), each with a
+Problem/Context/Acceptance-criteria body and a
+`<!-- hermes:epic-child key:"…" parent:#N -->` marker, and upserts a live
+`<!-- hermes:epic-decomposition -->` checklist into the epic body. Re-runs
+are idempotent — filed keys are indexed across open+closed issues and never
+re-filed; existing `#N` refs in the epic body are adopted into the
+checklist rather than duplicated. Children carry no trigger label: a human
+arms each one independently.
 
 ### ai-sdlc-implement
 | Input | Default | Purpose |
