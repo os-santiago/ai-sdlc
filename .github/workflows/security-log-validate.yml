@@ -1,0 +1,59 @@
+# security-log-validate — recompute the SECURITY_LOG.md hash chain on every
+# push that touches it (issue #106; epic #89 "EU CRA alignment").
+#
+# SECURITY_LOG.md is an append-only, hash-chained security event log:
+# every event line carries the SHA-256 of the previous line, so editing,
+# deleting, or reordering a historical entry breaks every successor's
+# stored `prev` and this job goes red. When config/security-log.pub.pem is
+# committed, per-event Ed25519 signatures and seal signatures are verified
+# too (`--strict` makes unsigned-seal warnings fatal).
+#
+# Tail protection: the chain alone cannot detect a rewritten *last* line
+# (nothing stores its hash downstream). Periodic `seal` attestations and
+# the weekly cosign signature (security-log-sign.yml, signature bundles on
+# the `security-log-signatures` release) pin the tip — see
+# docs/security-log.md.
+name: security-log-validate
+
+on:
+  push:
+    paths:
+      - SECURITY_LOG.md
+      - scripts/security-log.js
+      - .github/workflows/security-log-validate.yml
+  pull_request:
+    paths:
+      - SECURITY_LOG.md
+      - scripts/security-log.js
+      - .github/workflows/security-log-validate.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-log-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Verify security event log hash chain
+        run: |
+          if [ ! -f SECURITY_LOG.md ]; then
+            echo "SECURITY_LOG.md absent — nothing to verify"
+            exit 0
+          fi
+          args=(verify --log SECURITY_LOG.md)
+          if [ -f config/security-log.pub.pem ]; then
+            args+=(--pubkey-file config/security-log.pub.pem)
+          fi
+          node scripts/security-log.js "${args[@]}"
