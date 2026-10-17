@@ -104,7 +104,7 @@ jobs:
     steps:
       - name: Verify credentials + mint ai-sdlc App token
         id: app-token
-        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@main
         with:
           repo: ${{ inputs.repo }}
           app-id: ${{ secrets.AI_SDLC_APP_ID }}
@@ -137,7 +137,7 @@ jobs:
         id: stage-engine-fetch
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
         with:
           files: |
             scripts/engine_adapter.js
@@ -201,7 +201,7 @@ jobs:
         id: sanitize-fetch
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
         with:
           files: scripts/injection_defense.js
           ref: main
@@ -268,7 +268,7 @@ jobs:
 
       - name: Bootstrap scc engine (build + provider config)
         if: steps.stage-engine.outputs.engine == 'scc'
-        uses: os-santiago/ai-sdlc/.github/actions/bootstrap-scc@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/bootstrap-scc@main
         with:
           model: ${{ inputs.resolved_model }}
           provider-base-url: ${{ inputs.provider_base_url || vars.AI_SDLC_PROVIDER_URL || 'https://models.github.ai/inference' }}
@@ -473,7 +473,7 @@ jobs:
         id: seal
         if: always() && steps.ledger.outputs.head != ''
         continue-on-error: true
-        uses: os-santiago/ai-sdlc/.github/actions/seal-ledger@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/seal-ledger@main
         with:
           stage: review-fix
           signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}

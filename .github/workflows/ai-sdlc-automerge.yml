@@ -116,7 +116,7 @@ jobs:
     steps:
       - name: Verify credentials + mint ai-sdlc App token
         id: app-token
-        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@main
         with:
           repo: ${{ inputs.repo }}
           app-id: ${{ secrets.AI_SDLC_APP_ID }}
@@ -132,7 +132,7 @@ jobs:
         id: kill
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        uses: os-santiago/ai-sdlc/.github/actions/autonomy-gate@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/autonomy-gate@main
         with:
           repo: ${{ inputs.repo }}
           kill-var: ${{ vars.AI_SDLC_KILL }}
@@ -169,7 +169,7 @@ jobs:
         id: mainguard-fetch
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
         with:
           files: scripts/main-guard.js
           ref: ${{ inputs.runtime_ref }}
@@ -385,7 +385,7 @@ jobs:
         id: route-fetch
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
         with:
           files: scripts/alert-router.js
           ref: ${{ inputs.runtime_ref }}
@@ -480,7 +480,7 @@ jobs:
         id: seal
         if: always() && steps.ledger.outputs.head != ''
         continue-on-error: true
-        uses: os-santiago/ai-sdlc/.github/actions/seal-ledger@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/seal-ledger@main
         with:
           stage: automerge
           signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}

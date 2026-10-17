@@ -76,7 +76,7 @@ jobs:
       # Trusted code only: canonical sentinel from the runtime pin.
       - name: Fetch main-guard sentinel (trusted runtime pin)
         id: mainguard-fetch
-        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
         with:
           files: scripts/main-guard.js
           ref: main
@@ -130,7 +130,7 @@ jobs:
         id: kill
         env:
           GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
-        uses: os-santiago/ai-sdlc/.github/actions/autonomy-gate@ai-sdlc/issue-139-actions
+        uses: os-santiago/ai-sdlc/.github/actions/autonomy-gate@main
         with:
           repo: ${{ github.repository }}
           kill-var: ${{ vars.AI_SDLC_KILL }}
