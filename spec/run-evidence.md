@@ -256,6 +256,8 @@ the linter reads the block, humans read the table.
       "class": "sbom",
       "path_root": "runner_temp",
       "retention": 14
+    },
+    {
       "id": "vuln-feed-report",
       "match": "ai-sdlc-vuln-feed-<e>-<e>",
       "files": [
