@@ -431,7 +431,7 @@ jobs:
           issue: ${{ inputs.issue_number }}
           base: ${{ inputs.base }}
           run-id: ${{ github.run_id }}
-          engine: ${{ steps.stage-engine.outputs.engine || steps.contract.outputs.engine_name }}
+          engine: ${{ steps['stage-engine'].outputs.engine || steps.contract.outputs.engine_name }}
           token: ${{ steps.app-token-write.outputs.token }}
 
 
