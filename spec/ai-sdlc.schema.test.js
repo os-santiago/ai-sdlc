@@ -70,6 +70,74 @@ describe('ai-sdlc.schema.json — contract surface', () => {
     assert.strictEqual(p.properties.window.minimum, 10);
   });
 
+  it('declares promotion.required_signals as the closed four-signal taxonomy (issue #179)', () => {
+    const rs = schema.properties.promotion.properties.required_signals;
+    assert.ok(rs, 'missing promotion.required_signals');
+    assert.deepStrictEqual(
+      rs.items.enum.slice().sort(),
+      ['audit-trail', 'behavioral-eval', 'static-config', 'track-record'],
+    );
+    // "Track record alone never suffices": mandatory signal + minItems 2.
+    assert.strictEqual(rs.minItems, 2);
+    assert.deepStrictEqual(rs.contains, { const: 'track-record' });
+    assert.strictEqual(rs.uniqueItems, true);
+  });
+
+  it('declares promotion.overrides as a closed per-rung threshold map (issue #179)', () => {
+    const ov = schema.properties.promotion.properties.overrides;
+    assert.ok(ov, 'missing promotion.overrides');
+    assert.strictEqual(ov.additionalProperties, false);
+    assert.deepStrictEqual(
+      Object.keys(ov.properties).sort(),
+      ['auto-deploy', 'auto-merge-all', 'auto-merge-low', 'auto-pr', 'suggest'],
+    );
+    for (const lvl of Object.keys(ov.properties)) {
+      assert.strictEqual(ov.properties[lvl].$ref, '#/$defs/promotion_thresholds');
+    }
+    const t = schema.$defs.promotion_thresholds;
+    assert.strictEqual(t.additionalProperties, false);
+    assert.strictEqual(t.properties.clean_runs_threshold.minimum, 1);
+    assert.strictEqual(t.properties.clean_merges_threshold.minimum, 1);
+    assert.strictEqual(t.properties.window.minimum, 10);
+  });
+
+  it('accepts the new evidence fields and rejects track-record-only signals', { skip: !HAS_PY }, () => {
+    const ok = schemaValidate({
+      spec: '1.0.0',
+      promotion: {
+        clean_merges_threshold: 3,
+        window: 30,
+        required_signals: ['track-record', 'static-config'],
+        overrides: { 'auto-merge-all': { clean_merges_threshold: 10 } },
+      },
+      demotion: { escalation_threshold: 1, window: 30, priority_label: 'priority:P0' },
+    });
+    assert.ok(ok.valid, `valid evidence contract rejected: ${ok.errors}`);
+
+    // track-record alone never suffices — schema enforces it.
+    const lone = schemaValidate({
+      spec: '1.0.0',
+      promotion: {
+        clean_merges_threshold: 3,
+        window: 30,
+        required_signals: ['track-record'],
+      },
+    });
+    assert.strictEqual(lone.valid, false);
+
+    // Unknown signal id and unknown rung key are rejected, not silently dropped.
+    const badSignal = schemaValidate({
+      spec: '1.0.0',
+      promotion: { clean_merges_threshold: 3, window: 30, required_signals: ['track-record', 'vibes'] },
+    });
+    assert.strictEqual(badSignal.valid, false);
+    const badRung = schemaValidate({
+      spec: '1.0.0',
+      promotion: { clean_merges_threshold: 3, window: 30, overrides: { 'auto-yolo': { clean_merges_threshold: 5 } } },
+    });
+    assert.strictEqual(badRung.valid, false);
+  });
+
   it('declares demotion with the issue-#211 trigger shape', () => {
     const d = schema.properties.demotion;
     assert.ok(d, 'missing properties.demotion');
@@ -78,6 +146,9 @@ describe('ai-sdlc.schema.json — contract surface', () => {
     assert.strictEqual(d.properties.escalation_threshold.minimum, 1);
     assert.strictEqual(d.properties.window.type, 'integer');
     assert.strictEqual(d.properties.window.minimum, 1);
+    // issue #179: sentinel-halt demotion proposals carry a priority label.
+    assert.strictEqual(d.properties.priority_label.type, 'string');
+    assert.strictEqual(d.properties.priority_label.default, 'priority:P0');
   });
 });
 
