@@ -159,6 +159,7 @@ jobs:
       # Adapter id (engine.name) carried to the fix job's ledger entry (issue #230).
       engine_name: ${{ steps.contract.outputs.engine_name }}
       escalation_label: ${{ steps.contract.outputs.escalation_label }}
+      # shellcheck disable=SC2015
       max_fix: ${{ (inputs.max_fix_iterations != -1 && toJSON(inputs.max_fix_iterations)) || steps.contract.outputs.review_max_fix_iterations || '3' }}
       max_seconds: ${{ steps.contract.outputs.max_seconds }}
       max_steps: ${{ steps.contract.outputs.max_steps }}
