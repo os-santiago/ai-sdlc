@@ -114,34 +114,14 @@ jobs:
       ledger_head: ${{ steps.seal.outputs.head || steps.ledger.outputs.head }}
       main_guard: ${{ steps.mainguard.outputs.main_guard }}
     steps:
-      - name: Verify ai-sdlc App credentials
-        id: creds
-        env:
-          APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
-          APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          case "$REPO" in */*) ;; *)
-            echo "::error title=ai-sdlc auth::repo input '$REPO' is not owner/name" >&2
-            exit 1 ;;
-          esac
-          if [ -z "${APP_ID:-}" ] || [ -z "${APP_PRIVATE_KEY:-}" ]; then
-            echo "::error title=ai-sdlc auth::AI_SDLC_APP_ID and AI_SDLC_APP_PRIVATE_KEY must be configured — the ai-sdlc GitHub App is the only pipeline identity for merges/labels (fail-closed: no PAT or GITHUB_TOKEN fallback). Install the App on $REPO and add the org secrets; see docs/runtime.md (issue #26)."
-            exit 1
-          fi
-          {
-            echo "owner=${REPO%%/*}"
-            echo "repo_name=${REPO##*/}"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Mint ai-sdlc App installation token
+      - name: Verify credentials + mint ai-sdlc App token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@ai-sdlc/issue-139-actions
         with:
+          repo: ${{ inputs.repo }}
           app-id: ${{ secrets.AI_SDLC_APP_ID }}
-          private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
-          owner: ${{ steps.creds.outputs.owner }}
-          repositories: ${{ steps.creds.outputs.repo_name }}
+          app-private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+          purpose: merges/labels
 
       # Pre-dispatch authorization gate (issue #172): one engaged channel —
       # vars.AI_SDLC_KILL/AI_SDLC_OFF, or an open ai-sdlc:off issue in the
@@ -152,17 +132,12 @@ jobs:
         id: kill
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          AI_SDLC_KILL: ${{ vars.AI_SDLC_KILL }}
-          AI_SDLC_OFF: ${{ vars.AI_SDLC_OFF }}
-          AI_SDLC_CONTROL_REPO: ${{ vars.AI_SDLC_CONTROL_REPO }}
-        run: |
-          set -euo pipefail
-          # Trusted code only — fetched from the runtime pin, never the
-          # consumer/PR head (same posture as scripts/risk-classifier.js).
-          gh api "repos/os-santiago/ai-sdlc/contents/scripts/kill-switch.js?ref=main" \
-            -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/kill-switch.js"
-          node --check "$RUNNER_TEMP/kill-switch.js"
-          node "$RUNNER_TEMP/kill-switch.js" check --repo "$REPO" --json
+        uses: os-santiago/ai-sdlc/.github/actions/autonomy-gate@ai-sdlc/issue-139-actions
+        with:
+          repo: ${{ inputs.repo }}
+          kill-var: ${{ vars.AI_SDLC_KILL }}
+          off-var: ${{ vars.AI_SDLC_OFF }}
+          control-repo: ${{ vars.AI_SDLC_CONTROL_REPO }}
 
       - name: Resolve contract (.ai-sdlc.yaml)
         id: contract
@@ -187,11 +162,27 @@ jobs:
       # green closes it; stale/absent signal fails open. merge.main_guard.*
       # inputs are applied inline — never via contract `overrides` — because
       # the pinned @main action may predate the keys (same trap as review.*).
+      # Trusted code only: fetch the canonical sentinel from the runtime
+      # pin — never from the PR head or consumer repo. An unreachable
+      # script fails open: sentinel infra must never stall merges.
+      - name: Fetch main-guard sentinel (trusted runtime pin)
+        id: mainguard-fetch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: scripts/main-guard.js
+          ref: ${{ inputs.runtime_ref }}
+          dest: ${{ runner.temp }}/ai-sdlc-main-guard
+          label: main-guard
+          fallback: proceeding (fail-open)
+
       - name: Main-guard sentinel
         id: mainguard
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           RUNTIME_REF: ${{ inputs.runtime_ref }}
+          FETCHED: ${{ steps.mainguard-fetch.outputs.fetched }}
           CONTRACT_JSON: ${{ steps.contract.outputs.json }}
           MG_ENABLED_IN: ${{ inputs.main_guard }}
           MG_WORKFLOWS_IN: ${{ inputs.main_guard_workflows }}
@@ -205,19 +196,13 @@ jobs:
           [ -n "$MG_ENABLED_IN" ] && ENABLED="$MG_ENABLED_IN"
           [ -n "$MG_WORKFLOWS_IN" ] && WFS="$MG_WORKFLOWS_IN"
           [ "$MG_MAX_AGE_IN" != "-1" ] && MAXAGE="$MG_MAX_AGE_IN"
-          # Trusted code only: fetch the canonical sentinel from the runtime
-          # pin — never from the PR head or consumer repo. An unreachable
-          # script fails open: sentinel infra must never stall merges.
-          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/main-guard.js?ref=$RUNTIME_REF" \
-              -H "Accept: application/vnd.github.raw" > "$WORK/main-guard.js" 2>"$WORK/fetch.err" \
-              || ! node --check "$WORK/main-guard.js" 2>/dev/null; then
-            echo "::warning title=main-guard::sentinel unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$WORK/fetch.err")) — proceeding (fail-open)"
+          if [ "$FETCHED" != "true" ]; then
             { echo "main_guard=ok"; echo "main_guard_reason=sentinel-unavailable"; } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           EXTRA=()
           [ "$ENABLED" = "false" ] && EXTRA+=(--disabled)
-          if ! node "$WORK/main-guard.js" --repo "$REPO" --base main \
+          if ! node "$WORK/scripts/main-guard.js" --repo "$REPO" --base main \
               --gate-workflows "$WFS" --max-age-hours "$MAXAGE" --pr "$PR" \
               --apply --json --github-output "${EXTRA[@]}" \
               > "$WORK/result.json" 2>"$WORK/err.log"; then
@@ -395,6 +380,19 @@ jobs:
       # from the trusted runtime pin, never the PR head. Dedup reads only
       # trusted-author comments (bots/collaborators) so a forged marker can
       # never suppress a real alert.
+      - name: Fetch alert router (trusted runtime pin)
+        if: steps.eval.outputs.action == 'escalated'
+        id: route-fetch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: scripts/alert-router.js
+          ref: ${{ inputs.runtime_ref }}
+          dest: ${{ runner.temp }}/ai-sdlc-alert
+          label: alert router
+          fallback: escalation proceeds unrouted
+
       - name: Route escalation alert
         if: steps.eval.outputs.action == 'escalated'
         id: route
@@ -403,18 +401,16 @@ jobs:
           REASON: ${{ steps.eval.outputs.reason }}
           CONTRACT: ${{ steps.contract.outputs.path }}
           RUNTIME_REF: ${{ inputs.runtime_ref }}
+          FETCHED: ${{ steps.route-fetch.outputs.fetched }}
         run: |
           set -euo pipefail
           W="$RUNNER_TEMP/ai-sdlc-alert"
           mkdir -p "$W"
-          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/alert-router.js?ref=$RUNTIME_REF" \
-              -H "Accept: application/vnd.github.raw" > "$W/alert-router.js" 2>"$W/fetch.err" \
-             || ! node --check "$W/alert-router.js"; then
-            echo "::warning::alert router unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$W/fetch.err" 2>/dev/null)) — escalation proceeds unrouted"
+          if [ "$FETCHED" != "true" ]; then
             exit 0
           fi
           jq '.escalation // {}' "$CONTRACT" > "$W/escalation.json" 2>/dev/null || echo '{}' > "$W/escalation.json"
-          node "$W/alert-router.js" --escalation "$W/escalation.json" \
+          node "$W/scripts/alert-router.js" --escalation "$W/escalation.json" \
             --repo "$REPO" --pr "$PR" --reason "$REASON" \
             --comments trusted-comments.json \
             --github-output --json | tee "$W/route.json" || true
@@ -480,21 +476,12 @@ jobs:
             pr.json
             checks.json
 
-      - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)
+      - name: Run ledger — seal + publish
         id: seal
         if: always() && steps.ledger.outputs.head != ''
         continue-on-error: true
-        uses: ./.github/actions/run-ledger
+        uses: os-santiago/ai-sdlc/.github/actions/seal-ledger@ai-sdlc/issue-139-actions
         with:
-          op: seal
           stage: automerge
           signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
-
-      - uses: actions/upload-artifact@v7
-        if: always() && steps.ledger.outputs.head != ''
-        continue-on-error: true
-        with:
-          name: ai-sdlc-ledger-automerge-${{ inputs.pr_number }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/ai-sdlc-ledger/ledger-automerge.jsonl
-          if-no-files-found: ignore
-          retention-days: 14
+          artifact-name: ai-sdlc-ledger-automerge-${{ inputs.pr_number }}-${{ github.run_attempt }}

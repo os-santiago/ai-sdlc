@@ -1,0 +1,107 @@
+# mint-app-token — AI-SDLC App identity bootstrap (issue #139)
+#
+# Collapses the "Verify ai-sdlc App credentials" + "Mint ai-sdlc App
+# installation token" pair copy-pasted across every runtime stage into one
+# composite: format-check the target repo, fail-closed when the App secrets
+# are unset (the App is the only pipeline identity — no PAT/GITHUB_TOKEN
+# fallback, issue #26), then mint the installation token.
+#
+# Scoped-token variants (issue #210 forge boundary): the permission-*
+# inputs pass straight through to actions/create-github-app-token — a
+# read-scoped mint carries read perms, a write-scoped mint write perms.
+# `scope: 'none'` leaves the token unscoped (all repos of the
+# installation) — the intake fallback path where the App may not even be
+# installed; callers there still wrap the step in continue-on-error.
+name: ai-sdlc mint-app-token
+description: Verify ai-sdlc App credentials and mint the per-run installation token
+
+inputs:
+  repo:
+    description: 'owner/name being processed — format-verified; derives owner + repositories (empty = no format check, owner must come from the owner input)'
+    default: ''
+  app-id:
+    description: 'AI_SDLC_APP_ID secret'
+    required: true
+  app-private-key:
+    description: 'AI_SDLC_APP_PRIVATE_KEY secret'
+    required: true
+  purpose:
+    description: 'activity named in the missing-credentials error (e.g. "merges/labels", "pushes/PRs", "labels")'
+    default: 'pipeline operations'
+  require-creds:
+    description: "'true' (default) fails when app-id/app-private-key are unset; 'false' lets the mint itself degrade (paired with continue-on-error on the caller)"
+    default: 'true'
+  owner:
+    description: 'explicit App installation owner; empty = owner derived from repo'
+    default: ''
+  scope:
+    description: "'repository' (default) scopes the token to the repo; 'none' leaves it unscoped"
+    default: 'repository'
+  permission-contents:
+    description: 'token permission override (read|write); empty = App default'
+    default: ''
+  permission-issues:
+    description: 'token permission override (read|write); empty = App default'
+    default: ''
+  permission-pull-requests:
+    description: 'token permission override (read|write); empty = App default'
+    default: ''
+
+outputs:
+  token:
+    description: 'installation token (empty when the mint was declined under continue-on-error)'
+    value: ${{ steps.mint.outputs.token }}
+  owner:
+    description: 'installation owner used for the mint'
+    value: ${{ steps.verify.outputs.owner }}
+  repo_name:
+    description: 'repository name used for token scoping (empty when repo input unset)'
+    value: ${{ steps.verify.outputs.repo_name }}
+
+runs:
+  using: composite
+  steps:
+    - name: Verify ai-sdlc App credentials
+      id: verify
+      shell: bash
+      env:
+        REPO_IN: ${{ inputs.repo }}
+        OWNER_IN: ${{ inputs.owner }}
+        REQUIRE_CREDS: ${{ inputs.require-creds }}
+        PURPOSE: ${{ inputs.purpose }}
+        APP_ID: ${{ inputs.app-id }}
+        APP_PRIVATE_KEY: ${{ inputs.app-private-key }}
+      run: |
+        set -euo pipefail
+        if [ -n "$REPO_IN" ]; then
+          case "$REPO_IN" in */*) ;; *)
+            echo "::error title=ai-sdlc auth::repo input '$REPO_IN' is not owner/name" >&2
+            exit 1 ;;
+          esac
+        fi
+        if [ "$REQUIRE_CREDS" = "true" ] && { [ -z "${APP_ID:-}" ] || [ -z "${APP_PRIVATE_KEY:-}" ]; }; then
+          echo "::error title=ai-sdlc auth::AI_SDLC_APP_ID and AI_SDLC_APP_PRIVATE_KEY must be configured — the ai-sdlc GitHub App is the only pipeline identity for $PURPOSE (fail-closed: no PAT or GITHUB_TOKEN fallback). Install the App on ${REPO_IN:-the target repo} and add the org secrets; see docs/runtime.md (issue #26)." >&2
+          exit 1
+        fi
+        OWNER="$OWNER_IN"
+        NAME=""
+        if [ -n "$REPO_IN" ]; then
+          [ -n "$OWNER" ] || OWNER="${REPO_IN%%/*}"
+          NAME="${REPO_IN##*/}"
+        fi
+        {
+          echo "owner=$OWNER"
+          echo "repo_name=$NAME"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Mint ai-sdlc App installation token
+      id: mint
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: ${{ steps.verify.outputs.owner }}
+        repositories: ${{ inputs.scope == 'repository' && steps.verify.outputs.repo_name || '' }}
+        permission-contents: ${{ inputs.permission-contents }}
+        permission-issues: ${{ inputs.permission-issues }}
+        permission-pull-requests: ${{ inputs.permission-pull-requests }}

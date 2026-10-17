@@ -95,18 +95,12 @@ jobs:
       # Fail-closed: an unreadable channel denies too.
       - name: Autonomy gate — org kill-switch
         id: kill
-        env:
-          AI_SDLC_KILL: ${{ vars.AI_SDLC_KILL }}
-          AI_SDLC_OFF: ${{ vars.AI_SDLC_OFF }}
-          AI_SDLC_CONTROL_REPO: ${{ vars.AI_SDLC_CONTROL_REPO }}
-        run: |
-          set -euo pipefail
-          # Trusted code only — fetched from the runtime pin, never the
-          # consumer/PR head (same posture as scripts/risk-classifier.js).
-          gh api "repos/os-santiago/ai-sdlc/contents/scripts/kill-switch.js?ref=main" \
-            -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/kill-switch.js"
-          node --check "$RUNNER_TEMP/kill-switch.js"
-          node "$RUNNER_TEMP/kill-switch.js" check --repo "$REPO" --json
+        uses: os-santiago/ai-sdlc/.github/actions/autonomy-gate@ai-sdlc/issue-139-actions
+        with:
+          repo: ${{ inputs.repo }}
+          kill-var: ${{ vars.AI_SDLC_KILL }}
+          off-var: ${{ vars.AI_SDLC_OFF }}
+          control-repo: ${{ vars.AI_SDLC_CONTROL_REPO }}
 
       - name: Resolve contract (.ai-sdlc.yaml)
         id: contract
@@ -122,12 +116,14 @@ jobs:
       - name: Mint ai-sdlc App installation token
         id: app-token
         if: ${{ !cancelled() }}
-        uses: actions/create-github-app-token@v3
+        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@ai-sdlc/issue-139-actions
         continue-on-error: true
         with:
+          repo: ${{ inputs.repo }}
           app-id: ${{ secrets.AI_SDLC_APP_ID }}
-          private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
+          app-private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+          require-creds: 'false'
+          scope: 'none'
 
       - name: Contract error → not-ready + comment (no dispatch)
         if: failure() && steps.contract.outcome == 'failure'
@@ -154,11 +150,26 @@ jobs:
       # label. Runs BEFORE the DoR gate so a hold strips the trigger first
       # (labels.md F2) and the armed check stays honest. Idempotent by
       # content fingerprint — an edit or author reply re-triggers it.
+      # Trusted code only: canonical refiner from the runtime repo pin —
+      # never from the consumer repo (same posture as ai-sdlc-classify).
+      - name: Fetch intake refiner (trusted runtime pin)
+        id: refine-fetch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: scripts/intake-refiner.js
+          ref: ${{ inputs.runtime_ref }}
+          dest: ${{ runner.temp }}/ai-sdlc-refine
+          label: intake refiner
+          fallback: skipping refinement
+
       - name: Refine spec (conversational intake)
         id: refine
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
           RUNTIME_REF: ${{ inputs.runtime_ref }}
+          FETCHED: ${{ steps.refine-fetch.outputs.fetched }}
           TRIGGER: ${{ steps.contract.outputs.trigger_label }}
           SKIP_LABELS: ${{ steps.contract.outputs.skip_labels }}
           NOT_READY: ${{ steps.contract.outputs.label_not_ready }}
@@ -167,16 +178,10 @@ jobs:
           set -euo pipefail
           WORK="$RUNNER_TEMP/ai-sdlc-refine"
           mkdir -p "$WORK"
-
-          # Trusted code only: canonical refiner from the runtime repo pin —
-          # never from the consumer repo (same posture as ai-sdlc-classify).
-          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/intake-refiner.js?ref=$RUNTIME_REF" \
-              -H "Accept: application/vnd.github.raw" > "$WORK/intake-refiner.js" 2>"$WORK/fetch.err"; then
-            echo "::warning::intake refiner unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$WORK/fetch.err")) — skipping refinement"
+          if [ "$FETCHED" != "true" ]; then
             { echo "status=skipped"; echo "fingerprint="; } >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          node --check "$WORK/intake-refiner.js"
 
           # Labels that veto trigger restoration: contract skip labels ∪
           # active run-state bindings (labels.md F4/F5).
@@ -186,7 +191,7 @@ jobs:
           # Fail-open: refinement is additive intelligence, not a dispatch
           # gate — a refiner error must not wedge an otherwise DoR-ready
           # issue (the R1–R6 check below still gates dispatch).
-          if ! node "$WORK/intake-refiner.js" \
+          if ! node "$WORK/scripts/intake-refiner.js" \
               --repo "$REPO" --issue "$ISSUE" \
               --trigger "$TRIGGER" --hold "$NOT_READY" \
               --skip-labels "$SKIP_LABELS" --veto-labels "$VETO" \
@@ -205,28 +210,37 @@ jobs:
       # `duplicate` label (spec/labels.md T10 — `dedup`/`human` own that
       # transition). Fail-open like the refiner: additive intelligence,
       # not a dispatch gate.
+      # Trusted code only: canonical detector from the runtime repo
+      # pin — never from the consumer repo (same trust boundary as
+      # classify/refine).
+      - name: Fetch dup detector (trusted runtime pin)
+        id: dup-fetch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: scripts/dup-detector.js
+          ref: ${{ inputs.runtime_ref }}
+          dest: ${{ runner.temp }}/ai-sdlc-dup
+          label: dup detector
+          fallback: skipping dedup scan
+
       - name: Duplicate scan (backlog dedup)
         id: dup
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
           RUNTIME_REF: ${{ inputs.runtime_ref }}
+          FETCHED: ${{ steps.dup-fetch.outputs.fetched }}
         run: |
           set -euo pipefail
           WORK="$RUNNER_TEMP/ai-sdlc-dup"
           mkdir -p "$WORK"
-
-          # Trusted code only: canonical detector from the runtime repo
-          # pin — never from the consumer repo (same trust boundary as
-          # classify/refine).
-          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/dup-detector.js?ref=$RUNTIME_REF" \
-              -H "Accept: application/vnd.github.raw" > "$WORK/dup-detector.js" 2>"$WORK/fetch.err"; then
-            echo "::warning::dup detector unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$WORK/fetch.err")) — skipping dedup scan"
+          if [ "$FETCHED" != "true" ]; then
             echo "status=skipped" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          node --check "$WORK/dup-detector.js"
 
-          if ! node "$WORK/dup-detector.js" \
+          if ! node "$WORK/scripts/dup-detector.js" \
               --repo "$REPO" --issue "$ISSUE" \
               --apply --json --github-output > "$WORK/dup.out" 2>"$WORK/dup.err"; then
             echo "::warning::dup scan failed ($(head -c 200 "$WORK/dup.err")) — continuing to DoR"
@@ -243,7 +257,6 @@ jobs:
         id: epic
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
-          RUNTIME_REF: ${{ inputs.runtime_ref }}
         run: |
           set -euo pipefail
           gh issue view "$ISSUE" -R "$REPO" --json number,title,body,labels > issue.json
@@ -254,17 +267,35 @@ jobs:
           echo "is_epic=true" >> "$GITHUB_OUTPUT"
           echo "::notice title=ai-sdlc intake::issue #$ISSUE carries 'epic' — decomposing into scc:child sub-issues instead of DoR dispatch"
 
-          # Trusted code only: the decomposer is fetched from the runtime
-          # pin (inputs.runtime_ref), never from the consumer checkout —
-          # same trust boundary as classify/verify.
+      # Trusted code only: the decomposer is fetched from the runtime
+      # pin (inputs.runtime_ref), never from the consumer checkout —
+      # same trust boundary as classify/verify.
+      - name: Fetch epic decomposer (trusted runtime pin)
+        id: epic-fetch
+        if: steps.epic.outputs.is_epic == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@ai-sdlc/issue-139-actions
+        with:
+          files: scripts/epic-decomposer.js
+          ref: ${{ inputs.runtime_ref }}
+          dest: ${{ runner.temp }}/ai-sdlc-epic-decomposer
+          label: epic decomposer
+          fallback: skipping decomposition
+
+      - name: Decompose epic into scc:child sub-issues
+        id: epic-decompose
+        if: steps.epic.outputs.is_epic == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          FETCHED: ${{ steps.epic-fetch.outputs.fetched }}
+        run: |
+          set -euo pipefail
           WORK="$RUNNER_TEMP/ai-sdlc-epic-decomposer"; mkdir -p "$WORK"
-          if ! gh api "repos/os-santiago/ai-sdlc/contents/scripts/epic-decomposer.js?ref=$RUNTIME_REF" \
-              -H "Accept: application/vnd.github.raw" > "$WORK/epic-decomposer.js" 2>"$WORK/fetch.err"; then
-            echo "::warning::epic decomposer unavailable at os-santiago/ai-sdlc@$RUNTIME_REF ($(head -c 160 "$WORK/fetch.err")) — skipping decomposition"
+          if [ "$FETCHED" != "true" ]; then
             exit 0
           fi
-          node --check "$WORK/epic-decomposer.js"
-          node "$WORK/epic-decomposer.js" --repo "$REPO" --issue "$ISSUE" --json --github-output || true
+          node "$WORK/scripts/epic-decomposer.js" --repo "$REPO" --issue "$ISSUE" --json --github-output || true
 
       - name: Validate DoR (R1–R6)
         id: dor
@@ -353,21 +384,12 @@ jobs:
           engine: ${{ steps.contract.outputs.engine_name }}
           data: ${{ toJSON(steps.dor.outputs) }}
 
-      - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)
+      - name: Run ledger — seal + publish
         id: seal
         if: always() && steps.ledger.outputs.head != ''
         continue-on-error: true
-        uses: ./.github/actions/run-ledger
+        uses: os-santiago/ai-sdlc/.github/actions/seal-ledger@ai-sdlc/issue-139-actions
         with:
-          op: seal
           stage: intake
           signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
-
-      - uses: actions/upload-artifact@v7
-        if: always() && steps.ledger.outputs.head != ''
-        continue-on-error: true
-        with:
-          name: ai-sdlc-ledger-intake-${{ inputs.issue_number }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/ai-sdlc-ledger/ledger-intake.jsonl
-          if-no-files-found: ignore
-          retention-days: 14
+          artifact-name: ai-sdlc-ledger-intake-${{ inputs.issue_number }}-${{ github.run_attempt }}

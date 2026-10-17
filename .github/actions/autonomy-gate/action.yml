@@ -1,0 +1,79 @@
+# autonomy-gate — AI-SDLC org kill-switch (issue #139)
+#
+# Collapses the "Autonomy gate — org kill-switch" block copy-pasted into
+# every mutating stage (issue #172): fetch the canonical kill-switch.js
+# from the runtime pin — always `main`, so a revoked autonomy lands on the
+# next run regardless of the caller's pin — then evaluate it.
+#
+# Fail-closed by default: an unreadable channel denies and fails the step.
+# `soft: 'true'` (the review stage, which runs on every same-repo PR
+# including human-owned ones) resolves the verdict into step outputs
+# (state|reason) instead — the caller's guard maps it to decision=skip.
+#
+# The step env contract is unchanged: GH_TOKEN authenticates the fetch,
+# AI_SDLC_KILL / AI_SDLC_OFF / AI_SDLC_CONTROL_REPO carry the kill channels
+# (vars.*), REPO defaults the target. All flow in from the calling step's
+# env: block.
+name: ai-sdlc autonomy-gate
+description: Evaluate the org kill-switch (trusted kill-switch.js from the runtime repo @main)
+
+inputs:
+  repo:
+    description: 'owner/name to check — empty = $REPO from the caller env'
+    default: ''
+  ref:
+    description: "ref of os-santiago/ai-sdlc to fetch scripts/kill-switch.js from — pinned 'main' so an engaged switch lands immediately"
+    default: 'main'
+  soft:
+    description: "'true' resolves the verdict into outputs (state|reason) instead of failing — for advisory stages like review"
+    default: 'false'
+  kill-var:
+    description: 'vars.AI_SDLC_KILL — env kill channel (empty = caller ambient env, unset is clear)'
+    default: ''
+  off-var:
+    description: 'vars.AI_SDLC_OFF — env off channel (empty = caller ambient env)'
+    default: ''
+  control-repo:
+    description: 'vars.AI_SDLC_CONTROL_REPO — control repo for the fleet-wide ai-sdlc:off issue channel (empty = ambient/default)'
+    default: ''
+
+outputs:
+  state:
+    description: 'kill-switch state (soft mode only): clear | engaged | unreadable'
+    value: ${{ steps.gate.outputs.state }}
+  reason:
+    description: 'kill-switch reason detail (soft mode only)'
+    value: ${{ steps.gate.outputs.reason }}
+
+runs:
+  using: composite
+  steps:
+    - name: Autonomy gate — org kill-switch
+      id: gate
+      shell: bash
+      env:
+        GATE_REPO: ${{ inputs.repo }}
+        GATE_REF: ${{ inputs.ref }}
+        GATE_SOFT: ${{ inputs.soft }}
+        GATE_KILL_VAR: ${{ inputs.kill-var }}
+        GATE_OFF_VAR: ${{ inputs.off-var }}
+        GATE_CONTROL_REPO: ${{ inputs.control-repo }}
+      run: |
+        set -euo pipefail
+        TARGET="${GATE_REPO:-${REPO:-}}"
+        # Explicit inputs override ambient env; both feed the same channels
+        # kill-switch.js reads (AI_SDLC_KILL / AI_SDLC_OFF /
+        # AI_SDLC_CONTROL_REPO) — empty input keeps the caller env as-is.
+        export AI_SDLC_KILL="${GATE_KILL_VAR:-${AI_SDLC_KILL:-}}"
+        export AI_SDLC_OFF="${GATE_OFF_VAR:-${AI_SDLC_OFF:-}}"
+        export AI_SDLC_CONTROL_REPO="${GATE_CONTROL_REPO:-${AI_SDLC_CONTROL_REPO:-}}"
+        # Trusted code only — fetched from the runtime pin, never the
+        # consumer/PR head (same posture as scripts/risk-classifier.js).
+        gh api "repos/os-santiago/ai-sdlc/contents/scripts/kill-switch.js?ref=$GATE_REF" \
+          -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/kill-switch.js"
+        node --check "$RUNNER_TEMP/kill-switch.js"
+        if [ "$GATE_SOFT" = "true" ]; then
+          node "$RUNNER_TEMP/kill-switch.js" check --repo "$TARGET" --json --github-output --soft
+        else
+          node "$RUNNER_TEMP/kill-switch.js" check --repo "$TARGET" --json
+        fi

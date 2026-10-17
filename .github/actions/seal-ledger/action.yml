@@ -1,0 +1,61 @@
+# seal-ledger — AI-SDLC run-ledger seal + artifact publish (issue #139)
+#
+# Collapses the "Run ledger — seal" + ledger artifact upload pair that
+# closes every stage workflow (issue #196): seal the stage's hash chain
+# (signed when AI_SDLC_LEDGER_KEY is provided — Ed25519/RSA PEM), then
+# upload the JSONL as a run artifact. Evidence must never break the
+# pipeline — callers run this under `if: always()` +
+# `continue-on-error: true`, exactly like the former two-step form.
+#
+# run-ledger.js is invoked through the materialized action path — the
+# whole runtime repo is checked out alongside this action at the same ref
+# (the $GITHUB_ACTION_PATH contract resolve-stage-engine already relies
+# on), so no nested `uses:` is needed.
+name: ai-sdlc seal-ledger
+description: Seal a stage run-ledger (signed when a key is passed) and upload it as an artifact
+
+inputs:
+  stage:
+    description: 'stage name — resolves the ledger path ($RUNNER_TEMP/ai-sdlc-ledger/ledger-<stage>.jsonl)'
+    required: true
+  signing-key:
+    description: 'Ed25519/RSA private key PEM — pass secrets.AI_SDLC_LEDGER_KEY; empty = unsigned seal'
+    default: ''
+  artifact-name:
+    description: 'uploaded artifact name'
+    required: true
+  retention-days:
+    description: 'artifact retention'
+    default: '14'
+
+outputs:
+  head:
+    description: 'sealed chain head — SHA-256 of the last entry'
+    value: ${{ steps.seal.outputs.head }}
+  signed:
+    description: '"true" when the seal was cryptographically signed'
+    value: ${{ steps.seal.outputs.signed }}
+
+runs:
+  using: composite
+  steps:
+    - name: Run ledger — seal (signed when AI_SDLC_LEDGER_KEY is set)
+      id: seal
+      shell: bash
+      env:
+        LEDGER_STAGE: ${{ inputs.stage }}
+        LEDGER_SIGNING_KEY: ${{ inputs.signing-key }}
+      run: |
+        set -euo pipefail
+        FILE="$RUNNER_TEMP/ai-sdlc-ledger/ledger-${LEDGER_STAGE}.jsonl"
+        args=(seal --ledger "$FILE")
+        [ -n "$LEDGER_SIGNING_KEY" ] && args+=(--key-env LEDGER_SIGNING_KEY)
+        node "$GITHUB_ACTION_PATH/../run-ledger/run-ledger.js" "${args[@]}"
+
+    - name: Upload sealed ledger artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ runner.temp }}/ai-sdlc-ledger/ledger-${{ inputs.stage }}.jsonl
+        if-no-files-found: ignore
+        retention-days: ${{ inputs.retention-days }}

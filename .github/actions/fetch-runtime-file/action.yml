@@ -1,0 +1,95 @@
+# fetch-runtime-file — AI-SDLC trusted-pin script fetch (issue #139)
+#
+# Collapses the "fetch trusted code from the runtime repo pin" boilerplate
+# copy-pasted across the stage workflows: `gh api contents/<path>?ref=$REF`
+# into a scratch dir + `node --check` on .js payloads, fail-open by default
+# (fetched=false + ::warning::, matching every existing call site) or
+# fail-closed with required='true' (apply-patch.js, contract-drift.js).
+#
+# The trust boundary is preserved verbatim: payloads come from
+# os-santiago/ai-sdlc at `ref` — the caller's runtime_ref pin — never from
+# the consumer checkout or a PR head. Nested paths are reproduced under
+# `dest` (scripts/gha/x.js → dest/scripts/gha/x.js); a failed file is
+# removed so presence checks (`[ -f ... ]`) keep working downstream.
+name: ai-sdlc fetch-runtime-file
+description: Fetch trusted runtime files from os-santiago/ai-sdlc@<ref> (fail-open by default)
+
+inputs:
+  files:
+    description: 'newline-separated repo-relative paths (e.g. scripts/intake-refiner.js)'
+    required: true
+  ref:
+    description: 'ref of os-santiago/ai-sdlc to fetch from — pass the caller runtime_ref input'
+    default: 'main'
+  dest:
+    description: 'destination directory; repo-relative layout is preserved beneath it'
+    required: true
+  label:
+    description: 'label used in the unavailable warning (e.g. "risk classifier", "alert router")'
+    default: 'runtime file(s)'
+  fallback:
+    description: 'degradation named in the warning suffix (e.g. "skipping refinement")'
+    default: 'skipping'
+  required:
+    description: "'true' fails the step when a fetch/check fails; 'false' (default) warns and reports fetched=false"
+    default: 'false'
+  check:
+    description: "'true' (default) runs node --check on each fetched *.js before reporting success"
+    default: 'true'
+  token:
+    description: 'token for the contents read — empty = caller ambient GH_TOKEN'
+    default: ''
+
+outputs:
+  fetched:
+    description: "'true' when every file was fetched and syntax-checked"
+    value: ${{ steps.fetch.outputs.fetched }}
+  dest:
+    description: 'destination directory (echo of the input, for expression brevity)'
+    value: ${{ inputs.dest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Fetch runtime files
+      id: fetch
+      shell: bash
+      env:
+        FILES: ${{ inputs.files }}
+        REF: ${{ inputs.ref }}
+        DEST: ${{ inputs.dest }}
+        LABEL: ${{ inputs.label }}
+        FALLBACK: ${{ inputs.fallback }}
+        REQUIRED: ${{ inputs.required }}
+        CHECK: ${{ inputs.check }}
+        TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$DEST"
+        export GH_TOKEN="${TOKEN:-${GH_TOKEN:-}}"
+        ok=1
+        while IFS= read -r f; do
+          [ -z "${f//[[:space:]]/}" ] && continue
+          d="$DEST/$f"
+          mkdir -p "$(dirname "$d")"
+          if ! gh api "repos/os-santiago/ai-sdlc/contents/$f?ref=$REF" \
+              -H "Accept: application/vnd.github.raw" > "$d" 2>"$DEST/fetch.err"; then
+            ok=0
+          elif [ "$CHECK" = "true" ] && [[ "$f" == *.js ]] \
+              && ! node --check "$d" 2>/dev/null; then
+            ok=0
+          fi
+          if [ "$ok" = 0 ]; then
+            # Drop a partial/corrupt payload so presence checks downstream
+            # never execute it (same posture as the inline blocks).
+            rm -f "$d"
+            echo "::warning::${LABEL} unavailable at os-santiago/ai-sdlc@${REF} ($(head -c 160 "$DEST/fetch.err" 2>/dev/null)) — ${FALLBACK}"
+            break
+          fi
+        done <<< "$FILES"
+        if [ "$ok" = 0 ]; then
+          echo "fetched=false" >> "$GITHUB_OUTPUT"
+          [ "$REQUIRED" = "true" ] && exit 1
+          exit 0
+        fi
+        echo "fetched=true" >> "$GITHUB_OUTPUT"
