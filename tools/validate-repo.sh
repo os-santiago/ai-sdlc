@@ -9,11 +9,15 @@
 #      definitions is dead without anyone noticing; issue #255)
 #   3. .github/workflows/*.yml, .github/actions/*/action.yml and the contracts
 #      parse as YAML
-#   4. actionlint, when a binary is already installed (CI owns the pinned
+#   4. every .github/workflows job that runs steps declares timeout-minutes
+#      (bounded-everything doctrine; jobs calling reusable workflows via
+#      `uses:` can't carry the key — the callee's job-level bound applies;
+#      issue #136)
+#   5. actionlint, when a binary is already installed (CI owns the pinned
 #      release — .github/workflows/actionlint.yml; ./actionlint fetches it)
-#   5. node --test on */*.test.js + scripts/gha/*.test.js, when node and
+#   6. node --test on */*.test.js + scripts/gha/*.test.js, when node and
 #      test files are present
-#   6. shell e2e tests (tests/*.test.sh) — CLI-level contracts that assert
+#   7. shell e2e tests (tests/*.test.sh) — CLI-level contracts that assert
 #      process exit codes, which node --test can't cover as directly
 #
 # Exit 0 = clean, 1 = a check failed, 2 = required tooling missing.
@@ -109,7 +113,60 @@ else
   note "no YAML parser (need python3+PyYAML or npx) — workflow YAML parse-check skipped"
 fi
 
-# --- 4. actionlint (when installed) ---------------------------------------------
+# --- 4. Workflow jobs declare timeout-minutes ------------------------------------
+python3 - <<'PY'
+import glob, re, sys
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
+def jobs_of(path):
+    """Map each job id to {'uses': bool, 'timeout': bool}."""
+    if yaml is not None:
+        doc = yaml.safe_load(open(path)) or {}
+        jobs = doc.get('jobs') or {}
+        return {jid: {'uses': 'uses' in (job or {}),
+                      'timeout': 'timeout-minutes' in (job or {})}
+                for jid, job in jobs.items()}
+    # No YAML parser: indentation scan — job keys sit at 2-space indent
+    # under a top-level 'jobs:' key; uses/timeout-minutes at 4 spaces in.
+    out, cur, in_jobs = {}, None, False
+    for line in open(path):
+        if re.match(r'^\S', line):
+            in_jobs = line.startswith('jobs:')
+            cur = None
+            continue
+        if not in_jobs:
+            continue
+        m = re.match(r'^  ([\w.-]+):\s*(?:#.*)?$', line)
+        if m:
+            cur = m.group(1)
+            out[cur] = {'uses': False, 'timeout': False}
+            continue
+        if cur and re.match(r'^    uses:', line):
+            out[cur]['uses'] = True
+        elif cur and re.match(r'^    timeout-minutes:', line):
+            out[cur]['timeout'] = True
+    return out
+
+bad = []
+for f in sorted(glob.glob('.github/workflows/*.yml')):
+    for jid, j in jobs_of(f).items():
+        # `uses:` jobs call a reusable workflow — GitHub rejects
+        # timeout-minutes there; the callee's own job bound applies.
+        if not j['uses'] and not j['timeout']:
+            bad.append(f"{f}: job '{jid}' runs steps without timeout-minutes")
+if bad:
+    for b in bad:
+        print(f"[X] {b}", file=sys.stderr)
+    sys.exit("[X] every step-running job must be bounded — "
+             "declare timeout-minutes (issue #136)")
+print("[✓] workflows: every step-running job declares timeout-minutes")
+PY
+
+# --- 5. actionlint (when installed) ---------------------------------------------
 if command -v actionlint >/dev/null 2>&1; then
   actionlint || fail "actionlint reported workflow violations"
   echo "[✓] actionlint: workflows clean"
@@ -117,7 +174,7 @@ else
   note "actionlint not on PATH — skipped (CI pin: .github/workflows/actionlint.yml; run ./actionlint -color for full parity)"
 fi
 
-# --- 5. node --test (when node and test files exist) ----------------------------
+# --- 6. node --test (when node and test files exist) ----------------------------
 if command -v node >/dev/null 2>&1; then
   tests=()
   # */*.test.js misses action-dir tests (.github/actions/*/), nested
@@ -134,7 +191,7 @@ else
   note "node not on PATH — node --test skipped"
 fi
 
-# --- 6. shell e2e tests ---------------------------------------------------------
+# --- 7. shell e2e tests ---------------------------------------------------------
 ran=0
 for t in tests/*.test.sh; do
   [ -f "$t" ] || continue
