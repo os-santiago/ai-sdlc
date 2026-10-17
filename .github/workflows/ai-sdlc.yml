@@ -54,15 +54,13 @@ jobs:
     # Armed: the trigger label event. Refinement: every other issue event —
     # opened/edited plus author replies (issue_comment on non-PR issues);
     # the refiner fingerprint no-ops when the spec source didn't move.
-    if: >-
-      github.event.label.name == 'ready-to-implement' ||
-      (github.event_name == 'issues' && github.event.action != 'labeled') ||
-      (github.event_name == 'issue_comment' && !github.event.issue.pull_request)
     # `epic` is a terminal label — intake decomposes it into scc:child
     # sub-issues instead of dispatching (issue #198, spec/labels.md T10).
     if: >-
       github.event.label.name == 'ready-to-implement' ||
-      github.event.label.name == 'epic'
+      github.event.label.name == 'epic' ||
+      (github.event_name == 'issues' && github.event.action != 'labeled') ||
+      (github.event_name == 'issue_comment' && !github.event.issue.pull_request)
     uses: ./.github/workflows/ai-sdlc-intake.yml
     with:
       repo: ${{ github.repository }}

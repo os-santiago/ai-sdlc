@@ -37,8 +37,7 @@ on:
         type: string
         default: ''
       runtime_ref:
-        description: 'ref of os-santiago/ai-sdlc to fetch scripts/intake-refiner.js from — pin to the same ref as this workflow'
-        description: 'ref of os-santiago/ai-sdlc to fetch scripts/epic-decomposer.js from — pin to the same ref as this workflow'
+        description: 'ref of os-santiago/ai-sdlc to fetch runtime scripts (intake-refiner.js, epic-decomposer.js) from — pin to the same ref as this workflow'
         type: string
         default: 'main'
     outputs:
