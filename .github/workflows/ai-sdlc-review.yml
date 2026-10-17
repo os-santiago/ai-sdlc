@@ -904,6 +904,9 @@ jobs:
       # pass the review stage already dispatched.
       - name: Resolve contract (.ai-sdlc.yaml)
         id: contract
+        # Advisory: resolution only feeds stage-engine selection here — a
+        # failed read falls back to the default engine, never blocks a fix.
+        continue-on-error: true
         uses: os-santiago/ai-sdlc/.github/actions/load-config@main
         with:
           repo: ${{ inputs.repo }}

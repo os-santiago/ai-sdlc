@@ -444,6 +444,9 @@ jobs:
       - name: Resolve contract (.ai-sdlc.yaml)
         id: contract
         if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
+        # Advisory: an unresolvable contract must not abort the repair
+        # attempt — stage-engine then falls back to the default engine.
+        continue-on-error: true
         uses: os-santiago/ai-sdlc/.github/actions/load-config@main
         with:
           repo: ${{ inputs.repo }}
