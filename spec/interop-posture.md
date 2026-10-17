@@ -14,8 +14,9 @@ ai-sdlc is not another agent product competing on execution. The product
 surface is the **normative contract**: `.ai-sdlc.yaml` plus the `spec/`
 vocabulary plus the evidence every governed run must emit. Engines and
 harnesses plug in **below** that surface — `sc-agent-cli` is the
-reference engine today; `devin` is already declared in the adapter
-registry; third-party harnesses are the intended next arrivals.
+reference engine today; `devin`, `claude-code`, `codex`, and `openhands`
+are already declared in the adapter registry; further third-party
+harnesses are the intended next arrivals.
 
 The winning end-state is **integration without fusion**: a certified
 third-party harness running under an ai-sdlc contract — governed by the
@@ -92,7 +93,8 @@ record so the seam can evolve without breaking conforming engines.
 adapter registry — the registry of approved engines. Per engine it
 declares `binary`, `probe`, `capabilities`, `argvBuilder` (a declarative
 placeholder contract, never evaluated code), `configRenderer`,
-`exitCodeMap`, and `manifestMap` (`scc` and `devin` are declared).
+`exitCodeMap`, and `manifestMap` (`scc`, `devin`, `claude-code`,
+`codex`, and `openhands` are declared).
 [`scripts/engine_adapter.js`](../scripts/engine_adapter.js) is the
 canonical interpreter both runtime paths bind to (the container worker
 directly, the GHA path via `scripts/gha/engine-adapter-resolver.js`).

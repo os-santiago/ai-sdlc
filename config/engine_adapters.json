@@ -194,5 +194,172 @@
       "path": "{manifestFile}",
       "format": "json"
     }
+  },
+  "claude-code": {
+    "binary": "claude",
+    "probe": [
+      "claude",
+      "--version"
+    ],
+    "capabilities": {
+      "supportsWorkspaceTrust": true,
+      "modelConfigurable": true,
+      "projectIdRequired": false
+    },
+    "argvBuilder": {
+      "substitution": {
+        "mode": "argv-element",
+        "shell": "never",
+        "note": "Each {name} token occupies a whole argv element and MUST be replaced atomically with the validated value as one element (no re-splitting, no globbing, no shell joining). Unknown placeholders must be rejected, not substituted.",
+        "placeholders": {
+          "prompt": {
+            "pattern": "^[^\\u0000]{1,65536}$",
+            "required": true
+          },
+          "model": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$",
+            "required": true
+          },
+          "manifestFile": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$",
+            "required": true
+          }
+        }
+      },
+      "args": [
+        "-p",
+        "{prompt}",
+        "--model",
+        "{model}",
+        "--settings",
+        "{manifestFile}",
+        "--output-format",
+        "json",
+        "--bare"
+      ]
+    },
+    "configRenderer": {
+      "format": "json",
+      "path": "{manifestFile}"
+    },
+    "exitCodeMap": {
+      "0": "Success",
+      "1": "AgentError",
+      "default": "AgentError"
+    },
+    "manifestMap": {
+      "path": "{manifestFile}",
+      "format": "json"
+    }
+  },
+  "codex": {
+    "binary": "codex",
+    "probe": [
+      "codex",
+      "--version"
+    ],
+    "capabilities": {
+      "supportsWorkspaceTrust": true,
+      "modelConfigurable": true,
+      "projectIdRequired": false
+    },
+    "argvBuilder": {
+      "command": "exec",
+      "substitution": {
+        "mode": "argv-element",
+        "shell": "never",
+        "note": "Each {name} token occupies a whole argv element and MUST be replaced atomically with the validated value as one element (no re-splitting, no globbing, no shell joining). Unknown placeholders must be rejected, not substituted.",
+        "placeholders": {
+          "model": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$",
+            "required": true
+          },
+          "manifestFile": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$",
+            "required": true
+          },
+          "prompt": {
+            "pattern": "^[^\\u0000]{1,65536}$",
+            "required": true
+          }
+        }
+      },
+      "args": [
+        "--model",
+        "{model}",
+        "--json",
+        "--full-auto",
+        "--output-last-message",
+        "{manifestFile}",
+        "{prompt}"
+      ]
+    },
+    "configRenderer": {
+      "format": "toml",
+      "path": "{manifestFile}"
+    },
+    "exitCodeMap": {
+      "0": "Success",
+      "1": "AgentError",
+      "default": "AgentError"
+    },
+    "manifestMap": {
+      "path": "{manifestFile}",
+      "format": "json"
+    }
+  },
+  "openhands": {
+    "binary": "openhands",
+    "probe": [
+      "openhands",
+      "--version"
+    ],
+    "capabilities": {
+      "supportsWorkspaceTrust": true,
+      "modelConfigurable": true,
+      "projectIdRequired": false
+    },
+    "argvBuilder": {
+      "substitution": {
+        "mode": "argv-element",
+        "shell": "never",
+        "note": "Each {name} token occupies a whole argv element and MUST be replaced atomically with the validated value as one element (no re-splitting, no globbing, no shell joining). Unknown placeholders must be rejected, not substituted.",
+        "placeholders": {
+          "prompt": {
+            "pattern": "^[^\\u0000]{1,65536}$",
+            "required": true
+          },
+          "manifestFile": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$",
+            "required": true
+          },
+          "model": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$",
+            "required": true
+          }
+        }
+      },
+      "args": [
+        "--task",
+        "{prompt}",
+        "--config-file",
+        "{manifestFile}",
+        "--llm-config",
+        "{model}"
+      ]
+    },
+    "configRenderer": {
+      "format": "toml",
+      "path": "{manifestFile}"
+    },
+    "exitCodeMap": {
+      "0": "Success",
+      "1": "AgentError",
+      "default": "AgentError"
+    },
+    "manifestMap": {
+      "path": "{manifestFile}",
+      "format": "json"
+    }
   }
 }
