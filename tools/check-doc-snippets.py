@@ -46,6 +46,8 @@ WF_DIR = '.github/workflows'
 EXTERNAL_REFS = {
     'scripts/alert_router.js',   # Hermes upstream file (Axel-DaMage/hermes)
                                  # — correct spelling of THEIR path, not ours
+    'docs/exit-codes.md',        # sc-agent-cli upstream doc (docs/runtime.md
+                                 # links it via its own repo URL)
 }
 
 NS_PREFIX = ('scripts/', 'tools/', 'docs/', 'spec/', 'tests/', 'examples/',
