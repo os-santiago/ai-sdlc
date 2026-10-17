@@ -397,7 +397,6 @@ jobs:
           console.log(`signature=${signature} prompt_bytes=${Buffer.byteLength(prompt)}`);
           NODE
 
-<<<<<<< HEAD
       - name: Consult failure runbook (issue #188)
         id: runbook
         if: steps.guard.outputs.decision == 'repair' && steps.prompt.outputs.base_fault != 'true'
