@@ -660,6 +660,7 @@ function renderMarkdown(report) {
     '> lead time = `ready-to-implement` label applied → merge (fallback: PR creation);',
     '> change failure = merge followed by red main, revert or non-converging repair;',
     '> MTTR = main red → green. **Agentic** = pipeline-authored PRs; **human** = the rest.',
+    '> Canonical definitions + event sources: [docs/metrics/definitions.md](definitions.md).',
     '',
     '## Comparison — agentic vs human',
     '',

@@ -671,7 +671,8 @@ the stage fails open to a plain issue so the failure is never lost.
 
 The scheduled/dispatch run commits `docs/metrics/dora.md` (diff-gated) in
 addition to the `dora-metrics-json` artifact; `workflow_call` consumers
-receive the artifact + step summary only.
+receive the artifact + step summary only. Canonical metric definitions and
+event sources: [`metrics/definitions.md`](metrics/definitions.md).
 
 ### ai-sdlc-drift
 | Input | Default | Purpose |
