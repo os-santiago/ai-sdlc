@@ -1,0 +1,104 @@
+{
+  "inputs": {
+    "base": {
+      "default": "main",
+      "description": "ref to resolve .ai-sdlc.yaml from — trusted base, never the PR head",
+      "type": "string"
+    },
+    "block_on_secret": {
+      "default": "",
+      "description": "security.block_on_secret override — 'true'|'false'; empty = resolved contract",
+      "type": "string"
+    },
+    "diff_max_bytes": {
+      "default": 500000,
+      "description": "byte cap on the PR diff fed to the dependency audit",
+      "type": "number"
+    },
+    "enabled": {
+      "default": "",
+      "description": "security.enabled override — 'true'|'false'; empty = resolved contract; overrides clamp strictest-wins (tighten only)",
+      "type": "string"
+    },
+    "ledger_head": {
+      "default": "",
+      "description": "upstream run-ledger chain head — seeds this stage entry prev; empty = recover the ai-sdlc:ledger-head marker on the PR (issue #196)",
+      "type": "string"
+    },
+    "max_vuln_lookups": {
+      "default": 20,
+      "description": "cap on OSV vuln-detail lookups for severity/fix enrichment",
+      "type": "number"
+    },
+    "min_severity": {
+      "default": "",
+      "description": "security.min_severity override — low|medium|high|critical; empty = resolved contract",
+      "type": "string"
+    },
+    "org_config": {
+      "default": "",
+      "description": "org baseline contract ref owner/repo[/path][@ref] — security.* floors per spec/org-policy.md; empty = repo contract + defaults",
+      "type": "string"
+    },
+    "pr_number": {
+      "required": true,
+      "type": "number"
+    },
+    "repo": {
+      "required": true,
+      "type": "string"
+    },
+    "runtime_ref": {
+      "default": "main",
+      "description": "ref of os-santiago/ai-sdlc to fetch trusted scripts (security-gate.js, dep-update.js, tools/gitleaks.sh) from — pin to the same ref as this workflow",
+      "type": "string"
+    },
+    "scan_scope": {
+      "default": "diff",
+      "description": "diff = PR commit range (per-PR runs); tree = full history (scheduled sweeps)",
+      "type": "string"
+    },
+    "severity_matrix": {
+      "default": "",
+      "description": "security.severity_matrix override — inline JSON {\"pr:risk-high\":\"blocking\",...}; empty = resolved contract",
+      "type": "string"
+    }
+  },
+  "outputs": {
+    "action": {
+      "description": "evaluated | skipped",
+      "value": "${{ jobs.gate.outputs.action }}"
+    },
+    "findings_count": {
+      "description": "total findings recorded",
+      "value": "${{ jobs.gate.outputs.findings_count }}"
+    },
+    "ledger_head": {
+      "description": "sealed run-ledger chain head for this gate run (issue #196)",
+      "value": "${{ jobs.gate.outputs.ledger_head }}"
+    },
+    "security_gate_outcome": {
+      "description": "strictest applied gate outcome — report-only | blocking-if-fix-available | blocking",
+      "value": "${{ jobs.gate.outputs.security_gate_outcome }}"
+    },
+    "verdict": {
+      "description": "pass | fail",
+      "value": "${{ jobs.gate.outputs.verdict }}"
+    }
+  },
+  "secrets": {
+    "AI_SDLC_APP_ID": {
+      "description": "ai-sdlc GitHub App id — mints the per-run installation token used for all gh auth + the PR-head checkout (fail-closed when unset; issue #26)",
+      "required": true
+    },
+    "AI_SDLC_APP_PRIVATE_KEY": {
+      "description": "ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID",
+      "required": true
+    },
+    "AI_SDLC_LEDGER_KEY": {
+      "description": "run-ledger signing key (PEM; Ed25519/RSA) — seals stage evidence; absent = unsigned seal (issue #196)",
+      "required": false
+    }
+  },
+  "workflow": "ai-sdlc-security.yml"
+}
