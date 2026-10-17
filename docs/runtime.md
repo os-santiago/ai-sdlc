@@ -39,6 +39,7 @@ engine only, no GitHub webhook adapter yet).
 | `ai-sdlc-ci-repair.yml` | bounded repair loop on red checks: failing-check log tails → `scc` headless on the PR head → commit + push; one comment per attempt; `needs-human` after `max_repairs` | `check_run.completed` (failure) / `workflow_dispatch` / automerge `repair-signaled` |
 | `ai-sdlc-verify.yml` | post-merge verify commands (resolved contract `verify.commands`); failure → canonical postmortem issue via `scripts/postmortem.js` — signature-deduped: open canonical comments, closed canonical reopens at `postmortem.reopen_min` (spec/postmortem-lifecycle.md) — or revert when enabled | post-merge |
 | `ai-sdlc-dep-update.yml` | scheduled dependency scan → vetted dep-update PR (`scripts/dep-update.js`): release-age gate, license allowlist, typosquat distance, OSV → one bounded consolidated PR + deduped flagged-for-human issue | `schedule` / `workflow_dispatch` / called |
+| `ai-sdlc-vuln-feed.yml` | scheduled vulnerability feed (`scripts/vuln-feed.js`): repo dep surface (lockfile, else resolved manifest ranges) → OSV querybatch → one bounded `security` issue per new advisory+package, marker-deduped against open/closed canonicals | `schedule` (weekly) / `workflow_dispatch` / `workflow_call` |
 | `ai-sdlc-canary.yml` | scheduled end-to-end smoke of the intake→implement→PR loop: files a synthetic `<!-- ai-sdlc:canary -->` fixture issue, arms it with the contract trigger, observes `scc:queued`→`scc:pr-opened`, asserts PR/artifact/ledger shape, cleans up; failure → signature-deduped `postmortem` issue | `schedule` (daily) / `workflow_dispatch` (`mode`) |
 | `ai-sdlc-spec-tag.yml` | spec/v* semver machinery (`scripts/spec-version.js`): classifies the `spec/**` diff since the last `spec/v*` tag (breaking → MAJOR, additive → MINOR, editorial → PATCH), gates on the `**Declared version:**` marker in `spec/README.md`, and tags + releases on merge to `main` | `push`/`pull_request` (`spec/**` paths) / `workflow_dispatch` (`bump`, `dry_run`) |
 
@@ -608,6 +609,28 @@ are required (fail-closed; App-token pushes re-fire CI/classify/review).
 
 One invocation = one bounded scan (see
 [Dependency-update stage](#dependency-update-stage-ai-sdlc-dep-updateyml)).
+
+### ai-sdlc-vuln-feed
+| Input | Default | Purpose |
+|---|---|---|
+| `repo` | `''` | `owner/name` to scan (blank → `repos` input → caller repo `config/fleet.json` → caller repo) |
+| `repos` | `''` | csv of `owner/name` — the watched-repo list for one sweep |
+| `dry_run` | `false` | scan + report only — never files issues |
+| `max_findings` | `5` | max new advisory issues filed per repo per run |
+| `runtime_ref` | `main` | ref of `os-santiago/ai-sdlc` the worker (`scripts/vuln-feed.js` + `scripts/dep-update.js`) is fetched from — pin to the same ref as the workflow |
+
+Outputs: `action` (`filed` \| `deduped` \| `clean` \| `skipped`),
+`filed`, `findings`. Secrets: none required — `AI_SDLC_TOKEN` is used when
+present for cross-repo reads, else `GITHUB_TOKEN` (issues write + contents
+read suffice).
+
+Each filing is a DoR-complete `security(deps):` issue carrying
+`<!-- ai-sdlc:vuln-feed id:<ADVISORY> pkg:<NAME> -->` — the same
+signature-marker dedup idiom as `scripts/postmortem.js`: an open canonical
+is never duplicated, a closed canonical suppresses re-filing (reopen it to
+re-arm). Issues carry the `security` label and flow through normal intake —
+dogfooding the pipeline's own fix loop (issue #99); a vetted dep-update
+bump past the advisory's fixed version is the intended resolution.
 
 ### ai-sdlc-verify
 | Input | Default | Purpose |

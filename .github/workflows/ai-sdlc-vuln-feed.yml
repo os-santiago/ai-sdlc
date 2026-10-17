@@ -1,0 +1,230 @@
+# ai-sdlc-vuln-feed — scheduled vulnerability feed → deduped advisory issues
+# (issue #99, dogfooding)
+#
+# Weekly sweep over the watched repos: resolve each repo's npm dependency
+# surface (package-lock.json/npm-shrinkwrap.json resolved tree preferred —
+# else package.json declared ranges resolved to the max-satisfying published
+# version via the registry), query OSV (which aggregates the GitHub Advisory
+# Database — GHSA records are OSV entries), and file ONE bounded
+# `security(deps):` issue per new advisory+package with the `security`
+# label. Dedup is the postmortem signature-marker idiom: the filed body
+# carries `<!-- ai-sdlc:vuln-feed id:<ADVISORY> pkg:<NAME> -->`; an open
+# issue with the same marker is never duplicated, and a closed canonical
+# suppresses re-filing (reopen it to re-arm — no duplicate flood).
+#
+# Filed issues are DoR-complete and flow through normal intake — the
+# pipeline triages and fixes its own vulnerabilities. The fix path is the
+# dep-update worker (ai-sdlc-dep-update / scripts/dep-update.js): a vetted
+# bump to a fixed version clears the same OSV gate that flags it.
+#
+# Trust boundary: the worker script is fetched from the os-santiago/ai-sdlc
+# pin (runtime_ref) — never from a scanned checkout. All egress is bounded
+# by the `npm-vet` profile (registry.npmjs.org + api.osv.dev); advisory and
+# registry payloads are untrusted T3 input (spec/injection-defense.md) —
+# escaped into issue bodies as data, never executed.
+#
+# Bounded: ≤ max_findings filings per repo per run, ≤ 200 deps scanned,
+# ≤25 advisory detail fetches; the whole job is time-bounded.
+#
+# Reusable: consumer repos call this workflow (`uses:`) with their own
+# repo/repos inputs on whatever cadence they choose — exactly like the
+# drift/metrics sweeps. Needs `issues: write` to file advisories.
+name: ai-sdlc-vuln-feed
+
+on:
+  schedule:
+    - cron: '23 7 * * 1'        # weekly — Monday 07:23 UTC (off the top of the hour)
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 'owner/name to scan (blank = repos/fleet resolution)'
+        type: string
+        default: ''
+      repos:
+        description: 'csv of owner/name to scan (blank = config/fleet.json)'
+        type: string
+        default: ''
+      dry_run:
+        description: 'scan + report only — never files issues'
+        type: boolean
+        default: false
+      max_findings:
+        description: 'max new issues filed per repo per run'
+        type: number
+        default: 5
+  workflow_call:
+    inputs:
+      repo:
+        description: 'owner/name to scan (blank = repos input / caller repo fleet list)'
+        type: string
+        default: ''
+      repos:
+        description: 'csv of owner/name to scan (blank = caller repo config/fleet.json)'
+        type: string
+        default: ''
+      dry_run:
+        description: 'scan + report only — never files issues'
+        type: boolean
+        default: false
+      max_findings:
+        description: 'max new issues filed per repo per run'
+        type: number
+        default: 5
+      runtime_ref:
+        description: 'ref of os-santiago/ai-sdlc to fetch scripts/vuln-feed.js + scripts/dep-update.js from — pin to the same ref as this workflow'
+        type: string
+        default: 'main'
+    outputs:
+      action:
+        description: 'filed | deduped | clean | skipped | mixed — aggregate over scanned repos'
+        value: ${{ jobs.scan.outputs.action }}
+      filed:
+        description: 'advisory issues filed this run (all repos)'
+        value: ${{ jobs.scan.outputs.filed }}
+      findings:
+        description: 'unique advisory+package findings observed (all repos)'
+        value: ${{ jobs.scan.outputs.findings }}
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    # Kill-switch: AI_SDLC_OFF halts every pipeline mutation, including
+    # filing issues.
+    if: vars.AI_SDLC_OFF != '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      # One sweep per caller repo at a time — a concurrent rerun could
+      # double-file the same advisory before the marker dedup sees it.
+      group: ai-sdlc-vuln-feed-${{ inputs.repo || github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: read          # dep surface (package files) via gh api
+      issues: write           # advisory filings + dedup scan
+    outputs:
+      action: ${{ steps.scan.outputs.action }}
+      filed: ${{ steps.scan.outputs.filed }}
+      findings: ${{ steps.scan.outputs.findings }}
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
+        with:
+          node-version: '22'
+
+      # Trusted code only: the worker + its dep-update helpers come from
+      # the runtime pin — never from a scanned repo's checkout.
+      - name: Fetch vuln-feed worker (trusted runtime pin)
+        id: worker-fetch
+        env:
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
+        with:
+          files: |
+            scripts/vuln-feed.js
+            scripts/dep-update.js
+          ref: ${{ inputs.runtime_ref || 'main' }}
+          dest: ${{ runner.temp }}/ai-sdlc-vuln-feed
+          label: vuln-feed worker
+          fallback: scan aborted
+          required: 'true'
+
+      - name: Scan watched repos → deduped advisory issues
+        id: scan
+        env:
+          GH_TOKEN: ${{ secrets.AI_SDLC_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO_IN: ${{ inputs.repo || '' }}
+          REPOS_IN: ${{ inputs.repos || '' }}
+          DRY_RUN: ${{ inputs.dry_run == true && '1' || '0' }}
+          MAX_FINDINGS: ${{ inputs.max_findings || 5 }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-vuln-feed"
+          mkdir -p "$WORK/reports" "$WORK/surface"
+
+          # Watched repos: explicit single repo > csv > the repo's own
+          # fleet list (config/fleet.json) > this repo.
+          RESOLVED=""
+          if [ -n "$REPO_IN" ]; then
+            RESOLVED="$REPO_IN"
+          elif [ -n "$REPOS_IN" ]; then
+            RESOLVED="$REPOS_IN"
+          else
+            FLEET=$(gh api "repos/${{ github.repository }}/contents/config/fleet.json" \
+              -H "Accept: application/vnd.github.raw" 2>/dev/null | jq -r '.repos | join(",")' 2>/dev/null || true)
+            RESOLVED="${FLEET:-${{ github.repository }}}"
+          fi
+          echo "watched repos: $RESOLVED"
+
+          FILED=0; DUPED=0; FINDINGS=0; SCANNED=0; SAW_CLEAN=0; SAW_SKIP=0
+          IFS=',' read -ra LIST <<< "$RESOLVED"
+          for R in "${LIST[@]}"; do
+            R="$(echo "$R" | tr -d '[:space:]')"
+            [ -n "$R" ] || continue
+            if ! [[ "$R" =~ ^[-A-Za-z0-9_.]+/[-A-Za-z0-9_.]+$ ]]; then
+              echo "::warning::skipping malformed repo '$R'"
+              continue
+            fi
+            SAFE=$(echo "$R" | tr '/.' '__')
+            SCANNED=$((SCANNED + 1))
+            echo "::group::vuln-feed → $R"
+
+            ARGS=(--repo "$R" --max-findings "$MAX_FINDINGS"
+                  --report "$WORK/reports/$SAFE.json" --json)
+            [ "$DRY_RUN" = "1" ] && ARGS+=(--dry-run)
+
+            # Dependency surface: lockfile (exact resolved tree) preferred;
+            # else the manifest — the worker resolves declared ranges via
+            # the registry under the egress profile.
+            if gh api "repos/$R/contents/package-lock.json" \
+                -H "Accept: application/vnd.github.raw" > "$WORK/surface/$SAFE-lock.json" 2>/dev/null; then
+              ARGS+=(--lockfile "$WORK/surface/$SAFE-lock.json")
+            elif gh api "repos/$R/contents/npm-shrinkwrap.json" \
+                -H "Accept: application/vnd.github.raw" > "$WORK/surface/$SAFE-shrink.json" 2>/dev/null; then
+              ARGS+=(--lockfile "$WORK/surface/$SAFE-shrink.json")
+            elif gh api "repos/$R/contents/package.json" \
+                -H "Accept: application/vnd.github.raw" > "$WORK/surface/$SAFE-pkg.json" 2>/dev/null; then
+              ARGS+=(--manifest "$WORK/surface/$SAFE-pkg.json")
+            fi
+
+            if node "$WORK/scripts/vuln-feed.js" scan "${ARGS[@]}" > "$WORK/reports/$SAFE.out.json"; then
+              A=$(jq -r '.action' "$WORK/reports/$SAFE.out.json")
+              FILED=$((FILED + $(jq '.filed | length' "$WORK/reports/$SAFE.out.json")))
+              DUPED=$((DUPED + $(jq '.duped | length' "$WORK/reports/$SAFE.out.json")))
+              FINDINGS=$((FINDINGS + $(jq -r '.findings' "$WORK/reports/$SAFE.out.json")))
+              [ "$A" = "clean" ] && SAW_CLEAN=$((SAW_CLEAN + 1))
+              [ "$A" = "skipped" ] && SAW_SKIP=$((SAW_SKIP + 1))
+            else
+              echo "::warning::vuln-feed scan failed for $R — continuing (bounded sweep)"
+            fi
+            echo "::endgroup::"
+          done
+
+          ACTION="skipped"
+          if [ "$FILED" -gt 0 ]; then ACTION="filed"
+          elif [ "$DUPED" -gt 0 ] || [ "$FINDINGS" -gt 0 ]; then ACTION="deduped"
+          elif [ "$SAW_CLEAN" -gt 0 ]; then ACTION="clean"
+          fi
+          {
+            echo "action=$ACTION"
+            echo "filed=$FILED"
+            echo "findings=$FINDINGS"
+            echo "deduped=$DUPED"
+            echo "scanned=$SCANNED"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### ai-sdlc vuln-feed sweep"
+            echo "- repos: \`$RESOLVED\` · dry_run: \`$DRY_RUN\`"
+            echo "- action: \`$ACTION\` · findings: $FINDINGS · filed: $FILED · deduped: $DUPED (scanned $SCANNED repo(s), $SAW_SKIP skipped)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload run artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: ai-sdlc-vuln-feed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ai-sdlc-vuln-feed/reports/
+          if-no-files-found: ignore
+          retention-days: 30

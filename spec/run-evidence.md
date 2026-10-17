@@ -62,6 +62,8 @@ the linter reads the block, humans read the table.
 | `dora-metrics-json` | dora | workspace-report | `dora-metrics.json`, `dora-input.json` at root | 90d |
 | `ai-sdlc-sbom-<pr>` | sbom | sbom | `${{ runner.temp }}/ai-sdlc-sbom/` — CycloneDX JSON of the npm surface | 14d |
 | `ai-sdlc-<tag>` | release | build | `dist/` — the shipped artifact (tarball + `.cdx.json` SBOM), not run evidence | 30d |
+| `ai-sdlc-vuln-feed-<run>-<attempt>` | vuln-feed | report | `${{ runner.temp }}/ai-sdlc-vuln-feed/reports/` | 30d |
+| `ai-sdlc-<tag>` | release | build | `dist/` — the shipped artifact, not run evidence | 30d |
 
 <!-- ai-sdlc:run-evidence -->
 ```json
@@ -254,6 +256,16 @@ the linter reads the block, humans read the table.
       "class": "sbom",
       "path_root": "runner_temp",
       "retention": 14
+    },
+    {
+      "id": "vuln-feed-report",
+      "match": "ai-sdlc-vuln-feed-<e>-<e>",
+      "files": [
+        ".github/workflows/ai-sdlc-vuln-feed.yml"
+      ],
+      "class": "report",
+      "path_root": "runner_temp",
+      "retention": 30
     }
   ]
 }
