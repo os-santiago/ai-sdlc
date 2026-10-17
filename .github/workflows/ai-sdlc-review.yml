@@ -219,7 +219,7 @@ jobs:
       # (missing contract → global default engine, never a block).
       - name: Resolve stage engine (.ai-sdlc.yaml engines)
         id: stage-engine
-        uses: os-santiago/ai-sdlc/.github/actions/resolve-stage-engine@main
+        uses: ./.github/actions/resolve-stage-engine
         with:
           stage: review
           required: 'false'
@@ -919,7 +919,7 @@ jobs:
       # stage — it runs whichever adapter `engines.review` selects.
       - name: Resolve stage engine (.ai-sdlc.yaml engines)
         id: stage-engine
-        uses: os-santiago/ai-sdlc/.github/actions/resolve-stage-engine@main
+        uses: ./.github/actions/resolve-stage-engine
         with:
           stage: review
           required: 'false'

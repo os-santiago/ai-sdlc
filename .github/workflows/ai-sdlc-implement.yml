@@ -197,7 +197,7 @@ jobs:
       # with exit 1 before any engine run.
       - name: Resolve stage engine (.ai-sdlc.yaml engines)
         id: stage-engine
-        uses: os-santiago/ai-sdlc/.github/actions/resolve-stage-engine@main
+        uses: ./.github/actions/resolve-stage-engine
         with:
           stage: implement
           contract: ${{ runner.temp }}/ai-sdlc-contract/contract.json
