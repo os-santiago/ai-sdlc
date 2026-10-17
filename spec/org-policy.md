@@ -90,6 +90,7 @@ they still allow repo-side tightening. Listing them in
 | `security.min_severity` | Severity floor — resolves to the *stricter* (lower-rank) of the org and repo values: `low` < `medium` < `high` < `critical`. Findings at/above the resolved threshold are blocking-class; below it they are always report-only. |
 | `security.block_on_secret` | Boolean floor — org `true` stands; secret/credential-material findings always block, regardless of severity or `pr:risk-*` tier. |
 | `security.severity_matrix.<pr:risk-*>` | Strictest-outcome floor per leaf the org declares — outcomes rank `report-only` < `blocking-if-fix-available` < `blocking`; a repo may harden a tier, never soften it. |
+| `security.sbom` | Boolean floor — org `true` pins CycloneDX SBOM emission on org-wide (PR artifact + attested release asset; issue #92); a repo `true` under an org `false` only tightens. Evidence-only — never gates a check. |
 
 ### Severity matrix
 

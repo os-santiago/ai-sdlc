@@ -1,0 +1,95 @@
+# sbom — CycloneDX SBOM of the npm dependency surface (issue #92, epic #87)
+#
+# Repo self-scan only — NOT a reusable ai-sdlc-* stage; consumer repos run
+# their own SBOM emission under their own contract. Produces run evidence,
+# never a gate: the artifact is review material for dependency-surface
+# changes landing on a PR (the merge-ref checkout includes the incoming
+# package.json/package-lock.json), and the same generator runs inside
+# ai-sdlc-release so every published release carries the SBOM as a
+# cosign-signed, SLSA-attested asset (feeds the attestation subject-paths
+# follow-up — the SBOM is already an attestation subject).
+#
+# Tool: anchore/sbom-action (syft), SHA-pinned per issues #118/#123 —
+# npm cannot SHA-pin a package, so the pinned action is the compliant
+# route (issue #92 AC: "SHA-pinned tool"). `upload-artifact`/`upload-
+# release-assets` are disabled inside the action: the canonical upload
+# runs through actions/upload-artifact so the run-evidence layout
+# (spec/run-evidence.md — ai-sdlc-sbom-<pr>) and its retention apply.
+#
+# Contract: gated on `security.sbom` (spec/ai-sdlc.schema.json) — a
+# boolean floor an org baseline can pin on; absent/false skips emission
+# with a notice instead of failing.
+name: sbom
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sbom-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sbom:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      - name: Read security.sbom contract posture
+        id: contract
+        run: |
+          set -euo pipefail
+          mkdir -p "${{ runner.temp }}/ai-sdlc-sbom"
+          # Same raw-contract read ai-sdlc-release uses — the repo's own
+          # .ai-sdlc.yaml; org floor merging is the resolver's concern.
+          npx -y -q js-yaml .ai-sdlc.yaml > "$RUNNER_TEMP/contract.json"
+          node -e '
+            const c = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")) || {};
+            console.log("enabled=" + String((c.security || {}).sbom === true));
+          ' "$RUNNER_TEMP/contract.json" >> "$GITHUB_OUTPUT"
+
+      - name: Generate CycloneDX SBOM (npm surface)
+        if: steps.contract.outputs.enabled == 'true'
+        uses: anchore/sbom-action@fffec3d851af758d56fee099cf3fbf8aa8779843  # v0.24.3
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: ${{ runner.temp }}/ai-sdlc-sbom/ai-sdlc-sbom.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Verify SBOM (CycloneDX JSON, fail-closed)
+        if: steps.contract.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          F="${{ runner.temp }}/ai-sdlc-sbom/ai-sdlc-sbom.cdx.json"
+          [ -s "$F" ] || { echo "::error::syft produced no SBOM"; exit 1; }
+          node -e '
+            const d = require(process.argv[1]);
+            if (d.bomFormat !== "CycloneDX") throw new Error("SBOM is not CycloneDX JSON");
+            console.log("CycloneDX specVersion=" + d.specVersion +
+              " components=" + (d.components || []).length);
+          ' "$F"
+          {
+            echo '### CycloneDX SBOM'
+            node -e 'const d=require(process.argv[1]);for(const c of (d.components||[]).slice(0,50))console.log("- " + c.name + "@" + (c.version || "?"))' "$F"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload SBOM artifact
+        if: steps.contract.outputs.enabled == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: ai-sdlc-sbom-${{ github.event.pull_request.number || github.run_id }}
+          path: ${{ runner.temp }}/ai-sdlc-sbom/ai-sdlc-sbom.cdx.json
+          retention-days: 14
+
+      - name: SBOM emission disabled by contract
+        if: steps.contract.outputs.enabled != 'true'
+        run: echo "::notice::security.sbom is not enabled in .ai-sdlc.yaml — SBOM emission skipped"

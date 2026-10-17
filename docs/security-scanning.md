@@ -1,6 +1,6 @@
-# Security scanning — Dependabot + CodeQL + gitleaks (issues #105, #125; epic #89)
+# Security scanning — Dependabot + CodeQL + gitleaks + SBOM (issues #105, #125, #92; epics #89, #87)
 
-Three halves of the vulnerability-handling posture ship in-repo:
+The vulnerability-handling posture ships in-repo:
 
 - **`.github/dependabot.yml`** — weekly dependency-update PRs for the
   `npm` and `github-actions` ecosystems, bounded (≤5 open PRs each) with
@@ -17,6 +17,13 @@ Three halves of the vulnerability-handling posture ship in-repo:
   `.ai-sdlc.yaml` *content* only, at a point in time; gitleaks scans the
   commit history. Baseline + triage register:
   [`security/baseline-scan.md`](security/baseline-scan.md).
+- **`.github/workflows/sbom.yml`** — CycloneDX SBOM of the npm dependency
+  surface (issue #92, epic #87) via SHA-pinned `anchore/sbom-action`
+  (syft). Emitted as run evidence (`ai-sdlc-sbom-<pr>`, 14d) on every PR
+  against the merge ref — so incoming dependency changes are captured —
+  and, when the `security.sbom` contract field is on, attached to releases
+  by `ai-sdlc-release.yml` as an attested asset. Evidence-only: it never
+  gates a check.
 
 The pipeline integration applies to Dependabot only: its PRs carry the
 `dependencies` label → the classifier's dep fast-path → review →

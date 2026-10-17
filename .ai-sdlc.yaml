@@ -35,6 +35,13 @@ verify:
   required_checks: []
   timeout_seconds: 300
 
+# Supply-chain evidence (issue #92, epic #87): the sbom workflow emits a
+# CycloneDX JSON of the npm dependency surface on every PR, and
+# ai-sdlc-release attaches it to the release as an attested asset.
+# Boolean floor — an org baseline's `true` pins it on org-wide.
+security:
+  sbom: true
+
 # Ready-queue prioritization (issue #162, epic #147): the sweep scores every
 # armed issue — trigger label present, no veto label per spec/labels.md —
 # and publishes the ordered dispatch queue as run evidence (step summary +
