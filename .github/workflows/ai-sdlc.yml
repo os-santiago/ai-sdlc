@@ -43,7 +43,7 @@ jobs:
     steps:
       # pull_request checks out the merge ref — exactly what would land on
       # main; push checks out the pushed head.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: '22'

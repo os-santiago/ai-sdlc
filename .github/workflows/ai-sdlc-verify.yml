@@ -82,7 +82,7 @@ jobs:
           off-var: ${{ vars.AI_SDLC_OFF }}
           control-repo: ${{ vars.AI_SDLC_CONTROL_REPO }}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.repo }}
           ref: ${{ inputs.base }}

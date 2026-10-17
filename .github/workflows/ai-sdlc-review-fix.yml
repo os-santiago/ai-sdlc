@@ -187,7 +187,7 @@ jobs:
             "$ATTEMPT" "$HEAD_SHA" "$ATTEMPT" "$MAX_FIX" "${HEAD_SHA:0:8}" "$RUN_URL" > "$WORK/attempt-start.md"
           gh pr comment "$PR" -R "$REPO" --body-file "$WORK/attempt-start.md"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.repo }}
           ref: ${{ inputs.head_ref }}

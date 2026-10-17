@@ -192,7 +192,7 @@ jobs:
 
       - name: Checkout repo
         if: steps.cfg.outputs.action == 'continue'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.REPO }}
           ref: ${{ env.BASE }}

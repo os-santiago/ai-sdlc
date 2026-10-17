@@ -43,7 +43,7 @@ jobs:
       actions: read            # required for CodeQL on private repos
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: initialize codeql
         uses: github/codeql-action/init@v3
