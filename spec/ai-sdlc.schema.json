@@ -29,15 +29,29 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "engine"
+          "anyOf": [
+            {
+              "required": [
+                "engine"
+              ]
+            },
+            {
+              "required": [
+                "model"
+              ]
+            }
           ],
           "properties": {
             "engine": {
               "$ref": "#/$defs/engine_id"
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Provider-native model id routed to this stage's task class (issue #171; spec/model-routing.md). Wins over `model.primary` for this stage only; OmniRoute route names (auto/*, devin/*) are Hermes control-plane only and resolve to `model.primary` on GHA runners (ADR-0001)."
             }
           },
-          "description": "Stage-definition form: `engine` selects the certified adapter for the stage. An object (not a bare id) so per-stage engine overrides can grow fields without a schema break."
+          "description": "Stage-definition form: `engine` selects the certified adapter for the stage, `model` overrides the routed model for the stage's task class. At least one is required — a missing `engine` falls back to `engine.name`, a missing `model` to `model.primary`. An object (not a bare id) so per-stage overrides can grow fields without a schema break."
         }
       ]
     },
@@ -558,7 +572,7 @@
     "engines": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Per-stage engine selection (issue #205; docs/engine_contract.md): stage → certified adapter. Both `implement: devin` (shorthand) and `implement: {engine: devin}` (stage-definition form) are accepted and normalize to the same resolved value. A stage without an entry falls back to `engine.name`, which itself defaults to `scc` (sc-agent-cli). Unknown stage keys and non-certified engine ids are rejected.",
+      "description": "Per-stage engine and model selection (issues #205, #171; docs/engine_contract.md, spec/model-routing.md): stage → certified adapter and/or stage model. `implement: devin` (shorthand), `implement: {engine: devin}` and `implement: {engine: devin, model: openai/gpt-4o}` are all accepted; the stage-definition form may also carry `model` alone to route a model without pinning the adapter. A stage without an `engine` falls back to `engine.name` (default `scc`); a stage without a `model` falls back to `model.primary`. Unknown stage keys, non-certified engine ids and empty stage definitions are rejected.",
       "properties": {
         "intake": {
           "$ref": "#/$defs/stage_engine"

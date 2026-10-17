@@ -78,13 +78,22 @@ engine:
     - --summary-file
     - --prompt-file
 
-# Per-stage engine selection (issue #205): stage → certified adapter id.
-# Any stage omitted here falls back to engine.name (scc). Both the bare-id
-# shorthand and the stage-definition object form are accepted.
+# Per-stage engine + model selection (issues #205, #171;
+# spec/model-routing.md): each stage key is a task class. The
+# stage-definition object carries `engine` and/or `model` — a missing
+# engine falls back to engine.name (scc), a missing model to
+# model.primary. Spend capability where it pays: cheap models on
+# mechanical classes, frontier reasoning on review/repair.
 engines:
-  implement: scc
+  intake:
+    model: auto/best-fast            # cheap class, default adapter
+  implement: scc                     # shorthand — model.primary (best-coding)
   review:
     engine: scc
+    model: auto/best-reasoning       # frontier class; review.ai_reviewer.model
+                                     # would still outrank this for the reviewer
+  ci-repair:
+    model: auto/best-reasoning
 
 escalation:
   label: needs-human

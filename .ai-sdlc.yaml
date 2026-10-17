@@ -113,6 +113,15 @@ model:
   primary: nvidia/nemotron-3-super-120b-a12b
   fallback: nvidia/nemotron-3.5-lightning-30b-a3b
 
+# Per-task-class model routing (issue #171; spec/model-routing.md):
+# model-only entries keep the default adapter (engine.name = scc); a
+# missing model falls back to model.primary.
+engines:
+  intake:
+    model: nvidia/nemotron-3.5-lightning-30b-a3b   # cheap class — mechanical triage
+  ci-repair:
+    model: nvidia/nemotron-3-super-120b-a12b        # frontier class on the repair loop
+
 engine:
   name: scc
   max_steps: 200

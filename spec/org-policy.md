@@ -26,6 +26,10 @@ never "deleted" by a lower-precedence absence.
 
 - **Scalars**: higher layer replaces.
 - **Maps** (`labels`, `routing_hints`): key-wise merge; repo keys win.
+- **Stage definitions** (`engines.<stage>`): merged per leaf —
+  `engines.<stage>.engine` and `engines.<stage>.model` are independent
+  scalars (spec/model-routing.md), so an org-pinned adapter coexists
+  with a repo-chosen model.
 - **Lists** (`skip_labels`, `verify.commands`, `required_checks`):
   *union* for guard rails (skip_labels, required_checks — strictly
   additive), *replace* for configuration (verify.commands,
