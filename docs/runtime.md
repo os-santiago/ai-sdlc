@@ -19,7 +19,13 @@ intake payload. See
 [ADR-0005: Durable state, transactional outbox and engine invocation for runtime/k8s](./architecture/adr/0005-runtime-k8s-event-bus-and-engine-invocation.md)
 for how that control plane's components are actually wired together
 (PostgreSQL + outbox, no message broker) and its current limits (stub
-engine only, no GitHub webhook adapter yet).
+engine only, no GitHub webhook adapter yet). That control plane's
+`worker` image builds `scc` at image-build time from the same pinned
+engine ref — the `SCC_ENGINE_PIN` build arg on
+`runtime/k8s/components/worker/Containerfile` mirrors the contract
+`engine.pin`/`SCC_ENGINE_PIN` pin point (issues #117/#356); see
+[`runtime/k8s/README.md`](../runtime/k8s/README.md) "Engine source pin"
+for how to feed a contract's resolved pin into the build.
 
 ## Workflows
 
