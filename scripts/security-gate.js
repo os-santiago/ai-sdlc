@@ -376,8 +376,20 @@ async function main(argv, { stdout, fetchJson } = {}) {
     if (report && report.__error) {
       scannerErrors.push(`gitleaks report unreadable (${report.__error})`);
     } else {
-      if (status > 1) scannerErrors.push(`gitleaks exited ${status} — scanner failure, not a clean scan`);
-      findings.push(...normalizeGitleaks(report));
+      // Exit contract (callers map gitleaks' --exit-code onto it):
+      // 0 = clean scan, 1 = findings — the report is evidence. Any other
+      // status is a scanner failure — never a clean scan (fail closed).
+      if (status !== 0 && status !== 1) {
+        scannerErrors.push(`gitleaks exited ${status} — scanner failure, not a clean scan`);
+      } else {
+        const normalized = normalizeGitleaks(report);
+        // A leak-class exit with no parseable findings means the evidence
+        // was lost — an empty report at status 1 is not a pass.
+        if (status === 1 && normalized.length === 0) {
+          scannerErrors.push('gitleaks reported findings (status 1) but the report held none — evidence unavailable');
+        }
+        findings.push(...normalized);
+      }
     }
   }
 

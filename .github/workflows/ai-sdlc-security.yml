@@ -29,7 +29,11 @@
 #
 # Trust boundary: scripts + the gitleaks shim are fetched from the runtime
 # repo pin (inputs.runtime_ref), never from the PR head or consumer repo —
-# scanned content is data, never executed. Input overrides for security.*
+# scanned content is data, never executed. The gitleaks ruleset/ignore
+# list are likewise resolved at the PR base ref (maintainer-owned) or the
+# runtime-pinned baseline (tools/gitleaks-gate.toml), and inline
+# gitleaks:allow comments in PR content are ignored — a PR must not be
+# able to weaken the gate that scans it. Input overrides for security.*
 # clamp strictest-wins against the resolved contract: a caller may tighten,
 # never loosen (the same rule org floors apply).
 #
@@ -147,7 +151,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
-      group: ai-sdlc-security-${{ inputs.repo }}-${{ inputs.pr_number }}
+      # github.workflow is the CALLER's name in a reusable workflow — the
+      # PR caller and the automerge caller get separate groups so a sweep
+      # run can never cancel the PR's gate check (or vice versa).
+      group: ai-sdlc-security-${{ github.workflow }}-${{ inputs.repo }}-${{ inputs.pr_number }}
       cancel-in-progress: true
     outputs:
       action: ${{ steps.eval.outputs.action }}
@@ -197,6 +204,7 @@ jobs:
             scripts/security-gate.js
             scripts/dep-update.js
             tools/gitleaks.sh
+            tools/gitleaks-gate.toml
           ref: ${{ inputs.runtime_ref }}
           dest: ${{ runner.temp }}/ai-sdlc-security
           label: security gate scripts
@@ -215,12 +223,23 @@ jobs:
           WORK="$RUNNER_TEMP/ai-sdlc-security"; mkdir -p "$WORK"
           gh api "repos/$REPO/pulls/$PR" \
             --jq '{base_sha: .base.sha, head_sha: .head.sha,
+                   commits: .commits,
                    labels: [.labels[].name]}' > "$WORK/pr.json"
+          BASE=$(jq -r .base_sha "$WORK/pr.json")
+          HEAD=$(jq -r .head_sha "$WORK/pr.json")
           TIER=$(jq -r 'def r: {"pr:risk-low":0,"pr:risk-medium":1,"pr:risk-high":2,"pr:risk-critical":3};
                         ([.labels[] | select(r[.] != null)] | sort_by(r[.]))[-1] // ""' "$WORK/pr.json")
+          # Server-side merge-base: GitHub computes the fork point over
+          # full history — immune to the shallow-clone boundary noise that
+          # makes a local merge-base unreliable. Empty on API failure; the
+          # clone step falls back or fails closed.
+          MB=$(gh api "repos/$REPO/compare/$BASE...$HEAD" \
+            --jq .merge_base_commit.sha 2>/dev/null || true)
           {
-            echo "base_sha=$(jq -r .base_sha "$WORK/pr.json")"
-            echo "head_sha=$(jq -r .head_sha "$WORK/pr.json")"
+            echo "base_sha=$BASE"
+            echo "head_sha=$HEAD"
+            echo "pr_commits=$(jq -r .commits "$WORK/pr.json")"
+            echo "merge_base=${MB:-}"
             echo "tier=$TIER"
           } >> "$GITHUB_OUTPUT"
 
@@ -232,9 +251,12 @@ jobs:
       # The clone lives under $RUNNER_TEMP so it can never collide with a
       # load-config sparse checkout in the workspace.
       - name: Clone base + fetch PR head (scan only)
+        id: scan
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           BASE_SHA: ${{ steps.ctx.outputs.base_sha }}
+          PR_COMMITS: ${{ steps.ctx.outputs.pr_commits }}
+          MERGE_BASE: ${{ steps.ctx.outputs.merge_base }}
         run: |
           set -euo pipefail
           SCAN="$RUNNER_TEMP/ai-sdlc-scan"
@@ -244,33 +266,99 @@ jobs:
           git remote add origin "https://github.com/$REPO.git"
           git config --local "http.https://github.com/.extraheader" \
             "AUTHORIZATION: basic $(printf 'x:%s' "$GH_TOKEN" | base64 -w0)"
-          git fetch -q --no-tags --depth 1 origin "+$BASE_SHA:refs/remotes/scan/base"
-          git fetch -q --no-tags --depth 500 origin "+refs/pull/$PR/head:refs/remotes/scan/head"
+          # Depth bound: PR commit count + 1 keeps the fork point inside
+          # the head pack; both sides cap at 500 commits.
+          DEPTH=$((PR_COMMITS + 1)); [ "$DEPTH" -gt 500 ] && DEPTH=500
+          git fetch -q --no-tags --depth 500 origin "+$BASE_SHA:refs/remotes/scan/base"
+          git fetch -q --no-tags --depth "$DEPTH" origin "+refs/pull/$PR/head:refs/remotes/scan/head"
           git checkout -q --detach refs/remotes/scan/head
+          # scan_base = the PR's own fork point, so `scan_base..head` is
+          # exactly the commits the PR adds — a shallow `BASE_SHA..head`
+          # would silently widen into old shared history (an ancient
+          # revoked secret must not block a PR that never touched it).
+          # Resolution order, each verified against the fetched window:
+          #   1. server-side merge-base (compare API) — a head ancestor;
+          #   2. local merge-base over the bounded base window;
+          #   3. head~PR_COMMITS for strictly linear histories;
+          #   otherwise empty → the scanners fail closed downstream.
+          RANGE=""
+          if [ -n "$MERGE_BASE" ] \
+             && git merge-base --is-ancestor "$MERGE_BASE" refs/remotes/scan/head 2>/dev/null; then
+            RANGE="$MERGE_BASE"
+          else
+            MB=$(git merge-base refs/remotes/scan/base refs/remotes/scan/head 2>/dev/null || true)
+            if [ -n "$MB" ]; then
+              RANGE="$MB"
+            elif [ "$PR_COMMITS" -lt 500 ]; then
+              START=$(git rev-parse -q --verify "refs/remotes/scan/head~$PR_COMMITS" || true)
+              if [ -n "$START" ] && \
+                 [ "$(git rev-list --count --min-parents=2 "$START..refs/remotes/scan/head")" = "0" ]; then
+                RANGE="$START"
+              fi
+            fi
+          fi
+          echo "scan_base=$RANGE" >> "$GITHUB_OUTPUT"
 
       # Secret scan (gitleaks-class): --log-opts bounds the range for
-      # per-PR runs; scan_scope=tree sweeps full history. The consumer
-      # repo's own .gitleaksignore (in the scanned tree) applies.
+      # per-PR runs; scan_scope=tree sweeps the fetched history.
+      # The gate's rules can never come from the scanned tree: --config is
+      # the consumer's own .gitleaks.toml resolved at the PR BASE ref
+      # (maintainer-owned), else the runtime-pinned baseline; the ignore
+      # list comes from the same base ref; inline gitleaks:allow comments
+      # in PR content are disabled outright.
       - name: Secret scan (gitleaks)
         id: secretscan
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           BASE_SHA: ${{ steps.ctx.outputs.base_sha }}
+          SCAN_BASE: ${{ steps.scan.outputs.scan_base }}
           SCAN_SCOPE: ${{ inputs.scan_scope }}
         run: |
           set -euo pipefail
           WORK="$RUNNER_TEMP/ai-sdlc-security"
           SCAN="$RUNNER_TEMP/ai-sdlc-scan"
           REPORT="$WORK/gitleaks-report.json"
-          args=(git "$SCAN" --redact --report-format json --report-path "$REPORT")
+          if [ "$SCAN_SCOPE" = "diff" ] && [ -z "$SCAN_BASE" ]; then
+            # No resolvable fork point → no bounded range → not a pass.
+            printf '{"__error":"PR commit range not resolvable within fetch depth"}\n' > "$REPORT"
+            echo "status=2" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          TRUSTED="$WORK/gitleaks-trusted"; mkdir -p "$TRUSTED"
+          CONFIG="$TRUSTED/gitleaks.toml"
+          gh api "repos/$REPO/contents/.gitleaks.toml?ref=$BASE_SHA" \
+            -H "Accept: application/vnd.github.raw" > "$CONFIG" 2>/dev/null \
+            || cp "$WORK/tools/gitleaks-gate.toml" "$CONFIG"
+          IGNORE="$TRUSTED/.gitleaksignore"
+          gh api "repos/$REPO/contents/.gitleaksignore?ref=$BASE_SHA" \
+            -H "Accept: application/vnd.github.raw" > "$IGNORE" 2>/dev/null \
+            || : > "$IGNORE"
+          # Leaks get a dedicated exit code: gitleaks' default exit 1
+          # conflates "leaks found" with "scanner error", which would turn
+          # a crashed scan into a clean one. Normalized contract for the
+          # evaluator: 0=clean, 1=leaks (report is evidence), 2=failure.
+          args=(git "$SCAN" --redact --exit-code 42
+                --config "$CONFIG"
+                --gitleaks-ignore-path "$IGNORE"
+                --ignore-gitleaks-allow
+                --report-format json --report-path "$REPORT")
           if [ "$SCAN_SCOPE" = "diff" ]; then
-            args+=(--log-opts "$BASE_SHA..refs/remotes/scan/head")
+            args+=(--log-opts "$SCAN_BASE..refs/remotes/scan/head")
           fi
           status=0
           bash "$WORK/tools/gitleaks.sh" "${args[@]}" || status=$?
-          # A clean run emits an empty report; only a real scan outcome is
-          # evidence — an absent report at status 0 is normalized to [].
-          if [ ! -f "$REPORT" ]; then echo '[]' > "$REPORT"; fi
-          echo "status=$status" >> "$GITHUB_OUTPUT"
+          case "$status" in
+            0)
+              # A clean run may emit no report — normalize to [] only here.
+              [ -f "$REPORT" ] || echo '[]' > "$REPORT"
+              gl=0 ;;
+            42) gl=1 ;;
+            *)
+              printf '{"__error":"gitleaks exited %s — scanner failure, not a clean scan"}\n' \
+                "$status" > "$REPORT"
+              gl=2 ;;
+          esac
+          echo "status=$gl" >> "$GITHUB_OUTPUT"
 
       # Dependency audit: added direct deps in the bounded PR diff →
       # registry meta + OSV + license/typosquat/age vetting (dep-update.js
@@ -282,15 +370,45 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           DIFF_MAX: ${{ inputs.diff_max_bytes }}
           CONTRACT_JSON: ${{ steps.contract.outputs.json }}
+          SCAN_BASE: ${{ steps.scan.outputs.scan_base }}
         run: |
           set -euo pipefail
           WORK="$RUNNER_TEMP/ai-sdlc-security"
+          SCAN="$RUNNER_TEMP/ai-sdlc-scan"
+          if [ -z "$SCAN_BASE" ]; then
+            printf '{"__error":"PR commit range not resolvable — dep audit cannot bound the diff"}\n' > "$WORK/dep-vet.json"
+            exit 0
+          fi
           rc=0
-          gh pr diff "$PR" -R "$REPO" > "$WORK/diff.patch" 2>"$WORK/diff.err" || rc=$?
+          # The diff comes from the local clone — `gh pr diff` can hit the
+          # API's diff-size ceiling (HTTP 406) and strand the PR while the
+          # gate cannot see. Restricted to dep manifests/lockfiles, which
+          # is the only surface vet-pr consumes.
+          git -C "$SCAN" diff "$SCAN_BASE" refs/remotes/scan/head -- \
+            ':(glob)**/package.json' \
+            ':(glob)**/package-lock.json' \
+            ':(glob)**/npm-shrinkwrap.json' \
+            ':(glob)**/yarn.lock' \
+            ':(glob)**/pnpm-lock.yaml' \
+            ':(glob)**/requirements*.txt' \
+            ':(glob)**/pyproject.toml' \
+            ':(glob)**/poetry.lock' \
+            ':(glob)**/Pipfile' \
+            ':(glob)**/Pipfile.lock' \
+            ':(glob)**/go.mod' \
+            ':(glob)**/go.sum' \
+            ':(glob)**/Cargo.toml' \
+            ':(glob)**/Cargo.lock' \
+            ':(glob)**/Gemfile' \
+            ':(glob)**/Gemfile.lock' \
+            ':(glob)**/composer.json' \
+            ':(glob)**/composer.lock' \
+            ':(glob)**/pom.xml' \
+            > "$WORK/diff.patch" 2>"$WORK/diff.err" || rc=$?
           if [ "$rc" -ne 0 ]; then
-            # A diff that could not be fetched is not a clean scan — the
+            # A diff that could not be produced is not a clean scan — the
             # evaluator fails closed on the explicit error record.
-            printf '{"__error":"gh pr diff exited %s"}\n' "$rc" > "$WORK/dep-vet.json"
+            printf '{"__error":"git diff exited %s"}\n' "$rc" > "$WORK/dep-vet.json"
             exit 0
           fi
           head -c "$DIFF_MAX" "$WORK/diff.patch" > "$WORK/diff.bounded.patch"

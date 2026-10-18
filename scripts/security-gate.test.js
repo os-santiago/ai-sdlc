@@ -251,6 +251,26 @@ describe('main', () => {
     assert.strictEqual(r.scanner_errors.length, 1);
   });
 
+  it('gitleaks exit contract: only 0 (clean) and 1 (findings) are scan outcomes', async () => {
+    const empty = tmp('gl-empty.json', []);
+    // A scanner error normalized to status 2 fails closed — never a pass.
+    const err = await run(['--gitleaks', empty, '--gitleaks-status', '2']);
+    assert.strictEqual(err.verdict, 'fail');
+    assert.ok(err.scanner_errors[0].includes('exited 2'));
+    // A leak-class exit with no parseable findings = lost evidence.
+    const lost = await run(['--gitleaks', empty, '--gitleaks-status', '1']);
+    assert.strictEqual(lost.verdict, 'fail');
+    assert.ok(lost.scanner_errors[0].includes('report held none'));
+    // Status 0 on an empty report is a real clean scan.
+    const clean = await run(['--gitleaks', empty, '--gitleaks-status', '0']);
+    assert.strictEqual(clean.verdict, 'pass');
+    // Status 1 with findings flows into the block_on_secret verdict.
+    const leaks = tmp('gl.json', [{ RuleID: 'aws-key', File: 'a.py', StartLine: 4 }]);
+    const found = await run(['--gitleaks', leaks, '--gitleaks-status', '1']);
+    assert.strictEqual(found.verdict, 'fail');
+    assert.strictEqual(found.blocking_count, 1);
+  });
+
   it('unreadable dep-vet verdict is a scanner error', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sg-'));
     const p = path.join(dir, 'vet.json');
