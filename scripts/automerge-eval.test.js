@@ -302,6 +302,92 @@ describe('decision table — mergeable + review gate rows', () => {
   });
 });
 
+describe('decision table — issue #360 fail-closed hardening', () => {
+  const green = [{ name: 'build', bucket: 'pass' }];
+
+  it('required check absent from the rollup → held/required-check-missing while young', () => {
+    const r = run(basePr({ commits: [{ committedDate: min(5) }] }), green,
+      { REQUIRED_CHECKS: '["contract"]' });
+    assert.deepEqual(r, { action: 'held', reason: 'required-check-missing:contract' });
+  });
+
+  it('required check absent past the pending cap → escalated/required-check-missing', () => {
+    const r = run(basePr({ commits: [{ committedDate: min(90) }] }), green,
+      { REQUIRED_CHECKS: '["contract","gitleaks"]' });
+    assert.deepEqual(r, { action: 'escalated', reason: 'required-check-missing:contract,gitleaks' });
+  });
+
+  it('required check present and green → merges', () => {
+    const r = run(basePr(), [{ name: 'contract', bucket: 'pass' }, ...green],
+      { REQUIRED_CHECKS: '["contract"]' });
+    assert.equal(r.action, 'merged');
+  });
+
+  it('required check present but pending → held/pending (pending row wins)', () => {
+    const r = run(basePr({ createdAt: min(30) }),
+      [{ name: 'contract', bucket: 'pending' }, ...green], { REQUIRED_CHECKS: '["contract"]' });
+    assert.deepEqual(r, { action: 'held', reason: 'pending' });
+  });
+
+  it('required check present but failing → repair-signaled (failing row wins)', () => {
+    const r = run(basePr(), [{ name: 'contract', bucket: 'fail' }, ...green],
+      { REQUIRED_CHECKS: '["contract"]' });
+    assert.equal(r.action, 'repair-signaled');
+  });
+
+  it('required check satisfied by a skipping bucket (legitimate path-filtered skip)', () => {
+    const r = run(basePr(), [{ name: 'contract', bucket: 'skipping' }, ...green],
+      { REQUIRED_CHECKS: '["contract"]' });
+    assert.equal(r.action, 'merged');
+  });
+
+  it('REQUIRED_CHECKS falls back to CONTRACT_JSON verify.required_checks', () => {
+    const r = run(basePr(), green,
+      { CONTRACT_JSON: '{"verify":{"required_checks":["gitleaks"]}}' });
+    assert.equal(r.reason, 'required-check-missing:gitleaks');
+  });
+
+  it('unknown check bucket → held/check-state-unknown, never merged', () => {
+    const checks = [{ name: 'weird', bucket: 'stale' }, ...green];
+    const young = run(basePr({ createdAt: min(30) }), checks);
+    assert.deepEqual(young, { action: 'held', reason: 'check-state-unknown:weird' });
+  });
+
+  it('unknown check bucket past the pending cap → escalated/check-state-unknown', () => {
+    const r = run(basePr(), [{ name: 'weird', bucket: 'stale' }, ...green]);
+    assert.equal(r.action, 'escalated');
+    assert.equal(r.reason, 'check-state-unknown:weird');
+  });
+
+  it('check row with a missing bucket fails closed (not green)', () => {
+    const r = run(basePr({ createdAt: min(30) }), [{ name: 'mystery' }]);
+    assert.equal(r.action, 'held');
+    assert.equal(r.reason, 'check-state-unknown:mystery');
+  });
+
+  it('SKIP_LABELS empty → contract merge.skip_labels still vetoes', () => {
+    const r = run(basePr({ labels: [{ name: 'hold' }] }), green, {
+      SKIP_LABELS: '[]',
+      CONTRACT_JSON: '{"merge":{"skip_labels":["hold","wip"]}}',
+    });
+    assert.deepEqual(r, { action: 'skipped', reason: 'skip-label' });
+  });
+
+  it('SKIP_LABELS malformed → contract merge.skip_labels still vetoes (no throw)', () => {
+    const r = run(basePr({ labels: [{ name: 'wip' }] }), green, {
+      SKIP_LABELS: 'not-json{',
+      CONTRACT_JSON: '{"merge":{"skip_labels":["wip"]}}',
+    });
+    assert.equal(r.action, 'skipped');
+  });
+
+  it('escalation label always vetoes even with empty skip list', () => {
+    const r = run(basePr({ labels: [{ name: 'needs-human' }] }), green,
+      { SKIP_LABELS: '[]', CONTRACT_JSON: '{"merge":{"skip_labels":[]}}' });
+    assert.deepEqual(r, { action: 'skipped', reason: 'skip-label' });
+  });
+});
+
 describe('main — file wiring + GITHUB_OUTPUT', () => {
   it('reads the four JSON inputs and appends action/reason', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'automerge-eval-'));

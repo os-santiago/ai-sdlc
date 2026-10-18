@@ -28,7 +28,7 @@ engine only, no GitHub webhook adapter yet).
 | `ai-sdlc-intake.yml` | conversational refinement (`scripts/intake-refiner.js`): spec-completeness check → one upserted comment (clarifying questions or derived ACs) + `scc:not-ready` hold, fingerprint-retriggered on edits/replies; duplicate scan (`scripts/dup-detector.js`): token-Jaccard + marker-key similarity over the open backlog → one advisory upserted comment (never closes, never label-blocks); then DoR validation (R1–R6 per `spec/definition-of-ready.md`), `scc:queued`/`scc:not-ready` labels | `issues` (labeled/opened/edited) + `issue_comment` in caller |
 | `ai-sdlc-intake.yml` | Epic decomposition (`epic` → `scc:child` sub-issues) or DoR validation (R1–R6 per `spec/definition-of-ready.md`), `scc:queued`/`scc:not-ready` labels | `issues.labeled` in caller |
 | `ai-sdlc-implement.yml` | `scc` headless run → branch → PR (`Closes #N`) + manifest/audit artifacts | called on `scc:queued` |
-| `ai-sdlc-automerge.yml` | merge-gate decision table (spec/risk-taxonomy.md): green+mergeable → squash+delete; failing → repair signal; pending/conflict → `needs-human`; pending review holds only up to `review.wait_max_minutes` → `review_timeout` merge; fork/external heads and zero-check rollups fail closed → `needs-human`, never merge | `check_run.completed` / `pull_request` / called |
+| `ai-sdlc-automerge.yml` | merge-gate decision table (spec/risk-taxonomy.md): green+mergeable → squash+delete; failing → repair signal; pending/conflict → `needs-human`; pending review holds only up to `review.wait_max_minutes` → `review_timeout` merge; fork/external heads, zero-check rollups, missing `verify.required_checks` and unknown check buckets fail closed → `needs-human`, never merge; the merge step re-evaluates on a fresh snapshot so a label/check change between evaluate and merge aborts | `check_run.completed` / `pull_request` / called |
 | `ai-sdlc-classify.yml` | deterministic diff risk classification (`scripts/risk-classifier.js`): path/size/content signals → `pr:risk-*` label on every `pull_request` event — recomputed on each push | `pull_request` (opened/synchronize) |
 | `ai-sdlc-review.yml` | AI review + bounded review-fix convergence: verdict marker per head SHA + `pr:risk-*` tier label; `blocker|major`/`request_changes` → fix pass on the same branch → re-review; `needs-human` after `max_fix_iterations` | `pull_request` (opened/synchronize) / called post-implement |
 | `ai-sdlc-sweep.yml` | scheduled stall-sweep: enumerates open pipeline PRs and feeds each to `ai-sdlc-automerge.yml` — no green-idle PRs | `schedule` (every 30 min) / `workflow_dispatch` |
@@ -568,6 +568,27 @@ declaration, never silence:
 To keep trusted automation flowing (e.g. dependabot), list the bot logins
 in `merge.allow_authors`; a differently-named runtime app sets
 `merge.pipeline_author`.
+
+#### Fail-closed rollup completeness (issue #360)
+
+Three additional invariants keep a non-green rollup from ever merging:
+
+- **Required checks** — every `verify.required_checks` name must appear in
+  the PR rollup with a satisfied bucket (`pass`, or `skipping` for a
+  legitimately path-filtered check). A declared check that never reported
+  is a missing signal: `held` (`required-check-missing:<names>`) while the
+  head is younger than `merge.pending_max_minutes`, then `escalated` to
+  `needs-human`. An empty list means "all reported checks must be green" —
+  the default posture.
+- **Unknown check buckets** — a check whose rollup bucket is none of
+  `pass`/`skipping`/`fail`/`cancel`/`pending` is an unknown state, not a
+  success: `held` (`check-state-unknown:<names>`), escalated past the
+  pending cap.
+- **Merge-time re-check** — `Merge on green` re-runs the same decision
+  eval on a fresh PR/checks snapshot immediately before `gh pr merge`.
+  A merge-skip label, draft flip, head push or newly-red check landing
+  between the evaluate step and the merge aborts with an explanatory
+  comment instead of riding a stale decision.
 
 ### ai-sdlc-classify
 | Input | Default | Purpose |
