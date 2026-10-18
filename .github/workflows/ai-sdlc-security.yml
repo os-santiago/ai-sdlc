@@ -345,6 +345,10 @@ jobs:
           if [ "$SCAN_SCOPE" = "diff" ]; then
             args+=(--log-opts "$SCAN_BASE..refs/remotes/scan/head")
           fi
+          # gitleaks auto-loads <source>/.gitleaksignore regardless of
+          # --gitleaks-ignore-path — drop the PR's own copy so PR content
+          # can never suppress its own findings.
+          rm -f "$SCAN/.gitleaksignore"
           status=0
           bash "$WORK/tools/gitleaks.sh" "${args[@]}" || status=$?
           case "$status" in
@@ -409,6 +413,14 @@ jobs:
             # A diff that could not be produced is not a clean scan — the
             # evaluator fails closed on the explicit error record.
             printf '{"__error":"git diff exited %s"}\n' "$rc" > "$WORK/dep-vet.json"
+            exit 0
+          fi
+          # The contract admits no partial dep scan: a diff larger than
+          # the bound would silently drop trailing hunks (added deps past
+          # the cut never reach vet-pr) — fail closed instead.
+          if [ "$(wc -c < "$WORK/diff.patch")" -gt "$DIFF_MAX" ]; then
+            printf '{"__error":"dependency diff exceeds diff_max_bytes (%s); scan incomplete"}\n' \
+              "$DIFF_MAX" > "$WORK/dep-vet.json"
             exit 0
           fi
           head -c "$DIFF_MAX" "$WORK/diff.patch" > "$WORK/diff.bounded.patch"
