@@ -295,7 +295,7 @@ jobs:
           fi
           head -c "$DIFF_MAX" "$WORK/diff.patch" > "$WORK/diff.bounded.patch"
           VET_ARGS=(--repo "$REPO" --pr "$PR" --diff "$WORK/diff.bounded.patch")
-          MIN_AGE=$(jq -r '.dependencies.min_release_age_days // ""' <<<"${CONTRACT_JSON:-{}}")
+          MIN_AGE=$(jq -r '.dependencies.min_release_age_days // ""' <<<"${CONTRACT_JSON:-"{}"}")
           [ -n "$MIN_AGE" ] && VET_ARGS+=(--min-age-days "$MIN_AGE")
           rc=0
           node "$WORK/scripts/dep-update.js" vet-pr "${VET_ARGS[@]}" > "$WORK/dep-vet.json" || rc=$?
@@ -322,7 +322,7 @@ jobs:
         run: |
           set -euo pipefail
           WORK="$RUNNER_TEMP/ai-sdlc-security"
-          jq '.security // {}' <<<"${CONTRACT_JSON:-{}}" > "$WORK/security-contract.json"
+          jq '.security // {}' <<<"${CONTRACT_JSON:-"{}"}" > "$WORK/security-contract.json"
           OVR=$(jq -cn --arg e "$IN_ENABLED" --arg ms "$IN_MIN_SEVERITY" \
                      --arg bos "$IN_BLOCK_ON_SECRET" --arg sm "$IN_SEVERITY_MATRIX" '
                 {enabled: $e, min_severity: $ms, block_on_secret: $bos,
