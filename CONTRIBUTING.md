@@ -1,6 +1,23 @@
 # Contributor Guidelines
 
-Thank you for considering contributing to this project! Please read the following guidelines to ensure your contributions are accepted smoothly.
+Thank you for considering contributing to AI-SDLC — the canonical,
+repo-agnostic spec + GitHub-Actions-native runtime. These guidelines keep
+contributions reviewable and landable with minimum friction.
+
+**English only** for code, commits, PRs, issues, and docs.
+
+## Where work lives (file things in the right repo)
+
+| Surface | Repo |
+|---|---|
+| Normative spec (`spec/`), reusable runtime stages (`.github/workflows/`), this repo's docs | `os-santiago/ai-sdlc` — here |
+| Engine (the `scc` CLI that runs headless inside stages) | `os-santiago/sc-agent-cli` — co-maintained upstream; PRs get human review |
+| Doctrine / methodology | `Axel-DaMage/adev` |
+| Deployment / control-plane instances (Discord, OmniRoute, memory) | `Axel-DaMage/hermes`, consumer repos |
+
+See the ecosystem layering diagram in the [README](README.md) and the
+operating context in [AGENTS.md](AGENTS.md) — read it before doing
+anything in the repository.
 
 ## Developer Certificate of Origin (DCO)
 
@@ -31,12 +48,77 @@ Once a contributor has had one PR accepted, they are considered trusted and subs
 Please follow the conventions outlined in the project's [AGENTS.md](./AGENTS.md) for branch naming, commit messages, and pull request descriptions.
 
 - Branch names: `fix/issue-N-<slug>` / `feat/issue-N-<slug>` / `docs/<slug>`
+- Commit messages and PR titles in conventional-commit form:
+  `feat|fix|docs|chore|refactor|perf|test|build|ci|security(scope): summary`
 - PRs should reference issues: `Closes #N` or `Refs #N`
 - Use squash merge and delete the branch after merging.
 
+## PR shape
+
+Keep it atomic and state four things in the body:
+
+1. **What changed** — the observable diff.
+2. **Why it matters** — the issue or evidence driving it.
+3. **What is intentionally out of scope** — adjacent work left for
+   follow-up issues.
+4. **What stage follows next** — the dependency this unblocks.
+
+## Validate before opening a PR
+
+`npm test` (or `make validate`) runs the same suite CI gates on:
+
+```bash
+# Full repo check — also what `npm test` / `npm run build` run
+bash tools/validate-repo.sh
+
+# Workflow lint — same pinned release CI runs (wrapper fetches it on demand;
+# `bash actionlint -color` if a checkout lost the exec bit). With shellcheck
+# on PATH it also lints every workflow `run:` block. Composite actions are
+# covered too: a generated caller workflow `uses:` every
+# .github/actions/*/action.yml (issue #130).
+./actionlint -color
+
+# Shellcheck — validate-repo.sh runs it over standalone scripts when the
+# binary is installed; this fetches the pinned release for exact parity
+bash tools/shellcheck.sh tools/*.sh .github/actions/*/*.sh tests/*.sh
+
+# Contract validation only
+bash tools/validate-ai-sdlc-config.sh .ai-sdlc.yaml spec/ai-sdlc.schema.json
+```
+
+## Spec changes are semver-sensitive
+
+A breaking schema change is a MAJOR bump of the `spec/v*` tags plus a
+migration note. `scripts/spec-version.js` + `ai-sdlc-spec-tag.yml` enforce
+it: every `spec/**` PR must bump the `**Declared version:**` marker in
+`spec/README.md` to the classified next tag.
+
+## Hard rules that surprise newcomers
+
+- **No credentials in the repo** — never put API keys or tokens in
+  `.ai-sdlc.yaml` or workflows; the contract validator rejects
+  credential-shaped values, and gitleaks scans history.
+- **Every mutable step is bounded** — `timeout-minutes` on every
+  step-running job (CI enforces it), `max_seconds`/`max_steps`/
+  `max_repairs` on every loop. No unbounded anything.
+- **Third-party `uses:` refs are SHA-pinned** with a `# <version>`
+  comment — `tools/pin-actions.py --check` fails otherwise.
+- **`secrets: inherit` is rejected** — caller snippets map secrets
+  explicitly per stage; `tools/check-doc-snippets.py` keeps docs honest
+  against the `workflow_call` contracts.
+
 ## Reporting Issues
 
-If you encounter a bug or have a feature request, please open an issue on the GitHub issue tracker. Provide as much detail as possible, including steps to reproduce for bugs.
+Use the issue forms under **New Issue** — bug and enhancement templates
+are shaped to the agent-consumable Definition of Ready
+([spec/definition-of-ready.md](spec/definition-of-ready.md)): a
+conventional-commit title, problem/context, and a falsifiable acceptance
+checklist. A maintainer applies `priority:P*` at triage; the
+`ready-to-implement` label arms pipeline dispatch — see
+[spec/labels.md](spec/labels.md) for the label state machine.
+
+For security vulnerabilities do **not** open a public issue — follow
+[SECURITY.md](SECURITY.md).
 
 ## Questions?
 
