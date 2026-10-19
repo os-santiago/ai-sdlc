@@ -236,8 +236,9 @@ Bootstrap stage — and it runs on itself. Observable today:
 - The `ai-sdlc (self)` caller dogfoods the loop on this repo's issues:
   intake refinement comments (DoR verdicts, clarifying questions) are
   posted by `ai-sdlc-runtime` — see any recent issue thread.
-- `ai-sdlc-canary` (daily cron) files a synthetic issue and asserts the
-  intake→implement→PR loop end-to-end; a red canary files a
+- `ai-sdlc-canary` (daily cron) files a synthetic issue and asserts that
+  intake reaches `scc:queued`; a manually dispatched `full` run asserts
+  the intake→implement→PR loop end-to-end. A red canary files a
   signature-deduped postmortem issue.
 - Per the bootstrap rule in [AGENTS.md](AGENTS.md), implement-stage
   dispatch is hand-driven until the evidence gate in

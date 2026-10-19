@@ -58,13 +58,16 @@ Two facts already on the ground:
    single workflow file.
 2. **Consumer entry surface: consolidated callers, ≤3 files.** One event
    caller (`.github/workflows/ai-sdlc.yml`) multiplexes every event
-   trigger — `issues`, `issue_comment`, `pull_request`, `check_run`,
+   trigger — `issues`, `pull_request`, `check_run`,
    `push`, `workflow_dispatch` — into per-job `if:` + `uses:` dispatches;
    one vendored scheduled caller (`ai-sdlc-sweep.yml`) covers the cron
    domain, since a schedule cannot live inside a `workflow_call`-only
    stage. A third entry file is permitted only for a trigger domain that
    genuinely cannot ride the main caller — none exists today. This
-   ratifies the topology `tools/ai-sdlc-init.js` already generates.
+   ratifies the topology `tools/ai-sdlc-init.js` already generates — the
+   armed path only; `issue_comment`/`opened`/`edited` intake routing for
+   conversational refinement is a documented opt-in (see the
+   `docs/runtime.md` caller example), dogfooded by `ai-sdlc (self)`.
 3. **The single in-run orchestrator is rejected.** It cannot span the
    event gaps without idle-burning minutes or re-deriving the event model
    it was meant to simplify.

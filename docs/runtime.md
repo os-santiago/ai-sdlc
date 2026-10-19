@@ -278,10 +278,11 @@ A consumer repo carries at most three entry workflows; the
 `ai-sdlc init` installer emits exactly two:
 
 1. **`ai-sdlc.yml`** — one event caller multiplexing `issues`,
-   `issue_comment`, `pull_request`, `check_run`, `push` and
+   `pull_request`, `check_run`, `push` and
    `workflow_dispatch` into per-job `if:` + `uses:` dispatches
-   (the shape below, and the generated caller in
-   [onboarding.md](onboarding.md)).
+   (the generated caller in [onboarding.md](onboarding.md); the caller
+   example below adds `issue_comment`/`opened`/`edited` for
+   conversational refinement — a documented opt-in, not emitted).
 2. **`ai-sdlc-sweep.yml`** — the vendored scheduled stall-sweep; a cron
    trigger cannot live inside a `workflow_call`-only stage.
 
