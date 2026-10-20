@@ -1,0 +1,55 @@
+name: Bug report
+description: Something in the spec or runtime behaves incorrectly — report it as an agent-consumable issue.
+title: "fix(scope): "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues here are **agent-consumable** — the intake stage checks the
+        Definition of Ready (`spec/definition-of-ready.md` R1–R6) before
+        dispatch. Keep the conventional-commit title (`fix(scope): summary`),
+        fill in the fields below, and a maintainer will apply `priority:P*`
+        at triage. The `ready-to-implement` label arms dispatch.
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What the spec or runtime does wrong — factual, present tense.
+      placeholder: "e.g. The automerge gate merges a PR whose verdict marker names a different head SHA."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What it should do instead — the observable correct outcome.
+      placeholder: "e.g. The gate holds the PR and re-requests review for the new head."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / evidence
+      description: Workflow run links, log excerpts, issue/PR numbers, contract excerpts that show the failure.
+      placeholder: |
+        1. Open a pipeline PR …
+        2. Push a new head …
+        3. The next `check_run.completed` …
+        Run: https://github.com/os-santiago/ai-sdlc/actions/runs/…
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: 1–8 falsifiable checks a reviewer (or machine) can run to confirm the fix. No "should work" phrasing.
+      placeholder: |
+        - [ ] A stale-head verdict marker holds the merge gate (`review-pending`)
+        - [ ] Regression case added to the harness asserting the hold
+    validations:
+      required: true
