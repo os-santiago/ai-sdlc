@@ -1,0 +1,53 @@
+name: Enhancement / feature
+description: A bounded improvement to the spec or runtime — written as an agent-consumable issue.
+title: "feat(scope): "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues here are **agent-consumable** — the intake stage checks the
+        Definition of Ready (`spec/definition-of-ready.md` R1–R6) before
+        dispatch. Keep the conventional-commit title
+        (`feat(scope): summary` / `docs(scope): summary` / `refactor(scope): summary`),
+        one concern per issue (epics decompose first — see the atomicity
+        rules in the spec), and a maintainer will apply `priority:P*` at
+        triage. The `ready-to-implement` label arms dispatch.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / goal
+      description: What is wrong or missing — one concern, present tense, factual.
+      placeholder: "e.g. Consumer callers cannot route different stages to different models; everything resolves to model.primary."
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Where it lives — files, modules, prior issues/PRs, permalinks. Cross-repo work names the sibling repo.
+      placeholder: "e.g. `scripts/gha/stage-engine-resolver.js` resolves engines.*; the model hint is dropped before contract.json emit. Refs #171."
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: 1–8 falsifiable checks a reviewer (or machine) can run — the DoR's required `## Acceptance criteria` content.
+      placeholder: |
+        - [ ] `engines.review.model` resolves into contract.json's stage_models output
+        - [ ] A contract unit test asserts the precedence order
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope (negative boundaries)
+      description: What this issue must NOT touch — adjacent refactor, migration, or surface left for follow-ups.
+      placeholder: "e.g. Does not wire non-scc engine adapters (tracked separately in #206)."
+    validations:
+      required: false
