@@ -21,6 +21,12 @@ for how that control plane's components are actually wired together
 (PostgreSQL + outbox, no message broker) and its current limits (stub
 engine only, no GitHub webhook adapter yet).
 
+See
+[ADR-0006: Orchestrator vs per-stage event callers](./architecture/adr/0006-orchestrator-vs-per-stage-event-callers.md)
+for the caller topology this reference assumes: stages stay
+`workflow_call` units and consumers run consolidated event callers —
+never a single in-run orchestrator.
+
 ## Workflows
 
 | Workflow | Stage | Entry |
@@ -257,6 +263,33 @@ finding-class → verdict matrix is
 and floor semantics are normative in
 [spec/org-policy.md](../spec/org-policy.md#security-gate) — Security
 Gate.
+
+## Caller topology (ADR-0006)
+
+Which model applies: **reusable stages + consolidated event callers** —
+never a single orchestrator workflow. Stages are separated in *time*
+(intake fires on issue events; review/merge wait on PR and check events
+minutes-to-hours later), so an in-run `uses:` chain would idle-burn
+runner minutes or re-derive the event model it replaced. The decision
+record is
+[ADR-0006](architecture/adr/0006-orchestrator-vs-per-stage-event-callers.md).
+
+A consumer repo carries at most three entry workflows; the
+`ai-sdlc init` installer emits exactly two:
+
+1. **`ai-sdlc.yml`** — one event caller multiplexing `issues`,
+   `pull_request`, `check_run`, `push` and
+   `workflow_dispatch` into per-job `if:` + `uses:` dispatches
+   (the generated caller in [onboarding.md](onboarding.md); the caller
+   example below adds `issue_comment`/`opened`/`edited` for
+   conversational refinement — a documented opt-in, not emitted).
+2. **`ai-sdlc-sweep.yml`** — the vendored scheduled stall-sweep; a cron
+   trigger cannot live inside a `workflow_call`-only stage.
+
+Per-stage caller files are the superseded alternative: they duplicate the
+secrets map and permissions union per file. Stage-level retry granularity
+is preserved either way — each `uses:` dispatch is its own run, so a
+crashed stage never replays upstream work.
 
 ## Caller example
 
