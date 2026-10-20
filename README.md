@@ -1,10 +1,13 @@
 ---
-lastVerified: 2026-10-17T20:57:00Z
-verifiedAgainst: 0b7af3fe9843bcd46bfa0af218d054433467e702
-sources: [.ai-sdlc.yaml, spec/, .github/workflows/, docs/runtime.md, docs/onboarding.md, docs/operations.md, tools/verify-release.sh, runtime/k8s/README.md, examples/]
+lastVerified: 2026-10-19T00:00:00Z
+verifiedAgainst: aa1638fed6d95dfbda5ecff7cd48b4028689bbca
+sources: [.ai-sdlc.yaml, spec/, .github/workflows/, .github/ISSUE_TEMPLATE/, docs/runtime.md, docs/onboarding.md, docs/operations.md, docs/architecture/adr/, tools/verify-release.sh, runtime/k8s/README.md, examples/, CONTRIBUTING.md]
 freshnessWindowDays: 30
 ---
 # ai-sdlc — Canonical AI Software Delivery Lifecycle Runtime
+
+[![ai-sdlc (self)](https://github.com/os-santiago/ai-sdlc/actions/workflows/ai-sdlc.yml/badge.svg)](https://github.com/os-santiago/ai-sdlc/actions/workflows/ai-sdlc.yml)
+[![ai-sdlc-canary](https://github.com/os-santiago/ai-sdlc/actions/workflows/ai-sdlc-canary.yml/badge.svg)](https://github.com/os-santiago/ai-sdlc/actions/workflows/ai-sdlc-canary.yml)
 
 Repo-agnostic, GitHub-Actions-native implementation of the AI-SDLC pipeline:
 from a labeled issue to a merged, verified pull request — with bounded
@@ -31,6 +34,33 @@ autonomy driven by a declarative per-repo contract (`.ai-sdlc.yaml`).
 │   os-santiago/homedir-ai-sdlc (legacy VPS instance)     │
 └─────────────────────────────────────────────────────────┘
 ```
+
+## The loop
+
+```
+issue labeled               pull_request events      check_run       push to main
+`ready-to-implement`        opened / synchronize     completed
+      │                           │                      │                │
+      ▼                           ▼                      ▼                ▼
+  ┌────────┐   dispatch    ┌───────────┐   PR     ┌─────────┐   ┌────────────┐   ┌────────┐
+  │ intake │ ────────────▶ │ implement │ ───────▶ │ review  │ ─▶│ automerge  │─▶ │ verify │
+  │  DoR   │               │ engine run│          │+classify│   │ merge gate │   │+postm. │
+  └────────┘               └───────────┘          └─────────┘   └────────────┘   └────────┘
+                                 │                    │               │  ▲
+                                 │                    ▼               ▼  │
+                                 │               blocked verdict   red checks
+                                 │                    │               │
+                                 │               fix pass (≤N)    ci-repair (≤N)
+                                 │                    └───────────────┘
+                                 ▼
+              ai-sdlc-sweep (cron) re-drives stalled PRs through the gate
+              ai-sdlc-canary (cron) smokes the whole loop end-to-end daily
+```
+
+Each box is a `workflow_call`-reusable stage in `.github/workflows/`; the
+consumer-side event plumbing is consolidated thin callers — the model is
+ratified in
+[ADR-0006](docs/architecture/adr/0006-orchestrator-vs-per-stage-event-callers.md).
 
 ## Design principles
 
@@ -188,6 +218,9 @@ Details and the offline (exported-bundle) path:
   surface (schema, labels, trust ladder, DoR, risk taxonomy).
 - [ADR-0001](docs/architecture/adr/0001-homedir-ai-sdlc-sunset-and-cutover.md) —
   homedir-ai-sdlc sunset and canonical-runtime cutover decision record.
+- [ADR-0006](docs/architecture/adr/0006-orchestrator-vs-per-stage-event-callers.md) —
+  caller topology: reusable `workflow_call` stages + consolidated event
+  callers (never a single orchestrator).
 - [runtime/k8s/README.md](runtime/k8s/README.md) /
   [ADR-0004](docs/architecture/adr/0004-cloud-native-k8s-openshift-runtime.md) —
   optional Kubernetes/OpenShift-native control plane for adopters who
@@ -198,9 +231,22 @@ Details and the offline (exported-bundle) path:
 
 ## Status
 
-Early scaffold. The normative spec issues were transferred from
-`Axel-DaMage/adev` — see the [issues tab](../../issues). First deliverable:
-`workflow_call`-reusable `issue-implement` workflow driving `scc` headless.
+Bootstrap stage — and it runs on itself. Observable today:
+
+- The `ai-sdlc (self)` caller dogfoods the loop on this repo's issues:
+  intake refinement comments (DoR verdicts, clarifying questions) are
+  posted by `ai-sdlc-runtime` — see any recent issue thread.
+- `ai-sdlc-canary` (daily cron) files a synthetic issue and asserts that
+  intake reaches `scc:queued`; a manually dispatched `full` run asserts
+  the intake→implement→PR loop end-to-end. A red canary files a
+  signature-deduped postmortem issue.
+- Per the bootstrap rule in [AGENTS.md](AGENTS.md), implement-stage
+  dispatch is hand-driven until the evidence gate in
+  [ADR-0001](docs/architecture/adr/0001-homedir-ai-sdlc-sunset-and-cutover.md)
+  passes — issues are worked via Devin sessions or manual PRs.
+
+Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) — DCO sign-off, branch
+conventions, and the local validation suite (`tools/validate-repo.sh`).
 
 ## Non-goals
 
