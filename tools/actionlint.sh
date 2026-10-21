@@ -29,7 +29,7 @@ ACTIONLINT_SHA256="${ACTIONLINT_SHA256:-8aca8db96f1b94770f1b0d72b6dddcb1ebb8123c
 
 tmpdir="$(mktemp -d)"
 sweep=""
-cleanup() { rm -rf "$tmpdir"; [ -n "$sweep" ] && rm -f "$sweep"; }
+cleanup() { rm -rf "$tmpdir"; if [ -n "$sweep" ]; then rm -f "$sweep"; fi; }
 trap cleanup EXIT
 
 tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
