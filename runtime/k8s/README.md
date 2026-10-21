@@ -97,6 +97,26 @@ helm template deploy/helm/ai-sdlc-k8s-runtime \
 `make render-k8s`, `make render-openshift` and `make helm-lint` wrap the
 above. `make containers` builds all five images locally with Podman.
 
+### Engine source pin (image builds)
+
+The worker image builds `scc` from `os-santiago/sc-agent-cli` at
+image-build time, pinned to an immutable ref via the `SCC_ENGINE_PIN`
+build arg (`components/worker/Containerfile`) — a 40-char commit SHA or
+semver tag; anything else fails the build closed. The default mirrors
+the contract `engine.pin` field / the GHA runtime's `SCC_ENGINE_PIN`
+default (issue #117), so a plain `make containers` or the OpenShift
+`worker` BuildConfig already bakes in the pinned engine. To keep the
+image on a contract that declares its own `engine.pin`, pass the
+resolved value through:
+
+```bash
+podman build -f components/worker/Containerfile \
+  --build-arg SCC_ENGINE_PIN=<resolved engine.pin> \
+  -t localhost/ai-sdlc-worker:dev .
+# or, for all components:
+make containers SCC_ENGINE_PIN=<resolved engine.pin>
+```
+
 Every surface needs a Postgres reachable via `DATABASE_URL` before the
 pipeline does anything beyond respond-and-discard (ADR-0005). The default
 path is a [CloudNativePG](https://cloudnative-pg.io/) `Cluster`, rendered

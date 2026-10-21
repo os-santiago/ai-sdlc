@@ -108,6 +108,32 @@ jobs:
       AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
       AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
 
+  ai-sdlc-security:
+    # Deterministic supply-chain gate (issue #91, epic #87): secrets +
+    # dependency audit + license observations on every same-repo PR head —
+    # emits the required check `ai-sdlc-security` (verify.required_checks).
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/ai-sdlc-security.yml
+    with:
+      repo: ${{ github.repository }}
+      pr_number: ${{ github.event.pull_request.number }}
+      # runtime_ref = the same ref the called workflow resolves from
+      # (docs/security-scanning.md — "pin to the same ref as this
+      # workflow"): on pull_request, github.sha is the merge commit. The
+      # evaluator is fail-closed (`required: true`), so a stage script that
+      # only exists on the PR head — e.g. the PR introducing
+      # scripts/security-gate.js itself — must be fetched from the merge
+      # ref or the gate 404s on main and can never go green. Same-repo
+      # heads only (the if above), so this never executes fork content.
+      runtime_ref: ${{ github.sha }}
+    # Security declares App pair (required) + ledger signer.
+    secrets:
+      AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+      AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+      AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}
+
   review:
     # Fork heads carry no secrets — the called workflow would fail its auth
     # check rather than skip cleanly, so the event filter lives here.

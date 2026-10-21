@@ -289,6 +289,18 @@ function rollupHasFailures(pr) {
   });
 }
 
+/** Merging-actor annotation for merge findings (issue #360): the gate only
+ * binds merges it performs itself — a merge under any other credential
+ * bypassed the runtime entirely, so the actor belongs in the evidence. */
+function mergedByNote(pr, contract) {
+  const who = (pr.mergedBy && pr.mergedBy.login) || '';
+  if (!who) return '';
+  const pipeline = ((contract.merge || {}).pipeline_author) || 'ai-sdlc-runtime[bot]';
+  return who === pipeline
+    ? ` (merged by ${who})`
+    : ` (merged by ${who} — outside the runtime gate)`;
+}
+
 // --- Drift evaluation ---------------------------------------------------------
 // Pure over (contract, observed model). Returns findings:
 //   {check, subject, declared, observed, detail}
@@ -386,7 +398,7 @@ function evaluateDrift(model, opts = {}) {
       if (rollupHasFailures(pr)) {
         find('merge-checks-bypassed', `pr:${pr.number}`, 'merge_requires_checks=true',
           rollupCheckNames(pr).join(', '),
-          `pipeline PR #${pr.number} merged with non-passing check(s) in its rollup`);
+          `pipeline PR #${pr.number} merged with non-passing check(s) in its rollup${mergedByNote(pr, contract)}`);
       }
     }
   }
@@ -426,7 +438,7 @@ function evaluateDrift(model, opts = {}) {
       const hit = labelNames(pr).filter((l) => mergeSkips.has(l));
       if (hit.length) {
         find('skip-label-violation', `pr:${pr.number}`, [...mergeSkips].sort(), hit.sort(),
-          `pipeline PR #${pr.number} merged while carrying merge-skip label(s) ${hit.join(', ')}`);
+          `pipeline PR #${pr.number} merged while carrying merge-skip label(s) ${hit.join(', ')}${mergedByNote(pr, contract)}`);
       }
     }
   }
@@ -694,7 +706,7 @@ function collect(repo, { limit, windowMs, endMs } = {}, exec) {
   const since = new Date(endMs - windowMs).toISOString();
   const prs = JSON.parse(run([
     'pr', 'list', '-R', repo, '--state', 'all', '--limit', String(limit),
-    '--json', 'number,title,state,headRefName,labels,createdAt,updatedAt,closedAt,mergedAt,isDraft,mergeCommit,statusCheckRollup',
+    '--json', 'number,title,state,headRefName,labels,createdAt,updatedAt,closedAt,mergedAt,mergedBy,isDraft,mergeCommit,statusCheckRollup',
   ]));
   const issues = JSON.parse(run([
     'issue', 'list', '-R', repo, '--state', 'all', '--limit', String(limit),
@@ -839,6 +851,7 @@ module.exports = {
   normalizeObserved,
   rollupCheckNames,
   rollupHasFailures,
+  mergedByNote,
   evaluateDrift,
   fingerprintFindings,
   repoSignature,

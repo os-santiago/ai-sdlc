@@ -1,0 +1,10 @@
+# expect: schema
+# match: does not match
+# Mutable engine source ref — engine.pin accepts only a full commit SHA or
+# a semver tag (issue #117). A branch name would run whatever lands
+# upstream next beside minted App tokens + provider credentials, so the
+# schema rejects it at contract validation, not at bootstrap time.
+spec: "1.0.0"
+engine:
+  name: scc
+  pin: main

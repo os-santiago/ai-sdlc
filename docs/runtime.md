@@ -19,7 +19,19 @@ intake payload. See
 [ADR-0005: Durable state, transactional outbox and engine invocation for runtime/k8s](./architecture/adr/0005-runtime-k8s-event-bus-and-engine-invocation.md)
 for how that control plane's components are actually wired together
 (PostgreSQL + outbox, no message broker) and its current limits (stub
-engine only, no GitHub webhook adapter yet).
+engine only, no GitHub webhook adapter yet). That control plane's
+`worker` image builds `scc` at image-build time from the same pinned
+engine ref — the `SCC_ENGINE_PIN` build arg on
+`runtime/k8s/components/worker/Containerfile` mirrors the contract
+`engine.pin`/`SCC_ENGINE_PIN` pin point (issues #117/#356); see
+[`runtime/k8s/README.md`](../runtime/k8s/README.md) "Engine source pin"
+for how to feed a contract's resolved pin into the build.
+
+See
+[ADR-0006: Orchestrator vs per-stage event callers](./architecture/adr/0006-orchestrator-vs-per-stage-event-callers.md)
+for the caller topology this reference assumes: stages stay
+`workflow_call` units and consumers run consolidated event callers —
+never a single in-run orchestrator.
 
 ## Workflows
 
@@ -28,8 +40,9 @@ engine only, no GitHub webhook adapter yet).
 | `ai-sdlc-intake.yml` | conversational refinement (`scripts/intake-refiner.js`): spec-completeness check → one upserted comment (clarifying questions or derived ACs) + `scc:not-ready` hold, fingerprint-retriggered on edits/replies; duplicate scan (`scripts/dup-detector.js`): token-Jaccard + marker-key similarity over the open backlog → one advisory upserted comment (never closes, never label-blocks); then DoR validation (R1–R6 per `spec/definition-of-ready.md`), `scc:queued`/`scc:not-ready` labels | `issues` (labeled/opened/edited) + `issue_comment` in caller |
 | `ai-sdlc-intake.yml` | Epic decomposition (`epic` → `scc:child` sub-issues) or DoR validation (R1–R6 per `spec/definition-of-ready.md`), `scc:queued`/`scc:not-ready` labels | `issues.labeled` in caller |
 | `ai-sdlc-implement.yml` | `scc` headless run → branch → PR (`Closes #N`) + manifest/audit artifacts | called on `scc:queued` |
-| `ai-sdlc-automerge.yml` | merge-gate decision table (spec/risk-taxonomy.md): green+mergeable → squash+delete; failing → repair signal; pending/conflict → `needs-human`; pending review holds only up to `review.wait_max_minutes` → `review_timeout` merge; fork/external heads and zero-check rollups fail closed → `needs-human`, never merge | `check_run.completed` / `pull_request` / called |
+| `ai-sdlc-automerge.yml` | merge-gate decision table (spec/risk-taxonomy.md): green+mergeable → squash+delete; failing → repair signal; pending/conflict → `needs-human`; pending review holds only up to `review.wait_max_minutes` → `review_timeout` merge; fork/external heads, zero-check rollups, missing `verify.required_checks` and unknown check buckets fail closed → `needs-human`, never merge; the merge step re-evaluates on a fresh snapshot so a label/check change between evaluate and merge aborts | `check_run.completed` / `pull_request` / called |
 | `ai-sdlc-classify.yml` | deterministic diff risk classification (`scripts/risk-classifier.js`): path/size/content signals → `pr:risk-*` label on every `pull_request` event — recomputed on each push | `pull_request` (opened/synchronize) |
+| `ai-sdlc-security.yml` | deterministic supply-chain gate (`scripts/security-gate.js`): gitleaks secret scan over the PR range + `dep-update.js` dep audit (OSV, license, typosquat, release age) → `security_gate_outcome` per `security.severity_matrix`; blocking verdicts fail the required check `ai-sdlc-security` (issue #91, epic #87); invoked inside `ai-sdlc-automerge.yml` before the merge decision | `pull_request` / called by automerge |
 | `ai-sdlc-review.yml` | AI review + bounded review-fix convergence: verdict marker per head SHA + `pr:risk-*` tier label; `blocker|major`/`request_changes` → fix pass on the same branch → re-review; `needs-human` after `max_fix_iterations` | `pull_request` (opened/synchronize) / called post-implement |
 | `ai-sdlc-sweep.yml` | scheduled stall-sweep: enumerates open pipeline PRs and feeds each to `ai-sdlc-automerge.yml` — no green-idle PRs | `schedule` (every 30 min) / `workflow_dispatch` |
 | `ai-sdlc-metrics.yml` | scheduled SLO report (`scripts/slo-metrics.js`): time-to-merge, iterations-to-green, escalation rate → step summary + JSON/Prometheus artifacts | `schedule` (daily) / `workflow_dispatch` / `workflow_call` |
@@ -83,7 +96,7 @@ resolves it before acting:
 | Stage | Consumes | Overridable inputs |
 |---|---|---|
 | intake | `triggers.issue_label`, `triggers.skip_labels`, `labels.*` | `trigger_label` |
-| implement | `model.primary`, `model.fallback`, `engine.max_seconds`, `engine.max_steps`, `labels.*` | `model`, `fallback_model`, `max_seconds`, `max_steps` |
+| implement | `model.primary`, `model.fallback`, `engine.pin`, `engine.max_seconds`, `engine.max_steps`, `labels.*` | `model`, `fallback_model`, `max_seconds`, `max_steps` |
 | review | `review.mode`, `review.ai_reviewer.model`, `review.max_fix_iterations`, `review.external_reviewer`, `review.adversarial.*`, `merge.skip_labels`, `engine.*`, `escalation.label` | `model`, `external_reviewer`, `max_fix_iterations`, `max_seconds`, `max_steps`, `adversarial_min_tier`, `adversarial_max_attacks` |
 | automerge | `merge.max_repairs`, `merge.pending_max_minutes`, `merge.skip_labels`, `merge.method`, `review.mode`, `review.wait_max_minutes`, `review.external_reviewer`, `escalation.label` | `max_repairs`, `pending_max_minutes`, `merge_method`, `review_wait_minutes` |
 | verify | `verify.commands` | `verify_commands` |
@@ -257,6 +270,33 @@ finding-class → verdict matrix is
 and floor semantics are normative in
 [spec/org-policy.md](../spec/org-policy.md#security-gate) — Security
 Gate.
+
+## Caller topology (ADR-0006)
+
+Which model applies: **reusable stages + consolidated event callers** —
+never a single orchestrator workflow. Stages are separated in *time*
+(intake fires on issue events; review/merge wait on PR and check events
+minutes-to-hours later), so an in-run `uses:` chain would idle-burn
+runner minutes or re-derive the event model it replaced. The decision
+record is
+[ADR-0006](architecture/adr/0006-orchestrator-vs-per-stage-event-callers.md).
+
+A consumer repo carries at most three entry workflows; the
+`ai-sdlc init` installer emits exactly two:
+
+1. **`ai-sdlc.yml`** — one event caller multiplexing `issues`,
+   `pull_request`, `check_run`, `push` and
+   `workflow_dispatch` into per-job `if:` + `uses:` dispatches
+   (the generated caller in [onboarding.md](onboarding.md); the caller
+   example below adds `issue_comment`/`opened`/`edited` for
+   conversational refinement — a documented opt-in, not emitted).
+2. **`ai-sdlc-sweep.yml`** — the vendored scheduled stall-sweep; a cron
+   trigger cannot live inside a `workflow_call`-only stage.
+
+Per-stage caller files are the superseded alternative: they duplicate the
+secrets map and permissions union per file. Stage-level retry granularity
+is preserved either way — each `uses:` dispatch is its own run, so a
+crashed stage never replays upstream work.
 
 ## Caller example
 
@@ -568,6 +608,27 @@ declaration, never silence:
 To keep trusted automation flowing (e.g. dependabot), list the bot logins
 in `merge.allow_authors`; a differently-named runtime app sets
 `merge.pipeline_author`.
+
+#### Fail-closed rollup completeness (issue #360)
+
+Three additional invariants keep a non-green rollup from ever merging:
+
+- **Required checks** — every `verify.required_checks` name must appear in
+  the PR rollup with a satisfied bucket (`pass`, or `skipping` for a
+  legitimately path-filtered check). A declared check that never reported
+  is a missing signal: `held` (`required-check-missing:<names>`) while the
+  head is younger than `merge.pending_max_minutes`, then `escalated` to
+  `needs-human`. An empty list means "all reported checks must be green" —
+  the default posture.
+- **Unknown check buckets** — a check whose rollup bucket is none of
+  `pass`/`skipping`/`fail`/`cancel`/`pending` is an unknown state, not a
+  success: `held` (`check-state-unknown:<names>`), escalated past the
+  pending cap.
+- **Merge-time re-check** — `Merge on green` re-runs the same decision
+  eval on a fresh PR/checks snapshot immediately before `gh pr merge`.
+  A merge-skip label, draft flip, head push or newly-red check landing
+  between the evaluate step and the merge aborts with an explanatory
+  comment instead of riding a stale decision.
 
 ### ai-sdlc-classify
 | Input | Default | Purpose |
@@ -1509,7 +1570,19 @@ contract resolution lands (#22); the input is the override surface today.
 ## In-run failover (SC_FAILOVER)\n\nThe engine's in-run failover chain (used when the primary model encounters a provider error during a run) is now derived from the resolved contract.\nSpecifically, it is set to the value of `model.fallback` from the contract, provided it is set and not identical to `model.primary`.\nIf the fallback is empty or equals the primary, then no in-run failover is configured (the engine will not retry on provider error beyond the one-shot fallback).\n\nThis replaces the previous hardcoded list of model IDs. The contract resolution step ensures that the failover chain is always validated against the\ncurrent configuration and warns if the failover ID is identical to the primary or a known-unserved id.\n\n[Note: The one-shot fallback (on exit 20/21) is still governed by the `fallback_model` input to the engine step, which is also set from `model.fallback`.\n  However, the in-run failover is a separate mechanism that allows the engine to retry a different model mid-run without exiting and resetting the workspace.]\n## Engine contract
 
 `sc-agent-cli` (`scc`) is built from source on the runner — it is not
-published on npm. Headless flags used: `--prompt-file --no-commit
+published on npm. The build fetches the **pinned** source ref (issue
+#117): `engine.pin` in the contract resolves through load-config to the
+`bootstrap-scc` composite action, which fetches exactly that ref — a
+full commit SHA or a semver tag — from `os-santiago/sc-agent-cli`.
+Mutable refs (branch names, `HEAD`) are rejected twice: by the schema
+pattern on `engine.pin` at contract validation and by the same check
+inside the action before any fetch runs, so an unset or malformed pin
+fails closed rather than silently tracking upstream `main`. Contracts
+that omit `engine.pin` resolve to the runtime-pinned default
+(`SCC_ENGINE_PIN` in `.github/actions/load-config/resolve.py`); an org
+baseline can floor-pin it via `policy_floor.pin`. The checked-out commit
+is emitted as the action's `engine-commit` output for run evidence.
+Headless flags used: `--prompt-file --no-commit
 --audit-log --summary-file --max-seconds --max-steps`. The raw exit-code
 taxonomy is a cross-repo contract: emission semantics are normative in
 [`sc-agent-cli` `docs/exit-codes.md`](https://github.com/os-santiago/sc-agent-cli/blob/main/docs/exit-codes.md)

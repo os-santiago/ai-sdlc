@@ -190,7 +190,10 @@ contract accepts are the certified adapter names declared in
 `config/engine_adapters.json` — and a certified id still needs an
 adapter-registry entry before dispatch can run it. A stage without an
 `engines` entry falls back to the global `engine.name`, which itself
-defaults to `scc` (sc-agent-cli).
+defaults to `scc` (sc-agent-cli). `engine.pin` selects the immutable
+source ref (commit SHA or semver tag) the runtime builds source-built
+engines from — mutable refs are rejected at contract validation (issue
+#117).
 
 ### Per-stage model selection (task classes)
 

@@ -22,6 +22,12 @@
 # itself true) a PR reporting ZERO check-runs is held — then escalated
 # past merge.pending_max_minutes — never merged: 'no checks' is a missing
 # signal, not a green one. Both opt-outs are explicit contract fields.
+# Plus the issue-#360 hardening: verify.required_checks names must appear
+# green in the rollup (an absent required check holds/escalates, never
+# merges), unknown check buckets fail closed instead of counting as green,
+# and 'Merge on green' re-runs the same eval on a FRESH pr/checks snapshot
+# before merging — a skip label or red check landing between evaluate and
+# merge aborts instead of riding a stale decision.
 # Caller: on check_run.completed / pull_request events, or per PR from the
 # scheduled stall-sweep (ai-sdlc-sweep.yml). Repair budget, pending cap,
 # merge method, skip labels and the escalation label come from the resolved
@@ -111,7 +117,29 @@ env:
 permissions: {}
 
 jobs:
+  # Supply-chain security gate (issue #91, epic #87): the deterministic
+  # ai-sdlc-security stage runs before the merge decision — a blocking
+  # verdict fails this job, which fails the run and holds the merge via the
+  # caller's check. Contract fields (security.*) resolve inside the stage
+  # from the same base ref + org baseline the gate uses; secrets pass
+  # through explicitly (no inherit, issue #137).
+  security:
+    name: ai-sdlc-security
+    uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-security.yml@main
+    with:
+      repo: ${{ inputs.repo }}
+      pr_number: ${{ inputs.pr_number }}
+      base: ${{ inputs.base }}
+      runtime_ref: ${{ inputs.runtime_ref }}
+      org_config: ${{ inputs.org_config }}
+      ledger_head: ${{ inputs.ledger_head }}
+    secrets:
+      AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+      AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+      AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}
+
   gate:
+    needs: [security]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -198,9 +226,9 @@ jobs:
         run: |
           set -euo pipefail
           WORK="$RUNNER_TEMP/ai-sdlc-main-guard"; mkdir -p "$WORK"
-          ENABLED="$(jq -r '.merge.main_guard.enabled // true' <<<"${CONTRACT_JSON:-{}}")"
-          WFS="$(jq -r '[(.merge.main_guard.workflows // ["ci"])[]] | join(",")' <<<"${CONTRACT_JSON:-{}}")"
-          MAXAGE="$(jq -r '.merge.main_guard.max_age_hours // 72' <<<"${CONTRACT_JSON:-{}}")"
+          ENABLED="$(jq -r '.merge.main_guard.enabled // true' <<<"${CONTRACT_JSON:-"{}"}")"
+          WFS="$(jq -r '[(.merge.main_guard.workflows // ["ci"])[]] | join(",")' <<<"${CONTRACT_JSON:-"{}"}")"
+          MAXAGE="$(jq -r '.merge.main_guard.max_age_hours // 72' <<<"${CONTRACT_JSON:-"{}"}")"
           [ -n "$MG_ENABLED_IN" ] && ENABLED="$MG_ENABLED_IN"
           [ -n "$MG_WORKFLOWS_IN" ] && WFS="$MG_WORKFLOWS_IN"
           [ "$MG_MAX_AGE_IN" != "-1" ] && MAXAGE="$MG_MAX_AGE_IN"
@@ -246,6 +274,7 @@ jobs:
           PENDING_MAX: ${{ steps.contract.outputs.pending_max_minutes }}
           MAX_REPAIRS: ${{ steps.contract.outputs.max_repairs }}
           SKIP_LABELS: ${{ steps.contract.outputs.merge_skip_labels }}
+          REQUIRED_CHECKS: ${{ steps.contract.outputs.required_checks }}
           ESCALATION: ${{ steps.contract.outputs.escalation_label }}
           REVIEW_MODE: ${{ steps.contract.outputs.review_mode || 'ai' }}
           REVIEW_WAIT: ${{ (inputs.review_wait_minutes != -1 && toJSON(inputs.review_wait_minutes)) || steps.contract.outputs.review_wait_max_minutes || '15' }}
@@ -258,11 +287,19 @@ jobs:
           # outputs, but the resolved contract always carries these keys.
           # merge.require_checks unset falls back to the resolved
           # autonomy.merge_requires_checks declaration (resolve.py's rule).
-          REQUIRE_CHECKS="$(jq -r 'if .merge.require_checks == null then (.autonomy.merge_requires_checks // true) else .merge.require_checks end' <<<"${CONTRACT_JSON:-{}}")"
-          REQUIRE_PROV="$(jq -r '.merge.require_pipeline_provenance // true' <<<"${CONTRACT_JSON:-{}}")"
-          ALLOW_AUTHORS="$(jq -c '.merge.allow_authors // []' <<<"${CONTRACT_JSON:-{}}")"
-          PIPELINE_AUTHOR="$(jq -r '.merge.pipeline_author // "ai-sdlc-runtime[bot]"' <<<"${CONTRACT_JSON:-{}}")"
+          REQUIRE_CHECKS="$(jq -r 'if .merge.require_checks == null then (.autonomy.merge_requires_checks // true) else .merge.require_checks end' <<<"${CONTRACT_JSON:-"{}"}")"
+          REQUIRE_PROV="$(jq -r '.merge.require_pipeline_provenance // true' <<<"${CONTRACT_JSON:-"{}"}")"
+          ALLOW_AUTHORS="$(jq -c '.merge.allow_authors // []' <<<"${CONTRACT_JSON:-"{}"}")"
+          PIPELINE_AUTHOR="$(jq -r '.merge.pipeline_author // "ai-sdlc-runtime[bot]"' <<<"${CONTRACT_JSON:-"{}"}")"
           export REQUIRE_CHECKS REQUIRE_PROV ALLOW_AUTHORS PIPELINE_AUTHOR
+          # Propagate to later steps (Merge on green re-runs the same eval on
+          # fresh state — issue #360).
+          {
+            echo "REQUIRE_CHECKS=$REQUIRE_CHECKS"
+            echo "REQUIRE_PROV=$REQUIRE_PROV"
+            echo "ALLOW_AUTHORS=$ALLOW_AUTHORS"
+            echo "PIPELINE_AUTHOR=$PIPELINE_AUTHOR"
+          } >> "$GITHUB_ENV"
           # GitHub computes `mergeable` lazily; an idle PR often reports
           # UNKNOWN on first read. Re-poll a few times before deciding.
           for _ in 1 2 3 4; do
@@ -300,8 +337,42 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           METHOD: ${{ steps.contract.outputs.merge_method }}
+          # Re-eval env mirrors the Evaluate step: the merge must not act on
+          # a stale decision (issue #360 TOCTOU) — a merge-skip label or a
+          # red/missing check landing between evaluate and merge aborts here.
+          MAIN_GUARD: ${{ steps.mainguard.outputs.main_guard }}
+          MAIN_GUARD_REASON: ${{ steps.mainguard.outputs.main_guard_reason }}
+          PENDING_MAX: ${{ steps.contract.outputs.pending_max_minutes }}
+          MAX_REPAIRS: ${{ steps.contract.outputs.max_repairs }}
+          SKIP_LABELS: ${{ steps.contract.outputs.merge_skip_labels }}
+          REQUIRED_CHECKS: ${{ steps.contract.outputs.required_checks }}
+          ESCALATION: ${{ steps.contract.outputs.escalation_label }}
+          REVIEW_MODE: ${{ steps.contract.outputs.review_mode || 'ai' }}
+          REVIEW_WAIT: ${{ (inputs.review_wait_minutes != -1 && toJSON(inputs.review_wait_minutes)) || steps.contract.outputs.review_wait_max_minutes || '15' }}
+          EXT: ${{ steps.contract.outputs.review_external_reviewer }}
+          CONTRACT_JSON: ${{ steps.contract.outputs.json }}
         run: |
           set -euo pipefail
+          # Fresh snapshot, same decision table — the eval is a pure function
+          # of its inputs, so re-running it on live data is the authoritative
+          # merge-time check (labels/checks/head may have moved since eval).
+          gh pr view "$PR" -R "$REPO" --json number,title,isDraft,mergeable,mergeStateStatus,headRefOid,headRefName,baseRefName,labels,createdAt,comments,commits,author,headRepository,headRepositoryOwner,isCrossRepository > pr-merge.json
+          rc=0; gh pr checks "$PR" -R "$REPO" --json name,state,bucket > checks-merge.json 2> checks-merge.err || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            if grep -qi 'no checks reported' checks-merge.err; then echo '[]' > checks-merge.json
+            else cat checks-merge.err >&2; exit 1; fi
+          fi
+          REOUT="$RUNNER_TEMP/merge-recheck.out"; : > "$REOUT"
+          GITHUB_OUTPUT="$REOUT" node "$RUNNER_TEMP/ai-sdlc-automerge/scripts/automerge-eval.js" \
+            --pr pr-merge.json --checks checks-merge.json \
+            --trusted-comments trusted-comments.json --ext-reviews ext-reviews.json
+          RE_ACTION="$(sed -n 's/^action=//p' "$REOUT" | tail -1)"
+          RE_REASON="$(sed -n 's/^reason=//p' "$REOUT" | tail -1)"
+          if [ "$RE_ACTION" != "merged" ]; then
+            echo "::warning title=automerge::merge aborted — fresh gate evaluation returned ${RE_ACTION:-<none>} (${RE_REASON:-?})"
+            gh pr comment "$PR" -R "$REPO" --body "⚠️ **AI-SDLC:** merge aborted — the PR state changed after the gate evaluated it (re-check: \`${RE_ACTION:-none}\` — \`${RE_REASON:-unknown}\`). The next sweep re-evaluates."
+            exit 1
+          fi
           gh pr merge "$PR" -R "$REPO" --"$METHOD" --delete-branch
 
       - name: Record review timeout

@@ -32,14 +32,29 @@ verify:
     # Full repo check (contract schema + secret scan, workflow/action YAML,
     # spec JSON). Same script backs `npm test` / `npm run build`.
     - bash tools/validate-repo.sh
-  required_checks: []
+  # Check-run names that must appear green for automerge (issue #360):
+  # a required name absent from a PR rollup blocks the merge. Limited to
+  # checks that run unconditionally on every PR to main — `contract` (the
+  # ai-sdlc validate suite) and `gitleaks` (secret-scan).
+  required_checks:
+    - contract
+    - gitleaks
   timeout_seconds: 300
 
-# Supply-chain evidence (issue #92, epic #87): the sbom workflow emits a
-# CycloneDX JSON of the npm dependency surface on every PR, and
-# ai-sdlc-release attaches it to the release as an attested asset.
-# Boolean floor — an org baseline's `true` pins it on org-wide.
+# Security gate + supply-chain evidence (issues #90/#91/#92, epic #87):
+# the deterministic gate emitted by the ai-sdlc-security stage (secrets →
+# gitleaks-class, dep audit → OSV/license/typosquat) and the CycloneDX
+# SBOM attached as run/release evidence. Defaults are already the secure
+# posture — declared here as the audit record.
 security:
+  enabled: true
+  min_severity: high            # findings >= high are blocking-class
+  block_on_secret: true         # credential material always blocks
+  severity_matrix:              # pr:risk-* tier → gate outcome
+    pr:risk-low: report-only
+    pr:risk-medium: report-only
+    pr:risk-high: blocking-if-fix-available     # blocks when a fix exists
+    pr:risk-critical: blocking-if-fix-available # blocks when a fix exists
   sbom:
     enabled: true
     format: cyclonedx
@@ -187,6 +202,11 @@ engines:
 
 engine:
   name: scc
+  # Engine source pin (issue #117): immutable ref the bootstrap fetches —
+  # os-santiago/sc-agent-cli main HEAD 2026-10-14. Full SHA, not a branch:
+  # the checkout runs beside minted App tokens + provider credentials.
+  # Declared here as the audit record; equals the runtime default.
+  pin: 8430737505d306c3edf921eb5a1aa8a7ddfb4d77
   max_steps: 200
   max_seconds: 900
   flags:

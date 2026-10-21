@@ -17,20 +17,39 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/component ./compon
 #
 # sc-agent-cli is not published on npm (docs/runtime.md "Engine
 # contract") — every runtime that invokes it builds it from the upstream
-# repo's default branch. This mirrors
-# .github/workflows/ai-sdlc-implement.yml's "Build scc engine from
-# source" step (git clone --depth 1 && npm ci && npm run build), but
-# cannot reuse that step's `npm link`/`npm install -g .`: both resolve a
-# local directory to a *symlink* into node_modules rather than copying
-# it (confirmed by building this image: the resulting
-# /usr/local/lib/node_modules/sc-agent-cli was a dangling symlink back
-# into this build stage's /opt/scc, which does not exist in the final
-# stage). Pruning dev dependencies and copying /opt/scc wholesale avoids
-# that; the final stage's wrapper script replaces the one dropped by
-# not using npm's own global-install bin-linking.
+# repo. This mirrors the bootstrap-scc composite action
+# (.github/actions/bootstrap-scc: fetch the pinned ref && npm ci &&
+# npm run build), but cannot reuse that step's `npm link`/
+# `npm install -g .`: both resolve a local directory to a *symlink* into
+# node_modules rather than copying it (confirmed by building this image:
+# the resulting /usr/local/lib/node_modules/sc-agent-cli was a dangling
+# symlink back into this build stage's /opt/scc, which does not exist in
+# the final stage). Pruning dev dependencies and copying /opt/scc
+# wholesale avoids that; the final stage's wrapper script replaces the
+# one dropped by not using npm's own global-install bin-linking.
 FROM docker.io/library/node:22-alpine AS sccbuild
 RUN apk add --no-cache git
-RUN git clone --depth 1 https://github.com/os-santiago/sc-agent-cli /opt/scc \
+# Engine source pin (issue #356): immutable ref — full commit SHA or
+# semver tag — baked into the image. The default mirrors the contract
+# `engine.pin` / runtime `SCC_ENGINE_PIN` default (issue #117;
+# os-santiago/sc-agent-cli main HEAD 2026-10-14). Feed the resolved
+# contract pin at build time so the image tracks the same single pin
+# point as the GHA bootstrap:
+#   podman build --build-arg SCC_ENGINE_PIN=<resolved engine.pin> ...
+# (`make containers SCC_ENGINE_PIN=<pin>` — see runtime/k8s/README.md).
+# init+fetch+checkout instead of `git clone --branch`: a bare SHA is a
+# valid fetch target but not a clone-able branch/tag name.
+ARG SCC_ENGINE_PIN=8430737505d306c3edf921eb5a1aa8a7ddfb4d77
+# Fail closed on anything but an immutable ref — the same check
+# bootstrap-scc enforces on `engine.pin` (issue #117). A mutable ref
+# (main, HEAD, …) would bake whatever lands upstream next into a
+# published image built beside registry credentials.
+RUN printf '%s' "$SCC_ENGINE_PIN" | grep -Eqx '[0-9a-f]{40}|v?[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?' \
+    || { echo "SCC_ENGINE_PIN '$SCC_ENGINE_PIN' is not an immutable ref — expected a 40-char commit SHA or semver tag (feed it the resolved contract engine.pin)" >&2; exit 1; }
+RUN git init -q /opt/scc \
+    && git -C /opt/scc remote add origin https://github.com/os-santiago/sc-agent-cli \
+    && git -C /opt/scc fetch -q --depth 1 origin "$SCC_ENGINE_PIN" \
+    && git -C /opt/scc checkout -q --detach FETCH_HEAD \
     && cd /opt/scc && npm ci && npm run build && npm prune --omit=dev
 
 # node:alpine (not distroless): running `scc` needs a Node runtime, and

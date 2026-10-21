@@ -53,6 +53,7 @@ the linter reads the block, humans read the table.
 | `ai-sdlc-review-fix-<pr>-attempt-<n>` | review-fix | engine-session | `${{ runner.temp }}/ai-sdlc-review-fix/` | 14d |
 | `ai-sdlc-ci-repair-<pr>-attempt-<n>` | ci-repair | engine-session | `${{ runner.temp }}/ai-sdlc-ci-repair/` | 14d |
 | `ai-sdlc-dep-update-<attempt>` | dep-update | engine-session | `${{ runner.temp }}/ai-sdlc-dep-update/` (+ its ledger segment) | 14d |
+| `ai-sdlc-security-<pr>-<attempt>` | security | stage-evidence | `${{ runner.temp }}/ai-sdlc-security/` — gate result, scanner reports, markdown summary | 14d |
 | `ai-sdlc-contract-<job>-<attempt>` | all (load-config) | contract | `${{ runner.temp }}/ai-sdlc-contract/` | 14d |
 | `ai-sdlc-ledger-<stage>-<subject>-<attempt>` | every sealed stage | ledger | `${{ runner.temp }}/ai-sdlc-ledger/ledger-<stage>.jsonl` | 14d |
 | `ai-sdlc-ready-queue-<run>-<attempt>` | sweep | workspace-report | `ready-queue.json`/`ready-queue.md` at root | 30d |
@@ -131,6 +132,16 @@ the linter reads the block, humans read the table.
       "retention": 14
     },
     {
+      "id": "security-bundle",
+      "match": "ai-sdlc-security-<e>-<e>",
+      "files": [
+        ".github/workflows/ai-sdlc-security.yml"
+      ],
+      "class": "stage-evidence",
+      "path_root": "runner_temp",
+      "retention": 14
+    },
+    {
       "id": "contract-bundle",
       "regex": "ai-sdlc-contract-",
       "files": [
@@ -142,7 +153,7 @@ the linter reads the block, humans read the table.
     },
     {
       "id": "ledger-segment",
-      "regex": "^ai-sdlc-ledger-(intake|implement|review|review-fix|ci-repair|automerge|dep-update|verify|kill-switch|drift|fleet|metrics|sweep|canary)-",
+      "regex": "^ai-sdlc-ledger-(intake|implement|review|review-fix|ci-repair|automerge|dep-update|verify|kill-switch|drift|fleet|metrics|sweep|canary|security)-",
       "files": [
         ".github/workflows/ai-sdlc-kill.yml",
         ".github/workflows/ai-sdlc-canary.yml"
