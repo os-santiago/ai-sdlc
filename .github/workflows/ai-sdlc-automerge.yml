@@ -117,7 +117,29 @@ env:
 permissions: {}
 
 jobs:
+  # Supply-chain security gate (issue #91, epic #87): the deterministic
+  # ai-sdlc-security stage runs before the merge decision — a blocking
+  # verdict fails this job, which fails the run and holds the merge via the
+  # caller's check. Contract fields (security.*) resolve inside the stage
+  # from the same base ref + org baseline the gate uses; secrets pass
+  # through explicitly (no inherit, issue #137).
+  security:
+    name: ai-sdlc-security
+    uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-security.yml@main
+    with:
+      repo: ${{ inputs.repo }}
+      pr_number: ${{ inputs.pr_number }}
+      base: ${{ inputs.base }}
+      runtime_ref: ${{ inputs.runtime_ref }}
+      org_config: ${{ inputs.org_config }}
+      ledger_head: ${{ inputs.ledger_head }}
+    secrets:
+      AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+      AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+      AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}
+
   gate:
+    needs: [security]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:

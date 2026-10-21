@@ -41,11 +41,20 @@ verify:
     - gitleaks
   timeout_seconds: 300
 
-# Supply-chain evidence (issue #92, epic #87): the sbom workflow emits a
-# CycloneDX JSON of the npm dependency surface on every PR, and
-# ai-sdlc-release attaches it to the release as an attested asset.
-# Boolean floor — an org baseline's `true` pins it on org-wide.
+# Security gate + supply-chain evidence (issues #90/#91/#92, epic #87):
+# the deterministic gate emitted by the ai-sdlc-security stage (secrets →
+# gitleaks-class, dep audit → OSV/license/typosquat) and the CycloneDX
+# SBOM attached as run/release evidence. Defaults are already the secure
+# posture — declared here as the audit record.
 security:
+  enabled: true
+  min_severity: high            # findings >= high are blocking-class
+  block_on_secret: true         # credential material always blocks
+  severity_matrix:              # pr:risk-* tier → gate outcome
+    pr:risk-low: report-only
+    pr:risk-medium: report-only
+    pr:risk-high: blocking-if-fix-available     # blocks when a fix exists
+    pr:risk-critical: blocking-if-fix-available # blocks when a fix exists
   sbom:
     enabled: true
     format: cyclonedx

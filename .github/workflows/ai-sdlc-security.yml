@@ -1,0 +1,526 @@
+# ai-sdlc-security — deterministic supply-chain security gate (issue #91,
+# epic #87)
+#
+# Implements the `security:` contract section (spec/ai-sdlc.schema.json;
+# floor semantics in spec/org-policy.md — Security Gate) as a reusable
+# `workflow_call` stage. Three deterministic scanners evaluate the PR head —
+# never generative judgment:
+#
+#   * secrets  — gitleaks-class scan via tools/gitleaks.sh (pinned release +
+#     SHA-256 verify), bounded to the PR commit range (scan_scope=diff) or
+#     full history (scan_scope=tree, for scheduled sweeps). Findings are
+#     blocking-class unconditionally under security.block_on_secret.
+#   * deps     — dep-update.js `vet-pr` over the bounded PR diff: added
+#     direct deps → registry metadata + OSV (egress-bound: npm-vet profile),
+#     license allowlist, typosquat distance, release age. OSV vuln detail
+#     (bounded lookups) enriches severity + upstream-fix availability for
+#     the blocking-if-fix-available tier.
+#   * licenses — same vet pass; license observations stay report-only under
+#     every tier (spec floor).
+#
+# Verdict (scripts/security-gate.js): findings ≥ security.min_severity are
+# blocking-class and consult severity_matrix[pr:risk-* tier] →
+# report-only | blocking-if-fix-available | blocking; the job fails on any
+# blocking finding (exit 1) so the emitted check `ai-sdlc-security` holds
+# the merge — carried by verify.required_checks. An absent/unknown risk
+# tier resolves to the strictest declared matrix outcome (ambiguity
+# resolves UP); a scanner that produced no parseable evidence fails closed
+# — a gate that cannot see is not a pass.
+#
+# Trust boundary: scripts + the gitleaks shim are fetched from the runtime
+# repo pin (inputs.runtime_ref), never from the PR head or consumer repo —
+# scanned content is data, never executed. The gitleaks ruleset/ignore
+# list are likewise resolved at the PR base ref (maintainer-owned) or the
+# runtime-pinned baseline (tools/gitleaks-gate.toml), and inline
+# gitleaks:allow comments in PR content are ignored — a PR must not be
+# able to weaken the gate that scans it. Input overrides for security.*
+# clamp strictest-wins against the resolved contract: a caller may tighten,
+# never loosen (the same rule org floors apply).
+#
+# Bounded: timeout-minutes: 15 (author clarification, issue #91); diff fed
+# to the dep audit capped at diff_max_bytes; OSV detail lookups capped at
+# max_vuln_lookups; no unbounded loops.
+#
+# Caller usage — for the literal required check `ai-sdlc-security` name the
+# calling job identically (same collapse as `intake`):
+#   on:
+#     pull_request: { types: [opened, synchronize] }
+#   jobs:
+#     ai-sdlc-security:
+#       uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-security.yml@main
+#       with:
+#         repo: ${{ github.repository }}
+#         pr_number: ${{ github.event.pull_request.number }}
+#       secrets:
+#         AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
+#         AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+#         AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}
+name: ai-sdlc-security
+
+on:
+  workflow_call:
+    inputs:
+      repo:
+        type: string
+        required: true
+      pr_number:
+        type: number
+        required: true
+      base:
+        description: 'ref to resolve .ai-sdlc.yaml from — trusted base, never the PR head'
+        type: string
+        default: 'main'
+      runtime_ref:
+        description: 'ref of os-santiago/ai-sdlc to fetch trusted scripts (security-gate.js, dep-update.js, tools/gitleaks.sh) from — pin to the same ref as this workflow'
+        type: string
+        default: 'main'
+      org_config:
+        description: 'org baseline contract ref owner/repo[/path][@ref] — security.* floors per spec/org-policy.md; empty = repo contract + defaults'
+        type: string
+        default: ''
+      ledger_head:
+        description: 'upstream run-ledger chain head — seeds this stage entry prev; empty = recover the ai-sdlc:ledger-head marker on the PR (issue #196)'
+        type: string
+        default: ''
+      enabled:
+        description: "security.enabled override — 'true'|'false'; empty = resolved contract; overrides clamp strictest-wins (tighten only)"
+        type: string
+        default: ''
+      min_severity:
+        description: 'security.min_severity override — low|medium|high|critical; empty = resolved contract'
+        type: string
+        default: ''
+      block_on_secret:
+        description: "security.block_on_secret override — 'true'|'false'; empty = resolved contract"
+        type: string
+        default: ''
+      severity_matrix:
+        description: 'security.severity_matrix override — inline JSON {"pr:risk-high":"blocking",...}; empty = resolved contract'
+        type: string
+        default: ''
+      scan_scope:
+        description: 'diff = PR commit range (per-PR runs); tree = full history (scheduled sweeps)'
+        type: string
+        default: 'diff'
+      diff_max_bytes:
+        description: 'byte cap on the PR diff fed to the dependency audit'
+        type: number
+        default: 500000
+      max_vuln_lookups:
+        description: 'cap on OSV vuln-detail lookups for severity/fix enrichment'
+        type: number
+        default: 20
+    outputs:
+      action:
+        description: 'evaluated | skipped'
+        value: ${{ jobs.gate.outputs.action }}
+      verdict:
+        description: 'pass | fail'
+        value: ${{ jobs.gate.outputs.verdict }}
+      security_gate_outcome:
+        description: 'strictest applied gate outcome — report-only | blocking-if-fix-available | blocking'
+        value: ${{ jobs.gate.outputs.security_gate_outcome }}
+      findings_count:
+        description: 'total findings recorded'
+        value: ${{ jobs.gate.outputs.findings_count }}
+      ledger_head:
+        description: 'sealed run-ledger chain head for this gate run (issue #196)'
+        value: ${{ jobs.gate.outputs.ledger_head }}
+    secrets:
+      AI_SDLC_APP_ID:
+        description: 'ai-sdlc GitHub App id — mints the per-run installation token used for all gh auth + the PR-head checkout (fail-closed when unset; issue #26)'
+        required: true
+      AI_SDLC_APP_PRIVATE_KEY:
+        description: 'ai-sdlc GitHub App private key (PEM) — pairs with AI_SDLC_APP_ID'
+        required: true
+      AI_SDLC_LEDGER_KEY:
+        description: 'run-ledger signing key (PEM; Ed25519/RSA) — seals stage evidence; absent = unsigned seal (issue #196)'
+        required: false
+
+env:
+  REPO: ${{ inputs.repo }}
+  PR: ${{ inputs.pr_number }}
+
+# Every gh call + the checkout use the minted ai-sdlc App installation
+# token — the job's GITHUB_TOKEN carries no scopes (fail-closed, issue #26).
+permissions: {}
+
+jobs:
+  gate:
+    name: ai-sdlc-security
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      # github.workflow is the CALLER's name in a reusable workflow — the
+      # PR caller and the automerge caller get separate groups so a sweep
+      # run can never cancel the PR's gate check (or vice versa).
+      group: ai-sdlc-security-${{ github.workflow }}-${{ inputs.repo }}-${{ inputs.pr_number }}
+      cancel-in-progress: true
+    outputs:
+      action: ${{ steps.eval.outputs.action }}
+      verdict: ${{ steps.eval.outputs.verdict }}
+      security_gate_outcome: ${{ steps.eval.outputs.security_gate_outcome }}
+      findings_count: ${{ steps.eval.outputs.findings_count }}
+      ledger_head: ${{ steps.seal.outputs.head || steps.ledger.outputs.head }}
+    steps:
+      - name: Verify credentials + mint ai-sdlc App token
+        id: app-token
+        uses: os-santiago/ai-sdlc/.github/actions/mint-app-token@main
+        with:
+          repo: ${{ inputs.repo }}
+          app-id: ${{ secrets.AI_SDLC_APP_ID }}
+          app-private-key: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
+          purpose: checkouts/PR reads
+          permission-contents: read
+          permission-pull-requests: read
+
+      - name: Resolve contract (.ai-sdlc.yaml)
+        id: contract
+        uses: os-santiago/ai-sdlc/.github/actions/load-config@main
+        with:
+          repo: ${{ inputs.repo }}
+          ref: ${{ inputs.base }}
+          checkout: 'true'
+          token: ${{ steps.app-token.outputs.token }}
+          org-config: ${{ inputs.org_config }}
+          # security.* workflow inputs are NOT passed via overrides here —
+          # overrides replace values outright and could soften an org floor.
+          # The evaluator clamps them strictest-wins instead.
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
+        with:
+          node-version: '22'
+
+      # Trusted code only: evaluator + dep auditor + the pinned gitleaks
+      # shim from the runtime repo pin — never from the PR head or consumer
+      # checkout. Fail-closed: a gate without its evaluator is not a pass.
+      - name: Fetch security gate scripts (trusted runtime pin)
+        id: eval-fetch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        uses: os-santiago/ai-sdlc/.github/actions/fetch-runtime-file@main
+        with:
+          files: |
+            scripts/security-gate.js
+            scripts/dep-update.js
+            tools/gitleaks.sh
+            tools/gitleaks-gate.toml
+          ref: ${{ inputs.runtime_ref }}
+          dest: ${{ runner.temp }}/ai-sdlc-security
+          label: security gate scripts
+          fallback: gate cannot evaluate
+          required: 'true'
+
+      # PR context: base/head SHAs for the scan range + the pr:risk-* tier
+      # that arbitrates the severity matrix. Multiple risk labels resolve to
+      # the highest rank (ambiguity resolves UP).
+      - name: Resolve PR scan context
+        id: ctx
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-security"; mkdir -p "$WORK"
+          gh api "repos/$REPO/pulls/$PR" \
+            --jq '{base_sha: .base.sha, head_sha: .head.sha,
+                   commits: .commits,
+                   labels: [.labels[].name]}' > "$WORK/pr.json"
+          BASE=$(jq -r .base_sha "$WORK/pr.json")
+          HEAD=$(jq -r .head_sha "$WORK/pr.json")
+          TIER=$(jq -r 'def r: {"pr:risk-low":0,"pr:risk-medium":1,"pr:risk-high":2,"pr:risk-critical":3};
+                        ([.labels[] | select(r[.] != null)] | sort_by(r[.]))[-1] // ""' "$WORK/pr.json")
+          # Server-side merge-base: GitHub computes the fork point over
+          # full history — immune to the shallow-clone boundary noise that
+          # makes a local merge-base unreliable. Empty on API failure; the
+          # clone step falls back or fails closed.
+          MB=$(gh api "repos/$REPO/compare/$BASE...$HEAD" \
+            --jq .merge_base_commit.sha 2>/dev/null || true)
+          {
+            echo "base_sha=$BASE"
+            echo "head_sha=$HEAD"
+            echo "pr_commits=$(jq -r .commits "$WORK/pr.json")"
+            echo "merge_base=${MB:-}"
+            echo "tier=$TIER"
+          } >> "$GITHUB_OUTPUT"
+
+      # Scan the PR head WITHOUT trusting it: the clone materializes bytes
+      # for the scanners only — nothing in the tree is ever executed.
+      # refs/pull/<N>/head resolves fork heads too, so the secret scan works
+      # for cross-repo PRs (automerge's provenance gate still escalates
+      # those independently). Bounded: head history capped at 500 commits.
+      # The clone lives under $RUNNER_TEMP so it can never collide with a
+      # load-config sparse checkout in the workspace.
+      - name: Clone base + fetch PR head (scan only)
+        id: scan
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BASE_SHA: ${{ steps.ctx.outputs.base_sha }}
+          PR_COMMITS: ${{ steps.ctx.outputs.pr_commits }}
+          MERGE_BASE: ${{ steps.ctx.outputs.merge_base }}
+        run: |
+          set -euo pipefail
+          SCAN="$RUNNER_TEMP/ai-sdlc-scan"
+          mkdir -p "$SCAN"
+          cd "$SCAN"
+          git init -q .
+          git remote add origin "https://github.com/$REPO.git"
+          git config --local "http.https://github.com/.extraheader" \
+            "AUTHORIZATION: basic $(printf 'x:%s' "$GH_TOKEN" | base64 -w0)"
+          # Depth bound: PR commit count + 1 keeps the fork point inside
+          # the head pack; both sides cap at 500 commits.
+          DEPTH=$((PR_COMMITS + 1)); [ "$DEPTH" -gt 500 ] && DEPTH=500
+          git fetch -q --no-tags --depth 500 origin "+$BASE_SHA:refs/remotes/scan/base"
+          git fetch -q --no-tags --depth "$DEPTH" origin "+refs/pull/$PR/head:refs/remotes/scan/head"
+          git checkout -q --detach refs/remotes/scan/head
+          # scan_base = the PR's own fork point, so `scan_base..head` is
+          # exactly the commits the PR adds — a shallow `BASE_SHA..head`
+          # would silently widen into old shared history (an ancient
+          # revoked secret must not block a PR that never touched it).
+          # Resolution order, each verified against the fetched window:
+          #   1. server-side merge-base (compare API) — a head ancestor;
+          #   2. local merge-base over the bounded base window;
+          #   3. head~PR_COMMITS for strictly linear histories;
+          #   otherwise empty → the scanners fail closed downstream.
+          RANGE=""
+          if [ -n "$MERGE_BASE" ] \
+             && git merge-base --is-ancestor "$MERGE_BASE" refs/remotes/scan/head 2>/dev/null; then
+            RANGE="$MERGE_BASE"
+          else
+            MB=$(git merge-base refs/remotes/scan/base refs/remotes/scan/head 2>/dev/null || true)
+            if [ -n "$MB" ]; then
+              RANGE="$MB"
+            elif [ "$PR_COMMITS" -lt 500 ]; then
+              START=$(git rev-parse -q --verify "refs/remotes/scan/head~$PR_COMMITS" || true)
+              if [ -n "$START" ] && \
+                 [ "$(git rev-list --count --min-parents=2 "$START..refs/remotes/scan/head")" = "0" ]; then
+                RANGE="$START"
+              fi
+            fi
+          fi
+          echo "scan_base=$RANGE" >> "$GITHUB_OUTPUT"
+
+      # Secret scan (gitleaks-class): --log-opts bounds the range for
+      # per-PR runs; scan_scope=tree sweeps the fetched history.
+      # The gate's rules can never come from the scanned tree: --config is
+      # the consumer's own .gitleaks.toml resolved at the PR BASE ref
+      # (maintainer-owned), else the runtime-pinned baseline; the ignore
+      # list comes from the same base ref; inline gitleaks:allow comments
+      # in PR content are disabled outright.
+      - name: Secret scan (gitleaks)
+        id: secretscan
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BASE_SHA: ${{ steps.ctx.outputs.base_sha }}
+          SCAN_BASE: ${{ steps.scan.outputs.scan_base }}
+          SCAN_SCOPE: ${{ inputs.scan_scope }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-security"
+          SCAN="$RUNNER_TEMP/ai-sdlc-scan"
+          REPORT="$WORK/gitleaks-report.json"
+          if [ "$SCAN_SCOPE" = "diff" ] && [ -z "$SCAN_BASE" ]; then
+            # No resolvable fork point → no bounded range → not a pass.
+            printf '{"__error":"PR commit range not resolvable within fetch depth"}\n' > "$REPORT"
+            echo "status=2" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          TRUSTED="$WORK/gitleaks-trusted"; mkdir -p "$TRUSTED"
+          CONFIG="$TRUSTED/gitleaks.toml"
+          gh api "repos/$REPO/contents/.gitleaks.toml?ref=$BASE_SHA" \
+            -H "Accept: application/vnd.github.raw" > "$CONFIG" 2>/dev/null \
+            || cp "$WORK/tools/gitleaks-gate.toml" "$CONFIG"
+          IGNORE="$TRUSTED/.gitleaksignore"
+          gh api "repos/$REPO/contents/.gitleaksignore?ref=$BASE_SHA" \
+            -H "Accept: application/vnd.github.raw" > "$IGNORE" 2>/dev/null \
+            || : > "$IGNORE"
+          # Leaks get a dedicated exit code: gitleaks' default exit 1
+          # conflates "leaks found" with "scanner error", which would turn
+          # a crashed scan into a clean one. Normalized contract for the
+          # evaluator: 0=clean, 1=leaks (report is evidence), 2=failure.
+          args=(git "$SCAN" --redact --exit-code 42
+                --config "$CONFIG"
+                --gitleaks-ignore-path "$IGNORE"
+                --ignore-gitleaks-allow
+                --report-format json --report-path "$REPORT")
+          if [ "$SCAN_SCOPE" = "diff" ]; then
+            args+=(--log-opts "$SCAN_BASE..refs/remotes/scan/head")
+          fi
+          # gitleaks auto-loads <source>/.gitleaksignore regardless of
+          # --gitleaks-ignore-path — drop the PR's own copy so PR content
+          # can never suppress its own findings.
+          rm -f "$SCAN/.gitleaksignore"
+          status=0
+          bash "$WORK/tools/gitleaks.sh" "${args[@]}" || status=$?
+          case "$status" in
+            0)
+              # A clean run may emit no report — normalize to [] only here.
+              [ -f "$REPORT" ] || echo '[]' > "$REPORT"
+              gl=0 ;;
+            42) gl=1 ;;
+            *)
+              printf '{"__error":"gitleaks exited %s — scanner failure, not a clean scan"}\n' \
+                "$status" > "$REPORT"
+              gl=2 ;;
+          esac
+          echo "status=$gl" >> "$GITHUB_OUTPUT"
+
+      # Dependency audit: added direct deps in the bounded PR diff →
+      # registry meta + OSV + license/typosquat/age vetting (dep-update.js
+      # vet-pr). A scanner failure is written as an explicit error record —
+      # the evaluator fails closed on it.
+      - name: Dependency audit (OSV + license + supply-chain vetting)
+        id: deps
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          DIFF_MAX: ${{ inputs.diff_max_bytes }}
+          CONTRACT_JSON: ${{ steps.contract.outputs.json }}
+          SCAN_BASE: ${{ steps.scan.outputs.scan_base }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-security"
+          SCAN="$RUNNER_TEMP/ai-sdlc-scan"
+          if [ -z "$SCAN_BASE" ]; then
+            printf '{"__error":"PR commit range not resolvable — dep audit cannot bound the diff"}\n' > "$WORK/dep-vet.json"
+            exit 0
+          fi
+          rc=0
+          # The diff comes from the local clone — `gh pr diff` can hit the
+          # API's diff-size ceiling (HTTP 406) and strand the PR while the
+          # gate cannot see. Restricted to dep manifests/lockfiles, which
+          # is the only surface vet-pr consumes.
+          git -C "$SCAN" diff "$SCAN_BASE" refs/remotes/scan/head -- \
+            ':(glob)**/package.json' \
+            ':(glob)**/package-lock.json' \
+            ':(glob)**/npm-shrinkwrap.json' \
+            ':(glob)**/yarn.lock' \
+            ':(glob)**/pnpm-lock.yaml' \
+            ':(glob)**/requirements*.txt' \
+            ':(glob)**/pyproject.toml' \
+            ':(glob)**/poetry.lock' \
+            ':(glob)**/Pipfile' \
+            ':(glob)**/Pipfile.lock' \
+            ':(glob)**/go.mod' \
+            ':(glob)**/go.sum' \
+            ':(glob)**/Cargo.toml' \
+            ':(glob)**/Cargo.lock' \
+            ':(glob)**/Gemfile' \
+            ':(glob)**/Gemfile.lock' \
+            ':(glob)**/composer.json' \
+            ':(glob)**/composer.lock' \
+            ':(glob)**/pom.xml' \
+            > "$WORK/diff.patch" 2>"$WORK/diff.err" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            # A diff that could not be produced is not a clean scan — the
+            # evaluator fails closed on the explicit error record.
+            printf '{"__error":"git diff exited %s"}\n' "$rc" > "$WORK/dep-vet.json"
+            exit 0
+          fi
+          # The contract admits no partial dep scan: a diff larger than
+          # the bound would silently drop trailing hunks (added deps past
+          # the cut never reach vet-pr) — fail closed instead.
+          if [ "$(wc -c < "$WORK/diff.patch")" -gt "$DIFF_MAX" ]; then
+            printf '{"__error":"dependency diff exceeds diff_max_bytes (%s); scan incomplete"}\n' \
+              "$DIFF_MAX" > "$WORK/dep-vet.json"
+            exit 0
+          fi
+          head -c "$DIFF_MAX" "$WORK/diff.patch" > "$WORK/diff.bounded.patch"
+          VET_ARGS=(--repo "$REPO" --pr "$PR" --diff "$WORK/diff.bounded.patch")
+          MIN_AGE=$(jq -r '.dependencies.min_release_age_days // ""' <<<"${CONTRACT_JSON:-"{}"}")
+          [ -n "$MIN_AGE" ] && VET_ARGS+=(--min-age-days "$MIN_AGE")
+          rc=0
+          node "$WORK/scripts/dep-update.js" vet-pr "${VET_ARGS[@]}" > "$WORK/dep-vet.json" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            printf '{"__error":"dep-vet exited %s"}\n' "$rc" > "$WORK/dep-vet.json"
+          fi
+
+      # Verdict: findings × resolved security.* contract (+ strictest-wins
+      # input overrides) × pr:risk-* tier → security_gate_outcome. Exits
+      # non-zero on a blocking verdict — the emitted check fails and holds
+      # the merge.
+      - name: Evaluate security gate
+        id: eval
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          CONTRACT_JSON: ${{ steps.contract.outputs.json }}
+          TIER: ${{ steps.ctx.outputs.tier }}
+          GL_STATUS: ${{ steps.secretscan.outputs.status }}
+          IN_ENABLED: ${{ inputs.enabled }}
+          IN_MIN_SEVERITY: ${{ inputs.min_severity }}
+          IN_BLOCK_ON_SECRET: ${{ inputs.block_on_secret }}
+          IN_SEVERITY_MATRIX: ${{ inputs.severity_matrix }}
+          MAX_VULN_LOOKUPS: ${{ inputs.max_vuln_lookups }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ai-sdlc-security"
+          jq '.security // {}' <<<"${CONTRACT_JSON:-"{}"}" > "$WORK/security-contract.json"
+          OVR=$(jq -cn --arg e "$IN_ENABLED" --arg ms "$IN_MIN_SEVERITY" \
+                     --arg bos "$IN_BLOCK_ON_SECRET" --arg sm "$IN_SEVERITY_MATRIX" '
+                {enabled: $e, min_severity: $ms, block_on_secret: $bos,
+                 severity_matrix: ($sm | try fromjson catch {})}
+                | with_entries(select(.value != "" and .value != null))')
+          EVAL_ARGS=(--gitleaks "$WORK/gitleaks-report.json" --gitleaks-status "$GL_STATUS"
+                     --dep-vet "$WORK/dep-vet.json"
+                     --contract "$WORK/security-contract.json"
+                     --overrides "$OVR"
+                     --max-vuln-lookups "$MAX_VULN_LOOKUPS"
+                     --findings "$WORK/gate-result.json"
+                     --summary "$WORK/summary.md"
+                     --github-output)
+          [ -n "$TIER" ] && EVAL_ARGS+=(--tier "$TIER")
+          node "$WORK/scripts/security-gate.js" "${EVAL_ARGS[@]}"
+
+      - name: Human-readable summary
+        if: always()
+        run: |
+          set -euo pipefail
+          S="$RUNNER_TEMP/ai-sdlc-security/summary.md"
+          if [ -f "$S" ]; then cat "$S" >> "$GITHUB_STEP_SUMMARY"; fi
+
+      # Structured findings artifact (spec/run-evidence.md R1/R3): the gate
+      # result, scanner reports and the markdown summary — 14-day retention.
+      - name: Upload security findings artifact
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: ai-sdlc-security-${{ inputs.pr_number }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ai-sdlc-security/gate-result.json
+            ${{ runner.temp }}/ai-sdlc-security/summary.md
+            ${{ runner.temp }}/ai-sdlc-security/gitleaks-report.json
+            ${{ runner.temp }}/ai-sdlc-security/dep-vet.json
+            ${{ runner.temp }}/ai-sdlc-security/pr.json
+          retention-days: 14
+          if-no-files-found: warn
+
+      # Tamper-evident run evidence (issue #196): the gate verdict is hashed
+      # into a chain entry seeded from the last published ledger head on the
+      # PR (recover-prev), sealed and uploaded. Never fails the job.
+      - name: Run ledger — append stage record
+        id: ledger
+        if: always()
+        continue-on-error: true
+        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
+        with:
+          op: append
+          stage: security
+          repo: ${{ inputs.repo }}
+          pr: ${{ inputs.pr_number }}
+          prev: ${{ inputs.ledger_head }}
+          engine: ${{ steps.contract.outputs.engine_name }}
+          recover-prev: 'true'
+          token: ${{ steps.app-token.outputs.token }}
+          data: ${{ toJSON(steps.eval.outputs) }}
+          data-files: |
+            ${{ runner.temp }}/ai-sdlc-security/gate-result.json
+            ${{ runner.temp }}/ai-sdlc-security/gitleaks-report.json
+            ${{ runner.temp }}/ai-sdlc-security/dep-vet.json
+
+      - name: Run ledger — seal + publish
+        id: seal
+        if: always() && steps.ledger.outputs.head != ''
+        continue-on-error: true
+        uses: os-santiago/ai-sdlc/.github/actions/seal-ledger@main
+        with:
+          stage: security
+          signing-key: ${{ secrets.AI_SDLC_LEDGER_KEY }}
+          artifact-name: ai-sdlc-ledger-security-${{ inputs.pr_number }}-${{ github.run_attempt }}
