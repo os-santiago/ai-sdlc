@@ -198,9 +198,9 @@ jobs:
         run: |
           set -euo pipefail
           WORK="$RUNNER_TEMP/ai-sdlc-main-guard"; mkdir -p "$WORK"
-          ENABLED="$(jq -r '.merge.main_guard.enabled // true' <<<"${CONTRACT_JSON:-{}}")"
-          WFS="$(jq -r '[(.merge.main_guard.workflows // ["ci"])[]] | join(",")' <<<"${CONTRACT_JSON:-{}}")"
-          MAXAGE="$(jq -r '.merge.main_guard.max_age_hours // 72' <<<"${CONTRACT_JSON:-{}}")"
+          ENABLED="$(jq -r '.merge.main_guard.enabled // true' <<<"${CONTRACT_JSON:-"{}"}")"
+          WFS="$(jq -r '[(.merge.main_guard.workflows // ["ci"])[]] | join(",")' <<<"${CONTRACT_JSON:-"{}"}")"
+          MAXAGE="$(jq -r '.merge.main_guard.max_age_hours // 72' <<<"${CONTRACT_JSON:-"{}"}")"
           [ -n "$MG_ENABLED_IN" ] && ENABLED="$MG_ENABLED_IN"
           [ -n "$MG_WORKFLOWS_IN" ] && WFS="$MG_WORKFLOWS_IN"
           [ "$MG_MAX_AGE_IN" != "-1" ] && MAXAGE="$MG_MAX_AGE_IN"
@@ -258,10 +258,10 @@ jobs:
           # outputs, but the resolved contract always carries these keys.
           # merge.require_checks unset falls back to the resolved
           # autonomy.merge_requires_checks declaration (resolve.py's rule).
-          REQUIRE_CHECKS="$(jq -r 'if .merge.require_checks == null then (.autonomy.merge_requires_checks // true) else .merge.require_checks end' <<<"${CONTRACT_JSON:-{}}")"
-          REQUIRE_PROV="$(jq -r '.merge.require_pipeline_provenance // true' <<<"${CONTRACT_JSON:-{}}")"
-          ALLOW_AUTHORS="$(jq -c '.merge.allow_authors // []' <<<"${CONTRACT_JSON:-{}}")"
-          PIPELINE_AUTHOR="$(jq -r '.merge.pipeline_author // "ai-sdlc-runtime[bot]"' <<<"${CONTRACT_JSON:-{}}")"
+          REQUIRE_CHECKS="$(jq -r 'if .merge.require_checks == null then (.autonomy.merge_requires_checks // true) else .merge.require_checks end' <<<"${CONTRACT_JSON:-"{}"}")"
+          REQUIRE_PROV="$(jq -r '.merge.require_pipeline_provenance // true' <<<"${CONTRACT_JSON:-"{}"}")"
+          ALLOW_AUTHORS="$(jq -c '.merge.allow_authors // []' <<<"${CONTRACT_JSON:-"{}"}")"
+          PIPELINE_AUTHOR="$(jq -r '.merge.pipeline_author // "ai-sdlc-runtime[bot]"' <<<"${CONTRACT_JSON:-"{}"}")"
           export REQUIRE_CHECKS REQUIRE_PROV ALLOW_AUTHORS PIPELINE_AUTHOR
           # GitHub computes `mergeable` lazily; an idle PR often reports
           # UNKNOWN on first read. Re-poll a few times before deciding.
