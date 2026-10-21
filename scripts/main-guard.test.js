@@ -19,7 +19,7 @@ const {
   main,
 } = require('./main-guard');
 
-const NOW = Date.parse('2026-10-17T12:00:00Z');
+const NOW = Date.now();
 const H = 3600000;
 
 const run = (workflowName, conclusion, ageH = 1, status = 'completed', databaseId = 11) => ({
