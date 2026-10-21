@@ -1,22 +1,17 @@
-# docs/ — Runtime reference & decision records
+# AI-SDLC Documentation
 
-Operational documentation for the AI-SDLC runtime: the `workflow_call`
-stage reference and the architecture decision records (ADRs) that bind it.
+The canonical reference for AI-SDLC: normative spec, runtime workflows, and operational guides.
 
-## Contents
+## Table of Contents
 
-| Artifact | Purpose | Issue |
+| Document | Purpose | Related Issues |
 |---|---|---|
-| [`onboarding.md`](onboarding.md) | One-command install (`gh ai-sdlc init` bootstrap PR) and the shadow-start trust ramp — new repos start at `shadow` and climb on evidence | #207 |
-| [`runtime.md`](runtime.md) | Reusable `workflow_call` stage reference — workflows, contract resolution, inputs/secrets, provider resolution, repair loop | #7 |
-| [`operations.md`](operations.md) | Operations runbook — `scc:*` label state machine, failure modes, artifacts, kill-switch, recovery paths | #143 |
-| [`regression-harness.md`](regression-harness.md) | Golden-fixture replay suite for pipeline decisions (DoR verdicts, merge gate, risk tiers, adapter resolution, contract resolution) — bless/update workflow and case format | #193 |
-| [`self-healing-parity.md`](self-healing-parity.md) | Self-healing parity map — Hermes control-plane feature → GHA-native equivalent → forge-agnostic contract, plus the `scripts/self-heal.js` orchestrator (`plan`/`classify`/`postmortem`/`sentinel`) | #187 |
-| [`spec/interop-posture.md`](../spec/interop-posture.md) | Interop posture — ai-sdlc as the normative governance layer over pluggable engines; the seam (normalized events + headless engine contract), the conformance path, and the non-goals | #216 |
-| [`security-log.md`](security-log.md) | Tamper-evident `SECURITY_LOG.md` — hash-chained security event log, `verify`/seal/cosign attestation, auditor verification steps | #106 |
+| [`spec.md`](spec.md) | Normative specification of the `.ai-sdlc.yaml` contract — schema, stages, defaults, and invariants | #1, #87 |
+| [`runtime.md`](runtime.md) | Runtime workflows and operational model — event-driven execution, stage callers, and deployment topology | #30, #110 |
 | [`security-scanning.md`](security-scanning.md) | Repo self-scanning posture — Dependabot + CodeQL + gitleaks secret scan, and the admin-scope repo-settings toggles that cannot ship in YAML | #105, #125 |
 | [`security/baseline-scan.md`](security/baseline-scan.md) | Gitleaks full-history baseline — findings register, triage statuses (`false-positive` / `historical-revoked`), `.gitleaksignore` procedure | #125 |
 | [`security/gate-calibration.md`](security/gate-calibration.md) | Security-gate calibration — which finding classes and `pr:risk-*` tiers block vs report the `ai-sdlc-security` check, and the org-floor semantics per `security.*` field | #90, #93 |
+| [`metrics/definitions.md`](metrics/definitions.md) | Canonical DORA metric definitions + GitHub event sources for the generated `metrics/dora.md` report — agentic-vs-human classifier, failure/recovery boundaries, external-benchmark caveat | #88, #94 |
 | [`architecture/adr/`](architecture/adr/) | Architecture Decision Records — binding decisions and open proposals: ADR-0001 (homedir cutover), ADR-0004/0005 (k8s control plane, proposed), ADR-0006 (caller topology) | #30, #110 |
 
 ## Repo presentation (locked decisions, #111)
