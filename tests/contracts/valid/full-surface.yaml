@@ -126,6 +126,7 @@ model:
 
 engine:
   name: scc
+  pin: 8430737505d306c3edf921eb5a1aa8a7ddfb4d77   # immutable engine source ref (issue #117)
   max_steps: 200
   max_seconds: 900
   flags: [--no-commit, --audit-log]

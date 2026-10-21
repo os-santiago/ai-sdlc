@@ -193,6 +193,11 @@ engines:
 
 engine:
   name: scc
+  # Engine source pin (issue #117): immutable ref the bootstrap fetches —
+  # os-santiago/sc-agent-cli main HEAD 2026-10-14. Full SHA, not a branch:
+  # the checkout runs beside minted App tokens + provider credentials.
+  # Declared here as the audit record; equals the runtime default.
+  pin: 8430737505d306c3edf921eb5a1aa8a7ddfb4d77
   max_steps: 200
   max_seconds: 900
   flags:

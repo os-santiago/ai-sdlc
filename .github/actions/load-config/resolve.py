@@ -24,6 +24,15 @@ import os
 import re
 import sys
 
+# Runtime-pinned engine source (issue #117): the immutable ref
+# bootstrap-scc fetches when a contract leaves `engine.pin` unset —
+# os-santiago/sc-agent-cli main HEAD as of 2026-10-14. A full commit SHA,
+# never a branch: whatever the ref resolves to runs beside minted App
+# tokens and provider credentials. Contracts may declare engine.pin to
+# move the pin (schema restricts it to a SHA or semver tag); an org
+# baseline may floor-pin it via policy_floor.pin.
+SCC_ENGINE_PIN = "8430737505d306c3edf921eb5a1aa8a7ddfb4d77"
+
 DEFAULTS = {
     # shadow-first default (issue #186): a contract that omits
     # autonomy.level resolves to observe-only and climbs the trust
@@ -87,7 +96,7 @@ DEFAULTS = {
         "no-changes": "scc:no-changes",
     },
     "model": {"primary": "auto/best-coding", "fallback": None, "routing_hints": {}},
-    "engine": {"name": "scc", "max_steps": 200, "max_seconds": 900, "flags": []},
+    "engine": {"name": "scc", "pin": SCC_ENGINE_PIN, "max_steps": 200, "max_seconds": 900, "flags": []},
     "engines": {},
     "escalation": {"label": "needs-human", "contacts": [], "notify_channels": [], "routes": {}},
 }
@@ -531,6 +540,10 @@ def flat_outputs(c):
         # engine.name = adapter id (config/engine-adapters.json registry key);
         # ledger entries and run records carry it as `engine` (issue #230).
         "engine_name": c["engine"]["name"],
+        # engine.pin — immutable source ref (SHA or semver tag) the engine
+        # bootstrap fetches (issue #117); resolves from the contract or
+        # the runtime-pinned default.
+        "engine_pin": c["engine"].get("pin") or "",
         "stage_models": j(stage_models(c)),
         "max_seconds": str(c["engine"]["max_seconds"]),
         "max_steps": str(c["engine"]["max_steps"]),

@@ -95,7 +95,7 @@ resolves it before acting:
 | Stage | Consumes | Overridable inputs |
 |---|---|---|
 | intake | `triggers.issue_label`, `triggers.skip_labels`, `labels.*` | `trigger_label` |
-| implement | `model.primary`, `model.fallback`, `engine.max_seconds`, `engine.max_steps`, `labels.*` | `model`, `fallback_model`, `max_seconds`, `max_steps` |
+| implement | `model.primary`, `model.fallback`, `engine.pin`, `engine.max_seconds`, `engine.max_steps`, `labels.*` | `model`, `fallback_model`, `max_seconds`, `max_steps` |
 | review | `review.mode`, `review.ai_reviewer.model`, `review.max_fix_iterations`, `review.external_reviewer`, `review.adversarial.*`, `merge.skip_labels`, `engine.*`, `escalation.label` | `model`, `external_reviewer`, `max_fix_iterations`, `max_seconds`, `max_steps`, `adversarial_min_tier`, `adversarial_max_attacks` |
 | automerge | `merge.max_repairs`, `merge.pending_max_minutes`, `merge.skip_labels`, `merge.method`, `review.mode`, `review.wait_max_minutes`, `review.external_reviewer`, `escalation.label` | `max_repairs`, `pending_max_minutes`, `merge_method`, `review_wait_minutes` |
 | verify | `verify.commands` | `verify_commands` |
@@ -1568,7 +1568,19 @@ contract resolution lands (#22); the input is the override surface today.
 ## In-run failover (SC_FAILOVER)\n\nThe engine's in-run failover chain (used when the primary model encounters a provider error during a run) is now derived from the resolved contract.\nSpecifically, it is set to the value of `model.fallback` from the contract, provided it is set and not identical to `model.primary`.\nIf the fallback is empty or equals the primary, then no in-run failover is configured (the engine will not retry on provider error beyond the one-shot fallback).\n\nThis replaces the previous hardcoded list of model IDs. The contract resolution step ensures that the failover chain is always validated against the\ncurrent configuration and warns if the failover ID is identical to the primary or a known-unserved id.\n\n[Note: The one-shot fallback (on exit 20/21) is still governed by the `fallback_model` input to the engine step, which is also set from `model.fallback`.\n  However, the in-run failover is a separate mechanism that allows the engine to retry a different model mid-run without exiting and resetting the workspace.]\n## Engine contract
 
 `sc-agent-cli` (`scc`) is built from source on the runner — it is not
-published on npm. Headless flags used: `--prompt-file --no-commit
+published on npm. The build fetches the **pinned** source ref (issue
+#117): `engine.pin` in the contract resolves through load-config to the
+`bootstrap-scc` composite action, which fetches exactly that ref — a
+full commit SHA or a semver tag — from `os-santiago/sc-agent-cli`.
+Mutable refs (branch names, `HEAD`) are rejected twice: by the schema
+pattern on `engine.pin` at contract validation and by the same check
+inside the action before any fetch runs, so an unset or malformed pin
+fails closed rather than silently tracking upstream `main`. Contracts
+that omit `engine.pin` resolve to the runtime-pinned default
+(`SCC_ENGINE_PIN` in `.github/actions/load-config/resolve.py`); an org
+baseline can floor-pin it via `policy_floor.pin`. The checked-out commit
+is emitted as the action's `engine-commit` output for run evidence.
+Headless flags used: `--prompt-file --no-commit
 --audit-log --summary-file --max-seconds --max-steps`. The raw exit-code
 taxonomy is a cross-repo contract: emission semantics are normative in
 [`sc-agent-cli` `docs/exit-codes.md`](https://github.com/os-santiago/sc-agent-cli/blob/main/docs/exit-codes.md)

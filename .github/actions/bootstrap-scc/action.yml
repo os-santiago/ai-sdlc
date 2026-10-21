@@ -1,21 +1,29 @@
 # bootstrap-scc — AI-SDLC engine build + provider config (issue #139)
 #
 # Collapses the "Build scc engine from source" + "Configure scc engine
-# provider" pair copy-pasted into every engine-running stage: shallow-clone
-# the pinned engine, npm ci && npm run build, link it, then render
+# provider" pair copy-pasted into every engine-running stage: fetch the
+# contract-pinned engine ref, npm ci && npm run build, link it, then render
 # $HOME/.sc-agent/config.json — the engine's single source of truth on the
 # runner (never env/CLI-flag overrides).
+#
+# The engine source is pinned (issue #117): the `pin` input carries the
+# resolved `engine.pin` contract field — a full commit SHA or semver tag,
+# never a mutable ref. The checkout runs beside minted App tokens and
+# provider credentials, so whatever the ref resolves to must be deliberate.
 #
 # The render is the canonical permission profile: full tool autoApprove for
 # the headless run, denyPaths hard-walling credentials and SSH material.
 # The provider defaults to GitHub Models (GITHUB_TOKEN); a non-empty
 # model-api-key input switches to a direct provider key.
 name: ai-sdlc bootstrap-scc
-description: Build the scc engine from source and render its provider config.json
+description: Build the scc engine from a pinned source ref and render its provider config.json
 
 inputs:
   model:
     description: 'engine model id (provider-native, e.g. openai/gpt-4o)'
+    required: true
+  pin:
+    description: 'engine source ref — full commit SHA or semver tag (resolved contract `engine.pin`); mutable refs are rejected, empty fails closed'
     required: true
   provider-base-url:
     description: 'OpenAI-compatible inference base URL (caller resolves input → vars.AI_SDLC_PROVIDER_URL → GitHub Models)'
@@ -30,19 +38,40 @@ inputs:
     description: 'engine source checkout dir'
     default: '/tmp/scc-src'
 
+outputs:
+  engine-commit:
+    description: 'resolved commit SHA the engine was built from (run evidence)'
+    value: ${{ steps.build.outputs.commit }}
+
 runs:
   using: composite
   steps:
-    - name: Build scc engine from source
+    - name: Build scc engine from source (pinned ref)
+      id: build
       shell: bash
       env:
         SRC_DIR: ${{ inputs.src-dir }}
+        PIN: ${{ inputs.pin }}
       run: |
         set -euo pipefail
-        git clone --depth 1 https://github.com/os-santiago/sc-agent-cli "$SRC_DIR"
+        # Fail closed on anything but an immutable ref — a mutable branch
+        # (main, HEAD, …) would execute whatever lands upstream next beside
+        # minted App tokens + provider credentials (issue #117). The same
+        # pattern the schema enforces on the `engine.pin` contract field.
+        if ! [[ "$PIN" =~ ^([0-9a-f]{40}|v?[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?)$ ]]; then
+          echo "::error title=ai-sdlc engine pin (scc:config-error)::engine pin '$PIN' is not an immutable ref — expected a 40-char commit SHA or semver tag (contract field: engine.pin)"
+          exit 1
+        fi
+        rm -rf "$SRC_DIR"
+        git init -q "$SRC_DIR"
+        git -C "$SRC_DIR" remote add origin https://github.com/os-santiago/sc-agent-cli
+        git -C "$SRC_DIR" fetch -q --depth 1 origin "$PIN"
+        git -C "$SRC_DIR" checkout -q --detach FETCH_HEAD
         cd "$SRC_DIR" && npm ci && npm run build
         npm link >/dev/null 2>&1 || true
         scc --version
+        echo "scc engine built from pin=$PIN commit=$(git rev-parse HEAD)"
+        echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
     - name: Configure scc engine provider
       shell: bash
