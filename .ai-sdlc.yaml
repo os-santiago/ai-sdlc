@@ -32,7 +32,13 @@ verify:
     # Full repo check (contract schema + secret scan, workflow/action YAML,
     # spec JSON). Same script backs `npm test` / `npm run build`.
     - bash tools/validate-repo.sh
-  required_checks: []
+  # Check-run names that must appear green for automerge (issue #360):
+  # a required name absent from a PR rollup blocks the merge. Limited to
+  # checks that run unconditionally on every PR to main — `contract` (the
+  # ai-sdlc validate suite) and `gitleaks` (secret-scan).
+  required_checks:
+    - contract
+    - gitleaks
   timeout_seconds: 300
 
 # Supply-chain evidence (issue #92, epic #87): the sbom workflow emits a

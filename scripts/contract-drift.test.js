@@ -241,6 +241,29 @@ describe('evaluateDrift — divergence detection', () => {
     assert.ok(f.some((x) => x.check === 'skip-label-violation' && x.subject === 'pr:10'));
   });
 
+  it('annotates merge findings with the merging actor (issue #360)', () => {
+    const m = cleanModel();
+    m.observed.pullRequests[0].statusCheckRollup = [
+      { name: 'contract', conclusion: 'FAILURE' },
+    ];
+    // Gate-executed merge → bare attribution…
+    m.observed.pullRequests[0].mergedBy = { login: 'ai-sdlc-runtime[bot]' };
+    let f = cd.evaluateDrift(m, WINDOW);
+    let hit = f.find((x) => x.check === 'merge-checks-bypassed');
+    assert.ok(hit.detail.includes('(merged by ai-sdlc-runtime[bot])'));
+    assert.ok(!hit.detail.includes('outside the runtime gate'));
+    // …any other credential merged outside the gate — the evidence says so.
+    m.observed.pullRequests[0].mergedBy = { login: 'some-user' };
+    f = cd.evaluateDrift(m, WINDOW);
+    hit = f.find((x) => x.check === 'merge-checks-bypassed');
+    assert.ok(hit.detail.includes('(merged by some-user — outside the runtime gate)'));
+    // No actor data → no annotation.
+    delete m.observed.pullRequests[0].mergedBy;
+    f = cd.evaluateDrift(m, WINDOW);
+    hit = f.find((x) => x.check === 'merge-checks-bypassed');
+    assert.ok(!hit.detail.includes('(merged by'));
+  });
+
   it('flags issues holding forbidden label pairs (declared ∪ skip_labels×trigger)', () => {
     const m = cleanModel();
     m.observed.issues = [

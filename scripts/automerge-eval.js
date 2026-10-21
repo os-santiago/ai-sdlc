@@ -20,6 +20,11 @@
 //      PENDING_MAX → repair-stalled; distinct signatures >= MAX_REPAIRS →
 //      repairs-exhausted)
 //   pending checks past cap            → escalated (pending-timeout)
+//   unknown check bucket (issue #360)  → held, escalated past cap —
+//     fail-closed: unknown/error states never count as green
+//   required check absent from rollup  → held, escalated past cap
+//     (verify.required_checks; issue #360 — a check that never ran is a
+//      missing signal, not a green one)
 //   MERGEABLE                          → review gate (issue #28):
 //     external reviewer blocking       → held then escalated at wait cap
 //     verdict=blocked                  → held while fix pass runs /
@@ -45,6 +50,9 @@
 //   (JSON array), ESCALATION, REVIEW_MODE, REVIEW_WAIT, EXT
 //   Hardening gates (issues #119/#120): REQUIRE_PROV, REQUIRE_CHECKS,
 //   PIPELINE_AUTHOR, ALLOW_AUTHORS (JSON array), REPO
+//   Issue #360: REQUIRED_CHECKS (JSON array) + CONTRACT_JSON fallback —
+//   when a flat output is absent/empty the resolved contract body supplies
+//   merge.skip_labels and verify.required_checks.
 // Outputs append to $GITHUB_OUTPUT when set: action, reason.
 'use strict';
 
@@ -53,6 +61,23 @@ const fs = require('fs');
 const REPAIR_MARK = /<!-- ai-sdlc:repair-signal sha=([0-9a-f]+) -->/;
 const VERDICT_MARK = /<!-- ai-sdlc:review sha=([0-9a-f]{7,40}) verdict=(clean|blocked|inconclusive) -->/;
 const FIX_MARK = /<!-- ai-sdlc:review-fix attempt=(\d+) sha=([0-9a-f]{7,40})/;
+
+// Green buckets per `gh pr checks --json bucket` — pass and skipping (a
+// legitimately skipped check is neutral, matching GitHub protection
+// semantics). fail/cancel/pending have their own rows; anything else is
+// an unknown signal (issue #360 — fail-closed, never counts as green).
+const GREEN_BUCKETS = new Set(['pass', 'skipping']);
+const FAILING_BUCKETS = new Set(['fail', 'cancel']);
+
+function parseJsonList(v) {
+  try { const p = JSON.parse(v || '[]'); return Array.isArray(p) ? p : []; }
+  catch (err) { return []; }
+}
+
+function safeJsonObj(v) {
+  try { const p = JSON.parse(v || '{}'); return p && typeof p === 'object' ? p : {}; }
+  catch (err) { return {}; }
+}
 
 // Core decision table. `env` defaults to process.env so tests can inject a
 // hermetic map; `nowMs` pins the clock for fixture-driven rows.
@@ -65,7 +90,19 @@ function evaluateMergeGate({ pr, checks, trustedComments, extReviews, env, nowMs
   extReviews = Array.isArray(extReviews) ? extReviews : [];
 
   const labels = (pr.labels || []).map((l) => l.name);
-  const SKIP = [...JSON.parse(e.SKIP_LABELS || '[]'), e.ESCALATION].filter(Boolean);
+  // Resolved contract body — the flat step outputs (SKIP_LABELS,
+  // REQUIRED_CHECKS) may be absent on a pinned load-config that predates
+  // them; the resolved JSON always carries the keys (issue #360).
+  const contractJson = safeJsonObj(e.CONTRACT_JSON);
+  const envSkips = parseJsonList(e.SKIP_LABELS);
+  const contractSkips = ((contractJson.merge || {}).skip_labels) || [];
+  const SKIP = [...(envSkips.length ? envSkips : contractSkips), e.ESCALATION].filter(Boolean);
+  // verify.required_checks (schema: "check-run names that must be green
+  // for automerge") — a declared name absent from the rollup is a missing
+  // signal, never a green one.
+  const envRequired = parseJsonList(e.REQUIRED_CHECKS);
+  const contractRequired = ((contractJson.verify || {}).required_checks) || [];
+  const REQUIRED = envRequired.length ? envRequired : contractRequired;
 
   // Provenance gate (issue #119): with merge.require_pipeline_provenance
   // (default on) only a same-repo head authored by the pipeline app or
@@ -98,8 +135,17 @@ function evaluateMergeGate({ pr, checks, trustedComments, extReviews, env, nowMs
   else if (labels.includes('pr:risk-critical') && !labels.includes('pr:risk-accepted')) { action = 'held'; reason = 'risk-critical-unaccepted'; }
   else if (pr.mergeable === 'CONFLICTING') { action = 'escalated'; reason = 'conflict'; }
   else {
-    const failing = checks.filter((c) => c.bucket === 'fail' || c.bucket === 'cancel');
+    const failing = checks.filter((c) => FAILING_BUCKETS.has(c.bucket));
     const pending = checks.filter((c) => c.bucket === 'pending');
+    // Fail-closed (issue #360): a bucket outside the known green/failing/
+    // pending set is an unknown signal — it holds the merge like a pending
+    // check and escalates past the same cap, never counts as green.
+    const unknown = checks.filter((c) => !GREEN_BUCKETS.has(c.bucket)
+      && !FAILING_BUCKETS.has(c.bucket) && c.bucket !== 'pending');
+    // A required check that never reports is invisible to the bucket rows
+    // above — its absence must block the merge just like a failure.
+    const present = new Set(checks.map((c) => c.name));
+    const missingRequired = REQUIRED.filter((n) => !present.has(n));
     const ageMin = (now - new Date(pr.createdAt)) / 60000;
     // Repair signals carry a per-head-SHA marker so repeated polls
     // (scheduled sweep) neither spam nor loop forever. Trusted
@@ -121,6 +167,8 @@ function evaluateMergeGate({ pr, checks, trustedComments, extReviews, env, nowMs
     }
     else if (pending.length && ageMin > Number(e.PENDING_MAX)) { action = 'escalated'; reason = 'pending-timeout'; }
     else if (pending.length) { action = 'held'; reason = 'pending'; }
+    else if (unknown.length && ageMin > Number(e.PENDING_MAX)) { action = 'escalated'; reason = `check-state-unknown:${unknown.map((c) => c.name).join(',')}`; }
+    else if (unknown.length) { action = 'held'; reason = `check-state-unknown:${unknown.map((c) => c.name).join(',')}`; }
     else if (pr.mergeable === 'MERGEABLE') {
       const base = checks.length ? 'green' : 'no-checks';
       // Review gate (issue #28): verdict markers live on the PR as
@@ -158,6 +206,15 @@ function evaluateMergeGate({ pr, checks, trustedComments, extReviews, env, nowMs
       if (!checks.length && REQ_CHECKS) {
         if (headMin > Number(e.PENDING_MAX)) { action = 'escalated'; reason = 'no-checks'; }
         else { action = 'held'; reason = 'no-checks'; }
+      }
+      else if (missingRequired.length) {
+        // Required check absent from the rollup (issue #360): the check
+        // never reported — a missing signal, not a green one. Held while
+        // the head is young (the run may still be registering), escalated
+        // past the pending cap like the zero-checks row.
+        const names = missingRequired.join(',');
+        if (headMin > Number(e.PENDING_MAX)) { action = 'escalated'; reason = `required-check-missing:${names}`; }
+        else { action = 'held'; reason = `required-check-missing:${names}`; }
       }
       else if (REVIEW_ON && extBlocking) {
         // The external reviewer wins over the AI verdict (fail-safe);

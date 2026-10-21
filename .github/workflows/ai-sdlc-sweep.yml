@@ -121,6 +121,7 @@ jobs:
       max_repairs: ${{ steps.cfg.outputs.max_repairs }}
       pending_max_minutes: ${{ steps.cfg.outputs.pending_max_minutes }}
       merge_method: ${{ steps.cfg.outputs.merge_method }}
+      skip_labels: ${{ steps.cfg.outputs.skip_labels }}
     steps:
       # Pre-dispatch authorization gate (issue #172): one engaged channel —
       # vars.AI_SDLC_KILL/AI_SDLC_OFF, or an open ai-sdlc:off issue in the
@@ -150,6 +151,9 @@ jobs:
             echo "max_repairs=$(yq -r ".merge.max_repairs // 3" .ai-sdlc.yaml)"
             echo "pending_max_minutes=$(yq -r ".merge.pending_max_minutes // 60" .ai-sdlc.yaml)"
             echo "merge_method=$(yq -r ".merge.method // \"squash\"" .ai-sdlc.yaml)"
+            # Contract-derived skip set (issue #360): the prefilter must track
+            # merge.skip_labels, not a hardcoded copy that can drift from it.
+            echo "skip_labels=$(yq -r '(.merge.skip_labels // ["needs-human","hold","do-not-merge","wip"]) | join(",")' .ai-sdlc.yaml)"
           } >> "$GITHUB_OUTPUT"
 
       - name: Enumerate pipeline PRs
@@ -161,7 +165,7 @@ jobs:
           MAX_PRS: ${{ inputs.max_prs || 20 }}
           PIPELINE_BRANCH_RE: '^(feat|fix)/issue-[0-9]+'
           PIPELINE_LABEL: 'ai-sdlc'
-          SKIP_LABELS: 'needs-human,hold,do-not-merge,wip'
+          SKIP_LABELS: ${{ steps.cfg.outputs.skip_labels }}
         run: |
           set -euo pipefail
           MAX=$(( MAX_PRS > 20 ? 20 : MAX_PRS ))
