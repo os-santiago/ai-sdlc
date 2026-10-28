@@ -43,7 +43,8 @@ const indexOf = (needle) => {
 const engineIdx = indexOf('id: engine');
 const readMintIdx = indexOf('id: app-token-read');
 const writeMintIdx = indexOf('id: app-token-write');
-const APPLY_PUBLISH_RE = /uses: (?:\.\/|os-santiago\/ai-sdlc\/)\.github\/actions\/apply-publish/;
+const APPLY_PUBLISH_RE =
+  /uses: (?:\.\/\.github\/actions\/apply-publish(?=\s|$)|os-santiago\/ai-sdlc\/\.github\/actions\/apply-publish@[^\s]+(?=\s|$))/;
 const applyIdx = steps.findIndex((c) => APPLY_PUBLISH_RE.test(c));
 assert.ok(applyIdx !== -1, 'no step references the apply-publish action');
 const probeIdx = indexOf('Verify read-only forge credential');
