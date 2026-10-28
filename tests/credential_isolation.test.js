@@ -43,7 +43,10 @@ const indexOf = (needle) => {
 const engineIdx = indexOf('id: engine');
 const readMintIdx = indexOf('id: app-token-read');
 const writeMintIdx = indexOf('id: app-token-write');
-const applyIdx = indexOf('uses: ./.github/actions/apply-publish');
+const APPLY_PUBLISH_RE =
+  /uses: (?:\.\/\.github\/actions\/apply-publish(?=\s|$)|os-santiago\/ai-sdlc\/\.github\/actions\/apply-publish@[^\s]+(?=\s|$))/;
+const applyIdx = steps.findIndex((c) => APPLY_PUBLISH_RE.test(c));
+assert.ok(applyIdx !== -1, 'no step references the apply-publish action');
 const probeIdx = indexOf('Verify read-only forge credential');
 
 test('read-scoped token minted before checkout/engine; write-scoped minted only after the engine', () => {
@@ -100,7 +103,7 @@ test('every forge write goes through a deterministic post-script step under FORG
     if (!/gh (issue|pr|label) |git .*push/.test(b)) continue; // forge-mutating chunk
     assert.ok(
       /FORGE_TOKEN_WRITE: \$\{\{ steps\.app-token-write\.outputs\.token \}\}/.test(b) ||
-        /uses: \.\/\.github\/actions\/apply-publish/.test(b),
+        APPLY_PUBLISH_RE.test(b),
       `forge write outside the post-script boundary:\n${c.slice(0, 200)}`);
   }
 });

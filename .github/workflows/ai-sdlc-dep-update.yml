@@ -448,7 +448,7 @@ jobs:
         id: ledger
         if: always() && steps.cfg.outputs.action != ''
         continue-on-error: true
-        uses: ./.github/actions/run-ledger
+        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
         with:
           op: append
           stage: dep-update
@@ -464,7 +464,7 @@ jobs:
         id: seal
         if: always() && steps.ledger.outputs.head != ''
         continue-on-error: true
-        uses: ./.github/actions/run-ledger
+        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
         with:
           op: seal
           stage: dep-update

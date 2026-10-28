@@ -405,7 +405,7 @@ jobs:
         id: ledger
         if: always()
         continue-on-error: true
-        uses: ./.github/actions/run-ledger
+        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
         with:
           op: append
           stage: review-fix

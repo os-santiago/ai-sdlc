@@ -79,7 +79,7 @@ jobs:
         id: ledger
         if: always()
         continue-on-error: true
-        uses: ./.github/actions/run-ledger
+        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
         with:
           op: append
           stage: kill-switch
@@ -93,7 +93,7 @@ jobs:
         id: seal
         if: always() && steps.ledger.outputs.head != ''
         continue-on-error: true
-        uses: ./.github/actions/run-ledger
+        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
         with:
           op: seal
           stage: kill-switch
