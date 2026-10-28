@@ -799,6 +799,7 @@ jobs:
           ISSUE: ${{ inputs.issue_number }}
           CODE: ${{ steps.engine.outputs.exit_code }}
           APPLIED: ${{ steps.apply.outputs.applied }}
+          PUBLISH: ${{ steps.pr.outcome }}
           MODEL: ${{ steps.engine.outputs.model }}
           PRIMARY_MODEL: ${{ steps.contract.outputs.model_primary }}
           PRIMARY_EXIT: ${{ steps.engine.outputs.primary_exit }}
@@ -824,7 +825,13 @@ jobs:
           }
           case "$CODE" in
             0)
-              if [ "$APPLIED" = "true" ]; then
+              if [ "$APPLIED" = "true" ] && [ "$PUBLISH" != "success" ]; then
+                # Patch applied but apply-publish never completed (steps.pr
+                # failed or was skipped) — surface as failed, never a
+                # phantom pr-opened (issue #212 follow-up).
+                gh issue edit "$ISSUE" -R "$REPO" --add-label "$L_FAILED" || true
+                gh issue comment "$ISSUE" -R "$REPO" --body "🛡️ **AI-SDLC implement — publish failed:** the patch was applied but no branch/PR was created (publish step outcome: ${PUBLISH:-unknown}). Run: $RUN_URL" || true
+              elif [ "$APPLIED" = "true" ]; then
                 gh issue edit "$ISSUE" -R "$REPO" --remove-label "$L_QUEUED" --add-label "$L_PR_OPENED" || true
               else
                 # Engine claimed success but the deterministic apply gate
