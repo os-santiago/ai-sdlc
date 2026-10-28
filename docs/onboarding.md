@@ -221,5 +221,6 @@ and let evidence drive promotion.
   gates, demotion triggers, freeze
 - [../spec/labels.md](../spec/labels.md) — the label set the PR
   bootstraps
-- [positioning.md](positioning.md) — why the contract, not the engine,
-  is the product surface
+- [../spec/interop-posture.md](../spec/interop-posture.md) — why the
+  contract, not the engine, is the product surface (the old
+  [positioning.md](positioning.md) is a redirect stub)

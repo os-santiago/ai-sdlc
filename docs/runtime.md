@@ -1566,7 +1566,28 @@ quotes it):
 `fallback_model` will be fed from `.ai-sdlc.yaml` `model.fallback` once
 contract resolution lands (#22); the input is the override surface today.
 
-## In-run failover (SC_FAILOVER)\n\nThe engine's in-run failover chain (used when the primary model encounters a provider error during a run) is now derived from the resolved contract.\nSpecifically, it is set to the value of `model.fallback` from the contract, provided it is set and not identical to `model.primary`.\nIf the fallback is empty or equals the primary, then no in-run failover is configured (the engine will not retry on provider error beyond the one-shot fallback).\n\nThis replaces the previous hardcoded list of model IDs. The contract resolution step ensures that the failover chain is always validated against the\ncurrent configuration and warns if the failover ID is identical to the primary or a known-unserved id.\n\n[Note: The one-shot fallback (on exit 20/21) is still governed by the `fallback_model` input to the engine step, which is also set from `model.fallback`.\n  However, the in-run failover is a separate mechanism that allows the engine to retry a different model mid-run without exiting and resetting the workspace.]\n## Engine contract
+## In-run failover (SC_FAILOVER)
+
+The engine's in-run failover chain (used when the primary model
+encounters a provider error during a run) is derived from the resolved
+contract. Specifically, it is set to the value of `model.fallback` from
+the contract, provided it is set and not identical to `model.primary`.
+If the fallback is empty or equals the primary, no in-run failover is
+configured (the engine will not retry on provider error beyond the
+one-shot fallback).
+
+This replaces the previous hardcoded list of model IDs. The contract
+resolution step ensures the failover chain is always validated against
+the current configuration and warns if the failover ID is identical to
+the primary or a known-unserved id.
+
+Note: the one-shot fallback (on exit 20/21) is still governed by the
+`fallback_model` input to the engine step, which is also set from
+`model.fallback`. However, the in-run failover is a separate mechanism
+that allows the engine to retry a different model mid-run without
+exiting and resetting the workspace.
+
+## Engine contract
 
 `sc-agent-cli` (`scc`) is built from source on the runner — it is not
 published on npm. The build fetches the **pinned** source ref (issue
