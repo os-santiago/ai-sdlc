@@ -23,8 +23,9 @@ autonomy driven by a declarative per-repo contract (`.ai-sdlc.yaml`).
 │ THIS REPO — spec + runtime (the missing piece)          │
 │   spec/:  .ai-sdlc.yaml schema · label taxonomy ·       │
 │           trust ladder · DoR · injection defense        │
-│   actions/: reusable GH workflows (intake → implement → │
-│             ci-repair → automerge → verify)             │
+│   .github/workflows/: reusable stages (                 │
+│             intake → implement → review → automerge →   │
+│             ci-repair → verify)                         │
 ├─────────────────────────────────────────────────────────┤
 │ engine — the agentic execution loop                     │
 │   os-santiago/sc-agent-cli (provider-agnostic CLI)      │

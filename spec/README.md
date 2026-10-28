@@ -9,8 +9,7 @@ implements via `.ai-sdlc.yaml` at its root.
 |---|---|---|
 | [`ai-sdlc.schema.json`](ai-sdlc.schema.json) | JSON Schema (draft 2020-12) for `.ai-sdlc.yaml` — repo contract: verify commands, autonomy ceiling, review policy, labels, model routing, escalation | #2 |
 | [`labels.md`](labels.md) | Issue-label state machine — intake trio exclusivity, transition table, veto-pair matrix (`labels.state_machine`), janitor repair rule; `scc:*` flow vs `pr:*` states | #18 |
-| [`trust-ladder.md`](trust-ladder.md) | Six-level progressive autonomy: levels, four-signal promotion evidence, per-rung thresholds, contract-PR promotion/demotion, freeze | #5, #179 |
-| [`trust-ladder.md`](trust-ladder.md) | Six-level progressive autonomy: levels, promotion gates, demotion triggers, freeze, shadow-first self-accrediting onboarding | #5 |
+| [`trust-ladder.md`](trust-ladder.md) | Six-level progressive autonomy: levels, four-signal promotion evidence, per-rung thresholds, contract-PR promotion/demotion, freeze, shadow-first self-accrediting onboarding | #5, #179 |
 | [`definition-of-ready.md`](definition-of-ready.md) | DoR fields, AC format, atomicity rules, R1–R6 machine-checkable validation | #1 |
 | [`risk-taxonomy.md`](risk-taxonomy.md) | pr:risk-* tiers + required-evidence matrix + merge-gate decision table | #3 |
 | [`injection-defense.md`](injection-defense.md) | Trust-boundary model, fence+scrub convention, forbidden-action rules | #4 |
@@ -21,6 +20,11 @@ implements via `.ai-sdlc.yaml` at its root.
 | [`model-routing.md`](model-routing.md) | Task-class → model routing: `engines.<stage>.model`, the resolution chain, OmniRoute/fallback rules, benchmark-informed per-class defaults | #171 |
 | [`kill-switch.md`](kill-switch.md) | Org kill-switch — one action revokes autonomy fleet-wide: signal channels (variable / `ai-sdlc:off` control issue), fail-closed verdict, enforced-stage table, audit contract | #172 |
 | [`run-evidence.md`](run-evidence.md) | Canonical run-evidence layout — `${{ runner.temp }}/ai-sdlc-<stage>/` evidence dirs, `ai-sdlc-<stage>-<subject>` artifact naming, enumerated workspace classes; enforced by `tools/check-run-evidence.py` | #141 |
+| [`threat-model.md`](threat-model.md) | Normative threat model — ranked threat classes, attack vectors, defenses mapped to runtime controls | — |
+| [`postmortem-lifecycle.md`](postmortem-lifecycle.md) | Lifecycle and behavior of postmortem issues | — |
+| [`normalized-event-versioning.md`](normalized-event-versioning.md) | Semver rules for the normalized event schema (`normalized-event.schema.json`) — forge-adapter compatibility guarantees | — |
+| [`normalized-event.schema.json`](normalized-event.schema.json) | JSON Schema for the normalized event — the seam forge adapters emit and the runtime consumes | — |
+| [`generated-artifact-publish-contract.md`](generated-artifact-publish-contract.md) | Publish contract for generated artifacts — diff gating, rolling-PR semantics, budget/circuit-breaker | — |
 
 ## Versioning
 
