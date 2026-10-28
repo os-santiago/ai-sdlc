@@ -779,7 +779,7 @@ jobs:
       - name: Apply diff + publish PR (deterministic post-script)
         id: pr
         if: steps.engine.outputs.exit_code == '0' && steps.apply.outputs.applied == 'true' && steps.propgate.outputs.escalated != 'true'
-        uses: ./.github/actions/apply-publish
+        uses: os-santiago/ai-sdlc/.github/actions/apply-publish@main
         with:
           repo: ${{ inputs.repo }}
           issue: ${{ inputs.issue_number }}
@@ -910,7 +910,7 @@ jobs:
         id: ledger
         if: always()
         continue-on-error: true
-        uses: ./.github/actions/run-ledger
+        uses: os-santiago/ai-sdlc/.github/actions/run-ledger@main
         with:
           op: append
           stage: implement
