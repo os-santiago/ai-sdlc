@@ -750,6 +750,7 @@ jobs:
           FORGE_TOKEN_WRITE: ${{ steps.app-token-write.outputs.token }}
           ISSUE: ${{ inputs.issue_number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SAN: ${{ runner.temp }}/ai-sdlc-sanitize/scripts/injection_defense.js
         run: |
           set -euo pipefail
           [ -f "$SAN" ] || exit 0
@@ -888,6 +889,8 @@ jobs:
       - name: Redact run artifacts (output-side redaction)
         if: always()
         continue-on-error: true
+        env:
+          SAN: ${{ runner.temp }}/ai-sdlc-sanitize/scripts/injection_defense.js
         run: |
           set -euo pipefail
           [ -f "$SAN" ] || exit 0
