@@ -1,6 +1,7 @@
 package authority
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"math"
 	"os"
@@ -285,5 +286,18 @@ func TestExplicitPolicyFields(t *testing.T) {
 	duplicate := strings.Replace(string(raw), `"freeze":false`, `"freeze":true,"Freeze":false`, 1)
 	if _, err := ParsePolicy([]byte(duplicate)); err == nil {
 		t.Fatal("case-insensitive duplicate accepted")
+	}
+}
+
+func TestVerificationKeyAliasesRejected(t *testing.T) {
+	p, _ := fixture(t)
+	// Both textual encodings denote the same public key in a permissive decoder.
+	canonical := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	for _, alias := range []string{canonical[:10] + "\r\n" + canonical[10:], canonical[:42] + "B="} {
+		p.Keys["worker-1"] = PublicKey{Role: "worker", Value: canonical}
+		p.Keys["relay-1"] = PublicKey{Role: "relay", Value: alias}
+		if err := p.Validate(); err == nil {
+			t.Fatal("shared key alias accepted across roles")
+		}
 	}
 }

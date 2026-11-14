@@ -142,13 +142,13 @@ func (p Policy) Validate() error {
 	keyOwners := map[string]string{}
 	for id, key := range p.Keys {
 		decoded, err := base64.StdEncoding.Strict().DecodeString(key.Value)
-		if !keyIDPattern.MatchString(id) || !roles[key.Role] || err != nil || len(decoded) != ed25519.PublicKeySize {
+		if !keyIDPattern.MatchString(id) || !roles[key.Role] || err != nil || len(decoded) != ed25519.PublicKeySize || base64.StdEncoding.EncodeToString(decoded) != key.Value {
 			return errors.New("invalid component verification key")
 		}
-		if owner, found := keyOwners[key.Value]; found && owner != key.Role {
+		if owner, found := keyOwners[string(decoded)]; found && owner != key.Role {
 			return errors.New("verification key shared across roles")
 		}
-		keyOwners[key.Value] = key.Role
+		keyOwners[string(decoded)] = key.Role
 	}
 	seen := map[string]bool{}
 	for _, grant := range p.Grants {
