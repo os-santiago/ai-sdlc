@@ -3,6 +3,30 @@
 `ai-sdlc` is the Kubernetes/OpenShift runtime and portable contract for
 bounded, evidence-driven AI-assisted software delivery.
 
+## Install locally with kind and Helm
+
+On Linux amd64 with Python 3.11+ and Docker or Podman:
+
+```bash
+git clone https://github.com/os-santiago/ai-sdlc.git
+cd ai-sdlc
+./install.sh plan
+./install.sh local
+./install.sh status
+```
+
+One entrypoint installs verified Kubernetes clients, creates kind and applies
+the versioned Helm chart. Each of the five runtime services has its own
+container and Deployment; PostgreSQL uses persistent storage. Images come
+from [Quay](https://quay.io/repository/os-santiago/ai-sdlc) and are pinned by
+digest in Git. Reapply the same command to reconcile desired state.
+
+This first release installs **maintenance mode**, with delivery actions
+disabled. It verifies infrastructure installation, not autonomous
+issue-to-production delivery. No GitOps controller is installed; reconciliation
+is explicit through Helm. See [installation and configuration](docs/installation.md)
+for credentials, supported scope, limitations and recovery guidance.
+
 ## GitHub Actions deprecation
 
 The GitHub Actions AI-SDLC runtime, reusable stages, bootstrap tooling, and its
@@ -20,7 +44,8 @@ The Kubernetes/OpenShift runtime is now the sole execution path. See
 - `runtime/k8s/` — the canonical Go control plane, deployment manifests, and
   component tests.
 - `examples/` — starter `.ai-sdlc.yaml` contracts.
-- `.github/workflows/` — repository quality and security validation only;
+- `.github/workflows/` — repository quality/security validation and component
+  image construction/publication; no AI-SDLC orchestration;
   see [quality checks](docs/quality-checks.md) for CI and local commands.
 - `.github/ISSUE_TEMPLATE/` and `.github/CODEOWNERS` — repository governance,
   not runtime execution.

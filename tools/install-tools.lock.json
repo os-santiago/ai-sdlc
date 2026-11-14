@@ -1,0 +1,21 @@
+{
+  "kind": {
+    "version": "0.33.0",
+    "url": "https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64",
+    "sha256": "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d",
+    "binarySha256": "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d"
+  },
+  "helm": {
+    "version": "4.3.2",
+    "url": "https://get.helm.sh/helm-v4.3.2-linux-amd64.tar.gz",
+    "sha256": "d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983",
+    "member": "linux-amd64/helm",
+    "binarySha256": "876242ea89b1fc07692e179d9abdc47028979fb64b20d85448e85193c8b04931"
+  },
+  "kubectl": {
+    "version": "1.35.8",
+    "url": "https://dl.k8s.io/release/v1.35.8/bin/linux/amd64/kubectl",
+    "sha256": "874d5e72dbb819f43cff16bcd1e4f8bac5b7f2361fe1e55049b0a6c676fb0cbf",
+    "binarySha256": "874d5e72dbb819f43cff16bcd1e4f8bac5b7f2361fe1e55049b0a6c676fb0cbf"
+  }
+}

@@ -12,9 +12,9 @@ spec:
   {{- end }}
   to:
     kind: Service
-    name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}
+    name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-admission-controller
   port:
-    targetPort: admission
+    targetPort: http
   tls:
     termination: edge
     insecureEdgeTerminationPolicy: Redirect

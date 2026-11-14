@@ -35,11 +35,15 @@ func main() {
 	relay := &outbox.Relay{DB: db, Routes: routesFromEnv()}
 	interval := intervalFromEnv()
 
-	go func() {
-		if err := relay.Run(ctx, interval); err != nil {
-			log.Fatalf("relay: poll loop stopped: %v", err)
-		}
-	}()
+	if !service.MaintenanceMode() {
+		go func() {
+			if err := relay.Run(ctx, interval); err != nil {
+				log.Fatalf("relay: poll loop stopped: %v", err)
+			}
+		}()
+	} else {
+		log.Print("relay: maintenance mode; command delivery disabled")
+	}
 
 	err = service.Run(service.Metadata{
 		Name:           "relay",

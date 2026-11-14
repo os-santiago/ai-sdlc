@@ -18,7 +18,7 @@ func main() {
 	if url := os.Getenv("DATABASE_URL"); url != "" {
 		db, err := store.Open(ctx, url)
 		if err != nil {
-			log.Printf("orchestrator: database unavailable, running without persistence (event ingress disabled): %v", err)
+			log.Fatalf("orchestrator: configured database unavailable; refusing stateless fallback: %v", err)
 		} else {
 			if err := db.Migrate(ctx); err != nil {
 				log.Fatalf("orchestrator: migrate database: %v", err)

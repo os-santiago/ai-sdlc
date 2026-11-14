@@ -44,12 +44,9 @@ type DB struct {
 }
 
 // Open connects to Postgres and verifies the connection with a bounded ping.
-// Callers should treat a non-nil error as "run without persistence" at
-// their own discretion (every component in this runtime degrades to
-// synchronous-only behavior when its *DB is nil — see each component's
-// Deps type) rather than crash the process, matching
-// internal/contract.LoadFromEnv's "degrade, never crash a running pod"
-// posture.
+// Components configured with DATABASE_URL must fail startup on error.
+// A nil dependency is reserved for deliberately isolated synchronous tests;
+// an unavailable configured store must not become a stateless installation.
 func Open(ctx context.Context, databaseURL string) (*DB, error) {
 	pool, err := sql.Open("pgx", databaseURL)
 	if err != nil {
@@ -81,7 +78,17 @@ func (db *DB) Close() error {
 // skipped, and CREATE TABLE IF NOT EXISTS statements make each file
 // idempotent even without the tracking table.
 func (db *DB) Migrate(ctx context.Context) error {
-	if _, err := db.Pool.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+	// Serialize startup migrations across independently deployed components.
+	conn, err := db.Pool.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("migration connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(73421019)`); err != nil {
+		return fmt.Errorf("migration lock: %w", err)
+	}
+	defer conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(73421019)`)
+	if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		filename   text PRIMARY KEY,
 		applied_at timestamptz NOT NULL DEFAULT now()
 	)`); err != nil {
@@ -102,7 +109,7 @@ func (db *DB) Migrate(ctx context.Context) error {
 
 	for _, name := range names {
 		var applied bool
-		row := db.Pool.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE filename = $1)`, name)
+		row := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE filename = $1)`, name)
 		if err := row.Scan(&applied); err != nil {
 			return fmt.Errorf("check migration %s: %w", name, err)
 		}
@@ -115,7 +122,7 @@ func (db *DB) Migrate(ctx context.Context) error {
 			return fmt.Errorf("read migration %s: %w", name, err)
 		}
 
-		tx, err := db.Pool.BeginTx(ctx, nil)
+		tx, err := conn.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("begin migration %s: %w", name, err)
 		}

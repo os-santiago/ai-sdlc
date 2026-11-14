@@ -1,0 +1,633 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "fullnameOverride": {
+      "type": "string"
+    },
+    "nameOverride": {
+      "type": "string"
+    },
+    "namespace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "create",
+        "name"
+      ]
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "pullPolicy": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository",
+        "tag",
+        "pullPolicy"
+      ]
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "create",
+        "name"
+      ]
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "maintenance"
+          ]
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    },
+    "logLevel": {
+      "type": "string"
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "inline": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "inline"
+      ]
+    },
+    "postgres": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "local": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "image": {
+              "type": "string"
+            },
+            "storageSize": {
+              "type": "string"
+            },
+            "storageClass": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "enabled",
+            "image",
+            "storageSize",
+            "storageClass"
+          ]
+        },
+        "cloudNativePG": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "clusterName": {
+              "type": "string"
+            },
+            "instances": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "storageSize": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "enabled",
+            "clusterName",
+            "instances",
+            "storageSize"
+          ]
+        },
+        "databaseURLSecret": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "key"
+          ]
+        }
+      },
+      "required": [
+        "local",
+        "cloudNativePG",
+        "databaseURLSecret"
+      ]
+    },
+    "engine": {
+      "type": "string"
+    },
+    "modelProvider": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "baseURL": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "workspaceDir": {
+          "type": "string"
+        },
+        "apiKeySecret": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "key"
+          ]
+        }
+      },
+      "required": [
+        "baseURL",
+        "model",
+        "workspaceDir",
+        "apiKeySecret"
+      ]
+    },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "admissionController": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^(|sha256:[a-f0-9]{64})$"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory"
+                  ]
+                },
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory"
+                  ]
+                }
+              },
+              "required": [
+                "requests",
+                "limits"
+              ]
+            }
+          },
+          "required": [
+            "name",
+            "digest",
+            "port",
+            "resources"
+          ]
+        },
+        "orchestrator": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^(|sha256:[a-f0-9]{64})$"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory"
+                  ]
+                },
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory"
+                  ]
+                }
+              },
+              "required": [
+                "requests",
+                "limits"
+              ]
+            }
+          },
+          "required": [
+            "name",
+            "digest",
+            "port",
+            "resources"
+          ]
+        },
+        "worker": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^(|sha256:[a-f0-9]{64})$"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "workspaceSizeLimit": {
+              "type": "string"
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory"
+                  ]
+                },
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory"
+                  ]
+                }
+              },
+              "required": [
+                "requests",
+                "limits"
+              ]
+            }
+          },
+          "required": [
+            "name",
+            "digest",
+            "port",
+            "workspaceSizeLimit",
+            "resources"
+          ]
+        },
+        "releaseManager": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^(|sha256:[a-f0-9]{64})$"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory"
+                  ]
+                },
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory"
+                  ]
+                }
+              },
+              "required": [
+                "requests",
+                "limits"
+              ]
+            }
+          },
+          "required": [
+            "name",
+            "digest",
+            "port",
+            "resources"
+          ]
+        },
+        "relay": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^(|sha256:[a-f0-9]{64})$"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory"
+                  ]
+                },
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory"
+                  ]
+                }
+              },
+              "required": [
+                "requests",
+                "limits"
+              ]
+            }
+          },
+          "required": [
+            "name",
+            "digest",
+            "port",
+            "resources"
+          ]
+        }
+      },
+      "required": [
+        "admissionController",
+        "orchestrator",
+        "worker",
+        "releaseManager",
+        "relay"
+      ]
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "databaseEgressCIDRs": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "enabled",
+        "databaseEgressCIDRs"
+      ]
+    },
+    "openshift": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "route": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "host": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "enabled",
+            "host"
+          ]
+        }
+      },
+      "required": [
+        "route"
+      ]
+    }
+  },
+  "required": [
+    "fullnameOverride",
+    "nameOverride",
+    "namespace",
+    "image",
+    "imagePullSecrets",
+    "serviceAccount",
+    "runtime",
+    "logLevel",
+    "contract",
+    "postgres",
+    "engine",
+    "modelProvider",
+    "components",
+    "networkPolicy",
+    "openshift"
+  ],
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

@@ -1,0 +1,19 @@
+# Committed desired state for a local kind installation.
+fullnameOverride: ai-sdlc
+namespace:
+  create: false
+  name: ai-sdlc-runtime
+runtime:
+  mode: maintenance
+postgres:
+  cloudNativePG:
+    enabled: false
+  local:
+    enabled: true
+    storageSize: 2Gi
+  databaseURLSecret:
+    name: ai-sdlc-postgres-app
+    key: uri
+openshift:
+  route:
+    enabled: false

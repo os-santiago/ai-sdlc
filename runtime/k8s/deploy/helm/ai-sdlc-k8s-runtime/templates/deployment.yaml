@@ -1,169 +1,87 @@
+{{- range $key, $component := .Values.components }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}
-  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-{{ $component.name }}
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" $ }}
   labels:
-    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+    {{- include "ai-sdlc-k8s-runtime.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component.name }}
 spec:
   replicas: 1
-  strategy:
-    type: Recreate
+  strategy: {type: Recreate}
   selector:
     matchLabels:
-      {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+      {{- include "ai-sdlc-k8s-runtime.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $component.name }}
   template:
     metadata:
       labels:
-        {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 8 }}
+        {{- include "ai-sdlc-k8s-runtime.selectorLabels" $ | nindent 8 }}
+        app.kubernetes.io/component: {{ $component.name }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
     spec:
-      serviceAccountName: {{ include "ai-sdlc-k8s-runtime.serviceAccountName" . }}
+      serviceAccountName: {{ include "ai-sdlc-k8s-runtime.serviceAccountName" $ }}
       automountServiceAccountToken: false
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
       containers:
-        - name: admission-controller
-          image: "{{ .Values.image.registry }}/{{ .Values.components.admissionController.image }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+        - name: {{ $component.name }}
+          image: "{{ $.Values.image.repository }}{{ if $component.digest }}@{{ $component.digest }}{{ else }}:{{ $component.name }}-{{ $.Values.image.tag }}{{ end }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
           envFrom:
-            - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
+            - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-config}
           env:
-            - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ .Values.components.admissionController.port }}"}
+            - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ $component.port }}"}
             - name: DATABASE_URL
               valueFrom:
-                secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" . }}, key: {{ include "ai-sdlc-k8s-runtime.databaseSecretKey" . }}}
-          ports:
-            - {name: admission, containerPort: {{ .Values.components.admissionController.port }}}
-          readinessProbe:
-            httpGet: {path: /readyz, port: admission}
-          livenessProbe:
-            httpGet: {path: /healthz, port: admission}
-          resources:
-            {{- toYaml .Values.components.admissionController.resources | nindent 12 }}
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities: {drop: ["ALL"]}
-            readOnlyRootFilesystem: true
-          volumeMounts:
-            - {name: contract, mountPath: /etc/ai-sdlc/contract, readOnly: true}
-        - name: orchestrator
-          image: "{{ .Values.image.registry }}/{{ .Values.components.orchestrator.image }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          envFrom:
-            - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
-          env:
-            - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ .Values.components.orchestrator.port }}"}
-            - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" . }}, key: {{ include "ai-sdlc-k8s-runtime.databaseSecretKey" . }}}
-          ports:
-            - {name: orchestrator, containerPort: {{ .Values.components.orchestrator.port }}}
-          readinessProbe:
-            httpGet: {path: /readyz, port: orchestrator}
-          livenessProbe:
-            httpGet: {path: /healthz, port: orchestrator}
-          resources:
-            {{- toYaml .Values.components.orchestrator.resources | nindent 12 }}
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities: {drop: ["ALL"]}
-            readOnlyRootFilesystem: true
-        - name: worker
-          image: "{{ .Values.image.registry }}/{{ .Values.components.worker.image }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          envFrom:
-            - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
-          env:
-            - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ .Values.components.worker.port }}"}
-            - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" . }}, key: {{ include "ai-sdlc-k8s-runtime.databaseSecretKey" . }}}
-            - {name: AI_SDLC_ENGINE, value: {{ .Values.engine | quote }}}
-            - {name: AI_SDLC_PROVIDER_BASE_URL, value: {{ .Values.modelProvider.baseURL | quote }}}
-            - {name: AI_SDLC_MODEL, value: {{ .Values.modelProvider.model | quote }}}
-            - {name: AI_SDLC_WORKSPACE_DIR, value: {{ .Values.modelProvider.workspaceDir | quote }}}
+                secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" $ }}, key: {{ include "ai-sdlc-k8s-runtime.databaseSecretKey" $ }}}
+            {{- if eq $key "worker" }}
+            - {name: AI_SDLC_ENGINE, value: {{ $.Values.engine | quote }}}
+            - {name: AI_SDLC_PROVIDER_BASE_URL, value: {{ $.Values.modelProvider.baseURL | quote }}}
+            - {name: AI_SDLC_MODEL, value: {{ $.Values.modelProvider.model | quote }}}
+            - {name: AI_SDLC_WORKSPACE_DIR, value: {{ $.Values.modelProvider.workspaceDir | quote }}}
+            - {name: AI_SDLC_ADEV_BUNDLE_PATH, value: /etc/ai-sdlc/policy/ai-sdlc.yaml}
+            - {name: AI_SDLC_ADEV_BUNDLE_SHA256, value: {{ $.Files.Get "files/adev-profile.yaml" | sha256sum | quote }}}
+            {{- if ne $.Values.runtime.mode "maintenance" }}
             - name: MODEL_API_KEY
               valueFrom:
-                secretKeyRef: {name: {{ .Values.modelProvider.apiKeySecret.name }}, key: {{ .Values.modelProvider.apiKeySecret.key }}, optional: true}
-            - name: AI_SDLC_GH_APP_ID
-              valueFrom:
-                secretKeyRef: {name: {{ .Values.githubApp.secret.name }}, key: {{ .Values.githubApp.secret.appIdKey }}, optional: true}
-            - name: AI_SDLC_GH_APP_PRIVATE_KEY
-              valueFrom:
-                secretKeyRef: {name: {{ .Values.githubApp.secret.name }}, key: {{ .Values.githubApp.secret.privateKeyKey }}, optional: true}
-            - name: AI_SDLC_GH_PAT
-              valueFrom:
-                secretKeyRef: {name: {{ .Values.githubPat.secret.name }}, key: {{ .Values.githubPat.secret.tokenKey }}, optional: true}
+                secretKeyRef: {name: {{ $.Values.modelProvider.apiKeySecret.name }}, key: {{ $.Values.modelProvider.apiKeySecret.key }}}
+            {{- end }}
+            {{- end }}
           ports:
-            - {name: worker, containerPort: {{ .Values.components.worker.port }}}
+            - {name: http, containerPort: {{ $component.port }}}
           readinessProbe:
-            httpGet: {path: /readyz, port: worker}
+            httpGet: {path: /readyz, port: http}
           livenessProbe:
-            httpGet: {path: /healthz, port: worker}
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 10
           resources:
-            {{- toYaml .Values.components.worker.resources | nindent 12 }}
+            {{- toYaml $component.resources | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
-            capabilities: {drop: ["ALL"]}
+            capabilities: {drop: [ALL]}
             readOnlyRootFilesystem: true
           volumeMounts:
+            - {name: contract, mountPath: /etc/ai-sdlc/contract, readOnly: true}
+            {{- if eq $key "worker" }}
             - {name: workspaces, mountPath: /workspaces}
-            - {name: contract, mountPath: /etc/ai-sdlc/contract, readOnly: true}
-        - name: release-manager
-          image: "{{ .Values.image.registry }}/{{ .Values.components.releaseManager.image }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          envFrom:
-            - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
-          env:
-            - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ .Values.components.releaseManager.port }}"}
-            - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" . }}, key: {{ include "ai-sdlc-k8s-runtime.databaseSecretKey" . }}}
-          ports:
-            - {name: release, containerPort: {{ .Values.components.releaseManager.port }}}
-          readinessProbe:
-            httpGet: {path: /readyz, port: release}
-          livenessProbe:
-            httpGet: {path: /healthz, port: release}
-          resources:
-            {{- toYaml .Values.components.releaseManager.resources | nindent 12 }}
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities: {drop: ["ALL"]}
-            readOnlyRootFilesystem: true
-          volumeMounts:
-            - {name: contract, mountPath: /etc/ai-sdlc/contract, readOnly: true}
-        # relay (ADR-0005): co-located so it reaches the other four
-        # components over localhost (internal/outbox.DefaultRoutes) — no
-        # NetworkPolicy egress rule needed for that traffic.
-        - name: relay
-          image: "{{ .Values.image.registry }}/{{ .Values.components.relay.image }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          envFrom:
-            - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
-          env:
-            - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ .Values.components.relay.port }}"}
-            - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" . }}, key: {{ include "ai-sdlc-k8s-runtime.databaseSecretKey" . }}}
-          ports:
-            - {name: relay, containerPort: {{ .Values.components.relay.port }}}
-          readinessProbe:
-            httpGet: {path: /readyz, port: relay}
-          livenessProbe:
-            httpGet: {path: /healthz, port: relay}
-          resources:
-            {{- toYaml .Values.components.relay.resources | nindent 12 }}
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities: {drop: ["ALL"]}
-            readOnlyRootFilesystem: true
+            - {name: adev, mountPath: /etc/ai-sdlc/policy, readOnly: true}
+            {{- end }}
       volumes:
-        - name: workspaces
-          emptyDir:
-            sizeLimit: {{ .Values.components.worker.workspaceSizeLimit }}
         - name: contract
-          configMap:
-            name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-contract
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-contract}
+        {{- if eq $key "worker" }}
+        - name: workspaces
+          emptyDir: {sizeLimit: {{ $.Values.components.worker.workspaceSizeLimit }}}
+        - name: adev
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-adev}
+        {{- end }}
+{{- end }}

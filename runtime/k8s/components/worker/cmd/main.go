@@ -22,7 +22,7 @@ func main() {
 	if url := os.Getenv("DATABASE_URL"); url != "" {
 		db, err := store.Open(ctx, url)
 		if err != nil {
-			log.Printf("worker: database unavailable, running without persistence (attempt dispatch disabled): %v", err)
+			log.Fatalf("worker: configured database unavailable; refusing stateless fallback: %v", err)
 		} else {
 			if err := db.Migrate(ctx); err != nil {
 				log.Fatalf("worker: migrate database: %v", err)
@@ -49,6 +49,10 @@ func main() {
 // startup — this component degrades, it never crashes a running pod over
 // a misconfigured env var (ADR-0005).
 func selectEngine() engine.Engine {
+	if service.MaintenanceMode() {
+		log.Print("worker: maintenance mode; generative execution disabled")
+		return engine.StubEngine{}
+	}
 	switch os.Getenv("AI_SDLC_ENGINE") {
 	case "scc":
 		return selectSCCEngine()

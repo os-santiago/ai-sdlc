@@ -18,7 +18,7 @@ func main() {
 	if url := os.Getenv("DATABASE_URL"); url != "" {
 		db, err := store.Open(ctx, url)
 		if err != nil {
-			log.Printf("release-manager: database unavailable, running without persistence: %v", err)
+			log.Fatalf("release-manager: configured database unavailable; refusing stateless fallback: %v", err)
 		} else {
 			if err := db.Migrate(ctx); err != nil {
 				log.Fatalf("release-manager: migrate database: %v", err)

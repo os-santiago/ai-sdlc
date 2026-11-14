@@ -77,6 +77,6 @@ RUN printf '#!/usr/bin/env node\nimport "/opt/scc/dist/cli.js";\n' > /usr/local/
 COPY --from=build /out/component /component
 ENV HOME=/workspaces/home
 ENV TMPDIR=/workspaces/tmp
-USER node
+USER 1000:1000
 EXPOSE 8080
 ENTRYPOINT ["/component"]
