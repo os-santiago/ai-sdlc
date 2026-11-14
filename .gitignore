@@ -22,3 +22,5 @@ node_modules/
 # created transiently by tools/actionlint.sh / validate-repo.sh and removed
 # on exit; ignored in case a hard kill leaves residue.
 /.actionlint-sweep.*.yml
+__pycache__/
+*.py[cod]
