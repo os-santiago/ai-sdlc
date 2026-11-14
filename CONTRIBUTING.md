@@ -14,7 +14,14 @@ runtime. GitHub Actions runtime contributions are out of scope; see
 5. Explain the observable change, validation, intentional exclusions, and
    follow-up work in the pull request.
 
-## Validate
+## Contributor provenance
+
+Contributors must sign off commits with `git commit -s` under the Developer
+Certificate of Origin. Automated project-agent commits retain the existing
+exemption. A maintainer must vouch for a first-time contributor through a PR
+comment or approval. Runtime retirement does not remove these requirements.
+
+## Validation commands
 
 For runtime changes:
 

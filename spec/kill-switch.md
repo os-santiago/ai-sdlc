@@ -3,8 +3,10 @@
 Normative contract for the fleet-wide emergency stop. One control-plane action
 MUST be able to revoke autonomy across every enrolled repository; no
 single-repository configuration edit per consumer may ever be required in an
-incident. The Kubernetes/OpenShift control plane enforces this contract before
-it schedules autonomous work.
+incident. This is a normative requirement, not verified runtime enforcement.
+The current Kubernetes implementation does not resolve these fleet signals;
+operators must keep autonomous promotion disabled until enforcement is
+implemented and tested. Declaring a contract alone does not stop work.
 
 ## Signal channels
 
@@ -13,7 +15,7 @@ engaged always wins, and an unreadable channel denies on its own.
 
 | Channel | Scope | Mechanism |
 |---|---|---|
-| Controller signal | fleet or repository | A controller-managed configuration source supplies `engaged` or `clear`. Truthy (`1|true|yes|on|engaged`, case-insensitive) engages; falsy (`0|false|no|off|clear`) disengages; every other non-empty value engages. |
+| Controller signal | fleet or repository | A controller-managed configuration source supplies `engaged` or `clear`. Truthy (`1`, `true`, `yes`, `on`, `engaged`, case-insensitive) engages; falsy (`0`, `false`, `no`, `off`, `clear`) disengages; every other non-empty value engages. |
 | Control repository issue | fleet | One open `ai-sdlc:off` issue halts every enrolled repository associated with that control repository. |
 | Target repository issue | repository | An open `ai-sdlc:off` issue halts the target repository. |
 

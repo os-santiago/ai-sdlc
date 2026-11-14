@@ -6,7 +6,7 @@ bounded, evidence-driven AI-assisted software delivery.
 ## GitHub Actions deprecation
 
 The GitHub Actions runtime, reusable workflows, bootstrap tooling, and its
-Node-based test surface were removed from this branch. The final supported
+Node-based test surface were removed from this branch. The final historical
 implementation is preserved at the annotated tag
 [`deprecated-github-actions-runtime-2026-11-14`](https://github.com/os-santiago/ai-sdlc/tree/deprecated-github-actions-runtime-2026-11-14).
 
@@ -37,7 +37,7 @@ go test ./...
 
 `go test ./...` runs the pure component tests without external services.
 Set `AI_SDLC_TEST_DATABASE_URL` to include persistence-path tests. Build local
-images with `make -C runtime/k8s containers` when Podman is available. Full instructions are
+images with `make containers` from `runtime/k8s` when Podman is available. Full instructions are
 in [runtime/k8s/README.md](runtime/k8s/README.md).
 
 ## Scope
