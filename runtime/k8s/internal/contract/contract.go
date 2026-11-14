@@ -9,9 +9,8 @@
 // workloads.
 //
 // Only fields actually consumed by a ported component are modeled here —
-// this is intentionally not a full mirror of ai-sdlc.schema.json. See
-// docs/architecture/adr/0004-cloud-native-k8s-openshift-runtime.md for the
-// fields not yet consumed by this runtime.
+// this is intentionally not a full mirror of ai-sdlc.schema.json. Schema
+// acceptance alone does not imply runtime enforcement of every field.
 package contract
 
 import (

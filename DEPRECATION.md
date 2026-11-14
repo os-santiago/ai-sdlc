@@ -26,3 +26,12 @@ environment-specific rollout.
 This repository does not provide automatic migration of GitHub secrets,
 repository variables, labels, or workflow permissions. Those are environment
 state and must be reviewed by the owning operator.
+
+## Merge prerequisite
+
+The protected main branch still requires `contract`, `gitleaks`, `sbom`,
+`codeql (javascript)`, and `CodeQL` checks from their configured GitHub Apps.
+Removing workflow files does not migrate this external configuration. Before
+merging, maintainers must provision replacement validators and migrate the
+required-check policy to those verified checks. Do not fabricate passing
+statuses or disable protections to land this change.
