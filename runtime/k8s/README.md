@@ -180,7 +180,7 @@ It implements:
   crashes. Expired leases allow recovery; exhausted facts remain stored.
 
 `store.ProvisionRoles` is reserved for the future dedicated migration Job in
-an installation-owned database. It requires all eight component credentials
+an installation-owned database. It requires eight distinct component credentials
 from external Secrets and refuses to adopt unregistered PostgreSQL roles.
 It reconciles table and column grants, revokes PUBLIC table access and schema
 creation, rejects role membership and removes privileged role attributes.
