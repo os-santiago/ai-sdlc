@@ -84,15 +84,16 @@ func selectSCCEngine() engine.Engine {
 	}
 	c := contract.LoadFromEnv()
 	return engine.SCCEngine{
-		Binary:          valueOrDefault("SCC_BINARY", "scc"),
-		WorkDir:         workDir,
-		Checkout:        selectCheckout(),
-		ProviderBaseURL: valueOrDefault("AI_SDLC_PROVIDER_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-		APIKey:          apiKey,
-		Model:           valueOrDefault("AI_SDLC_MODEL", "nvidia/nemotron-3-ultra-550b-a55b"),
-		ADevBundlePath:  os.Getenv("AI_SDLC_ADEV_BUNDLE_PATH"),
-		MaxSteps:        c.Engine.MaxSteps,
-		MaxSeconds:      c.Engine.MaxSeconds,
+		Binary:           valueOrDefault("SCC_BINARY", "scc"),
+		WorkDir:          workDir,
+		Checkout:         selectCheckout(),
+		ProviderBaseURL:  valueOrDefault("AI_SDLC_PROVIDER_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+		APIKey:           apiKey,
+		Model:            valueOrDefault("AI_SDLC_MODEL", "nvidia/nemotron-3-ultra-550b-a55b"),
+		ADevBundlePath:   os.Getenv("AI_SDLC_ADEV_BUNDLE_PATH"),
+		ADevBundleSHA256: os.Getenv("AI_SDLC_ADEV_BUNDLE_SHA256"),
+		MaxSteps:         c.Engine.MaxSteps,
+		MaxSeconds:       c.Engine.MaxSeconds,
 	}
 }
 

@@ -32,23 +32,34 @@ it unset and they behave exactly as ADR-0004 shipped them (stateless,
 dry-run only). `relay` requires `DATABASE_URL` — polling the outbox is its
 only job.
 
-## Spec integration
-
 ## A-Dev policy bundle
 
 When `AI_SDLC_ADEV_BUNDLE_PATH` is set, the SCC worker reads the mounted,
 reviewed A-Dev AI-SDLC profile before each invocation and places it in the
 trusted policy section of the SCC prompt. An unreadable, empty, or oversized
-bundle stops the attempt before `scc` starts. Mount a pinned copy of
+bundle stops the attempt before checkout or configuration writes. Set
+`AI_SDLC_ADEV_BUNDLE_SHA256` to the reviewed file's SHA-256 (`sha256sum`);
+the worker verifies integrity and the supported 1.0.0 profile structure,
+including fail-closed policy. Mount a pinned copy of
 `implementation/profiles/ai-sdlc.yaml` from A-Dev; do not source it from a
 work item or target repository.
 
 For supervised local development, `tools/codexcli_openai_wrapper.py` exposes a
 localhost-only OpenAI-compatible endpoint backed by `codex exec`. It allows
-SCC to use CodexCLI as a simulated model against a named workspace without
-turning Codex credentials into a cluster secret. It is intentionally not a
-production gateway: bind it only to `127.0.0.1`, use a disposable or reviewed
-workspace, and never expose it outside the local host.
+SCC to use CodexCLI as a completion model. Codex runs read-only in a temporary
+directory and proposes structured tool calls; SCC executes those tools in the
+target workspace. Both JSON and buffered SSE responses are supported. Set
+`CODEX_WRAPPER_TOKEN` to a random value of at least 32 characters and use that
+same value as the SCC model API key. The server binds only to `127.0.0.1`.
+When SCC runs in a container, use host networking for this supervised local
+test; do not expose the endpoint externally. The completion has a 100-second
+timeout. Codex uses existing host authentication, but ignores user config.
+
+This integration supplies profile context and verifies its integrity; it does
+not implement every A-Dev acceptance or release policy. The isolated HTTP and
+tool-mapping tests are not evidence of a complete autonomous release cycle.
+
+## Spec integration
 
 - `internal/contract` loads `.ai-sdlc.yaml` from the path named by
   `AI_SDLC_CONTRACT_PATH` (default: schema-documented defaults). Each
