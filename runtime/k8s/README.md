@@ -54,6 +54,10 @@ same value as the SCC model API key. The server binds only to `127.0.0.1`.
 When SCC runs in a container, use host networking for this supervised local
 test; do not expose the endpoint externally. The completion has a 100-second
 timeout. Codex uses existing host authentication, but ignores user config.
+Because responses are buffered, set `SC_PROVIDER_CONNECT_TIMEOUT_MS=110000`
+and `SC_PROVIDER_ATTEMPT_TIMEOUT_MS=120000` in the SCC/worker process for this
+adapter. The pinned SCC build defaults to a 30-second header timeout, which
+would otherwise cancel a longer Codex completion prematurely.
 
 This integration supplies profile context and verifies its integrity; it does
 not implement every A-Dev acceptance or release policy. The isolated HTTP and
