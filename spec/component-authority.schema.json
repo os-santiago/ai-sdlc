@@ -1,0 +1,379 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/os-santiago/ai-sdlc/spec/component-authority.schema.json",
+  "title": "Component authority policy v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "repository",
+    "environment",
+    "autonomy",
+    "freeze",
+    "keys",
+    "grants"
+  ],
+  "properties": {
+    "version": {
+      "const": "1"
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "environment": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    },
+    "autonomy": {
+      "enum": [
+        "shadow",
+        "suggest",
+        "auto-pr",
+        "auto-merge-low",
+        "auto-merge-all",
+        "auto-deploy"
+      ]
+    },
+    "freeze": {
+      "type": "boolean"
+    },
+    "keys": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9-]{0,127}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "role",
+          "value"
+        ],
+        "properties": {
+          "role": {
+            "enum": [
+              "admission-controller",
+              "deployer",
+              "intake",
+              "orchestrator",
+              "relay",
+              "release-manager",
+              "verifier",
+              "worker"
+            ]
+          },
+          "value": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9+/]{43}=$"
+          }
+        }
+      }
+    },
+    "grants": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 9,
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "caller",
+              "target",
+              "operation",
+              "minimumLevel",
+              "eventType"
+            ],
+            "properties": {
+              "caller": {
+                "const": "intake"
+              },
+              "target": {
+                "const": "admission-controller"
+              },
+              "operation": {
+                "const": "admit-issue"
+              },
+              "minimumLevel": {
+                "enum": [
+                  "shadow",
+                  "suggest",
+                  "auto-pr",
+                  "auto-merge-low",
+                  "auto-merge-all",
+                  "auto-deploy"
+                ]
+              },
+              "eventType": {
+                "const": "IssueObserved"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "caller",
+              "target",
+              "operation",
+              "minimumLevel",
+              "eventType"
+            ],
+            "properties": {
+              "caller": {
+                "const": "admission-controller"
+              },
+              "target": {
+                "const": "orchestrator"
+              },
+              "operation": {
+                "const": "plan-admission"
+              },
+              "minimumLevel": {
+                "enum": [
+                  "shadow",
+                  "suggest",
+                  "auto-pr",
+                  "auto-merge-low",
+                  "auto-merge-all",
+                  "auto-deploy"
+                ]
+              },
+              "eventType": {
+                "const": "IssueAdmissionDecided"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "caller",
+              "target",
+              "operation",
+              "minimumLevel",
+              "eventType"
+            ],
+            "properties": {
+              "caller": {
+                "const": "orchestrator"
+              },
+              "target": {
+                "const": "worker"
+              },
+              "operation": {
+                "const": "execute-work"
+              },
+              "minimumLevel": {
+                "enum": [
+                  "auto-pr",
+                  "auto-merge-low",
+                  "auto-merge-all",
+                  "auto-deploy"
+                ]
+              },
+              "eventType": {
+                "const": "WorkItemReady"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "caller",
+              "target",
+              "operation",
+              "minimumLevel",
+              "eventType"
+            ],
+            "properties": {
+              "caller": {
+                "const": "worker"
+              },
+              "target": {
+                "const": "orchestrator"
+              },
+              "operation": {
+                "const": "record-attempt"
+              },
+              "minimumLevel": {
+                "enum": [
+                  "auto-pr",
+                  "auto-merge-low",
+                  "auto-merge-all",
+                  "auto-deploy"
+                ]
+              },
+              "eventType": {
+                "const": "ImplementationAttemptDecided"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "caller",
+              "target",
+              "operation",
+              "minimumLevel",
+              "eventType"
+            ],
+            "properties": {
+              "caller": {
+                "const": "worker"
+              },
+              "target": {
+                "const": "verifier"
+              },
+              "operation": {
+                "const": "verify-artifact"
+              },
+              "minimumLevel": {
+                "enum": [
+                  "auto-pr",
+                  "auto-merge-low",
+                  "auto-merge-all",
+                  "auto-deploy"
+                ]
+              },
+              "eventType": {
+                "const": "CandidateProduced"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "caller",
+              "target",
+              "operation",
+              "minimumLevel",
+              "eventType"
+            ],
+            "properties": {
+              "caller": {
+                "const": "verifier"
+              },
+              "target": {
+                "const": "release-manager"
+              },
+              "operation": {
+                "const": "publish-candidate"
+              },
+              "minimumLevel": {
+                "enum": [
+                  "auto-pr",
+                  "auto-merge-low",
+                  "auto-merge-all",
+                  "auto-deploy"
+                ]
+              },
+              "eventType": {
+                "const": "CandidateVerified"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "caller",
+              "target",
+              "operation",
+              "minimumLevel",
+              "eventType"
+            ],
+            "properties": {
+              "caller": {
+                "const": "release-manager"
+              },
+              "target": {
+                "const": "orchestrator"
+              },
+              "operation": {
+                "const": "record-release"
+              },
+              "minimumLevel": {
+                "enum": [
+                  "auto-pr",
+                  "auto-merge-low",
+                  "auto-merge-all",
+                  "auto-deploy"
+                ]
+              },
+              "eventType": {
+                "const": "ReleaseGateDecided"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "caller",
+              "target",
+              "operation",
+              "minimumLevel",
+              "eventType"
+            ],
+            "properties": {
+              "caller": {
+                "const": "release-manager"
+              },
+              "target": {
+                "const": "deployer"
+              },
+              "operation": {
+                "const": "deploy-release"
+              },
+              "minimumLevel": {
+                "enum": [
+                  "auto-deploy"
+                ]
+              },
+              "eventType": {
+                "const": "ReleaseReady"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "caller",
+              "target",
+              "operation",
+              "minimumLevel",
+              "eventType"
+            ],
+            "properties": {
+              "caller": {
+                "const": "deployer"
+              },
+              "target": {
+                "const": "release-manager"
+              },
+              "operation": {
+                "const": "record-deployment"
+              },
+              "minimumLevel": {
+                "enum": [
+                  "auto-deploy"
+                ]
+              },
+              "eventType": {
+                "const": "DeploymentVerified"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

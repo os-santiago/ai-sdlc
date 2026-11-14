@@ -1,0 +1,106 @@
+{
+  "version": "1",
+  "repository": "example/project",
+  "environment": "production-test",
+  "autonomy": "shadow",
+  "freeze": true,
+  "keys": {
+    "admission-controller-example": {
+      "role": "admission-controller",
+      "value": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+    },
+    "deployer-example": {
+      "role": "deployer",
+      "value": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI="
+    },
+    "intake-example": {
+      "role": "intake",
+      "value": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM="
+    },
+    "orchestrator-example": {
+      "role": "orchestrator",
+      "value": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ="
+    },
+    "relay-example": {
+      "role": "relay",
+      "value": "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU="
+    },
+    "release-manager-example": {
+      "role": "release-manager",
+      "value": "BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY="
+    },
+    "verifier-example": {
+      "role": "verifier",
+      "value": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="
+    },
+    "worker-example": {
+      "role": "worker",
+      "value": "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg="
+    }
+  },
+  "grants": [
+    {
+      "caller": "intake",
+      "target": "admission-controller",
+      "operation": "admit-issue",
+      "minimumLevel": "shadow",
+      "eventType": "IssueObserved"
+    },
+    {
+      "caller": "admission-controller",
+      "target": "orchestrator",
+      "operation": "plan-admission",
+      "minimumLevel": "shadow",
+      "eventType": "IssueAdmissionDecided"
+    },
+    {
+      "caller": "orchestrator",
+      "target": "worker",
+      "operation": "execute-work",
+      "minimumLevel": "auto-pr",
+      "eventType": "WorkItemReady"
+    },
+    {
+      "caller": "worker",
+      "target": "orchestrator",
+      "operation": "record-attempt",
+      "minimumLevel": "auto-pr",
+      "eventType": "ImplementationAttemptDecided"
+    },
+    {
+      "caller": "worker",
+      "target": "verifier",
+      "operation": "verify-artifact",
+      "minimumLevel": "auto-pr",
+      "eventType": "CandidateProduced"
+    },
+    {
+      "caller": "verifier",
+      "target": "release-manager",
+      "operation": "publish-candidate",
+      "minimumLevel": "auto-pr",
+      "eventType": "CandidateVerified"
+    },
+    {
+      "caller": "release-manager",
+      "target": "orchestrator",
+      "operation": "record-release",
+      "minimumLevel": "auto-pr",
+      "eventType": "ReleaseGateDecided"
+    },
+    {
+      "caller": "release-manager",
+      "target": "deployer",
+      "operation": "deploy-release",
+      "minimumLevel": "auto-deploy",
+      "eventType": "ReleaseReady"
+    },
+    {
+      "caller": "deployer",
+      "target": "release-manager",
+      "operation": "record-deployment",
+      "minimumLevel": "auto-deploy",
+      "eventType": "DeploymentVerified"
+    }
+  ]
+}
