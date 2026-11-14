@@ -1,8 +1,10 @@
 package delivery
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -204,6 +206,9 @@ func TestDatabaseOwnershipAndProvisioning(t *testing.T) {
 	for _, test := range []struct{ role, query string }{
 		{"intake", `INSERT INTO authorized_outbox(producer,event_id,target,operation,receipt,payload) VALUES('worker','forged','orchestrator','record-attempt','{}','x')`},
 		{"intake", `UPDATE authorized_outbox SET payload='modified'`},
+		{"intake", `INSERT INTO authorized_outbox(producer,event_id,target,operation,receipt,payload,attempts) VALUES('intake','poison','admission-controller','admit-issue','{}','x',8)`},
+		{"intake", `INSERT INTO authorized_outbox(producer,event_id,target,operation,receipt,payload,published_at) VALUES('intake','forged-ack','admission-controller','admit-issue','{}','x',now())`},
+
 		{"relay", `UPDATE authorized_outbox SET receipt='{}'`},
 		{"relay", `INSERT INTO authorized_outbox(producer,event_id,target,operation,receipt,payload) VALUES('relay','forged','worker','execute-work','{}','x')`},
 		{"relay", `SELECT * FROM authorized_inbox`},
@@ -408,5 +413,180 @@ func TestHTTPRejectsMalformedInputBeforeEffect(t *testing.T) {
 	}
 	if count(t, f.admin, `SELECT count(*) FROM authorized_inbox`) != 0 {
 		t.Fatal("malformed input persisted")
+	}
+}
+
+func TestNonceRetainedDuringFinalAcceptedSecond(t *testing.T) {
+	f := setup(t)
+	in := Inbox{DB: f.dbs["admission-controller"], Target: "admission-controller"}
+	envelope := f.envelope(t, "nonce-boundary", []byte(`{}`))
+	now := time.Unix(envelope.Transport.IssuedAt, 0)
+	if _, _, err := in.Accept(context.Background(), f.p, envelope, "admit-issue", "POST", "/admit", now, persistAdmission); err != nil {
+		t.Fatal(err)
+	}
+	finalSecond := time.Unix(envelope.Transport.IssuedAt+300, 500000000)
+	if _, _, err := in.Accept(context.Background(), f.p, envelope, "admit-issue", "POST", "/admit", finalSecond, persistAdmission); !errors.Is(err, ErrReplay) {
+		t.Fatalf("nonce lost before transport expiry: %v", err)
+	}
+	if count(t, f.admin, `SELECT count(*) FROM authorized_nonces`) != 1 {
+		t.Fatal("live nonce removed")
+	}
+}
+
+func TestInvalidReceiverIdentityHasNoEffect(t *testing.T) {
+	f := setup(t)
+	in := Inbox{DB: f.dbs["admission-controller"], Target: "admission-controller"}
+	raw, err := json.Marshal(f.envelope(t, "invalid-receiver", []byte(`{}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"missing-key", "wrong-private-key", "unknown-key-id", "wrong-role"} {
+		identity := f.ids["admission-controller"]
+		switch scenario {
+		case "missing-key":
+			identity.PrivateKey = ""
+		case "wrong-private-key":
+			identity.PrivateKey = f.ids["worker"].PrivateKey
+		case "unknown-key-id":
+			identity.KeyID = "unregistered"
+		case "wrong-role":
+			identity = f.ids["worker"]
+		}
+		handler := in.Handler(func() (authority.Policy, authority.Identity, error) { return f.p, identity, nil }, "admit-issue", "/admit", persistAdmission)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/admit", bytes.NewReader(raw)))
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s returned %d", scenario, w.Code)
+		}
+	}
+	for _, table := range []string{"authorized_inbox", "authorized_nonces"} {
+		if count(t, f.admin, "SELECT count(*) FROM "+table) != 0 {
+			t.Fatalf("invalid receiver wrote %s", table)
+		}
+	}
+	if count(t, f.admin, `SELECT count(*) FROM admissions WHERE repository='example/project'`) != 0 {
+		t.Fatal("invalid receiver committed an effect")
+	}
+}
+
+func TestInvalidRelayIdentityDoesNotConsumeRetries(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	if err := f.dbs["intake"].WithTx(ctx, func(tx *sql.Tx) error {
+		return Append(ctx, tx, f.p, f.ids["intake"], "bad-relay-key", "admit-issue", []byte(`{}`))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	identity := f.ids["relay"]
+	identity.PrivateKey = f.ids["worker"].PrivateKey
+	relay := Relay{DB: f.dbs["relay"], Identity: identity}
+	if _, err := relay.PollOnce(ctx, f.p, time.Now()); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("bad relay identity accepted: %v", err)
+	}
+	if count(t, f.admin, `SELECT count(*) FROM authorized_outbox WHERE attempts=0 AND published_at IS NULL`) != 1 {
+		t.Fatal("invalid relay consumed a delivery attempt")
+	}
+}
+
+func TestBootstrapCannotBecomeOperationalWithSetRole(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	err := f.admin.WithTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `SET LOCAL ROLE aisdlc_worker`); err != nil {
+			return err
+		}
+		return store.AssertComponent(ctx, tx, "worker")
+	})
+	if err == nil {
+		t.Fatal("bootstrap session impersonated operational login")
+	}
+	if err := store.AssertComponent(ctx, f.dbs["worker"].Pool, "worker"); err != nil {
+		t.Fatal("dedicated login rejected")
+	}
+}
+
+func TestReservationSurvivesCrashAndStaleOwnerCannotFinalize(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	if err := f.dbs["intake"].WithTx(ctx, func(tx *sql.Tx) error {
+		return Append(ctx, tx, f.p, f.ids["intake"], "crashed-relay", "admit-issue", []byte(`{}`))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	relay := Relay{DB: f.dbs["relay"], Identity: f.ids["relay"]}
+	now := time.Now()
+	old, err := relay.reserve(ctx, f.p, now)
+	if err != nil || old == nil {
+		t.Fatalf("reservation failed: %v", err)
+	}
+	if count(t, f.admin, `SELECT count(*) FROM authorized_outbox WHERE attempts=1 AND lease_token IS NOT NULL`) != 1 {
+		t.Fatal("reservation not committed before I/O")
+	}
+	if row, err := relay.reserve(ctx, f.p, now.Add(time.Second)); err != nil || row != nil {
+		t.Fatalf("active lease stolen: %v", err)
+	}
+	restarted := Relay{DB: f.dbs["relay"], Identity: f.ids["relay"]}
+	next, err := restarted.reserve(ctx, f.p, now.Add(31*time.Second))
+	if err != nil || next == nil || next.attempts != 2 {
+		t.Fatalf("restart lost attempt budget: %v", err)
+	}
+	if done, err := relay.finish(ctx, *old, "", now.Add(32*time.Second)); err != nil || done {
+		t.Fatalf("stale owner finalized: %v", err)
+	}
+	if count(t, f.admin, `SELECT count(*) FROM authorized_outbox WHERE attempts=2 AND published_at IS NULL`) != 1 {
+		t.Fatal("stale lease changed delivery state")
+	}
+	for attempt := 3; attempt <= 8; attempt++ {
+		row, err := restarted.reserve(ctx, f.p, now.Add(time.Duration(attempt-1)*31*time.Second))
+		if err != nil || row == nil || row.attempts != attempt {
+			t.Fatalf("reservation %d: %v", attempt, err)
+		}
+	}
+	if row, err := restarted.reserve(ctx, f.p, now.Add(time.Hour)); err != nil || row != nil {
+		t.Fatalf("ninth reservation after crash: %v", err)
+	}
+	if count(t, f.admin, `SELECT count(*) FROM authorized_outbox WHERE attempts=8 AND exhausted AND published_at IS NULL`) != 1 {
+		t.Fatal("crashes bypassed retry budget")
+	}
+}
+
+func TestCrashAfterCommittedReceiverRecoversWithFreshLease(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	var effects atomic.Int32
+	effect := func(ctx context.Context, tx *sql.Tx, r authority.Receipt, payload []byte) ([]byte, error) {
+		effects.Add(1)
+		return persistAdmission(ctx, tx, r, payload)
+	}
+	in := Inbox{DB: f.dbs["admission-controller"], Target: "admission-controller"}
+	server := httptest.NewServer(in.Handler(func() (authority.Policy, authority.Identity, error) { return f.p, f.ids["admission-controller"], nil }, "admit-issue", "/admit", effect))
+	defer server.Close()
+	if err := f.dbs["intake"].WithTx(ctx, func(tx *sql.Tx) error {
+		return Append(ctx, tx, f.p, f.ids["intake"], "ack-before-crash", "admit-issue", []byte(`{}`))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	relay := Relay{DB: f.dbs["relay"], Identity: f.ids["relay"], Routes: map[string]string{"admit-issue": server.URL + "/admit"}}
+	row, err := relay.reserve(ctx, f.p, time.Now())
+	if err != nil || row == nil {
+		t.Fatal("reservation failed")
+	}
+	var receipt authority.Receipt
+	if err := authority.DecodeStrict(row.raw, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if failure := relay.send(ctx, f.p, receipt, row.payload, time.Now()); failure != "" {
+		t.Fatalf("receiver did not commit: %s", failure)
+	}
+	// Simulate process loss before finalize and expiry of its durable lease.
+	if _, err := f.admin.Pool.ExecContext(ctx, `UPDATE authorized_outbox SET lease_until=now()-interval '1 second',next_attempt_at=now()-interval '1 second'`); err != nil {
+		t.Fatal(err)
+	}
+	restarted := relay
+	if delivered, err := restarted.PollOnce(ctx, f.p, time.Now()); err != nil || !delivered {
+		t.Fatalf("restart could not confirm committed receiver: %v", err)
+	}
+	if effects.Load() != 1 || count(t, f.admin, `SELECT count(*) FROM authorized_outbox WHERE attempts=2 AND published_at IS NOT NULL`) != 1 {
+		t.Fatal("restart repeated receiver effect or lost attempts")
 	}
 }

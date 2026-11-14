@@ -30,14 +30,14 @@ func AssertComponent(ctx context.Context, q Querier, component string) error {
 	if err != nil {
 		return err
 	}
-	var actual string
+	var actual, session string
 	var elevated bool
-	if err := q.QueryRowContext(ctx, `SELECT current_user,
+	if err := q.QueryRowContext(ctx, `SELECT current_user, session_user,
  EXISTS(SELECT 1 FROM pg_roles WHERE rolname=current_user AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolbypassrls OR rolreplication))
- OR EXISTS(SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.member WHERE r.rolname=current_user)`).Scan(&actual, &elevated); err != nil {
+ OR EXISTS(SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.member WHERE r.rolname=current_user)`).Scan(&actual, &session, &elevated); err != nil {
 		return errors.New("database identity unavailable")
 	}
-	if actual != want || elevated {
+	if actual != want || session != want || elevated {
 		return errors.New("database component identity mismatch")
 	}
 	return nil
@@ -133,9 +133,10 @@ func (db *DB) ProvisionRoles(ctx context.Context, passwords map[string]string) e
 			}
 			if component == "relay" {
 				statements = append(statements, `GRANT SELECT ON authorized_outbox TO `+role,
-					`GRANT UPDATE (published_at, attempts, next_attempt_at, exhausted, last_error) ON authorized_outbox TO `+role)
+					`GRANT UPDATE (published_at, attempts, next_attempt_at, exhausted, last_error, lease_token, lease_until) ON authorized_outbox TO `+role)
 			} else {
-				statements = append(statements, `GRANT SELECT, INSERT ON authorized_outbox TO `+role,
+				statements = append(statements, `GRANT SELECT ON authorized_outbox TO `+role,
+					`GRANT INSERT (producer,event_id,target,operation,receipt,payload) ON authorized_outbox TO `+role,
 					`GRANT SELECT, INSERT, UPDATE ON authorized_inbox TO `+role,
 					`GRANT SELECT, INSERT, DELETE ON authorized_nonces TO `+role)
 			}

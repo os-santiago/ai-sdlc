@@ -17,7 +17,10 @@ CREATE TABLE authorized_outbox (
     attempts integer NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 8),
     next_attempt_at timestamptz NOT NULL DEFAULT now(),
     exhausted boolean NOT NULL DEFAULT false,
+    lease_token uuid,
+    lease_until timestamptz,
     last_error text NOT NULL DEFAULT '',
+    CHECK (attempts < 8 OR exhausted OR published_at IS NOT NULL),
     PRIMARY KEY (producer, event_id)
 );
 CREATE INDEX authorized_outbox_pending ON authorized_outbox(next_attempt_at)

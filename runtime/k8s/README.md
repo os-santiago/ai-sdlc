@@ -175,8 +175,9 @@ It implements:
   receipt; conflicting content under an existing event ID is rejected.
 - Receiver-signed acknowledgements. Lost responses can be retried without
   reapplying state, while a plain HTTP 200 cannot complete delivery.
-- One-row relay transactions with a ten-second HTTP limit, exponential retry
-  spacing and exhaustion after eight attempts. Exhausted facts remain stored.
+- Attempt/lease reservation committed before HTTP, a ten-second HTTP limit,
+  exponential retry spacing and exhaustion after eight reservations, including
+  crashes. Expired leases allow recovery; exhausted facts remain stored.
 
 `store.ProvisionRoles` is reserved for the future dedicated migration Job in
 an installation-owned database. It requires all eight component credentials

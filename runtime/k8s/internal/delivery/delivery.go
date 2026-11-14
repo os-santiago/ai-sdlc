@@ -102,7 +102,9 @@ func (in Inbox) Accept(ctx context.Context, p authority.Policy, envelope Envelop
 		}
 		// Expired nonces can be removed because transport verification above
 		// rejects them. No unexpired nonce is removed during retries.
-		if _, err := tx.ExecContext(ctx, `DELETE FROM authorized_nonces WHERE target=$1 AND valid_until < $2`, in.Target, now); err != nil {
+		// Match VerifyTransport's whole-second clock boundary: a nonce remains
+		// live for the entire final second in which its transport is accepted.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM authorized_nonces WHERE target=$1 AND valid_until < $2`, in.Target, time.Unix(now.Unix(), 0)); err != nil {
 			return ErrStorage
 		}
 		inserted, err := tx.ExecContext(ctx, `INSERT INTO authorized_nonces(target,caller,key_id,nonce,valid_until)

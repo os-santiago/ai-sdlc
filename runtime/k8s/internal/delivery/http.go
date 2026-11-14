@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -32,7 +33,7 @@ func (in Inbox) Handler(policy func() (authority.Policy, authority.Identity, err
 			fail(http.StatusServiceUnavailable, "policy_unavailable")
 			return
 		}
-		if identity.Role != in.Target {
+		if identity.Role != in.Target || identity.Validate(p) != nil {
 			fail(http.StatusServiceUnavailable, "identity_unavailable")
 			return
 		}
@@ -46,7 +47,9 @@ func (in Inbox) Handler(policy func() (authority.Policy, authority.Identity, err
 			fail(http.StatusBadRequest, "invalid_envelope")
 			return
 		}
-		response, _, err := in.Accept(r.Context(), p, envelope, operation, r.Method, path, time.Now(), effect)
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		response, _, err := in.Accept(ctx, p, envelope, operation, r.Method, path, time.Now(), effect)
 		switch {
 		case errors.Is(err, ErrUnauthorized), errors.Is(err, ErrReplay):
 			fail(http.StatusUnauthorized, "authority_denied")

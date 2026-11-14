@@ -23,49 +23,92 @@ type Relay struct {
 	Client *http.Client
 }
 
-// PollOnce holds at most one row lock and a bounded ten-second HTTP exchange.
-// Receivers acknowledge durable commands promptly; execution happens elsewhere.
-// Failed deliveries stop after eight attempts and retain the original fact.
-func (relay Relay) PollOnce(ctx context.Context, p authority.Policy, now time.Time) (bool, error) {
+type pending struct {
+	producer, id, target, operation, lease string
+	raw, payload                           []byte
+	attempts                               int
+}
+
+// reserve commits the attempt and lease before any I/O. A crash consumes its
+// budget and another replica may reclaim only after the lease expires.
+func (relay Relay) reserve(ctx context.Context, p authority.Policy, now time.Time) (*pending, error) {
 	if relay.DB == nil || relay.Identity.Role != "relay" {
-		return false, ErrUnauthorized
+		return nil, ErrUnauthorized
 	}
-	if err := p.Validate(); err != nil || p.Freeze {
-		return false, ErrUnauthorized
+	if err := relay.Identity.Validate(p); err != nil || p.Freeze {
+		return nil, ErrUnauthorized
 	}
-	delivered := false
+	var item *pending
 	err := relay.DB.WithTx(ctx, func(tx *sql.Tx) error {
 		if err := store.AssertComponent(ctx, tx, "relay"); err != nil {
 			return ErrUnauthorized
 		}
-		var producer, id, target, operation string
-		var raw, payload []byte
-		var attempts int
+		row := pending{}
 		err := tx.QueryRowContext(ctx, `SELECT producer,event_id,target,operation,receipt,payload,attempts FROM authorized_outbox
-			WHERE published_at IS NULL AND NOT exhausted AND next_attempt_at <= $1
-			ORDER BY next_attempt_at,created_at LIMIT 1 FOR UPDATE SKIP LOCKED`, now).Scan(&producer, &id, &target, &operation, &raw, &payload, &attempts)
+   WHERE published_at IS NULL AND NOT exhausted AND next_attempt_at <= $1 AND (lease_until IS NULL OR lease_until <= $1)
+   ORDER BY next_attempt_at,created_at LIMIT 1 FOR UPDATE SKIP LOCKED`, now).Scan(&row.producer, &row.id, &row.target, &row.operation, &row.raw, &row.payload, &row.attempts)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		if err != nil {
 			return ErrStorage
 		}
-		var receipt authority.Receipt
-		failure := "authority_denied"
-		if err := authority.DecodeStrict(raw, &receipt); err == nil && receipt.Producer == producer && receipt.ID == id && p.VerifyReceipt(receipt, target, operation, payload) == nil {
-			failure = relay.send(ctx, p, receipt, payload, now)
+		row.attempts++
+		row.lease = store.NewID()
+		_, err = tx.ExecContext(ctx, `UPDATE authorized_outbox SET attempts=$1,exhausted=$2,lease_token=$3,lease_until=$4,next_attempt_at=$4,last_error='delivery_reserved' WHERE producer=$5 AND event_id=$6`, row.attempts, row.attempts >= 8, row.lease, now.Add(30*time.Second), row.producer, row.id)
+		if err != nil {
+			return ErrStorage
 		}
-		attempts++
+		item = &row
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+// PollOnce reserves one durable attempt, performs at most ten seconds of HTTP,
+// then conditionally records the result for that lease. No transaction spans
+// external I/O. Eight reservations bound attempts even across process crashes.
+func (relay Relay) PollOnce(ctx context.Context, p authority.Policy, now time.Time) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	started := time.Now()
+	row, err := relay.reserve(ctx, p, now)
+	if err != nil || row == nil {
+		return false, err
+	}
+	var receipt authority.Receipt
+	failure := "authority_denied"
+	if err := authority.DecodeStrict(row.raw, &receipt); err == nil && receipt.Producer == row.producer && receipt.ID == row.id && p.VerifyReceipt(receipt, row.target, row.operation, row.payload) == nil {
+		failure = relay.send(ctx, p, receipt, row.payload, now)
+	}
+	return relay.finish(ctx, *row, failure, now.Add(time.Since(started)))
+}
+
+func (relay Relay) finish(ctx context.Context, row pending, failure string, now time.Time) (bool, error) {
+	delivered := false
+	err := relay.DB.WithTx(ctx, func(tx *sql.Tx) error {
+		if err := store.AssertComponent(ctx, tx, "relay"); err != nil {
+			return ErrUnauthorized
+		}
+		var result sql.Result
+		var err error
 		if failure == "" {
-			_, err = tx.ExecContext(ctx, `UPDATE authorized_outbox SET published_at=$1,attempts=$2,last_error='' WHERE producer=$3 AND event_id=$4`, now, attempts, producer, id)
-			delivered = true
+			result, err = tx.ExecContext(ctx, `UPDATE authorized_outbox SET published_at=$1,exhausted=false,last_error='',lease_token=NULL,lease_until=NULL WHERE producer=$2 AND event_id=$3 AND lease_token=$4 AND lease_until > $1`, now, row.producer, row.id, row.lease)
 		} else {
-			delay := time.Duration(1<<attempts) * time.Second
-			_, err = tx.ExecContext(ctx, `UPDATE authorized_outbox SET attempts=$1,next_attempt_at=$2,exhausted=$3,last_error=$4 WHERE producer=$5 AND event_id=$6`, attempts, now.Add(delay), attempts >= 8, failure, producer, id)
+			delay := time.Duration(1<<row.attempts) * time.Second
+			result, err = tx.ExecContext(ctx, `UPDATE authorized_outbox SET next_attempt_at=$1,last_error=$2,lease_token=NULL,lease_until=NULL WHERE producer=$3 AND event_id=$4 AND lease_token=$5 AND lease_until > $6`, now.Add(delay), failure, row.producer, row.id, row.lease, now)
 		}
 		if err != nil {
 			return ErrStorage
 		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return ErrStorage
+		}
+		delivered = failure == "" && changed == 1
 		return nil
 	})
 	return delivered && err == nil, err
