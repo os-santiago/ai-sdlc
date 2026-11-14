@@ -8,8 +8,8 @@ preserved only by the `deprecated-github-actions-runtime-2026-11-14` tag.
 
 - `runtime/k8s/` is the only executable runtime in this repository.
 - `spec/` defines portable policy and event contracts.
-- Do not add GitHub Actions workflows, composite actions, or workflow-specific
-  bootstrap code.
+- GitHub Actions may validate repository quality and security. Do not restore
+  AI-SDLC orchestration workflows, composite runtime actions, or their bootstrap.
 - Keep credentials out of source control and deployment manifests.
 
 ## Working rules
