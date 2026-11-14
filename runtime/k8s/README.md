@@ -43,6 +43,13 @@ bundle stops the attempt before `scc` starts. Mount a pinned copy of
 `implementation/profiles/ai-sdlc.yaml` from A-Dev; do not source it from a
 work item or target repository.
 
+For supervised local development, `tools/codexcli_openai_wrapper.py` exposes a
+localhost-only OpenAI-compatible endpoint backed by `codex exec`. It allows
+SCC to use CodexCLI as a simulated model against a named workspace without
+turning Codex credentials into a cluster secret. It is intentionally not a
+production gateway: bind it only to `127.0.0.1`, use a disposable or reviewed
+workspace, and never expose it outside the local host.
+
 - `internal/contract` loads `.ai-sdlc.yaml` from the path named by
   `AI_SDLC_CONTRACT_PATH` (default: schema-documented defaults). Each
   component derives its policy from it: `admission.PolicyFromContract`,
