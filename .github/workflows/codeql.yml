@@ -9,33 +9,58 @@ on:
 permissions: {}
 jobs:
   analyze:
-    name: codeql (${{ matrix.language }})
+    # Keep the original job/category so existing main alerts remain comparable.
+    name: codeql (javascript)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       security-events: write
       contents: read
       actions: read
-    strategy:
-      fail-fast: false
-      matrix:
-        # JavaScript is the standalone security-log utility, not the old runtime.
-        language: [javascript, go, python]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        with:
+          languages: javascript
+      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+  go:
+    name: codeql (go)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@802e89cd7394b98352d79117a8b463bbfc2fdacf
-        if: matrix.language == 'go'
         with:
           go-version-file: runtime/k8s/go.mod
           cache-dependency-path: runtime/k8s/go.sum
       - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
-          languages: ${{ matrix.language }}
-          build-mode: ${{ matrix.language == 'go' && 'manual' || 'none' }}
+          languages: go
+          build-mode: manual
       - name: Build Go runtime for extraction
-        if: matrix.language == 'go'
         working-directory: runtime/k8s
         run: go build ./...
       - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
-          category: /language:${{ matrix.language }}
+          category: /language:go
+  python:
+    name: codeql (python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        with:
+          languages: python
+          build-mode: none
+      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        with:
+          category: /language:python
