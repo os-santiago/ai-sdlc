@@ -15,11 +15,9 @@ func main() {
 	ctx := context.Background()
 	deps := admission.Deps{}
 
-	// DATABASE_URL is optional: unset (or unreachable) means this
-	// component degrades to ADR-0004's original synchronous-only
-	// behavior — it never crashes a running pod for a missing dependency
-	// (internal/contract.LoadFromEnv's "degrade, never crash" posture,
-	// applied here to persistence too).
+	// Unset DATABASE_URL retains the isolated synchronous evaluator.
+	// A configured but unavailable database fails startup, so Kubernetes
+	// retries rather than declaring a stateless component ready.
 	if url := os.Getenv("DATABASE_URL"); url != "" {
 		db, err := store.Open(ctx, url)
 		if err != nil {

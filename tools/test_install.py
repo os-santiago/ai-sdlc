@@ -2,6 +2,8 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import subprocess
+import os
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +13,36 @@ spec.loader.exec_module(installer)
 
 
 class InstallerBoundaryTests(unittest.TestCase):
+    def test_standalone_bootstrap_ref_mismatch_preserves_cached_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'source'
+            source.mkdir()
+            def git(*args):
+                return subprocess.check_output(['git', '-C', str(source), *args], text=True).strip()
+            git('init', '-q')
+            git('config', 'user.name', 'Installer test')
+            git('config', 'user.email', 'installer@example.invalid')
+            git('remote', 'add', 'origin', 'https://github.com/os-santiago/ai-sdlc.git')
+            (source / 'tools').mkdir()
+            (source / 'tools/install.py').write_text('raise SystemExit("must not execute")\n')
+            git('add', '.')
+            git('commit', '-qm', 'first')
+            requested = git('rev-parse', 'HEAD')
+            (source / 'second').write_text('committed\n')
+            git('add', '.')
+            git('commit', '-qm', 'second')
+            current = git('rev-parse', 'HEAD')
+            (source / 'second').write_text('local edits\n')
+            script = root / 'install.sh'
+            script.write_bytes((installer.ROOT / 'install.sh').read_bytes())
+            result = subprocess.run(['bash', str(script), 'plan'], text=True, capture_output=True,
+                                    env=dict(os.environ, AI_SDLC_SOURCE_DIR=str(source), AI_SDLC_INSTALL_REF=requested))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('differs from AI_SDLC_INSTALL_REF', result.stderr)
+            self.assertEqual(git('rev-parse', 'HEAD'), current)
+            self.assertEqual((source / 'second').read_text(), 'local edits\n')
+
     def test_stale_or_failed_creation_marker_cannot_adopt_a_cluster(self):
         with tempfile.TemporaryDirectory() as tmp:
             marker = Path(tmp) / 'ownership.json'
