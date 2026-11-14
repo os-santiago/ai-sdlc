@@ -18,6 +18,24 @@ type Identity struct {
 	PrivateKey string `json:"privateKey"`
 }
 
+// Validate checks the signing identity against trusted configuration before
+// accepting work. Merely matching a role string is not proof of key possession.
+func (i Identity) Validate(p Policy) error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	key, err := p.verificationKey(i.KeyID, i.Role)
+	if err != nil {
+		return err
+	}
+	challenge := []byte("ai-sdlc/identity-validation/v1\x00")
+	signature, err := i.sign(challenge)
+	if err != nil {
+		return err
+	}
+	return verify(key, challenge, signature)
+}
+
 func NewIdentity(role, keyID string) (Identity, PublicKey, error) {
 	if !roles[role] || !keyIDPattern.MatchString(keyID) {
 		return Identity{}, PublicKey{}, errors.New("invalid identity")

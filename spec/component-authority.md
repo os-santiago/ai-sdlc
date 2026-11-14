@@ -65,6 +65,12 @@ outgoing events. Same ID and same digest returns the stored result; same ID
 and different digest fails. Fresh transport signatures allow safe redelivery
 of the original durable event. No effect may precede that transaction boundary.
 
+After commit, the receiver signs a domain-separated Ed25519 acknowledgement
+binding its identity, the policy revision, the receipt digest, transport nonce
+and result digest. A relay must verify that acknowledgement before recording
+delivery. An unsigned HTTP 200, a redirect or an acknowledgement for another
+attempt is not evidence that the receiver committed the command.
+
 ## Trusted configuration and isolation
 
 Policy comes from the reviewed deployment revision and is mounted read-only
@@ -83,14 +89,22 @@ these boundaries even when the HTTP signatures are correct.
 ## Implementation status and validation
 
 `runtime/k8s/internal/authority` implements policy validation and cryptographic
-receipt/transport verification, with positive and negative tests for every
-transition. This is the hidden first rollout stage. It is not yet wired into
-HTTP handlers, outbox, durable inbox, database roles or installation identities.
-The installed runtime remains in maintenance. This library alone does not
-establish an authenticated runtime or a functional issue-to-production cycle.
+receipt/transport/acknowledgement verification. `internal/delivery` implements
+a signed HTTP handler, transactional inbox/outbox, nonce consumption, stored
+responses and a relay bounded to eight attempts. PostgreSQL-backed tests cover
+concurrent delivery, restart, rollback, response loss and component privileges.
+
+These remain hidden integration building blocks. Component entry points still
+use the legacy unsigned outbox; the new handler/relay and role provisioning are
+not selected by the installer. The installed runtime remains in maintenance.
+These libraries alone do not establish an authenticated installed runtime or a
+functional issue-to-production cycle. See the
+[runtime integration boundary](../runtime/k8s/README.md#signed-delivery-integration-boundary).
 Fleet signal resolution remains separately tracked by [kill-switch.md](kill-switch.md).
 
 Run `go test ./internal/authority` from `runtime/k8s`; run
 `bash tools/test-contracts.sh` from the repository root to validate the schema
-fixture. Integration must prove durable replay protection, ownership isolation
-and fail-closed startup before active mode can be enabled.
+fixture. Run `go test -p 1 ./...` with `AI_SDLC_TEST_DATABASE_URL` pointing to a
+dedicated disposable PostgreSQL database for durable delivery and ownership
+tests. Deployment integration must prove these same boundaries and fail-closed
+startup with the installed component identities before active mode is enabled.
