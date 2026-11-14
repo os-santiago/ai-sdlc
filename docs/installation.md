@@ -160,9 +160,10 @@ results in maintenance mode, not autonomous delivery or production evidence.
 
 The first local trial exposed a non-numeric worker image user rejected by
 Kubernetes; this was corrected before the pinned build above. Database/DNS
-startup ordering now causes explicit bounded-by-Kubernetes startup retries,
-rather than silently running without persistence. Initial pod restarts while
-PostgreSQL becomes ready are expected; installation still has a finite timeout.
+startup ordering now causes Kubernetes startup retries rather than silently
+running without persistence. Initial pod restarts while PostgreSQL becomes
+ready are expected. The installer has a finite wait timeout; Kubernetes may
+continue retrying pods after the installer exits with failure.
 
 - **Missing tool/runtime:** install Python/Git and Docker or Podman. The
   installer downloads the Kubernetes clients itself.

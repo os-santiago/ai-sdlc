@@ -11,6 +11,27 @@ import sys
 import install
 
 
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def verify_deployments(deployments, lock):
+    names = {'admissionController': 'admission-controller', 'orchestrator': 'orchestrator',
+             'worker': 'worker', 'releaseManager': 'release-manager', 'relay': 'relay'}
+    expected = {'ai-sdlc-' + names[key]: lock['image']['repository'] + '@' + value['digest']
+                for key, value in lock['components'].items()}
+    require(len(deployments) == 5, 'Expected exactly five component Deployments')
+    actual = {}
+    for deployment in deployments:
+        name = deployment['metadata']['name']
+        require(deployment.get('status', {}).get('readyReplicas') == 1, 'Component is not ready: ' + name)
+        containers = deployment['spec']['template']['spec']['containers']
+        require(len(containers) == 1, 'Expected one container per component: ' + name)
+        actual[name] = containers[0]['image']
+    require(actual == expected, 'Component-to-image mapping differs from the committed lock')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cluster', default='ai-sdlc')
@@ -33,28 +54,21 @@ def main():
         pvc = next(p for p in claims if p['metadata']['name'] == 'data-ai-sdlc-postgres-0')
         migrations = read('exec', 'ai-sdlc-postgres-0', '--', 'psql', '-U', 'ai_sdlc', '-d', 'ai_sdlc', '-Atc',
                           'SELECT count(*) FROM schema_migrations;')
-        assert int(migrations) > 0, 'Database migration evidence is missing'
+        require(int(migrations) > 0, 'Database migration evidence is missing')
         return {'secretUID': secret['metadata']['uid'],
                 'secretDigest': hashlib.sha256(json.dumps(secret['data'], sort_keys=True).encode()).hexdigest(),
                 'pvcUID': pvc['metadata']['uid'], 'volume': pvc['spec']['volumeName'],
                 'migrations': migrations}
 
     config = json.loads(read('get', 'configmap', 'ai-sdlc-config', '-o', 'json'))
-    assert config['data']['AI_SDLC_RUNTIME_MODE'] == 'maintenance'
+    require(config['data']['AI_SDLC_RUNTIME_MODE'] == 'maintenance', 'Verification requires maintenance mode')
     before = snapshot()
     install.main(['local', '--cluster', args.cluster, '--provider', args.provider])
-    assert before == snapshot(), 'Reapplication changed credentials, persistent storage or migration state'
+    require(before == snapshot(), 'Reapplication changed credentials, persistent storage or migration state')
     deployments = json.loads(read('get', 'deployments', '-l', 'app.kubernetes.io/instance=ai-sdlc', '-o', 'json'))['items']
-    assert len(deployments) == 5
-    expected = set(v['digest'] for v in install.image_lock(install.LOCAL / 'images.lock.json')['components'].values())
-    actual = set()
-    for d in deployments:
-        assert d['status']['readyReplicas'] == 1
-        assert len(d['spec']['template']['spec']['containers']) == 1
-        actual.add(d['spec']['template']['spec']['containers'][0]['image'].split('@')[1])
-    assert actual == expected, 'Running desired images differ from the committed lock'
+    verify_deployments(deployments, install.image_lock(install.LOCAL / 'images.lock.json'))
     worker_uid = read('exec', 'deployment/ai-sdlc-worker', '--', 'id', '-u')
-    assert worker_uid == '1000'
+    require(worker_uid == '1000', 'Worker must run with numeric UID 1000')
     report = {'installation': 'passed', 'reapplication': 'passed', 'readyComponents': 5,
               'postgresReady': True, 'credentialsPreserved': True, 'persistentVolumePreserved': True,
               'migrationsPreserved': True, 'workerUID': 1000,
