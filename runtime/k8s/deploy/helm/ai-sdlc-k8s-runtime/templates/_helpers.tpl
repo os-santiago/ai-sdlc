@@ -25,7 +25,7 @@ Create a default fully qualified app name.
 Namespace to render every namespaced resource into.
 */}}
 {{- define "ai-sdlc-k8s-runtime.namespace" -}}
-{{- .Values.namespace.name | default "ai-sdlc-runtime" }}
+{{- .Values.namespace.name | default .Release.Namespace }}
 {{- end }}
 
 {{/*

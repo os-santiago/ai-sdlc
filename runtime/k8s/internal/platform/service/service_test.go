@@ -1,9 +1,31 @@
 package service
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
+
+func TestMaintenanceCannotReachDeliveryHandlers(t *testing.T) {
+	t.Setenv("AI_SDLC_RUNTIME_MODE", "maintenance")
+	for _, path := range []string{"/v1/admissions/evaluate", "/v1/plans/reconcile", "/v1/attempts/dispatch", "/v1/releases/evaluate", "/metadata"} {
+		called := false
+		h := maintenanceBoundary(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, nil))
+		if called || w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("maintenance allowed mutation at %s: called=%v status=%d", path, called, w.Code)
+		}
+	}
+	for _, path := range []string{"/healthz", "/readyz", "/metadata"} {
+		w := httptest.NewRecorder()
+		maintenanceBoundary(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })).ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("observation denied at %s", path)
+		}
+	}
+}
 
 func TestMetadataRequiresNameAndResponsibility(t *testing.T) {
 	tests := []Metadata{

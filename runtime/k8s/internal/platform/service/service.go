@@ -75,7 +75,7 @@ func Run(metadata Metadata, registrars ...RouteRegistrar) error {
 	// connection) so they stay as before.
 	server := &http.Server{
 		Addr:              address,
-		Handler:           requestLog(logger, mux),
+		Handler:           requestLog(logger, maintenanceBoundary(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      writeTimeout,
@@ -96,6 +96,24 @@ func Run(metadata Metadata, registrars ...RouteRegistrar) error {
 		return fmt.Errorf("serve %s: %w", metadata.Name, err)
 	}
 	return nil
+}
+
+// Maintenance installations expose observation only. This is not component
+// authentication: live authority enforcement is tracked separately.
+func maintenanceBoundary(next http.Handler) http.Handler {
+	maintenance := MaintenanceMode()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if maintenance && (r.Method != http.MethodGet || (r.URL.Path != "/healthz" && r.URL.Path != "/readyz" && r.URL.Path != "/metadata")) {
+			WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "runtime_in_maintenance", "delivery": "disabled"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// MaintenanceMode is selected explicitly by the initial Helm installation.
+func MaintenanceMode() bool {
+	return os.Getenv("AI_SDLC_RUNTIME_MODE") == "maintenance"
 }
 
 // WriteJSON writes a JSON response with the given status code.

@@ -2,9 +2,46 @@ package store
 
 import (
 	"context"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
+	"time"
 )
+
+func TestConcurrentFreshMigrations(t *testing.T) {
+	db := testDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	schema := "startup_" + strings.ReplaceAll(NewID(), "-", "")
+	if _, err := db.Pool.ExecContext(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Pool.ExecContext(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
+	u, err := url.Parse(os.Getenv("AI_SDLC_TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	q.Set("search_path", schema)
+	u.RawQuery = q.Encode()
+	results := make(chan error, 5)
+	for i := 0; i < 5; i++ {
+		go func() {
+			other, err := Open(ctx, u.String())
+			if err == nil {
+				defer other.Close()
+				err = other.Migrate(ctx)
+			}
+			results <- err
+		}()
+	}
+	for i := 0; i < 5; i++ {
+		if err := <-results; err != nil {
+			t.Errorf("concurrent startup: %v", err)
+		}
+	}
+}
 
 // testDB opens a real Postgres connection and runs migrations, skipping the
 // test when AI_SDLC_TEST_DATABASE_URL is unset. This runtime's design goal

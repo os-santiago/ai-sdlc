@@ -49,6 +49,10 @@ func main() {
 // startup — this component degrades, it never crashes a running pod over
 // a misconfigured env var (ADR-0005).
 func selectEngine() engine.Engine {
+	if service.MaintenanceMode() {
+		log.Print("worker: maintenance mode; generative execution disabled")
+		return engine.StubEngine{}
+	}
 	switch os.Getenv("AI_SDLC_ENGINE") {
 	case "scc":
 		return selectSCCEngine()
