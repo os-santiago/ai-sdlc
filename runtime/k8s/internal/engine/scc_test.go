@@ -211,7 +211,7 @@ func TestADevRejectsBeforeCheckout(t *testing.T) {
 }
 
 func TestADevRejectsMalformedAndMismatchedPolicy(t *testing.T) {
-	for _, content := range []string{"", " ", "version: 1.0.0", strings.ReplaceAll(validADevProfile, "fail_closed: true", "fail_closed: false"), validADevProfile + "unknown: true\n", validADevProfile + "---\nextra: true\n", strings.Repeat("x", 65537)} {
+	for _, content := range []string{"", " ", "version: 1.0.0", strings.ReplaceAll(validADevProfile, "[reviewed]", "['']"), strings.ReplaceAll(validADevProfile, "fail_closed: true", "fail_closed: false"), validADevProfile + "unknown: true\n", validADevProfile + "---\nextra: true\n", strings.Repeat("x", 65537)} {
 		path := filepath.Join(t.TempDir(), "profile.yaml")
 		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 			t.Fatal(err)

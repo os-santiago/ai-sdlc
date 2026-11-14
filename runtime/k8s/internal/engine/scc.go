@@ -356,6 +356,13 @@ func readADevBundle(path, digest string) (string, error) {
 	default:
 		return "", errors.New("invalid A-Dev freshness policy")
 	}
+	for _, entries := range [][]string{profile.Knowledge.TrustedSources, profile.Policy.AuthorityOrder, profile.Success.AcceptanceCriteria, profile.Success.RequiredEvidence, profile.Components.Deterministic, profile.Components.Generative} {
+		for _, entry := range entries {
+			if strings.TrimSpace(entry) == "" {
+				return "", errors.New("A-Dev profile contains an empty entry")
+			}
+		}
+	}
 	return string(raw), nil
 }
 

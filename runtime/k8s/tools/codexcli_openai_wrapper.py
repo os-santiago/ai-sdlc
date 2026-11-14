@@ -45,6 +45,8 @@ def complete(request):
         schema_path.write_text(json.dumps(schema))
         result = subprocess.run(
             ["codex", "exec", "--ephemeral", "--ignore-user-config", "--sandbox", "read-only",
+             "--disable", "shell_tool", "--disable", "unified_exec", "--disable", "multi_agent",
+             "--disable", "multi_agent_v2", "-c", 'web_search="disabled"',
              "--skip-git-repo-check", "-C", directory, "--output-schema", str(schema_path),
              "--output-last-message", str(output_path), "-"],
             input=prompt, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
