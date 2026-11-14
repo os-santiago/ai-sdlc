@@ -22,7 +22,7 @@ func main() {
 	if url := os.Getenv("DATABASE_URL"); url != "" {
 		db, err := store.Open(ctx, url)
 		if err != nil {
-			log.Printf("worker: database unavailable, running without persistence (attempt dispatch disabled): %v", err)
+			log.Fatalf("worker: configured database unavailable; refusing stateless fallback: %v", err)
 		} else {
 			if err := db.Migrate(ctx); err != nil {
 				log.Fatalf("worker: migrate database: %v", err)

@@ -39,7 +39,7 @@ def tools(cache):
     for name, entry in lock.items():
         target = cache / (name + '-' + entry['version'])
         if not target.exists() or digest(target.read_bytes()) != entry['binarySha256']:
-            print('Downloading verified ' + name + ' ' + entry['version'], flush=True)
+            print('Downloading verified ' + name + ' ' + entry['version'], file=sys.stderr, flush=True)
             with urllib.request.urlopen(entry['url'], timeout=120) as response:
                 data = response.read()
             if digest(data) != entry['sha256']:

@@ -5,6 +5,12 @@ the portable `.ai-sdlc.yaml` contract (`spec/ai-sdlc.schema.json`) and the
 `spec/normalized-event.schema.json` intake payload. The removed GitHub
 Actions runtime is preserved only by the repository deprecation tag.
 
+For installation, start at [the Helm/kind guide](../../docs/installation.md).
+The canonical installer is `./install.sh` at the repository root. Helm chart
+0.2 deploys one container/Deployment per component and uses internal Services.
+The original Kustomize topology remains a legacy manual deployment surface;
+it is not the new installer's desired state.
+
 ## Components
 
 | Component | Stage (ADR-0003) | Package |
@@ -20,8 +26,8 @@ Each of the first four is a standalone HTTP service
 function per component, wrapped by a thin HTTP handler. `relay` is the
 5th container: it polls the `outbox` table (`internal/store`,
 `internal/outbox`) and delivers unpublished events/commands to the other
-four over HTTP (localhost — all five are co-located in one pod, see
-`deploy/kustomize/base/deployment.yaml`), closing the "wiring to a real
+four over HTTP (Service DNS in Helm 0.2; localhost in the legacy single-pod
+Kustomize deployment), closing the "wiring to a real
 event bus" gap ADR-0004 left open, without a message broker
 (ADR-0005: PostgreSQL + a transactional outbox, matching
 `homedir-ai-sdlc`'s own prior ADR-0002).
@@ -200,7 +206,8 @@ make containers SCC_ENGINE_PIN=<resolved engine.pin>
 
 Every surface needs a Postgres reachable via `DATABASE_URL` before the
 pipeline does anything beyond respond-and-discard (ADR-0005). The default
-path is a [CloudNativePG](https://cloudnative-pg.io/) `Cluster`, rendered
+Helm local profile installs a PostgreSQL StatefulSet; the generic default
+uses a [CloudNativePG](https://cloudnative-pg.io/) `Cluster`, rendered
 from `deploy/kustomize/base/postgres-cluster.yaml` / Helm's
 `postgres.cloudNativePG` values — see
 [deploy/kustomize/base/README.md](deploy/kustomize/base/README.md)
