@@ -65,7 +65,7 @@ func TestDispatchCompletesOnFirstSuccessfulAttempt(t *testing.T) {
 	workItemUUID := store.NewID()
 	insertWorkItemForDispatch(t, db, planID, workItemUUID)
 
-	eng := &scriptedEngine{results: []engine.Result{{ExitCode: 0, ValidationPassed: true}}}
+	eng := &scriptedEngine{results: []engine.Result{{ExitCode: 0, ValidationPassed: true, ChangedFiles: []string{"implementation.go"}}}}
 	command := workItemReady{CorrelationID: "corr-1", PlanID: planID, WorkItemID: workItemUUID, Repository: "os-santiago/homedir-dispatch-test", BaseRef: "main", IssueNumbers: []int{1}, AcceptanceCriteria: []string{"Done."}}
 
 	decision, attemptNumber, err := dispatch(context.Background(), db, eng, command, DefaultPolicy())
@@ -129,7 +129,7 @@ func TestDispatchResumesFromPriorAttemptCount(t *testing.T) {
 		t.Fatalf("seed prior attempt: %v", err)
 	}
 
-	eng := &scriptedEngine{results: []engine.Result{{ExitCode: 0, ValidationPassed: true}}}
+	eng := &scriptedEngine{results: []engine.Result{{ExitCode: 0, ValidationPassed: true, ChangedFiles: []string{"implementation.go"}}}}
 	command := workItemReady{CorrelationID: "corr-1", PlanID: planID, WorkItemID: workItemUUID, Repository: "os-santiago/homedir-dispatch-test", BaseRef: "main", IssueNumbers: []int{1}, AcceptanceCriteria: []string{"Done."}}
 
 	_, attemptNumber, err := dispatch(ctx, db, eng, command, DefaultPolicy())
