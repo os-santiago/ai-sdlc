@@ -34,6 +34,15 @@ only job.
 
 ## Spec integration
 
+## A-Dev policy bundle
+
+When `AI_SDLC_ADEV_BUNDLE_PATH` is set, the SCC worker reads the mounted,
+reviewed A-Dev AI-SDLC profile before each invocation and places it in the
+trusted policy section of the SCC prompt. An unreadable, empty, or oversized
+bundle stops the attempt before `scc` starts. Mount a pinned copy of
+`implementation/profiles/ai-sdlc.yaml` from A-Dev; do not source it from a
+work item or target repository.
+
 - `internal/contract` loads `.ai-sdlc.yaml` from the path named by
   `AI_SDLC_CONTRACT_PATH` (default: schema-documented defaults). Each
   component derives its policy from it: `admission.PolicyFromContract`,
