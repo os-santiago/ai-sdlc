@@ -6,5 +6,6 @@ in public issues.
 
 The active runtime is under `runtime/k8s/`. Security reports should identify
 the affected component, deployment surface, observable impact, and a safe
-reproduction path. GitHub Actions findings apply only to the deprecated
-historical tag and should identify that tag explicitly.
+reproduction path. Repository quality and security workflows under
+`.github/workflows/` remain supported. Findings in the retired Actions
+AI-SDLC runtime should identify the historical deprecation tag explicitly.

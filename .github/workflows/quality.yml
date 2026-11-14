@@ -1,0 +1,56 @@
+name: quality
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: local-ci-only
+          POSTGRES_DB: ai_sdlc_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@802e89cd7394b98352d79117a8b463bbfc2fdacf
+        with:
+          go-version-file: runtime/k8s/go.mod
+          cache-dependency-path: runtime/k8s/go.sum
+      - name: Install contract validator
+        run: |
+          python3 -m venv "$RUNNER_TEMP/contract-venv"
+          "$RUNNER_TEMP/contract-venv/bin/pip" install -r tools/quality-requirements.txt
+          echo "$RUNNER_TEMP/contract-venv/bin" >> "$GITHUB_PATH"
+      - name: Validate portable examples and fail-closed validator behavior
+        run: bash tools/test-contracts.sh
+      - name: Build, vet, and test runtime with a fresh PostgreSQL database
+        working-directory: runtime/k8s
+        env:
+          AI_SDLC_TEST_DATABASE_URL: postgres://postgres:local-ci-only@localhost:5432/ai_sdlc_test?sslmode=disable
+        run: |
+          go build ./...
+          go vet ./...
+          go test -p 1 ./...
+  security-log-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - run: node --test scripts/security-log.test.js

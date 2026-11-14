@@ -7,4 +7,6 @@ Current operational documentation lives with the Kubernetes/OpenShift runtime:
 - [DEPRECATION.md](../DEPRECATION.md) — GitHub Actions retirement and the
   preserved historical tag.
 
-The GitHub Actions-specific documentation was removed with its implementation.
+The AI-SDLC orchestration documentation was removed with its implementation.
+Repository [quality checks](quality-checks.md) and [security log](security-log.md)
+remain supported through GitHub Actions.

@@ -1,0 +1,43 @@
+name: sbom
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: sbom-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  sbom:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Generate CycloneDX SBOM of the current Go runtime
+        uses: anchore/sbom-action@fffec3d851af758d56fee099cf3fbf8aa8779843 # v0.24.3
+        with:
+          path: runtime/k8s
+          format: cyclonedx-json
+          output-file: ${{ runner.temp }}/ai-sdlc-sbom.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Require CycloneDX with the Go dependency inventory
+        env:
+          SBOM_PATH: ${{ runner.temp }}/ai-sdlc-sbom.cdx.json
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path(os.environ['SBOM_PATH']).read_text())
+          assert data['bomFormat'] == 'CycloneDX'
+          assert any(c.get('purl', '').startswith('pkg:golang/') for c in data.get('components', [])), 'Go dependencies missing'
+          print(f"CycloneDX {data['specVersion']}: {len(data['components'])} components")
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ai-sdlc-sbom-${{ github.event.pull_request.number || github.run_id }}
+          path: ${{ runner.temp }}/ai-sdlc-sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 14
