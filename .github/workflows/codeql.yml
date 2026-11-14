@@ -20,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         # JavaScript is the standalone security-log utility, not the old runtime.
-        language: [javascript, go]
+        language: [javascript, go, python]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@802e89cd7394b98352d79117a8b463bbfc2fdacf

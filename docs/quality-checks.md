@@ -5,9 +5,9 @@ GitHub Actions validates this repository. AI-SDLC execution lives only in
 
 | Workflow | Evidence |
 | --- | --- |
-| `quality.yml` | `contract`: portable schema examples, rejection tests, Go build/vet and PostgreSQL tests; security-log tamper/signature tests |
+| `quality.yml` | `contract`: portable schema examples, rejection tests, Go build/vet and PostgreSQL tests; security-log tamper/signature tests; Codex wrapper protocol tests |
 | `secret-scan.yml` | `gitleaks`: incoming commits on PR/push, full history weekly |
-| `codeql.yml` | Go runtime and JavaScript security-log static analysis, SARIF in Code scanning |
+| `codeql.yml` | Go runtime, JavaScript security log and Python wrapper static analysis, SARIF in Code scanning |
 | `sbom.yml` | `sbom`: CycloneDX inventory of Go dependencies, retained 14 days |
 | `actionlint.yml` | Workflow syntax, expressions and shell checks |
 | `security-log-validate.yml` | Integrity of `SECURITY_LOG.md` when present |
@@ -30,6 +30,7 @@ source /tmp/ai-sdlc-quality-venv/bin/activate
 python3 -m pip install -r tools/quality-requirements.txt
 bash tools/test-contracts.sh
 node --test scripts/security-log.test.js
+python3 -m unittest discover -s runtime/k8s/tools -p 'test_*.py' -v
 bash tools/actionlint.sh
 bash tools/gitleaks.sh git . --redact
 cd runtime/k8s
