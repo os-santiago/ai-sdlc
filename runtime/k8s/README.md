@@ -65,6 +65,11 @@ tool-mapping tests are not evidence of a complete autonomous release cycle.
 
 ## Local autonomous-cycle validation
 
+This is an **experimental probe**, not a reliable autonomous onboarding path.
+Live executor runs have both completed successfully and exhausted their budget
+without changes. A passing run demonstrates that execution's evidence only;
+do not infer repeatability or production readiness from it.
+
 On Linux, install Podman, Git, Python 3 and Codex CLI, then authenticate Codex
 (`codex login`). Supply a reviewed A-Dev profile from its separate checkout:
 
@@ -109,6 +114,15 @@ publish releases or verify production. Its SCC result checks manifest/Git
 agreement; that alone is not independent software validation. The local
 harness supplies the separate deterministic probe check and exercises release
 **decisions**, not an autonomous production release.
+
+Validation observed on 2026-11-14 with SCC 0.4.2: one entrypoint run completed
+with 4 model requests, 11 tool calls, one exact documentation change, persisted
+release decisions and drained outbox. A subsequent run on clean revision
+`db725e3347001bfeef57e6c76a83a3a7d16d4691` exhausted its 12-tool budget without
+changes and escalated safely. The full SCC role pipeline also exhausted its
+probe budget. Investigation reproduced SCC accepting malformed/no-op patches
+as "applied"; the Git checks prevent that message alone from passing this
+probe. Model/tool convergence remains an open limitation.
 
 ## Spec integration
 
