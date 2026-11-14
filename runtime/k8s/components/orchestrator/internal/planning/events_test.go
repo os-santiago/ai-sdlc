@@ -1,12 +1,61 @@
 package planning
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
+
+// Exercise the strict HTTP boundary, not just the domain functions. These
+// fields are emitted by admission.persist and cycle.persistAttempt in real runs.
+func TestRoutesAcceptCompleteRuntimeEvents(t *testing.T) {
+	db := testDB(t)
+	mux := http.NewServeMux()
+	Routes(mux, Deps{DB: db})
+	post := func(path string, event map[string]any, want int) {
+		t.Helper()
+		body, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body)))
+		if response.Code != want {
+			t.Fatalf("%s: status %d, body %s", path, response.Code, response.Body.String())
+		}
+	}
+	repository := "local/wire-" + store.NewID()
+	admitted := map[string]any{
+		"eventId": store.NewID(), "occurredAt": "2026-11-14T00:00:00Z", "correlationId": "wire-test",
+		"repository": repository, "issue": 1, "issueRevision": "revision-1", "decision": "accepted",
+		"risk": "low", "policyVersion": "1.0.0", "reasons": []string{"Accepted."},
+		"requiredGates": []string{"tests"}, "acceptanceCriteria": []string{"Document the local test procedure."},
+	}
+	post("/v1/plans/events/issue-admission-decided", admitted, http.StatusOK)
+	var id string
+	if err := db.Pool.QueryRowContext(context.Background(), `SELECT w.uuid FROM work_items w JOIN plans p ON p.id=w.plan_id WHERE p.repository=$1`, repository).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	post("/v1/plans/events/implementation-attempt-decided", map[string]any{
+		"eventId": store.NewID(), "occurredAt": "2026-11-14T00:00:01Z", "correlationId": "wire-test",
+		"workItemId": id, "attemptNumber": 1, "outcome": "completed", "reason": "Validated.", "reprompt": false,
+	}, http.StatusOK)
+	var status string
+	if err := db.Pool.QueryRowContext(context.Background(), `SELECT status FROM work_items WHERE uuid=$1`, id).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "completed" {
+		t.Fatalf("work item status = %s", status)
+	}
+	admitted["unexpectedAuthority"] = true
+	post("/v1/plans/events/issue-admission-decided", admitted, http.StatusBadRequest)
+}
 
 func testDB(t *testing.T) *store.DB {
 	t.Helper()

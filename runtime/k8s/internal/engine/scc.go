@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -67,11 +68,11 @@ const (
 // crash (same "degrade, never crash a running pod" posture as
 // internal/contract.LoadFromEnv).
 type manifest struct {
-	Success      bool     `json:"success"`
-	Model        string   `json:"model"`
-	ExitReason   string   `json:"exit_reason"`
-	FilesChanged []string `json:"files_changed"`
-	Error        string   `json:"error"`
+	Success      bool   `json:"success"`
+	Model        string `json:"model"`
+	ExitReason   string `json:"exit_reason"`
+	FilesChanged int    `json:"files_changed"`
+	Error        string `json:"error"`
 }
 
 // Checker ensures WorkDir is a clean checkout of a repository at a ref
@@ -149,6 +150,17 @@ func (e SCCEngine) Invoke(ctx context.Context, request Request) (Result, error) 
 			return Result{}, fmt.Errorf("scc engine: checkout %s@%s: %w", request.Repository, request.BaseRef, err)
 		}
 	}
+	baseHead, err := gitOutput(ctx, e.WorkDir, "rev-parse", "HEAD")
+	if err != nil {
+		return Result{}, errors.New("scc engine: a Git worktree with a committed baseline is required")
+	}
+	status, err := gitOutput(ctx, e.WorkDir, "status", "--porcelain=v1", "-z")
+	if err != nil || len(status) != 0 {
+		// Preserve an operator's edits or a partial prior attempt. Returning a
+		// terminal decision lets dispatch persist the stop instead of causing
+		// an HTTP 500 that the relay would redeliver indefinitely.
+		return Result{ExitCode: int(SCCFatal), UnsafeOrAmbiguous: true}, nil
+	}
 
 	configPath, err := e.configPath()
 	if err != nil {
@@ -213,16 +225,18 @@ func (e SCCEngine) Invoke(ctx context.Context, request Request) (Result, error) 
 	exitCode, ranAtAll := exitCodeOf(runErr)
 	timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
 
-	var changedFiles []string
-	if m, readErr := readManifest(summaryPath); readErr == nil {
-		changedFiles = m.FilesChanged
-	}
-	// else: engine crashed before writing a manifest — changedFiles stays
-	// nil, which mapExitCode (and, downstream, cycle.Evaluate) already
-	// treats as "completed without producing changes" (retry/escalate),
-	// the correct conservative behavior for an unreadable manifest.
-
+	// Pinned SCC v1 reports a count, not a list. Obtain authoritative paths
+	// from Git; preserve partial changes as evidence even on failure.
+	changedFiles, diffErr := changedWorktreeFiles(ctx, e.WorkDir, baseHead)
+	m, manifestErr := readManifest(summaryPath)
+	validManifest := manifestErr == nil && m.Success && m.ExitReason == "success" && m.FilesChanged == len(changedFiles)
 	result := mapExitCode(exitCode, changedFiles, timedOut)
+	result.ValidationPassed = result.ValidationPassed && validManifest && diffErr == nil
+	if diffErr != nil || (ranAtAll && exitCode == 0 && !validManifest) || (len(changedFiles) > 0 && !result.ValidationPassed) {
+		// Retrying could overwrite evidence or encounter a dirty worktree.
+		// Escalate immediately; never reset the operator's workspace here.
+		result.UnsafeOrAmbiguous = true
+	}
 
 	if !ranAtAll {
 		// cmd.Run() failed for a reason other than a non-zero exit (binary
@@ -232,6 +246,41 @@ func (e SCCEngine) Invoke(ctx context.Context, request Request) (Result, error) 
 		return result, fmt.Errorf("invoke scc: %w (stderr: %s)", runErr, strings.TrimSpace(stderr.String()))
 	}
 	return result, nil
+}
+
+func gitOutput(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	return cmd.Output()
+}
+
+func changedWorktreeFiles(ctx context.Context, dir string, baseHead []byte) ([]string, error) {
+	head, err := gitOutput(ctx, dir, "rev-parse", "HEAD")
+	if err != nil || !bytes.Equal(head, baseHead) {
+		return nil, errors.New("engine changed HEAD despite no-commit contract")
+	}
+	tracked, err := gitOutput(ctx, dir, "diff", "--name-only", "-z", "HEAD", "--")
+	if err != nil {
+		return nil, err
+	}
+	untracked, err := gitOutput(ctx, dir, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, err
+	}
+	unique := map[string]bool{}
+	for _, raw := range [][]byte{tracked, untracked} {
+		for _, name := range bytes.Split(raw, []byte{0}) {
+			if len(name) > 0 {
+				unique[string(name)] = true
+			}
+		}
+	}
+	files := make([]string, 0, len(unique))
+	for name := range unique {
+		files = append(files, name)
+	}
+	sort.Strings(files)
+	return files, nil
 }
 
 // mapExitCode is the pure exit-code-to-Result mapping.

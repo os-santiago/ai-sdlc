@@ -10,6 +10,7 @@ import os
 import subprocess
 import tempfile
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -58,12 +59,13 @@ def complete(request):
     if not isinstance(answer.get("content"), str) or not isinstance(answer.get("tool_calls"), list):
         raise ValueError("invalid completion")
     calls = []
+    call_prefix = uuid.uuid4().hex
     for index, call in enumerate(answer["tool_calls"]):
         if call.get("name") not in names:
             raise ValueError("unknown proposed tool")
         if not isinstance(json.loads(call["arguments"]), dict):
             raise ValueError("tool arguments must be an object")
-        calls.append({"id": f"call_{index}", "type": "function", "function": call})
+        calls.append({"id": f"call_{call_prefix}_{index}", "type": "function", "function": call})
     message = {"role": "assistant", "content": answer["content"]}
     if calls:
         message["tool_calls"] = calls

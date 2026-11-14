@@ -29,6 +29,8 @@ type Deps struct {
 // workItemReady mirrors contracts/commands/v1/work-item-ready.schema.json
 // — the command internal/outbox.Relay delivers here from the orchestrator.
 type workItemReady struct {
+	CommandID          string   `json:"commandId"`
+	IdempotencyKey     string   `json:"idempotencyKey"`
 	CorrelationID      string   `json:"correlationId"`
 	PlanID             string   `json:"planId"`
 	WorkItemID         string   `json:"workItemId"`
@@ -36,6 +38,8 @@ type workItemReady struct {
 	BaseRef            string   `json:"baseRef"`
 	IssueNumbers       []int    `json:"issueNumbers"`
 	AcceptanceCriteria []string `json:"acceptanceCriteria"`
+	RequiredGates      []string `json:"requiredGates"`
+	LeaseSeconds       int      `json:"leaseSeconds"`
 }
 
 // Routes registers the worker's HTTP API: the original dry-run
