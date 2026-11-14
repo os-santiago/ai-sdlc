@@ -7,8 +7,8 @@
 // docs/architecture/adr/0004-cloud-native-k8s-openshift-runtime.md for
 // provenance. PolicyFromContract is new in this port: it derives defaults
 // from a repo's .ai-sdlc.yaml (internal/contract) instead of the standalone
-// policies/defaults/v1/admission.yaml future-go used, so the k8s/OpenShift
-// control plane and the GHA-native runtime share one declarative contract.
+// policies/defaults/v1/admission.yaml future-go used, so the Kubernetes/OpenShift
+// control plane consumes one declarative contract.
 package admission
 
 import (

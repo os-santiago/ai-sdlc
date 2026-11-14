@@ -15,14 +15,10 @@ import (
 
 // SCCConfig is rendered to disk (default $HOME/.sc-agent/config.json)
 // before every invocation — the engine's single source of truth for
-// provider/model/permissions (docs/engine_contract.md "Configured": "the
-// engine takes provider/model configuration solely from a rendered config
-// file ... No hidden environment variable or command-line layer diverges
-// from this config"). Mirrors
-// .github/workflows/ai-sdlc-implement.yml's "Configure scc engine
-// provider" step field-for-field, and the root CLAUDE.md "Critical
-// Lessons" rule: config.json is authoritative, never a --permissions CLI
-// flag.
+// provider/model/permissions. The engine takes that configuration solely from
+// the rendered file: no hidden environment variable or command-line layer
+// diverges from it. The runtime treats config.json as authoritative and never
+// passes a --permissions CLI flag.
 type SCCConfig struct {
 	ProviderBaseURL string
 	APIKey          string
@@ -48,13 +44,11 @@ func (c SCCConfig) render() ([]byte, error) {
 	return json.MarshalIndent(doc, "", "  ")
 }
 
-// SCCExitCode mirrors config/engine-adapters.json's scc.exitCodeMap — the
-// pipeline acts on these classes, not raw numbers
-// (docs/engine_contract.md "Exit Code Semantics").
+// SCCExitCode defines the classes the control plane acts on, not raw numbers.
 type SCCExitCode int
 
 const (
-	SCCSuccess        SCCExitCode = 0  // implemented + PR opened (GHA stage then commits/pushes/opens the PR; this engine wrapper leaves that to the caller)
+	SCCSuccess        SCCExitCode = 0  // implemented + proposal opened; repository writes belong to the caller
 	SCCNoChanges      SCCExitCode = 10 // no workspace mutations (clean no-op)
 	SCCProviderError  SCCExitCode = 20
 	SCCAuthError      SCCExitCode = 21
@@ -63,9 +57,8 @@ const (
 	SCCFatal          SCCExitCode = 1
 )
 
-// manifest is the subset of the run manifest (--summary-file,
-// docs/engine_contract.md "Normalized Events and Run Manifest") this
-// engine reads back. Unknown/absent fields are fine — a manifest that
+// manifest is the subset of the run manifest (--summary-file) this engine
+// reads back. Unknown or absent fields are fine — a manifest that
 // fails to parse or is missing degrades to an empty Result, never a
 // crash (same "degrade, never crash a running pod" posture as
 // internal/contract.LoadFromEnv).
@@ -81,8 +74,7 @@ type manifest struct {
 // immediately before each invocation — internal/checkout.GitCheckout is
 // the implementation this runtime wires in (components/worker/cmd/main.go),
 // backed by a GitHub App installation token
-// (internal/githubapp.App.InstallationToken), the same auth model
-// .github/workflows/ai-sdlc-implement.yml uses and the only one this
+// (internal/githubapp.App.InstallationToken), the only auth model this
 // project ships (fail-closed: no PAT, no GITHUB_TOKEN fallback). nil
 // means the operator already guarantees WorkDir is a checkout by some
 // other means — SCCEngine runs scc there unchanged, exactly as before
@@ -92,8 +84,7 @@ type Checker interface {
 }
 
 // SCCEngine shells out to sc-agent-cli (`scc`) with the headless contract
-// (docs/engine_contract.md) — the same invocation
-// .github/workflows/ai-sdlc-implement.yml's "Run scc headless" step uses:
+// (the documented headless contract):
 //
 //	scc chat -yq --prompt-file <f> --no-commit \
 //	  --audit-log <f> --summary-file <f> \
@@ -102,13 +93,9 @@ type Checker interface {
 // configured solely via a rendered config.json (never CLI flags for
 // model/apiKey — see SCCConfig). Checkout handles the repo-checkout
 // prerequisite (see Checker's doc comment); the other prerequisite this
-// wrapper still does not handle: `scc` (an npm package) must be present
-// in the worker container image, which is currently distroless/static —
-// no Node.js, no shell. See components/worker/Containerfile's second
-// stage for the node-based image this requires, and the explicit
-// security-posture tradeoff noted there. Until that lands,
-// components/worker/cmd/main.go keeps defaulting to StubEngine even when
-// AI_SDLC_ENGINE=scc is set.
+// wrapper does not install `scc`; it must be present in the worker container
+// image. See components/worker/Containerfile for the Node-capable worker image
+// and its explicit security posture.
 type SCCEngine struct {
 	Binary          string  // default "scc"
 	WorkDir         string  // target repo checkout; required
@@ -117,7 +104,7 @@ type SCCEngine struct {
 	ProviderBaseURL string
 	APIKey          string
 	Model           string
-	MaxSteps        int // default 200 (docs/engine_contract.md / config/engine-adapters.json default)
+	MaxSteps        int // default 200
 	MaxSeconds      int // default 900
 }
 
@@ -237,7 +224,7 @@ func (e SCCEngine) Invoke(ctx context.Context, request Request) (Result, error) 
 	return result, nil
 }
 
-// mapExitCode is the pure exit-code-to-Result mapping (docs/engine_contract.md
+// mapExitCode is the pure exit-code-to-Result mapping.
 // "Exit Code Semantics" / config/engine-adapters.json's scc.exitCodeMap),
 // kept separate from Invoke's subprocess/filesystem plumbing so it is
 // directly unit-testable — the same "pure function, thin transport

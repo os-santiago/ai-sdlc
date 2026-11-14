@@ -1,4 +1,0 @@
-{
-  "error": "Error: invalid tier 'extreme' — expected low|medium|high|critical",
-  "calls": []
-}

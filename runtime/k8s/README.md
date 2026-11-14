@@ -1,19 +1,9 @@
 # runtime/k8s — Kubernetes/OpenShift control plane
 
-A cloud-native **alternative** to this repo's GHA-native pipeline, for
-adopters who cannot or do not want to run on GitHub Actions (self-hosted
-forges, air-gapped clusters, orgs standardizing on an in-cluster platform).
-Same spec, different compute: both control planes read the same
-`.ai-sdlc.yaml` (`spec/ai-sdlc.schema.json`) and the same
-`spec/normalized-event.schema.json` intake payload.
-
-See [ADR-0004](../../docs/architecture/adr/0004-cloud-native-k8s-openshift-runtime.md)
-for the full decision record, including provenance (ported from
-`os-santiago/homedir-ai-sdlc`'s unreleased `future-go/` prototype) and the
-schema gaps this port surfaced, and
-[ADR-0005](../../docs/architecture/adr/0005-runtime-k8s-event-bus-and-engine-invocation.md)
-for the durable-state/event-bus/engine-invocation wiring that turns this
-from a buildable scaffold into an actually-running pipeline.
+The canonical Kubernetes/OpenShift control plane for `ai-sdlc`. It consumes
+the portable `.ai-sdlc.yaml` contract (`spec/ai-sdlc.schema.json`) and the
+`spec/normalized-event.schema.json` intake payload. The removed GitHub
+Actions runtime is preserved only by the repository deprecation tag.
 
 ## Components
 
@@ -51,7 +41,7 @@ only job.
 - `internal/normalizedevent` decodes `spec/normalized-event.schema.json`
   work_item payloads and extracts acceptance criteria per
   `spec/definition-of-ready.md` R2/R3, so admission-controller's input
-  shape matches the GHA intake stage's output shape.
+  shape matches the portable normalized-event contract.
 
 ## Build & test
 
@@ -103,8 +93,7 @@ The worker image builds `scc` from `os-santiago/sc-agent-cli` at
 image-build time, pinned to an immutable ref via the `SCC_ENGINE_PIN`
 build arg (`components/worker/Containerfile`) — a 40-char commit SHA or
 semver tag; anything else fails the build closed. The default mirrors
-the contract `engine.pin` field / the GHA runtime's `SCC_ENGINE_PIN`
-default (issue #117), so a plain `make containers` or the OpenShift
+the contract `engine.pin` field, so a plain `make containers` or the OpenShift
 `worker` BuildConfig already bakes in the pinned engine. To keep the
 image on a contract that declares its own `engine.pin`, pass the
 resolved value through:
@@ -137,17 +126,15 @@ four stay distroless/static.
 
 ## Non-goals
 
-- **Replacing the GHA-native runtime.** GHA stays the default,
-  zero-infrastructure path for any repo that can use it (root README
-  "Adopt this runtime"). This directory is an opt-in alternative.
+- **Providing a GitHub Actions runtime.** That implementation was removed and
+  is preserved only by `deprecated-github-actions-runtime-2026-11-14`.
 - **A GitHub webhook adapter.** `admission-controller`'s Route (OpenShift
   overlay) exists, but translating a GitHub webhook payload into
-  `spec/normalized-event.schema.json` is separate, reviewable follow-up —
-  mirroring the GHA intake stage's existing logic (ADR-0005).
-- **A dashboard.** ADR-0001 already decided GitHub-native observability
-  suffices for a single consumer.
+  `spec/normalized-event.schema.json` is separate, reviewable follow-up.
+- **A dashboard.** The runtime exposes component and deployment surfaces but
+  does not ship a dashboard.
 
 ~~Wiring a real event bus or durable store~~ — closed by ADR-0005:
 PostgreSQL + a transactional outbox (`internal/store`, `internal/outbox`),
-polled and delivered by the new `relay` component. See ADR-0005 for why
-this isn't a message broker (NATS/Kafka) and why CloudNativePG.
+polled and delivered by the `relay` component. This avoids a mandatory
+message broker for the initial control plane.

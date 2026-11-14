@@ -3,10 +3,9 @@
 // internal/engine.SCCEngine.Invoke runs — the second of the two explicit
 // prerequisites that package's doc comment used to list as unbuilt.
 //
-// Mirrors .github/workflows/ai-sdlc-implement.yml's actions/checkout
-// step: clone/fetch over HTTPS with a short-lived credential, reset to
+// The checkout path clones/fetches over HTTPS with a short-lived credential, resets to
 // the exact ref, then strip the credential back out of the remote URL
-// (persist-credentials: false in that workflow) before the engine ever
+// before the engine ever
 // runs — the engine executes on untrusted issue text in this same
 // directory (spec/injection-defense.md) and must never find a
 // push-capable credential sitting in .git/config.
@@ -32,13 +31,11 @@ import (
 // components/worker/cmd/main.go wires one of two implementations,
 // preferring the first that's configured:
 //  1. A GitHub App installation token (internal/githubapp.App.
-//     InstallationToken) — matches .github/workflows/ai-sdlc-implement.
-//     yml's fail-closed, App-only posture (CLAUDE.md "Critical Lessons").
+//     InstallationToken) — the fail-closed, App-only posture.
 //     Requires admin access to the App itself to mint its private key;
 //     the App backing AI_SDLC_APP_ID/AI_SDLC_APP_PRIVATE_KEY in this
-//     repo's own GitHub Actions secrets (os-santiago/ai-sdlc) is owned
-//     by an individual account, not the org, so not every operator can
-//     generate a key for it.
+//     controller's external secret store. Operators must use a key they are
+//     authorized to rotate.
 //  2. StaticToken wrapping a fine-grained personal access token — a
 //     pragmatic fallback for whoever is standing up this runtime but
 //     doesn't control the App above. Scope it to the minimum needed

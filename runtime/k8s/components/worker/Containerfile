@@ -15,11 +15,8 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/component ./compon
 # (admission-controller, orchestrator, release-manager, relay) stay
 # distroless/static.
 #
-# sc-agent-cli is not published on npm (docs/runtime.md "Engine
-# contract") — every runtime that invokes it builds it from the upstream
-# repo. This mirrors the bootstrap-scc composite action
-# (.github/actions/bootstrap-scc: fetch the pinned ref && npm ci &&
-# npm run build), but cannot reuse that step's `npm link`/
+# sc-agent-cli is not published on npm, so the worker builds it from its
+# upstream repository. It cannot use `npm link`/
 # `npm install -g .`: both resolve a local directory to a *symlink* into
 # node_modules rather than copying it (confirmed by building this image:
 # the resulting /usr/local/lib/node_modules/sc-agent-cli was a dangling
@@ -34,14 +31,14 @@ RUN apk add --no-cache git
 # `engine.pin` / runtime `SCC_ENGINE_PIN` default (issue #117;
 # os-santiago/sc-agent-cli main HEAD 2026-10-14). Feed the resolved
 # contract pin at build time so the image tracks the same single pin
-# point as the GHA bootstrap:
+# point as the deployed controller:
 #   podman build --build-arg SCC_ENGINE_PIN=<resolved engine.pin> ...
 # (`make containers SCC_ENGINE_PIN=<pin>` — see runtime/k8s/README.md).
 # init+fetch+checkout instead of `git clone --branch`: a bare SHA is a
 # valid fetch target but not a clone-able branch/tag name.
 ARG SCC_ENGINE_PIN=8430737505d306c3edf921eb5a1aa8a7ddfb4d77
 # Fail closed on anything but an immutable ref — the same check
-# bootstrap-scc enforces on `engine.pin` (issue #117). A mutable ref
+# the worker enforces on `engine.pin`. A mutable ref
 # (main, HEAD, …) would bake whatever lands upstream next into a
 # published image built beside registry credentials.
 RUN printf '%s' "$SCC_ENGINE_PIN" | grep -Eqx '[0-9a-f]{40}|v?[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?' \

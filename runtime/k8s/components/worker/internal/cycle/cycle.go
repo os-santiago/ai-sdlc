@@ -10,8 +10,8 @@
 //
 // This component evaluates attempts; it does not invoke an engine. Engine
 // invocation (sc-agent-cli, headless contract: --prompt-file --audit-log
-// --summary-file --no-commit) stays a single integration point shared with
-// the GHA runtime — see runtime/k8s/README.md "Non-goals".
+// --summary-file --no-commit) stays a single integration point for this
+// control plane.
 package cycle
 
 import (

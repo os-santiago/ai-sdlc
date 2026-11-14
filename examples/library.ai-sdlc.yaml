@@ -129,7 +129,7 @@ model:
   routing_hints:
     docs_tasks: auto/best-fast
 
-# Per-task-class model routing (issue #171; spec/model-routing.md):
+# Per-task-class model routing:
 # stage keys are the task classes. Model-only entries keep the default
 # adapter (engine.name = scc); a missing model falls back to
 # model.primary.

@@ -1,259 +1,51 @@
----
-lastVerified: 2026-10-19T00:00:00Z
-verifiedAgainst: aa1638fed6d95dfbda5ecff7cd48b4028689bbca
-sources: [.ai-sdlc.yaml, spec/, .github/workflows/, .github/ISSUE_TEMPLATE/, docs/runtime.md, docs/onboarding.md, docs/operations.md, docs/architecture/adr/, tools/verify-release.sh, runtime/k8s/README.md, examples/, CONTRIBUTING.md]
-freshnessWindowDays: 30
----
-# ai-sdlc — Canonical AI Software Delivery Lifecycle Runtime
+# ai-sdlc
 
-[![ai-sdlc (self)](https://github.com/os-santiago/ai-sdlc/actions/workflows/ai-sdlc.yml/badge.svg)](https://github.com/os-santiago/ai-sdlc/actions/workflows/ai-sdlc.yml)
-[![ai-sdlc-canary](https://github.com/os-santiago/ai-sdlc/actions/workflows/ai-sdlc-canary.yml/badge.svg)](https://github.com/os-santiago/ai-sdlc/actions/workflows/ai-sdlc-canary.yml)
+`ai-sdlc` is the Kubernetes/OpenShift runtime and portable contract for
+bounded, evidence-driven AI-assisted software delivery.
 
-Repo-agnostic, GitHub-Actions-native implementation of the AI-SDLC pipeline:
-from a labeled issue to a merged, verified pull request — with bounded
-autonomy driven by a declarative per-repo contract (`.ai-sdlc.yaml`).
+## GitHub Actions deprecation
 
-## Layered architecture
+The GitHub Actions runtime, reusable workflows, bootstrap tooling, and its
+Node-based test surface were removed from this branch. The final supported
+implementation is preserved at the annotated tag
+[`deprecated-github-actions-runtime-2026-11-14`](https://github.com/os-santiago/ai-sdlc/tree/deprecated-github-actions-runtime-2026-11-14).
 
-```
-┌─────────────────────────────────────────────────────────┐
-│ doctrine — why & how we build (book, patterns, evidence).│
-│   Axel-DaMage/adev (methodology) · adev-pattern-bridge  │
-├─────────────────────────────────────────────────────────┤
-│ THIS REPO — spec + runtime (the missing piece)          │
-│   spec/:  .ai-sdlc.yaml schema · label taxonomy ·       │
-│           trust ladder · DoR · injection defense        │
-│   .github/workflows/: reusable stages (                 │
-│             intake → implement → review → automerge →   │
-│             ci-repair → verify)                         │
-├─────────────────────────────────────────────────────────┤
-│ engine — the agentic execution loop                     │
-│   os-santiago/sc-agent-cli (provider-agnostic CLI)      │
-├─────────────────────────────────────────────────────────┤
-│ deployments — instances consuming this runtime          │
-│   Axel-DaMage/hermes (Discord UX, OmniRoute, self-host) │
-│   os-santiago/homedir-ai-sdlc (legacy VPS instance)     │
-└─────────────────────────────────────────────────────────┘
-```
+The Kubernetes/OpenShift runtime is now the sole execution path. See
+[DEPRECATION.md](DEPRECATION.md) for the migration boundary.
 
-## The loop
+## What remains
 
-```
-issue labeled               pull_request events      check_run       push to main
-`ready-to-implement`        opened / synchronize     completed
-      │                           │                      │                │
-      ▼                           ▼                      ▼                ▼
-  ┌────────┐   dispatch    ┌───────────┐   PR     ┌─────────┐   ┌────────────┐   ┌────────┐
-  │ intake │ ────────────▶ │ implement │ ───────▶ │ review  │ ─▶│ automerge  │─▶ │ verify │
-  │  DoR   │               │ engine run│          │+classify│   │ merge gate │   │+postm. │
-  └────────┘               └───────────┘          └─────────┘   └────────────┘   └────────┘
-                                 │                    │               │  ▲
-                                 │                    ▼               ▼  │
-                                 │               blocked verdict   red checks
-                                 │                    │               │
-                                 │               fix pass (≤N)    ci-repair (≤N)
-                                 │                    └───────────────┘
-                                 ▼
-              ai-sdlc-sweep (cron) re-drives stalled PRs through the gate
-              ai-sdlc-canary (cron) smokes the whole loop end-to-end daily
-```
+- `spec/` — portable contracts for admission, risk, trust, policy, labels,
+  injection defense, and normalized events.
+- `runtime/k8s/` — the canonical Go control plane, deployment manifests, and
+  component tests.
+- `examples/` — starter `.ai-sdlc.yaml` contracts.
+- `.github/ISSUE_TEMPLATE/` and `.github/CODEOWNERS` — repository governance,
+  not runtime execution.
 
-Each box is a `workflow_call`-reusable stage in `.github/workflows/`; the
-consumer-side event plumbing is consolidated thin callers — the model is
-ratified in
-[ADR-0006](docs/architecture/adr/0006-orchestrator-vs-per-stage-event-callers.md).
+## Local development
 
-## Design principles
-
-- **Spec-first**: every behavior is declared in `.ai-sdlc.yaml`; the runtime
-  never hardcodes per-repo policy.
-- **GHA-native**: compute runs in GitHub Actions (`workflow_call` entrypoints);
-  self-hosted control planes (Hermes) are an optional trigger surface.
-- **Bounded autonomy**: trust ladder (shadow → suggest → auto-PR →
-  auto-merge-low → auto-merge-all → auto-deploy) with per-repo ceilings.
-- **Engine-agnostic contract**: sc-agent-cli today; any tool honoring the
-  headless contract (`--prompt-file`, `--audit-log`, `--summary-file`,
-  `--no-commit`) can slot in.
-
-## Adopt this runtime
-
-**One command.** The [`gh ai-sdlc` extension](https://github.com/os-santiago/gh-ai-sdlc)
-(or the dispatchable bootstrap workflow this repo ships) opens a single
-bootstrap PR on the target — contract, caller workflow, label set,
-secrets checklist — and merging it completes onboarding:
+The runtime requires Go and optionally Podman, Kustomize, Helm, and Postgres
+depending on the surface being exercised.
 
 ```bash
-gh extension install os-santiago/gh-ai-sdlc
-gh ai-sdlc init   # run inside the target repo checkout
+cd runtime/k8s
+go build ./...
+go vet ./...
+go test ./...
 ```
 
-New repos onboard at `shadow`, the observe-only rung of the trust
-ladder, and climb on accumulated run evidence — promotion proposals
-arrive as ordinary reviewed contract PRs. Step-by-step:
-[docs/onboarding.md](docs/onboarding.md).
+`go test ./...` runs the pure component tests without external services.
+Set `AI_SDLC_TEST_DATABASE_URL` to include persistence-path tests. Build local
+images with `make -C runtime/k8s containers` when Podman is available. Full instructions are
+in [runtime/k8s/README.md](runtime/k8s/README.md).
 
-The bootstrap PR (and the manual path below) wires three things:
+## Scope
 
-1. **Contract** — `.ai-sdlc.yaml` at the repo root. Only `spec` is
-   required; every other field resolves from runtime defaults (see
-   `spec/ai-sdlc.schema.json`, archetypes under `examples/`):
-
-   ```yaml
-   spec: "1.0.0"
-   autonomy:
-     level: shadow   # init's starter ceiling — evidence climbs the ladder
-   ```
-
-2. **Caller workflow** — `.github/workflows/ai-sdlc.yml` dispatching the
-   reusable stages on `@main`:
-
-   ```yaml
-   name: ai-sdlc
-   on:
-     issues: { types: [labeled] }
-
-   permissions:
-     contents: write
-     issues: write
-     pull-requests: write
-     # `models` is a workflow permission scope for accessing GitHub Models
-     # (retired 2026-07-30) — it only gated the retired zero-secret path.
-     # For current usage, set `MODEL_API_KEY` and omit this permission.
-
-   jobs:
-     intake:
-       if: github.event.label.name == 'ready-to-implement'
-       uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-intake.yml@main
-       with:
-         repo: ${{ github.repository }}
-         issue_number: ${{ github.event.issue.number }}
-       secrets:   # explicit map — pass only what the stage declares
-         AI_SDLC_TOKEN: ${{ secrets.AI_SDLC_TOKEN }}                    # optional
-         AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}
-         AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }}
-         AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}          # optional
-
-     implement:
-       needs: intake
-       if: needs.intake.outputs.dispatch == 'true'
-       uses: os-santiago/ai-sdlc/.github/workflows/ai-sdlc-implement.yml@main
-       with:
-         repo: ${{ github.repository }}
-         issue_number: ${{ github.event.issue.number }}
-       secrets:
-         AI_SDLC_APP_ID: ${{ secrets.AI_SDLC_APP_ID }}                  # required
-         AI_SDLC_APP_PRIVATE_KEY: ${{ secrets.AI_SDLC_APP_PRIVATE_KEY }} # required
-         AI_SDLC_LEDGER_KEY: ${{ secrets.AI_SDLC_LEDGER_KEY }}          # optional
-         MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}                    # optional
-   ```
-
-   Review, automerge, ci-repair, sweep and verify wire the same way —
-   [docs/runtime.md](docs/runtime.md) has each stage's caller block.
-
-   The examples track `@main` for readability — for production, pin the
-   `uses:` ref to a commit SHA (or a `vX.Y.Z` tag once the release-tag
-   scheme lands) and set the stage's `runtime_ref` input to the same
-   ref; Dependabot keeps SHA-pinned refs fresh. See
-   [docs/security-scanning.md](docs/security-scanning.md#sha-pinned-uses-refs-issues-118123).
-
-3. **App + secrets** — install the `ai-sdlc` GitHub App on the repo and
-   expose `AI_SDLC_APP_ID` + `AI_SDLC_APP_PRIVATE_KEY` to it (org secrets
-   scoped to the consumer repos are the intended setup). Every mutation
-   stage mints a per-run installation token — fail-closed, no PAT or
-   `GITHUB_TOKEN` fallback, so pushes and merges always re-trigger CI.
-   `MODEL_API_KEY` is required for inference: unset → the engine
-   attempts `GITHUB_TOKEN` against GitHub Models, which was retired
-   2026-07-30, so the run fails. Set it to a provider API key and
-   configure a provider URL (the `provider_base_url` input or the
-   `AI_SDLC_PROVIDER_URL` repository variable) pointing at a live
-   OpenAI-compatible endpoint. Set the variable `AI_SDLC_OFF=1` /
-   `AI_SDLC_KILL=true` (repo- or org-scoped) or open an `ai-sdlc:off`
-   control issue to halt the pipeline without disabling workflows
-   (spec/kill-switch.md).
-
-## Verifying release provenance
-
-Every release artifact (`ai-sdlc-<tag>.tar.gz`) is cosign-sign-blobbed
-keyless under the release workflow's GitHub OIDC identity (Fulcio cert +
-Rekor log) and attested via GitHub Artifact Attestations (SLSA L3-class).
-Releases carry `<artifact>.sig`, `.crt`, `.sigstore.json` and
-`.attestation.jsonl` next to the tarball.
-
-One command downloads the asset set and verifies both surfaces:
-
-```bash
-tools/verify-release.sh <tag>   # e.g. v0.4.2 — needs `gh` + `cosign`
-```
-
-Or manually:
-
-```bash
-gh release download <tag> -R os-santiago/ai-sdlc -p 'ai-sdlc-<tag>.tar.gz*'
-
-cosign verify-blob --signature ai-sdlc-<tag>.tar.gz.sig \
-  --certificate ai-sdlc-<tag>.tar.gz.crt \
-  --certificate-identity-regexp \
-    '^https://github\.com/os-santiago/ai-sdlc/\.github/workflows/ai-sdlc-release\.yml@refs/(heads/main|tags/v.+)$' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ai-sdlc-<tag>.tar.gz
-
-gh attestation verify ai-sdlc-<tag>.tar.gz -R os-santiago/ai-sdlc
-```
-
-Details and the offline (exported-bundle) path:
-[docs/runtime.md](docs/runtime.md#release-manager-ai-sdlc-releaseyml).
-
-## Documentation
-
-- [docs/onboarding.md](docs/onboarding.md) — one-command install
-  (`gh ai-sdlc init`) and the shadow-start trust ramp for new repos.
-- [docs/runtime.md](docs/runtime.md) — `workflow_call` runtime stages
-  reference for adopters.
-- [docs/operations.md](docs/operations.md) — operations runbook:
-  `scc:*` label states, failure modes, artifacts, kill-switch and
-  recovery paths.
-- [spec/interop-posture.md](spec/interop-posture.md) — interop posture: the
-  governance layer over pluggable engines, the conformance path, and
-  the explicit non-goals.
-- [spec/README.md](spec/README.md) — index of the normative contract
-  surface (schema, labels, trust ladder, DoR, risk taxonomy).
-- [ADR-0001](docs/architecture/adr/0001-homedir-ai-sdlc-sunset-and-cutover.md) —
-  homedir-ai-sdlc sunset and canonical-runtime cutover decision record.
-- [ADR-0006](docs/architecture/adr/0006-orchestrator-vs-per-stage-event-callers.md) —
-  caller topology: reusable `workflow_call` stages + consolidated event
-  callers (never a single orchestrator).
-- [runtime/k8s/README.md](runtime/k8s/README.md) /
-  [ADR-0004](docs/architecture/adr/0004-cloud-native-k8s-openshift-runtime.md) —
-  optional Kubernetes/OpenShift-native control plane for adopters who
-  cannot run GitHub Actions. GHA remains the default below.
-- [SECURITY.md](SECURITY.md) — vulnerability disclosure policy: private
-  reporting channel, response timeline and coordinated disclosure,
-  plus a consumer-repo template note.
-
-## Status
-
-Bootstrap stage — and it runs on itself. Observable today:
-
-- The `ai-sdlc (self)` caller dogfoods the loop on this repo's issues:
-  intake refinement comments (DoR verdicts, clarifying questions) are
-  posted by `ai-sdlc-runtime` — see any recent issue thread.
-- `ai-sdlc-canary` (daily cron) files a synthetic issue and asserts that
-  intake reaches `scc:queued`; a manually dispatched `full` run asserts
-  the intake→implement→PR loop end-to-end. A red canary files a
-  signature-deduped postmortem issue.
-- Per the bootstrap rule in [AGENTS.md](AGENTS.md), implement-stage
-  dispatch is hand-driven until the evidence gate in
-  [ADR-0001](docs/architecture/adr/0001-homedir-ai-sdlc-sunset-and-cutover.md)
-  passes — issues are worked via Devin sessions or manual PRs.
-
-Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) — DCO sign-off, branch
-conventions, and the local validation suite (`tools/validate-repo.sh`).
-
-## Non-goals
-
-- Chat/notification UX (Discord etc.) — lives in deployment repos.
-- Engine internals — upstream `sc-agent-cli`.
-- Org-specific infrastructure (VPS, systemd) — stays in instance repos.
+This repository does not ship a GitHub Actions runtime, a `gh` bootstrap
+extension, or a Node-based workflow engine. Consumers integrate with the
+Kubernetes/OpenShift control plane using the portable contract and normalized
+event schemas under `spec/`.
 
 ## License
 

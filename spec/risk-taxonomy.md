@@ -87,7 +87,7 @@ supply-chain halt and a stalled dep-update no longer land identically.
 | `policy-hold` | `pr:risk-critical` awaiting human `pr:risk-accepted` | risk-critical → HOLD |
 | `unknown` | no pattern matched — the reserved fallback class | any failure surface |
 
-**Route resolution** (implemented by `scripts/alert-router.js`):
+**Route resolution** is a runtime responsibility:
 
 ```
 route = escalation.routes.<class>
@@ -105,15 +105,13 @@ marker so repeat escalations don't page twice for one failure.
 ## Notes for implementers
 
 - Tier assignment SHOULD be computed from the diff (files/lines/surfaces),
-  not self-declared by the author-agent. Reference implementation:
-  `scripts/risk-classifier.js` + `ai-sdlc-classify.yml` — deterministic
-  path/size/content signals applied on `pull_request` events; the
-  classifier source must come from a trusted ref, never the PR head.
+  not self-declared by the author-agent. A runtime MUST apply deterministic
+  path, size, and content signals from a trusted controller image or revision,
+  never from the proposed change.
 - Dep-update fast path (issue #177): a diff bounded to dependency
   manifests/lockfiles carrying only patch|minor bumps with no new direct
-  deps classifies `pr:risk-low` (`scripts/dep-update.js`
-  `classifyDepUpdateDiff`/`depUpdateVerdict`). Majors, unknown specs, new
-  deps and non-dep files fail closed onto the generic path (dep surfaces →
-  high).
+  dependencies classifies `pr:risk-low`. Majors, unknown specifications, new
+  dependencies, and non-dependency files fail closed onto the generic path
+  (dependency surfaces → high).
 - The decision table maps to the merger's `decidePrAction` semantics;
   divergences between runtime behavior and this table are bugs.

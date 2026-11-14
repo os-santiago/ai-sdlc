@@ -1,6 +1,0 @@
-{
-  "id": "repair-signal-uppercase",
-  "marker": "repair-signal",
-  "body": "<!-- ai-sdlc:repair-signal sha=AAA1111 -->",
-  "expect": { "match": false, "reason": "SHA must be lowercase hex" }
-}

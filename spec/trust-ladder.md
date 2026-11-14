@@ -42,7 +42,7 @@ run-state (`labels.pr-opened`, `labels.failed`, `labels.no-changes` per
 | Clean merge | A pipeline-opened PR merged with all `verify.required_checks` green on the merged head SHA, never subsequently reverted, and carrying no escalation attributable to its run. The evidence unit for merge rungs (`auto-merge-low` and up). |
 | Escalation event | An application of `escalation.label` (default `needs-human`) attributable to a run inside the window — see §Escalation semantics. |
 | Sentinel halt | A post-merge gate firing on the default branch: the `verify` stage's commands failing, or a required-check regression attributable to a pipeline-merged change — evidence that a "clean" merge was not clean. |
-| Postmortem recurrence | A postmortem `signatureHash` (spec/postmortem-lifecycle.md) recurring at or above its reopen threshold. |
+| Postmortem recurrence | A postmortem `signatureHash` recurring at or above its controller-configured reopen threshold. |
 
 ### The four signal types
 
