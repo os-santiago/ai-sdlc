@@ -34,7 +34,7 @@ verify:
 # Security gate floor (epic #87). Org-declared values are clamps: repos
 # may tighten — a lower min_severity, a stricter severity_matrix outcome,
 # a higher scan mode, enabling the gate where the org left it off — but
-# can never loosen them. Calibration: docs/security/gate-calibration.md.
+# can never loosen them. Calibration is owned by the deploying controller.
 security:
   enabled: true
   min_severity: high            # findings >= high are blocking-class

@@ -95,7 +95,7 @@ Threats are ranked by potential impact and likelihood in the AI-SDLC context:
 - **Scheduled Realignment**: Periodic retraining or fine-tuning on verified data.
 - **Constraint Anchoring**: Hard-coded invariants that cannot be overridden by learning or feedback.
 
-**Spec Reference:** `spec/risk-taxonomy.md` includes drift as a risk category; `spec/postmortem-lifecycle.md` outlines drift detection and remediation.
+**Spec Reference:** [risk-taxonomy.md](risk-taxonomy.md) includes drift as a risk category; the deployed controller owns drift detection and remediation.
 
 ### Supply Chain
 

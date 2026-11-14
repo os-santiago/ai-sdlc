@@ -1,54 +1,49 @@
-# codeql — static-analysis security scanning (issue #105, epic #89)
-#
-# Repo self-scan only — this is NOT a reusable ai-sdlc-* stage: consumer
-# repos enable their own code scanning under their own security posture
-# and contract. Language set is `javascript` (interpreted — no build step;
-# autobuild does not apply). The default query suite is deliberate:
-# `security-extended` roughly doubles alert volume for marginal signal —
-# the CRA posture wants actionable findings, not triage fatigue.
-#
-# Results upload as SARIF to the Security → Code scanning tab. Whether a
-# finding FAILS the PR check is governed by the repo's code-scanning
-# configuration (Settings → Code security → Code scanning → check-runs
-# failure threshold) — an admin-scope API toggle documented in
-# docs/security-scanning.md, not something workflow YAML can express.
-#
-# Triggers: push + PR to main, weekly cron (Thursday 03:27 UTC, off the
-# top of the hour) so drifted/new advisories catch the untouched tree,
-# and workflow_dispatch for manual re-scans.
-#
-# Cost: one CodeQL database extraction + one query-pack evaluation over
-# the repo's JS surface — bounded at timeout-minutes: 15.
 name: codeql
-
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   schedule:
-    - cron: '27 3 * * 4'        # weekly Thursday 03:27 UTC
+    - cron: '27 3 * * 4'
   workflow_dispatch:
-
 permissions: {}
-
 jobs:
   analyze:
+    # Keep the original job/category so existing main alerts remain comparable.
     name: codeql (javascript)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
-      security-events: write   # SARIF upload → code scanning alerts
-      contents: read           # checkout + CodeQL pack resolution
-      actions: read            # required for CodeQL on private repos
+      security-events: write
+      contents: read
+      actions: read
     steps:
-      - name: checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
-
-      - name: initialize codeql
-        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
           languages: javascript
-
-      - name: analyze
-        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4
+      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+  go:
+    name: codeql (go)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@802e89cd7394b98352d79117a8b463bbfc2fdacf
+        with:
+          go-version-file: runtime/k8s/go.mod
+          cache-dependency-path: runtime/k8s/go.sum
+      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        with:
+          languages: go
+          build-mode: manual
+      - name: Build Go runtime for extraction
+        working-directory: runtime/k8s
+        run: go build ./...
+      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        with:
+          category: /language:go

@@ -86,8 +86,7 @@ modelProvider:
 # SCCEngine still runs; fine for a public repo, since checkout is
 # currently read-only).
 #
-# githubApp: a GitHub App installation token, matching
-# .github/workflows/ai-sdlc-implement.yml's fail-closed stance. Requires
+# githubApp: a GitHub App installation token with a fail-closed stance. Requires
 # admin access to that specific App to mint it a private key. Neither
 # value is ever set here. Create the Secret out-of-band:
 #   kubectl create secret generic ai-sdlc-github-app \

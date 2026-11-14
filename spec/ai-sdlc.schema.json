@@ -19,7 +19,7 @@
         "openhands",
         "mimoclaw"
       ],
-      "description": "Certified adapter identifier (epic #152). `scc` is the sc-agent-cli reference engine; the remaining ids certify through the conformance suite in docs/engine_contract.md. A certified id still needs a config/engine_adapters.json entry before a stage can dispatch to it — the contract certifies names, the registry implements them. Unknown values are rejected here, not at dispatch time."
+      "description": "Certified adapter identifier. `scc` is the sc-agent-cli reference engine; other identifiers require conformance validation by the deployed runtime. The contract certifies names while the runtime implements dispatch. Unknown values are rejected here, not at dispatch time."
     },
     "stage_engine": {
       "oneOf": [
@@ -48,7 +48,7 @@
             "model": {
               "type": "string",
               "minLength": 1,
-              "description": "Provider-native model id routed to this stage's task class (issue #171; spec/model-routing.md). Wins over `model.primary` for this stage only; OmniRoute route names (auto/*, devin/*) are Hermes control-plane only and resolve to `model.primary` on GHA runners (ADR-0001)."
+              "description": "Provider-native model id routed to this stage's task class. It wins over `model.primary` for this stage only; controller-specific route names resolve according to the deployed runtime policy."
             }
           },
           "description": "Stage-definition form: `engine` selects the certified adapter for the stage, `model` overrides the routed model for the stage's task class. At least one is required — a missing `engine` falls back to `engine.name`, a missing `model` to `model.primary`. An object (not a bare id) so per-stage overrides can grow fields without a schema break."
@@ -670,7 +670,7 @@
         "adversarial": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Adversarial review pass (issue #180, epic #151): diffs whose deterministic risk tier reaches min_tier receive a hostile second pass — generated injection probes (scripts/adversarial.js) plus abuse-case framing — whose findings enter the normal review-fix loop.",
+          "description": "Adversarial review pass: diffs whose deterministic risk tier reaches min_tier receive a hostile second pass with generated injection probes and abuse-case framing; findings enter the normal review-fix loop.",
           "properties": {
             "enabled": {
               "type": "boolean",
@@ -797,7 +797,7 @@
     "postmortem": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Canonical postmortem lifecycle knobs (spec/postmortem-lifecycle.md) — signature dedup window and reopen-on-recurrence threshold, consumed by scripts/postmortem.js.",
+      "description": "Canonical postmortem lifecycle knobs: signature deduplication window and reopen-on-recurrence threshold consumed by the runtime.",
       "properties": {
         "reopen_min": {
           "type": "integer",
@@ -959,7 +959,7 @@
     "engines": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Per-stage engine and model selection (issues #205, #171; docs/engine_contract.md, spec/model-routing.md): stage → certified adapter and/or stage model. `implement: devin` (shorthand), `implement: {engine: devin}` and `implement: {engine: devin, model: openai/gpt-4o}` are all accepted; the stage-definition form may also carry `model` alone to route a model without pinning the adapter. A stage without an `engine` falls back to `engine.name` (default `scc`); a stage without a `model` falls back to `model.primary`. Unknown stage keys, non-certified engine ids and empty stage definitions are rejected.",
+      "description": "Per-stage engine and model selection: stage → certified adapter and/or stage model. `implement: devin` (shorthand), `implement: {engine: devin}` and `implement: {engine: devin, model: openai/gpt-4o}` are all accepted; the stage-definition form may also carry `model` alone to route a model without pinning the adapter. A stage without an `engine` falls back to `engine.name` (default `scc`); a stage without a `model` falls back to `model.primary`. Unknown stage keys, non-certified engine ids and empty stage definitions are rejected.",
       "properties": {
         "intake": {
           "$ref": "#/$defs/stage_engine"

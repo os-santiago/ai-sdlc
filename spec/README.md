@@ -1,71 +1,26 @@
-# spec/ — Normative AI-SDLC contract
+# Portable contract surface
 
-Versioned, declarative surface that every repo opting into the pipeline
-implements via `.ai-sdlc.yaml` at its root.
+These documents define the policy and event vocabulary consumed by the
+Kubernetes/OpenShift runtime. They are not an implementation of GitHub
+Actions.
 
-## Contents
+The Go runtime currently consumes only the subset modeled by
+`runtime/k8s/internal/contract`. Schema acceptance does not prove enforcement
+of every policy. In particular, fleet kill-switch enforcement remains a gap;
+see [kill-switch.md](kill-switch.md).
 
-| Artifact | Purpose | Issue |
-|---|---|---|
-| [`ai-sdlc.schema.json`](ai-sdlc.schema.json) | JSON Schema (draft 2020-12) for `.ai-sdlc.yaml` — repo contract: verify commands, autonomy ceiling, review policy, labels, model routing, escalation | #2 |
-| [`labels.md`](labels.md) | Issue-label state machine — intake trio exclusivity, transition table, veto-pair matrix (`labels.state_machine`), janitor repair rule; `scc:*` flow vs `pr:*` states | #18 |
-| [`trust-ladder.md`](trust-ladder.md) | Six-level progressive autonomy: levels, four-signal promotion evidence, per-rung thresholds, contract-PR promotion/demotion, freeze, shadow-first self-accrediting onboarding | #5, #179 |
-| [`definition-of-ready.md`](definition-of-ready.md) | DoR fields, AC format, atomicity rules, R1–R6 machine-checkable validation | #1 |
-| [`risk-taxonomy.md`](risk-taxonomy.md) | pr:risk-* tiers + required-evidence matrix + merge-gate decision table | #3 |
-| [`injection-defense.md`](injection-defense.md) | Trust-boundary model, fence+scrub convention, forbidden-action rules | #4 |
-| [`org-policy.md`](org-policy.md) | Field-level merge, pin-able floor fields, resolution algorithm | #6 |
-| [`interop-posture.md`](interop-posture.md) | Interop posture — ai-sdlc as the normative governance layer over pluggable engines; the seam (normalized events + headless engine contract), the conformance path, and the non-goals | #216 |
-| [`engine-conformance.md`](engine-conformance.md) | Engine conformance — descriptor contract, resolved adapter surface, check catalog, static/live levels, and the certification procedure enforced by `tests/engine_conformance_harness.js` | #183 |
-| [`engine-exit-codes.md`](engine-exit-codes.md) | scc raw exit-code taxonomy — registry labels, stall classes, the `{20,21}` fallback gate, outcome routing; drift-checked by `tests/exit_code_contract.test.js` | #133 |
-| [`model-routing.md`](model-routing.md) | Task-class → model routing: `engines.<stage>.model`, the resolution chain, OmniRoute/fallback rules, benchmark-informed per-class defaults | #171 |
-| [`kill-switch.md`](kill-switch.md) | Org kill-switch — one action revokes autonomy fleet-wide: signal channels (variable / `ai-sdlc:off` control issue), fail-closed verdict, enforced-stage table, audit contract | #172 |
-| [`run-evidence.md`](run-evidence.md) | Canonical run-evidence layout — `${{ runner.temp }}/ai-sdlc-<stage>/` evidence dirs, `ai-sdlc-<stage>-<subject>` artifact naming, enumerated workspace classes; enforced by `tools/check-run-evidence.py` | #141 |
-| [`threat-model.md`](threat-model.md) | Normative threat model — ranked threat classes, attack vectors, defenses mapped to runtime controls | — |
-| [`postmortem-lifecycle.md`](postmortem-lifecycle.md) | Lifecycle and behavior of postmortem issues | — |
-| [`normalized-event-versioning.md`](normalized-event-versioning.md) | Semver rules for the normalized event schema (`normalized-event.schema.json`) — forge-adapter compatibility guarantees | — |
-| [`normalized-event.schema.json`](normalized-event.schema.json) | JSON Schema for the normalized event — the seam forge adapters emit and the runtime consumes | — |
-| [`generated-artifact-publish-contract.md`](generated-artifact-publish-contract.md) | Publish contract for generated artifacts — diff gating, rolling-PR semantics, budget/circuit-breaker | — |
+| Asset | Purpose |
+| --- | --- |
+| `ai-sdlc.schema.json` | Contract schema for `.ai-sdlc.yaml` |
+| `normalized-event.schema.json` | Portable work-item event shape |
+| `definition-of-ready.md` | Admission criteria |
+| `risk-taxonomy.md` | Deterministic risk classification vocabulary |
+| `trust-ladder.md` | Bounded autonomy levels and evidence gates |
+| `org-policy.md` | Organization policy floors |
+| `labels.md` | Portable lifecycle labels |
+| `injection-defense.md` | Untrusted-input handling rules |
+| `kill-switch.md` | Emergency-stop semantics |
+| `threat-model.md` | Security assumptions and boundaries |
 
-## Versioning
-
-**Declared version:** `spec/v1.1.0` — bumped in the same PR that changes
-`spec/**`; `.github/workflows/ai-sdlc-spec-tag.yml` verifies it against the
-diff classification and publishes the tag on merge to `main`.
-
-The spec is semver-tagged (`spec/vX.Y.Z` tags). Workflows pin to a spec
-version; breaking schema changes bump MAJOR and ship a migration note.
-
-Bump classification (`scripts/spec-version.js` — diff-aware, not just
-conventional commits):
-
-- **MAJOR** — removed/renamed spec file or schema field, newly required
-  field, narrowed enum/type, added or tightened constraint
-  (`minimum`↑, `maxLength`↓, `pattern`, `additionalProperties: false`,
-  dropped `anyOf`/`oneOf` branch, added `allOf`/`not`, …)
-- **MINOR** — new spec file, new optional field, widened enum/type,
-  loosened constraint
-- **PATCH** — docs-only (`.md`) or annotation-only edits
-  (`description`, `title`, `examples`, `default`, `$comment`)
-
-The commit signal still applies: a `type!:` / `BREAKING CHANGE` commit
-touching `spec/` forces MAJOR even when the structural diff looks additive
-(prose semantics a classifier cannot see). `--bump` overrides; the
-`ai-sdlc-spec-tag` workflow's `bump` dispatch input does the same
-server-side. Declared-vs-computed mismatches fail the run — a spec change
-that forgets its version bump never tags silently.
-
-## Validation in CI
-
-Any repo can validate its `.ai-sdlc.yaml` against the schema:
-
-```bash
-curl -sL https://raw.githubusercontent.com/os-santiago/ai-sdlc/main/spec/ai-sdlc.schema.json -o /tmp/ai-sdlc.schema.json
-bash <(curl -sL https://raw.githubusercontent.com/os-santiago/ai-sdlc/main/tools/validate-ai-sdlc-config.sh) .ai-sdlc.yaml /tmp/ai-sdlc.schema.json
-```
-
-Or vendor `tools/validate-ai-sdlc-config.sh` and run it in a CI step —
-it auto-resolves python3+PyYAML/jsonschema or npx fallbacks. Exit 0 = valid.
-
-Examples: `../examples/library.ai-sdlc.yaml` (conservative, auto-merge-low
-ceiling) and `../examples/internal-app.ai-sdlc.yaml` (aggressive,
-auto-merge-all).
+GitHub Actions-specific execution contracts are preserved only by the
+`deprecated-github-actions-runtime-2026-11-14` tag.

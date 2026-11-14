@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run gitleaks exactly as CI does (.github/workflows/secret-scan.yml):
+# Run the repository's pinned gitleaks release locally:
 # downloads the pinned release, verifies its SHA-256, extracts to a temp
 # dir and runs it. Invoke from the repo root:
 #

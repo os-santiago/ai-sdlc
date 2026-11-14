@@ -1,124 +1,35 @@
----
-lastVerified: 2026-10-17T20:57:00Z
-verifiedAgainst: 0b7af3fe9843bcd46bfa0af218d054433467e702
-sources: [.ai-sdlc.yaml, spec/, .github/workflows/, tools/validate-repo.sh, tools/validate-ai-sdlc-config.sh, docs/architecture/adr/0001-homedir-ai-sdlc-sunset-and-cutover.md, examples/]
-freshnessWindowDays: 14
----
-# AGENTS.md — os-santiago/ai-sdlc
+# ai-sdlc agent guidance
 
-Canonical, repo-agnostic AI-SDLC: normative spec + GitHub-Actions-native
-runtime. Read this file before doing anything in the repository — it is the
-operating context for every agent (Devin sessions, scc workers, maintainers).
+`ai-sdlc` is a Kubernetes/OpenShift runtime with portable contracts under
+`spec/`. GitHub Actions runtime code is removed; historical consumers are
+preserved only by the `deprecated-github-actions-runtime-2026-11-14` tag.
 
-## What this repo is
+## Scope
 
-- `spec/` — the normative contract surface: `ai-sdlc.schema.json`,
-  `trust-ladder.md`, `definition-of-ready.md`, `risk-taxonomy.md`,
-  `injection-defense.md`, `org-policy.md`, `labels` taxonomy
-- `.github/workflows/` — reusable `workflow_call` runtime stages:
-  `ai-sdlc-intake` (DoR), `ai-sdlc-implement` (engine run → PR),
-  `ai-sdlc-automerge` (merge gate), `ai-sdlc-verify` (post-merge smoke),
-  plus the self-caller `ai-sdlc.yml` (this repo dogfoods itself)
-- `.ai-sdlc.yaml` — this repo's own contract; validate with
-  `tools/validate-ai-sdlc-config.sh`
-- `docs/` — `runtime.md` (workflow reference) + `architecture/adr/`
-- `examples/` — archetype contracts (library = conservative, internal-app
-  = aggressive)
-- `runtime/k8s/` — optional Kubernetes/OpenShift-native control plane
-  (Go microservices + Kustomize/Helm manifests) for adopters who cannot run
-  GitHub Actions. GHA remains the default; see ADR-0004.
+- `runtime/k8s/` is the only executable runtime in this repository.
+- `spec/` defines portable policy and event contracts.
+- GitHub Actions may validate repository quality and security. Do not restore
+  AI-SDLC orchestration workflows, composite runtime actions, or their bootstrap.
+- Keep credentials out of source control and deployment manifests.
 
-## Ecosystem layering (do not violate boundaries)
+## Working rules
 
-```
-Axel-DaMage/adev          doctrine (methodology, book, evidence)
-os-santiago/ai-sdlc       THIS REPO — spec + runtime
-os-santiago/sc-agent-cli  engine (upstream; co-maintained — PRs, human review)
-deployments               Axel-DaMage/hermes (control plane: Discord,
-                          OmniRoute, memory, orchestration), consumer repos
-                          carrying only .ai-sdlc.yaml + thin caller
-```
+- Use a focused branch and one reviewable pull request per change.
+- Preserve Kubernetes/OpenShift security defaults: non-root containers,
+  read-only filesystems where supported, least privilege, and explicit network
+  policy.
+- Keep component behavior bounded by timeouts, retry caps, and explicit
+  escalation paths.
+- Validate the changed Go and deployment surface before requesting review.
 
-File things in the right repo: spec/runtime work → here; engine changes →
-`os-santiago/sc-agent-cli` (fork `Axel-DaMage/sc-agent-cli` for the branch);
-deployment/personal-infra → `Axel-DaMage/hermes`.
-
-## Active initiative: homedir cutover (epic #30)
-
-`os-santiago/homedir-ai-sdlc` (VPS bash worker) is being sunset; `homedir`
-migrates to this runtime. **ADR-0001** (`docs/architecture/adr/`) is the
-binding decision record — read it before touching anything cutover-related.
-The cutover executes only after the evidence gate in epic #30 passes.
-
-## Hard rules
-
-- **English only** for code, commits, PRs, issues, docs.
-- **No credentials in the repo** — never put API keys/tokens in
-  `.ai-sdlc.yaml` or workflows. Secrets live in GitHub secrets
-  (`AI_SDLC_APP_ID`, `AI_SDLC_APP_PRIVATE_KEY`, `MODEL_API_KEY`).
-- **The pipeline never edits `.github/workflows/` in consumer repos** — the
-  implement stage strips workflow paths from agent diffs, and the
-  `ai-sdlc-runtime` GitHub App holds `Workflows: No access`. Changes to THIS
-  repo's workflows go through normal PRs.
-- **OmniRoute route names (`auto/*`, `devin/*`) are Hermes control-plane
-  only** — unreachable from GHA runners by design (ADR-0001). The GHA
-  default provider is **GitHub Models** (`models.github.ai`, `GITHUB_TOKEN`
-  + `models: read`); `MODEL_API_KEY` switches to a direct provider.
-- **scc config.json is the engine's single source of truth** on the runner —
-  never rely on env/CLI-flag overrides for provider config (the VPS worker's
-  iteration-#13 lesson).
-- **Every mutable step is bounded**: `timeout-minutes`, `max_seconds`,
-  `max_steps`, `max_repairs`, bounded scan sizes. No unbounded loops.
-- **Identity**: pipeline automation runs as `ai-sdlc-runtime[bot]` (GitHub
-  App installation tokens via `actions/create-github-app-token`).
-  `GITHUB_TOKEN` pushes/PRs do not fire downstream workflows — anything that
-  must trigger CI needs the App token (minted per-run from
-  `AI_SDLC_APP_ID` + `AI_SDLC_APP_PRIVATE_KEY`; fail-closed, no PAT fallback).
-- **Golden rule**: no pipeline PR stays open unresolved — merged, or
-  `needs-human` with an explicit cause.
-
-## How work flows here (bootstrap stage)
-
-- Issue labels: `ready-to-implement` dispatches the self-dogfood GHA
-  pipeline; skip labels (`epic`, `wontfix`, `needs-human`,
-  `needs-refinement`, …) veto dispatch; `scc:*` = run states,
-  `pr:risk-*` = risk taxonomy.
-- During bootstrap (pre-pilot, epic #30 gate): **do not label runtime issues
-  `ready-to-implement`** — the implement loop is still proving itself.
-  Dispatch work via Devin cloud sessions or manual PRs instead.
-- Branch names: `fix/issue-N-<slug>` / `feat/issue-N-<slug>` /
-  `docs/<slug>`. PRs reference issues (`Closes #N` / `Refs #N`), squash
-  merge, delete branch.
-- Spec changes are semver-sensitive: a breaking schema change = MAJOR bump
-  of `spec/v*` tags + migration note. Enforced by
-  `scripts/spec-version.js` + `ai-sdlc-spec-tag.yml` — every `spec/**` PR
-  must bump the `**Declared version:**` marker in `spec/README.md` to the
-  classified next tag.
-
-## Validate before opening a PR
+## Validation
 
 ```bash
-# Full repo check — also what `npm test` / `npm run build` run
-bash tools/validate-repo.sh
-
-# Workflow lint — same pinned release CI runs (wrapper fetches it on demand;
-# `bash actionlint -color` if a checkout lost the exec bit). With shellcheck
-# on PATH it also lints every workflow `run:` block. Composite actions are
-# covered too: a generated caller workflow `uses:` every
-# .github/actions/*/action.yml (issue #130).
-./actionlint -color
-
-# Shellcheck — validate-repo.sh runs it over standalone scripts when the
-# binary is installed; this fetches the pinned release for exact parity
-bash tools/shellcheck.sh tools/*.sh .github/actions/*/*.sh tests/*.sh
-
-# Contract validation only
-bash tools/validate-ai-sdlc-config.sh .ai-sdlc.yaml spec/ai-sdlc.schema.json
+cd runtime/k8s
+go build ./...
+go vet ./...
+go test ./...
 ```
 
-## Pointers
-
-- ADR-0001 (cutover): `docs/architecture/adr/0001-homedir-ai-sdlc-sunset-and-cutover.md`
-- Cutover epic: issue #30 · Runtime epic: issue #7
-- Board: org project **AI-SDLC Board — Runtime & Cutover**
-- Engine: `os-santiago/sc-agent-cli` · Control plane: `Axel-DaMage/hermes`
+Use Kustomize or Helm rendering checks for deployment-manifest changes. Run
+container builds only when the change affects an image or build contract.

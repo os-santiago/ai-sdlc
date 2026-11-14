@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-# actionlint — repo-local entrypoint. The single maintained implementation is
-# tools/actionlint.sh (pinned release, SHA-256-verified, CI-parity). This
-# wrapper exists only so `./actionlint` works from the repo root.
-set -euo pipefail
-exec bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/tools/actionlint.sh" "$@"

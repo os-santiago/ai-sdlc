@@ -65,6 +65,4 @@ components never crosses this boundary, since all five are containers in
 one pod (loopback, not subject to `NetworkPolicy`).
 
 This satisfies OpenShift's default `restricted-v2` SCC without a custom SCC
-object or an explicit `runAsUser` — see
-[../../README.md](../../README.md) and
-[ADR-0004](../../../../docs/architecture/adr/0004-cloud-native-k8s-openshift-runtime.md).
+object or an explicit `runAsUser`; see the [runtime guide](../../../README.md).

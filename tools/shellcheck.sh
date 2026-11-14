@@ -3,11 +3,10 @@
 # its SHA-256, extracts to a temp dir and runs it against the given files.
 # Invoke from the repo root:
 #
-#   bash tools/shellcheck.sh tools/*.sh .github/actions/*/*.sh tests/*.sh
+#   bash tools/shellcheck.sh tools/*.sh runtime/k8s/**/*.sh
 #
-# The version + checksum live here (not inline in a workflow) so CI gates
-# and local/pre-PR runs share a single pinned source of truth — same
-# pattern as tools/actionlint.sh (issue #129). Override with
+# The version + checksum live here so local and external CI runs share a
+# single pinned source of truth. Override with
 # SHELLCHECK_VERSION / SHELLCHECK_SHA256 to test a different release.
 set -euo pipefail
 

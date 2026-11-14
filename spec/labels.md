@@ -53,7 +53,7 @@ skip labels  — epic · wontfix · invalid · duplicate · question ·
 | T5 | any pre-dispatch | hold: `+needs-human` | `admission-gate`, `escalation`, `human` | veto: applying the winner strips `ready-to-implement` / `needs-refinement` in the same operation |
 | T6 | needs-human | unblock: `−needs-human` | `human`, `policy` re-evaluation | a policy-fired hold requires `policy:accepted` before clearing |
 | T7 | needs-human | re-arm: `+ready-to-implement` | `authorized-labeler`, `human` | only after the hold clears |
-| T8 | in-progress | engine exit: `+pr-opened` / `+failed` / `+no-changes` | `dispatch` | exit-code mapping per `docs/runtime.md` |
+| T8 | in-progress | engine exit: `+pr-opened` / `+failed` / `+no-changes` | `dispatch` | runtime-defined exit-code mapping |
 | T9 | any | escalate: `+needs-human` + cause comment | `escalation` | golden rule — no silent unresolved stall |
 | T10 | any | structural: `+duplicate` / `+epic` / `+umbrella` / `+scc:child` | owning component (`dedup`, `triage`, `decomposer`), `human` | vetoes the trigger while present |
 

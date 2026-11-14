@@ -15,7 +15,7 @@
  * every successor's stored `prev` — `verify` recomputes the chain and
  * fails. This is the same chaining discipline as the run ledger
  * (.github/actions/run-ledger/run-ledger.js): canonical/sha256/GENESIS and
- * the Ed25519 seal pattern are imported from it, not reimplemented.
+ * the Ed25519 seal pattern are preserved independently of the retired runtime.
  *
  * Because an event's own hash is only ever stored in a *successor*, the
  * tail of an unsealed, unsigned log can be rewritten without breaking the
@@ -61,8 +61,15 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const { canonical, sha256, GENESIS } =
-  require('../.github/actions/run-ledger/run-ledger.js');
+// Preserve the original ledger encoding without importing the retired runtime.
+const GENESIS = '0'.repeat(64);
+function canonical(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`;
+}
+const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 
 const FORMAT = 'ai-sdlc-security-log';
 const FORMAT_V = 1;

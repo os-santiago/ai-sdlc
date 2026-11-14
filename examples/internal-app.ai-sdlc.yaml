@@ -125,7 +125,7 @@ engine:
     - --prompt-file
 
 # Per-stage engine + model selection (issues #205, #171;
-# spec/model-routing.md): each stage key is a task class. The
+# each stage key is a task class. The
 # stage-definition object carries `engine` and/or `model` — a missing
 # engine falls back to engine.name (scc), a missing model to
 # model.primary. Spend capability where it pays: cheap models on

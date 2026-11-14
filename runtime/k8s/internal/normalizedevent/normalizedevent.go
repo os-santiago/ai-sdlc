@@ -1,13 +1,11 @@
 // Package normalizedevent decodes spec/normalized-event.schema.json payloads
-// (the forge-neutral event this repo's intake stage already produces for the
-// GHA runtime) and projects a work_item entity into the admission
+// and projects a work_item entity into the admission
 // component's Issue type.
 //
 // This is the k8s/OpenShift control plane's intake boundary: it consumes the
-// same canonical event the GHA ai-sdlc-intake workflow emits, so a repo's
+// same canonical event consumed by the control plane, so a repository's
 // trigger surface (GitHub webhook, GitLab, forge-neutral future adapters)
-// does not change based on which control plane (GHA or k8s) is executing
-// the pipeline.
+// does not depend on a delivery-system-specific event shape.
 package normalizedevent
 
 import (

@@ -1,13 +1,9 @@
-# gitleaks-gate.toml — baseline ruleset for the ai-sdlc-security reusable
-# stage (issue #91, epic #87).
+# gitleaks-gate.toml — baseline ruleset for the ai-sdlc security gate.
 #
-# Fetched from the runtime pin (fetch-runtime-file, same trust boundary as
-# scripts/security-gate.js) and passed to gitleaks via --config, so a
-# scanned PR tree can never redefine the gate that scans it: no PR-supplied
-# .gitleaks.toml, .gitleaksignore or inline gitleaks:allow comment is
-# consulted. A consumer repo may still govern its own ruleset — the
-# workflow resolves .gitleaks.toml/.gitleaksignore at the PR *base* ref
-# (maintainer-owned), falling back to this file when absent.
+# The controller supplies this trusted baseline to gitleaks, so a scanned
+# change can never redefine the gate that scans it: no change-supplied
+# .gitleaks.toml, .gitleaksignore, or inline gitleaks:allow comment is
+# consulted. A consumer repository may still govern its own reviewed ruleset.
 #
 # Extends gitleaks' embedded default config with no overrides: the gate's
 # floor is the full default ruleset.

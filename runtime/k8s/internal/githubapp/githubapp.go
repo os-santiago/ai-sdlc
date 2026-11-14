@@ -1,8 +1,6 @@
 // Package githubapp mints short-lived GitHub App installation access
-// tokens — the only pipeline identity this runtime (or
-// .github/workflows/ai-sdlc-implement.yml) uses for git/gh auth. Fail
-// closed: there is deliberately no PAT or GITHUB_TOKEN fallback here
-// (root CLAUDE.md "Critical Lessons"; ai-sdlc-implement.yml's "Verify
+// tokens — the only pipeline identity this runtime uses for git/gh auth. Fail
+// closed: there is deliberately no PAT or GITHUB_TOKEN fallback here.
 // ai-sdlc App credentials" step, issue #26). components/worker/cmd/main.go
 // treats a missing AppID/PrivateKey as "checkout is not configured", not
 // as a reason to substitute a weaker credential.

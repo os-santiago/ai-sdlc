@@ -20,11 +20,13 @@ on:
     paths:
       - SECURITY_LOG.md
       - scripts/security-log.js
+      - config/security-log.pub.pem
       - .github/workflows/security-log-validate.yml
   pull_request:
     paths:
       - SECURITY_LOG.md
       - scripts/security-log.js
+      - config/security-log.pub.pem
       - .github/workflows/security-log-validate.yml
   workflow_dispatch:
 

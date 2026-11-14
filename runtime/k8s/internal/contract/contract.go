@@ -4,16 +4,13 @@
 //
 // This is the integration point that keeps the cloud-native runtime
 // spec-first (AGENTS.md: "every behavior is declared in .ai-sdlc.yaml; the
-// runtime never hardcodes per-repo policy"). The GHA-native runtime reads
-// the same file through its own workflow steps; this package is the
-// equivalent entry point for components running as Kubernetes/OpenShift
-// workloads instead of GitHub Actions runners.
+// runtime never hardcodes per-repo policy"). This package is the entry point
+// for components running as Kubernetes/OpenShift
+// workloads.
 //
 // Only fields actually consumed by a ported component are modeled here —
-// this is intentionally not a full mirror of ai-sdlc.schema.json. See
-// docs/architecture/adr/0004-cloud-native-k8s-openshift-runtime.md for the
-// fields found to have no schema equivalent yet (a gap surfaced by this
-// port, not invented by it).
+// this is intentionally not a full mirror of ai-sdlc.schema.json. Schema
+// acceptance alone does not imply runtime enforcement of every field.
 package contract
 
 import (

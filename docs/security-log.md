@@ -3,7 +3,8 @@
 Tamper-evident, hash-chained audit trail of security-relevant events
 (issue #106; epic #89 "EU CRA alignment"). Under CRA the org needs an
 auditable record of vulnerability reports and handling actions; this log
-is where they — and every other security-relevant runtime event — land.
+can be recorded with the standalone CLI below. The Kubernetes runtime does not
+automatically append events to this file.
 
 ## Format
 
@@ -17,9 +18,8 @@ One event per line, plus `#` comments and `seal` attestation lines:
 first event chains from 64 zeroes (genesis). Editing, deleting, or
 reordering any historical event breaks every successor's stored `prev`.
 This is the same chaining discipline as the run ledger
-(`.github/actions/run-ledger/run-ledger.js`) — `scripts/security-log.js`
-imports `canonical`, `sha256`, and `GENESIS` from it rather than
-reimplementing.
+in the retired Actions runtime. `scripts/security-log.js` preserves the original
+canonical encoding and hashing without depending on that runtime.
 
 Canonical event types (`scripts/security-log.js` `EVENT_TYPES`; other
 lowercase slugs are accepted with a notice):

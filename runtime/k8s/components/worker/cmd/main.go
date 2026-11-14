@@ -101,8 +101,7 @@ func selectSCCEngine() engine.Engine {
 // both exist):
 //
 //  1. AI_SDLC_GH_APP_ID + AI_SDLC_GH_APP_PRIVATE_KEY — a GitHub App
-//     installation token, matching .github/workflows/ai-sdlc-implement.
-//     yml's fail-closed posture. Requires admin access to that specific
+//     installation token with a fail-closed posture. Requires admin access to that specific
 //     App to mint a private key for it.
 //  2. AI_SDLC_GH_PAT — a fine-grained personal access token, for
 //     operators who don't control the App above but do control a

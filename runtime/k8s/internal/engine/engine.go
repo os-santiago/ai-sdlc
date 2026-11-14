@@ -2,9 +2,8 @@
 // point: invoking something that actually attempts an implementation.
 //
 // ADR-0004 Decision #2 deliberately dropped future-go's fifth component
-// (a direct sc-agent-cli wrapper) so this runtime shares one headless
-// engine contract with the GHA-native runtime
-// (--prompt-file --audit-log --summary-file --no-commit) instead of
+// (a direct sc-agent-cli wrapper) so this runtime uses one headless
+// engine contract (--prompt-file --audit-log --summary-file --no-commit) instead of
 // duplicating it. This package is that integration point's boundary:
 // components/worker calls Engine.Invoke and never knows whether the
 // implementation underneath is a real subprocess or a test double.

@@ -1,5 +1,5 @@
 # Archetype: fresh onboarding — shadow-first, self-accrediting.
-# Mirrors the starter contract `gh ai-sdlc init` writes (docs/onboarding.md):
+# Starter contract for a shadow-first runtime deployment:
 # the repo enters the trust ladder at `shadow` — observe-only, zero
 # mutations — and climbs on accumulated run evidence, not promises
 # (spec/trust-ladder.md, issue #186).
@@ -38,7 +38,7 @@ demotion:
 # rides under the contract even at shadow — secrets always block, fixable
 # findings >= min_severity gate per pr:risk-* tier, everything else
 # reports. Defaults shown explicitly; an org baseline can floor any
-# leaf (spec/org-policy.md — Security Gate; docs/security/gate-calibration.md).
+# leaf (spec/org-policy.md — Security Gate).
 security:
   enabled: true
   block_on_secret: true

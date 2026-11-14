@@ -10,7 +10,7 @@
 #
 # Besides schema conformance, the contract is scanned for secret-looking
 # values (API keys, tokens, passwords, private keys): credentials live in
-# GitHub secrets only, never in .ai-sdlc.yaml (see AGENTS.md).
+# an external secret manager, never in .ai-sdlc.yaml (see AGENTS.md).
 #
 # Exit 0 = valid, 1 = invalid, 2 = usage error / missing tools.
 set -euo pipefail
@@ -86,7 +86,7 @@ if findings:
     for name, p in findings:
         # Never echo the offending value — only its location.
         print(f"[X] secret-looking value ({name}) at {'.'.join(p) or '<root>'} — "
-              "credentials belong in GitHub secrets, not in the contract", file=sys.stderr)
+              "credentials belong in an external secret manager, not in the contract", file=sys.stderr)
     sys.exit(1)
 print(f"[✓] {config}: no secret-looking values")
 PY

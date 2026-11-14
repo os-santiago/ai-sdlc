@@ -1,9 +1,0 @@
-{
-  "id": "label-ops-idempotent-same-tier",
-  "type": "label-ops",
-  "title": "already carrying only the winner label is a no-op",
-  "input": {
-    "repo": "fixture/repo", "pr": 9, "tier": "medium",
-    "labels": ["pr:risk-medium"]
-  }
-}
