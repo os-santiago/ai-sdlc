@@ -44,12 +44,9 @@ type DB struct {
 }
 
 // Open connects to Postgres and verifies the connection with a bounded ping.
-// Callers should treat a non-nil error as "run without persistence" at
-// their own discretion (every component in this runtime degrades to
-// synchronous-only behavior when its *DB is nil — see each component's
-// Deps type) rather than crash the process, matching
-// internal/contract.LoadFromEnv's "degrade, never crash a running pod"
-// posture.
+// Components configured with DATABASE_URL must fail startup on error.
+// A nil dependency is reserved for deliberately isolated synchronous tests;
+// an unavailable configured store must not become a stateless installation.
 func Open(ctx context.Context, databaseURL string) (*DB, error) {
 	pool, err := sql.Open("pgx", databaseURL)
 	if err != nil {

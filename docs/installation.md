@@ -137,14 +137,32 @@ invoke SCC for work, merge PRs or advance AI-SDLC delivery stages.
 python3 -m unittest discover -s tools -p test_install.py -v
 AI_SDLC_TEST_HELM=<verified-helm-path> python3 -m unittest discover -s tools -p test_helm.py -v
 ./install.sh local --provider podman
-./install.sh local --provider podman
+python3 tools/verify_local_install.py --provider podman
 ./install.sh status --provider podman
 ```
 
 `test_helm.py` needs the pinned Python packages in
 [`quality-requirements.txt`](../tools/quality-requirements.txt). CI uses Docker
 for its kind installation and repeat-apply check. Both paths exercise the
-same entrypoint and manifests.
+same entrypoint and manifests. The verifier compares database Secret identity
+and content, PVC/volume identity and applied migration count before and after
+reapplication. It also checks the five Deployment digests, readiness and the
+worker's actual UID. It never submits a work item or advances delivery.
+
+Observed on 2026-11-14: fresh kind/Podman installation and repeat application
+passed on Linux amd64, with five ready services plus PostgreSQL, preserved
+credentials/storage/migrations and worker UID 1000. The selected images come
+from source revision `5fd38f90dc7a55f5e210c5bf729eae2b96ffc24a`, published by
+[Actions run 43646059156](https://github.com/os-santiago/ai-sdlc/actions/runs/43646059156).
+[Docker/kind CI run 43646250244](https://github.com/os-santiago/ai-sdlc/actions/runs/43646250244)
+also passed fresh installation and repeat application. These are installation
+results in maintenance mode, not autonomous delivery or production evidence.
+
+The first local trial exposed a non-numeric worker image user rejected by
+Kubernetes; this was corrected before the pinned build above. Database/DNS
+startup ordering now causes explicit bounded-by-Kubernetes startup retries,
+rather than silently running without persistence. Initial pod restarts while
+PostgreSQL becomes ready are expected; installation still has a finite timeout.
 
 - **Missing tool/runtime:** install Python/Git and Docker or Podman. The
   installer downloads the Kubernetes clients itself.
