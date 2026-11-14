@@ -63,14 +63,28 @@ def tools(cache):
 
 def image_lock(path):
     lock = json.loads(path.read_text())
+    if not isinstance(lock, dict) or set(lock) != {'image', 'components'}:
+        raise ValueError('Image lock accepts only image and components')
+    if not isinstance(lock['image'], dict) or set(lock['image']) - {'repository', 'tag'}:
+        raise ValueError('Image lock cannot override installation configuration')
+    if 'tag' in lock['image'] and not re.fullmatch(r'[a-f0-9]{40}', lock['image']['tag']):
+        raise ValueError('Image lock tag must record a full source commit SHA')
     if lock.get('image', {}).get('repository') != 'quay.io/os-santiago/ai-sdlc':
         raise ValueError('Unexpected image repository in lock')
     if set(lock.get('components', {})) != set(COMPONENTS):
         raise ValueError('The image lock must contain exactly five runtime components')
     for name in COMPONENTS:
+        if not isinstance(lock['components'][name], dict) or set(lock['components'][name]) != {'digest'}:
+            raise ValueError('Component lock accepts only a digest: ' + name)
         if not re.fullmatch(r'sha256:[a-f0-9]{64}', lock['components'][name].get('digest', '')):
             raise ValueError('Missing published image digest: ' + name)
     return lock
+
+
+def check_ownership(marker, cluster, provider, cluster_uid):
+    expected = {'cluster': cluster, 'provider': provider, 'clusterUID': cluster_uid}
+    if not cluster_uid or not marker.exists() or json.loads(marker.read_text()) != expected:
+        raise ValueError('Cluster identity differs from its ownership record; refusing to adopt or modify it.')
 
 
 def main(argv=None):
@@ -86,11 +100,12 @@ def main(argv=None):
     if not re.fullmatch(r'[1-9][0-9]*(s|m)', args.timeout):
         raise ValueError('Timeout must be positive seconds or minutes')
     cache = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'ai-sdlc/tools'
+    if args.command != 'tools':
+        image_lock(args.images)
     binaries = tools(cache)
     if args.command == 'tools':
         print(json.dumps(binaries, indent=2))
         return 0
-    image_lock(args.images)
     helm_args = [binaries['helm'], 'template', 'ai-sdlc', CHART, '--namespace', NAMESPACE,
                  '-f', LOCAL / 'values.yaml', '-f', args.images]
     run(helm_args, stdout=subprocess.DEVNULL)
@@ -116,15 +131,20 @@ def main(argv=None):
         raise ValueError('Cluster already exists without this installer ownership record; choose a different --cluster.')
     if args.command == 'status' and args.cluster not in clusters:
         raise ValueError('The requested local cluster does not exist')
-    if args.cluster not in clusters:
-        marker.write_text(json.dumps({'cluster': args.cluster, 'provider': provider}) + '\n')
+    created = args.cluster not in clusters
+    if created:
         run([kind, 'create', 'cluster', '--name', args.cluster, '--config', LOCAL / 'kind.yaml',
              '--kubeconfig', kubeconfig, '--wait', args.timeout], env=env)
-    elif json.loads(marker.read_text()) != {'cluster': args.cluster, 'provider': provider}:
-        raise ValueError('Cluster provider differs from its ownership record')
     run([kind, 'export', 'kubeconfig', '--name', args.cluster, '--kubeconfig', kubeconfig], env=env)
     kubeconfig.chmod(0o600)
     kubectl = [binaries['kubectl'], '--kubeconfig', kubeconfig, '--context', 'kind-' + args.cluster]
+    cluster_uid = run(kubectl + ['get', 'namespace', 'kube-system', '-o', 'jsonpath={.metadata.uid}'], capture_output=True).stdout.strip()
+    if created:
+        if not cluster_uid:
+            raise ValueError('Cannot establish the created cluster identity')
+        marker.write_text(json.dumps({'cluster': args.cluster, 'provider': provider, 'clusterUID': cluster_uid}) + '\n')
+    else:
+        check_ownership(marker, args.cluster, provider, cluster_uid)
     if args.command == 'status':
         run(kubectl + ['get', 'deployments,statefulsets,pods,pvc', '-n', NAMESPACE])
         print('Installation mode: maintenance. Autonomous issue delivery: unavailable.')

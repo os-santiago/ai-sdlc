@@ -11,16 +11,29 @@ spec.loader.exec_module(installer)
 
 
 class InstallerBoundaryTests(unittest.TestCase):
+    def test_stale_or_failed_creation_marker_cannot_adopt_a_cluster(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / 'ownership.json'
+            for value in (None, {'cluster': 'ai-sdlc', 'provider': 'podman'},
+                          {'cluster': 'ai-sdlc', 'provider': 'podman', 'clusterUID': 'old-uid'}):
+                if value is not None: marker.write_text(json.dumps(value))
+                with self.assertRaisesRegex(ValueError, 'identity'):
+                    installer.check_ownership(marker, 'ai-sdlc', 'podman', 'new-uid')
+            marker.write_text(json.dumps({'cluster': 'ai-sdlc', 'provider': 'podman', 'clusterUID': 'new-uid'}))
+            installer.check_ownership(marker, 'ai-sdlc', 'podman', 'new-uid')
+
     def lock(self):
         return {'image': {'repository': 'quay.io/os-santiago/ai-sdlc'},
                 'components': {key: {'digest': 'sha256:' + 'a' * 64} for key in installer.COMPONENTS}}
 
     def test_missing_mutable_or_foreign_images_fail_before_install(self):
-        for invalid in ('mutable', 'missing', 'foreign'):
+        for invalid in ('mutable', 'missing', 'foreign', 'namespace', 'component_name'):
             lock = self.lock()
             if invalid == 'mutable': lock['components']['worker']['digest'] = 'latest'
             if invalid == 'missing': del lock['components']['worker']
             if invalid == 'foreign': lock['image']['repository'] = 'example.org/untrusted'
+            if invalid == 'namespace': lock['namespace'] = {'name': 'unrelated'}
+            if invalid == 'component_name': lock['components']['worker']['name'] = 'unrelated'
             with tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / 'images.json'
                 path.write_text(json.dumps(lock))

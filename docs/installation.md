@@ -16,9 +16,17 @@ cd ai-sdlc
 ./install.sh status
 ```
 
+The same `install.sh` can be downloaded and executed outside a checkout. It
+clones this repository into `~/.local/share/ai-sdlc/source` before delegating
+to the installer. `AI_SDLC_SOURCE_DIR` selects a different checkout location;
+`AI_SDLC_INSTALL_REF` selects a reviewed commit/tag for a new clone. When a
+checkout already exists, a different requested revision fails explicitly:
+review and update that checkout rather than silently replacing local work.
+
 Use `--provider podman` or `--provider docker` to select the container
 runtime explicitly. `--cluster ai-sdlc-dev` creates a separate named
-installation; the installer refuses to adopt an unrelated existing cluster.
+installation; the installer records and verifies the cluster's `kube-system`
+UID and refuses to adopt an unrelated or externally recreated cluster.
 Rootless runtime support depends on host configuration; the installer never
 changes host privileges or silently retries as root. See the
 [kind rootless prerequisites](https://kind.sigs.k8s.io/docs/user/rootless/).
@@ -90,7 +98,8 @@ No model/API/GitHub write credentials are mounted in this mode.
 The default kind CNI does not enforce Kubernetes NetworkPolicy. Policies
 are rendered for compatible CNIs, but are not proof of isolation on kind.
 Maintenance mode and the absence of public component ingress are essential
-boundaries here; application authentication and worker isolation remain
+boundaries here; [NetworkPolicy enforcement requires a supporting CNI](https://kubernetes.io/docs/concepts/services-networking/network-policies/).
+Application authentication and worker isolation remain
 #421/#422. Keep the local cluster on a trusted host.
 
 The missing issue adapters, independent verification, PR/merge/release and

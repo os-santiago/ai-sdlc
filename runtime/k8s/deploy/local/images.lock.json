@@ -1,0 +1,23 @@
+{
+  "image": {
+    "repository": "quay.io/os-santiago/ai-sdlc",
+    "tag": "40dd8e895a91da8fb87a2867018003b086d94814"
+  },
+  "components": {
+    "admissionController": {
+      "digest": "sha256:5652599df95f2b58b3844b1ed6a4d8ed0bd54043a39d9480056f015ae23003bc"
+    },
+    "relay": {
+      "digest": "sha256:25f506401ff9e829b2d9649ccb57c67b4f91541555c0c46b8a6f35772262d29a"
+    },
+    "worker": {
+      "digest": "sha256:bfdf5a542b4b67398c36f4f7d28af18a7ca2b39e302134112ecd0af8f155c7d2"
+    },
+    "releaseManager": {
+      "digest": "sha256:e310aefeffa2751c56f657f3ea609ea5e5a77d249475e2ba4e34d9d7e7dcb4b4"
+    },
+    "orchestrator": {
+      "digest": "sha256:a8bd97e671dd8a066dfc1176ca6179f464e467524933a14a76f008d7245da97e"
+    }
+  }
+}
