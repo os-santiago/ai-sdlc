@@ -162,6 +162,49 @@ export AI_SDLC_TEST_DATABASE_URL=postgres://ai_sdlc:ai_sdlc@localhost:5432/ai_sd
 go test ./... -v
 ```
 
+## Signed delivery integration boundary
+
+`internal/delivery` is the hidden replacement boundary for unsigned delivery;
+component entry points and the installed Helm release do not use it yet.
+It implements:
+
+- Exact-byte, producer-signed records in `authorized_outbox`. Producers can
+  append their own facts; the relay can update transport status only.
+- A transactional `authorized_inbox` and expiring `authorized_nonces` table.
+  Concurrent/restarted receivers return the committed response for the same
+  receipt; conflicting content under an existing event ID is rejected.
+- Receiver-signed acknowledgements. Lost responses can be retried without
+  reapplying state, while a plain HTTP 200 cannot complete delivery.
+- One-row relay transactions with a ten-second HTTP limit, exponential retry
+  spacing and exhaustion after eight attempts. Exhausted facts remain stored.
+
+`store.ProvisionRoles` is reserved for the future dedicated migration Job in
+an installation-owned database. It requires all eight component credentials
+from external Secrets and refuses to adopt unregistered PostgreSQL roles.
+It reconciles table and column grants, revokes PUBLIC table access and schema
+creation, rejects role membership and removes privileged role attributes.
+Operational transactions reject bootstrap credentials and elevated identities.
+The existing Helm release still uses its original database Secret; separate
+Secret mounts and migrator startup ordering remain integration requirements.
+
+Effects passed to `Inbox.Accept` must validate payload semantics, repository
+ownership and stage gates, then write state/outgoing commands using its SQL
+transaction. They must not run a model, call a forge or deploy synchronously.
+Those operations require durable command leases and their own idempotency keys.
+`Inbox.Handler` resolves policy from trusted configuration on every request.
+Policy and signing identities must never come from a generated workspace.
+
+Migration `0002_authorized_delivery.sql` only adds new tables/policies. It does
+not promote legacy unsigned rows into signed facts or activate delivery.
+Rollback can retain these unused tables while reverting component images;
+do not delete delivery evidence as an automatic rollback step.
+
+Validate with `go build ./...`, `go vet ./...` and `go test -p 1 ./...` using a
+disposable PostgreSQL 17 database via `AI_SDLC_TEST_DATABASE_URL`. The integration
+tests provision actual restricted LOGIN roles and use HTTP receivers, rather
+than treating superuser-only SQL tests as proof of isolation. See
+[component authority](../../spec/component-authority.md) for the trust contract.
+
 ## Deploy
 
 Three equivalent surfaces, pick one:
