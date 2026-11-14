@@ -1,13 +1,54 @@
 package cycle
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/engine"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
+
+func TestDispatchRouteAcceptsCompleteWorkItemReady(t *testing.T) {
+	db := testDB(t)
+	planID, workItemID := store.NewID(), store.NewID()
+	insertWorkItemForDispatch(t, db, planID, workItemID)
+	eng := &scriptedEngine{results: []engine.Result{{ExitCode: 0, ValidationPassed: true, ChangedFiles: []string{"README.md"}}}}
+	mux := http.NewServeMux()
+	Routes(mux, Deps{DB: db, Engine: eng})
+	command := map[string]any{
+		"commandId": store.NewID(), "idempotencyKey": workItemID, "correlationId": "wire-test",
+		"planId": planID, "workItemId": workItemID, "repository": "local/wire-test", "baseRef": "main",
+		"issueNumbers": []int{1}, "acceptanceCriteria": []string{"Document the local test procedure."},
+		"requiredGates": []string{"tests"}, "leaseSeconds": 1800,
+	}
+	body, err := json.Marshal(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/attempts/dispatch", bytes.NewReader(body)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", response.Code, response.Body.String())
+	}
+	if eng.calls != 1 {
+		t.Fatalf("engine calls = %d, want 1", eng.calls)
+	}
+	command["unexpectedAuthority"] = true
+	body, err = json.Marshal(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	mux.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/attempts/dispatch", bytes.NewReader(body)))
+	if response.Code != http.StatusBadRequest || eng.calls != 1 {
+		t.Fatal("unknown fields reached the engine")
+	}
+}
 
 func testDB(t *testing.T) *store.DB {
 	t.Helper()

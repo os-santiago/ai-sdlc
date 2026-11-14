@@ -136,7 +136,10 @@ func (r *Relay) client() *http.Client {
 	if r.Client != nil {
 		return r.Client
 	}
-	return &http.Client{Timeout: 15 * time.Second}
+	// WorkItemReady dispatch is synchronous and can include several model
+	// completions. Match the component server's bounded default, not a 15s
+	// request timeout that cancels real work before a model can respond.
+	return &http.Client{Timeout: 25 * time.Minute}
 }
 
 func (r *Relay) logger() *slog.Logger {

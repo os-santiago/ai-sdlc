@@ -15,6 +15,68 @@ import (
 
 var errCheckoutFixture = errors.New("checkout fixture failure")
 
+func testGitWorktree(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, args := range [][]string{{"init", "-q"}, {"-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "baseline"}} {
+		if _, err := gitOutput(context.Background(), dir, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestInvokeReadsPinnedSCCCountAndChecksActualGitChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name, manifest, edit string
+		success              bool
+	}{
+		{"real-count", `{"v":1,"success":true,"exit_reason":"success","files_changed":1}`, "printf changed > changed.txt", true},
+		{"fabricated-count", `{"v":1,"success":true,"exit_reason":"success","files_changed":1}`, ":", false},
+		{"mismatched-count", `{"v":1,"success":true,"exit_reason":"success","files_changed":2}`, "printf changed > changed.txt", false},
+		{"failed-manifest", `{"v":1,"success":false,"exit_reason":"provider_error","files_changed":1}`, "printf changed > changed.txt", false},
+		{"wrong-shape", `{"success":true,"files_changed":["changed.txt"]}`, "printf changed > changed.txt", false},
+		{"unexpected-commit", `{"v":1,"success":true,"exit_reason":"success","files_changed":1}`, "printf changed > changed.txt\ngit add changed.txt\ngit -c user.name=Test -c user.email=test@example.invalid commit -qm unexpected", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := testGitWorktree(t)
+			binary := filepath.Join(t.TempDir(), "scc")
+			script := "#!/bin/sh\nset -eu\nwhile [ $# -gt 0 ]; do\nif [ \"$1\" = --summary-file ]; then shift; summary=$1; fi\nshift\ndone\n" + tc.edit + "\ncat > \"$summary\" <<'JSON'\n" + tc.manifest + "\nJSON\n"
+			if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			result, err := (SCCEngine{WorkDir: dir, Binary: binary, ConfigPath: filepath.Join(t.TempDir(), "config.json")}).Invoke(context.Background(), Request{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.ValidationPassed != tc.success {
+				t.Fatalf("result = %+v", result)
+			}
+			if !tc.success && !result.UnsafeOrAmbiguous {
+				t.Fatalf("invalid result did not terminate safely: %+v", result)
+			}
+			if tc.success && (len(result.ChangedFiles) != 1 || result.ChangedFiles[0] != "changed.txt") {
+				t.Fatalf("paths = %v", result.ChangedFiles)
+			}
+		})
+	}
+}
+
+func TestInvokeRejectsExistingChangesBeforeWritingConfig(t *testing.T) {
+	dir := testGitWorktree(t)
+	if err := os.WriteFile(filepath.Join(dir, "existing.txt"), []byte("preserve"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(t.TempDir(), "config.json")
+	result, err := (SCCEngine{WorkDir: dir, ConfigPath: config}).Invoke(context.Background(), Request{})
+	if err != nil || !result.UnsafeOrAmbiguous || result.ValidationPassed {
+		t.Fatalf("dirty worktree must produce a terminal decision, got %+v, %v", result, err)
+	}
+	if _, err := os.Stat(config); !os.IsNotExist(err) {
+		t.Fatal("config written before worktree validation")
+	}
+}
+
 func TestSCCConfigRenderMatchesEngineContract(t *testing.T) {
 	raw, err := (SCCConfig{ProviderBaseURL: "https://example.com", APIKey: "secret-key", Model: "test-model"}).render()
 	if err != nil {
@@ -135,15 +197,15 @@ func TestReadManifestMissingFile(t *testing.T) {
 func TestReadManifestParsesFilesChanged(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/manifest.json"
-	if err := os.WriteFile(path, []byte(`{"success":true,"model":"test","files_changed":["a.go","b.go"]}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"v":1,"success":true,"exit_reason":"success","model":"test","files_changed":2}`), 0o600); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 	m, err := readManifest(path)
 	if err != nil {
 		t.Fatalf("readManifest() error = %v", err)
 	}
-	if len(m.FilesChanged) != 2 {
-		t.Fatalf("FilesChanged = %v, want 2 entries", m.FilesChanged)
+	if m.FilesChanged != 2 {
+		t.Fatalf("FilesChanged = %v, want count 2", m.FilesChanged)
 	}
 }
 
@@ -281,7 +343,7 @@ func TestInvokePropagatesCheckoutError(t *testing.T) {
 func TestInvokeWithNilCheckoutIsUnaffected(t *testing.T) {
 	// nil Checkout (the zero value) must behave exactly as before this
 	// field existed: Invoke proceeds straight to the subprocess attempt.
-	dir := t.TempDir()
+	dir := testGitWorktree(t)
 	eng := SCCEngine{Binary: "scc-binary-that-does-not-exist", WorkDir: dir}
 	_, err := eng.Invoke(context.Background(), Request{Repository: "os-santiago/homedir", BaseRef: "main"})
 	if err == nil {
@@ -308,7 +370,7 @@ func TestInvokeCreatesTempDirRootWhenMissing(t *testing.T) {
 	t.Setenv("TMP", missingTempRoot)
 	t.Setenv("TEMP", missingTempRoot)
 
-	dir := t.TempDir()
+	dir := testGitWorktree(t)
 	eng := SCCEngine{Binary: "scc-binary-that-does-not-exist", WorkDir: dir}
 	_, err := eng.Invoke(context.Background(), Request{Repository: "os-santiago/homedir", BaseRef: "main"})
 	if err == nil {
@@ -332,11 +394,11 @@ func TestInvokeAgainstRealBinary(t *testing.T) {
 	if binary == "" {
 		t.Skip("AI_SDLC_TEST_SCC_BINARY not set; skipping real-engine integration test")
 	}
-	dir := t.TempDir()
+	dir := testGitWorktree(t)
 	eng := SCCEngine{
 		Binary:          binary,
 		WorkDir:         dir,
-		ConfigPath:      dir + "/config.json",
+		ConfigPath:      filepath.Join(t.TempDir(), "config.json"),
 		ProviderBaseURL: os.Getenv("AI_SDLC_TEST_PROVIDER_BASE_URL"),
 		APIKey:          os.Getenv("AI_SDLC_TEST_MODEL_API_KEY"),
 		Model:           os.Getenv("AI_SDLC_TEST_MODEL"),

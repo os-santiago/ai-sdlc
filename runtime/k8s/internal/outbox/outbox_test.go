@@ -9,9 +9,27 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
+
+func TestDeliveryWaitsForBoundedWorkerBeyondOldTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(16 * time.Second):
+			w.WriteHeader(http.StatusOK)
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	relay := &Relay{Routes: map[string]string{"WorkItemReady.v1": server.URL}}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := relay.deliver(ctx, outboxRow{ID: "slow-worker", EventType: "WorkItemReady.v1", Payload: json.RawMessage(`{}`)}); err != nil {
+		t.Fatalf("bounded worker cancelled before completion: %v", err)
+	}
+}
 
 func testDB(t *testing.T) *store.DB {
 	t.Helper()

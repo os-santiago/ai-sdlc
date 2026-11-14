@@ -63,6 +63,67 @@ This integration supplies profile context and verifies its integrity; it does
 not implement every A-Dev acceptance or release policy. The isolated HTTP and
 tool-mapping tests are not evidence of a complete autonomous release cycle.
 
+## Local autonomous-cycle validation
+
+This is an **experimental probe**, not a reliable autonomous onboarding path.
+Live executor runs have both completed successfully and exhausted their budget
+without changes. A passing run demonstrates that execution's evidence only;
+do not infer repeatability or production readiness from it.
+
+On Linux, install Podman, Git, Python 3 and Codex CLI, then authenticate Codex
+(`codex login`). Supply a reviewed A-Dev profile from its separate checkout:
+
+```bash
+bash runtime/k8s/tools/validate-local-cycle.sh \
+  ../adev/implementation/profiles/ai-sdlc.yaml \
+  /tmp/ai-sdlc-local-cycle-report.json
+```
+
+Run this command from the repository root. It builds the five component
+binaries and the worker image, starts a fresh disposable PostgreSQL database,
+and runs admission → relay → orchestrator → real SCC → Codex tool proposals →
+SCC tool execution → durable terminal decision. It then independently checks
+the exact scoped diff and evaluates both missing-evidence and passing-evidence
+release gates. The release decision must persist and the outbox must drain.
+
+The probe uses a disposable local clone of this repository at the immutable
+baseline `12d948c79102813c0db2acf63038df80e7c8991a`, where the PostgreSQL test
+documentation still needs correction. SCC must update exactly that paragraph;
+prepared changes, new files, commits and unrelated text are checked too. The
+original checkout is preserved. No GitHub credentials enter the worker, its
+clone has no remote, and no PR, tag or deployment is published.
+
+Default scope is one SCC executor role plus the independent deterministic
+validator. `--scc-role full` exercises SCC's planner/executor/reviewer pipeline
+under the same bounded budget; success in executor mode does not establish
+success in that mode. Both modes allow one attempt, 12 SCC steps and 300
+seconds of engine work. The harness waits at most 420 seconds for a terminal
+state, then stops its containers and services. It binds services on loopback
+ports 18081–18085 and 18088, and PostgreSQL on 15432; use `--port-base` and
+`--database-port` if needed. Existing services must not use those ports.
+
+The report records source/target revisions, source diff and binary hashes,
+the image identity, policy digest, actual SCC manifest counts, persisted
+attempts and independent checks. A nonzero exit is a failed validation even
+when health endpoints return success. Model prose and raw backend logs are
+not included in that report. Lower-level options are available through
+`python3 runtime/k8s/tools/validate_local_cycle.py --help`.
+
+The runtime still does not open PRs, collect independent CI evidence itself,
+publish releases or verify production. Its SCC result checks manifest/Git
+agreement; that alone is not independent software validation. The local
+harness supplies the separate deterministic probe check and exercises release
+**decisions**, not an autonomous production release.
+
+Validation observed on 2026-11-14 with SCC 0.4.2: one entrypoint run completed
+with 4 model requests, 11 tool calls, one exact documentation change, persisted
+release decisions and drained outbox. A subsequent run on clean revision
+`db725e3347001bfeef57e6c76a83a3a7d16d4691` exhausted its 12-tool budget without
+changes and escalated safely. The full SCC role pipeline also exhausted its
+probe budget. Investigation reproduced SCC accepting malformed/no-op patches
+as "applied"; the Git checks prevent that message alone from passing this
+probe. Model/tool convergence remains an open limitation.
+
 ## Spec integration
 
 - `internal/contract` loads `.ai-sdlc.yaml` from the path named by

@@ -22,7 +22,9 @@ class AdapterTests(unittest.TestCase):
             return type("Result", (), {"returncode": 0})()
         with patch.object(wrapper.subprocess, "run", side_effect=invoke):
             result = wrapper.complete({"messages": [{"role": "system", "content": "policy"}], "tools": [{"function": {"name": "read_file"}}]})
+            later = wrapper.complete({"messages": [{"role": "system", "content": "policy"}], "tools": [{"function": {"name": "read_file"}}]})
         self.assertEqual(result["tool_calls"][0]["function"]["name"], "read_file")
+        self.assertNotEqual(result["tool_calls"][0]["id"], later["tool_calls"][0]["id"])
 
     def test_http_auth_streaming_and_sanitized_failure(self):
         server = wrapper.HTTPServer(("127.0.0.1", 0), wrapper.Handler)

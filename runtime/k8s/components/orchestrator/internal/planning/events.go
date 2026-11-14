@@ -26,11 +26,16 @@ type Deps struct {
 // issueAdmissionDecided mirrors
 // contracts/events/v1/issue-admission-decided.schema.json.
 type issueAdmissionDecided struct {
+	EventID            string   `json:"eventId"`
+	OccurredAt         string   `json:"occurredAt"`
 	CorrelationID      string   `json:"correlationId"`
 	Repository         string   `json:"repository"`
 	Issue              int      `json:"issue"`
 	IssueRevision      string   `json:"issueRevision"`
 	Decision           string   `json:"decision"`
+	Risk               string   `json:"risk"`
+	PolicyVersion      string   `json:"policyVersion"`
+	Reasons            []string `json:"reasons"`
 	RequiredGates      []string `json:"requiredGates"`
 	AcceptanceCriteria []string `json:"acceptanceCriteria"`
 }
@@ -38,6 +43,8 @@ type issueAdmissionDecided struct {
 // implementationAttemptDecided mirrors
 // contracts/events/v1/implementation-attempt-decided.schema.json.
 type implementationAttemptDecided struct {
+	EventID       string `json:"eventId"`
+	OccurredAt    string `json:"occurredAt"`
 	CorrelationID string `json:"correlationId"`
 	WorkItemID    string `json:"workItemId"`
 	AttemptNumber int    `json:"attemptNumber"`
