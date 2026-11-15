@@ -15,6 +15,11 @@ cd ai-sdlc
 ./install.sh status
 ```
 
+If the preflight reports low Linux inotify limits, run
+`sudo ./install.sh host --configure-host`, then retry as your normal user.
+The explicit adjustment affects this boot only; see the
+[host prerequisites](docs/installation.md) for persistent host management.
+
 One entrypoint installs verified Kubernetes clients, creates kind and applies
 the versioned Helm chart. Each of the five runtime services has its own
 container and Deployment; PostgreSQL uses persistent storage. A short-lived

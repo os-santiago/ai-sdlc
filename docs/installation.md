@@ -8,6 +8,16 @@ or Podman installation. Allow at least 4 CPUs, 6 GiB available RAM and
 15 GiB free disk for kind, PostgreSQL and image downloads. These are initial
 planning allowances, not measured production sizing.
 
+The installer checks Linux inotify limits before creating a cluster. If it
+reports a low limit, run `sudo ./install.sh host --configure-host` once and
+retry the installation as your normal user. This explicit command raises
+limits to the committed minima in
+[`host-prerequisites.json`](../runtime/k8s/deploy/local/host-prerequisites.json),
+following the [kind inotify guidance](https://kind.sigs.k8s.io/docs/user/known-issues/#pod-errors-due-to-too-many-open-files).
+It preserves higher limits, verifies the result, and affects only the current
+boot. Use your host configuration manager for persistence across reboots.
+`./install.sh host` only checks; the installer never invokes sudo itself.
+
 ```bash
 git clone https://github.com/os-santiago/ai-sdlc.git
 cd ai-sdlc

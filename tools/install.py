@@ -32,6 +32,31 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def host_prerequisites(configure=False, proc_root=Path('/proc/sys/fs/inotify')):
+    policy = json.loads((LOCAL / 'host-prerequisites.json').read_text())
+    limits = policy.get('inotify', {})
+    if policy.get('version') != 1 or set(limits) != {'max_user_instances', 'max_user_watches'}:
+        raise ValueError('Unsupported host prerequisite policy')
+    for name, minimum in limits.items():
+        if type(minimum) is not int or not 1 <= minimum <= 2097152:
+            raise ValueError('Invalid inotify prerequisite value')
+    observed = {name: int((proc_root / name).read_text().strip()) for name in limits}
+    for name, minimum in limits.items():
+        current = observed[name]
+        if current < minimum:
+            if not configure:
+                raise ValueError('Host inotify limits are below the committed minimum. Run ./install.sh host --configure-host as root, or apply deploy/local/host-prerequisites.json with your host configuration manager.')
+            if os.geteuid() != 0:
+                raise ValueError('Host prerequisite changes require root; the installer does not invoke sudo')
+            # Monotonic, current-boot changes only. Never lower an existing limit
+            # or rewrite a host-managed persistent sysctl configuration.
+            run(['sysctl', '-w', 'fs.inotify.' + name + '=' + str(minimum)], stdout=subprocess.DEVNULL)
+            observed[name] = int((proc_root / name).read_text().strip())
+            if observed[name] < minimum:
+                raise ValueError('Host prerequisite change was not applied')
+    return observed
+
+
 def tools(cache):
     if platform.system() != 'Linux' or platform.machine() not in ('x86_64', 'amd64'):
         raise ValueError('This release supports Linux amd64. Other platforms are not yet validated.')
@@ -202,7 +227,8 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['plan', 'local', 'status', 'tools'])
+    parser.add_argument('command', choices=['plan', 'local', 'status', 'tools', 'host'])
+    parser.add_argument('--configure-host', action='store_true', help='Raise inotify limits to committed minima for this boot; requires root')
     parser.add_argument('--cluster', default='ai-sdlc')
     parser.add_argument('--provider', choices=['auto', 'docker', 'podman'], default='auto')
     parser.add_argument('--images', type=Path, default=LOCAL / 'images.lock.json')
@@ -210,6 +236,11 @@ def main(argv=None):
     parser.add_argument('--repository', default='os-santiago/ai-sdlc')
     parser.add_argument('--environment', default='ai-sdlc-production')
     args = parser.parse_args(argv)
+    if args.configure_host and args.command not in ('local', 'host'):
+        raise ValueError('--configure-host is valid only with local or host')
+    if args.command == 'host':
+        print(json.dumps({'inotify': host_prerequisites(args.configure_host)}, indent=2))
+        return 0
     if not re.fullmatch(r'[a-z][a-z0-9-]{0,35}', args.cluster):
         raise ValueError('Invalid cluster name')
     if not re.fullmatch(r'[1-9][0-9]*(s|m)', args.timeout):
@@ -239,6 +270,8 @@ def main(argv=None):
     if not provider or not shutil.which(provider):
         raise ValueError('Install Docker or Podman, then rerun; the installer does not change host privileges.')
     run([provider, 'info'], stdout=subprocess.DEVNULL)
+    if args.command == 'local':
+        host_prerequisites(args.configure_host)
     env = dict(os.environ, KIND_EXPERIMENTAL_PROVIDER=provider)
     state = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'ai-sdlc' / args.cluster
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -268,6 +301,12 @@ def main(argv=None):
         run(kubectl + ['get', 'deployments,statefulsets,pods,pvc', '-n', NAMESPACE])
         print('Installation mode: maintenance. Autonomous issue delivery: unavailable.')
         return 0
+    # kind's node readiness alone does not establish service networking or
+    # dynamic storage. Fail here before consuming the bounded migration window.
+    run(kubectl + ['wait', '--for=condition=Ready', 'pods', '--all', '-n', 'kube-system',
+                   '--timeout', args.timeout])
+    run(kubectl + ['rollout', 'status', 'deployment/local-path-provisioner',
+                   '-n', 'local-path-storage', '--timeout', args.timeout])
     run(kubectl + ['apply', '-f', LOCAL / 'namespace.yaml'])
     # Bootstrap secret boundary: values refer to a Secret, never its contents.
     # An existing Secret is reused unchanged, including on repeat installs.

@@ -61,7 +61,8 @@ class ChartTests(unittest.TestCase):
         if not lock.exists(): self.skipTest('Image publication not completed yet')
         result = self.render('-f', str(lock))
         self.assertEqual(result.returncode, 0, result.stderr)
-        docs = [d for d in yaml.safe_load_all(result.stdout) if d and d['kind'] == 'Deployment']
+        docs = [d for d in yaml.safe_load_all(result.stdout) if d and d['kind'] in ('Deployment', 'Job')]
+        self.assertEqual(len(docs), 6)
         for doc in docs:
             image = doc['spec']['template']['spec']['containers'][0]['image']
             self.assertRegex(image, r'^quay.io/os-santiago/ai-sdlc@sha256:[a-f0-9]{64}$')
