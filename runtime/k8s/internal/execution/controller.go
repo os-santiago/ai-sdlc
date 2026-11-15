@@ -47,6 +47,9 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 			if configUID != "" && resources.DeleteConfig(cleanup, configUID) != nil {
 				failed = true
 			}
+			if !failed && l != nil && configUID != "" && podUID != "" {
+				failed = db.ConfirmExecutionCleanup(cleanup, l.durable, configUID, podUID) != nil
+			}
 			if failed {
 				err = ControllerError{"cleanup"}
 			}
