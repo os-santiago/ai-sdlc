@@ -6,6 +6,8 @@ It is not a provider, an authorization endpoint, a new runtime service, or a
 completed autonomous flow. No current component calls it, and none of the eight
 operational database roles can access its tables. The executor and
 [offline mailbox](offline-model-mailbox.md) receive no database credentials.
+The hidden [provider dispatcher](model-broker.md) composes this ledger with
+bounded HTTP and a trusted publication capability; it has no live wiring.
 
 ## Immutable scope and finite limits
 
