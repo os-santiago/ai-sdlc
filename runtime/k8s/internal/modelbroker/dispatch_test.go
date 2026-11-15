@@ -189,7 +189,7 @@ func TestBrokerProviderFailuresNeverRetryOrPublish(t *testing.T) {
 				}
 			}, publisherFunc(func(context.Context, modelmailbox.Envelope) error { published.Add(1); return nil }))
 			result, err := dispatcher.Deliver(context.Background(), a.ID, profile, request)
-			if !errors.Is(err, ErrUncertain) || !result.DispatchAttempted || result.HandoffConfirmed {
+			if !errors.Is(err, ErrUncertain) || !result.DispatchAttempted || result.HandoffConfirmed || result.FailureStage != "provider" {
 				t.Fatalf("failure: %+v %v", result, err)
 			}
 			parent, call, handed, count := ledgerState(t, dispatcher.DB, a)
@@ -222,6 +222,13 @@ func TestBrokerPublicationFailurePreservesCompletedResponseEvidence(t *testing.T
 		result, err := dispatcher.Deliver(context.Background(), a.ID, profile, request)
 		if !errors.Is(err, ErrUncertain) || result.HandoffConfirmed || calls.Load() != 1 {
 			t.Fatalf("publication: %+v %v", result, err)
+		}
+		expectedStage := "publication"
+		if mutate {
+			expectedStage = "publication-response-mutation"
+		}
+		if result.FailureStage != expectedStage {
+			t.Fatal("publication diagnostic", result.FailureStage)
 		}
 		parent, call, handed, count := ledgerState(t, dispatcher.DB, a)
 		if parent != "stopped" || call != "ambiguous" || handed || count != 1 {

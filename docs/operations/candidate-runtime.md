@@ -98,3 +98,21 @@ separate outerloop work. See the [architecture](../innerloop-outerloop.md).
 The [recorded validation](../evidence/2026-11-15-candidate-runtime.json) separates
 real infrastructure/model observations from synthetic issue/model fixtures and
 lists the unverified delivery boundaries.
+
+## Diagnose a stopped attempt
+
+The worker logs one allowlisted stage with `candidate reconciliation stopped
+safely`. Broker categories distinguish authorization, reservation, provider,
+completion commit, publication and acknowledgement. Publication additionally
+identifies envelope/encoding checks, before/after Pod observations, helper
+transport/exit and receipt validation. These are operational categories, not
+proof of a particular network, model or application root cause.
+
+The diagnostic deliberately excludes exception text, request/response bodies,
+source code and credentials. A completed HTTP response without a confirmed
+handoff remains ambiguous; a stage label never permits retry or adoption.
+Inspect the ledger and resource cleanup before supplying a new issue revision.
+The [first live Homedir candidate installation](../evidence/2026-11-15-homedir-candidate-installation.json)
+confirmed two model handoffs and then stopped with an unconfirmed third response.
+Its resources were removed and no candidate or release was produced. The older
+image had no failure-stage diagnostic, so its precise cause remains unknown.

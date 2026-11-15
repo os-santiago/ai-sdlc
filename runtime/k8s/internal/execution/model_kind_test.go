@@ -187,7 +187,7 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 		if calls.Load() != expectedCalls {
 			t.Fatal("unexpected failed scenario calls", calls.Load())
 		}
-		result, _ := json.Marshal(map[string]any{"scope": "isolated-composed-component-fixture", "scenario": input.Scenario, "syntheticAuthority": true, "syntheticModelReplies": true, "liveWorkflowAdvanced": false, "controller": "RunController", "candidateCaptured": false, "candidateValidated": false, "claimStopped": true, "modelCalls": calls.Load(), "workerNonzeroExitObserved": input.Scenario == "no-change"})
+		result, _ := json.Marshal(map[string]any{"scope": "isolated-composed-component-fixture", "scenario": input.Scenario, "syntheticAuthority": true, "syntheticModelReplies": true, "liveWorkflowAdvanced": false, "controller": "RunController", "candidateCaptured": false, "candidateValidated": false, "diagnosticStage": DiagnosticStage(err), "claimStopped": true, "modelCalls": calls.Load(), "workerNonzeroExitObserved": input.Scenario == "no-change"})
 		writePrivate(input.ReportFile, result)
 		return
 	}
