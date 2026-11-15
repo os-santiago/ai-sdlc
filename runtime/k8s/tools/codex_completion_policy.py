@@ -10,7 +10,7 @@ SUPPORTED_VERSION = "codex-cli 0.169.0"
 MODEL = "gpt-6.1-sol"
 POLICY_HASHES = {
     "codex_completion_catalog.json": "b943cf4344445dc7559548f70cd8853765501df0e4dfde35e49c5db2f7e621a8",
-    "codex_completion_instructions.txt": "acb9d9b5af533f81bbba3f23b0879853be07278525a8bed73579a5eaa44d1fbb",
+    "codex_completion_instructions.txt": "1f79a293c810c97dd5adaa8fc98cf332f08314fbc28a704b2559629520d736d9",
 }
 DISABLED_FEATURES = (
     "shell_tool", "unified_exec", "multi_agent", "multi_agent_v2", "apps", "plugins",

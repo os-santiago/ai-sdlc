@@ -103,3 +103,9 @@ Such isolation requires the container/cgroup model gateway and admission policy.
 These checks establish a local component boundary. A successful external model
 completion is not evidence of autonomous issue-to-release delivery, SCC tool
 execution, production quality gates or a successful Homedir deployment.
+
+The [real-model Homedir component benchmark](real-model-homedir-benchmark.md)
+checks the adapter together with SCC, the durable broker and gVisor. Completion
+policy explicitly separates the model host's read-only permissions from inert
+JSON proposals for SCC's independently authorized workspace. No host action tool
+or executor permission is added by this distinction.

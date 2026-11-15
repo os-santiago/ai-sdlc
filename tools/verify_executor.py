@@ -34,11 +34,13 @@ def tree_digest(bundle):
     return digest.hexdigest()
 
 
-def verify(kubectl, provider, render_image, mailbox_image, worker_image, bundle, variant="normal", transport=None):
+def verify(kubectl, provider, render_image, mailbox_image, worker_image, bundle, variant="normal", transport=None, benchmark=None):
     if variant not in VARIANTS:
         raise ValueError('Unsupported executor fixture variant')
     if transport is not None and variant != 'normal':
         raise ValueError('Composed transport fixture requires the normal source scenario')
+    if benchmark is not None and (variant != 'normal' or transport is None):
+        raise ValueError('Real-model benchmark requires normal composed transport')
     rejected_profile = variant in ("source-token-override", "source-profile-override", "source-stream-override")
     preflight_reject = variant in ('profile-digest-tamper', 'policy-digest-tamper')
     tree_reject = variant == 'source-tree-tamper'
@@ -63,6 +65,8 @@ def verify(kubectl, provider, render_image, mailbox_image, worker_image, bundle,
     profile = {'version': 'ai-sdlc.executor-profile/v1', 'model': 'fixture-model',
                'maxSteps': 4, 'maxSeconds': 45, 'maxTokens': 2048,
                'aDevSHA256': hashlib.sha256(adev).hexdigest()}
+    if benchmark is not None:
+        profile.update(model='codex-cli', maxSteps=24, maxSeconds=180, maxTokens=8192)
     if timeout_case:
         profile['maxSeconds'] = 10
     profile_raw = wire(profile)
@@ -75,6 +79,8 @@ def verify(kubectl, provider, render_image, mailbox_image, worker_image, bundle,
                   'acceptanceCriteria': ['Create ' + FIXTURE_PATH + ' containing exactly: ' + FIXTURE_BODY.decode(),
                                          'Preserve every original source file.'],
                   'expiresAt': int((time.time() + 300) * 1000)}
+    if benchmark is not None:
+        assignment.update(benchmark.assignment())
     assignment_raw = wire(assignment)
     assignment_digest = hashlib.sha256(assignment_raw).hexdigest()
     render = subprocess.run([provider, 'run', '--rm', '--network', 'none', '--pull', 'never',
@@ -171,7 +177,7 @@ def verify(kubectl, provider, render_image, mailbox_image, worker_image, bundle,
             seen = set()
             wrote = False
             execution_started = time.monotonic()
-            deadline = execution_started + (profile['maxSeconds'] + 15 if timeout_case else 60)
+            deadline = execution_started + (profile['maxSeconds'] + 15 if timeout_case or benchmark is not None else 60)
             if transport is not None:
                 seen = transport.exchange(workload, pod_uid, assignment_raw, profile_raw, adev, command)
                 wrote = bool(seen)
@@ -266,7 +272,8 @@ def verify(kubectl, provider, render_image, mailbox_image, worker_image, bundle,
             elif variant == 'persistent-child':
                 expected['files'].append({'path': 'AI_SDLC_CHILD_STARTED.txt', 'mode': 420,
                                           'data': base64.b64encode(b'spawned\n').decode()})
-            if identities(exported) != identities(expected):
+            benchmark_report = benchmark.validate(bundle, exported) if benchmark is not None else {}
+            if benchmark is None and identities(exported) != identities(expected):
                 actual_names, expected_names = set(identities(exported)), set(identities(expected))
                 raise ValueError('Actual SCC candidate differs; added=' + str(sorted(actual_names - expected_names))
                                  + '; missing=' + str(sorted(expected_names - actual_names)))
@@ -285,9 +292,13 @@ def verify(kubectl, provider, render_image, mailbox_image, worker_image, bundle,
                           wrongPodStartRejected=True, repeatedStartRejected=True)
             if transport is not None:
                 transport.verify_replacement(workload, pod_uid, command)
-                report.update(realPodTransport=True, durableModelHandoffs=2,
+                report.update(realPodTransport=True, durableModelHandoffs=len(seen),
                               actualRBACDenial=True, getOnlyExecDenied=True,
                               scopedExecSucceeded=True, actualPodReplacementRejected=True)
+            if benchmark is not None:
+                report.update(syntheticModelReplies=False, realCodexCompletions=True,
+                              originalSourceFilesPreserved=False, createdFixtureFile=None)
+                report.update(benchmark_report)
     finally:
         if namespace_uid:
             network_probe.cleanup_namespace(command, namespace, namespace_uid)

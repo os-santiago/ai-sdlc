@@ -29,6 +29,7 @@ class TransportFixture:
         if not self.database:
             raise ValueError('Disposable PostgreSQL fixture URL is required in AI_SDLC_TEST_DATABASE_URL')
         self.binding = None
+        self.sequences = {1, 2}
 
     def run(self, scenario, config=None, replacement_uid=None):
         payload = {'Config': config or self.config, 'Binding': self.binding,
@@ -79,7 +80,7 @@ class TransportFixture:
         command(['-n', namespace, 'patch', 'role', 'fixed-helper', '--type=json', '-p',
                  '[{"op":"add","path":"/rules/0/verbs/-","value":"create"}]'])
         self.run('normal', restricted)
-        return {1, 2}  # Go independently requires these two completed durable handoffs.
+        return self.sequences  # The Go fixture independently verifies each durable handoff.
 
     def verify_replacement(self, workload, original_uid, command):
         namespace, name = workload['pod']['metadata']['namespace'], workload['pod']['metadata']['name']
