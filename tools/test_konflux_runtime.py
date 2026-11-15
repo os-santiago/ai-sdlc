@@ -1,11 +1,13 @@
 import copy
+import json
 import unittest
 import subprocess
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import konflux_build_fixture as fixture
-from verify_konflux_runtime import verified_image, runtime_identity, cleanup_runtime_namespace
+from verify_konflux_runtime import verified_image, runtime_identity, cleanup_runtime_namespace, decode_http_probe, HTTPProbeError
 
 
 class RuntimeInputTests(unittest.TestCase):
@@ -26,6 +28,19 @@ class RuntimeInputTests(unittest.TestCase):
 
 
 class RuntimeIdentityTests(unittest.TestCase):
+    def test_api_and_exec_failures_cannot_be_tolerated_as_http_timeouts(self):
+        envelope=json.dumps({'version':1,'error':'TimeoutError'})
+        with self.assertRaises(HTTPProbeError):
+            decode_http_probe(SimpleNamespace(returncode=42,stdout=envelope,stderr='remote exit42'))
+        for code,output,error in [(1,'','Forbidden'),(1,'','unexpected EOF'),(1,envelope,'lost exec'),(42,'','missing client'),(0,'{}','')]:
+            with self.subTest(code=code,output=output,error=error):
+                try:decode_http_probe(SimpleNamespace(returncode=code,stdout=output,stderr=error))
+                except HTTPProbeError:self.fail('Control-plane failure was tolerated as HTTP')
+                except ValueError:pass
+                else:self.fail('Invalid execution result accepted')
+        response={'status':200,'milliseconds':1.5,'body':'hello','headers':{'content-type':'text/plain'}}
+        self.assertEqual(decode_http_probe(SimpleNamespace(returncode=0,stdout=json.dumps({'version':1,'response':response}))),response)
+
     def test_report_disk_failure_cannot_prevent_namespace_cleanup(self):
         with tempfile.TemporaryDirectory() as directory:
             calls = []; report = {}

@@ -3,6 +3,7 @@
 import argparse
 import ipaddress
 import json
+import math
 from pathlib import Path
 import re
 import resource
@@ -20,6 +21,30 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class HTTPProbeError(ValueError):
     pass
+
+
+def decode_http_probe(result):
+    try:
+        if len(result.stdout) > 1 << 20: raise ValueError('HTTP probe output exceeded its bound')
+        envelope = json.loads(result.stdout)
+    except (ValueError, TypeError) as exc:
+        raise ValueError('HTTP client did not return a valid execution result') from exc
+    if not isinstance(envelope, dict) or type(envelope.get('version')) is not int or envelope['version'] != 1:
+        raise ValueError('HTTP client protocol mismatch')
+    if (result.returncode == 42 and set(envelope) == {'version', 'error'}
+            and envelope['error'] in ('TimeoutError', 'AbortError', 'TypeError')):
+        raise HTTPProbeError(envelope['error'])
+    if result.returncode != 0 or set(envelope) != {'version', 'response'}:
+        raise ValueError('HTTP client execution failed')
+    response = envelope['response']
+    if (not isinstance(response, dict) or set(response) != {'status', 'milliseconds', 'body', 'headers'}
+            or type(response['status']) is not int or not 100 <= response['status'] <= 599
+            or type(response['milliseconds']) not in (int, float) or not math.isfinite(response['milliseconds'])
+            or response['milliseconds'] < 0 or not isinstance(response['body'], str) or len(response['body']) > 262144
+            or not isinstance(response['headers'], dict)
+            or any(not isinstance(k, str) or not isinstance(v, str) for k, v in response['headers'].items())):
+        raise ValueError('Invalid HTTP response envelope')
+    return response
 
 
 def verified_image(report):
@@ -198,12 +223,11 @@ def main():
         pod = assert_app(); address = str(ipaddress.ip_address(pod['status']['podIP']))
         if ':' in address: raise ValueError('IPv6 runtime fixture not reviewed')
         report['imageID'] = pod['status']['containerStatuses'][0]['imageID']
-        request_script = "const start=performance.now();fetch(process.argv[1],{signal:AbortSignal.timeout(20000),redirect:'error'}).then(async r=>{let body='';for await(const chunk of r.body){body+=Buffer.from(chunk).toString();if(body.length>262144)throw Error('body limit')}console.log(JSON.stringify({status:r.status,milliseconds:performance.now()-start,body,headers:Object.fromEntries(r.headers)}))}).catch(e=>{console.error(e.name);process.exit(1)})"
+        request_script = "const start=performance.now();fetch(process.argv[1],{signal:AbortSignal.timeout(20000),redirect:'error'}).then(async r=>{let body='';for await(const chunk of r.body){body+=Buffer.from(chunk).toString();if(body.length>262144)throw Error('body limit')}console.log(JSON.stringify({version:1,response:{status:r.status,milliseconds:performance.now()-start,body,headers:Object.fromEntries(r.headers)}}))}).catch(e=>{if(!['TimeoutError','AbortError','TypeError'].includes(e.name)){console.error('HTTP probe failed');process.exit(1)}console.log(JSON.stringify({version:1,error:e.name}));process.exitCode=42})"
         def request(route):
             if get('pod', 'client')['metadata']['uid'] != probe_uid: raise ValueError('Runtime probe was replaced')
             result = deadline.run(kubectl+['exec', '-n', namespace, 'client', '--', 'node', '-e', request_script, 'http://'+address+':8080'+route], capture_output=True, check=False, limit=25)
-            if result.returncode: raise HTTPProbeError(result.stderr[-500:].strip())
-            return json.loads(result.stdout)
+            return decode_http_probe(result)
         start = time.monotonic()
         while True:
             try:
