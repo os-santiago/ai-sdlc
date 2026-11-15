@@ -69,7 +69,7 @@ jobs:
           python3 - <<'PYTHON'
           import json, os, pathlib, subprocess, sys
           tools = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'install-tools.json').read_text())
-          subprocess.run([sys.executable, 'tools/verify_workspace_bundle.py', 'tools/verify_executor.py', 'tools/fixture_images.py', 'runtime/k8s/internal/executor/**', 'runtime/k8s/internal/engine/**', 'runtime/k8s/components/worker/**', '--kubectl', tools['kubectl'],
+          subprocess.run([sys.executable, 'tools/verify_workspace_bundle.py', '--kubectl', tools['kubectl'],
                           '--kubeconfig', str(pathlib.Path.home() / '.local/state/ai-sdlc/ai-sdlc/kubeconfig'),
                           '--mailbox-image', 'localhost/ai-sdlc-model-mailbox:conformance',
                           '--source-repository', str(pathlib.Path(os.environ['RUNNER_TEMP'], 'homedir-source')),
