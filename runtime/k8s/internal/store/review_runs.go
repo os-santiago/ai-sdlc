@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sync/atomic"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -19,6 +20,26 @@ type ReviewRun struct {
 type ReviewClaim struct {
 	ID, Token string
 	Until     time.Time
+	lifetime  *reviewClaimLifetime
+}
+
+// The original owner also holds a non-serializable lifetime. A failed stop
+// cannot resurrect that owner if PostgreSQL becomes available again. Restarted
+// processes cannot reconstruct/adopt this capability from persisted fields.
+type reviewClaimLifetime struct {
+	id, token string
+	until     time.Time
+	revoked   atomic.Bool
+}
+
+func (c ReviewClaim) ownsLifetime() bool {
+	return c.lifetime != nil && c.lifetime.id == c.ID && c.lifetime.token == c.Token && c.lifetime.until.Equal(c.Until)
+}
+func (c ReviewClaim) live() bool { return c.ownsLifetime() && !c.lifetime.revoked.Load() }
+func (c ReviewClaim) revoke() {
+	if c.ownsLifetime() {
+		c.lifetime.revoked.Store(true)
+	}
 }
 
 func ReviewID(verification, behavior, profile, config, assignment string) string {
@@ -108,7 +129,8 @@ func (db *DB) ClaimReview(ctx context.Context, id, configuration string) (Review
 		if tx.QueryRowContext(ctx, `UPDATE review_runs SET state='claimed',claim_token=$3,claim_until=LEAST(expires_at,clock_timestamp()+interval '300 seconds') WHERE id=$1 AND configuration_digest=$2 AND state='queued' AND expires_at>clock_timestamp() RETURNING claim_until`, id, configuration, c.Token).Scan(&c.Until) != nil {
 			return ErrExecution
 		}
-		return nil
+		c.lifetime = &reviewClaimLifetime{id: c.ID, token: c.Token, until: c.Until}
+		return checkReviewTime(ctx, tx, c)
 	})
 	if err != nil {
 		cleanup, stop := context.WithTimeout(context.Background(), 3*time.Second)
@@ -119,6 +141,9 @@ func (db *DB) ClaimReview(ctx context.Context, id, configuration string) (Review
 	return c, nil
 }
 func lockReview(ctx context.Context, tx *sql.Tx, c ReviewClaim) error {
+	if !c.live() {
+		return ErrExecution
+	}
 	if AssertComponent(ctx, tx, "verifier") != nil {
 		return ErrExecution
 	}
@@ -132,6 +157,9 @@ func lockReview(ctx context.Context, tx *sql.Tx, c ReviewClaim) error {
 // Repeat after all potentially blocking writes, before committing an effect or
 // invocation capability. Transaction-start timestamps are not authorization.
 func checkReviewTime(ctx context.Context, tx *sql.Tx, c ReviewClaim) error {
+	if !c.live() {
+		return ErrExecution
+	}
 	var valid bool
 	if tx.QueryRowContext(ctx, `SELECT claim_until>clock_timestamp() AND expires_at>clock_timestamp() FROM review_runs WHERE id=$1`, c.ID).Scan(&valid) != nil || !valid {
 		return ErrExecution
@@ -151,6 +179,7 @@ func (db *DB) CheckReviewClaim(ctx context.Context, c ReviewClaim) error {
 	return db.WithTx(ctx, func(tx *sql.Tx) error { return lockReview(ctx, tx, c) })
 }
 func (db *DB) StopReview(ctx context.Context, c ReviewClaim, reason string) error {
+	c.revoke()
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	if AssertComponent(ctx, db.Pool, "verifier") != nil || (reason != "expired" && reason != "revoked" && reason != "uncertain" && reason != "rejected" && reason != "request-changes") {
