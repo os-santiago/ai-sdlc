@@ -15,3 +15,6 @@
 bffb60238b6ab08f398cde166f29b962356f52e7:scripts/injection_defense.test.js:private-key:123
 bfdeee1638b1aa49466de4d1139541aafb545f24:scripts/risk-classifier.test.js:generic-api-key:125
 e54412ba8a62e920eb31520a0497832c0555737e:scripts/risk-classifier.test.js:generic-api-key:125
+
+# SQL column-to-column UPSERT; triaged under issue #481.
+c035a7ad14f870837d452d37c09cd5a7f7f2eee7:runtime/k8s/internal/intake/poller.go:generic-api-key:239

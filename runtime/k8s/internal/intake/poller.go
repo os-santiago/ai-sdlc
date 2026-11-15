@@ -146,6 +146,9 @@ func (p Poller) scan(ctx context.Context, reserved lease) (int, error) {
 			if !tracked && (!listed.HasLabel(p.Config.TriggerLabel) || listed.State != "open") {
 				continue
 			}
+			// Capture the start of the actual authoritative reads, not a later
+			// database commit time that could follow a long row-lock wait.
+			observedAt := time.Now().UTC()
 			snapshot, err := p.snapshot(ctx, listed.Number)
 			if err != nil {
 				return count, err
@@ -153,7 +156,7 @@ func (p Poller) scan(ctx context.Context, reserved lease) (int, error) {
 			if !snapshot.Eligible && !tracked {
 				continue
 			}
-			created, err := p.record(ctx, snapshot, reserved.token)
+			created, err := p.record(ctx, snapshot, reserved.token, observedAt)
 			if err != nil {
 				return count, err
 			}
@@ -198,7 +201,10 @@ func (p Poller) snapshot(ctx context.Context, number int) (Snapshot, error) {
 	return snapshot, snapshot.validateContent(p.Config)
 }
 
-func (p Poller) record(ctx context.Context, snapshot Snapshot, leaseToken string) (bool, error) {
+func (p Poller) record(ctx context.Context, snapshot Snapshot, leaseToken string, observedAt time.Time) (bool, error) {
+	if observedAt.IsZero() || observedAt.After(time.Now().Add(5*time.Second)) {
+		return false, errors.New("invalid issue observation time")
+	}
 	policy, identity, err := p.current()
 	if err != nil {
 		return false, err
@@ -225,8 +231,25 @@ func (p Poller) record(ctx context.Context, snapshot Snapshot, leaseToken string
 			return err
 		}
 		contentKey := authority.Digest([]byte(snapshot.Revision + "\x00" + strconv.FormatBool(snapshot.Eligible) + "\x00" + snapshot.ConfigDigest + "\x00" + snapshot.AuthorityRevision))
-		if previous == contentKey {
+		observe := func(generation int64) error {
+			result, err := tx.ExecContext(ctx, `INSERT INTO intake_observations(repository,issue_number,generation,config_digest,authority_revision,content_key,observed_at)
+				SELECT $1,$2,$3,$4,$5,$6,$7 FROM intake_cursors
+				WHERE repository=$1 AND config_digest=$4 AND lease_token=$8 AND lease_until>clock_timestamp()
+				ON CONFLICT(repository,issue_number) DO UPDATE
+				SET (generation,config_digest,authority_revision,content_key,observed_at) =
+				(EXCLUDED.generation,EXCLUDED.config_digest,EXCLUDED.authority_revision,EXCLUDED.content_key,EXCLUDED.observed_at)`,
+				snapshot.Repository, snapshot.Issue.Number, generation, snapshot.ConfigDigest, snapshot.AuthorityRevision, contentKey, observedAt, leaseToken)
+			if err != nil {
+				return errors.New("issue observation persistence failed")
+			}
+			n, err := result.RowsAffected()
+			if err != nil || n != 1 {
+				return errors.New("issue observation lease expired")
+			}
 			return nil
+		}
+		if previous == contentKey {
+			return observe(generation)
 		}
 		snapshot.Generation = generation + 1
 		if err := snapshot.Validate(p.Config); err != nil {
@@ -246,7 +269,7 @@ func (p Poller) record(ctx context.Context, snapshot Snapshot, leaseToken string
 			return err
 		}
 		created = true
-		return nil
+		return observe(snapshot.Generation)
 	})
 	if err != nil {
 		return false, errors.New("intake atomic persistence failed")

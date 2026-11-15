@@ -121,7 +121,7 @@ func setup(t *testing.T) fixture {
 	if err := admin.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Pool.ExecContext(ctx, `TRUNCATE intake_cursors,intake_revisions,intake_heads,authorized_outbox,authorized_inbox,authorized_nonces`); err != nil {
+	if _, err := admin.Pool.ExecContext(ctx, `TRUNCATE intake_observations,intake_cursors,intake_revisions,intake_heads,authorized_outbox,authorized_inbox,authorized_nonces`); err != nil {
 		t.Fatal(err)
 	}
 	material, err := authority.Bootstrap("example/project", "production-test")
@@ -301,7 +301,7 @@ func TestOutboxFailureRollsBackRevision(t *testing.T) {
 	if err != nil || reserved == nil {
 		t.Fatal("fixture lease unavailable")
 	}
-	if _, err := f.poller.record(ctx, snapshot, reserved.token); err == nil {
+	if _, err := f.poller.record(ctx, snapshot, reserved.token, time.Now()); err == nil {
 		t.Fatal("outbox failure hidden")
 	}
 	if records, events := f.counts(t); records != 0 || events != 0 {

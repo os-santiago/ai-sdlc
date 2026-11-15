@@ -129,7 +129,7 @@ func TestExecutionLostClaimCommitNeverAuthorizesEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 	faulted, dropped := executionCommitFault(t, 1)
-	claim, err := Claim(context.Background(), faulted, f.policy, f.command.ID())
+	claim, err := Claim(context.Background(), faulted, f.readyPolicy, f.command.ID())
 	if err == nil || claim.Token != "" || claim.ID != "" {
 		t.Fatal("uncertain claim exposed capability")
 	}
@@ -141,7 +141,7 @@ func TestExecutionLostClaimCommitNeverAuthorizesEffects(t *testing.T) {
 	if f.Count(t, `SELECT count(*) FROM execution_requests WHERE state='stopped' AND stop_reason='uncertain'`) != 1 {
 		t.Fatal("uncertain claim was not stopped after healthy reconnect")
 	}
-	if _, err := Claim(context.Background(), f.db, f.policy, f.command.ID()); err == nil {
+	if _, err := Claim(context.Background(), f.db, f.readyPolicy, f.command.ID()); err == nil {
 		t.Fatal("stopped command was reclaimed")
 	}
 }
