@@ -20,6 +20,19 @@ var errWorkerNonzero = errors.New("original worker exited nonzero")
 
 func (e ControllerError) Error() string { return "execution controller stopped: " + e.Stage }
 
+// cleanupFailure preserves the original stop cause. Cleanup failure must not
+// erase the stage that made a model call uncertain.
+type cleanupFailure struct{ cause error }
+
+func (e cleanupFailure) Error() string { return "execution cleanup incomplete" }
+func (e cleanupFailure) Unwrap() error {
+	if e.cause != nil {
+		return e.cause
+	}
+	return ControllerError{"cleanup"}
+}
+func CleanupPending(err error) bool { var failed cleanupFailure; return errors.As(err, &failed) }
+
 // DiagnosticStage returns only fixed operational categories. Never log an
 // arbitrary underlying error, source text, model output or credential.
 func DiagnosticStage(err error) string {
@@ -28,7 +41,7 @@ func DiagnosticStage(err error) string {
 		return "authority-or-storage"
 	}
 	switch stopped.Stage {
-	case "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "worker-exit", "export", "capture", "cleanup":
+	case "source-preflight-authority", "source-rate-limited", "source-unavailable", "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "worker-exit", "export", "capture", "cleanup":
 		return stopped.Stage
 	}
 	if strings.HasPrefix(stopped.Stage, "model-") {
@@ -69,7 +82,7 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 				failed = db.ConfirmExecutionCleanup(cleanup, l.durable, configUID, podUID) != nil
 			}
 			if failed {
-				err = ControllerError{"cleanup"}
+				err = cleanupFailure{cause: err}
 			}
 		}
 		if err != nil {
