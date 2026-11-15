@@ -61,13 +61,12 @@ func (db *DB) FinishReview(ctx context.Context, c ReviewClaim, proof []byte) err
 		ConfigurationSHA256   string `json:"configurationSHA256"`
 		AssignmentSHA256      string `json:"assignmentSHA256"`
 		CandidateTreeSHA256   string `json:"candidateTreeSHA256"`
-		SummarySHA256         string `json:"summarySHA256"`
 		ModelEvidenceSHA256   string `json:"modelEvidenceSHA256"`
 		Verdict               string `json:"verdict"`
 		SourceUnchanged       bool   `json:"sourceUnchanged"`
 		PublicationAuthorized bool   `json:"publicationAuthorized"`
 	}
-	if authority.DecodeStrict(proof, &header) != nil || header.Version != "ai-sdlc.independent-review-proof/v1" || header.ReviewID != c.ID || header.Verdict != "approve" || !header.SourceUnchanged || header.PublicationAuthorized || !modelDigest.MatchString(header.SummarySHA256) || !modelDigest.MatchString(header.ModelEvidenceSHA256) {
+	if authority.DecodeStrict(proof, &header) != nil || header.Version != "ai-sdlc.independent-review-proof/v1" || header.ReviewID != c.ID || header.Verdict != "approve" || !header.SourceUnchanged || header.PublicationAuthorized || !modelDigest.MatchString(header.ModelEvidenceSHA256) {
 		return ErrExecution
 	}
 	return db.WithTx(ctx, func(tx *sql.Tx) error {

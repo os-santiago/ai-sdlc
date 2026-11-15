@@ -63,7 +63,7 @@ func TestReviewProofRequiresExactEvidenceAndCleanup(t *testing.T) {
 		t.Fatal(e)
 	}
 	raw, _ := json.Marshal(evidence)
-	proof := map[string]any{"version": "ai-sdlc.independent-review-proof/v1", "reviewID": r.ID, "verificationID": r.VerificationID, "candidateID": r.CandidateID, "behaviorSHA256": r.BehaviorDigest, "profileSHA256": r.ProfileDigest, "configurationSHA256": r.ConfigurationDigest, "assignmentSHA256": r.AssignmentDigest, "candidateTreeSHA256": tree, "summarySHA256": strings.Repeat("a", 64), "modelEvidenceSHA256": authority.Digest(raw), "verdict": "approve", "sourceUnchanged": true, "publicationAuthorized": false}
+	proof := map[string]any{"version": "ai-sdlc.independent-review-proof/v1", "reviewID": r.ID, "verificationID": r.VerificationID, "candidateID": r.CandidateID, "behaviorSHA256": r.BehaviorDigest, "profileSHA256": r.ProfileDigest, "configurationSHA256": r.ConfigurationDigest, "assignmentSHA256": r.AssignmentDigest, "candidateTreeSHA256": tree, "modelEvidenceSHA256": authority.Digest(raw), "verdict": "approve", "sourceUnchanged": true, "publicationAuthorized": false}
 	encode := func() []byte { v, _ := json.Marshal(proof); return v }
 	if db.FinishReview(ctx, c, encode()) == nil {
 		t.Fatal("accepted without export/cleanup")
@@ -78,7 +78,7 @@ func TestReviewProofRequiresExactEvidenceAndCleanup(t *testing.T) {
 	if db.ConfirmReviewCleanup(ctx, c) != nil {
 		t.Fatal("cleanup")
 	}
-	for key, value := range map[string]any{"profileSHA256": strings.Repeat("f", 64), "behaviorSHA256": strings.Repeat("f", 64), "modelEvidenceSHA256": strings.Repeat("f", 64), "candidateTreeSHA256": strings.Repeat("f", 64), "summarySHA256": "", "verdict": "request_changes", "sourceUnchanged": false, "publicationAuthorized": true} {
+	for key, value := range map[string]any{"profileSHA256": strings.Repeat("f", 64), "behaviorSHA256": strings.Repeat("f", 64), "modelEvidenceSHA256": strings.Repeat("f", 64), "candidateTreeSHA256": strings.Repeat("f", 64), "verdict": "request_changes", "sourceUnchanged": false, "publicationAuthorized": true} {
 		old := proof[key]
 		proof[key] = value
 		if db.FinishReview(ctx, c, encode()) == nil {
@@ -86,6 +86,11 @@ func TestReviewProofRequiresExactEvidenceAndCleanup(t *testing.T) {
 		}
 		proof[key] = old
 	}
+	proof["summarySHA256"] = strings.Repeat("a", 64)
+	if db.FinishReview(ctx, c, encode()) == nil {
+		t.Fatal("accepted summary digest without durable receipt")
+	}
+	delete(proof, "summarySHA256")
 	if f.db.FinishReview(ctx, c, encode()) == nil {
 		t.Fatal("generator approved its review")
 	}

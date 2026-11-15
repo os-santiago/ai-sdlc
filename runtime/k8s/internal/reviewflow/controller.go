@@ -34,7 +34,6 @@ type Proof struct {
 	ConfigurationSHA256   string `json:"configurationSHA256"`
 	AssignmentSHA256      string `json:"assignmentSHA256"`
 	CandidateTreeSHA256   string `json:"candidateTreeSHA256"`
-	SummarySHA256         string `json:"summarySHA256"`
 	ModelEvidenceSHA256   string `json:"modelEvidenceSHA256"`
 	Verdict               string `json:"verdict"`
 	SourceUnchanged       bool   `json:"sourceUnchanged"`
@@ -230,7 +229,7 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 		return proof, ControllerError{Stage: "request-changes"}
 	}
 	modelRaw, _ := json.Marshal(evidence)
-	proof = Proof{Version: "ai-sdlc.independent-review-proof/v1", ReviewID: p.run.ID, VerificationID: id, CandidateID: p.run.CandidateID, BehaviorSHA256: p.run.BehaviorDigest, ProfileSHA256: p.run.ProfileDigest, ConfigurationSHA256: p.run.ConfigurationDigest, AssignmentSHA256: p.run.AssignmentDigest, CandidateTreeSHA256: p.tree, SummarySHA256: authority.Digest(summary.Bytes()), ModelEvidenceSHA256: authority.Digest(modelRaw), Verdict: "approve", SourceUnchanged: true, PublicationAuthorized: false}
+	proof = Proof{Version: "ai-sdlc.independent-review-proof/v1", ReviewID: p.run.ID, VerificationID: id, CandidateID: p.run.CandidateID, BehaviorSHA256: p.run.BehaviorDigest, ProfileSHA256: p.run.ProfileDigest, ConfigurationSHA256: p.run.ConfigurationDigest, AssignmentSHA256: p.run.AssignmentDigest, CandidateTreeSHA256: p.tree, ModelEvidenceSHA256: authority.Digest(modelRaw), Verdict: "approve", SourceUnchanged: true, PublicationAuthorized: false}
 	raw, _ := json.Marshal(proof)
 	stage = "commit"
 	if db.FinishReview(ctx, claim, raw) != nil {

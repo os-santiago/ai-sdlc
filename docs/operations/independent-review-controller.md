@@ -55,3 +55,8 @@ and disposable namespaces must be retired before the tool reports success.
 on a separate ephemeral runner. This keeps their public source acquisition and
 execution budget separate from the longer installer conformance job. Actions
 remain quality validation only; they do not process the product backlog.
+
+The durable proof includes the hash of the independently recorded model evidence,
+which binds the final text digest and verdict. It deliberately excludes a summary
+hash without a durable export receipt. The controller still checks the strict SCC
+summary against the original handed-off model evidence before committing.
