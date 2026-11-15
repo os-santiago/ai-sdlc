@@ -8,7 +8,7 @@ import fixture_images
 
 
 class AliasTests(unittest.TestCase):
-    def run_case(self, *, delay=False, tag_failure=False, mismatch=False, wrong_target=False, existing=False, never=False):
+    def run_case(self, *, delay=False, tag_failure=False, mismatch=False, wrong_target=False, existing=False, never=False, child_digest=False):
         digest = 'sha256:' + 'a' * 64
         tag = 'localhost/ai-sdlc-worker:fixture'
         reference = tag.split(':')[0] + '@' + digest
@@ -25,11 +25,11 @@ class AliasTests(unittest.TestCase):
                     if never or (delay and observations == 1):
                         raise subprocess.CalledProcessError(1, command, stderr=b'not visible')
                 status = {'id': 'wrong' if mismatch and command[-1] == reference else 'original',
-                          'repoDigests': [reference]}
+                          'repoDigests': [reference if command[-1] == reference or not child_digest else tag.split(':')[0] + '@sha256:' + 'c' * 64]}
                 return subprocess.CompletedProcess(command, 0, json.dumps({'status': status}).encode())
             if 'ls' in command:
                 name = command[-1].removeprefix('name==')
-                target = 'sha256:' + 'b' * 64 if wrong_target else digest
+                target = 'invalid' if wrong_target else digest
                 rows = f'{name} media {target} 1B linux/amd64 -\n' if name == tag or registered else ''
                 return subprocess.CompletedProcess(command, 0, 'REF TYPE DIGEST SIZE PLATFORMS LABELS\n' + rows)
             self.assertIn('--local', command)
@@ -45,6 +45,10 @@ class AliasTests(unittest.TestCase):
     def test_waits_for_cri_after_single_local_registration(self):
         _, calls = self.run_case(delay=True)
         self.assertEqual(sum('tag' in call for call in calls), 1)
+
+    def test_index_descriptor_is_not_confused_with_cri_child_digest(self):
+        result, _ = self.run_case(child_digest=True)
+        self.assertTrue(result.endswith('sha256:' + 'a' * 64))
 
     def test_existing_alias_is_observed_without_retag(self):
         _, calls = self.run_case(existing=True)

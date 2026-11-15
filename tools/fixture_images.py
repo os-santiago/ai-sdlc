@@ -18,10 +18,6 @@ def register_digest(provider, node, tag):
         return json.loads(result.stdout)['status']
 
     image = inspect(tag)
-    digests = {value.rsplit('@', 1)[-1] for value in image['repoDigests']}
-    if len(digests) != 1 or not re.fullmatch('sha256:[a-f0-9]{64}', next(iter(digests))):
-        raise ValueError('Fixture image has no unambiguous manifest digest')
-    reference = tag.rsplit(':', 1)[0] + '@' + next(iter(digests))
     def descriptor(name):
         result = subprocess.run(prefix + ['ctr', '-n', 'k8s.io', 'images', 'ls', 'name==' + name],
                                 capture_output=True, check=True, timeout=15, text=True)
@@ -32,9 +28,12 @@ def register_digest(provider, node, tag):
             raise ValueError('Ambiguous containerd fixture descriptor')
         return rows[0][2]
 
-    expected = next(iter(digests))
-    if descriptor(tag) != expected:
-        raise ValueError('Loaded fixture tag descriptor disagrees with CRI digest')
+    # The loaded target can be an OCI index while CRI reports its selected
+    # platform manifest. Bind the alias to containerd's actual target digest.
+    expected = descriptor(tag)
+    if not isinstance(expected, str) or not re.fullmatch('sha256:[a-f0-9]{64}', expected):
+        raise ValueError('Loaded fixture has no valid containerd descriptor')
+    reference = tag.rsplit(':', 1)[0] + '@' + expected
     existing = descriptor(reference)
     if existing is not None and existing != expected:
         raise ValueError('Existing fixture alias points to a different descriptor')
