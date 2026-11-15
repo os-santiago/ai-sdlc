@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -40,7 +41,9 @@ func HandoffCandidate(ctx context.Context, db *store.DB, load func() (authority.
 	}
 	snapshot, err := verifiedSnapshotStatus(ctx, db, p, config, command, "running")
 	if err != nil {
-		_ = db.RejectCandidateHandoff(ctx, id, "revoked")
+		if errors.Is(err, ErrAuthority) {
+			_ = db.RejectCandidateHandoff(ctx, id, "revoked")
+		}
 		return false, err
 	}
 	// Marker parsing is deliberately finite. Full reconstruction remains the
@@ -49,7 +52,8 @@ func HandoffCandidate(ctx context.Context, db *store.DB, load func() (authority.
 		_ = db.RejectCandidateHandoff(ctx, id, "unsupported-recipe")
 		return false, nil
 	}
-	c := verification.Command{Version: verification.CommandVersion, CandidateID: id, WorkItemID: record.WorkItem, Repository: record.Repository, IssueNumber: command.IssueNumber, Generation: command.Generation, IssueRevision: snapshot.Revision, SourceSHA: command.SourceSHA, DeltaSHA256: record.Record.DeltaSHA256, CandidateTreeSHA256: record.Record.CandidateTreeSHA256, Recipe: verification.LocaleRecipe, RecipeRevision: verification.RecipeRevision(), AuthorityRevision: p.Revision(), ExpiresAt: command.ExpiresAt}
+	expires := min(command.ExpiresAt, time.Now().Add(verification.MaxCommandAge).UnixMilli())
+	c := verification.Command{Version: verification.CommandVersion, CandidateID: id, WorkItemID: record.WorkItem, Repository: record.Repository, IssueNumber: command.IssueNumber, Generation: command.Generation, IssueRevision: snapshot.Revision, SourceSHA: command.SourceSHA, DeltaSHA256: record.Record.DeltaSHA256, CandidateTreeSHA256: record.Record.CandidateTreeSHA256, Recipe: verification.LocaleRecipe, RecipeRevision: verification.RecipeRevision(), AuthorityRevision: p.Revision(), ExpiresAt: expires}
 	if verification.MatchLedger(c, record) != nil {
 		return false, ErrAuthority
 	}

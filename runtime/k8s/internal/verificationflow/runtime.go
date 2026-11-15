@@ -2,6 +2,7 @@ package verificationflow
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
@@ -37,6 +38,9 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		for _, kind := range []string{"baseline", "candidate", "reference", "tests", "config"} {
 			for _, effect := range effects {
 				if effect.Kind == kind {
+					if effect.NotSent {
+						continue
+					}
 					if effect.UID == "" {
 						removed = false
 						continue
@@ -63,6 +67,9 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	if _, _, _, err = CurrentProof(ctx, r.DB, r.Load, id); err != nil {
+		if errors.Is(err, store.ErrObservationUnavailable) {
+			return "observation-unavailable", ControllerError{"authority"}
+		}
 		if r.DB.RejectQueuedVerification(ctx, id) != nil {
 			return "", ControllerError{"rejection"}
 		}

@@ -8,7 +8,7 @@ var verificationPrivileges = []string{
 	`GRANT INSERT(id,candidate_id,payload_digest,payload,receipt,expires_at) ON verification_requests TO aisdlc_verifier`,
 	`GRANT UPDATE(state,claim_token,claim_until,reason,cleanup_state,cleanup_attempts,cleanup_next_at,proof) ON verification_requests TO aisdlc_verifier`,
 	`GRANT INSERT(request_id,kind,token,resource_name) ON verification_effects TO aisdlc_verifier`,
-	`GRANT UPDATE(resource_uid,completed_at) ON verification_effects TO aisdlc_verifier`,
+	`GRANT UPDATE(resource_uid,completed_at,not_sent_at) ON verification_effects TO aisdlc_verifier`,
 	`GRANT SELECT(id,repository,correlation_id) ON plans TO aisdlc_verifier`,
 	`GRANT SELECT(uuid,plan_id,status,issue_numbers,acceptance_criteria,depends_on) ON work_items TO aisdlc_verifier`,
 	`GRANT SELECT(repository,issue_number,generation,content_key) ON intake_heads TO aisdlc_verifier`,

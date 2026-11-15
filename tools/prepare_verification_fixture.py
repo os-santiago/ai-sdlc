@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Prepare only a synthetic candidate for the pinned verifier conformance test."""
 import argparse
+import os
+import tempfile
 from pathlib import Path
 import subprocess
 
@@ -19,8 +21,24 @@ def prepare(source_repository, target):
     path.parent.mkdir(parents=True)
     path.write_bytes(result.stdout)
     patch = Path(__file__).resolve().parent / 'fixtures/homedir-locale.patch'
-    subprocess.run(['git', 'apply', '--check', str(patch)], cwd=target, check=True, timeout=15)
-    subprocess.run(['git', 'apply', str(patch)], cwd=target, check=True, timeout=15)
+    # Apply outside any parent repository, with ambient Git overrides removed.
+    with tempfile.TemporaryDirectory(prefix='ai-sdlc-verifier-patch-') as directory:
+        isolated = Path(directory)
+        original = isolated / UTILS
+        original.parent.mkdir(parents=True)
+        original.write_bytes(result.stdout)
+        env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+        env['GIT_CEILING_DIRECTORIES'] = str(isolated.parent)
+        for arguments in (['--check'], []):
+            subprocess.run(['git', 'apply', *arguments, str(patch)], cwd=isolated,
+                           env=env, check=True, timeout=15)
+        for name in (UTILS, 'tests/js/utils-locale-fallback.test.js'):
+            generated = isolated / name
+            if not generated.is_file() or not 1 <= generated.stat().st_size <= 32768:
+                raise ValueError('Missing or oversized prepared candidate file')
+            destination = target / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(generated.read_bytes())
     return target
 
 

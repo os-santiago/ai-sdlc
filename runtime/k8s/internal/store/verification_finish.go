@@ -88,7 +88,7 @@ func (db *DB) FinishVerificationCleanup(ctx context.Context, c VerificationClean
 	if AssertComponent(ctx, db.Pool, "verifier") != nil {
 		return ErrExecution
 	}
-	r, err := db.Pool.ExecContext(ctx, `UPDATE verification_requests SET cleanup_state=CASE WHEN EXISTS(SELECT 1 FROM verification_effects e WHERE e.request_id=$1 AND e.resource_uid IS NULL) THEN 'uncertain' WHEN $5 THEN 'complete' WHEN cleanup_attempts>=3 THEN 'uncertain' ELSE 'pending' END WHERE id=$1 AND claim_token=$2 AND claim_until=$3 AND cleanup_attempts=$4 AND state='failed' AND cleanup_state='pending'`, c.Claim.ID, c.Claim.Token, c.Claim.Until, c.Attempt, removed)
+	r, err := db.Pool.ExecContext(ctx, `UPDATE verification_requests SET cleanup_state=CASE WHEN EXISTS(SELECT 1 FROM verification_effects e WHERE e.request_id=$1 AND e.resource_uid IS NULL AND e.not_sent_at IS NULL) THEN 'uncertain' WHEN $5 THEN 'complete' WHEN cleanup_attempts>=3 THEN 'uncertain' ELSE 'pending' END WHERE id=$1 AND claim_token=$2 AND claim_until=$3 AND cleanup_attempts=$4 AND state='failed' AND cleanup_state='pending'`, c.Claim.ID, c.Claim.Token, c.Claim.Until, c.Attempt, removed)
 	if err != nil {
 		return ErrExecution
 	}

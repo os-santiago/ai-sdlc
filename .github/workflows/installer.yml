@@ -218,7 +218,7 @@ jobs:
           kubectl = [tools['kubectl'], '--kubeconfig', str(pathlib.Path.home() / '.local/state/ai-sdlc/ai-sdlc/kubeconfig')]
           worker = register_digest('docker', 'ai-sdlc-control-plane', 'localhost/ai-sdlc-worker:conformance')
           mailbox = register_digest('docker', 'ai-sdlc-control-plane', 'localhost/ai-sdlc-model-mailbox:conformance')
-          for scenario in ('success', 'revoke-config', 'revoke-results', 'expire-config', 'lost-config-reply'):
+          for scenario in ('success', 'revoke-config', 'revoke-results', 'expire-config', 'lost-config-reply', 'revoke-intent', 'transient-policy'):
               report = verify(kubectl, worker, mailbox, root / 'execution.test', root / 'verifier.test',
                               '0622cdaeb59a11a27bd5f3d7e18183c401a5e412', candidate, scenario)
               (root / f'verifier-{scenario}-report.json').write_text(json.dumps(report, indent=2))

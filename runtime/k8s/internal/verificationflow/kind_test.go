@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -106,10 +107,10 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal("Kubernetes client")
 	}
-	if in.Scenario == "revoke-config" || in.Scenario == "revoke-results" {
+	if in.Scenario == "revoke-config" || in.Scenario == "revoke-results" || in.Scenario == "revoke-intent" {
 		load = func() (authority.Policy, intake.Config, string, error) {
 			var n int
-			if err := db.Pool.QueryRow(`SELECT count(*) FROM verification_effects WHERE request_id=$1 AND resource_uid IS NOT NULL`, id).Scan(&n); err != nil {
+			if err := db.Pool.QueryRow(`SELECT count(*) FROM verification_effects WHERE request_id=$1 AND (resource_uid IS NOT NULL OR $2)`, id, in.Scenario == "revoke-intent").Scan(&n); err != nil {
 				return authority.Policy{}, intake.Config{}, "", err
 			}
 			p := in.Policy
@@ -142,6 +143,17 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 		}
 	}
 	runtime := Runtime{DB: db, Load: load, Client: client, Image: in.Image}
+	if in.Scenario == "transient-policy" {
+		runtime.Load = func() (authority.Policy, intake.Config, string, error) {
+			return authority.Policy{}, intake.Config{}, "", errors.New("fixture temporary policy read failure")
+		}
+		state, e := runtime.PollOnce(ctx)
+		var pending int
+		if e == nil || state != "observation-unavailable" || db.Pool.QueryRow(`SELECT count(*) FROM verification_requests WHERE state='queued'`).Scan(&pending) != nil || pending != 1 {
+			t.Fatal("transient read permanently rejected request")
+		}
+		runtime.Load = load
+	}
 	state, err := runtime.PollOnce(ctx)
 	if in.Scenario == "expire-config" {
 		if err == nil || state != "stopped" {
@@ -168,7 +180,7 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 		_, _ = runtime.PollOnce(ctx)
 		var uncertain bool
 		if db.Pool.QueryRow(`SELECT state='failed' AND proof IS NULL AND cleanup_state='uncertain' FROM verification_requests WHERE id=$1`, id).Scan(&uncertain) != nil || !uncertain {
-			t.Fatal("lost create not quarantined")
+			t.Fatal("lost create not quarantined", DiagnosticStage(err), "createCalls", creates.Load())
 		}
 		if creates.Load() != 1 || deletes.Load() != 0 {
 			t.Fatal("unknown UID retried or deleted")
@@ -183,7 +195,13 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 		return
 	}
 
-	if in.Scenario == "revoke-config" || in.Scenario == "revoke-results" {
+	if in.Scenario == "revoke-config" || in.Scenario == "revoke-results" || in.Scenario == "revoke-intent" {
+		if in.Scenario == "revoke-intent" {
+			var unsent int
+			if db.Pool.QueryRow(`SELECT count(*) FROM verification_effects WHERE not_sent_at IS NOT NULL AND resource_uid IS NULL`).Scan(&unsent) != nil || unsent != 1 {
+				t.Fatal("unsent intention not sealed")
+			}
+		}
 		if err == nil || state != "stopped" {
 			t.Fatal("revocation continued", state, err)
 		}

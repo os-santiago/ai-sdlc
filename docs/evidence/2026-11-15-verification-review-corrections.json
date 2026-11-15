@@ -1,0 +1,104 @@
+{
+  "scope": "verification-profile-review-corrections",
+  "autonomousE2E": false,
+  "runtimeSuite": {
+    "build": "passed",
+    "vet": "passed",
+    "tests": 901,
+    "packages": 31,
+    "freshPostgres": true
+  },
+  "additionalRegression": "TestLiveVerificationClaimCannotReuseCancelledEffect passed against disposable PostgreSQL",
+  "helmTests": 9,
+  "nestedCheckoutFixture": "both output files matched reference candidate",
+  "realKubernetes": {
+    "revoke-intent": {
+      "authorityRevokedDuringReconciliation": true,
+      "autonomousE2E": false,
+      "noProofCommitted": true,
+      "realKubernetes": true,
+      "realPostgres": true,
+      "realSCC": true,
+      "resourcesRetired": true,
+      "scenario": "revoke-intent",
+      "scope": "isolated-candidate-verifier-revocation-fixture",
+      "secondPollDidNotReplay": true,
+      "syntheticIssue": true,
+      "syntheticModel": true,
+      "resourcesConfirmedRemoved": true,
+      "ownedNamespaceRemoved": true,
+      "verifierNamespaceRemoved": true,
+      "verifierResourcesConfirmedRemoved": true,
+      "separateServiceAccounts": true
+    },
+    "transient-policy": {
+      "automaticWorkerHandoff": true,
+      "autonomousE2E": false,
+      "behaviorProof": {
+        "version": "ai-sdlc.behavior-proof/v1",
+        "command": {
+          "version": "ai-sdlc.verification-command/v1",
+          "candidateId": "execution-f1c3533dafebb38e5306ac1f292b320b2d46bfc94f732daf14027984dc56af6f",
+          "workItemId": "1a77b9a5-4a60-4fc2-bd6b-79b1cd75e82e",
+          "repository": "os-santiago/homedir",
+          "issueNumber": 3,
+          "generation": 1,
+          "issueRevision": "61b7a506ae8dda5e2ed16ccf69e99a155603ce18892690c27637b812922c6104",
+          "sourceSHA": "0622cdaeb59a11a27bd5f3d7e18183c401a5e412",
+          "deltaSHA256": "e9168d5823b7a9d864e89fe07b09b76bfde32c690460db77c5ebd63853b58f2d",
+          "candidateTreeSHA256": "0296aed54468853cba4797a9ab0d21512494799b980815d2cc61f89183396a22",
+          "recipe": "homedir-date-locale/v1",
+          "recipeRevision": "81621cb27c84f43b9942b53707b37b17530aa45844a00d16c4990e75ec4ea35f",
+          "authorityRevision": "f95d12cdc6326352c07a52821ce4f51d157846b7c9effffee2c3635436486648",
+          "expiresAt": 1794768729272
+        },
+        "toolchainImage": "localhost/ai-sdlc-worker@sha256:541a6054a0c984d938b982f816b48228d84eaaf7b0db36b421a49c25f166ce91",
+        "baselineResultSHA256": "9b84f2d503bc659f25f78423da7555e2fe0934cdea3d823ee1ae19edb429d634",
+        "candidateResultSHA256": "cd75e2711b15460d3f5b4d5614d5960f598ac475aa8e36d07476b1cb6c608988",
+        "referenceResultSHA256": "cd75e2711b15460d3f5b4d5614d5960f598ac475aa8e36d07476b1cb6c608988",
+        "resourceUIDs": {
+          "baseline": "6fb384b3-5882-4ef7-9b8b-a05ecb6f7b1b",
+          "candidate": "73c8bb39-d9e8-4413-9127-bc50174c3451",
+          "config": "4d5ae9d2-3d24-485a-a3c5-eccfd41afa82",
+          "reference": "3b15db45-ccdf-4869-9cb9-9b68a525e7f0",
+          "tests": "fef0f7d3-d912-4303-9676-bf9963bbe219"
+        },
+        "behaviorVerified": true,
+        "publicationAuthorized": false
+      },
+      "currentAuthorityChecked": true,
+      "duplicateInboxDidNotReplay": true,
+      "operationalPrivileges": true,
+      "realHTTPBoundary": true,
+      "realKubernetes": true,
+      "realPostgres": true,
+      "realSCC": true,
+      "scope": "isolated-candidate-verifier-runtime-fixture",
+      "secondPollDidNotReplay": true,
+      "separateOfflinePods": 4,
+      "signedVerifierInbox": true,
+      "signedWorkerOutbox": true,
+      "sourceSHA": "0622cdaeb59a11a27bd5f3d7e18183c401a5e412",
+      "syntheticIssue": true,
+      "syntheticModel": true,
+      "resourcesConfirmedRemoved": true,
+      "ownedNamespaceRemoved": true,
+      "verifierNamespaceRemoved": true,
+      "verifierResourcesConfirmedRemoved": true,
+      "separateServiceAccounts": true
+    }
+  },
+  "lostConfigReplyRetest": {
+    "status": "blocked-before-effect",
+    "observedRequest": "failed/uncertain, cleanup complete, zero verification effects",
+    "externalObservation": {
+      "githubAnonymousStatus": 403,
+      "rateLimit": 60,
+      "remaining": 0,
+      "resetUTC": "2026-11-15T19:00:20+00:00"
+    },
+    "previousPassedProof": "2026-11-15-verification-profile.json",
+    "requiredFollowup": "exact-head installer CI or isolated rerun after upstream quota reset"
+  },
+  "liveInstallationUpdated": false
+}

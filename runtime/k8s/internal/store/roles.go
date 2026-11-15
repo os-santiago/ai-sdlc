@@ -35,7 +35,7 @@ func AssertComponent(ctx context.Context, q Querier, component string) error {
 	if err := q.QueryRowContext(ctx, `SELECT current_user, session_user,
  EXISTS(SELECT 1 FROM pg_roles WHERE rolname=current_user AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolbypassrls OR rolreplication))
  OR EXISTS(SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.member WHERE r.rolname=current_user)`).Scan(&actual, &session, &elevated); err != nil {
-		return errors.New("database identity unavailable")
+		return ErrObservationUnavailable
 	}
 	if actual != want || session != want || elevated {
 		return errors.New("database component identity mismatch")

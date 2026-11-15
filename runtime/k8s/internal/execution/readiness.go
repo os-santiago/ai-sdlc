@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strconv"
 	"strings"
@@ -39,6 +40,9 @@ func verifiedSnapshotStatus(ctx context.Context, db *store.DB, p authority.Polic
 	}
 	e, err := db.ReadExecutionEvidence(ctx, c.WorkItemID, c.Repository, c.IssueNumber, age)
 	if err != nil {
+		if errors.Is(err, store.ErrObservationUnavailable) {
+			return intake.Snapshot{}, err
+		}
 		return intake.Snapshot{}, ErrAuthority
 	}
 	return validateSnapshotEvidence(p, config, c, expectedStatus, e)
@@ -57,6 +61,9 @@ func CandidateSnapshot(ctx context.Context, db *store.DB, p authority.Policy, co
 	}
 	e, err := db.ReadVerificationEvidence(ctx, c.WorkItemID, c.Repository, c.IssueNumber, age)
 	if err != nil {
+		if errors.Is(err, store.ErrObservationUnavailable) {
+			return intake.Snapshot{}, err
+		}
 		return intake.Snapshot{}, ErrAuthority
 	}
 	return validateSnapshotEvidence(p, config, c, "running", e)

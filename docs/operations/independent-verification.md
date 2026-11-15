@@ -69,8 +69,8 @@ place. Tests reject overflow, redirects, forbidden responses and arbitrary roles
 
 ## Activation boundary and remaining outerloop
 
-Migrations 0012 and 0013 define candidate read policies and the verification
-ledger. They grant no operational privileges by themselves. The reviewed
+Migrations 0012–0014 define candidate read policies, the verification
+ledger and durable cancellation of effects known not to have been sent. They grant no operational privileges by themselves. The reviewed
 `verification` profile provisions the independent role's minimum reads and
 ledger writes; returning to `candidate`, `shadow` or maintenance revokes them.
 The actual nonprivileged identity is exercised in the composed fixture below.
@@ -86,7 +86,8 @@ does not establish completion of those stages.
 The worker can derive a `verify-artifact` command only from a captured candidate
 whose executor cleanup is complete, whose original signed execution request is
 unexpired, and whose current issue evidence still selects the reviewed recipe.
-The command retains the original expiry. Its disposition and signed outbox entry
+The command expires at the earlier of the original expiry and thirty minutes
+after handoff; verification never extends generation authority. Its disposition and signed outbox entry
 are committed together; an unsupported or revoked candidate is terminally rejected.
 
 The independent verifier inbox records only a matching signed worker handoff.
@@ -165,7 +166,8 @@ python3 tools/verify_verification_flow.py \
   --report /private/verification-report.json
 ```
 
-Use `python3 tools/prepare_verification_fixture.py --source-repository /path/to/isolated-homedir --output /private/new-fixture-candidate` to reproduce the committed synthetic candidate patch for the pinned source. The output directory must be new; the source checkout is read-only. CI runs the same five scenarios as installation conformance.
+Use `python3 tools/prepare_verification_fixture.py --source-repository /path/to/isolated-homedir --output /private/new-fixture-candidate` to reproduce the committed synthetic candidate patch for the pinned source. The output directory must be new; the source checkout is read-only. CI runs seven scenarios as installation conformance, including revocation after
+intent but before send, and recovery from a temporary policy-read failure.
 
 The candidate directory supplies only the two recipe files. Model responses and
 the issue are synthetic; SCC, source fetch, PostgreSQL, signed inbox/outbox,
@@ -176,3 +178,17 @@ expiry and a real API create whose UID response is discarded. The lost-reply
 scenario preserves the unknown resource until the harness deletes its own
 namespace by the namespace UID; runtime recovery remains uncertain and blocked.
 These fixtures do not demonstrate a live issue-to-production E2E.
+
+### Observation failures and effects not sent
+
+Before a verifier claim or a worker handoff, unavailable database/policy reads
+leave the existing request pending within its original expiry. Missing or invalid
+authority evidence remains a rejection. This distinction never retries or adopts
+an already claimed execution or a potentially dispatched effect.
+
+If authority changes after recording an intent but before calling Kubernetes,
+the original controller seals `not_sent_at` against its exact claim and effect
+tokens. It may record that fact after expiry, but cannot reuse the effect or
+produce a successful verification. Cleanup requires the durable no-send marker;
+a NULL UID after a crash or a lost create response remains uncertain and blocks
+new work. No operational role can delete the evidence.

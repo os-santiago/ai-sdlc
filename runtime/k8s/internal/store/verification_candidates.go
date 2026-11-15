@@ -26,8 +26,8 @@ func (db *DB) readCandidate(ctx context.Context, id, component string) (Verifica
 	var result VerificationCandidate
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	if AssertComponent(ctx, db.Pool, component) != nil {
-		return result, ErrExecution
+	if err := AssertComponent(ctx, db.Pool, component); err != nil {
+		return result, identityObservationError(err)
 	}
 	err := db.Pool.QueryRowContext(ctx, `SELECT c.request_id,c.allocation_id,c.pod_uid,c.source_sha,c.source_tree_sha256,c.candidate_tree_sha256,c.export_sha256,c.export_bytes,c.delta_sha256,c.delta,c.changes,c.model_calls,c.created_at,r.work_item_uuid,r.repository,r.payload,r.receipt
  FROM execution_candidates c JOIN execution_requests r ON r.id=c.request_id
@@ -37,7 +37,7 @@ func (db *DB) readCandidate(ctx context.Context, id, component string) (Verifica
  JOIN model_budgets b ON b.work_item_uuid=r.work_item_uuid AND b.source_sha=c.source_sha AND b.repository=r.repository
  WHERE c.request_id=$1 AND l.phase='candidate-captured' AND l.cleanup_state='complete' AND l.pod_uid=c.pod_uid AND b.state='stopped' AND b.stop_reason='candidate-captured'`, id).Scan(&result.Record.RequestID, &result.Record.AllocationID, &result.Record.PodUID, &result.Record.SourceSHA, &result.Record.SourceTreeSHA256, &result.Record.CandidateTreeSHA256, &result.Record.ExportSHA256, &result.Record.ExportBytes, &result.Record.DeltaSHA256, &result.Delta, &result.Record.Changes, &result.Record.ModelCalls, &result.CreatedAt, &result.WorkItem, &result.Repository, &result.Payload, &result.Receipt)
 	if err != nil {
-		return VerificationCandidate{}, ErrExecution
+		return VerificationCandidate{}, observationError(err)
 	}
 	return result, nil
 }

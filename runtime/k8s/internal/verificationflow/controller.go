@@ -133,6 +133,11 @@ func Run(ctx context.Context, db *store.DB, load PolicyLoader, id string, client
 			return e
 		}
 		if fence() != nil {
+			unsentCtx, stop := context.WithTimeout(context.Background(), 3*time.Second)
+			// Cleanup requires an observable durable cancellation. A restart
+			// must never infer no-send merely from the missing UID.
+			_ = db.CancelUnsentVerificationEffect(unsentCtx, effect)
+			stop()
 			return verification.ErrVerification
 		}
 		uid, e := apply()

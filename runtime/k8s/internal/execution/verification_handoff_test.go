@@ -3,11 +3,13 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 )
 
@@ -17,6 +19,7 @@ func TestCandidateHandoffIsSignedAtomicAndNotReplayed(t *testing.T) {
 		f.Config.Repository = f.Material.Policy.Repository
 		f.command.Repository = f.Material.Policy.Repository
 		f.command.AuthorityRevision = f.Material.Policy.Revision()
+		f.command.ExpiresAt = time.Now().Add(45 * time.Minute).UnixMilli()
 		snapshot := f.Snapshot(1, true)
 		snapshot.Issue.Body += "\n" + verification.RecipeMarker + "\n"
 		snapshot.Revision = snapshot.ContentRevision()
@@ -43,6 +46,25 @@ func TestCandidateHandoffIsSignedAtomicAndNotReplayed(t *testing.T) {
 	if err = f.db.ConfirmExecutionCleanup(ctx, l.durable, configUID, podUID); err != nil {
 		t.Fatal(err)
 	}
+	// A temporary SQL read deadline must leave the captured candidate queued.
+	locked, err := f.Admin.Pool.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locked.Rollback()
+	if _, err = locked.ExecContext(ctx, `LOCK TABLE plans IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	sent, readErr := HandoffCandidate(ctx, f.db, load)
+	if sent || !errors.Is(readErr, store.ErrObservationUnavailable) {
+		t.Fatal("transient observation classification", readErr)
+	}
+	if f.Count(t, `SELECT count(*) FROM verification_handoffs`) != 0 {
+		t.Fatal("transient SQL read revoked candidate")
+	}
+	if err = locked.Rollback(); err != nil {
+		t.Fatal(err)
+	}
 	if sent, err := HandoffCandidate(ctx, f.db, load); err != nil || !sent {
 		t.Fatal("signed handoff", err)
 	}
@@ -60,6 +82,9 @@ func TestCandidateHandoffIsSignedAtomicAndNotReplayed(t *testing.T) {
 	command, err := verification.Verify(f.Material.Policy, receipt, payload, time.Now())
 	if err != nil || command.CandidateID != captured.RequestID || command.DeltaSHA256 != captured.DeltaSHA256 {
 		t.Fatal("outbox binding", err)
+	}
+	if command.ExpiresAt >= f.command.ExpiresAt || time.UnixMilli(command.ExpiresAt).After(time.Now().Add(verification.MaxCommandAge)) {
+		t.Fatal("handoff exceeded verification horizon")
 	}
 	if f.Count(t, `SELECT count(*) FROM verification_handoffs WHERE state='sent'`) != 1 {
 		t.Fatal("missing atomic disposition")

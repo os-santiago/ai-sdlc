@@ -35,12 +35,12 @@ func (db *DB) ReadVerification(ctx context.Context, id string) (VerificationRequ
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	var r VerificationRequest
-	if AssertComponent(ctx, db.Pool, "verifier") != nil {
-		return r, ErrExecution
+	if err := AssertComponent(ctx, db.Pool, "verifier"); err != nil {
+		return r, identityObservationError(err)
 	}
 	err := db.Pool.QueryRowContext(ctx, `SELECT id,candidate_id,payload_digest,payload,receipt,expires_at FROM verification_requests WHERE id=$1`, id).Scan(&r.ID, &r.CandidateID, &r.PayloadDigest, &r.Payload, &r.Receipt, &r.ExpiresAt)
 	if err != nil {
-		return VerificationRequest{}, ErrExecution
+		return VerificationRequest{}, observationError(err)
 	}
 	return r, nil
 }
