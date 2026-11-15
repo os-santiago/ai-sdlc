@@ -42,7 +42,7 @@ func (d ReviewDispatcher) authorizeReview(ctx context.Context, r store.ReviewRun
 		return time.Time{}, ErrRejected
 	}
 	until, err = d.Authority.AuthorizeReview(ctx, r, c)
-	if err != nil || ctx.Err() != nil {
+	if err != nil || ctx.Err() != nil || d.DB.CheckReviewClaim(ctx, c) != nil || ctx.Err() != nil {
 		return time.Time{}, ErrRejected
 	}
 	if c.Until.Before(until) {
@@ -149,11 +149,14 @@ func (d ReviewDispatcher) DeliverReview(ctx context.Context, c store.ReviewClaim
 		return result, ErrRejected
 	}
 	stage = "authorization-completion"
-	if _, err = d.authorizeReview(ctx, run, c); err != nil {
+	until, err = d.authorizeReview(ctx, run, c)
+	if err != nil {
 		return result, ErrUncertain
 	}
+	completionCtx, stopCompletion := context.WithDeadline(ctx, until)
+	defer stopCompletion()
 	stage = "completion-commit"
-	if err = d.DB.CompleteReviewModelCall(ctx, call, response, observationRaw); err != nil {
+	if err = d.DB.CompleteReviewModelCall(completionCtx, call, response, observationRaw); err != nil {
 		return result, ErrUncertain
 	}
 	reply := request
@@ -180,11 +183,14 @@ func (d ReviewDispatcher) DeliverReview(ctx context.Context, c store.ReviewClaim
 		return result, ErrUncertain
 	}
 	stage = "authorization-acknowledgement"
-	if _, err = d.authorizeReview(ctx, run, c); err != nil {
+	until, err = d.authorizeReview(ctx, run, c)
+	if err != nil {
 		return result, ErrUncertain
 	}
+	ackCtx, stopAck := context.WithDeadline(ctx, until)
+	defer stopAck()
 	stage = "acknowledgement"
-	if err = d.DB.AcknowledgeReviewModelCall(ctx, call, digest); err != nil {
+	if err = d.DB.AcknowledgeReviewModelCall(ackCtx, call, digest); err != nil {
 		return result, ErrUncertain
 	}
 	result.HandoffConfirmed = true
