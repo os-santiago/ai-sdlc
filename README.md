@@ -99,6 +99,11 @@ only its own containers. It prints a report path with stage timings, skipped
 tests and cleanup results. See [local validation](docs/development/local-validation.md)
 for deadlines, prerequisites and troubleshooting.
 
+For an opt-in test of real Codex completions, SCC, gVisor and independent
+candidate checks, see the [Homedir component benchmark](docs/security/real-model-homedir-benchmark.md).
+It uses disposable fixture authority and does not advance live issues or prove
+autonomous delivery.
+
 For a quick check with Go installed, run `go build ./...`, `go vet ./...` and
 `go test ./...` from `runtime/k8s`. Without `AI_SDLC_TEST_DATABASE_URL`, persistence
 tests skip; that result is not full database validation. Build local images with
