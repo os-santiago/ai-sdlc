@@ -168,6 +168,24 @@ replace newer admission or plan state. Accepted plans remain blocked because
 this profile grants no execution authority. GitHub reads are snapshots; later
 execution/release integration must revalidate current eligibility before effects.
 
+Observe the resulting signed deliveries and database state without submitting
+tasks or changing workflow state:
+
+```bash
+python3 tools/verify_shadow_intake.py --provider podman --issue <number>
+```
+
+Use `--minimum-generation 2 --expected rejected` to observe a subsequent
+withdrawal, or increase the generation for reopening. This observer verifies
+only the shadow path and requires that no execution/release records exist.
+It does not claim autonomous delivery.
+
+Shadow adds public IPv4 HTTPS egress only for intake, excluding private,
+loopback and link-local ranges. Standard NetworkPolicy cannot restrict DNS
+names: the client fixes `api.github.com`, verifies TLS and rejects redirects.
+Sites requiring a network-level hostname allowlist need an approved egress
+proxy or CNI-specific policy. Other components receive no public HTTPS rule.
+
 Full scans restart in creation order so concurrent edits cannot permanently
 exclude an old issue through an update-time cursor. A scan exceeding 90 seconds
 or the configured page bound reports incomplete coverage and retains its last

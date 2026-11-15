@@ -1,10 +1,10 @@
 name: installer
 on:
   pull_request:
-    paths: ['install.sh', 'tools/install*', 'tools/github_client.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
+    paths: ['install.sh', 'tools/install*', 'tools/github_client.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
   push:
     branches: [main]
-    paths: ['install.sh', 'tools/install*', 'tools/github_client.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
+    paths: ['install.sh', 'tools/install*', 'tools/github_client.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
 permissions:
   contents: read
 jobs:
@@ -26,7 +26,10 @@ jobs:
               output.write('AI_SDLC_TEST_HELM=' + tools['helm'] + '\n')
           PY
       - name: Validate installer boundaries and Helm resources
-        run: python3 -m unittest discover -s tools -p 'test_*install*.py' -v && python3 -m unittest discover -s tools -p test_helm.py -v
+        run: |
+          python3 -m unittest discover -s tools -p 'test_*install*.py' -v
+          python3 -m unittest discover -s tools -p test_helm.py -v
+          python3 -m unittest discover -s tools -p test_verify_shadow_intake.py -v
       - name: Install and reconcile the same local desired state twice
         run: |
           sudo ./install.sh host --configure-host

@@ -1,26 +1,29 @@
 {
   "image": {
     "repository": "quay.io/os-santiago/ai-sdlc",
-    "tag": "b4459388e3f4a7afad441391f8a39a8e0f5b6daf"
+    "tag": "3f794ba364f2f3c9389e0b3238e21ed76712c78a"
   },
   "components": {
-    "relay": {
-      "digest": "sha256:779186301905bc2343e3d6ab55695d74858895eabef752eaa2843ace49321c16"
-    },
-    "worker": {
-      "digest": "sha256:bf6c435310d82ad5bcd5d091fb7a9a8c49044a12dd6ed291d6e0d2e838fe278d"
-    },
-    "admissionController": {
-      "digest": "sha256:cc06232bea69d7bd322b9acaf422bb9a92e3c9b75d215d8e6eeb2db25a47bb44"
-    },
-    "releaseManager": {
-      "digest": "sha256:eabcead825ff5f5e7b541b35fbf98a592f14b7b6a46d9de08a885a77a709f5db"
+    "intake": {
+      "digest": "sha256:f29b35825e8c242d36729ee6c520719e5028b93968b94865b73e97981eebcf40"
     },
     "orchestrator": {
-      "digest": "sha256:06fb13a957dd63a896c9f8ba725a5e9744b79eabb64f69fd55faaa1d1846ae9e"
+      "digest": "sha256:dd4b4288092e776c49b9986980e5267cb561023fed2fe004e6da7aca6db01163"
+    },
+    "admissionController": {
+      "digest": "sha256:6aca2d343237d1616102a7f2a82527f7a2b90e3d1f4f7c24d7e3905e77b6ff19"
+    },
+    "relay": {
+      "digest": "sha256:30157101968d57db86bd32a55d770f8dd1da118a98490e0184e58170d314d7e8"
+    },
+    "worker": {
+      "digest": "sha256:cb276c3dce213e622c7da3a385f5c8840770f7f2f38864083dcbf76abfd2cc82"
+    },
+    "releaseManager": {
+      "digest": "sha256:b513ded004c3ccf6baafea43b20ea3f634da854a19fe4125ac0fcfc05432735d"
     }
   },
   "migrator": {
-    "digest": "sha256:fa3ebe979a5ca9b8188b83981d3fb10cc684960a0039a855c02a71e4e9ff6d1c"
+    "digest": "sha256:e170db10a107770a87724035088f848c8c5a1fabf3c216b4c218f00303f4dacf"
   }
 }

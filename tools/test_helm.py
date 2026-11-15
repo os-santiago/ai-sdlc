@@ -79,5 +79,18 @@ class ChartTests(unittest.TestCase):
             env = pod['containers'][0]['env']
             self.assertFalse(any(e['name'] == 'MODEL_API_KEY' for e in env))
 
+    def test_public_https_egress_is_limited_to_shadow_intake(self):
+        for profile in ('maintenance', 'shadow'):
+            result = self.render('-f', str(ROOT / ('runtime/k8s/deploy/local/profiles/' + profile + '.json')))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            policies = [d for d in yaml.safe_load_all(result.stdout) if d and d['kind'] == 'NetworkPolicy']
+            public = [(p, rule) for p in policies for rule in p['spec'].get('egress', [])
+                      if any(peer.get('ipBlock', {}).get('cidr') == '0.0.0.0/0' for peer in rule.get('to', []))]
+            self.assertEqual(len(public), 1 if profile == 'shadow' else 0)
+            for policy, rule in public:
+                self.assertEqual(policy['spec']['podSelector']['matchLabels']['app.kubernetes.io/component'], 'intake')
+                self.assertEqual(rule['ports'], [{'protocol': 'TCP', 'port': 443}])
+                self.assertIn('169.254.0.0/16', rule['to'][0]['ipBlock']['except'])
+
 
 if __name__ == '__main__': unittest.main()
