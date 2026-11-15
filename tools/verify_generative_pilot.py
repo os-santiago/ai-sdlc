@@ -125,9 +125,14 @@ def bounded_container(provider, arguments, timeout=30):
                 return result.returncode, stdout.read(64*1024), stderr.read(64*1024)
         finally:
             recorded_id = None
-            if cid.exists():
+            try:
                 with cid.open('rb') as stream:
                     recorded = stream.read(129).strip()
+            except FileNotFoundError:
+                # Automatic removal may unlink the cidfile before it is opened.
+                # Absence still requires a healthy engine observation below.
+                pass
+            else:
                 if not re.fullmatch(b'[a-f0-9]{64}', recorded):
                     raise ValueError('Independent test cleanup identity invalid')
                 recorded_id = recorded.decode('ascii')
