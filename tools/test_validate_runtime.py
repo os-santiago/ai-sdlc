@@ -56,7 +56,7 @@ class ValidationDriverTests(unittest.TestCase):
             with self.assertRaisesRegex(ValidationError, 'deadline'):
                 self.run.call(['version'])
 
-    def test_failed_stage_still_cleans_resources_and_secret_file(self):
+    def test_failed_stage_cleans_resources_without_writing_credentials(self):
         (self.path / '.git/objects').mkdir(parents=True)
         (self.path / '.git/HEAD').write_text('ref: refs/heads/main')
         def command(args, **kwargs):
@@ -70,8 +70,16 @@ class ValidationDriverTests(unittest.TestCase):
                 return subprocess.CompletedProcess(args, 0, '')
             raise AssertionError('Unexpected subprocess')
         self.run.lock = {'platform': 'linux/amd64', 'postgres': 'fixture'}
+        def fail_start(args, **kwargs):
+            self.assertNotIn('fixture-value-must-not-be-recorded', ' '.join(args))
+            self.assertNotIn('--env-file', args)
+            self.assertIn('POSTGRES_PASSWORD', args)
+            self.assertEqual(self.run.environment['POSTGRES_PASSWORD'], 'fixture-value-must-not-be-recorded')
+            self.assertFalse((self.path / 'database.env').exists())
+            raise ValidationError('simulated start failure')
         with patch('validate_runtime.subprocess.run', side_effect=command), \
-                patch.object(self.run, 'call', side_effect=ValidationError('simulated start failure')):
+                patch.object(self.run, 'call', side_effect=fail_start), \
+                patch('validate_runtime.secrets.token_urlsafe', return_value='fixture-value-must-not-be-recorded'):
             self.assertEqual(self.run.execute(), 1)
         self.assertFalse((self.path / 'database.env').exists())
         result = json.loads((self.path / 'report.json').read_text())
@@ -79,6 +87,8 @@ class ValidationDriverTests(unittest.TestCase):
         self.assertEqual(result['stages'][0]['status'], 'failed')
         self.assertEqual([row['status'] for row in result['cleanup']], ['absent', 'absent'])
         self.assertNotIn('POSTGRES_PASSWORD', json.dumps(result))
+        self.assertNotIn('fixture-value-must-not-be-recorded', json.dumps(result))
+        self.assertIsNone(self.run.environment)
 
 
 if __name__ == '__main__':

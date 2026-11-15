@@ -59,9 +59,10 @@ failed command exits nonzero, records attempted stages and removes only objects
 whose ownership label matches the run, by observed container ID. Cleanup errors
 also make the result fail and identify remaining names for inspection.
 
-Temporary database credentials are generated per run and removed from disk on
-normal completion, failure or handled interruption. SIGKILL, daemon loss or a
-host crash can prevent cleanup; inspect the report/run directory and exact
+Temporary database credentials are generated per run and passed by named
+environment variables to the container CLI. They are never written to host
+files or command arguments. The fixture containers retain their own environment
+until removed. SIGKILL, daemon loss or a host crash can prevent cleanup; inspect the report/run directory and exact
 ownership label before removing a leftover container. Do not run broad container
 prune commands as recovery. Source tests execute trusted developer code and can
 read fixture credentials; this tool is not a hostile-code sandbox.

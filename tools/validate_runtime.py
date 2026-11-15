@@ -55,6 +55,7 @@ class Run:
     def __init__(self, provider, root, output, cache, timeout, lock):
         self.provider, self.root, self.output, self.cache = provider, root, output, cache
         self.lock = lock
+        self.environment = None
         self.identity = uuid.uuid4().hex
         self.names = ['ai-sdlc-validation-' + self.identity + suffix for suffix in ('-db', '-go')]
         self.deadline = time.monotonic() + timeout
@@ -70,7 +71,7 @@ class Run:
     def call(self, args, *, log=None, limit=60, check=True):
         try:
             result = subprocess.run([self.provider] + args, stdout=log or subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, text=True,
+                                    stderr=subprocess.STDOUT, text=True, env=self.environment,
                                     timeout=self.remaining(limit), check=False)
         except subprocess.TimeoutExpired as exc:
             raise ValidationError('Container operation exceeded its deadline') from exc
@@ -123,7 +124,6 @@ class Run:
 
     def execute(self):
         started = time.monotonic()
-        envfile = self.output / 'database.env'
         try:
             commit = subprocess.run(['git', '-C', str(self.root), 'rev-parse', 'HEAD'],
                                     capture_output=True, text=True, check=True, timeout=10).stdout.strip()
@@ -143,14 +143,17 @@ class Run:
             self.report['source'] = {'commit': commit, 'dirty': bool(dirty),
                                      'gitLayout': 'worktree' if external_metadata else 'checkout'}
             password = secrets.token_urlsafe(36)
-            with envfile.open('x', encoding='utf-8') as stream:
-                os.chmod(envfile, 0o600)
-                stream.write('POSTGRES_PASSWORD=' + password + '\nPGPASSWORD=' + password + '\nPOSTGRES_DB=ai_sdlc_test\n'
-                             'AI_SDLC_TEST_DATABASE_URL=postgres://postgres:' + password +
-                             '@127.0.0.1:5432/ai_sdlc_test?sslmode=disable\n')
+            self.environment = dict(os.environ, POSTGRES_PASSWORD=password,
+                                    PGPASSWORD=password, POSTGRES_DB='ai_sdlc_test',
+                                    AI_SDLC_TEST_DATABASE_URL='postgres://postgres:' + password +
+                                    '@127.0.0.1:5432/ai_sdlc_test?sslmode=disable')
+            # The CLI inherits values by name; credentials never enter argv,
+            # host files, reports or image configuration in source control.
+            fixture_env = [item for name in ('POSTGRES_PASSWORD', 'PGPASSWORD', 'POSTGRES_DB', 'AI_SDLC_TEST_DATABASE_URL')
+                           for item in ('--env', name)]
             db, runner = self.names
             shared = ['--platform', self.lock['platform'], '--label', OWNER_LABEL + '=' + self.identity]
-            self.stage('database-start', ['run', '-d', '--name', db, *shared, '--env-file', str(envfile),
+            self.stage('database-start', ['run', '-d', '--name', db, *shared, *fixture_env,
                                          '--tmpfs', '/var/lib/postgresql/data:rw,size=512m',
                                          self.lock['postgres'], 'postgres', '-c', 'listen_addresses=127.0.0.1'], 180)
             inspected = self.call(['container', 'inspect', db])
@@ -184,7 +187,7 @@ class Run:
             for child in ('mod', 'build'):
                 (self.cache / child).mkdir(exist_ok=True)
             self.stage('runner-start', ['run', '-d', '--name', runner, *shared,
-                       '--network', 'container:' + db, '--env-file', str(envfile),
+                       '--network', 'container:' + db, *fixture_env,
                        '-e', 'GOFLAGS=-mod=readonly',
                        *source_mounts,
                        '-v', str(self.cache / 'mod') + ':/go/pkg/mod:z',
@@ -205,7 +208,7 @@ class Run:
             self.report['error'] = str(exc) if isinstance(exc, ValidationError) else type(exc).__name__
         finally:
             self.cleanup()
-            envfile.unlink(missing_ok=True)
+            self.environment = None
             if any(item['status'] not in ('removed', 'absent') for item in self.report['cleanup']):
                 self.report['status'] = 'failed'
                 self.report['cleanupRequired'] = True
