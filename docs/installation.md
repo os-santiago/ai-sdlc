@@ -76,6 +76,42 @@ need no publisher token.
 
 ## Component identities
 
+### Optional local GitHub client
+
+For an explicitly selected local account, the same installer can import the
+credential of an authenticated GitHub CLI session:
+
+```bash
+gh auth login --hostname github.com
+./install.sh credentials --github-auth gh-cli --provider podman
+```
+
+This command requires an existing installer-owned cluster and matching authority
+repository. `./install.sh local --github-auth gh-cli` also configures it after
+installation. `plan --github-auth gh-cli` reports intent without accessing `gh`
+or creating credentials. The default remains `none`; there is no automatic
+fallback from a GitHub App to a user credential.
+
+[`gh auth token`](https://cli.github.com/manual/gh_auth_token) retrieves the active
+credential; it does not create a PAT or narrow its existing GitHub permissions.
+The installer verifies account identity, repository access and the account's
+write role using bounded read-only GitHub API requests, then sends the credential
+to the owned `ai-sdlc-github-client` Secret over stdin. It never prints the token,
+places it in command arguments, or stores it in Git or Helm values. Reapplication
+revalidates and preserves that Secret. To import the current CLI credential again,
+use `credentials --github-auth gh-cli --refresh-github-credential`; replacement
+preserves the Secret UID and checks concurrent changes. The account's write role
+does not prove that the token grants every required API permission: the report
+explicitly sets `writeCapabilitiesVerified: false`. Actual PR, merge and release
+operations must check their authoritative responses and fail closed on denial.
+
+The Secret is reserved for trusted GitHub operations. This maintenance release
+does not mount it in any workload, including the worker; generated Jobs must
+never receive it. Credential validation establishes access only, not a completed
+autonomous delivery cycle. GitHub App runtime integration remains tracked in #425.
+
+### Internal component credentials
+
 Chart 0.3 separates the bootstrap database credential from every service.
 A bounded migration Job owns schema and role setup. Each service receives only
 its own database LOGIN and Ed25519 identity, and refuses startup if the mounted

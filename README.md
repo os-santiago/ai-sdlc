@@ -34,6 +34,11 @@ issue-to-production delivery. No GitOps controller is installed; reconciliation
 is explicit through Helm. See [installation and configuration](docs/installation.md)
 for credentials, supported scope, limitations and recovery guidance.
 
+For local GitHub client access, run `./install.sh credentials --github-auth gh-cli`
+after installation and `gh auth login`. See the
+[credential setup](docs/installation.md#optional-local-github-client) for its scope
+and explicit refresh command.
+
 ## GitHub Actions deprecation
 
 The GitHub Actions AI-SDLC runtime, reusable stages, bootstrap tooling, and its

@@ -14,7 +14,10 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import urllib.request
+
+import github_client
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL = ROOT / 'runtime/k8s/deploy/local'
@@ -225,9 +228,15 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
                           'installationUID': cluster_uid}}
 
 
+def configure_github_client(kubectl, cluster_uid, repository, refresh=False):
+    secrets_api = SimpleNamespace(owned_secret=owned_secret, read_resource=read_resource,
+                                  create_owned_secret=create_owned_secret, run=run)
+    return github_client.configure(secrets_api, kubectl, cluster_uid, repository, refresh)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['plan', 'local', 'status', 'tools', 'host'])
+    parser.add_argument('command', choices=['plan', 'local', 'status', 'tools', 'host', 'credentials'])
     parser.add_argument('--configure-host', action='store_true', help='Raise inotify limits to committed minima for this boot; requires root')
     parser.add_argument('--cluster', default='ai-sdlc')
     parser.add_argument('--provider', choices=['auto', 'docker', 'podman'], default='auto')
@@ -235,7 +244,15 @@ def main(argv=None):
     parser.add_argument('--timeout', default='10m')
     parser.add_argument('--repository', default='os-santiago/ai-sdlc')
     parser.add_argument('--environment', default='ai-sdlc-production')
+    parser.add_argument('--github-auth', choices=['none', 'gh-cli'], default='none')
+    parser.add_argument('--refresh-github-credential', action='store_true')
     args = parser.parse_args(argv)
+    if args.github_auth != 'none' and args.command not in ('plan', 'local', 'credentials'):
+        raise ValueError('--github-auth is valid only with plan, local or credentials')
+    if args.command == 'credentials' and args.github_auth != 'gh-cli':
+        raise ValueError('Select --github-auth gh-cli explicitly')
+    if args.refresh_github_credential and (args.command not in ('local', 'credentials') or args.github_auth != 'gh-cli'):
+        raise ValueError('Credential refresh requires local or credentials with --github-auth gh-cli')
     if args.configure_host and args.command not in ('local', 'host'):
         raise ValueError('--configure-host is valid only with local or host')
     if args.command == 'host':
@@ -262,7 +279,8 @@ def main(argv=None):
     if args.command == 'plan':
         print(json.dumps({'cluster': args.cluster, 'namespace': NAMESPACE,
                           'chart': str(CHART.relative_to(ROOT)), 'mode': 'maintenance',
-                          'images': image_lock(args.images), 'deliveryEnabled': False}, indent=2))
+                          'images': image_lock(args.images), 'deliveryEnabled': False,
+                          'githubAuth': args.github_auth}, indent=2))
         return 0
     provider = args.provider
     if provider == 'auto':
@@ -281,7 +299,7 @@ def main(argv=None):
     marker = state / 'ownership.json'
     if args.cluster in clusters and not marker.exists():
         raise ValueError('Cluster already exists without this installer ownership record; choose a different --cluster.')
-    if args.command == 'status' and args.cluster not in clusters:
+    if args.command in ('status', 'credentials') and args.cluster not in clusters:
         raise ValueError('The requested local cluster does not exist')
     created = args.cluster not in clusters
     if created:
@@ -300,6 +318,14 @@ def main(argv=None):
     if args.command == 'status':
         run(kubectl + ['get', 'deployments,statefulsets,pods,pvc', '-n', NAMESPACE])
         print('Installation mode: maintenance. Autonomous issue delivery: unavailable.')
+        return 0
+    if args.command == 'credentials':
+        policy = read_resource(kubectl, 'configmap', 'ai-sdlc-authority')
+        if (policy is None or policy.get('metadata', {}).get('annotations', {}).get('ai-sdlc.io/cluster-uid') != cluster_uid
+                or json.loads(policy.get('data', {}).get('policy.json', '{}')).get('repository') != args.repository):
+            raise ValueError('Install matching repository authority before configuring credentials')
+        print(json.dumps(configure_github_client(kubectl, cluster_uid, args.repository,
+                                                args.refresh_github_credential), indent=2))
         return 0
     # kind's node readiness alone does not establish service networking or
     # dynamic storage. Fail here before consuming the bounded migration window.
@@ -338,6 +364,8 @@ def main(argv=None):
     for name in ('admission-controller', 'orchestrator', 'worker', 'release-manager', 'relay'):
         run(kubectl + ['rollout', 'status', 'deployment/ai-sdlc-' + name, '-n', NAMESPACE,
                        '--timeout', args.timeout])
+    if args.github_auth == 'gh-cli':
+        configure_github_client(kubectl, cluster_uid, args.repository, args.refresh_github_credential)
     report = {'cluster': args.cluster, 'namespace': NAMESPACE, 'provider': provider,
               'mode': 'maintenance', 'installationReady': True, 'deliveryEnabled': False,
               'images': image_lock(args.images)}
