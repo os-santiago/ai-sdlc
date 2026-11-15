@@ -32,13 +32,13 @@ func (f reviewPublisherFunc) Publish(ctx context.Context, e modelmailbox.Envelop
 	return f(ctx, e)
 }
 func TestReviewDispatcherRealJournal(t *testing.T) {
-	for _, scenario := range []string{"approve", "mutation", "implicit", "revoked-before", "revoked-after", "lost-provider", "lost-publish", "mutated-publish", "lost-reservation", "lost-completion", "lost-ack"} {
+	for _, scenario := range []string{"approve", "mutation", "implicit", "revoked-before", "revoked-after", "lost-provider", "lost-publish", "mutated-publish", "lost-reservation", "lost-completion", "lost-ack", "expired-completion", "expired-ack", "revoked-during-authority"} {
 		t.Run(scenario, func(t *testing.T) {
 			profile := []byte(`{"version":"ai-sdlc.reviewer-profile/v1","model":"review-model","maxSteps":4,"maxSeconds":90,"maxTokens":2048,"aDevSHA256":"` + strings.Repeat("a", 64) + `"}`)
 			f, db, run := reviewJournalFixture(t, authority.Digest(profile))
 			c := claimReview(t, db, run)
 			pod := startReviewFixture(t, db, c)
-			var calls, publications atomic.Int32
+			var calls, publications, authorizations atomic.Int32
 			var revoked atomic.Bool
 			if scenario == "revoked-before" {
 				revoked.Store(true)
@@ -87,6 +87,31 @@ func TestReviewDispatcherRealJournal(t *testing.T) {
 					if revoked.Load() {
 						return time.Time{}, errors.New("revoked")
 					}
+					n := authorizations.Add(1)
+					if scenario == "revoked-during-authority" && n == 2 {
+						if _, e := f.Admin.Pool.Exec(`REVOKE UPDATE ON review_runs FROM aisdlc_verifier`); e != nil {
+							return time.Time{}, e
+						}
+						if db.StopReview(context.Background(), c, "uncertain") == nil {
+							t.Error("expected durable stop fault")
+						}
+						if _, e := f.Admin.Pool.Exec(`GRANT UPDATE ON review_runs TO aisdlc_verifier`); e != nil {
+							return time.Time{}, e
+						}
+						return c.Until, nil
+					}
+					if (scenario == "expired-completion" && n == 3) || (scenario == "expired-ack" && n == 5) {
+						lock, e := f.Admin.Pool.Begin()
+						if e != nil {
+							return time.Time{}, e
+						}
+						if _, e = lock.Exec(`SELECT 1 FROM review_model_calls WHERE run_id=$1 FOR UPDATE`, c.ID); e != nil {
+							_ = lock.Rollback()
+							return time.Time{}, e
+						}
+						go func() { time.Sleep(400 * time.Millisecond); _ = lock.Rollback() }()
+						return time.Now().Add(100 * time.Millisecond), nil
+					}
 					return c.Until, nil
 				}),
 				Mailbox: reviewPublisherFunc(func(_ context.Context, envelope modelmailbox.Envelope) error {
@@ -105,11 +130,11 @@ func TestReviewDispatcherRealJournal(t *testing.T) {
 			// real reservation/completion/ACK COMMIT, not a fake DB method.
 			switch scenario {
 			case "lost-reservation":
-				d.DB, dropped = executionCommitFault(t, 2, "verifier")
+				d.DB, dropped = executionCommitFault(t, 3, "verifier")
 			case "lost-completion":
-				d.DB, dropped = executionCommitFault(t, 5, "verifier")
-			case "lost-ack":
 				d.DB, dropped = executionCommitFault(t, 8, "verifier")
+			case "lost-ack":
+				d.DB, dropped = executionCommitFault(t, 13, "verifier")
 			}
 			request := func(sequence uint64) modelmailbox.Envelope {
 				raw := []byte(`{"model":"review-model","max_tokens":2048,"messages":[{"role":"user","content":"Inspect source"}]}`)
@@ -141,6 +166,12 @@ func TestReviewDispatcherRealJournal(t *testing.T) {
 				if f.Admin.Pool.QueryRow(`SELECT state FROM review_runs WHERE id=$1`, run.ID).Scan(&state) != nil || state != "failed" {
 					t.Fatal("unsafe parent not stopped", state)
 				}
+				if scenario == "expired-ack" && result.FailureStage != "acknowledgement" {
+					t.Fatal("ACK did not honor final deadline", result)
+				}
+				if scenario == "expired-completion" && result.FailureStage != "completion-commit" {
+					t.Fatal("completion did not honor final deadline", result)
+				}
 				before := calls.Load()
 				d.DB = db
 				if _, e = d.DeliverReview(context.Background(), c, profile, request(1)); e == nil || calls.Load() != before {
@@ -152,7 +183,7 @@ func TestReviewDispatcherRealJournal(t *testing.T) {
 				if (scenario == "mutation" || scenario == "revoked-after" || scenario == "lost-completion") && publications.Load() != 0 {
 					t.Fatal("unsafe provider response reached worker")
 				}
-				if (scenario == "revoked-before" || scenario == "lost-reservation") && calls.Load() != 0 {
+				if (scenario == "revoked-before" || scenario == "lost-reservation" || scenario == "revoked-during-authority") && calls.Load() != 0 {
 					t.Fatal("unclaimed provider call")
 				}
 			}
