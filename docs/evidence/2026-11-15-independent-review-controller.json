@@ -6,8 +6,10 @@
   "autonomousE2E": false,
   "validation": {
     "status": "passed",
-    "passedTests": 1001,
-    "passedPackages": 34
+    "passedTests": 1002,
+    "passedPackages": 34,
+    "sourceCommit": "16ec734c6cb04f101840fa4bb0b73de87ba09ba9",
+    "cleanSource": true
   },
   "scenarios": [
     {
@@ -28,7 +30,6 @@
       "secondPollDidNotReplay": true,
       "signedCandidateHandoff": true,
       "syntheticIssue": true,
-      "syntheticModel": true,
       "resourcesConfirmedRemoved": true,
       "ownedNamespaceRemoved": true,
       "verifierNamespaceRemoved": true,
@@ -36,7 +37,9 @@
       "separateServiceAccounts": true,
       "reviewerNamespaceRemoved": true,
       "reviewerResourcesConfirmedRemoved": true,
-      "reviewerServiceAccountSeparated": true
+      "reviewerServiceAccountSeparated": true,
+      "syntheticGenerationModel": true,
+      "syntheticReviewModel": true
     },
     {
       "autonomousE2E": false,
@@ -56,7 +59,6 @@
       "secondPollDidNotReplay": true,
       "signedCandidateHandoff": true,
       "syntheticIssue": true,
-      "syntheticModel": true,
       "resourcesConfirmedRemoved": true,
       "ownedNamespaceRemoved": true,
       "verifierNamespaceRemoved": true,
@@ -64,7 +66,9 @@
       "separateServiceAccounts": true,
       "reviewerNamespaceRemoved": true,
       "reviewerResourcesConfirmedRemoved": true,
-      "reviewerServiceAccountSeparated": true
+      "reviewerServiceAccountSeparated": true,
+      "syntheticGenerationModel": true,
+      "syntheticReviewModel": true
     },
     {
       "autonomousE2E": false,
@@ -84,7 +88,6 @@
       "secondPollDidNotReplay": true,
       "signedCandidateHandoff": true,
       "syntheticIssue": true,
-      "syntheticModel": true,
       "resourcesConfirmedRemoved": true,
       "ownedNamespaceRemoved": true,
       "verifierNamespaceRemoved": true,
@@ -92,7 +95,9 @@
       "separateServiceAccounts": true,
       "reviewerNamespaceRemoved": true,
       "reviewerResourcesConfirmedRemoved": true,
-      "reviewerServiceAccountSeparated": true
+      "reviewerServiceAccountSeparated": true,
+      "syntheticGenerationModel": true,
+      "syntheticReviewModel": true
     },
     {
       "autonomousE2E": false,
@@ -112,7 +117,6 @@
       "secondPollDidNotReplay": true,
       "signedCandidateHandoff": true,
       "syntheticIssue": true,
-      "syntheticModel": true,
       "resourcesConfirmedRemoved": true,
       "ownedNamespaceRemoved": true,
       "verifierNamespaceRemoved": true,
@@ -120,7 +124,9 @@
       "separateServiceAccounts": true,
       "reviewerNamespaceRemoved": true,
       "reviewerResourcesConfirmedRemoved": true,
-      "reviewerServiceAccountSeparated": true
+      "reviewerServiceAccountSeparated": true,
+      "syntheticGenerationModel": true,
+      "syntheticReviewModel": true
     },
     {
       "autonomousE2E": false,
@@ -141,7 +147,6 @@
       "secondPollDidNotReplay": true,
       "signedCandidateHandoff": true,
       "syntheticIssue": true,
-      "syntheticModel": false,
       "resourcesConfirmedRemoved": true,
       "ownedNamespaceRemoved": true,
       "verifierNamespaceRemoved": true,
@@ -149,7 +154,9 @@
       "separateServiceAccounts": true,
       "reviewerNamespaceRemoved": true,
       "reviewerResourcesConfirmedRemoved": true,
-      "reviewerServiceAccountSeparated": true
+      "reviewerServiceAccountSeparated": true,
+      "syntheticGenerationModel": true,
+      "syntheticReviewModel": false
     },
     {
       "autonomousE2E": false,
@@ -170,7 +177,6 @@
       "secondPollDidNotReplay": true,
       "signedCandidateHandoff": true,
       "syntheticIssue": true,
-      "syntheticModel": true,
       "resourcesConfirmedRemoved": true,
       "ownedNamespaceRemoved": true,
       "verifierNamespaceRemoved": true,
@@ -179,7 +185,9 @@
       "reviewerNamespaceRemoved": true,
       "reviewerResourcesConfirmedRemoved": true,
       "unknownResourcePreserved": false,
-      "reviewerServiceAccountSeparated": true
+      "reviewerServiceAccountSeparated": true,
+      "syntheticGenerationModel": true,
+      "syntheticReviewModel": true
     }
   ],
   "initialFindings": [
@@ -190,7 +198,6 @@
   "syntheticGenerationModel": true,
   "realModelScope": "Only the independent review uses actual Codex CLI; generation uses deterministic synthetic replies.",
   "pendingValidation": [
-    "lost-config-reply: first attempt stopped in pre-existing source preparation before the reviewer due to unavailable public source; rerun after source access is available.",
-    "Final stable-tree build/vet/full PostgreSQL suite."
+    "lost-config-reply: first attempt stopped in pre-existing source preparation before the reviewer due to unavailable public source; rerun after source access is available."
   ]
 }
