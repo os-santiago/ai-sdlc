@@ -109,7 +109,8 @@ jobs:
           PYTHON
       - name: Reject false success from untrusted candidate validation
         run: |
-          export AI_SDLC_TEST_ORACLE_IMAGE="$(docker image inspect localhost/ai-sdlc-worker:conformance --format '{{.Id}}')"
+          AI_SDLC_TEST_ORACLE_IMAGE="$(docker image inspect localhost/ai-sdlc-worker:conformance --format '{{.Id}}')"
+          export AI_SDLC_TEST_ORACLE_IMAGE
           export AI_SDLC_TEST_ORACLE_PROVIDER=docker
           export AI_SDLC_TEST_HOMEDIR_SOURCE="$RUNNER_TEMP/homedir-source"
           python3 -m unittest discover -s tools -p test_generative_pilot.py -v
