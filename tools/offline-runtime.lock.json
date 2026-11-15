@@ -1,0 +1,45 @@
+{
+  "version": "release-20261109.0",
+  "sourceRevision": "a0e6be6fb5e03d8ebea13592f36a097c7e9a41b9",
+  "url": "https://github.com/google/gvisor/releases/download/release-20261109.0/gvisor-x86_64.tar.bz2",
+  "sha256": "0846228061b05eb936a96ed2ea205cbd8ddf6936c946f8a390b699cff3b5c138",
+  "size": 84532987,
+  "files": {
+    "containerd-shim-runsc-v1": {
+      "sha256": "22f5dc4a3fcca14242116377131ae9cce4c0cd0ec1ff3715ca3e54d9a6b3ca6d",
+      "size": 24403864
+    },
+    "gvisor-bin/checkpointgofer": {
+      "sha256": "248a97a71e33b9745a7c86ab4c3201c15457f54fffea2a1c4955c3cff20ff79a",
+      "size": 48803265
+    },
+    "gvisor-bin/gvisor-proc-umounter": {
+      "sha256": "b3bbbaef5ddc62084e5febd19d3acca14f3d42b2a25d8552fb40def699467019",
+      "size": 1280
+    },
+    "gvisor-bin/gvisor-sentry-prewarmer": {
+      "sha256": "046e3ec1de3aa7b7ec7ce53b4f0d1e08db15987847606a8e361133d5c5bd3d73",
+      "size": 1752
+    },
+    "gvisor-bin/gvisor_sentry": {
+      "sha256": "2063b86b8dca211156a52a1f3b650cce961fb6710f1c520e1c5462dc8c0bd0bf",
+      "size": 55214627
+    },
+    "gvisor-bin/runsc-fd-parking": {
+      "sha256": "03af90d07ea466c10ecc3e3ba839b2a59540959dd3286aea3886917cba850c11",
+      "size": 1320
+    },
+    "gvisor-bin/runsc-metric-server": {
+      "sha256": "814a4de681856e38a1d22829bc8d24e2b847267151f3432f003376f132cef935",
+      "size": 21618726
+    },
+    "gvisor-bin/runsc-netgofer": {
+      "sha256": "c4cf1ecec86a7f2f8ca13dc88e28704bad3316c80d95437bf87be9a19ef1edea",
+      "size": 18597548
+    },
+    "runsc": {
+      "sha256": "c58f1dc2a3855487bf3bedc2edf074123ad433f1d98fb7f451f56790e87b5c9f",
+      "size": 19470512
+    }
+  }
+}

@@ -52,6 +52,10 @@ Unknown cost or timing is unknown, never zero. First establish a small smoke
 corpus; expand toward 50–100 representative tasks before drawing economic
 conclusions. This is an evaluation design, not an enterprise certification.
 
+The [offline executor runtime](security/offline-executor-runtime.md) implements
+the first hidden containment prerequisite (#459) of iteration 2. It installs
+and tests gVisor without enabling model transport or generative work.
+
 ## Fullsend: reuse decisions before reinvention
 
 Initial source inspection pins

@@ -1,0 +1,8 @@
+binary_name = "/opt/ai-sdlc/gvisor-release-20261109.0/runsc"
+[runsc_config]
+  network = "none"
+  platform = "systrap"
+  allow-flag-override = "false"
+  host-uds = "none"
+  directfs = "false"
+  oci-seccomp = "true"
