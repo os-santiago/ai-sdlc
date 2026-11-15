@@ -16,7 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Validate wrapper HTTP boundary and tool-call protocol
-        run: python3 -m unittest discover -s runtime/k8s/tools -p 'test_*.py' -v
+        run: |
+          python3 -m unittest discover -s runtime/k8s/tools -p 'test_*.py' -v
+          python3 -m unittest discover -s tools -p test_model_fixture_environment.py -v
   contract:
     runs-on: ubuntu-latest
     timeout-minutes: 15
