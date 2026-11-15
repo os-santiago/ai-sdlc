@@ -58,7 +58,7 @@ jobs:
           tools = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'install-tools.json').read_text())
           image = 'localhost/ai-sdlc-model-mailbox:conformance'
           subprocess.run([tools['kind'], 'load', 'docker-image', image, '--name', 'ai-sdlc'], check=True)
-          subprocess.run([sys.executable, 'tools/verify_model_mailbox.py', 'tools/verify_workspace_bundle.py', 'runtime/k8s/internal/workspacebundle/**', '--kubectl', tools['kubectl'],
+          subprocess.run([sys.executable, 'tools/verify_model_mailbox.py', '--kubectl', tools['kubectl'],
                           '--kubeconfig', str(pathlib.Path.home() / '.local/state/ai-sdlc/ai-sdlc/kubeconfig'),
                           '--mailbox-image', image], check=True)
           PYTHON
