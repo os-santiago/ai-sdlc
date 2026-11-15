@@ -1,0 +1,91 @@
+{
+  "source": {
+    "url": "https://codeload.github.com/konflux-ci/konflux-ci/tar.gz/be0e6cac273fe90ff6ef8e388a50c67be1308d52",
+    "sha256": "02dbde1bb91daa8e35a9808b5c0d78bc1a3baaf054cc06ee140af493d59adc08",
+    "commit": "be0e6cac273fe90ff6ef8e388a50c67be1308d52"
+  },
+  "dependencies": [
+    {
+      "path": "dependencies/cert-manager",
+      "sha256": "2ff7d9d82534c893610d494645196390ddb90c1e9fd0173049e5b655d153df73",
+      "bytes": 1050462
+    },
+    {
+      "path": "dependencies/prometheus-operator-crds",
+      "sha256": "1efa7add153fdcc7dd88edafa00ea46e0e05defeb2fbdc78696f748b5024e03c",
+      "bytes": 74777
+    },
+    {
+      "path": "dependencies/trust-manager",
+      "sha256": "c1e101f36823c9a1c97b5af9bbb5e82992513e7d79a7894f773269d2f84bc719",
+      "bytes": 38813
+    },
+    {
+      "path": "dependencies/tekton-operator",
+      "sha256": "252105fc9397fe33fae67dca2b857ec670380dc2553fc1fb145a09c3b5751143",
+      "bytes": 651081
+    },
+    {
+      "path": "dependencies/tekton-config",
+      "sha256": "2e54f568613c68c43bf2ba366bf065fb13932f8e464f75661bfa22ba8e41bdb5",
+      "bytes": 3412
+    },
+    {
+      "path": "dependencies/tekton-chains-rbac",
+      "sha256": "4032fda4d4522185213de4aaab057c34ac3a604487b7efad3093189670d645db",
+      "bytes": 6683
+    },
+    {
+      "path": "dependencies/admission-policies/policy",
+      "sha256": "aeece847137413935ca41796690b6385b89f493231f37798aa40c0c80181ed1b",
+      "bytes": 2050
+    }
+  ],
+  "version": 1,
+  "release": "v0.2.2",
+  "nodeImage": "kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed",
+  "operator": {
+    "url": "https://github.com/konflux-ci/konflux-ci/releases/download/v0.2.2/install.yaml",
+    "sha256": "68fbb841e8c83a6c2b4181dd6c7fad5a0d570869d3556753f92eced3b6805ff3",
+    "originalImage": "quay.io/konflux-ci/konflux-operator:release-sha-be0e6ca",
+    "image": "quay.io/konflux-ci/konflux-operator@sha256:8d6180cf966ca370938422d2a339cda46d638091238278517bbc46ed75a523b2"
+  },
+  "prerequisites": {
+    "minimumCPUs": 4,
+    "minimumAvailableMemoryGiB": 8,
+    "recommendedAvailableMemoryGiB": 16
+  },
+  "requiredDeployments": [
+    "build-service/build-service-controller-manager",
+    "cert-manager/cert-manager",
+    "cert-manager/cert-manager-cainjector",
+    "cert-manager/cert-manager-webhook",
+    "cert-manager/trust-manager",
+    "integration-service/integration-service-controller-manager",
+    "kind-registry/registry",
+    "konflux-operator/konflux-operator-controller-manager",
+    "konflux-ui/dex",
+    "konflux-ui/proxy",
+    "kube-system/coredns",
+    "local-path-storage/local-path-provisioner",
+    "namespace-lister/namespace-lister",
+    "release-service/release-service-controller-manager",
+    "tekton-operator/tekton-operator",
+    "tekton-operator/tekton-operator-webhook",
+    "tekton-pipelines/pipelines-as-code-controller",
+    "tekton-pipelines/pipelines-as-code-watcher",
+    "tekton-pipelines/pipelines-as-code-webhook",
+    "tekton-pipelines/tekton-chains-controller",
+    "tekton-pipelines/tekton-events-controller",
+    "tekton-pipelines/tekton-operator-proxy-webhook",
+    "tekton-pipelines/tekton-pipelines-controller",
+    "tekton-pipelines/tekton-pipelines-remote-resolvers",
+    "tekton-pipelines/tekton-pipelines-webhook",
+    "tekton-pipelines/tekton-results-api",
+    "tekton-pipelines/tekton-results-retention-policy-agent",
+    "tekton-pipelines/tekton-results-watcher",
+    "tekton-pipelines/tekton-triggers-controller",
+    "tekton-pipelines/tekton-triggers-core-interceptors",
+    "tekton-pipelines/tekton-triggers-webhook"
+  ]
+}

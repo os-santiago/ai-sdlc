@@ -1,6 +1,10 @@
 # Install AI-SDLC with Helm
 
 The supported first installation target is **Linux amd64 + local kind**.
+
+The optional [local Konflux environment](operations/konflux-local.md) uses
+`./install.sh supply-chain` and a separate owned kind cluster. Its prerequisites
+and readiness evidence are independent of the AI-SDLC runtime installation.
 The same chart renders Kubernetes resources; installing into an existing
 remote cluster is a separate, not yet validated onboarding path (#434).
 The installer needs Python 3.11+, Git, Internet access and a working Docker

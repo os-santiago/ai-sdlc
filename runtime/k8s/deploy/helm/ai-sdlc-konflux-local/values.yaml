@@ -1,0 +1,28 @@
+# The installer enables the CR only after the operator and its CRDs are ready.
+konflux:
+  enabled: false
+  spec:
+    imageController:
+      enabled: false
+    internalRegistry:
+      enabled: true
+    defaultTenant:
+      enabled: false
+    telemetry:
+      enabled: false
+    certManager:
+      createClusterIssuer: true
+    ui:
+      spec:
+        ingress:
+          nodePortService:
+            httpsPort: 30011
+        dex:
+          config:
+            enablePasswordDB: true
+            staticPasswords: []
+    info:
+      spec:
+        publicInfo:
+          environment: development
+          visibility: private

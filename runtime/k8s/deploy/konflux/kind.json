@@ -1,0 +1,17 @@
+{
+  "kind": "Cluster",
+  "apiVersion": "kind.x-k8s.io/v1alpha4",
+  "networking": {
+    "apiServerAddress": "127.0.0.1"
+  },
+  "nodes": [
+    {
+      "role": "control-plane",
+      "image": "kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed",
+      "kubeadmConfigPatches": [
+        "kind: KubeletConfiguration\nserializeImagePulls: false\nmaxParallelImagePulls: 3\n",
+        "kind: ClusterConfiguration\napiServer:\n  extraArgs:\n    service-account-issuer: https://kubernetes.default.svc\n    service-account-jwks-uri: https://kubernetes.default.svc/openid/v1/jwks\n"
+      ]
+    }
+  ]
+}
