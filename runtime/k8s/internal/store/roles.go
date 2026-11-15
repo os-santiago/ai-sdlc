@@ -64,6 +64,12 @@ func (db *DB) ProvisionRolesForOptions(ctx context.Context, passwords map[string
 }
 
 func (db *DB) ProvisionRolesForCapabilities(ctx context.Context, passwords map[string]string, mode string, review, publication bool) error {
+	return db.ProvisionRolesForMerge(ctx, passwords, mode, review, publication, false)
+}
+func (db *DB) ProvisionRolesForMerge(ctx context.Context, passwords map[string]string, mode string, review, publication, merge bool) error {
+	if merge && !publication {
+		return errors.New("merge requires verified publication")
+	}
 	if publication && (mode != "verification" || !review) {
 		return errors.New("publication requires verification and independent review")
 	}
@@ -181,6 +187,9 @@ func (db *DB) ProvisionRolesForCapabilities(ctx context.Context, passwords map[s
 				if component == "release-manager" {
 					statements = append(statements, publicationPrivileges...)
 				}
+			}
+			if merge && component == "release-manager" {
+				statements = append(statements, mergePrivileges...)
 			}
 			// REVOKE table privileges alone does not remove column grants.
 			for _, revoke := range columnRevocations {

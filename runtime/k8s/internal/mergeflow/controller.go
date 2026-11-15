@@ -1,5 +1,6 @@
 // Package mergeflow joins historical publication facts to fresh issue, policy
-// and forge checks. It has no external route or installed capability yet.
+// and forge checks. Only the explicitly enabled release-manager loop calls it;
+// it has no external route.
 package mergeflow
 
 import (
@@ -73,7 +74,11 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		return "", ErrMerge
 	}
 	if id == "" {
-		publicationID, e := r.DB.NextMergePublication(ctx)
+		p, _, _, e := r.Policy()
+		if e != nil {
+			return "", ErrMerge
+		}
+		publicationID, e := r.DB.NextMergePublication(ctx, p.Revision())
 		if e != nil {
 			return "", ErrMerge
 		}
@@ -103,7 +108,7 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		if e != nil || current != c || currentFact.Digest() != fact.Digest() {
 			return "", ErrMerge
 		}
-		p, _, _, e := r.Policy()
+		p, _, _, e = r.Policy()
 		if e != nil || p.Revision() != c.AuthorityRevision {
 			return "", ErrMerge
 		}

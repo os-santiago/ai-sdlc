@@ -149,6 +149,9 @@ func readiness(ready func(context.Context) error) http.Handler {
 		if bootstrap.PublicationEnabled() {
 			delivery = "verified-publication-only"
 		}
+		if bootstrap.MergeEnabled() {
+			delivery = "verified-low-risk-merge-only"
+		}
 		WriteJSON(w, http.StatusOK, map[string]string{"status": "ready", "mode": mode, "delivery": delivery})
 	})
 }

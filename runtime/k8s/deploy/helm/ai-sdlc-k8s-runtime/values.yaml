@@ -111,3 +111,6 @@ review:
 publication:
   enabled: false
   credentialRevision: ""
+
+merge:
+  enabled: false

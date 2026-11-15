@@ -75,6 +75,10 @@ The Homedir verification pilot can additionally opt into
 requires signed behavior/review evidence. Publication creates a bounded PR;
 merge, release and production promotion remain separate gates.
 
+With compatible images and verified native protection, the separate
+[low-risk merge capability](docs/operations/merge-installation.md) can be enabled
+with `"merge": true`. This does not enable release or production promotion.
+
 The [Homedir enterprise pilot](docs/enterprise-pilot.md) uses a separate,
 declaratively configured installation and real product validation. Start with
 `./install.sh plan --config examples/homedir.local-install.json`; the example

@@ -1,3 +1,6 @@
+{{- if and .Values.merge.enabled (not .Values.publication.enabled) }}
+{{- fail "merge requires explicit verified publication" }}
+{{- end }}
 {{- if .Values.publication.enabled }}
 {{- if or (ne .Values.runtime.mode "verification") (not .Values.review.enabled) }}
 {{- fail "publication requires verification and independent review" }}

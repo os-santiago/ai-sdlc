@@ -13,7 +13,7 @@ import (
 )
 
 // Exported only into the external test binary. All signatures, synthetic forge
-// receipts and direct grants belong to its disposable PostgreSQL fixture.
+// receipts and installed grants belong to its disposable PostgreSQL fixture.
 type PublishedMergeTestFixture struct {
 	Admin, DB                                                  *store.DB
 	Policy                                                     authority.Policy
@@ -55,11 +55,9 @@ func NewPublishedMergeTestFixture(t *testing.T, lifetime ...time.Duration) Publi
 	for role := range f.Material.Identities {
 		passwords[role] = strings.ReplaceAll(role, "-", "_") + strings.Repeat("q", 40)
 	}
-	if e := f.Admin.ProvisionRolesForCapabilities(ctx, passwords, "verification", true, true); e != nil {
+	if e := f.Admin.ProvisionRolesForMerge(ctx, passwords, "verification", true, true, true); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := f.Admin.Pool.Exec(`GRANT SELECT,INSERT,UPDATE ON merge_requests,merge_effects TO aisdlc_release_manager; GRANT SELECT ON merged_records TO aisdlc_release_manager; GRANT INSERT(merge_id,payload_digest,payload,receipt,gate,policy,proof_digest,proof,effect_digest,effect,authority_expires_at) ON merged_records TO aisdlc_release_manager`); e != nil {
-		t.Fatal(e)
-	}
+
 	return PublishedMergeTestFixture{f.Admin, db, f.Material.Policy, f.Material.Identities["release-manager"], f.Config, f.command.ProfileSHA256, strings.Repeat("b", 64), strings.Repeat("c", 64), r.ID}
 }

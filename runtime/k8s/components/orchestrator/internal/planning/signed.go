@@ -38,7 +38,7 @@ func signedEffect(component *bootstrap.Component, config intake.Config) delivery
 		if err != nil {
 			return nil, err
 		}
-		if snapshot.AuthorityRevision != policy.Revision() || (policy.Autonomy != "shadow" && policy.Autonomy != "auto-pr") {
+		if snapshot.AuthorityRevision != policy.Revision() || (policy.Autonomy != "shadow" && !bootstrap.CandidateAutonomy(policy)) {
 			return nil, errors.New("stale planning authority")
 		}
 		advanced, err := store.AdvanceIssue(ctx, tx, "orchestrator", snapshot.Repository, snapshot.Issue.Number, snapshot.Generation, receipt.ID, raw)
@@ -58,7 +58,7 @@ func signedEffect(component *bootstrap.Component, config intake.Config) delivery
 		}
 		state := Blocked
 		var profile []byte
-		if policy.Autonomy == "auto-pr" && admission.Risk == "low" {
+		if bootstrap.CandidateAutonomy(policy) && admission.Risk == "low" {
 			_, profile, err = execution.LoadRuntime(os.Getenv("AI_SDLC_EXECUTION_CONFIG_PATH"))
 			if err != nil {
 				return nil, err

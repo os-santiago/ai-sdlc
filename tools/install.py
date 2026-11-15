@@ -168,12 +168,16 @@ def identity_material(provider, image, repository, environment):
     return json.loads(result.stdout)
 
 
-def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False, verification=False, publication=False):
+def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False, verification=False, publication=False, merge=False):
+    if merge and not publication:
+        raise ValueError('Merge requires verified publication')
     if publication and (not candidate or not verification or repository != 'os-santiago/homedir'):
         raise ValueError('Invalid publication authority scope')
     image = lock['image']['repository'] + '@' + lock['migrator']['digest']
     material = identity_material(provider, image, repository, environment)
     reviewed_grants = material['policy']['grants']
+    if merge and not any(g.get('operation') == 'merge-publication' for g in reviewed_grants):
+        raise ValueError('Pinned migrator image does not support the merge capability')
     pending, passwords = [], {}
     for role in ROLES:
         name = 'ai-sdlc-identity-' + role
@@ -221,15 +225,15 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
                 raise ValueError('Existing authority policy and component identity differ; restore or rotate through reviewed configuration')
         material['policy'] = policy
     if freeze is not None:
-        if type(freeze) is not bool or material['policy'].get('autonomy') not in ('shadow', 'auto-pr'):
+        if type(freeze) is not bool or material['policy'].get('autonomy') not in ('shadow', 'auto-pr', 'auto-merge-low'):
             raise ValueError('Unsupported installation authority ceiling')
         material['policy']['freeze'] = freeze
-        material['policy']['autonomy'] = 'auto-pr' if candidate else 'shadow'
+        material['policy']['autonomy'] = 'auto-merge-low' if merge else ('auto-pr' if candidate else 'shadow')
         # Candidate mode grants only issue ingress and isolated execution.
         # Candidate authority is restricted to intake, planning and execution.
         if candidate:
             material['policy']['grants'] = [g for g in reviewed_grants
-                if g['operation'] in ('admit-issue', 'plan-admission', 'execute-work') or (verification and g['operation'] == 'verify-artifact') or (publication and g['operation'] == 'publish-candidate')]
+                if g['operation'] in ('admit-issue', 'plan-admission', 'execute-work') or (verification and g['operation'] == 'verify-artifact') or (publication and g['operation'] == 'publish-candidate') or (merge and g['operation'] == 'merge-publication')]
     current_passwords = owned_secret(kubectl, 'ai-sdlc-database-roles', cluster_uid)
     if current_passwords is not None:
         if set(current_passwords) != {'passwords.json'} or json.loads(current_passwords['passwords.json']) != passwords:
@@ -301,6 +305,7 @@ def main(argv=None):
     parser.add_argument('--repository')
     parser.add_argument('--environment')
     parser.add_argument('--profile', choices=['maintenance', 'shadow', 'candidate', 'verification'])
+    parser.add_argument('--merge', action='store_true', default=None, help='Enable low-risk Homedir merge after authenticated required checks')
     parser.add_argument('--publication', action='store_true', default=None, help='Enable signed verified Homedir PR publication; requires independent review')
     parser.add_argument('--independent-review', action='store_true', default=None, help='Enable isolated read-only review after behavior verification')
     parser.add_argument('--github-auth', choices=['none', 'gh-cli'], default='none')
@@ -314,6 +319,12 @@ def main(argv=None):
     for key, value in defaults.items():
         if getattr(args, key) is None:
             setattr(args, key, value)
+    if args.merge and not args.publication:
+        raise ValueError('Merge requires explicit verified publication')
+    if args.merge is not None and args.command not in ('plan', 'local', 'status', 'credentials', 'sandbox'):
+        raise ValueError('Merge option requires an installation scope')
+    if args.merge and args.command == 'local' and args.github_auth != 'gh-cli':
+        raise ValueError('Merge installation requires gh-cli authentication for native protection')
     if args.publication and (args.repository != 'os-santiago/homedir' or not args.independent_review or (args.command in ('plan', 'local') and args.profile != 'verification')):
         raise ValueError('Publication requires Homedir, verification and independent review')
     if args.publication is not None and args.command not in ('plan', 'local', 'status', 'credentials', 'sandbox'):
@@ -359,7 +370,7 @@ def main(argv=None):
     execution_values = None
     if args.profile in ('candidate', 'verification'):
         import candidate_install
-        execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images), verification=args.profile == "verification", review=bool(args.independent_review), publication=bool(args.publication))
+        execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images), verification=args.profile == "verification", review=bool(args.independent_review), publication=bool(args.publication), merge=bool(args.merge))
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as preview:
         preview_values = dict(execution_values or {})
         if args.publication:
@@ -372,6 +383,7 @@ def main(argv=None):
                           'images': image_lock(args.images), 'deliveryEnabled': False,
                           'independentReviewEnabled': bool(args.independent_review),
                           'publicationEnabled': bool(args.publication),
+                          'mergeEnabled': bool(args.merge),
                           'githubAuth': args.github_auth, 'repository': args.repository,
                           'environment': args.environment, 'configurationDigest': config_digest}, indent=2))
         return 0
@@ -460,9 +472,12 @@ def main(argv=None):
             'stringData': {'password': password,
                            'uri': 'postgresql://ai_sdlc:' + password + '@ai-sdlc-postgres:5432/ai_sdlc?sslmode=disable'}}
         run(kubectl + ['create', '-f', '-'], input=json.dumps(secret), stdout=subprocess.DEVNULL)
+    if args.merge:
+        import github_merge_policy
+        github_merge_policy.verify()
     public_values = configure_identities(kubectl, provider, image_lock(args.images),
                                          cluster_uid, args.repository, args.environment,
-                                         freeze=args.profile == 'maintenance', candidate=args.profile in ('candidate', 'verification'), verification=args.profile == 'verification', publication=bool(args.publication))
+                                         freeze=args.profile == 'maintenance', candidate=args.profile in ('candidate', 'verification'), verification=args.profile == 'verification', publication=bool(args.publication), merge=bool(args.merge))
     if intake_values is not None:
         public_values['intake'] = intake_values
     if args.profile in ('candidate', 'verification'):
@@ -506,6 +521,7 @@ def main(argv=None):
               'independentVerificationEnabled': args.profile == 'verification',
               'independentReviewEnabled': bool(args.independent_review),
                           'publicationEnabled': bool(args.publication),
+                          'mergeEnabled': bool(args.merge),
               'networkPolicyVerification': network,
               'images': image_lock(args.images)}
     (state / 'installation.json').write_text(json.dumps(report, indent=2) + '\n')

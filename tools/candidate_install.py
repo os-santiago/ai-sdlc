@@ -7,7 +7,9 @@ import re
 import secrets
 
 
-def desired_values(root, image_lock_path, lock, verification=False, review=False, publication=False):
+def desired_values(root, image_lock_path, lock, verification=False, review=False, publication=False, merge=False):
+    if merge and not publication:
+        raise ValueError('Merge requires verified publication')
     if publication and (not review or not verification):
         raise ValueError('Publication requires verification and independent review')
     if review and not verification:
@@ -55,6 +57,8 @@ def desired_values(root, image_lock_path, lock, verification=False, review=False
         result['review'] = {'enabled': True, 'configJSON': json.dumps(review_config, sort_keys=True)}
     if publication:
         result['publication'] = {'enabled': True}
+    if merge:
+        result['merge'] = {'enabled': True}
     return result
 
 

@@ -7,11 +7,15 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/execution"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/forge"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergeflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergegate"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergewriter"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publication"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/reviewflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"log"
 	"net/http"
 	"os"
@@ -47,16 +51,41 @@ func main() {
 		config, e := reviewflow.LoadPublicInstalled("/etc/ai-sdlc/review/config.json")
 		return publicationflow.ReviewPolicy{Profile: authority.Digest(config.Profile), Configuration: config.Digest()}, e
 	}
-	writer := func() (*publication.Writer, error) {
+	credential := func() (forge.Credential, error) {
 		raw, e := execution.ReadBounded("/etc/ai-sdlc/publication/credential.json", 16384)
 		if e != nil {
-			return nil, publication.ErrPublication
+			return forge.Credential{}, publication.ErrPublication
 		}
 		var credential forge.Credential
 		if authority.DecodeStrict(raw, &credential) != nil {
-			return nil, publication.ErrPublication
+			return forge.Credential{}, publication.ErrPublication
 		}
-		return publication.NewWriter(credential)
+		return credential, nil
+	}
+	writer := func() (*publication.Writer, error) {
+		value, e := credential()
+		if e != nil {
+			return nil, e
+		}
+		return publication.NewWriter(value)
+	}
+	mergeRuntime := func() (mergeflow.Runtime, error) {
+		value, e := credential()
+		if e != nil {
+			return mergeflow.Runtime{}, e
+		}
+		gates, e := mergegate.New(value)
+		if e != nil {
+			return mergeflow.Runtime{}, e
+		}
+		writer, e := mergewriter.New(value)
+		if e != nil {
+			return mergeflow.Runtime{}, e
+		}
+		return mergeflow.Runtime{DB: c.DB, Policy: policy, Review: review,
+			Identity:   func() (authority.Identity, error) { _, key, e := c.Authority(); return key, e },
+			GatePolicy: func() (mergegate.Policy, error) { return mergegate.PilotPolicy(), nil },
+			Gates:      gates, Writer: writer}, nil
 	}
 	ready := func(ctx context.Context) error {
 		if e := c.Ready(ctx); e != nil {
@@ -70,6 +99,16 @@ func main() {
 		}
 		if _, e := writer(); e != nil {
 			return e
+		}
+		if bootstrap.MergeEnabled() {
+			if _, e := mergeRuntime(); e != nil {
+				return e
+			}
+			journal := store.NewMergeJournal(c.DB, func() (authority.Policy, error) { p, _, e := c.Authority(); return p, e })
+			blocked, e := journal.MergeBlocked(ctx)
+			if e != nil || blocked {
+				return mergeflow.ErrMerge
+			}
 		}
 		blocked, e := c.DB.PublicationBlocked(ctx)
 		if e != nil || blocked {
@@ -92,6 +131,22 @@ func main() {
 		}
 	})
 	defer stop()
+	if bootstrap.MergeEnabled() {
+		stopMerge := bootstrap.Periodic(time.Minute, func(ctx context.Context) {
+			r, e := mergeRuntime()
+			if e != nil {
+				log.Print("merge credential unavailable")
+				return
+			}
+			state, e := r.PollOnce(ctx)
+			if e != nil {
+				log.Print("merge reconciliation stopped safely")
+			} else if state != "" {
+				log.Print("merge reconciliation: " + state)
+			}
+		})
+		defer stopMerge()
+	}
 	e = service.RunWithReadiness(metadata, ready, func(mux *http.ServeMux) {
 		inbox := delivery.Inbox{DB: c.DB, Target: "release-manager"}
 		mux.Handle("POST /internal/publish-candidate", inbox.Handler(c.Authority, "publish-candidate", "/internal/publish-candidate", publicationflow.Effect(func() (authority.Policy, error) { p, _, e := c.Authority(); return p, e })))

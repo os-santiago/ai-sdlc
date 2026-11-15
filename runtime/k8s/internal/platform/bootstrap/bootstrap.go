@@ -35,7 +35,22 @@ func ValidateMode() error {
 	if option == "true" && (mode != "verification" || os.Getenv("AI_SDLC_INDEPENDENT_REVIEW") != "true") {
 		return errors.New("publication requires verification and independent review")
 	}
+	merge := os.Getenv("AI_SDLC_MERGE")
+	if merge != "" && merge != "false" && merge != "true" {
+		return errors.New("invalid merge option")
+	}
+	if merge == "true" && option != "true" {
+		return errors.New("merge requires verified publication")
+	}
 	return nil
+}
+
+func MergeEnabled() bool { return ValidateMode() == nil && os.Getenv("AI_SDLC_MERGE") == "true" }
+func CandidateAutonomy(p authority.Policy) bool {
+	if MergeEnabled() {
+		return p.Repository == "os-santiago/homedir" && p.Autonomy == "auto-merge-low"
+	}
+	return p.Autonomy == "auto-pr"
 }
 
 // PublicationEnabled is a trusted capability ceiling, not a route or grant.
@@ -98,11 +113,11 @@ func (c *Component) Authority() (authority.Policy, authority.Identity, error) {
 		return authority.Policy{}, authority.Identity{}, errors.New("shadow mode requires shadow authority ceiling")
 	}
 	if CandidateEnabled() {
-		if p.Autonomy != "auto-pr" {
-			return authority.Policy{}, authority.Identity{}, errors.New("candidate mode requires auto-pr ceiling")
+		if !CandidateAutonomy(p) {
+			return authority.Policy{}, authority.Identity{}, errors.New("candidate authority ceiling does not match installed capabilities")
 		}
 		for _, grant := range p.Grants {
-			if grant.Operation != "admit-issue" && grant.Operation != "plan-admission" && grant.Operation != "execute-work" && !(os.Getenv("AI_SDLC_RUNTIME_MODE") == "verification" && grant.Operation == "verify-artifact") && !(PublicationEnabled() && grant.Operation == "publish-candidate") {
+			if grant.Operation != "admit-issue" && grant.Operation != "plan-admission" && grant.Operation != "execute-work" && !(os.Getenv("AI_SDLC_RUNTIME_MODE") == "verification" && grant.Operation == "verify-artifact") && !(PublicationEnabled() && grant.Operation == "publish-candidate") && !(MergeEnabled() && grant.Operation == "merge-publication") {
 				return authority.Policy{}, authority.Identity{}, errors.New("candidate mode denies downstream authority")
 			}
 		}

@@ -2,6 +2,7 @@ package mergegate
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"regexp"
 	"sort"
@@ -28,8 +29,15 @@ type Policy struct {
 	Required  []RequiredCheck
 }
 
+//go:embed homedir-policy.json
+var pilotManifest []byte
+
 func PilotPolicy() Policy {
-	return Policy{9071701, []RequiredCheck{{"Quality Summary", 15368}, {"CI Summary", 15368}, {"Quality Gate Summary", 15368}}}
+	var p Policy
+	if json.Unmarshal(pilotManifest, &p) != nil {
+		return Policy{}
+	}
+	return p
 }
 
 type Observation struct {

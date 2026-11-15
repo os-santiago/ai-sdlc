@@ -60,6 +60,10 @@
     "publication": {
       "type": "boolean",
       "description": "Explicit signed verified PR publication; requires Homedir verification and independent review."
+    },
+    "merge": {
+      "type": "boolean",
+      "description": "Explicit low-risk authenticated merge; requires verified publication and native strict protection."
     }
   },
   "allOf": [
@@ -101,6 +105,28 @@
           },
           "repository": {
             "const": "os-santiago/homedir"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "merge"
+        ],
+        "properties": {
+          "merge": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "publication"
+        ],
+        "properties": {
+          "publication": {
+            "const": true
           }
         }
       }

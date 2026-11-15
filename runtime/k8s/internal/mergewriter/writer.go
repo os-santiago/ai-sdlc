@@ -1,5 +1,5 @@
-// Package mergewriter is an inactive, single-send GitHub merge transport.
-// It has no external input or installed controller. Its trusted fence must
+// Package mergewriter is a single-send GitHub merge transport.
+// It accepts only its owning controller. Its trusted fence must
 // commit effect intent and revalidate current authority before any send.
 package mergewriter
 

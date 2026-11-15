@@ -133,3 +133,46 @@ func TestMergeControllerActualJournalAndSyntheticForge(t *testing.T) {
 		})
 	}
 }
+
+func TestInstalledMergePrivilegesAndAuthoritySelection(t *testing.T) {
+	f := execution.NewPublishedMergeTestFixture(t)
+	ctx := context.Background()
+	if id, e := f.DB.NextMergePublication(ctx, f.Policy.Revision()); e != nil || id != f.PublicationID {
+		t.Fatal("installed selection", id, e)
+	}
+	changed := f.Policy
+	changed.Freeze = true
+	if id, e := f.DB.NextMergePublication(ctx, changed.Revision()); e != nil || id != "" {
+		t.Fatal("old policy publication remained selectable", id, e)
+	}
+	for _, query := range []string{
+		`UPDATE merge_requests SET payload='changed' WHERE false`,
+		`UPDATE merge_requests SET expires_at=clock_timestamp() WHERE false`,
+		`UPDATE merge_effects SET request_digest='changed' WHERE false`,
+		`UPDATE merged_records SET proof='changed' WHERE false`,
+		`DELETE FROM merged_records WHERE false`,
+		`INSERT INTO merged_records(merged_at) SELECT clock_timestamp() WHERE false`,
+	} {
+		if _, e := f.DB.Pool.Exec(query); e == nil {
+			t.Fatal("forbidden merge mutation", query)
+		}
+	}
+	passwords := map[string]string{}
+	for _, role := range []string{"intake", "admission-controller", "orchestrator", "worker", "verifier", "release-manager", "relay", "deployer"} {
+		passwords[role] = strings.ReplaceAll(role, "-", "_") + strings.Repeat("q", 40)
+	}
+	if e := f.Admin.ProvisionRolesForCapabilities(ctx, passwords, "verification", true, true); e != nil {
+		t.Fatal(e)
+	}
+	for _, query := range []string{`SELECT * FROM merge_requests`, `UPDATE merge_requests SET state='failed' WHERE false`, `INSERT INTO merge_effects(request_id,token,request_digest) SELECT 'a','b','c' WHERE false`} {
+		if _, e := f.DB.Pool.Exec(query); e == nil {
+			t.Fatal("merge permission survived disable", query)
+		}
+	}
+	if e := f.Admin.ProvisionRolesForMerge(ctx, passwords, "verification", true, true, true); e != nil {
+		t.Fatal(e)
+	}
+	if id, e := f.DB.NextMergePublication(ctx, f.Policy.Revision()); e != nil || id != f.PublicationID {
+		t.Fatal("fact lost during reactivation", e)
+	}
+}
