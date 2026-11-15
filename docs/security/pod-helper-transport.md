@@ -140,3 +140,7 @@ and Pod replacement rejection. It does not use PostgreSQL or a real model;
 its report explicitly records zero durable model handoffs. Installer CI runs
 both transport fixtures and retains their reports. No operational controller,
 execution grants, issue transition, pull request or deployment is enabled.
+
+[Fixed workload resource operations](fixed-workload-resources.md) provide the
+next internal boundary for verified creation, same-UID readiness and
+UID-preconditioned cleanup. They still require a trusted lifecycle controller.

@@ -1,10 +1,10 @@
 name: installer
 on:
   pull_request:
-    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/offline*', 'tools/verify_model_mailbox.py', 'tools/verify_workspace_bundle.py', 'tools/verify_executor.py', 'tools/verify_pod_transport.py', 'tools/verify_workspace_transport.py', 'tools/verify_generative_pilot.py', 'tools/test_generative_pilot.py', 'runtime/k8s/internal/podtransport/**', 'runtime/k8s/internal/modelbroker/**', 'runtime/k8s/internal/store/**', 'tools/fixture_images.py', 'runtime/k8s/internal/executor/**', 'runtime/k8s/internal/engine/**', 'runtime/k8s/components/worker/**', 'runtime/k8s/internal/workspacebundle/**', 'runtime/k8s/internal/modelmailbox/**', 'runtime/k8s/components/model-mailbox/**', 'runtime/k8s/go.mod', 'runtime/k8s/go.sum', 'tools/test_offline_probe.js', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
+    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/offline*', 'tools/verify_model_mailbox.py', 'tools/verify_workspace_bundle.py', 'tools/verify_executor.py', 'tools/verify_pod_transport.py', 'tools/verify_workspace_transport.py', 'tools/verify_workload_resources.py', 'tools/verify_generative_pilot.py', 'tools/test_generative_pilot.py', 'runtime/k8s/internal/podtransport/**', 'runtime/k8s/internal/modelbroker/**', 'runtime/k8s/internal/store/**', 'tools/fixture_images.py', 'runtime/k8s/internal/executor/**', 'runtime/k8s/internal/engine/**', 'runtime/k8s/components/worker/**', 'runtime/k8s/internal/workspacebundle/**', 'runtime/k8s/internal/modelmailbox/**', 'runtime/k8s/components/model-mailbox/**', 'runtime/k8s/go.mod', 'runtime/k8s/go.sum', 'tools/test_offline_probe.js', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
   push:
     branches: [main]
-    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/offline*', 'tools/verify_model_mailbox.py', 'tools/verify_workspace_bundle.py', 'tools/verify_executor.py', 'tools/verify_pod_transport.py', 'tools/verify_workspace_transport.py', 'tools/verify_generative_pilot.py', 'tools/test_generative_pilot.py', 'runtime/k8s/internal/podtransport/**', 'runtime/k8s/internal/modelbroker/**', 'runtime/k8s/internal/store/**', 'tools/fixture_images.py', 'runtime/k8s/internal/executor/**', 'runtime/k8s/internal/engine/**', 'runtime/k8s/components/worker/**', 'runtime/k8s/internal/workspacebundle/**', 'runtime/k8s/internal/modelmailbox/**', 'runtime/k8s/components/model-mailbox/**', 'runtime/k8s/go.mod', 'runtime/k8s/go.sum', 'tools/test_offline_probe.js', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
+    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/offline*', 'tools/verify_model_mailbox.py', 'tools/verify_workspace_bundle.py', 'tools/verify_executor.py', 'tools/verify_pod_transport.py', 'tools/verify_workspace_transport.py', 'tools/verify_workload_resources.py', 'tools/verify_generative_pilot.py', 'tools/test_generative_pilot.py', 'runtime/k8s/internal/podtransport/**', 'runtime/k8s/internal/modelbroker/**', 'runtime/k8s/internal/store/**', 'tools/fixture_images.py', 'runtime/k8s/internal/executor/**', 'runtime/k8s/internal/engine/**', 'runtime/k8s/components/worker/**', 'runtime/k8s/internal/workspacebundle/**', 'runtime/k8s/internal/modelmailbox/**', 'runtime/k8s/components/model-mailbox/**', 'runtime/k8s/go.mod', 'runtime/k8s/go.sum', 'tools/test_offline_probe.js', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
 permissions:
   contents: read
 jobs:
@@ -132,14 +132,15 @@ jobs:
           tools = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'install-tools.json').read_text())
           worker = register_digest('docker', 'ai-sdlc-control-plane', 'localhost/ai-sdlc-worker:conformance')
           mailbox = register_digest('docker', 'ai-sdlc-control-plane', 'localhost/ai-sdlc-model-mailbox:conformance')
-          for fixture in ('pod_transport', 'workspace_transport'):
-              result = subprocess.run([sys.executable, f'tools/verify_{fixture}.py', '--kubectl', tools['kubectl'],
-                                      '--kubeconfig', str(pathlib.Path.home() / '.local/state/ai-sdlc/ai-sdlc/kubeconfig'),
-                                      '--provider', 'docker', '--render-image', 'localhost/ai-sdlc-model-mailbox:conformance',
-                                      '--worker-image', worker, '--mailbox-image', mailbox,
-                                      '--test-binary', str(pathlib.Path(os.environ['RUNNER_TEMP'], 'pod-transport.test')),
-                                      '--source-repository', str(pathlib.Path(os.environ['RUNNER_TEMP'], 'homedir-source')),
-                                      '--source-sha', '0622cdaeb59a11a27bd5f3d7e18183c401a5e412'],
+          arguments = ['--kubectl', tools['kubectl'],
+                       '--kubeconfig', str(pathlib.Path.home() / '.local/state/ai-sdlc/ai-sdlc/kubeconfig'),
+                       '--worker-image', worker, '--mailbox-image', mailbox,
+                       '--test-binary', str(pathlib.Path(os.environ['RUNNER_TEMP'], 'pod-transport.test')),
+                       '--source-repository', str(pathlib.Path(os.environ['RUNNER_TEMP'], 'homedir-source')),
+                       '--source-sha', '0622cdaeb59a11a27bd5f3d7e18183c401a5e412']
+          for fixture in ('pod_transport', 'workspace_transport', 'workload_resources'):
+              extra = [] if fixture == 'workload_resources' else ['--provider', 'docker', '--render-image', 'localhost/ai-sdlc-model-mailbox:conformance']
+              result = subprocess.run([sys.executable, f'tools/verify_{fixture}.py'] + arguments + extra,
                                       check=True, capture_output=True, text=True, timeout=180)
               print(result.stdout, end='')
               pathlib.Path(os.environ['RUNNER_TEMP'], f'{fixture}-report.json').write_text(result.stdout)
@@ -147,5 +148,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: pod-transport-conformance
-          path: ${{ runner.temp }}/*_transport-report.json
+          path: |
+            ${{ runner.temp }}/*_transport-report.json
+            ${{ runner.temp }}/workload_resources-report.json
           retention-days: 14

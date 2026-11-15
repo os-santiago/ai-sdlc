@@ -1,0 +1,316 @@
+package podtransport
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"reflect"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
+	core "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
+	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+)
+
+var resourceUID = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
+
+// Resources is a fixed compiled workload, not execution authority. A trusted
+// lifecycle controller must persist intent before each mutating operation.
+// There is no arbitrary manifest, resource kind, namespace or retry option.
+type Resources struct {
+	client  *Client
+	binding Binding
+	config  core.ConfigMap
+	pod     core.Pod
+	expires time.Time
+}
+
+func PlanResources(client *Client, b Binding) (*Resources, error) {
+	if client == nil || client.http == nil || client.config == nil || b.PodUID != "" || len(b.Assignment) == 0 || len(b.Assignment) > executor.MaxAssignmentBytes || len(b.Profile) == 0 || len(b.Profile) > executor.MaxProfileBytes || len(b.ADev) == 0 || len(b.ADev) > 64*1024 {
+		return nil, ErrTransport
+	}
+	b.Assignment = append([]byte(nil), b.Assignment...)
+	b.Profile = append([]byte(nil), b.Profile...)
+	b.ADev = append([]byte(nil), b.ADev...)
+	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.Assignment, b.Profile, b.ADev, time.Now())
+	if err != nil {
+		return nil, ErrTransport
+	}
+	a, err := executor.ParseAssignment(b.Assignment, modelmailbox.Digest(b.Assignment), time.Now())
+	if err != nil {
+		return nil, ErrTransport
+	}
+	r := &Resources{client: client, binding: b, expires: time.UnixMilli(a.ExpiresAt)}
+	config, _ := json.Marshal(w.ConfigMap)
+	pod, _ := json.Marshal(w.Pod)
+	if authority.DecodeStrict(config, &r.config) != nil || authority.DecodeStrict(pod, &r.pod) != nil {
+		return nil, ErrTransport
+	}
+	return r, nil
+}
+func (r *Resources) url(kind, name string) string {
+	path := r.client.base + "/api/v1/namespaces/" + r.binding.Namespace + "/" + kind
+	if name != "" {
+		path += "/" + name
+	}
+	return path
+}
+func (r *Resources) request(ctx context.Context, method, kind, name string, input []byte, cleanup bool) ([]byte, int, error) {
+	if r == nil || len(input) > maxPodBytes || (!cleanup && !time.Now().Before(r.expires)) {
+		return nil, 0, ErrTransport
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	if !cleanup {
+		deadline = minDeadline(deadline, r.expires)
+	}
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, r.url(kind, name), bytes.NewReader(input))
+	if err != nil {
+		return nil, 0, ErrTransport
+	}
+	req.Header.Set("Accept", "application/json")
+	if len(input) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if r.client.config.BearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+r.client.config.BearerToken)
+	}
+	response, err := r.client.http.Do(req)
+	if err != nil {
+		return nil, 0, ErrTransport
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxPodBytes+1))
+	if err != nil || len(raw) > maxPodBytes || ctx.Err() != nil || (!cleanup && !time.Now().Before(r.expires)) {
+		return nil, 0, ErrTransport
+	}
+	if response.StatusCode == http.StatusForbidden {
+		return nil, response.StatusCode, ErrPermission
+	}
+	return raw, response.StatusCode, nil
+}
+func exactMetadata(actual, expected meta.ObjectMeta, uid string) bool {
+	return resourceUID.MatchString(string(actual.UID)) && (uid == "" || string(actual.UID) == uid) && actual.Name == expected.Name && actual.Namespace == expected.Namespace && actual.GenerateName == "" && actual.DeletionTimestamp == nil && actual.DeletionGracePeriodSeconds == nil && len(actual.OwnerReferences) == 0 && len(actual.Finalizers) == 0 && reflect.DeepEqual(actual.Labels, expected.Labels) && reflect.DeepEqual(actual.Annotations, expected.Annotations)
+}
+func (r *Resources) checkConfig(raw []byte, uid string) (string, error) {
+	var actual core.ConfigMap
+	if authority.DecodeStrict(raw, &actual) != nil || actual.APIVersion != "v1" || actual.Kind != "ConfigMap" || !exactMetadata(actual.ObjectMeta, r.config.ObjectMeta, uid) || actual.Immutable == nil || !*actual.Immutable || !reflect.DeepEqual(actual.Data, r.config.Data) || len(actual.BinaryData) != 0 {
+		return "", ErrTransport
+	}
+	return string(actual.UID), nil
+}
+func exactPodTemplate(actual, expected core.Pod, uid string) bool {
+	if actual.APIVersion != "v1" || actual.Kind != "Pod" || !exactMetadata(actual.ObjectMeta, expected.ObjectMeta, uid) {
+		return false
+	}
+	expected = *expected.DeepCopy()
+	applyDefaults(&expected.Spec)
+	actual = *actual.DeepCopy()
+	actual.Spec.NodeName = ""
+	return equality.Semantic.DeepEqual(actual.Spec, expected.Spec)
+}
+func (r *Resources) getConfig(ctx context.Context, uid string) error {
+	raw, status, err := r.request(ctx, http.MethodGet, "configmaps", r.config.Name, nil, false)
+	if err != nil {
+		return err
+	}
+	if status != 200 {
+		return ErrTransport
+	}
+	_, err = r.checkConfig(raw, uid)
+	return err
+}
+func (r *Resources) CreateConfig(ctx context.Context) (string, error) {
+	if r == nil {
+		return "", ErrTransport
+	}
+	raw, _ := json.Marshal(r.config)
+	response, status, err := r.request(ctx, http.MethodPost, "configmaps", "", raw, false)
+	if err != nil {
+		return "", err
+	}
+	if status != 201 {
+		return "", ErrTransport
+	}
+	return r.checkConfig(response, "")
+}
+func (r *Resources) CreatePod(ctx context.Context, configUID string) (string, error) {
+	if r == nil || !resourceUID.MatchString(configUID) {
+		return "", ErrTransport
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if err := r.getConfig(ctx, configUID); err != nil {
+		return "", err
+	}
+	raw, _ := json.Marshal(r.pod)
+	response, status, err := r.request(ctx, http.MethodPost, "pods", "", raw, false)
+	if err != nil {
+		return "", err
+	}
+	if status != 201 {
+		return "", ErrTransport
+	}
+	var pod core.Pod
+	if authority.DecodeStrict(response, &pod) != nil || !exactPodTemplate(pod, r.pod, "") || (pod.Status.Phase != core.PodPending && pod.Status.Phase != core.PodRunning) {
+		return "", ErrTransport
+	}
+	if err = r.getConfig(ctx, configUID); err != nil {
+		return "", err
+	}
+	return string(pod.UID), nil
+}
+
+// WaitRunning polls only the compiled Pod name and exact returned UID. Pending
+// scheduling is bounded; mutations, replacement and terminal states fail.
+func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, error) {
+	if r == nil || !resourceUID.MatchString(uid) {
+		return nil, ErrTransport
+	}
+	ctx, cancel := context.WithDeadline(ctx, minDeadline(time.Now().Add(30*time.Second), r.expires))
+	defer cancel()
+	for {
+		raw, status, err := r.request(ctx, http.MethodGet, "pods", r.pod.Name, nil, false)
+		if err != nil {
+			return nil, err
+		}
+		if status != 200 {
+			return nil, ErrTransport
+		}
+		var pod core.Pod
+		if authority.DecodeStrict(raw, &pod) != nil || !exactPodTemplate(pod, r.pod, uid) {
+			return nil, ErrTransport
+		}
+		if pod.Status.Phase != core.PodPending && pod.Status.Phase != core.PodRunning {
+			return nil, ErrTransport
+		}
+		ready, err := r.containersReady(pod)
+		if err != nil {
+			return nil, err
+		}
+		if ready && pod.Status.Phase == core.PodRunning {
+			b := r.binding
+			b.PodUID = uid
+			return Bind(ctx, r.client, b)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ErrTransport
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+// Only initial ContainerCreating/PodInitializing states may be polled. This
+// is not a generic retry of failed binding, restarts or unknown transport errors.
+func (r *Resources) containersReady(pod core.Pod) (bool, error) {
+	if len(pod.Status.ContainerStatuses) > 2 || len(pod.Status.InitContainerStatuses) != 0 || len(pod.Status.EphemeralContainerStatuses) != 0 {
+		return false, ErrTransport
+	}
+	images := map[string]string{}
+	for _, container := range r.pod.Spec.Containers {
+		images[container.Name] = container.Image
+	}
+	seen := map[string]bool{}
+	running := 0
+	for _, status := range pod.Status.ContainerStatuses {
+		pin, known := images[status.Name]
+		if !known || seen[status.Name] || status.RestartCount != 0 || status.State.Terminated != nil || status.LastTerminationState.Terminated != nil || status.LastTerminationState.Running != nil || status.LastTerminationState.Waiting != nil {
+			return false, ErrTransport
+		}
+		seen[status.Name] = true
+		if len(status.Image) > 1024 || len(status.ImageID) > 1024 {
+			return false, ErrTransport
+		}
+		if status.ImageID != "" && (!imageIDPattern.MatchString(status.ImageID) || status.ImageID[strings.LastIndex(status.ImageID, "@")+1:] != pin[strings.LastIndex(pin, "@")+1:]) {
+			return false, ErrTransport
+		}
+		if status.State.Running != nil && status.State.Waiting == nil {
+			if !containerIDPattern.MatchString(status.ContainerID) || status.ImageID == "" || status.Image == "" {
+				return false, ErrTransport
+			}
+			running++
+			continue
+		}
+		if status.State.Running != nil || status.State.Waiting == nil || status.ContainerID != "" || (status.State.Waiting.Reason != "ContainerCreating" && status.State.Waiting.Reason != "PodInitializing") {
+			return false, ErrTransport
+		}
+	}
+	return running == 2, nil
+}
+
+func (r *Resources) DeletePod(ctx context.Context, uid string) error {
+	if r == nil {
+		return ErrTransport
+	}
+	return r.remove(ctx, "pods", r.pod.Name, uid)
+}
+func (r *Resources) DeleteConfig(ctx context.Context, uid string) error {
+	if r == nil {
+		return ErrTransport
+	}
+	return r.remove(ctx, "configmaps", r.config.Name, uid)
+}
+
+// Cleanup is allowed after assignment expiry, but only for an explicit original
+// UID. A successful DELETE response alone does not prove removal.
+func (r *Resources) remove(ctx context.Context, kind, name, uid string) error {
+	if !resourceUID.MatchString(uid) {
+		return ErrTransport
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	id := types.UID(uid)
+	grace := int64(1)
+	propagation := meta.DeletePropagationBackground
+	options := meta.DeleteOptions{TypeMeta: meta.TypeMeta{APIVersion: "v1", Kind: "DeleteOptions"}, Preconditions: &meta.Preconditions{UID: &id}, GracePeriodSeconds: &grace, PropagationPolicy: &propagation}
+	input, _ := json.Marshal(options)
+	_, status, err := r.request(ctx, http.MethodDelete, kind, name, input, true)
+	if err != nil {
+		return err
+	}
+	if status == 404 {
+		return nil
+	}
+	if status != 200 && status != 202 {
+		return ErrTransport
+	}
+	for {
+		raw, status, err := r.request(ctx, http.MethodGet, kind, name, nil, true)
+		if err != nil {
+			return err
+		}
+		if status == 404 {
+			return nil
+		}
+		if status != 200 {
+			return ErrTransport
+		}
+		var object struct {
+			meta.TypeMeta `json:",inline"`
+			Metadata      meta.ObjectMeta `json:"metadata"`
+			Spec          json.RawMessage `json:"spec,omitempty"`
+			Status        json.RawMessage `json:"status,omitempty"`
+			Data          json.RawMessage `json:"data,omitempty"`
+			BinaryData    json.RawMessage `json:"binaryData,omitempty"`
+			Immutable     *bool           `json:"immutable,omitempty"`
+		}
+		if authority.DecodeStrict(raw, &object) != nil || string(object.Metadata.UID) != uid || object.Metadata.Name != name || object.Metadata.Namespace != r.binding.Namespace {
+			return ErrTransport
+		}
+		select {
+		case <-ctx.Done():
+			return ErrTransport
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
