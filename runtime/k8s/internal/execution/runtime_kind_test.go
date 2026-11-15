@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -111,7 +112,7 @@ func TestRealCandidateRuntimeFixture(t *testing.T) {
 	write(filepath.Join(root, "token"), []byte(in.Config.BearerToken))
 	write(filepath.Join(root, "ca"), in.Config.CA)
 	write(filepath.Join(root, "model"), []byte(strings.Repeat("x", 48)))
-	var calls atomic.Int32
+	var calls, readFailures, responseFailures atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+strings.Repeat("x", 48) {
 			w.WriteHeader(401)
@@ -119,6 +120,15 @@ func TestRealCandidateRuntimeFixture(t *testing.T) {
 		}
 		if r.Method == "GET" && r.URL.Path == "/readyz" {
 			w.Write([]byte(`{"ready":true}`))
+			return
+		}
+		// Consume the bounded request before responding, like the real adapter.
+		// Replying on a Connection: close socket with unread request bytes can
+		// reset the transport while the caller is still writing its prompt.
+		request, readError := io.ReadAll(io.LimitReader(r.Body, 131073))
+		if readError != nil || len(request) > 131072 || !json.Valid(request) {
+			readFailures.Add(1)
+			w.WriteHeader(400)
 			return
 		}
 		n := calls.Add(1)
@@ -146,7 +156,9 @@ func TestRealCandidateRuntimeFixture(t *testing.T) {
 			reason = "tool_calls"
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"id": "runtime-fixture", "object": "chat.completion", "model": "codex-cli", "choices": []any{map[string]any{"index": 0, "finish_reason": reason, "message": message}}})
+		if json.NewEncoder(w).Encode(map[string]any{"id": "runtime-fixture", "object": "chat.completion", "model": "codex-cli", "choices": []any{map[string]any{"index": 0, "finish_reason": reason, "message": message}}}) != nil {
+			responseFailures.Add(1)
+		}
 	}))
 	defer server.Close()
 	runtime := Runtime{Component: component, ConfigPath: filepath.Join(root, "runtime"), IntakePath: filepath.Join(root, "intake"), TokenPath: filepath.Join(root, "token"), CAPath: filepath.Join(root, "ca"), GatewayTokenPath: filepath.Join(root, "model"), APIServer: in.Config.APIServer, ProviderEndpoint: server.URL + "/v1/chat/completions"}
@@ -164,7 +176,7 @@ func TestRealCandidateRuntimeFixture(t *testing.T) {
 
 	state, err := runtime.PollOnce(ctx)
 	if err != nil || state != "candidate-captured" {
-		t.Fatal("runtime reconciliation", state, err)
+		t.Fatal("runtime reconciliation", state, err, "modelCalls", calls.Load(), "requestReadFailures", readFailures.Load(), "responseWriteFailures", responseFailures.Load())
 	}
 	if in.Scenario == "verification" {
 		if state, e := runtime.PollOnce(ctx); e != nil || state != "verification-dispatched" {
