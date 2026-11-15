@@ -11,6 +11,15 @@ imagePullSecrets: []
 serviceAccount: {create: true, name: ""}
 runtime:
   mode: maintenance
+authority:
+  policyConfigMap: ai-sdlc-authority
+  policyJSON: ""
+  installationUID: ""
+  identitySecretPrefix: ai-sdlc-identity
+  databaseSecretPrefix: ai-sdlc-database
+migrator:
+  digest: ""
+  credentialsSecret: ai-sdlc-database-roles
 logLevel: info
 contract:
   inline: |

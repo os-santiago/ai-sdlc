@@ -8,6 +8,16 @@ or Podman installation. Allow at least 4 CPUs, 6 GiB available RAM and
 15 GiB free disk for kind, PostgreSQL and image downloads. These are initial
 planning allowances, not measured production sizing.
 
+The installer checks Linux inotify limits before creating a cluster. If it
+reports a low limit, run `sudo ./install.sh host --configure-host` once and
+retry the installation as your normal user. This explicit command raises
+limits to the committed minima in
+[`host-prerequisites.json`](../runtime/k8s/deploy/local/host-prerequisites.json),
+following the [kind inotify guidance](https://kind.sigs.k8s.io/docs/user/known-issues/#pod-errors-due-to-too-many-open-files).
+It preserves higher limits, verifies the result, and affects only the current
+boot. Use your host configuration manager for persistence across reboots.
+`./install.sh host` only checks; the installer never invokes sudo itself.
+
 ```bash
 git clone https://github.com/os-santiago/ai-sdlc.git
 cd ai-sdlc
@@ -45,9 +55,10 @@ kubeconfig/context. `XDG_CACHE_HOME` and `XDG_STATE_HOME` are supported.
 | Five Deployments, one container each | Admission, orchestration, worker with SCC, release decisions, relay |
 | Five internal ClusterIP Services | Stable component DNS; no external delivery endpoint |
 | PostgreSQL StatefulSet + PVC | Durable state and outbox, retained when the StatefulSet is removed |
-| ConfigMaps | Runtime settings, shadow contract and pinned ADEV profile |
+| ConfigMaps | Runtime settings, frozen shadow authority policy, contract and pinned ADEV profile |
+| Migration Job | Schema setup and component-role reconciliation, using the bootstrap credential |
 | ServiceAccount, security contexts, NetworkPolicy | Kubernetes workload boundaries |
-| Existing Secret references | Database/model credentials stay out of Git and Helm values |
+| Per-component Secret references | Distinct database passwords and signing identities stay out of Git and Helm values |
 
 The ADEV profile is copied from `scanalesespinoza/adev` revision
 `340f705718001ee45067e6220d64ece31fab30cd`,
@@ -55,13 +66,39 @@ The ADEV profile is copied from `scanalesespinoza/adev` revision
 packaged file and passed to the worker. Future policy updates must be
 reviewed Git changes; issues cannot replace this bundle.
 
-The local database password is randomly generated once and sent to the
+The local bootstrap database password is randomly generated once and sent to the
 Kubernetes API over stdin. Subsequent runs reuse the existing Secret. The
 password never appears in command arguments, Git, rendered chart output or
 Helm values. Preserve the Secret together with PostgreSQL data; backup and
 restore automation remains #442. The Quay publication robot is **not** an
 installation credential: the image repository is public, so local pulls
 need no publisher token.
+
+## Component identities
+
+Chart 0.3 separates the bootstrap database credential from every service.
+A bounded migration Job owns schema and role setup. Each service receives only
+its own database LOGIN and Ed25519 identity, and refuses startup if the mounted
+policy, signing key, database identity or required migration is missing.
+Readiness checks those dependencies again after startup.
+
+The installer generates eight distinct database passwords and eight signing
+identities through the pinned migrator image. Private helper output is captured
+with container logging disabled; Secrets are created over stdin. Only public
+verification keys enter Helm values and the authority ConfigMap. No private
+keys or passwords are written to Git, Helm release values or command arguments.
+
+Reapplication preserves existing credentials and policy. New Secrets carry the
+installer's cluster UID; a conflicting owner, key, scope or credential map
+stops setup before those resources are changed. The default scope is
+`os-santiago/ai-sdlc` and the test environment `ai-sdlc-production`; use
+`--repository` and `--environment` to select another scope on first install.
+These flags do not silently rewrite an existing authority policy.
+
+Keep the component Secrets, the migrator credential map, authority ConfigMap
+and database together when preparing a backup. Losing a signing Secret requires
+restoration or a reviewed key rotation; reinstalling does not manufacture a new
+key under an existing trusted public key.
 
 ## Git-managed desired state
 
@@ -75,6 +112,11 @@ reports intended images without creating a cluster or changing Kubernetes.
 It may populate the verified client-tool cache.
 
 Run `./install.sh local` again to reconcile the committed desired state.
+The installer waits for kind networking and storage before starting application
+setup. Each Helm revision runs a new bounded migration Job. Readiness polling
+allows recovery after an earlier infrastructure outage without rotating keys
+or deleting the database. `--timeout` bounds each wait operation, not the total
+installer duration; an unsuccessful wait still exits nonzero.
 Helm owns workload updates, and a config checksum rolls Deployments when
 their configuration changes. This first version provides **explicit
 reconciliation**, not continuous drift correction. No Flux or Argo CD is
@@ -89,7 +131,7 @@ compatible manifests; database downgrade safety is not implied (#441).
 ## Installation readiness versus autonomous delivery
 
 This release installs **maintenance mode**. Helm readiness means the five
-services and database have started. It does not mean an issue was delivered.
+services have valid component identities and database permissions, and the migration Job completed. It does not mean an issue was delivered.
 HTTP mutation routes return `503 runtime_in_maintenance`; relay delivery and
 generative execution are disabled. The chart rejects `runtime.mode=active`
 until the issue-only intake and component authority work is implemented.
@@ -110,7 +152,7 @@ Do not submit synthetic tasks to internal endpoints to claim E2E success.
 ## Image construction and promotion
 
 GitHub Actions [`containers.yml`](../.github/workflows/containers.yml) builds
-all five component Containerfiles on pull requests, without publishing or
+all six component Containerfiles on pull requests, without publishing or
 receiving Quay secrets. Pushes to `main` and trusted `build/**` branches,
 or manual dispatch on those branches, publish to:
 
@@ -126,8 +168,8 @@ Do not allow untrusted collaborators to push publishing branches or edit
 publication workflows.
 
 Publication does not change deployed state. Promote a verified build by
-updating `local/images.lock.json` in a reviewed PR with the five artifact
-digests, then reapply the installer. The workflow does not ingest issues,
+updating `local/images.lock.json` in a reviewed PR with the five service digests and migrator artifact
+digest, then reapply the installer. The workflow does not ingest issues,
 invoke SCC for work, merge PRs or advance AI-SDLC delivery stages.
 
 ## Validation and troubleshooting
@@ -144,8 +186,8 @@ python3 tools/verify_local_install.py --provider podman
 `test_helm.py` needs the pinned Python packages in
 [`quality-requirements.txt`](../tools/quality-requirements.txt). CI uses Docker
 for its kind installation and repeat-apply check. Both paths exercise the
-same entrypoint and manifests. The verifier compares database Secret identity
-and content, PVC/volume identity and applied migration count before and after
+same entrypoint and manifests. The verifier compares all component and database Secret identities
+and content, authority policy, PVC/volume identity and applied migration count before and after
 reapplication. It also checks the five Deployment digests, readiness and the
 worker's actual UID. It never submits a work item or advances delivery.
 
@@ -157,6 +199,16 @@ from source revision `5fd38f90dc7a55f5e210c5bf729eae2b96ffc24a`, published by
 [Docker/kind CI run 43646250244](https://github.com/os-santiago/ai-sdlc/actions/runs/43646250244)
 also passed fresh installation and repeat application. These are installation
 results in maintenance mode, not autonomous delivery or production evidence.
+
+Observed on 2026-11-15: chart 0.3 with source images `b445938` passed local
+kind/Podman recovery and reapplication, preserving all 18 Secrets, authority,
+PVC and migrations, with five ready services and worker UID 1000. Read-only
+database inspection confirmed eight distinct managed LOGINs without elevated
+role flags. [Docker/kind run 43657544998](https://github.com/os-santiago/ai-sdlc/actions/runs/43657544998)
+passed fresh installation and reapplication. The local test exposed exhausted
+host inotify limits and stale Deployment failure conditions; committed host
+preflight, dependency waits and bounded Helm readiness polling address those
+observed failures. This evidence still concerns maintenance installation only.
 
 The first local trial exposed a non-numeric worker image user rejected by
 Kubernetes; this was corrected before the pinned build above. Database/DNS
@@ -170,7 +222,7 @@ continue retrying pods after the installer exits with failure.
 - **Existing cluster without ownership record:** choose another `--cluster`;
   do not delete someone else's cluster or fabricate ownership metadata.
 - **Image digest missing:** finish a successful publication and commit its
-  five digests. The installer does not fall back to mutable development tags.
+  six digests. The installer does not fall back to mutable development tags.
 - **ImagePullBackOff:** check registry connectivity and whether the committed
   digest exists. Never put the publishing robot token in the image values.
 - **Database startup failure:** inspect PVC/storage and the database Secret;
@@ -183,3 +235,10 @@ Chart 0.2 changes the previous single-pod layout to separate Deployments and
 Services. Existing 0.1 adopters must review a rendered diff and preserve
 database credentials/PVCs; the new installer is tested as a fresh local
 installation, not an automatic migration of existing production clusters.
+
+Chart 0.3 requires its matching image lock, including the migrator digest.
+An upgrade from 0.2 retains the bootstrap database Secret and PVC, creates
+separate service identities and applies the additive signed-delivery migration.
+Do not combine a 0.3 chart with older service images: older binaries do not use
+the new identity/readiness boundary. Migration and role provisioning are
+installation operations; they do not enqueue issues or advance delivery state.

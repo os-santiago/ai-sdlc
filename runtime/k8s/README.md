@@ -7,7 +7,7 @@ Actions runtime is preserved only by the repository deprecation tag.
 
 For installation, start at [the Helm/kind guide](../../docs/installation.md).
 The canonical installer is `./install.sh` at the repository root. Helm chart
-0.2 deploys one container/Deployment per component and uses internal Services.
+0.3 deploys one container/Deployment per component and uses internal Services.
 The original Kustomize topology remains a legacy manual deployment surface;
 it is not the new installer's desired state.
 
@@ -17,26 +17,21 @@ it is not the new installer's desired state.
 |---|---|---|
 | `admission-controller` | Admission | `components/admission-controller/internal/admission` |
 | `orchestrator` | Plan | `components/orchestrator/internal/planning` |
-| `worker` | Bounded edit (engine invocation via `internal/engine`; `StubEngine` by default, `SCCEngine` when `AI_SDLC_ENGINE=scc` — see `internal/engine/scc.go`) | `components/worker/internal/cycle` |
+| `worker` | Bounded implementation coordination; execution disabled during integration | `components/worker/internal/cycle` |
 | `release-manager` | Publish/review, Release | `components/release-manager/internal/gates` |
-| `relay` | — (infrastructure, not a pipeline stage) | `internal/outbox` |
+| `relay` | Signed durable transport; disabled during integration | `internal/delivery` |
+| `migrator` | Installation-only schema and role provisioning | `components/migrator/cmd` |
 
-Each of the first four is a standalone HTTP service
-(`internal/platform/service`): one pure, synchronous `Evaluate(...)`
-function per component, wrapped by a thin HTTP handler. `relay` is the
-5th container: it polls the `outbox` table (`internal/store`,
-`internal/outbox`) and delivers unpublished events/commands to the other
-four over HTTP (Service DNS in Helm 0.2; localhost in the legacy single-pod
-Kustomize deployment), closing the "wiring to a real
-event bus" gap ADR-0004 left open, without a message broker
-(ADR-0005: PostgreSQL + a transactional outbox, matching
-`homedir-ai-sdlc`'s own prior ADR-0002).
+The five service binaries load mounted component identities, connect with
+separate database LOGIN credentials and check migrations before starting.
+The short-lived `migrator` Job alone receives the bootstrap database credential
+and reconciles schema and role grants. Readiness rechecks those dependencies;
+there is no stateless or stub-success fallback for a missing installation.
 
-Set `DATABASE_URL` on any of the first four components to enable
-persistence + outbox emission around their existing `Evaluate` call; leave
-it unset and they behave exactly as ADR-0004 shipped them (stateless,
-dry-run only). `relay` requires `DATABASE_URL` — polling the outbox is its
-only job.
+Only observation endpoints are registered in maintenance. Unsigned delivery
+routes and synchronous engine execution are no longer installed by service
+entry points. Pure evaluators and legacy handlers remain isolated test assets;
+future live routes must use `internal/delivery` and isolated execution Jobs.
 
 ## A-Dev policy bundle
 
@@ -69,66 +64,24 @@ This integration supplies profile context and verifies its integrity; it does
 not implement every A-Dev acceptance or release policy. The isolated HTTP and
 tool-mapping tests are not evidence of a complete autonomous release cycle.
 
-## Local autonomous-cycle validation
+## Local delivery validation boundary
 
-This is an **experimental probe**, not a reliable autonomous onboarding path.
-Live executor runs have both completed successfully and exhausted their budget
-without changes. A passing run demonstrates that execution's evidence only;
-do not infer repeatability or production readiness from it.
+The earlier direct-endpoint probe is retired. It manually supplied admissions
+and release evidence, so it could not prove an issue-to-production autonomous
+cycle. Its CLI now exits before building images, starting processes or writing
+workflow state. The [historical implementation](https://github.com/os-santiago/ai-sdlc/tree/228a7128f69f183e6518804e9a0ac6fa4bc81ff4/runtime/k8s/tools)
+remains available for dated evidence; its deterministic helper tests are retained.
 
-On Linux, install Podman, Git, Python 3 and Codex CLI, then authenticate Codex
-(`codex login`). Supply a reviewed A-Dev profile from its separate checkout:
+Use `./install.sh local` and `tools/verify_local_install.py` for installation
+and reapplication checks. These are infrastructure checks, not workflow intake.
+A functional E2E must enter through a GitHub issue and let authenticated runtime
+components own generation, verification, PR, merge, release and production-test
+verification. That live integration remains disabled in this stage.
 
-```bash
-bash runtime/k8s/tools/validate-local-cycle.sh \
-  ../adev/implementation/profiles/ai-sdlc.yaml \
-  /tmp/ai-sdlc-local-cycle-report.json
-```
-
-Run this command from the repository root. It builds the five component
-binaries and the worker image, starts a fresh disposable PostgreSQL database,
-and runs admission → relay → orchestrator → real SCC → Codex tool proposals →
-SCC tool execution → durable terminal decision. It then independently checks
-the exact scoped diff and evaluates both missing-evidence and passing-evidence
-release gates. The release decision must persist and the outbox must drain.
-
-The probe uses a disposable local clone of this repository at the immutable
-baseline `12d948c79102813c0db2acf63038df80e7c8991a`, where the PostgreSQL test
-documentation still needs correction. SCC must update exactly that paragraph;
-prepared changes, new files, commits and unrelated text are checked too. The
-original checkout is preserved. No GitHub credentials enter the worker, its
-clone has no remote, and no PR, tag or deployment is published.
-
-Default scope is one SCC executor role plus the independent deterministic
-validator. `--scc-role full` exercises SCC's planner/executor/reviewer pipeline
-under the same bounded budget; success in executor mode does not establish
-success in that mode. Both modes allow one attempt, 12 SCC steps and 300
-seconds of engine work. The harness waits at most 420 seconds for a terminal
-state, then stops its containers and services. It binds services on loopback
-ports 18081–18085 and 18088, and PostgreSQL on 15432; use `--port-base` and
-`--database-port` if needed. Existing services must not use those ports.
-
-The report records source/target revisions, source diff and binary hashes,
-the image identity, policy digest, actual SCC manifest counts, persisted
-attempts and independent checks. A nonzero exit is a failed validation even
-when health endpoints return success. Model prose and raw backend logs are
-not included in that report. Lower-level options are available through
-`python3 runtime/k8s/tools/validate_local_cycle.py --help`.
-
-The runtime still does not open PRs, collect independent CI evidence itself,
-publish releases or verify production. Its SCC result checks manifest/Git
-agreement; that alone is not independent software validation. The local
-harness supplies the separate deterministic probe check and exercises release
-**decisions**, not an autonomous production release.
-
-Validation observed on 2026-11-14 with SCC 0.4.2: one entrypoint run completed
-with 4 model requests, 11 tool calls, one exact documentation change, persisted
-release decisions and drained outbox. A subsequent run on clean revision
-`db725e3347001bfeef57e6c76a83a3a7d16d4691` exhausted its 12-tool budget without
-changes and escalated safely. The full SCC role pipeline also exhausted its
-probe budget. Investigation reproduced SCC accepting malformed/no-op patches
-as "applied"; the Git checks prevent that message alone from passing this
-probe. Model/tool convergence remains an open limitation.
+Historical SCC probes on 2026-11-14 produced both an exact documentation change
+and budget exhaustion. Malformed/no-op patches could be reported as applied by
+SCC; independent Git checks rejected false success. Those observations remain
+an open convergence issue (#419), not evidence of a reliable release pipeline.
 
 ## Spec integration
 
@@ -165,7 +118,7 @@ go test ./... -v
 ## Signed delivery integration boundary
 
 `internal/delivery` is the hidden replacement boundary for unsigned delivery;
-component entry points and the installed Helm release do not use it yet.
+live delivery remains disabled while isolated executors and release gates are integrated.
 It implements:
 
 - Exact-byte, producer-signed records in `authorized_outbox`. Producers can
@@ -179,14 +132,15 @@ It implements:
   exponential retry spacing and exhaustion after eight reservations, including
   crashes. Expired leases allow recovery; exhausted facts remain stored.
 
-`store.ProvisionRoles` is reserved for the future dedicated migration Job in
+`store.ProvisionRoles` is reserved for the dedicated migration Job in
 an installation-owned database. It requires eight distinct component credentials
 from external Secrets and refuses to adopt unregistered PostgreSQL roles.
 It reconciles table and column grants, revokes PUBLIC table access and schema
 creation, rejects role membership and removes privileged role attributes.
 Operational transactions reject bootstrap credentials and elevated identities.
-The existing Helm release still uses its original database Secret; separate
-Secret mounts and migrator startup ordering remain integration requirements.
+Helm mounts only each service's own database Secret and signing identity. The
+migrator Job receives the original bootstrap Secret and the separate credential
+map. Services wait for its schema and role provisioning before becoming ready.
 
 Effects passed to `Inbox.Accept` must validate payload semantics, repository
 ownership and stage gates, then write state/outgoing commands using its SQL
@@ -200,7 +154,7 @@ not promote legacy unsigned rows into signed facts or activate delivery.
 Rollback can retain these unused tables while reverting component images;
 do not delete delivery evidence as an automatic rollback step.
 
-Validate with `go build ./...`, `go vet ./...` and `go test -p 1 ./...` using a
+Validate with `go build ./...`, `go vet ./...` and `go test -count=1 -p 1 ./...` using a
 disposable PostgreSQL 17 database via `AI_SDLC_TEST_DATABASE_URL`. The integration
 tests provision actual restricted LOGIN roles and use HTTP receivers, rather
 than treating superuser-only SQL tests as proof of isolation. See
@@ -227,7 +181,7 @@ helm template deploy/helm/ai-sdlc-k8s-runtime \
 ```
 
 `make render-k8s`, `make render-openshift` and `make helm-lint` wrap the
-above. `make containers` builds all five images locally with Podman.
+above. `make containers` builds all six images locally with Podman.
 
 ### Engine source pin (image builds)
 
@@ -248,8 +202,8 @@ podman build -f components/worker/Containerfile \
 make containers SCC_ENGINE_PIN=<resolved engine.pin>
 ```
 
-Every surface needs a Postgres reachable via `DATABASE_URL` before the
-pipeline does anything beyond respond-and-discard (ADR-0005). The default
+Every service requires its dedicated `DATABASE_URL`, signing Secret and
+trusted authority policy before becoming ready. The default
 Helm local profile installs a PostgreSQL StatefulSet; the generic default
 uses a [CloudNativePG](https://cloudnative-pg.io/) `Cluster`, rendered
 from `deploy/kustomize/base/postgres-cluster.yaml` / Helm's
@@ -261,11 +215,12 @@ See [deploy/kustomize/base/README.md](deploy/kustomize/base/README.md) for
 the GitOps promotion model (immutable image digests, no runtime mutation)
 and the security posture (Pod Security `restricted`, default-deny
 `NetworkPolicy`, dropped capabilities, read-only root filesystem,
-non-root images — satisfies OpenShift's default `restricted-v2` SCC with
-no custom SCC object). `worker` is the one component image that is not
+non-root images). Those legacy Kustomize assets do not provision the new
+component identities; they are rendering references, not the supported
+installation path. OpenShift deployment is not validated by rendering alone. `worker` is the one component image that is not
 distroless (it needs a Node runtime for `scc` and a `git` binary for
 `internal/checkout` — see `components/worker/Containerfile`); the other
-four stay distroless/static.
+five images are distroless/static.
 
 ## Non-goals
 
@@ -277,7 +232,6 @@ four stay distroless/static.
 - **A dashboard.** The runtime exposes component and deployment surfaces but
   does not ship a dashboard.
 
-~~Wiring a real event bus or durable store~~ — closed by ADR-0005:
-PostgreSQL + a transactional outbox (`internal/store`, `internal/outbox`),
-polled and delivered by the `relay` component. This avoids a mandatory
-message broker for the initial control plane.
+The signed transport foundation uses PostgreSQL and a transactional outbox,
+without a mandatory message broker. Live relay integration remains disabled
+until issue-only intake, isolated workers and release evidence are connected.

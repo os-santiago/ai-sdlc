@@ -50,6 +50,15 @@ def main():
 
     def snapshot():
         secret = json.loads(read('get', 'secret', 'ai-sdlc-postgres-app', '-o', 'json'))
+        component_secrets = {}
+        names = ['ai-sdlc-database-roles'] + [prefix + role for role in install.ROLES
+                  for prefix in ('ai-sdlc-identity-', 'ai-sdlc-database-')]
+        for name in names:
+            resource = json.loads(read('get', 'secret', name, '-o', 'json'))
+            component_secrets[name] = {'uid': resource['metadata']['uid'],
+                'digest': hashlib.sha256(json.dumps(resource['data'], sort_keys=True).encode()).hexdigest()}
+        authority = json.loads(read('get', 'configmap', 'ai-sdlc-authority', '-o', 'json'))
+        authority_snapshot = {'uid': authority['metadata']['uid'], 'data': authority['data']}
         claims = json.loads(read('get', 'pvc', '-o', 'json'))['items']
         pvc = next(p for p in claims if p['metadata']['name'] == 'data-ai-sdlc-postgres-0')
         migrations = read('exec', 'ai-sdlc-postgres-0', '--', 'psql', '-U', 'ai_sdlc', '-d', 'ai_sdlc', '-Atc',
@@ -57,6 +66,7 @@ def main():
         require(int(migrations) > 0, 'Database migration evidence is missing')
         return {'secretUID': secret['metadata']['uid'],
                 'secretDigest': hashlib.sha256(json.dumps(secret['data'], sort_keys=True).encode()).hexdigest(),
+                'componentSecrets': component_secrets, 'authority': authority_snapshot,
                 'pvcUID': pvc['metadata']['uid'], 'volume': pvc['spec']['volumeName'],
                 'migrations': migrations}
 
@@ -71,7 +81,7 @@ def main():
     require(worker_uid == '1000', 'Worker must run with numeric UID 1000')
     report = {'installation': 'passed', 'reapplication': 'passed', 'readyComponents': 5,
               'postgresReady': True, 'credentialsPreserved': True, 'persistentVolumePreserved': True,
-              'migrationsPreserved': True, 'workerUID': 1000,
+              'migrationsPreserved': True, 'authorityPreserved': True, 'workerUID': 1000,
               'deliveryEnabled': False, 'provider': args.provider,
               'sourceRevision': install.image_lock(install.LOCAL / 'images.lock.json')['image']['tag']}
     (state / 'verification.json').write_text(json.dumps(report, indent=2) + '\n')

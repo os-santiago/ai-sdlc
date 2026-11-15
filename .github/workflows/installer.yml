@@ -29,6 +29,7 @@ jobs:
         run: python3 -m unittest discover -s tools -p 'test_*install*.py' -v && python3 -m unittest discover -s tools -p test_helm.py -v
       - name: Install and reconcile the same local desired state twice
         run: |
+          sudo ./install.sh host --configure-host
           ./install.sh local --provider docker --timeout 10m
           python3 tools/verify_local_install.py --provider docker
           ./install.sh status --provider docker

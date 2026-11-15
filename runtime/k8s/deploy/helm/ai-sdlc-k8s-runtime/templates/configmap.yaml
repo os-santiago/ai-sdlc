@@ -7,6 +7,8 @@ metadata:
     {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
 data:
   AI_SDLC_ENVIRONMENT: {{ .Release.Namespace | default "default" | quote }}
+  AI_SDLC_AUTHORITY_POLICY_PATH: /etc/ai-sdlc/authority/policy.json
+  AI_SDLC_IDENTITY_PATH: /etc/ai-sdlc/identity/identity.json
   AI_SDLC_RUNTIME_MODE: {{ .Values.runtime.mode | quote }}
   AI_SDLC_LOG_LEVEL: {{ .Values.logLevel | quote }}
   AI_SDLC_RELAY_ROUTES: {{ dict "IssueAdmissionDecided.v1" (printf "http://%s-orchestrator:%v/v1/plans/events/issue-admission-decided" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.orchestrator.port) "WorkItemReady.v1" (printf "http://%s-worker:%v/v1/attempts/dispatch" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.worker.port) "ImplementationAttemptDecided.v1" (printf "http://%s-orchestrator:%v/v1/plans/events/implementation-attempt-decided" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.orchestrator.port) "ReleaseGateDecided.v1" (printf "http://%s-orchestrator:%v/v1/plans/events/release-gate-decided" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.orchestrator.port) | toJson | quote }}
@@ -36,3 +38,16 @@ metadata:
 data:
   ai-sdlc.yaml: |
     {{- .Files.Get "files/adev-profile.yaml" | nindent 4 }}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.authority.policyConfigMap }}
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+  annotations:
+    ai-sdlc.io/cluster-uid: {{ .Values.authority.installationUID | quote }}
+data:
+  policy.json: {{ .Values.authority.policyJSON | quote }}

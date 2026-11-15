@@ -13,6 +13,40 @@ spec.loader.exec_module(installer)
 
 
 class InstallerBoundaryTests(unittest.TestCase):
+    def test_host_preflight_is_read_only_and_never_lowers_limits(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(installer, 'run') as command:
+            root = Path(tmp)
+            (root / 'max_user_instances').write_text('128')
+            (root / 'max_user_watches').write_text('1048576')
+            with self.assertRaisesRegex(ValueError, 'committed minimum'):
+                installer.host_prerequisites(proc_root=root)
+            command.assert_not_called()
+            (root / 'max_user_instances').write_text('1024')
+            self.assertEqual(installer.host_prerequisites(True, root),
+                             {'max_user_instances': 1024, 'max_user_watches': 1048576})
+            command.assert_not_called()
+
+    def test_host_changes_require_root_and_verified_readback(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(installer, 'run') as command:
+            root = Path(tmp)
+            (root / 'max_user_instances').write_text('128')
+            (root / 'max_user_watches').write_text('1048576')
+            with patch.object(installer.os, 'geteuid', return_value=1000):
+                with self.assertRaisesRegex(ValueError, 'require root'):
+                    installer.host_prerequisites(True, root)
+                command.assert_not_called()
+            with patch.object(installer.os, 'geteuid', return_value=0):
+                with self.assertRaisesRegex(ValueError, 'not applied'):
+                    installer.host_prerequisites(True, root)
+                command.reset_mock()
+                def apply(args, **kwargs):
+                    self.assertEqual(args, ['sysctl', '-w', 'fs.inotify.max_user_instances=512'])
+                    (root / 'max_user_instances').write_text('512')
+                command.side_effect = apply
+                self.assertEqual(installer.host_prerequisites(True, root),
+                                 {'max_user_instances': 512, 'max_user_watches': 1048576})
+                self.assertEqual(command.call_count, 1)
+
     def test_standalone_bootstrap_ref_mismatch_preserves_cached_checkout(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -56,11 +90,13 @@ class InstallerBoundaryTests(unittest.TestCase):
 
     def lock(self):
         return {'image': {'repository': 'quay.io/os-santiago/ai-sdlc'},
-                'components': {key: {'digest': 'sha256:' + 'a' * 64} for key in installer.COMPONENTS}}
+                'components': {key: {'digest': 'sha256:' + 'a' * 64} for key in installer.COMPONENTS},
+                'migrator': {'digest': 'sha256:' + 'b' * 64}}
 
     def test_missing_mutable_or_foreign_images_fail_before_install(self):
-        for invalid in ('mutable', 'missing', 'foreign', 'namespace', 'component_name'):
+        for invalid in ('mutable', 'missing', 'foreign', 'namespace', 'component_name', 'migrator'):
             lock = self.lock()
+            if invalid == 'migrator': lock['migrator']['digest'] = 'latest'
             if invalid == 'mutable': lock['components']['worker']['digest'] = 'latest'
             if invalid == 'missing': del lock['components']['worker']
             if invalid == 'foreign': lock['image']['repository'] = 'example.org/untrusted'

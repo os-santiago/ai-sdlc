@@ -15,9 +15,16 @@ cd ai-sdlc
 ./install.sh status
 ```
 
+If the preflight reports low Linux inotify limits, run
+`sudo ./install.sh host --configure-host`, then retry as your normal user.
+The explicit adjustment affects this boot only; see the
+[host prerequisites](docs/installation.md) for persistent host management.
+
 One entrypoint installs verified Kubernetes clients, creates kind and applies
 the versioned Helm chart. Each of the five runtime services has its own
-container and Deployment; PostgreSQL uses persistent storage. Images come
+container and Deployment; PostgreSQL uses persistent storage. A short-lived
+migrator Job owns schema setup, while services receive separate database
+credentials and signing identities. Images come
 from [Quay](https://quay.io/repository/os-santiago/ai-sdlc) and are pinned by
 digest in Git. Reapply the same command to reconcile desired state.
 
@@ -64,7 +71,7 @@ go test ./...
 
 `go test ./...` runs the pure component tests without external services.
 Set `AI_SDLC_TEST_DATABASE_URL` to a fresh disposable database and run
-`go test -p 1 ./...` to include persistence-path tests. Build local
+`go test -count=1 -p 1 ./...` to include persistence-path tests. Build local
 images with `make containers` from `runtime/k8s` when Podman is available. Full instructions are
 in [runtime/k8s/README.md](runtime/k8s/README.md).
 

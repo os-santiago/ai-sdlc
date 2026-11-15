@@ -1,0 +1,52 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-migrate-{{ .Release.Revision }}
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrator
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrator
+    spec:
+      serviceAccountName: {{ include "ai-sdlc-k8s-runtime.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: migrator
+          image: "{{ .Values.image.repository }}{{ if .Values.migrator.digest }}@{{ .Values.migrator.digest }}{{ else }}:migrator-{{ .Values.image.tag }}{{ end }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [migrate]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" . }}, key: {{ include "ai-sdlc-k8s-runtime.databaseSecretKey" . }}}
+            - {name: AI_SDLC_DATABASE_CREDENTIALS_PATH, value: /etc/ai-sdlc/database/passwords.json}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          resources:
+            requests: {cpu: 25m, memory: 32Mi}
+            limits: {cpu: 250m, memory: 128Mi}
+          volumeMounts:
+            - {name: credentials, mountPath: /etc/ai-sdlc/database, readOnly: true}
+      volumes:
+        - name: credentials
+          secret:
+            secretName: {{ .Values.migrator.credentialsSecret }}
+            defaultMode: 0440
