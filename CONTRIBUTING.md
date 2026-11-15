@@ -23,15 +23,16 @@ comment or approval. Runtime retirement does not remove these requirements.
 
 ## Validation commands
 
-For runtime changes:
+For runtime changes, run the complete suite with an isolated database:
 
 ```bash
-cd runtime/k8s
-go build ./...
-go vet ./...
-go test ./...
+python3 tools/validate_runtime.py
 ```
 
-For deployment changes, render the relevant Kustomize or Helm surface. For
-changes that need Postgres persistence coverage, configure
-`AI_SDLC_TEST_DATABASE_URL` as documented in `runtime/k8s/README.md`.
+This requires Python 3, Git, and Docker or Podman; Go and PostgreSQL run in
+pinned containers. Include the report's outcome and any skipped optional
+integration fixtures in the PR. See [local validation](docs/development/local-validation.md).
+
+For deployment changes, also render the relevant Kustomize or Helm surface and
+run its integration fixture. Local Go/database success does not validate
+Kubernetes containment, model-provider behavior, or an autonomous delivery cycle.

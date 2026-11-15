@@ -1,0 +1,30 @@
+name: local-validation
+on:
+  pull_request:
+    paths: ['tools/validate_runtime.py', 'tools/test_validate_runtime.py', 'tools/runtime-validation.lock.json', '.github/workflows/local-validation.yml']
+  push:
+    branches: [main]
+    paths: ['tools/validate_runtime.py', 'tools/test_validate_runtime.py', 'tools/runtime-validation.lock.json', '.github/workflows/local-validation.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  docker-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify failure and ownership handling
+        run: python3 -m unittest discover -s tools -p test_validate_runtime.py -v
+      - name: Run the documented complete local command
+        run: python3 tools/validate_runtime.py --provider docker --output "$RUNNER_TEMP/runtime-validation" --timeout 900
+      - name: Preserve validation evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: local-runtime-validation
+          path: |
+            ${{ runner.temp }}/runtime-validation/report.json
+            ${{ runner.temp }}/runtime-validation/*.log
+          if-no-files-found: warn
+          retention-days: 7

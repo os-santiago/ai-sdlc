@@ -109,6 +109,13 @@ an open convergence issue (#419), not evidence of a reliable release pipeline.
 
 ## Build & test
 
+From the repository root, run `python3 tools/validate_runtime.py` for a complete
+build, vet and serial test run using disposable PostgreSQL. The
+[validation guide](../../docs/development/local-validation.md) explains logs,
+cleanup and optional integration fixtures.
+
+With Go installed, fast local checks remain available:
+
 ```bash
 cd runtime/k8s
 go build ./...
@@ -116,17 +123,13 @@ go vet ./...
 go test ./...
 ```
 
-The pure domain packages (`admission`, `cycle`, `planning`, `gates`,
-`engine`) and most of `internal/outbox` need no external services — those
-tests are pure unit tests, no network. `internal/store` and a few
-persistence-path tests in `admission`/`outbox` are the deliberate
-exception: they talk to a real Postgres and skip cleanly when
-`AI_SDLC_TEST_DATABASE_URL` is unset. To run them:
-
-```bash
-export AI_SDLC_TEST_DATABASE_URL=postgres://ai_sdlc:ai_sdlc@localhost:5432/ai_sdlc_test
-go test ./... -v
-```
+Persistence-path tests skip when `AI_SDLC_TEST_DATABASE_URL` is unset. Manual
+full-suite runs need a fresh PostgreSQL instance with permission to create the
+isolated component roles, the complete repository fixtures, and Git. Set that
+variable only to a disposable test database, then use
+`go test -count=1 -p 1 ./...`; multiple packages must not reconcile the same
+fixture roles concurrently. The single validation command supplies these
+prerequisites automatically and does not use a host database port.
 
 ## Signed delivery integration boundary
 

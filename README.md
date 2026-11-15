@@ -85,21 +85,24 @@ The Kubernetes/OpenShift runtime is now the sole execution path. See
 
 ## Local development
 
-The runtime requires Go and optionally Podman, Kustomize, Helm, and Postgres
-depending on the surface being exercised.
+Run the complete Go build, vet and test suite, including real PostgreSQL paths,
+with Python 3 and Docker or Podman:
 
 ```bash
-cd runtime/k8s
-go build ./...
-go vet ./...
-go test ./...
+python3 tools/validate_runtime.py
 ```
 
-`go test ./...` runs the pure component tests without external services.
-Set `AI_SDLC_TEST_DATABASE_URL` to a fresh disposable database and run
-`go test -count=1 -p 1 ./...` to include persistence-path tests. Build local
-images with `make containers` from `runtime/k8s` when Podman is available. Full instructions are
-in [runtime/k8s/README.md](runtime/k8s/README.md).
+The command uses pinned Linux/amd64 tool images, creates its own temporary
+database, checks that required persistence tests actually passed, and removes
+only its own containers. It prints a report path with stage timings, skipped
+tests and cleanup results. See [local validation](docs/development/local-validation.md)
+for deadlines, prerequisites and troubleshooting.
+
+For a quick check with Go installed, run `go build ./...`, `go vet ./...` and
+`go test ./...` from `runtime/k8s`. Without `AI_SDLC_TEST_DATABASE_URL`, persistence
+tests skip; that result is not full database validation. Build local images with
+`make containers` from `runtime/k8s`. Runtime details are in
+[runtime/k8s/README.md](runtime/k8s/README.md).
 
 ## Scope
 
