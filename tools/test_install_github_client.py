@@ -41,7 +41,7 @@ class GitHubClientTests(unittest.TestCase):
                 with self.assertRaises(ValueError): client.inspect(token, repo)
             request.assert_not_called()
 
-    def test_wrong_repo_archived_and_read_only_credentials_fail(self):
+    def test_wrong_repo_archived_and_missing_account_write_role_fail(self):
         for repo in ({'full_name': 'other/project', 'permissions': {'push': True}, 'archived': False},
                      {'full_name': REPO, 'permissions': {'push': False}, 'archived': False},
                      {'full_name': REPO, 'permissions': {'push': True}, 'archived': True}):
@@ -62,6 +62,8 @@ class GitHubClientTests(unittest.TestCase):
         with patch.object(client, 'from_gh', return_value=TOKEN), patch.object(client, 'inspect', return_value=credential):
             report = client.configure(api, ['kubectl'], 'cluster-id', REPO)
         self.assertNotIn(TOKEN, json.dumps(report))
+        self.assertFalse(report['writeCapabilitiesVerified'])
+        self.assertTrue(report['accountWriteRoleVerified'])
         self.assertEqual(api.create_owned_secret.call_args.args[2], {'credential.json': json.dumps(credential, sort_keys=True)})
         api = self.api({'credential.json': json.dumps(credential)})
         with patch.object(client, 'from_gh') as gh, patch.object(client, 'inspect', return_value=credential):

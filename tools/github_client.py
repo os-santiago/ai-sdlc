@@ -89,7 +89,8 @@ def configure(installer, kubectl, cluster_uid, repository, refresh=False):
             observed = inspect(credential['token'], repository)
             if observed != credential:
                 raise ValueError('GitHub client identity changed; explicitly refresh the credential')
-            return {'mode': 'gh-cli', 'repository': repository, 'credentialReady': True}
+            return {'mode': 'gh-cli', 'repository': repository, 'credentialReady': True,
+                    'accountWriteRoleVerified': True, 'writeCapabilitiesVerified': False}
     credential = inspect(from_gh(), repository)
     values = {'credential.json': json.dumps(credential, sort_keys=True)}
     if current is None:
@@ -105,4 +106,5 @@ def configure(installer, kubectl, cluster_uid, repository, refresh=False):
         resource['stringData'] = values
         installer.run(kubectl + ['replace', '-f', '-'], input=json.dumps(resource),
                       capture_output=True)
-    return {'mode': 'gh-cli', 'repository': repository, 'credentialReady': True}
+    return {'mode': 'gh-cli', 'repository': repository, 'credentialReady': True,
+            'accountWriteRoleVerified': True, 'writeCapabilitiesVerified': False}

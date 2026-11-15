@@ -94,13 +94,16 @@ fallback from a GitHub App to a user credential.
 
 [`gh auth token`](https://cli.github.com/manual/gh_auth_token) retrieves the active
 credential; it does not create a PAT or narrow its existing GitHub permissions.
-The installer verifies account identity and write access to the configured
-repository using bounded read-only GitHub API requests, then sends the credential
+The installer verifies account identity, repository access and the account's
+write role using bounded read-only GitHub API requests, then sends the credential
 to the owned `ai-sdlc-github-client` Secret over stdin. It never prints the token,
 places it in command arguments, or stores it in Git or Helm values. Reapplication
 revalidates and preserves that Secret. To import the current CLI credential again,
 use `credentials --github-auth gh-cli --refresh-github-credential`; replacement
-preserves the Secret UID and checks concurrent changes.
+preserves the Secret UID and checks concurrent changes. The account's write role
+does not prove that the token grants every required API permission: the report
+explicitly sets `writeCapabilitiesVerified: false`. Actual PR, merge and release
+operations must check their authoritative responses and fail closed on denial.
 
 The Secret is reserved for trusted GitHub operations. This maintenance release
 does not mount it in any workload, including the worker; generated Jobs must
