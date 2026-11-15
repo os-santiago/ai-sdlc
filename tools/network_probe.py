@@ -46,12 +46,13 @@ def policy(namespace, name, selector, direction, rules):
                      'policyTypes': [direction], direction.lower(): rules}}
 
 
-def verify(kubectl, image):
+def verify(kubectl, image, runner=None):
+    runner = runner or subprocess.run
     namespace = 'ai-sdlc-netcheck-' + secrets.token_hex(6)
     uid = None
 
     def call(args, value=None):
-        result = subprocess.run([str(v) for v in kubectl] + args, text=True,
+        result = runner([str(v) for v in kubectl] + args, text=True,
                                 input=json.dumps(value) if value is not None else None,
                                 capture_output=True, timeout=100)
         if result.returncode:
@@ -66,7 +67,7 @@ def verify(kubectl, image):
                 "const q=require('http').get({host:process.argv[1],port:8080,path:'/',timeout:1500},"
                 "r=>{let b='';r.on('data',c=>b+=c);r.on('end',()=>end(b==='network-probe'?0:2,'probe:allowed'))});"
                 "q.on('timeout',()=>end(3,'probe:denied'));q.on('error',()=>end(3,'probe:denied'));")
-        result = subprocess.run([str(v) for v in kubectl] + ['-n', namespace, 'exec', 'client', '--',
+        result = runner([str(v) for v in kubectl] + ['-n', namespace, 'exec', 'client', '--',
                                 'node', '-e', code, target], capture_output=True, text=True, timeout=15)
         # Only the probe's own connection failure proves denial. An exec/API
         # failure or a dead client must never be mistaken for network isolation.
