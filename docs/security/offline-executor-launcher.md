@@ -97,6 +97,12 @@ preserves all original Homedir source files. Negative cases exercise direct and
 `activeProfile` token overrides and streaming overrides. The persistent-child
 case spawns a detached shell through SCC's real tool, proves that it started,
 then checks that its delayed write cannot survive worker container termination.
+Additional negative cases tamper with the imported tree or the projected profile
+and A-Dev policy after digest binding; the actual launcher rejects them with no
+published model requests. A timeout case withholds the reply to a real SCC
+request and requires launcher exit 124 within a separate external deadline before
+export. Fixed publication logs let the fixture compare all accepted request
+sequences with its external observations without logging request contents.
 
 Go tests cover assignment/profile ambiguity, digest mismatches, expiry, source
 mutation, existing Git metadata, ignored-file baseline inclusion, exclusive

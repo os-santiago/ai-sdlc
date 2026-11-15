@@ -122,6 +122,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		failure(w, 502, "mailbox_unavailable")
 		return
 	}
+	log.Printf("model request published sequence=%d", s.sequence)
 	defer s.store.remove(requestFile)
 	defer s.store.remove(responseFile)
 	ctx, cancel := context.WithTimeout(r.Context(), s.wait)

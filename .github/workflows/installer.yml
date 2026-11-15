@@ -82,7 +82,7 @@ jobs:
           import json, os, pathlib, subprocess, sys
           sys.path.insert(0, 'tools')
           from fixture_images import register_digest
-          from verify_executor import verify
+          from verify_executor import VARIANTS, verify
           from verify_workspace_bundle import source_bundle
           tools = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'install-tools.json').read_text())
           worker_tag = 'localhost/ai-sdlc-worker:conformance'
@@ -93,6 +93,6 @@ jobs:
           source = source_bundle(pathlib.Path(os.environ['RUNNER_TEMP'], 'homedir-source'),
                                  '0622cdaeb59a11a27bd5f3d7e18183c401a5e412')
           kubectl = [tools['kubectl'], '--kubeconfig', str(pathlib.Path.home() / '.local/state/ai-sdlc/ai-sdlc/kubeconfig')]
-          for variant in ('normal', 'source-token-override', 'source-profile-override', 'source-stream-override', 'persistent-child'):
+          for variant in VARIANTS:
               print(json.dumps(verify(kubectl, 'docker', mailbox_tag, mailbox, worker, source, variant)), flush=True)
           PYTHON
