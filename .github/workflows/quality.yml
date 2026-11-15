@@ -18,7 +18,7 @@ jobs:
       - name: Validate wrapper HTTP boundary and tool-call protocol
         run: |
           python3 -m unittest discover -s runtime/k8s/tools -p 'test_*.py' -v
-          python3 -m unittest discover -s tools -p test_model_fixture_environment.py -v
+          python3 -m unittest discover -s tools -p 'test_model_fixture_*.py' -v
   contract:
     runs-on: ubuntu-latest
     timeout-minutes: 15
