@@ -102,6 +102,43 @@ func workspaceReply(conn *websocket.Conn, out []byte, status bool) {
 	}
 	conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 }
+
+func TestWorkerExitObservationNeverInvokesHelperOrAdoptsReplacement(t *testing.T) {
+	for _, mode := range []string{"running", "terminated", "replaced", "restarted", "expired"} {
+		t.Run(mode, func(t *testing.T) {
+			b, pod, _ := workspaceBinding(t)
+			session, execs := workspaceSession(t, b, pod, func(p *core.Pod, count int32) {
+				if count <= 1 {
+					return
+				}
+				switch mode {
+				case "terminated":
+					p.Status.ContainerStatuses[0].State = core.ContainerState{Terminated: &core.ContainerStateTerminated{ExitCode: 7}}
+				case "replaced":
+					p.UID = "99999999-9999-4999-8999-999999999999"
+				case "restarted":
+					p.Status.ContainerStatuses[0].RestartCount = 1
+				}
+			}, func(*http.Request, *websocket.Conn) { t.Error("observation invoked helper") })
+			if mode == "expired" {
+				session.expires = time.Now().Add(-time.Second)
+			}
+			code, exited, err := session.WorkerExit(context.Background())
+			if mode == "running" && (err != nil || exited) {
+				t.Fatal("running observation")
+			}
+			if mode == "terminated" && (err != nil || !exited || code != 7) {
+				t.Fatal("original worker exit observation")
+			}
+			if mode != "running" && mode != "terminated" && err == nil {
+				t.Fatal("invalid identity/authority observed")
+			}
+			if execs.Load() != 0 {
+				t.Fatal("helper side effect")
+			}
+		})
+	}
+}
 func sourceInput(t *testing.T, conn *websocket.Conn) []byte {
 	t.Helper()
 	var input []byte

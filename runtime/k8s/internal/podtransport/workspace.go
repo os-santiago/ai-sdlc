@@ -19,6 +19,22 @@ type Candidate struct {
 func (c Candidate) Bytes() []byte         { return append([]byte(nil), c.raw...) }
 func (c Candidate) WorkerExitCode() int32 { return c.exitCode }
 
+// WorkerExit observes only the originally bound worker instance. It invokes no
+// helper and does not make a candidate trustworthy or grant execution authority.
+func (s *Session) WorkerExit(ctx context.Context) (code int32, exited bool, err error) {
+	if s == nil {
+		return 0, false, ErrTransport
+	}
+	observed, err := s.inspect(ctx, true)
+	if err != nil {
+		return 0, false, err
+	}
+	if observed.workerExitCode == nil {
+		return 0, false, nil
+	}
+	return *observed.workerExitCode, true, nil
+}
+
 // ImportSource accepts only the exact source/tree bound by the assignment.
 // It does not renew execution authority or authorize a later start. An uncertain
 // import must be reconciled by a durable controller, never automatically retried.
