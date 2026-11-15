@@ -185,3 +185,8 @@ Graduation still requires a live eligible issue to pass independent validation,
 authoritative PR/merge/release, enterprise artifact policy, same-digest deployment
 and rollback through AI-SDLC's own components. No competitive superiority or
 adoption-economics conclusion follows from these isolated checks.
+
+The [outerloop gate boundary](security/outerloop-gate-evidence.md) rejects legacy
+false-success cases before operational integration: omitted/stale checks and a
+successful forge release cannot establish production verification. Authoritative
+evidence collection and authenticated promotion remain separate requirements.
