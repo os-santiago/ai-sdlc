@@ -132,3 +132,28 @@ Nine oracle/telemetry regressions and 19 wrapper tests passed locally, including
 actual pinned-CLI no-action-tool and no-upstream-retry checks. The fixture is a
 single fixed task, so adoption, sustained reliability, costs, security across
 arbitrary repositories and comparative Fullsend performance remain unproven.
+
+### Cleanup confirmation correction (issue #498)
+
+A later Docker CI run rejected excessive output correctly but failed during
+explicit removal while `--rm` could also remove the container. Cleanup now
+validates the recorded ID and ownership label, sends at most one explicit rm,
+and requires bounded read-only confirmation of exact-ID absence from a healthy
+engine. Without a recorded ID, it still requires healthy absence of the unique
+fixture label. A failed engine, persistent ID or changed identity fails closed.
+
+That stronger check exposed a separate local Podman timeout problem: its default
+10-second stop grace matched the CLI cleanup timeout. The old timeout regression
+could mistake the cleanup's TimeoutExpired for the expected execution timeout.
+Six historical owned timeout fixtures remained in Stopping state and were
+removed only after verifying their exact IDs, labels, names, creation times and
+fixture command. This corrects earlier cleanup assumptions; it does not change
+the independently validated candidate content or model ledger evidence.
+
+Podman cleanup now uses an explicit zero-second stop grace for these disposable
+untrusted test processes. Docker retains its normal forced removal arguments.
+The timeout regression requires that the exception came from `run`, then
+independently queries the fixture label to verify absence. The revised 13-test
+suite, including actual Podman output-cap and timeout cases, passed in 3.979
+seconds with no surviving locale-check fixture containers. Docker is validated
+separately through CI; local Podman evidence is not presented as Docker proof.

@@ -124,20 +124,63 @@ def bounded_container(provider, arguments, timeout=30):
                 stderr.seek(0)
                 return result.returncode, stdout.read(64*1024), stderr.read(64*1024)
         finally:
-            observed = subprocess.run([provider, 'inspect', name], capture_output=True, timeout=5)
+            recorded_id = None
+            if cid.exists():
+                with cid.open('rb') as stream:
+                    recorded = stream.read(129).strip()
+                if not re.fullmatch(b'[a-f0-9]{64}', recorded):
+                    raise ValueError('Independent test cleanup identity invalid')
+                recorded_id = recorded.decode('ascii')
+            try:
+                observed = subprocess.run([provider, 'inspect', name], capture_output=True, timeout=5)
+            except (subprocess.TimeoutExpired, OSError):
+                raise ValueError('Independent test cleanup could not be confirmed') from None
             if observed.returncode == 0:
-                info = json.loads(observed.stdout)[0]
-                if info['Config'].get('Labels', {}).get('ai-sdlc.fixture') != identity:
+                try:
+                    if len(observed.stdout)>64*1024:
+                        raise ValueError()
+                    info = json.loads(observed.stdout)[0]
+                    observed_id = info['Id']
+                    owned = info['Config'].get('Labels', {}).get('ai-sdlc.fixture') == identity
+                except (ValueError, KeyError, TypeError, IndexError, AttributeError):
+                    raise ValueError('Independent test cleanup identity invalid') from None
+                if not owned or not isinstance(observed_id,str) or not re.fullmatch('[a-f0-9]{64}',observed_id) or (recorded_id and recorded_id!=observed_id):
                     raise ValueError('Independent test cleanup identity mismatch')
-                result = subprocess.run([provider, 'rm', '-f', '-v', info['Id']], capture_output=True, timeout=10)
-                if result.returncode: raise ValueError('Independent test cleanup failed')
-            elif cid.exists():
-                # --rm normally removed the exact cid. Distinguish absence from
-                # an unavailable engine instead of claiming successful cleanup.
-                result = subprocess.run([provider, 'ps', '-a', '--no-trunc', '--format', '{{.ID}}'],
-                                        capture_output=True, timeout=5)
-                if result.returncode or cid.read_text().strip().encode() in result.stdout.splitlines():
-                    raise ValueError('Independent test cleanup could not be confirmed')
+                recorded_id = observed_id
+                # --rm may already be removing this exact container. Never retry
+                # DELETE; only a healthy engine's confirmed absence can resolve it.
+                try:
+                    subprocess.run([provider, 'rm', '-f', '-v'] + (['--time', '0'] if Path(provider).name=='podman' else []) + [observed_id], capture_output=True, timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
+                except OSError:
+                    raise ValueError('Independent test cleanup could not be confirmed') from None
+            confirm_owned_absence(provider, identity, recorded_id)
+
+
+def confirm_owned_absence(provider, identity, container_id):
+    deadline = time.monotonic()+5
+    selector = 'id='+container_id if container_id else 'label=ai-sdlc.fixture='+identity
+    while True:
+        remaining = deadline-time.monotonic()
+        if remaining<=0:
+            raise ValueError('Independent test cleanup could not be confirmed')
+        try:
+            result = subprocess.run([provider, 'ps', '-a', '--no-trunc', '--filter', selector, '--format', '{{.ID}}'],
+                                    capture_output=True, timeout=remaining)
+        except (subprocess.TimeoutExpired, OSError):
+            raise ValueError('Independent test cleanup could not be confirmed') from None
+        if result.returncode or len(result.stdout)>4096:
+            raise ValueError('Independent test cleanup could not be confirmed')
+        identifiers = result.stdout.splitlines()
+        if not identifiers:
+            return
+        if any(not re.fullmatch(b'[a-f0-9]{64}',value) for value in identifiers) or (container_id and identifiers!=[container_id.encode()]):
+            raise ValueError('Independent test cleanup identity mismatch')
+        remaining = deadline-time.monotonic()
+        if remaining<=0:
+            raise ValueError('Independent test cleanup could not be confirmed')
+        time.sleep(min(.1,remaining))
 
 
 def stage_oracle_inputs(root, reference, files):
