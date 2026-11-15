@@ -64,13 +64,14 @@ class CandidateInstallTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'images.lock.json'
             evidence_path = path.with_name('images.evidence.json')
+            verifier = evidence['images'].pop('verifier')
             evidence_path.write_text(json.dumps(evidence))
             with self.assertRaises(ValueError):
                 candidate_install.desired_values(install.ROOT, path, lock, verification=True)
-            evidence['images']['verifier'] = dict(evidence['images']['worker'], component='verifier')
+            evidence['images']['verifier'] = verifier
             evidence_path.write_text(json.dumps(evidence))
             result = candidate_install.desired_values(install.ROOT, path, lock, verification=True)
-            self.assertEqual(result['verifier']['digest'], evidence['images']['worker']['digest'])
+            self.assertEqual(result['verifier']['digest'], verifier['digest'])
             evidence['images']['verifier']['revision'] = '0' * 40
             evidence_path.write_text(json.dumps(evidence))
             with self.assertRaises(ValueError):
