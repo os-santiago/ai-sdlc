@@ -103,3 +103,68 @@ func TestProviderSlowResponseBodyIsBounded(t *testing.T) {
 		t.Fatal("slow body escaped cancellation")
 	}
 }
+
+func TestProviderAcceptsBufferedCompletionWithinAdapterDeadline(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		_, _ = io.Copy(io.Discard, r.Body)
+		select {
+		case <-time.After(16 * time.Second):
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"bounded completion"}}]}`)
+	}))
+	defer server.Close()
+	provider, err := NewProvider(ProviderConfig{Endpoint: server.URL + "/v1/chat/completions", BearerToken: strings.Repeat("x", 32), AllowLoopbackHTTP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 28*time.Second)
+	defer cancel()
+	if _, err = provider.invoke(ctx, []byte(`{}`), 1024); err != nil {
+		t.Fatal("valid buffered completion rejected")
+	}
+	if calls.Load() != 1 {
+		t.Fatal("provider call repeated")
+	}
+}
+
+func TestProviderHeaderWaitHonorsEarlierCancellation(t *testing.T) {
+	entered := make(chan struct{})
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		_, _ = io.Copy(io.Discard, r.Body)
+		close(entered)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	provider, err := NewProvider(ProviderConfig{Endpoint: server.URL + "/v1/chat/completions", BearerToken: strings.Repeat("x", 32), AllowLoopbackHTTP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := provider.invoke(ctx, []byte(`{}`), 1024); done <- err }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("provider not reached")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrProvider) {
+			t.Fatal("cancellation accepted")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("header cancellation did not terminate")
+	}
+	if calls.Load() != 1 {
+		t.Fatal("provider call repeated")
+	}
+}
