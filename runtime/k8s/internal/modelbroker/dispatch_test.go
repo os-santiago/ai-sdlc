@@ -23,6 +23,15 @@ import (
 
 var completionBody = []byte(`{"id":"fixture","object":"chat.completion","model":"fixture-model","choices":[{"index":0,"message":{"role":"assistant","content":"fixture"},"finish_reason":"stop"}]}`)
 
+type fixtureAuthority func(context.Context, store.ModelScope) (time.Time, error)
+
+func (f fixtureAuthority) Authorize(ctx context.Context, scope store.ModelScope) (time.Time, error) {
+	return f(ctx, scope)
+}
+func syntheticAuthority(ctx context.Context, scope store.ModelScope) (time.Time, error) {
+	return scope.ExpiresAt, ctx.Err()
+}
+
 type publisherFunc func(context.Context, modelmailbox.Envelope) error
 
 func (f publisherFunc) Publish(ctx context.Context, e modelmailbox.Envelope) error { return f(ctx, e) }
@@ -66,7 +75,7 @@ func brokerFixture(t *testing.T, handler http.HandlerFunc, publisher Publisher) 
 	}
 	body := []byte(`{"model":"fixture-model","messages":[{"role":"user","content":"fixture"}],"stream":false,"max_tokens":64}`)
 	request := modelmailbox.Envelope{Version: modelmailbox.Version, Kind: "request", Attempt: work + "-1", PodUID: allocation.PodUID, Sequence: 1, RequestSHA256: modelmailbox.Digest(body), Payload: body, ExpiresAt: time.Now().Add(time.Minute).UnixMilli()}
-	return Dispatcher{DB: db, Provider: provider, Mailbox: publisher}, allocation, profile, request
+	return Dispatcher{DB: db, Provider: provider, Mailbox: publisher, Authority: fixtureAuthority(syntheticAuthority)}, allocation, profile, request
 }
 func ledgerState(t *testing.T, db *store.DB, a store.ModelAllocation) (string, string, bool, int) {
 	t.Helper()

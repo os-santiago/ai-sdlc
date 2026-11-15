@@ -120,7 +120,7 @@ func TestRealKubernetesMailboxFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal("fixture provider")
 	}
-	dispatcher := modelbroker.Dispatcher{DB: db, Provider: p, Mailbox: session}
+	dispatcher := modelbroker.Dispatcher{DB: db, Provider: p, Mailbox: session, Authority: syntheticFixtureAuthority{}}
 	seen := map[uint64]bool{}
 	for len(seen) < 2 {
 		request, err := session.ReadRequest(ctx)
@@ -154,4 +154,12 @@ func TestRealKubernetesMailboxFixture(t *testing.T) {
 		t.Fatal("real ledger/provider counts do not match handoffs")
 	}
 	t.Log("two actual SCC mailbox requests: two synthetic HTTP provider calls, two durable completed handoffs, duplicate delivery metadata only")
+}
+
+// Only isolated fixtures use this synthetic authority; it is not evidence of
+// signed live workflow permission. Production controllers need current proof.
+type syntheticFixtureAuthority struct{}
+
+func (syntheticFixtureAuthority) Authorize(ctx context.Context, scope store.ModelScope) (time.Time, error) {
+	return scope.ExpiresAt, ctx.Err()
 }
