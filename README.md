@@ -26,7 +26,8 @@ container and Deployment; PostgreSQL uses persistent storage. A short-lived
 migrator Job owns schema setup, while services receive separate database
 credentials and signing identities. Images come
 from [Quay](https://quay.io/repository/os-santiago/ai-sdlc) and are pinned by
-digest in Git. Reapply the same command to reconcile desired state.
+digest in Git. Reapply the same command to reconcile desired state. To refresh
+pins from a reviewed publication, use the [image upgrade procedure](docs/operations/image-lock-upgrades.md).
 
 This first release installs **maintenance mode**, with delivery actions
 disabled. It verifies infrastructure installation, not autonomous

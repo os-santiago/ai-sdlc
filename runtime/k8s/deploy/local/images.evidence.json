@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "repository": "os-santiago/ai-sdlc",
+  "revision": "560e2fa901dd8188cec7b0f9232677057b93c7fa",
+  "run": 43690380613,
+  "runURL": "https://github.com/os-santiago/ai-sdlc/actions/runs/43690380613",
+  "images": {
+    "admission-controller": {
+      "component": "admission-controller",
+      "digest": "sha256:bd3d1ac2396b1f2a2d6b4ca19d31c0e41581330959bc573145dafb1c6fd9b75a",
+      "repository": "quay.io/os-santiago/ai-sdlc",
+      "revision": "560e2fa901dd8188cec7b0f9232677057b93c7fa",
+      "platform": "linux/amd64"
+    },
+    "intake": {
+      "component": "intake",
+      "digest": "sha256:d856bad75c0eae5294badde8e58d9972c2d0738e87d65135837f6c5ca2c4e8e5",
+      "repository": "quay.io/os-santiago/ai-sdlc",
+      "revision": "560e2fa901dd8188cec7b0f9232677057b93c7fa",
+      "platform": "linux/amd64"
+    },
+    "migrator": {
+      "component": "migrator",
+      "digest": "sha256:a9d412fb7fb3fb82f5ce053610d1ea83c0b93c5d8731dca8802f4bebc499cb49",
+      "repository": "quay.io/os-santiago/ai-sdlc",
+      "revision": "560e2fa901dd8188cec7b0f9232677057b93c7fa",
+      "platform": "linux/amd64"
+    },
+    "model-mailbox": {
+      "component": "model-mailbox",
+      "digest": "sha256:151a71bb539ca11adb3a63fda3e5e144f0bde7d913560ad4fb8e67c788948e25",
+      "repository": "quay.io/os-santiago/ai-sdlc",
+      "revision": "560e2fa901dd8188cec7b0f9232677057b93c7fa",
+      "platform": "linux/amd64"
+    },
+    "orchestrator": {
+      "component": "orchestrator",
+      "digest": "sha256:2fc6b7948e1e4a1303f20ae9387f0d9014857a6147ade2bdb53fa09fba1f6bd9",
+      "repository": "quay.io/os-santiago/ai-sdlc",
+      "revision": "560e2fa901dd8188cec7b0f9232677057b93c7fa",
+      "platform": "linux/amd64"
+    },
+    "relay": {
+      "component": "relay",
+      "digest": "sha256:01ccd7fda60a5ac9084c99b533f9ba0b66852a96acb2cd9bc5f70f016043892c",
+      "repository": "quay.io/os-santiago/ai-sdlc",
+      "revision": "560e2fa901dd8188cec7b0f9232677057b93c7fa",
+      "platform": "linux/amd64"
+    },
+    "release-manager": {
+      "component": "release-manager",
+      "digest": "sha256:2b86bd57073afddd8989303d64a5f886cb507f75621e79e9e55006a954e24c09",
+      "repository": "quay.io/os-santiago/ai-sdlc",
+      "revision": "560e2fa901dd8188cec7b0f9232677057b93c7fa",
+      "platform": "linux/amd64"
+    },
+    "worker": {
+      "component": "worker",
+      "digest": "sha256:b8dcb64dc98bd8a8bf378cca68eab4f2c5b653180bfa9ebd5d4e7161c4032df2",
+      "repository": "quay.io/os-santiago/ai-sdlc",
+      "revision": "560e2fa901dd8188cec7b0f9232677057b93c7fa",
+      "platform": "linux/amd64"
+    }
+  },
+  "artifacts": {
+    "release-manager": {
+      "id": 14152550618,
+      "digest": "sha256:a466efdbf001775b7c46d874556b67a35116e1cc20aebaadda4326d4d945f28f"
+    },
+    "worker": {
+      "id": 14152500648,
+      "digest": "sha256:785f93a87ed7b7d5c7e6e9af4eec08d72dba96a9454b9ee160e923f9fe29e3a6"
+    },
+    "migrator": {
+      "id": 14152390615,
+      "digest": "sha256:933407bfe3ef14d959f3f0d780bc8a071e77ec139959df391b839612d322be9d"
+    },
+    "intake": {
+      "id": 14152306011,
+      "digest": "sha256:30b11998384f44a73bc1372d5b9d2442e25e4e64277d825230f3f9053d0fb8a1"
+    },
+    "orchestrator": {
+      "id": 14151762709,
+      "digest": "sha256:70dbeb07b885e0c6144a6b2d4e90df3df7b0db71412d5a9e250821186039a391"
+    },
+    "model-mailbox": {
+      "id": 14151754165,
+      "digest": "sha256:6276ce28b9fef966a6d0cecde901df1f2313b76af04abaea78785633d78a80d3"
+    },
+    "admission-controller": {
+      "id": 14151584998,
+      "digest": "sha256:51fff280cdbbf111a0f1ddd3f6fa277cc73756917186a0e4157a58ceaff77729"
+    },
+    "relay": {
+      "id": 14151493397,
+      "digest": "sha256:375848e3bce96838a036137f03ddbd218eddb3b7fc4f804a83c74944f22596b7"
+    }
+  },
+  "scope": "GitHub publication identity only; registry pulls, signed provenance and deployment require separate validation."
+}
