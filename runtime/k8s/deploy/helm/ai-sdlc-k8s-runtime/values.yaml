@@ -103,3 +103,7 @@ networkPolicy:
   databaseEgressCIDRs: []
 openshift:
   route: {enabled: false, host: ""}
+
+review:
+  enabled: false
+  configJSON: ""

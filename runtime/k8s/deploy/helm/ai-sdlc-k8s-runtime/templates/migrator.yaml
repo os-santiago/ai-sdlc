@@ -32,6 +32,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: [migrate]
           env:
+            - {name: AI_SDLC_INDEPENDENT_REVIEW, value: {{ .Values.review.enabled | quote }}}
             - {name: AI_SDLC_RUNTIME_MODE, value: {{ .Values.runtime.mode | quote }}}
             - name: DATABASE_URL
               valueFrom:

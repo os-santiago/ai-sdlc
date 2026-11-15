@@ -1,0 +1,56 @@
+{{- if .Values.review.enabled }}
+{{- if ne .Values.runtime.mode "verification" }}
+{{- fail "independent review requires verification mode" }}
+{{- end }}
+{{- if empty .Values.review.configJSON }}
+{{- fail "independent review requires reviewed configuration" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-review
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+data:
+  config.json: {{ .Values.review.configJSON | quote }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-sdlc-reviewers
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata: {name: reviewer-bounds, namespace: ai-sdlc-reviewers}
+spec:
+  hard: {pods: "2", configmaps: "4", requests.cpu: "1", requests.memory: 1Gi, limits.cpu: "4", limits.memory: 2Gi}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: deny-all, namespace: ai-sdlc-reviewers}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: review-controller, namespace: ai-sdlc-reviewers}
+rules:
+  - apiGroups: [""]
+    resources: [pods, configmaps]
+    verbs: [create, get, delete]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [get, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: review-controller, namespace: ai-sdlc-reviewers}
+subjects:
+  - kind: ServiceAccount
+    name: ai-sdlc-verification-controller
+    namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: review-controller}
+{{- end }}

@@ -9,6 +9,7 @@ data:
   AI_SDLC_ENVIRONMENT: {{ .Release.Namespace | default "default" | quote }}
   AI_SDLC_AUTHORITY_POLICY_PATH: /etc/ai-sdlc/authority/policy.json
   AI_SDLC_IDENTITY_PATH: /etc/ai-sdlc/identity/identity.json
+  AI_SDLC_INDEPENDENT_REVIEW: {{ .Values.review.enabled | quote }}
   AI_SDLC_RUNTIME_MODE: {{ .Values.runtime.mode | quote }}
   AI_SDLC_INTAKE_CONFIG_PATH: /etc/ai-sdlc/intake/config.json
   AI_SDLC_LOG_LEVEL: {{ .Values.logLevel | quote }}

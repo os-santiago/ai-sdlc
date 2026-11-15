@@ -55,6 +55,14 @@ func (db *DB) ProvisionRoles(ctx context.Context, passwords map[string]string) e
 // ProvisionRolesForMode atomically reconciles optional execution privileges.
 // Returning to maintenance/shadow revokes the entire optional surface.
 func (db *DB) ProvisionRolesForMode(ctx context.Context, passwords map[string]string, mode string) error {
+	return db.ProvisionRolesForOptions(ctx, passwords, mode, false)
+}
+
+// Review privileges require an explicit installation option and verification mode.
+func (db *DB) ProvisionRolesForOptions(ctx context.Context, passwords map[string]string, mode string, review bool) error {
+	if review && mode != "verification" {
+		return errors.New("independent review requires verification mode")
+	}
 	if mode != "" && mode != "maintenance" && mode != "shadow" && mode != "candidate" && mode != "verification" {
 		return errors.New("unknown role provisioning mode")
 	}
@@ -154,6 +162,9 @@ func (db *DB) ProvisionRolesForMode(ctx context.Context, passwords map[string]st
 				}
 				if component == "verifier" {
 					statements = append(statements, verificationPrivileges...)
+					if review {
+						statements = append(statements, reviewPrivileges...)
+					}
 				}
 			}
 			// REVOKE table privileges alone does not remove column grants.

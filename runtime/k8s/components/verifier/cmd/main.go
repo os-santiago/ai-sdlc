@@ -12,9 +12,11 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/delivery"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/execution"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/reviewflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
@@ -27,6 +29,17 @@ func main() {
 	defer c.DB.Close()
 	if os.Getenv("AI_SDLC_RUNTIME_MODE") != "verification" {
 		log.Fatal("explicit verification mode required")
+	}
+	reviewOption := os.Getenv("AI_SDLC_INDEPENDENT_REVIEW")
+	if reviewOption != "" && reviewOption != "false" && reviewOption != "true" {
+		log.Fatal("invalid independent review option")
+	}
+	reviewEnabled := reviewOption == "true"
+	loadReview := func(ctx context.Context) (reviewflow.Configuration, error) {
+		if ctx.Err() != nil {
+			return reviewflow.Configuration{}, reviewflow.ErrReview
+		}
+		return reviewflow.LoadInstalled("/etc/ai-sdlc/review/config.json", "/var/run/ai-sdlc/review-model/token")
 	}
 	newLoader := func(expected string) verificationflow.PolicyLoader {
 		return func() (authority.Policy, intake.Config, string, error) {
@@ -58,6 +71,21 @@ func main() {
 		if err != nil || blocked {
 			return verificationflow.ControllerError{Stage: "cleanup"}
 		}
+		if reviewEnabled {
+			config, e := loadReview(ctx)
+			if e != nil {
+				return e
+			}
+			blocked, e := c.DB.ReviewCleanupBlocked(ctx)
+			if e != nil || blocked {
+				return reviewflow.ErrReview
+			}
+			provider, e := modelbroker.NewProvider(config.Model)
+			if e != nil {
+				return e
+			}
+			return provider.CheckGateway(ctx)
+		}
 		return nil
 	}
 	stop := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
@@ -81,6 +109,18 @@ func main() {
 		// Recheck the complete installation config, including pinned images, before every effect.
 		sealed, _ := json.Marshal(config)
 		r := verificationflow.Runtime{DB: c.DB, Load: newLoader(workspacebundle.Digest(sealed)), Client: client, Image: config.Placement.WorkerImage}
+		if reviewEnabled {
+			review := reviewflow.Runtime{DB: c.DB, Policy: r.Load, Load: loadReview, Client: client}
+			state, e := review.PollOnce(ctx)
+			if e != nil {
+				log.Print("independent review stopped safely")
+				return
+			}
+			if state != "" {
+				log.Print("independent review: " + state)
+				return
+			}
+		}
 		state, err := r.PollOnce(ctx)
 		if err != nil {
 			log.Print("verification reconciliation stopped safely: " + verificationflow.DiagnosticStage(err))

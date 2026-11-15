@@ -83,7 +83,11 @@ func run() error {
 		if err := db.Migrate(ctx); err != nil {
 			return errors.New("schema migration failed")
 		}
-		if err := db.ProvisionRolesForMode(ctx, passwords, os.Getenv("AI_SDLC_RUNTIME_MODE")); err != nil {
+		review := os.Getenv("AI_SDLC_INDEPENDENT_REVIEW")
+		if review != "" && review != "false" && review != "true" {
+			return errors.New("invalid independent review option")
+		}
+		if err := db.ProvisionRolesForOptions(ctx, passwords, os.Getenv("AI_SDLC_RUNTIME_MODE"), review == "true"); err != nil {
 			return err
 		}
 		log.Print("schema and component database roles ready")

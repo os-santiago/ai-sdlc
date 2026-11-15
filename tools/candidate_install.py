@@ -7,7 +7,9 @@ import re
 import secrets
 
 
-def desired_values(root, image_lock_path, lock, verification=False):
+def desired_values(root, image_lock_path, lock, verification=False, review=False):
+    if review and not verification:
+        raise ValueError('Independent review requires verification')
     evidence_path = Path(image_lock_path).with_name('images.evidence.json')
     with evidence_path.open('rb') as stream:
         raw = stream.read(65537)
@@ -43,6 +45,12 @@ def desired_values(root, image_lock_path, lock, verification=False):
                 or not re.fullmatch(r'sha256:[a-f0-9]{64}', value)):
             raise ValueError('Verification requires matching reviewed verifier image publication')
         result['verifier'] = {'digest': value}
+    if review:
+        review_profile = dict(profile, version='ai-sdlc.reviewer-profile/v1', maxSteps=8, maxSeconds=180)
+        review_config = {'version': 'ai-sdlc.independent-review-runtime/v1', 'profile': review_profile,
+                         'aDev': adev, 'workerImage': config['placement']['WorkerImage'],
+                         'mailboxImage': config['placement']['MailboxImage']}
+        result['review'] = {'enabled': True, 'configJSON': json.dumps(review_config, sort_keys=True)}
     return result
 
 
@@ -89,3 +97,12 @@ def api_cidrs(kubectl):
     if not 2 <= len(addresses) <= 8:
         raise ValueError('Unsupported Kubernetes API endpoint inventory')
     return sorted({str(ipaddress.IPv4Address(value)) + '/32' for value in addresses})
+
+
+def review_credentials(kubectl, cluster_uid):
+    from install import owned_secret, create_owned_secret
+    current = owned_secret(kubectl, 'ai-sdlc-review-model-client', cluster_uid)
+    if current is None:
+        create_owned_secret(kubectl, 'ai-sdlc-review-model-client', {'token': secrets.token_urlsafe(48)}, cluster_uid)
+    elif set(current) != {'token'} or not re.fullmatch(r'[A-Za-z0-9_-]{32,128}', current['token']):
+        raise ValueError('Invalid independent review model client identity')

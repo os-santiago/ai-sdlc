@@ -384,3 +384,37 @@ func TestReviewJournalNotGrantedByInstalledProfiles(t *testing.T) {
 		}
 	}
 }
+
+func TestInstalledReviewPrivilegesAreExplicitScopedAndRevocable(t *testing.T) {
+	f, db, r := reviewJournalFixture(t)
+	ctx := context.Background()
+	passwords := map[string]string{}
+	for role := range f.Material.Identities {
+		passwords[role] = strings.ReplaceAll(role, "-", "_") + strings.Repeat("q", 40)
+	}
+	if f.Admin.ProvisionRolesForOptions(ctx, passwords, "candidate", true) == nil {
+		t.Fatal("review enabled without verification")
+	}
+	if e := f.Admin.ProvisionRolesForOptions(ctx, passwords, "verification", true); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := db.ReadReview(ctx, r.ID); e != nil {
+		t.Fatal("review not readable", e)
+	}
+	for _, query := range []string{`UPDATE review_runs SET candidate_id='forged' WHERE false`, `UPDATE review_effects SET resource_name='forged' WHERE false`, `UPDATE review_model_calls SET request_digest=repeat('a',64) WHERE false`, `DELETE FROM review_runs WHERE false`, `UPDATE execution_candidates SET delta='forged' WHERE false`, `UPDATE release_gates SET state='verified' WHERE false`, `SELECT * FROM managed_component_roles`} {
+		if _, e := db.Pool.Exec(query); e == nil {
+			t.Fatal("excess review privilege", query)
+		}
+	}
+	if _, e := f.db.Pool.Exec(`SELECT * FROM review_runs`); e == nil {
+		t.Fatal("generation identity reads review")
+	}
+	if f.Admin.ProvisionRolesForOptions(ctx, passwords, "verification", false) != nil {
+		t.Fatal("review disable failed")
+	}
+	for _, query := range []string{`SELECT * FROM review_runs`, `UPDATE review_runs SET state='failed' WHERE false`, `UPDATE review_effects SET digest=repeat('a',64) WHERE false`, `UPDATE review_model_calls SET state='uncertain' WHERE false`} {
+		if _, e := db.Pool.Exec(query); e == nil {
+			t.Fatal("review privilege retained after disable", query)
+		}
+	}
+}
