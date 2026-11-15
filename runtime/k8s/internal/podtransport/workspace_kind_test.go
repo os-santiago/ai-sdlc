@@ -41,7 +41,12 @@ func TestRealWorkspaceLifecycleFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal("workspace fixture binding")
 	}
-	file, err := os.Open(input.SourceFile)
+	exerciseWorkspaceLifecycle(t, ctx, session, input.Binding, input.SourceFile, input.OutputFile)
+}
+
+func exerciseWorkspaceLifecycle(t *testing.T, ctx context.Context, session *Session, binding Binding, sourceFile, outputFile string) Candidate {
+	t.Helper()
+	file, err := os.Open(sourceFile)
 	if err != nil {
 		t.Fatal("workspace fixture source")
 	}
@@ -62,7 +67,7 @@ func TestRealWorkspaceLifecycleFixture(t *testing.T) {
 	if session.Start(ctx) == nil {
 		t.Fatal("exclusive start replay accepted")
 	}
-	a, err := executor.ParseAssignment(input.Binding.Assignment, modelmailbox.Digest(input.Binding.Assignment), time.Now())
+	a, err := executor.ParseAssignment(binding.Assignment, modelmailbox.Digest(binding.Assignment), time.Now())
 	if err != nil {
 		t.Fatal("fixture assignment")
 	}
@@ -140,7 +145,7 @@ func TestRealWorkspaceLifecycleFixture(t *testing.T) {
 			t.Fatal("independent candidate identity mismatch")
 		}
 	}
-	output, err := os.OpenFile(input.OutputFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	output, err := os.OpenFile(outputFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		t.Fatal("private candidate output")
 	}
@@ -150,4 +155,5 @@ func TestRealWorkspaceLifecycleFixture(t *testing.T) {
 		t.Fatal("candidate output failed")
 	}
 	t.Log("actual fixed import/start/stopped-export passed; two synthetic model replies; no durable model broker or live execution")
+	return candidate
 }
