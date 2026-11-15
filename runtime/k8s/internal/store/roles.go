@@ -9,7 +9,7 @@ import (
 )
 
 var componentTables = map[string][]string{
-	"intake": {}, "admission-controller": {"admissions"},
+	"intake": {"intake_cursors", "intake_revisions"}, "admission-controller": {"admissions"},
 	"orchestrator": {"plans", "work_items"}, "worker": {"attempts"},
 	"verifier": {}, "release-manager": {"release_gates"},
 	"relay": {}, "deployer": {},

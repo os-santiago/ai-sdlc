@@ -104,6 +104,34 @@ functional issue-to-production cycle. See the
 [runtime integration boundary](../runtime/k8s/README.md#signed-delivery-integration-boundary).
 Fleet signal resolution remains separately tracked by [kill-switch.md](kill-switch.md).
 
+### Issue polling building block
+
+`internal/forge` provides bounded, repository-bound GitHub reads using the
+explicit local client credential. It rejects redirects and unexpected issue
+identities and retains rate-limit delay hints without exposing response bodies
+or credentials. `internal/intake` resolves the latest label/unlabel event across
+pages against a reviewed numeric actor allowlist, then rereads the issue to
+reject changes observed during authorization.
+
+Its snapshot binds issue content/state, the authorization event, configuration
+digest and a base commit SHA. Comment timestamps and renamed display logins do
+not create a new content revision. The first accepted snapshot of a revision
+keeps its original base binding. Previously observed issues produce withdrawal
+snapshots when closed or no longer authorized; consumers must apply withdrawal
+semantics and recheck current issue eligibility before later external effects.
+GitHub reads are snapshots, not a lock on future issue edits.
+
+The intake database LOGIN owns its cursor and revision ledger. Each new revision
+and its signed `admit-issue` receipt commit together. Scans have a 90-second
+deadline, a 120-second durable lease, bounded pagination and durable backoff.
+Partial failures preserve the watermark; successful scans advance it only to
+scan start and overlap two minutes on the next pass. Restarted scans deduplicate
+committed revisions. Polling is observational and may continue after backoff;
+this does not increase the relay's eight-attempt delivery budget.
+
+These modules are not yet installed or activated. Their disposable PostgreSQL
+and HTTP-fixture tests do not establish real issue ingestion or E2E delivery.
+
 Run `go test ./internal/authority` from `runtime/k8s`; run
 `bash tools/test-contracts.sh` from the repository root to validate the schema
 fixture. Run `go test -count=1 -p 1 ./...` with `AI_SDLC_TEST_DATABASE_URL` pointing to a
