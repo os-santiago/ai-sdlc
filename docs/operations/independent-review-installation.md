@@ -39,3 +39,18 @@ Disabling does not rewrite claims or discard uncertain resources.
 Current evidence is in `docs/evidence/2026-11-15-review-installation.json`.
 The E2E demonstration additionally requires publication, merge gates, artifact
 provenance and promotion to the separate kind production namespace.
+
+## Reproduce installation behavior
+
+Create the dedicated disposable `ai-sdlc-review-install-test` kind cluster using
+the ordinary maintenance installer. Build and import the worker, model-mailbox,
+verifier and migrator OCI images locally. Supply their immutable references as
+a JSON object keyed by those four component names to
+`python3 tools/verify_review_install.py --help`. The tool requires explicit
+credential import options when its owned test Secrets do not exist. It freezes
+authority and uses a fixture-only trigger label, then enables, reapplies, disables
+and re-enables review through Helm. It checks zero workflow requests, actual
+PostgreSQL grants, removed model mounts/RBAC, and retained namespace, marker UID,
+deny-all policy and quota. It removes its marker with an exact UID precondition.
+Locally imported fixture images are not publication evidence. Retire the owned
+disposable cluster after inspecting the sanitized report.

@@ -63,6 +63,12 @@ adds a separate verifier service and four offline validation Pods. It requires
 a matching published verifier image and stores independent behavior evidence;
 publication, merge and promotion remain disabled.
 
+With reviewed compatible images, verification can also enable an
+[independent read-only SCC review](docs/operations/independent-review-installation.md)
+using `"independentReview": true` in the installation JSON. The reviewer has a
+separate offline namespace, model conversation and durable evidence journal.
+Publication and deployment remain disabled.
+
 The [Homedir enterprise pilot](docs/enterprise-pilot.md) uses a separate,
 declaratively configured installation and real product validation. Start with
 `./install.sh plan --config examples/homedir.local-install.json`; the example

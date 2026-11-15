@@ -31,6 +31,7 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 	}
 	var input struct {
 		Scenario                                                           string
+		Endpoint, Token                                                    string
 		Config                                                             podtransport.Config
 		Placement                                                          Placement
 		Profile, ADev                                                      []byte
@@ -62,7 +63,7 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 	snapshot := f.Snapshot(1, true)
 	snapshot.BaseSHA = bundle.SourceSHA
 	snapshot.Issue.Title = "Isolated lifecycle conformance fixture"
-	snapshot.Issue.Body = "Synthetic component fixture; not a live issue.\n## Acceptance criteria\n- Create AI_SDLC_EXECUTOR_FIXTURE.txt containing the requested fixture text.\n- Preserve every original source file.\n"
+	snapshot.Issue.Body = "Synthetic component fixture; not a live issue.\n## Acceptance criteria\n- Create AI_SDLC_EXECUTOR_FIXTURE.txt containing exactly: Created by the isolated SCC executor conformance fixture. End with a newline.\n- Preserve every original source file.\n"
 	snapshot.Revision = snapshot.ContentRevision()
 	f.seedReadinessSnapshot(t, snapshot)
 	if _, err = f.accept(f.envelope(t, f.command)); err != nil {
@@ -82,7 +83,7 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal("fixture-only grants")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 140*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 260*time.Second)
 	defer cancel()
 	load := func(context.Context) (PreparationInputs, error) {
 		return PreparationInputs{Policy: f.Material.Policy, Intake: f.Config, Profile: input.Profile, ADev: input.ADev}, nil
@@ -162,12 +163,20 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{"id": "lifecycle-fixture", "object": "chat.completion", "model": "fixture-model", "choices": []any{map[string]any{"index": 0, "finish_reason": reason, "message": message}}})
 	}))
 	defer server.Close()
-	provider, err := modelbroker.NewProvider(modelbroker.ProviderConfig{Endpoint: server.URL + "/v1/chat/completions", BearerToken: strings.Repeat("x", 32), AllowLoopbackHTTP: true})
+	endpoint, token := server.URL+"/v1/chat/completions", strings.Repeat("x", 32)
+	if input.Scenario == "real-model" {
+		endpoint, token = input.Endpoint, input.Token
+	}
+	provider, err := modelbroker.NewProvider(modelbroker.ProviderConfig{Endpoint: endpoint, BearerToken: token, AllowLoopbackHTTP: true})
 	if err != nil {
 		t.Fatal("synthetic HTTP model fixture")
 	}
+	limits := store.ModelLimits{Calls: 4, InputBytes: 512 * 1024, OutputBytes: 128 * 1024}
+	if input.Scenario == "real-model" {
+		limits = store.ModelLimits{Calls: 8, InputBytes: 1024 * 1024, OutputBytes: 512 * 1024}
+	}
 	captured, err := RunController(ctx, f.db, loader, prepared, client, provider, func(context.Context) (ModelPolicy, error) {
-		return ModelPolicy{Limits: store.ModelLimits{Calls: 4, InputBytes: 512 * 1024, OutputBytes: 128 * 1024}, ResponseLimit: 32 * 1024}, nil
+		return ModelPolicy{Limits: limits, ResponseLimit: 32 * 1024}, nil
 	})
 	if input.Scenario == "provider-failure" || input.Scenario == "cancel-provider" || input.Scenario == "no-change" {
 		if err == nil || captured.RequestID != "" || f.Count(t, `SELECT count(*) FROM execution_candidates`) != 0 || f.Count(t, `SELECT count(*) FROM execution_requests WHERE state='stopped'`) != 1 {
@@ -192,11 +201,18 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 		return
 	}
 	if err != nil {
-		t.Fatal("controller composition", err)
+		t.Fatal("controller composition", DiagnosticStage(err), "cleanupPending", CleanupPending(err))
 	}
 	expectedCalls := int32(2)
 	if input.Scenario == "three-turns" {
 		expectedCalls = 3
+	}
+	if input.Scenario == "real-model" {
+		expectedCalls = int32(f.Count(t, `SELECT count(*) FROM model_calls`))
+		if expectedCalls < 1 || expectedCalls > 8 {
+			t.Fatal("real model call budget")
+		}
+		calls.Store(expectedCalls)
 	}
 	if captured.Changes != 1 || captured.ModelCalls != int(expectedCalls) || calls.Load() != expectedCalls || f.Count(t, `SELECT count(*) FROM model_calls WHERE state='completed' AND response_handed_off_at IS NOT NULL`) != int(expectedCalls) || f.Count(t, `SELECT count(*) FROM execution_effects WHERE result IS NOT NULL`) != 5 {
 		t.Fatal("controller durable evidence")
@@ -219,6 +235,6 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 		t.Fatal("bundle encoding")
 	}
 	writePrivate(input.OutputFile, exported)
-	result, _ := json.Marshal(map[string]any{"scope": "isolated-composed-component-fixture", "syntheticAuthority": true, "syntheticModelReplies": true, "liveWorkflowAdvanced": false, "modelCalls": calls.Load(), "durableModelHandoffs": expectedCalls, "durableEffects": 5, "originalPodUID": captured.PodUID, "workerExitCode": 0, "candidateBytes": len(exported), "controller": "RunController", "workItemStatus": "running", "lifecyclePhase": "candidate-captured", "candidateDeltaSHA256": captured.DeltaSHA256, "candidateTreeSHA256": captured.CandidateTreeSHA256, "candidateDeltaBytes": len(delta), "candidateValidated": false, "modelBudgetSealed": true})
+	result, _ := json.Marshal(map[string]any{"scope": "isolated-composed-component-fixture", "syntheticAuthority": true, "syntheticModelReplies": input.Scenario != "real-model", "liveWorkflowAdvanced": false, "modelCalls": calls.Load(), "durableModelHandoffs": expectedCalls, "durableEffects": 5, "originalPodUID": captured.PodUID, "workerExitCode": 0, "candidateBytes": len(exported), "controller": "RunController", "workItemStatus": "running", "lifecyclePhase": "candidate-captured", "candidateDeltaSHA256": captured.DeltaSHA256, "candidateTreeSHA256": captured.CandidateTreeSHA256, "candidateDeltaBytes": len(delta), "candidateValidated": false, "modelBudgetSealed": true})
 	writePrivate(input.ReportFile, result)
 }

@@ -8,7 +8,7 @@
     "status": "passed",
     "passedTests": 1002,
     "passedPackages": 34,
-    "sourceCommit": "16ec734c6cb04f101840fa4bb0b73de87ba09ba9",
+    "sourceCommit": "83a3d41dc3c8abb48c51381ebaafe0e0e1b3661f",
     "cleanSource": true
   },
   "scenarios": [
@@ -197,7 +197,49 @@
   ],
   "syntheticGenerationModel": true,
   "realModelScope": "Only the independent review uses actual Codex CLI; generation uses deterministic synthetic replies.",
-  "pendingValidation": [
-    "lost-config-reply: first attempt stopped in pre-existing source preparation before the reviewer due to unavailable public source; rerun after source access is available."
-  ]
+  "pendingValidation": [],
+  "ciConformance": {
+    "run": "https://github.com/os-santiago/ai-sdlc/actions/runs/43758790234",
+    "head": "83a3d41dc3c8abb48c51381ebaafe0e0e1b3661f",
+    "conclusion": "success",
+    "scenarios": [
+      "approve",
+      "request_changes",
+      "mutation",
+      "revoke-model",
+      "revoke-config",
+      "lost-config-reply"
+    ],
+    "lostConfigReply": {
+      "autonomousE2E": false,
+      "behaviorVerified": true,
+      "cleanupState": "uncertain",
+      "confirmedHandoffs": 0,
+      "modelCalls": 0,
+      "proofCommitted": false,
+      "publicationAuthorized": false,
+      "realCodexCLI": false,
+      "realHTTP": true,
+      "realKubernetes": true,
+      "realPostgres": true,
+      "realSCC": true,
+      "reviewState": "failed",
+      "scenario": "lost-config-reply",
+      "scope": "isolated-candidate-behavior-review-controller",
+      "secondPollDidNotReplay": true,
+      "signedCandidateHandoff": true,
+      "syntheticGenerationModel": true,
+      "syntheticIssue": true,
+      "syntheticReviewModel": true,
+      "resourcesConfirmedRemoved": true,
+      "ownedNamespaceRemoved": true,
+      "verifierNamespaceRemoved": true,
+      "verifierResourcesConfirmedRemoved": true,
+      "separateServiceAccounts": true,
+      "reviewerNamespaceRemoved": true,
+      "reviewerResourcesConfirmedRemoved": false,
+      "unknownResourcePreserved": true,
+      "reviewerServiceAccountSeparated": true
+    }
+  }
 }

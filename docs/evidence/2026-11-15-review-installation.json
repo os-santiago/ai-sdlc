@@ -11,8 +11,34 @@
     "helm": "rendered review gateway credentials and namespace-scoped RBAC checked"
   },
   "pending": [
-    "Actual isolated installation and disable/reapply validation",
     "Independent audit and CI",
     "Published image pins before Homedir activation"
+  ],
+  "isolatedInstallation": {
+    "scope": "isolated-review-installation-fixture",
+    "autonomousE2E": false,
+    "workflowRequests": 0,
+    "authorityFrozen": true,
+    "realKubernetes": true,
+    "realPostgres": true,
+    "locallyBuiltFixtureImages": true,
+    "publishedImages": false,
+    "enabledReady": true,
+    "reapplyReady": true,
+    "disabledPrivilegesRevoked": true,
+    "disabledModelMountsRemoved": true,
+    "disabledRBACRemoved": true,
+    "uncertainResourceBoundaryPreserved": true,
+    "retainedNamespaceUID": "f81d6a00-578d-4868-9b16-09c2d826262e",
+    "retainedMarkerUID": "43a3909c-cafe-4e98-8cc8-16c4ad8e76b5",
+    "denyAllAndQuotaRetained": true,
+    "reenabledReady": true,
+    "homedirModified": false,
+    "ownedMarkerRemovedAfterValidation": true
+  },
+  "initialFindings": [
+    "The fixture initially used a runtime namespace UID instead of the installation kube-system UID; ownership checks rejected adoption before any write.",
+    "The custom fixture trigger label initially differed from its admission contract; aligning both allowed enable/reapply/disable/reenable to pass.",
+    "Audit found namespace deletion on disable could remove uncertain resources; Namespace, deny-all policy and quota now retain Helm ownership and survive disabling."
   ]
 }
