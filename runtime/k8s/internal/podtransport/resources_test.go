@@ -353,10 +353,46 @@ func TestRecoveryCleanupRejectsSubstitutionAndUsesUID(t *testing.T) {
 	if calls.Load() != 0 {
 		t.Fatal("invalid cleanup reached API")
 	}
+	if err := r.client.CleanupAcknowledged(context.Background(), "ai-sdlc-executors", pod, config, "", ""); err != nil || calls.Load() != 0 {
+		t.Fatal("pre-first-effect recovery was not a safe no-op", err)
+	}
 	if err := r.client.CleanupAcknowledged(context.Background(), "ai-sdlc-executors", pod, config, fixtureConfigUID, fixtureConfigUID); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 2 {
 		t.Fatal("cleanup did not use both UIDs")
+	}
+}
+
+func TestReviewRecoveryCleanupIsNamespaceAndUIDBound(t *testing.T) {
+	r, calls := resourcesFixture(t, func(_ *Resources, _ core.Pod, w http.ResponseWriter, request *http.Request) {
+		if request.Method != "DELETE" || !strings.HasPrefix(request.URL.Path, "/api/v1/namespaces/ai-sdlc-reviewers/") {
+			t.Error("review cleanup escaped namespace")
+		}
+		var options meta.DeleteOptions
+		if json.NewDecoder(request.Body).Decode(&options) != nil || options.Preconditions == nil || string(*options.Preconditions.UID) != fixtureConfigUID {
+			t.Error("missing original UID")
+		}
+		w.WriteHeader(404)
+	})
+	pod := "executor-" + fixtureConfigUID + "-1"
+	config := "assignment-" + strings.Repeat("a", 32)
+	if r.client.CleanupAcknowledged(context.Background(), "ai-sdlc-reviewers", pod, config, fixtureConfigUID, fixtureConfigUID) == nil {
+		t.Fatal("executor cleanup expanded namespace")
+	}
+	if r.client.CleanupReviewAcknowledged(context.Background(), "../escaped", config, fixtureConfigUID, fixtureConfigUID) == nil {
+		t.Fatal("invalid pod accepted")
+	}
+	if calls.Load() != 0 {
+		t.Fatal("invalid cleanup reached API")
+	}
+	if e := r.client.CleanupReviewAcknowledged(context.Background(), pod, config, fixtureConfigUID, fixtureConfigUID); e != nil {
+		t.Fatal(e)
+	}
+	if e := r.client.CleanupReviewAcknowledged(context.Background(), "", config, "", fixtureConfigUID); e != nil {
+		t.Fatal("config-only recovery rejected", e)
+	}
+	if calls.Load() != 3 {
+		t.Fatal("unexpected cleanup calls", calls.Load())
 	}
 }
