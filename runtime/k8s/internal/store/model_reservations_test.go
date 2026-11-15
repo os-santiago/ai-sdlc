@@ -512,3 +512,93 @@ func TestModelExpiredSiblingClaimRacesRecovery(t *testing.T) {
 		}
 	}
 }
+
+func TestModelExpiresWhileFinalRowLocksBlock(t *testing.T) {
+	for _, lockedTable := range []string{"allocation", "call"} {
+		for _, operation := range []string{"claim", "finish"} {
+			t.Run(lockedTable+"-"+operation, func(t *testing.T) {
+				db, _, a := modelFixture(t, 3)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				other := a
+				other.ID = NewID()
+				other.PodUID = NewID()
+				other.Attempt = 2
+				if err := db.CreateModelAllocation(ctx, other); err != nil {
+					t.Fatal(err)
+				}
+				refA := modelReserve(t, db, a, 1)
+				refB := modelReserve(t, db, other, 1)
+				if operation == "finish" {
+					if d, e := db.ClaimModelCall(ctx, refB); e != nil || !d.Invoke {
+						t.Fatalf("claim B %+v %v", d, e)
+					}
+				}
+				if d, e := db.ClaimModelCall(ctx, refA); e != nil || !d.Invoke {
+					t.Fatalf("claim A %+v %v", d, e)
+				}
+				blocker, err := db.Pool.BeginTx(ctx, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer blocker.Rollback()
+				lockSQL := `SELECT 1 FROM model_allocations WHERE id=$1 FOR UPDATE`
+				queryPrefix := "SELECT pod_uid,max_calls,%"
+				if lockedTable == "call" {
+					lockSQL = `SELECT 1 FROM model_calls WHERE allocation_id=$1 FOR UPDATE`
+					queryPrefix = "SELECT request_sha256,state,input_bytes,%"
+				}
+				if _, err = blocker.ExecContext(ctx, lockSQL, other.ID); err != nil {
+					t.Fatal(err)
+				}
+				var expires time.Time
+				if err = db.Pool.QueryRowContext(ctx, `UPDATE model_calls SET expires_at=clock_timestamp()+interval '1 second' WHERE allocation_id=$1 RETURNING expires_at`, a.ID).Scan(&expires); err != nil {
+					t.Fatal(err)
+				}
+				result := make(chan ModelDecision, 1)
+				errs := make(chan error, 1)
+				go func() {
+					var d ModelDecision
+					var e error
+					if operation == "claim" {
+						d, e = db.ClaimModelCall(ctx, refB)
+					} else {
+						d, e = db.FinishModelCall(ctx, refB, 200, []byte(`{}`))
+					}
+					result <- d
+					errs <- e
+				}()
+				// Observe the actual blocked query, rather than assuming goroutine scheduling.
+				for {
+					var blocked bool
+					err = db.Pool.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE $1)`, queryPrefix).Scan(&blocked)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if blocked {
+						break
+					}
+					select {
+					case <-ctx.Done():
+						t.Fatal("claim never blocked on allocation")
+					case <-time.After(5 * time.Millisecond):
+					}
+				}
+				if _, err = blocker.ExecContext(ctx, `SELECT pg_sleep(GREATEST(0,EXTRACT(EPOCH FROM ($1::timestamptz-clock_timestamp())))+0.05)`, expires); err != nil {
+					t.Fatal(err)
+				}
+				if err = blocker.Commit(); err != nil {
+					t.Fatal(err)
+				}
+				d := <-result
+				want := "inactive"
+				if operation == "finish" {
+					want = "uncertain-outcome"
+				}
+				if e := <-errs; e != nil || d.Invoke || d.Reason != want {
+					t.Fatalf("expired sibling passed final row lock: %+v %v", d, e)
+				}
+			})
+		}
+	}
+}

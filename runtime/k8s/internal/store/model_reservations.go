@@ -138,25 +138,33 @@ func lockModel(ctx context.Context, tx *sql.Tx, allocation string) (lockedModel,
 	if err != nil {
 		return l, err
 	}
-	// An expired pending call anywhere in this parent must stop new spending
-	// immediately, even if the periodic recovery sweep has not run. The parent
-	// lock serializes all call transitions; this observation needs no call lock.
-	var expired bool
-	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM model_calls c JOIN model_allocations a ON a.id=c.allocation_id WHERE a.work_item_uuid=$1 AND c.state IN ('reserved','started') AND c.expires_at<=clock_timestamp())`, l.workItem).Scan(&expired); err != nil {
-		return l, err
-	}
-	if expired && l.state == "active" {
-		if err = stopModel(ctx, tx, l, "expired-pending-call"); err != nil {
-			return l, err
-		}
-		l.state = "stopped"
-	}
 	err = tx.QueryRowContext(ctx, `SELECT pod_uid,max_calls,max_input_bytes,max_output_bytes,reserved_calls,reserved_input_bytes,reserved_output_bytes,response_limit,expires_at FROM model_allocations WHERE id=$1 FOR UPDATE`, allocation).Scan(&l.podUID, &l.allocation.Calls, &l.allocation.InputBytes, &l.allocation.OutputBytes, &l.allocationUsed.Calls, &l.allocationUsed.InputBytes, &l.allocationUsed.OutputBytes, &l.responseLimit, &l.allocationExpiry)
 	if err != nil {
 		return l, err
 	}
-	err = tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&l.now)
-	return l, err
+	return l, nil
+}
+
+// Evaluate every expiration against one DB instant, after ALL potentially
+// blocking row locks (including the selected call) have been acquired.
+func refreshModelTime(ctx context.Context, tx *sql.Tx, l *lockedModel) error {
+	if err := tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&l.now); err != nil {
+		return err
+	}
+	// An expired pending call anywhere in this parent must stop new spending
+	// immediately, even if the periodic recovery sweep has not run. The parent
+	// lock serializes all call transitions; this observation needs no call lock.
+	var expired bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM model_calls c JOIN model_allocations a ON a.id=c.allocation_id WHERE a.work_item_uuid=$1 AND c.state IN ('reserved','started') AND c.expires_at<=$2)`, l.workItem, l.now).Scan(&expired); err != nil {
+		return err
+	}
+	if expired && l.state == "active" {
+		if err := stopModel(ctx, tx, *l, "expired-pending-call"); err != nil {
+			return err
+		}
+		l.state = "stopped"
+	}
+	return nil
 }
 func (l lockedModel) active() bool {
 	return l.state == "active" && l.now.Before(l.budgetExpiry) && l.now.Before(l.allocationExpiry)
@@ -210,11 +218,17 @@ func (db *DB) ReserveModelCall(ctx context.Context, allocation, podUID string, s
 			d.Reason = "model-mismatch"
 			return stopModel(ctx, tx, l, d.Reason)
 		}
+		c, err := readModelCall(ctx, tx, r)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if refreshErr := refreshModelTime(ctx, tx, &l); refreshErr != nil {
+			return refreshErr
+		}
 		if !l.active() {
 			d.Reason = "inactive"
 			return nil
 		}
-		c, err := readModelCall(ctx, tx, r)
 		if err == nil {
 			if c.RequestSHA256 != r.RequestSHA256 {
 				d.Reason = "replay-mismatch"
@@ -291,6 +305,9 @@ func (db *DB) ClaimModelCall(ctx context.Context, r ModelCallRef) (ModelDecision
 		if err != nil {
 			return err
 		}
+		if err = refreshModelTime(ctx, tx, &l); err != nil {
+			return err
+		}
 		d.Call = c
 		if l.podUID != r.PodUID || c.RequestSHA256 != r.RequestSHA256 {
 			d.Reason = "binding-mismatch"
@@ -341,6 +358,9 @@ func (db *DB) FinishModelCall(ctx context.Context, r ModelCallRef, status int, r
 		}
 		c, err := readModelCall(ctx, tx, r)
 		if err != nil {
+			return err
+		}
+		if err = refreshModelTime(ctx, tx, &l); err != nil {
 			return err
 		}
 		d.Call = c
@@ -401,6 +421,9 @@ func (db *DB) StopModelCall(ctx context.Context, r ModelCallRef) (ModelDecision,
 		}
 		c, err := readModelCall(ctx, tx, r)
 		if err != nil {
+			return err
+		}
+		if err = refreshModelTime(ctx, tx, &l); err != nil {
 			return err
 		}
 		d.Call = c
