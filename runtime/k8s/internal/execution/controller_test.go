@@ -11,11 +11,12 @@ import (
 )
 
 type driverSession struct {
-	requests  []modelmailbox.Envelope
-	read      int
-	exitAfter int
-	code      int32
-	readErr   error
+	requests    []modelmailbox.Envelope
+	read        int
+	exitAfter   int
+	code        int32
+	readErr     error
+	errorOnRead int
 }
 
 func (s *driverSession) WorkerExit(context.Context) (int32, bool, error) {
@@ -23,7 +24,10 @@ func (s *driverSession) WorkerExit(context.Context) (int32, bool, error) {
 }
 func (s *driverSession) ReadRequest(context.Context) (modelmailbox.Envelope, error) {
 	s.read++
-	if s.readErr != nil {
+	if s.readErr != nil && (s.errorOnRead == 0 || s.read == s.errorOnRead) {
+		if s.read <= len(s.requests) {
+			return s.requests[s.read-1], s.readErr
+		}
 		return modelmailbox.Envelope{}, s.readErr
 	}
 	if s.read > len(s.requests) {
@@ -97,5 +101,20 @@ func TestControllerDoesNotReplayUncertainDelivery(t *testing.T) {
 	calls := 0
 	if driveModel(context.Background(), s, func(context.Context) error { return nil }, func(context.Context, modelmailbox.Envelope) error { calls++; return errors.New("uncertain") }) == nil || calls != 1 {
 		t.Fatal("uncertain call was retried")
+	}
+}
+
+func TestControllerExitCannotHideObservedRequestDrift(t *testing.T) {
+	changed := req(1)
+	changed.Payload = []byte("different")
+	for name, last := range map[string]modelmailbox.Envelope{"exact duplicate": req(1), "new unhanded": req(2), "gap": req(3), "substituted duplicate": changed} {
+		t.Run(name, func(t *testing.T) {
+			s := &driverSession{requests: []modelmailbox.Envelope{req(1), last}, exitAfter: 2, readErr: podtransport.ErrWorkerExited, errorOnRead: 2}
+			calls := 0
+			err := driveModel(context.Background(), s, func(context.Context) error { return nil }, func(context.Context, modelmailbox.Envelope) error { calls++; return nil })
+			if calls != 1 || ((err == nil) != (name == "exact duplicate")) {
+				t.Fatalf("exit hid observed request: calls=%d err=%v", calls, err)
+			}
+		})
 	}
 }

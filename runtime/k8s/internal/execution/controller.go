@@ -143,6 +143,10 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 	return record, nil
 }
 
+func sameRequest(a, b modelmailbox.Envelope) bool {
+	return a.Version == b.Version && a.RequestSHA256 == b.RequestSHA256 && a.Attempt == b.Attempt && a.PodUID == b.PodUID && a.ExpiresAt == b.ExpiresAt && a.Kind == b.Kind && a.Status == b.Status && a.Sequence == b.Sequence && modelmailbox.Digest(a.Payload) == modelmailbox.Digest(b.Payload)
+}
+
 type modelSession interface {
 	WorkerExit(context.Context) (int32, bool, error)
 	ReadRequest(context.Context) (modelmailbox.Envelope, error)
@@ -172,6 +176,12 @@ func driveModel(ctx context.Context, session modelSession, authorize func(contex
 			if !errors.Is(err, podtransport.ErrWorkerExited) {
 				return ErrAuthority
 			}
+			// An observed request at exit must already have a confirmed handoff.
+			// Never hide a new request, sequence gap or substituted duplicate
+			// behind the writer's zero exit. Pending/pre-read exit is empty.
+			if request.Sequence != 0 && (previous.Sequence == 0 || !sameRequest(request, previous)) {
+				return ErrAuthority
+			}
 			// The writer can exit between ReadRequest's before/after observations.
 			// Export/capture still require zero exit, no outstanding model call and a
 			// nonempty independently reconstructed delta. Never retry a failed delivery.
@@ -186,7 +196,7 @@ func driveModel(ctx context.Context, session modelSession, authorize func(contex
 		}
 		if err == nil {
 			if request.Sequence == previous.Sequence && previous.Sequence != 0 {
-				if request.Version != previous.Version || request.RequestSHA256 != previous.RequestSHA256 || request.Attempt != previous.Attempt || request.PodUID != previous.PodUID || request.ExpiresAt != previous.ExpiresAt || request.Kind != previous.Kind || request.Status != previous.Status || modelmailbox.Digest(request.Payload) != modelmailbox.Digest(previous.Payload) {
+				if !sameRequest(request, previous) {
 					return ErrAuthority
 				}
 			} else {

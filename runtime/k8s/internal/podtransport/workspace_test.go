@@ -361,8 +361,12 @@ func TestMailboxReadSeparatesProtocolRejectionFromWorkerExit(t *testing.T) {
 			}, func(_ *http.Request, conn *websocket.Conn) {
 				workspaceReply(conn, raw, which != "helper-failure-exit-race")
 			})
-			_, err = session.ReadRequest(context.Background())
+			observed, readErr := session.ReadRequest(context.Background())
+			err = readErr
 			if which == "valid-exit-race" {
+				if observed.Sequence != request.Sequence || !bytes.Equal(observed.Payload, request.Payload) {
+					t.Fatal("observed request lost on exit")
+				}
 				if !errors.Is(err, ErrWorkerExited) {
 					t.Fatal("valid original exit not distinguished", err)
 				}

@@ -203,7 +203,9 @@ func (s *Session) ReadRequest(ctx context.Context) (modelmailbox.Envelope, error
 		}
 	}
 	if err = s.requestWorkerActive(ctx); err != nil {
-		return modelmailbox.Envelope{}, err
+		// Preserve a validated observed request so the controller can reject
+		// unhanded sequences/rebinding even when the writer has just exited.
+		return e, err
 	}
 	if pending {
 		return modelmailbox.Envelope{}, modelmailbox.ErrPending

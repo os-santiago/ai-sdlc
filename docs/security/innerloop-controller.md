@@ -24,7 +24,9 @@ the preceding request. Gaps, rebinding, nonzero exit, revoked authority,
 ambiguous dispatch or cancellation stop the attempt; there is no provider retry.
 Read/exit races use a distinct transport outcome emitted only after validating
 the helper result and observing the original worker exit. Protocol rejection
-remains terminal even if a subsequent observation would show exit zero. Export/capture still require the unchanged identity, completed handoffs
+remains terminal even if a subsequent observation would show exit zero. A valid
+request observed during exit is retained and must match the last confirmed
+handoff exactly; a new, skipped or substituted request prevents capture. Export/capture still require the unchanged identity, completed handoffs
 and a nonempty reconstructable delta.
 
 All operations use the nonrenewable lifecycle deadline. Failure stops the
