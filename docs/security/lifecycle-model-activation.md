@@ -66,7 +66,9 @@ seconds. Python independently compared every exported file and mode against the
 original source plus the one expected synthetic addition. Model authority was
 denied after export; original resources and the fixture namespace were removed.
 
-Authority, admission facts and model replies in this fixture are explicitly
-synthetic. The work item remains running and the lifecycle export-ready:
-neither the fixture nor the new API manufactures completion, acceptance, a PR,
-a release, deployment, or a real issue-to-production result.
+The fixture now also exercises [bounded candidate capture](candidate-capture.md):
+it seals the model budget and independently reconstructs the persisted delta.
+The lifecycle reaches `candidate-captured` while the work item remains running.
+Authority, admission facts and model replies are explicitly synthetic. Neither
+the fixture nor these APIs manufacture completion, acceptance, a PR, a release,
+deployment, or a real issue-to-production result.

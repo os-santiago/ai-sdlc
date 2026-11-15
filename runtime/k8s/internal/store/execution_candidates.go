@@ -1,0 +1,81 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"time"
+
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
+)
+
+// CandidateRecord identifies unvalidated bytes, not acceptance or publication.
+type CandidateRecord struct {
+	RequestID, AllocationID, PodUID, SourceSHA                       string
+	SourceTreeSHA256, CandidateTreeSHA256, ExportSHA256, DeltaSHA256 string
+	ExportBytes, Changes, ModelCalls                                 int
+}
+
+// CaptureLifecycleCandidate serializes capture with every model reservation.
+// It closes the whole work budget, without refund, in the same transaction as
+// the immutable delta and lifecycle phase. No prior result is ever adopted.
+func (db *DB) CaptureLifecycleCandidate(ctx context.Context, l Lifecycle, allocationID string, export []byte, delta []byte) (CandidateRecord, error) {
+	d, err := candidate.Decode(delta)
+	if err != nil || len(export) < 1 || len(export) > workspacebundle.MaxWireBytes || !modelUUID.MatchString(allocationID) {
+		return CandidateRecord{}, ErrExecution
+	}
+	result := CandidateRecord{RequestID: l.Claim.ID, AllocationID: allocationID, SourceSHA: d.SourceSHA, SourceTreeSHA256: d.SourceTreeSHA256, CandidateTreeSHA256: d.CandidateTreeSHA256,
+		ExportSHA256: workspacebundle.Digest(export), ExportBytes: len(export), DeltaSHA256: workspacebundle.Digest(delta), Changes: len(d.Changes)}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	err = db.WithTx(ctx, func(tx *sql.Tx) error {
+		phase, _, pod, e := lockLifecycle(ctx, tx, l)
+		if e != nil || phase != "export-ready" {
+			return ErrExecution
+		}
+		result.PodUID = pod
+		var receiptRaw []byte
+		if tx.QueryRowContext(ctx, `SELECT result FROM execution_effects WHERE request_id=$1 AND kind='export' AND completed_at IS NOT NULL FOR UPDATE`, l.Claim.ID).Scan(&receiptRaw) != nil {
+			return ErrExecution
+		}
+		var receipt LifecycleResult
+		if json.Unmarshal(receiptRaw, &receipt) != nil || receipt.UID != pod || receipt.ExitCode == nil || *receipt.ExitCode != 0 || receipt.Digest != result.ExportSHA256 || receipt.Bytes != result.ExportBytes {
+			return ErrExecution
+		}
+		var work string
+		var expiry time.Time
+		if tx.QueryRowContext(ctx, `SELECT b.work_item_uuid,LEAST(b.expires_at,a.expires_at)
+ FROM execution_models e JOIN model_allocations a ON a.id=e.allocation_id JOIN model_budgets b ON b.work_item_uuid=a.work_item_uuid
+ JOIN execution_requests r ON r.id=e.request_id JOIN work_items w ON w.uuid=r.work_item_uuid
+ WHERE e.request_id=$1 AND a.id=$2 AND a.pod_uid=$3 AND b.source_sha=$4 AND b.state='active'
+ AND w.status='running' AND r.work_item_uuid=a.work_item_uuid AND r.repository=b.repository AND r.attempt=a.attempt
+ FOR UPDATE OF b`, l.Claim.ID, allocationID, pod, d.SourceSHA).Scan(&work, &expiry) != nil {
+			return ErrExecution
+		}
+		var pending int
+		if tx.QueryRowContext(ctx, `SELECT count(*),count(*) FILTER (WHERE c.state<>'completed' OR c.response_handed_off_at IS NULL)
+ FROM model_calls c JOIN model_allocations a ON a.id=c.allocation_id WHERE a.work_item_uuid=$1`, work).Scan(&result.ModelCalls, &pending) != nil || pending != 0 || result.ModelCalls < 1 || result.ModelCalls > 128 {
+			return ErrExecution
+		}
+		if _, e = tx.ExecContext(ctx, `INSERT INTO execution_candidates(request_id,allocation_id,pod_uid,source_sha,source_tree_sha256,candidate_tree_sha256,export_sha256,export_bytes,delta_sha256,delta,changes,model_calls)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, result.RequestID, result.AllocationID, result.PodUID, result.SourceSHA, result.SourceTreeSHA256, result.CandidateTreeSHA256, result.ExportSHA256, result.ExportBytes, result.DeltaSHA256, delta, result.Changes, result.ModelCalls); e != nil {
+			return ErrExecution
+		}
+		if _, e = tx.ExecContext(ctx, `UPDATE model_budgets SET state='stopped',stop_reason='candidate-captured' WHERE work_item_uuid=$1`, work); e != nil {
+			return ErrExecution
+		}
+		if _, e = tx.ExecContext(ctx, `UPDATE execution_lifecycles SET phase='candidate-captured',updated_at=clock_timestamp() WHERE request_id=$1`, l.Claim.ID); e != nil {
+			return ErrExecution
+		}
+		var current bool
+		if tx.QueryRowContext(ctx, `SELECT $1::timestamptz>clock_timestamp()`, expiry).Scan(&current) != nil || !current {
+			return ErrExecution
+		}
+		return lifecycleCurrent(ctx, tx, l.Claim)
+	})
+	if err != nil {
+		return CandidateRecord{}, ErrExecution
+	}
+	return result, nil
+}

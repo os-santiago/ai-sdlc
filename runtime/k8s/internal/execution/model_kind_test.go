@@ -29,10 +29,10 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 		t.Skip("isolated lifecycle Kubernetes fixture required")
 	}
 	var input struct {
-		Config                                                  podtransport.Config
-		Placement                                               Placement
-		Profile, ADev                                           []byte
-		SourceFile, OutputFile, ReportFile, PlanFile, ReadyFile string
+		Config                                                             podtransport.Config
+		Placement                                                          Placement
+		Profile, ADev                                                      []byte
+		SourceFile, OutputFile, ReportFile, PlanFile, ReadyFile, DeltaFile string
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil || len(raw) > 256*1024 || json.Unmarshal(raw, &input) != nil {
@@ -70,7 +70,7 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal("signed fixture claim")
 	}
-	_, err = f.Admin.Pool.Exec(`GRANT SELECT,INSERT ON execution_lifecycles,execution_effects,execution_models,model_budgets,model_allocations,model_calls TO aisdlc_worker;
+	_, err = f.Admin.Pool.Exec(`GRANT SELECT,INSERT ON execution_lifecycles,execution_effects,execution_models,execution_candidates,model_budgets,model_allocations,model_calls TO aisdlc_worker;
  GRANT UPDATE(phase,config_uid,pod_uid,updated_at) ON execution_lifecycles TO aisdlc_worker;
  GRANT UPDATE(result,completed_at) ON execution_effects TO aisdlc_worker;
  GRANT UPDATE(status,updated_at) ON work_items TO aisdlc_worker;
@@ -245,7 +245,16 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 	if calls.Load() != 2 || f.Count(t, `SELECT count(*) FROM model_calls WHERE state='completed' AND response_handed_off_at IS NOT NULL`) != 2 || f.Count(t, `SELECT count(*) FROM execution_effects WHERE result IS NOT NULL`) != 5 {
 		t.Fatal("durable effect/handoff evidence")
 	}
+	captured, err := l.CaptureCandidate(ctx, candidate.Bytes())
+	if err != nil || captured.Changes != 1 || captured.ModelCalls != 2 || captured.PodUID != podUID {
+		t.Fatal("durable unvalidated candidate capture", err)
+	}
+	var delta []byte
+	if err = f.Admin.Pool.QueryRow(`SELECT delta FROM execution_candidates WHERE request_id=$1`, captured.RequestID).Scan(&delta); err != nil {
+		t.Fatal("fixture candidate read")
+	}
+	writePrivate(input.DeltaFile, delta)
 	writePrivate(input.OutputFile, candidate.Bytes())
-	result, _ := json.Marshal(map[string]any{"scope": "isolated-composed-component-fixture", "syntheticAuthority": true, "syntheticModelReplies": true, "liveWorkflowAdvanced": false, "modelCalls": calls.Load(), "durableModelHandoffs": 2, "durableEffects": 5, "originalPodUID": podUID, "originalConfigUID": configUID, "workerExitCode": candidate.WorkerExitCode(), "candidateBytes": len(candidate.Bytes()), "workItemStatus": "running", "lifecyclePhase": "export-ready", "postExportAuthorityDenied": true})
+	result, _ := json.Marshal(map[string]any{"scope": "isolated-composed-component-fixture", "syntheticAuthority": true, "syntheticModelReplies": true, "liveWorkflowAdvanced": false, "modelCalls": calls.Load(), "durableModelHandoffs": 2, "durableEffects": 5, "originalPodUID": podUID, "originalConfigUID": configUID, "workerExitCode": candidate.WorkerExitCode(), "candidateBytes": len(candidate.Bytes()), "workItemStatus": "running", "lifecyclePhase": "candidate-captured", "postExportAuthorityDenied": true, "candidateDeltaSHA256": captured.DeltaSHA256, "candidateTreeSHA256": captured.CandidateTreeSHA256, "candidateDeltaBytes": len(delta), "candidateValidated": false, "modelBudgetSealed": true})
 	writePrivate(input.ReportFile, result)
 }
