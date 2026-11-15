@@ -235,8 +235,9 @@ func (p Poller) record(ctx context.Context, snapshot Snapshot, leaseToken string
 			result, err := tx.ExecContext(ctx, `INSERT INTO intake_observations(repository,issue_number,generation,config_digest,authority_revision,content_key,observed_at)
 				SELECT $1,$2,$3,$4,$5,$6,$7 FROM intake_cursors
 				WHERE repository=$1 AND config_digest=$4 AND lease_token=$8 AND lease_until>clock_timestamp()
-				ON CONFLICT(repository,issue_number) DO UPDATE SET generation=EXCLUDED.generation,config_digest=EXCLUDED.config_digest,
-				authority_revision=EXCLUDED.authority_revision,content_key=EXCLUDED.content_key,observed_at=EXCLUDED.observed_at`,
+				ON CONFLICT(repository,issue_number) DO UPDATE
+				SET (generation,config_digest,authority_revision,content_key,observed_at) =
+				(EXCLUDED.generation,EXCLUDED.config_digest,EXCLUDED.authority_revision,EXCLUDED.content_key,EXCLUDED.observed_at)`,
 				snapshot.Repository, snapshot.Issue.Number, generation, snapshot.ConfigDigest, snapshot.AuthorityRevision, contentKey, observedAt, leaseToken)
 			if err != nil {
 				return errors.New("issue observation persistence failed")

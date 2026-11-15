@@ -29,6 +29,8 @@ fingerprint and fails the gate — suppression never excuses recurrence.
 | `bfdeee1…:scripts/risk-classifier.test.js:generic-api-key:125` | `generic-api-key` | `scripts/risk-classifier.test.js` | `false-positive` | Test fixture string literal next to a `PRIVATE KEY` marker — feeds the risk classifier, not a provider |
 | `e54412b…:scripts/risk-classifier.test.js:generic-api-key:125` | `generic-api-key` | `scripts/risk-classifier.test.js` | `false-positive` | Same fixture in the pre-merge commit of the same change |
 
+| `c035a7a…:runtime/k8s/internal/intake/poller.go:generic-api-key:239` | `generic-api-key` | `runtime/k8s/internal/intake/poller.go` | `false-positive` | PostgreSQL UPSERT assigns `EXCLUDED.content_key` to a digest column; no credential or literal key. Rewritten as a row assignment for subsequent commits; exact historical fingerprint only. |
+
 (Fingerprints abbreviated for readability; `.gitleaksignore` carries the
 full 40-char commit SHAs.)
 
