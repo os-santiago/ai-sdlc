@@ -11,6 +11,10 @@ The canonical installer is `./install.sh` at the repository root. Helm chart
 The original Kustomize topology remains a legacy manual deployment surface;
 it is not the new installer's desired state.
 
+The installer requires positive/negative network conformance probes to pass
+against the plugin included in the pinned kind image. Existing remote clusters
+must provide their own NetworkPolicy enforcement.
+
 ## Components
 
 | Component | Stage (ADR-0003) | Package |

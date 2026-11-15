@@ -235,12 +235,26 @@ generative execution are disabled. The chart rejects `runtime.mode=active`
 until isolated execution and authoritative publication are implemented.
 No model/API/GitHub write credentials are mounted in this mode.
 
-The default kind CNI does not enforce Kubernetes NetworkPolicy. Policies
-are rendered for compatible CNIs, but are not proof of isolation on kind.
-Maintenance mode and the absence of public component ingress are essential
-boundaries here; [NetworkPolicy enforcement requires a supporting CNI](https://kubernetes.io/docs/concepts/services-networking/network-policies/).
-Application authentication and worker isolation remain
-#421/#422. Keep the local cluster on a trusted host.
+The pinned kind node image includes kindnet with
+[NetworkPolicy enforcement](https://github.com/kubernetes-sigs/kind/blob/69b56db7/images/kindnetd/cmd/kindnetd/main.go).
+Each local apply verifies that capability with disposable positive and negative
+connectivity tests instead of assuming a CNI's feature set. The probes establish
+baseline connectivity, egress denial, selective egress, unrestricted egress
+again, ingress denial and restored connectivity, then remove the temporary
+namespace using an atomic UID precondition. An API/exec error is a failure,
+never evidence of a blocked connection. Installation succeeds only after these
+tests pass. No additional network controller is installed.
+
+These probes do not submit runtime tasks or modify workflow state. A process
+interrupted during testing can leave an `ai-sdlc-netcheck-*` namespace; inspect
+its ownership label before removing it. The probe Pods run under the restricted
+Pod Security policy without runtime credentials or service-account tokens.
+
+Existing clusters must provide their own compatible network plugin:
+[NetworkPolicy requires enforcement support](https://kubernetes.io/docs/concepts/services-networking/network-policies/).
+The conformance test proves network behavior at installation time; it does not
+prove future generated-workload isolation, application authentication or
+continuous enforcement. Those additional boundaries remain #421/#422.
 
 Independent verification, PR/merge/release and
 production promotion remain tracked under #153. The experimental CodexCLI
