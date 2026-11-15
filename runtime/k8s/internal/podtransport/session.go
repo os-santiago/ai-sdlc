@@ -35,11 +35,12 @@ type instance struct{ ID, ImageID, Image string }
 // Session captures the exact initially observed container instances. A new
 // session is not a retry or a replacement for durable assignment authority.
 type Session struct {
-	client    *Client
-	expected  core.Pod
-	identity  modelmailbox.Identity
-	expires   time.Time
-	instances map[string]instance
+	client                               *Client
+	expected                             core.Pod
+	identity                             modelmailbox.Identity
+	expires                              time.Time
+	instances                            map[string]instance
+	sourceSHA, assignmentDigest, treeSHA string
 }
 
 func Bind(ctx context.Context, c *Client, b Binding) (*Session, error) {
@@ -68,7 +69,7 @@ func Bind(ctx context.Context, c *Client, b Binding) (*Session, error) {
 	if err != nil {
 		return nil, ErrTransport
 	}
-	s := &Session{client: c, identity: id, expires: time.UnixMilli(a.ExpiresAt)}
+	s := &Session{client: c, identity: id, expires: time.UnixMilli(a.ExpiresAt), sourceSHA: a.SourceSHA, assignmentDigest: modelmailbox.Digest(b.Assignment), treeSHA: a.TreeSHA256}
 	if authority.DecodeStrict(raw, &s.expected) != nil {
 		return nil, ErrTransport
 	}
@@ -125,15 +126,25 @@ func (s *Session) podURL() string {
 	return s.client.base + "/api/v1/namespaces/" + s.expected.Namespace + "/pods/" + s.expected.Name
 }
 
+type observation struct {
+	instances      map[string]instance
+	workerExitCode *int32
+}
+
 func (s *Session) observe(ctx context.Context, allowWorkerExit bool) (map[string]instance, error) {
+	observed, err := s.inspect(ctx, allowWorkerExit)
+	return observed.instances, err
+}
+
+func (s *Session) inspect(ctx context.Context, allowWorkerExit bool) (observation, error) {
 	if !time.Now().Before(s.expires) {
-		return nil, ErrTransport
+		return observation{}, ErrTransport
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithDeadline(ctx, minDeadline(time.Now().Add(5*time.Second), s.expires))
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.podURL(), nil)
 	if err != nil {
-		return nil, ErrTransport
+		return observation{}, ErrTransport
 	}
 	req.Header.Set("Accept", "application/json")
 	if s.client.config.BearerToken != "" {
@@ -141,30 +152,31 @@ func (s *Session) observe(ctx context.Context, allowWorkerExit bool) (map[string
 	}
 	response, err := s.client.http.Do(req)
 	if err != nil {
-		return nil, ErrTransport
+		return observation{}, ErrTransport
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusForbidden {
-		return nil, ErrPermission
+		return observation{}, ErrPermission
 	}
 	if response.StatusCode != 200 {
-		return nil, ErrTransport
+		return observation{}, ErrTransport
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxPodBytes+1))
 	var pod core.Pod
 	if err != nil || len(raw) > maxPodBytes || authority.DecodeStrict(raw, &pod) != nil {
-		return nil, ErrTransport
+		return observation{}, ErrTransport
 	}
 	if string(pod.UID) != s.identity.PodUID || pod.Name != s.expected.Name || pod.Namespace != s.expected.Namespace || pod.DeletionTimestamp != nil || pod.Status.Phase != core.PodRunning || pod.Spec.NodeName == "" || !reflect.DeepEqual(pod.Labels, s.expected.Labels) || !reflect.DeepEqual(pod.Annotations, s.expected.Annotations) {
-		return nil, ErrTransport
+		return observation{}, ErrTransport
 	}
 	// Scheduling selects nodeName. Every other specification field must match
 	// the compiled template plus the exact supported API defaults above.
 	pod.Spec.NodeName = ""
 	if !equality.Semantic.DeepEqual(pod.Spec, s.expected.Spec) || len(pod.Status.ContainerStatuses) != 2 || len(pod.Status.InitContainerStatuses) != 0 || len(pod.Status.EphemeralContainerStatuses) != 0 {
-		return nil, ErrTransport
+		return observation{}, ErrTransport
 	}
 	instances := map[string]instance{}
+	var workerExitCode *int32
 	expectedImages := map[string]string{}
 	for _, container := range s.expected.Spec.Containers {
 		expectedImages[container.Name] = container.Image
@@ -175,9 +187,11 @@ func (s *Session) observe(ctx context.Context, allowWorkerExit bool) (map[string
 			// The worker may consume the final response and exit before the
 			// post-publication GET. This is not candidate acceptance evidence.
 			stateOK = true
+			code := status.State.Terminated.ExitCode
+			workerExitCode = &code
 		}
 		if (status.Name != "worker" && status.Name != "mailbox") || status.RestartCount != 0 || !stateOK || !containerIDPattern.MatchString(status.ContainerID) || len(status.ImageID) > 1024 || !imageIDPattern.MatchString(status.ImageID) || len(status.Image) == 0 || len(status.Image) > 1024 {
-			return nil, ErrTransport
+			return observation{}, ErrTransport
 		}
 		// The supported kind/containerd profile reports its actual manifest
 		// digest in ImageID, while Image may be an imported tag. Require that
@@ -185,15 +199,25 @@ func (s *Session) observe(ctx context.Context, allowWorkerExit bool) (map[string
 		// Multi-platform index pins need explicit platform resolution first.
 		image := expectedImages[status.Name]
 		if status.ImageID[strings.LastIndex(status.ImageID, "@")+1:] != image[strings.LastIndex(image, "@")+1:] {
-			return nil, ErrTransport
+			return observation{}, ErrTransport
 		}
 		if _, duplicate := instances[status.Name]; duplicate {
-			return nil, ErrTransport
+			return observation{}, ErrTransport
 		}
 		instances[status.Name] = instance{status.ContainerID, status.ImageID, status.Image}
 	}
 	if s.instances != nil && !reflect.DeepEqual(instances, s.instances) {
-		return nil, ErrTransport
+		return observation{}, ErrTransport
 	}
-	return instances, nil
+	if ctx.Err() != nil || !time.Now().Before(s.expires) {
+		return observation{}, ErrTransport
+	}
+	return observation{instances: instances, workerExitCode: workerExitCode}, nil
+}
+
+func minDeadline(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }
