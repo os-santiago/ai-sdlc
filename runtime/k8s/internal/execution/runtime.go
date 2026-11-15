@@ -161,7 +161,7 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if cache == nil {
 		cache = sourcefetch.NewCache()
 	}
-	source, e := preflightSource(ctx, r.Component.DB, func(ctx context.Context) (PreparationInputs, error) { v, _, e := load(ctx); return v, e }, id, cache.Fetch)
+	source, e := acquireQueuedSource(ctx, r.Component.DB, func(ctx context.Context) (PreparationInputs, error) { v, _, e := load(ctx); return v, e }, id, cache.Fetch)
 	if e != nil {
 		return "source-deferred", e
 	}

@@ -2,12 +2,37 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
+
+type revokedSourceAuthority struct{}
+
+func (revokedSourceAuthority) Error() string { return "queued source authority revoked" }
+func (revokedSourceAuthority) Unwrap() error { return ControllerError{"source-preflight-authority"} }
+
+// Retire only conclusively invalid authority. Observation failures and source
+// outages retain the original queue lifetime; no failed claim is reopened.
+func acquireQueuedSource(ctx context.Context, db *store.DB, load PreparationLoader, id string, fetch sourceLoader) (acquiredSource, error) {
+	source, e := preflightSource(ctx, db, load, id, fetch)
+	var revoked revokedSourceAuthority
+	if errors.As(e, &revoked) && ctx.Err() == nil {
+		if db.RejectQueuedExecution(ctx, id) != nil {
+			return acquiredSource{}, ControllerError{"source-preflight-authority"}
+		}
+	}
+	return source, e
+}
+func preflightReadinessError(ctx context.Context, err error) error {
+	if ctx.Err() != nil || errors.Is(err, store.ErrObservationUnavailable) {
+		return ControllerError{"source-preflight-authority"}
+	}
+	return revokedSourceAuthority{}
+}
 
 type acquiredSource struct {
 	repository string
@@ -34,8 +59,11 @@ func preflightSource(ctx context.Context, db *store.DB, load PreparationLoader, 
 	}
 	input = copyInputs(input)
 	command, e := verifyRecord(input.Policy, r)
-	if e != nil || checkInputs(input, command) != nil || readiness(ctx, db, input.Policy, input.Intake, command) != nil {
-		return acquiredSource{}, ControllerError{"source-preflight-authority"}
+	if e != nil || checkInputs(input, command) != nil {
+		return acquiredSource{}, preflightReadinessError(ctx, ErrAuthority)
+	}
+	if e = readiness(ctx, db, input.Policy, input.Intake, command); e != nil {
+		return acquiredSource{}, preflightReadinessError(ctx, e)
 	}
 	bundle, e := fetch(ctx, command.Repository, command.SourceSHA)
 	if e != nil {
@@ -49,11 +77,17 @@ func preflightSource(ctx context.Context, db *store.DB, load PreparationLoader, 
 		return acquiredSource{}, ControllerError{"source-unavailable"}
 	}
 	latest, e := load(ctx)
-	if e != nil || latest.Policy.Revision() != input.Policy.Revision() || latest.Intake.Digest() != input.Intake.Digest() || workspacebundle.Digest(latest.Profile) != workspacebundle.Digest(input.Profile) || workspacebundle.Digest(latest.ADev) != workspacebundle.Digest(input.ADev) {
+	if e != nil || ctx.Err() != nil {
 		return acquiredSource{}, ControllerError{"source-preflight-authority"}
 	}
-	if _, e = verifyRecord(latest.Policy, r); e != nil || readiness(ctx, db, latest.Policy, latest.Intake, command) != nil {
-		return acquiredSource{}, ControllerError{"source-preflight-authority"}
+	if latest.Policy.Revision() != input.Policy.Revision() || latest.Intake.Digest() != input.Intake.Digest() || workspacebundle.Digest(latest.Profile) != workspacebundle.Digest(input.Profile) || workspacebundle.Digest(latest.ADev) != workspacebundle.Digest(input.ADev) {
+		return acquiredSource{}, revokedSourceAuthority{}
+	}
+	if _, e = verifyRecord(latest.Policy, r); e != nil {
+		return acquiredSource{}, preflightReadinessError(ctx, e)
+	}
+	if e = readiness(ctx, db, latest.Policy, latest.Intake, command); e != nil {
+		return acquiredSource{}, preflightReadinessError(ctx, e)
 	}
 	return acquiredSource{command.Repository, bundle}, nil
 }

@@ -23,3 +23,9 @@ authority failures without exposing provider response bodies.
 This change does not retry the stopped Homedir attempts. A fresh eligible issue
 input remains necessary for new work after those attempts. It does not complete
 publication, production promotion or the E2E demonstration.
+
+Conclusive signature/profile/current-generation mismatches retire the queued
+request without taking a claim, allowing the next valid request to progress.
+Unavailable observations, canceled reads, and failed configuration loads defer
+instead. This distinction is exercised with two signed queued requests, including
+an obsolete generation followed by current work and a database permission outage.

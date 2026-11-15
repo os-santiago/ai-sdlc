@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
@@ -91,4 +92,101 @@ func TestSourcePreflightRejectsAuthorityChangesDuringRead(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSourcePreflightRetiresRevokedHeadAndSelectsNextRequest(t *testing.T) {
+	f := queuedPreparationFixture(t)
+	ctx := context.Background()
+	first := f.command.ID()
+	f.seedReadinessSnapshot(t, f.Snapshot(2, true))
+	f.command.Generation = 2
+	addQueuedWorkItem(t, f)
+	if _, e := f.accept(f.envelope(t, f.command)); e != nil {
+		t.Fatal(e)
+	}
+	head, e := f.db.NextExecution(ctx)
+	if e != nil || head != first {
+		t.Fatal("wrong initial queue head")
+	}
+	calls := 0
+	_, e = acquireQueuedSource(ctx, f.db, f.load, head, func(context.Context, string, string) (workspacebundle.Bundle, error) {
+		calls++
+		return workspacebundle.Bundle{}, nil
+	})
+	var revoked revokedSourceAuthority
+	if !errors.As(e, &revoked) || calls != 0 {
+		t.Fatal("revoked generation fetched source")
+	}
+	next, e := f.db.NextExecution(ctx)
+	if e != nil || next != f.command.ID() {
+		t.Fatal("revoked request blocked later valid work")
+	}
+	if _, e = acquireQueuedSource(ctx, f.db, f.load, next, f.source); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = Claim(ctx, f.db, f.readyPolicy, next); e != nil {
+		t.Fatal(e)
+	}
+	if f.Count(t, `SELECT count(*) FROM execution_requests WHERE state='stopped' AND claim_token IS NULL`) != 1 {
+		t.Fatal("old request not retired without a claim")
+	}
+}
+func TestSourcePreflightObservationFailurePreservesTwoQueuedRequests(t *testing.T) {
+	for _, kind := range []string{"source", "loader", "observation", "cancel"} {
+		t.Run(kind, func(t *testing.T) {
+			f := queuedPreparationFixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			first := f.command.ID()
+			addQueuedWorkItem(t, f)
+			if _, e := f.accept(f.envelope(t, f.command)); e != nil {
+				t.Fatal(e)
+			}
+			before, e := f.db.ReadExecution(ctx, first)
+			if e != nil {
+				t.Fatal(e)
+			}
+			load := f.load
+			fetch := f.source
+			switch kind {
+			case "source":
+				fetch = func(context.Context, string, string) (workspacebundle.Bundle, error) {
+					return workspacebundle.Bundle{}, errors.New("source unavailable")
+				}
+			case "loader":
+				load = func(context.Context) (PreparationInputs, error) {
+					return PreparationInputs{}, store.ErrObservationUnavailable
+				}
+			case "observation":
+				if _, e := f.Admin.Pool.Exec(`REVOKE SELECT ON intake_heads FROM aisdlc_worker; REVOKE SELECT(repository,issue_number,generation,content_key) ON intake_heads FROM aisdlc_worker`); e != nil {
+					t.Fatal(e)
+				}
+			case "cancel":
+				cancel()
+			}
+			if _, e = acquireQueuedSource(ctx, f.db, load, first, fetch); e == nil {
+				t.Fatal("unavailable observation accepted")
+			}
+			after, e := f.db.ReadExecution(context.Background(), first)
+			if e != nil || !before.ExpiresAt.Equal(after.ExpiresAt) {
+				t.Fatal("original expiry changed")
+			}
+			if f.Count(t, `SELECT count(*) FROM execution_requests WHERE state='queued' AND claim_token IS NULL`) != 2 {
+				t.Fatal("temporary outage retired a request")
+			}
+		})
+	}
+}
+
+func addQueuedWorkItem(t *testing.T, f *preparationFixture) {
+	t.Helper()
+	var plan string
+	if e := f.Admin.Pool.QueryRow(`SELECT plan_id FROM work_items WHERE uuid=$1`, f.command.WorkItemID).Scan(&plan); e != nil {
+		t.Fatal(e)
+	}
+	f.command.WorkItemID = store.NewID()
+	if e := store.UpsertWorkItem(context.Background(), f.Admin.Pool, store.WorkItemRecord{PlanID: plan, ID: "second", UUID: f.command.WorkItemID, IssueNumbers: []int{3}, AcceptanceCriteria: []string{"fixture"}, Status: "ready"}); e != nil {
+		t.Fatal(e)
+	}
+	f.seedReadinessSnapshot(t, f.Snapshot(f.command.Generation, true))
 }
