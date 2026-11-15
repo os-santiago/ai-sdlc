@@ -18,6 +18,7 @@ import tempfile
 from network_probe import cleanup_namespace
 from verify_pod_transport import TransportFixture
 from verify_verification_flow import verify as verify_behavior
+from model_fixture_environment import provider_environment
 from verify_workspace_bundle import wire
 
 
@@ -31,7 +32,7 @@ def owned_provider(scenario):
         port = sock.getsockname()[1]
     token = secrets.token_urlsafe(48)
     wrapper = Path(__file__).resolve().parents[1] / 'runtime/k8s/tools/codexcli_openai_wrapper.py'
-    env = dict(os.environ, CODEX_WRAPPER_PORT=str(port), CODEX_WRAPPER_TOKEN=token)
+    env = provider_environment(port, token)
     process = subprocess.Popen([sys.executable, str(wrapper)], env=env,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:

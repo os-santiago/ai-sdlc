@@ -66,6 +66,11 @@ func (c *Client) archiveLocation(location, sha string) (string, error) {
 }
 
 func (c *Client) Fetch(ctx context.Context, sha string) (workspacebundle.Bundle, error) {
+	var err error
+	c, err = c.scoped(ctx)
+	if err != nil {
+		return workspacebundle.Bundle{}, err
+	}
 	if !workspacebundle.ValidSourceSHA(sha) {
 		return workspacebundle.Bundle{}, ErrSource
 	}
