@@ -13,6 +13,7 @@ import time
 import urllib.request
 
 from verify_lifecycle_model import verify
+from model_fixture_environment import provider_environment
 from verify_workspace_bundle import source_bundle
 
 
@@ -30,8 +31,7 @@ def main():
         port = sock.getsockname()[1]
     token = secrets.token_urlsafe(48)
     wrapper = Path(__file__).resolve().parents[1]/'runtime/k8s/tools/codexcli_openai_wrapper.py'
-    env = dict(os.environ, CODEX_WRAPPER_PORT=str(port), CODEX_WRAPPER_TOKEN=token)
-    # The completion adapter's child allowlist excludes these ambient credentials.
+    env = provider_environment(port, token)
     process = subprocess.Popen([sys.executable, str(wrapper)], env=env,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:

@@ -20,6 +20,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
 )
@@ -71,6 +72,16 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Second)
 	defer cancel()
+	// CI's read-only identity stays in the trusted test process. It is never
+	// serialized into fixture controls, Pod specs, model prompts or reports.
+	if token := os.Getenv("AI_SDLC_TEST_SOURCE_TOKEN"); token != "" {
+		scoped, err := sourcefetch.WithReadCredential(ctx, "os-santiago/homedir", token)
+		if err != nil {
+			t.Fatal("invalid fixture source credential")
+		}
+		ctx = scoped
+	}
+
 	admin, e := store.Open(ctx, u.String())
 	if e != nil {
 		t.Fatal("fixture database")
