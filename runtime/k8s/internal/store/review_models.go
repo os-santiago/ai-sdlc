@@ -128,7 +128,7 @@ func (db *DB) ReadReviewModelEvidence(ctx context.Context, c ReviewClaim) ([]Rev
 		}
 		return nil
 	})
-	if err != nil {
+	if err != nil || !c.live() {
 		return nil, ErrExecution
 	}
 	return result, nil

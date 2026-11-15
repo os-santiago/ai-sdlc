@@ -15,7 +15,10 @@ import (
 )
 
 var repoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
-var tokenPattern = regexp.MustCompile(`^[A-Za-z0-9_]{20,512}$`)
+
+// Tokens are opaque. GitHub installation tokens now contain a JWT and may
+// exceed 512 bytes; reject header delimiters while retaining a finite bound.
+var tokenPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 type Client struct {
 	repository, token string
@@ -28,7 +31,7 @@ type Client struct {
 // An empty token supports public repositories. Private-repository support still
 // requires validation with a separately scoped read-only credential.
 func New(repository, token string) (*Client, error) {
-	if len(repository) > 256 || !repoPattern.MatchString(repository) || token != "" && !tokenPattern.MatchString(token) {
+	if len(repository) > 256 || !repoPattern.MatchString(repository) || token != "" && (len(token) < 20 || len(token) > 4096 || !tokenPattern.MatchString(token)) {
 		return nil, ErrSource
 	}
 	for _, part := range strings.Split(repository, "/") {
@@ -66,6 +69,11 @@ func (c *Client) archiveLocation(location, sha string) (string, error) {
 }
 
 func (c *Client) Fetch(ctx context.Context, sha string) (workspacebundle.Bundle, error) {
+	var err error
+	c, err = c.scoped(ctx)
+	if err != nil {
+		return workspacebundle.Bundle{}, err
+	}
 	if !workspacebundle.ValidSourceSHA(sha) {
 		return workspacebundle.Bundle{}, ErrSource
 	}
