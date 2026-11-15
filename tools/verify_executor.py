@@ -286,7 +286,8 @@ def verify(kubectl, provider, render_image, mailbox_image, worker_image, bundle,
             if transport is not None:
                 transport.verify_replacement(workload, pod_uid, command)
                 report.update(realPodTransport=True, durableModelHandoffs=2,
-                              actualRBACDenial=True, actualPodReplacementRejected=True)
+                              actualRBACDenial=True, getOnlyExecDenied=True,
+                              scopedExecSucceeded=True, actualPodReplacementRejected=True)
     finally:
         if namespace_uid:
             network_probe.cleanup_namespace(command, namespace, namespace_uid)

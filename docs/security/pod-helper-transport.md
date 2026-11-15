@@ -75,7 +75,9 @@ credentials and provider bodies are not returned in diagnostics.
 ## Permissions and actual validation
 
 No production role is added. A future reviewed controller needs `get` on the
-specific Pod and `get` on its `pods/exec` subresource for the V5 GET upgrade.
+specific Pod and both `get` and `create` on its `pods/exec` subresource for the
+V5 GET upgrade. Kubernetes 1.35 enables the additional create authorization by
+default ([upstream change](https://github.com/kubernetes/kubernetes/pull/134577)).
 **`pods/exec` is powerful execution permission despite the GET verb.** Kubernetes
 RBAC does not constrain command or container arguments; the fixed trusted
 library does. Give it a separate scoped identity, never the executor identity,
@@ -86,7 +88,9 @@ source, real SCC, PostgreSQL and synthetic HTTP model responses. It exercises
 the actual broker and two helper publications, verifies durable handoff rows
 and metadata-only duplicate delivery, observes worker termination, and compares
 the exported candidate externally. It also checks a real read-only principal's
-exec denial, replaces the Pod and proves the old UID rejected while the new UID
+exec denial, proves GET-only exec permission insufficient, then performs the
+successful exchange with only Pod observation and scoped GET/create exec rights.
+It replaces the Pod and proves the old UID rejected while the new UID
 otherwise binds. Its temporary credential files are private and removed.
 
 Socket tests cover missing receipt/status, clean and abnormal closure,

@@ -66,7 +66,19 @@ class TransportFixture:
         token = command(['-n', namespace, 'create', 'token', 'observer', '--duration=10m']).decode().strip()
         restricted = {'APIServer': self.config['APIServer'], 'CA': self.config['CA'], 'BearerToken': token}
         self.run('permission-denied', restricted)
-        self.run('normal')
+        command(['create', '-f', '-'], {'apiVersion': 'v1', 'kind': 'List', 'items': [
+            {'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'Role',
+             'metadata': {'name': 'fixed-helper', 'namespace': namespace},
+             'rules': [{'apiGroups': [''], 'resources': ['pods/exec'],
+                        'resourceNames': [name], 'verbs': ['get']}]},
+            {'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'RoleBinding',
+             'metadata': {'name': 'fixed-helper', 'namespace': namespace},
+             'roleRef': {'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'Role', 'name': 'fixed-helper'},
+             'subjects': [{'kind': 'ServiceAccount', 'name': 'observer', 'namespace': namespace}]}]})
+        self.run('permission-denied', restricted)
+        command(['-n', namespace, 'patch', 'role', 'fixed-helper', '--type=json', '-p',
+                 '[{"op":"add","path":"/rules/0/verbs/-","value":"create"}]'])
+        self.run('normal', restricted)
         return {1, 2}  # Go independently requires these two completed durable handoffs.
 
     def verify_replacement(self, workload, original_uid, command):
