@@ -1,0 +1,49 @@
+{
+  "autonomousE2E": false,
+  "githubWrites": false,
+  "realCandidateBehaviorReviewPrerequisite": true,
+  "realPostgres": true,
+  "realSignedHTTPInbox": true,
+  "scenarios": [
+    {
+      "effects": 4,
+      "noReplay": true,
+      "scenario": "success",
+      "secondPoll": "publication-idle",
+      "state": "published"
+    },
+    {
+      "effects": 1,
+      "noReplay": true,
+      "scenario": "lost-tree",
+      "secondPoll": "publication-quarantined",
+      "state": "failed"
+    },
+    {
+      "effects": 1,
+      "noReplay": true,
+      "scenario": "revoked-tree",
+      "secondPoll": "publication-quarantined",
+      "state": "failed"
+    },
+    {
+      "effects": 4,
+      "noReplay": true,
+      "scenario": "lost-pull-request",
+      "secondPoll": "publication-quarantined",
+      "state": "failed"
+    }
+  ],
+  "scope": "isolated-publication-controller",
+  "syntheticForge": true,
+  "version": 1,
+  "validation": {
+    "build": "passed",
+    "vet": "passed",
+    "tests": 1072,
+    "packages": 35
+  },
+  "installedActivation": false,
+  "sourceBase": "fafc746a2e6e8175a0c0916225ded63a92691554",
+  "testedWorkingTree": true
+}

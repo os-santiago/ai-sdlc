@@ -32,10 +32,18 @@ func InsertVerification(ctx context.Context, tx *sql.Tx, r VerificationRequest) 
 	return nil
 }
 func (db *DB) ReadVerification(ctx context.Context, id string) (VerificationRequest, error) {
+	return db.readVerification(ctx, id, "verifier")
+}
+
+// ReadPublicationVerification is a read-only release-manager projection.
+func (db *DB) ReadPublicationVerification(ctx context.Context, id string) (VerificationRequest, error) {
+	return db.readVerification(ctx, id, "release-manager")
+}
+func (db *DB) readVerification(ctx context.Context, id, component string) (VerificationRequest, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	var r VerificationRequest
-	if err := AssertComponent(ctx, db.Pool, "verifier"); err != nil {
+	if err := AssertComponent(ctx, db.Pool, component); err != nil {
 		return r, identityObservationError(err)
 	}
 	err := db.Pool.QueryRowContext(ctx, `SELECT id,candidate_id,payload_digest,payload,receipt,expires_at FROM verification_requests WHERE id=$1`, id).Scan(&r.ID, &r.CandidateID, &r.PayloadDigest, &r.Payload, &r.Receipt, &r.ExpiresAt)

@@ -53,12 +53,16 @@ func verifyCapturedFixture(t *testing.T, f *fixture, component *bootstrap.Compon
 	}
 	control := struct {
 		Policy                                          authority.Policy
+		PublicationIdentities                           map[string]authority.Identity
 		Identity                                        authority.Identity
 		Intake                                          intake.Config
 		Profile, Image, ReportFile, SourceSHA, Scenario string
 		Config                                          podtransport.Config
 		Envelope, RetryEnvelope                         delivery.Envelope
-	}{f.Material.Policy, f.Material.Identities["verifier"], f.Config, profile, image, report, source, scenario, config, envelope, retry}
+	}{f.Material.Policy, nil, f.Material.Identities["verifier"], f.Config, profile, image, report, source, scenario, config, envelope, retry}
+	if os.Getenv("AI_SDLC_PUBLICATION_FIXTURE") == "1" {
+		control.PublicationIdentities = map[string]authority.Identity{"relay": f.Material.Identities["relay"], "release-manager": f.Material.Identities["release-manager"]}
+	}
 	raw, _ := json.Marshal(control)
 	path := filepath.Join(t.TempDir(), "verification.json")
 	if os.WriteFile(path, raw, 0600) != nil {

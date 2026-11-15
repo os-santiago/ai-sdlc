@@ -77,6 +77,8 @@ jobs:
           worker = register_digest('docker', 'ai-sdlc-control-plane', 'localhost/ai-sdlc-worker:conformance')
           mailbox = register_digest('docker', 'ai-sdlc-control-plane', 'localhost/ai-sdlc-model-mailbox:conformance')
           for scenario in ('approve', 'request_changes', 'mutation', 'revoke-model', 'revoke-config', 'lost-config-reply'):
+              os.environ['AI_SDLC_PUBLICATION_FIXTURE'] = '1' if scenario == 'approve' else '0'
+              os.environ['AI_SDLC_PUBLICATION_REPORT'] = str(root / 'publication-controller-report.json')
               report = verify(kubectl, worker, mailbox, root / 'execution.test', root / 'review.test',
                               '0622cdaeb59a11a27bd5f3d7e18183c401a5e412', candidate, scenario)
               (root / f'review-controller-{scenario}-report.json').write_text(json.dumps(report, indent=2))
@@ -86,5 +88,7 @@ jobs:
         if: always()
         with:
           name: independent-review-controller-conformance
-          path: ${{ runner.temp }}/review-controller-*-report.json
+          path: |
+            ${{ runner.temp }}/review-controller-*-report.json
+            ${{ runner.temp }}/publication-controller-report.json
           retention-days: 14

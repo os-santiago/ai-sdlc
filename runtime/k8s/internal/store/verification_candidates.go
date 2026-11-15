@@ -18,6 +18,11 @@ func (db *DB) ReadVerificationCandidate(ctx context.Context, id string) (Verific
 	return db.readCandidate(ctx, id, "verifier")
 }
 
+// ReadPublicationCandidate exposes immutable generation evidence, never writes.
+func (db *DB) ReadPublicationCandidate(ctx context.Context, id string) (VerificationCandidate, error) {
+	return db.readCandidate(ctx, id, "release-manager")
+}
+
 // ReadCapturedCandidate is the worker's read-only view for signed handoff.
 func (db *DB) ReadCapturedCandidate(ctx context.Context, id string) (VerificationCandidate, error) {
 	return db.readCandidate(ctx, id, "worker")

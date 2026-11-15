@@ -54,8 +54,12 @@ func TestRealCandidateRuntimeFixture(t *testing.T) {
 	}
 	if in.Scenario == "verification" {
 		t.Setenv("AI_SDLC_RUNTIME_MODE", "verification")
+		if os.Getenv("AI_SDLC_PUBLICATION_FIXTURE") == "1" {
+			t.Setenv("AI_SDLC_INDEPENDENT_REVIEW", "true")
+			t.Setenv("AI_SDLC_PUBLICATION", "true")
+		}
 		for _, g := range f.Material.Policy.Grants {
-			if g.Operation == "verify-artifact" {
+			if g.Operation == "verify-artifact" || (g.Operation == "publish-candidate" && os.Getenv("AI_SDLC_PUBLICATION_FIXTURE") == "1") {
 				grants = append(grants, g)
 			}
 		}

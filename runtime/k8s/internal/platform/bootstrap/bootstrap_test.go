@@ -191,3 +191,48 @@ func TestVerificationCeilingRejectsPublicationAndCandidateDowngrade(t *testing.T
 		t.Fatal("verification accepted publication grants")
 	}
 }
+
+func TestExplicitPublicationCeilingStillRejectsMergeAndDeploy(t *testing.T) {
+	t.Setenv("AI_SDLC_RUNTIME_MODE", "verification")
+	t.Setenv("AI_SDLC_INDEPENDENT_REVIEW", "true")
+	t.Setenv("AI_SDLC_PUBLICATION", "true")
+	c, m := files(t)
+	m.Policy.Autonomy = "auto-pr"
+	var grants []authority.Grant
+	for _, g := range m.Policy.Grants {
+		if g.Operation == "admit-issue" || g.Operation == "plan-admission" || g.Operation == "execute-work" || g.Operation == "verify-artifact" || g.Operation == "publish-candidate" {
+			grants = append(grants, g)
+		}
+	}
+	all := m.Policy.Grants
+	m.Policy.Grants = grants
+	write := func() {
+		raw, _ := json.Marshal(m.Policy)
+		if os.WriteFile(c.PolicyPath, raw, 0600) != nil {
+			t.Fatal("policy fixture")
+		}
+	}
+	write()
+	if _, _, e := c.Authority(); e != nil || !PublicationEnabled() {
+		t.Fatal("explicit publication ceiling rejected", e)
+	}
+	for _, change := range []struct{ name, value string }{{"AI_SDLC_RUNTIME_MODE", "candidate"}, {"AI_SDLC_RUNTIME_MODE", "maintenance"}, {"AI_SDLC_INDEPENDENT_REVIEW", "false"}, {"AI_SDLC_PUBLICATION", "false"}, {"AI_SDLC_PUBLICATION", "unexpected"}} {
+		t.Run(change.name+change.value, func(t *testing.T) {
+			t.Setenv(change.name, change.value)
+			if _, _, e := c.Authority(); e == nil || PublicationEnabled() {
+				t.Fatal("invalid publication context accepted")
+			}
+		})
+	}
+	m.Policy.Grants = all
+	write()
+	if _, _, e := c.Authority(); e == nil {
+		t.Fatal("publication option accepted other downstream grants")
+	}
+	m.Policy.Grants = grants
+	m.Policy.Autonomy = "auto-deploy"
+	write()
+	if _, _, e := c.Authority(); e == nil {
+		t.Fatal("publication option accepted deploy ceiling")
+	}
+}
