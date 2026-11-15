@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/forge"
@@ -64,6 +65,7 @@ type Snapshot struct {
 	Repository      string      `json:"repository"`
 	Issue           forge.Issue `json:"issue"`
 	Revision        string      `json:"revision"`
+	Generation      int64       `json:"generation"`
 	ConfigDigest    string      `json:"configDigest"`
 	BaseSHA         string      `json:"baseSHA"`
 	AuthorizedActor forge.Actor `json:"authorizedActor"`
@@ -90,9 +92,15 @@ func (s Snapshot) ContentRevision() string {
 	return authority.Digest(raw)
 }
 func (s Snapshot) ID() string {
-	return "issue-" + authority.Digest([]byte(s.Repository+"\x00"+s.Revision+"\x00"+s.ConfigDigest))
+	return "issue-" + authority.Digest([]byte(s.Repository+"\x00"+s.Revision+"\x00"+s.ConfigDigest+"\x00"+strconv.FormatInt(s.Generation, 10)))
 }
 func (s Snapshot) Validate(c Config) error {
+	if s.Generation < 1 {
+		return errors.New("issue generation required")
+	}
+	return s.validateContent(c)
+}
+func (s Snapshot) validateContent(c Config) error {
 	if s.Version != 1 || s.Repository != c.Repository || s.ConfigDigest != c.Digest() || s.Issue.Validate() != nil || s.Issue.IsPR() || s.Revision != s.ContentRevision() {
 		return errors.New("issue snapshot binding mismatch")
 	}

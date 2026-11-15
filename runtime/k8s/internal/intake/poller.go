@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -79,7 +80,9 @@ func (p Poller) reserve(ctx context.Context, now time.Time) (*lease, error) {
 
 // PollOnce bounds a complete scan to 90 seconds and retains its watermark on
 // any partial failure. Committed revisions deduplicate a restarted scan. A
-// two-minute overlap plus a scan-start watermark tolerates reordered updates.
+// complete reconciliation in immutable creation order avoids permanently
+// excluding old issues displaced by concurrent edits or deletions. Watermark
+// records successful scan time; it is deliberately not a filter on issue age.
 func (p Poller) PollOnce(ctx context.Context, now time.Time) (int, error) {
 	if _, _, err := p.current(); err != nil {
 		return 0, err
@@ -126,13 +129,9 @@ func (p Poller) PollOnce(ctx context.Context, now time.Time) (int, error) {
 }
 
 func (p Poller) scan(ctx context.Context, reserved lease) (int, error) {
-	since := time.Time{}
-	if reserved.since.Valid {
-		since = reserved.since.Time.Add(-2 * time.Minute)
-	}
 	count := 0
 	for page := 1; page <= p.Config.MaxPages; page++ {
-		issues, err := p.Source.Issues(ctx, since, page)
+		issues, err := p.Source.Issues(ctx, time.Time{}, page)
 		if err != nil {
 			return count, err
 		}
@@ -154,7 +153,7 @@ func (p Poller) scan(ctx context.Context, reserved lease) (int, error) {
 			if !snapshot.Eligible && !tracked {
 				continue
 			}
-			created, err := p.record(ctx, snapshot)
+			created, err := p.record(ctx, snapshot, reserved.token)
 			if err != nil {
 				return count, err
 			}
@@ -196,35 +195,53 @@ func (p Poller) snapshot(ctx context.Context, number int) (Snapshot, error) {
 		}
 	}
 	snapshot.Revision = snapshot.ContentRevision()
-	return snapshot, snapshot.Validate(p.Config)
+	return snapshot, snapshot.validateContent(p.Config)
 }
 
-func (p Poller) record(ctx context.Context, snapshot Snapshot) (bool, error) {
+func (p Poller) record(ctx context.Context, snapshot Snapshot, leaseToken string) (bool, error) {
 	policy, identity, err := p.current()
 	if err != nil {
 		return false, err
 	}
-	raw, err := json.Marshal(snapshot)
-	if err != nil {
-		return false, errors.New("intake serialization failed")
+	if err := snapshot.validateContent(p.Config); err != nil {
+		return false, err
 	}
 	created := false
 	err = p.DB.WithTx(ctx, func(tx *sql.Tx) error {
 		if err := store.AssertComponent(ctx, tx, "intake"); err != nil {
 			return err
 		}
-		result, err := tx.ExecContext(ctx, `INSERT INTO intake_revisions(repository,issue_number,revision,config_digest,event_id,payload) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(repository,issue_number,revision,config_digest) DO NOTHING`, snapshot.Repository, snapshot.Issue.Number, snapshot.Revision, snapshot.ConfigDigest, snapshot.ID(), raw)
-		if err != nil {
+		var held string
+		if err := tx.QueryRowContext(ctx, `SELECT lease_token FROM intake_cursors WHERE repository=$1 AND config_digest=$2 AND lease_token=$3 AND lease_until>now() FOR SHARE`, p.Config.Repository, p.Config.Digest(), leaseToken).Scan(&held); err != nil {
+			return errors.New("intake lease lost")
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO intake_heads(repository,issue_number) VALUES($1,$2) ON CONFLICT DO NOTHING`, snapshot.Repository, snapshot.Issue.Number); err != nil {
 			return err
 		}
-		n, err := result.RowsAffected()
-		if err != nil {
+		var previous string
+		var generation int64
+		if err := tx.QueryRowContext(ctx, `SELECT content_key,generation FROM intake_heads WHERE repository=$1 AND issue_number=$2 FOR UPDATE`, snapshot.Repository, snapshot.Issue.Number).Scan(&previous, &generation); err != nil {
 			return err
 		}
-		if n == 0 {
+		contentKey := authority.Digest([]byte(snapshot.Revision + "\x00" + strconv.FormatBool(snapshot.Eligible)))
+		if previous == contentKey {
 			return nil
 		}
+		snapshot.Generation = generation + 1
+		if err := snapshot.Validate(p.Config); err != nil {
+			return err
+		}
+		raw, err := json.Marshal(snapshot)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO intake_revisions(repository,issue_number,revision,generation,config_digest,event_id,payload) VALUES($1,$2,$3,$4,$5,$6,$7)`, snapshot.Repository, snapshot.Issue.Number, snapshot.Revision, snapshot.Generation, snapshot.ConfigDigest, snapshot.ID(), raw); err != nil {
+			return err
+		}
 		if err := delivery.Append(ctx, tx, policy, identity, snapshot.ID(), "admit-issue", raw); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE intake_heads SET content_key=$1,generation=$2 WHERE repository=$3 AND issue_number=$4`, contentKey, snapshot.Generation, snapshot.Repository, snapshot.Issue.Number); err != nil {
 			return err
 		}
 		created = true

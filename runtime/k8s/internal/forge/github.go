@@ -169,7 +169,7 @@ func (c *Client) Issues(ctx context.Context, since time.Time, page int) ([]Issue
 	if page < 1 || page > 100 {
 		return nil, errors.New("issue pagination bound exceeded")
 	}
-	query := url.Values{"state": {"all"}, "sort": {"updated"}, "direction": {"asc"}, "per_page": {"100"}, "page": {strconv.Itoa(page)}}
+	query := url.Values{"state": {"all"}, "sort": {"created"}, "direction": {"asc"}, "per_page": {"100"}, "page": {strconv.Itoa(page)}}
 	if !since.IsZero() {
 		query.Set("since", since.UTC().Format(time.RFC3339))
 	}
@@ -177,7 +177,7 @@ func (c *Client) Issues(ctx context.Context, since time.Time, page int) ([]Issue
 	if err := c.get(ctx, "/issues", query, &issues); err != nil {
 		return nil, err
 	}
-	if len(issues) > 100 {
+	if issues == nil || len(issues) > 100 {
 		return nil, errors.New("issue page exceeds bound")
 	}
 	for _, issue := range issues {
@@ -210,7 +210,7 @@ func (c *Client) LabelActor(ctx context.Context, number int, label string) (Acto
 		if err := c.get(ctx, "/issues/"+strconv.Itoa(number)+"/events", url.Values{"per_page": {"100"}, "page": {strconv.Itoa(page)}}, &events); err != nil {
 			return Actor{}, 0, err
 		}
-		if len(events) > 100 {
+		if events == nil || len(events) > 100 {
 			return Actor{}, 0, errors.New("event page exceeds bound")
 		}
 		for _, event := range events {

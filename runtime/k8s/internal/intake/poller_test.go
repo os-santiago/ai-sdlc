@@ -28,6 +28,7 @@ type source struct {
 	calls    int
 	changed  bool
 	fullPage bool
+	pageHook func(time.Time, int) []forge.Issue
 }
 
 func fakeSource() *source {
@@ -35,6 +36,9 @@ func fakeSource() *source {
 }
 func (s *source) Issues(ctx context.Context, since time.Time, page int) ([]forge.Issue, error) {
 	s.calls++
+	if s.pageHook != nil {
+		return s.pageHook(since, page), nil
+	}
 	if s.failure != nil {
 		return nil, s.failure
 	}
@@ -70,6 +74,7 @@ func TestSnapshotRevisionAndScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := snapshot.Revision
+	snapshot.Generation = 1
 	snapshot.Issue.UpdatedAt = snapshot.Issue.UpdatedAt.Add(time.Minute)
 	snapshot.Issue.User.Login = "renamed"
 	if snapshot.ContentRevision() != before {
@@ -115,7 +120,7 @@ func setup(t *testing.T) fixture {
 	if err := admin.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Pool.ExecContext(ctx, `TRUNCATE intake_cursors,intake_revisions,authorized_outbox,authorized_inbox,authorized_nonces`); err != nil {
+	if _, err := admin.Pool.ExecContext(ctx, `TRUNCATE intake_cursors,intake_revisions,intake_heads,authorized_outbox,authorized_inbox,authorized_nonces`); err != nil {
 		t.Fatal(err)
 	}
 	material, err := authority.Bootstrap("example/project", "production-test")
@@ -196,6 +201,29 @@ func TestDurableDedupeAndWithdrawal(t *testing.T) {
 	if records, events := f.counts(t); records != 2 || events != 2 {
 		t.Fatalf("ledger/outbox disagree: %d %d", records, events)
 	}
+	f.source.issue.State = "open"
+	f.due(t)
+	if n, err := restarted.PollOnce(ctx, time.Now()); err != nil || n != 1 {
+		t.Fatalf("reopen: %d %v", n, err)
+	}
+	body := f.source.issue.Body
+	f.source.issue.Body += " updated"
+	f.due(t)
+	if n, err := restarted.PollOnce(ctx, time.Now()); err != nil || n != 1 {
+		t.Fatalf("edit: %d %v", n, err)
+	}
+	f.source.issue.Body = body
+	f.due(t)
+	if n, err := restarted.PollOnce(ctx, time.Now()); err != nil || n != 1 {
+		t.Fatalf("revert: %d %v", n, err)
+	}
+	if records, events := f.counts(t); records != 5 || events != 5 {
+		t.Fatal("meaningful transition lost")
+	}
+	var max, distinct int
+	if err := f.admin.Pool.QueryRow(`SELECT max(generation),count(DISTINCT generation) FROM intake_revisions`).Scan(&max, &distinct); err != nil || max != 5 || distinct != 5 {
+		t.Fatal("generation was not monotonic")
+	}
 }
 
 func TestDeniedActorFreezeAndWrongDatabaseHaveNoAdmissionEffects(t *testing.T) {
@@ -268,11 +296,50 @@ func TestOutboxFailureRollsBackRevision(t *testing.T) {
 	if _, err := f.admin.Pool.ExecContext(ctx, `REVOKE INSERT (producer,event_id,target,operation,receipt,payload) ON authorized_outbox FROM aisdlc_intake`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.poller.record(ctx, snapshot); err == nil {
+	reserved, err := f.poller.reserve(ctx, time.Now())
+	if err != nil || reserved == nil {
+		t.Fatal("fixture lease unavailable")
+	}
+	if _, err := f.poller.record(ctx, snapshot, reserved.token); err == nil {
 		t.Fatal("outbox failure hidden")
 	}
 	if records, events := f.counts(t); records != 0 || events != 0 {
 		t.Fatal("revision committed without signed event")
+	}
+}
+
+func TestFullReconciliationRecoversOldIssueDisplacedBetweenPages(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	pass := 1
+	f.source.issue.UpdatedAt = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	prefix := f.source.issue
+	prefix.Number = 4
+	prefix.ID = 8
+	prefix.Labels = nil
+	f.source.pageHook = func(since time.Time, page int) []forge.Issue {
+		if !since.IsZero() {
+			t.Fatal("watermark excluded old issue from reconciliation")
+		}
+		if page == 1 {
+			items := make([]forge.Issue, 100)
+			for i := range items {
+				items[i] = prefix
+			}
+			return items
+		}
+		if pass == 1 {
+			return nil
+		} // Concurrent deletion displaced the target past this offset.
+		return []forge.Issue{f.source.issue}
+	}
+	if n, err := f.poller.PollOnce(ctx, time.Now()); err != nil || n != 0 {
+		t.Fatalf("first scan: %d %v", n, err)
+	}
+	pass = 2
+	f.due(t)
+	if n, err := f.poller.PollOnce(ctx, time.Now()); err != nil || n != 1 {
+		t.Fatalf("old issue not recovered: %d %v", n, err)
 	}
 }
 

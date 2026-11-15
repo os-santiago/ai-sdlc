@@ -114,9 +114,11 @@ pages against a reviewed numeric actor allowlist, then rereads the issue to
 reject changes observed during authorization.
 
 Its snapshot binds issue content/state, the authorization event, configuration
-digest and a base commit SHA. Comment timestamps and renamed display logins do
-not create a new content revision. The first accepted snapshot of a revision
-keeps its original base binding. Previously observed issues produce withdrawal
+digest, monotonic generation and a base commit SHA. Comment timestamps and
+renamed display logins do not create a new generation. Consecutive identical
+observations preserve the original base binding; reopenings and content
+reversions create a new generation. Consumers must reject older generations
+that arrive after newer state. Previously observed issues produce withdrawal
 snapshots when closed or no longer authorized; consumers must apply withdrawal
 semantics and recheck current issue eligibility before later external effects.
 GitHub reads are snapshots, not a lock on future issue edits.
@@ -124,9 +126,14 @@ GitHub reads are snapshots, not a lock on future issue edits.
 The intake database LOGIN owns its cursor and revision ledger. Each new revision
 and its signed `admit-issue` receipt commit together. Scans have a 90-second
 deadline, a 120-second durable lease, bounded pagination and durable backoff.
-Partial failures preserve the watermark; successful scans advance it only to
-scan start and overlap two minutes on the next pass. Restarted scans deduplicate
-committed revisions. Polling is observational and may continue after backoff;
+Every pass reconciles all pages in creation order, without filtering older
+issues by an update watermark. Concurrent deletions can delay an observation
+until the next pass, but cannot permanently exclude it by timestamp. The
+watermark records only the start of the last complete scan; partial failures
+preserve it and report incomplete coverage. A repository that cannot fit within
+the configured page/time limits has insufficient scan capacity; this version
+does not claim coverage of an unvisited suffix. Restarted scans deduplicate
+consecutive observations. Polling is observational and may continue after backoff;
 this does not increase the relay's eight-attempt delivery budget.
 
 These modules are not yet installed or activated. Their disposable PostgreSQL
