@@ -2,6 +2,8 @@ package artifact
 
 import (
 	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"io"
 	"os"
@@ -12,10 +14,77 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
+	"github.com/google/go-containerregistry/pkg/v1/types"
 	"golang.org/x/sys/unix"
 )
 
 var identity = Identity{strings.Repeat("a", 40), "sha256:" + strings.Repeat("b", 64), "pipeline-run-123"}
+
+func TestAssembleLayerMatchesManifestAndContainsGzip(t *testing.T) {
+	for _, format := range []struct{ manifest, config, layer types.MediaType }{
+		{types.DockerManifestSchema2, types.DockerConfigJSON, types.DockerLayer},
+		{types.OCIManifestSchema1, types.OCIConfigJSON, types.OCILayer},
+	} {
+		t.Run(string(format.manifest), func(t *testing.T) {
+			root, base := fixture(t)
+			base = mutate.ConfigMediaType(mutate.MediaType(base, format.manifest), format.config)
+			img, _, err := Assemble(context.Background(), base, root, identity)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest, err := img.Manifest()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if manifest.MediaType != format.manifest || manifest.Config.MediaType != format.config || manifest.Layers[len(manifest.Layers)-1].MediaType != format.layer {
+				t.Fatalf("incompatible image media types: %+v", manifest)
+			}
+			layers, err := img.Layers()
+			if err != nil {
+				t.Fatal(err)
+			}
+			compressed, err := layers[len(layers)-1].Compressed()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer compressed.Close()
+			decoded, err := gzip.NewReader(compressed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer decoded.Close()
+			uncompressed, err := io.ReadAll(decoded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			diffID, _, err := v1.SHA256(bytes.NewReader(uncompressed))
+			if err != nil {
+				t.Fatal(err)
+			}
+			expectedDiffID, err := layers[len(layers)-1].DiffID()
+			if err != nil || diffID != expectedDiffID {
+				t.Fatalf("uncompressed identity mismatch: %v", err)
+			}
+			again, err := layers[len(layers)-1].Compressed()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer again.Close()
+			compressedID, _, err := v1.SHA256(again)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expectedID, err := layers[len(layers)-1].Digest()
+			if err != nil || compressedID != expectedID {
+				t.Fatalf("compressed identity mismatch: %v", err)
+			}
+			header, err := tar.NewReader(bytes.NewReader(uncompressed)).Next()
+			if err != nil || header.Name != "deployments/" {
+				t.Fatalf("invalid compressed tar: %v", err)
+			}
+		})
+	}
+}
 
 func fixture(t *testing.T) (string, v1.Image) {
 	t.Helper()

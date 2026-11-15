@@ -21,7 +21,7 @@ import (
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
-	"github.com/google/go-containerregistry/pkg/v1/static"
+	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"golang.org/x/sys/unix"
 )
@@ -223,7 +223,26 @@ func Assemble(ctx context.Context, base v1.Image, directory string, id Identity)
 	if err = ctx.Err(); err != nil {
 		return nil, report, err
 	}
-	layer := static.NewLayer(buf.Bytes(), types.OCIUncompressedLayer)
+	manifestType, err := base.MediaType()
+	if err != nil {
+		return nil, report, err
+	}
+	layerType := types.DockerLayer
+	switch manifestType {
+	case types.OCIManifestSchema1:
+		layerType = types.OCILayer
+	case types.DockerManifestSchema2:
+	default:
+		return nil, report, errors.New("unsupported base manifest media type")
+	}
+	// Docker schema 2 rejects OCI uncompressed layer descriptors. Preserve the
+	// base format and gzip through a reusable in-memory opener (no writable tmp).
+	layer, err := tarball.LayerFromOpener(func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(buf.Bytes())), nil
+	}, tarball.WithMediaType(layerType))
+	if err != nil {
+		return nil, report, err
+	}
 	digest, err := layer.Digest()
 	if err != nil {
 		return nil, report, err
