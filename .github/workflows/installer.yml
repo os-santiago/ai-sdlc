@@ -70,7 +70,7 @@ jobs:
           # different manifest for the same config. The host copy renders fixtures.
           docker buildx create --name ai-sdlc-fixtures --driver docker-container
           docker buildx build --builder ai-sdlc-fixtures --provenance=false --load \
-            --output "type=oci,dest=$RUNNER_TEMP/model-mailbox.oci" \
+            --output "type=oci,name=localhost/ai-sdlc-model-mailbox:conformance,dest=$RUNNER_TEMP/model-mailbox.oci" \
             -f runtime/k8s/components/model-mailbox/Containerfile -t localhost/ai-sdlc-model-mailbox:conformance runtime/k8s
           python3 - <<'PYTHON'
           import json, os, pathlib, subprocess, sys
@@ -101,10 +101,10 @@ jobs:
       - name: Verify the fixed SCC executor and adversarial source configuration
         run: |
           docker buildx build --builder ai-sdlc-fixtures --provenance=false --load \
-            --output "type=oci,dest=$RUNNER_TEMP/worker.oci" \
+            --output "type=oci,name=localhost/ai-sdlc-worker:conformance,dest=$RUNNER_TEMP/worker.oci" \
             -f runtime/k8s/components/worker/Containerfile -t localhost/ai-sdlc-worker:conformance runtime/k8s
           python3 - <<'PYTHON'
-          import json, os, pathlib, subprocess, sys
+          import json, os, pathlib, subprocess, sys, tarfile
           sys.path.insert(0, 'tools')
           from fixture_images import register_digest
           from verify_executor import VARIANTS, verify
@@ -119,6 +119,14 @@ jobs:
           subprocess.run(['docker', 'exec', 'ai-sdlc-control-plane', 'rm', '/tmp/worker.oci'], check=True)
           worker = register_digest('docker', 'ai-sdlc-control-plane', worker_tag)
           mailbox = register_digest('docker', 'ai-sdlc-control-plane', mailbox_tag)
+          for component, reference in (('worker', worker), ('model-mailbox', mailbox)):
+              with tarfile.open(pathlib.Path(os.environ['RUNNER_TEMP'], component + '.oci')) as exported:
+                  member = exported.getmember('index.json')
+                  if not member.isfile() or member.size > 65536:
+                      raise ValueError('Invalid fixture OCI index')
+                  manifests = json.load(exported.extractfile(member))['manifests']
+              if len(manifests) != 1 or reference.rsplit('@', 1)[1] != manifests[0]['digest']:
+                  raise ValueError('Imported fixture descriptor differs from OCI export')
           print(json.dumps({'fixtureImages': {'worker': worker, 'mailbox': mailbox}}), flush=True)
           source = source_bundle(pathlib.Path(os.environ['RUNNER_TEMP'], 'homedir-source'),
                                  '0622cdaeb59a11a27bd5f3d7e18183c401a5e412')
