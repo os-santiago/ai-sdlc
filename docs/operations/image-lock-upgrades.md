@@ -48,7 +48,10 @@ Before an existing database upgrade, retain a private recovery copy and verify
 restoration against a disposable database. Do not commit database dumps or
 Secrets. Check the migrated version list, rollout readiness and retained signed
 intake evidence. New per-issue observations must be written by intake itself;
-never manufacture them through SQL. Reapply the same installer inputs to verify
+never manufacture them through SQL. For a disposable restore database, wait
+for TCP readiness (`pg_isready -h 127.0.0.1 -U USER -d DATABASE`) before
+restoring globals and data. The PostgreSQL image temporarily serves a local
+socket while initializing; socket readiness can precede database creation. Reapply the same installer inputs to verify
 convergence and preserve both attempted runs' logs.
 
 Migration scripts currently track applied filenames; they do not attest hashes

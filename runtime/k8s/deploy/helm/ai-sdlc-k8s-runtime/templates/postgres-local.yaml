@@ -50,7 +50,7 @@ spec:
                 secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" . }}, key: password}
           ports: [{name: postgres, containerPort: 5432}]
           readinessProbe:
-            exec: {command: [pg_isready, -U, ai_sdlc, -d, ai_sdlc]}
+            exec: {command: [pg_isready, -h, 127.0.0.1, -U, ai_sdlc, -d, ai_sdlc]}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
