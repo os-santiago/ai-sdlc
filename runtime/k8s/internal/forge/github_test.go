@@ -66,7 +66,7 @@ func TestFixedRepositoryReadsAndIssueIdentity(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/repos/example/project/issues":
-			if r.URL.Query().Get("per_page") != "100" || r.URL.Query().Get("state") != "all" || r.URL.Query().Get("since") != "2026-01-01T00:00:00Z" {
+			if r.URL.Query().Get("sort") != "created" || r.URL.Query().Get("per_page") != "100" || r.URL.Query().Get("state") != "all" || r.URL.Query().Get("since") != "2026-01-01T00:00:00Z" {
 				t.Error("pagination/since missing")
 			}
 			fmt.Fprint(w, "["+issueJSON()+"]")
@@ -90,6 +90,16 @@ func TestFixedRepositoryReadsAndIssueIdentity(t *testing.T) {
 	}
 	if sha, err := c.BaseSHA(context.Background(), "main"); err != nil || sha != strings.Repeat("a", 40) {
 		t.Fatalf("base: %v", err)
+	}
+}
+
+func TestNullListsAreNotSuccessfulEmptyScans(t *testing.T) {
+	c := serverClient(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "null") })
+	if _, err := c.Issues(context.Background(), time.Time{}, 1); err == nil {
+		t.Fatal("null issues treated as complete scan")
+	}
+	if _, _, err := c.LabelActor(context.Background(), 3, "ready"); err == nil {
+		t.Fatal("null events treated as authoritative absence")
 	}
 }
 

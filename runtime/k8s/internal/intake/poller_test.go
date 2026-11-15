@@ -352,3 +352,18 @@ func TestMissingAuthorityRejectsBeforeAnySourceCall(t *testing.T) {
 		t.Fatal("missing policy did not fail closed")
 	}
 }
+
+func TestLedgerPrivilegesRemainExclusiveToIntake(t *testing.T) {
+	f := setup(t)
+	for _, table := range []string{"intake_heads", "intake_cursors", "intake_revisions"} {
+		for _, role := range []string{"aisdlc_intake", "aisdlc_worker", "aisdlc_relay", "aisdlc_admission_controller"} {
+			var readable, writable bool
+			if err := f.admin.Pool.QueryRow(`SELECT has_table_privilege($1,$2,'SELECT'),has_table_privilege($1,$2,'UPDATE')`, role, table).Scan(&readable, &writable); err != nil {
+				t.Fatal(err)
+			}
+			if readable != (role == "aisdlc_intake") || writable != (role == "aisdlc_intake") {
+				t.Fatal("ledger component isolation violated")
+			}
+		}
+	}
+}
