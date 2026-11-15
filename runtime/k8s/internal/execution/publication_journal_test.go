@@ -340,3 +340,78 @@ func TestPublicationExpiryAfterEffectRowWaitRollsBackReceipt(t *testing.T) {
 		t.Fatal("expired unknown effect not quarantined")
 	}
 }
+
+func TestPublicationRequestLockWaitCannotOutliveAuthority(t *testing.T) {
+	for _, stage := range []string{"claim", "check"} {
+		t.Run(stage, func(t *testing.T) {
+			f, db, r := publicationJournalFixture(t)
+			ctx := context.Background()
+			var c store.PublicationClaim
+			if stage == "check" {
+				c = publicationClaim(t, db, r)
+			}
+			column := "expires_at"
+			if stage == "check" {
+				column = "claim_until"
+			}
+			if _, e := f.Admin.Pool.Exec(`UPDATE publication_requests SET `+column+`=clock_timestamp()+interval '1200 milliseconds' WHERE id=$1`, r.ID); e != nil {
+				t.Fatal(e)
+			}
+			lock, e := f.Admin.Pool.BeginTx(ctx, nil)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer lock.Rollback()
+			var id string
+			if e = lock.QueryRow(`SELECT id FROM publication_requests WHERE id=$1 FOR UPDATE`, r.ID).Scan(&id); e != nil {
+				t.Fatal(e)
+			}
+			result := make(chan error, 1)
+			go func() {
+				if stage == "check" {
+					result <- db.CheckPublication(ctx, c)
+					return
+				}
+				_, e := db.ClaimPublication(ctx, r.ID, strings.Repeat("f", 64))
+				result <- e
+			}()
+			deadline := time.Now().Add(time.Second)
+			blocked := false
+			for time.Now().Before(deadline) {
+				if f.Admin.Pool.QueryRow(`SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE usename='aisdlc_release_manager' AND wait_event_type='Lock' AND query LIKE '%publication_requests%')`).Scan(&blocked) != nil {
+					t.Fatal("lock observation")
+				}
+				if blocked {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if !blocked {
+				t.Fatal("publication operation never waited on the locked request")
+			}
+			for {
+				var expired bool
+				if f.Admin.Pool.QueryRow(`SELECT `+column+`<=clock_timestamp() FROM publication_requests WHERE id=$1`, r.ID).Scan(&expired) != nil {
+					t.Fatal("expiry observation")
+				}
+				if expired {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if e = lock.Commit(); e != nil {
+				t.Fatal(e)
+			}
+			if e = <-result; e == nil {
+				t.Fatal("row-lock wait authorized expired publication")
+			}
+			var state string
+			if f.Admin.Pool.QueryRow(`SELECT state FROM publication_requests WHERE id=$1`, r.ID).Scan(&state) != nil {
+				t.Fatal("publication state")
+			}
+			if stage == "claim" && state != "queued" {
+				t.Fatal("expired claim committed")
+			}
+		})
+	}
+}
