@@ -115,3 +115,31 @@ func reviewProofFixture(t *testing.T, installed bool) {
 		t.Fatal("completed review requeued")
 	}
 }
+
+func TestReviewSelectionSkipsSupersededIssueWithoutMutatingProof(t *testing.T) {
+	f, db, r := reviewJournalFixture(t)
+	ctx := context.Background()
+	// Remove only this disposable fixture's prequeued review to exercise selection.
+	if _, e := f.Admin.Pool.Exec(`DELETE FROM review_runs WHERE id=$1`, r.ID); e != nil {
+		t.Fatal(e)
+	}
+	if next, e := db.NextVerifiedForReview(ctx); e != nil || next != r.VerificationID {
+		t.Fatal("initial selection", next, e)
+	}
+	if _, e := f.Admin.Pool.Exec(`UPDATE intake_heads SET generation=generation+1`); e != nil {
+		t.Fatal(e)
+	}
+	if next, e := db.NextVerifiedForReview(ctx); e != nil || next != "" {
+		t.Fatal("obsolete issue blocked selection", next, e)
+	}
+	var state string
+	if e := db.Pool.QueryRow(`SELECT state FROM verification_requests WHERE id=$1`, r.VerificationID).Scan(&state); e != nil || state != "passed" {
+		t.Fatal("historical fact mutated", e)
+	}
+	if _, e := f.Admin.Pool.Exec(`REVOKE SELECT(repository,issue_number,generation,content_key) ON intake_heads FROM aisdlc_verifier`); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := db.NextVerifiedForReview(ctx); e == nil {
+		t.Fatal("unavailable observation treated as permanent rejection")
+	}
+}

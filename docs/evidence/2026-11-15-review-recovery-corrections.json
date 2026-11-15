@@ -1,0 +1,24 @@
+{
+  "scope": "review-controller-recovery-corrections",
+  "observedAt": "2026-11-15T23:49:26+00:00",
+  "baseCommit": "d51fcab8de7528086d025ae02ccbcfd441c62f14",
+  "runtime": {
+    "status": "passed",
+    "passedTests": 1042,
+    "passedPackages": 34,
+    "build": true,
+    "vet": true,
+    "realPostgres": true
+  },
+  "regressions": [
+    "Dedicated reviewer namespace cleanup using original acknowledged UIDs",
+    "Config-only review cleanup",
+    "Executor crash before first effect completes cleanup with zero API requests",
+    "Superseded intake generations cannot block the review selection",
+    "Unavailable database observations remain errors"
+  ],
+  "checkoutCredentialPersistence": false,
+  "audit": "independent findings corrected; approval subject to CI",
+  "autonomousE2E": false,
+  "liveWorkflowMutated": false
+}
