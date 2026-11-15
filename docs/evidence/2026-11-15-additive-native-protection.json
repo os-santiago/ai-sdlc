@@ -64,7 +64,7 @@
       }
     ]
   },
-  "nativeWriteTests": "synthetic HTTP boundary; single POST and no PUT/PATCH/DELETE",
+  "nativeWriteTests": "mocked gh API boundary; single POST and no PUT/PATCH/DELETE",
   "durabilityTests": [
     "nested directory chain fsync before POST",
     "synced pre-send intent",
