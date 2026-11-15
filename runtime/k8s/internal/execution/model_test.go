@@ -15,7 +15,7 @@ import (
 func modelLifecycleFixture(t *testing.T) (*lifecycleFixture, *Lifecycle, ModelPolicyLoader, string) {
 	t.Helper()
 	f := newLifecycleFixture(t)
-	_, err := f.Admin.Pool.Exec(`GRANT SELECT,INSERT ON execution_models,model_budgets,model_allocations TO aisdlc_worker; GRANT UPDATE(status,updated_at) ON work_items TO aisdlc_worker`)
+	_, err := f.Admin.Pool.Exec(`GRANT SELECT,INSERT ON execution_models,model_budgets,model_allocations TO aisdlc_worker; GRANT SELECT ON execution_candidates TO aisdlc_worker; GRANT UPDATE(status,updated_at) ON work_items TO aisdlc_worker`)
 	if err != nil {
 		t.Fatal(err)
 	}

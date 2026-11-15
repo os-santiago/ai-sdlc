@@ -61,13 +61,14 @@ def verify(kubectl, worker_image, mailbox_image, test_binary, bundle):
         with tempfile.TemporaryDirectory(prefix='ai-sdlc-lifecycle-fixture-') as directory:
             root = Path(directory)
             source, output, report = root/'source.json', root/'candidate.json', root/'report.json'
+            delta_file = root/'delta.json'
             plan, ready, control = root/'plan.json', root/'ready', root/'control.json'
             private(source, wire(bundle))
             private(control, wire({'Config': config, 'Placement': {'Namespace': namespace,
                 'WorkerImage': worker_image, 'MailboxImage': mailbox_image},
                 'Profile': base64.b64encode(profile).decode(), 'ADev': base64.b64encode(adev).decode(),
                 'SourceFile': str(source), 'OutputFile': str(output), 'ReportFile': str(report),
-                'PlanFile': str(plan), 'ReadyFile': str(ready)}))
+                'PlanFile': str(plan), 'ReadyFile': str(ready), 'DeltaFile': str(delta_file)}))
             with (root/'driver.log').open('w+b') as log:
                 process = subprocess.Popen([str(Path(test_binary).resolve()), '-test.run', '^TestRealLifecycleModelFixture$', '-test.v'],
                     env=dict(os.environ, AI_SDLC_LIFECYCLE_FIXTURE=str(control)), stdout=log, stderr=subprocess.STDOUT)
@@ -108,8 +109,25 @@ def verify(kubectl, worker_image, mailbox_image, test_binary, bundle):
             if identities(json.loads(raw))!=identities(expected):
                 raise ValueError('External candidate identity comparison failed')
             result = json.loads(report.read_bytes())
+            with delta_file.open('rb') as stream:
+                delta_raw = stream.read(2*1024*1024+1)
+            if len(delta_raw)>2*1024*1024 or hashlib.sha256(delta_raw).hexdigest()!=result['candidateDeltaSHA256']:
+                raise ValueError('Persisted delta bound/digest mismatch')
+            delta = json.loads(delta_raw)
+            if (delta['version']!='ai-sdlc.candidate-delta/v1' or delta['sourceSHA']!=bundle['sourceSHA']
+                    or delta['sourceTreeSHA256']!=tree_digest(bundle) or delta['candidateTreeSHA256']!=tree_digest(expected)):
+                raise ValueError('Persisted delta tree identity mismatch')
+            # This fixture has exactly one externally prescribed new file.
+            # Compare the entire persisted change against that independent value.
+            expected_change = {'path':FIXTURE_PATH,'before':None,
+                               'after':{'path':FIXTURE_PATH,'mode':420,'data':base64.b64encode(FIXTURE_BODY).decode()}}
+            if delta['changes']!=[expected_change] or result['candidateValidated'] is not False:
+                raise ValueError('Persisted candidate is not the prescribed unvalidated delta')
+            reconstructed = dict(bundle,files=list(bundle['files'])+[delta['changes'][0]['after']])
+            if identities(reconstructed)!=identities(json.loads(raw)):
+                raise ValueError('External persisted delta reconstruction differs from export')
             result.update(sourceSHA=bundle['sourceSHA'], sourceFiles=len(bundle['files']), sourceTreeSHA256=tree_digest(bundle),
-                          candidateIndependentlyCompared=True, resourcesConfirmedRemoved=True)
+                          candidateIndependentlyCompared=True, persistedDeltaIndependentlyReconstructed=True, resourcesConfirmedRemoved=True)
     finally:
         if process is not None and process.poll() is None:
             process.terminate()

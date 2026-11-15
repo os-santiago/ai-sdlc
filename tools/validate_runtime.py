@@ -19,6 +19,7 @@ REQUIRED_TESTS = {
     ('internal/store', 'TestConcurrentFreshMigrations'),
     ('internal/intake', 'TestDurableDedupeAndWithdrawal'),
     ('internal/execution', 'TestSignedExecutionDuplicateDeliveryAndSingleClaim'),
+    ('internal/execution', 'TestCandidateCapturePersistsExactDeltaAndSealsBudget'),
     ('internal/store', 'TestModelReservationConcurrentIdempotenceAndSingleClaim'),
 }
 

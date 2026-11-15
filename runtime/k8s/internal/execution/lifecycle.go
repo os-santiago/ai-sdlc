@@ -27,6 +27,7 @@ type Lifecycle struct {
 	durable   store.Lifecycle
 	stopped   bool
 	model     *lifecycleModel
+	captured  bool
 }
 
 // EffectInput contains only immutable copies and previously acknowledged UIDs.
