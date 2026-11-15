@@ -1,0 +1,39 @@
+{
+  "models": [
+    {
+      "slug": "gpt-6.1-sol",
+      "display_name": "Completion adapter",
+      "description": "Fixed local completion-only profile",
+      "default_reasoning_level": "low",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Bounded completion"
+        }
+      ],
+      "shell_type": "disabled",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 1,
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": null,
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "context_window": 272000,
+      "experimental_supported_tools": [],
+      "input_modalities": [
+        "text"
+      ],
+      "node_repl_disabled": true,
+      "use_responses_lite": true,
+      "include_apps_usage_instructions": false,
+      "include_skills_usage_instructions": false,
+      "include_plugin_usage_instructions": false,
+      "tool_mode": "direct",
+      "base_instructions": "Provide one structured completion. Propose SCC tool calls only as data; do not execute actions."
+    }
+  ]
+}

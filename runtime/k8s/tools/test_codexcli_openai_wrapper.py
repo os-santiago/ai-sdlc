@@ -4,7 +4,6 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
-from pathlib import Path
 from unittest.mock import patch
 
 import codexcli_openai_wrapper as wrapper
@@ -12,17 +11,15 @@ import codexcli_openai_wrapper as wrapper
 
 class AdapterTests(unittest.TestCase):
     def test_completion_proposes_tools_instead_of_editing_checkout(self):
-        def invoke(args, **kwargs):
-            self.assertEqual(args[args.index("--sandbox") + 1], "read-only")
-            self.assertIn("--ignore-user-config", args)
-            self.assertEqual(args[-1], "-")
-            self.assertIn('"role": "system"', kwargs["input"])
-            output = Path(args[args.index("--output-last-message") + 1])
-            output.write_text(json.dumps({"content": "", "tool_calls": [{"name": "read_file", "arguments": '{"path":"README.md"}'}]}))
-            return type("Result", (), {"returncode": 0})()
-        with patch.object(wrapper.subprocess, "run", side_effect=invoke):
-            result = wrapper.complete({"messages": [{"role": "system", "content": "policy"}], "tools": [{"function": {"name": "read_file"}}]})
-            later = wrapper.complete({"messages": [{"role": "system", "content": "policy"}], "tools": [{"function": {"name": "read_file"}}]})
+        def invoke(prompt, schema):
+            self.assertIn(b'"role": "system"', prompt)
+            self.assertFalse(json.loads(schema)["additionalProperties"])
+            return json.dumps({"content": "", "tool_calls": [{"name": "read_file", "arguments": '{"path":"README.md"}'}]})
+        request = {"messages": [{"role": "system", "content": "policy"}],
+                   "tools": [{"type": "function", "function": {"name": "read_file"}}]}
+        with patch.object(wrapper, "complete_process", side_effect=invoke):
+            result = wrapper.complete(request)
+            later = wrapper.complete(request)
         self.assertEqual(result["tool_calls"][0]["function"]["name"], "read_file")
         self.assertNotEqual(result["tool_calls"][0]["id"], later["tool_calls"][0]["id"])
 
@@ -33,12 +30,12 @@ class AdapterTests(unittest.TestCase):
         try:
             url = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
             request = urllib.request.Request(url, data=json.dumps({"stream": True, "messages": [{"role": "user", "content": "task"}]}).encode())
-            with patch.dict(os.environ, {"CODEX_WRAPPER_TOKEN": "test-token"}):
+            with patch.dict(os.environ, {"CODEX_WRAPPER_TOKEN": "fixture-token-012345678901234567890123456789"}):
                 with self.assertRaises(urllib.error.HTTPError) as failure:
                     urllib.request.urlopen(request)
                 self.assertEqual(failure.exception.code, 401)
                 failure.exception.close()
-                request.add_header("Authorization", "Bearer test-token")
+                request.add_header("Authorization", "Bearer fixture-token-012345678901234567890123456789")
                 message = {"role": "assistant", "content": "", "tool_calls": [{"id": "call_0", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]}
                 with patch.object(wrapper, "complete", return_value=message):
                     with urllib.request.urlopen(request) as response:
