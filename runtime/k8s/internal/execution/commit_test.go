@@ -18,7 +18,7 @@ import (
 // Lose exactly the selected real server COMMIT acknowledgement. Reconnection
 // stays healthy so the controller's independent cleanup can be observed. This
 // proxy carries only isolated fixture credentials and never logs wire bytes.
-func executionCommitFault(t *testing.T, nth int32) (*store.DB, <-chan struct{}) {
+func executionCommitFault(t *testing.T, nth int32, role ...string) (*store.DB, <-chan struct{}) {
 	t.Helper()
 	u, err := url.Parse(os.Getenv("AI_SDLC_TEST_DATABASE_URL"))
 	if err != nil {
@@ -89,7 +89,13 @@ func executionCommitFault(t *testing.T, nth int32) (*store.DB, <-chan struct{}) 
 	}()
 	t.Cleanup(func() { listener.Close(); wg.Wait() })
 	u.Host = listener.Addr().String()
-	u.User = url.UserPassword("aisdlc_worker", "worker"+strings.Repeat("q", 40))
+	component := "worker"
+	if len(role) == 1 && role[0] == "verifier" {
+		component = "verifier"
+	} else if len(role) != 0 {
+		t.Fatal("unsupported fixture identity")
+	}
+	u.User = url.UserPassword("aisdlc_"+component, component+strings.Repeat("q", 40))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	t.Cleanup(cancel)
 	db, err := store.Open(ctx, u.String())

@@ -1,0 +1,27 @@
+{
+  "observedAt": "2026-11-15",
+  "scope": "isolated-independent-review-postgres-journal",
+  "status": "passed",
+  "tests": {
+    "passed": 957,
+    "packages": 33,
+    "missingDatabaseProof": []
+  },
+  "realPostgres": true,
+  "realCommitRepliesDropped": [
+    "claim",
+    "intent",
+    "model",
+    "completion",
+    "handoff"
+  ],
+  "rowLockExpiryRollback": true,
+  "noInstalledProfileGrant": true,
+  "syntheticBehaviorProof": true,
+  "autonomousE2E": false,
+  "limitations": [
+    "No installed review controller or model invocation.",
+    "Provider tool/verdict observations and current-authority fencing remain controller responsibilities.",
+    "No positive review completion or publication transition exists in this foundation."
+  ]
+}
