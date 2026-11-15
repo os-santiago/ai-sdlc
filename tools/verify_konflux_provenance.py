@@ -14,6 +14,7 @@ import tempfile
 import time
 
 import konflux_build_fixture as fixture
+import konflux_fixture_guard as guard
 import konflux_provenance as provenance
 import network_probe
 import supply_chain_install
@@ -33,9 +34,9 @@ def main():
     if results['CHAINS-GIT_URL']!=fixture.INPUTS['sourceURL'] or results['CHAINS-GIT_COMMIT']!=fixture.INPUTS['sourceSHA'] or results['RUN_UID']!=build['publishRunUID'] or results['DEFINITION_DIGEST']!=build['definitionDigest']:raise ValueError('Trusted publisher result identity mismatch')
     if fixture.definition_digest(build['publisherImage'],build['network']['deniedTargets'])!=build['definitionDigest']:raise ValueError('Build definition differs from this trusted checkout')
     image=repository+'@'+digest
-    state=Path.home()/'.local/state/ai-sdlc'/args.cluster;ownership=json.loads((state/'konflux-ownership.json').read_text())
+    state,tools=guard.installation_paths(args.cluster);ownership=json.loads((state/'konflux-ownership.json').read_text())
     if ownership['cluster']!=args.cluster or ownership['scope']!='isolated-konflux':raise ValueError('Unexpected cluster ownership')
-    kubectl=[str(Path.home()/'.cache/ai-sdlc/tools/kubectl-1.35.8'),'--kubeconfig',str(state/'kubeconfig')]
+    kubectl=[str(tools/'kubectl-1.35.8'),'--kubeconfig',str(state/'kubeconfig')]
     deadline=supply_chain_install.Deadline(600)
     namespace='ai-sdlc-provenance-'+secrets.token_hex(6);uid=None
     report={'version':1,'image':image,'namespace':namespace,'sourceSHA':fixture.INPUTS['sourceSHA'],'definitionDigest':build['definitionDigest'],'publishRunUID':build['publishRunUID'],'status':'running','slsaLevelClaimed':False,'releaseAuthorized':False}

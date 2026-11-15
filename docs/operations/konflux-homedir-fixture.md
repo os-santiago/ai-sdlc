@@ -13,8 +13,9 @@ Install or reconcile the isolated environment through the existing entry point:
 
 The installer enables restricted security contexts and read-only root filesystems
 for Tekton's generated helper containers. Readiness checks their effective flags
-as well as current deployment generations. A namespace enforcing restricted Pod
-Security rejects helpers without those settings.
+as well as current deployment generations. Restricted Pod Security admission
+checks privilege escalation and capabilities, but does not require a read-only
+root filesystem; the installer verifies that separate helper setting.
 
 ## Run with an immutable publisher
 
@@ -44,16 +45,17 @@ A Docker archive or ambiguous cached aliases fail before Maven executes.
 Example local image preparation:
 
 ```bash
-revision=$(git rev-parse HEAD)
-test -z "$(git status --porcelain)"
+revision=$(git rev-parse HEAD) &&
+test -z "$(git status --porcelain)" &&
 podman build --label "org.opencontainers.image.revision=$revision" \
   -f runtime/k8s/components/artifact-builder/Containerfile \
-  -t "localhost/ai-sdlc-artifact-builder:$revision" runtime/k8s
+  -t "localhost/ai-sdlc-artifact-builder:$revision" runtime/k8s &&
 podman save --format oci-archive --output /tmp/publisher.oci \
-  "localhost/ai-sdlc-artifact-builder:$revision"
+  "localhost/ai-sdlc-artifact-builder:$revision" &&
 python3 -c 'import json,tarfile; a=tarfile.open("/tmp/publisher.oci"); print(json.load(a.extractfile("index.json"))["manifests"][0]["digest"])'
 ```
 
+The fixture honors `XDG_STATE_HOME` and `XDG_CACHE_HOME`, matching the installer.
 Output directories must be new. The fixture accepts only an owned Konflux kind
 cluster. Its infrastructure adapter currently targets the single local kind node;
 it is not a production storage provisioner.

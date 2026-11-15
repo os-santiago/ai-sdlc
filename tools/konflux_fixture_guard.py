@@ -1,10 +1,25 @@
 """Identity checks for isolated supply-chain fixtures, not live authority."""
 import json
 import hashlib
+import os
 import re
+import subprocess
 import tarfile
 import time
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
+
+
+def installation_paths(cluster):
+    state = Path(os.environ.get('XDG_STATE_HOME', Path.home()/'.local/state'))/'ai-sdlc'/cluster
+    tools = Path(os.environ.get('XDG_CACHE_HOME', Path.home()/'.cache'))/'ai-sdlc/tools'
+    return state, tools
+
+
+def collect_best_effort(collect, report):
+    try:
+        collect()
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        report['logCollectionFailure'] = type(exc).__name__
 
 
 def owned_node_exec(run, provider, name, expected_id, arguments, **kwargs):

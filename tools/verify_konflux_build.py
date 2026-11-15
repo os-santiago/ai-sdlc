@@ -27,11 +27,10 @@ def main():
         raise ValueError('Exact isolated cluster and publisher image digest required')
     if args.publisher_image.startswith('localhost/') and not args.publisher_archive:raise ValueError('Local publisher requires an explicit archive for digest registration')
     args.output.mkdir(mode=0o700,parents=True,exist_ok=False)
-    state=Path.home()/'.local/state/ai-sdlc'/args.cluster
+    state,tools=guard.installation_paths(args.cluster)
     ownership=json.loads((state/'konflux-ownership.json').read_text())
     if ownership['cluster']!=args.cluster or ownership['scope']!='isolated-konflux':raise ValueError('Not an owned isolated Konflux installation')
     provider=ownership['provider'];node=args.cluster+'-control-plane'
-    tools=Path.home()/'.cache/ai-sdlc/tools'
     kubectl=[str(tools/'kubectl-1.35.8'),'--kubeconfig',str(state/'kubeconfig')]
     deadline=supply_chain_install.Deadline(1800)
     token=secrets.token_hex(6);namespace='ai-sdlc-konflux-build-'+token;pv=namespace+'-volume'
@@ -178,7 +177,7 @@ def main():
         report['status']='failed';report['failureType']=type(exc).__name__;report['failure']=str(exc)[:2000];save()
         raise
     finally:
-        collect_logs()
+        guard.collect_best_effort(collect_logs,report)
         # Cleanup has its own bounded allowance so an exhausted execution budget
         # cannot turn a failed build into a leaked writable namespace silently.
         deadline=supply_chain_install.Deadline(120)

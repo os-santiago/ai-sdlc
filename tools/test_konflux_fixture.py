@@ -3,6 +3,8 @@ import io
 import json
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
+from pathlib import Path
 
 import konflux_build_fixture as fixture
 import konflux_fixture_guard as guard
@@ -20,6 +22,20 @@ def objects():
 
 
 class FixtureGuardTests(unittest.TestCase):
+    def test_custom_installation_roots_match_installer(self):
+        with patch.dict('os.environ', {'XDG_STATE_HOME':'/custom/state','XDG_CACHE_HOME':'/custom/cache'}):
+            self.assertEqual(guard.installation_paths('fixture'), (Path('/custom/state/ai-sdlc/fixture'),Path('/custom/cache/ai-sdlc/tools')))
+
+    def test_disk_failure_during_log_archival_does_not_skip_cleanup(self):
+        report={};calls=[]
+        def collect():raise OSError('disk full')
+        guard.collect_best_effort(collect,report)
+        # The production finally block continues to UID-scoped cleanup.
+        def call(args,value=None):calls.append((args,value));return ''
+        guard.cleanup_archived_namespace(call,'fixture','original',[],[])
+        self.assertEqual(report['logCollectionFailure'],'OSError')
+        self.assertEqual(calls[0][1]['preconditions'],{'uid':'original'})
+
     def test_cleanup_waits_for_chains_and_cas_only_archived_results(self):
         _,task,pod=objects();task['metadata']['deletionTimestamp']='now'
         tick=[0];patches=[];calls=[]
