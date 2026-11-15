@@ -4,9 +4,12 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY internal/modelmailbox ./internal/modelmailbox
+COPY internal/workspacebundle ./internal/workspacebundle
 COPY components/model-mailbox ./components/model-mailbox
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/model-mailbox ./components/model-mailbox/cmd
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/model-mailbox ./components/model-mailbox/cmd \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/workspace-transfer ./components/model-mailbox/workspace-cmd
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/model-mailbox /model-mailbox
+COPY --from=build /out/workspace-transfer /workspace-transfer
 USER 1000:1000
 ENTRYPOINT ["/model-mailbox"]

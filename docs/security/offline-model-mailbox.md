@@ -5,6 +5,7 @@ network. `model-mailbox` provides a loopback endpoint for SCC and fixed helper
 commands for exchanging bounded data. It has no provider client, credentials,
 database connection, GitHub client or delivery-stage API. This is a hidden
 prerequisite for #422, not an execution mode or a completed E2E pipeline.
+The image also includes the separate hidden [workspace file-transfer helper](offline-workspace-bundles.md).
 
 ## Boundary and protocol
 
