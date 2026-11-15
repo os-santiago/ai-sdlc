@@ -22,7 +22,7 @@ func publicationJournalFixture(t *testing.T) (*lifecycleFixture, *store.DB, stor
 	t.Helper()
 	f, verifier, review := reviewProofFixture(t, true)
 	ctx := context.Background()
-	if _, e := f.Admin.Pool.Exec(`GRANT SELECT,INSERT ON publication_handoffs TO aisdlc_verifier; GRANT SELECT ON publication_handoffs,review_runs,verification_requests TO aisdlc_release_manager; GRANT SELECT,INSERT,UPDATE ON publication_requests,publication_effects TO aisdlc_release_manager`); e != nil {
+	if _, e := f.Admin.Pool.Exec(`GRANT SELECT,INSERT ON publication_handoffs TO aisdlc_verifier; GRANT SELECT ON publication_handoffs,review_runs,verification_requests TO aisdlc_release_manager; GRANT SELECT,INSERT,UPDATE ON publication_requests,publication_effects TO aisdlc_release_manager; GRANT SELECT ON published_records TO aisdlc_release_manager; GRANT INSERT(publication_id,payload_digest,payload,receipt,proof_digest,proof,effects_digest,effects,authority_expires_at) ON published_records TO aisdlc_release_manager`); e != nil {
 		t.Fatal(e)
 	}
 	passed, e := verifier.ReadPassedReview(ctx, review.VerificationID)
@@ -272,6 +272,11 @@ func TestPublicationLostCommitCannotAuthorizeEffectOrReplay(t *testing.T) {
 			if f.Count(t, "SELECT count(*) FROM publication_requests WHERE state='"+state+"'") != 1 {
 				t.Fatal("lost commit changed durable outcome")
 			}
+			_, recordError := db.ReadPublishedRecord(ctx, r.ID)
+			if (stage == "finish") != (recordError == nil) {
+				t.Fatal("terminal fact disagrees with committed outcome")
+			}
+
 		})
 	}
 }

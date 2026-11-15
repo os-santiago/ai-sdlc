@@ -316,17 +316,7 @@ func (db *DB) ReadPublicationEffects(ctx context.Context, c PublicationClaim) ([
 	return result, nil
 }
 func (db *DB) FinishPublication(ctx context.Context, c PublicationClaim, proof []byte) error {
-	var p struct {
-		Version              string `json:"version"`
-		PublicationID        string `json:"publicationID"`
-		PlanSHA256           string `json:"planSHA256"`
-		EffectsSHA256        string `json:"effectsSHA256"`
-		CommitSHA            string `json:"commitSHA"`
-		Branch               string `json:"branch"`
-		PullRequest          int    `json:"pullRequest"`
-		MergeAuthorized      bool   `json:"mergeAuthorized"`
-		DeploymentAuthorized bool   `json:"deploymentAuthorized"`
-	}
+	var p PublicationProof
 	if len(proof) > 32768 || authority.DecodeStrict(proof, &p) != nil || p.Version != "ai-sdlc.publication-proof/v1" || p.PublicationID != c.ID || p.PlanSHA256 != c.PlanDigest || !modelDigest.MatchString(p.EffectsSHA256) || p.MergeAuthorized || p.DeploymentAuthorized {
 		return ErrExecution
 	}
@@ -351,6 +341,15 @@ func (db *DB) FinishPublication(ctx context.Context, c PublicationClaim, proof [
 		}
 		commit, branch, pr := effects[1].Receipt, effects[2].Receipt, effects[3].Receipt
 		if commit.SHA != branch.SHA || commit.SHA != pr.SHA || commit.SHA != p.CommitSHA || branch.Branch != pr.Branch || branch.Branch != p.Branch || pr.PullRequest != p.PullRequest {
+			return ErrExecution
+		}
+		// Snapshot evidence in the same transaction as the terminal transition.
+		// Database time cannot be supplied/backdated by the operational identity.
+		result, e := tx.ExecContext(ctx, `INSERT INTO published_records(publication_id,payload_digest,payload,receipt,proof_digest,proof,effects_digest,effects,authority_expires_at) SELECT id,payload_digest,payload,receipt,$2,$3,$4,$5,expires_at FROM publication_requests WHERE id=$1 AND state='claimed' AND claim_token=$6 AND expires_at>clock_timestamp() AND claim_until>clock_timestamp()`, c.ID, authority.Digest(proof), proof, authority.Digest(raw), raw, c.Token)
+		if e != nil {
+			return ErrExecution
+		}
+		if count, e := result.RowsAffected(); e != nil || count != 1 {
 			return ErrExecution
 		}
 		if _, e = tx.ExecContext(ctx, `UPDATE publication_requests SET state='published',proof=$2 WHERE id=$1`, c.ID, proof); e != nil {

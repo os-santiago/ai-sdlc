@@ -20,17 +20,8 @@ type Transport interface {
 	CreateBranch(context.Context, publication.WriteFence, publication.TreePlan, string) error
 	CreatePullRequest(context.Context, publication.WriteFence, publication.TreePlan, string, string, string) (publication.PublishedPullRequest, error)
 }
-type Proof struct {
-	Version              string `json:"version"`
-	PublicationID        string `json:"publicationID"`
-	PlanSHA256           string `json:"planSHA256"`
-	EffectsSHA256        string `json:"effectsSHA256"`
-	CommitSHA            string `json:"commitSHA"`
-	Branch               string `json:"branch"`
-	PullRequest          int    `json:"pullRequest"`
-	MergeAuthorized      bool   `json:"mergeAuthorized"`
-	DeploymentAuthorized bool   `json:"deploymentAuthorized"`
-}
+type Proof = store.PublicationProof
+
 type ControllerError struct{ Stage string }
 
 func (e ControllerError) Error() string { return "publication stopped at " + e.Stage }

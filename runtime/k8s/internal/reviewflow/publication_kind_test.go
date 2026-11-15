@@ -86,7 +86,7 @@ func verifyPublicationFixture(t *testing.T, admin, verifier *store.DB, original 
 	identity := func() (authority.Policy, authority.Identity, error) { return p, key, nil }
 	results := []map[string]any{}
 	for _, scenario := range []string{"success", "lost-tree", "revoked-tree", "lost-pull-request"} {
-		if _, e = admin.Pool.Exec(`DELETE FROM authorized_nonces WHERE target='release-manager'; DELETE FROM authorized_inbox WHERE target='release-manager'; DELETE FROM authorized_outbox WHERE operation='publish-candidate'; DELETE FROM publication_effects; DELETE FROM publication_requests; DELETE FROM publication_handoffs`); e != nil {
+		if _, e = admin.Pool.Exec(`DELETE FROM authorized_nonces WHERE target='release-manager'; DELETE FROM authorized_inbox WHERE target='release-manager'; DELETE FROM authorized_outbox WHERE operation='publish-candidate'; DELETE FROM published_records; DELETE FROM publication_effects; DELETE FROM publication_requests; DELETE FROM publication_handoffs`); e != nil {
 			t.Fatal("reset owned publication fixture", e)
 		}
 		revoked := false
@@ -131,9 +131,9 @@ func verifyPublicationFixture(t *testing.T, admin, verifier *store.DB, original 
 		publisher := &fixturePublisher{scenario: scenario, revoke: &revoked}
 		runtime := publicationflow.Runtime{DB: db, Policy: policy, Review: review, Writer: publisher}
 		state, runErr := runtime.PollOnce(ctx)
-		var stored string
+		var stored, publicationID string
 		var proof []byte
-		if db.Pool.QueryRow(`SELECT state,proof FROM publication_requests`).Scan(&stored, &proof) != nil {
+		if db.Pool.QueryRow(`SELECT id,state,proof FROM publication_requests`).Scan(&publicationID, &stored, &proof) != nil {
 			t.Fatal("publication evidence")
 		}
 		expectedCalls := 1
@@ -158,7 +158,11 @@ func verifyPublicationFixture(t *testing.T, admin, verifier *store.DB, original 
 		if scenario != "success" && again != "publication-quarantined" {
 			t.Fatal("publication not quarantined", again)
 		}
-		results = append(results, map[string]any{"scenario": scenario, "state": stored, "effects": publisher.calls, "secondPoll": again, "noReplay": true})
+		_, recordError := db.ReadPublishedRecord(ctx, publicationID)
+		if (scenario == "success") != (recordError == nil) {
+			t.Fatal("durable publication record differs from confirmed outcome", scenario, recordError)
+		}
+		results = append(results, map[string]any{"scenario": scenario, "state": stored, "effects": publisher.calls, "secondPoll": again, "noReplay": true, "durableRecord": recordError == nil})
 	}
 	if path := os.Getenv("AI_SDLC_PUBLICATION_REPORT"); path != "" {
 		raw, _ := json.MarshalIndent(map[string]any{"scope": "isolated-publication-controller", "realPostgres": true, "realSignedHTTPInbox": true, "realCandidateBehaviorReviewPrerequisite": true, "syntheticForge": true, "installedColumnPrivileges": true, "githubWrites": false, "autonomousE2E": false, "scenarios": results}, "", "  ")

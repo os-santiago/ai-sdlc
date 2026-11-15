@@ -57,3 +57,6 @@ Separately, the publication controller conformance fixture now uses
 queries with the exact installed column privileges. Its forge remains synthetic.
 Actual autonomous GitHub publication and downstream promotion require their own
 product-run evidence.
+
+Published requests also retain [durable terminal evidence](published-records.md)
+for later, separately authorized outerloop stages.
