@@ -4,6 +4,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import secrets
@@ -19,12 +20,13 @@ VERSION = 'ai-sdlc.workspace-bundle/v1'
 
 
 def source_bundle(repository, sha):
+    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
     if not re.fullmatch('[a-f0-9]{40}', sha):
         raise ValueError('An exact source commit is required')
     git = ['git', '--no-replace-objects', '-C', str(repository)]
 
     def read(*args):
-        return subprocess.run(git + list(args), check=True, capture_output=True, timeout=30).stdout
+        return subprocess.run(git + list(args), check=True, capture_output=True, timeout=30, env=env).stdout
 
     if read('rev-parse', sha + '^{commit}').decode().strip() != sha:
         raise ValueError('Source commit mismatch')

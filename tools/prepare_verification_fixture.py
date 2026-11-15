@@ -11,10 +11,11 @@ UTILS = 'quarkus-app/src/main/resources/META-INF/resources/js/utils.js'
 
 
 def prepare(source_repository, target):
+    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
     target = Path(target).resolve()
     target.mkdir(mode=0o700, parents=True, exist_ok=False)
     result = subprocess.run(['git', '-C', str(source_repository), 'show', SOURCE + ':' + UTILS],
-                            capture_output=True, check=True, timeout=15)
+                            capture_output=True, check=True, timeout=15, env=env)
     if not 1 <= len(result.stdout) <= 32768:
         raise ValueError('Unexpected pinned source size')
     path = target / UTILS
@@ -27,7 +28,6 @@ def prepare(source_repository, target):
         original = isolated / UTILS
         original.parent.mkdir(parents=True)
         original.write_bytes(result.stdout)
-        env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
         env['GIT_CEILING_DIRECTORIES'] = str(isolated.parent)
         for arguments in (['--check'], []):
             subprocess.run(['git', 'apply', *arguments, str(patch)], cwd=isolated,

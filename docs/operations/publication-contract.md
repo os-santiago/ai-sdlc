@@ -40,14 +40,14 @@ Build `go test -c -o /private/publication.test ./internal/publication` from
 `runtime/k8s`, then run:
 
 ```bash
-python3 tools/verify_publication_tree.py \
+python3 ../../tools/verify_publication_tree.py \
   --source-repository /path/to/isolated-homedir \
   --source-sha 0622cdaeb59a11a27bd5f3d7e18183c401a5e412 \
   --candidate-directory /private/prepared-verifier-fixture \
   --test-binary /private/publication.test
 ```
 
-Prepare the two candidate files with `tools/prepare_verification_fixture.py`.
+Prepare the two candidate files with `../../tools/prepare_verification_fixture.py`.
 The check compares the Go plan with real `git hash-object`, `read-tree`,
 `update-index` and `write-tree` results in a disposable bare repository.
 The source checkout is read-only, the procedure has no credential input and
