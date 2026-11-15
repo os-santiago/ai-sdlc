@@ -97,3 +97,17 @@ func TestReviewSummaryMustMatchIndependentEvidence(t *testing.T) {
 		t.Fatal("premature verdict matched")
 	}
 }
+
+func TestReviewReadToolsPermitBoundedNonterminalCommentary(t *testing.T) {
+	raw := string(reviewResponse("read_file", `{"path":"src/a.js"}`, ""))
+	for _, tc := range []struct {
+		content string
+		valid   bool
+	}{{"I will inspect the implementation and tests.", true}, {"VERDICT: approve", false}, {strings.Repeat("a", 4000), false}, {"bad\rtext", false}} {
+		content, _ := json.Marshal(tc.content)
+		response := strings.Replace(raw, `"content":null`, `"content":`+string(content), 1)
+		if _, e := ObserveReviewResponse([]byte(response), "review-model"); (e == nil) != tc.valid {
+			t.Fatal("commentary policy", tc.valid, e)
+		}
+	}
+}

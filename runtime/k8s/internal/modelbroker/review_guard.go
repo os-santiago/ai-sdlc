@@ -150,8 +150,16 @@ func ObserveReviewResponse(raw []byte, model string) (ReviewObservation, error) 
 	c := choices[0]
 	o := ReviewObservation{Version: reviewObservationVersion, Tools: map[string]int{}}
 	if len(c.Message.Tools) > 0 {
-		if c.Finish != "tool_calls" || len(c.Message.Tools) > 4 || (c.Message.Content != nil && *c.Message.Content != "") {
+		if c.Finish != "tool_calls" || len(c.Message.Tools) > 4 {
 			return invalid()
+		}
+		// Standard chat completions may include a short explanation alongside
+		// read-only tools. It is not a verdict and confers no authority.
+		if c.Message.Content != nil {
+			text := *c.Message.Content
+			if len(text) >= 4000 || strings.ContainsAny(text, "\x00\r") || strings.Contains(strings.ToLower(text), "verdict:") {
+				return invalid()
+			}
 		}
 		seen := map[string]bool{}
 		for _, tool := range c.Message.Tools {
