@@ -22,3 +22,26 @@ func TestDiagnosticStageNeverLogsUnderlyingContent(t *testing.T) {
 		}
 	}
 }
+
+func TestCleanupFailurePreservesPrimaryDiagnostic(t *testing.T) {
+	primary := ControllerError{"model-publication-helper-transport"}
+	combined := cleanupFailure{cause: primary}
+	if DiagnosticStage(combined) != "model-publication-helper-transport" || !CleanupPending(combined) {
+		t.Fatal("cleanup hid primary handoff failure")
+	}
+	if !errors.Is(combined, primary) {
+		t.Fatal("primary error chain lost")
+	}
+	if DiagnosticStage(cleanupFailure{}) != "cleanup" || !CleanupPending(cleanupFailure{}) {
+		t.Fatal("cleanup-only diagnostic")
+	}
+	if CleanupPending(primary) || CleanupPending(nil) {
+		t.Fatal("unexpected cleanup failure")
+	}
+	for _, err := range []error{errors.New("secret-canary"), ControllerError{"secret-canary"}} {
+		value := cleanupFailure{cause: fmt.Errorf("secret-wrapper: %w", err)}
+		if got := DiagnosticStage(value); got != "unknown" && got != "authority-or-storage" {
+			t.Fatal("underlying sensitive error leaked", got)
+		}
+	}
+}
