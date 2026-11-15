@@ -70,3 +70,34 @@ func TestHelperDeadlinesBoundBlockedPipes(t *testing.T) {
 		})
 	}
 }
+
+func TestFixedReviewHelperRejectsForeignUIDAndCallerPaths(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "workspaces")
+	runDir := filepath.Join(root, "review-state", "run")
+	if e := os.MkdirAll(runDir, 0700); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.WriteFile(filepath.Join(runDir, "summary.json"), []byte(`{"advisory":true}`), 0600); e != nil {
+		t.Fatal(e)
+	}
+	uid := "11111111-1111-4111-8111-111111111111"
+	uidPath := filepath.Join(root, "uid")
+	if e := os.WriteFile(uidPath, []byte(uid), 0600); e != nil {
+		t.Fatal(e)
+	}
+	args := []string{"review", "--pod-uid", uid, "--source-sha", strings.Repeat("a", 40)}
+	var result bytes.Buffer
+	if e := run(args, nil, &result, uidPath, parent); e != nil || result.String() != `{"advisory":true}` {
+		t.Fatal(e)
+	}
+	for _, suffix := range [][]string{{"--path", "/etc/passwd"}, {"--digest", strings.Repeat("b", 64)}} {
+		if run(append(append([]string{}, args...), suffix...), nil, io.Discard, uidPath, parent) == nil {
+			t.Fatal("review accepts extra authority")
+		}
+	}
+	args[2] = "22222222-2222-4222-8222-222222222222"
+	if run(args, nil, io.Discard, uidPath, parent) == nil {
+		t.Fatal("foreign reviewer accepted")
+	}
+}

@@ -41,6 +41,7 @@ type Session struct {
 	expires                              time.Time
 	instances                            map[string]instance
 	sourceSHA, assignmentDigest, treeSHA string
+	reviewProfile                        *executor.Profile
 }
 
 func Bind(ctx context.Context, c *Client, b Binding) (*Session, error) {
@@ -70,6 +71,9 @@ func Bind(ctx context.Context, c *Client, b Binding) (*Session, error) {
 		return nil, ErrTransport
 	}
 	s := &Session{client: c, identity: id, expires: time.UnixMilli(a.ExpiresAt), sourceSHA: a.SourceSHA, assignmentDigest: modelmailbox.Digest(b.Assignment), treeSHA: a.TreeSHA256}
+	if profile, e := executor.ParseReviewProfile(b.Profile, a.ProfileSHA256); e == nil {
+		s.reviewProfile = &profile
+	}
 	if authority.DecodeStrict(raw, &s.expected) != nil {
 		return nil, ErrTransport
 	}

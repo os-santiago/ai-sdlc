@@ -1,0 +1,79 @@
+{
+  "observedAt": "2026-11-15",
+  "scope": "isolated-readonly-reviewer-component",
+  "images": {
+    "worker": "localhost/ai-sdlc-worker@sha256:f0e1262b20242abad58e32bfd4a19d079bd7633c1edff85cc286c83e06d62f4b",
+    "model-mailbox": "localhost/ai-sdlc-model-mailbox@sha256:109efdb5a1f7f8eabcdddf3a80b77b53799ac69e82d413b48ceecd6e61c3a0cb"
+  },
+  "scenarios": [
+    {
+      "autonomousE2E": false,
+      "modelCalls": 2,
+      "podUID": "4d175804-9f79-4c13-8e25-398b7170cd08",
+      "publicationAuthorized": false,
+      "realKubernetes": true,
+      "realSCC": true,
+      "scenario": "approve",
+      "scope": "isolated-readonly-reviewer-component",
+      "sourceUnchanged": true,
+      "strictReviewAccepted": true,
+      "syntheticIssue": true,
+      "syntheticModel": true,
+      "ownedNamespaceRemoved": true,
+      "resourcesConfirmedRemoved": true
+    },
+    {
+      "autonomousE2E": false,
+      "modelCalls": 2,
+      "podUID": "44d42e66-77c4-463f-8f9b-8129f2a4f969",
+      "publicationAuthorized": false,
+      "realKubernetes": true,
+      "realSCC": true,
+      "scenario": "request_changes",
+      "scope": "isolated-readonly-reviewer-component",
+      "sourceUnchanged": true,
+      "strictReviewAccepted": true,
+      "syntheticIssue": true,
+      "syntheticModel": true,
+      "ownedNamespaceRemoved": true,
+      "resourcesConfirmedRemoved": true
+    },
+    {
+      "autonomousE2E": false,
+      "modelCalls": 2,
+      "podUID": "79e9812c-2c10-4d41-859f-755f158159bf",
+      "publicationAuthorized": false,
+      "realKubernetes": true,
+      "realSCC": true,
+      "scenario": "implicit",
+      "scope": "isolated-readonly-reviewer-component",
+      "sourceUnchanged": true,
+      "strictReviewAccepted": false,
+      "syntheticIssue": true,
+      "syntheticModel": true,
+      "ownedNamespaceRemoved": true,
+      "resourcesConfirmedRemoved": true
+    },
+    {
+      "autonomousE2E": false,
+      "modelCalls": 2,
+      "podUID": "f8e187d4-57ee-4e1a-b967-971109542eaa",
+      "publicationAuthorized": false,
+      "realKubernetes": true,
+      "realSCC": true,
+      "scenario": "mutation",
+      "scope": "isolated-readonly-reviewer-component",
+      "sourceUnchanged": true,
+      "strictReviewAccepted": false,
+      "syntheticIssue": true,
+      "syntheticModel": true,
+      "ownedNamespaceRemoved": true,
+      "resourcesConfirmedRemoved": true
+    }
+  ],
+  "limitations": [
+    "Synthetic model responses and issue; real SCC and Kubernetes.",
+    "No active review controller, durable review model ledger, publication grant or live workflow advancement.",
+    "A valid summary is advisory and cannot authorize publication."
+  ]
+}

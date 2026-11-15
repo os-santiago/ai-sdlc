@@ -9,16 +9,18 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/reviewresult"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
 func run(args []string, input io.Reader, output io.Writer, uidPath, parent string) error {
-	if len(args) == 0 || (args[0] != "import" && args[0] != "export") {
+	if len(args) == 0 || (args[0] != "import" && args[0] != "export" && args[0] != "review") {
 		return workspacebundle.ErrInvalid
 	}
 	flags := flag.NewFlagSet("workspace-transfer", flag.ContinueOnError)
@@ -29,7 +31,7 @@ func run(args []string, input io.Reader, output io.Writer, uidPath, parent strin
 	if flags.Parse(args[1:]) != nil || flags.NArg() != 0 || (modelmailbox.Identity{Attempt: "workspace-transfer", PodUID: *uid}).Validate() != nil || !workspacebundle.ValidSourceSHA(*source) {
 		return workspacebundle.ErrInvalid
 	}
-	if (args[0] == "import" && !workspacebundle.ValidDigest(*digest)) || (args[0] == "export" && *digest != "") {
+	if (args[0] == "import" && !workspacebundle.ValidDigest(*digest)) || (args[0] != "import" && *digest != "") {
 		return workspacebundle.ErrInvalid
 	}
 	f, e := os.Open(uidPath)
@@ -50,6 +52,14 @@ func run(args []string, input io.Reader, output io.Writer, uidPath, parent strin
 			return workspacebundle.ErrInvalid
 		}
 		return json.NewEncoder(output).Encode(map[string]any{"imported": true, "files": len(b.Files), "sourceSHA": *source, "bundleSHA256": *digest})
+	}
+	if args[0] == "review" {
+		raw, e := reviewresult.Read(filepath.Join(filepath.Dir(parent), "review-state"))
+		if e != nil {
+			return workspacebundle.ErrInvalid
+		}
+		_, e = output.Write(raw)
+		return e
 	}
 	b, e := workspacebundle.Export(parent, *source)
 	if e != nil {

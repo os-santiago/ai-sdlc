@@ -70,14 +70,37 @@ func strictBound(raw []byte, expected string, maximum int, keys []string, value 
 	}
 	return nil
 }
-func ParseProfile(raw []byte, expected string) (Profile, error) {
+func parseProfile(raw []byte, expected, version string) (Profile, error) {
 	var p Profile
 	keys := []string{"version", "model", "maxSteps", "maxSeconds", "maxTokens", "aDevSHA256"}
-	if strictBound(raw, expected, MaxProfileBytes, keys, &p) != nil || p.Version != ProfileVersion || !modelPattern.MatchString(p.Model) || p.MaxSteps < 1 || p.MaxSteps > 32 || p.MaxSeconds < 1 || p.MaxSeconds > 900 || p.MaxTokens < 1 || p.MaxTokens > 8192 || !workspacebundle.ValidDigest(p.ADevSHA256) {
+	if strictBound(raw, expected, MaxProfileBytes, keys, &p) != nil || p.Version != version || !modelPattern.MatchString(p.Model) || p.MaxSteps < 1 || p.MaxSteps > 32 || p.MaxSeconds < 1 || p.MaxSeconds > 900 || p.MaxTokens < 1 || p.MaxTokens > 8192 || !workspacebundle.ValidDigest(p.ADevSHA256) {
 		return Profile{}, ErrInvalid
 	}
 	return p, nil
 }
+
+// Generation parsing remains purpose-specific: a reviewer profile cannot be
+// substituted into an installed generation controller.
+func ParseProfile(raw []byte, expected string) (Profile, error) {
+	return parseProfile(raw, expected, ProfileVersion)
+}
+
+const ReviewProfileVersion = "ai-sdlc.reviewer-profile/v1"
+
+func ParseReviewProfile(raw []byte, expected string) (Profile, error) {
+	p, err := parseProfile(raw, expected, ReviewProfileVersion)
+	if err != nil || p.MaxSteps > 8 || p.MaxSeconds > 180 {
+		return Profile{}, ErrInvalid
+	}
+	return p, nil
+}
+func parseWorkloadProfile(raw []byte, expected string) (Profile, error) {
+	if p, err := ParseProfile(raw, expected); err == nil {
+		return p, nil
+	}
+	return ParseReviewProfile(raw, expected)
+}
+
 func ParseAssignment(raw []byte, expected string, now time.Time) (Assignment, error) {
 	var a Assignment
 	keys := []string{"version", "workItemId", "attempt", "repository", "sourceSHA", "treeSHA256", "profileSHA256", "authorityRevision", "issueNumbers", "title", "body", "acceptanceCriteria", "expiresAt"}

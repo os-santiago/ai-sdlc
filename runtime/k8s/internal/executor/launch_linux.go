@@ -21,10 +21,22 @@ const WorkspaceDirectory = "/workspaces"
 // SCCConfiguration is deterministic and contains no provider credential. The
 // endpoint is Pod-local; external model calls require a separate authority.
 func SCCConfiguration(p Profile) []byte {
-	raw, _ := json.Marshal(map[string]any{
+	tools := []string{"read_file", "list_dir", "search_text", "memory_read", "write_file", "edit_file", "run_shell", "git", "memory_write", "code_query", "repo_probe"}
+	if p.Version == ReviewProfileVersion {
+		tools = []string{"read_file", "list_dir", "search_text", "code_query"}
+	}
+	config := map[string]any{
 		"model":       map[string]any{"provider": "openai-compatible", "baseUrl": "http://127.0.0.1:8091/v1", "apiKey": "offline-mailbox-placeholder", "model": p.Model, "temperature": 0.2, "maxTokens": p.MaxTokens, "stream": false},
-		"permissions": map[string]any{"autoApprove": []string{"read_file", "list_dir", "search_text", "memory_read", "write_file", "edit_file", "run_shell", "git", "memory_write", "code_query", "repo_probe"}, "denyPaths": []string{".env", ".env.*", "**/*.key", "**/*.pem", "**/id_rsa*", "**/.ssh/*", "**/credentials*"}},
-	})
+		"permissions": map[string]any{"autoApprove": tools, "denyPaths": []string{".env", ".env.*", "**/*.key", "**/*.pem", "**/id_rsa*", "**/.ssh/*", "**/credentials*"}},
+	}
+	if p.Version == ReviewProfileVersion {
+		config["roles"] = map[string]string{"reviewer": p.Model}
+		permissions := config["permissions"].(map[string]any)
+		permissions["denyCommands"] = []string{"*"}
+		permissions["denyGitMutation"] = true
+		permissions["profile"] = "traditional"
+	}
+	raw, _ := json.Marshal(config)
 	return raw
 }
 
@@ -67,7 +79,7 @@ func Run(ctx context.Context, assignmentDigest string) int {
 	if err != nil {
 		return 1
 	}
-	p, err := ParseProfile(profileRaw, a.ProfileSHA256)
+	p, err := parseWorkloadProfile(profileRaw, a.ProfileSHA256)
 	if err != nil {
 		return 1
 	}
@@ -96,36 +108,54 @@ func Run(ctx context.Context, assignmentDigest string) int {
 	if VerifySource(WorkspaceDirectory, a) != nil {
 		return 1
 	}
+	stateDirectory := WorkspaceDirectory
+	if p.Version == ReviewProfileVersion {
+		stateDirectory = "/review-state"
+	}
 	for _, name := range []string{"home", "tmp", "run"} {
-		if os.Mkdir(filepath.Join(WorkspaceDirectory, name), 0700) != nil {
+		if os.Mkdir(filepath.Join(stateDirectory, name), 0700) != nil {
 			return 1
 		}
 	}
 	baselineCtx, stopBaseline := context.WithTimeout(ctx, 20*time.Second)
-	err = InitializeBaseline(baselineCtx, WorkspaceDirectory, "/opt/ai-sdlc/empty-git-template")
+	if p.Version != ReviewProfileVersion {
+		err = InitializeBaseline(baselineCtx, WorkspaceDirectory, "/opt/ai-sdlc/empty-git-template")
+	}
 	stopBaseline()
 	if err != nil {
 		return 1
 	}
-	prompt := WorkspaceDirectory + "/run/prompt.md"
-	if os.WriteFile(prompt, []byte(BuildPrompt(a, policy)), 0600) != nil {
+	prompt := stateDirectory + "/run/prompt.md"
+	promptText := BuildPrompt(a, policy)
+	if p.Version == ReviewProfileVersion {
+		promptText = BuildReviewPrompt(a, policy)
+	}
+	if os.WriteFile(prompt, []byte(promptText), 0600) != nil {
 		return 1
 	}
 	env := []string{
-		"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=/workspaces/home", "TMPDIR=/workspaces/tmp", "LC_ALL=C.UTF-8", "NO_COLOR=1", "CI=1",
+		"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + stateDirectory + "/home", "TMPDIR=" + stateDirectory + "/tmp", "LC_ALL=C.UTF-8", "NO_COLOR=1", "CI=1",
 		"SC_CONFIG_PATH=" + InputDirectory + "/scc-config.json", "SC_BASE_URL=http://127.0.0.1:8091/v1", "SC_MODEL=" + p.Model,
 		"NODE_OPTIONS=--max-old-space-size=256", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0",
 	}
 	runCtx, stopRun := context.WithTimeout(ctx, time.Duration(p.MaxSeconds)*time.Second)
 	defer stopRun()
-	err = runBounded(runCtx, "/usr/local/bin/scc", WorkspaceDirectory+"/repository", env, []string{
-		"chat", "-yq", "--prompt-file", prompt, "--no-commit", "--audit-log", WorkspaceDirectory + "/run/audit.jsonl", "--summary-file", WorkspaceDirectory + "/run/summary.json", "--max-seconds", strconv.Itoa(p.MaxSeconds), "--max-steps", strconv.Itoa(p.MaxSteps),
-	})
+	args := sccArguments(p, prompt, stateDirectory)
+	if p.Version == ReviewProfileVersion {
+		env = append(env, "SC_ROLE_MAX_FIXES=0")
+	}
+	err = runBounded(runCtx, "/usr/local/bin/scc", WorkspaceDirectory+"/repository", env, args)
 	if err == nil {
+		if p.Version == ReviewProfileVersion && VerifySource(WorkspaceDirectory, a) != nil {
+			return 1
+		}
 		return 0
 	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
+		if p.Version == ReviewProfileVersion && exit.ExitCode() == 10 && VerifySource(WorkspaceDirectory, a) != nil {
+			return 1
+		}
 		switch exit.ExitCode() {
 		case 10, 20, 21, 22, 23:
 			return exit.ExitCode()
@@ -135,4 +165,13 @@ func Run(ctx context.Context, assignmentDigest string) int {
 		return 124
 	}
 	return 1
+}
+
+func sccArguments(p Profile, prompt, stateDirectory string) []string {
+	args := []string{"chat", "-yq", "--prompt-file", prompt, "--no-commit", "--audit-log", stateDirectory + "/run/audit.jsonl", "--summary-file", stateDirectory + "/run/summary.json", "--max-seconds", strconv.Itoa(p.MaxSeconds), "--max-steps", strconv.Itoa(p.MaxSteps)}
+	if p.Version == ReviewProfileVersion {
+		args[1] = "-q"
+		args = append(args, "--role", "reviewer")
+	}
+	return args
 }
