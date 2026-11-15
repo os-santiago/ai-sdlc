@@ -3,6 +3,7 @@ package mergegate
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 type rule struct {
@@ -13,11 +14,11 @@ type rule struct {
 	SourceType string          `json:"ruleset_source_type"`
 }
 type ruleset struct {
-	ID                          int
-	Target, Enforcement, Source string
-	SourceType                  string             `json:"source_type"`
-	Bypass                      *[]json.RawMessage `json:"bypass_actors"`
-	Conditions                  struct {
+	ID                                int
+	Target, Enforcement, Source, Name string
+	SourceType                        string             `json:"source_type"`
+	Bypass                            *[]json.RawMessage `json:"bypass_actors"`
+	Conditions                        struct {
 		Ref struct{ Include, Exclude []string } `json:"ref_name"`
 	}
 	Rules []rule
@@ -29,7 +30,7 @@ func (c *Client) nativePolicy(ctx context.Context, p Policy) (string, []Required
 	if c.read(ctx, repoPath("/rulesets/"+number(p.RulesetID)), nil, &set) != nil || c.read(ctx, repoPath("/rules/branches/main"), nil, &effective) != nil {
 		return "", nil, false, ErrGate
 	}
-	if set.ID != p.RulesetID || set.Target != "branch" || set.Enforcement != "active" || set.Source != repository || set.SourceType != "Repository" || set.Bypass == nil || set.Conditions.Ref.Exclude == nil || len(set.Conditions.Ref.Exclude) != 0 || len(set.Conditions.Ref.Include) == 0 || len(set.Rules) == 0 || len(set.Rules) > 32 || len(effective) == 0 || len(effective) > 32 {
+	if (p.Name != "" && set.Name != p.Name) || set.ID != p.RulesetID || set.Target != "branch" || set.Enforcement != "active" || set.Source != repository || set.SourceType != "Repository" || set.Bypass == nil || set.Conditions.Ref.Exclude == nil || len(set.Conditions.Ref.Exclude) != 0 || len(set.Conditions.Ref.Include) == 0 || len(set.Rules) == 0 || len(set.Rules) > 32 || len(effective) == 0 || len(effective) > 32 {
 		return "", nil, false, ErrGate
 	}
 	applies := false
@@ -38,33 +39,39 @@ func (c *Client) nativePolicy(ctx context.Context, p Policy) (string, []Required
 			applies = true
 		}
 	}
-	if !applies {
+	if !applies || (p.Name != "" && (len(set.Conditions.Ref.Include) != 1 || set.Conditions.Ref.Include[0] != "refs/heads/main")) {
 		return "", nil, false, ErrGate
 	}
 	safe := len(*set.Bypass) == 0
 	required := []RequiredCheck{}
-	seen := map[string]bool{}
+	seen := map[string]int64{}
+	ownChecks := map[string]int64{}
 	hasChecks, hasReview := false, false
 	for _, r := range effective {
-		if r.RulesetID != p.RulesetID || r.Source != repository || r.SourceType != "Repository" {
+		own := r.RulesetID == p.RulesetID
+		if r.RulesetID <= 0 || (!own && p.Name == "") ||
+			!((r.SourceType == "Repository" && r.Source == repository) || (!own && r.SourceType == "Organization" && r.Source == strings.Split(repository, "/")[0])) {
 			return "", nil, false, ErrGate
 		}
-		// Every effective rule must be present in the explicitly reviewed ruleset.
+		// The dedicated floor must match its configured rules. Other authenticated
+		// effective rules can only add native requirements and remain in the digest.
 		match := false
 		for _, configured := range set.Rules {
 			if configured.Type == r.Type && parameterDigest(configured.Parameters) == parameterDigest(r.Parameters) {
 				match = true
 			}
 		}
-		if !match {
+		if own && !match {
 			return "", nil, false, ErrGate
 		}
 		switch r.Type {
 		case "required_status_checks":
-			if hasChecks {
+			if own && hasChecks {
 				return "", nil, false, ErrGate
 			}
-			hasChecks = true
+			if own {
+				hasChecks = true
+			}
 			var value struct {
 				Strict *bool `json:"strict_required_status_checks_policy"`
 				Checks []struct {
@@ -75,19 +82,30 @@ func (c *Client) nativePolicy(ctx context.Context, p Policy) (string, []Required
 			if json.Unmarshal(r.Parameters, &value) != nil || value.Strict == nil || len(value.Checks) < 1 || len(value.Checks) > 16 {
 				return "", nil, false, ErrGate
 			}
-			safe = safe && *value.Strict
+			if own {
+				safe = safe && *value.Strict
+			}
+			local := map[string]bool{}
 			for _, check := range value.Checks {
-				if check.Context == "" || len(check.Context) > 256 || check.AppID <= 0 || seen[check.Context] {
+				if check.Context == "" || len(check.Context) > 256 || check.AppID <= 0 || local[check.Context] || (seen[check.Context] != 0 && seen[check.Context] != check.AppID) {
 					return "", nil, false, ErrGate
 				}
-				seen[check.Context] = true
-				required = append(required, RequiredCheck{check.Context, check.AppID})
+				local[check.Context] = true
+				if seen[check.Context] == 0 {
+					required = append(required, RequiredCheck{check.Context, check.AppID})
+				}
+				seen[check.Context] = check.AppID
+				if own {
+					ownChecks[check.Context] = check.AppID
+				}
 			}
 		case "pull_request":
-			if hasReview {
+			if own && hasReview {
 				return "", nil, false, ErrGate
 			}
-			hasReview = true
+			if own {
+				hasReview = true
+			}
 			var value struct {
 				Resolved *bool `json:"required_review_thread_resolution"`
 				Count    *int  `json:"required_approving_review_count"`
@@ -95,23 +113,20 @@ func (c *Client) nativePolicy(ctx context.Context, p Policy) (string, []Required
 			if json.Unmarshal(r.Parameters, &value) != nil || value.Resolved == nil || value.Count == nil || *value.Count < 0 {
 				return "", nil, false, ErrGate
 			}
-			safe = safe && *value.Resolved
+			if own {
+				safe = safe && *value.Resolved
+			}
 		}
 	}
-	if !hasChecks || !hasReview {
+	if !hasChecks || !hasReview || len(required) > 16 {
 		return "", nil, false, ErrGate
 	}
 	for _, floor := range p.Required {
-		found := false
-		for _, native := range required {
-			if native == floor {
-				found = true
-			}
-		}
-		if !found {
+		if ownChecks[floor.Context] != floor.AppID {
 			safe = false
 		}
 	}
+
 	return digest(struct {
 		Configured Policy
 		Native     ruleset

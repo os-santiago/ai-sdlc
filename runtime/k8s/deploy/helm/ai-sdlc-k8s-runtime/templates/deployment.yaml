@@ -25,6 +25,9 @@ spec:
         checksum/review-config: {{ $.Values.review.configJSON | sha256sum }}
         ai-sdlc.io/publication-credential-revision: {{ $.Values.publication.credentialRevision | quote }}
         {{- end }}
+        {{- if and (eq $key "releaseManager") $.Values.merge.enabled }}
+        checksum/merge-policy: {{ $.Values.merge.configJSON | sha256sum }}
+        {{- end }}
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
         {{- if and (eq $key "worker") (has $.Values.runtime.mode (list "candidate" "verification")) }}
         ai-sdlc.io/model-credential-revision: {{ $.Values.candidate.credentialRevision | quote }}
@@ -94,6 +97,9 @@ spec:
             - {name: publication-client, mountPath: /etc/ai-sdlc/publication, readOnly: true}
             - {name: review-config, mountPath: /etc/ai-sdlc/review, readOnly: true}
             {{- end }}
+            {{- if and (eq $key "releaseManager") $.Values.merge.enabled }}
+            - {name: merge-policy, mountPath: /etc/ai-sdlc/merge, readOnly: true}
+            {{- end }}
             - {name: intake-config, mountPath: /etc/ai-sdlc/intake, readOnly: true}
             {{- if and (eq $key "intake") (has $.Values.runtime.mode (list "shadow" "candidate" "verification")) }}
             - {name: github-client, mountPath: /etc/ai-sdlc/github, readOnly: true}
@@ -151,6 +157,10 @@ spec:
           secret: {secretName: ai-sdlc-publication-client, defaultMode: 0440}
         - name: review-config
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-review}
+        {{- end }}
+        {{- if and (eq $key "releaseManager") $.Values.merge.enabled }}
+        - name: merge-policy
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-merge-policy}
         {{- end }}
         - name: intake-config
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-intake}

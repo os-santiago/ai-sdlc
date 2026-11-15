@@ -38,6 +38,9 @@ def main():
     profile=json.loads((install.LOCAL/'profiles/verification.json').read_text())
     public['contract']={'inline':profile['contract']['inline'].replace('ai-sdlc:shadow','ai-sdlc:publication-install-fixture')}
     values=candidate_install.desired_values(install.ROOT,lockpath,lock,verification=True,review=True,publication=True,merge=args.merge)
+    if args.merge:
+        import github_merge_policy
+        values['merge']['configJSON']=json.dumps({'RulesetID':999,'Name':'AI-SDLC low-risk merge protection','Required':github_merge_policy.MANIFEST['required']})
     values['candidate']['credentialRevision']=candidate_install.model_credentials(k,uid,args.codex_auth_file)
     candidate_install.review_credentials(k,uid)
     values['publication']['credentialRevision']=install.configure_publication_client(k,uid,repository,args.github_auth)

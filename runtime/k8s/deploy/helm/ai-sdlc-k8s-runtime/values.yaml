@@ -114,3 +114,4 @@ publication:
 
 merge:
   enabled: false
+  configJSON: ""

@@ -11,12 +11,35 @@ Preview with `./install.sh plan --config <path>`; apply with
 `./install.sh local --config <path> --github-auth gh-cli`. The installer verifies
 the native GitHub ruleset against
 [`homedir-policy.json`](../../runtime/k8s/internal/mergegate/homedir-policy.json),
-which also supplies the runtime's check names, App IDs and ruleset ID.
-Verification is read-only: it rejects insufficient protection instead of
-rewriting an existing ruleset without an atomic concurrency guard. The current
-pilot requires strict checks, resolved review threads, zero configured human
-approvals and no bypass actors. Additional native rules are retained. A future
-additive ruleset installer must receive separate validation before use.
+which supplies the runtime's check names and App IDs. The installed ruleset ID
+comes only from the verified GitHub response and retained installation receipt.
+Installation creates or reuses the exact dedicated rule described in
+[`homedir-merge-ruleset.json`](../../runtime/k8s/deploy/github/homedir-merge-ruleset.json).
+It never updates or deletes an existing ruleset. The new rule applies only to
+`main`, requires strict checks and resolved threads, and has no bypass actors.
+Existing protections remain in force, including stricter approval requirements.
+The collector includes all effective required checks and rejects ambiguous
+check owners, incomplete pages or an insufficient dedicated floor.
+
+**`local --merge` enables autonomous low-risk merge, not only configuration.**
+It can create the native rule and installs the owning component's merge loop.
+The default remains disabled. Only the controller can consume publication
+facts, evaluate current gates and request the single guarded merge. Installation
+never merges a PR, closes an issue or deploys application code.
+
+The installer records the returned numeric ruleset ID and manifest digest in
+its private installation state, then mounts public policy only into
+release-manager. Runtime never discovers authority from a name. A local lock
+serializes installation; directory entries and pre-send intent are synced before
+POST. A lost response leaves installation uncertain and prevents automatic
+retry. Duplicate names, missing/replaced IDs or changed scope stop activation.
+Do not delete the receipt to retry an uncertain operation: inspect the remote
+rule and recover through a reviewed configuration change. Disabling merge
+revokes its runtime capability but retains native protection and the receipt.
+
+GitHub layers applicable rules and enforces the most restrictive constraints;
+this additive approach does not overwrite concurrent administrator changes.
+See [GitHub ruleset layering](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets#about-rule-layering).
 
 Only release-manager receives the merge journal's column grants and runs the
 sequential one-minute merge reconciliation loop. There is no merge HTTP route,

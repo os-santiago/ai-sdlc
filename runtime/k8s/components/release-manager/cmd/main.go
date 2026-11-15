@@ -74,6 +74,9 @@ func main() {
 		if e != nil {
 			return mergeflow.Runtime{}, e
 		}
+		if _, e := mergegate.LoadInstalled("/etc/ai-sdlc/merge/policy.json"); e != nil {
+			return mergeflow.Runtime{}, e
+		}
 		gates, e := mergegate.New(value)
 		if e != nil {
 			return mergeflow.Runtime{}, e
@@ -84,7 +87,7 @@ func main() {
 		}
 		return mergeflow.Runtime{DB: c.DB, Policy: policy, Review: review,
 			Identity:   func() (authority.Identity, error) { _, key, e := c.Authority(); return key, e },
-			GatePolicy: func() (mergegate.Policy, error) { return mergegate.PilotPolicy(), nil },
+			GatePolicy: func() (mergegate.Policy, error) { return mergegate.LoadInstalled("/etc/ai-sdlc/merge/policy.json") },
 			Gates:      gates, Writer: writer}, nil
 	}
 	ready := func(ctx context.Context) error {

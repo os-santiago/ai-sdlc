@@ -25,6 +25,7 @@ type RequiredCheck struct {
 
 // Policy is reviewed installation configuration, outside generated workspaces.
 type Policy struct {
+	Name      string `json:"Name,omitempty"`
 	RulesetID int
 	Required  []RequiredCheck
 }

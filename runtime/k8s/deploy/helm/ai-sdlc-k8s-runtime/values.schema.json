@@ -832,6 +832,10 @@
       "properties": {
         "enabled": {
           "type": "boolean"
+        },
+        "configJSON": {
+          "type": "string",
+          "maxLength": 16384
         }
       }
     }

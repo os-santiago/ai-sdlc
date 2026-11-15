@@ -473,8 +473,9 @@ def main(argv=None):
                            'uri': 'postgresql://ai_sdlc:' + password + '@ai-sdlc-postgres:5432/ai_sdlc?sslmode=disable'}}
         run(kubectl + ['create', '-f', '-'], input=json.dumps(secret), stdout=subprocess.DEVNULL)
     if args.merge:
-        import github_merge_policy
-        github_merge_policy.verify()
+        import github_merge_install
+        native_policy = github_merge_install.reconcile(state)
+        execution_values['merge']['configJSON'] = json.dumps(native_policy, sort_keys=True)
     public_values = configure_identities(kubectl, provider, image_lock(args.images),
                                          cluster_uid, args.repository, args.environment,
                                          freeze=args.profile == 'maintenance', candidate=args.profile in ('candidate', 'verification'), verification=args.profile == 'verification', publication=bool(args.publication), merge=bool(args.merge))

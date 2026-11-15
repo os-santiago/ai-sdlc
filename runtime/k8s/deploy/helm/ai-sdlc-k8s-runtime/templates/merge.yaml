@@ -1,0 +1,14 @@
+{{- if .Values.merge.enabled }}
+{{- if not .Values.merge.configJSON }}
+{{- fail "merge requires verified installed native policy JSON" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-merge-policy
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+data:
+  policy.json: {{ .Values.merge.configJSON | quote }}
+{{- end }}

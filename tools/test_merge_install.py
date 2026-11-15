@@ -79,11 +79,11 @@ class MergeInstallTests(unittest.TestCase):
 
     def test_helm_activation_requires_publication_and_does_not_add_an_external_route(self):
         renderer = test_publication_install.PublicationInstallTests()
-        enabled = renderer.render(True, merge={'enabled': True})
+        enabled = renderer.render(True, merge={'enabled': True, 'configJSON': '{}'})
         self.assertEqual(enabled.returncode, 0, enabled.stderr)
         self.assertIn('AI_SDLC_MERGE', enabled.stdout)
         self.assertNotIn('/internal/merge-publication', enabled.stdout)
-        self.assertNotEqual(renderer.render(False, merge={'enabled': True}).returncode, 0)
+        self.assertNotEqual(renderer.render(False, merge={'enabled': True, 'configJSON': '{}'}).returncode, 0)
 
 
 if __name__ == '__main__':
