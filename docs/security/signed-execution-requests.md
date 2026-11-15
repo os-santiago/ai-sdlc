@@ -87,10 +87,11 @@ GitHub or proof that the source remains unchanged forever.
 
 ## Remaining integration gates
 
-Before operational activation, the reconciler must acquire the pinned source,
-verify the reviewed profile and A-Dev bundle, prepare the bounded workspace,
-provision and bind an isolated Pod, allocate the durable model budget, and
-reconcile expiry, policy changes and uncertain external operations.
+Before operational activation, the reconciler must invoke the
+[verified preparation boundary](prepared-execution-inputs.md), persist unique
+lifecycle ownership, provision and bind an isolated Pod, allocate the durable
+model budget, and reconcile expiry, policy changes and uncertain external
+operations. Prepared bytes do not authorize those later effects.
 
 The model dispatcher and Pod-bound transport remain separate prerequisites.
 Candidate extraction requires independently observed writer termination and

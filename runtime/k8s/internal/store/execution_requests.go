@@ -112,3 +112,22 @@ func (db *DB) ClaimExecution(ctx context.Context, id, digest string) (ExecutionC
 	}
 	return claim, nil
 }
+
+// ReadClaimedExecution never renews or adopts a claim. Every supplied binding
+// must still match the durable row and actual database time at this read.
+func (db *DB) ReadClaimedExecution(ctx context.Context, claim ExecutionClaim) (ExecutionRequest, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var r ExecutionRequest
+	if AssertComponent(ctx, db.Pool, "worker") != nil {
+		return r, ErrExecution
+	}
+	err := db.Pool.QueryRowContext(ctx, `SELECT id,work_item_uuid,attempt,repository,authority_revision,payload_digest,payload,receipt,expires_at
+ FROM execution_requests WHERE id=$1 AND claim_token=$2 AND claim_until=$3
+ AND state='claimed' AND claim_until>clock_timestamp() AND expires_at>clock_timestamp()`, claim.ID, claim.Token, claim.Until).Scan(
+		&r.ID, &r.WorkItem, &r.Attempt, &r.Repository, &r.AuthorityRevision, &r.PayloadDigest, &r.Payload, &r.Receipt, &r.ExpiresAt)
+	if err != nil {
+		return ExecutionRequest{}, ErrExecution
+	}
+	return r, nil
+}

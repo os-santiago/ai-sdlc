@@ -73,13 +73,14 @@ func Claim(ctx context.Context, db *store.DB, load ReadinessLoader, id string) (
 	// mounted policy and lifetime after that final wait, before returning any
 	// capability to a controller. Future effects need their own current check.
 	current, currentConfig, policyErr := load()
+	currentConfigDigest := currentConfig.Digest() // Immutable across a loader reusing its actor slice.
 	_, verifyErr := Verify(current, receipt, r.Payload, time.Now())
 	readyErr := readiness(ctx, db, current, currentConfig, c)
 	// Policy and readiness checks are adjacent but not a lock on future changes.
 	// Reload policy once more after the bounded database read.
 	latest, latestConfig, latestErr := load()
 	_, latestVerify := Verify(latest, receipt, r.Payload, time.Now())
-	if policyErr != nil || verifyErr != nil || readyErr != nil || latestErr != nil || latestVerify != nil || latestConfig.Digest() != currentConfig.Digest() || !claim.Until.After(time.Now()) || ctx.Err() != nil {
+	if policyErr != nil || verifyErr != nil || readyErr != nil || latestErr != nil || latestVerify != nil || latestConfig.Digest() != currentConfigDigest || !claim.Until.After(time.Now()) || ctx.Err() != nil {
 		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = db.StopExecutionClaim(cleanup, claim, "authority-revoked")
