@@ -55,6 +55,8 @@ Before any real provider invocation, a separate trusted controller must:
   reviewed model policy; ignore executor-supplied destinations or authority claims.
 - Reserve durable per-attempt and total cost/call budgets outside the Pod, key
   idempotency to actual request bytes, and stop on ambiguous provider outcomes.
+  The hidden [call reservation ledger](model-call-reservations.md) supplies
+  per-work-item call/byte accounting; provider billing and integration remain pending.
 - Keep provider secrets outside the executor; independently validate provider
   output limits and sanitization. No generic URL or header proxy is permitted.
 - Use scoped exec RBAC, fixed executable/arguments and explicit container names;
