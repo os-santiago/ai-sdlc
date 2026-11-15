@@ -14,7 +14,7 @@ func TestShadowBoundaryExposesOnlySignedOperationPaths(t *testing.T) {
 	t.Setenv("AI_SDLC_RUNTIME_MODE", "shadow")
 	for _, path := range []string{"/v1/admissions/evaluate", "/v1/attempts/dispatch", "/internal/execute-work", "/internal/admit-issue?policy=override"} {
 		called := false
-		handler := runtimeBoundary(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+		handler := RuntimeBoundary(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, nil))
 		if called || w.Code != http.StatusServiceUnavailable {
@@ -23,7 +23,7 @@ func TestShadowBoundaryExposesOnlySignedOperationPaths(t *testing.T) {
 	}
 	for _, path := range []string{"/internal/admit-issue", "/internal/plan-admission"} {
 		called := false
-		handler := runtimeBoundary(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+		handler := RuntimeBoundary(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
 		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, path, nil))
 		if !called {
 			t.Fatal("signed route unreachable")
@@ -127,7 +127,7 @@ func TestDurationOrDefaultFallsBackOnUnparsableValue(t *testing.T) {
 
 func TestCandidateBoundaryExposesOnlyThreeSignedPaths(t *testing.T) {
 	t.Setenv("AI_SDLC_RUNTIME_MODE", "candidate")
-	server := httptest.NewServer(runtimeBoundary(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })))
+	server := httptest.NewServer(RuntimeBoundary(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })))
 	defer server.Close()
 	for _, path := range []string{"/internal/admit-issue", "/internal/plan-admission", "/internal/execute-work", "/internal/execute-work?override=1", "/internal/publish", "/v1/attempts/dispatch"} {
 		response, err := http.Post(server.URL+path, "application/json", strings.NewReader("{}"))
@@ -144,5 +144,29 @@ func TestCandidateBoundaryExposesOnlyThreeSignedPaths(t *testing.T) {
 	readiness(nil).ServeHTTP(w, httptest.NewRequest("GET", "/readyz", nil))
 	if !strings.Contains(w.Body.String(), `"delivery":"candidate-only"`) {
 		t.Fatal("readiness misrepresents mode")
+	}
+}
+
+func TestVerificationBoundaryRequiresExplicitModeAndOnlyFourPaths(t *testing.T) {
+	for _, mode := range []string{"candidate", "verification"} {
+		t.Setenv("AI_SDLC_RUNTIME_MODE", mode)
+		server := httptest.NewServer(RuntimeBoundary(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })))
+		for _, path := range []string{"/internal/admit-issue", "/internal/plan-admission", "/internal/execute-work", "/internal/verify-artifact", "/internal/verify-artifact?override=1", "/internal/publish", "/v1/releases/evaluate"} {
+			response, err := http.Post(server.URL+path, "application/json", strings.NewReader("{}"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			response.Body.Close()
+			allowed := path == "/internal/admit-issue" || path == "/internal/plan-admission" || path == "/internal/execute-work" || (mode == "verification" && path == "/internal/verify-artifact")
+			if (response.StatusCode == 204) != allowed {
+				t.Fatal("mode boundary", mode, path, response.StatusCode)
+			}
+		}
+		server.Close()
+	}
+	w := httptest.NewRecorder()
+	readiness(nil).ServeHTTP(w, httptest.NewRequest("GET", "/readyz", nil))
+	if !strings.Contains(w.Body.String(), `"delivery":"verification-only"`) {
+		t.Fatal("readiness mode")
 	}
 }

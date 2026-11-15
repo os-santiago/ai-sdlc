@@ -157,3 +157,37 @@ func TestCandidateCeilingCannotGrantPublication(t *testing.T) {
 		t.Fatal("candidate accepted deploy ceiling")
 	}
 }
+
+func TestVerificationCeilingRejectsPublicationAndCandidateDowngrade(t *testing.T) {
+	t.Setenv("AI_SDLC_RUNTIME_MODE", "verification")
+	c, m := files(t)
+	m.Policy.Autonomy = "auto-pr"
+	var grants []authority.Grant
+	for _, g := range m.Policy.Grants {
+		if g.Operation == "admit-issue" || g.Operation == "plan-admission" || g.Operation == "execute-work" || g.Operation == "verify-artifact" {
+			grants = append(grants, g)
+		}
+	}
+	all := m.Policy.Grants
+	m.Policy.Grants = grants
+	write := func() {
+		b, _ := json.Marshal(m.Policy)
+		if os.WriteFile(c.PolicyPath, b, 0600) != nil {
+			t.Fatal("policy")
+		}
+	}
+	write()
+	if _, _, err := c.Authority(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_SDLC_RUNTIME_MODE", "candidate")
+	if _, _, err := c.Authority(); err == nil {
+		t.Fatal("candidate accepted verification")
+	}
+	t.Setenv("AI_SDLC_RUNTIME_MODE", "verification")
+	m.Policy.Grants = all
+	write()
+	if _, _, err := c.Authority(); err == nil {
+		t.Fatal("verification accepted publication grants")
+	}
+}

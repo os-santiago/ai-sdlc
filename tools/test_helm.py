@@ -16,6 +16,24 @@ class ChartTests(unittest.TestCase):
     def render(self, *args):
         return subprocess.run([HELM, 'template', 'ai-sdlc', str(CHART), '--namespace', 'ai-sdlc-runtime', '-f', str(LOCAL), *args], capture_output=True, text=True)
 
+    def test_verifier_effective_namespace_and_required_egress_without_global_policy(self):
+        result = self.render('-f', str(ROOT / 'runtime/k8s/deploy/local/profiles/verification.json'),
+                             '--set-string', 'verifier.digest=sha256:'+'a'*64,
+                             '--set', 'namespace.name=effective-runtime', '--set', 'networkPolicy.enabled=false',
+                             '--set', 'networkPolicy.databaseEgressCIDRs[0]=192.0.2.1/32')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        docs = [d for d in yaml.safe_load_all(result.stdout) if d]
+        for doc in docs:
+            if doc['metadata']['name'] in ('ai-sdlc-verifier', 'ai-sdlc-verification-controller', 'ai-sdlc-verifier-egress'):
+                self.assertEqual(doc['metadata']['namespace'], 'effective-runtime')
+        binding = next(d for d in docs if d['kind']=='RoleBinding' and d['metadata']['namespace']=='ai-sdlc-verifiers')
+        self.assertEqual(binding['subjects'][0]['namespace'], 'effective-runtime')
+        policy = next(d for d in docs if d['kind']=='NetworkPolicy' and d['metadata']['name']=='ai-sdlc-verifier-egress')
+        ports = {(p['protocol'],p['port']) for rule in policy['spec']['egress'] for p in rule['ports']}
+        self.assertTrue({('UDP',53),('TCP',53),('TCP',5432)} <= ports)
+        self.assertTrue(any(peer.get('ipBlock',{}).get('cidr')=='192.0.2.1/32'
+                            for rule in policy['spec']['egress'] for peer in rule['to']))
+
     def test_independent_components_persistence_and_policy(self):
         result = self.render()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -128,6 +146,28 @@ class ChartTests(unittest.TestCase):
             templates.append({d['metadata']['name']: d['spec']['template'] for d in docs})
         changed = {name for name in templates[0] if templates[0][name] != templates[1][name]}
         self.assertEqual(changed, {'ai-sdlc-worker'})
+
+    def test_verifier_is_separate_and_can_only_manage_offline_validation(self):
+        self.assertNotEqual(self.render('--set', 'runtime.mode=verification').returncode, 0)
+        result = self.render('--set', 'runtime.mode=verification', '--set', 'verifier.digest=sha256:' + 'a' * 64)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        docs = [d for d in yaml.safe_load_all(result.stdout) if d]
+        verifier = next(d for d in docs if d['kind'] == 'Deployment' and d['metadata']['name'] == 'ai-sdlc-verifier')
+        pod = verifier['spec']['template']['spec']
+        self.assertEqual(pod['serviceAccountName'], 'ai-sdlc-verification-controller')
+        self.assertFalse(pod['automountServiceAccountToken'])
+        self.assertEqual(len(pod['containers']), 1)
+        secrets = {v.get('secret', {}).get('secretName') for v in pod['volumes']} - {None}
+        self.assertEqual(secrets, {'ai-sdlc-identity-verifier'})
+        for rule in next(d for d in docs if d['kind'] == 'Role' and d['metadata']['namespace'] == 'ai-sdlc-verifiers')['rules']:
+            self.assertFalse(set(rule['resources']) & {'secrets', 'pods/exec', '*', 'deployments'})
+            self.assertFalse(set(rule['verbs']) & {'*', 'patch', 'update'})
+        policy = next(d for d in docs if d['kind'] == 'NetworkPolicy' and d['metadata']['namespace'] == 'ai-sdlc-verifiers')
+        self.assertEqual(policy['spec'], {'podSelector': {}, 'policyTypes': ['Ingress', 'Egress']})
+        config = next(d['data'] for d in docs if d['kind'] == 'ConfigMap' and 'AI_SDLC_RELAY_ROUTES' in d.get('data', {}))
+        routes = json.loads(config['AI_SDLC_RELAY_ROUTES'])
+        self.assertEqual(set(routes), {'admit-issue', 'plan-admission', 'execute-work', 'verify-artifact'})
+        self.assertEqual(routes['verify-artifact'], 'http://ai-sdlc-verifier:8087/internal/verify-artifact')
 
 
 if __name__ == '__main__': unittest.main()

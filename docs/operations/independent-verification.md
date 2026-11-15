@@ -1,9 +1,10 @@
 # Independent candidate verification
 
-The `verification` library and Kubernetes transport define a bounded verification
-boundary. They are **not yet an operational verifier**: candidate installations
-still stop at durable, unvalidated candidate capture. No publisher, merge or
-deployment permission follows from these APIs or their fixture reports.
+The explicit `verification` profile runs a separate service that consumes signed
+worker candidates and records independent, bounded behavior evidence. Its
+activation requires matching reviewed published images. The `candidate` profile
+still stops at durable, unvalidated capture. Neither a passing recipe nor a
+fixture report authorizes PR publication, merge or deployment.
 
 ## Reviewed recipe
 
@@ -66,26 +67,27 @@ Kubernetes log proxy requests use `Accept: */*`: real kind rejected `text/plain`
 with HTTP 406 before proxying. Strict response size and recipe parsing remain in
 place. Tests reject overflow, redirects, forbidden responses and arbitrary roles.
 
-## Prerequisites for activation
+## Activation boundary and remaining outerloop
 
-The candidate reader is deliberately unavailable to provisioned verifier roles.
-Migration 0012 defines read policies for all six joined tables but grants no privileges. A reviewed
-activation must provide and test SELECT permissions for all joined tables, including model allocations and
-budgets, with the actual
-nonprivileged verifier identity. No installer profile currently enables this.
+Migrations 0012–0014 define candidate read policies, the verification
+ledger and durable cancellation of effects known not to have been sent. They grant no operational privileges by themselves. The reviewed
+`verification` profile provisions the independent role's minimum reads and
+ledger writes; returning to `candidate`, `shadow` or maintenance revokes them.
+The actual nonprivileged identity is exercised in the composed fixture below.
 
-Further required work: signed durable handoff, current issue/policy proof,
-exclusive bounded claims and effect ledger, recovery after process loss,
-installation-owned offline verifier configuration, and authenticated audit
-consumption. PR publication, current forge merge gates, Konflux policy and
-same-digest test-production promotion remain separate outerloop stages.
+Signed handoff, current issue/policy proof, bounded claims, durable effects and
+UID-based recovery are implemented. Independent generative audit, PR publication,
+current forge merge gates, Konflux policy and same-digest production-test
+promotion remain separate outerloop stages. An installation or behavior proof
+does not establish completion of those stages.
 
 ## Signed handoff and bounded reconciliation
 
 The worker can derive a `verify-artifact` command only from a captured candidate
 whose executor cleanup is complete, whose original signed execution request is
 unexpired, and whose current issue evidence still selects the reviewed recipe.
-The command retains the original expiry. Its disposition and signed outbox entry
+The command expires at the earlier of the original expiry and thirty minutes
+after handoff; verification never extends generation authority. Its disposition and signed outbox entry
 are committed together; an unsupported or revoked candidate is terminally rejected.
 
 The independent verifier inbox records only a matching signed worker handoff.
@@ -105,10 +107,38 @@ retries creation nor deletes by name, and blocks further claims. Operator-direct
 infrastructure recovery must establish ownership separately; it cannot manufacture
 a successful verification record.
 
-This controller is an integration library in this revision. Migration 0013 adds
-its ledger and RLS policies, but the operational provisioner, component routes,
-Helm profile and installer do not activate it. The live candidate profile still
-stops at an unvalidated artifact.
+The `verification` installation profile activates this controller through a
+separate service, database role and restricted Kubernetes service account.
+`candidate` mode retains its three operations and unvalidated-artifact boundary.
+
+## Install the independent verifier
+
+First publish the reviewed verifier implementation and refresh the image lock
+and adjacent evidence from that same successful main publication. The installer
+rejects verification mode if its image evidence omits the verifier or names a
+different source, platform or registry. An older candidate lock does not enable
+this new profile merely because the source checkout changed.
+
+```bash
+./install.sh plan --config examples/homedir-verification.local-install.json
+./install.sh local --config examples/homedir-verification.local-install.json \
+  --github-auth gh-cli --codex-auth-file /private/path/auth.json
+```
+
+This reconciles the existing Homedir kind scope and keeps the production test
+target `ai-sdlc-production`. The verifier has a dedicated container, identity,
+database role and service on internal port 8087. Its only command is the signed
+worker `verify-artifact` message delivered by the relay. Its Kubernetes role can
+create/get/delete Pods and ConfigMaps, read Pod logs and inspect NetworkPolicies
+only in `ai-sdlc-verifiers`; it cannot exec into Pods, read Secrets or modify
+policies. Generated code runs in separate gVisor Pods without credentials or
+network access. Only the controller can fetch the pinned public source.
+
+Switching back to `candidate` revokes verifier and worker-handoff SQL privileges
+and removes the fourth authority grant. The public installation report exposes
+`independentVerificationEnabled`; readiness reports `verification-only`.
+A passing behavior proof remains insufficient for publication, agent audit,
+merge, Konflux policy acceptance, release or promotion.
 
 ## Reproduce the composed runtime fixture
 
@@ -136,6 +166,9 @@ python3 tools/verify_verification_flow.py \
   --report /private/verification-report.json
 ```
 
+Use `python3 tools/prepare_verification_fixture.py --source-repository /path/to/isolated-homedir --output /private/new-fixture-candidate` to reproduce the committed synthetic candidate patch for the pinned source. The output directory must be new; the source checkout is read-only. CI runs seven scenarios as installation conformance, including revocation after
+intent but before send, and recovery from a temporary policy-read failure.
+
 The candidate directory supplies only the two recipe files. Model responses and
 the issue are synthetic; SCC, source fetch, PostgreSQL, signed inbox/outbox,
 restricted service accounts, gVisor Pods, comparison and cleanup are real.
@@ -145,3 +178,17 @@ expiry and a real API create whose UID response is discarded. The lost-reply
 scenario preserves the unknown resource until the harness deletes its own
 namespace by the namespace UID; runtime recovery remains uncertain and blocked.
 These fixtures do not demonstrate a live issue-to-production E2E.
+
+### Observation failures and effects not sent
+
+Before a verifier claim or a worker handoff, unavailable database/policy reads
+leave the existing request pending within its original expiry. Missing or invalid
+authority evidence remains a rejection. This distinction never retries or adopts
+an already claimed execution or a potentially dispatched effect.
+
+If authority changes after recording an intent but before calling Kubernetes,
+the original controller seals `not_sent_at` against its exact claim and effect
+tokens. It may record that fact after expiry, but cannot reuse the effect or
+produce a successful verification. Cleanup requires the durable no-send marker;
+a NULL UID after a crash or a lost create response remains uncertain and blocks
+new work. No operational role can delete the evidence.

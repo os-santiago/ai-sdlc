@@ -2,6 +2,7 @@ package verificationflow
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -20,12 +21,21 @@ func CurrentProof(ctx context.Context, db *store.DB, load PolicyLoader, id strin
 	reject := func() (verification.Command, store.VerificationCandidate, intake.Snapshot, error) {
 		return verification.Command{}, store.VerificationCandidate{}, intake.Snapshot{}, verification.ErrVerification
 	}
+	unavailable := func() (verification.Command, store.VerificationCandidate, intake.Snapshot, error) {
+		return verification.Command{}, store.VerificationCandidate{}, intake.Snapshot{}, store.ErrObservationUnavailable
+	}
 	r, err := db.ReadVerification(ctx, id)
 	if err != nil {
+		if errors.Is(err, store.ErrObservationUnavailable) {
+			return unavailable()
+		}
 		return reject()
 	}
 	p, config, profile, err := load()
-	if err != nil || !workspacebundle.ValidDigest(profile) {
+	if err != nil {
+		return unavailable()
+	}
+	if !workspacebundle.ValidDigest(profile) {
 		return reject()
 	}
 	var receipt authority.Receipt
@@ -37,6 +47,9 @@ func CurrentProof(ctx context.Context, db *store.DB, load PolicyLoader, id strin
 		return reject()
 	}
 	candidate, err := db.ReadVerificationCandidate(ctx, c.CandidateID)
+	if errors.Is(err, store.ErrObservationUnavailable) {
+		return unavailable()
+	}
 	if err != nil || verification.MatchLedger(c, candidate) != nil {
 		return reject()
 	}
@@ -49,11 +62,17 @@ func CurrentProof(ctx context.Context, db *store.DB, load PolicyLoader, id strin
 		return reject()
 	}
 	snapshot, err := execution.CandidateSnapshot(ctx, db, p, config, generated)
+	if errors.Is(err, store.ErrObservationUnavailable) {
+		return unavailable()
+	}
 	if err != nil || snapshot.Revision != c.IssueRevision || !verification.SelectLocaleRecipe(snapshot.Issue.Body) {
 		return reject()
 	}
 	latest, latestConfig, latestProfile, err := load()
-	if err != nil || latestProfile != profile || latest.Revision() != p.Revision() || latestConfig.Digest() != config.Digest() || ctx.Err() != nil {
+	if err != nil || ctx.Err() != nil {
+		return unavailable()
+	}
+	if latestProfile != profile || latest.Revision() != p.Revision() || latestConfig.Digest() != config.Digest() || ctx.Err() != nil {
 		return reject()
 	}
 	if _, err = verification.Verify(latest, receipt, r.Payload, time.Now()); err != nil {

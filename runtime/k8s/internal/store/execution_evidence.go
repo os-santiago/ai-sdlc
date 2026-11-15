@@ -28,8 +28,11 @@ func (db *DB) readExecutionEvidence(ctx context.Context, component, work, reposi
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var e ExecutionEvidence
-	if maximumAgeSeconds < 30 || maximumAgeSeconds > 300 || AssertComponent(ctx, db.Pool, component) != nil {
+	if maximumAgeSeconds < 30 || maximumAgeSeconds > 300 {
 		return e, ErrExecution
+	}
+	if err := AssertComponent(ctx, db.Pool, component); err != nil {
+		return e, identityObservationError(err)
 	}
 	err := db.Pool.QueryRowContext(ctx, `SELECT
         p.correlation_id,w.status,w.issue_numbers,w.acceptance_criteria,w.depends_on,
@@ -58,7 +61,7 @@ func (db *DB) readExecutionEvidence(ctx context.Context, component, work, reposi
 		&e.AdmissionGeneration, &e.AdmissionEvent, &e.AdmissionPayload, &e.PlanningGeneration, &e.PlanningEvent, &e.PlanningPayload,
 		&e.Decision, &e.Risk, &e.PolicyVersion, &e.AdmissionCorrelation, &e.Reasons, &e.Gates)
 	if err != nil {
-		return ExecutionEvidence{}, ErrExecution
+		return ExecutionEvidence{}, observationError(err)
 	}
 	return e, nil
 }

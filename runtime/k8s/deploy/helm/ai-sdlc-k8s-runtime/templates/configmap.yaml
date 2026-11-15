@@ -13,11 +13,14 @@ data:
   AI_SDLC_INTAKE_CONFIG_PATH: /etc/ai-sdlc/intake/config.json
   AI_SDLC_LOG_LEVEL: {{ .Values.logLevel | quote }}
   {{- $routes := dict "admit-issue" (printf "http://%s-admission-controller:%v/internal/admit-issue" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.admissionController.port) "plan-admission" (printf "http://%s-orchestrator:%v/internal/plan-admission" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.orchestrator.port) }}
-  {{- if eq .Values.runtime.mode "candidate" }}
+  {{- if has .Values.runtime.mode (list "candidate" "verification") }}
   {{- $_ := set $routes "execute-work" (printf "http://%s-worker:%v/internal/execute-work" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.worker.port) }}
   {{- end }}
+  {{- if eq .Values.runtime.mode "verification" }}
+  {{- $_ := set $routes "verify-artifact" (printf "http://%s-verifier:8087/internal/verify-artifact" (include "ai-sdlc-k8s-runtime.fullname" .)) }}
+  {{- end }}
   AI_SDLC_RELAY_ROUTES: {{ $routes | toJson | quote }}
-  {{- if eq .Values.runtime.mode "candidate" }}
+  {{- if has .Values.runtime.mode (list "candidate" "verification") }}
   AI_SDLC_EXECUTION_CONFIG_PATH: /etc/ai-sdlc/execution/config.json
   {{- end }}
   AI_SDLC_CONTRACT_PATH: /etc/ai-sdlc/contract/.ai-sdlc.yaml
@@ -69,7 +72,7 @@ metadata:
 data:
   config.json: {{ .Values.intake.configJSON | quote }}
 
-{{- if eq .Values.runtime.mode "candidate" }}
+{{- if has .Values.runtime.mode (list "candidate" "verification") }}
 ---
 apiVersion: v1
 kind: ConfigMap

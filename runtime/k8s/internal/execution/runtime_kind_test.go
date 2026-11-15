@@ -53,11 +53,20 @@ func TestRealCandidateRuntimeFixture(t *testing.T) {
 		}
 	}
 	if in.Scenario == "verification" {
-		t.Setenv("AI_SDLC_RUNTIME_MODE", "maintenance")
+		t.Setenv("AI_SDLC_RUNTIME_MODE", "verification")
 		for _, g := range f.Material.Policy.Grants {
 			if g.Operation == "verify-artifact" {
 				grants = append(grants, g)
 			}
+		}
+	}
+	if in.Scenario == "verification" {
+		passwords := map[string]string{}
+		for role := range f.Material.Identities {
+			passwords[role] = strings.ReplaceAll(role, "-", "_") + strings.Repeat("q", 40)
+		}
+		if e := f.Admin.ProvisionRolesForMode(context.Background(), passwords, "verification"); e != nil {
+			t.Fatal(e)
 		}
 	}
 	f.Material.Policy.Grants = grants
@@ -143,6 +152,9 @@ func TestRealCandidateRuntimeFixture(t *testing.T) {
 		t.Fatal("runtime reconciliation", state, err)
 	}
 	if in.Scenario == "verification" {
+		if state, e := runtime.PollOnce(ctx); e != nil || state != "verification-dispatched" {
+			t.Fatal("operational verification handoff", state, e)
+		}
 		verifyCapturedFixture(t, f, component, in.VerificationDriver, in.VerificationConfig, in.Runtime.Placement.WorkerImage, in.ReportFile, f.command.ProfileSHA256, in.SourceSHA, in.VerificationScenario, calls.Load())
 		return
 	}

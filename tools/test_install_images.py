@@ -52,8 +52,8 @@ class ImageResolutionTests(unittest.TestCase):
                     images.validate_run(value, RUN, SHA)
 
     def test_requires_complete_unique_current_artifact_set(self):
-        catalog = {'total_count': 8, 'artifacts': [archive(c)[1] for c in sorted(images.ARTIFACT_COMPONENTS)]}
-        self.assertEqual(len(images.select_artifacts(catalog, RUN, SHA)), 8)
+        catalog = {'total_count': 9, 'artifacts': [archive(c)[1] for c in sorted(images.ARTIFACT_COMPONENTS)]}
+        self.assertEqual(len(images.select_artifacts(catalog, RUN, SHA)), 9)
         cases = [lambda j: j['artifacts'].pop(),
                  lambda j: j['artifacts'].__setitem__(0, j['artifacts'][1]),
                  lambda j: j['artifacts'][0].update(expired=True),
@@ -98,7 +98,7 @@ class ImageResolutionTests(unittest.TestCase):
 
     def test_resolves_exact_publication_into_installer_shape(self):
         responses = {'actions/runs/123': json.dumps(run()).encode()}
-        catalog = {'total_count': 8, 'artifacts': []}
+        catalog = {'total_count': 9, 'artifacts': []}
         for component in sorted(images.ARTIFACT_COMPONENTS):
             data, metadata = archive(component)
             catalog['artifacts'].append(metadata)

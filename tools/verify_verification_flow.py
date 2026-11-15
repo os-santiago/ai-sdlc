@@ -55,7 +55,7 @@ def verify(kubectl, worker, mailbox, candidate_binary, verifier_binary, source_s
                 raise ValueError('Verifier resources differ from the expected recovery outcome')
     finally:
         if uid:
-            cleanup_namespace(command, namespace, uid)
+            cleanup_namespace(lambda *args, **kwargs: command(*args, **dict(kwargs, timeout=65)), namespace, uid)
     return dict(result, verifierNamespaceRemoved=True, verifierResourcesConfirmedRemoved=scenario != "lost-config-reply", separateServiceAccounts=True)
 
 
@@ -65,7 +65,7 @@ def main():
         parser.add_argument('--' + name, required=True)
     for name in ('candidate-binary', 'verifier-binary', 'candidate-directory', 'report'):
         parser.add_argument('--' + name, required=True, type=Path)
-    parser.add_argument("--scenario", choices=("success", "revoke-config", "revoke-results", "lost-config-reply", "expire-config"), default="success")
+    parser.add_argument("--scenario", choices=("success", "revoke-config", "revoke-results", "lost-config-reply", "expire-config", "revoke-intent", "transient-policy"), default="success")
     args = parser.parse_args()
     result = verify([args.kubectl, '--kubeconfig', args.kubeconfig], args.worker_image, args.mailbox_image,
                     args.candidate_binary, args.verifier_binary, args.source_sha, args.candidate_directory, args.scenario)

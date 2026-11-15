@@ -12,6 +12,7 @@ var verificationIDPattern = regexp.MustCompile(`^verification-[a-f0-9]{64}$`)
 type VerificationEffect struct {
 	Claim                  VerificationClaim
 	Kind, Token, Name, UID string
+	NotSent                bool
 }
 
 func lockVerification(ctx context.Context, tx *sql.Tx, c VerificationClaim) error {
@@ -79,7 +80,7 @@ func (db *DB) AcknowledgeVerificationEffect(ctx context.Context, e VerificationE
 		if lockVerification(ctx, tx, e.Claim) != nil {
 			return ErrExecution
 		}
-		r, err := tx.ExecContext(ctx, `UPDATE verification_effects SET resource_uid=$5,completed_at=clock_timestamp() WHERE request_id=$1 AND kind=$2 AND token=$3 AND resource_name=$4 AND resource_uid IS NULL`, e.Claim.ID, e.Kind, e.Token, e.Name, uid)
+		r, err := tx.ExecContext(ctx, `UPDATE verification_effects SET resource_uid=$5,completed_at=clock_timestamp() WHERE request_id=$1 AND kind=$2 AND token=$3 AND resource_name=$4 AND resource_uid IS NULL AND not_sent_at IS NULL`, e.Claim.ID, e.Kind, e.Token, e.Name, uid)
 		if err != nil {
 			return ErrExecution
 		}
@@ -96,7 +97,7 @@ func (db *DB) ReadVerificationEffects(ctx context.Context, c VerificationClaim) 
 	if AssertComponent(ctx, db.Pool, "verifier") != nil {
 		return nil, ErrExecution
 	}
-	rows, err := db.Pool.QueryContext(ctx, `SELECT e.kind,e.token,e.resource_name,COALESCE(e.resource_uid::text,'') FROM verification_effects e JOIN verification_requests r ON r.id=e.request_id WHERE r.id=$1 AND r.claim_token=$2 AND r.claim_until=$3 ORDER BY e.kind LIMIT 6`, c.ID, c.Token, c.Until)
+	rows, err := db.Pool.QueryContext(ctx, `SELECT e.kind,e.token,e.resource_name,COALESCE(e.resource_uid::text,''),e.not_sent_at IS NOT NULL FROM verification_effects e JOIN verification_requests r ON r.id=e.request_id WHERE r.id=$1 AND r.claim_token=$2 AND r.claim_until=$3 ORDER BY e.kind LIMIT 6`, c.ID, c.Token, c.Until)
 	if err != nil {
 		return nil, ErrExecution
 	}
@@ -104,7 +105,7 @@ func (db *DB) ReadVerificationEffects(ctx context.Context, c VerificationClaim) 
 	effects := []VerificationEffect{}
 	for rows.Next() {
 		e := VerificationEffect{Claim: c}
-		if rows.Scan(&e.Kind, &e.Token, &e.Name, &e.UID) != nil || e.Name != verificationResourceName(c.ID, e.Kind) {
+		if rows.Scan(&e.Kind, &e.Token, &e.Name, &e.UID, &e.NotSent) != nil || e.Name != verificationResourceName(c.ID, e.Kind) {
 			return nil, ErrExecution
 		}
 		effects = append(effects, e)
@@ -123,7 +124,30 @@ func (db *DB) ConfirmVerificationCleanup(ctx context.Context, c VerificationClai
 	if AssertComponent(ctx, db.Pool, "verifier") != nil {
 		return ErrExecution
 	}
-	r, err := db.Pool.ExecContext(ctx, `UPDATE verification_requests SET cleanup_state='complete' WHERE id=$1 AND claim_token=$2 AND claim_until=$3 AND state IN ('claimed','failed') AND NOT EXISTS(SELECT 1 FROM verification_effects e WHERE e.request_id=$1 AND e.resource_uid IS NULL)`, c.ID, c.Token, c.Until)
+	r, err := db.Pool.ExecContext(ctx, `UPDATE verification_requests SET cleanup_state='complete' WHERE id=$1 AND claim_token=$2 AND claim_until=$3 AND state IN ('claimed','failed') AND NOT EXISTS(SELECT 1 FROM verification_effects e WHERE e.request_id=$1 AND e.resource_uid IS NULL AND e.not_sent_at IS NULL)`, c.ID, c.Token, c.Until)
+	if err != nil {
+		return ErrExecution
+	}
+	n, err := r.RowsAffected()
+	if err != nil || n != 1 {
+		return ErrExecution
+	}
+	return nil
+}
+
+// CancelUnsentVerificationEffect is called only before apply has been invoked.
+// It closes an observation, not an execution lease: the exact original claim
+// token may seal this fact after expiry. No delete or effect replay is allowed.
+func (db *DB) CancelUnsentVerificationEffect(ctx context.Context, e VerificationEffect) error {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if AssertComponent(ctx, db.Pool, "verifier") != nil || e.Name != verificationResourceName(e.Claim.ID, e.Kind) {
+		return ErrExecution
+	}
+	r, err := db.Pool.ExecContext(ctx, `UPDATE verification_effects e SET not_sent_at=clock_timestamp()
+      FROM verification_requests r WHERE e.request_id=r.id AND r.id=$1 AND r.claim_token=$2 AND r.claim_until=$3
+      AND r.state IN ('claimed','failed') AND e.kind=$4 AND e.token=$5 AND e.resource_name=$6
+      AND e.resource_uid IS NULL AND e.not_sent_at IS NULL`, e.Claim.ID, e.Claim.Token, e.Claim.Until, e.Kind, e.Token, e.Name)
 	if err != nil {
 		return ErrExecution
 	}

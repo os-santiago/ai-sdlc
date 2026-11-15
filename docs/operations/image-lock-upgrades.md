@@ -13,7 +13,7 @@ repository's Actions artifacts. Both identifiers are explicit: the tool never
 selects an implicit latest build or accepts PR/build-branch artifacts. The output
 directory must be new. The command reads GitHub and writes local files only.
 
-The resolver requires all eight component identity artifacts from the same
+The resolver requires all nine component identity artifacts from the same
 successful push run, exact source revision, repository, workflow and platform.
 It verifies each downloaded ZIP against GitHub's reported SHA-256 and size,
 accepts one bounded JSON entry, rejects duplicate fields and checks all identity
@@ -22,8 +22,8 @@ fields. GitHub responses have a 1 MiB file limit, 30-second request limit and
 artifacts fail before an installer lock is written.
 
 `images.lock.json` contains the six installed services and migrator, in the
-installer's existing schema. `evidence.json` also records the model-mailbox image,
-which remains a hidden executor prerequisite rather than an installed service.
+installer's existing schema. `evidence.json` also records the model-mailbox image and the optional verifier
+image. Verification mode requires the latter from the exact same publication.
 Review the generated lock and evidence in a focused PR, retaining the workflow
 URL and source revision. Commit the reviewed lock to
 `runtime/k8s/deploy/local/images.lock.json` and its public publication record.

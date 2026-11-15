@@ -37,7 +37,7 @@ def load(path):
             or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', config['repository'])
             or any(part in ('.', '..') for part in config['repository'].split('/'))
             or not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,62}', config['environment'])
-            or config['profile'] not in ('maintenance', 'shadow', 'candidate')
+            or config['profile'] not in ('maintenance', 'shadow', 'candidate', 'verification')
             or not config['images'] or '\x00' in config['images']):
         raise ValueError('Invalid or unsupported local installation scope')
     digest = 'sha256:' + hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest()

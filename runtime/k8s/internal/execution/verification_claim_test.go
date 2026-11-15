@@ -86,6 +86,9 @@ func verificationClaimFixture(t *testing.T) (*lifecycleFixture, *store.DB, store
 func TestVerificationExclusiveClaimEffectsAndFinish(t *testing.T) {
 	f, db, r := verificationClaimFixture(t)
 	ctx := context.Background()
+	if _, err := f.db.ClaimVerification(ctx, r.ID, r.PayloadDigest); err == nil {
+		t.Fatal("worker claimed verification")
+	}
 	var wg sync.WaitGroup
 	winners := make(chan store.VerificationClaim, 12)
 	for range 12 {
@@ -144,9 +147,6 @@ func TestVerificationExclusiveClaimEffectsAndFinish(t *testing.T) {
 	}
 	if db.CheckVerificationClaim(ctx, c) == nil || db.FinishVerification(ctx, c, proof) == nil {
 		t.Fatal("terminal claim reused")
-	}
-	if _, err := f.db.ClaimVerification(ctx, r.ID, r.PayloadDigest); err == nil {
-		t.Fatal("worker claimed verification")
 	}
 }
 func TestVerificationExpiredClaimDoesNotAdoptUnknownResources(t *testing.T) {
@@ -228,5 +228,130 @@ func TestVerificationCleanupAttemptsAreBounded(t *testing.T) {
 	next, err := db.NextVerificationCleanup(ctx)
 	if err != nil || next.Claim.ID != "" {
 		t.Fatal("fourth cleanup")
+	}
+}
+
+func TestVerificationPrivilegesAreIndependentAndRevocable(t *testing.T) {
+	f, db, r := verificationClaimFixture(t)
+	ctx := context.Background()
+	passwords := map[string]string{}
+	for role := range f.Material.Identities {
+		passwords[role] = strings.ReplaceAll(role, "-", "_") + strings.Repeat("q", 40)
+	}
+	if err := f.Admin.ProvisionRolesForMode(ctx, passwords, "verification"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ReadVerification(ctx, r.ID); err != nil {
+		t.Fatal("verification role unavailable", err)
+	}
+	if _, err := db.ReadVerificationCandidate(ctx, r.CandidateID); err != nil {
+		t.Fatal("candidate evidence unavailable", err)
+	}
+	for _, query := range []string{`UPDATE execution_candidates SET delta='changed' WHERE false`, `UPDATE intake_observations SET observed_at=clock_timestamp() WHERE false`, `UPDATE verification_requests SET payload='changed' WHERE false`, `DELETE FROM verification_requests WHERE false`, `UPDATE verification_effects SET resource_name='changed' WHERE false`, `SELECT * FROM managed_component_roles`, `UPDATE release_gates SET state='verified' WHERE false`} {
+		if _, err := db.Pool.Exec(query); err == nil {
+			t.Fatal("forbidden verifier privilege", query)
+		}
+	}
+	if _, err := f.db.Pool.Exec(`SELECT * FROM verification_handoffs`); err != nil {
+		t.Fatal("worker handoff unavailable", err)
+	}
+	if err := f.Admin.ProvisionRolesForMode(ctx, passwords, "candidate"); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{`SELECT * FROM verification_requests`, `UPDATE verification_requests SET state='failed' WHERE false`, `UPDATE verification_effects SET resource_uid=NULL WHERE false`, `SELECT * FROM execution_candidates`} {
+		if _, err := db.Pool.Exec(query); err == nil {
+			t.Fatal("downgrade retained verifier privilege", query)
+		}
+	}
+	if _, err := f.db.Pool.Exec(`SELECT * FROM verification_handoffs`); err == nil {
+		t.Fatal("candidate profile retained handoff")
+	}
+}
+
+func TestVerificationUnsentEffectCanBeSealedAfterExpiryWithoutReplay(t *testing.T) {
+	f, db, r := verificationClaimFixture(t)
+	ctx := context.Background()
+	// Only fixture admin bounds time; production cannot renew an execution.
+	if _, err := f.Admin.Pool.Exec(`UPDATE verification_requests SET expires_at=clock_timestamp()+interval '400 milliseconds' WHERE id=$1`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	c, err := db.ClaimVerification(ctx, r.ID, r.PayloadDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := db.BeginVerificationEffect(ctx, c, "config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong := e
+	wrong.Token = store.NewID()
+	if db.CancelUnsentVerificationEffect(ctx, wrong) == nil {
+		t.Fatal("foreign effect cancelled")
+	}
+	if f.db.CancelUnsentVerificationEffect(ctx, e) == nil {
+		t.Fatal("worker cancelled verifier effect")
+	}
+	if db.ConfirmVerificationCleanup(ctx, c) == nil {
+		t.Fatal("unknown effect accepted as no-send")
+	}
+	time.Sleep(time.Until(c.Until) + 10*time.Millisecond)
+	if db.CheckVerificationClaim(ctx, c) == nil {
+		t.Fatal("claim still valid")
+	}
+	if db.CancelUnsentVerificationEffect(ctx, e) != nil {
+		t.Fatal("cannot seal no-send after expiry")
+	}
+	if db.CancelUnsentVerificationEffect(ctx, e) == nil {
+		t.Fatal("cancel replay")
+	}
+	if db.AcknowledgeVerificationEffect(ctx, e, store.NewID()) == nil {
+		t.Fatal("cancelled effect acknowledged")
+	}
+	if _, err = db.BeginVerificationEffect(ctx, c, "config"); err == nil {
+		t.Fatal("cancelled effect replayed")
+	}
+	if db.ConfirmVerificationCleanup(ctx, c) != nil {
+		t.Fatal("known no-send blocks cleanup")
+	}
+	effects, err := db.ReadVerificationEffects(ctx, c)
+	if err != nil || len(effects) != 1 || !effects[0].NotSent || effects[0].UID != "" {
+		t.Fatal("durable no-send lost")
+	}
+	if db.FinishVerification(ctx, c, []byte(`{"behaviorVerified":true}`)) == nil {
+		t.Fatal("no-send authorized success")
+	}
+	if db.ExpireVerifications(ctx) != nil {
+		t.Fatal("expiry")
+	}
+	if blocked, err := db.VerificationCleanupBlocked(ctx); err != nil || blocked {
+		t.Fatal("no-send blocked next work")
+	}
+}
+
+func TestLiveVerificationClaimCannotReuseCancelledEffect(t *testing.T) {
+	_, db, r := verificationClaimFixture(t)
+	ctx := context.Background()
+	c, err := db.ClaimVerification(ctx, r.ID, r.PayloadDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := db.BeginVerificationEffect(ctx, c, "config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if db.CancelUnsentVerificationEffect(ctx, e) != nil || db.CheckVerificationClaim(ctx, c) != nil {
+		t.Fatal("cancel unexpectedly changed live claim")
+	}
+	if db.AcknowledgeVerificationEffect(ctx, e, store.NewID()) == nil {
+		t.Fatal("cancelled effect acknowledged during valid claim")
+	}
+	if _, err = db.BeginVerificationEffect(ctx, c, "config"); err == nil {
+		t.Fatal("cancelled effect replayed during valid claim")
+	}
+	if db.ConfirmVerificationCleanup(ctx, c) != nil {
+		t.Fatal("no-send cleanup")
+	}
+	if db.FinishVerification(ctx, c, []byte(`{"behaviorVerified":true}`)) == nil {
+		t.Fatal("no-send produced success")
 	}
 }
