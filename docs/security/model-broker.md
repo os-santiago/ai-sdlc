@@ -75,3 +75,42 @@ demonstrate a Codex call or an issue-to-production cycle. Live integration still
 requires reviewed controller authority, least-privilege database roles,
 provider provisioning, reconciliation and
 candidate/release/deployment gates. Call/byte limits are not monetary budgets.
+
+## Current authority at external-effect boundaries (issue #501)
+
+`Dispatcher` now requires a trusted `CurrentAuthority` capability. Omitting it
+fails before reservation. Its `Authorize(ctx, scope)` method must revalidate
+current signed execution ownership, the exact workload/Pod/repository/source/
+profile binding and reviewed configuration, then return the nonrenewable
+execution deadline. Ledger scope alone does not supply these facts. The broker
+provides no default production authorizer and enables no operational route.
+
+The broker checks this capability after validating immutable scope, again after
+the committed call claim immediately before invoking the provider, and after
+recording the response metadata immediately before publishing to the mailbox.
+This closes the unchecked waits across database locks and provider processing.
+Every check receives a context bounded to five seconds; implementations are
+trusted and must honor that context. A check error, panic, cancelled context or
+expired deadline is rejected. The full delivery retains the earliest deadline
+observed, even if a later authorizer returns a later time.
+
+Denial after a committed claim or completed response uses the existing
+conservative stop path. Response hash, byte count and status remain available
+in the ambiguous call record; no raw response is persisted or published after
+that denial. No automatic provider or publication retry is introduced. A
+previously handed-off duplicate still needs current authorization before
+returning metadata, and does not invoke either external capability again.
+
+The checks are not atomic revocation of an already in-flight remote operation.
+A response published before a revocation becomes observable cannot be retracted
+by a later database update. Handoff acknowledgement retains its existing
+bounded evidence-recording behavior; it is not a new provider invocation.
+A concrete lifecycle-backed authorizer and its installed configuration remain
+required before operational integration.
+
+PostgreSQL/HTTP tests revoke authority while a real reservation waits on a row
+lock and while the provider handles its request. They verify zero invocation in
+the former case, zero publication and retained response metadata in the latter,
+and prevent a later authority check from extending the initial deadline. The
+isolated kind and real-model developer fixtures explicitly use synthetic
+authority; their success does not prove live signed execution authorization.
