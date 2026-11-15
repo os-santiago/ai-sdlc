@@ -41,7 +41,7 @@ func main() {
 		stop := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
 			state, e := runtime.PollOnce(ctx)
 			if e != nil {
-				log.Print("candidate reconciliation stopped safely")
+				log.Print("candidate reconciliation stopped safely: " + execution.DiagnosticStage(e))
 			} else if state != "" {
 				log.Print("candidate reconciliation: " + state)
 			}
