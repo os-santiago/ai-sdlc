@@ -1,6 +1,6 @@
 .PHONY: build test fmt vet render-k8s render-openshift helm-lint containers
 
-COMPONENTS := intake admission-controller orchestrator worker release-manager relay migrator
+COMPONENTS := intake admission-controller orchestrator worker release-manager relay migrator model-mailbox
 
 build:
 	go build ./...

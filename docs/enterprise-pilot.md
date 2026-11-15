@@ -56,6 +56,12 @@ The [offline executor runtime](security/offline-executor-runtime.md) implements
 the first hidden containment prerequisite (#459) of iteration 2. It installs
 and tests gVisor without enabling model transport or generative work.
 
+The next hidden prerequisite, the [offline model mailbox](security/offline-model-mailbox.md)
+(#461), exchanges bounded model data over loopback and a fixed file helper.
+Its disposable SCC fixture uses a synthetic model response and independently
+checks Git state. It does not connect a real provider, authorize model calls or
+enable live execution; trusted durable quotas and controller integration remain pending.
+
 ## Fullsend: reuse decisions before reinvention
 
 Initial source inspection pins
