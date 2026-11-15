@@ -24,7 +24,7 @@ type fixture struct {
 	command Command
 }
 
-func newFixture(t *testing.T) *fixture {
+func newFixture(t *testing.T, configure ...func(*fixture)) *fixture {
 	t.Helper()
 	f := &fixture{Fixture: testsupport.New(t)}
 	f.Material.Policy.Autonomy = "auto-pr"
@@ -56,6 +56,9 @@ func newFixture(t *testing.T) *fixture {
 		AdmissionID: "admission-issue-" + strings.Repeat("a", 64), SourceSHA: strings.Repeat("b", 40), ProfileSHA256: strings.Repeat("c", 64),
 		AuthorityRevision: f.Material.Policy.Revision(), ExpiresAt: time.Now().Add(5 * time.Minute).UnixMilli()}
 	f.seedReadiness(t)
+	for _, setup := range configure {
+		setup(f)
+	}
 	return f
 }
 func (f *fixture) policy() (authority.Policy, error) { return f.Material.Policy, nil }

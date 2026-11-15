@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -229,4 +230,28 @@ func (v *VerificationResources) ReadResults(ctx context.Context, uids map[string
 		return VerificationResults{}, ErrTransport
 	}
 	return result, nil
+}
+
+// CleanupVerification deletes only a name/UID pair acknowledged in the durable
+// verifier effect ledger. No lookup/adoption by a missing UID is permitted.
+func (client *Client) CleanupVerification(ctx context.Context, kind, name, uid string) error {
+	if client == nil || client.http == nil || client.config == nil || !resourceUID.MatchString(uid) {
+		return ErrTransport
+	}
+	resource := "pods"
+	suffix := kind
+	switch kind {
+	case "config":
+		resource = "configmaps"
+		suffix = "inputs"
+	case "baseline", "candidate", "reference", "tests":
+	default:
+		return ErrTransport
+	}
+	pattern := regexp.MustCompile(`^verify-[a-f0-9]{32}-` + suffix + `$`)
+	if !pattern.MatchString(name) {
+		return ErrTransport
+	}
+	r := &Resources{client: client, binding: Binding{Namespace: "ai-sdlc-verifiers"}}
+	return r.remove(ctx, resource, name, uid)
 }

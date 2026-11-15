@@ -19,9 +19,9 @@ type lifecycleFixture struct {
 	placement Placement
 }
 
-func newLifecycleFixture(t *testing.T) *lifecycleFixture {
+func newLifecycleFixture(t *testing.T, configure ...func(*fixture)) *lifecycleFixture {
 	t.Helper()
-	f := newPreparationFixture(t)
+	f := newPreparationFixture(t, configure...)
 	_, err := f.Admin.Pool.Exec(`GRANT SELECT,INSERT ON execution_lifecycles,execution_effects TO aisdlc_worker;
  GRANT UPDATE(phase,config_uid,pod_uid,updated_at) ON execution_lifecycles TO aisdlc_worker;
  GRANT UPDATE(result,completed_at) ON execution_effects TO aisdlc_worker`)

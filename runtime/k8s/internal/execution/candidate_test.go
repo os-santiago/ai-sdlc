@@ -14,9 +14,9 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
-func candidateFixture(t *testing.T) (*lifecycleFixture, *Lifecycle, store.ModelScope, []byte) {
+func candidateFixture(t *testing.T, configure ...func(*fixture)) (*lifecycleFixture, *Lifecycle, store.ModelScope, []byte) {
 	t.Helper()
-	f, l, load, pod := modelLifecycleFixture(t)
+	f, l, load, pod := modelLifecycleFixture(t, configure...)
 	if _, err := f.Admin.Pool.Exec(`GRANT INSERT ON execution_candidates TO aisdlc_worker; GRANT SELECT ON model_calls TO aisdlc_worker; GRANT UPDATE(state,stop_reason) ON model_budgets TO aisdlc_worker`); err != nil {
 		t.Fatal(err)
 	}

@@ -41,6 +41,27 @@ func verifiedSnapshotStatus(ctx context.Context, db *store.DB, p authority.Polic
 	if err != nil {
 		return intake.Snapshot{}, ErrAuthority
 	}
+	return validateSnapshotEvidence(p, config, c, expectedStatus, e)
+}
+
+// CandidateSnapshot verifies current issue/admission/plan evidence for the
+// independent verifier. The original signed execution remains bounded by its
+// own expiry; a verification command cannot extend generation authority.
+func CandidateSnapshot(ctx context.Context, db *store.DB, p authority.Policy, config intake.Config, c Command) (intake.Snapshot, error) {
+	if config.Validate(p.Repository) != nil {
+		return intake.Snapshot{}, ErrAuthority
+	}
+	age := 2 * config.PollSeconds
+	if age > 300 {
+		age = 300
+	}
+	e, err := db.ReadVerificationEvidence(ctx, c.WorkItemID, c.Repository, c.IssueNumber, age)
+	if err != nil {
+		return intake.Snapshot{}, ErrAuthority
+	}
+	return validateSnapshotEvidence(p, config, c, "running", e)
+}
+func validateSnapshotEvidence(p authority.Policy, config intake.Config, c Command, expectedStatus string, e store.ExecutionEvidence) (intake.Snapshot, error) {
 	if e.Status != expectedStatus || e.IntakeGeneration != c.Generation || e.AdmissionGeneration != c.Generation || e.PlanningGeneration != c.Generation || e.ObservationAuthority != c.AuthorityRevision {
 		return intake.Snapshot{}, ErrAuthority
 	}

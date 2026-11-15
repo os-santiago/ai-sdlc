@@ -18,6 +18,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
@@ -32,6 +33,10 @@ func TestRealCandidateRuntimeFixture(t *testing.T) {
 		Config                          podtransport.Config
 		Runtime                         RuntimeConfig
 		SourceSHA, ReportFile, Scenario string
+		Changes                         map[string]string
+		VerificationDriver              string
+		VerificationConfig              podtransport.Config
+		VerificationScenario            string
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil || len(raw) > 256*1024 || json.Unmarshal(raw, &in) != nil {
@@ -47,6 +52,14 @@ func TestRealCandidateRuntimeFixture(t *testing.T) {
 			grants = append(grants, g)
 		}
 	}
+	if in.Scenario == "verification" {
+		t.Setenv("AI_SDLC_RUNTIME_MODE", "maintenance")
+		for _, g := range f.Material.Policy.Grants {
+			if g.Operation == "verify-artifact" {
+				grants = append(grants, g)
+			}
+		}
+	}
 	f.Material.Policy.Grants = grants
 	f.Config.Repository = f.Material.Policy.Repository
 	f.command.Repository = f.Material.Policy.Repository
@@ -57,6 +70,9 @@ func TestRealCandidateRuntimeFixture(t *testing.T) {
 	snapshot.BaseSHA = in.SourceSHA
 	snapshot.Issue.Title = "Candidate runtime conformance"
 	snapshot.Issue.Body = "Synthetic fixture.\n## Acceptance criteria\n- Create AI_SDLC_EXECUTOR_FIXTURE.txt with the requested fixture text.\n- Preserve all original files.\n"
+	if in.Scenario == "verification" {
+		snapshot.Issue.Body = "Synthetic fixture.\n" + verification.RecipeMarker + "\n## Acceptance criteria\n- Correct locale fallback and add regression tests.\n"
+	}
 	snapshot.Revision = snapshot.ContentRevision()
 	f.seedReadinessSnapshot(t, snapshot)
 	if _, err = f.accept(f.envelope(t, f.command)); err != nil {
@@ -97,7 +113,20 @@ func TestRealCandidateRuntimeFixture(t *testing.T) {
 		}
 		message := map[string]any{"role": "assistant", "content": "Fixture file created."}
 		reason := "stop"
-		if n == 1 {
+		if in.Scenario == "verification" && n <= 2 {
+			name := verification.LocaleSource
+			if n == 2 {
+				name = verification.LocaleNewTest
+			}
+			content, ok := in.Changes[name]
+			if !ok {
+				w.WriteHeader(500)
+				return
+			}
+			args, _ := json.Marshal(map[string]string{"path": name, "content": content})
+			message = map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{map[string]any{"id": "runtime-fixture", "type": "function", "function": map[string]any{"name": "write_file", "arguments": string(args)}}}}
+			reason = "tool_calls"
+		} else if n == 1 {
 			args, _ := json.Marshal(map[string]string{"path": "AI_SDLC_EXECUTOR_FIXTURE.txt", "content": "Created by the isolated SCC executor conformance fixture.\n"})
 			message = map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{map[string]any{"id": "runtime-fixture", "type": "function", "function": map[string]any{"name": "write_file", "arguments": string(args)}}}}
 			reason = "tool_calls"
@@ -112,6 +141,10 @@ func TestRealCandidateRuntimeFixture(t *testing.T) {
 	state, err := runtime.PollOnce(ctx)
 	if err != nil || state != "candidate-captured" {
 		t.Fatal("runtime reconciliation", state, err)
+	}
+	if in.Scenario == "verification" {
+		verifyCapturedFixture(t, f, component, in.VerificationDriver, in.VerificationConfig, in.Runtime.Placement.WorkerImage, in.ReportFile, f.command.ProfileSHA256, in.SourceSHA, in.VerificationScenario, calls.Load())
+		return
 	}
 	if calls.Load() != 2 || f.Count(t, `SELECT count(*) FROM execution_candidates WHERE changes=1`) != 1 {
 		t.Fatal("candidate or model handoff")

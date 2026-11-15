@@ -35,17 +35,7 @@ func Prepare(repository, recipe, issueBody string, source workspacebundle.Bundle
 	if repository != "os-santiago/homedir" || recipe != LocaleRecipe || len(issueBody) > 65536 {
 		return Inputs{}, ErrVerification
 	}
-	count := 0
-	for _, line := range strings.Split(issueBody, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "AI-SDLC validation recipe:") && line != RecipeMarker {
-			return Inputs{}, ErrVerification
-		}
-		if line == RecipeMarker {
-			count++
-		}
-	}
-	if count != 1 {
+	if !SelectLocaleRecipe(issueBody) {
 		return Inputs{}, ErrVerification
 	}
 	d, err := candidate.Decode(raw)
@@ -138,4 +128,25 @@ func Compare(baseline, actual, reference []byte) error {
 		}
 	}
 	return nil
+}
+
+// SelectLocaleRecipe accepts only one exact reviewed issue marker.
+func SelectLocaleRecipe(issueBody string) bool {
+	if len(issueBody) > 65536 {
+		return false
+	}
+	count := 0
+	for _, line := range strings.Split(issueBody, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "AI-SDLC validation recipe:") && line != RecipeMarker {
+			return false
+		}
+		if line == RecipeMarker {
+			count++
+		}
+	}
+	if count != 1 {
+		return false
+	}
+	return true
 }
