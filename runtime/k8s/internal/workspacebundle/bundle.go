@@ -6,12 +6,14 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode/utf8"
 )
@@ -253,4 +255,37 @@ func ReadVerified(input io.Reader, expectedDigest, sourceSHA string) (Bundle, er
 		return Bundle{}, ErrInvalid
 	}
 	return b, nil
+}
+
+// TreeDigest binds a validated file tree independently of JSON formatting or
+// input order. The wire encoding is versioned and domain-separated: prefix,
+// 20-byte source commit, u32 file count, then UTF-8-byte-sorted entries with u32
+// path length, path bytes, u32 Git mode, u64 data length and 32-byte content hash.
+// Integers are unsigned big-endian. No source file or caller slice is mutated.
+func (b Bundle) TreeDigest() (string, error) {
+	if b.Validate() != nil {
+		return "", ErrInvalid
+	}
+	files := append([]File(nil), b.Files...)
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	h := sha256.New()
+	h.Write([]byte("ai-sdlc.workspace-tree/v1\x00"))
+	source, _ := hex.DecodeString(b.SourceSHA)
+	h.Write(source)
+	var u32 [4]byte
+	var u64 [8]byte
+	binary.BigEndian.PutUint32(u32[:], uint32(len(files)))
+	h.Write(u32[:])
+	for _, f := range files {
+		binary.BigEndian.PutUint32(u32[:], uint32(len(f.Path)))
+		h.Write(u32[:])
+		h.Write([]byte(f.Path))
+		binary.BigEndian.PutUint32(u32[:], f.Mode)
+		h.Write(u32[:])
+		binary.BigEndian.PutUint64(u64[:], uint64(len(f.Data)))
+		h.Write(u64[:])
+		sum := sha256.Sum256(f.Data)
+		h.Write(sum[:])
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

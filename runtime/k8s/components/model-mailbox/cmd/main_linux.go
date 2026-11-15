@@ -28,8 +28,13 @@ func run(ctx context.Context, args []string, input io.Reader, output io.Writer) 
 	flags.SetOutput(io.Discard)
 	attempt := flags.String("attempt", "", "trusted attempt identity")
 	uid := flags.String("pod-uid", "", "expected Pod UID")
+	model := flags.String("model", "", "reviewed model, required with token cap")
+	maxTokens := flags.Int("max-tokens", 0, "reviewed per-request token cap")
 	if flags.Parse(args[1:]) != nil || flags.NArg() != 0 {
 		return errors.New("invalid mailbox arguments")
+	}
+	if (mode != "serve" && (*model != "" || *maxTokens != 0)) || ((*model == "") != (*maxTokens == 0)) {
+		return errors.New("invalid mailbox request limits")
 	}
 	id := modelmailbox.Identity{Attempt: *attempt, PodUID: *uid}
 	if id.Validate() != nil {
@@ -53,7 +58,13 @@ func run(ctx context.Context, args []string, input io.Reader, output io.Writer) 
 	defer store.Close()
 	switch mode {
 	case "serve":
-		server, err := modelmailbox.NewServer(store, id, 60*time.Second)
+		var server *modelmailbox.Server
+		var err error
+		if *model != "" {
+			server, err = modelmailbox.NewRestrictedServer(store, id, 60*time.Second, modelmailbox.RequestLimits{Model: *model, MaxTokens: *maxTokens})
+		} else {
+			server, err = modelmailbox.NewServer(store, id, 60*time.Second)
+		}
 		if err != nil {
 			return err
 		}

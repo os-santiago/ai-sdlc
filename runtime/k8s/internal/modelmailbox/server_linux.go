@@ -19,7 +19,8 @@ type Server struct {
 	id       Identity
 	wait     time.Duration
 	active   chan struct{}
-	sequence uint64 // accessed only while holding active
+	sequence uint64         // accessed only while holding active
+	limits   *RequestLimits // optional for the transport-only conformance fixture
 }
 
 func NewServer(store *Store, id Identity, wait time.Duration) (*Server, error) {
@@ -32,6 +33,39 @@ func NewServer(store *Store, id Identity, wait time.Duration) (*Server, error) {
 		}
 	}
 	return &Server{store: store, id: id, wait: wait, active: make(chan struct{}, 1)}, nil
+}
+
+// RequestLimits is a local request constraint, never a durable provider quota.
+type RequestLimits struct {
+	Model     string
+	MaxTokens int
+}
+
+func NewRestrictedServer(store *Store, id Identity, wait time.Duration, limits RequestLimits) (*Server, error) {
+	if len(limits.Model) == 0 || len(limits.Model) > 128 || limits.MaxTokens < 1 || limits.MaxTokens > 8192 {
+		return nil, errors.New("invalid mailbox request limits")
+	}
+	server, err := NewServer(store, id, wait)
+	if err != nil {
+		return nil, err
+	}
+	server.limits = &limits
+	return server, nil
+}
+func (limits RequestLimits) Validate(raw []byte) error {
+	if ValidateRequest(raw) != nil {
+		return errors.New("invalid bounded model request")
+	}
+	fields, err := objectFields(raw)
+	if err != nil {
+		return err
+	}
+	var model string
+	var maximum int
+	if json.Unmarshal(fields["model"], &model) != nil || model != limits.Model || json.Unmarshal(fields["max_tokens"], &maximum) != nil || maximum < 1 || maximum > limits.MaxTokens {
+		return errors.New("model request exceeds reviewed profile")
+	}
+	return nil
 }
 
 func failure(w http.ResponseWriter, status int, code string) {
@@ -70,6 +104,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		failure(w, 413, "request_too_large")
+		return
+	}
+	if s.limits != nil && s.limits.Validate(body) != nil {
+		log.Print("reviewed model request rejected")
+		failure(w, 400, "reviewed_profile_rejected")
 		return
 	}
 	if ValidateRequest(body) != nil {

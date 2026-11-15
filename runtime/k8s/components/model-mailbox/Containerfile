@@ -3,13 +3,16 @@ FROM docker.io/library/golang:1.25-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY internal/modelmailbox ./internal/modelmailbox
-COPY internal/workspacebundle ./internal/workspacebundle
+COPY internal ./internal
 COPY components/model-mailbox ./components/model-mailbox
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/model-mailbox ./components/model-mailbox/cmd \
-    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/workspace-transfer ./components/model-mailbox/workspace-cmd
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/workspace-transfer ./components/model-mailbox/workspace-cmd \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/executor-control ./components/model-mailbox/executor-cmd \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/executor-render ./components/model-mailbox/render-cmd
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/model-mailbox /model-mailbox
 COPY --from=build /out/workspace-transfer /workspace-transfer
+COPY --from=build /out/executor-control /executor-control
+COPY --from=build /out/executor-render /executor-render
 USER 1000:1000
 ENTRYPOINT ["/model-mailbox"]

@@ -6,7 +6,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY internal ./internal
 COPY components/worker ./components/worker
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/component ./components/worker/cmd
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/component ./components/worker/cmd \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/executor ./components/worker/executor-cmd
 
 # worker is the one component that is not distroless: internal/engine.
 # SCCEngine shells out to sc-agent-cli (`scc`), a Node CLI, and
@@ -75,6 +76,8 @@ COPY --from=sccbuild /opt/scc /opt/scc
 RUN printf '#!/usr/bin/env node\nimport "/opt/scc/dist/cli.js";\n' > /usr/local/bin/scc \
     && chmod +x /usr/local/bin/scc
 COPY --from=build /out/component /component
+COPY --from=build /out/executor /executor
+RUN mkdir -p /opt/ai-sdlc/empty-git-template && chmod 0555 /opt/ai-sdlc/empty-git-template
 ENV HOME=/workspaces/home
 ENV TMPDIR=/workspaces/tmp
 USER 1000:1000
