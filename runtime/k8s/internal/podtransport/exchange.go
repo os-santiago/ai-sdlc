@@ -32,14 +32,30 @@ func (s *Session) exchange(ctx context.Context, mode string, input []byte) ([]by
 	} else if mode != "read" {
 		return nil, 0, ErrTransport
 	}
-	if len(input) > modelmailbox.MaxEnvelopeBytes || (mode == "read" && len(input) != 0) {
+	return s.exchangeFixed(ctx, helperOperation{
+		command:    []string{"/model-mailbox", mode, "--attempt", s.identity.Attempt, "--pod-uid", s.identity.PodUID},
+		inputLimit: modelmailbox.MaxEnvelopeBytes, outputLimit: limit, frames: 1024, timeout: 5 * time.Second, stdin: mode == "respond",
+	}, input)
+}
+
+type helperOperation struct {
+	command                         []string
+	inputLimit, outputLimit, frames int
+	timeout                         time.Duration
+	stdin                           bool
+}
+
+// Private callers construct fixed helpers. No exported API accepts commands,
+// containers, destinations, byte limits or transport settings.
+func (s *Session) exchangeFixed(ctx context.Context, operation helperOperation, input []byte) ([]byte, int, error) {
+	if !time.Now().Before(s.expires) || len(input) > operation.inputLimit || (!operation.stdin && len(input) != 0) {
 		return nil, 0, ErrTransport
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithDeadline(ctx, minDeadline(time.Now().Add(operation.timeout), s.expires))
 	defer cancel()
 	query := url.Values{"container": {"mailbox"}, "stdout": {"true"}, "stderr": {"true"}, "tty": {"false"}}
-	query["command"] = []string{"/model-mailbox", mode, "--attempt", s.identity.Attempt, "--pod-uid", s.identity.PodUID}
-	if mode == "respond" {
+	query["command"] = operation.command
+	if operation.stdin {
 		query.Set("stdin", "true")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, s.podURL()+"/exec?"+query.Encode(), nil)
@@ -65,10 +81,10 @@ func (s *Session) exchange(ctx context.Context, mode string, input []byte) ([]by
 	if conn.SetReadDeadline(deadline) != nil || conn.SetWriteDeadline(deadline) != nil {
 		return nil, 0, ErrTransport
 	}
-	conn.SetReadLimit(int64(modelmailbox.MaxEnvelopeBytes + 1))
+	conn.SetReadLimit(int64(max(operation.outputLimit, 8192) + 1))
 	written := make(chan error, 1)
 	go func() {
-		if mode == "respond" {
+		if operation.stdin {
 			for remaining := input; len(remaining) > 0; {
 				n := min(len(remaining), 16*1024)
 				frame := make([]byte, n+1)
@@ -97,10 +113,10 @@ func (s *Session) exchange(ctx context.Context, mode string, input []byte) ([]by
 		}
 	}()
 	var stdout, stderr, status bytes.Buffer
-	limits := map[byte]int{protocol.StreamStdOut: limit, protocol.StreamStdErr: 8192, protocol.StreamErr: 8192}
+	limits := map[byte]int{protocol.StreamStdOut: operation.outputLimit, protocol.StreamStdErr: 8192, protocol.StreamErr: 8192}
 	buffers := map[byte]*bytes.Buffer{protocol.StreamStdOut: &stdout, protocol.StreamStdErr: &stderr, protocol.StreamErr: &status}
 	closed := false
-	for frames := 0; frames < 1024; frames++ {
+	for frames := 0; frames < operation.frames; frames++ {
 		kind, reader, err := conn.NextReader()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
