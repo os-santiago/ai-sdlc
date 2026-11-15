@@ -40,14 +40,16 @@ func Effect(load PolicyLoader) delivery.Effect {
 }
 
 // Claim revalidates stored signed authority against the current policy before
-// requesting a single durable claim. It does not prove source/admission
-// freshness or provision a workload; the controller must check those too.
-func Claim(ctx context.Context, db *store.DB, load PolicyLoader, id string) (store.ExecutionClaim, error) {
+// requesting a single durable claim. Current observed admission/readiness is
+// required too; a later controller must revalidate before each external effect.
+func Claim(ctx context.Context, db *store.DB, load ReadinessLoader, id string) (store.ExecutionClaim, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
 	r, err := db.ReadExecution(ctx, id)
 	if err != nil {
 		return store.ExecutionClaim{}, err
 	}
-	p, err := load()
+	p, config, err := load()
 	if err != nil {
 		return store.ExecutionClaim{}, ErrAuthority
 	}
@@ -60,6 +62,9 @@ func Claim(ctx context.Context, db *store.DB, load PolicyLoader, id string) (sto
 		c.AuthorityRevision != r.AuthorityRevision || !time.UnixMilli(c.ExpiresAt).Equal(r.ExpiresAt) {
 		return store.ExecutionClaim{}, ErrAuthority
 	}
+	if readiness(ctx, db, p, config, c) != nil {
+		return store.ExecutionClaim{}, ErrAuthority
+	}
 	claim, err := db.ClaimExecution(ctx, id, r.PayloadDigest)
 	if err != nil {
 		return store.ExecutionClaim{}, err
@@ -67,9 +72,14 @@ func Claim(ctx context.Context, db *store.DB, load PolicyLoader, id string) (sto
 	// Locks and COMMIT acknowledgement can delay the transaction. Recheck the
 	// mounted policy and lifetime after that final wait, before returning any
 	// capability to a controller. Future effects need their own current check.
-	current, policyErr := load()
+	current, currentConfig, policyErr := load()
 	_, verifyErr := Verify(current, receipt, r.Payload, time.Now())
-	if policyErr != nil || verifyErr != nil || !claim.Until.After(time.Now()) || ctx.Err() != nil {
+	readyErr := readiness(ctx, db, current, currentConfig, c)
+	// Policy and readiness checks are adjacent but not a lock on future changes.
+	// Reload policy once more after the bounded database read.
+	latest, latestConfig, latestErr := load()
+	_, latestVerify := Verify(latest, receipt, r.Payload, time.Now())
+	if policyErr != nil || verifyErr != nil || readyErr != nil || latestErr != nil || latestVerify != nil || latestConfig.Digest() != currentConfig.Digest() || !claim.Until.After(time.Now()) || ctx.Err() != nil {
 		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = db.StopExecutionClaim(cleanup, claim, "authority-revoked")

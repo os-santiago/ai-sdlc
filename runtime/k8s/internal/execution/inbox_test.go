@@ -13,6 +13,7 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/delivery"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/testsupport"
 )
@@ -54,6 +55,7 @@ func newFixture(t *testing.T) *fixture {
 	f.command = Command{Version: Version, WorkItemID: work, Attempt: 1, Repository: f.Material.Policy.Repository, IssueNumber: 3, Generation: 1,
 		AdmissionID: "admission-issue-" + strings.Repeat("a", 64), SourceSHA: strings.Repeat("b", 40), ProfileSHA256: strings.Repeat("c", 64),
 		AuthorityRevision: f.Material.Policy.Revision(), ExpiresAt: time.Now().Add(5 * time.Minute).UnixMilli()}
+	f.seedReadiness(t)
 	return f
 }
 func (f *fixture) policy() (authority.Policy, error) { return f.Material.Policy, nil }
@@ -79,7 +81,7 @@ func TestSignedExecutionDuplicateDeliveryAndSingleClaim(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			claim, err := Claim(context.Background(), f.db, f.policy, f.command.ID())
+			claim, err := Claim(context.Background(), f.db, f.readyPolicy, f.command.ID())
 			if err == nil {
 				winners <- claim
 			}
@@ -173,17 +175,17 @@ func TestExecutionClaimRechecksAuthority(t *testing.T) {
 	}
 	original := f.Material.Policy
 	f.Material.Policy.Freeze = true
-	if _, err := Claim(context.Background(), f.db, f.policy, f.command.ID()); err == nil {
+	if _, err := Claim(context.Background(), f.db, f.readyPolicy, f.command.ID()); err == nil {
 		t.Fatal("freeze ignored")
 	}
 	f.Material.Policy = original
 	f.Material.Policy.Autonomy = "shadow"
-	if _, err := Claim(context.Background(), f.db, f.policy, f.command.ID()); err == nil {
+	if _, err := Claim(context.Background(), f.db, f.readyPolicy, f.command.ID()); err == nil {
 		t.Fatal("lowered autonomy ignored")
 	}
 	f.Material.Policy = original
 	delete(f.Material.Policy.Keys, "orchestrator-1")
-	if _, err := Claim(context.Background(), f.db, f.policy, f.command.ID()); err == nil {
+	if _, err := Claim(context.Background(), f.db, f.readyPolicy, f.command.ID()); err == nil {
 		t.Fatal("revoked signing key ignored")
 	}
 	if f.Count(t, `SELECT count(*) FROM execution_requests WHERE state='queued'`) != 1 {
@@ -251,7 +253,11 @@ func TestExecutionRevocationDuringRowLockStopsOwnClaim(t *testing.T) {
 	}
 	var mu sync.Mutex
 	policy := f.Material.Policy
-	load := func() (authority.Policy, error) { mu.Lock(); defer mu.Unlock(); return policy, nil }
+	load := func() (authority.Policy, intake.Config, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return policy, f.Config, nil
+	}
 	result := make(chan error, 1)
 	go func() {
 		claim, err := Claim(context.Background(), f.db, load, f.command.ID())
@@ -293,7 +299,7 @@ func TestExecutionStopCannotAffectAnotherClaim(t *testing.T) {
 	if _, err := f.accept(f.envelope(t, f.command)); err != nil {
 		t.Fatal(err)
 	}
-	claim, err := Claim(context.Background(), f.db, f.policy, f.command.ID())
+	claim, err := Claim(context.Background(), f.db, f.readyPolicy, f.command.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +314,7 @@ func TestExecutionStopCannotAffectAnotherClaim(t *testing.T) {
 	if err = f.db.StopExecutionClaim(context.Background(), claim, "aborted"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = Claim(context.Background(), f.db, f.policy, f.command.ID()); err == nil {
+	if _, err = Claim(context.Background(), f.db, f.readyPolicy, f.command.ID()); err == nil {
 		t.Fatal("stopped request reopened")
 	}
 }
@@ -331,5 +337,35 @@ func TestExecutionRoleProvisionerKeepsQueueHidden(t *testing.T) {
 	}
 	if allowed {
 		t.Fatal("fixture grants survived operational privilege reconciliation")
+	}
+	for _, table := range []string{"plans", "work_items", "intake_heads", "intake_revisions", "intake_cursors", "intake_observations", "admission_heads", "planning_heads", "admissions"} {
+		if err := f.Admin.Pool.QueryRow(`SELECT has_any_column_privilege('aisdlc_worker',$1,'SELECT,INSERT,UPDATE,REFERENCES')`, table).Scan(&allowed); err != nil {
+			t.Fatal(err)
+		}
+		if allowed {
+			t.Fatalf("operational worker retained proof privileges on %s", table)
+		}
+	}
+}
+
+func TestExecutionProofReaderCannotRefreshIssueObservation(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.db.Pool.Exec(`UPDATE intake_observations SET observed_at=clock_timestamp()`); err == nil {
+		t.Fatal("worker refreshed source proof")
+	}
+	if _, err := f.db.Pool.Exec(`DELETE FROM intake_observations`); err == nil {
+		t.Fatal("worker removed source proof")
+	}
+	// Even an accidental UPDATE grant cannot bypass the table's role policy.
+	if _, err := f.Admin.Pool.Exec(`GRANT UPDATE(observed_at) ON intake_observations TO aisdlc_worker`); err != nil {
+		t.Fatal(err)
+	}
+	result, err := f.db.Pool.Exec(`UPDATE intake_observations SET observed_at=clock_timestamp()`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil || n != 0 {
+		t.Fatal("row policy allowed worker to manufacture source freshness")
 	}
 }
