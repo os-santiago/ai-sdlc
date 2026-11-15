@@ -1,29 +1,29 @@
 {
   "image": {
     "repository": "quay.io/os-santiago/ai-sdlc",
-    "tag": "575b0058c608beedc6d90d36d041987ed9eb660c"
+    "tag": "bd8371f7c00d91465dadb734fd9f402981103adb"
   },
   "components": {
     "intake": {
-      "digest": "sha256:2a0bb161a6c40d1e35ab562baee84a0ea1e57fe136e371be0a19d438538d43e5"
+      "digest": "sha256:874e484d9f3d19d158f5fbf692dcdd19442f13e7edb5d41b454d4826432e5918"
     },
     "admissionController": {
-      "digest": "sha256:8ae9bd70ff6e1b137ec16370255c9b4ebaa3e596e86581d024503c7fa72d63bb"
+      "digest": "sha256:b282e39482504dc13a0475bbaeaa5f1943fd24bb29f337dc323f4b3178ea5aee"
     },
     "orchestrator": {
-      "digest": "sha256:22445944eabe9b5abb894d9306e50d5f6ffa3d6b778b0ac3ba5f0e519e3f2330"
+      "digest": "sha256:70e8bd354b4846de3b44423b61a2d250e422a97f850c9236683e29c1b617fce5"
     },
     "worker": {
-      "digest": "sha256:69644621b1797452ad248b95e72d590f659f271e42f4e1533be64697a7497086"
+      "digest": "sha256:b95eca784dd4207f7f26557a5cdd9f5120d5805e9d2d9cbd6eab05a1fd6cbc75"
     },
     "releaseManager": {
-      "digest": "sha256:e57d82add35df17c55cdc6fdb85b8f22003018192b1cf8e8e0193c5ebca09875"
+      "digest": "sha256:371f7515dfec53eac7e2e68bceefa7b845652a9d01057cb50ba1f1c5d24e5278"
     },
     "relay": {
-      "digest": "sha256:3974dbab6c4b8928baeed5f9a35ff90fbb4bc5aebae69269fa81de9baff9e462"
+      "digest": "sha256:6e5ec67d3c2a90179b88bf8d071d2bdb3186849948f004a1420e3e0730b7a644"
     }
   },
   "migrator": {
-    "digest": "sha256:1adfec0cd7d3c3c27ab84dd700fd0a37a3db5e9fbd247fdd620631f3f5f0bae2"
+    "digest": "sha256:fd2243f80e9872d1745284fc390a4cf87d80df12afdc294b9ab8c9e546181c6c"
   }
 }
