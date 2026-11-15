@@ -34,3 +34,16 @@ func TestExplicitSourceCredentialScope(t *testing.T) {
 		t.Fatal("credential escaped call scope")
 	}
 }
+
+func TestSourceTokenIsOpaqueAndHeaderBounded(t *testing.T) {
+	for _, token := range []string{strings.Repeat("x", 32), "ghs_15368_" + strings.Repeat("a", 240) + "." + strings.Repeat("b", 240) + "." + strings.Repeat("c", 86), strings.Repeat("x", 4096)} {
+		if _, err := WithReadCredential(context.Background(), "fixture/product", token); err != nil {
+			t.Fatal("valid opaque shape rejected")
+		}
+	}
+	for _, token := range []string{strings.Repeat("x", 4097), strings.Repeat("x", 32) + "\r\nInjected: yes", strings.Repeat("x", 32) + " ", strings.Repeat("x", 32) + "\x00"} {
+		if _, err := WithReadCredential(context.Background(), "fixture/product", token); err == nil {
+			t.Fatal("unsafe header accepted")
+		}
+	}
+}
