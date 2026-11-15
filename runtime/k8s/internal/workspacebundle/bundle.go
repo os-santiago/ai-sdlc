@@ -47,7 +47,9 @@ type Bundle struct {
 func Digest(raw []byte) string       { sum := sha256.Sum256(raw); return hex.EncodeToString(sum[:]) }
 func ValidSourceSHA(sha string) bool { return shaPattern.MatchString(sha) }
 func ValidDigest(sha string) bool    { return digestPattern.MatchString(sha) }
-func validPath(name string) bool {
+
+// ValidPath reports whether a repository-relative path fits the bundle contract.
+func ValidPath(name string) bool {
 	if name == "" || len(name) > MaxPathBytes || !utf8.ValidString(name) || strings.ContainsRune(name, utf8.RuneError) || strings.HasPrefix(name, "/") || strings.ContainsAny(name, "\\\x00\r\n\t") || path.Clean(name) != name {
 		return false
 	}
@@ -74,7 +76,7 @@ func (b Bundle) Validate() error {
 	names := map[string]bool{}
 	total := 0
 	for _, f := range b.Files {
-		if !validPath(f.Path) || names[f.Path] || (f.Mode != 0644 && f.Mode != 0755) || f.Data == nil || len(f.Data) > MaxFileBytes {
+		if !ValidPath(f.Path) || names[f.Path] || (f.Mode != 0644 && f.Mode != 0755) || f.Data == nil || len(f.Data) > MaxFileBytes {
 			return ErrInvalid
 		}
 		total += len(f.Data)
@@ -131,7 +133,7 @@ func decodeFile(d *json.Decoder) (File, error) {
 		switch key {
 		case "path":
 			f.Path, e = readString(d)
-			if e != nil || !validPath(f.Path) {
+			if e != nil || !ValidPath(f.Path) {
 				return f, ErrInvalid
 			}
 		case "mode":

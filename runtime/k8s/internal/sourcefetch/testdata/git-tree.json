@@ -1,0 +1,46 @@
+{
+  "sha": "9eb0703bb667ab2cb44a45e1d93d5e3489c816ab",
+  "url": "",
+  "tree": [
+    {
+      "path": "README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "abee8f02f9b815f8290cb08220d158fb4e0cde5e",
+      "url": "",
+      "size": 15
+    },
+    {
+      "path": "nested.txt",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3190eda6a4f093c83c2a699b7e967908cfa2d6a3",
+      "url": "",
+      "size": 18
+    },
+    {
+      "path": "nested",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "302cce14673163da1fc1c6ea45df45955d1dcb89",
+      "url": ""
+    },
+    {
+      "path": "nested/a.bin",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "494b1410a95b9ef0a980c33411fbf7d564472741",
+      "url": "",
+      "size": 3
+    },
+    {
+      "path": "run.sh",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "039e4d0069c5c26909f86c505b9de66182e6d1f3",
+      "url": "",
+      "size": 17
+    }
+  ],
+  "truncated": false
+}

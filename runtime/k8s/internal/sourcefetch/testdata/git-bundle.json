@@ -1,0 +1,26 @@
+{
+  "version": "ai-sdlc.workspace-bundle/v1",
+  "sourceSHA": "0622cdaeb59a11a27bd5f3d7e18183c401a5e412",
+  "files": [
+    {
+      "path": "README.md",
+      "mode": 420,
+      "data": "Zml4dHVyZSBzb3VyY2UK"
+    },
+    {
+      "path": "nested/a.bin",
+      "mode": 420,
+      "data": "AAH/"
+    },
+    {
+      "path": "nested.txt",
+      "mode": 420,
+      "data": "R2l0IHRyZWUgb3JkZXJpbmcK"
+    },
+    {
+      "path": "run.sh",
+      "mode": 493,
+      "data": "IyEvYmluL3NoCmV4aXQgMAo="
+    }
+  ]
+}
