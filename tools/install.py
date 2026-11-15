@@ -22,7 +22,10 @@ import github_client
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL = ROOT / 'runtime/k8s/deploy/local'
 CHART = ROOT / 'runtime/k8s/deploy/helm/ai-sdlc-k8s-runtime'
-COMPONENTS = ('admissionController', 'orchestrator', 'worker', 'releaseManager', 'relay')
+COMPONENT_NAMES = {'intake': 'intake', 'admissionController': 'admission-controller',
+                   'orchestrator': 'orchestrator', 'worker': 'worker',
+                   'releaseManager': 'release-manager', 'relay': 'relay'}
+COMPONENTS = tuple(COMPONENT_NAMES)
 NAMESPACE = 'ai-sdlc-runtime'
 ROLES = ('intake', 'admission-controller', 'orchestrator', 'worker', 'verifier', 'release-manager', 'relay', 'deployer')
 
@@ -163,7 +166,7 @@ def identity_material(provider, image, repository, environment):
     return json.loads(result.stdout)
 
 
-def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment):
+def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None):
     image = lock['image']['repository'] + '@' + lock['migrator']['digest']
     material = identity_material(provider, image, repository, environment)
     pending, passwords = [], {}
@@ -212,6 +215,10 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
             if policy.get('keys', {}).get(key_id) != material['policy']['keys'][key_id]:
                 raise ValueError('Existing authority policy and component identity differ; restore or rotate through reviewed configuration')
         material['policy'] = policy
+    if freeze is not None:
+        if type(freeze) is not bool or material['policy'].get('autonomy') != 'shadow':
+            raise ValueError('Installation profiles require the shadow authority ceiling')
+        material['policy']['freeze'] = freeze
     current_passwords = owned_secret(kubectl, 'ai-sdlc-database-roles', cluster_uid)
     if current_passwords is not None:
         if set(current_passwords) != {'passwords.json'} or json.loads(current_passwords['passwords.json']) != passwords:
@@ -234,6 +241,23 @@ def configure_github_client(kubectl, cluster_uid, repository, refresh=False):
     return github_client.configure(secrets_api, kubectl, cluster_uid, repository, refresh)
 
 
+def shadow_intake_config(kubectl, cluster_uid, repository):
+    current = owned_secret(kubectl, 'ai-sdlc-github-client', cluster_uid)
+    if current is None:
+        raise ValueError('Shadow intake requires an explicitly imported GitHub client; run credentials --github-auth gh-cli first')
+    # Revalidate the existing credential without falling back to ambient gh.
+    configure_github_client(kubectl, cluster_uid, repository)
+    if owned_secret(kubectl, 'ai-sdlc-github-client', cluster_uid) != current:
+        raise ValueError('GitHub client changed while deriving intake authorization; retry installation')
+    credential = json.loads(current['credential.json'])
+    policy = json.loads((LOCAL / 'intake-policy.json').read_text())
+    if (set(policy) != {'version', 'baseBranch', 'triggerLabel', 'authorizedActorSource', 'pollSeconds', 'maxPages'}
+            or policy.pop('authorizedActorSource') != 'github-client'):
+        raise ValueError('Unsupported intake actor source')
+    policy.update(repository=repository, authorizedActorIDs=[credential['actorID']])
+    return {'configJSON': json.dumps(policy, sort_keys=True)}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['plan', 'local', 'status', 'tools', 'host', 'credentials'])
@@ -244,9 +268,12 @@ def main(argv=None):
     parser.add_argument('--timeout', default='10m')
     parser.add_argument('--repository', default='os-santiago/ai-sdlc')
     parser.add_argument('--environment', default='ai-sdlc-production')
+    parser.add_argument('--profile', choices=['maintenance', 'shadow'], default='maintenance')
     parser.add_argument('--github-auth', choices=['none', 'gh-cli'], default='none')
     parser.add_argument('--refresh-github-credential', action='store_true')
     args = parser.parse_args(argv)
+    if args.profile == 'shadow' and args.command not in ('plan', 'local'):
+        raise ValueError('--profile shadow is valid only with plan or local')
     if args.github_auth != 'none' and args.command not in ('plan', 'local', 'credentials'):
         raise ValueError('--github-auth is valid only with plan, local or credentials')
     if args.command == 'credentials' and args.github_auth != 'gh-cli':
@@ -274,11 +301,11 @@ def main(argv=None):
         print(json.dumps(binaries, indent=2))
         return 0
     helm_args = [binaries['helm'], 'template', 'ai-sdlc', CHART, '--namespace', NAMESPACE,
-                 '-f', LOCAL / 'values.yaml', '-f', args.images]
+                 '-f', LOCAL / 'values.yaml', '-f', LOCAL / 'profiles' / (args.profile + '.json'), '-f', args.images]
     run(helm_args, stdout=subprocess.DEVNULL)
     if args.command == 'plan':
         print(json.dumps({'cluster': args.cluster, 'namespace': NAMESPACE,
-                          'chart': str(CHART.relative_to(ROOT)), 'mode': 'maintenance',
+                          'chart': str(CHART.relative_to(ROOT)), 'mode': args.profile,
                           'images': image_lock(args.images), 'deliveryEnabled': False,
                           'githubAuth': args.github_auth}, indent=2))
         return 0
@@ -317,7 +344,9 @@ def main(argv=None):
         check_ownership(marker, args.cluster, provider, cluster_uid)
     if args.command == 'status':
         run(kubectl + ['get', 'deployments,statefulsets,pods,pvc', '-n', NAMESPACE])
-        print('Installation mode: maintenance. Autonomous issue delivery: unavailable.')
+        config = read_resource(kubectl, 'configmap', 'ai-sdlc-config')
+        mode = (config or {}).get('data', {}).get('AI_SDLC_RUNTIME_MODE', 'unknown')
+        print('Installation mode: ' + mode + '. Autonomous issue-to-production delivery: unavailable.')
         return 0
     if args.command == 'credentials':
         policy = read_resource(kubectl, 'configmap', 'ai-sdlc-authority')
@@ -334,6 +363,11 @@ def main(argv=None):
     run(kubectl + ['rollout', 'status', 'deployment/local-path-provisioner',
                    '-n', 'local-path-storage', '--timeout', args.timeout])
     run(kubectl + ['apply', '-f', LOCAL / 'namespace.yaml'])
+    if args.github_auth == 'gh-cli':
+        configure_github_client(kubectl, cluster_uid, args.repository, args.refresh_github_credential)
+    intake_values = None
+    if args.profile == 'shadow':
+        intake_values = shadow_intake_config(kubectl, cluster_uid, args.repository)
     # Bootstrap secret boundary: values refer to a Secret, never its contents.
     # An existing Secret is reused unchanged, including on repeat installs.
     result = run(kubectl + ['get', 'secret', 'ai-sdlc-postgres-app', '-n', NAMESPACE,
@@ -347,7 +381,10 @@ def main(argv=None):
                            'uri': 'postgresql://ai_sdlc:' + password + '@ai-sdlc-postgres:5432/ai_sdlc?sslmode=disable'}}
         run(kubectl + ['create', '-f', '-'], input=json.dumps(secret), stdout=subprocess.DEVNULL)
     public_values = configure_identities(kubectl, provider, image_lock(args.images),
-                                         cluster_uid, args.repository, args.environment)
+                                         cluster_uid, args.repository, args.environment,
+                                         freeze=args.profile == 'maintenance')
+    if intake_values is not None:
+        public_values['intake'] = intake_values
     # This temporary Helm input contains public verification keys only. Helm
     # owns workloads and the policy ConfigMap; private data stays in Secrets.
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as values:
@@ -355,19 +392,19 @@ def main(argv=None):
         values.flush()
         run([binaries['helm'], 'upgrade', '--install', 'ai-sdlc', CHART,
              '--kubeconfig', kubeconfig, '--kube-context', 'kind-' + args.cluster,
-             '--namespace', NAMESPACE, '-f', LOCAL / 'values.yaml', '-f', args.images,
+             '--namespace', NAMESPACE, '-f', LOCAL / 'values.yaml',
+             '-f', LOCAL / 'profiles' / (args.profile + '.json'), '-f', args.images,
              # Poll readiness during recovery rather than failing immediately
              # on a Deployment's stale ProgressDeadlineExceeded condition.
              '-f', values.name, '--wait=legacy', '--wait-for-jobs', '--timeout', args.timeout])
     run(kubectl + ['rollout', 'status', 'statefulset/ai-sdlc-postgres', '-n', NAMESPACE,
                    '--timeout', args.timeout])
-    for name in ('admission-controller', 'orchestrator', 'worker', 'release-manager', 'relay'):
+    for name in COMPONENT_NAMES.values():
         run(kubectl + ['rollout', 'status', 'deployment/ai-sdlc-' + name, '-n', NAMESPACE,
                        '--timeout', args.timeout])
-    if args.github_auth == 'gh-cli':
-        configure_github_client(kubectl, cluster_uid, args.repository, args.refresh_github_credential)
     report = {'cluster': args.cluster, 'namespace': NAMESPACE, 'provider': provider,
-              'mode': 'maintenance', 'installationReady': True, 'deliveryEnabled': False,
+              'mode': args.profile, 'installationReady': True, 'deliveryEnabled': False,
+              'issueIntakeEnabled': args.profile == 'shadow',
               'images': image_lock(args.images)}
     (state / 'installation.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

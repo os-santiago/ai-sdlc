@@ -40,6 +40,9 @@ spec:
             - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-config}
           env:
             - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ $component.port }}"}
+            {{- if and (eq $key "intake") (eq $.Values.runtime.mode "shadow") }}
+            - {name: AI_SDLC_GITHUB_CREDENTIAL_PATH, value: /etc/ai-sdlc/github/credential.json}
+            {{- end }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: {name: {{ printf "%s-%s" $.Values.authority.databaseSecretPrefix $component.name }}, key: uri}
@@ -50,11 +53,6 @@ spec:
             - {name: AI_SDLC_WORKSPACE_DIR, value: {{ $.Values.modelProvider.workspaceDir | quote }}}
             - {name: AI_SDLC_ADEV_BUNDLE_PATH, value: /etc/ai-sdlc/policy/ai-sdlc.yaml}
             - {name: AI_SDLC_ADEV_BUNDLE_SHA256, value: {{ $.Files.Get "files/adev-profile.yaml" | sha256sum | quote }}}
-            {{- if ne $.Values.runtime.mode "maintenance" }}
-            - name: MODEL_API_KEY
-              valueFrom:
-                secretKeyRef: {name: {{ $.Values.modelProvider.apiKeySecret.name }}, key: {{ $.Values.modelProvider.apiKeySecret.key }}}
-            {{- end }}
             {{- end }}
           ports:
             - {name: http, containerPort: {{ $component.port }}}
@@ -73,11 +71,21 @@ spec:
             - {name: contract, mountPath: /etc/ai-sdlc/contract, readOnly: true}
             - {name: authority, mountPath: /etc/ai-sdlc/authority, readOnly: true}
             - {name: identity, mountPath: /etc/ai-sdlc/identity, readOnly: true}
+            - {name: intake-config, mountPath: /etc/ai-sdlc/intake, readOnly: true}
+            {{- if and (eq $key "intake") (eq $.Values.runtime.mode "shadow") }}
+            - {name: github-client, mountPath: /etc/ai-sdlc/github, readOnly: true}
+            {{- end }}
             {{- if eq $key "worker" }}
             - {name: workspaces, mountPath: /workspaces}
             - {name: adev, mountPath: /etc/ai-sdlc/policy, readOnly: true}
             {{- end }}
       volumes:
+        - name: intake-config
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-intake}
+        {{- if and (eq $key "intake") (eq $.Values.runtime.mode "shadow") }}
+        - name: github-client
+          secret: {secretName: {{ $.Values.intake.credentialSecret }}, defaultMode: 0440}
+        {{- end }}
         - name: authority
           configMap: {name: {{ $.Values.authority.policyConfigMap }}}
         - name: identity

@@ -94,15 +94,53 @@ a signed HTTP handler, transactional inbox/outbox, nonce consumption, stored
 responses and a relay bounded to eight attempts. PostgreSQL-backed tests cover
 concurrent delivery, restart, rollback, response loss and component privileges.
 
-These remain hidden integration building blocks. Component entry points now
-register only observation routes and require
-separate mounted signing and database identities. The installer selects the
-dedicated migrator, but the signed delivery handler/relay remain disabled.
-The installed runtime remains in maintenance.
-These libraries alone do not establish an authenticated installed runtime or a
-functional issue-to-production cycle. See the
+The default maintenance profile registers observation routes only. The opt-in
+shadow profile connects intake, the signed relay, admission and planning with
+separate mounted signing and database identities. It exposes only the two
+signed operation paths for this slice; legacy unsigned routes remain closed.
+Worker execution, verification, publication and deployment remain disabled.
+These components do not establish a functional issue-to-production cycle. See the
 [runtime integration boundary](../runtime/k8s/README.md#signed-delivery-integration-boundary).
 Fleet signal resolution remains separately tracked by [kill-switch.md](kill-switch.md).
+
+### Issue polling building block
+
+`internal/forge` provides bounded, repository-bound GitHub reads using the
+explicit local client credential. It rejects redirects and unexpected issue
+identities and retains rate-limit delay hints without exposing response bodies
+or credentials. `internal/intake` resolves the latest label/unlabel event across
+pages against a reviewed numeric actor allowlist, then rereads the issue to
+reject changes observed during authorization.
+
+Its snapshot binds issue content/state, the authorization event, configuration
+digest, monotonic generation and a base commit SHA. Comment timestamps and
+renamed display logins do not create a new generation. Consecutive identical
+observations preserve the original base binding; reopenings and content
+reversions create a new generation. Reviewed configuration or authority-revision
+changes also create a fresh, currently bound observation of the existing issue.
+Consumers must reject older generations
+that arrive after newer state. Previously observed issues produce withdrawal
+snapshots when closed or no longer authorized; consumers must apply withdrawal
+semantics and recheck current issue eligibility before later external effects.
+GitHub reads are snapshots, not a lock on future issue edits.
+
+The intake database LOGIN owns its cursor and revision ledger. Each new revision
+and its signed `admit-issue` receipt commit together. Scans have a 90-second
+deadline, a 120-second durable lease, bounded pagination and durable backoff.
+Every pass reconciles all pages in creation order, without filtering older
+issues by an update watermark. Concurrent deletions can delay an observation
+until the next pass, but cannot permanently exclude it by timestamp. The
+watermark records only the start of the last complete scan; partial failures
+preserve it and report incomplete coverage. A repository that cannot fit within
+the configured page/time limits has insufficient scan capacity; this version
+does not claim coverage of an unvisited suffix. Restarted scans deduplicate
+consecutive observations. Polling is observational and may continue after backoff;
+this does not increase the relay's eight-attempt delivery budget.
+
+Disposable PostgreSQL and HTTP-fixture tests alone do not establish real issue
+ingestion. Installation validation must additionally observe a real GitHub issue
+through its signed decision and blocked plan; that remains a partial delivery
+slice, not E2E production evidence.
 
 Run `go test ./internal/authority` from `runtime/k8s`; run
 `bash tools/test-contracts.sh` from the repository root to validate the schema

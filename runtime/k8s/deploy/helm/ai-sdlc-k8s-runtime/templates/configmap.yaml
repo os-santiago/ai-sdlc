@@ -10,8 +10,9 @@ data:
   AI_SDLC_AUTHORITY_POLICY_PATH: /etc/ai-sdlc/authority/policy.json
   AI_SDLC_IDENTITY_PATH: /etc/ai-sdlc/identity/identity.json
   AI_SDLC_RUNTIME_MODE: {{ .Values.runtime.mode | quote }}
+  AI_SDLC_INTAKE_CONFIG_PATH: /etc/ai-sdlc/intake/config.json
   AI_SDLC_LOG_LEVEL: {{ .Values.logLevel | quote }}
-  AI_SDLC_RELAY_ROUTES: {{ dict "IssueAdmissionDecided.v1" (printf "http://%s-orchestrator:%v/v1/plans/events/issue-admission-decided" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.orchestrator.port) "WorkItemReady.v1" (printf "http://%s-worker:%v/v1/attempts/dispatch" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.worker.port) "ImplementationAttemptDecided.v1" (printf "http://%s-orchestrator:%v/v1/plans/events/implementation-attempt-decided" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.orchestrator.port) "ReleaseGateDecided.v1" (printf "http://%s-orchestrator:%v/v1/plans/events/release-gate-decided" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.orchestrator.port) | toJson | quote }}
+  AI_SDLC_RELAY_ROUTES: {{ dict "admit-issue" (printf "http://%s-admission-controller:%v/internal/admit-issue" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.admissionController.port) "plan-admission" (printf "http://%s-orchestrator:%v/internal/plan-admission" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.orchestrator.port) | toJson | quote }}
   AI_SDLC_CONTRACT_PATH: /etc/ai-sdlc/contract/.ai-sdlc.yaml
 ---
 # Prefer sourcing this from the target repo via GitOps (docs/onboarding.md)
@@ -51,3 +52,12 @@ metadata:
     ai-sdlc.io/cluster-uid: {{ .Values.authority.installationUID | quote }}
 data:
   policy.json: {{ .Values.authority.policyJSON | quote }}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-intake
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+data:
+  config.json: {{ .Values.intake.configJSON | quote }}

@@ -25,8 +25,8 @@ type Component struct {
 // active. An omitted mode is maintenance, not a stateless public evaluator.
 func ValidateMode() error {
 	mode := os.Getenv("AI_SDLC_RUNTIME_MODE")
-	if mode != "" && mode != "maintenance" {
-		return errors.New("runtime supports maintenance mode only until delivery integration is verified")
+	if mode != "" && mode != "maintenance" && mode != "shadow" {
+		return errors.New("runtime supports maintenance and bounded shadow modes only")
 	}
 	return nil
 }
@@ -77,6 +77,9 @@ func (c *Component) Authority() (authority.Policy, authority.Identity, error) {
 	p, err := authority.ParsePolicy(raw)
 	if err != nil {
 		return authority.Policy{}, authority.Identity{}, err
+	}
+	if os.Getenv("AI_SDLC_RUNTIME_MODE") == "shadow" && p.Autonomy != "shadow" {
+		return authority.Policy{}, authority.Identity{}, errors.New("shadow mode requires shadow authority ceiling")
 	}
 	raw, err = boundedFile(c.IdentityPath)
 	if err != nil {

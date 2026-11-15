@@ -7,7 +7,7 @@ Actions runtime is preserved only by the repository deprecation tag.
 
 For installation, start at [the Helm/kind guide](../../docs/installation.md).
 The canonical installer is `./install.sh` at the repository root. Helm chart
-0.3 deploys one container/Deployment per component and uses internal Services.
+0.4 deploys one container/Deployment per component and uses internal Services.
 The original Kustomize topology remains a legacy manual deployment surface;
 it is not the new installer's desired state.
 
@@ -15,14 +15,15 @@ it is not the new installer's desired state.
 
 | Component | Stage (ADR-0003) | Package |
 |---|---|---|
+| `intake` | Bounded GitHub issue polling | `internal/intake` |
 | `admission-controller` | Admission | `components/admission-controller/internal/admission` |
 | `orchestrator` | Plan | `components/orchestrator/internal/planning` |
 | `worker` | Bounded implementation coordination; execution disabled during integration | `components/worker/internal/cycle` |
 | `release-manager` | Publish/review, Release | `components/release-manager/internal/gates` |
-| `relay` | Signed durable transport; disabled during integration | `internal/delivery` |
+| `relay` | Signed durable transport; admission and planning only in shadow | `internal/delivery` |
 | `migrator` | Installation-only schema and role provisioning | `components/migrator/cmd` |
 
-The five service binaries load mounted component identities, connect with
+The six service binaries load mounted component identities, connect with
 separate database LOGIN credentials and check migrations before starting.
 The short-lived `migrator` Job alone receives the bootstrap database credential
 and reconciles schema and role grants. Readiness rechecks those dependencies;
@@ -31,7 +32,10 @@ there is no stateless or stub-success fallback for a missing installation.
 Only observation endpoints are registered in maintenance. Unsigned delivery
 routes and synchronous engine execution are no longer installed by service
 entry points. Pure evaluators and legacy handlers remain isolated test assets;
-future live routes must use `internal/delivery` and isolated execution Jobs.
+The opt-in shadow profile registers only signed admission and planning routes
+through `internal/delivery`. It polls real issues and creates blocked plans;
+it never invokes the model or publishes artifacts. Generated execution must
+use isolated Jobs in a later integration stage.
 
 ## A-Dev policy bundle
 
@@ -76,7 +80,8 @@ Use `./install.sh local` and `tools/verify_local_install.py` for installation
 and reapplication checks. These are infrastructure checks, not workflow intake.
 A functional E2E must enter through a GitHub issue and let authenticated runtime
 components own generation, verification, PR, merge, release and production-test
-verification. That live integration remains disabled in this stage.
+verification. Only issue intake, admission and blocked planning are enabled by
+the opt-in shadow profile in this stage.
 
 Historical SCC probes on 2026-11-14 produced both an exact documentation change
 and budget exhaustion. Malformed/no-op patches could be reported as applied by
@@ -181,7 +186,7 @@ helm template deploy/helm/ai-sdlc-k8s-runtime \
 ```
 
 `make render-k8s`, `make render-openshift` and `make helm-lint` wrap the
-above. `make containers` builds all six images locally with Podman.
+above. `make containers` builds all seven images locally with Podman.
 
 ### Engine source pin (image builds)
 
@@ -220,7 +225,7 @@ component identities; they are rendering references, not the supported
 installation path. OpenShift deployment is not validated by rendering alone. `worker` is the one component image that is not
 distroless (it needs a Node runtime for `scc` and a `git` binary for
 `internal/checkout` — see `components/worker/Containerfile`); the other
-five images are distroless/static.
+six images are distroless/static.
 
 ## Non-goals
 

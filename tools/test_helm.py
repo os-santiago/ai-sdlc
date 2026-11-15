@@ -21,7 +21,7 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         docs = [d for d in yaml.safe_load_all(result.stdout) if d]
         deployments = [d for d in docs if d['kind'] == 'Deployment']
-        self.assertEqual(len(deployments), 5)
+        self.assertEqual(len(deployments), 6)
         services = {d['metadata']['name'] for d in docs if d['kind'] == 'Service'}
         for deployment in deployments:
             pod = deployment['spec']['template']['spec']
@@ -62,10 +62,35 @@ class ChartTests(unittest.TestCase):
         result = self.render('-f', str(lock))
         self.assertEqual(result.returncode, 0, result.stderr)
         docs = [d for d in yaml.safe_load_all(result.stdout) if d and d['kind'] in ('Deployment', 'Job')]
-        self.assertEqual(len(docs), 6)
+        self.assertEqual(len(docs), 7)
         for doc in docs:
             image = doc['spec']['template']['spec']['containers'][0]['image']
             self.assertRegex(image, r'^quay.io/os-santiago/ai-sdlc@sha256:[a-f0-9]{64}$')
+
+    def test_shadow_github_credential_is_mounted_only_in_intake(self):
+        result = self.render('-f', str(ROOT / 'runtime/k8s/deploy/local/profiles/shadow.json'))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        docs = [d for d in yaml.safe_load_all(result.stdout) if d and d['kind'] == 'Deployment']
+        for doc in docs:
+            name = doc['metadata']['labels']['app.kubernetes.io/component']
+            pod = doc['spec']['template']['spec']
+            secrets = [v.get('secret', {}).get('secretName') for v in pod['volumes']]
+            self.assertEqual('ai-sdlc-github-client' in secrets, name == 'intake')
+            env = pod['containers'][0]['env']
+            self.assertFalse(any(e['name'] == 'MODEL_API_KEY' for e in env))
+
+    def test_public_https_egress_is_limited_to_shadow_intake(self):
+        for profile in ('maintenance', 'shadow'):
+            result = self.render('-f', str(ROOT / ('runtime/k8s/deploy/local/profiles/' + profile + '.json')))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            policies = [d for d in yaml.safe_load_all(result.stdout) if d and d['kind'] == 'NetworkPolicy']
+            public = [(p, rule) for p in policies for rule in p['spec'].get('egress', [])
+                      if any(peer.get('ipBlock', {}).get('cidr') == '0.0.0.0/0' for peer in rule.get('to', []))]
+            self.assertEqual(len(public), 1 if profile == 'shadow' else 0)
+            for policy, rule in public:
+                self.assertEqual(policy['spec']['podSelector']['matchLabels']['app.kubernetes.io/component'], 'intake')
+                self.assertEqual(rule['ports'], [{'protocol': 'TCP', 'port': 443}])
+                self.assertIn('169.254.0.0/16', rule['to'][0]['ipBlock']['except'])
 
 
 if __name__ == '__main__': unittest.main()

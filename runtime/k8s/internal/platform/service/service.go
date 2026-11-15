@@ -76,7 +76,7 @@ func RunWithReadiness(metadata Metadata, ready func(context.Context) error, regi
 
 	server := &http.Server{
 		Addr:              address,
-		Handler:           requestLog(logger, maintenanceBoundary(mux)),
+		Handler:           requestLog(logger, runtimeBoundary(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      writeTimeout,
@@ -111,6 +111,20 @@ func maintenanceBoundary(next http.Handler) http.Handler {
 	})
 }
 
+func runtimeBoundary(next http.Handler) http.Handler {
+	if os.Getenv("AI_SDLC_RUNTIME_MODE") != "shadow" {
+		return maintenanceBoundary(next)
+	}
+	observation := maintenanceBoundary(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.RawQuery == "" && (r.URL.Path == "/internal/admit-issue" || r.URL.Path == "/internal/plan-admission") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		observation.ServeHTTP(w, r)
+	})
+}
+
 func readiness(ready func(context.Context) error) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if ready != nil {
@@ -121,7 +135,11 @@ func readiness(ready func(context.Context) error) http.Handler {
 				return
 			}
 		}
-		WriteJSON(w, http.StatusOK, map[string]string{"status": "ready", "mode": "maintenance", "delivery": "disabled"})
+		mode, delivery := "maintenance", "disabled"
+		if os.Getenv("AI_SDLC_RUNTIME_MODE") == "shadow" {
+			mode, delivery = "shadow", "admission-only"
+		}
+		WriteJSON(w, http.StatusOK, map[string]string{"status": "ready", "mode": mode, "delivery": delivery})
 	})
 }
 
