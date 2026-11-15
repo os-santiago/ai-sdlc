@@ -136,3 +136,6 @@ conformance as `not-tested`: deployment readiness and historical observations do
 not prove current connectivity. Neither result proves continuous isolation.
 Build fixtures must additionally test their actual API/registry egress policy
 before running project code. See [the core network contract](../installation.md).
+The [isolated Homedir build fixture](konflux-homedir-fixture.md) exercises Maven,
+a separate OCI publisher, Chains signatures and independent identity checks.
+Its documented gaps remain separate from infrastructure readiness.

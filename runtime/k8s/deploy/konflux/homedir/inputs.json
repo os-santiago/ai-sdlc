@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "sourceURL": "https://github.com/os-santiago/homedir",
+  "sourceSHA": "0622cdaeb59a11a27bd5f3d7e18183c401a5e412",
+  "builderImage": "docker.io/library/maven@sha256:99e61abcff91a9b1333463bd8451fb18495d6eba9250ac66a338b518f8278320",
+  "baseImage": "registry.access.redhat.com/ubi9/openjdk-21@sha256:4daa3f2fa0f2f64cc7732dca63ef1ed7c53ff4883cc18571d6f8eca7a8458b46",
+  "recipe": "ai-sdlc.quarkus-jvm/v1",
+  "volumeBytes": 4294967296,
+  "volumeInodes": 32768,
+  "mavenMemory": "8Gi",
+  "mavenCPU": "4",
+  "testHeap": "3g",
+  "cosignImage": "quay.io/konflux-ci/task-runner@sha256:9f4151ff21f4c14b9151582c91a5542140bbbb6dca7861cd42081006840bec05",
+  "conformaImage": "quay.io/conforma/cli@sha256:78ae5239ca0a651c57fbdb36096616b229a376d9ab5691b15d7d46104fd8684c"
+}
