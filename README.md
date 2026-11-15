@@ -50,6 +50,12 @@ Only issues carrying `ai-sdlc:shadow`, labeled by the configured local account,
 can enter that profile. See [shadow intake](docs/installation.md#shadow-intake)
 for scope, verification and returning to maintenance.
 
+The [Homedir enterprise pilot](docs/enterprise-pilot.md) uses a separate,
+declaratively configured installation and real product validation. Start with
+`./install.sh plan --config examples/homedir.local-install.json`; the example
+grants shadow intake only. Its roadmap includes independent execution,
+Konflux provenance gates and a measured Fullsend comparison.
+
 Local installation also verifies NetworkPolicy enforcement with temporary
 connectivity probes against the network plugin included in the pinned kind image;
 see the [installation boundaries](docs/installation.md#installation-readiness-versus-autonomous-delivery).
