@@ -37,8 +37,8 @@ class AliasTests(unittest.TestCase):
             registered = True
             return subprocess.CompletedProcess(command, 1 if tag_failure else 0, b'', b'registration rejected')
 
-        clock = iter([0, 11] if never else [0, 1])
-        with patch.object(fixture_images.subprocess, 'run', side_effect=run), patch.object(fixture_images.time, 'sleep'), patch.object(fixture_images.time, 'monotonic', side_effect=lambda: next(clock)):
+        clock = iter([0, 0, 11] if never else [0, 0, 1, 1, 1])
+        with patch.object(fixture_images.subprocess, 'run', side_effect=run), patch.object(fixture_images.time, 'sleep'), patch.object(fixture_images.time, 'monotonic', side_effect=lambda: next(clock, 11 if never else 1)):
             result = fixture_images.register_digest('podman', 'ai-sdlc-test-control-plane', tag)
         return result, calls
 

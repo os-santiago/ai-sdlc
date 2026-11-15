@@ -12,9 +12,9 @@ def register_digest(provider, node, tag):
         raise ValueError('Expected a local AI-SDLC fixture tag')
     prefix = [provider, 'exec', node]
 
-    def inspect(reference):
+    def inspect(reference, timeout=15):
         result = subprocess.run(prefix + ['crictl', 'inspecti', '-o', 'json', reference],
-                                capture_output=True, check=True, timeout=15)
+                                capture_output=True, check=True, timeout=timeout)
         return json.loads(result.stdout)['status']
 
     image = inspect(tag)
@@ -51,14 +51,19 @@ def register_digest(provider, node, tag):
     # observation after successful registration; never retag or pull on failure.
     deadline = time.monotonic() + 10
     while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError('Fixture alias did not become visible in CRI before deadline')
         try:
-            actual = inspect(reference)
+            actual = inspect(reference, timeout=remaining)
         except subprocess.CalledProcessError as error:
             if time.monotonic() >= deadline:
                 detail = (error.stderr or b'').decode(errors='replace')[-1024:]
                 raise ValueError('Fixture alias did not become visible in CRI: ' + detail) from error
             time.sleep(0.1)
             continue
+        if time.monotonic() >= deadline:
+            raise ValueError('Fixture alias observation exceeded CRI deadline')
         if actual['id'] != image['id'] or reference not in actual['repoDigests']:
             raise ValueError('Registered fixture digest does not resolve to loaded image')
         return reference
