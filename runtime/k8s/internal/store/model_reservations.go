@@ -39,6 +39,7 @@ type ModelCall struct {
 	State                     string
 	InputBytes, ResponseLimit int
 	ExpiresAt                 time.Time
+	ResponseHandedOff         bool
 }
 type ModelDecision struct {
 	Reason string
@@ -155,7 +156,7 @@ func refreshModelTime(ctx context.Context, tx *sql.Tx, l *lockedModel) error {
 	// immediately, even if the periodic recovery sweep has not run. The parent
 	// lock serializes all call transitions; this observation needs no call lock.
 	var expired bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM model_calls c JOIN model_allocations a ON a.id=c.allocation_id WHERE a.work_item_uuid=$1 AND c.state IN ('reserved','started') AND c.expires_at<=$2)`, l.workItem, l.now).Scan(&expired); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM model_calls c JOIN model_allocations a ON a.id=c.allocation_id WHERE a.work_item_uuid=$1 AND (c.state IN ('reserved','started') OR (c.state='completed' AND c.response_handed_off_at IS NULL)) AND c.expires_at<=$2)`, l.workItem, l.now).Scan(&expired); err != nil {
 		return err
 	}
 	if expired && l.state == "active" {
@@ -175,8 +176,16 @@ func stopModel(ctx context.Context, tx *sql.Tx, l lockedModel, reason string) er
 }
 func readModelCall(ctx context.Context, tx *sql.Tx, r ModelCallRef) (ModelCall, error) {
 	c := ModelCall{ModelCallRef: r}
-	err := tx.QueryRowContext(ctx, `SELECT request_sha256,state,input_bytes,response_limit,expires_at FROM model_calls WHERE allocation_id=$1 AND sequence=$2 FOR UPDATE`, r.AllocationID, r.Sequence).Scan(&c.RequestSHA256, &c.State, &c.InputBytes, &c.ResponseLimit, &c.ExpiresAt)
+	err := tx.QueryRowContext(ctx, `SELECT request_sha256,state,input_bytes,response_limit,expires_at,response_handed_off_at IS NOT NULL FROM model_calls WHERE allocation_id=$1 AND sequence=$2 FOR UPDATE`, r.AllocationID, r.Sequence).Scan(&c.RequestSHA256, &c.State, &c.InputBytes, &c.ResponseLimit, &c.ExpiresAt, &c.ResponseHandedOff)
 	return c, err
+}
+
+// The parent budget lock serializes every response handoff. Check this barrier
+// both before reservation and before claiming a previously reserved call.
+func pendingModelHandoff(ctx context.Context, tx *sql.Tx, workItem string) (bool, error) {
+	var pending bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM model_calls c JOIN model_allocations a ON a.id=c.allocation_id WHERE a.work_item_uuid=$1 AND c.state='completed' AND c.response_handed_off_at IS NULL)`, workItem).Scan(&pending)
+	return pending, err
 }
 func validModelRef(r ModelCallRef) bool {
 	return modelUUID.MatchString(r.AllocationID) && modelUUID.MatchString(r.PodUID) && r.Sequence >= 1 && r.Sequence <= 32 && modelDigest.MatchString(r.RequestSHA256)
@@ -241,6 +250,12 @@ func (db *DB) ReserveModelCall(ctx context.Context, allocation, podUID string, s
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
+		if pending, err := pendingModelHandoff(ctx, tx, l.workItem); err != nil {
+			return err
+		} else if pending {
+			d.Reason = "response-handoff-pending"
+			return nil
+		}
 		if sequence != l.allocationUsed.Calls+1 {
 			d.Reason = "sequence-mismatch"
 			return stopModel(ctx, tx, l, d.Reason)
@@ -277,7 +292,7 @@ func (db *DB) ReserveModelCall(ctx context.Context, allocation, podUID string, s
 		if err != nil {
 			return err
 		}
-		d = ModelDecision{Reason: "reserved", Call: ModelCall{r, "reserved", len(payload), l.responseLimit, expires}}
+		d = ModelDecision{Reason: "reserved", Call: ModelCall{ModelCallRef: r, State: "reserved", InputBytes: len(payload), ResponseLimit: l.responseLimit, ExpiresAt: expires}}
 		return nil
 	})
 	if err != nil {
@@ -319,6 +334,12 @@ func (db *DB) ClaimModelCall(ctx context.Context, r ModelCallRef) (ModelDecision
 		}
 		if c.State != "reserved" {
 			d.Reason = "already-claimed"
+			return nil
+		}
+		if pending, err := pendingModelHandoff(ctx, tx, l.workItem); err != nil {
+			return err
+		} else if pending {
+			d.Reason = "response-handoff-pending"
 			return nil
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE model_calls SET state='started' WHERE allocation_id=$1 AND sequence=$2`, r.AllocationID, r.Sequence)
@@ -431,12 +452,12 @@ func (db *DB) StopModelCall(ctx context.Context, r ModelCallRef) (ModelDecision,
 			d.Reason = "binding-mismatch"
 			return stopModel(ctx, tx, l, d.Reason)
 		}
-		if c.State != "reserved" && c.State != "started" {
+		if c.State != "reserved" && c.State != "started" && !(c.State == "completed" && !c.ResponseHandedOff) {
 			d.Reason = "terminal"
 			return nil
 		}
 		next := "stopped"
-		if c.State == "started" {
+		if c.State == "started" || c.State == "completed" {
 			next = "ambiguous"
 		}
 		if err = stopModel(ctx, tx, l, "uncertain-outcome"); err != nil {
@@ -459,7 +480,7 @@ func (db *DB) StopModelCall(ctx context.Context, r ModelCallRef) (ModelDecision,
 func (db *DB) RecoverExpiredModelCalls(ctx context.Context) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	rows, err := db.Pool.QueryContext(ctx, `SELECT c.allocation_id,a.pod_uid,c.sequence,c.request_sha256 FROM model_calls c JOIN model_allocations a ON a.id=c.allocation_id WHERE c.state IN ('reserved','started') AND c.expires_at<=clock_timestamp() ORDER BY c.expires_at LIMIT 100`)
+	rows, err := db.Pool.QueryContext(ctx, `SELECT c.allocation_id,a.pod_uid,c.sequence,c.request_sha256 FROM model_calls c JOIN model_allocations a ON a.id=c.allocation_id WHERE (c.state IN ('reserved','started') OR (c.state='completed' AND c.response_handed_off_at IS NULL)) AND c.expires_at<=clock_timestamp() ORDER BY c.expires_at LIMIT 100`)
 	if err != nil {
 		return 0, err
 	}
