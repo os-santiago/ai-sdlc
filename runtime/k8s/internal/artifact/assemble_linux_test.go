@@ -172,10 +172,27 @@ func TestAssembleRejectsBaseIdentityAndCanceledContext(t *testing.T) {
 }
 
 func TestCaptureEnforcesAggregateBudgetsBeforeReading(t *testing.T) {
- for _,budget:=range []string{"bytes","files","nodes"} {t.Run(budget,func(t *testing.T){
-  root,_:=fixture(t);f,e:=openDirectory(root);if e!=nil{t.Fatal(e)};defer f.Close()
-  r:=Report{};c:=collector{ctx:context.Background(),tw:tar.NewWriter(io.Discard),report:&r}
-  switch budget{case "bytes":r.Bytes=MaxBytes;case "files":r.Files=make([]File,MaxFiles);case "nodes":c.nodes=MaxFiles+1024}
-  if e=c.entry(f,"quarkus-run.jar","quarkus-run.jar",0);e==nil{t.Fatal("accepted exhausted aggregate budget")}
- })}
+	for _, budget := range []string{"bytes", "files", "nodes"} {
+		t.Run(budget, func(t *testing.T) {
+			root, _ := fixture(t)
+			f, e := openDirectory(root)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer f.Close()
+			r := Report{}
+			c := collector{ctx: context.Background(), tw: tar.NewWriter(io.Discard), report: &r}
+			switch budget {
+			case "bytes":
+				r.Bytes = MaxBytes
+			case "files":
+				r.Files = make([]File, MaxFiles)
+			case "nodes":
+				c.nodes = MaxFiles + 1024
+			}
+			if e = c.entry(f, "quarkus-run.jar", "quarkus-run.jar", 0); e == nil {
+				t.Fatal("accepted exhausted aggregate budget")
+			}
+		})
+	}
 }

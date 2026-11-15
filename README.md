@@ -134,3 +134,5 @@ event schemas under `spec/`.
 ## License
 
 Apache-2.0
+
+For supply-chain component validation, see the [isolated Homedir/Konflux fixture](docs/operations/konflux-homedir-fixture.md). It records actual builds and signature checks without advancing live delivery.

@@ -9,5 +9,7 @@
   "volumeInodes": 32768,
   "mavenMemory": "8Gi",
   "mavenCPU": "4",
-  "testHeap": "3g"
+  "testHeap": "3g",
+  "cosignImage": "quay.io/konflux-ci/task-runner@sha256:9f4151ff21f4c14b9151582c91a5542140bbbb6dca7861cd42081006840bec05",
+  "conformaImage": "quay.io/conforma/cli@sha256:78ae5239ca0a651c57fbdb36096616b229a376d9ab5691b15d7d46104fd8684c"
 }

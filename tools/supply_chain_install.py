@@ -194,6 +194,8 @@ def observe(kubectl, deadline, cluster_uid, source_digest, required_deployments)
     konflux = get('konflux','konflux')
     deployments = get('deployments','-A')['items']
     pods = get('pods','-A')['items']
+    flags=get('configmap','feature-flags','-n','tekton-pipelines').get('data',{})
+    helper_security={key:flags.get(key)=='true' for key in ('set-security-context','set-security-context-read-only-root-filesystem')}
     generation=konflux['metadata'].get('generation')
     ready = generation is not None and not konflux['metadata'].get('deletionTimestamp') and any(
         c['type']=='Ready' and c['status']=='True' and c.get('observedGeneration')==generation
@@ -206,13 +208,13 @@ def observe(kubectl, deadline, cluster_uid, source_digest, required_deployments)
                 and status.get('unavailableReplicas',0)==0)
     present = {d['metadata']['namespace']+'/'+d['metadata']['name'] for d in deployments}
     missing = sorted(set(required_deployments)-present)
-    ready = ready and not missing and all(current_deployment(d) for d in deployments)
+    ready = ready and not missing and all(current_deployment(d) for d in deployments) and all(helper_security.values())
     return {'version':1, 'status':'ready' if ready else 'not-ready', 'clusterUID':cluster_uid,
             'desiredSourceLockSHA256':source_digest, 'scope':'isolated-supply-chain-validation',
             'liveWorkflowAdvanced':False, 'githubAppProvisionedByInstaller':False, 'externalRegistryProvisionedByInstaller':False,
             'networkConformance':{'status':'not-tested','scope':'point-in-time'},
             'provenanceValidated':False, 'slsaLevelClaimed':False, 'konfluxUID':konflux['metadata']['uid'],
-            'missingRequiredDeployments':missing,
+            'missingRequiredDeployments':missing,'generatedHelperSecurity':helper_security,
             'deployments':[{'namespace':d['metadata']['namespace'], 'name':d['metadata']['name'],
                             'generation':d['metadata'].get('generation'),'observedGeneration':d.get('status',{}).get('observedGeneration'),
                             'desired':d['spec'].get('replicas',1),'updated':d.get('status',{}).get('updatedReplicas',0),
@@ -350,6 +352,8 @@ def main(argv=None):
     exists_resource(['tektonconfig','config'])
     wait(['--for=condition=Ready','tektonconfig/config'],360)
     apply('tekton-config')
+    deadline.run(kubectl+['patch','tektonconfig','config','--type=merge',
+                         '--patch-file',DESIRED/'tekton-security.json'],limit=30)
     wait(['--for=condition=Ready','tektonconfig/config'],180)
     apply('tekton-chains-rbac')
     wait(['--for=condition=complete','job/tekton-chains-signing-secret','-n','tekton-pipelines'],180)

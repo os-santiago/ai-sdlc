@@ -25,7 +25,7 @@ class SupplyChainTests(unittest.TestCase):
         self.assertEqual((result.returncode,result.stdout.strip()),(0,'probe:allowed'))
 
     def test_stale_generations_and_old_replicas_are_not_ready(self):
-        for mode in ('current','cr-old','deployment-old','old-replicas','not-ready','deleting','missing','scaled-down'):
+        for mode in ('current','cr-old','deployment-old','old-replicas','not-ready','deleting','missing','scaled-down','helper-insecure'):
             cr={'metadata':{'uid':'fixture','generation':2},'status':{'conditions':[{'type':'Ready','status':'True','observedGeneration':2}]}}
             deployment={'metadata':{'namespace':'fixture','name':'fixture','generation':2},'spec':{'replicas':1},
                         'status':{'observedGeneration':2,'updatedReplicas':1,'readyReplicas':1,'availableReplicas':1}}
@@ -35,7 +35,9 @@ class SupplyChainTests(unittest.TestCase):
             if mode=='not-ready':deployment['status']['readyReplicas']=0
             if mode=='deleting':cr['metadata']['deletionTimestamp']='2026-11-15T00:00:00Z'
             if mode=='scaled-down':deployment['spec']['replicas']=0
-            values={'konflux':cr,'deployments':{'items':[deployment]},'pods':{'items':[]}}
+            values={'konflux':cr,'deployments':{'items':[deployment]},'pods':{'items':[]},
+                    'configmap':{'data':{'set-security-context':'true','set-security-context-read-only-root-filesystem':'true'}}}
+            if mode=='helper-insecure':values['configmap']['data']['set-security-context']='false'
             if mode=='missing':values['deployments']['items']=[]
             class Reader:
                 def run(self,args,**kwargs):return SimpleNamespace(stdout=json.dumps(values[args[1]]))

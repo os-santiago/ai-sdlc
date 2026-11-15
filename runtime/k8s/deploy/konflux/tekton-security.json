@@ -1,0 +1,16 @@
+{
+  "spec": {
+    "pipeline": {
+      "set-security-context": true,
+      "options": {
+        "configMaps": {
+          "feature-flags": {
+            "data": {
+              "set-security-context-read-only-root-filesystem": "true"
+            }
+          }
+        }
+      }
+    }
+  }
+}
