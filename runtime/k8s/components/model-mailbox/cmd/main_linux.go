@@ -84,7 +84,11 @@ func run(ctx context.Context, args []string, input io.Reader, output io.Writer) 
 		if err != nil {
 			return err
 		}
-		return store.WriteResponse(id, response)
+		receipt, err := store.PublishResponse(id, response)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(receipt)
 	}
 	return errors.New("unsupported mailbox mode")
 }

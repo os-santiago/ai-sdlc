@@ -34,9 +34,11 @@ def tree_digest(bundle):
     return digest.hexdigest()
 
 
-def verify(kubectl, provider, render_image, mailbox_image, worker_image, bundle, variant="normal"):
+def verify(kubectl, provider, render_image, mailbox_image, worker_image, bundle, variant="normal", transport=None):
     if variant not in VARIANTS:
         raise ValueError('Unsupported executor fixture variant')
+    if transport is not None and variant != 'normal':
+        raise ValueError('Composed transport fixture requires the normal source scenario')
     rejected_profile = variant in ("source-token-override", "source-profile-override", "source-stream-override")
     preflight_reject = variant in ('profile-digest-tamper', 'policy-digest-tamper')
     tree_reject = variant == 'source-tree-tamper'
@@ -153,6 +155,7 @@ def verify(kubectl, provider, render_image, mailbox_image, worker_image, bundle,
             command(['-n', namespace, 'wait', '--for=condition=Ready', 'pod/' + pod_name, '--timeout=90s'], timeout=100)
             pod = observe()
             image_ids = {item['name']: item['imageID'] for item in pod['status']['containerStatuses']}
+            image_refs = {item['name']: item['image'] for item in pod['status']['containerStatuses']}
             # Read-only conformance before the exclusive start marker. After start,
             # the fixture never execs a command into the worker container.
             local = offline_probe.checked_local(command(['-n', namespace, 'exec', pod_name, '-c', 'worker', '--',
@@ -169,6 +172,9 @@ def verify(kubectl, provider, render_image, mailbox_image, worker_image, bundle,
             wrote = False
             execution_started = time.monotonic()
             deadline = execution_started + (profile['maxSeconds'] + 15 if timeout_case else 60)
+            if transport is not None:
+                seen = transport.exchange(workload, pod_uid, assignment_raw, profile_raw, adev, command)
+                wrote = bool(seen)
             while True:
                 pod = observe()
                 if time.monotonic() >= deadline:
@@ -181,6 +187,9 @@ def verify(kubectl, provider, render_image, mailbox_image, worker_image, bundle,
                         raise ValueError('SCC launcher exited ' + str(state['terminated']['exitCode'])
                                          + '; model calls=' + str(len(seen)))
                     break
+                if transport is not None:
+                    time.sleep(.1)
+                    continue
                 result = subprocess.run([str(part) for part in kubectl] + ['-n', namespace, 'exec', pod_name,
                                         '-c', 'mailbox', '--', '/model-mailbox', 'read', '--attempt', attempt,
                                         '--pod-uid', pod_uid], capture_output=True, timeout=10)
@@ -271,8 +280,14 @@ def verify(kubectl, provider, render_image, mailbox_image, worker_image, bundle,
                           persistentChildContained=variant == 'persistent-child',
                           candidateIndependentlyCompared=True, createdFixtureFile=None if rejected_profile or tree_reject or timeout_case else FIXTURE_PATH,
                           observedPodUID=pod_uid, observedContainerImageIDs=image_ids,
+                          observedContainerImages=image_refs,
                           assignmentSHA256=assignment_digest, fixedTemplateUsed=True,
                           wrongPodStartRejected=True, repeatedStartRejected=True)
+            if transport is not None:
+                transport.verify_replacement(workload, pod_uid, command)
+                report.update(realPodTransport=True, durableModelHandoffs=2,
+                              actualRBACDenial=True, getOnlyExecDenied=True,
+                              scopedExecSucceeded=True, actualPodReplacementRejected=True)
     finally:
         if namespace_uid:
             network_probe.cleanup_namespace(command, namespace, namespace_uid)

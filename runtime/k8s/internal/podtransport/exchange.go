@@ -1,0 +1,203 @@
+package podtransport
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/httpstream"
+	protocol "k8s.io/apimachinery/pkg/util/remotecommand"
+	upgrade "k8s.io/client-go/transport/websocket"
+)
+
+// exchange implements only the V5 channels needed by two fixed helper modes.
+// client-go owns verified upgrade/authentication; its generic remotecommand
+// reader is intentionally not used because its status channel is unbounded and
+// accepts clean EOF without an explicit status. No fallback or retry exists.
+func (s *Session) exchange(ctx context.Context, mode string, input []byte) ([]byte, int, error) {
+	limit := modelmailbox.MaxEnvelopeBytes
+	if mode == "respond" {
+		limit = modelmailbox.MaxReceiptBytes
+	} else if mode != "read" {
+		return nil, 0, ErrTransport
+	}
+	if len(input) > modelmailbox.MaxEnvelopeBytes || (mode == "read" && len(input) != 0) {
+		return nil, 0, ErrTransport
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	query := url.Values{"container": {"mailbox"}, "stdout": {"true"}, "stderr": {"true"}, "tty": {"false"}}
+	query["command"] = []string{"/model-mailbox", mode, "--attempt", s.identity.Attempt, "--pod-uid", s.identity.PodUID}
+	if mode == "respond" {
+		query.Set("stdin", "true")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, s.podURL()+"/exec?"+query.Encode(), nil)
+	if err != nil {
+		return nil, 0, ErrTransport
+	}
+	roundTripper, holder, err := upgrade.RoundTripperFor(s.client.config)
+	if err != nil {
+		return nil, 0, ErrTransport
+	}
+	conn, err := upgrade.Negotiate(roundTripper, holder, request, protocol.StreamProtocolV5Name)
+	if err != nil {
+		var failure *httpstream.UpgradeFailureError
+		if errors.As(err, &failure) && apierrors.IsForbidden(failure.Cause) {
+			return nil, 0, ErrPermission
+		}
+		return nil, 0, ErrTransport
+	}
+	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	deadline, _ := ctx.Deadline()
+	if conn.SetReadDeadline(deadline) != nil || conn.SetWriteDeadline(deadline) != nil {
+		return nil, 0, ErrTransport
+	}
+	conn.SetReadLimit(int64(modelmailbox.MaxEnvelopeBytes + 1))
+	written := make(chan error, 1)
+	go func() {
+		if mode == "respond" {
+			for remaining := input; len(remaining) > 0; {
+				n := min(len(remaining), 16*1024)
+				frame := make([]byte, n+1)
+				frame[0] = protocol.StreamStdIn
+				copy(frame[1:], remaining[:n])
+				if err := conn.WriteMessage(websocket.BinaryMessage, frame); err != nil {
+					written <- err
+					return
+				}
+				remaining = remaining[n:]
+			}
+			if err := conn.WriteMessage(websocket.BinaryMessage, []byte{protocol.StreamClose, protocol.StreamStdIn}); err != nil {
+				written <- err
+				return
+			}
+		}
+		written <- nil
+	}()
+	// Closing the connection unblocks both directions. Join the sole writer on
+	// every exit; no goroutine retains credentials or response bytes afterward.
+	joined := false
+	defer func() {
+		conn.Close()
+		if !joined {
+			<-written
+		}
+	}()
+	var stdout, stderr, status bytes.Buffer
+	limits := map[byte]int{protocol.StreamStdOut: limit, protocol.StreamStdErr: 8192, protocol.StreamErr: 8192}
+	buffers := map[byte]*bytes.Buffer{protocol.StreamStdOut: &stdout, protocol.StreamStdErr: &stderr, protocol.StreamErr: &status}
+	closed := false
+	for frames := 0; frames < 1024; frames++ {
+		kind, reader, err := conn.NextReader()
+		if err != nil {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+				closed = true
+				break
+			}
+			return nil, 0, ErrTransport
+		}
+		if kind != websocket.BinaryMessage {
+			return nil, 0, ErrTransport
+		}
+		var channel [1]byte
+		if _, err := io.ReadFull(reader, channel[:]); err != nil {
+			return nil, 0, ErrTransport
+		}
+		buffer, ok := buffers[channel[0]]
+		if !ok {
+			return nil, 0, ErrTransport
+		}
+		remaining := limits[channel[0]] - buffer.Len()
+		raw, err := io.ReadAll(io.LimitReader(reader, int64(remaining)+1))
+		if err != nil || len(raw) > remaining {
+			return nil, 0, ErrTransport
+		}
+		buffer.Write(raw)
+	}
+	writeErr := <-written
+	joined = true
+	if !closed || ctx.Err() != nil || writeErr != nil {
+		return nil, 0, ErrTransport
+	}
+	var result meta.Status
+	if status.Len() == 0 || authority.DecodeStrict(status.Bytes(), &result) != nil {
+		return nil, 0, ErrTransport
+	}
+	if result.Status == meta.StatusSuccess && result.Reason == "" && result.Details == nil && (result.Code == 0 || result.Code == 200) {
+		if stderr.Len() != 0 {
+			return nil, 0, ErrTransport
+		}
+		return stdout.Bytes(), 0, nil
+	}
+	if result.Status == meta.StatusFailure && result.Reason == protocol.NonZeroExitCodeReason && result.Details != nil && len(result.Details.Causes) == 1 && result.Details.Causes[0].Type == protocol.ExitCodeCauseType {
+		code, err := strconv.ParseUint(result.Details.Causes[0].Message, 10, 8)
+		if err == nil && code > 0 {
+			return stdout.Bytes(), int(code), nil
+		}
+	}
+	return nil, 0, ErrTransport
+}
+
+func (s *Session) ReadRequest(ctx context.Context) (modelmailbox.Envelope, error) {
+	if _, err := s.observe(ctx, false); err != nil {
+		return modelmailbox.Envelope{}, err
+	}
+	raw, code, err := s.exchange(ctx, "read", nil)
+	if err != nil {
+		return modelmailbox.Envelope{}, err
+	}
+	if _, err := s.observe(ctx, false); err != nil {
+		return modelmailbox.Envelope{}, err
+	}
+	if code == 3 && len(raw) == 0 {
+		return modelmailbox.Envelope{}, modelmailbox.ErrPending
+	}
+	if code != 0 {
+		return modelmailbox.Envelope{}, ErrTransport
+	}
+	e, err := modelmailbox.Decode(raw)
+	if err != nil || e.Validate(s.identity, "request") != nil {
+		return modelmailbox.Envelope{}, ErrTransport
+	}
+	return e, nil
+}
+
+// Publish implements modelbroker.Publisher. Success confirms exclusive helper
+// publication through its exact receipt; it never claims application receipt.
+func (s *Session) Publish(ctx context.Context, e modelmailbox.Envelope) error {
+	if e.Validate(s.identity, "response") != nil {
+		return ErrTransport
+	}
+	e.Payload = append([]byte(nil), e.Payload...)
+	raw, err := json.Marshal(e)
+	if err != nil || len(raw) > modelmailbox.MaxEnvelopeBytes {
+		return ErrTransport
+	}
+	if _, err := s.observe(ctx, false); err != nil {
+		return err
+	}
+	receipt, code, err := s.exchange(ctx, "respond", raw)
+	if err != nil {
+		return err
+	}
+	if code != 0 || modelmailbox.ValidatePublicationReceipt(receipt, e) != nil {
+		return ErrTransport
+	}
+	if _, err := s.observe(ctx, true); err != nil {
+		return err
+	}
+	return nil
+}
