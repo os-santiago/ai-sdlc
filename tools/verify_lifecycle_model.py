@@ -19,9 +19,19 @@ from verify_pod_transport import TransportFixture
 from verify_workspace_bundle import identities, source_bundle, wire
 
 
-def verify(kubectl, worker_image, mailbox_image, test_binary, bundle, scenario="success"):
-    if scenario not in ("success", "three-turns", "provider-failure", "cancel-provider", "no-change"):
+def verify(kubectl, worker_image, mailbox_image, test_binary, bundle, scenario="success", model_connection=None):
+    if scenario not in ("success", "three-turns", "provider-failure", "cancel-provider", "no-change", "real-model"):
         raise ValueError("Unknown controller scenario")
+    if scenario == "real-model":
+        if not isinstance(model_connection, dict) or set(model_connection) != {"Endpoint", "Token"}:
+            raise ValueError("Owned loopback model connection required")
+        endpoint = urllib.parse.urlsplit(model_connection["Endpoint"])
+        if (endpoint.scheme != "http" or endpoint.hostname != "127.0.0.1" or not endpoint.port
+                or endpoint.path != "/v1/chat/completions" or endpoint.query or endpoint.fragment
+                or endpoint.username or endpoint.password or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", model_connection["Token"])):
+            raise ValueError("Invalid fixture model connection")
+    elif model_connection is not None:
+        raise ValueError("Synthetic scenarios cannot accept a model connection")
     database = urllib.parse.urlsplit(os.environ.get('AI_SDLC_TEST_DATABASE_URL', ''))
     if database.scheme not in ('postgres', 'postgresql') or database.hostname not in ('127.0.0.1', 'localhost', '::1') or database.path != '/ai_sdlc_test':
         raise ValueError('Explicit local disposable ai_sdlc_test database is required; fixture resets it')
@@ -33,8 +43,8 @@ def verify(kubectl, worker_image, mailbox_image, test_binary, bundle, scenario="
     if FIXTURE_PATH in identities(bundle):
         raise ValueError('Source already contains fixture file')
     adev = Path(__file__).resolve().parents[1].joinpath('runtime/k8s/deploy/helm/ai-sdlc-k8s-runtime/files/adev-profile.yaml').read_bytes()
-    profile = wire({'version': 'ai-sdlc.executor-profile/v1', 'model': 'fixture-model',
-                    'maxSteps': 4, 'maxSeconds': 45, 'maxTokens': 2048,
+    profile = wire({'version': 'ai-sdlc.executor-profile/v1', 'model': 'codex-cli' if scenario == 'real-model' else 'fixture-model',
+                    'maxSteps': 24 if scenario == 'real-model' else 4, 'maxSeconds': 180 if scenario == 'real-model' else 45, 'maxTokens': 2048,
                     'aDevSHA256': hashlib.sha256(adev).hexdigest()})
 
     def command(args, value=None, expected=0, timeout=45):
@@ -70,7 +80,7 @@ def verify(kubectl, worker_image, mailbox_image, test_binary, bundle, scenario="
                 'WorkerImage': worker_image, 'MailboxImage': mailbox_image},
                 'Profile': base64.b64encode(profile).decode(), 'ADev': base64.b64encode(adev).decode(),
                 'SourceFile': str(source), 'OutputFile': str(output), 'ReportFile': str(report),
-                'PlanFile': str(plan), 'ReadyFile': str(ready), 'DeltaFile': str(delta_file), 'Scenario': scenario}))
+                'PlanFile': str(plan), 'ReadyFile': str(ready), 'DeltaFile': str(delta_file), 'Scenario': scenario, **(model_connection or {})}))
             with (root/'driver.log').open('w+b') as log:
                 process = subprocess.Popen([str(Path(test_binary).resolve()), '-test.run', '^TestRealLifecycleModelFixture$', '-test.v'],
                     env=dict(os.environ, AI_SDLC_LIFECYCLE_FIXTURE=str(control)), stdout=log, stderr=subprocess.STDOUT)
@@ -100,7 +110,7 @@ def verify(kubectl, worker_image, mailbox_image, test_binary, bundle, scenario="
                      'roleRef': {'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'Role', 'name': 'lifecycle-controller'},
                      'subjects': [{'kind': 'ServiceAccount', 'name': 'lifecycle-controller', 'namespace': namespace}]}]})
                 private(ready, b'ready\n')
-                if process.wait(timeout=150):
+                if process.wait(timeout=270):
                     log.seek(0)
                     raise ValueError('Composed lifecycle fixture failed: '+log.read(4096).decode(errors='replace'))
             result = json.loads(report.read_bytes())

@@ -122,3 +122,22 @@ A cleanup failure is reported separately as `cleanupPending=true`. The primary
 fixed diagnostic stage is retained when both model handoff and cleanup fail;
 raw helper/provider exceptions are still excluded. A successful cleanup recovery
 cannot turn an ambiguous model call into a completed handoff or replay it.
+
+### Opt-in controller check with the real completion adapter
+
+`tools/verify_real_controller.py` exercises `RunController` with actual Codex CLI
+completions, SCC, Kubernetes and PostgreSQL in an isolated fixture. Build
+`go test -c -o /private/controller.test ./internal/execution`, select a disposable
+`ai_sdlc_test` database through `AI_SDLC_TEST_DATABASE_URL`, and pass the same
+`--kubectl`, `--kubeconfig`, `--worker-image`, `--mailbox-image`, `--test-binary`,
+`--source-repository` and `--source-sha` arguments as `verify_lifecycle_model.py`.
+Use an isolated fixture cluster; the helper resets only its explicitly selected
+local fixture database. It starts its own loopback completion adapter using the
+existing host Codex authentication. Do not point it at the installed model gateway.
+
+The bounded task creates one prescribed text file. The helper compares the entire
+candidate and persisted delta independently, verifies durable handoffs and confirms
+UID-bound resource cleanup. This is synthetic work and authority; a pass does not
+prove live issue intake, independent verification, PR publication or production.
+The first real-controller observation used five model calls and removed all its
+resources. It does not establish the cause of the separate Homedir #1581 failure.
