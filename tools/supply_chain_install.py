@@ -16,6 +16,8 @@ import tempfile
 import time
 import urllib.request
 
+import network_probe
+
 ROOT = Path(__file__).resolve().parents[1]
 DESIRED = ROOT / 'runtime/k8s/deploy/konflux'
 CHART = ROOT / 'runtime/k8s/deploy/helm/ai-sdlc-konflux-local'
@@ -75,7 +77,7 @@ class Deadline:
 
     def run(self, args, **kwargs):
         return subprocess.run([str(a) for a in args], check=kwargs.pop('check', True),
-                              text=True, timeout=self.remaining(kwargs.pop('limit', 600)), **kwargs)
+                              text=kwargs.pop('text', True), timeout=self.remaining(kwargs.pop('limit', 600)), **kwargs)
 
 
 def verified_asset(asset, cache, deadline, bound):
@@ -208,6 +210,7 @@ def observe(kubectl, deadline, cluster_uid, source_digest, required_deployments)
     return {'version':1, 'status':'ready' if ready else 'not-ready', 'clusterUID':cluster_uid,
             'desiredSourceLockSHA256':source_digest, 'scope':'isolated-supply-chain-validation',
             'liveWorkflowAdvanced':False, 'githubAppProvisionedByInstaller':False, 'externalRegistryProvisionedByInstaller':False,
+            'networkConformance':{'status':'not-tested','scope':'point-in-time'},
             'provenanceValidated':False, 'slsaLevelClaimed':False, 'konfluxUID':konflux['metadata']['uid'],
             'missingRequiredDeployments':missing,
             'deployments':[{'namespace':d['metadata']['namespace'], 'name':d['metadata']['name'],
@@ -272,7 +275,7 @@ def main(argv=None):
         print(json.dumps({'cluster':args.cluster,'release':lock['release'],'nodeImage':lock['nodeImage'],
             'operatorImage':lock['operator']['image'],'sourceLockSHA256':source_digest,'prerequisites':lock['prerequisites'],
             'chart':str(CHART.relative_to(ROOT)), 'hostPortMappings':[], 'defaultUsers':[],
-            'liveWorkflowAdvanced':False,'githubAppConfigured':False,'externalRegistryConfigured':False},indent=2))
+            'networkConformanceRequired':True,'liveWorkflowAdvanced':False,'githubAppConfigured':False,'externalRegistryConfigured':False},indent=2))
         return 0
     import install
     deadline = Deadline(args.timeout)
@@ -375,8 +378,20 @@ def main(argv=None):
     (state/'konflux-installation-report.json').write_text(json.dumps(report,indent=2)+'\n')
     if report['status']!='ready':
         raise ValueError('Konflux or a deployment is not ready; inspect supply-chain status')
+    image_lock = install.image_lock(ROOT/'runtime/k8s/deploy/local/images.lock.json')
+    probe_image = image_lock['image']['repository']+'@'+image_lock['components']['worker']['digest']
+    def probe_run(command, **kwargs):
+        return deadline.run(command, check=False, limit=kwargs.pop('timeout',100), **kwargs)
+    # Historical evidence cannot satisfy a new apply. Clear it before probing.
+    report['networkConformance'] = {'status':'pending','scope':'point-in-time'}
+    (state/'konflux-installation-report.json').write_text(json.dumps(report,indent=2)+'\n')
+    evidence = network_probe.verify(kubectl,probe_image,runner=probe_run)
+    report['networkConformance'] = {'status':'passed','scope':'point-in-time','image':probe_image,
+                                  'observedAt':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),**evidence}
+    (state/'konflux-installation-report.json').write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps({'status':report['status'],'cluster':args.cluster,'release':lock['release'],
                       'deploymentsAvailable':len(report['deployments']),
                       'report':str(state/'konflux-installation-report.json'),
+                      'networkConformance':report['networkConformance'],
                       'liveWorkflowAdvanced':False,'provenanceValidated':False},indent=2))
     return 0

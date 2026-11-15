@@ -118,3 +118,21 @@ the smaller default CI installation.
 
 Upstream references: [Konflux getting started](https://konflux-ci.dev/docs/getting-started/)
 and [policy evaluations](https://konflux-ci.dev/docs/compliance/policy-evaluations/).
+
+### Network conformance before source builds
+
+Every `supply-chain local` apply now runs the same disposable restricted-Pod
+network tests as the core installer: reachable positive controls, egress deny,
+selective egress, unrestricted egress recovery, ingress deny and restored
+connectivity. All commands share the install deadline. Namespace cleanup uses an
+atomic UID precondition; command/exec failures never count as successful denial.
+An interrupted process can retain its uniquely named `ai-sdlc-netcheck-*`
+namespace; inspect ownership before removal.
+
+The pinned kindnet version includes NetworkPolicy enforcement; no extra CNI is
+installed. The installation report records the probe image digest, observation
+time and point-in-time result. Read-only `status` deliberately reports network
+conformance as `not-tested`: deployment readiness and historical observations do
+not prove current connectivity. Neither result proves continuous isolation.
+Build fixtures must additionally test their actual API/registry egress policy
+before running project code. See [the core network contract](../installation.md).

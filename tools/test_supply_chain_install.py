@@ -6,6 +6,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +19,11 @@ import supply_chain_install as supply
 
 
 class SupplyChainTests(unittest.TestCase):
+    def test_deadline_accepts_network_runner_text_contract(self):
+        result = supply.Deadline(2).run([sys.executable,'-c','print("probe:allowed")'],
+                                       text=True,check=False,capture_output=True,limit=1)
+        self.assertEqual((result.returncode,result.stdout.strip()),(0,'probe:allowed'))
+
     def test_stale_generations_and_old_replicas_are_not_ready(self):
         for mode in ('current','cr-old','deployment-old','old-replicas','not-ready','deleting','missing','scaled-down'):
             cr={'metadata':{'uid':'fixture','generation':2},'status':{'conditions':[{'type':'Ready','status':'True','observedGeneration':2}]}}

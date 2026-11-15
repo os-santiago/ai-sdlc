@@ -1,8 +1,9 @@
+import json
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from network_probe import cleanup_namespace, connection_result, pod
+from network_probe import cleanup_namespace, connection_result, pod, verify
 
 
 class NetworkConformanceTests(unittest.TestCase):
@@ -20,6 +21,22 @@ class NetworkConformanceTests(unittest.TestCase):
                 connection_result(SimpleNamespace(returncode=code, stdout=output))
         self.assertFalse(connection_result(SimpleNamespace(returncode=3, stdout='probe:denied\n')))
         self.assertTrue(connection_result(SimpleNamespace(returncode=0, stdout='probe:allowed\n')))
+
+    def test_injected_deadline_runner_covers_execution_and_cleanup(self):
+        calls = []
+        def runner(command, **kwargs):
+            calls.append((command, kwargs))
+            if 'create' in command:
+                return SimpleNamespace(returncode=0, stdout=json.dumps({'metadata':{'uid':'original'}}))
+            if 'apply' in command:
+                raise TimeoutError('overall deadline')
+            return SimpleNamespace(returncode=0, stdout='')
+        with self.assertRaisesRegex(TimeoutError, 'overall deadline'):
+            verify(['kubectl'], 'pinned-image', runner=runner)
+        self.assertEqual(len(calls), 4)
+        deletion = json.loads(calls[2][1]['input'])
+        self.assertEqual(deletion['preconditions'], {'uid':'original'})
+        self.assertTrue(all(item[1]['timeout'] == 100 for item in calls))
 
     def test_probe_workloads_have_no_runtime_identity_or_host_access(self):
         for name in ('client', 'server-a', 'server-b'):
