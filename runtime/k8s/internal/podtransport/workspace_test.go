@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -330,5 +332,43 @@ func TestWorkspaceExpiryDuringObservationPreventsStartEffect(t *testing.T) {
 	}
 	if calls.Load() != 0 {
 		t.Fatal("expired assignment reached mutating helper")
+	}
+}
+
+func TestMailboxReadSeparatesProtocolRejectionFromWorkerExit(t *testing.T) {
+	for _, which := range []string{"valid-exit-race", "invalid-uid-exit-race", "helper-failure-exit-race"} {
+		t.Run(which, func(t *testing.T) {
+			b, pod, _ := workspaceBinding(t)
+			request := modelmailbox.Envelope{Version: modelmailbox.Version, Kind: "request", Attempt: "fixture", PodUID: b.PodUID, Sequence: 1, ExpiresAt: time.Now().Add(time.Minute).UnixMilli(), Payload: []byte(`{"model":"fixture","messages":[{"role":"user","content":"bounded"}],"max_tokens":1}`)}
+			a, err := executor.ParseAssignment(b.Assignment, modelmailbox.Digest(b.Assignment), time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Attempt = fmt.Sprintf("%s-%d", a.WorkItemID, a.Attempt)
+			request.RequestSHA256 = modelmailbox.Digest(request.Payload)
+			if which == "invalid-uid-exit-race" {
+				request.PodUID = "11111111-1111-4111-8111-111111111111"
+			}
+			raw, _ := json.Marshal(request)
+			session, _ := workspaceSession(t, b, pod, func(p *core.Pod, n int32) {
+				if n >= 3 {
+					for i := range p.Status.ContainerStatuses {
+						if p.Status.ContainerStatuses[i].Name == "worker" {
+							p.Status.ContainerStatuses[i].State = core.ContainerState{Terminated: &core.ContainerStateTerminated{ExitCode: 0}}
+						}
+					}
+				}
+			}, func(_ *http.Request, conn *websocket.Conn) {
+				workspaceReply(conn, raw, which != "helper-failure-exit-race")
+			})
+			_, err = session.ReadRequest(context.Background())
+			if which == "valid-exit-race" {
+				if !errors.Is(err, ErrWorkerExited) {
+					t.Fatal("valid original exit not distinguished", err)
+				}
+			} else if !errors.Is(err, ErrTransport) || errors.Is(err, ErrWorkerExited) {
+				t.Fatal("protocol rejection became worker exit", err)
+			}
+		})
 	}
 }

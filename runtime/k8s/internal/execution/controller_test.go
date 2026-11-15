@@ -54,11 +54,12 @@ func TestControllerRejectsSequenceDriftAndNonzeroExit(t *testing.T) {
 	changed := req(1)
 	changed.Payload = []byte("substitution")
 	for name, s := range map[string]*driverSession{
-		"sequence gap":            {requests: []modelmailbox.Envelope{req(2)}, exitAfter: 1},
-		"duplicate drift":         {requests: []modelmailbox.Envelope{req(1), changed}, exitAfter: 2},
-		"nonzero":                 {exitAfter: 0, code: 7},
-		"permission during exit":  {exitAfter: 1, readErr: podtransport.ErrPermission},
-		"transport while running": {exitAfter: -1, readErr: podtransport.ErrTransport},
+		"sequence gap":                      {requests: []modelmailbox.Envelope{req(2)}, exitAfter: 1},
+		"duplicate drift":                   {requests: []modelmailbox.Envelope{req(1), changed}, exitAfter: 2},
+		"nonzero":                           {exitAfter: 0, code: 7},
+		"permission during exit":            {exitAfter: 1, readErr: podtransport.ErrPermission},
+		"protocol failure before zero exit": {exitAfter: 1, readErr: podtransport.ErrTransport},
+		"transport while running":           {exitAfter: -1, readErr: podtransport.ErrTransport},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if driveModel(context.Background(), s, func(context.Context) error { return nil }, func(context.Context, modelmailbox.Envelope) error { return nil }) == nil {
@@ -68,7 +69,7 @@ func TestControllerRejectsSequenceDriftAndNonzeroExit(t *testing.T) {
 	}
 }
 func TestControllerHandlesOriginalWorkerExitRace(t *testing.T) {
-	s := &driverSession{exitAfter: 1, readErr: podtransport.ErrTransport}
+	s := &driverSession{exitAfter: 1, readErr: podtransport.ErrWorkerExited}
 	if driveModel(context.Background(), s, func(context.Context) error { return nil }, func(context.Context, modelmailbox.Envelope) error { t.Fatal("unexpected dispatch"); return nil }) != nil {
 		t.Fatal("original zero exit not observed")
 	}

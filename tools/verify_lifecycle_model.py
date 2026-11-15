@@ -110,6 +110,8 @@ def verify(kubectl, worker_image, mailbox_image, test_binary, bundle, scenario="
             if scenario in ("provider-failure", "cancel-provider", "no-change"):
                 if result.get("claimStopped") is not True or result.get("candidateCaptured") is not False or result.get("modelCalls") not in (range(1, 5) if scenario == "no-change" else (1,)) or output.exists() or delta_file.exists():
                     raise ValueError("Failed controller exposed candidate or retained authority")
+                if scenario == "no-change" and result.get("workerNonzeroExitObserved") is not True:
+                    raise ValueError("No-change scenario did not observe the original worker rejection")
                 result.update(resourcesConfirmedRemoved=True)
             else:
                 with output.open('rb') as stream:

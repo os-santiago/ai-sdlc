@@ -15,6 +15,8 @@ import (
 // ControllerError deliberately excludes provider bodies, credentials and source.
 type ControllerError struct{ Stage string }
 
+var errWorkerNonzero = errors.New("original worker exited nonzero")
+
 func (e ControllerError) Error() string { return "execution controller stopped: " + e.Stage }
 
 // RunController composes a freshly prepared, signed claim into one isolated
@@ -117,6 +119,9 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 		}
 		return nil
 	}); err != nil {
+		if errors.Is(err, errWorkerNonzero) {
+			stage = "worker-exit"
+		}
 		return record, ControllerError{stage}
 	}
 	stage = "export"
@@ -158,20 +163,23 @@ func driveModel(ctx context.Context, session modelSession, authorize func(contex
 		}
 		if exited {
 			if code != 0 {
-				return ErrAuthority
+				return errWorkerNonzero
 			}
 			return nil
 		}
 		request, err := session.ReadRequest(ctx)
 		if err != nil && !errors.Is(err, modelmailbox.ErrPending) {
-			if !errors.Is(err, podtransport.ErrTransport) {
+			if !errors.Is(err, podtransport.ErrWorkerExited) {
 				return ErrAuthority
 			}
 			// The writer can exit between ReadRequest's before/after observations.
 			// Export/capture still require zero exit, no outstanding model call and a
 			// nonempty independently reconstructed delta. Never retry a failed delivery.
 			code, exited, exitErr := session.WorkerExit(ctx)
-			if exitErr == nil && exited && code == 0 && ctx.Err() == nil {
+			if exitErr == nil && exited && ctx.Err() == nil {
+				if code != 0 {
+					return errWorkerNonzero
+				}
 				return nil
 			}
 			return ErrAuthority

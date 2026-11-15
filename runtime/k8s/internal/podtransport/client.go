@@ -16,6 +16,10 @@ import (
 )
 
 var ErrTransport = errors.New("executor Pod transport failed or exceeded a bound")
+
+// ErrWorkerExited is returned only after the original worker identity is
+// observed terminated. Protocol, permission and helper errors never wrap it.
+var ErrWorkerExited = errors.New("original executor worker exited during mailbox read")
 var ErrPermission = errors.New("executor Pod transport permission denied")
 var tokenPattern = regexp.MustCompile(`^[A-Za-z0-9._~+/=-]+$`)
 

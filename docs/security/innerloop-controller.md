@@ -22,8 +22,9 @@ Completion is driven by the worker instance, not by a fixed call count, model
 prose or `finish_reason`. Duplicate reads must be byte/identity equivalent to
 the preceding request. Gaps, rebinding, nonzero exit, revoked authority,
 ambiguous dispatch or cancellation stop the attempt; there is no provider retry.
-Read/exit races are resolved only through another observation of the original
-worker. Export/capture still require the unchanged identity, completed handoffs
+Read/exit races use a distinct transport outcome emitted only after validating
+the helper result and observing the original worker exit. Protocol rejection
+remains terminal even if a subsequent observation would show exit zero. Export/capture still require the unchanged identity, completed handoffs
 and a nonempty reconstructable delta.
 
 All operations use the nonrenewable lifecycle deadline. Failure stops the
@@ -52,7 +53,7 @@ Use `--scenario` to select `success`, `three-turns`, `provider-failure`,
 `cancel-provider` or `no-change`; all five run in installer conformance CI.
 The successful variants exercise different request counts. The rejection
 variants require zero captured candidates, one stopped current claim and no
-provider replay. The no-change case reads an existing file without modifying it; a nonzero
-SCC exit or an empty delta must prevent capture. Separate candidate tests also
-reject a zero-exit empty delta. Local unit regressions additionally exercise idle revocation,
+provider replay. The no-change case reads an existing file without modifying it and requires
+an explicitly observed nonzero SCC exit; an unrelated transport/capture failure
+cannot pass that scenario. Separate candidate tests reject a zero-exit empty delta. Local unit regressions additionally exercise idle revocation,
 idle cancellation, duplicate substitution, sequence gaps and exit races.
