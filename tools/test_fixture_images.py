@@ -8,7 +8,7 @@ import fixture_images
 
 
 class AliasTests(unittest.TestCase):
-    def run_case(self, *, delay=False, tag_failure=False, mismatch=False, wrong_target=False, existing=False, never=False, child_digest=False):
+    def run_case(self, *, delay=False, tag_failure=False, mismatch=False, wrong_target=False, existing=False, never=False, child_digest=False, alias_changed=False, missing=False):
         digest = 'sha256:' + 'a' * 64
         tag = 'localhost/ai-sdlc-worker:fixture'
         reference = tag.split(':')[0] + '@' + digest
@@ -29,8 +29,8 @@ class AliasTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, json.dumps({'status': status}).encode())
             if 'ls' in command:
                 name = command[-1].removeprefix('name==')
-                target = 'invalid' if wrong_target else digest
-                rows = f'{name} media {target} 1B linux/amd64 -\n' if name == tag or registered else ''
+                target = 'invalid' if wrong_target else ('sha256:' + 'b' * 64 if alias_changed and name == reference else digest)
+                rows = f'{name} application/vnd.oci.image.index.v1+json {target} 1B linux/amd64 -\n' if not missing and (name == tag or registered) else ''
                 return subprocess.CompletedProcess(command, 0, 'REF TYPE DIGEST SIZE PLATFORMS LABELS\n' + rows)
             self.assertIn('--local', command)
             self.assertNotIn('--force', command)
@@ -61,6 +61,14 @@ class AliasTests(unittest.TestCase):
     def test_different_descriptor_is_terminal(self):
         with self.assertRaisesRegex(ValueError, 'descriptor'):
             self.run_case(wrong_target=True)
+
+    def test_missing_descriptor_is_terminal(self):
+        with self.assertRaisesRegex(ValueError, 'descriptor'):
+            self.run_case(missing=True)
+
+    def test_changed_alias_descriptor_is_terminal(self):
+        with self.assertRaisesRegex(ValueError, 'descriptor'):
+            self.run_case(alias_changed=True)
 
     def test_cri_identity_mismatch_is_terminal(self):
         with self.assertRaisesRegex(ValueError, 'does not resolve'):

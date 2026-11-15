@@ -26,6 +26,12 @@ def register_digest(provider, node, tag):
             return None
         if len(rows) != 1 or len(rows[0]) < 3 or rows[0][0] != name:
             raise ValueError('Ambiguous containerd fixture descriptor')
+        if rows[0][1] not in {
+            'application/vnd.oci.image.manifest.v1+json', 'application/vnd.oci.image.index.v1+json',
+            'application/vnd.docker.distribution.manifest.v2+json',
+            'application/vnd.docker.distribution.manifest.list.v2+json',
+        }:
+            raise ValueError('Unsupported fixture descriptor media type')
         return rows[0][2]
 
     # The loaded target can be an OCI index while CRI reports its selected
