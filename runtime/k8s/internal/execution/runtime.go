@@ -13,6 +13,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
@@ -58,6 +59,7 @@ func LoadRuntime(path string) (RuntimeConfig, []byte, error) {
 // Runtime polls only durable requests received by the signed worker inbox.
 // It has no externally callable run/claim/advance endpoint and no retry/adoption.
 type Runtime struct {
+	SourceCache                                                 *sourcefetch.Cache
 	Component                                                   *bootstrap.Component
 	ConfigPath, IntakePath, TokenPath, CAPath, GatewayTokenPath string
 	APIServer, ProviderEndpoint                                 string
@@ -155,12 +157,25 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		return "", e
 	}
 	ready := func() (authority.Policy, intake.Config, error) { v, _, e := load(ctx); return v.Policy, v.Intake, e }
+	cache := r.SourceCache
+	if cache == nil {
+		cache = sourcefetch.NewCache()
+	}
+	source, e := preflightSource(ctx, r.Component.DB, func(ctx context.Context) (PreparationInputs, error) { v, _, e := load(ctx); return v, e }, id, cache.Fetch)
+	if e != nil {
+		return "source-deferred", e
+	}
 	claim, e := Claim(ctx, r.Component.DB, ready, id)
 	if e != nil {
 		_ = r.Component.DB.RejectQueuedExecution(ctx, id)
 		return "rejected", ErrAuthority
 	}
-	prep, e := Prepare(ctx, r.Component.DB, func(ctx context.Context) (PreparationInputs, error) { v, _, e := load(ctx); return v, e }, claim, "")
+	prep, e := prepare(ctx, r.Component.DB, func(ctx context.Context) (PreparationInputs, error) { v, _, e := load(ctx); return v, e }, claim, func(ctx context.Context, repository, sha string) (workspacebundle.Bundle, error) {
+		if ctx.Err() != nil || repository != source.repository || sha != source.bundle.SourceSHA {
+			return workspacebundle.Bundle{}, ErrAuthority
+		}
+		return source.bundle, nil
+	})
 	if e != nil {
 		return "stopped", e
 	}
