@@ -29,7 +29,7 @@ type Writer struct {
 	repository, token, base string
 	http                    *http.Client
 }
-type WriteFence func(context.Context) error
+type WriteFence func(context.Context, string) error
 
 var pilotBranch = regexp.MustCompile(`^ai-sdlc/issue-([1-9][0-9]{0,9})-[a-f0-9]{32}$`)
 
@@ -63,7 +63,8 @@ func (w *Writer) post(ctx context.Context, fence WriteFence, suffix string, valu
 	if e != nil || len(raw) < 1 || len(raw) > 2*1024*1024 {
 		return ErrPublication
 	}
-	if ctx.Err() != nil || fence(ctx) != nil {
+	requestDigest := authority.Digest(raw)
+	if ctx.Err() != nil || fence(ctx, requestDigest) != nil {
 		return ErrPublication
 	}
 	req, e := http.NewRequestWithContext(ctx, http.MethodPost, w.base+"/repos/"+w.repository+suffix, bytes.NewReader(raw))
@@ -91,7 +92,7 @@ func (w *Writer) post(ctx context.Context, fence WriteFence, suffix string, valu
 	// GitHub may add metadata fields; retain strict duplicate-key rejection before
 	// projecting its response onto the finite fields that bind this operation.
 	var object map[string]json.RawMessage
-	if authority.DecodeStrict(raw, &object) != nil || object == nil || json.Unmarshal(raw, out) != nil || ctx.Err() != nil || fence(ctx) != nil {
+	if authority.DecodeStrict(raw, &object) != nil || object == nil || json.Unmarshal(raw, out) != nil || ctx.Err() != nil || fence(ctx, requestDigest) != nil {
 		return ErrPublication
 	}
 	return nil

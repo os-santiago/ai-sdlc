@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -36,13 +38,18 @@ func TestPublisherFinitePlanThroughActualTLS(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	var calls atomic.Int32
 	fences := 0
+	var expectedDigest atomic.Value
 	w, _ := writerFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		if r.Method != "POST" || r.Header.Get("Authorization") != "Bearer "+strings.Repeat("x", 40) || r.GetBody != nil {
 			t.Error("wrong write boundary")
 		}
 		var raw map[string]json.RawMessage
-		if json.NewDecoder(r.Body).Decode(&raw) != nil {
+		body, _ := io.ReadAll(r.Body)
+		if expectedDigest.Load() != authority.Digest(body) {
+			t.Error("journal fence digest differs from exact HTTP request")
+		}
+		if json.Unmarshal(body, &raw) != nil {
 			t.Error("invalid request")
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -84,7 +91,7 @@ func TestPublisherFinitePlanThroughActualTLS(t *testing.T) {
 			t.Error("unsupported endpoint")
 		}
 	})
-	fence := func(context.Context) error { fences++; return nil }
+	fence := func(_ context.Context, digest string) error { expectedDigest.Store(digest); fences++; return nil }
 	ctx := context.Background()
 	if sha, e := w.CreateTree(ctx, fence, p); e != nil || sha != p.ExpectedTreeSHA {
 		t.Fatal("tree receipt", e)
@@ -138,7 +145,7 @@ func TestPublisherAmbiguousResponsesNeverRetryOrLeak(t *testing.T) {
 				}
 			})
 			fences := 0
-			fence := func(context.Context) error {
+			fence := func(context.Context, string) error {
 				fences++
 				if scenario == "revoked-after" && fences == 2 {
 					return errors.New("revoked")
@@ -160,14 +167,14 @@ func TestPublisherDeniesUnreviewedPlanBeforeNetwork(t *testing.T) {
 	for _, mutate := range []func(*TreePlan){func(p *TreePlan) { p.Branch = "main" }, func(p *TreePlan) { p.CommitMessage = "release production" }, func(p *TreePlan) { p.Request.Tree[0].Path = ".github/workflows/release.yml" }, func(p *TreePlan) { p.Request.Tree[0].Mode = "120000" }, func(p *TreePlan) { p.Request.Tree[1] = p.Request.Tree[0] }, func(p *TreePlan) { p.Request.BaseTree = "main" }} {
 		p := writerPlan()
 		mutate(&p)
-		if _, e := w.CreateTree(context.Background(), func(context.Context) error { return nil }, p); e == nil {
+		if _, e := w.CreateTree(context.Background(), func(context.Context, string) error { return nil }, p); e == nil {
 			t.Fatal("unsafe plan reached writer")
 		}
 	}
 	if _, e := w.CreateTree(context.Background(), nil, writerPlan()); e == nil {
 		t.Fatal("missing authority fence")
 	}
-	if _, e := w.CreateTree(context.Background(), func(context.Context) error { return errors.New("revoked") }, writerPlan()); e == nil {
+	if _, e := w.CreateTree(context.Background(), func(context.Context, string) error { return errors.New("revoked") }, writerPlan()); e == nil {
 		t.Fatal("revoked fence")
 	}
 	if calls.Load() != 0 {

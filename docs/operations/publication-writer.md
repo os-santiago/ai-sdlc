@@ -16,7 +16,9 @@ closed before the local production-test promotion completes.
 
 Each operation performs one bounded HTTP/1 POST to the fixed GitHub API, with
 no proxy, redirects, transport replay or response-body logging. Current authority
-is checked immediately before and after the request. A lost response, changed
+is checked immediately before and after the request. Both fences receive the
+SHA-256 of the exact serialized HTTP request, allowing the controller to commit
+and validate that same body binding before the single POST. A lost response, changed
 receipt, HTTP failure or revoked fence yields no receipt; the caller must mark
 its journal uncertain. The writer cannot adopt an existing branch, overwrite a
 ref, merge, release or deploy. A future merge stage must independently preserve
