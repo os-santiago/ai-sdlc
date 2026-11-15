@@ -66,14 +66,21 @@ jobs:
           ./install.sh sandbox --config "$RUNNER_TEMP/local-install.json"
       - name: Verify the bounded mailbox with SCC in the offline runtime
         run: |
-          # Local single-platform fixtures require one digest across import and CRI.
-          # Published images retain their independent provenance configuration.
-          docker build --provenance=false -f runtime/k8s/components/model-mailbox/Containerfile -t localhost/ai-sdlc-model-mailbox:conformance runtime/k8s
+          # Export canonical OCI directly to kind; Docker save may synthesize a
+          # different manifest for the same config. The host copy renders fixtures.
+          docker buildx create --name ai-sdlc-fixtures --driver docker-container
+          docker buildx build --builder ai-sdlc-fixtures --provenance=false --load \
+            --output "type=oci,dest=$RUNNER_TEMP/model-mailbox.oci" \
+            -f runtime/k8s/components/model-mailbox/Containerfile -t localhost/ai-sdlc-model-mailbox:conformance runtime/k8s
           python3 - <<'PYTHON'
           import json, os, pathlib, subprocess, sys
           tools = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'install-tools.json').read_text())
           image = 'localhost/ai-sdlc-model-mailbox:conformance'
-          subprocess.run([tools['kind'], 'load', 'docker-image', image, '--name', 'ai-sdlc'], check=True)
+          archive = str(pathlib.Path(os.environ['RUNNER_TEMP'], 'model-mailbox.oci'))
+          subprocess.run(['docker', 'cp', archive, 'ai-sdlc-control-plane:/tmp/model-mailbox.oci'], check=True)
+          subprocess.run(['docker', 'exec', 'ai-sdlc-control-plane', 'ctr', '-n', 'k8s.io',
+                          'images', 'import', '--local', '--digests', '/tmp/model-mailbox.oci'], check=True)
+          subprocess.run(['docker', 'exec', 'ai-sdlc-control-plane', 'rm', '/tmp/model-mailbox.oci'], check=True)
           subprocess.run([sys.executable, 'tools/verify_model_mailbox.py', '--kubectl', tools['kubectl'],
                           '--kubeconfig', str(pathlib.Path.home() / '.local/state/ai-sdlc/ai-sdlc/kubeconfig'),
                           '--mailbox-image', image], check=True)
@@ -93,7 +100,9 @@ jobs:
           PYTHON
       - name: Verify the fixed SCC executor and adversarial source configuration
         run: |
-          docker build --provenance=false -f runtime/k8s/components/worker/Containerfile -t localhost/ai-sdlc-worker:conformance runtime/k8s
+          docker buildx build --builder ai-sdlc-fixtures --provenance=false --load \
+            --output "type=oci,dest=$RUNNER_TEMP/worker.oci" \
+            -f runtime/k8s/components/worker/Containerfile -t localhost/ai-sdlc-worker:conformance runtime/k8s
           python3 - <<'PYTHON'
           import json, os, pathlib, subprocess, sys
           sys.path.insert(0, 'tools')
@@ -103,9 +112,14 @@ jobs:
           tools = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'install-tools.json').read_text())
           worker_tag = 'localhost/ai-sdlc-worker:conformance'
           mailbox_tag = 'localhost/ai-sdlc-model-mailbox:conformance'
-          subprocess.run([tools['kind'], 'load', 'docker-image', worker_tag, '--name', 'ai-sdlc'], check=True)
+          archive = str(pathlib.Path(os.environ['RUNNER_TEMP'], 'worker.oci'))
+          subprocess.run(['docker', 'cp', archive, 'ai-sdlc-control-plane:/tmp/worker.oci'], check=True)
+          subprocess.run(['docker', 'exec', 'ai-sdlc-control-plane', 'ctr', '-n', 'k8s.io',
+                          'images', 'import', '--local', '--digests', '/tmp/worker.oci'], check=True)
+          subprocess.run(['docker', 'exec', 'ai-sdlc-control-plane', 'rm', '/tmp/worker.oci'], check=True)
           worker = register_digest('docker', 'ai-sdlc-control-plane', worker_tag)
           mailbox = register_digest('docker', 'ai-sdlc-control-plane', mailbox_tag)
+          print(json.dumps({'fixtureImages': {'worker': worker, 'mailbox': mailbox}}), flush=True)
           source = source_bundle(pathlib.Path(os.environ['RUNNER_TEMP'], 'homedir-source'),
                                  '0622cdaeb59a11a27bd5f3d7e18183c401a5e412')
           kubectl = [tools['kubectl'], '--kubeconfig', str(pathlib.Path.home() / '.local/state/ai-sdlc/ai-sdlc/kubeconfig')]
