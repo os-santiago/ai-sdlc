@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
@@ -18,6 +19,23 @@ type ControllerError struct{ Stage string }
 var errWorkerNonzero = errors.New("original worker exited nonzero")
 
 func (e ControllerError) Error() string { return "execution controller stopped: " + e.Stage }
+
+// DiagnosticStage returns only fixed operational categories. Never log an
+// arbitrary underlying error, source text, model output or credential.
+func DiagnosticStage(err error) string {
+	var stopped ControllerError
+	if !errors.As(err, &stopped) {
+		return "authority-or-storage"
+	}
+	switch stopped.Stage {
+	case "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "worker-exit", "export", "capture", "cleanup":
+		return stopped.Stage
+	}
+	if strings.HasPrefix(stopped.Stage, "model-") {
+		return "model-" + modelbroker.SafeFailureStage(strings.TrimPrefix(stopped.Stage, "model-"))
+	}
+	return "unknown"
+}
 
 // RunController composes a freshly prepared, signed claim into one isolated
 // candidate. Only trusted bootstrap code may supply dependencies. It does not
@@ -115,6 +133,7 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 	if err = driveModel(ctx, session, func(ctx context.Context) error { _, e := l.Authorize(ctx, scope); return e }, func(ctx context.Context, request modelmailbox.Envelope) error {
 		result, e := dispatcher.Deliver(ctx, scope.AllocationID, prepared.Profile(), request)
 		if e != nil || !result.HandoffConfirmed {
+			stage = "model-" + modelbroker.SafeFailureStage(result.FailureStage)
 			return ErrAuthority
 		}
 		return nil

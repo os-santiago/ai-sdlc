@@ -215,27 +215,53 @@ func (s *Session) ReadRequest(ctx context.Context) (modelmailbox.Envelope, error
 
 // Publish implements modelbroker.Publisher. Success confirms exclusive helper
 // publication through its exact receipt; it never claims application receipt.
-func (s *Session) Publish(ctx context.Context, e modelmailbox.Envelope) error {
+func (s *Session) Publish(ctx context.Context, e modelmailbox.Envelope) (err error) {
+	stage := "envelope"
+	defer func() {
+		if err != nil {
+			err = publicationError{stage: stage, cause: err}
+		}
+	}()
 	if e.Validate(s.identity, "response") != nil {
 		return ErrTransport
 	}
 	e.Payload = append([]byte(nil), e.Payload...)
+	stage = "encoding"
 	raw, err := json.Marshal(e)
 	if err != nil || len(raw) > modelmailbox.MaxEnvelopeBytes {
 		return ErrTransport
 	}
+	stage = "before-observation"
 	if _, err := s.observe(ctx, false); err != nil {
 		return err
 	}
+	stage = "helper-transport"
 	receipt, code, err := s.exchange(ctx, "respond", raw)
 	if err != nil {
 		return err
 	}
-	if code != 0 || modelmailbox.ValidatePublicationReceipt(receipt, e) != nil {
+	stage = "helper-exit"
+	if code != 0 {
 		return ErrTransport
 	}
+	stage = "receipt"
+	if modelmailbox.ValidatePublicationReceipt(receipt, e) != nil {
+		return ErrTransport
+	}
+	stage = "after-observation"
 	if _, err := s.observe(ctx, true); err != nil {
 		return err
 	}
 	return nil
 }
+
+// Only fixed publication boundaries are surfaced; never helper stderr or API
+// exception text. Unwrap preserves the existing error classification.
+type publicationError struct {
+	stage string
+	cause error
+}
+
+func (e publicationError) Error() string            { return "mailbox publication failed at " + e.stage }
+func (e publicationError) Unwrap() error            { return e.cause }
+func (e publicationError) PublicationStage() string { return e.stage }

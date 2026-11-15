@@ -1,0 +1,89 @@
+{
+  "observedAt": "2026-11-15",
+  "scope": "live local Homedir candidate installation",
+  "installerCommit": "79761a06020dd3aa7a05ace44c4d8d00f52faf86",
+  "imageSourceCommit": "bd8371f7c00d91465dadb734fd9f402981103adb",
+  "profile": "candidate",
+  "repository": "os-santiago/homedir",
+  "testProductionNamespace": "ai-sdlc-production",
+  "migrations": 11,
+  "imageIdentitiesVerified": [
+    {
+      "container": "admission-controller",
+      "digest": "sha256:b282e39482504dc13a0475bbaeaa5f1943fd24bb29f337dc323f4b3178ea5aee",
+      "ready": true,
+      "restarts": 0
+    },
+    {
+      "container": "intake",
+      "digest": "sha256:874e484d9f3d19d158f5fbf692dcdd19442f13e7edb5d41b454d4826432e5918",
+      "ready": true,
+      "restarts": 0
+    },
+    {
+      "container": "migrator",
+      "digest": "sha256:fd2243f80e9872d1745284fc390a4cf87d80df12afdc294b9ab8c9e546181c6c",
+      "ready": false,
+      "restarts": 0
+    },
+    {
+      "container": "orchestrator",
+      "digest": "sha256:70e8bd354b4846de3b44423b61a2d250e422a97f850c9236683e29c1b617fce5",
+      "ready": true,
+      "restarts": 0
+    },
+    {
+      "container": "relay",
+      "digest": "sha256:6e5ec67d3c2a90179b88bf8d071d2bdb3186849948f004a1420e3e0730b7a644",
+      "ready": true,
+      "restarts": 0
+    },
+    {
+      "container": "release-manager",
+      "digest": "sha256:371f7515dfec53eac7e2e68bceefa7b845652a9d01057cb50ba1f1c5d24e5278",
+      "ready": true,
+      "restarts": 0
+    },
+    {
+      "container": "model-gateway",
+      "digest": "sha256:b95eca784dd4207f7f26557a5cdd9f5120d5805e9d2d9cbd6eab05a1fd6cbc75",
+      "ready": true,
+      "restarts": 0
+    },
+    {
+      "container": "worker",
+      "digest": "sha256:b95eca784dd4207f7f26557a5cdd9f5120d5805e9d2d9cbd6eab05a1fd6cbc75",
+      "ready": true,
+      "restarts": 1
+    }
+  ],
+  "networkIsolationConformance": "passed positive/negative ingress/egress controls",
+  "backupRestore": "passed in isolated PostgreSQL before upgrade",
+  "runtimeInput": "eligible GitHub issue, no manual stage advancement",
+  "issue": 1577,
+  "realModelInvoked": true,
+  "modelResponsesWithConfirmedHandoff": 2,
+  "modelResponsesWithoutConfirmedHandoff": 1,
+  "terminalState": "stopped-uncertain",
+  "workItemState": "failed",
+  "candidateCaptured": false,
+  "acknowledgedResourcesRemoved": true,
+  "attemptReplayed": false,
+  "autonomousE2E": false,
+  "remaining": [
+    "identify terminal handoff failure with bounded diagnostics",
+    "independent verifier activation",
+    "authenticated audit and publisher",
+    "current merge gates",
+    "Konflux policy and test-production promotion"
+  ],
+  "diagnosticChangeValidation": {
+    "goBuild": "passed",
+    "goVet": "passed",
+    "testsPassed": 849,
+    "database": "fresh disposable PostgreSQL",
+    "realKindFailureFixture": "provider-failure classified as model-provider, no candidate, stopped claim, resources removed",
+    "arbitraryExceptionCanaries": "excluded by allowlist",
+    "liveFailureRootCause": "not yet established"
+  }
+}
