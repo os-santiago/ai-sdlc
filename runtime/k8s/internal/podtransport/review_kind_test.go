@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
@@ -79,6 +81,8 @@ func TestRealReadonlyReviewerFixture(t *testing.T) {
 		t.Fatal("fixed review start")
 	}
 	seen := uint64(0)
+	evidence := []store.ReviewModelEvidence{}
+	guardRejected := false
 	for {
 		code, done, e := session.WorkerExit(ctx)
 		if e != nil {
@@ -136,6 +140,16 @@ func TestRealReadonlyReviewerFixture(t *testing.T) {
 			message["content"] = "Inspected the source.\nVERDICT: approve"
 		}
 		payload, _ := json.Marshal(map[string]any{"id": "fixture", "object": "chat.completion", "model": "fixture-model", "choices": []any{map[string]any{"index": 0, "finish_reason": reason, "message": message}}})
+		observation, guardErr := modelbroker.ObserveReviewResponse(payload, "fixture-model")
+		if guardErr != nil {
+			guardRejected = true
+		} else {
+			raw, _ := json.Marshal(observation)
+			evidence = append(evidence, store.ReviewModelEvidence{Sequence: int(request.Sequence), RequestDigest: request.RequestSHA256, ResponseDigest: modelmailbox.Digest(payload), InputBytes: len(request.Payload), OutputBytes: len(payload), Observation: raw})
+		}
+		// This isolated transport fixture deliberately delivers negative replies
+		// to test SCC as well. The production review broker rejects them BEFORE
+		// delivery; its PostgreSQL/HTTP failure tests cover that boundary.
 		request.Kind, request.Status, request.Payload = "response", 200, payload
 		if session.Publish(ctx, request) != nil {
 			t.Fatal("synthetic response delivery")
@@ -163,10 +177,16 @@ func TestRealReadonlyReviewerFixture(t *testing.T) {
 	if accepted && (err != nil || review.Result().Verdict != in.Scenario || review.Result().ReadCalls != 1) {
 		t.Fatal("explicit review rejected", err)
 	}
+	if accepted && (guardRejected || modelbroker.MatchReviewSummary(review.Result(), evidence) != nil) {
+		t.Fatal("actual SCC summary did not match independent provider observations")
+	}
+	if !accepted && !guardRejected {
+		t.Fatal("guard accepted unsafe review response")
+	}
 	if !accepted && err == nil {
 		t.Fatal("unsafe review accepted")
 	}
-	report, _ := json.Marshal(map[string]any{"scope": "isolated-readonly-reviewer-component", "scenario": in.Scenario, "realSCC": true, "realKubernetes": true, "syntheticModel": true, "syntheticIssue": true, "sourceUnchanged": true, "modelCalls": seen, "strictReviewAccepted": accepted, "publicationAuthorized": false, "autonomousE2E": false, "podUID": podUID})
+	report, _ := json.Marshal(map[string]any{"scope": "isolated-readonly-reviewer-component", "scenario": in.Scenario, "realSCC": true, "realKubernetes": true, "syntheticModel": true, "syntheticIssue": true, "sourceUnchanged": true, "modelCalls": seen, "strictReviewAccepted": accepted, "providerObservationsMatched": accepted, "unsafeResponseRejectedByGuard": guardRejected, "publicationAuthorized": false, "autonomousE2E": false, "podUID": podUID})
 	if os.WriteFile(in.ReportFile, report, 0600) != nil {
 		t.Fatal("fixture report")
 	}

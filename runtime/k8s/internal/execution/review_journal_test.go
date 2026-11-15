@@ -11,7 +11,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
 
-func reviewJournalFixture(t *testing.T) (*lifecycleFixture, *store.DB, store.ReviewRun) {
+func reviewJournalFixture(t *testing.T, profileOverride ...string) (*lifecycleFixture, *store.DB, store.ReviewRun) {
 	t.Helper()
 	f, db, v := verificationClaimFixture(t)
 	ctx := context.Background()
@@ -20,6 +20,9 @@ func reviewJournalFixture(t *testing.T) (*lifecycleFixture, *store.DB, store.Rev
 	}
 	proof := []byte(`{"behaviorVerified":true,"publicationAuthorized":false}`)
 	profile, config, assignment := strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64)
+	if len(profileOverride) == 1 {
+		profile = profileOverride[0]
+	}
 	if _, err := db.QueueReview(ctx, v.ID, authority.Digest(proof), profile, config, assignment); err == nil {
 		t.Fatal("unverified candidate queued")
 	}

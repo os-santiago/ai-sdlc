@@ -1,0 +1,93 @@
+{
+  "scope": "isolated-independent-review-model-delivery",
+  "date": "2026-11-15",
+  "autonomousE2E": false,
+  "liveWorkflowModified": false,
+  "installed": false,
+  "validation": {
+    "status": "passed",
+    "passedTests": 993,
+    "passedPackages": 33,
+    "realPostgreSQL": true,
+    "realHTTP": true,
+    "lostCommitReplies": [
+      "reservation",
+      "completion",
+      "acknowledgement"
+    ]
+  },
+  "kubernetes": [
+    {
+      "autonomousE2E": false,
+      "modelCalls": 2,
+      "podUID": "dee64503-aa61-4b98-8c3d-0f8744e531eb",
+      "providerObservationsMatched": true,
+      "publicationAuthorized": false,
+      "realKubernetes": true,
+      "realSCC": true,
+      "scenario": "approve",
+      "scope": "isolated-readonly-reviewer-component",
+      "sourceUnchanged": true,
+      "strictReviewAccepted": true,
+      "syntheticIssue": true,
+      "syntheticModel": true,
+      "unsafeResponseRejectedByGuard": false,
+      "ownedNamespaceRemoved": true,
+      "resourcesConfirmedRemoved": true
+    },
+    {
+      "autonomousE2E": false,
+      "modelCalls": 2,
+      "podUID": "d9f18698-e37d-4786-8d7e-dbbb60f38807",
+      "providerObservationsMatched": true,
+      "publicationAuthorized": false,
+      "realKubernetes": true,
+      "realSCC": true,
+      "scenario": "request_changes",
+      "scope": "isolated-readonly-reviewer-component",
+      "sourceUnchanged": true,
+      "strictReviewAccepted": true,
+      "syntheticIssue": true,
+      "syntheticModel": true,
+      "unsafeResponseRejectedByGuard": false,
+      "ownedNamespaceRemoved": true,
+      "resourcesConfirmedRemoved": true
+    },
+    {
+      "autonomousE2E": false,
+      "modelCalls": 2,
+      "podUID": "8df8e18d-606d-4ec6-a0c1-cda729bf79a2",
+      "providerObservationsMatched": false,
+      "publicationAuthorized": false,
+      "realKubernetes": true,
+      "realSCC": true,
+      "scenario": "implicit",
+      "scope": "isolated-readonly-reviewer-component",
+      "sourceUnchanged": true,
+      "strictReviewAccepted": false,
+      "syntheticIssue": true,
+      "syntheticModel": true,
+      "unsafeResponseRejectedByGuard": true,
+      "ownedNamespaceRemoved": true,
+      "resourcesConfirmedRemoved": true
+    },
+    {
+      "autonomousE2E": false,
+      "modelCalls": 2,
+      "podUID": "4c3fe52d-44b2-4111-9914-70f50f16a00b",
+      "providerObservationsMatched": false,
+      "publicationAuthorized": false,
+      "realKubernetes": true,
+      "realSCC": true,
+      "scenario": "mutation",
+      "scope": "isolated-readonly-reviewer-component",
+      "sourceUnchanged": true,
+      "strictReviewAccepted": false,
+      "syntheticIssue": true,
+      "syntheticModel": true,
+      "unsafeResponseRejectedByGuard": true,
+      "ownedNamespaceRemoved": true,
+      "resourcesConfirmedRemoved": true
+    }
+  ]
+}
