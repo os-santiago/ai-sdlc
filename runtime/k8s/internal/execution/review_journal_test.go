@@ -384,3 +384,53 @@ func TestReviewJournalNotGrantedByInstalledProfiles(t *testing.T) {
 		}
 	}
 }
+
+func TestReviewClaimCannotReviveAfterFailedDurableStop(t *testing.T) {
+	f, db, r := reviewJournalFixture(t)
+	ctx := context.Background()
+	c := claimReview(t, db, r)
+	pod := startReviewFixture(t, db, c)
+	request := []byte(`{"model":"fixture","messages":[]}`)
+	call, e := db.BeginReviewModelCall(ctx, c, pod, 1, request)
+	if e != nil {
+		t.Fatal(e)
+	}
+	response := []byte(`{"choices":[]}`)
+	observation := []byte(`{"verdict":""}`)
+	if db.CompleteReviewModelCall(ctx, call, response, observation) != nil || db.AcknowledgeReviewModelCall(ctx, call, authority.Digest(response)) != nil {
+		t.Fatal("fixture handoff")
+	}
+	// Force a real failed UPDATE; the committed model response remains in the DB.
+	if _, e = f.Admin.Pool.Exec(`REVOKE UPDATE ON review_runs FROM aisdlc_verifier`); e != nil {
+		t.Fatal(e)
+	}
+	ownerCopy := c
+	if db.StopReview(ctx, c, "uncertain") == nil {
+		t.Fatal("stop fault did not occur")
+	}
+	if _, e = f.Admin.Pool.Exec(`GRANT UPDATE ON review_runs TO aisdlc_verifier`); e != nil {
+		t.Fatal(e)
+	}
+	if f.Count(t, `SELECT count(*) FROM review_runs WHERE state='claimed'`) != 1 {
+		t.Fatal("fixture did not retain uncertain parent")
+	}
+	if db.CheckReviewClaim(ctx, c) == nil || db.CheckReviewClaim(ctx, ownerCopy) == nil {
+		t.Fatal("owner revived after failed stop")
+	}
+	if _, e = db.ReadReviewModelEvidence(ctx, c); e == nil {
+		t.Fatal("uncertain handoff became evidence")
+	}
+	if _, e = db.BeginReviewModelCall(ctx, c, pod, 2, request); e == nil {
+		t.Fatal("uncertain parent invoked next call")
+	}
+	copied := store.ReviewClaim{ID: c.ID, Token: c.Token, Until: c.Until}
+	if db.CheckReviewClaim(ctx, copied) == nil {
+		t.Fatal("serialized claim adopted")
+	}
+	if _, e = db.ClaimReview(ctx, r.ID, r.ConfigurationDigest); e == nil {
+		t.Fatal("restart adopted original claim")
+	}
+	if e = db.StopReview(ctx, c, "uncertain"); e != nil {
+		t.Fatal("revoked owner cannot finish durable stop", e)
+	}
+}

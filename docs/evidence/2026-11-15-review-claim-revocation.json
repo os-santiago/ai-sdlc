@@ -1,0 +1,12 @@
+{
+  "scope": "independent-review-revocation",
+  "realPostgreSQL": true,
+  "failedDurableStopTested": true,
+  "revokedDuringAuthorizationProviderCalls": 0,
+  "finalCompletionAndAckDeadlineTested": true,
+  "build": "passed",
+  "vet": "passed",
+  "passedTests": 1030,
+  "passedPackages": 33,
+  "autonomousE2E": false
+}
