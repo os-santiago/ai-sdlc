@@ -4,7 +4,7 @@ description: >
   AI-SDLC cloud-native control plane (admission-controller, orchestrator,
   worker, release-manager, relay) driven by the .ai-sdlc.yaml contract.
 type: application
-version: 0.4.0
+version: 0.4.1
 appVersion: "0.4.0"
 home: https://github.com/os-santiago/ai-sdlc
 sources:

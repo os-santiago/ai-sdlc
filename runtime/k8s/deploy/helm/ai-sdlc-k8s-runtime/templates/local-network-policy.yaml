@@ -1,0 +1,92 @@
+{{- if .Values.localNetworkPolicy.enabled }}
+{{- if not .Values.networkPolicy.enabled }}
+{{- fail "Local network enforcement requires networkPolicy.enabled" }}
+{{- end }}
+# Firewall-only kube-router runs beside kindnet and kube-proxy. This trusted
+# node infrastructure is deliberately separate from runtime workloads.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-network-policy
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-network-policy
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, pods, services, nodes]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-network-policy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-network-policy
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-network-policy
+    namespace: kube-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-network-policy
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels: {app.kubernetes.io/name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-network-policy}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-network-policy}
+    spec:
+      priorityClassName: system-node-critical
+      serviceAccountName: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-network-policy
+      hostNetwork: true
+      dnsPolicy: Default
+      nodeSelector: {kubernetes.io/os: linux}
+      tolerations:
+        - {operator: Exists, effect: NoSchedule}
+        - {operator: Exists, effect: NoExecute}
+      containers:
+        - name: network-policy
+          image: {{ .Values.localNetworkPolicy.image | quote }}
+          args: ["--run-router=false", "--run-firewall=true", "--run-service-proxy=false", "--enable-cni=false"]
+          securityContext: {privileged: true}
+          env:
+            - name: NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+          startupProbe:
+            httpGet: {path: /healthz, port: 20244}
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /healthz, port: 20244}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: 20244}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          volumeMounts:
+            - {name: lib-modules, mountPath: /lib/modules, readOnly: true}
+            - {name: xtables-lock, mountPath: /run/xtables.lock}
+      volumes:
+        - name: lib-modules
+          hostPath: {path: /lib/modules}
+        - name: xtables-lock
+          hostPath: {path: /run/xtables.lock, type: FileOrCreate}
+{{- end }}

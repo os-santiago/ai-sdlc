@@ -50,6 +50,10 @@ Only issues carrying `ai-sdlc:shadow`, labeled by the configured local account,
 can enter that profile. See [shadow intake](docs/installation.md#shadow-intake)
 for scope, verification and returning to maintenance.
 
+Local installation also verifies NetworkPolicy enforcement with temporary
+connectivity probes. The kind profile includes a pinned firewall controller;
+see the [installation boundaries](docs/installation.md#installation-readiness-versus-autonomous-delivery).
+
 ## GitHub Actions deprecation
 
 The GitHub Actions AI-SDLC runtime, reusable stages, bootstrap tooling, and its

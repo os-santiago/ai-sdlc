@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import urllib.request
 
 import github_client
+import network_probe
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL = ROOT / 'runtime/k8s/deploy/local'
@@ -105,7 +106,7 @@ def image_lock(path):
     if lock.get('image', {}).get('repository') != 'quay.io/os-santiago/ai-sdlc':
         raise ValueError('Unexpected image repository in lock')
     if set(lock.get('components', {})) != set(COMPONENTS):
-        raise ValueError('The image lock must contain exactly five runtime components')
+        raise ValueError('The image lock must contain exactly the declared runtime components')
     for name in COMPONENTS:
         if not isinstance(lock['components'][name], dict) or set(lock['components'][name]) != {'digest'}:
             raise ValueError('Component lock accepts only a digest: ' + name)
@@ -402,9 +403,14 @@ def main(argv=None):
     for name in COMPONENT_NAMES.values():
         run(kubectl + ['rollout', 'status', 'deployment/ai-sdlc-' + name, '-n', NAMESPACE,
                        '--timeout', args.timeout])
+    run(kubectl + ['rollout', 'status', 'daemonset/ai-sdlc-network-policy', '-n', 'kube-system',
+                   '--timeout', args.timeout])
+    lock = image_lock(args.images)
+    network = network_probe.verify(kubectl, lock['image']['repository'] + '@' + lock['components']['worker']['digest'])
     report = {'cluster': args.cluster, 'namespace': NAMESPACE, 'provider': provider,
               'mode': args.profile, 'installationReady': True, 'deliveryEnabled': False,
               'issueIntakeEnabled': args.profile == 'shadow',
+              'networkPolicyVerification': network,
               'images': image_lock(args.images)}
     (state / 'installation.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
@@ -414,7 +420,7 @@ def main(argv=None):
 if __name__ == '__main__':
     try:
         sys.exit(main())
-    except (ValueError, OSError, subprocess.CalledProcessError) as error:
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
         # Do not serialize process input (which can contain a Secret).
         print('Installation failed: ' + str(error), file=sys.stderr)
         sys.exit(1)

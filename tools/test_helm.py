@@ -92,5 +92,24 @@ class ChartTests(unittest.TestCase):
                 self.assertEqual(rule['ports'], [{'protocol': 'TCP', 'port': 443}])
                 self.assertIn('169.254.0.0/16', rule['to'][0]['ipBlock']['except'])
 
+    def test_local_firewall_is_pinned_and_has_read_only_cluster_access(self):
+        result = self.render()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        docs = [d for d in yaml.safe_load_all(result.stdout) if d]
+        daemon = next(d for d in docs if d['kind'] == 'DaemonSet')
+        self.assertEqual(daemon['metadata']['namespace'], 'kube-system')
+        pod = daemon['spec']['template']['spec']
+        self.assertNotIn('hostPID', pod)
+        container = pod['containers'][0]
+        self.assertRegex(container['image'], r'^docker.io/cloudnativelabs/kube-router:v[0-9.]+@sha256:[a-f0-9]{64}$')
+        self.assertEqual(set(container['args']), {'--run-router=false', '--run-firewall=true', '--run-service-proxy=false', '--enable-cni=false'})
+        role = next(d for d in docs if d['kind'] == 'ClusterRole')
+        for rule in role['rules']:
+            self.assertEqual(set(rule['verbs']), {'get', 'list', 'watch'})
+            self.assertNotIn('secrets', rule['resources'])
+        disabled = self.render('--set', 'localNetworkPolicy.enabled=false')
+        self.assertFalse(any(d and d['kind'] in ('DaemonSet', 'ClusterRole', 'ClusterRoleBinding') for d in yaml.safe_load_all(disabled.stdout)))
+        self.assertNotEqual(self.render('--set', 'networkPolicy.enabled=false').returncode, 0)
+
 
 if __name__ == '__main__': unittest.main()
