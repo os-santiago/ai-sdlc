@@ -32,7 +32,11 @@ func (db *DB) NextVerifiedForReview(ctx context.Context) (string, error) {
 		return "", identityObservationError(err)
 	}
 	var id string
-	err := db.Pool.QueryRowContext(ctx, `SELECT v.id FROM verification_requests v WHERE v.state='passed' AND v.cleanup_state='complete' AND v.expires_at>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM review_runs r WHERE r.verification_id=v.id) ORDER BY v.created_at,v.id LIMIT 1`).Scan(&id)
+	err := db.Pool.QueryRowContext(ctx, `SELECT v.id FROM verification_requests v JOIN execution_requests e ON e.id=v.candidate_id
+ JOIN intake_heads h ON h.repository=e.repository
+ AND h.issue_number=(convert_from(v.payload,'UTF8')::jsonb->>'issueNumber')::integer
+ AND h.generation=(convert_from(v.payload,'UTF8')::jsonb->>'generation')::bigint
+ WHERE v.state='passed' AND v.cleanup_state='complete' AND v.expires_at>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM review_runs r WHERE r.verification_id=v.id) ORDER BY v.created_at,v.id LIMIT 1`).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
