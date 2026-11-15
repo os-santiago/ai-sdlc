@@ -26,6 +26,17 @@ class RuntimeInputTests(unittest.TestCase):
 
 
 class RuntimeIdentityTests(unittest.TestCase):
+    def test_report_disk_failure_cannot_prevent_namespace_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            calls = []; report = {}
+            def call(args, value=None, **kwargs): calls.append((args, value)); return ''
+            def save(): raise OSError('disk full')
+            with self.assertRaisesRegex(OSError, 'cleanup completed'):
+                cleanup_runtime_namespace(call, 'fixture', 'original', Path(directory), report, save)
+            self.assertTrue(report['cleanupComplete'])
+            self.assertTrue(report['reportWriteFailure'])
+            self.assertEqual(next(value for args, value in calls if args[0] == 'delete')['preconditions'], {'uid': 'original'})
+
     def test_original_container_required_and_credentials_rejected(self):
         pod = {'metadata': {'uid': 'pod'}, 'spec': {'containers': [{'name': 'homedir', 'image': 'image'}],
                'automountServiceAccountToken': False, 'volumes': []},

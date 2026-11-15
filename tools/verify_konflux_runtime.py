@@ -52,7 +52,10 @@ def runtime_identity(pod, uid, image, container_id=None):
 
 
 def cleanup_runtime_namespace(call, namespace, uid, output, report, save):
-    report['cleanupComplete'] = False; save()
+    def save_during_cleanup():
+        try: save()
+        except OSError: report['reportWriteFailure'] = True
+    report['cleanupComplete'] = False; save_during_cleanup()
     try:
         try:
             logs = call(['logs', '-n', namespace, 'homedir', '--tail=150', '--limit-bytes=32768'], check=False, limit=10)
@@ -60,9 +63,11 @@ def cleanup_runtime_namespace(call, namespace, uid, output, report, save):
         except (ValueError, OSError, subprocess.SubprocessError):
             report['logCollectionFailed'] = True
         network_probe.cleanup_namespace(call, namespace, uid)
-        report['cleanupComplete'] = True; save()
+        report['cleanupComplete'] = True; save_during_cleanup()
     except BaseException as exc:
-        report['cleanupFailure'] = str(exc)[:1500]; save(); raise
+        report['cleanupFailure'] = str(exc)[:1500]; save_during_cleanup(); raise
+    if report.get('reportWriteFailure'):
+        raise OSError('Runtime cleanup completed but its report could not be written')
 
 
 def main():
@@ -75,12 +80,12 @@ def main():
         raise ValueError('Invalid owned cluster name')
     image = verified_image(json.loads(args.provenance_report.read_text()))
     args.output.mkdir(mode=0o700, parents=True, exist_ok=False)
-    state = Path.home()/'.local/state/ai-sdlc'/args.cluster
+    state, tools = guard.installation_paths(args.cluster)
     ownership = json.loads((state/'konflux-ownership.json').read_text())
     if ownership['scope'] != 'isolated-konflux' or ownership['cluster'] != args.cluster:
         raise ValueError('Unexpected cluster ownership')
     provider = ownership['provider']; node = args.cluster+'-control-plane'
-    kubectl = [str(Path.home()/'.cache/ai-sdlc/tools/kubectl-1.35.8'), '--kubeconfig', str(state/'kubeconfig')]
+    kubectl = [str(tools/'kubectl-1.35.8'), '--kubeconfig', str(state/'kubeconfig')]
     deadline = supply_chain_install.Deadline(600)
     namespace = 'ai-sdlc-image-smoke-'+secrets.token_hex(6)
     uid = None
