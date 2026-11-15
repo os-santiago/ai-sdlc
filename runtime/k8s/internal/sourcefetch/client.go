@@ -73,7 +73,7 @@ func (c *Client) Fetch(ctx context.Context, sha string) (workspacebundle.Bundle,
 	defer cancel()
 	manifest, err := c.manifest(ctx, sha)
 	if err != nil {
-		return workspacebundle.Bundle{}, ErrSource
+		return workspacebundle.Bundle{}, err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.api+"/repos/"+c.repository+"/tarball/"+sha, nil)
 	if err != nil {
@@ -89,7 +89,10 @@ func (c *Client) Fetch(ctx context.Context, sha string) (workspacebundle.Bundle,
 		return workspacebundle.Bundle{}, ErrSource
 	}
 	response.Body.Close()
-	if response.StatusCode != http.StatusFound || len(response.Header.Values("Location")) != 1 {
+	if response.StatusCode != http.StatusFound {
+		return workspacebundle.Bundle{}, httpSourceError(response)
+	}
+	if len(response.Header.Values("Location")) != 1 {
 		return workspacebundle.Bundle{}, ErrSource
 	}
 	location, err := c.archiveLocation(response.Header.Get("Location"), sha)
@@ -106,7 +109,10 @@ func (c *Client) Fetch(ctx context.Context, sha string) (workspacebundle.Bundle,
 		return workspacebundle.Bundle{}, ErrSource
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Encoding") != "" || response.ContentLength > MaxArchiveBytes {
+	if response.StatusCode != http.StatusOK {
+		return workspacebundle.Bundle{}, httpSourceError(response)
+	}
+	if response.Header.Get("Content-Encoding") != "" || response.ContentLength > MaxArchiveBytes {
 		return workspacebundle.Bundle{}, ErrSource
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, MaxArchiveBytes+1))
