@@ -52,7 +52,7 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 				podName, podUID = effect.Name, effect.UID
 			}
 		}
-		if (podUID != "" || configUID != "") && r.Client.CleanupAcknowledged(ctx, "ai-sdlc-reviewers", podName, configName, podUID, configUID) != nil {
+		if (podUID != "" || configUID != "") && r.Client.CleanupReviewAcknowledged(ctx, podName, configName, podUID, configUID) != nil {
 			removed = false
 		}
 		if r.DB.FinishReviewCleanup(ctx, cleanup, removed) != nil || !removed {
