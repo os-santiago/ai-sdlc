@@ -210,7 +210,7 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 		if in.Scenario == "revoke-intent" {
 			var unsent int
 			if db.Pool.QueryRow(`SELECT count(*) FROM verification_effects WHERE not_sent_at IS NOT NULL AND resource_uid IS NULL`).Scan(&unsent) != nil || unsent != 1 {
-				t.Fatal("unsent intention not sealed")
+				t.Fatal("unsent intention not sealed", DiagnosticStage(err), "state", state, "createCalls", creates.Load())
 			}
 		}
 		if err == nil || state != "stopped" {
