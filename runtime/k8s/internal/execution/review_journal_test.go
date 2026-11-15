@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -13,12 +14,20 @@ import (
 
 func reviewJournalFixture(t *testing.T, profileOverride ...string) (*lifecycleFixture, *store.DB, store.ReviewRun) {
 	t.Helper()
-	f, db, v := verificationClaimFixture(t)
+	return reviewJournalFixtureConfigured(t, profileOverride, nil)
+}
+func reviewJournalFixtureConfigured(t *testing.T, profileOverride []string, configure []func(*fixture)) (*lifecycleFixture, *store.DB, store.ReviewRun) {
+	t.Helper()
+	f, db, v := verificationClaimFixture(t, configure...)
 	ctx := context.Background()
 	if _, err := f.Admin.Pool.Exec(`GRANT SELECT ON execution_requests TO aisdlc_verifier; GRANT SELECT,INSERT,UPDATE ON review_runs,review_effects,review_model_calls TO aisdlc_verifier`); err != nil {
 		t.Fatal(err)
 	}
-	proof := []byte(`{"behaviorVerified":true,"publicationAuthorized":false}`)
+	resources := map[string]string{}
+	for _, kind := range []string{"config", "baseline", "candidate", "reference", "tests"} {
+		resources[kind] = store.NewID()
+	}
+	proof, _ := json.Marshal(map[string]any{"version": "ai-sdlc.behavior-proof/v1", "command": json.RawMessage(v.Payload), "resourceUIDs": resources, "behaviorVerified": true, "publicationAuthorized": false})
 	profile, config, assignment := strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64)
 	if len(profileOverride) == 1 {
 		profile = profileOverride[0]
@@ -35,7 +44,7 @@ func reviewJournalFixture(t *testing.T, profileOverride ...string) (*lifecycleFi
 		if err != nil {
 			t.Fatal(err)
 		}
-		if db.AcknowledgeVerificationEffect(ctx, e, store.NewID()) != nil {
+		if db.AcknowledgeVerificationEffect(ctx, e, resources[kind]) != nil {
 			t.Fatal("synthetic verification effect")
 		}
 	}

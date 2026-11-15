@@ -1,0 +1,25 @@
+{
+  "scope": "inactive-publication-to-merge-controller",
+  "realPostgreSQL": true,
+  "syntheticForge": true,
+  "originalPublicationExpiryObserved": true,
+  "historicalLeaseRenewed": false,
+  "build": "passed",
+  "vet": "passed",
+  "passedTests": 1195,
+  "passedPackages": 38,
+  "scenarios": [
+    "success",
+    "checks-pending",
+    "changed-checks",
+    "revoked",
+    "lost-write",
+    "wrong-tree",
+    "wrong-head",
+    "issue-revoked",
+    "wrong-profile",
+    "expired-publication"
+  ],
+  "nativeGitHubMergePerformed": false,
+  "autonomousE2E": false
+}

@@ -19,12 +19,15 @@ import (
 
 // This fixture uses a captured candidate and the real signed worker outbox;
 // explicit verifier grants remain confined to the isolated test database.
-func verificationClaimFixture(t *testing.T) (*lifecycleFixture, *store.DB, store.VerificationRequest) {
+func verificationClaimFixture(t *testing.T, configure ...func(*fixture)) (*lifecycleFixture, *store.DB, store.VerificationRequest) {
 	t.Helper()
 	f, l, _, raw := candidateFixture(t, func(f *fixture) {
 		f.Material.Policy.Repository = "os-santiago/homedir"
 		f.Config.Repository = f.Material.Policy.Repository
 		f.command.Repository = f.Material.Policy.Repository
+		for _, setup := range configure {
+			setup(f)
+		}
 		f.command.AuthorityRevision = f.Material.Policy.Revision()
 		snapshot := f.Snapshot(1, true)
 		snapshot.Issue.Body += "\n" + verification.RecipeMarker + "\n"
