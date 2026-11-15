@@ -3,6 +3,7 @@ import json
 import hashlib
 import re
 import tarfile
+import time
 from pathlib import PurePosixPath
 
 
@@ -64,6 +65,33 @@ def finalizer_patch(task,uid):
             {'op':'test','path':'/metadata/resourceVersion','value':task['metadata']['resourceVersion']},
             {'op':'test','path':'/metadata/finalizers','value':['results.tekton.dev/taskrun']},
             {'op':'remove','path':'/metadata/finalizers'}]
+
+
+def cleanup_archived_namespace(call, namespace, uid, archived_uids, run_uids,
+                               timeout=90, monotonic=time.monotonic, sleep=time.sleep):
+    """Let controllers finalize, retiring only archived Results-only Tasks."""
+    call(['delete','--raw','/api/v1/namespaces/'+namespace,'-f','-'],
+         {'apiVersion':'v1','kind':'DeleteOptions','preconditions':{'uid':uid}})
+    end=monotonic()+timeout
+    removed=[]
+    while monotonic()<end:
+        raw=call(['get','namespace',namespace,'--ignore-not-found','-o','json'])
+        if not raw.strip():return removed
+        current=json.loads(raw)
+        if current['metadata']['uid']!=uid or not current['metadata'].get('deletionTimestamp'):
+            raise ValueError('Cleanup namespace identity or deletion state changed')
+        tasks=json.loads(call(['get','taskruns','-n',namespace,'-o','json']))['items']
+        pods=json.loads(call(['get','pods','-n',namespace,'-o','json']))['items']
+        for task in tasks:
+            task_uid=task['metadata']['uid']
+            if (task_uid in archived_uids and task['metadata'].get('deletionTimestamp')
+                    and removable_results_finalizer(task,run_uids,pods)):
+                # CAS the same snapshot whose ownership and state were checked.
+                call(['patch','taskrun',task['metadata']['name'],'-n',namespace,
+                      '--type=json','-p',json.dumps(finalizer_patch(task,task_uid))])
+                removed.append(task_uid)
+        sleep(min(1,max(0,end-monotonic())))
+    raise ValueError('Owned fixture namespace cleanup timed out')
 
 
 def validate_oci_archive(path,expected_image):

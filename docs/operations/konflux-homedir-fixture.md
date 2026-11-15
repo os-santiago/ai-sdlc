@@ -115,8 +115,11 @@ waits for stopped writers before unmounting the dedicated tmpfs.
 The optional Results archive can retain a terminal fixture TaskRun. After its
 local TaskRun/Pod logs are successfully archived and no writer is running, the
 fixture may remove only `results.tekton.dev/taskrun`, using UID, resource-version
-and exact-finalizer compare-and-swap tests. Foreign/additional finalizers are
-preserved. This exception is limited to disposable validation resources and must
+and exact-finalizer compare-and-swap tests. Cleanup first requests namespace
+deletion, then reevaluates terminal ownership while Chains removes its own
+finalizer. Only a deleting TaskRun with the Results finalizer alone qualifies;
+Chains and foreign/additional finalizers are preserved. The loop is bounded and
+API errors never count as confirmed absence. This exception is limited to disposable validation resources and must
 not be copied into operational delivery controllers.
 
 An API failure, replaced identity or exhausted cleanup allowance may retain owned

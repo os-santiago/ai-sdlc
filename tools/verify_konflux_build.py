@@ -185,19 +185,11 @@ def main():
         try:
             cleanup=[];report["cleanup"]=cleanup;report["cleanupComplete"]=False
             if uid:
-                # Local logs/TaskRun snapshots are archived above. Results' optional
-                # remote archive must not retain an owned terminal fixture forever.
-                current=get('namespace',namespace,None)
-                if current['metadata']['uid']!=uid:raise ValueError('Cleanup namespace was replaced')
-                pods=get('pods')['items']
-                for task in get('taskruns')['items']:
-                    if task['metadata']['uid'] in report.get('archivedTaskUIDs',[]) and guard.removable_results_finalizer(task,[report.get('buildRunUID'),report.get('publishRunUID')],pods):
-                        name=task['metadata']['name'];task_uid=task['metadata']['uid']
-                        call(['delete','--raw','/apis/tekton.dev/v1/namespaces/'+namespace+'/taskruns/'+name,'-f','-'],{'apiVersion':'v1','kind':'DeleteOptions','preconditions':{'uid':task_uid}})
-                        current=get('taskrun',name)
-                        call(['patch','taskrun',name,'-n',namespace,'--type=json','-p',json.dumps(guard.finalizer_patch(current,task_uid))])
-                        report.setdefault('archivedResultsFinalizers',[]).append(task_uid)
-                network_probe.cleanup_namespace(lambda a,v=None:call(a,v).stdout,namespace,uid);cleanup.append('namespace')
+                report['archivedResultsFinalizers']=guard.cleanup_archived_namespace(
+                    lambda a,v=None:call(a,v).stdout,namespace,uid,
+                    report.get('archivedTaskUIDs',[]),
+                    [report.get('buildRunUID'),report.get('publishRunUID')])
+                cleanup.append('namespace')
             if pv_uid:
                 call(['delete','--raw','/api/v1/persistentvolumes/'+pv,'-f','-'],{'apiVersion':'v1','kind':'DeleteOptions','preconditions':{'uid':pv_uid}})
                 call(['wait','--for=delete','pv/'+pv,'--timeout=30s']);cleanup.append('pv')

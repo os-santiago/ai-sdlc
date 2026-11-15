@@ -1,5 +1,6 @@
 import copy
 import io
+import json
 from types import SimpleNamespace
 import unittest
 
@@ -19,6 +20,47 @@ def objects():
 
 
 class FixtureGuardTests(unittest.TestCase):
+    def test_cleanup_waits_for_chains_and_cas_only_archived_results(self):
+        _,task,pod=objects();task['metadata']['deletionTimestamp']='now'
+        tick=[0];patches=[];calls=[]
+        def call(args,value=None):
+            calls.append((args,value))
+            if args[0]=='delete':return '{}'
+            if args[:2]==['get','namespace']:
+                if tick[0]>=2:return ''
+                return json.dumps({'metadata':{'uid':'ns','deletionTimestamp':'now'}})
+            if args[:2]==['get','taskruns']:
+                snapshot=copy.deepcopy(task)
+                if tick[0]==0:snapshot['metadata']['finalizers'].append('chains.tekton.dev/taskrun')
+                return json.dumps({'items':[snapshot]})
+            if args[:2]==['get','pods']:return json.dumps({'items':[pod]})
+            if args[0]=='patch':patches.append(json.loads(args[-1]));return '{}'
+            self.fail(args)
+        def sleep(seconds):tick[0]+=seconds
+        self.assertEqual(guard.cleanup_archived_namespace(call,'fixture','ns',['task'],['run'],monotonic=lambda:tick[0],sleep=sleep),['task'])
+        self.assertEqual(calls[0][1]['preconditions'],{'uid':'ns'})
+        self.assertEqual(len(patches),1)
+        self.assertEqual(patches[0],guard.finalizer_patch(task,'task'))
+
+    def test_cleanup_never_treats_api_error_or_replacement_as_absence(self):
+        for case in ('api-error','replacement','not-deleting','active-writer','foreign-finalizer','unarchived'):
+            with self.subTest(case=case):
+                _,task,pod=objects();task['metadata']['deletionTimestamp']='now';tick=[0];patches=[]
+                if case=='active-writer':pod['status']['phase']='Running'
+                if case=='foreign-finalizer':task['metadata']['finalizers'].append('foreign')
+                def call(args,value=None):
+                    if args[0]=='delete':return '{}'
+                    if args[:2]==['get','namespace']:
+                        if case=='api-error':raise ValueError('API unavailable')
+                        return json.dumps({'metadata':{'uid':'other' if case=='replacement' else 'ns', 'deletionTimestamp':None if case=='not-deleting' else 'now'}})
+                    if args[:2]==['get','taskruns']:return json.dumps({'items':[task]})
+                    if args[:2]==['get','pods']:return json.dumps({'items':[pod]})
+                    patches.append(args);return '{}'
+                def sleep(seconds):tick[0]+=seconds
+                with self.assertRaises(ValueError):
+                    guard.cleanup_archived_namespace(call,'fixture','ns',[] if case=='unarchived' else ['task'],['run'],timeout=2,monotonic=lambda:tick[0],sleep=sleep)
+                self.assertEqual(patches,[])
+
     def test_node_replacement_between_inspect_and_exec_cannot_retarget_operation(self):
         calls=[]
         def run(args,**kwargs):
