@@ -1,0 +1,26 @@
+{
+  "scope": "inactive-publication-transport",
+  "installed": false,
+  "githubWrites": 0,
+  "autonomousE2E": false,
+  "validation": {
+    "status": "passed",
+    "tests": 917,
+    "packages": 32,
+    "realTLS": true,
+    "realPostgres": true
+  },
+  "bounds": [
+    "Homedir only",
+    "derived two-file recipe branch and tree",
+    "fixed commit identity and skip-release marker",
+    "current-authority fence before/after each write",
+    "one POST, no retries, redirects, update-ref, merge, release or deploy"
+  ],
+  "requires": [
+    "fresh durable intent before effect",
+    "quarantine for unknown outcomes",
+    "current signed issue/behavior/review proof",
+    "installed runtime wiring"
+  ]
+}
