@@ -31,13 +31,18 @@ URL and source revision. Commit the reviewed lock to
 ## Apply and verify the desired state
 
 Keep the installation's existing repository, environment and profile. For the
-Homedir pilot, the scope remains shadow intake in its dedicated kind cluster:
+Homedir pilot, first commit the reviewed lock at the path already named by its
+configuration. Then the scope remains shadow intake in its dedicated kind cluster:
 
 ```bash
-./install.sh plan --config examples/homedir.local-install.json --images /tmp/reviewed-ai-sdlc-images/images.lock.json
-./install.sh local --config examples/homedir.local-install.json --images /tmp/reviewed-ai-sdlc-images/images.lock.json
+./install.sh plan --config examples/homedir.local-install.json
+./install.sh local --config examples/homedir.local-install.json
 python3 tools/verify_shadow_intake.py --cluster ai-sdlc-homedir --provider podman --repository os-santiago/homedir --issue 1576 --expected needs-human --timeout 20
 ```
+
+Do not combine that configuration with a different `--images` override: the
+installer deliberately rejects conflicting declarations. To test a separate lock,
+review a separate configuration file that explicitly names it.
 
 Before an existing database upgrade, retain a private recovery copy and verify
 restoration against a disposable database. Do not commit database dumps or
