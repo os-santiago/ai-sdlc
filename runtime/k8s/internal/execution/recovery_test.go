@@ -5,6 +5,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"strings"
 	"testing"
+	"time"
 )
 
 func candidatePrivileges(t *testing.T, f *fixture) {
@@ -15,6 +16,56 @@ func candidatePrivileges(t *testing.T, f *fixture) {
 	}
 	if err := f.Admin.ProvisionRolesForMode(context.Background(), passwords, "candidate"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCleanupConfirmationRequiresExactOwnerAndAcknowledgedResources(t *testing.T) {
+	f, l, _, pod := modelLifecycleFixture(t)
+	candidatePrivileges(t, f.preparationFixture.fixture)
+	ctx := context.Background()
+	var configUID string
+	if err := f.Admin.Pool.QueryRow(`SELECT config_uid FROM execution_lifecycles WHERE request_id=$1`, l.durable.Claim.ID).Scan(&configUID); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"config", "pod", "owner", "namespace", "pending-create"} {
+		t.Run(kind, func(t *testing.T) {
+			binding := l.durable
+			config, podID := configUID, pod
+			switch kind {
+			case "config":
+				config = store.NewID()
+			case "pod":
+				podID = store.NewID()
+			case "owner":
+				binding.Claim.Token = store.NewID()
+			case "namespace":
+				binding.Binding.Namespace = "other"
+			case "pending-create":
+				var saved []byte
+				var completed time.Time
+				if err := f.Admin.Pool.QueryRow(`SELECT result,completed_at FROM execution_effects WHERE request_id=$1 AND kind='pod'`, binding.Claim.ID).Scan(&saved, &completed); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := f.Admin.Pool.Exec(`UPDATE execution_effects SET result=NULL,completed_at=NULL WHERE request_id=$1 AND kind='pod'`, binding.Claim.ID); err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					_, err := f.Admin.Pool.Exec(`UPDATE execution_effects SET result=$2,completed_at=$3 WHERE request_id=$1 AND kind='pod'`, binding.Claim.ID, saved, completed)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}()
+			}
+			if f.db.ConfirmExecutionCleanup(ctx, binding, config, podID) == nil {
+				t.Fatal("unproven cleanup accepted")
+			}
+		})
+	}
+	if err := f.db.ConfirmExecutionCleanup(ctx, l.durable, configUID, pod); err != nil {
+		t.Fatal("owner cleanup confirmation", err)
+	}
+	if f.Count(t, `SELECT count(*) FROM execution_lifecycles WHERE cleanup_state='complete'`) != 1 {
+		t.Fatal("cleanup not durable")
 	}
 }
 

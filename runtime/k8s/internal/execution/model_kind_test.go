@@ -73,7 +73,7 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 		t.Fatal("signed fixture claim")
 	}
 	_, err = f.Admin.Pool.Exec(`GRANT SELECT,INSERT ON execution_lifecycles,execution_effects,execution_models,execution_candidates,model_budgets,model_allocations,model_calls TO aisdlc_worker;
- GRANT UPDATE(phase,config_uid,pod_uid,updated_at) ON execution_lifecycles TO aisdlc_worker;
+ GRANT UPDATE(phase,config_uid,pod_uid,updated_at,cleanup_state) ON execution_lifecycles TO aisdlc_worker;
  GRANT UPDATE(result,completed_at) ON execution_effects TO aisdlc_worker;
  GRANT UPDATE(status,updated_at) ON work_items TO aisdlc_worker;
  GRANT UPDATE(reserved_calls,reserved_input_bytes,reserved_output_bytes,state,stop_reason) ON model_budgets TO aisdlc_worker;

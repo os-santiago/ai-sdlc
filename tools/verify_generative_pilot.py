@@ -25,48 +25,13 @@ SOURCE_SHA = '0622cdaeb59a11a27bd5f3d7e18183c401a5e412'
 UTILS = 'quarkus-app/src/main/resources/META-INF/resources/js/utils.js'
 EXISTING_TEST = 'tests/js/utils-format-date.test.js'
 NEW_TEST = 'tests/js/utils-locale-fallback.test.js'
-CASES = [
-    {"lang": lang, "browser": browser, "locale": locale, "raw": "2026-03-15T13:45:00Z", "opts": opts}
-    for lang, browser, locale, opts in [
-        ('bad_locale', 'es', 'es', None), ('en_US', 'en-US', 'en-US', None),
-        ('bad_locale', 'also_bad', 'en', None), ('', 'bad_locale', 'en', None),
-        ('es', 'en', 'es', None), ('en', 'es', 'en', None), ('', 'es', 'es', None),
-        ('bad_locale', 'es', 'es', 'datetime'), ('bad_locale', 'es', 'es', 'short'),
-        ('bad_locale', 'es', 'es', {'weekday': 'long'}),
-        ('en', 'es', 'en', {'month': 'bad-option'})]
-] + [{'lang':'en', 'browser':'es', 'locale':'en', 'raw':raw, 'opts':None}
-     for raw in [None, '', 'not-a-date', 0]]
+RECIPE = Path(__file__).resolve().parents[1] / 'runtime/k8s/internal/verification/recipes/homedir-date-locale'
+CASES = json.loads((RECIPE / 'cases.json').read_text())
 
 # The untrusted process only produces values. A separate trusted invocation
 # computes expected Intl values, and Python compares outside both containers.
-CANDIDATE_DRIVER = r''' 
-const fs = require('node:fs');
-const vm = require('node:vm');
-const cases = JSON.parse(fs.readFileSync('/check/cases.json', 'utf8'));
-const source = fs.readFileSync('/check/quarkus-app/src/main/resources/META-INF/resources/js/utils.js', 'utf8');
-const results = cases.map(item => {
-  const context = vm.createContext(Object.create(null), {codeGeneration:{strings:false, wasm:false}});
-  vm.runInContext('var window={}; var document={documentElement:{lang:'+JSON.stringify(item.lang)+'}}; var navigator={language:'+JSON.stringify(item.browser)+'};', context, {timeout:500});
-  vm.runInContext(source, context, {timeout:500});
-  return vm.runInContext('window.HomeDirUtils.formatDate('+JSON.stringify(item.raw)+','+JSON.stringify(item.opts)+')', context, {timeout:500});
-});
-process.stdout.write(JSON.stringify(results));
-'''
-REFERENCE_DRIVER = r'''
-const fs = require('node:fs');
-const cases = JSON.parse(fs.readFileSync('/check/cases.json', 'utf8'));
-const presets = {date:{year:'numeric',month:'short',day:'numeric'}, datetime:{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'}, short:{month:'short',day:'2-digit'}};
-const results = cases.map(item => {
-  if (!item.raw) return '';
-  try {
-    const date = new Date(item.raw);
-    if (isNaN(date.getTime())) return '';
-    const options = typeof item.opts === 'string' ? presets[item.opts] || presets.date : item.opts || presets.date;
-    return options.hour || options.minute ? date.toLocaleString(item.locale, options) : date.toLocaleDateString(item.locale, options);
-  } catch (_) { return ''; }
-});
-process.stdout.write(JSON.stringify(results));
-'''
+CANDIDATE_DRIVER = (RECIPE / 'candidate.cjs').read_text()
+REFERENCE_DRIVER = (RECIPE / 'reference.cjs').read_text()
 
 
 WRAPPER_FIXTURE = r'''

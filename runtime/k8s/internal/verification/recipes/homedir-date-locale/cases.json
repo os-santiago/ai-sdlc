@@ -1,0 +1,111 @@
+[
+  {
+    "lang": "bad_locale",
+    "browser": "es",
+    "locale": "es",
+    "raw": "2026-03-15T13:45:00Z",
+    "opts": null
+  },
+  {
+    "lang": "en_US",
+    "browser": "en-US",
+    "locale": "en-US",
+    "raw": "2026-03-15T13:45:00Z",
+    "opts": null
+  },
+  {
+    "lang": "bad_locale",
+    "browser": "also_bad",
+    "locale": "en",
+    "raw": "2026-03-15T13:45:00Z",
+    "opts": null
+  },
+  {
+    "lang": "",
+    "browser": "bad_locale",
+    "locale": "en",
+    "raw": "2026-03-15T13:45:00Z",
+    "opts": null
+  },
+  {
+    "lang": "es",
+    "browser": "en",
+    "locale": "es",
+    "raw": "2026-03-15T13:45:00Z",
+    "opts": null
+  },
+  {
+    "lang": "en",
+    "browser": "es",
+    "locale": "en",
+    "raw": "2026-03-15T13:45:00Z",
+    "opts": null
+  },
+  {
+    "lang": "",
+    "browser": "es",
+    "locale": "es",
+    "raw": "2026-03-15T13:45:00Z",
+    "opts": null
+  },
+  {
+    "lang": "bad_locale",
+    "browser": "es",
+    "locale": "es",
+    "raw": "2026-03-15T13:45:00Z",
+    "opts": "datetime"
+  },
+  {
+    "lang": "bad_locale",
+    "browser": "es",
+    "locale": "es",
+    "raw": "2026-03-15T13:45:00Z",
+    "opts": "short"
+  },
+  {
+    "lang": "bad_locale",
+    "browser": "es",
+    "locale": "es",
+    "raw": "2026-03-15T13:45:00Z",
+    "opts": {
+      "weekday": "long"
+    }
+  },
+  {
+    "lang": "en",
+    "browser": "es",
+    "locale": "en",
+    "raw": "2026-03-15T13:45:00Z",
+    "opts": {
+      "month": "bad-option"
+    }
+  },
+  {
+    "lang": "en",
+    "browser": "es",
+    "locale": "en",
+    "raw": null,
+    "opts": null
+  },
+  {
+    "lang": "en",
+    "browser": "es",
+    "locale": "en",
+    "raw": "",
+    "opts": null
+  },
+  {
+    "lang": "en",
+    "browser": "es",
+    "locale": "en",
+    "raw": "not-a-date",
+    "opts": null
+  },
+  {
+    "lang": "en",
+    "browser": "es",
+    "locale": "en",
+    "raw": 0,
+    "opts": null
+  }
+]

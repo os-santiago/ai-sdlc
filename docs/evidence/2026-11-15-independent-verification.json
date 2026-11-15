@@ -1,0 +1,39 @@
+{
+  "actualTransport": true,
+  "autonomousE2E": false,
+  "deltaSHA256": "e9168d5823b7a9d864e89fe07b09b76bfde32c690460db77c5ebd63853b58f2d",
+  "independentBehaviorCompared": true,
+  "recipeRevision": "81621cb27c84f43b9942b53707b37b17530aa45844a00d16c4990e75ec4ea35f",
+  "scope": "isolated-verification-transport-fixture",
+  "separatePods": 4,
+  "sourceSHA": "0622cdaeb59a11a27bd5f3d7e18183c401a5e412",
+  "syntheticCommand": true,
+  "ownedNamespaceRemoved": true,
+  "restrictedServiceAccount": true,
+  "observedAt": "2026-11-15",
+  "implementationScope": "independent verification boundary; no operational verifier",
+  "realModelInvoked": false,
+  "candidateOrigin": "prior isolated generative fixture, supplied as test input",
+  "networkPrerequisite": "installer-conformance-tested gVisor network-none runtime",
+  "defectFoundAndFixed": "Kubernetes log content negotiation rejected Accept text/plain with HTTP 406; bounded */* request passed",
+  "remaining": [
+    "signed durable worker handoff",
+    "current issue/policy proof",
+    "verifier claims and effect recovery",
+    "operational role provisioning and component installation",
+    "authenticated audit consumer",
+    "PR publication and current merge gates",
+    "Konflux policy and test-production promotion"
+  ],
+  "validation": {
+    "goBuild": "passed",
+    "goVet": "passed",
+    "goTestsPassed": 888,
+    "postgres": "fresh disposable database, verifier role lookup and cleanup fencing passed",
+    "oracleTestsPassed": 14,
+    "transport": "real kind with restricted service account",
+    "candidateRegression": "Runtime.PollOnce, synthetic issue/model, real SCC/Kubernetes/PostgreSQL, cleanup and no replay passed",
+    "actionlint": "passed",
+    "gitleaks": "passed"
+  }
+}

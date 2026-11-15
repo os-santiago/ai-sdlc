@@ -89,7 +89,9 @@ namespace and require an explicitly disposable database.
 
 The gateway also requires a separate real-model container validation. Neither
 fixture nor gateway success establishes autonomous issue-to-production delivery.
-Independent verification, authenticated audit consumption, PR publication,
+The [independent verification boundary](independent-verification.md) has an isolated
+recipe fixture but is not yet connected to live candidates. Independent
+verification, authenticated audit consumption, PR publication,
 current merge gates, Konflux release policy and test-production promotion remain
 separate outerloop work. See the [architecture](../innerloop-outerloop.md).
 

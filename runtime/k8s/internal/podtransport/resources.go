@@ -103,7 +103,7 @@ func exactMetadata(actual, expected meta.ObjectMeta, uid string) bool {
 }
 func (r *Resources) checkConfig(raw []byte, uid string) (string, error) {
 	var actual core.ConfigMap
-	if authority.DecodeStrict(raw, &actual) != nil || actual.APIVersion != "v1" || actual.Kind != "ConfigMap" || !exactMetadata(actual.ObjectMeta, r.config.ObjectMeta, uid) || actual.Immutable == nil || !*actual.Immutable || !reflect.DeepEqual(actual.Data, r.config.Data) || len(actual.BinaryData) != 0 {
+	if authority.DecodeStrict(raw, &actual) != nil || actual.APIVersion != "v1" || actual.Kind != "ConfigMap" || !exactMetadata(actual.ObjectMeta, r.config.ObjectMeta, uid) || actual.Immutable == nil || !*actual.Immutable || !reflect.DeepEqual(actual.Data, r.config.Data) || !reflect.DeepEqual(actual.BinaryData, r.config.BinaryData) {
 		return "", ErrTransport
 	}
 	return string(actual.UID), nil
