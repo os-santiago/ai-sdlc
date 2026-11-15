@@ -27,6 +27,14 @@ policy. Eligibility must account for both and pause when required evidence is
 absent. Existing SCC automation and in-progress PRs remain separate; do not
 apply their trigger labels or run competing controllers on one issue.
 
+**Policy update, 2026-11-15:** maintainer-authorized [Homedir #1580](https://github.com/os-santiago/homedir/pull/1580)
+adds an [authenticated independent audit alternative for low-risk changes](https://github.com/os-santiago/homedir/blob/d1dd262dd0fc80a75f09fda4db0776efd84953d7/config/ai-sdlc/review-policy.json).
+It preserves all higher-risk human requirements, current checks and resolved
+feedback. The protected SCC labeler is unchanged and its labels are not approval
+authority. AI-SDLC still needs the authenticated audit-policy consumer before
+this alternative becomes operational. This governance bootstrap passed Homedir's
+CI, including Playwright; its public production release was explicitly skipped.
+
 The current runtime supports signed issue admission and blocked shadow plans.
 Worker execution, independent verification, authoritative publishing/merge,
 release and production rollback are not an installed E2E path. A healthy
@@ -190,3 +198,37 @@ The [outerloop gate boundary](security/outerloop-gate-evidence.md) rejects legac
 false-success cases before operational integration: omitted/stale checks and a
 successful forge release cannot establish production verification. Authoritative
 evidence collection and authenticated promotion remain separate requirements.
+
+## Innerloop and outerloop integration evidence (2026-11-15 UTC)
+
+The [innerloop controller](security/innerloop-controller.md) and
+[outerloop gate hardening](security/outerloop-gate-evidence.md) are integrated
+through [#517](https://github.com/os-santiago/ai-sdlc/pull/517) and
+[#519](https://github.com/os-santiago/ai-sdlc/pull/519). The exact combined reviewed
+head passed Go build/vet and 822 tests. Five real isolated kind scenarios covered
+two- and three-call success, provider failure, cancellation and actual nonzero
+SCC exit with no candidate. These component scenarios used synthetic model
+responses and disposable authority; they did not deliver a live issue.
+
+The Homedir installation then applied source `575b0058c608beedc6d90d36d041987ed9eb660c`
+using the reviewed lock from [#521](https://github.com/os-santiago/ai-sdlc/pull/521)
+and [main publication 43728322984](https://github.com/os-santiago/ai-sdlc/actions/runs/43728322984).
+A private backup was successfully restored into disposable PostgreSQL first.
+Actual apply and reapply reached six ready services with the requested imageIDs,
+advanced migrations from seven to ten, and preserved credentials, authority,
+configuration, persistent storage and business-state counts. Network probes
+passed. Intake itself recorded fresh observations of all three pilot issues;
+issue #1577 retained its accepted admission and blocked plan. Independent QA
+confirmed these observations without changing live business state.
+
+The [sanitized evidence record](evidence/2026-11-15-inner-outer-validation.json)
+distinguishes component tests, publication metadata, installation and policy
+bootstrap. It grants no trusted-builder provenance or SLSA level.
+
+The installed profile remains `shadow`. An operational scheduler/inbox with
+scoped database/Kubernetes grants and a containerized model gateway is still
+required. Independent verification, authenticated audit consumption, PR/merge
+publication, enterprise Conforma policy and same-digest production-test rollout
+remain separate unfinished boundaries. Zero execution requests, candidates,
+attempts and release gates were observed after the upgrade. Do not describe
+this iteration as autonomous issue-to-production delivery.

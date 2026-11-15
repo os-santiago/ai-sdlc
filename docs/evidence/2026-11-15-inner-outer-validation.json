@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "observedDate": "2026-11-15",
+  "scope": "component validation, reviewed shadow installation and authorized governance bootstrap",
+  "innerloop": {
+    "reviewedHead": "44b5d8cf8aabb02555931262ba23af1170ec7ed5",
+    "mergeCommit": "575b0058c608beedc6d90d36d041987ed9eb660c",
+    "goTests": 822,
+    "build": "passed",
+    "vet": "passed",
+    "kindScenarios": [
+      "success",
+      "three-turns",
+      "provider-failure",
+      "cancel-provider",
+      "no-change"
+    ],
+    "modelResponses": "synthetic",
+    "liveIssueDelivered": false,
+    "installerCI": "https://github.com/os-santiago/ai-sdlc/actions/runs/43726831903"
+  },
+  "outerloop": {
+    "mergeCommit": "5c4e6163b72db123b753cb57f2e5ccbcd18b403e",
+    "authority": "pure evaluator; not installed promotion capability"
+  },
+  "installation": {
+    "sourceRevision": "575b0058c608beedc6d90d36d041987ed9eb660c",
+    "reviewedLockHead": "be448d9f37c4e8cdca502ead0e965745bd9adcc2",
+    "readyComponents": 6,
+    "migrationsBefore": 7,
+    "migrationsAfter": 10,
+    "credentialsPreserved": true,
+    "authorityPreserved": true,
+    "configurationPreserved": true,
+    "persistentStoragePreserved": true,
+    "businessStateCountsPreserved": true,
+    "reapplicationConverged": true,
+    "mode": "shadow",
+    "deliveryEnabled": false
+  },
+  "homedirPolicy": {
+    "mergeCommit": "d1dd262dd0fc80a75f09fda4db0776efd84953d7",
+    "pullRequest": "https://github.com/os-santiago/homedir/pull/1580",
+    "independentAudit": "approved",
+    "requiredCI": "passed",
+    "playwright": "passed",
+    "legacySCCModified": false,
+    "authenticatedConsumerOperational": false,
+    "publicProductionRelease": "skipped",
+    "releaseRun": "https://github.com/os-santiago/homedir/actions/runs/43729126473"
+  },
+  "issueObservations": [
+    {
+      "issue": 1576,
+      "generation": 1,
+      "ageSecondsAtVerification": 40.894561
+    },
+    {
+      "issue": 1577,
+      "generation": 2,
+      "ageSecondsAtVerification": 39.398044
+    },
+    {
+      "issue": 1578,
+      "generation": 1,
+      "ageSecondsAtVerification": 37.80925
+    }
+  ],
+  "autonomousE2EAchieved": false,
+  "slsaLevelClaimed": false,
+  "remaining": [
+    "operational execution scheduling and scoped grants",
+    "containerized model gateway and recovery",
+    "independent candidate verification",
+    "authenticated audit policy consumption and PR/merge publication",
+    "enterprise Conforma promotion policy",
+    "same-digest test-production rollout and user journeys/rollback"
+  ]
+}
