@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -90,8 +91,8 @@ func TestControllerStopsTransferredClaimOnResourceFailures(t *testing.T) {
 				t.Error("unexpected model activation")
 				return ModelPolicy{}, ErrAuthority
 			})
-			failure, ok := err.(ControllerError)
-			if !ok || record.RequestID != "" {
+			var failure ControllerError
+			if !errors.As(err, &failure) || record.RequestID != "" {
 				t.Fatal("failed controller returned candidate", err)
 			}
 			stage := "pod"
@@ -102,8 +103,8 @@ func TestControllerStopsTransferredClaimOnResourceFailures(t *testing.T) {
 				expectedPosts = 1
 				expectedDeletes = 0
 			}
-			if scenario == "cleanup-denied" {
-				stage = "cleanup"
+			if CleanupPending(err) != (scenario == "cleanup-denied") {
+				t.Fatal("cleanup status lost or incorrectly reported")
 			}
 			if failure.Stage != stage || posts.Load() != expectedPosts || deletes.Load() != expectedDeletes {
 				t.Fatal("unexpected retry or cleanup", failure, posts.Load(), deletes.Load())

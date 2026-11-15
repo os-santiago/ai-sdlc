@@ -1,0 +1,42 @@
+{
+  "sourceRevision": "05535054a397d29325c80034445b0830df6ad223",
+  "publicationRun": 43753794486,
+  "installerPR": 532,
+  "installerCI": 43749010235,
+  "installerCIAttempt": 2,
+  "independentAudit": "approved exact b8de39771df6610d0363692f972cf6c635539ea3 conditional on CI; fulfilled",
+  "lostCreateReplyLocalProof": {
+    "autonomousE2E": false,
+    "createCalls": 1,
+    "createSucceededButUIDReplyLost": true,
+    "deleteCalls": 0,
+    "nextClaimBlocked": true,
+    "noProofCommitted": true,
+    "realKubernetes": true,
+    "realPostgres": true,
+    "realSCC": true,
+    "scenario": "lost-config-reply",
+    "scope": "isolated-candidate-verifier-lost-reply-fixture",
+    "syntheticIssue": true,
+    "syntheticModel": true,
+    "unknownResourcePreserved": true,
+    "resourcesConfirmedRemoved": true,
+    "ownedNamespaceRemoved": true,
+    "verifierNamespaceRemoved": true,
+    "verifierResourcesConfirmedRemoved": false,
+    "separateServiceAccounts": true
+  },
+  "preUpgradeRestore": {
+    "status": "passed",
+    "migrations": 12,
+    "executionRequests": 2,
+    "candidates": 0,
+    "businessStateMutated": false
+  },
+  "autonomousE2E": false,
+  "limitations": [
+    "Publication identities are not signed provenance or deployment proof.",
+    "One prior installer CI attempt failed during a synthetic provider call before verifier execution. Same-head rerun and separate local lost-reply scenario passed; no production retry was added.",
+    "Installed runtime has not yet been upgraded by this pin change."
+  ]
+}

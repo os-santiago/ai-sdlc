@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
@@ -41,7 +42,7 @@ func main() {
 		stop := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
 			state, e := runtime.PollOnce(ctx)
 			if e != nil {
-				log.Print("candidate reconciliation stopped safely: " + execution.DiagnosticStage(e))
+				log.Print("candidate reconciliation stopped safely: " + execution.DiagnosticStage(e) + " cleanupPending=" + strconv.FormatBool(execution.CleanupPending(e)))
 			} else if state != "" {
 				log.Print("candidate reconciliation: " + state)
 			}
