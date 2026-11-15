@@ -65,6 +65,20 @@ def identities(bundle):
     return result
 
 
+def writer_exit(observed, pod_uid, container_id):
+    if observed['metadata']['uid'] != pod_uid:
+        raise ValueError('Workspace writer Pod was replaced')
+    worker = next(item for item in observed['status']['containerStatuses'] if item['name'] == 'probe')
+    if worker.get('restartCount', 0) != 0 or worker.get('containerID') != container_id:
+        raise ValueError('Workspace writer restarted or changed container identity')
+    terminated = worker.get('state', {}).get('terminated')
+    if terminated is None:
+        return False
+    if terminated.get('exitCode') != 0:
+        raise ValueError('Workspace writer did not terminate cleanly')
+    return True
+
+
 def verify(kubectl, mailbox_image, worker_image, bundle):
     namespace = 'ai-sdlc-workspacecheck-' + secrets.token_hex(6)
     namespace_uid = None
@@ -76,7 +90,8 @@ def verify(kubectl, mailbox_image, worker_image, bundle):
         data = wire(value) if isinstance(value, dict) else value
         result = subprocess.run([str(part) for part in kubectl] + args,
                                 input=data, capture_output=True, timeout=timeout)
-        if result.returncode != expected:
+        allowed = expected if isinstance(expected, tuple) else (expected,)
+        if result.returncode not in allowed:
             raise ValueError('Workspace fixture command failed: ' + ' '.join(args[:5])
                              + '; exit=' + str(result.returncode) + '; stdoutBytes=' + str(len(result.stdout)) + '; stderr=' + result.stderr[:300].decode(errors='replace'))
         return result.stdout
@@ -107,6 +122,10 @@ def verify(kubectl, mailbox_image, worker_image, bundle):
         observed = json.loads(command(['-n', namespace, 'get', 'pod', 'executor', '-o', 'json']))
         pod_uid = observed['metadata']['uid']
         images = {item['name']: item['imageID'] for item in observed['status']['containerStatuses']}
+        worker_container_id = next(item['containerID'] for item in observed['status']['containerStatuses']
+                                   if item['name'] == 'probe')
+        if not worker_container_id:
+            raise ValueError('Workspace writer container identity is missing')
         # Existing conformance checks establish the actual gVisor/credential boundary.
         local = offline_probe.checked_local(command(['-n', namespace, 'exec', 'executor', '-c', 'probe', '--',
                                                      'node', '-e', offline_probe.SCRIPT, 'local']))
@@ -176,15 +195,16 @@ walk('');console.log(JSON.stringify(out));"""))
             {'path': fixture_path + '/modified.txt', 'mode': 420, 'data': base64.b64encode(b'after\n').decode()},
             {'path': fixture_path + '/script.sh', 'mode': 493, 'data': base64.b64encode(seeds['script.sh'].encode()).decode()}])
         # Stop the only workspace writer and observe its container's actual exit.
-        node("require('fs').writeFileSync('/workspaces/fixture-stop','stop')")
+        # PID 1 can observe the marker and exit before the signaling exec has
+        # returned. That exec can then report SIGKILL (137). Neither status is
+        # proof of writer exit: require the original container's clean observed
+        # termination below before exporting any candidate bytes.
+        command(['-n', namespace, 'exec', 'executor', '-c', 'probe', '--', 'node', '-e',
+                 "require('fs').writeFileSync('/workspaces/fixture-stop','stop')"], expected=(0, 137))
         deadline = time.monotonic() + 15
         while True:
             observed = json.loads(command(['-n', namespace, 'get', 'pod', 'executor', '-o', 'json']))
-            worker = next(item for item in observed['status']['containerStatuses'] if item['name'] == 'probe')
-            terminated = worker.get('state', {}).get('terminated')
-            if terminated:
-                if terminated['exitCode'] != 0:
-                    raise ValueError('Workspace writer did not terminate cleanly')
+            if writer_exit(observed, pod_uid, worker_container_id):
                 break
             if time.monotonic() >= deadline:
                 raise ValueError('Workspace writer still running')
