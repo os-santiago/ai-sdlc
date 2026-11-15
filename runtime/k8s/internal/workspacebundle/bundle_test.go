@@ -322,3 +322,43 @@ func TestExportUsesGitOwnerExecutableBit(t *testing.T) {
 		}
 	}
 }
+
+func TestTreeDigestIndependentWireVectorAndOrdering(t *testing.T) {
+	b := fixture()
+	got, e := b.TreeDigest()
+	if e != nil {
+		t.Fatal(e)
+	}
+	// Generated independently with Python hashlib/struct and the documented wire format.
+	const want = "a44f8ef9bcb126b5186b2c99094fcda5c264e37b265aa0264f75e1054ba95cc7"
+	if got != want {
+		t.Fatalf("got %s want %s", got, want)
+	}
+	first := b.Files[0].Path
+	b.Files[0], b.Files[3] = b.Files[3], b.Files[0]
+	again, e := b.TreeDigest()
+	if e != nil || again != want {
+		t.Fatalf("ordering affected digest: %s %v", again, e)
+	}
+	if b.Files[3].Path != first {
+		t.Fatal("digest mutated caller ordering")
+	}
+}
+func TestTreeDigestBindsEveryIdentityField(t *testing.T) {
+	base := fixture()
+	want, _ := base.TreeDigest()
+	cases := []func(*Bundle){func(b *Bundle) { b.SourceSHA = strings.Repeat("b", 40) }, func(b *Bundle) { b.Files[0].Path = "renamed" }, func(b *Bundle) { b.Files[0].Mode = 0755 }, func(b *Bundle) { b.Files[0].Data = []byte("different") }, func(b *Bundle) { b.Files = b.Files[:3] }}
+	for _, mutate := range cases {
+		b := fixture()
+		mutate(&b)
+		got, e := b.TreeDigest()
+		if e != nil || got == want {
+			t.Fatalf("unbound tree field %v", e)
+		}
+	}
+	b := fixture()
+	b.Files[0].Path = "../unsafe"
+	if _, e := b.TreeDigest(); e == nil {
+		t.Fatal("hashed invalid tree")
+	}
+}

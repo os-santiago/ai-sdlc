@@ -340,6 +340,15 @@ func readManifest(path string) (manifest, error) {
 // <untrusted-input>, never instructions (spec/injection-defense.md). esc
 // neutralizes any "</untrusted" sequence an attacker-controlled issue body
 // could use to break out of the fence.
+// ReadRequiredADevBundle validates a required, operator-pinned delivery profile.
+// Callers must supply a trusted read-only mount, never a repository path.
+func ReadRequiredADevBundle(path, digest string) (string, error) {
+	if path == "" || digest == "" {
+		return "", errors.New("reviewed A-Dev bundle is required")
+	}
+	return readADevBundle(path, digest)
+}
+
 func readADevBundle(path, digest string) (string, error) {
 	if path == "" {
 		if digest != "" {

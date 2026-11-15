@@ -1,10 +1,10 @@
 name: installer
 on:
   pull_request:
-    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/offline*', 'tools/verify_model_mailbox.py', 'tools/verify_workspace_bundle.py', 'runtime/k8s/internal/workspacebundle/**', 'runtime/k8s/internal/modelmailbox/**', 'runtime/k8s/components/model-mailbox/**', 'runtime/k8s/go.mod', 'runtime/k8s/go.sum', 'tools/test_offline_probe.js', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
+    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/offline*', 'tools/verify_model_mailbox.py', 'tools/verify_workspace_bundle.py', 'tools/verify_executor.py', 'tools/fixture_images.py', 'runtime/k8s/internal/executor/**', 'runtime/k8s/internal/engine/**', 'runtime/k8s/components/worker/**', 'runtime/k8s/internal/workspacebundle/**', 'runtime/k8s/internal/modelmailbox/**', 'runtime/k8s/components/model-mailbox/**', 'runtime/k8s/go.mod', 'runtime/k8s/go.sum', 'tools/test_offline_probe.js', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
   push:
     branches: [main]
-    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/offline*', 'tools/verify_model_mailbox.py', 'tools/verify_workspace_bundle.py', 'runtime/k8s/internal/workspacebundle/**', 'runtime/k8s/internal/modelmailbox/**', 'runtime/k8s/components/model-mailbox/**', 'runtime/k8s/go.mod', 'runtime/k8s/go.sum', 'tools/test_offline_probe.js', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
+    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/offline*', 'tools/verify_model_mailbox.py', 'tools/verify_workspace_bundle.py', 'tools/verify_executor.py', 'tools/fixture_images.py', 'runtime/k8s/internal/executor/**', 'runtime/k8s/internal/engine/**', 'runtime/k8s/components/worker/**', 'runtime/k8s/internal/workspacebundle/**', 'runtime/k8s/internal/modelmailbox/**', 'runtime/k8s/components/model-mailbox/**', 'runtime/k8s/go.mod', 'runtime/k8s/go.sum', 'tools/test_offline_probe.js', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
 permissions:
   contents: read
 jobs:
@@ -74,4 +74,25 @@ jobs:
                           '--mailbox-image', 'localhost/ai-sdlc-model-mailbox:conformance',
                           '--source-repository', str(pathlib.Path(os.environ['RUNNER_TEMP'], 'homedir-source')),
                           '--source-sha', '0622cdaeb59a11a27bd5f3d7e18183c401a5e412'], check=True)
+          PYTHON
+      - name: Verify the fixed SCC executor and adversarial source configuration
+        run: |
+          docker build -f runtime/k8s/components/worker/Containerfile -t localhost/ai-sdlc-worker:conformance runtime/k8s
+          python3 - <<'PYTHON'
+          import json, os, pathlib, subprocess, sys
+          sys.path.insert(0, 'tools')
+          from fixture_images import register_digest
+          from verify_executor import VARIANTS, verify
+          from verify_workspace_bundle import source_bundle
+          tools = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'install-tools.json').read_text())
+          worker_tag = 'localhost/ai-sdlc-worker:conformance'
+          mailbox_tag = 'localhost/ai-sdlc-model-mailbox:conformance'
+          subprocess.run([tools['kind'], 'load', 'docker-image', worker_tag, '--name', 'ai-sdlc'], check=True)
+          worker = register_digest('docker', 'ai-sdlc-control-plane', worker_tag)
+          mailbox = register_digest('docker', 'ai-sdlc-control-plane', mailbox_tag)
+          source = source_bundle(pathlib.Path(os.environ['RUNNER_TEMP'], 'homedir-source'),
+                                 '0622cdaeb59a11a27bd5f3d7e18183c401a5e412')
+          kubectl = [tools['kubectl'], '--kubeconfig', str(pathlib.Path.home() / '.local/state/ai-sdlc/ai-sdlc/kubeconfig')]
+          for variant in VARIANTS:
+              print(json.dumps(verify(kubectl, 'docker', mailbox_tag, mailbox, worker, source, variant)), flush=True)
           PYTHON

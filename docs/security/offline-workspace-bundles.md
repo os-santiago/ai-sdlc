@@ -115,3 +115,6 @@ source and bundle identities, counts, limits tested and
 `autonomousExecutionEnabled: false`. CI repeats this with the pinned public
 Homedir source on kind/Docker. This is file-transfer evidence, not a generated
 improvement, application test, release or issue-to-production E2E run.
+
+The next boundary is the [fixed SCC executor launcher](offline-executor-launcher.md),
+which verifies source identity in the worker view before starting repository tools.

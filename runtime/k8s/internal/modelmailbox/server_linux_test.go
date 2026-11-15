@@ -3,6 +3,7 @@ package modelmailbox
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -176,5 +177,31 @@ func TestLinkedResponseWaitsOnlyUntilOriginalDeadline(t *testing.T) {
 				result(t, done, 504)
 			}
 		})
+	}
+}
+
+func TestRestrictedMailboxRejectsOverriddenModelAndTokenLimits(t *testing.T) {
+	store, dir, _ := setupServer(t, time.Second)
+	server, err := NewRestrictedServer(store, testIdentity, time.Second, RequestLimits{Model: "m", MaxTokens: 2048})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	for _, body := range []string{
+		`{"model":"m","messages":[{}],"max_tokens":1000000,"stream":false}`,
+		`{"model":"other","messages":[{}],"max_tokens":2048,"stream":false}`,
+		`{"model":"m","messages":[{}],"stream":false}`,
+		`{"model":"m","messages":[{}],"max_tokens":null,"stream":false}`,
+		`{"model":"m","messages":[{}],"max_tokens":1.5,"stream":false}`,
+		`{"model":"m","messages":[{}],"max_tokens":2048,"stream":true}`,
+	} {
+		result(t, send(httpServer, []byte(body)), 400)
+		if _, err := os.Stat(filepath.Join(dir, "request.json")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("rejected request was published")
+		}
+	}
+	if err := (RequestLimits{Model: "m", MaxTokens: 2048}).Validate([]byte(`{"model":"m","messages":[{}],"max_tokens":2048,"stream":false}`)); err != nil {
+		t.Fatal(err)
 	}
 }
