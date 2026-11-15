@@ -1,9 +1,10 @@
 # Independent candidate verification
 
-The `verification` library and Kubernetes transport define a bounded verification
-boundary. They are **not yet an operational verifier**: candidate installations
-still stop at durable, unvalidated candidate capture. No publisher, merge or
-deployment permission follows from these APIs or their fixture reports.
+The explicit `verification` profile runs a separate service that consumes signed
+worker candidates and records independent, bounded behavior evidence. Its
+activation requires matching reviewed published images. The `candidate` profile
+still stops at durable, unvalidated capture. Neither a passing recipe nor a
+fixture report authorizes PR publication, merge or deployment.
 
 ## Reviewed recipe
 
@@ -66,19 +67,19 @@ Kubernetes log proxy requests use `Accept: */*`: real kind rejected `text/plain`
 with HTTP 406 before proxying. Strict response size and recipe parsing remain in
 place. Tests reject overflow, redirects, forbidden responses and arbitrary roles.
 
-## Prerequisites for activation
+## Activation boundary and remaining outerloop
 
-The candidate reader is deliberately unavailable to provisioned verifier roles.
-Migration 0012 defines read policies for all six joined tables but grants no privileges. A reviewed
-activation must provide and test SELECT permissions for all joined tables, including model allocations and
-budgets, with the actual
-nonprivileged verifier identity. No installer profile currently enables this.
+Migrations 0012 and 0013 define candidate read policies and the verification
+ledger. They grant no operational privileges by themselves. The reviewed
+`verification` profile provisions the independent role's minimum reads and
+ledger writes; returning to `candidate`, `shadow` or maintenance revokes them.
+The actual nonprivileged identity is exercised in the composed fixture below.
 
-Further required work: signed durable handoff, current issue/policy proof,
-exclusive bounded claims and effect ledger, recovery after process loss,
-installation-owned offline verifier configuration, and authenticated audit
-consumption. PR publication, current forge merge gates, Konflux policy and
-same-digest test-production promotion remain separate outerloop stages.
+Signed handoff, current issue/policy proof, bounded claims, durable effects and
+UID-based recovery are implemented. Independent generative audit, PR publication,
+current forge merge gates, Konflux policy and same-digest production-test
+promotion remain separate outerloop stages. An installation or behavior proof
+does not establish completion of those stages.
 
 ## Signed handoff and bounded reconciliation
 
