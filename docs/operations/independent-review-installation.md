@@ -29,7 +29,10 @@ model attempt blocks further work; the installer does not adopt or replay it.
 
 Removing the option (or setting it false) removes review model mounts/RBAC and
 atomically revokes review table and column privileges during the migration Job.
-The journal remains as evidence. Do not disable during an active review: first
+The journal remains as evidence. The reviewer namespace, deny-all policy and
+resource quota carry Helm keep annotations so disabling cannot delete uncertain
+resources or remove their isolation. Re-enabling uses the same retained boundary.
+Do not disable during an active review: first
 observe that known resources are retired and no uncertain cleanup remains.
 Disabling does not rewrite claims or discard uncertain resources.
 
