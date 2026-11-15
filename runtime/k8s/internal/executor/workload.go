@@ -37,7 +37,7 @@ func Compile(namespace, workerImage, mailboxImage string, assignmentRaw, profile
 	if err != nil {
 		return Workload{}, err
 	}
-	p, err := ParseProfile(profileRaw, a.ProfileSHA256)
+	p, err := parseWorkloadProfile(profileRaw, a.ProfileSHA256)
 	if err != nil {
 		return Workload{}, err
 	}
@@ -78,6 +78,18 @@ func Compile(namespace, workerImage, mailboxImage string, assignmentRaw, profile
 			map[string]any{"name": "pod-identity", "downwardAPI": map[string]any{"items": []any{map[string]any{"path": "uid", "fieldRef": map[string]any{"fieldPath": "metadata.uid"}}}}},
 		}, "containers": []any{worker, mailbox},
 	}}
+	if p.Version == ReviewProfileVersion {
+		// The reviewer cannot mutate source even if its tool policy fails.
+		worker["volumeMounts"] = []any{
+			map[string]any{"name": "workspace", "mountPath": "/workspaces", "readOnly": true},
+			map[string]any{"name": "review-state", "mountPath": "/review-state"}, assignment, identity,
+		}
+		mailbox["volumeMounts"] = []any{workspace, bridge, assignment, identity,
+			map[string]any{"name": "review-state", "mountPath": "/review-state", "readOnly": true},
+		}
+		spec := pod["spec"].(map[string]any)
+		spec["volumes"] = append(spec["volumes"].([]any), map[string]any{"name": "review-state", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "16Mi"}})
+	}
 	// JSON round-trip also gives independent objects; callers cannot accidentally
 	// mutate shared nested maps through a sibling container/config-map object.
 	raw, err := json.Marshal(Workload{config, pod})
