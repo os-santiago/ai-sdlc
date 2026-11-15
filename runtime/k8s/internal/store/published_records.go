@@ -34,12 +34,16 @@ type PublishedRecord struct {
 func (db *DB) ReadPublishedRecord(ctx context.Context, id string) (PublishedRecord, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	return readPublishedRecord(ctx, db.Pool, id)
+}
+
+func readPublishedRecord(ctx context.Context, q Querier, id string) (PublishedRecord, error) {
 	var r PublishedRecord
 	var planDigest string
-	if !publicationIDPattern.MatchString(id) || AssertComponent(ctx, db.Pool, "release-manager") != nil {
+	if !publicationIDPattern.MatchString(id) || AssertComponent(ctx, q, "release-manager") != nil {
 		return r, ErrExecution
 	}
-	err := db.Pool.QueryRowContext(ctx, `SELECT f.publication_id,f.payload_digest,f.payload,f.receipt,f.proof_digest,f.proof,f.effects_digest,f.effects,f.published_at,f.authority_expires_at,r.plan_digest FROM published_records f JOIN publication_requests r ON r.id=f.publication_id WHERE f.publication_id=$1 AND r.state='published' AND r.payload_digest=f.payload_digest AND r.payload=f.payload AND r.receipt=f.receipt AND r.proof=f.proof AND f.authority_expires_at=r.expires_at AND f.published_at<=clock_timestamp() AND f.published_at>=r.commit_time`, id).Scan(&r.PublicationID, &r.PayloadDigest, &r.Payload, &r.Receipt, &r.ProofDigest, &r.Proof, &r.EffectsDigest, &r.Effects, &r.PublishedAt, &r.AuthorityExpiresAt, &planDigest)
+	err := q.QueryRowContext(ctx, `SELECT f.publication_id,f.payload_digest,f.payload,f.receipt,f.proof_digest,f.proof,f.effects_digest,f.effects,f.published_at,f.authority_expires_at,r.plan_digest FROM published_records f JOIN publication_requests r ON r.id=f.publication_id WHERE f.publication_id=$1 AND r.state='published' AND r.payload_digest=f.payload_digest AND r.payload=f.payload AND r.receipt=f.receipt AND r.proof=f.proof AND f.authority_expires_at=r.expires_at AND f.published_at<=clock_timestamp() AND f.published_at>=r.commit_time`, id).Scan(&r.PublicationID, &r.PayloadDigest, &r.Payload, &r.Receipt, &r.ProofDigest, &r.Proof, &r.EffectsDigest, &r.Effects, &r.PublishedAt, &r.AuthorityExpiresAt, &planDigest)
 	if err != nil {
 		return PublishedRecord{}, observationError(err)
 	}
@@ -60,4 +64,13 @@ func (db *DB) ReadPublishedRecord(ctx context.Context, id string) (PublishedReco
 		return PublishedRecord{}, ErrExecution
 	}
 	return r, nil
+}
+
+// Digest binds immutable evidence bytes and the database publication time. It
+// does not validate a caller-constructed struct or grant any authority.
+func (r PublishedRecord) Digest() string {
+	r.PublishedAt = r.PublishedAt.UTC()
+	r.AuthorityExpiresAt = r.AuthorityExpiresAt.UTC()
+	raw, _ := json.Marshal(r)
+	return authority.Digest(raw)
 }

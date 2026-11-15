@@ -83,6 +83,13 @@
     },
     {
       "caller": "release-manager",
+      "target": "release-manager",
+      "operation": "merge-publication",
+      "minimumLevel": "auto-merge-low",
+      "eventType": "PublicationMergeRequested"
+    },
+    {
+      "caller": "release-manager",
       "target": "orchestrator",
       "operation": "record-release",
       "minimumLevel": "auto-pr",
