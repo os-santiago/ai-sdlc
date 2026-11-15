@@ -153,6 +153,7 @@ jobs:
           CGO_ENABLED=0 go test -c ./internal/verificationflow -o "$RUNNER_TEMP/verifier.test"
       - name: Verify actual Kubernetes handoff, RBAC denial and Pod replacement
         env:
+          AI_SDLC_TEST_SOURCE_TOKEN: ${{ github.token }}
           AI_SDLC_TEST_DATABASE_URL: postgres://postgres:local-ci-only@127.0.0.1:5432/ai_sdlc_test?sslmode=disable
         run: |
           python3 - <<'PYTHON'
@@ -221,6 +222,7 @@ jobs:
           PYTHON
       - name: Verify signed independent validation and fail-closed recovery
         env:
+          AI_SDLC_TEST_SOURCE_TOKEN: ${{ github.token }}
           AI_SDLC_TEST_DATABASE_URL: postgres://postgres:local-ci-only@127.0.0.1:5432/ai_sdlc_test?sslmode=disable
         run: |
           python3 - <<'PYTHON'

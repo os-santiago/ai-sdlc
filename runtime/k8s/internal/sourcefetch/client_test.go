@@ -3,7 +3,7 @@ package sourcefetch
 import (
 	"context"
 	"encoding/json"
- "errors"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -83,6 +83,34 @@ func TestActualTLSArchiveBoundarySeparatesCredentials(t *testing.T) {
 	if apiCalls.Load() != 3 || archiveCalls.Load() != 1 {
 		t.Fatal("unexpected HTTP attempts")
 	}
+	// Context credentials authenticate only API reads and never mutate a reused
+	// anonymous client or reach the independently constructed archive request.
+	anonymous := *c
+	anonymous.token = ""
+	scoped, err := WithReadCredential(context.Background(), "fixture/product", strings.Repeat("x", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = anonymous.Fetch(scoped, testSHA); err != nil {
+		t.Fatal(err)
+	}
+	if anonymous.token != "" || apiCalls.Load() != 6 || archiveCalls.Load() != 2 {
+		t.Fatal("scoped credential isolation")
+	}
+	beforeScope := apiCalls.Load()
+	wrong, _ := WithReadCredential(context.Background(), "other/product", strings.Repeat("x", 32))
+	conflict, _ := WithReadCredential(context.Background(), "fixture/product", strings.Repeat("y", 32))
+	for _, ctx := range []context.Context{wrong, conflict} {
+		if _, err = c.Fetch(ctx, testSHA); err == nil {
+			t.Fatal("conflicting credential accepted")
+		}
+	}
+	canceled, cancel := context.WithCancel(scoped)
+	cancel()
+	if _, err = anonymous.Fetch(canceled, testSHA); err == nil || apiCalls.Load() != beforeScope {
+		t.Fatal("invalid context reached API")
+	}
+
 	for _, variant := range []int32{1, 2, 3, 4} {
 		mode.Store(variant)
 		before := archiveCalls.Load()
