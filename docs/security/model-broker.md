@@ -53,10 +53,10 @@ only. They neither invoke the provider nor republish the response.
 
 Publication failure stops the budget and preserves completed response evidence
 as ambiguous. Mailbox publication is not proof that SCC consumed the response.
-The current package has no Kubernetes publisher implementation; a caller-owned
-callback, successful socket write or synthetic test recorder is not operational
-evidence of that boundary. Provider bodies and credentials are absent from
-returned results and error strings.
+The hidden [Pod helper transport](pod-helper-transport.md) implements this
+capability with a helper receipt and external Pod/container checks. A caller-owned
+callback or successful socket write is not operational evidence of that boundary.
+Provider bodies and credentials are absent from returned results and error strings.
 
 ## Validation and remaining integration
 
@@ -70,6 +70,6 @@ zero provider calls and denial of a sibling allocation's claim.
 
 These are component fixtures with synthetic provider responses. They do not
 demonstrate a Codex call or an issue-to-production cycle. Live integration still
-requires reviewed controller authority, least-privilege database roles, actual
-Pod-bound mailbox publication, provider provisioning, reconciliation and
+requires reviewed controller authority, least-privilege database roles,
+provider provisioning, reconciliation and
 candidate/release/deployment gates. Call/byte limits are not monetary budgets.

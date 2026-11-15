@@ -1,0 +1,98 @@
+# Pod-bound helper transport: hidden controller prerequisite
+
+Issue #473 connects the [model broker](model-broker.md) publication capability
+to the fixed [offline executor](offline-executor-launcher.md) mailbox. It is an
+internal library, with no public route, installed controller, operational RBAC
+or live workflow transition. Signed execution authority and durable ownership
+of an assignment remain prerequisites for its future caller.
+
+## Binding the workload and container instances
+
+`Bind` recompiles the trusted assignment/profile/A-Dev inputs and immutable
+worker/mailbox image references. It reads the actual Pod through verified TLS
+and checks its namespace, name, UID, labels, annotations and complete spec.
+Unknown JSON fields and duplicate keys are rejected before typed decoding.
+Only the concrete Kubernetes 1.35 API defaults observed in the kind fixture are
+added to the expected spec. The scheduled `nodeName` is the sole spec field
+omitted from equality; extra volumes, init/ephemeral containers, credentials,
+commands, privileges and admission mutations fail closed.
+
+The supported kind/containerd profile exposes the running image manifest digest
+in `status.imageID`, even when `status.image` reports an imported tag. Each
+running manifest digest must equal its compiler pin. This version requires
+**platform manifest pins**: a multi-platform index must be resolved and reviewed
+to a platform manifest before use. Other CRI representations or admission
+defaults require explicit conformance work; they are not silently accepted.
+
+The session captures both containers' `containerID`, `imageID` and reported
+image reference. Every operation checks them again, rejects nonzero restart
+counts, a deleting/replaced Pod and unexpected container state. The mailbox
+must remain running. After publication, the same worker instance may have
+terminated after consuming the final response; its exit status is separate
+candidate-validation evidence, never proof of a successful delivery here.
+
+These observations are not an atomic Kubernetes precondition. The helper also
+checks the read-only projected UID, which rejects execution against a different
+Pod with the same name. The API server, kubelet and authorized cluster
+administrators remain trusted. An actor allowed to mutate Pods or inject an
+ephemeral container is outside this boundary. Workload code and helper callers
+must receive no such authority, and executors receive no Kubernetes credentials.
+
+## Fixed operations and publication evidence
+
+The only operations are `/model-mailbox read` and `/model-mailbox respond`, in
+the `mailbox` container, with the session's fixed attempt and UID. Callers cannot
+supply a shell, binary, container, path or arbitrary command. The helper performs
+exclusive filesystem publication and then emits a strict receipt binding
+attempt, UID, sequence, request digest, response digest, status and byte count.
+
+The client requires a matching receipt, a successful explicit remote status,
+complete bounded output, an accepted WebSocket closure and a second external
+Pod observation. A successful socket write or clean EOF alone is insufficient.
+Cancellation or an uncertain connection never triggers another `respond`.
+Remote process termination is not guaranteed by closing a client connection;
+the helper also has its own five-second deadline. The broker's stop/recovery
+rules handle uncertainty. Publication still does not prove SCC consumed data.
+
+The pinned Kubernetes client supplies authenticated TLS/WebSocket negotiation.
+A small internal V5 channel reader handles these fixed helpers, because the
+generic client [accepts empty status on clean EOF and reads status without an
+application byte cap](https://github.com/kubernetes/client-go/blob/v0.35.8/tools/remotecommand/errorstream.go). The channel reader requires exactly one complete status,
+allows fragmentation, and rejects unknown channels or trailing/duplicate JSON.
+It has one writer, one reader, an absolute five-second operation deadline,
+1,024 data-message cap and cumulative limits of one mailbox envelope (read) or
+2 KiB (receipt), plus 8 KiB each for stderr and status. It joins its writer on
+exit. This bounds application channels, not every internal allocation made by
+the upstream TLS/HTTP handshake implementation.
+
+API configuration contains explicit HTTPS endpoint, CA bytes and either a
+bearer token or client certificate/key. It cannot load kubeconfig auth plugins,
+ambient proxies, insecure TLS overrides or caller transport callbacks. API
+observations have a five-second limit and a 1-MiB response cap. There is no
+SPDY/protocol fallback, redirect following or automatic retry. Raw API errors,
+credentials and provider bodies are not returned in diagnostics.
+
+## Permissions and actual validation
+
+No production role is added. A future reviewed controller needs `get` on the
+specific Pod and `get` on its `pods/exec` subresource for the V5 GET upgrade.
+**`pods/exec` is powerful execution permission despite the GET verb.** Kubernetes
+RBAC does not constrain command or container arguments; the fixed trusted
+library does. Give it a separate scoped identity, never the executor identity,
+and exclude patch/update and `pods/ephemeralcontainers` permissions.
+
+`tools/verify_pod_transport.py` uses disposable kind/gVisor Pods, pinned Homedir
+source, real SCC, PostgreSQL and synthetic HTTP model responses. It exercises
+the actual broker and two helper publications, verifies durable handoff rows
+and metadata-only duplicate delivery, observes worker termination, and compares
+the exported candidate externally. It also checks a real read-only principal's
+exec denial, replaces the Pod and proves the old UID rejected while the new UID
+otherwise binds. Its temporary credential files are private and removed.
+
+Socket tests cover missing receipt/status, clean and abnormal closure,
+fragmentation, duplicated/truncated status, channel overflow, cancellation,
+Pod mutation/restart, unknown fields and an initially wrong running image.
+The installer CI builds the test driver, runs the composed fixture on Docker/
+kind and retains its sanitized report. These are component conformance tests;
+they do not execute a live issue, call Codex, approve a candidate or deploy a
+release. Autonomous signed controller integration remains unfinished.
