@@ -55,6 +55,7 @@ var operations = map[string][2]string{
 	"record-attempt":    {"worker", "orchestrator"},
 	"verify-artifact":   {"worker", "verifier"},
 	"publish-candidate": {"verifier", "release-manager"},
+	"merge-publication": {"release-manager", "release-manager"},
 	"record-release":    {"release-manager", "orchestrator"},
 	"deploy-release":    {"release-manager", "deployer"},
 	"record-deployment": {"deployer", "release-manager"},
@@ -67,6 +68,7 @@ var floors = map[string]string{
 	"execute-work": "auto-pr", "record-attempt": "auto-pr",
 	"verify-artifact": "auto-pr", "publish-candidate": "auto-pr",
 	"record-release": "auto-pr", "deploy-release": "auto-deploy",
+	"merge-publication": "auto-merge-low",
 	"record-deployment": "auto-deploy",
 }
 var eventTypes = map[string]string{
@@ -74,6 +76,7 @@ var eventTypes = map[string]string{
 	"execute-work": "WorkItemReady", "record-attempt": "ImplementationAttemptDecided",
 	"verify-artifact": "CandidateProduced", "publish-candidate": "CandidateVerified",
 	"record-release": "ReleaseGateDecided", "deploy-release": "ReleaseReady",
+	"merge-publication": "PublicationMergeRequested",
 	"record-deployment": "DeploymentVerified",
 }
 

@@ -1,0 +1,14 @@
+{
+  "scope": "inactive-merge-journal",
+  "realPostgreSQL": true,
+  "build": "passed",
+  "vet": "passed",
+  "passedTests": 1165,
+  "passedPackages": 37,
+  "gateMaximumAgeSeconds": 30,
+  "signedPolicyRevalidated": true,
+  "lostCommitResponsesTested": true,
+  "postgresRowLockExpiryTested": true,
+  "nativeGitHubMergePerformed": false,
+  "autonomousE2E": false
+}
