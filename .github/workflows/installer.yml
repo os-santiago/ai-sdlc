@@ -66,7 +66,9 @@ jobs:
           ./install.sh sandbox --config "$RUNNER_TEMP/local-install.json"
       - name: Verify the bounded mailbox with SCC in the offline runtime
         run: |
-          docker build -f runtime/k8s/components/model-mailbox/Containerfile -t localhost/ai-sdlc-model-mailbox:conformance runtime/k8s
+          # Local single-platform fixtures require one digest across import and CRI.
+          # Published images retain their independent provenance configuration.
+          docker build --provenance=false -f runtime/k8s/components/model-mailbox/Containerfile -t localhost/ai-sdlc-model-mailbox:conformance runtime/k8s
           python3 - <<'PYTHON'
           import json, os, pathlib, subprocess, sys
           tools = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'install-tools.json').read_text())
@@ -91,7 +93,7 @@ jobs:
           PYTHON
       - name: Verify the fixed SCC executor and adversarial source configuration
         run: |
-          docker build -f runtime/k8s/components/worker/Containerfile -t localhost/ai-sdlc-worker:conformance runtime/k8s
+          docker build --provenance=false -f runtime/k8s/components/worker/Containerfile -t localhost/ai-sdlc-worker:conformance runtime/k8s
           python3 - <<'PYTHON'
           import json, os, pathlib, subprocess, sys
           sys.path.insert(0, 'tools')
@@ -149,7 +151,13 @@ jobs:
                   selected[selected.index('--test-binary') + 1] = str(pathlib.Path(os.environ['RUNNER_TEMP'], 'execution.test'))
               extra = [] if fixture in ('workload_resources', 'lifecycle_model') else ['--provider', 'docker', '--render-image', 'localhost/ai-sdlc-model-mailbox:conformance']
               result = subprocess.run([sys.executable, f'tools/verify_{fixture}.py'] + selected + extra,
-                                      check=True, capture_output=True, text=True, timeout=180)
+                                      capture_output=True, text=True, timeout=180)
+              if result.returncode:
+                  # Fixture diagnostics are sanitized at their source; retain a
+                  # bounded tail so integration failures are actually reviewable.
+                  print(result.stdout[-8000:], end='')
+                  print(result.stderr[-8000:], end='', file=sys.stderr)
+                  raise SystemExit(result.returncode)
               print(result.stdout, end='')
               pathlib.Path(os.environ['RUNNER_TEMP'], f'{fixture}-report.json').write_text(result.stdout)
           PYTHON
