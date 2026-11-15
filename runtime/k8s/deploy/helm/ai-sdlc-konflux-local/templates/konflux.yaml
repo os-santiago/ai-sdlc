@@ -1,0 +1,10 @@
+{{- if .Values.konflux.enabled }}
+apiVersion: konflux.konflux-ci.dev/v1alpha1
+kind: Konflux
+metadata:
+  name: konflux
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc-supply-chain-validation
+spec:
+{{ toYaml .Values.konflux.spec | indent 2 }}
+{{- end }}

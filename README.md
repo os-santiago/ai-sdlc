@@ -57,6 +57,20 @@ declaratively configured installation and real product validation. Start with
 grants shadow intake only. Its roadmap includes independent execution,
 Konflux provenance gates and a measured Fullsend comparison.
 
+For a separate local Konflux environment, use the same installer:
+
+```bash
+./install.sh supply-chain plan
+./install.sh supply-chain local
+./install.sh supply-chain status
+```
+
+This optional installation needs at least 8 GiB available memory and creates
+its own kind cluster. It installs pinned upstream dependencies and a Helm-managed
+Konflux operator, with no default users or UI host ports. See
+[local Konflux setup](docs/operations/konflux-local.md) for prerequisites,
+reapplication, evidence and the remaining build/provenance integration work.
+
 Local installation also verifies NetworkPolicy enforcement with temporary
 connectivity probes against the network plugin included in the pinned kind image;
 see the [installation boundaries](docs/installation.md#installation-readiness-versus-autonomous-delivery).

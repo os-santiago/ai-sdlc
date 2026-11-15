@@ -1,0 +1,5 @@
+{{- $operator := .Files.Get "files/operator.yaml" -}}
+{{- if not $operator -}}
+{{- fail "Use install.sh supply-chain local to stage the verified upstream operator asset" -}}
+{{- end -}}
+{{ $operator }}
