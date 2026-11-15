@@ -55,19 +55,22 @@ including fail-closed policy. Mount a pinned copy of
 work item or target repository.
 
 For supervised local development, `tools/codexcli_openai_wrapper.py` exposes a
-localhost-only OpenAI-compatible endpoint backed by `codex exec`. It allows
-SCC to use CodexCLI as a completion model. Codex runs read-only in a temporary
-directory and proposes structured tool calls; SCC executes those tools in the
-target workspace. Both JSON and buffered SSE responses are supported. Set
-`CODEX_WRAPPER_TOKEN` to a random value of at least 32 characters and use that
-same value as the SCC model API key. The server binds only to `127.0.0.1`.
-When SCC runs in a container, use host networking for this supervised local
-test; do not expose the endpoint externally. The completion has a 100-second
-timeout. Codex uses existing host authentication, but ignores user config.
-Because responses are buffered, set `SC_PROVIDER_CONNECT_TIMEOUT_MS=110000`
-and `SC_PROVIDER_ATTEMPT_TIMEOUT_MS=120000` in the SCC/worker process for this
-adapter. The pinned SCC build defaults to a 30-second header timeout, which
-would otherwise cancel a longer Codex completion prematurely.
+localhost-only OpenAI-compatible endpoint backed by pinned `codex-cli 0.169.0`
+and `gpt-6.1-sol`. Its reviewed completion policy advertises no executable tools;
+Codex proposes structured calls that SCC validates and executes in its workspace.
+Both JSON and buffered SSE responses are supported. Set `CODEX_WRAPPER_TOKEN`
+to a random value of at least 32 characters and use that value as the SCC model
+API key. The server binds only to `127.0.0.1`. When SCC runs in a container,
+use host networking only for this supervised local test.
+
+Each completion has a 24-second subprocess deadline, a 128 KiB accepted output
+limit and a 3-second absolute HTTP request-read deadline. The fixed backend and
+policy digests are verified before listening. Existing host authentication is
+used with a restricted child environment. User configuration is ignored, but
+system and managed host configuration remain trusted dependencies. Read the
+[completion adapter boundary](../../docs/security/codex-completion-adapter.md)
+for setup, conformance checks, limits and the host trust assumptions. This host
+adapter is not the containerized production model gateway.
 
 This integration supplies profile context and verifies its integrity; it does
 not implement every A-Dev acceptance or release policy. The isolated HTTP and
