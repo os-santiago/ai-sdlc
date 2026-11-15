@@ -40,7 +40,7 @@ must receive no such authority, and executors receive no Kubernetes credentials.
 
 ## Fixed operations and publication evidence
 
-The only operations are `/model-mailbox read` and `/model-mailbox respond`, in
+The model operations are `/model-mailbox read` and `/model-mailbox respond`, in
 the `mailbox` container, with the session's fixed attempt and UID. Callers cannot
 supply a shell, binary, container, path or arbitrary command. The helper performs
 exclusive filesystem publication and then emits a strict receipt binding
@@ -100,3 +100,47 @@ The installer CI builds the test driver, runs the composed fixture on Docker/
 kind and retains its sanitized report. These are component conformance tests;
 they do not execute a live issue, call Codex, approve a candidate or deploy a
 release. Autonomous signed controller integration remains unfinished.
+
+## Verified workspace lifecycle (issue #492)
+
+The same bound session now exposes three additional fixed operations in the
+mailbox container. `ImportSource` verifies the entire bounded source bundle,
+source commit and tree digest against the assignment before calling
+`/workspace-transfer import`. Its strict receipt must acknowledge exactly the
+expected file count and bundle digest. `Start` invokes `/executor-control start`
+with the assignment digest, source tree and Pod UID; the helper exclusively
+creates the start marker, while the launcher independently validates its input.
+A successful marker acknowledgement is not proof of successful SCC execution.
+
+`ExportCandidate` requires the original worker instance to have terminated both
+before and after `/workspace-transfer export`. The exit code must remain the
+same. It returns bounded, decoded candidate bytes through a copying accessor.
+Nonzero worker exits are retained for diagnostics, never accepted as successful
+software. A valid bundle and zero exit still require independent validation,
+review and release policy. A new session cannot bind an already terminated
+worker; durable recovery/reconciliation is not implemented by this library.
+
+Import/export have 30-second transport limits, 32-MiB bundle limits and
+40-second outer limits; import receipts are capped at 2 KiB. Export permits at
+most 8,192 channel messages; other operations retain 1,024. Start has a
+five-second transport limit and requires empty stdout. Every observation and
+transport deadline is capped by assignment expiry, and an observation that
+finishes after expiry cannot initiate a helper. Caller cancellation can shorten
+these bounds. Closing a socket does not atomically revoke remote effects: an
+already started import can continue under its own 60-second helper limit.
+Uncertain operations require durable controller reconciliation, never blind
+retry. Current signed authority and lifecycle ownership remain caller duties.
+
+`tools/verify_workspace_transport.py` exercises import, exclusive start, two
+synthetic mailbox replies, observed SCC termination and export through this Go
+session on an actual disposable kind/gVisor Pod with the 1,158-file pinned
+Homedir tree. It compares every retained file and the single fixture addition,
+rejects an export while the writer is running, and verifies actual exec RBAC
+and Pod replacement rejection. It does not use PostgreSQL or a real model;
+its report explicitly records zero durable model handoffs. Installer CI runs
+both transport fixtures and retains their reports. No operational controller,
+execution grants, issue transition, pull request or deployment is enabled.
+
+[Fixed workload resource operations](fixed-workload-resources.md) provide the
+next internal boundary for verified creation, same-UID readiness and
+UID-preconditioned cleanup. They still require a trusted lifecycle controller.

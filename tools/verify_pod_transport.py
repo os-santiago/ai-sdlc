@@ -13,7 +13,7 @@ from verify_workspace_bundle import source_bundle, wire
 
 
 class TransportFixture:
-    def __init__(self, kubectl, test_binary):
+    def __init__(self, kubectl, test_binary, database_required=True):
         self.kubectl = kubectl
         self.test_binary = str(Path(test_binary).resolve())
         # Capture only into memory. Never print kubeconfig, keys or tokens.
@@ -26,7 +26,7 @@ class TransportFixture:
         self.config = {'APIServer': cluster['server'], 'CA': cluster['certificate-authority-data'],
                        'ClientCertificate': user['client-certificate-data'], 'ClientKey': user['client-key-data']}
         self.database = os.environ.get('AI_SDLC_TEST_DATABASE_URL')
-        if not self.database:
+        if database_required and not self.database:
             raise ValueError('Disposable PostgreSQL fixture URL is required in AI_SDLC_TEST_DATABASE_URL')
         self.binding = None
         self.sequences = {1, 2}

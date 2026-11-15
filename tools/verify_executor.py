@@ -168,12 +168,16 @@ def verify(kubectl, provider, render_image, mailbox_image, worker_image, bundle,
                                                          'node', '-e', offline_probe.SCRIPT, 'local']))
             helper('/model-mailbox', ['read', '--attempt', attempt, '--pod-uid', pod_uid], expected=3)
             payload = wire(imported_bundle)
-            helper('/workspace-transfer', ['import', '--pod-uid', pod_uid, '--source-sha', bundle['sourceSHA'],
-                                          '--digest', hashlib.sha256(payload).hexdigest()], payload)
+            go_workspace = bool(getattr(transport, 'manages_workspace', False))
             helper('/executor-control', ['start', '00000000-0000-0000-0000-000000000000', assignment_digest,
                                          assignment['treeSHA256']], expected=1)
-            helper('/executor-control', ['start', pod_uid, assignment_digest, assignment['treeSHA256']])
-            helper('/executor-control', ['start', pod_uid, assignment_digest, assignment['treeSHA256']], expected=1)
+            if go_workspace:
+                transport.source_payload = payload
+            else:
+                helper('/workspace-transfer', ['import', '--pod-uid', pod_uid, '--source-sha', bundle['sourceSHA'],
+                                              '--digest', hashlib.sha256(payload).hexdigest()], payload)
+                helper('/executor-control', ['start', pod_uid, assignment_digest, assignment['treeSHA256']])
+                helper('/executor-control', ['start', pod_uid, assignment_digest, assignment['treeSHA256']], expected=1)
             seen = set()
             wrote = False
             execution_started = time.monotonic()
@@ -263,8 +267,11 @@ def verify(kubectl, provider, render_image, mailbox_image, worker_image, bundle,
                 # container termination is sufficient before waiting for its deadline.
                 time.sleep(11)
                 observe()
-            exported = json.loads(helper('/workspace-transfer', ['export', '--pod-uid', pod_uid,
-                                                                 '--source-sha', bundle['sourceSHA']]))
+            if go_workspace:
+                exported = transport.candidate
+            else:
+                exported = json.loads(helper('/workspace-transfer', ['export', '--pod-uid', pod_uid,
+                                                                     '--source-sha', bundle['sourceSHA']]))
             expected = dict(bundle, files=list(bundle['files']) + [
                 {'path': FIXTURE_PATH, 'mode': 420, 'data': base64.b64encode(FIXTURE_BODY).decode()}])
             if rejected_profile or tree_reject or timeout_case:
@@ -292,7 +299,8 @@ def verify(kubectl, provider, render_image, mailbox_image, worker_image, bundle,
                           wrongPodStartRejected=True, repeatedStartRejected=True)
             if transport is not None:
                 transport.verify_replacement(workload, pod_uid, command)
-                report.update(realPodTransport=True, durableModelHandoffs=len(seen),
+                report.update(realPodTransport=True, durableModelHandoffs=0 if go_workspace else len(seen),
+                              goWorkspaceLifecycle=go_workspace,
                               actualRBACDenial=True, getOnlyExecDenied=True,
                               scopedExecSucceeded=True, actualPodReplacementRejected=True)
             if benchmark is not None:
