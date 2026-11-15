@@ -17,6 +17,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
@@ -147,6 +148,16 @@ func TestRealCandidateRuntimeFixture(t *testing.T) {
 	runtime := Runtime{Component: component, ConfigPath: filepath.Join(root, "runtime"), IntakePath: filepath.Join(root, "intake"), TokenPath: filepath.Join(root, "token"), CAPath: filepath.Join(root, "ca"), GatewayTokenPath: filepath.Join(root, "model"), APIServer: in.Config.APIServer, ProviderEndpoint: server.URL + "/v1/chat/completions"}
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
+	// CI's read-only identity stays in the trusted test process. It is never
+	// serialized into fixture controls, Pod specs, model prompts or reports.
+	if token := os.Getenv("AI_SDLC_TEST_SOURCE_TOKEN"); token != "" {
+		scoped, err := sourcefetch.WithReadCredential(ctx, "os-santiago/homedir", token)
+		if err != nil {
+			t.Fatal("invalid fixture source credential")
+		}
+		ctx = scoped
+	}
+
 	state, err := runtime.PollOnce(ctx)
 	if err != nil || state != "candidate-captured" {
 		t.Fatal("runtime reconciliation", state, err)
