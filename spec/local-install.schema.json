@@ -56,6 +56,10 @@
     "independentReview": {
       "type": "boolean",
       "description": "Explicit read-only independent review; requires verification profile."
+    },
+    "publication": {
+      "type": "boolean",
+      "description": "Explicit signed verified PR publication; requires Homedir verification and independent review."
     }
   },
   "allOf": [
@@ -69,6 +73,34 @@
         "properties": {
           "profile": {
             "const": "verification"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "publication"
+        ],
+        "properties": {
+          "publication": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "independentReview"
+        ],
+        "properties": {
+          "independentReview": {
+            "const": true
+          },
+          "profile": {
+            "const": "verification"
+          },
+          "repository": {
+            "const": "os-santiago/homedir"
           }
         }
       }

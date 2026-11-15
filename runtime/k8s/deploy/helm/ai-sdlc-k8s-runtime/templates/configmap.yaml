@@ -9,6 +9,7 @@ data:
   AI_SDLC_ENVIRONMENT: {{ .Release.Namespace | default "default" | quote }}
   AI_SDLC_AUTHORITY_POLICY_PATH: /etc/ai-sdlc/authority/policy.json
   AI_SDLC_IDENTITY_PATH: /etc/ai-sdlc/identity/identity.json
+  AI_SDLC_PUBLICATION: {{ .Values.publication.enabled | quote }}
   AI_SDLC_INDEPENDENT_REVIEW: {{ .Values.review.enabled | quote }}
   AI_SDLC_RUNTIME_MODE: {{ .Values.runtime.mode | quote }}
   AI_SDLC_INTAKE_CONFIG_PATH: /etc/ai-sdlc/intake/config.json
@@ -19,6 +20,9 @@ data:
   {{- end }}
   {{- if eq .Values.runtime.mode "verification" }}
   {{- $_ := set $routes "verify-artifact" (printf "http://%s-verifier:8087/internal/verify-artifact" (include "ai-sdlc-k8s-runtime.fullname" .)) }}
+  {{- end }}
+  {{- if .Values.publication.enabled }}
+  {{- $_ := set $routes "publish-candidate" (printf "http://%s-release-manager:%v/internal/publish-candidate" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.releaseManager.port) }}
   {{- end }}
   AI_SDLC_RELAY_ROUTES: {{ $routes | toJson | quote }}
   {{- if has .Values.runtime.mode (list "candidate" "verification") }}

@@ -70,8 +70,9 @@ def inspect(token, repository):
             'actorLogin': account['login'], 'token': token}
 
 
-def configure(installer, kubectl, cluster_uid, repository, refresh=False):
-    name = 'ai-sdlc-github-client'
+def configure(installer, kubectl, cluster_uid, repository, refresh=False, name='ai-sdlc-github-client'):
+    if name not in ('ai-sdlc-github-client', 'ai-sdlc-publication-client'):
+        raise ValueError('Unsupported GitHub credential destination')
     current = installer.owned_secret(kubectl, name, cluster_uid)
     if current is not None:
         if set(current) != {'credential.json'}:

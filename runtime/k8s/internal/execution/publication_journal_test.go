@@ -415,3 +415,55 @@ func TestPublicationRequestLockWaitCannotOutliveAuthority(t *testing.T) {
 		})
 	}
 }
+
+func TestInstalledPublicationPrivilegesAreNarrowAndReversible(t *testing.T) {
+	f, db, r := publicationJournalFixture(t)
+	ctx := context.Background()
+	passwords := map[string]string{}
+	for role := range f.Material.Identities {
+		passwords[role] = strings.ReplaceAll(role, "-", "_") + strings.Repeat("q", 40)
+	}
+	if f.Admin.ProvisionRolesForCapabilities(ctx, passwords, "verification", false, true) == nil {
+		t.Fatal("publication without review")
+	}
+	if e := f.Admin.ProvisionRolesForCapabilities(ctx, passwords, "verification", true, true); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := db.ReadPublication(ctx, r.ID); e != nil {
+		t.Fatal("enabled publication unavailable", e)
+	}
+	if _, e := db.ReadPublicationCandidate(ctx, r.CandidateID); e != nil {
+		t.Fatal("candidate projection unavailable", e)
+	}
+	if _, e := db.ReadPublicationReview(ctx, r.VerificationID); e != nil {
+		t.Fatal("review projection unavailable", e)
+	}
+	for _, query := range []string{`UPDATE publication_requests SET payload='changed' WHERE false`, `UPDATE publication_effects SET request_digest='changed' WHERE false`, `UPDATE review_runs SET proof='changed' WHERE false`, `UPDATE execution_candidates SET delta='changed' WHERE false`, `UPDATE intake_observations SET observed_at=clock_timestamp() WHERE false`, `DELETE FROM publication_requests WHERE false`} {
+		if _, e := db.Pool.Exec(query); e == nil {
+			t.Fatal("publisher received forbidden mutation", query)
+		}
+	}
+	c := publicationClaim(t, db, r)
+	completePublicationEffects(t, db, c)
+	raw, _ := json.Marshal(publicationProof(t, db, c))
+	if db.FinishPublication(ctx, c, raw) != nil {
+		t.Fatal("column grants cannot complete publication")
+	}
+	if f.Admin.ProvisionRolesForOptions(ctx, passwords, "verification", true) != nil {
+		t.Fatal("disable publication")
+	}
+	for _, query := range []string{`SELECT * FROM publication_requests`, `UPDATE publication_requests SET state='failed' WHERE false`, `UPDATE publication_effects SET receipt='changed' WHERE false`, `INSERT INTO publication_handoffs(review_id,command_id,payload_digest) SELECT 'a','b','c' WHERE false`} {
+		if _, e := db.Pool.Exec(query); e == nil {
+			t.Fatal("publication privileges survived disable")
+		}
+	}
+	if f.Admin.ProvisionRolesForCapabilities(ctx, passwords, "verification", true, true) != nil {
+		t.Fatal("reenable publication")
+	}
+	if _, e := db.ReadPublication(ctx, r.ID); e != nil {
+		t.Fatal("journal lost during disable")
+	}
+	if _, e := db.ClaimPublication(ctx, r.ID, c.PlanDigest); e == nil {
+		t.Fatal("reenable replayed published request")
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/reviewflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
@@ -109,6 +110,20 @@ func main() {
 		// Recheck the complete installation config, including pinned images, before every effect.
 		sealed, _ := json.Marshal(config)
 		r := verificationflow.Runtime{DB: c.DB, Load: newLoader(workspacebundle.Digest(sealed)), Client: client, Image: config.Placement.WorkerImage}
+		if bootstrap.PublicationEnabled() {
+			sent, e := publicationflow.Handoff(ctx, c.DB, r.Load, func() (publicationflow.ReviewPolicy, error) {
+				current, e := loadReview(ctx)
+				return publicationflow.ReviewPolicy{Profile: authority.Digest(current.Profile), Configuration: current.Digest()}, e
+			}, c.Authority)
+			if e != nil {
+				log.Print("publication handoff stopped safely")
+				return
+			}
+			if sent {
+				log.Print("publication handoff dispatched")
+				return
+			}
+		}
 		if reviewEnabled {
 			review := reviewflow.Runtime{DB: c.DB, Policy: r.Load, Load: loadReview, Client: client}
 			state, e := review.PollOnce(ctx)

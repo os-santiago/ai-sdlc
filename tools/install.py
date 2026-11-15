@@ -168,7 +168,9 @@ def identity_material(provider, image, repository, environment):
     return json.loads(result.stdout)
 
 
-def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False, verification=False):
+def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False, verification=False, publication=False):
+    if publication and (not candidate or not verification or repository != 'os-santiago/homedir'):
+        raise ValueError('Invalid publication authority scope')
     image = lock['image']['repository'] + '@' + lock['migrator']['digest']
     material = identity_material(provider, image, repository, environment)
     reviewed_grants = material['policy']['grants']
@@ -227,7 +229,7 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
         # Candidate authority is restricted to intake, planning and execution.
         if candidate:
             material['policy']['grants'] = [g for g in reviewed_grants
-                if g['operation'] in ('admit-issue', 'plan-admission', 'execute-work') or (verification and g['operation'] == 'verify-artifact')]
+                if g['operation'] in ('admit-issue', 'plan-admission', 'execute-work') or (verification and g['operation'] == 'verify-artifact') or (publication and g['operation'] == 'publish-candidate')]
     current_passwords = owned_secret(kubectl, 'ai-sdlc-database-roles', cluster_uid)
     if current_passwords is not None:
         if set(current_passwords) != {'passwords.json'} or json.loads(current_passwords['passwords.json']) != passwords:
@@ -248,6 +250,22 @@ def configure_github_client(kubectl, cluster_uid, repository, refresh=False):
     secrets_api = SimpleNamespace(owned_secret=owned_secret, read_resource=read_resource,
                                   create_owned_secret=create_owned_secret, run=run)
     return github_client.configure(secrets_api, kubectl, cluster_uid, repository, refresh)
+
+
+def configure_publication_client(kubectl, cluster_uid, repository, auth, refresh=False):
+    name = 'ai-sdlc-publication-client'
+    if repository != 'os-santiago/homedir':
+        raise ValueError('Publication supports only the reviewed Homedir pilot')
+    if owned_secret(kubectl, name, cluster_uid) is None and auth != 'gh-cli':
+        raise ValueError('Publication needs an explicitly imported client via --github-auth gh-cli')
+    api = SimpleNamespace(owned_secret=owned_secret, read_resource=read_resource,
+                          create_owned_secret=create_owned_secret, run=run)
+    github_client.configure(api, kubectl, cluster_uid, repository, refresh, name=name)
+    resource = read_resource(kubectl, 'secret', name)
+    revision = (resource or {}).get('metadata', {}).get('resourceVersion', '')
+    if not re.fullmatch(r'[0-9]{1,64}', revision):
+        raise ValueError('Invalid publication credential resource version')
+    return revision
 
 
 def shadow_intake_config(kubectl, cluster_uid, repository):
@@ -283,6 +301,7 @@ def main(argv=None):
     parser.add_argument('--repository')
     parser.add_argument('--environment')
     parser.add_argument('--profile', choices=['maintenance', 'shadow', 'candidate', 'verification'])
+    parser.add_argument('--publication', action='store_true', default=None, help='Enable signed verified Homedir PR publication; requires independent review')
     parser.add_argument('--independent-review', action='store_true', default=None, help='Enable isolated read-only review after behavior verification')
     parser.add_argument('--github-auth', choices=['none', 'gh-cli'], default='none')
     parser.add_argument('--refresh-github-credential', action='store_true')
@@ -295,6 +314,10 @@ def main(argv=None):
     for key, value in defaults.items():
         if getattr(args, key) is None:
             setattr(args, key, value)
+    if args.publication and (args.repository != 'os-santiago/homedir' or not args.independent_review or (args.command in ('plan', 'local') and args.profile != 'verification')):
+        raise ValueError('Publication requires Homedir, verification and independent review')
+    if args.publication is not None and args.command not in ('plan', 'local', 'status', 'credentials', 'sandbox'):
+        raise ValueError('Publication option requires an installation scope')
     if args.independent_review and args.command in ('plan', 'local') and args.profile != 'verification':
         raise ValueError('Independent review requires the verification profile')
     if args.independent_review is not None and args.command not in ('plan', 'local', 'status', 'credentials', 'sandbox'):
@@ -336,15 +359,19 @@ def main(argv=None):
     execution_values = None
     if args.profile in ('candidate', 'verification'):
         import candidate_install
-        execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images), verification=args.profile == "verification", review=bool(args.independent_review))
+        execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images), verification=args.profile == "verification", review=bool(args.independent_review), publication=bool(args.publication))
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as preview:
-        json.dump(execution_values or {}, preview); preview.flush()
+        preview_values = dict(execution_values or {})
+        if args.publication:
+            preview_values['authority'] = {'policyJSON': json.dumps({'repository': args.repository})}
+        json.dump(preview_values, preview); preview.flush()
         run(helm_args + ['-f', preview.name], stdout=subprocess.DEVNULL)
     if args.command == 'plan':
         print(json.dumps({'cluster': args.cluster, 'namespace': NAMESPACE,
                           'chart': str(CHART.relative_to(ROOT)), 'mode': args.profile,
                           'images': image_lock(args.images), 'deliveryEnabled': False,
                           'independentReviewEnabled': bool(args.independent_review),
+                          'publicationEnabled': bool(args.publication),
                           'githubAuth': args.github_auth, 'repository': args.repository,
                           'environment': args.environment, 'configurationDigest': config_digest}, indent=2))
         return 0
@@ -435,7 +462,7 @@ def main(argv=None):
         run(kubectl + ['create', '-f', '-'], input=json.dumps(secret), stdout=subprocess.DEVNULL)
     public_values = configure_identities(kubectl, provider, image_lock(args.images),
                                          cluster_uid, args.repository, args.environment,
-                                         freeze=args.profile == 'maintenance', candidate=args.profile in ('candidate', 'verification'), verification=args.profile == 'verification')
+                                         freeze=args.profile == 'maintenance', candidate=args.profile in ('candidate', 'verification'), verification=args.profile == 'verification', publication=bool(args.publication))
     if intake_values is not None:
         public_values['intake'] = intake_values
     if args.profile in ('candidate', 'verification'):
@@ -445,6 +472,8 @@ def main(argv=None):
         execution_values["candidate"]["credentialRevision"] = candidate_install.model_credentials(kubectl, cluster_uid, args.codex_auth_file, args.refresh_model_credential)
         if args.independent_review:
             candidate_install.review_credentials(kubectl, cluster_uid)
+        if args.publication:
+            execution_values['publication']['credentialRevision'] = configure_publication_client(kubectl, cluster_uid, args.repository, args.github_auth, args.refresh_github_credential)
         offline_runtime.install(kubectl, provider, kind, args.cluster, cluster_uid, cache,
                                 lock['image']['repository'] + '@' + lock['components']['worker']['digest'])
         execution_values['candidate']['apiServerCIDRs'] = candidate_install.api_cidrs(kubectl)
@@ -476,6 +505,7 @@ def main(argv=None):
               'candidateExecutionEnabled': args.profile in ('candidate', 'verification'),
               'independentVerificationEnabled': args.profile == 'verification',
               'independentReviewEnabled': bool(args.independent_review),
+                          'publicationEnabled': bool(args.publication),
               'networkPolicyVerification': network,
               'images': image_lock(args.images)}
     (state / 'installation.json').write_text(json.dumps(report, indent=2) + '\n')

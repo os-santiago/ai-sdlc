@@ -1,0 +1,91 @@
+{
+  "scope": "isolated-publication-installation-fixture",
+  "realKubernetes": true,
+  "realPostgres": true,
+  "authorityFrozen": true,
+  "autonomousE2E": false,
+  "githubWrites": false,
+  "workflowRequests": 0,
+  "locallyBuiltFixtureImages": true,
+  "publishedImages": false,
+  "credentialUIDPreserved": true,
+  "scenarios": [
+    {
+      "publicationEnabled": true,
+      "readyDeployments": 7,
+      "privilegesMatched": true,
+      "isolatedCredentialMounts": true,
+      "workflowRequests": 0
+    },
+    {
+      "publicationEnabled": true,
+      "readyDeployments": 7,
+      "privilegesMatched": true,
+      "isolatedCredentialMounts": true,
+      "workflowRequests": 0
+    },
+    {
+      "publicationEnabled": false,
+      "readyDeployments": 7,
+      "privilegesMatched": true,
+      "isolatedCredentialMounts": true,
+      "workflowRequests": 0
+    },
+    {
+      "publicationEnabled": true,
+      "readyDeployments": 7,
+      "privilegesMatched": true,
+      "isolatedCredentialMounts": true,
+      "workflowRequests": 0
+    }
+  ],
+  "observedAt": "2026-11-15",
+  "runtimeValidation": {
+    "goTestsPassed": 1074,
+    "packages": 35,
+    "build": "passed",
+    "vet": "passed"
+  },
+  "installerTestsPassed": 70,
+  "helmTestsPassed": 9,
+  "installedPrivilegeConformance": {
+    "autonomousE2E": false,
+    "githubWrites": false,
+    "installedColumnPrivileges": true,
+    "realCandidateBehaviorReviewPrerequisite": true,
+    "realPostgres": true,
+    "realSignedHTTPInbox": true,
+    "scenarios": [
+      {
+        "effects": 4,
+        "noReplay": true,
+        "scenario": "success",
+        "secondPoll": "publication-idle",
+        "state": "published"
+      },
+      {
+        "effects": 1,
+        "noReplay": true,
+        "scenario": "lost-tree",
+        "secondPoll": "publication-quarantined",
+        "state": "failed"
+      },
+      {
+        "effects": 1,
+        "noReplay": true,
+        "scenario": "revoked-tree",
+        "secondPoll": "publication-quarantined",
+        "state": "failed"
+      },
+      {
+        "effects": 4,
+        "noReplay": true,
+        "scenario": "lost-pull-request",
+        "secondPoll": "publication-quarantined",
+        "state": "failed"
+      }
+    ],
+    "scope": "isolated-publication-controller",
+    "syntheticForge": true
+  }
+}

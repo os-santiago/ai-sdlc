@@ -107,3 +107,7 @@ openshift:
 review:
   enabled: false
   configJSON: ""
+
+publication:
+  enabled: false
+  credentialRevision: ""

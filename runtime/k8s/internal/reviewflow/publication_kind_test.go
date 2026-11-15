@@ -67,10 +67,12 @@ func verifyPublicationFixture(t *testing.T, admin, verifier *store.DB, original 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	if _, e = admin.Pool.Exec(`GRANT SELECT,INSERT ON publication_handoffs TO aisdlc_verifier;
- GRANT SELECT ON publication_handoffs,review_runs,verification_requests,execution_requests,execution_lifecycles,execution_models,execution_candidates,model_allocations,model_budgets,work_items,plans,intake_heads,intake_revisions,intake_cursors,intake_observations,admission_heads,planning_heads,admissions TO aisdlc_release_manager;
- GRANT SELECT,INSERT,UPDATE ON publication_requests,publication_effects TO aisdlc_release_manager`); e != nil {
-		t.Fatal("publication fixture grants", e)
+	passwords := map[string]string{}
+	for _, key := range p.Keys {
+		passwords[key.Role] = strings.ReplaceAll(key.Role, "-", "_") + strings.Repeat("q", 40)
+	}
+	if e = admin.ProvisionRolesForCapabilities(ctx, passwords, "verification", true, true); e != nil {
+		t.Fatal("installed publication capabilities", e)
 	}
 	u.User = url.UserPassword("aisdlc_release_manager", "release_manager"+strings.Repeat("q", 40))
 	db, e := store.Open(ctx, u.String())
@@ -159,7 +161,7 @@ func verifyPublicationFixture(t *testing.T, admin, verifier *store.DB, original 
 		results = append(results, map[string]any{"scenario": scenario, "state": stored, "effects": publisher.calls, "secondPoll": again, "noReplay": true})
 	}
 	if path := os.Getenv("AI_SDLC_PUBLICATION_REPORT"); path != "" {
-		raw, _ := json.MarshalIndent(map[string]any{"scope": "isolated-publication-controller", "realPostgres": true, "realSignedHTTPInbox": true, "realCandidateBehaviorReviewPrerequisite": true, "syntheticForge": true, "githubWrites": false, "autonomousE2E": false, "scenarios": results}, "", "  ")
+		raw, _ := json.MarshalIndent(map[string]any{"scope": "isolated-publication-controller", "realPostgres": true, "realSignedHTTPInbox": true, "realCandidateBehaviorReviewPrerequisite": true, "syntheticForge": true, "installedColumnPrivileges": true, "githubWrites": false, "autonomousE2E": false, "scenarios": results}, "", "  ")
 		if os.WriteFile(path, raw, 0600) != nil {
 			t.Fatal("publication fixture report")
 		}

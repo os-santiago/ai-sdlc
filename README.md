@@ -69,6 +69,12 @@ using `"independentReview": true` in the installation JSON. The reviewer has a
 separate offline namespace, model conversation and durable evidence journal.
 Publication and deployment remain disabled.
 
+The Homedir verification pilot can additionally opt into
+[verified PR publication](docs/operations/publication-installation.md) with
+`"publication": true`. Its release manager has a separate GitHub credential and
+requires signed behavior/review evidence. Publication creates a bounded PR;
+merge, release and production promotion remain separate gates.
+
 The [Homedir enterprise pilot](docs/enterprise-pilot.md) uses a separate,
 declaratively configured installation and real product validation. Start with
 `./install.sh plan --config examples/homedir.local-install.json`; the example

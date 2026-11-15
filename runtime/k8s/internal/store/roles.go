@@ -60,6 +60,13 @@ func (db *DB) ProvisionRolesForMode(ctx context.Context, passwords map[string]st
 
 // Review privileges require an explicit installation option and verification mode.
 func (db *DB) ProvisionRolesForOptions(ctx context.Context, passwords map[string]string, mode string, review bool) error {
+	return db.ProvisionRolesForCapabilities(ctx, passwords, mode, review, false)
+}
+
+func (db *DB) ProvisionRolesForCapabilities(ctx context.Context, passwords map[string]string, mode string, review, publication bool) error {
+	if publication && (mode != "verification" || !review) {
+		return errors.New("publication requires verification and independent review")
+	}
 	if review && mode != "verification" {
 		return errors.New("independent review requires verification mode")
 	}
@@ -165,6 +172,14 @@ func (db *DB) ProvisionRolesForOptions(ctx context.Context, passwords map[string
 					if review {
 						statements = append(statements, reviewPrivileges...)
 					}
+				}
+			}
+			if publication {
+				if component == "verifier" {
+					statements = append(statements, `GRANT SELECT ON publication_handoffs TO aisdlc_verifier`, `GRANT INSERT(review_id,command_id,payload_digest) ON publication_handoffs TO aisdlc_verifier`)
+				}
+				if component == "release-manager" {
+					statements = append(statements, publicationPrivileges...)
 				}
 			}
 			// REVOKE table privileges alone does not remove column grants.

@@ -87,7 +87,11 @@ func run() error {
 		if review != "" && review != "false" && review != "true" {
 			return errors.New("invalid independent review option")
 		}
-		if err := db.ProvisionRolesForOptions(ctx, passwords, os.Getenv("AI_SDLC_RUNTIME_MODE"), review == "true"); err != nil {
+		publication := os.Getenv("AI_SDLC_PUBLICATION")
+		if publication != "" && publication != "false" && publication != "true" {
+			return errors.New("invalid publication option")
+		}
+		if err := db.ProvisionRolesForCapabilities(ctx, passwords, os.Getenv("AI_SDLC_RUNTIME_MODE"), review == "true", publication == "true"); err != nil {
 			return err
 		}
 		log.Print("schema and component database roles ready")
