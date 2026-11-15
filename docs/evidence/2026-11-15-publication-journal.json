@@ -5,7 +5,7 @@
   "validation": {
     "build": "passed",
     "vet": "passed",
-    "tests": 1017,
+    "tests": 1041,
     "packages": 34,
     "realPostgres": true,
     "lostCommitStages": [
@@ -13,9 +13,10 @@
       "intent",
       "ack",
       "finish"
-    ]
+    ],
+    "rowLockExpiryObserved": true
   },
-  "sourceBase": "3623effe652252302b7711ad7ccf90a0cc6e4fc6",
+  "sourceBase": "3ac3935c473a23e6856abae0023a04f9c12a5ec8",
   "testedWorkingTree": true,
   "autonomousE2E": false,
   "githubWrites": false,

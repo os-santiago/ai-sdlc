@@ -77,7 +77,7 @@ func (db *DB) ClaimPublication(ctx context.Context, id, planDigest string) (Publ
 		if tx.QueryRowContext(ctx, `UPDATE publication_requests SET state='claimed',claim_token=$2,claim_until=LEAST(expires_at,clock_timestamp()+interval '120 seconds'),plan_digest=$3,commit_time=date_trunc('second',clock_timestamp()) WHERE id=$1 AND state='queued' AND expires_at>clock_timestamp() RETURNING claim_until,commit_time`, id, c.Token, planDigest).Scan(&c.Until, &c.CommitTime) != nil {
 			return ErrExecution
 		}
-		return nil
+		return checkPublicationTime(ctx, tx, c)
 	})
 	if e != nil {
 		cleanup, stop := context.WithTimeout(context.Background(), 3*time.Second)
@@ -95,7 +95,9 @@ func lockPublication(ctx context.Context, tx *sql.Tx, c PublicationClaim) error 
 	if tx.QueryRowContext(ctx, `SELECT claim_until>clock_timestamp() AND expires_at>clock_timestamp() FROM publication_requests WHERE id=$1 AND claim_token=$2 AND plan_digest=$3 AND state='claimed' AND commit_time=$4 FOR UPDATE`, c.ID, c.Token, c.PlanDigest, c.CommitTime).Scan(&ok) != nil || !ok {
 		return ErrExecution
 	}
-	return nil
+	// PostgreSQL may evaluate the SELECT expression before waiting on its row
+	// lock. Only a separate observation after lock acquisition authorizes work.
+	return checkPublicationTime(ctx, tx, c)
 }
 func checkPublicationTime(ctx context.Context, tx *sql.Tx, c PublicationClaim) error {
 	var ok bool
