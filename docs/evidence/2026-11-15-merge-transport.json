@@ -1,0 +1,11 @@
+{
+  "scope": "inactive-single-send-merge-transport",
+  "realTLSFixture": true,
+  "realPostgreSQLSuite": true,
+  "build": "passed",
+  "vet": "passed",
+  "passedTests": 1146,
+  "passedPackages": 37,
+  "nativeGitHubMergePerformed": false,
+  "autonomousE2E": false
+}
