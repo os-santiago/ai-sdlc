@@ -22,12 +22,13 @@ flowchart LR
 | Boundary | Own images | Responsibility and authority |
 | --- | --- | --- |
 | Innerloop | `worker`, `model-mailbox` | Coordinate isolated SCC generation, workspace tools and local checks. The executor receives no publishing, database or deployment credentials. Controller credentials remain outside its Pod. |
-| Outerloop | `artifact-builder`, `release-manager` | Deterministic artifact assembly/publication and evidence-gated release coordination. Konflux/Tekton, Chains and Conforma are external dependencies. Independent verifier/deployer roles are defined but not yet installed components. |
+| Outerloop | `verifier`, `artifact-builder`, `release-manager` | Deterministic artifact assembly/publication and evidence-gated release coordination. Konflux/Tekton, Chains and Conforma are external dependencies. The optional verification profile installs an independent verifier; the deployer remains a role awaiting an operational component. |
 | Shared | `intake`, `admission-controller`, `orchestrator`, `relay`, `migrator` | Issue provenance, eligibility, bounded state transitions, signed durable transport and installation-only schema/role setup. PostgreSQL is external infrastructure. |
 
-There are nine own image definitions. Image inventory is not the count of
+There are ten own image definitions. Image inventory is not the count of
 installed Deployments: maintenance/shadow installs six runtime services plus
-PostgreSQL and a short-lived migrator Job. Executors, mailbox and artifact build
+PostgreSQL and a short-lived migrator Job; verification mode adds a seventh
+runtime service. Executors, mailbox and artifact build
 workloads are currently exercised by isolated component fixtures.
 
 ## Graduation evidence
@@ -36,7 +37,8 @@ workloads are currently exercised by isolated component fixtures.
 | --- | --- | --- |
 | Issue → admission → plan | Installed signed shadow flow with real Homedir issues | Approved non-shadow profile and current eligibility |
 | Plan → generated candidate | [Reusable bounded controller](security/innerloop-controller.md), isolated SCC/gVisor/PostgreSQL fixtures | [Candidate profile](operations/candidate-runtime.md) supplies scheduler/inbox, scoped grants, model gateway and terminal recovery; published-image rollout and real issue evidence remain required |
-| Candidate → verified PR | Candidate delta reconstruction; authority contracts | Independent test/scope verification, signed handoff, idempotent publisher and real PR evidence |
+| Candidate → behavior evidence | Signed worker/verifier handoff, four isolated validation Pods, oracle, UID cleanup and failure recovery; explicit verification profile | Published-image rollout and a real issue-derived candidate passing the recipe |
+| Behavior evidence → verified PR | No live publisher yet | Independent agent audit, idempotent publisher and real PR evidence |
 | PR → merge | Policy requirements documented | Current head/base, resolved threads/change requests/check failures and repository-required approvals |
 | Merge → trusted image | Real pinned Homedir build, Chains signature/identity checks and runtime smoke | Component-triggered merged-source build plus enterprise Conforma release policy |
 | Image → production-test | Isolated runtime smoke only | Same-digest deployment to `ai-sdlc-production`, user journeys, readiness and rollback through runtime components |

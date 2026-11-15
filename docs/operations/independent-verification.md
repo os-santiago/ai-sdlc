@@ -105,10 +105,38 @@ retries creation nor deletes by name, and blocks further claims. Operator-direct
 infrastructure recovery must establish ownership separately; it cannot manufacture
 a successful verification record.
 
-This controller is an integration library in this revision. Migration 0013 adds
-its ledger and RLS policies, but the operational provisioner, component routes,
-Helm profile and installer do not activate it. The live candidate profile still
-stops at an unvalidated artifact.
+The `verification` installation profile activates this controller through a
+separate service, database role and restricted Kubernetes service account.
+`candidate` mode retains its three operations and unvalidated-artifact boundary.
+
+## Install the independent verifier
+
+First publish the reviewed verifier implementation and refresh the image lock
+and adjacent evidence from that same successful main publication. The installer
+rejects verification mode if its image evidence omits the verifier or names a
+different source, platform or registry. An older candidate lock does not enable
+this new profile merely because the source checkout changed.
+
+```bash
+./install.sh plan --config examples/homedir-verification.local-install.json
+./install.sh local --config examples/homedir-verification.local-install.json \
+  --github-auth gh-cli --codex-auth-file /private/path/auth.json
+```
+
+This reconciles the existing Homedir kind scope and keeps the production test
+target `ai-sdlc-production`. The verifier has a dedicated container, identity,
+database role and service on internal port 8087. Its only command is the signed
+worker `verify-artifact` message delivered by the relay. Its Kubernetes role can
+create/get/delete Pods and ConfigMaps, read Pod logs and inspect NetworkPolicies
+only in `ai-sdlc-verifiers`; it cannot exec into Pods, read Secrets or modify
+policies. Generated code runs in separate gVisor Pods without credentials or
+network access. Only the controller can fetch the pinned public source.
+
+Switching back to `candidate` revokes verifier and worker-handoff SQL privileges
+and removes the fourth authority grant. The public installation report exposes
+`independentVerificationEnabled`; readiness reports `verification-only`.
+A passing behavior proof remains insufficient for publication, agent audit,
+merge, Konflux policy acceptance, release or promotion.
 
 ## Reproduce the composed runtime fixture
 
@@ -135,6 +163,8 @@ python3 tools/verify_verification_flow.py \
   --candidate-directory /private/supplied-fixture-candidate \
   --report /private/verification-report.json
 ```
+
+Use `python3 tools/prepare_verification_fixture.py --source-repository /path/to/isolated-homedir --output /private/new-fixture-candidate` to reproduce the committed synthetic candidate patch for the pinned source. The output directory must be new; the source checkout is read-only. CI runs the same five scenarios as installation conformance.
 
 The candidate directory supplies only the two recipe files. Model responses and
 the issue are synthetic; SCC, source fetch, PostgreSQL, signed inbox/outbox,

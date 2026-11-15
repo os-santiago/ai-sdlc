@@ -230,3 +230,40 @@ func TestVerificationCleanupAttemptsAreBounded(t *testing.T) {
 		t.Fatal("fourth cleanup")
 	}
 }
+
+func TestVerificationPrivilegesAreIndependentAndRevocable(t *testing.T) {
+	f, db, r := verificationClaimFixture(t)
+	ctx := context.Background()
+	passwords := map[string]string{}
+	for role := range f.Material.Identities {
+		passwords[role] = strings.ReplaceAll(role, "-", "_") + strings.Repeat("q", 40)
+	}
+	if err := f.Admin.ProvisionRolesForMode(ctx, passwords, "verification"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ReadVerification(ctx, r.ID); err != nil {
+		t.Fatal("verification role unavailable", err)
+	}
+	if _, err := db.ReadVerificationCandidate(ctx, r.CandidateID); err != nil {
+		t.Fatal("candidate evidence unavailable", err)
+	}
+	for _, query := range []string{`UPDATE execution_candidates SET delta='changed' WHERE false`, `UPDATE intake_observations SET observed_at=clock_timestamp() WHERE false`, `UPDATE verification_requests SET payload='changed' WHERE false`, `DELETE FROM verification_requests WHERE false`, `UPDATE verification_effects SET resource_name='changed' WHERE false`, `SELECT * FROM managed_component_roles`, `UPDATE release_gates SET state='verified' WHERE false`} {
+		if _, err := db.Pool.Exec(query); err == nil {
+			t.Fatal("forbidden verifier privilege", query)
+		}
+	}
+	if _, err := f.db.Pool.Exec(`SELECT * FROM verification_handoffs`); err != nil {
+		t.Fatal("worker handoff unavailable", err)
+	}
+	if err := f.Admin.ProvisionRolesForMode(ctx, passwords, "candidate"); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{`SELECT * FROM verification_requests`, `UPDATE verification_requests SET state='failed' WHERE false`, `UPDATE verification_effects SET resource_uid=NULL WHERE false`, `SELECT * FROM execution_candidates`} {
+		if _, err := db.Pool.Exec(query); err == nil {
+			t.Fatal("downgrade retained verifier privilege", query)
+		}
+	}
+	if _, err := f.db.Pool.Exec(`SELECT * FROM verification_handoffs`); err == nil {
+		t.Fatal("candidate profile retained handoff")
+	}
+}

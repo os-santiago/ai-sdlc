@@ -17,7 +17,7 @@ REGISTRY = 'quay.io/os-santiago/ai-sdlc'
 COMPONENTS = {'intake': 'intake', 'admissionController': 'admission-controller',
               'orchestrator': 'orchestrator', 'worker': 'worker',
               'releaseManager': 'release-manager', 'relay': 'relay'}
-ARTIFACT_COMPONENTS = set(COMPONENTS.values()) | {'migrator', 'model-mailbox'}
+ARTIFACT_COMPONENTS = set(COMPONENTS.values()) | {'migrator', 'model-mailbox', 'verifier'}
 SHA = re.compile('[a-f0-9]{40}')
 DIGEST = re.compile('sha256:[a-f0-9]{64}')
 MAX_RESPONSE = 1024 * 1024

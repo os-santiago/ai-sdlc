@@ -76,7 +76,7 @@ func RunWithReadiness(metadata Metadata, ready func(context.Context) error, regi
 
 	server := &http.Server{
 		Addr:              address,
-		Handler:           requestLog(logger, runtimeBoundary(mux)),
+		Handler:           requestLog(logger, RuntimeBoundary(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      writeTimeout,
@@ -111,14 +111,15 @@ func maintenanceBoundary(next http.Handler) http.Handler {
 	})
 }
 
-func runtimeBoundary(next http.Handler) http.Handler {
+// RuntimeBoundary limits reachable paths; registered inboxes still authenticate every message.
+func RuntimeBoundary(next http.Handler) http.Handler {
 	mode := os.Getenv("AI_SDLC_RUNTIME_MODE")
-	if mode != "shadow" && mode != "candidate" {
+	if mode != "shadow" && mode != "candidate" && mode != "verification" {
 		return maintenanceBoundary(next)
 	}
 	observation := maintenanceBoundary(next)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.RawQuery == "" && (r.URL.Path == "/internal/admit-issue" || r.URL.Path == "/internal/plan-admission" || (mode == "candidate" && r.URL.Path == "/internal/execute-work")) {
+		if r.Method == http.MethodPost && r.URL.RawQuery == "" && (r.URL.Path == "/internal/admit-issue" || r.URL.Path == "/internal/plan-admission" || ((mode == "candidate" || mode == "verification") && r.URL.Path == "/internal/execute-work") || (mode == "verification" && r.URL.Path == "/internal/verify-artifact")) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -141,6 +142,9 @@ func readiness(ready func(context.Context) error) http.Handler {
 			mode, delivery = "shadow", "admission-only"
 		} else if os.Getenv("AI_SDLC_RUNTIME_MODE") == "candidate" {
 			mode, delivery = "candidate", "candidate-only"
+		}
+		if os.Getenv("AI_SDLC_RUNTIME_MODE") == "verification" {
+			mode, delivery = "verification", "verification-only"
 		}
 		WriteJSON(w, http.StatusOK, map[string]string{"status": "ready", "mode": mode, "delivery": delivery})
 	})

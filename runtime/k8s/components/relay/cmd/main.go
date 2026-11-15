@@ -22,10 +22,13 @@ func main() {
 	if bootstrap.IntakeEnabled() {
 		var routes map[string]string
 		expected := 2
-		if os.Getenv("AI_SDLC_RUNTIME_MODE") == "candidate" {
+		if bootstrap.CandidateEnabled() {
 			expected = 3
 		}
-		if authority.DecodeStrict([]byte(os.Getenv("AI_SDLC_RELAY_ROUTES")), &routes) != nil || len(routes) != expected || (expected == 3 && routes["execute-work"] == "") || routes["admit-issue"] == "" || routes["plan-admission"] == "" {
+		if os.Getenv("AI_SDLC_RUNTIME_MODE") == "verification" {
+			expected = 4
+		}
+		if authority.DecodeStrict([]byte(os.Getenv("AI_SDLC_RELAY_ROUTES")), &routes) != nil || len(routes) != expected || (expected >= 3 && routes["execute-work"] == "") || (expected == 4 && routes["verify-artifact"] == "") || routes["admit-issue"] == "" || routes["plan-admission"] == "" {
 			log.Fatal("relay requires exactly its reviewed routes")
 		}
 		stop := bootstrap.Periodic(time.Second, func(ctx context.Context) {

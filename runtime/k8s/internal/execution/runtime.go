@@ -124,6 +124,25 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if _, _, e = load(ctx); e != nil {
 		return "", e
 	}
+	if os.Getenv("AI_SDLC_RUNTIME_MODE") == "verification" {
+		sent, e := HandoffCandidate(ctx, r.Component.DB, func() (authority.Policy, authority.Identity, intake.Config, string, error) {
+			v, _, e := load(ctx)
+			if e != nil {
+				return authority.Policy{}, authority.Identity{}, intake.Config{}, "", e
+			}
+			p, i, e := r.Component.Authority()
+			if e != nil || p.Revision() != v.Policy.Revision() {
+				return authority.Policy{}, authority.Identity{}, intake.Config{}, "", ErrAuthority
+			}
+			return p, i, v.Intake, workspacebundle.Digest(v.Profile), nil
+		})
+		if e != nil {
+			return "verification-handoff-stopped", e
+		}
+		if sent {
+			return "verification-dispatched", nil
+		}
+	}
 	provider, e := r.gateway()
 	if e != nil || provider.CheckGateway(ctx) != nil {
 		return "", ErrAuthority

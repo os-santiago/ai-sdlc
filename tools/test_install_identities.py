@@ -37,7 +37,7 @@ def fixture():
 
 
 class IdentityInstallationTests(unittest.TestCase):
-    def configure(self, material, secrets, resource, freeze=None):
+    def configure(self, material, secrets, resource, freeze=None, **options):
         lock = {'image': {'repository': 'quay.io/os-santiago/ai-sdlc'},
                 'migrator': {'digest': 'sha256:' + 'a' * 64}}
         with patch.object(installer, 'identity_material', return_value=material), \
@@ -47,7 +47,7 @@ class IdentityInstallationTests(unittest.TestCase):
              patch.object(installer, 'create_owned_secret') as create:
             try:
                 result = installer.configure_identities(['kubectl'], 'podman', lock, 'owned-uid',
-                                                        'example/project', 'production-test', freeze=freeze)
+                                                        'example/project', 'production-test', freeze=freeze, **options)
             finally:
                 create.assert_not_called()
             self.assertEqual(run.call_count, 1)
@@ -89,6 +89,23 @@ class IdentityInstallationTests(unittest.TestCase):
         result = self.configure(material, secrets, resource, freeze=False)
         expected = dict(original, freeze=False)
         self.assertEqual(json.loads(result['authority']['policyJSON']), expected)
+
+    def test_verification_upgrade_restores_only_reviewed_four_grants(self):
+        material, secrets, resource = fixture()
+        material['policy']['grants'] = [{'operation': name} for name in
+            ('admit-issue', 'plan-admission', 'execute-work', 'verify-artifact', 'release-artifact')]
+        old = json.loads(resource['data']['policy.json'])
+        old.update(autonomy='auto-pr', grants=material['policy']['grants'][:3])
+        resource['data']['policy.json'] = json.dumps(old)
+        result = self.configure(material, secrets, resource, freeze=False, candidate=True, verification=True)
+        policy = json.loads(result['authority']['policyJSON'])
+        self.assertEqual({g['operation'] for g in policy['grants']},
+                         {'admit-issue', 'plan-admission', 'execute-work', 'verify-artifact'})
+        material, secrets, _ = fixture()
+        material['policy']['grants'] = policy['grants']
+        resource['data']['policy.json'] = json.dumps(policy)
+        result = self.configure(material, secrets, resource, freeze=False, candidate=True)
+        self.assertEqual(len(json.loads(result['authority']['policyJSON'])['grants']), 3)
 
     def test_shadow_has_no_ambient_credential_fallback(self):
         with patch.object(installer, 'owned_secret', return_value=None), patch.object(installer, 'configure_github_client') as configure:

@@ -25,17 +25,13 @@ func verifyCapturedFixture(t *testing.T, f *fixture, component *bootstrap.Compon
 	if calls != 3 || driver == "" {
 		t.Fatal("verification fixture inputs")
 	}
-	if _, err := f.Admin.Pool.Exec(`GRANT SELECT,INSERT ON verification_handoffs TO aisdlc_worker;
- GRANT SELECT ON execution_candidates,execution_requests,execution_lifecycles,execution_models,model_allocations,model_budgets,verification_handoffs,work_items,plans,intake_heads,intake_revisions,intake_cursors,intake_observations,admission_heads,planning_heads,admissions TO aisdlc_verifier;
- GRANT SELECT,INSERT,UPDATE ON verification_requests,verification_effects,authorized_inbox TO aisdlc_verifier; GRANT SELECT,INSERT ON authorized_nonces TO aisdlc_verifier`); err != nil {
-		t.Fatal(err)
-	}
+
 	load := func() (authority.Policy, authority.Identity, intake.Config, string, error) {
 		p, i, e := component.Authority()
 		return p, i, f.Config, profile, e
 	}
-	if sent, err := HandoffCandidate(ctx, f.db, load); err != nil || !sent {
-		t.Fatal("signed verification handoff", err)
+	if sent, err := HandoffCandidate(ctx, f.db, load); err != nil || sent {
+		t.Fatal("operational handoff duplicated", err)
 	}
 	var envelope delivery.Envelope
 	var receipt []byte
@@ -57,11 +53,12 @@ func verifyCapturedFixture(t *testing.T, f *fixture, component *bootstrap.Compon
 	}
 	control := struct {
 		Policy                                          authority.Policy
+		Identity                                        authority.Identity
 		Intake                                          intake.Config
 		Profile, Image, ReportFile, SourceSHA, Scenario string
 		Config                                          podtransport.Config
 		Envelope, RetryEnvelope                         delivery.Envelope
-	}{f.Material.Policy, f.Config, profile, image, report, source, scenario, config, envelope, retry}
+	}{f.Material.Policy, f.Material.Identities["verifier"], f.Config, profile, image, report, source, scenario, config, envelope, retry}
 	raw, _ := json.Marshal(control)
 	path := filepath.Join(t.TempDir(), "verification.json")
 	if os.WriteFile(path, raw, 0600) != nil {

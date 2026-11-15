@@ -1,4 +1,4 @@
-{{- if eq .Values.runtime.mode "candidate" }}
+{{- if has .Values.runtime.mode (list "candidate" "verification") }}
 apiVersion: v1
 kind: Namespace
 metadata:

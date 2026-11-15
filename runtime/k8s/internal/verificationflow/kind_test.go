@@ -1,9 +1,12 @@
 package verificationflow
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
@@ -14,6 +17,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/delivery"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
@@ -25,6 +29,7 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 	}
 	var in struct {
 		Policy                                          authority.Policy
+		Identity                                        authority.Identity
 		Intake                                          intake.Config
 		Profile, Image, ReportFile, SourceSHA, Scenario string
 		Config                                          podtransport.Config
@@ -47,12 +52,36 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 	}
 	defer db.Close()
 	inbox := delivery.Inbox{DB: db, Target: "verifier"}
-	for n, envelope := range []delivery.Envelope{in.Envelope, in.RetryEnvelope} {
-		_, duplicate, e := inbox.Accept(ctx, in.Policy, envelope, "verify-artifact", http.MethodPost, "/internal/verify-artifact", time.Now(), Effect(func() (authority.Policy, error) { return in.Policy, nil }))
-		if e != nil || duplicate != (n == 1) {
-			t.Fatal("signed inbox/replay", e)
+	t.Setenv("AI_SDLC_RUNTIME_MODE", "verification")
+	mux := http.NewServeMux()
+	mux.Handle("POST /internal/verify-artifact", inbox.Handler(func() (authority.Policy, authority.Identity, error) { return in.Policy, in.Identity, nil }, "verify-artifact", "/internal/verify-artifact", Effect(func() (authority.Policy, error) { return in.Policy, nil })))
+	server := httptest.NewServer(service.RuntimeBoundary(mux))
+	defer server.Close()
+	invalid, e := http.Post(server.URL+"/internal/verify-artifact", "application/json", strings.NewReader("{}"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	invalid.Body.Close()
+	if invalid.StatusCode < 400 {
+		t.Fatal("unsigned request accepted")
+	}
+	for _, envelope := range []delivery.Envelope{in.Envelope, in.RetryEnvelope} {
+		raw, _ := json.Marshal(envelope)
+		response, e := http.Post(server.URL+"/internal/verify-artifact", "application/json", bytes.NewReader(raw))
+		if e != nil {
+			t.Fatal(e)
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 65536))
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatal("signed HTTP inbox", response.StatusCode)
 		}
 	}
+	var queued int
+	if db.Pool.QueryRow(`SELECT count(*) FROM verification_requests`).Scan(&queued) != nil || queued != 1 {
+		t.Fatal("HTTP inbox duplicate")
+	}
+
 	load := func() (authority.Policy, intake.Config, string, error) { return in.Policy, in.Intake, in.Profile, nil }
 	id, err := db.NextVerification(ctx)
 	if err != nil || id == "" {
@@ -185,7 +214,7 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 	if state, err = runtime.PollOnce(ctx); err != nil || state != "" {
 		t.Fatal("verification replay", state, err)
 	}
-	report, _ := json.Marshal(map[string]any{"scope": "isolated-candidate-verifier-runtime-fixture", "syntheticIssue": true, "syntheticModel": true, "realSCC": true, "realKubernetes": true, "realPostgres": true, "signedWorkerOutbox": true, "signedVerifierInbox": true, "duplicateInboxDidNotReplay": true, "currentAuthorityChecked": true, "separateOfflinePods": 4, "sourceSHA": in.SourceSHA, "behaviorProof": proof, "secondPollDidNotReplay": true, "autonomousE2E": false})
+	report, _ := json.Marshal(map[string]any{"scope": "isolated-candidate-verifier-runtime-fixture", "syntheticIssue": true, "syntheticModel": true, "realSCC": true, "realKubernetes": true, "realPostgres": true, "signedWorkerOutbox": true, "signedVerifierInbox": true, "realHTTPBoundary": true, "operationalPrivileges": true, "automaticWorkerHandoff": true, "duplicateInboxDidNotReplay": true, "currentAuthorityChecked": true, "separateOfflinePods": 4, "sourceSHA": in.SourceSHA, "behaviorProof": proof, "secondPollDidNotReplay": true, "autonomousE2E": false})
 	if os.WriteFile(in.ReportFile, report, 0600) != nil {
 		t.Fatal("report")
 	}

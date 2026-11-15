@@ -55,7 +55,7 @@ func (db *DB) ProvisionRoles(ctx context.Context, passwords map[string]string) e
 // ProvisionRolesForMode atomically reconciles optional execution privileges.
 // Returning to maintenance/shadow revokes the entire optional surface.
 func (db *DB) ProvisionRolesForMode(ctx context.Context, passwords map[string]string, mode string) error {
-	if mode != "" && mode != "maintenance" && mode != "shadow" && mode != "candidate" {
+	if mode != "" && mode != "maintenance" && mode != "shadow" && mode != "candidate" && mode != "verification" {
 		return errors.New("unknown role provisioning mode")
 	}
 
@@ -145,8 +145,16 @@ func (db *DB) ProvisionRolesForMode(ctx context.Context, passwords map[string]st
 			for _, table := range tables {
 				statements = append(statements, `GRANT SELECT, INSERT, UPDATE ON `+table+` TO `+role)
 			}
-			if component == "worker" && mode == "candidate" {
+			if component == "worker" && (mode == "candidate" || mode == "verification") {
 				statements = append(statements, executionPrivileges...)
+			}
+			if mode == "verification" {
+				if component == "worker" {
+					statements = append(statements, `GRANT SELECT,INSERT ON verification_handoffs TO `+role)
+				}
+				if component == "verifier" {
+					statements = append(statements, verificationPrivileges...)
+				}
 			}
 			// REVOKE table privileges alone does not remove column grants.
 			for _, revoke := range columnRevocations {

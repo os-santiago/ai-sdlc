@@ -56,3 +56,22 @@ class CandidateInstallTests(unittest.TestCase):
                 revision = candidate_install.model_credentials(['kubectl'], 'fixture', source, True)
             self.assertEqual(revision, '102')
             self.assertEqual([json.loads(value)['test_identity'] for value in writes], ['B'])
+
+    def test_verification_requires_exact_published_identity(self):
+        lock_path = install.LOCAL / 'images.lock.json'
+        lock = install.image_lock(lock_path)
+        evidence = json.loads(lock_path.with_name('images.evidence.json').read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'images.lock.json'
+            evidence_path = path.with_name('images.evidence.json')
+            evidence_path.write_text(json.dumps(evidence))
+            with self.assertRaises(ValueError):
+                candidate_install.desired_values(install.ROOT, path, lock, verification=True)
+            evidence['images']['verifier'] = dict(evidence['images']['worker'], component='verifier')
+            evidence_path.write_text(json.dumps(evidence))
+            result = candidate_install.desired_values(install.ROOT, path, lock, verification=True)
+            self.assertEqual(result['verifier']['digest'], evidence['images']['worker']['digest'])
+            evidence['images']['verifier']['revision'] = '0' * 40
+            evidence_path.write_text(json.dumps(evidence))
+            with self.assertRaises(ValueError):
+                candidate_install.desired_values(install.ROOT, path, lock, verification=True)

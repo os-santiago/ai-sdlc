@@ -58,6 +58,11 @@ issue-to-candidate execution with an isolated SCC executor, a containerized Code
 gateway and terminal crash recovery. It requires reviewed matching images and
 stops at an unvalidated candidate; it does not authorize PR publication or release.
 
+The explicit [verification profile](docs/operations/independent-verification.md#install-the-independent-verifier)
+adds a separate verifier service and four offline validation Pods. It requires
+a matching published verifier image and stores independent behavior evidence;
+publication, merge and promotion remain disabled.
+
 The [Homedir enterprise pilot](docs/enterprise-pilot.md) uses a separate,
 declaratively configured installation and real product validation. Start with
 `./install.sh plan --config examples/homedir.local-install.json`; the example

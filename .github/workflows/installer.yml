@@ -1,10 +1,10 @@
 name: installer
 on:
   pull_request:
-    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/candidate_install.py', 'tools/supply_chain_install.py', 'tools/*konflux*.py', 'runtime/k8s/internal/artifact/**', 'runtime/k8s/components/artifact-builder/**', 'tools/offline*', 'tools/verify_model_mailbox.py', 'tools/verify_workspace_bundle.py', 'tools/test_workspace_writer.py', 'tools/verify_executor.py', 'tools/verify_pod_transport.py', 'tools/verify_workspace_transport.py', 'tools/verify_workload_resources.py', 'tools/verify_lifecycle_model.py', 'tools/verify_candidate_runtime.py', 'tools/verify_candidate_credentials.py', 'runtime/k8s/internal/execution/**', 'runtime/k8s/tools/**', 'runtime/k8s/internal/candidate/**', 'runtime/k8s/internal/verification/**', 'tools/verify_verification_recipe.py', 'tools/verify_generative_pilot.py', 'tools/test_generative_pilot.py', 'runtime/k8s/internal/podtransport/**', 'runtime/k8s/internal/modelbroker/**', 'runtime/k8s/internal/store/**', 'tools/fixture_images.py', 'tools/test_fixture_images.py', 'runtime/k8s/internal/executor/**', 'runtime/k8s/internal/engine/**', 'runtime/k8s/components/worker/**', 'runtime/k8s/internal/workspacebundle/**', 'runtime/k8s/internal/modelmailbox/**', 'runtime/k8s/components/model-mailbox/**', 'runtime/k8s/go.mod', 'runtime/k8s/go.sum', 'tools/test_offline_probe.js', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
+    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/candidate_install.py', 'tools/supply_chain_install.py', 'tools/*konflux*.py', 'runtime/k8s/internal/artifact/**', 'runtime/k8s/components/artifact-builder/**', 'tools/offline*', 'tools/verify_model_mailbox.py', 'tools/verify_workspace_bundle.py', 'tools/test_workspace_writer.py', 'tools/verify_executor.py', 'tools/verify_pod_transport.py', 'tools/verify_workspace_transport.py', 'tools/verify_workload_resources.py', 'tools/verify_lifecycle_model.py', 'tools/verify_candidate_runtime.py', 'tools/verify_candidate_credentials.py', 'runtime/k8s/internal/execution/**', 'runtime/k8s/tools/**', 'runtime/k8s/internal/candidate/**', 'runtime/k8s/internal/verification/**', 'tools/verify_verification_recipe.py', 'tools/verify_verification_flow.py', 'tools/prepare_verification_fixture.py', 'tools/fixtures/**', 'runtime/k8s/internal/verificationflow/**', 'runtime/k8s/components/verifier/**', 'tools/verify_generative_pilot.py', 'tools/test_generative_pilot.py', 'runtime/k8s/internal/podtransport/**', 'runtime/k8s/internal/modelbroker/**', 'runtime/k8s/internal/store/**', 'tools/fixture_images.py', 'tools/test_fixture_images.py', 'runtime/k8s/internal/executor/**', 'runtime/k8s/internal/engine/**', 'runtime/k8s/components/worker/**', 'runtime/k8s/internal/workspacebundle/**', 'runtime/k8s/internal/modelmailbox/**', 'runtime/k8s/components/model-mailbox/**', 'runtime/k8s/go.mod', 'runtime/k8s/go.sum', 'tools/test_offline_probe.js', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
   push:
     branches: [main]
-    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/candidate_install.py', 'tools/supply_chain_install.py', 'tools/*konflux*.py', 'runtime/k8s/internal/artifact/**', 'runtime/k8s/components/artifact-builder/**', 'tools/offline*', 'tools/verify_model_mailbox.py', 'tools/verify_workspace_bundle.py', 'tools/test_workspace_writer.py', 'tools/verify_executor.py', 'tools/verify_pod_transport.py', 'tools/verify_workspace_transport.py', 'tools/verify_workload_resources.py', 'tools/verify_lifecycle_model.py', 'tools/verify_candidate_runtime.py', 'tools/verify_candidate_credentials.py', 'runtime/k8s/internal/execution/**', 'runtime/k8s/tools/**', 'runtime/k8s/internal/candidate/**', 'runtime/k8s/internal/verification/**', 'tools/verify_verification_recipe.py', 'tools/verify_generative_pilot.py', 'tools/test_generative_pilot.py', 'runtime/k8s/internal/podtransport/**', 'runtime/k8s/internal/modelbroker/**', 'runtime/k8s/internal/store/**', 'tools/fixture_images.py', 'tools/test_fixture_images.py', 'runtime/k8s/internal/executor/**', 'runtime/k8s/internal/engine/**', 'runtime/k8s/components/worker/**', 'runtime/k8s/internal/workspacebundle/**', 'runtime/k8s/internal/modelmailbox/**', 'runtime/k8s/components/model-mailbox/**', 'runtime/k8s/go.mod', 'runtime/k8s/go.sum', 'tools/test_offline_probe.js', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
+    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/candidate_install.py', 'tools/supply_chain_install.py', 'tools/*konflux*.py', 'runtime/k8s/internal/artifact/**', 'runtime/k8s/components/artifact-builder/**', 'tools/offline*', 'tools/verify_model_mailbox.py', 'tools/verify_workspace_bundle.py', 'tools/test_workspace_writer.py', 'tools/verify_executor.py', 'tools/verify_pod_transport.py', 'tools/verify_workspace_transport.py', 'tools/verify_workload_resources.py', 'tools/verify_lifecycle_model.py', 'tools/verify_candidate_runtime.py', 'tools/verify_candidate_credentials.py', 'runtime/k8s/internal/execution/**', 'runtime/k8s/tools/**', 'runtime/k8s/internal/candidate/**', 'runtime/k8s/internal/verification/**', 'tools/verify_verification_recipe.py', 'tools/verify_verification_flow.py', 'tools/prepare_verification_fixture.py', 'tools/fixtures/**', 'runtime/k8s/internal/verificationflow/**', 'runtime/k8s/components/verifier/**', 'tools/verify_generative_pilot.py', 'tools/test_generative_pilot.py', 'runtime/k8s/internal/podtransport/**', 'runtime/k8s/internal/modelbroker/**', 'runtime/k8s/internal/store/**', 'tools/fixture_images.py', 'tools/test_fixture_images.py', 'runtime/k8s/internal/executor/**', 'runtime/k8s/internal/engine/**', 'runtime/k8s/components/worker/**', 'runtime/k8s/internal/workspacebundle/**', 'runtime/k8s/internal/modelmailbox/**', 'runtime/k8s/components/model-mailbox/**', 'runtime/k8s/go.mod', 'runtime/k8s/go.sum', 'tools/test_offline_probe.js', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
 permissions:
   contents: read
 jobs:
@@ -150,6 +150,7 @@ jobs:
         run: |
           CGO_ENABLED=0 go test -c ./internal/podtransport -o "$RUNNER_TEMP/pod-transport.test"
           CGO_ENABLED=0 go test -c ./internal/execution -o "$RUNNER_TEMP/execution.test"
+          CGO_ENABLED=0 go test -c ./internal/verificationflow -o "$RUNNER_TEMP/verifier.test"
       - name: Verify actual Kubernetes handoff, RBAC denial and Pod replacement
         env:
           AI_SDLC_TEST_DATABASE_URL: postgres://postgres:local-ci-only@127.0.0.1:5432/ai_sdlc_test?sslmode=disable
@@ -201,6 +202,28 @@ jobs:
               print(result.stdout, end='')
               pathlib.Path(os.environ['RUNNER_TEMP'], f'candidate-runtime-{scenario}-report.json').write_text(result.stdout)
           PYTHON
+      - name: Verify signed independent validation and fail-closed recovery
+        env:
+          AI_SDLC_TEST_DATABASE_URL: postgres://postgres:local-ci-only@127.0.0.1:5432/ai_sdlc_test?sslmode=disable
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, pathlib, sys
+          sys.path.insert(0, 'tools')
+          from fixture_images import register_digest
+          from prepare_verification_fixture import prepare
+          from verify_verification_flow import verify
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          tools = json.loads((root / 'install-tools.json').read_text())
+          candidate = prepare(root / 'homedir-source', root / 'verification-candidate')
+          kubectl = [tools['kubectl'], '--kubeconfig', str(pathlib.Path.home() / '.local/state/ai-sdlc/ai-sdlc/kubeconfig')]
+          worker = register_digest('docker', 'ai-sdlc-control-plane', 'localhost/ai-sdlc-worker:conformance')
+          mailbox = register_digest('docker', 'ai-sdlc-control-plane', 'localhost/ai-sdlc-model-mailbox:conformance')
+          for scenario in ('success', 'revoke-config', 'revoke-results', 'expire-config', 'lost-config-reply'):
+              report = verify(kubectl, worker, mailbox, root / 'execution.test', root / 'verifier.test',
+                              '0622cdaeb59a11a27bd5f3d7e18183c401a5e412', candidate, scenario)
+              (root / f'verifier-{scenario}-report.json').write_text(json.dumps(report, indent=2))
+              print(json.dumps(report), flush=True)
+          PYTHON
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: pod-transport-conformance
@@ -210,4 +233,5 @@ jobs:
             ${{ runner.temp }}/lifecycle_model*-report.json
             ${{ runner.temp }}/candidate-runtime-*-report.json
             ${{ runner.temp }}/candidate-credentials-report.json
+            ${{ runner.temp }}/verifier-*-report.json
           retention-days: 14

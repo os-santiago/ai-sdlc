@@ -11,7 +11,7 @@
     "provider": {"enum": ["auto", "docker", "podman"]},
     "repository": {"type": "string", "pattern": "^(?!\\.{1,2}/)(?![^/]+/\\.{1,2}$)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
     "environment": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"},
-    "profile": {"enum": ["maintenance", "shadow", "candidate"]},
+    "profile": {"enum": ["maintenance", "shadow", "candidate", "verification"]},
     "images": {"type": "string", "minLength": 1, "pattern": "^[^\\u0000]+$", "description": "Pinned image lock path, relative to this configuration file or absolute."}
   }
 }

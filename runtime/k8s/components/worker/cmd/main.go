@@ -22,7 +22,7 @@ func main() {
 	defer component.DB.Close()
 	var routes []service.RouteRegistrar
 	ready := component.Ready
-	if os.Getenv("AI_SDLC_RUNTIME_MODE") == "candidate" {
+	if bootstrap.CandidateEnabled() {
 		path := os.Getenv("AI_SDLC_EXECUTION_CONFIG_PATH")
 		if _, _, e := execution.LoadRuntime(path); e != nil {
 			log.Fatal("candidate configuration unavailable")

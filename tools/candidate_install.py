@@ -7,7 +7,7 @@ import re
 import secrets
 
 
-def desired_values(root, image_lock_path, lock):
+def desired_values(root, image_lock_path, lock, verification=False):
     evidence_path = Path(image_lock_path).with_name('images.evidence.json')
     with evidence_path.open('rb') as stream:
         raw = stream.read(65537)
@@ -34,7 +34,16 @@ def desired_values(root, image_lock_path, lock):
                             'MailboxImage': lock['image']['repository'] + '@' + images['model-mailbox']['digest']},
               'model': {'Limits': {'Calls': 16, 'InputBytes': 2097152, 'OutputBytes': 4194304},
                         'ResponseLimit': 262144}}
-    return {'candidate': {'configJSON': json.dumps(config, sort_keys=True), 'apiServerCIDRs': []}}
+    result = {'candidate': {'configJSON': json.dumps(config, sort_keys=True), 'apiServerCIDRs': []}}
+    if verification:
+        item = images.get('verifier', {})
+        value = item.get('digest')
+        if (item.get('component') != 'verifier' or item.get('revision') != lock['image']['tag'] or item.get('repository') != lock['image']['repository']
+                or item.get('platform') != 'linux/amd64' or not isinstance(value, str)
+                or not re.fullmatch(r'sha256:[a-f0-9]{64}', value)):
+            raise ValueError('Verification requires matching reviewed verifier image publication')
+        result['verifier'] = {'digest': value}
+    return result
 
 
 def model_credentials(kubectl, cluster_uid, auth_file, refresh=False):

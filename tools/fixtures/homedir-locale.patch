@@ -1,0 +1,85 @@
+diff --git a/quarkus-app/src/main/resources/META-INF/resources/js/utils.js b/quarkus-app/src/main/resources/META-INF/resources/js/utils.js
+index 826d6d9..324e5a8 100644
+--- a/quarkus-app/src/main/resources/META-INF/resources/js/utils.js
++++ b/quarkus-app/src/main/resources/META-INF/resources/js/utils.js
+@@ -37,7 +37,19 @@
+       if (isNaN(d.getTime())) {
+         return '';
+       }
+-      var locale = document.documentElement.lang || navigator.language || undefined;
++      var locale = 'en';
++      var candidates = [document.documentElement.lang, navigator.language];
++      for (var i = 0; i < candidates.length; i++) {
++        if (typeof candidates[i] !== 'string' || !candidates[i]) {
++          continue;
++        }
++        try {
++          locale = Intl.getCanonicalLocales(candidates[i])[0];
++          break;
++        } catch (e) {
++          // Try the next locale without retrying invalid formatting options.
++        }
++      }
+       var formatOpts = typeof opts === 'string' ? FORMAT_PRESETS[opts] || FORMAT_PRESETS.date : (opts || FORMAT_PRESETS.date);
+       var hasTime = formatOpts.hour || formatOpts.minute;
+       return hasTime ? d.toLocaleString(locale, formatOpts) : d.toLocaleDateString(locale, formatOpts);
+diff --git a/tests/js/utils-locale-fallback.test.js b/tests/js/utils-locale-fallback.test.js
+new file mode 100644
+index 0000000..254ef45
+--- /dev/null
++++ b/tests/js/utils-locale-fallback.test.js
+@@ -0,0 +1,54 @@
++const { test } = require('node:test');
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const path = require('node:path');
++
++const source = fs.readFileSync(path.join(__dirname, '../../quarkus-app/src/main/resources/META-INF/resources/js/utils.js'), 'utf8');
++const raw = '2026-03-15T13:45:00Z';
++const date = new Date(raw);
++const defaults = { year: 'numeric', month: 'short', day: 'numeric' };
++
++function load(lang, language) {
++  const window = {};
++  new Function('window', 'document', 'navigator', source)(
++    window, { documentElement: { lang } }, { language });
++  return window.HomeDirUtils;
++}
++
++for (const [lang, language, expected] of [
++  ['en_US', 'es-CL', 'es-CL'],
++  ['en_US', 'es_CL', 'en'],
++  ['', '', 'en'],
++  ['', 'es-CL', 'es-CL'],
++  ['fr-FR', 'es-CL', 'fr-FR'],
++  ['fr-FR', 'es_CL', 'fr-FR']
++]) {
++  test(`locale priority: ${lang} / ${language} -> ${expected}`, () => {
++    const utils = load(lang, language);
++    assert.equal(utils.formatDate(raw), date.toLocaleDateString(expected, defaults));
++    assert.equal(utils.formatDate(raw, 'unknown'), date.toLocaleDateString(expected, defaults));
++    const short = { month: 'short', day: '2-digit' };
++    assert.equal(utils.formatDate(raw, 'short'), date.toLocaleDateString(expected, short));
++    const datetime = { ...short, hour: '2-digit', minute: '2-digit' };
++    assert.equal(utils.formatDate(raw, 'datetime'), date.toLocaleString(expected, datetime));
++    const custom = { weekday: 'long', timeZone: 'UTC' };
++    assert.equal(utils.formatDate(raw, custom), date.toLocaleDateString(expected, custom));
++  });
++}
++
++for (const lang of ['en-US', 'en_US']) {
++  test(`invalid input and options remain empty with document locale ${lang}`, () => {
++    const utils = load(lang, 'es_CL');
++    for (const input of [null, undefined, '', 0, 'not-a-date']) {
++      assert.equal(utils.formatDate(input), '');
++    }
++    for (const options of [
++      { month: 'invalid' },
++      { hour: 'invalid' },
++      { timeZone: 'Not/AZone' },
++      { dateStyle: 'short', year: 'numeric' }
++    ]) {
++      assert.equal(utils.formatDate(raw, options), '');
++    }
++  });
++}

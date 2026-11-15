@@ -85,7 +85,8 @@
           "enum": [
             "maintenance",
             "shadow",
-            "candidate"
+            "candidate",
+            "verification"
           ]
         }
       },
@@ -771,6 +772,19 @@
           "type": "string",
           "maxLength": 64,
           "pattern": "^[0-9]*$"
+        }
+      }
+    },
+    "verifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "digest"
+      ],
+      "properties": {
+        "digest": {
+          "type": "string",
+          "pattern": "^$|^sha256:[a-f0-9]{64}$"
         }
       }
     }

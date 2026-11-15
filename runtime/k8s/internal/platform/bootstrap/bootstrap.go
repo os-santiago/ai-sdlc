@@ -25,8 +25,8 @@ type Component struct {
 // active. An omitted mode is maintenance, not a stateless public evaluator.
 func ValidateMode() error {
 	mode := os.Getenv("AI_SDLC_RUNTIME_MODE")
-	if mode != "" && mode != "maintenance" && mode != "shadow" && mode != "candidate" {
-		return errors.New("runtime supports maintenance, shadow and bounded candidate modes only")
+	if mode != "" && mode != "maintenance" && mode != "shadow" && mode != "candidate" && mode != "verification" {
+		return errors.New("runtime supports maintenance, shadow, candidate and verification modes only")
 	}
 	return nil
 }
@@ -81,12 +81,12 @@ func (c *Component) Authority() (authority.Policy, authority.Identity, error) {
 	if os.Getenv("AI_SDLC_RUNTIME_MODE") == "shadow" && p.Autonomy != "shadow" {
 		return authority.Policy{}, authority.Identity{}, errors.New("shadow mode requires shadow authority ceiling")
 	}
-	if os.Getenv("AI_SDLC_RUNTIME_MODE") == "candidate" {
+	if CandidateEnabled() {
 		if p.Autonomy != "auto-pr" {
 			return authority.Policy{}, authority.Identity{}, errors.New("candidate mode requires auto-pr ceiling")
 		}
 		for _, grant := range p.Grants {
-			if grant.Operation != "admit-issue" && grant.Operation != "plan-admission" && grant.Operation != "execute-work" {
+			if grant.Operation != "admit-issue" && grant.Operation != "plan-admission" && grant.Operation != "execute-work" && !(os.Getenv("AI_SDLC_RUNTIME_MODE") == "verification" && grant.Operation == "verify-artifact") {
 				return authority.Policy{}, authority.Identity{}, errors.New("candidate mode denies downstream authority")
 			}
 		}
@@ -123,5 +123,11 @@ func (c *Component) Ready(ctx context.Context) error {
 // IntakeEnabled installs only authenticated issue ingress and component routes.
 func IntakeEnabled() bool {
 	m := os.Getenv("AI_SDLC_RUNTIME_MODE")
-	return m == "shadow" || m == "candidate"
+	return m == "shadow" || m == "candidate" || m == "verification"
+}
+
+// CandidateEnabled includes the explicitly enabled independent verification stage.
+func CandidateEnabled() bool {
+	m := os.Getenv("AI_SDLC_RUNTIME_MODE")
+	return m == "candidate" || m == "verification"
 }

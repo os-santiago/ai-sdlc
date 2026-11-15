@@ -1,0 +1,154 @@
+{{- if eq .Values.runtime.mode "verification" }}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" .Values.verifier.digest) }}
+{{- fail "verification mode requires a reviewed immutable verifier digest" }}
+{{- end }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-sdlc-verifiers
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata: {name: verifier-bounds, namespace: ai-sdlc-verifiers}
+spec:
+  hard: {pods: "4", configmaps: "4", requests.cpu: "1", requests.memory: 1Gi, limits.cpu: "4", limits.memory: 2Gi}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: deny-all, namespace: ai-sdlc-verifiers}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: ai-sdlc-verification-controller, namespace: {{ .Release.Namespace }}}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: verification-controller, namespace: ai-sdlc-verifiers}
+rules:
+  - apiGroups: [""]
+    resources: [pods, configmaps]
+    verbs: [create, get, delete]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: verification-controller, namespace: ai-sdlc-verifiers}
+subjects:
+  - kind: ServiceAccount
+    name: ai-sdlc-verification-controller
+    namespace: {{ .Release.Namespace }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: verification-controller}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: ai-sdlc-verifier-egress, namespace: {{ .Release.Namespace }}}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: verifier
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4]
+      ports: [{protocol: TCP, port: 443}]
+    {{- range .Values.candidate.apiServerCIDRs }}
+    - to: [{ipBlock: {cidr: {{ . | quote }}}}]
+      ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 6443}]
+    {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-verifier
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: verifier
+  ports: [{name: http, port: 8087, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-verifier
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: verifier
+  template:
+    metadata:
+      labels:
+        {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: verifier
+      annotations:
+        checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: ai-sdlc-verification-controller
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: verifier
+          image: "{{ .Values.image.repository }}@{{ .Values.verifier.digest }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
+          env:
+            - {name: AI_SDLC_HTTP_ADDRESS, value: ":8087"}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: {{ printf "%s-verifier" .Values.authority.databaseSecretPrefix }}, key: uri}
+          ports: [{name: http, containerPort: 8087}]
+          readinessProbe: {httpGet: {path: /readyz, port: http}}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, initialDelaySeconds: 10}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
+          volumeMounts:
+            - {name: authority, mountPath: /etc/ai-sdlc/authority, readOnly: true}
+            - {name: identity, mountPath: /etc/ai-sdlc/identity, readOnly: true}
+            - {name: intake, mountPath: /etc/ai-sdlc/intake, readOnly: true}
+            - {name: execution, mountPath: /etc/ai-sdlc/execution, readOnly: true}
+            - {name: kubernetes, mountPath: /var/run/ai-sdlc/kubernetes, readOnly: true}
+      volumes:
+        - name: authority
+          configMap: {name: {{ .Values.authority.policyConfigMap }}}
+        - name: identity
+          secret: {secretName: {{ printf "%s-verifier" .Values.authority.identitySecretPrefix }}, defaultMode: 0440}
+        - name: intake
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-intake}
+        - name: execution
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-execution}
+        - name: kubernetes
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken: {path: token, expirationSeconds: 3600}
+              - configMap:
+                  name: kube-root-ca.crt
+                  items: [{key: ca.crt, path: ca.crt}]
+{{- end }}
