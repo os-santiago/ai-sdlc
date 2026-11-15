@@ -53,7 +53,10 @@ func NewProvider(config ProviderConfig) (*Provider, error) {
 		DialContext:         (&net.Dialer{Timeout: 3 * time.Second, KeepAlive: -1}).DialContext,
 		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}},
 		TLSNextProto:        map[string]func(string, *tls.Conn) http.RoundTripper{},
-		TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 15 * time.Second,
+		// The supervised completion adapter buffers its result for up to 24s.
+		// Keep a bounded margin for its response; the entire request still has
+		// a 30s ceiling and an earlier caller deadline always takes precedence.
+		TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 25 * time.Second,
 		MaxResponseHeaderBytes: 8192,
 	}
 	client := &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

@@ -23,7 +23,9 @@ allows only literal loopback IP addresses. The endpoint path is fixed to
 The transport uses fresh HTTP/1 connections without keep-alive, HTTP/2, ambient
 proxies, redirects, compression or a replayable request body. There is one HTTP
 request attempt, with a 30-second client limit, three-second connection/TLS
-limits, 15-second response-header limit and 8-KiB response-header bound. The
+limits, 25-second response-header limit and 8-KiB response-header bound. The
+header limit accommodates the local adapter's existing 24-second buffered
+completion bound; earlier cancellation still interrupts header waiting. The
 dispatch deadline is also capped by the executor profile and by the remaining
 call/mailbox lifetime minus a 15-second handoff margin. No failed HTTP exchange
 is retried. This does not imply exactly-once execution inside the provider.
