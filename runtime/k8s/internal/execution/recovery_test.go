@@ -2,8 +2,13 @@ package execution
 
 import (
 	"context"
+	"encoding/pem"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -194,5 +199,44 @@ func TestStoppedControllerIsTerminalizedAndCleanupCooldownBlocks(t *testing.T) {
 				t.Fatal("terminalization is not idempotent", err)
 			}
 		})
+	}
+}
+
+func TestCrashBeforeFirstEffectCleanupCompletesWithoutAPICall(t *testing.T) {
+	f := newLifecycleFixture(t)
+	candidatePrivileges(t, f.preparationFixture.fixture)
+	f.placement.Namespace = "ai-sdlc-executors"
+	l := f.open(t)
+	ctx := context.Background()
+	if _, e := f.Admin.Pool.Exec(`UPDATE execution_requests SET claim_until=clock_timestamp()-interval '1 second'`); e != nil {
+		t.Fatal(e)
+	}
+	if e := f.db.ExpireExecutionClaims(ctx); e != nil {
+		t.Fatal(e)
+	}
+	r, e := f.db.NextExecutionCleanup(ctx)
+	if e != nil || r.RequestID != l.durable.Claim.ID || r.PodUID != "" || r.ConfigUID != "" || r.Uncertain {
+		t.Fatal("pre-effect cleanup", r, e)
+	}
+	calls := new(atomic.Int32)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { calls.Add(1); w.WriteHeader(500) }))
+	defer server.Close()
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	client, e := podtransport.NewClient(podtransport.Config{APIServer: server.URL, CA: ca, BearerToken: strings.Repeat("x", 40)})
+	if e != nil {
+		t.Fatal(e)
+	}
+	removed := client.CleanupAcknowledged(ctx, r.Namespace, r.PodName, r.ConfigName, r.PodUID, r.ConfigUID) == nil
+	if !removed || calls.Load() != 0 {
+		t.Fatal("empty cleanup denied or reached API")
+	}
+	if e := f.db.FinishExecutionCleanup(ctx, r, removed); e != nil {
+		t.Fatal(e)
+	}
+	if blocked, e := f.db.ExecutionCleanupBlocked(ctx); e != nil || blocked {
+		t.Fatal("empty cleanup blocked next request", e)
+	}
+	if next, e := f.db.NextExecutionCleanup(ctx); e != nil || next.RequestID != "" {
+		t.Fatal("empty cleanup replayed", e)
 	}
 }
