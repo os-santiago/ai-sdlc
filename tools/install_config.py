@@ -50,8 +50,8 @@ def resolve(args):
     """Reject conflicting CLI scope before any external calls; never import auth."""
     if args.config is None:
         return None
-    if args.command not in ('plan', 'local', 'status', 'credentials'):
-        raise ValueError('--config supports plan, local, status and credentials only')
+    if args.command not in ('plan', 'local', 'status', 'credentials', 'sandbox'):
+        raise ValueError('--config supports plan, local, status, credentials and sandbox only')
     values, digest = load(args.config)
     for key, value in values.items():
         supplied = getattr(args, key)

@@ -176,6 +176,12 @@ key under an existing trusted public key.
 
 ## Shadow intake
 
+For the optional executor containment prerequisite, use
+`./install.sh sandbox --config examples/homedir.local-install.json` after
+installation. It installs a pinned offline gVisor RuntimeClass inside the owned
+kind node and runs adversarial conformance checks; it does not enable delivery.
+See [offline executor runtime](security/offline-executor-runtime.md).
+
 The opt-in [shadow profile](../runtime/k8s/deploy/local/profiles/shadow.json)
 connects GitHub issues to signed admission and durable plans. Its authority
 ceiling remains `shadow`: there is no model invocation, artifact execution,

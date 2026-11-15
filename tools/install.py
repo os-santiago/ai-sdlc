@@ -262,7 +262,7 @@ def shadow_intake_config(kubectl, cluster_uid, repository):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['plan', 'local', 'status', 'tools', 'host', 'credentials'])
+    parser.add_argument('command', choices=['plan', 'local', 'status', 'tools', 'host', 'credentials', 'sandbox'])
     parser.add_argument('--configure-host', action='store_true', help='Raise inotify limits to committed minima for this boot; requires root')
     parser.add_argument('--config', type=Path, help='Reviewed local installation JSON; credentials remain explicit CLI choices')
     parser.add_argument('--cluster')
@@ -336,7 +336,7 @@ def main(argv=None):
     marker = state / 'ownership.json'
     if args.cluster in clusters and not marker.exists():
         raise ValueError('Cluster already exists without this installer ownership record; choose a different --cluster.')
-    if args.command in ('status', 'credentials') and args.cluster not in clusters:
+    if args.command in ('status', 'credentials', 'sandbox') and args.cluster not in clusters:
         raise ValueError('The requested local cluster does not exist')
     created = args.cluster not in clusters
     if created:
@@ -365,6 +365,20 @@ def main(argv=None):
             raise ValueError('Install matching repository authority before configuring credentials')
         print(json.dumps(configure_github_client(kubectl, cluster_uid, args.repository,
                                                 args.refresh_github_credential), indent=2))
+        return 0
+    if args.command == 'sandbox':
+        import offline_runtime
+        policy = read_resource(kubectl, 'configmap', 'ai-sdlc-authority')
+        scope = json.loads((policy or {}).get('data', {}).get('policy.json', '{}'))
+        if (policy is None or policy.get('metadata', {}).get('annotations', {}).get('ai-sdlc.io/cluster-uid') != cluster_uid
+                or scope.get('repository') != args.repository or scope.get('environment') != args.environment):
+            raise ValueError('Install matching authority scope before configuring the offline runtime')
+        lock = image_lock(args.images)
+        result = offline_runtime.install(kubectl, provider, kind, args.cluster, cluster_uid,
+                                         cache / 'offline-runtime',
+                                         lock['image']['repository'] + '@' + lock['components']['worker']['digest'])
+        (state / 'offline-runtime.json').write_text(json.dumps(result, indent=2) + '\n')
+        print(json.dumps(result, indent=2))
         return 0
     # kind's node readiness alone does not establish service networking or
     # dynamic storage. Fail here before consuming the bounded migration window.
