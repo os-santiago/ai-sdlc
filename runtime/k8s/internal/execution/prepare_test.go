@@ -20,9 +20,9 @@ type preparationFixture struct {
 	inputs PreparationInputs
 }
 
-func newPreparationFixture(t *testing.T) *preparationFixture {
+func newPreparationFixture(t *testing.T, configure ...func(*fixture)) *preparationFixture {
 	t.Helper()
-	f := newFixture(t)
+	f := newFixture(t, configure...)
 	adev := []byte("reviewed-fixture: use bounded deterministic validation\n")
 	profile, _ := json.Marshal(executor.Profile{Version: executor.ProfileVersion, Model: "fixture", MaxSteps: 4, MaxSeconds: 30, MaxTokens: 1024, ADevSHA256: workspacebundle.Digest(adev)})
 	f.command.ProfileSHA256 = workspacebundle.Digest(profile)

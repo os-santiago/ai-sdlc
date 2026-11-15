@@ -15,10 +15,18 @@ type VerificationCandidate struct {
 }
 
 func (db *DB) ReadVerificationCandidate(ctx context.Context, id string) (VerificationCandidate, error) {
+	return db.readCandidate(ctx, id, "verifier")
+}
+
+// ReadCapturedCandidate is the worker's read-only view for signed handoff.
+func (db *DB) ReadCapturedCandidate(ctx context.Context, id string) (VerificationCandidate, error) {
+	return db.readCandidate(ctx, id, "worker")
+}
+func (db *DB) readCandidate(ctx context.Context, id, component string) (VerificationCandidate, error) {
 	var result VerificationCandidate
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	if AssertComponent(ctx, db.Pool, "verifier") != nil {
+	if AssertComponent(ctx, db.Pool, component) != nil {
 		return result, ErrExecution
 	}
 	err := db.Pool.QueryRowContext(ctx, `SELECT c.request_id,c.allocation_id,c.pod_uid,c.source_sha,c.source_tree_sha256,c.candidate_tree_sha256,c.export_sha256,c.export_bytes,c.delta_sha256,c.delta,c.changes,c.model_calls,c.created_at,r.work_item_uuid,r.repository,r.payload,r.receipt

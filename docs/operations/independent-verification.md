@@ -79,3 +79,69 @@ exclusive bounded claims and effect ledger, recovery after process loss,
 installation-owned offline verifier configuration, and authenticated audit
 consumption. PR publication, current forge merge gates, Konflux policy and
 same-digest test-production promotion remain separate outerloop stages.
+
+## Signed handoff and bounded reconciliation
+
+The worker can derive a `verify-artifact` command only from a captured candidate
+whose executor cleanup is complete, whose original signed execution request is
+unexpired, and whose current issue evidence still selects the reviewed recipe.
+The command retains the original expiry. Its disposition and signed outbox entry
+are committed together; an unsupported or revoked candidate is terminally rejected.
+
+The independent verifier inbox records only a matching signed worker handoff.
+Before each effect, the controller rechecks the original request, candidate delta,
+source, generation, issue criteria, authority, intake configuration and generation
+profile. A nonrenewable exclusive claim lasts at most 180 seconds and never beyond
+the signed command expiry. Each configuration/Pod creation has a durable intent
+followed by an immutable UID acknowledgement. Results from four separate offline
+Pods must agree with the reviewed oracle, and all confirmed resources must be
+removed before the behavior proof is committed. That proof explicitly grants no
+publication authority; it is neither an independent agent audit nor a merge gate.
+
+A failed or expired claim cannot be adopted. Recovery deletes only acknowledged
+name/UID pairs, with at most three reserved cleanup attempts and a 30-second
+cooldown. A lost create reply leaves an unknown UID: the controller neither
+retries creation nor deletes by name, and blocks further claims. Operator-directed
+infrastructure recovery must establish ownership separately; it cannot manufacture
+a successful verification record.
+
+This controller is an integration library in this revision. Migration 0013 adds
+its ledger and RLS policies, but the operational provisioner, component routes,
+Helm profile and installer do not activate it. The live candidate profile still
+stops at an unvalidated artifact.
+
+## Reproduce the composed runtime fixture
+
+Build the two test executables from `runtime/k8s` using the pinned Go toolchain:
+
+```bash
+go test -c -o /private/fixtures/candidate.test ./internal/execution
+go test -c -o /private/fixtures/verifier.test ./internal/verificationflow
+```
+
+Use the existing disposable `ai_sdlc_test` database and an offline-runtime kind
+cluster. Supply `AI_SDLC_TEST_DATABASE_URL` through the local test environment;
+never put credentials in a command or report. The fixture resets that database
+and refuses to adopt either existing executor or verifier namespace.
+
+```bash
+python3 tools/verify_verification_flow.py \
+  --kubectl /path/to/kubectl --kubeconfig /private/fixture-kubeconfig \
+  --candidate-binary /private/fixtures/candidate.test \
+  --verifier-binary /private/fixtures/verifier.test \
+  --worker-image REGISTRY/WORKER@sha256:DIGEST \
+  --mailbox-image REGISTRY/MAILBOX@sha256:DIGEST \
+  --source-sha PINNED_HOMEDIR_COMMIT \
+  --candidate-directory /private/supplied-fixture-candidate \
+  --report /private/verification-report.json
+```
+
+The candidate directory supplies only the two recipe files. Model responses and
+the issue are synthetic; SCC, source fetch, PostgreSQL, signed inbox/outbox,
+restricted service accounts, gVisor Pods, comparison and cleanup are real.
+Run `--scenario revoke-config`, `revoke-results`, `expire-config`, and
+`lost-config-reply` separately to exercise revocation, injected disposable claim
+expiry and a real API create whose UID response is discarded. The lost-reply
+scenario preserves the unknown resource until the harness deletes its own
+namespace by the namespace UID; runtime recovery remains uncertain and blocked.
+These fixtures do not demonstrate a live issue-to-production E2E.

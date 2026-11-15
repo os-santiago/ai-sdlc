@@ -14,7 +14,7 @@ from verify_pod_transport import TransportFixture
 from verify_workspace_bundle import wire
 
 
-def verify(kubectl, worker, mailbox, binary, source_sha, scenario="success"):
+def verify(kubectl, worker, mailbox, binary, source_sha, scenario="success", verification=None):
     database = urllib.parse.urlsplit(os.environ.get('AI_SDLC_TEST_DATABASE_URL', ''))
     if database.hostname not in ('127.0.0.1', 'localhost', '::1') or database.path != '/ai_sdlc_test':
         raise ValueError('Explicit disposable local ai_sdlc_test database required; it will be reset')
@@ -56,11 +56,11 @@ def verify(kubectl, worker, mailbox, binary, source_sha, scenario="success"):
             fd = os.open(control, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, 'wb') as stream:
                 stream.write(wire({'Config': {'APIServer': transport.config['APIServer'], 'CA': transport.config['CA'], 'BearerToken': token},
-                                   'Runtime': runtime, 'SourceSHA': source_sha, 'ReportFile': str(report), 'Scenario': scenario}))
+                                   'Runtime': runtime, 'SourceSHA': source_sha, 'ReportFile': str(report), 'Scenario': scenario, **(verification or {})}))
             (root/'go-tmp').mkdir()
             child_env = dict(os.environ, AI_SDLC_CANDIDATE_FIXTURE=str(control), TMPDIR=str(root/'go-tmp'))
             result = subprocess.run([str(Path(binary).resolve()), '-test.run', '^TestRealCandidateRuntimeFixture$', '-test.v'],
-                env=child_env, capture_output=True, timeout=210)
+                env=child_env, capture_output=True, timeout=420 if verification else 210)
             if scenario == 'crash-after-model-start' and result.returncode == 91:
                 result = subprocess.run([str(Path(binary).resolve()), '-test.run', '^TestRealCandidateRecoveryFixture$', '-test.v'], env=child_env, capture_output=True, timeout=210)
             if result.returncode:

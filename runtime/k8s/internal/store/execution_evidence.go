@@ -16,10 +16,19 @@ type ExecutionEvidence struct {
 }
 
 func (db *DB) ReadExecutionEvidence(ctx context.Context, work, repository string, issue, maximumAgeSeconds int) (ExecutionEvidence, error) {
+	return db.readExecutionEvidence(ctx, "worker", work, repository, issue, maximumAgeSeconds)
+}
+
+// ReadVerificationEvidence is read-only and requires the independent identity.
+// Its caller must still validate the original signed request and current issue.
+func (db *DB) ReadVerificationEvidence(ctx context.Context, work, repository string, issue, maximumAgeSeconds int) (ExecutionEvidence, error) {
+	return db.readExecutionEvidence(ctx, "verifier", work, repository, issue, maximumAgeSeconds)
+}
+func (db *DB) readExecutionEvidence(ctx context.Context, component, work, repository string, issue, maximumAgeSeconds int) (ExecutionEvidence, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var e ExecutionEvidence
-	if maximumAgeSeconds < 30 || maximumAgeSeconds > 300 || AssertComponent(ctx, db.Pool, "worker") != nil {
+	if maximumAgeSeconds < 30 || maximumAgeSeconds > 300 || AssertComponent(ctx, db.Pool, component) != nil {
 		return e, ErrExecution
 	}
 	err := db.Pool.QueryRowContext(ctx, `SELECT
