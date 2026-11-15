@@ -35,3 +35,6 @@ and [pull request merge API](https://docs.github.com/en/rest/pulls/pulls#merge-a
 
 This change records evidence only. It does not install or authorize that future
 merge controller, Konflux promotion or production deployment.
+
+The inactive [authenticated merge collector](authenticated-merge-gate.md) supplies
+bounded current forge observations; it does not grant the fresh merge authority.
