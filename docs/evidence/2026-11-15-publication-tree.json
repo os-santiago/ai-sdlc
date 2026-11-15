@@ -1,0 +1,14 @@
+{
+  "scope": "isolated-publication-tree-fixture",
+  "autonomousE2E": false,
+  "sourceSHA": "0622cdaeb59a11a27bd5f3d7e18183c401a5e412",
+  "sourceGitTreeSHA": "02aaf1c1eb576f4e85a094acb832528de0b5a2e4",
+  "candidateGitTreeSHA": "26cbd4b28f0e2a6fc594f9de18e594d313ea2449",
+  "candidateDeltaSHA256": "e9168d5823b7a9d864e89fe07b09b76bfde32c690460db77c5ebd63853b58f2d",
+  "candidateTreeSHA256": "0296aed54468853cba4797a9ab0d21512494799b980815d2cc61f89183396a22",
+  "changedFiles": 2,
+  "forgeWrites": 0,
+  "actualGitObjectsCompared": true,
+  "sourceCheckoutModified": false,
+  "temporaryRepositoryRemoved": true
+}

@@ -1,0 +1,141 @@
+package publication
+
+import (
+	"bytes"
+	"crypto/sha1" // Git object identities; SHA-256 remains the evidence binding.
+	"encoding/hex"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
+)
+
+type TreeEntry struct {
+	Path    string `json:"path"`
+	Mode    string `json:"mode"`
+	Type    string `json:"type"`
+	Content string `json:"content"`
+}
+type TreeRequest struct {
+	BaseTree string      `json:"base_tree"`
+	Tree     []TreeEntry `json:"tree"`
+}
+type TreePlan struct {
+	Request         TreeRequest
+	ExpectedTreeSHA string
+	Branch          string
+	CommitMessage   string
+}
+
+// PrepareTree is pure reconstruction, not a publication authorization. It must
+// be followed by current signed evidence checks and a durable effect journal.
+// Only the two files in the reviewed low-risk Homedir recipe can be written.
+func PrepareTree(c Command, source workspacebundle.Bundle, delta []byte) (TreePlan, error) {
+	if c.Repository != "os-santiago/homedir" || c.SourceSHA != source.SourceSHA || c.IssueNumber < 1 || !candidateID.MatchString(c.CandidateID) || workspacebundle.Digest(delta) != c.DeltaSHA256 {
+		return TreePlan{}, ErrPublication
+	}
+	if _, err := verification.Prepare(c.Repository, verification.LocaleRecipe, verification.RecipeMarker, source, delta); err != nil {
+		return TreePlan{}, ErrPublication
+	}
+	d, err := candidate.Decode(delta)
+	if err != nil || d.CandidateTreeSHA256 != c.CandidateTreeSHA256 {
+		return TreePlan{}, ErrPublication
+	}
+	result, err := candidate.Apply(source, d)
+	if err != nil {
+		return TreePlan{}, ErrPublication
+	}
+	base, err := GitTreeSHA(source)
+	if err != nil {
+		return TreePlan{}, err
+	}
+	expected, err := GitTreeSHA(result)
+	if err != nil {
+		return TreePlan{}, err
+	}
+	entries := make([]TreeEntry, 0, 2)
+	for _, change := range d.Changes {
+		if change.After == nil || !utf8.Valid(change.After.Data) {
+			return TreePlan{}, ErrPublication
+		}
+		entries = append(entries, TreeEntry{Path: change.Path, Mode: "100644", Type: "blob", Content: string(change.After.Data)})
+	}
+	// Keep the tested public VPS release workflow out of the local-kind pilot.
+	// No model or issue text can remove the explicit release-skip marker.
+	return TreePlan{Request: TreeRequest{base, entries}, ExpectedTreeSHA: expected,
+		Branch:        "ai-sdlc/issue-" + strconv.Itoa(c.IssueNumber) + "-" + strings.TrimPrefix(c.CandidateID, "execution-")[:32],
+		CommitMessage: fmt.Sprintf("fix(ai-sdlc): address issue #%d [skip release]", c.IssueNumber)}, nil
+}
+
+type gitNode struct {
+	children map[string]*gitNode
+	file     *workspacebundle.File
+}
+
+func objectID(kind string, raw []byte) []byte {
+	h := sha1.New()
+	fmt.Fprintf(h, "%s %d\x00", kind, len(raw))
+	h.Write(raw)
+	return h.Sum(nil)
+}
+func hashNode(node *gitNode) []byte {
+	keys := make([]string, 0, len(node.children))
+	for name, child := range node.children {
+		key := name
+		if child.file == nil {
+			key += "/"
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var raw bytes.Buffer
+	for _, key := range keys {
+		name := strings.TrimSuffix(key, "/")
+		child := node.children[name]
+		mode := "40000"
+		var digest []byte
+		if child.file != nil {
+			mode = "100644"
+			if child.file.Mode == 0755 {
+				mode = "100755"
+			}
+			digest = objectID("blob", child.file.Data)
+		} else {
+			digest = hashNode(child)
+		}
+		fmt.Fprintf(&raw, "%s %s\x00", mode, name)
+		raw.Write(digest)
+	}
+	return objectID("tree", raw.Bytes())
+}
+
+// GitTreeSHA independently reconstructs canonical Git object identities without
+// invoking git, filters, attributes, hooks or code from the source repository.
+func GitTreeSHA(bundle workspacebundle.Bundle) (string, error) {
+	if bundle.Validate() != nil {
+		return "", ErrPublication
+	}
+	root := &gitNode{children: map[string]*gitNode{}}
+	for _, file := range bundle.Files {
+		node := root
+		parts := strings.Split(file.Path, "/")
+		for i, part := range parts {
+			child := node.children[part]
+			if child == nil {
+				child = &gitNode{children: map[string]*gitNode{}}
+				node.children[part] = child
+			}
+			if i == len(parts)-1 {
+				copied := file
+				child.file = &copied
+			}
+			node = child
+		}
+	}
+	return hex.EncodeToString(hashNode(root)), nil
+}
