@@ -17,4 +17,3 @@ postgres:
 openshift:
   route:
     enabled: false
-localNetworkPolicy: {enabled: true}

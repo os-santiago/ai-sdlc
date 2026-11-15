@@ -51,7 +51,7 @@ can enter that profile. See [shadow intake](docs/installation.md#shadow-intake)
 for scope, verification and returning to maintenance.
 
 Local installation also verifies NetworkPolicy enforcement with temporary
-connectivity probes. The kind profile includes a pinned firewall controller;
+connectivity probes against the network plugin included in the pinned kind image;
 see the [installation boundaries](docs/installation.md#installation-readiness-versus-autonomous-delivery).
 
 ## GitHub Actions deprecation

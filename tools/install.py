@@ -403,8 +403,6 @@ def main(argv=None):
     for name in COMPONENT_NAMES.values():
         run(kubectl + ['rollout', 'status', 'deployment/ai-sdlc-' + name, '-n', NAMESPACE,
                        '--timeout', args.timeout])
-    run(kubectl + ['rollout', 'status', 'daemonset/ai-sdlc-network-policy', '-n', 'kube-system',
-                   '--timeout', args.timeout])
     lock = image_lock(args.images)
     network = network_probe.verify(kubectl, lock['image']['repository'] + '@' + lock['components']['worker']['digest'])
     report = {'cluster': args.cluster, 'namespace': NAMESPACE, 'provider': provider,

@@ -11,6 +11,14 @@ def connection_result(result):
     return result.returncode == 0
 
 
+def cleanup_namespace(call, namespace, uid):
+    # The API evaluates the UID with the deletion atomically. A replacement
+    # namespace must survive even if it appears between our reads and DELETE.
+    call(['delete', '--raw', '/api/v1/namespaces/' + namespace, '-f', '-'],
+         {'apiVersion': 'v1', 'kind': 'DeleteOptions', 'preconditions': {'uid': uid}})
+    call(['wait', '--for=delete', 'namespace/' + namespace, '--timeout=60s'])
+
+
 def pod(namespace, name, image):
     server = name.startswith('server')
     code = ("require('http').createServer((q,s)=>s.end('network-probe')).listen(8080,'0.0.0.0')"
@@ -96,8 +104,12 @@ def verify(kubectl, image):
              'ports': [{'protocol': 'TCP', 'port': 8080}]}]))
         expect(servers[0], True)
         expect(servers[1], False)
-        apply(policy(namespace, 'server-ingress', 'server-b', 'Ingress', []))
         apply(policy(namespace, 'client-egress', 'client', 'Egress', [{}]))
+        # Establish both reachable with unrestricted egress before testing
+        # ingress. Otherwise a stale egress deny can masquerade as ingress.
+        for target in servers:
+            expect(target, True)
+        apply(policy(namespace, 'server-ingress', 'server-b', 'Ingress', []))
         expect(servers[0], True)
         expect(servers[1], False)
         # Remove the deny rule and prove the server still works. A dead server
@@ -106,9 +118,6 @@ def verify(kubectl, image):
         expect(servers[1], True)
     finally:
         if uid:
-            current = json.loads(call(['get', 'namespace', namespace, '-o', 'json']))
-            if current['metadata']['uid'] != uid:
-                raise ValueError('Network probe namespace ownership changed; cleanup refused')
-            call(['delete', 'namespace', namespace, '--wait=true', '--timeout=60s'])
+            cleanup_namespace(call, namespace, uid)
     return {'egressDeny': True, 'selectiveEgress': True, 'ingressDeny': True,
             'positiveControls': True, 'temporaryResourcesRemoved': True}

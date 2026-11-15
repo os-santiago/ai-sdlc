@@ -95,8 +95,5 @@ components:
 networkPolicy:
   enabled: true
   databaseEgressCIDRs: []
-localNetworkPolicy:
-  enabled: false
-  image: docker.io/cloudnativelabs/kube-router:v2.12.0@sha256:29034446e59a9e984a8a720c03f2ba1ce4e61ebb938d1a88c8f40b08bdb06c78
 openshift:
   route: {enabled: false, host: ""}

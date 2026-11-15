@@ -745,23 +745,6 @@
           "pattern": "^[a-z0-9][a-z0-9-]*$"
         }
       }
-    },
-    "localNetworkPolicy": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "enabled",
-        "image"
-      ],
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "image": {
-          "type": "string",
-          "pattern": "^docker\\.io/cloudnativelabs/kube-router:v[0-9]+\\.[0-9]+\\.[0-9]+@sha256:[a-f0-9]{64}$"
-        }
-      }
     }
   },
   "required": [
@@ -782,8 +765,7 @@
     "openshift",
     "authority",
     "migrator",
-    "intake",
-    "localNetworkPolicy"
+    "intake"
   ],
   "$schema": "http://json-schema.org/draft-07/schema#"
 }

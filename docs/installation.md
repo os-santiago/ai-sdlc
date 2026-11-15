@@ -235,27 +235,26 @@ generative execution are disabled. The chart rejects `runtime.mode=active`
 until isolated execution and authoritative publication are implemented.
 No model/API/GitHub write credentials are mounted in this mode.
 
-The local profile installs a pinned kube-router firewall controller alongside
-kindnet and kube-proxy. It does not replace their routing, service proxy or CNI
-configuration. This follows the upstream [firewall-only deployment](https://github.com/cloudnativelabs/kube-router/blob/6e325beb97be4c653d9a79b04c45c02ed44d84d9/daemonset/kube-router-firewall-daemonset.yaml).
-The trusted controller requires node network privileges and read-only cluster
-discovery. It runs in `kube-system`, with no Secret access or workload-write
-permissions; runtime components remain unprivileged and token-free.
+The pinned kind node image includes kindnet with
+[NetworkPolicy enforcement](https://github.com/kubernetes-sigs/kind/blob/69b56db7/images/kindnetd/cmd/kindnetd/main.go).
+Each local apply verifies that capability with disposable positive and negative
+connectivity tests instead of assuming a CNI's feature set. The probes establish
+baseline connectivity, egress denial, selective egress, unrestricted egress
+again, ingress denial and restored connectivity, then remove the temporary
+namespace using an atomic UID precondition. An API/exec error is a failure,
+never evidence of a blocked connection. Installation succeeds only after these
+tests pass. No additional network controller is installed.
 
-Each local apply runs disposable positive and negative connectivity tests.
-They prove ingress denial, egress denial and a selective allow rule, then
-remove the temporary namespace. An API/exec error is a failure, never evidence
-of a blocked connection. Installation succeeds only after these tests pass.
-These tests do not submit runtime tasks or modify workflow state. A process
+These probes do not submit runtime tasks or modify workflow state. A process
 interrupted during testing can leave an `ai-sdlc-netcheck-*` namespace; inspect
-its ownership label before removing it.
+its ownership label before removing it. The probe Pods run under the restricted
+Pod Security policy without runtime credentials or service-account tokens.
 
-The base chart leaves `localNetworkPolicy.enabled=false` for existing clusters,
-which must supply their own compatible enforcement. Kubernetes
-[NetworkPolicy requires a supporting network plugin](https://kubernetes.io/docs/concepts/services-networking/network-policies/).
-The local conformance test proves network behavior at installation time; it
-does not prove future generated-workload isolation, application authentication
-or continuous enforcement. Those additional boundaries remain #421/#422.
+Existing clusters must provide their own compatible network plugin:
+[NetworkPolicy requires enforcement support](https://kubernetes.io/docs/concepts/services-networking/network-policies/).
+The conformance test proves network behavior at installation time; it does not
+prove future generated-workload isolation, application authentication or
+continuous enforcement. Those additional boundaries remain #421/#422.
 
 Independent verification, PR/merge/release and
 production promotion remain tracked under #153. The experimental CodexCLI

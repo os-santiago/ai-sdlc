@@ -1,10 +1,19 @@
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
-from network_probe import connection_result, pod
+from network_probe import cleanup_namespace, connection_result, pod
 
 
 class NetworkConformanceTests(unittest.TestCase):
+    def test_cleanup_uses_atomic_uid_precondition_and_never_retries_conflict(self):
+        call = Mock(side_effect=ValueError('Conflict: replacement namespace has a different UID'))
+        with self.assertRaises(ValueError):
+            cleanup_namespace(call, 'owned-probe', 'original-uid')
+        call.assert_called_once_with(
+            ['delete', '--raw', '/api/v1/namespaces/owned-probe', '-f', '-'],
+            {'apiVersion': 'v1', 'kind': 'DeleteOptions', 'preconditions': {'uid': 'original-uid'}})
+
     def test_transport_or_exec_failure_is_never_a_successful_denial(self):
         for code, output in [(1, ''), (3, ''), (0, ''), (2, 'probe:allowed'), (0, 'probe:denied')]:
             with self.assertRaises(ValueError):

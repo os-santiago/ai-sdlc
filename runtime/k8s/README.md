@@ -11,10 +11,9 @@ The canonical installer is `./install.sh` at the repository root. Helm chart
 The original Kustomize topology remains a legacy manual deployment surface;
 it is not the new installer's desired state.
 
-The kind profile includes kube-router in firewall-only mode and the installer
-requires positive/negative network conformance probes to pass. This trusted
-node controller is separate from the unprivileged runtime components. Existing
-remote clusters must provide their own NetworkPolicy enforcement.
+The installer requires positive/negative network conformance probes to pass
+against the plugin included in the pinned kind image. Existing remote clusters
+must provide their own NetworkPolicy enforcement.
 
 ## Components
 
