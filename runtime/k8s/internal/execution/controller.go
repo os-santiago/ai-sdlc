@@ -41,7 +41,7 @@ func DiagnosticStage(err error) string {
 		return "authority-or-storage"
 	}
 	switch stopped.Stage {
-	case "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "worker-exit", "export", "capture", "cleanup":
+	case "source-preflight-authority", "source-rate-limited", "source-unavailable", "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "worker-exit", "export", "capture", "cleanup":
 		return stopped.Stage
 	}
 	if strings.HasPrefix(stopped.Stage, "model-") {
