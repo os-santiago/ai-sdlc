@@ -1,0 +1,6 @@
+{
+  "runtime": {"mode": "shadow"},
+  "contract": {
+    "inline": "spec: \"1.0.0\"\nautonomy:\n  level: shadow\ntriggers:\n  issue_label: ai-sdlc:shadow\n  min_body_length: 120\n  acceptance_criteria:\n    min: 1\n    max: 8\n"
+  }
+}

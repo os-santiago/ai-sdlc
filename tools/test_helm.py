@@ -21,7 +21,7 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         docs = [d for d in yaml.safe_load_all(result.stdout) if d]
         deployments = [d for d in docs if d['kind'] == 'Deployment']
-        self.assertEqual(len(deployments), 5)
+        self.assertEqual(len(deployments), 6)
         services = {d['metadata']['name'] for d in docs if d['kind'] == 'Service'}
         for deployment in deployments:
             pod = deployment['spec']['template']['spec']
@@ -62,10 +62,22 @@ class ChartTests(unittest.TestCase):
         result = self.render('-f', str(lock))
         self.assertEqual(result.returncode, 0, result.stderr)
         docs = [d for d in yaml.safe_load_all(result.stdout) if d and d['kind'] in ('Deployment', 'Job')]
-        self.assertEqual(len(docs), 6)
+        self.assertEqual(len(docs), 7)
         for doc in docs:
             image = doc['spec']['template']['spec']['containers'][0]['image']
             self.assertRegex(image, r'^quay.io/os-santiago/ai-sdlc@sha256:[a-f0-9]{64}$')
+
+    def test_shadow_github_credential_is_mounted_only_in_intake(self):
+        result = self.render('-f', str(ROOT / 'runtime/k8s/deploy/local/profiles/shadow.json'))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        docs = [d for d in yaml.safe_load_all(result.stdout) if d and d['kind'] == 'Deployment']
+        for doc in docs:
+            name = doc['metadata']['labels']['app.kubernetes.io/component']
+            pod = doc['spec']['template']['spec']
+            secrets = [v.get('secret', {}).get('secretName') for v in pod['volumes']]
+            self.assertEqual('ai-sdlc-github-client' in secrets, name == 'intake')
+            env = pod['containers'][0]['env']
+            self.assertFalse(any(e['name'] == 'MODEL_API_KEY' for e in env))
 
 
 if __name__ == '__main__': unittest.main()

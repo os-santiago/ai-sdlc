@@ -52,8 +52,8 @@ kubeconfig/context. `XDG_CACHE_HOME` and `XDG_STATE_HOME` are supported.
 
 | Resource | Purpose |
 | --- | --- |
-| Five Deployments, one container each | Admission, orchestration, worker with SCC, release decisions, relay |
-| Five internal ClusterIP Services | Stable component DNS; no external delivery endpoint |
+| Six Deployments, one container each | Issue intake, admission, orchestration, worker with SCC, release decisions, relay |
+| Six internal ClusterIP Services | Stable component DNS; no external delivery endpoint |
 | PostgreSQL StatefulSet + PVC | Durable state and outbox, retained when the StatefulSet is removed |
 | ConfigMaps | Runtime settings, frozen shadow authority policy, contract and pinned ADEV profile |
 | Migration Job | Schema setup and component-role reconciliation, using the bootstrap credential |
@@ -105,9 +105,10 @@ does not prove that the token grants every required API permission: the report
 explicitly sets `writeCapabilitiesVerified: false`. Actual PR, merge and release
 operations must check their authoritative responses and fail closed on denial.
 
-The Secret is reserved for trusted GitHub operations. This maintenance release
-does not mount it in any workload, including the worker; generated Jobs must
-never receive it. Credential validation establishes access only, not a completed
+The Secret is reserved for trusted GitHub operations. The maintenance profile
+does not mount it in any workload. The shadow profile mounts it only in the
+deterministic intake service; the worker and generated Jobs never receive it.
+Credential validation establishes access only, not a completed
 autonomous delivery cycle. GitHub App runtime integration remains tracked in #425.
 
 ### Internal component credentials
@@ -135,6 +136,49 @@ Keep the component Secrets, the migrator credential map, authority ConfigMap
 and database together when preparing a backup. Losing a signing Secret requires
 restoration or a reviewed key rotation; reinstalling does not manufacture a new
 key under an existing trusted public key.
+
+## Shadow intake
+
+The opt-in [shadow profile](../runtime/k8s/deploy/local/profiles/shadow.json)
+connects GitHub issues to signed admission and durable plans. Its authority
+ceiling remains `shadow`: there is no model invocation, artifact execution,
+PR, merge, release or deployment. The default profile remains maintenance.
+
+```bash
+./install.sh plan --profile shadow
+./install.sh local --profile shadow --github-auth gh-cli --provider podman
+./install.sh status --provider podman
+```
+
+`plan` never reads a GitHub credential. Installation requires an explicitly
+imported credential or the explicit `--github-auth gh-cli` import option. The
+actor allowlist resolves the numeric account ID from that validated credential;
+issue text cannot authorize a different actor. The reviewed
+[intake policy](../runtime/k8s/deploy/local/intake-policy.json) selects the
+`ai-sdlc:shadow` label, `main` base branch, polling interval and page bound.
+The profile's strict contract requires an explicit acceptance-criteria section,
+bounded criteria and a body of at least 120 characters. Unknown or malformed
+shadow contract fields reject startup rather than falling back to defaults.
+
+Create a normal GitHub issue and apply `ai-sdlc:shadow` using the authorized
+account. Intake reads GitHub itself; do not POST events to internal services.
+Issue closure or removal of authorization records a withdrawal. Reopening or
+reverting content records a new monotonic generation; delayed old events cannot
+replace newer admission or plan state. Accepted plans remain blocked because
+this profile grants no execution authority. GitHub reads are snapshots; later
+execution/release integration must revalidate current eligibility before effects.
+
+Full scans restart in creation order so concurrent edits cannot permanently
+exclude an old issue through an update-time cursor. A scan exceeding 90 seconds
+or the configured page bound reports incomplete coverage and retains its last
+complete-scan watermark. Larger repositories may require future continuation
+support; this release does not claim coverage of an unvisited suffix.
+
+Reapply with the same `--profile shadow` selection to preserve this desired
+state. `./install.sh local --profile maintenance` freezes authority and returns
+all services to observation without deleting issue history, credentials or data.
+The installer only configures infrastructure; it does not manufacture issue
+events or complete a workflow stage.
 
 ## Git-managed desired state
 
@@ -166,11 +210,11 @@ compatible manifests; database downgrade safety is not implied (#441).
 
 ## Installation readiness versus autonomous delivery
 
-This release installs **maintenance mode**. Helm readiness means the five
+The default profile installs **maintenance mode**. Helm readiness means the six
 services have valid component identities and database permissions, and the migration Job completed. It does not mean an issue was delivered.
 HTTP mutation routes return `503 runtime_in_maintenance`; relay delivery and
 generative execution are disabled. The chart rejects `runtime.mode=active`
-until the issue-only intake and component authority work is implemented.
+until isolated execution and authoritative publication are implemented.
 No model/API/GitHub write credentials are mounted in this mode.
 
 The default kind CNI does not enforce Kubernetes NetworkPolicy. Policies
@@ -180,7 +224,7 @@ boundaries here; [NetworkPolicy enforcement requires a supporting CNI](https://k
 Application authentication and worker isolation remain
 #421/#422. Keep the local cluster on a trusted host.
 
-The missing issue adapters, independent verification, PR/merge/release and
+Independent verification, PR/merge/release and
 production promotion remain tracked under #153. The experimental CodexCLI
 wrapper is not installed or authenticated by this infrastructure installer.
 Do not submit synthetic tasks to internal endpoints to claim E2E success.
@@ -188,7 +232,7 @@ Do not submit synthetic tasks to internal endpoints to claim E2E success.
 ## Image construction and promotion
 
 GitHub Actions [`containers.yml`](../.github/workflows/containers.yml) builds
-all six component Containerfiles on pull requests, without publishing or
+all seven component Containerfiles on pull requests, without publishing or
 receiving Quay secrets. Pushes to `main` and trusted `build/**` branches,
 or manual dispatch on those branches, publish to:
 
@@ -204,7 +248,7 @@ Do not allow untrusted collaborators to push publishing branches or edit
 publication workflows.
 
 Publication does not change deployed state. Promote a verified build by
-updating `local/images.lock.json` in a reviewed PR with the five service digests and migrator artifact
+updating `local/images.lock.json` in a reviewed PR with the six service digests and migrator artifact
 digest, then reapply the installer. The workflow does not ingest issues,
 invoke SCC for work, merge PRs or advance AI-SDLC delivery stages.
 
@@ -224,7 +268,7 @@ python3 tools/verify_local_install.py --provider podman
 for its kind installation and repeat-apply check. Both paths exercise the
 same entrypoint and manifests. The verifier compares all component and database Secret identities
 and content, authority policy, PVC/volume identity and applied migration count before and after
-reapplication. It also checks the five Deployment digests, readiness and the
+reapplication. It also checks the six Deployment digests, readiness and the
 worker's actual UID. It never submits a work item or advances delivery.
 
 Observed on 2026-11-14: fresh kind/Podman installation and repeat application
@@ -258,7 +302,7 @@ continue retrying pods after the installer exits with failure.
 - **Existing cluster without ownership record:** choose another `--cluster`;
   do not delete someone else's cluster or fabricate ownership metadata.
 - **Image digest missing:** finish a successful publication and commit its
-  six digests. The installer does not fall back to mutable development tags.
+  seven digests. The installer does not fall back to mutable development tags.
 - **ImagePullBackOff:** check registry connectivity and whether the committed
   digest exists. Never put the publishing robot token in the image values.
 - **Database startup failure:** inspect PVC/storage and the database Secret;

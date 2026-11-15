@@ -206,6 +206,7 @@ func (p Poller) record(ctx context.Context, snapshot Snapshot, leaseToken string
 	if err := snapshot.validateContent(p.Config); err != nil {
 		return false, err
 	}
+	snapshot.AuthorityRevision = policy.Revision()
 	created := false
 	err = p.DB.WithTx(ctx, func(tx *sql.Tx) error {
 		if err := store.AssertComponent(ctx, tx, "intake"); err != nil {
@@ -223,7 +224,7 @@ func (p Poller) record(ctx context.Context, snapshot Snapshot, leaseToken string
 		if err := tx.QueryRowContext(ctx, `SELECT content_key,generation FROM intake_heads WHERE repository=$1 AND issue_number=$2 FOR UPDATE`, snapshot.Repository, snapshot.Issue.Number).Scan(&previous, &generation); err != nil {
 			return err
 		}
-		contentKey := authority.Digest([]byte(snapshot.Revision + "\x00" + strconv.FormatBool(snapshot.Eligible)))
+		contentKey := authority.Digest([]byte(snapshot.Revision + "\x00" + strconv.FormatBool(snapshot.Eligible) + "\x00" + snapshot.ConfigDigest + "\x00" + snapshot.AuthorityRevision))
 		if previous == contentKey {
 			return nil
 		}

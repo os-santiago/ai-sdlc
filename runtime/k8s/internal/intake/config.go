@@ -61,16 +61,17 @@ func (c Config) AllowsActor(actor forge.Actor) bool {
 }
 
 type Snapshot struct {
-	Version         int         `json:"version"`
-	Repository      string      `json:"repository"`
-	Issue           forge.Issue `json:"issue"`
-	Revision        string      `json:"revision"`
-	Generation      int64       `json:"generation"`
-	ConfigDigest    string      `json:"configDigest"`
-	BaseSHA         string      `json:"baseSHA"`
-	AuthorizedActor forge.Actor `json:"authorizedActor"`
-	LabelEventID    int64       `json:"labelEventID"`
-	Eligible        bool        `json:"eligible"`
+	Version           int         `json:"version"`
+	Repository        string      `json:"repository"`
+	Issue             forge.Issue `json:"issue"`
+	Revision          string      `json:"revision"`
+	Generation        int64       `json:"generation"`
+	AuthorityRevision string      `json:"authorityRevision"`
+	ConfigDigest      string      `json:"configDigest"`
+	BaseSHA           string      `json:"baseSHA"`
+	AuthorizedActor   forge.Actor `json:"authorizedActor"`
+	LabelEventID      int64       `json:"labelEventID"`
+	Eligible          bool        `json:"eligible"`
 }
 
 func (s Snapshot) ContentRevision() string {
@@ -97,6 +98,9 @@ func (s Snapshot) ID() string {
 func (s Snapshot) Validate(c Config) error {
 	if s.Generation < 1 {
 		return errors.New("issue generation required")
+	}
+	if !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(s.AuthorityRevision) {
+		return errors.New("authority revision required")
 	}
 	return s.validateContent(c)
 }

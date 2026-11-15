@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "baseBranch": "main",
+  "triggerLabel": "ai-sdlc:shadow",
+  "authorizedActorSource": "github-client",
+  "pollSeconds": 30,
+  "maxPages": 100
+}

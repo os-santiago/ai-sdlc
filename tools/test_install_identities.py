@@ -37,7 +37,7 @@ def fixture():
 
 
 class IdentityInstallationTests(unittest.TestCase):
-    def configure(self, material, secrets, resource):
+    def configure(self, material, secrets, resource, freeze=None):
         lock = {'image': {'repository': 'quay.io/os-santiago/ai-sdlc'},
                 'migrator': {'digest': 'sha256:' + 'a' * 64}}
         with patch.object(installer, 'identity_material', return_value=material), \
@@ -47,7 +47,7 @@ class IdentityInstallationTests(unittest.TestCase):
              patch.object(installer, 'create_owned_secret') as create:
             try:
                 result = installer.configure_identities(['kubectl'], 'podman', lock, 'owned-uid',
-                                                        'example/project', 'production-test')
+                                                        'example/project', 'production-test', freeze=freeze)
             finally:
                 create.assert_not_called()
             self.assertEqual(run.call_count, 1)
@@ -83,12 +83,30 @@ class IdentityInstallationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'ownership'):
                 installer.owned_secret(['kubectl'], 'ai-sdlc-identity-worker', 'owned-uid')
 
+    def test_profile_changes_only_freeze_and_never_replaces_keys(self):
+        material, secrets, resource = fixture()
+        original = json.loads(resource['data']['policy.json'])
+        result = self.configure(material, secrets, resource, freeze=False)
+        expected = dict(original, freeze=False)
+        self.assertEqual(json.loads(result['authority']['policyJSON']), expected)
+
+    def test_shadow_has_no_ambient_credential_fallback(self):
+        with patch.object(installer, 'owned_secret', return_value=None), patch.object(installer, 'configure_github_client') as configure:
+            with self.assertRaisesRegex(ValueError, 'explicitly imported'):
+                installer.shadow_intake_config([], 'owned-uid', 'example/project')
+            configure.assert_not_called()
+
     def test_private_bootstrap_output_cannot_enter_container_logs(self):
         with patch.object(installer, 'run', return_value=SimpleNamespace(stdout='{}')) as run:
             installer.identity_material('podman', 'pinned-image', 'example/project', 'production-test')
         self.assertIn('--log-driver=none', run.call_args.args[0])
         self.assertIn('--network=none', run.call_args.args[0])
         self.assertTrue(run.call_args.kwargs['capture_output'])
+
+    def test_shadow_rejects_concurrent_credential_change(self):
+        with patch.object(installer, 'owned_secret', side_effect=[{'credential.json': '{}'}, {'credential.json': 'changed'}]), patch.object(installer, 'configure_github_client'):
+            with self.assertRaisesRegex(ValueError, 'changed while deriving'):
+                installer.shadow_intake_config([], 'owned-uid', 'example/project')
 
 
 if __name__ == '__main__':

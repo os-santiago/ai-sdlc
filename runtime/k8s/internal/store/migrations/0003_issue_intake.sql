@@ -26,3 +26,12 @@ CREATE TABLE intake_heads (
     generation bigint NOT NULL DEFAULT 0 CHECK (generation >= 0),
     PRIMARY KEY (repository, issue_number)
 );
+CREATE TABLE admission_heads (
+    repository text NOT NULL,
+    issue_number integer NOT NULL CHECK (issue_number > 0),
+    generation bigint NOT NULL DEFAULT 0 CHECK (generation >= 0),
+    event_id text NOT NULL DEFAULT '',
+    payload bytea CHECK (octet_length(payload) BETWEEN 1 AND 1048576),
+    PRIMARY KEY (repository, issue_number)
+);
+CREATE TABLE planning_heads (LIKE admission_heads INCLUDING ALL);

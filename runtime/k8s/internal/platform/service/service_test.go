@@ -10,6 +10,27 @@ import (
 	"time"
 )
 
+func TestShadowBoundaryExposesOnlySignedOperationPaths(t *testing.T) {
+	t.Setenv("AI_SDLC_RUNTIME_MODE", "shadow")
+	for _, path := range []string{"/v1/admissions/evaluate", "/v1/attempts/dispatch", "/internal/execute-work", "/internal/admit-issue?policy=override"} {
+		called := false
+		handler := runtimeBoundary(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, nil))
+		if called || w.Code != http.StatusServiceUnavailable {
+			t.Fatal("legacy or unsupported operation exposed")
+		}
+	}
+	for _, path := range []string{"/internal/admit-issue", "/internal/plan-admission"} {
+		called := false
+		handler := runtimeBoundary(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, path, nil))
+		if !called {
+			t.Fatal("signed route unreachable")
+		}
+	}
+}
+
 func TestReadinessReportsDependencyFailure(t *testing.T) {
 	w := httptest.NewRecorder()
 	readiness(func(context.Context) error { return errors.New("unavailable dependency") }).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))

@@ -21,7 +21,7 @@ The explicit adjustment affects this boot only; see the
 [host prerequisites](docs/installation.md) for persistent host management.
 
 One entrypoint installs verified Kubernetes clients, creates kind and applies
-the versioned Helm chart. Each of the five runtime services has its own
+the versioned Helm chart. Each of the six runtime services has its own
 container and Deployment; PostgreSQL uses persistent storage. A short-lived
 migrator Job owns schema setup, while services receive separate database
 credentials and signing identities. Images come
@@ -38,6 +38,17 @@ For local GitHub client access, run `./install.sh credentials --github-auth gh-c
 after installation and `gh auth login`. See the
 [credential setup](docs/installation.md#optional-local-github-client) for its scope
 and explicit refresh command.
+
+The reviewed `shadow` profile adds real GitHub issue polling, signed admission
+and durable blocked plans. It does not execute generated code or publish PRs:
+
+```bash
+./install.sh local --profile shadow --github-auth gh-cli
+```
+
+Only issues carrying `ai-sdlc:shadow`, labeled by the configured local account,
+can enter that profile. See [shadow intake](docs/installation.md#shadow-intake)
+for scope, verification and returning to maintenance.
 
 ## GitHub Actions deprecation
 

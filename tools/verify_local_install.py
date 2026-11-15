@@ -17,11 +17,10 @@ def require(condition, message):
 
 
 def verify_deployments(deployments, lock):
-    names = {'admissionController': 'admission-controller', 'orchestrator': 'orchestrator',
-             'worker': 'worker', 'releaseManager': 'release-manager', 'relay': 'relay'}
+    names = install.COMPONENT_NAMES
     expected = {'ai-sdlc-' + names[key]: lock['image']['repository'] + '@' + value['digest']
                 for key, value in lock['components'].items()}
-    require(len(deployments) == 5, 'Expected exactly five component Deployments')
+    require(len(deployments) == len(names), 'Unexpected component Deployment count')
     actual = {}
     for deployment in deployments:
         name = deployment['metadata']['name']
@@ -79,7 +78,7 @@ def main():
     verify_deployments(deployments, install.image_lock(install.LOCAL / 'images.lock.json'))
     worker_uid = read('exec', 'deployment/ai-sdlc-worker', '--', 'id', '-u')
     require(worker_uid == '1000', 'Worker must run with numeric UID 1000')
-    report = {'installation': 'passed', 'reapplication': 'passed', 'readyComponents': 5,
+    report = {'installation': 'passed', 'reapplication': 'passed', 'readyComponents': len(install.COMPONENT_NAMES),
               'postgresReady': True, 'credentialsPreserved': True, 'persistentVolumePreserved': True,
               'migrationsPreserved': True, 'authorityPreserved': True, 'workerUID': 1000,
               'deliveryEnabled': False, 'provider': args.provider,

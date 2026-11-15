@@ -11,6 +11,9 @@ imagePullSecrets: []
 serviceAccount: {create: true, name: ""}
 runtime:
   mode: maintenance
+intake:
+  configJSON: ""
+  credentialSecret: ai-sdlc-github-client
 authority:
   policyConfigMap: ai-sdlc-authority
   policyJSON: ""
@@ -46,6 +49,13 @@ modelProvider:
   workspaceDir: /workspaces/target-repo
   apiKeySecret: {name: ai-sdlc-model-provider, key: apiKey}
 components:
+  intake:
+    name: intake
+    digest: ""
+    port: 8086
+    resources:
+      requests: {cpu: 25m, memory: 32Mi}
+      limits: {cpu: 250m, memory: 128Mi}
   admissionController:
     name: admission-controller
     digest: ""

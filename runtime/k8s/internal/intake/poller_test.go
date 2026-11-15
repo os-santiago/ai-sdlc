@@ -75,6 +75,7 @@ func TestSnapshotRevisionAndScope(t *testing.T) {
 	}
 	before := snapshot.Revision
 	snapshot.Generation = 1
+	snapshot.AuthorityRevision = strings.Repeat("a", 64)
 	snapshot.Issue.UpdatedAt = snapshot.Issue.UpdatedAt.Add(time.Minute)
 	snapshot.Issue.User.Login = "renamed"
 	if snapshot.ContentRevision() != before {
@@ -365,5 +366,37 @@ func TestLedgerPrivilegesRemainExclusiveToIntake(t *testing.T) {
 				t.Fatal("ledger component isolation violated")
 			}
 		}
+	}
+}
+
+func TestReviewedBindingChangesProduceFreshGeneration(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	if n, err := f.poller.PollOnce(ctx, time.Now()); err != nil || n != 1 {
+		t.Fatal("initial observation failed")
+	}
+	f.poller.Config.BaseBranch = "develop"
+	if n, err := f.poller.PollOnce(ctx, time.Now()); err != nil || n != 1 {
+		t.Fatalf("configuration change suppressed: %d %v", n, err)
+	}
+	f.policy.Keys["intake-next"] = f.policy.Keys["intake-1"]
+	f.due(t)
+	if n, err := f.poller.PollOnce(ctx, time.Now()); err != nil || n != 1 {
+		t.Fatalf("authority change suppressed: %d %v", n, err)
+	}
+	f.due(t)
+	if n, err := f.poller.PollOnce(ctx, time.Now()); err != nil || n != 0 {
+		t.Fatal("identical binding duplicated")
+	}
+	var raw []byte
+	if err := f.admin.Pool.QueryRow(`SELECT payload FROM intake_revisions ORDER BY generation DESC LIMIT 1`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var snapshot Snapshot
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Generation != 3 || snapshot.ConfigDigest != f.poller.Config.Digest() || snapshot.AuthorityRevision != f.policy.Revision() {
+		t.Fatal("new observation retained stale binding")
 	}
 }

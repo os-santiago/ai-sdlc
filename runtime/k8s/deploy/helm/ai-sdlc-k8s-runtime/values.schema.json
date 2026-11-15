@@ -83,7 +83,8 @@
         "mode": {
           "type": "string",
           "enum": [
-            "maintenance"
+            "maintenance",
+            "shadow"
           ]
         }
       },
@@ -560,6 +561,72 @@
             "port",
             "resources"
           ]
+        },
+        "intake": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^(|sha256:[a-f0-9]{64})$"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory"
+                  ]
+                },
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory"
+                  ]
+                }
+              },
+              "required": [
+                "requests",
+                "limits"
+              ]
+            }
+          },
+          "required": [
+            "name",
+            "digest",
+            "port",
+            "resources"
+          ]
         }
       },
       "required": [
@@ -567,7 +634,8 @@
         "orchestrator",
         "worker",
         "releaseManager",
-        "relay"
+        "relay",
+        "intake"
       ]
     },
     "networkPolicy": {
@@ -660,6 +728,23 @@
           "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
         }
       }
+    },
+    "intake": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configJSON",
+        "credentialSecret"
+      ],
+      "properties": {
+        "configJSON": {
+          "type": "string"
+        },
+        "credentialSecret": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        }
+      }
     }
   },
   "required": [
@@ -679,7 +764,8 @@
     "networkPolicy",
     "openshift",
     "authority",
-    "migrator"
+    "migrator",
+    "intake"
   ],
   "$schema": "http://json-schema.org/draft-07/schema#"
 }

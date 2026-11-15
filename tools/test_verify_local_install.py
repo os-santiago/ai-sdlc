@@ -9,8 +9,7 @@ import verify_local_install as verifier
 
 class VerificationTests(unittest.TestCase):
     def fixture(self):
-        names = {'admissionController': 'admission-controller', 'orchestrator': 'orchestrator',
-                 'worker': 'worker', 'releaseManager': 'release-manager', 'relay': 'relay'}
+        names = verifier.install.COMPONENT_NAMES
         lock = {'image': {'repository': 'quay.io/os-santiago/ai-sdlc'}, 'components': {}}
         deployments = []
         for index, (key, name) in enumerate(names.items()):
