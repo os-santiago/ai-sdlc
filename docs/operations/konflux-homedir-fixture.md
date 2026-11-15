@@ -130,3 +130,44 @@ never delete another namespace, PV or node path merely because its name matches.
 Published test images/signatures remain in the isolated internal registry as
 supply-chain evidence. No external Quay application image is published by this
 fixture.
+
+## Isolated container smoke validation
+
+After the provenance verifier succeeds, exercise the exact signed image:
+
+```bash
+python3 tools/verify_konflux_runtime.py \
+  --provenance-report /path/to/provenance/report.json \
+  --output /path/to/new-runtime-report
+```
+
+The input is a trusted local report produced by the preceding verifier, not an
+independently signed admission token. This utility never grants release authority.
+It uses a restricted Skopeo Pod to export the exact image with TLS validation,
+checks every bounded OCI archive blob, and imports it into the original owned kind
+node by ID. This avoids changing node DNS to reach Konflux's internal registry.
+Registry credentials and the exporter Pod are removed before the application
+starts; the application receives no registry or Kubernetes credentials.
+
+The original image entrypoint runs as UID 185 with a read-only root filesystem,
+dropped capabilities, no privilege escalation, explicit CPU/memory limits and
+small temporary writable `/tmp` and `/data` volumes. A separate client checks the
+home page, response security headers and ten sequential request timings. Health
+responses and request timeouts are recorded with an external egress-deny policy
+configured; this smoke does not independently prove network enforcement. A fixed
+filesystem probe confirms that `/data` exists and is writable as UID 185. This
+does not prove a data round trip, persistence across restarts or recovery. `/data` is deliberately
+volatile in this disposable fixture.
+
+OIDC is disabled, `QUESTS_CONTENT_URL=''` selects the packaged quest content,
+and session configuration is synthetic. The original remote-content startup
+stalled under unavailable external connectivity; that failed observation is
+retained and tracked in [Homedir #1577](https://github.com/os-santiago/homedir/issues/1577). The smoke run therefore
+does not validate production authentication, browser journeys, concurrency,
+production storage or a performance SLO. Health failures caused by required
+external APIs and health request timeouts remain visible in the report; they
+do not become successful readiness results. `productionReadinessAccepted` remains
+false even when the home-page smoke succeeds. Request timings are observations
+under the recorded fixture limits, not production benchmarks. Namespace deletion
+uses its original UID; the local OCI archive and node image cache remain as
+validation artifacts.
