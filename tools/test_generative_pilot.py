@@ -133,15 +133,77 @@ class RealOracleTests(unittest.TestCase):
                 benchmark.run_checks(files)
 
     def test_timeout_removes_owned_container(self):
-        with self.assertRaises(subprocess.TimeoutExpired):
-            bounded_container(self.provider, ['--rm', '--pull', 'never', '--network', 'none',
-                '--read-only', '--entrypoint', 'node', self.image, '-e', 'setInterval(()=>{},1000)'], timeout=1)
+        identity = pilot.secrets.token_hex(16)
+        with patch.object(pilot.secrets,'token_hex',return_value=identity):
+            with self.assertRaises(subprocess.TimeoutExpired) as failure:
+                bounded_container(self.provider, ['--rm', '--pull', 'never', '--network', 'none',
+                    '--read-only', '--entrypoint', 'node', self.image, '-e', 'setInterval(()=>{},1000)'], timeout=1)
+        self.assertEqual(failure.exception.cmd[1], 'run', 'cleanup timeout cannot impersonate execution timeout')
+        observed = subprocess.run([self.provider,'ps','-a','--no-trunc','--filter',
+                                   'label=ai-sdlc.fixture='+identity,'--format','{{.ID}}'],
+                                  capture_output=True,timeout=5)
+        self.assertEqual(observed.returncode,0)
+        self.assertEqual(observed.stdout,b'', 'timed-out fixture container survived cleanup')
 
     def test_generated_output_cannot_exceed_capture_bound(self):
         with self.assertRaisesRegex(ValueError, 'output exceeded bound'):
             bounded_container(self.provider, ['--rm', '--pull', 'never', '--network', 'none',
                 '--read-only', '--entrypoint', 'node', self.image, '-e',
                 'process.stdout.write(Buffer.alloc(2*1024*1024,120))'], timeout=5)
+
+class CleanupRaceTests(unittest.TestCase):
+    def test_automatic_removal_race_preserves_output_rejection(self):
+        identity, container_id = 'a'*32, 'b'*64
+        calls = []
+        def execute(command, **kwargs):
+            calls.append(command)
+            if command[1] == 'run':
+                Path(command[command.index('--cidfile')+1]).write_text(container_id)
+                kwargs['stdout'].write(b'x'*(1024*1024))
+                return subprocess.CompletedProcess(command, 1)
+            if command[1] == 'inspect':
+                return subprocess.CompletedProcess(command, 0, json.dumps([{'Id': container_id,
+                    'Config': {'Labels': {'ai-sdlc.fixture': identity}}}]).encode(), b'')
+            if command[1] == 'rm':
+                return subprocess.CompletedProcess(command, 1, b'', b'removal already in progress')
+            if command[1] == 'ps':
+                return subprocess.CompletedProcess(command, 0, b'', b'')
+            self.fail('unexpected fixture command')
+        with patch.object(pilot.secrets, 'token_hex', return_value=identity), \
+             patch.object(pilot.subprocess, 'run', side_effect=execute):
+            with self.assertRaisesRegex(ValueError, 'output exceeded bound'):
+                bounded_container('fixture-engine', ['--rm', 'fixture-image'])
+        self.assertEqual(sum(command[1]=='rm' for command in calls), 1)
+        self.assertTrue(any(command[1]=='ps' for command in calls))
+
+    def test_absence_confirmation_rejects_engine_failure_and_still_present_id(self):
+        for mode in ('engine-failed', 'still-present', 'wrong-id', 'invalid-output'):
+            with self.subTest(mode=mode):
+                identity, cid = 'a'*32, 'b'*64
+                output = {'engine-failed': b'', 'still-present': (cid+'\n').encode(),
+                          'wrong-id': ('c'*64+'\n').encode(), 'invalid-output': b'invalid\n'}[mode]
+                result = subprocess.CompletedProcess([], 1 if mode=='engine-failed' else 0, output, b'')
+                with patch.object(pilot.subprocess, 'run', return_value=result), \
+                     patch.object(pilot.time, 'monotonic', side_effect=[0,0,6]):
+                    with self.assertRaisesRegex(ValueError, 'cleanup'):
+                        pilot.confirm_owned_absence('fixture-engine',identity,cid)
+
+    def test_absence_confirmation_waits_read_only_for_exact_id(self):
+        cid = 'b'*64
+        responses = [subprocess.CompletedProcess([],0,(cid+'\n').encode(),b''),
+                     subprocess.CompletedProcess([],0,b'',b'')]
+        with patch.object(pilot.subprocess,'run',side_effect=responses) as run, patch.object(pilot.time,'sleep'):
+            pilot.confirm_owned_absence('fixture-engine','a'*32,cid)
+        self.assertEqual(run.call_count,2)
+        for call in run.call_args_list:
+            self.assertEqual(call.args[0][1],'ps')
+            self.assertIn('id='+cid,call.args[0])
+
+    def test_unknown_cid_still_requires_healthy_label_absence(self):
+        with patch.object(pilot.subprocess,'run',return_value=subprocess.CompletedProcess([],1,b'',b'')) as run:
+            with self.assertRaisesRegex(ValueError,'cleanup'):
+                pilot.confirm_owned_absence('fixture-engine','a'*32,None)
+        self.assertIn('label=ai-sdlc.fixture='+'a'*32,run.call_args.args[0])
 
 
 if __name__ == '__main__':
