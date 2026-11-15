@@ -1,10 +1,10 @@
 name: installer
 on:
   pull_request:
-    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/offline*', 'tools/test_offline_probe.js', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
+    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/offline*', 'tools/verify_model_mailbox.py', 'runtime/k8s/internal/modelmailbox/**', 'runtime/k8s/components/model-mailbox/**', 'runtime/k8s/go.mod', 'runtime/k8s/go.sum', 'tools/test_offline_probe.js', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
   push:
     branches: [main]
-    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/offline*', 'tools/test_offline_probe.js', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
+    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/offline*', 'tools/verify_model_mailbox.py', 'runtime/k8s/internal/modelmailbox/**', 'runtime/k8s/components/model-mailbox/**', 'runtime/k8s/go.mod', 'runtime/k8s/go.sum', 'tools/test_offline_probe.js', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
 permissions:
   contents: read
 jobs:
@@ -50,3 +50,15 @@ jobs:
         run: |
           ./install.sh sandbox --config "$RUNNER_TEMP/local-install.json"
           ./install.sh sandbox --config "$RUNNER_TEMP/local-install.json"
+      - name: Verify the bounded mailbox with SCC in the offline runtime
+        run: |
+          docker build -f runtime/k8s/components/model-mailbox/Containerfile -t localhost/ai-sdlc-model-mailbox:conformance runtime/k8s
+          python3 - <<'PYTHON'
+          import json, os, pathlib, subprocess, sys
+          tools = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'install-tools.json').read_text())
+          image = 'localhost/ai-sdlc-model-mailbox:conformance'
+          subprocess.run([tools['kind'], 'load', 'docker-image', image, '--name', 'ai-sdlc'], check=True)
+          subprocess.run([sys.executable, 'tools/verify_model_mailbox.py', '--kubectl', tools['kubectl'],
+                          '--kubeconfig', str(pathlib.Path.home() / '.local/state/ai-sdlc/ai-sdlc/kubeconfig'),
+                          '--mailbox-image', image], check=True)
+          PYTHON

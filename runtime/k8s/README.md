@@ -26,6 +26,7 @@ must provide their own NetworkPolicy enforcement.
 | `release-manager` | Publish/review, Release | `components/release-manager/internal/gates` |
 | `relay` | Signed durable transport; admission and planning only in shadow | `internal/delivery` |
 | `migrator` | Installation-only schema and role provisioning | `components/migrator/cmd` |
+| `model-mailbox` | Hidden offline model-data transport; no live workload integration | `internal/modelmailbox` |
 
 The six service binaries load mounted component identities, connect with
 separate database LOGIN credentials and check migrations before starting.
@@ -190,7 +191,9 @@ helm template deploy/helm/ai-sdlc-k8s-runtime \
 ```
 
 `make render-k8s`, `make render-openshift` and `make helm-lint` wrap the
-above. `make containers` builds all seven images locally with Podman.
+above. `make containers` builds all eight images locally with Podman. The
+`model-mailbox` image is a hidden prerequisite, tested in disposable Pods; the
+installer does not activate it. See the [transport boundary](../../docs/security/offline-model-mailbox.md).
 
 ### Engine source pin (image builds)
 
