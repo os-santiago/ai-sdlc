@@ -11,6 +11,8 @@ import time
 
 import install
 
+DECISIONS = ('accepted', 'rejected', 'needs-clarification', 'needs-human', 'requires-decomposition')
+
 
 def observation_sql(repository, issue):
     if (not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository)
@@ -49,7 +51,7 @@ def observation_sql(repository, issue):
 
 def verified(observed, minimum_generation, expected):
     generation = observed.get('generation', 0)
-    return (generation >= minimum_generation
+    return (expected in DECISIONS and generation >= minimum_generation
             and observed.get('admissionGeneration') == generation
             and observed.get('planningGeneration') == generation
             and observed.get('admission') == expected
@@ -69,7 +71,7 @@ def main():
     parser.add_argument('--repository', default='os-santiago/ai-sdlc')
     parser.add_argument('--issue', required=True, type=int)
     parser.add_argument('--minimum-generation', type=int, default=1)
-    parser.add_argument('--expected', choices=['accepted', 'rejected'], default='accepted')
+    parser.add_argument('--expected', choices=DECISIONS, default='accepted')
     parser.add_argument('--timeout', type=int, default=180)
     args = parser.parse_args()
     if not 1 <= args.timeout <= 600 or args.minimum_generation < 1:

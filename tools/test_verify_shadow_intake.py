@@ -17,6 +17,12 @@ class ShadowObservationTests(unittest.TestCase):
         self.assertFalse(verified(complete, 3, 'accepted'))
         withdrawn = dict(complete, admission='rejected', plans=0, blockedItems=0)
         self.assertTrue(verified(withdrawn, 2, 'rejected'))
+        for decision in ('needs-human', 'needs-clarification', 'requires-decomposition'):
+            stopped = dict(withdrawn, admission=decision)
+            self.assertTrue(verified(stopped, 2, decision))
+            self.assertFalse(verified(dict(stopped, plans=1, blockedItems=1), 2, decision))
+            self.assertFalse(verified(dict(stopped, executionRequests=1), 2, decision))
+        self.assertFalse(verified(dict(withdrawn, admission='unknown'), 2, 'unknown'))
 
     def test_scope_is_validated_before_sql_construction(self):
         for repository, issue in [("owner/repo'; DELETE FROM plans;--", 1), ('../repo', 1), ('owner/repo', -1)]:

@@ -1,10 +1,10 @@
 name: installer
 on:
   pull_request:
-    paths: ['install.sh', 'tools/install*', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
+    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
   push:
     branches: [main]
-    paths: ['install.sh', 'tools/install*', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
+    paths: ['examples/*.local-install.json', 'spec/local-install.schema.json', 'install.sh', 'tools/install*', 'tools/github_client.py', 'tools/network_probe.py', 'tools/test_*install*.py', 'tools/test_helm.py', 'tools/*shadow_intake.py', 'tools/verify_local_install.py', 'runtime/k8s/deploy/**', '.github/workflows/installer.yml']
 permissions:
   contents: read
 jobs:
@@ -33,6 +33,15 @@ jobs:
       - name: Install and reconcile the same local desired state twice
         run: |
           sudo ./install.sh host --configure-host
-          ./install.sh local --provider docker --timeout 10m
+          python3 - <<'PY'
+          import json, os, pathlib
+          config = json.loads(pathlib.Path('examples/homedir.local-install.json').read_text())
+          config.update(cluster='ai-sdlc', repository='os-santiago/ai-sdlc', provider='docker',
+                        profile='maintenance', images=str(pathlib.Path('runtime/k8s/deploy/local/images.lock.json').resolve()))
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'local-install.json').write_text(json.dumps(config))
+          PY
+          ./install.sh plan --config "$RUNNER_TEMP/local-install.json"
+          ./install.sh local --config "$RUNNER_TEMP/local-install.json" --timeout 10m
           python3 tools/verify_local_install.py --provider docker
-          ./install.sh status --provider docker
+          ./install.sh local --config "$RUNNER_TEMP/local-install.json" --timeout 10m
+          ./install.sh status --config "$RUNNER_TEMP/local-install.json"

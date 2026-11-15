@@ -19,6 +19,7 @@ import urllib.request
 
 import github_client
 import network_probe
+import install_config
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL = ROOT / 'runtime/k8s/deploy/local'
@@ -263,16 +264,23 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['plan', 'local', 'status', 'tools', 'host', 'credentials'])
     parser.add_argument('--configure-host', action='store_true', help='Raise inotify limits to committed minima for this boot; requires root')
-    parser.add_argument('--cluster', default='ai-sdlc')
-    parser.add_argument('--provider', choices=['auto', 'docker', 'podman'], default='auto')
-    parser.add_argument('--images', type=Path, default=LOCAL / 'images.lock.json')
+    parser.add_argument('--config', type=Path, help='Reviewed local installation JSON; credentials remain explicit CLI choices')
+    parser.add_argument('--cluster')
+    parser.add_argument('--provider', choices=['auto', 'docker', 'podman'])
+    parser.add_argument('--images', type=Path)
     parser.add_argument('--timeout', default='10m')
-    parser.add_argument('--repository', default='os-santiago/ai-sdlc')
-    parser.add_argument('--environment', default='ai-sdlc-production')
-    parser.add_argument('--profile', choices=['maintenance', 'shadow'], default='maintenance')
+    parser.add_argument('--repository')
+    parser.add_argument('--environment')
+    parser.add_argument('--profile', choices=['maintenance', 'shadow'])
     parser.add_argument('--github-auth', choices=['none', 'gh-cli'], default='none')
     parser.add_argument('--refresh-github-credential', action='store_true')
     args = parser.parse_args(argv)
+    config_digest = install_config.resolve(args)
+    defaults = dict(cluster='ai-sdlc', provider='auto', images=LOCAL / 'images.lock.json',
+                    repository='os-santiago/ai-sdlc', environment='ai-sdlc-production', profile='maintenance')
+    for key, value in defaults.items():
+        if getattr(args, key) is None:
+            setattr(args, key, value)
     if args.profile == 'shadow' and args.command not in ('plan', 'local'):
         raise ValueError('--profile shadow is valid only with plan or local')
     if args.github_auth != 'none' and args.command not in ('plan', 'local', 'credentials'):
@@ -308,7 +316,8 @@ def main(argv=None):
         print(json.dumps({'cluster': args.cluster, 'namespace': NAMESPACE,
                           'chart': str(CHART.relative_to(ROOT)), 'mode': args.profile,
                           'images': image_lock(args.images), 'deliveryEnabled': False,
-                          'githubAuth': args.github_auth}, indent=2))
+                          'githubAuth': args.github_auth, 'repository': args.repository,
+                          'environment': args.environment, 'configurationDigest': config_digest}, indent=2))
         return 0
     provider = args.provider
     if provider == 'auto':
@@ -406,6 +415,8 @@ def main(argv=None):
     lock = image_lock(args.images)
     network = network_probe.verify(kubectl, lock['image']['repository'] + '@' + lock['components']['worker']['digest'])
     report = {'cluster': args.cluster, 'namespace': NAMESPACE, 'provider': provider,
+              'repository': args.repository, 'environment': args.environment,
+              'configurationDigest': config_digest,
               'mode': args.profile, 'installationReady': True, 'deliveryEnabled': False,
               'issueIntakeEnabled': args.profile == 'shadow',
               'networkPolicyVerification': network,

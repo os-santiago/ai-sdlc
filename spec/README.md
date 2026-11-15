@@ -23,6 +23,7 @@ see [kill-switch.md](kill-switch.md).
 | `threat-model.md` | Security assumptions and boundaries |
 | `component-authority.md` | Versioned component capabilities and signed delivery boundary |
 | `component-authority.schema.json` | Machine-readable component authority policy |
+| `local-install.schema.json` | Credential-free local installer configuration |
 
 GitHub Actions-specific execution contracts are preserved only by the
 `deprecated-github-actions-runtime-2026-11-14` tag.
