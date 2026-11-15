@@ -86,3 +86,7 @@ The 1,158-file result must match independently verified canonical tree
 `a392d4d3be50cc89cb1cc324fb736952fe9e86b47e5d131912163d363c147277`.
 This is a composed preparation fixture, not live issue admission, a generated
 software improvement or autonomous E2E delivery.
+
+The next hidden boundary is [durable lifecycle ownership](executor-lifecycle-ownership.md):
+it transfers a still-current preparation claim once, rotates its token and
+records ordered effect intents before a trusted controller can invoke them.
