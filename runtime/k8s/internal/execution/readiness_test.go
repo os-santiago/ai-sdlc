@@ -19,11 +19,13 @@ func (f *fixture) readyPolicy() (authority.Policy, intake.Config, error) {
 // Isolated fixture facts only. No production intake or transition uses this
 // helper; operational code must obtain these rows through signed components.
 func (f *fixture) seedReadiness(t *testing.T) {
+	f.seedReadinessSnapshot(t, f.Snapshot(1, true))
+}
+func (f *fixture) seedReadinessSnapshot(t *testing.T, snapshot intake.Snapshot) {
 	t.Helper()
-	if _, err := f.Admin.Pool.Exec(`TRUNCATE intake_observations,intake_heads,intake_revisions,intake_cursors`); err != nil {
+	if _, err := f.Admin.Pool.Exec(`TRUNCATE intake_observations,intake_heads,intake_revisions,intake_cursors,admission_heads,planning_heads,admissions`); err != nil {
 		t.Fatal(err)
 	}
-	snapshot := f.Snapshot(1, true)
 	admission := intake.Admission{Snapshot: snapshot, Decision: "accepted", Risk: "low", Reasons: []string{"Fixture admission."}, RequiredGates: []string{"tests", "quality", "security", "issue-coverage"}, PolicyVersion: "1.0.0"}
 	observed, _ := json.Marshal(snapshot)
 	decided, _ := json.Marshal(admission)
@@ -35,7 +37,7 @@ func (f *fixture) seedReadiness(t *testing.T) {
 		sql  string
 		args []any
 	}{
-		{`UPDATE plans SET correlation_id=$1`, []any{snapshot.ID()}},
+		{`UPDATE plans SET correlation_id=$1,repository=$2`, []any{snapshot.ID(), snapshot.Repository}},
 		{`UPDATE work_items SET acceptance_criteria=$1,depends_on='[]'`, []any{criteria}},
 		{`INSERT INTO intake_heads(repository,issue_number,content_key,generation) VALUES($1,$2,$3,$4)`, []any{snapshot.Repository, snapshot.Issue.Number, contentKey, snapshot.Generation}},
 		{`INSERT INTO intake_revisions(repository,issue_number,revision,generation,config_digest,event_id,payload) VALUES($1,$2,$3,$4,$5,$6,$7)`, []any{snapshot.Repository, snapshot.Issue.Number, snapshot.Revision, snapshot.Generation, snapshot.ConfigDigest, snapshot.ID(), observed}},
@@ -186,5 +188,30 @@ func TestExecutionReadinessSupersededDuringClaimLock(t *testing.T) {
 	}
 	if f.Count(t, `SELECT count(*) FROM execution_requests WHERE state='stopped'`) != 1 {
 		t.Fatal("superseded claim not stopped")
+	}
+}
+
+func TestClaimRejectsInPlaceActorRevocationOnFinalReload(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.accept(f.envelope(t, f.command)); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	load := func() (authority.Policy, intake.Config, error) {
+		calls++
+		if calls == 3 {
+			f.Config.AuthorizedActorIDs[0] = 99
+		}
+		return f.Material.Policy, f.Config, nil
+	}
+	claim, err := Claim(context.Background(), f.db, load, f.command.ID())
+	if calls != 3 {
+		t.Fatalf("final config reload not exercised: %d", calls)
+	}
+	if err == nil || claim.Token != "" {
+		t.Fatal("in-place actor revocation returned claim")
+	}
+	if f.Count(t, `SELECT count(*) FROM execution_requests WHERE state='stopped'`) != 1 {
+		t.Fatal("revoked claim was not stopped")
 	}
 }
