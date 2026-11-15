@@ -42,7 +42,7 @@ spec:
             - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ $component.port }}"}
             - name: DATABASE_URL
               valueFrom:
-                secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" $ }}, key: {{ include "ai-sdlc-k8s-runtime.databaseSecretKey" $ }}}
+                secretKeyRef: {name: {{ printf "%s-%s" $.Values.authority.databaseSecretPrefix $component.name }}, key: uri}
             {{- if eq $key "worker" }}
             - {name: AI_SDLC_ENGINE, value: {{ $.Values.engine | quote }}}
             - {name: AI_SDLC_PROVIDER_BASE_URL, value: {{ $.Values.modelProvider.baseURL | quote }}}
@@ -71,11 +71,19 @@ spec:
             readOnlyRootFilesystem: true
           volumeMounts:
             - {name: contract, mountPath: /etc/ai-sdlc/contract, readOnly: true}
+            - {name: authority, mountPath: /etc/ai-sdlc/authority, readOnly: true}
+            - {name: identity, mountPath: /etc/ai-sdlc/identity, readOnly: true}
             {{- if eq $key "worker" }}
             - {name: workspaces, mountPath: /workspaces}
             - {name: adev, mountPath: /etc/ai-sdlc/policy, readOnly: true}
             {{- end }}
       volumes:
+        - name: authority
+          configMap: {name: {{ $.Values.authority.policyConfigMap }}}
+        - name: identity
+          secret:
+            secretName: {{ printf "%s-%s" $.Values.authority.identitySecretPrefix $component.name }}
+            defaultMode: 0440
         - name: contract
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-contract}
         {{- if eq $key "worker" }}

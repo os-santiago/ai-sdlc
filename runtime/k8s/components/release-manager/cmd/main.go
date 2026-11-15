@@ -3,36 +3,25 @@ package main
 import (
 	"context"
 	"log"
-	"net/http"
-	"os"
 
-	"github.com/os-santiago/ai-sdlc/runtime/k8s/components/release-manager/internal/gates"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
-	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
 
 func main() {
-	ctx := context.Background()
-	deps := gates.Deps{}
-
-	if url := os.Getenv("DATABASE_URL"); url != "" {
-		db, err := store.Open(ctx, url)
-		if err != nil {
-			log.Fatalf("release-manager: configured database unavailable; refusing stateless fallback: %v", err)
-		} else {
-			if err := db.Migrate(ctx); err != nil {
-				log.Fatalf("release-manager: migrate database: %v", err)
-			}
-			deps.DB = db
-		}
+	component, err := bootstrap.Open(context.Background(), "release-manager")
+	if err != nil {
+		log.Fatal(err)
 	}
-
-	err := service.Run(service.Metadata{
+	defer component.DB.Close()
+	// Only observation endpoints are installed during this integration stage.
+	// Legacy unsigned routes remain available to isolated Go fixtures only.
+	err = service.RunWithReadiness(service.Metadata{
 		Name:           "release-manager",
-		Responsibility: "evaluate merge/release gates: required checks, review, issue coverage, validation evidence",
-		Consumes:       []string{"ImplementationAttemptDecided.v1"},
+		Responsibility: "collect authoritative evidence and coordinate release gates",
+		Consumes:       []string{"CandidateVerified.v1"},
 		Produces:       []string{"ReleaseGateDecided.v1"},
-	}, func(mux *http.ServeMux) { gates.Routes(mux, deps) })
+	}, component.Ready)
 	if err != nil {
 		log.Fatal(err)
 	}

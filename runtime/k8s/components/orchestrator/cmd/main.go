@@ -3,36 +3,25 @@ package main
 import (
 	"context"
 	"log"
-	"net/http"
-	"os"
 
-	"github.com/os-santiago/ai-sdlc/runtime/k8s/components/orchestrator/internal/planning"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
-	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
 
 func main() {
-	ctx := context.Background()
-	deps := planning.Deps{}
-
-	if url := os.Getenv("DATABASE_URL"); url != "" {
-		db, err := store.Open(ctx, url)
-		if err != nil {
-			log.Fatalf("orchestrator: configured database unavailable; refusing stateless fallback: %v", err)
-		} else {
-			if err := db.Migrate(ctx); err != nil {
-				log.Fatalf("orchestrator: migrate database: %v", err)
-			}
-			deps.DB = db
-		}
+	component, err := bootstrap.Open(context.Background(), "orchestrator")
+	if err != nil {
+		log.Fatal(err)
 	}
-
-	err := service.Run(service.Metadata{
+	defer component.DB.Close()
+	// Only observation endpoints are installed during this integration stage.
+	// Legacy unsigned routes remain available to isolated Go fixtures only.
+	err = service.RunWithReadiness(service.Metadata{
 		Name:           "orchestrator",
-		Responsibility: "turn an admitted work item into a bounded, dependency-ordered plan",
+		Responsibility: "maintain bounded plans and reconcile authenticated component facts",
 		Consumes:       []string{"IssueAdmissionDecided.v1", "ImplementationAttemptDecided.v1"},
 		Produces:       []string{"WorkItemReady.v1"},
-	}, func(mux *http.ServeMux) { planning.Routes(mux, deps) })
+	}, component.Ready)
 	if err != nil {
 		log.Fatal(err)
 	}

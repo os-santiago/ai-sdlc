@@ -49,21 +49,8 @@ func AssertComponent(ctx context.Context, q Querier, component string) error {
 // for schema ownership but reconciles each managed role's table privileges.
 // The caller must not use a shared application database.
 func (db *DB) ProvisionRoles(ctx context.Context, passwords map[string]string) error {
-	if len(passwords) != len(componentTables) {
-		return errors.New("all component database credentials required")
-	}
-	seenPasswords := map[string]bool{}
-	for component, password := range passwords {
-		if _, err := ComponentRole(component); err != nil {
-			return err
-		}
-		if !rolePasswordPattern.MatchString(password) {
-			return errors.New("component password must be a 32-128 character URL-safe value")
-		}
-		if seenPasswords[password] {
-			return errors.New("component database credentials must be distinct")
-		}
-		seenPasswords[password] = true
+	if err := ValidateRoleCredentials(passwords); err != nil {
+		return err
 	}
 	return db.WithTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(73421020)`); err != nil {
@@ -169,4 +156,25 @@ func (db *DB) ProvisionRoles(ctx context.Context, passwords map[string]string) e
 		}
 		return nil
 	})
+}
+
+// ValidateRoleCredentials must run before privileged installation effects.
+func ValidateRoleCredentials(passwords map[string]string) error {
+	if len(passwords) != len(componentTables) {
+		return errors.New("all component database credentials required")
+	}
+	seenPasswords := map[string]bool{}
+	for component, password := range passwords {
+		if _, err := ComponentRole(component); err != nil {
+			return err
+		}
+		if !rolePasswordPattern.MatchString(password) {
+			return errors.New("component password must be a 32-128 character URL-safe value")
+		}
+		if seenPasswords[password] {
+			return errors.New("component database credentials must be distinct")
+		}
+		seenPasswords[password] = true
+	}
+	return nil
 }

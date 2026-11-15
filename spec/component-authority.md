@@ -94,9 +94,11 @@ a signed HTTP handler, transactional inbox/outbox, nonce consumption, stored
 responses and a relay bounded to eight attempts. PostgreSQL-backed tests cover
 concurrent delivery, restart, rollback, response loss and component privileges.
 
-These remain hidden integration building blocks. Component entry points still
-use the legacy unsigned outbox; the new handler/relay and role provisioning are
-not selected by the installer. The installed runtime remains in maintenance.
+These remain hidden integration building blocks. Component entry points now
+register only observation routes and require
+separate mounted signing and database identities. The installer selects the
+dedicated migrator, but the signed delivery handler/relay remain disabled.
+The installed runtime remains in maintenance.
 These libraries alone do not establish an authenticated installed runtime or a
 functional issue-to-production cycle. See the
 [runtime integration boundary](../runtime/k8s/README.md#signed-delivery-integration-boundary).
@@ -104,7 +106,7 @@ Fleet signal resolution remains separately tracked by [kill-switch.md](kill-swit
 
 Run `go test ./internal/authority` from `runtime/k8s`; run
 `bash tools/test-contracts.sh` from the repository root to validate the schema
-fixture. Run `go test -p 1 ./...` with `AI_SDLC_TEST_DATABASE_URL` pointing to a
+fixture. Run `go test -count=1 -p 1 ./...` with `AI_SDLC_TEST_DATABASE_URL` pointing to a
 dedicated disposable PostgreSQL database for durable delivery and ownership
 tests. Deployment integration must prove these same boundaries and fail-closed
 startup with the installed component identities before active mode is enabled.

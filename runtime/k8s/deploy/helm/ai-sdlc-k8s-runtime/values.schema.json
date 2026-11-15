@@ -610,6 +610,56 @@
       "required": [
         "route"
       ]
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policyConfigMap",
+        "identitySecretPrefix",
+        "databaseSecretPrefix",
+        "policyJSON",
+        "installationUID"
+      ],
+      "properties": {
+        "policyConfigMap": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,51}$"
+        },
+        "identitySecretPrefix": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,51}$"
+        },
+        "databaseSecretPrefix": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,51}$"
+        },
+        "policyJSON": {
+          "type": "string",
+          "maxLength": 131072
+        },
+        "installationUID": {
+          "type": "string"
+        }
+      }
+    },
+    "migrator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "digest",
+        "credentialsSecret"
+      ],
+      "properties": {
+        "digest": {
+          "type": "string",
+          "pattern": "^(|sha256:[a-f0-9]{64})$"
+        },
+        "credentialsSecret": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+        }
+      }
     }
   },
   "required": [
@@ -627,7 +677,9 @@
     "modelProvider",
     "components",
     "networkPolicy",
-    "openshift"
+    "openshift",
+    "authority",
+    "migrator"
   ],
   "$schema": "http://json-schema.org/draft-07/schema#"
 }

@@ -56,11 +56,13 @@ class InstallerBoundaryTests(unittest.TestCase):
 
     def lock(self):
         return {'image': {'repository': 'quay.io/os-santiago/ai-sdlc'},
-                'components': {key: {'digest': 'sha256:' + 'a' * 64} for key in installer.COMPONENTS}}
+                'components': {key: {'digest': 'sha256:' + 'a' * 64} for key in installer.COMPONENTS},
+                'migrator': {'digest': 'sha256:' + 'b' * 64}}
 
     def test_missing_mutable_or_foreign_images_fail_before_install(self):
-        for invalid in ('mutable', 'missing', 'foreign', 'namespace', 'component_name'):
+        for invalid in ('mutable', 'missing', 'foreign', 'namespace', 'component_name', 'migrator'):
             lock = self.lock()
+            if invalid == 'migrator': lock['migrator']['digest'] = 'latest'
             if invalid == 'mutable': lock['components']['worker']['digest'] = 'latest'
             if invalid == 'missing': del lock['components']['worker']
             if invalid == 'foreign': lock['image']['repository'] = 'example.org/untrusted'

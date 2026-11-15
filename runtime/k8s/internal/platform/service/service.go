@@ -8,9 +8,14 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+
 	"errors"
 	"fmt"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"log/slog"
 	"net/http"
 	"os"
@@ -36,21 +41,27 @@ type RouteRegistrar func(*http.ServeMux)
 // Every component (admission-controller, orchestrator, worker, release-manager)
 // calls this from main(); it is the only place that touches the network.
 func Run(metadata Metadata, registrars ...RouteRegistrar) error {
+	return RunWithReadiness(metadata, nil, registrars...)
+}
+
+func RunWithReadiness(metadata Metadata, ready func(context.Context) error, registrars ...RouteRegistrar) error {
 	if metadata.Name == "" || metadata.Responsibility == "" {
 		return errors.New("component metadata is incomplete")
 	}
 
+	if err := bootstrap.ValidateMode(); err != nil {
+		return err
+	}
+
 	address := valueOrDefault("AI_SDLC_HTTP_ADDRESS", ":8080")
-	writeTimeout := durationOrDefault("AI_SDLC_HTTP_WRITE_TIMEOUT", 25*time.Minute)
+	writeTimeout := durationOrDefault("AI_SDLC_HTTP_WRITE_TIMEOUT", 15*time.Second)
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("component", metadata.Name)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		WriteJSON(w, http.StatusOK, map[string]string{"status": "healthy"})
 	})
-	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
-		WriteJSON(w, http.StatusOK, map[string]string{"status": "ready"})
-	})
+	mux.Handle("GET /readyz", readiness(ready))
 	mux.HandleFunc("GET /metadata", func(w http.ResponseWriter, _ *http.Request) {
 		WriteJSON(w, http.StatusOK, metadata)
 	})
@@ -60,19 +71,9 @@ func Run(metadata Metadata, registrars ...RouteRegistrar) error {
 		}
 	}
 
-	// WriteTimeout defaults to 25 minutes, not the original 15 seconds:
-	// a real dispatch call against the worker's POST /v1/attempts/dispatch
-	// (ADR-0005) invokes SCCEngine, which shells out to `scc` and can run
-	// for minutes. With a 15s WriteTimeout, the handler keeps running to
-	// completion (its logic is unaffected — only the connection's write
-	// deadline expires), but the final service.WriteJSON response write
-	// fails silently (its error is discarded) once that deadline passes,
-	// so the client sees "empty reply from server" no matter what the
-	// handler actually produced. Confirmed via a real end-to-end dispatch
-	// call that logged a ~136s handler duration but delivered zero
-	// response bytes. ReadTimeout/IdleTimeout aren't implicated (request
-	// bodies here are small, and this is the first request on the
-	// connection) so they stay as before.
+	// Delivery handlers will enqueue bounded work; model execution never
+	// belongs inside a control-plane HTTP request.
+
 	server := &http.Server{
 		Addr:              address,
 		Handler:           requestLog(logger, maintenanceBoundary(mux)),
@@ -101,9 +102,8 @@ func Run(metadata Metadata, registrars ...RouteRegistrar) error {
 // Maintenance installations expose observation only. This is not component
 // authentication: live authority enforcement is tracked separately.
 func maintenanceBoundary(next http.Handler) http.Handler {
-	maintenance := MaintenanceMode()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if maintenance && (r.Method != http.MethodGet || (r.URL.Path != "/healthz" && r.URL.Path != "/readyz" && r.URL.Path != "/metadata")) {
+		if r.Method != http.MethodGet || (r.URL.Path != "/healthz" && r.URL.Path != "/readyz" && r.URL.Path != "/metadata") {
 			WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "runtime_in_maintenance", "delivery": "disabled"})
 			return
 		}
@@ -111,9 +111,18 @@ func maintenanceBoundary(next http.Handler) http.Handler {
 	})
 }
 
-// MaintenanceMode is selected explicitly by the initial Helm installation.
-func MaintenanceMode() bool {
-	return os.Getenv("AI_SDLC_RUNTIME_MODE") == "maintenance"
+func readiness(ready func(context.Context) error) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ready != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+			defer cancel()
+			if err := ready(ctx); err != nil {
+				WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
+				return
+			}
+		}
+		WriteJSON(w, http.StatusOK, map[string]string{"status": "ready", "mode": "maintenance", "delivery": "disabled"})
+	})
 }
 
 // WriteJSON writes a JSON response with the given status code.
@@ -126,10 +135,9 @@ func WriteJSON(w http.ResponseWriter, status int, value any) {
 // DecodeJSON strictly decodes a bounded (1MiB) JSON request body, rejecting
 // unknown fields. Writes a 400 response and returns false on failure.
 func DecodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil || authority.DecodeStrict(raw, target) != nil {
+		WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON request"})
 		return false
 	}
 	return true

@@ -1,11 +1,46 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestReadinessReportsDependencyFailure(t *testing.T) {
+	w := httptest.NewRecorder()
+	readiness(func(context.Context) error { return errors.New("unavailable dependency") }).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatal("unavailable dependency reported ready")
+	}
+}
+
+func TestUnknownRuntimeModeCannotStartServer(t *testing.T) {
+	for _, mode := range []string{"active", "typo"} {
+		t.Setenv("AI_SDLC_RUNTIME_MODE", mode)
+		if err := Run(Metadata{Name: "worker", Responsibility: "test"}); err == nil {
+			t.Fatal("unsupported mode started")
+		}
+	}
+}
+
+func TestDecoderRejectsAmbiguousRequests(t *testing.T) {
+	for _, body := range []string{`{"value":1} {}`, `{"value":1,"value":2}`, `{"unknown":1}`} {
+		var target struct {
+			Value int `json:"value"`
+		}
+		w := httptest.NewRecorder()
+		if DecodeJSON(w, httptest.NewRequest(http.MethodPost, "/fixture", strings.NewReader(body)), &target) {
+			t.Fatal("ambiguous request accepted")
+		}
+		if w.Code != http.StatusBadRequest {
+			t.Fatal("invalid request not rejected")
+		}
+	}
+}
 
 func TestMaintenanceCannotReachDeliveryHandlers(t *testing.T) {
 	t.Setenv("AI_SDLC_RUNTIME_MODE", "maintenance")
