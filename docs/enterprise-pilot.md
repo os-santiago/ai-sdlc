@@ -60,7 +60,8 @@ The next hidden prerequisite, the [offline model mailbox](security/offline-model
 (#461), exchanges bounded model data over loopback and a fixed file helper.
 Its disposable SCC fixture uses a synthetic model response and independently
 checks Git state. It does not connect a real provider, authorize model calls or
-enable live execution; trusted durable quotas and controller integration remain pending.
+enable live execution; durable quota and lifecycle libraries are now tested separately, while their
+operational controller integration remains pending.
 
 ## Fullsend: reuse decisions before reinvention
 
@@ -96,7 +97,10 @@ wrong digest or failed mandatory tests must prevent promotion. Promote the
 same built digest; do not rebuild after verification. Assess the actual builder
 against [SLSA v1.2](https://slsa.dev/spec/v1.2/) before claiming a level.
 
-Konflux is not installed by the current local profile. Its [local installer](https://konflux-ci.dev/konflux-ci/docs/installation/install-local/)
+The default runtime profile does not install Konflux. The optional
+[AI-SDLC supply-chain installer](operations/konflux-local.md) now reconciles a
+separate pinned environment through `./install.sh supply-chain local`. Its
+upstream [local installer](https://konflux-ci.dev/konflux-ci/docs/installation/install-local/)
 supports setup without integration (`SKIP_SECRETS=true`); the integrated GitHub
 build path requires a GitHub App and registry integration. An existing `gh` client token
 does not manufacture that App identity. Stage its pinned resources, capacity
@@ -150,3 +154,34 @@ observed outcome. Reapply using `local --config`; the separate
 `verify_local_install.py` currently targets the default maintenance scope and
 is not a generic Homedir/shadow verifier. These observations establish pilot
 onboarding and safe stopping, not autonomous delivery or improved Homedir UX.
+
+
+## Additional isolated evidence (2026-11-15 UTC)
+
+The [candidate capture](security/candidate-capture.md),
+[lifecycle/model boundary](security/lifecycle-model-activation.md) and
+[real-model benchmark](security/real-model-homedir-benchmark.md) document their
+individual tested guarantees. Their existence does not enable the installed
+shadow runtime to execute a live issue.
+
+The [Homedir supply-chain fixture](operations/konflux-homedir-fixture.md) builds
+the pinned source with actual Maven verification, publishes through a separate
+restricted component, and verifies Chains signatures plus expected source,
+definition, run, publisher and artifact identities. Conforma's builtin signature
+checks are distinct from an enterprise release policy. An actual downstream
+consumer exposed an incompatible image media type that signatures did not catch;
+the publisher now emits matching compressed layer descriptors. A successful
+signature must therefore never substitute for consumer or runtime validation.
+
+The runtime smoke uses packaged quest content and synthetic session configuration.
+The unmodified remote-content startup exceeded its budget when external access
+was unavailable; [Homedir #1577](https://github.com/os-santiago/homedir/issues/1577)
+records that baseline defect as an issue-only input. A public-page smoke with
+explicit local content does not demonstrate the default production startup,
+external health readiness, authenticated journeys or durable storage. Retain
+failed experiments alongside successful component evidence.
+
+Graduation still requires a live eligible issue to pass independent validation,
+authoritative PR/merge/release, enterprise artifact policy, same-digest deployment
+and rollback through AI-SDLC's own components. No competitive superiority or
+adoption-economics conclusion follows from these isolated checks.
