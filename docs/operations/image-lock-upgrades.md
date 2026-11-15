@@ -40,6 +40,19 @@ configuration. Then the scope remains shadow intake in its dedicated kind cluste
 python3 tools/verify_shadow_intake.py --cluster ai-sdlc-homedir --provider podman --repository os-santiago/homedir --issue 1576 --expected needs-human --timeout 20
 ```
 
+For an already authorized candidate installation, preserve its candidate profile:
+
+```bash
+./install.sh plan --config examples/homedir-candidate.local-install.json
+./install.sh local --config examples/homedir-candidate.local-install.json --github-auth gh-cli --codex-auth-file /private/path/auth.json
+```
+
+The current lock publishes source `aae96016600e634645f0cbb7fdda446d95279200`
+from [containers run 43743992582](https://github.com/os-santiago/ai-sdlc/actions/runs/43743992582).
+It includes bounded model handoff diagnostics and the inactive independent
+verification foundation. Candidate mode still grants no verifier dispatch,
+forge publication, merge, release or promotion capability.
+
 Do not combine that configuration with a different `--images` override: the
 installer deliberately rejects conflicting declarations. To test a separate lock,
 review a separate configuration file that explicitly names it.
