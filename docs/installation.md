@@ -112,6 +112,10 @@ reports intended images without creating a cluster or changing Kubernetes.
 It may populate the verified client-tool cache.
 
 Run `./install.sh local` again to reconcile the committed desired state.
+The installer waits for kind networking and storage before starting application
+setup. Each Helm revision runs a new bounded migration Job. Readiness polling
+allows recovery after an earlier infrastructure outage without rotating keys
+or deleting the database; the installation still fails on its configured timeout.
 Helm owns workload updates, and a config checksum rolls Deployments when
 their configuration changes. This first version provides **explicit
 reconciliation**, not continuous drift correction. No Flux or Argo CD is

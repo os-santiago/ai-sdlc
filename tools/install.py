@@ -330,7 +330,9 @@ def main(argv=None):
         run([binaries['helm'], 'upgrade', '--install', 'ai-sdlc', CHART,
              '--kubeconfig', kubeconfig, '--kube-context', 'kind-' + args.cluster,
              '--namespace', NAMESPACE, '-f', LOCAL / 'values.yaml', '-f', args.images,
-             '-f', values.name, '--wait', '--wait-for-jobs', '--timeout', args.timeout])
+             # Poll readiness during recovery rather than failing immediately
+             # on a Deployment's stale ProgressDeadlineExceeded condition.
+             '-f', values.name, '--wait=legacy', '--wait-for-jobs', '--timeout', args.timeout])
     run(kubectl + ['rollout', 'status', 'statefulset/ai-sdlc-postgres', '-n', NAMESPACE,
                    '--timeout', args.timeout])
     for name in ('admission-controller', 'orchestrator', 'worker', 'release-manager', 'relay'):
