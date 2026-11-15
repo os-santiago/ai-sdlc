@@ -11,6 +11,10 @@ imagePullSecrets: []
 serviceAccount: {create: true, name: ""}
 runtime:
   mode: maintenance
+candidate:
+  credentialRevision: ""
+  configJSON: ""
+  apiServerCIDRs: []
 intake:
   configJSON: ""
   credentialSecret: ai-sdlc-github-client

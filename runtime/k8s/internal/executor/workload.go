@@ -20,8 +20,16 @@ type Workload struct {
 	Pod       map[string]any `json:"pod"`
 }
 
-func Compile(namespace, workerImage, mailboxImage string, assignmentRaw, profileRaw, adevRaw []byte, now time.Time) (Workload, error) {
+// ValidatePlacement rejects mutable image references and malformed scope.
+func ValidatePlacement(namespace, workerImage, mailboxImage string) error {
 	if !namespacePattern.MatchString(namespace) || len(workerImage) > 512 || len(mailboxImage) > 512 || !imagePattern.MatchString(workerImage) || !imagePattern.MatchString(mailboxImage) {
+		return ErrInvalid
+	}
+	return nil
+}
+
+func Compile(namespace, workerImage, mailboxImage string, assignmentRaw, profileRaw, adevRaw []byte, now time.Time) (Workload, error) {
+	if ValidatePlacement(namespace, workerImage, mailboxImage) != nil {
 		return Workload{}, ErrInvalid
 	}
 	digest := workspacebundle.Digest(assignmentRaw)

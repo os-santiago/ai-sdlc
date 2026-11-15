@@ -1,0 +1,10 @@
+{
+  "apiVersion": "ai-sdlc.io/local-install/v1",
+  "kind": "LocalInstallation",
+  "cluster": "ai-sdlc-homedir",
+  "provider": "podman",
+  "repository": "os-santiago/homedir",
+  "environment": "ai-sdlc-production",
+  "profile": "candidate",
+  "images": "../runtime/k8s/deploy/local/images.lock.json"
+}

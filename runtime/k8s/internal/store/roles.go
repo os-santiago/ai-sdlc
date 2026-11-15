@@ -49,6 +49,16 @@ func AssertComponent(ctx context.Context, q Querier, component string) error {
 // for schema ownership but reconciles each managed role's table privileges.
 // The caller must not use a shared application database.
 func (db *DB) ProvisionRoles(ctx context.Context, passwords map[string]string) error {
+	return db.ProvisionRolesForMode(ctx, passwords, "maintenance")
+}
+
+// ProvisionRolesForMode atomically reconciles optional execution privileges.
+// Returning to maintenance/shadow revokes the entire optional surface.
+func (db *DB) ProvisionRolesForMode(ctx context.Context, passwords map[string]string, mode string) error {
+	if mode != "" && mode != "maintenance" && mode != "shadow" && mode != "candidate" {
+		return errors.New("unknown role provisioning mode")
+	}
+
 	if err := ValidateRoleCredentials(passwords); err != nil {
 		return err
 	}
@@ -134,6 +144,9 @@ func (db *DB) ProvisionRoles(ctx context.Context, passwords map[string]string) e
 			}
 			for _, table := range tables {
 				statements = append(statements, `GRANT SELECT, INSERT, UPDATE ON `+table+` TO `+role)
+			}
+			if component == "worker" && mode == "candidate" {
+				statements = append(statements, executionPrivileges...)
 			}
 			// REVOKE table privileges alone does not remove column grants.
 			for _, revoke := range columnRevocations {

@@ -125,3 +125,35 @@ func TestDedicatedStartupAndReadiness(t *testing.T) {
 		t.Fatal("readiness ignored revoked policy mount")
 	}
 }
+
+func TestCandidateCeilingCannotGrantPublication(t *testing.T) {
+	t.Setenv("AI_SDLC_RUNTIME_MODE", "candidate")
+	c, m := files(t)
+	m.Policy.Autonomy = "auto-pr"
+	write := func() {
+		b, _ := json.Marshal(m.Policy)
+		if e := os.WriteFile(c.PolicyPath, b, 0600); e != nil {
+			t.Fatal(e)
+		}
+	}
+	write()
+	if _, _, e := c.Authority(); e == nil {
+		t.Fatal("candidate accepted downstream grants")
+	}
+	var grants []authority.Grant
+	for _, g := range m.Policy.Grants {
+		if g.Operation == "admit-issue" || g.Operation == "plan-admission" || g.Operation == "execute-work" {
+			grants = append(grants, g)
+		}
+	}
+	m.Policy.Grants = grants
+	write()
+	if _, _, e := c.Authority(); e != nil {
+		t.Fatal(e)
+	}
+	m.Policy.Autonomy = "auto-deploy"
+	write()
+	if _, _, e := c.Authority(); e == nil {
+		t.Fatal("candidate accepted deploy ceiling")
+	}
+}

@@ -52,6 +52,32 @@ class ChartTests(unittest.TestCase):
             self.assertIn(url.split('/')[2].split(':')[0], services)
         self.assertFalse(any(d['kind'] == 'Secret' for d in docs))
 
+    def test_candidate_isolates_gateway_credentials_and_executor_authority(self):
+        result = self.render('-f', str(ROOT / 'runtime/k8s/deploy/local/profiles/candidate.json'),
+                             '-f', str(ROOT / 'runtime/k8s/deploy/local/images.lock.json'))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        docs = [d for d in yaml.safe_load_all(result.stdout) if d]
+        worker = next(d for d in docs if d['kind'] == 'Deployment' and d['metadata']['name'] == 'ai-sdlc-worker')
+        pod = worker['spec']['template']['spec']
+        self.assertEqual(pod['serviceAccountName'], 'ai-sdlc-execution-controller')
+        self.assertFalse(pod['automountServiceAccountToken'])
+        controller, gateway = pod['containers']
+        self.assertEqual(gateway['name'], 'model-gateway')
+        self.assertEqual({v['name'] for v in gateway['volumeMounts']}, {'model-auth', 'model-home'})
+        self.assertNotIn('model-auth', {v['name'] for v in controller['volumeMounts']})
+        self.assertNotIn('DATABASE_URL', {v['name'] for v in gateway['env']})
+        role = next(d for d in docs if d['kind'] == 'Role')
+        self.assertEqual(role['metadata']['namespace'], 'ai-sdlc-executors')
+        exec_rule = next(r for r in role['rules'] if r['resources'] == ['pods/exec'])
+        self.assertEqual(set(exec_rule['verbs']), {'get', 'create'})
+        for rule in role['rules']:
+            self.assertFalse(set(rule['resources']) & {'secrets', '*', 'deployments'})
+            self.assertFalse(set(rule['verbs']) & {'*', 'update', 'patch', 'list'})
+        policy = next(d for d in docs if d['kind'] == 'NetworkPolicy' and d['metadata']['namespace'] == 'ai-sdlc-executors')
+        self.assertEqual(policy['spec']['policyTypes'], ['Ingress', 'Egress'])
+        self.assertNotIn('egress', policy['spec'])
+        self.assertTrue(any(d['kind'] == 'ResourceQuota' for d in docs))
+
     def test_unsupported_live_mode_and_conflicting_databases_fail(self):
         for args in (['--set', 'runtime.mode=active'], ['--set', 'postgres.cloudNativePG.enabled=true'], ['--set', 'runtime.typo=true']):
             self.assertNotEqual(self.render(*args).returncode, 0)
@@ -91,6 +117,17 @@ class ChartTests(unittest.TestCase):
                 self.assertEqual(policy['spec']['podSelector']['matchLabels']['app.kubernetes.io/component'], 'intake')
                 self.assertEqual(rule['ports'], [{'protocol': 'TCP', 'port': 443}])
                 self.assertIn('169.254.0.0/16', rule['to'][0]['ipBlock']['except'])
+
+    def test_credential_refresh_replaces_only_worker_pod_template(self):
+        templates = []
+        for revision in ('101', '102'):
+            result = self.render('-f', str(ROOT / 'runtime/k8s/deploy/local/profiles/candidate.json'),
+                                 '--set-string', 'candidate.credentialRevision=' + revision)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            docs = [d for d in yaml.safe_load_all(result.stdout) if d and d['kind'] == 'Deployment']
+            templates.append({d['metadata']['name']: d['spec']['template'] for d in docs})
+        changed = {name for name in templates[0] if templates[0][name] != templates[1][name]}
+        self.assertEqual(changed, {'ai-sdlc-worker'})
 
 
 if __name__ == '__main__': unittest.main()

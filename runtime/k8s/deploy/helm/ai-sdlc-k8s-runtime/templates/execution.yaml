@@ -1,0 +1,77 @@
+{{- if eq .Values.runtime.mode "candidate" }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-sdlc-executors
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata: {name: executor-bounds, namespace: ai-sdlc-executors}
+spec:
+  hard:
+    pods: "4"
+    configmaps: "8"
+    requests.cpu: "1"
+    requests.memory: 1Gi
+    limits.cpu: "6"
+    limits.memory: 4Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: deny-all, namespace: ai-sdlc-executors}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ai-sdlc-execution-controller
+  namespace: {{ .Release.Namespace }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: execution-controller, namespace: ai-sdlc-executors}
+rules:
+  - apiGroups: [""]
+    resources: [pods, configmaps]
+    verbs: [create, get, delete]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [get, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: execution-controller, namespace: ai-sdlc-executors}
+subjects:
+  - kind: ServiceAccount
+    name: ai-sdlc-execution-controller
+    namespace: {{ .Release.Namespace }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: execution-controller}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-sdlc-controller-egress
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4]
+      ports: [{protocol: TCP, port: 443}]
+    {{- range .Values.candidate.apiServerCIDRs }}
+    - to: [{ipBlock: {cidr: {{ . | quote }}}}]
+      ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 6443}]
+    {{- end }}
+{{- end }}

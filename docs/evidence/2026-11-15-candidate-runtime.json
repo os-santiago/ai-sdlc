@@ -1,0 +1,76 @@
+{
+  "date": "2026-11-15",
+  "scope": "candidate runtime prerequisites; not autonomous delivery",
+  "autonomousE2E": false,
+  "runtimeTests": {
+    "status": "passed",
+    "passedTests": 845,
+    "passedPackages": 29,
+    "build": "passed",
+    "vet": "passed"
+  },
+  "runtimeFixture": {
+    "autonomousE2E": false,
+    "candidateCaptured": true,
+    "candidateDeltaSHA256": "3f1545e51e868594b47268bf0c05a4b235be05ae2d8a5eb057b231e48c9f715f",
+    "controller": "Runtime.PollOnce",
+    "modelCalls": 2,
+    "publicPinnedSourceFetched": true,
+    "realKubernetes": true,
+    "realPostgres": true,
+    "realSCC": true,
+    "scope": "isolated-candidate-runtime-fixture",
+    "secondPollDidNotReplay": true,
+    "sourceSHA": "0622cdaeb59a11a27bd5f3d7e18183c401a5e412",
+    "syntheticIssue": true,
+    "syntheticModel": true,
+    "resourcesConfirmedRemoved": true,
+    "ownedNamespaceRemoved": true
+  },
+  "recoveryFixture": {
+    "abruptProcessExit": true,
+    "autonomousE2E": false,
+    "budgetClosedWithoutRefund": true,
+    "candidateCaptured": false,
+    "cleanupByPersistedUID": true,
+    "freshProcessRecovery": true,
+    "providerCallAmbiguous": true,
+    "realClaimExpiry": true,
+    "realKubernetes": true,
+    "realPostgres": true,
+    "scope": "isolated-candidate-recovery-fixture",
+    "workFailed": true,
+    "resourcesConfirmedRemoved": true,
+    "ownedNamespaceRemoved": true
+  },
+  "credentialFixture": {
+    "scope": "isolated-model-credential-fixture",
+    "fakeAuthentication": true,
+    "modelCalls": 0,
+    "initialIdentityVerified": true,
+    "refreshedIdentityVerified": true,
+    "newPodUID": true,
+    "newModelHome": true,
+    "autonomousE2E": false,
+    "ownedNamespaceRemoved": true
+  },
+  "realCodexContainer": {
+    "scope": "isolated real Codex completion container",
+    "status": "passed",
+    "autonomousE2E": false,
+    "durationSeconds": 6.815,
+    "exitCode": 0,
+    "httpStatus": 200,
+    "choices": 1,
+    "contentPresent": true,
+    "ownedContainerRemoved": true
+  },
+  "remaining": [
+    "published image rollout",
+    "real signed issue to candidate in Homedir installation",
+    "independent verifier and authenticated audit consumer",
+    "PR publication and current merge gates",
+    "component-triggered Konflux build and enterprise release policy",
+    "same-digest test-production rollout and user journeys"
+  ]
+}

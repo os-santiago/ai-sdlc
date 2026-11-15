@@ -155,6 +155,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.read_deadline.cancel()
+        if self.path == "/readyz":
+            token = os.environ.get("CODEX_WRAPPER_TOKEN", "")
+            supplied = self.headers.get_all("Authorization", [])
+            if (len(token) < 32 or len(supplied) != 1
+                    or not hmac.compare_digest(supplied[0].encode(), ("Bearer " + token).encode())):
+                self.reply(401, {"ready": False})
+                return
+            self.reply(200, {"ready": True})
+            return
         self.reply(200 if self.path == "/healthz" else 404, {"status": "ok"})
 
     def do_POST(self):

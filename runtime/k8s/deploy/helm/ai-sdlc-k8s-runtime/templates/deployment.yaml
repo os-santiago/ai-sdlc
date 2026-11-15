@@ -22,8 +22,16 @@ spec:
         app.kubernetes.io/component: {{ $component.name }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
+        {{- if and (eq $key "worker") (eq $.Values.runtime.mode "candidate") }}
+        ai-sdlc.io/model-credential-revision: {{ $.Values.candidate.credentialRevision | quote }}
+        {{- end }}
     spec:
+      {{- if and (eq $key "worker") (eq $.Values.runtime.mode "candidate") }}
+      terminationGracePeriodSeconds: 60
+      serviceAccountName: ai-sdlc-execution-controller
+      {{- else }}
       serviceAccountName: {{ include "ai-sdlc-k8s-runtime.serviceAccountName" $ }}
+      {{- end }}
       automountServiceAccountToken: false
       {{- with $.Values.imagePullSecrets }}
       imagePullSecrets: {{ toYaml . | nindent 8 }}
@@ -40,7 +48,7 @@ spec:
             - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-config}
           env:
             - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ $component.port }}"}
-            {{- if and (eq $key "intake") (eq $.Values.runtime.mode "shadow") }}
+            {{- if and (eq $key "intake") (has $.Values.runtime.mode (list "shadow" "candidate")) }}
             - {name: AI_SDLC_GITHUB_CREDENTIAL_PATH, value: /etc/ai-sdlc/github/credential.json}
             {{- end }}
             - name: DATABASE_URL
@@ -68,21 +76,71 @@ spec:
             capabilities: {drop: [ALL]}
             readOnlyRootFilesystem: true
           volumeMounts:
+            {{- if and (has $key (list "worker" "orchestrator")) (eq $.Values.runtime.mode "candidate") }}
+            - {name: execution, mountPath: /etc/ai-sdlc/execution, readOnly: true}
+            {{- end }}
+            {{- if and (eq $key "worker") (eq $.Values.runtime.mode "candidate") }}
+            - {name: kubernetes, mountPath: /var/run/ai-sdlc/kubernetes, readOnly: true}
+            - {name: model-client, mountPath: /var/run/ai-sdlc/model, readOnly: true}
+            {{- end }}
             - {name: contract, mountPath: /etc/ai-sdlc/contract, readOnly: true}
             - {name: authority, mountPath: /etc/ai-sdlc/authority, readOnly: true}
             - {name: identity, mountPath: /etc/ai-sdlc/identity, readOnly: true}
             - {name: intake-config, mountPath: /etc/ai-sdlc/intake, readOnly: true}
-            {{- if and (eq $key "intake") (eq $.Values.runtime.mode "shadow") }}
+            {{- if and (eq $key "intake") (has $.Values.runtime.mode (list "shadow" "candidate")) }}
             - {name: github-client, mountPath: /etc/ai-sdlc/github, readOnly: true}
             {{- end }}
             {{- if eq $key "worker" }}
             - {name: workspaces, mountPath: /workspaces}
             - {name: adev, mountPath: /etc/ai-sdlc/policy, readOnly: true}
             {{- end }}
+        {{- if and (eq $key "worker") (eq $.Values.runtime.mode "candidate") }}
+        - name: model-gateway
+          image: "{{ $.Values.image.repository }}@{{ $component.digest }}"
+          command: [python3, /opt/ai-sdlc/model/codex_gateway.py]
+          workingDir: /opt/ai-sdlc/model
+          env:
+            - {name: TMPDIR, value: /model-home/tmp}
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            - name: CODEX_WRAPPER_TOKEN
+              valueFrom: {secretKeyRef: {name: ai-sdlc-model-client, key: token}}
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 768Mi, ephemeral-storage: 256Mi}
+          volumeMounts:
+            - {name: model-auth, mountPath: /var/run/ai-sdlc/codex, readOnly: true}
+            - {name: model-home, mountPath: /model-home}
+        {{- end }}
       volumes:
+        {{- if and (has $key (list "worker" "orchestrator")) (eq $.Values.runtime.mode "candidate") }}
+        - name: execution
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-execution}
+        {{- end }}
+        {{- if and (eq $key "worker") (eq $.Values.runtime.mode "candidate") }}
+        - name: model-client
+          secret: {secretName: ai-sdlc-model-client, defaultMode: 0440}
+        - name: model-auth
+          secret: {secretName: ai-sdlc-codex-auth, defaultMode: 0440}
+        - name: model-home
+          emptyDir: {sizeLimit: 128Mi}
+        - name: kubernetes
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken: {path: token, expirationSeconds: 3600}
+              - configMap:
+                  name: kube-root-ca.crt
+                  items: [{key: ca.crt, path: ca.crt}]
+        {{- end }}
         - name: intake-config
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-intake}
-        {{- if and (eq $key "intake") (eq $.Values.runtime.mode "shadow") }}
+        {{- if and (eq $key "intake") (has $.Values.runtime.mode (list "shadow" "candidate")) }}
         - name: github-client
           secret: {secretName: {{ $.Values.intake.credentialSecret }}, defaultMode: 0440}
         {{- end }}

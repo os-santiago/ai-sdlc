@@ -19,10 +19,14 @@ func main() {
 		log.Fatal(err)
 	}
 	defer component.DB.Close()
-	if os.Getenv("AI_SDLC_RUNTIME_MODE") == "shadow" {
+	if bootstrap.IntakeEnabled() {
 		var routes map[string]string
-		if authority.DecodeStrict([]byte(os.Getenv("AI_SDLC_RELAY_ROUTES")), &routes) != nil || len(routes) != 2 || routes["admit-issue"] == "" || routes["plan-admission"] == "" {
-			log.Fatal("shadow relay requires exactly its two reviewed routes")
+		expected := 2
+		if os.Getenv("AI_SDLC_RUNTIME_MODE") == "candidate" {
+			expected = 3
+		}
+		if authority.DecodeStrict([]byte(os.Getenv("AI_SDLC_RELAY_ROUTES")), &routes) != nil || len(routes) != expected || (expected == 3 && routes["execute-work"] == "") || routes["admit-issue"] == "" || routes["plan-admission"] == "" {
+			log.Fatal("relay requires exactly its reviewed routes")
 		}
 		stop := bootstrap.Periodic(time.Second, func(ctx context.Context) {
 			policy, identity, err := component.Authority()

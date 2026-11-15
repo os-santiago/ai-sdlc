@@ -331,3 +331,32 @@ func TestResourceReadinessRejectsUnsafeInitialStates(t *testing.T) {
 		})
 	}
 }
+
+func TestRecoveryCleanupRejectsSubstitutionAndUsesUID(t *testing.T) {
+	r, calls := resourcesFixture(t, func(_ *Resources, _ core.Pod, w http.ResponseWriter, request *http.Request) {
+		if request.Method != "DELETE" || !strings.HasPrefix(request.URL.Path, "/api/v1/namespaces/ai-sdlc-executors/") {
+			t.Error("cleanup exceeded fixed surface")
+		}
+		var options meta.DeleteOptions
+		if json.NewDecoder(request.Body).Decode(&options) != nil || options.Preconditions == nil || string(*options.Preconditions.UID) != fixtureConfigUID {
+			t.Error("cleanup omitted UID")
+		}
+		w.WriteHeader(404)
+	})
+	pod := "executor-" + fixtureConfigUID + "-1"
+	config := "assignment-" + strings.Repeat("a", 32)
+	for _, namespace := range []string{"ai-sdlc-runtime", "../default", "default"} {
+		if err := r.client.CleanupAcknowledged(context.Background(), namespace, pod, config, fixtureConfigUID, fixtureConfigUID); err == nil {
+			t.Fatal("unsafe namespace accepted")
+		}
+	}
+	if calls.Load() != 0 {
+		t.Fatal("invalid cleanup reached API")
+	}
+	if err := r.client.CleanupAcknowledged(context.Background(), "ai-sdlc-executors", pod, config, fixtureConfigUID, fixtureConfigUID); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 {
+		t.Fatal("cleanup did not use both UIDs")
+	}
+}
