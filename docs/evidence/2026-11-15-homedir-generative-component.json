@@ -1,0 +1,167 @@
+{
+  "scope": "isolated-real-model-component-benchmark",
+  "liveWorkflowAdvanced": false,
+  "status": "passed",
+  "validationImage": "sha256:f5e0900f08c244702a36a8c8c1755d6eabd1a1547aeacecfeb13a010dc38ea53",
+  "renderImage": "sha256:bf74e3042089f1f19846dc218f88b8ec64917a659793b73aa008a01841e41566",
+  "baselineDefectReproduced": true,
+  "gvisor": true,
+  "loopback4": true,
+  "loopback6": true,
+  "nonRoot": true,
+  "capabilitiesDropped": true,
+  "credentialMountsAbsent": true,
+  "rootReadOnly": true,
+  "workspaceWritable": true,
+  "externalInterfacesAbsent": true,
+  "syntheticModelReplies": false,
+  "syntheticIssueOnly": true,
+  "originalSourceFilesPreserved": false,
+  "sourceSHA": "0622cdaeb59a11a27bd5f3d7e18183c401a5e412",
+  "sourceFiles": 1158,
+  "sourceTreeSHA256": "a392d4d3be50cc89cb1cc324fb736952fe9e86b47e5d131912163d363c147277",
+  "modelCalls": 6,
+  "workerTerminatedObserved": true,
+  "workerExitCode": 0,
+  "variant": "normal",
+  "reviewedRequestOverrideRejected": false,
+  "sourceIdentityRejected": false,
+  "launcherTimeoutObserved": false,
+  "executionObservedSeconds": 61.033,
+  "persistentChildContained": false,
+  "candidateIndependentlyCompared": true,
+  "createdFixtureFile": null,
+  "observedPodUID": "8987cc00-f275-4d0c-a0d8-5450883c4eb7",
+  "observedContainerImageIDs": {
+    "mailbox": "docker.io/library/import-2026-11-15@sha256:d2b61887146001bfd4cdf4edbf181f84084ca22b42893b8f7ff56c47d5699003",
+    "worker": "docker.io/library/import-2026-11-15@sha256:d90b6fae259bd71d9767c2afc9f9d068d089ee4b1c0ac6d6b2f4c9c64737d8ca"
+  },
+  "observedContainerImages": {
+    "mailbox": "localhost/ai-sdlc-model-mailbox:issue473",
+    "worker": "localhost/ai-sdlc-worker:issue473"
+  },
+  "assignmentSHA256": "46e2ee6e9842ea7a1aba4297c55a2e102bdd3b8a28bdf1c2d3018409a8071b94",
+  "fixedTemplateUsed": true,
+  "wrongPodStartRejected": true,
+  "repeatedStartRejected": true,
+  "realPodTransport": true,
+  "durableModelHandoffs": 6,
+  "actualRBACDenial": true,
+  "getOnlyExecDenied": true,
+  "scopedExecSucceeded": true,
+  "actualPodReplacementRejected": true,
+  "realCodexCompletions": true,
+  "benchmark": "homedir-date-locale-fallback/v1",
+  "changedFiles": [
+    "quarkus-app/src/main/resources/META-INF/resources/js/utils.js",
+    "tests/js/utils-locale-fallback.test.js"
+  ],
+  "unmodifiedSourceIdentitiesPreserved": true,
+  "candidateIndependentChecks": {
+    "existingAndGeneratedTestsPassed": true,
+    "auxiliaryReportedTests": 16,
+    "externalComparisonPassed": true,
+    "casesCompared": 15,
+    "baselineDefectReproduced": false
+  },
+  "candidateFileSHA256": {
+    "quarkus-app/src/main/resources/META-INF/resources/js/utils.js": "5de5bd8aa590fd48593efc8deaa6340f39ad89daf4d42ffe029b815ad69bf179",
+    "tests/js/utils-locale-fallback.test.js": "b9feffaa5fb72b80cfc5f8c7a60b81924fa04a900d68b74fe6547aadaa1eb75b"
+  },
+  "temporaryResourcesRemoved": true,
+  "durationSeconds": 72.485,
+  "completionTimings": [
+    {
+      "outcome": "completed",
+      "seconds": 6.213
+    },
+    {
+      "outcome": "completed",
+      "seconds": 6.465
+    },
+    {
+      "outcome": "completed",
+      "seconds": 9.77
+    },
+    {
+      "outcome": "completed",
+      "seconds": 18.74
+    },
+    {
+      "outcome": "completed",
+      "seconds": 5.358
+    },
+    {
+      "outcome": "completed",
+      "seconds": 5.108
+    }
+  ],
+  "modelLedger": {
+    "completed": 6,
+    "handedOff": 6,
+    "uncertain": 0
+  },
+  "ownedWrapperRemoved": true,
+  "totalSeconds": 75.429,
+  "evidenceDate": "2026-11-15",
+  "validationSource": "Working-tree validation before the benchmark commit; includes provider header correction from PR491 head240a0651abded4b67450b697ac4dba049385fabb.",
+  "limitations": [
+    "Synthetic fixture authority; no live issue admission or execution request.",
+    "No Homedir PR, release, provenance or deployment was produced.",
+    "One successful fixed-task run is not a reliability, enterprise SLA or comparative market benchmark.",
+    "Generated tests are auxiliary evidence; external comparison covers a finite case set."
+  ],
+  "independentLedgerVerification": {
+    "calls": [
+      {
+        "state": "completed",
+        "sequence": 1,
+        "handedOff": true,
+        "inputBytes": 65614,
+        "outputBytes": 998
+      },
+      {
+        "state": "completed",
+        "sequence": 2,
+        "handedOff": true,
+        "inputBytes": 78688,
+        "outputBytes": 682
+      },
+      {
+        "state": "completed",
+        "sequence": 3,
+        "handedOff": true,
+        "inputBytes": 83416,
+        "outputBytes": 1512
+      },
+      {
+        "state": "completed",
+        "sequence": 4,
+        "handedOff": true,
+        "inputBytes": 84941,
+        "outputBytes": 2749
+      },
+      {
+        "state": "completed",
+        "sequence": 5,
+        "handedOff": true,
+        "inputBytes": 87680,
+        "outputBytes": 841
+      },
+      {
+        "state": "completed",
+        "sequence": 6,
+        "handedOff": true,
+        "inputBytes": 92963,
+        "outputBytes": 514
+      }
+    ],
+    "model": "codex-cli",
+    "podUID": "8987cc00-f275-4d0c-a0d8-5450883c4eb7",
+    "maxCalls": 8,
+    "inputByteBudget": 1048576,
+    "outputByteBudget": 524288,
+    "scope": "isolated-synthetic-authority-fixture",
+    "databaseContainerRemoved": true
+  }
+}
