@@ -3,6 +3,7 @@ package sourcefetch
 import (
 	"context"
 	"encoding/json"
+ "errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -177,7 +178,7 @@ func TestManifestHTTPFailureIsBoundedAndNotRetried(t *testing.T) {
 			c.api = server.URL
 			c.http.Transport.(*http.Transport).TLSClientConfig.RootCAs = server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
 			_, err := c.Fetch(context.Background(), testSHA)
-			if err != ErrSource || calls.Load() != 1 {
+			if !errors.Is(err, ErrSource) || strings.Contains(err.Error(), "private-fixture-response") || calls.Load() != 1 {
 				t.Fatalf("failure=%v calls=%d", err, calls.Load())
 			}
 		})

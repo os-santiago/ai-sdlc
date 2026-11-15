@@ -1,0 +1,62 @@
+{
+  "request": "execution-8110244e946bd84c1f2dcd7d7faea384fc85690c540d3738fa5567e374962db2",
+  "state": "stopped",
+  "reason": "uncertain",
+  "workStatus": "failed",
+  "phase": "start-ready",
+  "cleanup": "complete",
+  "candidateCount": 0,
+  "calls": [
+    {
+      "sequence": 1,
+      "state": "completed",
+      "status": 200,
+      "inputBytes": 67901,
+      "outputBytes": 828,
+      "handedOffAt": "2026-11-15T18:25:38.826575+00:00"
+    },
+    {
+      "sequence": 2,
+      "state": "ambiguous",
+      "status": 200,
+      "inputBytes": 74864,
+      "outputBytes": 2841,
+      "handedOffAt": null
+    }
+  ],
+  "scope": "live-issue-driven-candidate-attempt",
+  "issue": "https://github.com/os-santiago/homedir/issues/1581",
+  "sourceImageRevision": "aae96016600e634645f0cbb7fdda446d95279200",
+  "entry": "authorized issue label",
+  "operatorInjectedWorkflowState": false,
+  "observedDiagnostic": "cleanup",
+  "primaryFailureKnown": false,
+  "autonomousE2E": false,
+  "diagnosticCorrectionValidation": {
+    "runtimeSuite": {
+      "status": "passed",
+      "build": true,
+      "vet": true,
+      "tests": 897,
+      "freshPostgres": true
+    },
+    "isolatedKubernetesProviderFailure": {
+      "candidateCaptured": false,
+      "candidateValidated": false,
+      "claimStopped": true,
+      "controller": "RunController",
+      "diagnosticStage": "model-provider",
+      "liveWorkflowAdvanced": false,
+      "modelCalls": 1,
+      "scenario": "provider-failure",
+      "scope": "isolated-composed-component-fixture",
+      "syntheticAuthority": true,
+      "syntheticModelReplies": true,
+      "workerNonzeroExitObserved": false,
+      "resourcesConfirmedRemoved": true,
+      "temporaryNamespaceRemoved": true,
+      "durationSeconds": 15.682
+    },
+    "rootCauseOfLiveFailureResolved": false
+  }
+}

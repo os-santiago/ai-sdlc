@@ -50,7 +50,10 @@ func (c *Client) getJSON(ctx context.Context, suffix string, limit int) ([]byte,
 		return nil, ErrSource
 	}
 	defer response.Body.Close()
-	if response.StatusCode != 200 || response.Header.Get("Content-Encoding") != "" || response.ContentLength > int64(limit) {
+	if response.StatusCode != 200 {
+		return nil, httpSourceError(response)
+	}
+	if response.Header.Get("Content-Encoding") != "" || response.ContentLength > int64(limit) {
 		return nil, ErrSource
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, int64(limit)+1))
