@@ -115,7 +115,8 @@ Run `./install.sh local` again to reconcile the committed desired state.
 The installer waits for kind networking and storage before starting application
 setup. Each Helm revision runs a new bounded migration Job. Readiness polling
 allows recovery after an earlier infrastructure outage without rotating keys
-or deleting the database; the installation still fails on its configured timeout.
+or deleting the database. `--timeout` bounds each wait operation, not the total
+installer duration; an unsuccessful wait still exits nonzero.
 Helm owns workload updates, and a config checksum rolls Deployments when
 their configuration changes. This first version provides **explicit
 reconciliation**, not continuous drift correction. No Flux or Argo CD is
@@ -198,6 +199,16 @@ from source revision `5fd38f90dc7a55f5e210c5bf729eae2b96ffc24a`, published by
 [Docker/kind CI run 43646250244](https://github.com/os-santiago/ai-sdlc/actions/runs/43646250244)
 also passed fresh installation and repeat application. These are installation
 results in maintenance mode, not autonomous delivery or production evidence.
+
+Observed on 2026-11-15: chart 0.3 with source images `b445938` passed local
+kind/Podman recovery and reapplication, preserving all 18 Secrets, authority,
+PVC and migrations, with five ready services and worker UID 1000. Read-only
+database inspection confirmed eight distinct managed LOGINs without elevated
+role flags. [Docker/kind run 43657544998](https://github.com/os-santiago/ai-sdlc/actions/runs/43657544998)
+passed fresh installation and reapplication. The local test exposed exhausted
+host inotify limits and stale Deployment failure conditions; committed host
+preflight, dependency waits and bounded Helm readiness polling address those
+observed failures. This evidence still concerns maintenance installation only.
 
 The first local trial exposed a non-numeric worker image user rejected by
 Kubernetes; this was corrected before the pinned build above. Database/DNS
