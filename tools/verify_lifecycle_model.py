@@ -19,7 +19,9 @@ from verify_pod_transport import TransportFixture
 from verify_workspace_bundle import identities, source_bundle, wire
 
 
-def verify(kubectl, worker_image, mailbox_image, test_binary, bundle):
+def verify(kubectl, worker_image, mailbox_image, test_binary, bundle, scenario="success"):
+    if scenario not in ("success", "three-turns", "provider-failure", "cancel-provider", "no-change"):
+        raise ValueError("Unknown controller scenario")
     database = urllib.parse.urlsplit(os.environ.get('AI_SDLC_TEST_DATABASE_URL', ''))
     if database.scheme not in ('postgres', 'postgresql') or database.hostname not in ('127.0.0.1', 'localhost', '::1') or database.path != '/ai_sdlc_test':
         raise ValueError('Explicit local disposable ai_sdlc_test database is required; fixture resets it')
@@ -68,7 +70,7 @@ def verify(kubectl, worker_image, mailbox_image, test_binary, bundle):
                 'WorkerImage': worker_image, 'MailboxImage': mailbox_image},
                 'Profile': base64.b64encode(profile).decode(), 'ADev': base64.b64encode(adev).decode(),
                 'SourceFile': str(source), 'OutputFile': str(output), 'ReportFile': str(report),
-                'PlanFile': str(plan), 'ReadyFile': str(ready), 'DeltaFile': str(delta_file)}))
+                'PlanFile': str(plan), 'ReadyFile': str(ready), 'DeltaFile': str(delta_file), 'Scenario': scenario}))
             with (root/'driver.log').open('w+b') as log:
                 process = subprocess.Popen([str(Path(test_binary).resolve()), '-test.run', '^TestRealLifecycleModelFixture$', '-test.v'],
                     env=dict(os.environ, AI_SDLC_LIFECYCLE_FIXTURE=str(control)), stdout=log, stderr=subprocess.STDOUT)
@@ -101,33 +103,41 @@ def verify(kubectl, worker_image, mailbox_image, test_binary, bundle):
                 if process.wait(timeout=150):
                     log.seek(0)
                     raise ValueError('Composed lifecycle fixture failed: '+log.read(4096).decode(errors='replace'))
-            with output.open('rb') as stream:
-                raw = stream.read(32*1024*1024+1)
-            if len(raw)>32*1024*1024:
-                raise ValueError('Candidate bound')
-            expected = dict(bundle, files=list(bundle['files'])+[{'path': FIXTURE_PATH, 'mode': 420, 'data': base64.b64encode(FIXTURE_BODY).decode()}])
-            if identities(json.loads(raw))!=identities(expected):
-                raise ValueError('External candidate identity comparison failed')
             result = json.loads(report.read_bytes())
-            with delta_file.open('rb') as stream:
-                delta_raw = stream.read(2*1024*1024+1)
-            if len(delta_raw)>2*1024*1024 or hashlib.sha256(delta_raw).hexdigest()!=result['candidateDeltaSHA256']:
-                raise ValueError('Persisted delta bound/digest mismatch')
-            delta = json.loads(delta_raw)
-            if (delta['version']!='ai-sdlc.candidate-delta/v1' or delta['sourceSHA']!=bundle['sourceSHA']
-                    or delta['sourceTreeSHA256']!=tree_digest(bundle) or delta['candidateTreeSHA256']!=tree_digest(expected)):
-                raise ValueError('Persisted delta tree identity mismatch')
-            # This fixture has exactly one externally prescribed new file.
-            # Compare the entire persisted change against that independent value.
-            expected_change = {'path':FIXTURE_PATH,'before':None,
-                               'after':{'path':FIXTURE_PATH,'mode':420,'data':base64.b64encode(FIXTURE_BODY).decode()}}
-            if delta['changes']!=[expected_change] or result['candidateValidated'] is not False:
-                raise ValueError('Persisted candidate is not the prescribed unvalidated delta')
-            reconstructed = dict(bundle,files=list(bundle['files'])+[delta['changes'][0]['after']])
-            if identities(reconstructed)!=identities(json.loads(raw)):
-                raise ValueError('External persisted delta reconstruction differs from export')
-            result.update(sourceSHA=bundle['sourceSHA'], sourceFiles=len(bundle['files']), sourceTreeSHA256=tree_digest(bundle),
-                          candidateIndependentlyCompared=True, persistedDeltaIndependentlyReconstructed=True, resourcesConfirmedRemoved=True)
+            for kind, name in (("pod", planned["pod"]), ("configmap", planned["config"])):
+                if command(["-n", namespace, "get", kind, name, "--ignore-not-found", "-o", "json"]).strip():
+                    raise ValueError("Controller did not retire its acknowledged resources")
+            if scenario in ("provider-failure", "cancel-provider", "no-change"):
+                if result.get("claimStopped") is not True or result.get("candidateCaptured") is not False or result.get("modelCalls") not in (range(1, 5) if scenario == "no-change" else (1,)) or output.exists() or delta_file.exists():
+                    raise ValueError("Failed controller exposed candidate or retained authority")
+                result.update(resourcesConfirmedRemoved=True)
+            else:
+                with output.open('rb') as stream:
+                    raw = stream.read(32*1024*1024+1)
+                if len(raw)>32*1024*1024:
+                    raise ValueError('Candidate bound')
+                expected = dict(bundle, files=list(bundle['files'])+[{'path': FIXTURE_PATH, 'mode': 420, 'data': base64.b64encode(FIXTURE_BODY).decode()}])
+                if identities(json.loads(raw))!=identities(expected):
+                    raise ValueError('External candidate identity comparison failed')
+                with delta_file.open('rb') as stream:
+                    delta_raw = stream.read(2*1024*1024+1)
+                if len(delta_raw)>2*1024*1024 or hashlib.sha256(delta_raw).hexdigest()!=result['candidateDeltaSHA256']:
+                    raise ValueError('Persisted delta bound/digest mismatch')
+                delta = json.loads(delta_raw)
+                if (delta['version']!='ai-sdlc.candidate-delta/v1' or delta['sourceSHA']!=bundle['sourceSHA']
+                        or delta['sourceTreeSHA256']!=tree_digest(bundle) or delta['candidateTreeSHA256']!=tree_digest(expected)):
+                    raise ValueError('Persisted delta tree identity mismatch')
+                # This fixture has exactly one externally prescribed new file.
+                # Compare the entire persisted change against that independent value.
+                expected_change = {'path':FIXTURE_PATH,'before':None,
+                                   'after':{'path':FIXTURE_PATH,'mode':420,'data':base64.b64encode(FIXTURE_BODY).decode()}}
+                if delta['changes']!=[expected_change] or result['candidateValidated'] is not False:
+                    raise ValueError('Persisted candidate is not the prescribed unvalidated delta')
+                reconstructed = dict(bundle,files=list(bundle['files'])+[delta['changes'][0]['after']])
+                if identities(reconstructed)!=identities(json.loads(raw)):
+                    raise ValueError('External persisted delta reconstruction differs from export')
+                result.update(sourceSHA=bundle['sourceSHA'], sourceFiles=len(bundle['files']), sourceTreeSHA256=tree_digest(bundle),
+                              candidateIndependentlyCompared=True, persistedDeltaIndependentlyReconstructed=True, resourcesConfirmedRemoved=True)
     finally:
         if process is not None and process.poll() is None:
             process.terminate()
@@ -146,9 +156,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('kubectl','kubeconfig','worker-image','mailbox-image','test-binary','source-repository','source-sha'):
         parser.add_argument('--'+name, required=True)
+    parser.add_argument("--scenario", choices=("success", "three-turns", "provider-failure", "cancel-provider", "no-change"), default="success")
     args = parser.parse_args()
     print(json.dumps(verify([args.kubectl,'--kubeconfig',args.kubeconfig], args.worker_image, args.mailbox_image,
-        args.test_binary, source_bundle(Path(args.source_repository),args.source_sha)), indent=2))
+        args.test_binary, source_bundle(Path(args.source_repository),args.source_sha), args.scenario), indent=2))
 
 
 if __name__ == '__main__':

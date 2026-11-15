@@ -172,16 +172,20 @@ jobs:
               if fixture == 'lifecycle_model':
                   selected[selected.index('--test-binary') + 1] = str(pathlib.Path(os.environ['RUNNER_TEMP'], 'execution.test'))
               extra = [] if fixture in ('workload_resources', 'lifecycle_model') else ['--provider', 'docker', '--render-image', 'localhost/ai-sdlc-model-mailbox:conformance']
-              result = subprocess.run([sys.executable, f'tools/verify_{fixture}.py'] + selected + extra,
-                                      capture_output=True, text=True, timeout=180)
-              if result.returncode:
-                  # Fixture diagnostics are sanitized at their source; retain a
-                  # bounded tail so integration failures are actually reviewable.
-                  print(result.stdout[-8000:], end='')
-                  print(result.stderr[-8000:], end='', file=sys.stderr)
-                  raise SystemExit(result.returncode)
-              print(result.stdout, end='')
-              pathlib.Path(os.environ['RUNNER_TEMP'], f'{fixture}-report.json').write_text(result.stdout)
+              scenarios = ('success', 'three-turns', 'provider-failure', 'cancel-provider', 'no-change') if fixture == 'lifecycle_model' else ('success',)
+              for scenario in scenarios:
+                  scenario_args = ['--scenario', scenario] if fixture == 'lifecycle_model' else []
+                  result = subprocess.run([sys.executable, f'tools/verify_{fixture}.py'] + selected + extra + scenario_args,
+                                          capture_output=True, text=True, timeout=180)
+                  if result.returncode:
+                      # Fixture diagnostics are sanitized at their source; retain a
+                      # bounded tail so integration failures are actually reviewable.
+                      print(result.stdout[-8000:], end='')
+                      print(result.stderr[-8000:], end='', file=sys.stderr)
+                      raise SystemExit(result.returncode)
+                  print(result.stdout, end='')
+                  suffix = '' if scenario == 'success' else '-' + scenario
+                  pathlib.Path(os.environ['RUNNER_TEMP'], f'{fixture}{suffix}-report.json').write_text(result.stdout)
           PYTHON
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
@@ -189,5 +193,5 @@ jobs:
           path: |
             ${{ runner.temp }}/*_transport-report.json
             ${{ runner.temp }}/workload_resources-report.json
-            ${{ runner.temp }}/lifecycle_model-report.json
+            ${{ runner.temp }}/lifecycle_model*-report.json
           retention-days: 14

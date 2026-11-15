@@ -72,3 +72,7 @@ The lifecycle reaches `candidate-captured` while the work item remains running.
 Authority, admission facts and model replies are explicitly synthetic. Neither
 the fixture nor these APIs manufacture completion, acceptance, a PR, a release,
 deployment, or a real issue-to-production result.
+
+The composed fixture now uses the [bounded innerloop controller](innerloop-controller.md)
+rather than implementing its own fixed two-response loop. The controller follows
+the original worker through exit and retires its acknowledged resources.
