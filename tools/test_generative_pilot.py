@@ -152,6 +152,34 @@ class RealOracleTests(unittest.TestCase):
                 'process.stdout.write(Buffer.alloc(2*1024*1024,120))'], timeout=5)
 
 class CleanupRaceTests(unittest.TestCase):
+    def test_cid_removed_before_open_requires_healthy_label_absence(self):
+        identity = 'a'*32
+        real_open = Path.open
+        for healthy in (True, False):
+            calls = []
+            def disappearing_open(path, *args, **kwargs):
+                if path.name == 'container.id' and args == ('rb',):
+                    path.unlink()
+                return real_open(path, *args, **kwargs)
+            def execute(command, **kwargs):
+                calls.append(command)
+                if command[1] == 'run':
+                    Path(command[command.index('--cidfile')+1]).write_text('b'*64)
+                    kwargs['stdout'].write(b'x'*(1024*1024))
+                    return subprocess.CompletedProcess(command, 1)
+                if command[1] == 'inspect':
+                    return subprocess.CompletedProcess(command, 1, b'', b'')
+                if command[1] == 'ps':
+                    return subprocess.CompletedProcess(command, 0 if healthy else 1, b'', b'')
+                self.fail('unexpected cleanup mutation')
+            with self.subTest(healthy=healthy), patch.object(Path, 'open', disappearing_open), \
+                 patch.object(pilot.secrets, 'token_hex', return_value=identity), \
+                 patch.object(pilot.subprocess, 'run', side_effect=execute):
+                with self.assertRaisesRegex(ValueError, 'output exceeded bound' if healthy else 'cleanup could not be confirmed'):
+                    bounded_container('fixture-engine', ['--rm', 'fixture-image'])
+            self.assertEqual(calls[-1][1], 'ps')
+            self.assertIn('label=ai-sdlc.fixture='+identity, calls[-1])
+
     def test_automatic_removal_race_preserves_output_rejection(self):
         identity, container_id = 'a'*32, 'b'*64
         calls = []
