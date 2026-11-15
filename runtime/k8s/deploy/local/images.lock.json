@@ -1,29 +1,29 @@
 {
   "image": {
     "repository": "quay.io/os-santiago/ai-sdlc",
-    "tag": "3f794ba364f2f3c9389e0b3238e21ed76712c78a"
+    "tag": "560e2fa901dd8188cec7b0f9232677057b93c7fa"
   },
   "components": {
     "intake": {
-      "digest": "sha256:f29b35825e8c242d36729ee6c520719e5028b93968b94865b73e97981eebcf40"
-    },
-    "orchestrator": {
-      "digest": "sha256:dd4b4288092e776c49b9986980e5267cb561023fed2fe004e6da7aca6db01163"
+      "digest": "sha256:d856bad75c0eae5294badde8e58d9972c2d0738e87d65135837f6c5ca2c4e8e5"
     },
     "admissionController": {
-      "digest": "sha256:6aca2d343237d1616102a7f2a82527f7a2b90e3d1f4f7c24d7e3905e77b6ff19"
+      "digest": "sha256:bd3d1ac2396b1f2a2d6b4ca19d31c0e41581330959bc573145dafb1c6fd9b75a"
     },
-    "relay": {
-      "digest": "sha256:30157101968d57db86bd32a55d770f8dd1da118a98490e0184e58170d314d7e8"
+    "orchestrator": {
+      "digest": "sha256:2fc6b7948e1e4a1303f20ae9387f0d9014857a6147ade2bdb53fa09fba1f6bd9"
     },
     "worker": {
-      "digest": "sha256:cb276c3dce213e622c7da3a385f5c8840770f7f2f38864083dcbf76abfd2cc82"
+      "digest": "sha256:b8dcb64dc98bd8a8bf378cca68eab4f2c5b653180bfa9ebd5d4e7161c4032df2"
     },
     "releaseManager": {
-      "digest": "sha256:b513ded004c3ccf6baafea43b20ea3f634da854a19fe4125ac0fcfc05432735d"
+      "digest": "sha256:2b86bd57073afddd8989303d64a5f886cb507f75621e79e9e55006a954e24c09"
+    },
+    "relay": {
+      "digest": "sha256:01ccd7fda60a5ac9084c99b533f9ba0b66852a96acb2cd9bc5f70f016043892c"
     }
   },
   "migrator": {
-    "digest": "sha256:e170db10a107770a87724035088f848c8c5a1fabf3c216b4c218f00303f4dacf"
+    "digest": "sha256:a9d412fb7fb3fb82f5ce053610d1ea83c0b93c5d8731dca8802f4bebc499cb49"
   }
 }
