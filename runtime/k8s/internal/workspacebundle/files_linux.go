@@ -118,7 +118,7 @@ func Export(parent, sourceSHA string) (Bundle, error) {
 				if prefix != "" {
 					name = prefix + "/" + name
 				}
-				if nodes > MaxNodes || !validPath(name) {
+				if nodes > MaxNodes || !ValidPath(name) {
 					return ErrInvalid
 				}
 				child, e := unix.Openat(dir, entry, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
