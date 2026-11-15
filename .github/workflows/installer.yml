@@ -77,10 +77,10 @@ jobs:
           tools = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'install-tools.json').read_text())
           image = 'localhost/ai-sdlc-model-mailbox:conformance'
           archive = str(pathlib.Path(os.environ['RUNNER_TEMP'], 'model-mailbox.oci'))
-          subprocess.run(['docker', 'cp', archive, 'ai-sdlc-control-plane:/tmp/model-mailbox.oci'], check=True)
-          subprocess.run(['docker', 'exec', 'ai-sdlc-control-plane', 'ctr', '-n', 'k8s.io',
-                          'images', 'import', '--local', '--digests', '/tmp/model-mailbox.oci'], check=True)
-          subprocess.run(['docker', 'exec', 'ai-sdlc-control-plane', 'rm', '/tmp/model-mailbox.oci'], check=True)
+          with open(archive, 'rb') as stream:
+              subprocess.run(['docker', 'exec', '-i', 'ai-sdlc-control-plane', 'ctr', '-n', 'k8s.io',
+                              'images', 'import', '--local', '--digests', '-'],
+                             stdin=stream, check=True, timeout=60)
           subprocess.run([sys.executable, 'tools/verify_model_mailbox.py', '--kubectl', tools['kubectl'],
                           '--kubeconfig', str(pathlib.Path.home() / '.local/state/ai-sdlc/ai-sdlc/kubeconfig'),
                           '--mailbox-image', image], check=True)
@@ -113,10 +113,10 @@ jobs:
           worker_tag = 'localhost/ai-sdlc-worker:conformance'
           mailbox_tag = 'localhost/ai-sdlc-model-mailbox:conformance'
           archive = str(pathlib.Path(os.environ['RUNNER_TEMP'], 'worker.oci'))
-          subprocess.run(['docker', 'cp', archive, 'ai-sdlc-control-plane:/tmp/worker.oci'], check=True)
-          subprocess.run(['docker', 'exec', 'ai-sdlc-control-plane', 'ctr', '-n', 'k8s.io',
-                          'images', 'import', '--local', '--digests', '/tmp/worker.oci'], check=True)
-          subprocess.run(['docker', 'exec', 'ai-sdlc-control-plane', 'rm', '/tmp/worker.oci'], check=True)
+          with open(archive, 'rb') as stream:
+              subprocess.run(['docker', 'exec', '-i', 'ai-sdlc-control-plane', 'ctr', '-n', 'k8s.io',
+                              'images', 'import', '--local', '--digests', '-'],
+                             stdin=stream, check=True, timeout=60)
           worker = register_digest('docker', 'ai-sdlc-control-plane', worker_tag)
           mailbox = register_digest('docker', 'ai-sdlc-control-plane', mailbox_tag)
           for component, reference in (('worker', worker), ('model-mailbox', mailbox)):
