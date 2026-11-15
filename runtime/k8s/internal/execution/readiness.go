@@ -24,6 +24,12 @@ func readiness(ctx context.Context, db *store.DB, p authority.Policy, config int
 }
 
 func verifiedSnapshot(ctx context.Context, db *store.DB, p authority.Policy, config intake.Config, c Command) (intake.Snapshot, error) {
+	return verifiedSnapshotStatus(ctx, db, p, config, c, "ready")
+}
+func verifiedSnapshotStatus(ctx context.Context, db *store.DB, p authority.Policy, config intake.Config, c Command, expectedStatus string) (intake.Snapshot, error) {
+	if expectedStatus != "ready" && expectedStatus != "running" {
+		return intake.Snapshot{}, ErrAuthority
+	}
 	if config.Validate(p.Repository) != nil {
 		return intake.Snapshot{}, ErrAuthority
 	}
@@ -35,7 +41,7 @@ func verifiedSnapshot(ctx context.Context, db *store.DB, p authority.Policy, con
 	if err != nil {
 		return intake.Snapshot{}, ErrAuthority
 	}
-	if e.Status != "ready" || e.IntakeGeneration != c.Generation || e.AdmissionGeneration != c.Generation || e.PlanningGeneration != c.Generation || e.ObservationAuthority != c.AuthorityRevision {
+	if e.Status != expectedStatus || e.IntakeGeneration != c.Generation || e.AdmissionGeneration != c.Generation || e.PlanningGeneration != c.Generation || e.ObservationAuthority != c.AuthorityRevision {
 		return intake.Snapshot{}, ErrAuthority
 	}
 	var observed, admitted intake.Snapshot
