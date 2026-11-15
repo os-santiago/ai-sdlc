@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "scope": "inactive-publication-journal",
+  "status": "passed",
+  "validation": {
+    "build": "passed",
+    "vet": "passed",
+    "tests": 1017,
+    "packages": 34,
+    "realPostgres": true,
+    "lostCommitStages": [
+      "claim",
+      "intent",
+      "ack",
+      "finish"
+    ]
+  },
+  "sourceBase": "3623effe652252302b7711ad7ccf90a0cc6e4fc6",
+  "testedWorkingTree": true,
+  "autonomousE2E": false,
+  "githubWrites": false,
+  "installedActivation": false
+}
