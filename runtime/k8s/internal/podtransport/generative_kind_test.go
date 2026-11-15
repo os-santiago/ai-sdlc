@@ -123,7 +123,7 @@ func TestRealCodexKubernetesMailboxFixture(t *testing.T) {
 		t.Fatal("fixture provider")
 	}
 	observer := &fixtureCompletionObserver{session: session, t: t}
-	dispatcher := modelbroker.Dispatcher{DB: db, Provider: provider, Mailbox: observer}
+	dispatcher := modelbroker.Dispatcher{DB: db, Provider: provider, Mailbox: observer, Authority: syntheticFixtureAuthority{}}
 	seen := map[uint64]bool{}
 	for {
 		if fixtureWorkerExited(ctx, session) {
