@@ -3,7 +3,6 @@ package execution
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
@@ -29,6 +30,7 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 		t.Skip("isolated lifecycle Kubernetes fixture required")
 	}
 	var input struct {
+		Scenario                                                           string
 		Config                                                             podtransport.Config
 		Placement                                                          Placement
 		Profile, ADev                                                      []byte
@@ -89,12 +91,13 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal("actual preparation")
 	}
-	l, err := OpenLifecycle(ctx, f.db, func(ctx context.Context) (PreparationInputs, Placement, error) {
+	loader := func(ctx context.Context) (PreparationInputs, Placement, error) {
 		in, e := load(ctx)
 		return in, input.Placement, e
-	}, prepared)
+	}
+	workload, err := executor.Compile(input.Placement.Namespace, input.Placement.WorkerImage, input.Placement.MailboxImage, prepared.Assignment(), prepared.Profile(), prepared.ADev(), time.Now())
 	if err != nil {
-		t.Fatal("actual lifecycle ownership")
+		t.Fatal("fixed workload plan")
 	}
 	writePrivate := func(path string, value []byte) {
 		file, e := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
@@ -107,7 +110,7 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 			t.Fatal("fixture output write")
 		}
 	}
-	plan, _ := json.Marshal(map[string]string{"namespace": l.durable.Binding.Namespace, "pod": l.durable.Binding.PodName, "config": l.durable.Binding.ConfigName})
+	plan, _ := json.Marshal(map[string]string{"namespace": input.Placement.Namespace, "pod": workload.Pod["metadata"].(map[string]any)["name"].(string), "config": workload.ConfigMap["metadata"].(map[string]any)["name"].(string)})
 	writePrivate(input.PlanFile, plan)
 	readyDeadline := time.Now().Add(20 * time.Second)
 	for {
@@ -123,58 +126,6 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal("fixture Kubernetes client")
 	}
-	resources, err := podtransport.PlanResources(client, podtransport.Binding{Namespace: input.Placement.Namespace, WorkerImage: input.Placement.WorkerImage, MailboxImage: input.Placement.MailboxImage, Assignment: prepared.Assignment(), Profile: prepared.Profile(), ADev: prepared.ADev()})
-	if err != nil {
-		t.Fatal("fixed resources")
-	}
-	configUID, podUID := "", ""
-	defer func() {
-		cleanup, stop := context.WithTimeout(context.Background(), 25*time.Second)
-		defer stop()
-		if podUID != "" {
-			if e := resources.DeletePod(cleanup, podUID); e != nil {
-				t.Error("owned Pod cleanup")
-			}
-		}
-		if configUID != "" {
-			if e := resources.DeleteConfig(cleanup, configUID); e != nil {
-				t.Error("owned ConfigMap cleanup")
-			}
-		}
-	}()
-	if err = l.RunEffect(ctx, "config", func(ctx context.Context, _ EffectInput) (store.LifecycleResult, error) {
-		configUID, err = resources.CreateConfig(ctx)
-		return store.LifecycleResult{UID: configUID}, err
-	}); err != nil {
-		t.Fatal("durable config effect")
-	}
-	if err = l.RunEffect(ctx, "pod", func(ctx context.Context, in EffectInput) (store.LifecycleResult, error) {
-		podUID, err = resources.CreatePod(ctx, in.ConfigUID)
-		return store.LifecycleResult{UID: podUID}, err
-	}); err != nil {
-		t.Fatal("durable Pod effect")
-	}
-	session, err := resources.WaitRunning(ctx, podUID)
-	if err != nil {
-		t.Fatal("original Pod readiness")
-	}
-	if err = l.RunEffect(ctx, "source", func(ctx context.Context, in EffectInput) (store.LifecycleResult, error) {
-		e := session.ImportSource(ctx, in.Source)
-		return store.LifecycleResult{UID: in.PodUID, Digest: workspacebundle.Digest(in.Source), Bytes: len(in.Source)}, e
-	}); err != nil {
-		t.Fatal("durable source effect")
-	}
-	scope, err := l.ActivateModel(ctx, func(context.Context) (ModelPolicy, error) {
-		return ModelPolicy{Limits: store.ModelLimits{Calls: 4, InputBytes: 512 * 1024, OutputBytes: 128 * 1024}, ResponseLimit: 32 * 1024}, nil
-	})
-	if err != nil {
-		t.Fatal("atomic model activation")
-	}
-	if err = l.RunEffect(ctx, "start", func(ctx context.Context, in EffectInput) (store.LifecycleResult, error) {
-		return store.LifecycleResult{UID: in.PodUID}, session.Start(ctx)
-	}); err != nil {
-		t.Fatal("durable start effect")
-	}
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, e := io.Copy(io.Discard, io.LimitReader(r.Body, modelmailbox.MaxRequestBytes+1)); e != nil {
@@ -184,9 +135,27 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 		n := calls.Add(1)
 		message := map[string]any{"role": "assistant", "content": "Created the isolated conformance fixture file."}
 		reason := "stop"
-		if n == 1 {
+		if input.Scenario == "provider-failure" {
+			w.WriteHeader(503)
+			return
+		}
+		if input.Scenario == "cancel-provider" {
+			cancel()
+			w.WriteHeader(503)
+			return
+		}
+		if n == 1 && input.Scenario != "no-change" {
 			args, _ := json.Marshal(map[string]string{"path": "AI_SDLC_EXECUTOR_FIXTURE.txt", "content": "Created by the isolated SCC executor conformance fixture.\n"})
 			message = map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{map[string]any{"id": "lifecycle-fixture", "type": "function", "function": map[string]any{"name": "write_file", "arguments": string(args)}}}}
+			reason = "tool_calls"
+		}
+		if (input.Scenario == "three-turns" && n == 2) || (input.Scenario == "no-change" && n == 1) {
+			path := "AI_SDLC_EXECUTOR_FIXTURE.txt"
+			if input.Scenario == "no-change" {
+				path = "README.md"
+			}
+			args, _ := json.Marshal(map[string]string{"path": path})
+			message = map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{map[string]any{"id": "inspect-fixture", "type": "function", "function": map[string]any{"name": "read_file", "arguments": string(args)}}}}
 			reason = "tool_calls"
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -197,64 +166,59 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal("synthetic HTTP model fixture")
 	}
-	dispatcher := modelbroker.Dispatcher{DB: f.db, Provider: provider, Mailbox: session, Authority: l}
-	seen := map[uint64]bool{}
-	for len(seen) < 2 {
-		req, e := session.ReadRequest(ctx)
-		if errors.Is(e, modelmailbox.ErrPending) {
-			time.Sleep(25 * time.Millisecond)
-			continue
+	captured, err := RunController(ctx, f.db, loader, prepared, client, provider, func(context.Context) (ModelPolicy, error) {
+		return ModelPolicy{Limits: store.ModelLimits{Calls: 4, InputBytes: 512 * 1024, OutputBytes: 128 * 1024}, ResponseLimit: 32 * 1024}, nil
+	})
+	if input.Scenario == "provider-failure" || input.Scenario == "cancel-provider" || input.Scenario == "no-change" {
+		if err == nil || captured.RequestID != "" || f.Count(t, `SELECT count(*) FROM execution_candidates`) != 0 || f.Count(t, `SELECT count(*) FROM execution_requests WHERE state='stopped'`) != 1 {
+			t.Fatal("failed controller retained authority/candidate", err)
 		}
-		if e != nil {
-			t.Fatal("actual mailbox read")
-		}
-		if seen[req.Sequence] {
-			time.Sleep(25 * time.Millisecond)
-			continue
-		}
-		result, e := dispatcher.Deliver(ctx, scope.AllocationID, prepared.Profile(), req)
-		if e != nil || !result.DispatchAttempted || !result.HandoffConfirmed {
-			t.Fatal("lifecycle-authorized model handoff")
-		}
-		seen[req.Sequence] = true
-	}
-	for {
-		code, exited, e := session.WorkerExit(ctx)
-		if e != nil {
-			t.Fatal("bound worker observation")
-		}
-		if exited {
-			if code != 0 {
-				t.Fatal("fixture worker exit")
+		expectedCalls := int32(1)
+		if input.Scenario == "no-change" {
+			expectedCalls = calls.Load()
+			if expectedCalls < 1 || expectedCalls > 4 || f.Count(t, `SELECT count(*) FROM model_calls WHERE state='completed' AND response_handed_off_at IS NOT NULL`) != int(expectedCalls) {
+				t.Fatal("no-change exchange exceeded budget or left uncertain calls")
 			}
-			break
+			failure, ok := err.(ControllerError)
+			if !ok || failure.Stage != "worker-exit" {
+				t.Fatal("unexpected no-change rejection", err)
+			}
 		}
-		time.Sleep(25 * time.Millisecond)
+		if calls.Load() != expectedCalls {
+			t.Fatal("unexpected failed scenario calls", calls.Load())
+		}
+		result, _ := json.Marshal(map[string]any{"scope": "isolated-composed-component-fixture", "scenario": input.Scenario, "syntheticAuthority": true, "syntheticModelReplies": true, "liveWorkflowAdvanced": false, "controller": "RunController", "candidateCaptured": false, "candidateValidated": false, "claimStopped": true, "modelCalls": calls.Load(), "workerNonzeroExitObserved": input.Scenario == "no-change"})
+		writePrivate(input.ReportFile, result)
+		return
 	}
-	var candidate podtransport.Candidate
-	if err = l.RunEffect(ctx, "export", func(ctx context.Context, in EffectInput) (store.LifecycleResult, error) {
-		candidate, err = session.ExportCandidate(ctx)
-		code := candidate.WorkerExitCode()
-		return store.LifecycleResult{UID: in.PodUID, Digest: workspacebundle.Digest(candidate.Bytes()), Bytes: len(candidate.Bytes()), ExitCode: &code}, err
-	}); err != nil {
-		t.Fatal("durable candidate export")
+	if err != nil {
+		t.Fatal("controller composition", err)
 	}
-	if _, err = l.Authorize(ctx, scope); err == nil {
-		t.Fatal("post-export model authority")
+	expectedCalls := int32(2)
+	if input.Scenario == "three-turns" {
+		expectedCalls = 3
 	}
-	if calls.Load() != 2 || f.Count(t, `SELECT count(*) FROM model_calls WHERE state='completed' AND response_handed_off_at IS NOT NULL`) != 2 || f.Count(t, `SELECT count(*) FROM execution_effects WHERE result IS NOT NULL`) != 5 {
-		t.Fatal("durable effect/handoff evidence")
-	}
-	captured, err := l.CaptureCandidate(ctx, candidate.Bytes())
-	if err != nil || captured.Changes != 1 || captured.ModelCalls != 2 || captured.PodUID != podUID {
-		t.Fatal("durable unvalidated candidate capture", err)
+	if captured.Changes != 1 || captured.ModelCalls != int(expectedCalls) || calls.Load() != expectedCalls || f.Count(t, `SELECT count(*) FROM model_calls WHERE state='completed' AND response_handed_off_at IS NOT NULL`) != int(expectedCalls) || f.Count(t, `SELECT count(*) FROM execution_effects WHERE result IS NOT NULL`) != 5 {
+		t.Fatal("controller durable evidence")
 	}
 	var delta []byte
 	if err = f.Admin.Pool.QueryRow(`SELECT delta FROM execution_candidates WHERE request_id=$1`, captured.RequestID).Scan(&delta); err != nil {
 		t.Fatal("fixture candidate read")
 	}
 	writePrivate(input.DeltaFile, delta)
-	writePrivate(input.OutputFile, candidate.Bytes())
-	result, _ := json.Marshal(map[string]any{"scope": "isolated-composed-component-fixture", "syntheticAuthority": true, "syntheticModelReplies": true, "liveWorkflowAdvanced": false, "modelCalls": calls.Load(), "durableModelHandoffs": 2, "durableEffects": 5, "originalPodUID": podUID, "originalConfigUID": configUID, "workerExitCode": candidate.WorkerExitCode(), "candidateBytes": len(candidate.Bytes()), "workItemStatus": "running", "lifecyclePhase": "candidate-captured", "postExportAuthorityDenied": true, "candidateDeltaSHA256": captured.DeltaSHA256, "candidateTreeSHA256": captured.CandidateTreeSHA256, "candidateDeltaBytes": len(delta), "candidateValidated": false, "modelBudgetSealed": true})
+	decoded, err := candidate.Decode(delta)
+	if err != nil {
+		t.Fatal("delta decode")
+	}
+	reconstructed, err := candidate.Apply(bundle, decoded)
+	if err != nil {
+		t.Fatal("delta reconstruction")
+	}
+	exported, err := workspacebundle.Encode(reconstructed)
+	if err != nil {
+		t.Fatal("bundle encoding")
+	}
+	writePrivate(input.OutputFile, exported)
+	result, _ := json.Marshal(map[string]any{"scope": "isolated-composed-component-fixture", "syntheticAuthority": true, "syntheticModelReplies": true, "liveWorkflowAdvanced": false, "modelCalls": calls.Load(), "durableModelHandoffs": expectedCalls, "durableEffects": 5, "originalPodUID": captured.PodUID, "workerExitCode": 0, "candidateBytes": len(exported), "controller": "RunController", "workItemStatus": "running", "lifecyclePhase": "candidate-captured", "candidateDeltaSHA256": captured.DeltaSHA256, "candidateTreeSHA256": captured.CandidateTreeSHA256, "candidateDeltaBytes": len(delta), "candidateValidated": false, "modelBudgetSealed": true})
 	writePrivate(input.ReportFile, result)
 }

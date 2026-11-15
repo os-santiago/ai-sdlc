@@ -167,26 +167,48 @@ func (s *Session) exchangeFixed(ctx context.Context, operation helperOperation, 
 	return nil, 0, ErrTransport
 }
 
+func (s *Session) requestWorkerActive(ctx context.Context) error {
+	if s == nil {
+		return ErrTransport
+	}
+	observed, err := s.inspect(ctx, true)
+	if err != nil {
+		return err
+	}
+	if observed.workerExitCode != nil {
+		return ErrWorkerExited
+	}
+	return nil
+}
+
 func (s *Session) ReadRequest(ctx context.Context) (modelmailbox.Envelope, error) {
-	if _, err := s.observe(ctx, false); err != nil {
+	if err := s.requestWorkerActive(ctx); err != nil {
 		return modelmailbox.Envelope{}, err
 	}
 	raw, code, err := s.exchange(ctx, "read", nil)
 	if err != nil {
 		return modelmailbox.Envelope{}, err
 	}
-	if _, err := s.observe(ctx, false); err != nil {
-		return modelmailbox.Envelope{}, err
+	// Validate the helper result before observing a concurrent worker exit.
+	// An invalid envelope cannot be hidden behind a later zero exit.
+	pending := code == 3 && len(raw) == 0
+	var e modelmailbox.Envelope
+	if !pending {
+		if code != 0 {
+			return e, ErrTransport
+		}
+		e, err = modelmailbox.Decode(raw)
+		if err != nil || e.Validate(s.identity, "request") != nil {
+			return modelmailbox.Envelope{}, ErrTransport
+		}
 	}
-	if code == 3 && len(raw) == 0 {
+	if err = s.requestWorkerActive(ctx); err != nil {
+		// Preserve a validated observed request so the controller can reject
+		// unhanded sequences/rebinding even when the writer has just exited.
+		return e, err
+	}
+	if pending {
 		return modelmailbox.Envelope{}, modelmailbox.ErrPending
-	}
-	if code != 0 {
-		return modelmailbox.Envelope{}, ErrTransport
-	}
-	e, err := modelmailbox.Decode(raw)
-	if err != nil || e.Validate(s.identity, "request") != nil {
-		return modelmailbox.Envelope{}, ErrTransport
 	}
 	return e, nil
 }

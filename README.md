@@ -2,6 +2,8 @@
 
 `ai-sdlc` is the Kubernetes/OpenShift runtime and portable contract for
 bounded, evidence-driven AI-assisted software delivery.
+See the [innerloop/outerloop architecture](docs/innerloop-outerloop.md) for component
+responsibilities, authority boundaries and the remaining E2E graduation gates.
 
 ## Install locally with kind and Helm
 
