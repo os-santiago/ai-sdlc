@@ -35,7 +35,7 @@ workloads are currently exercised by isolated component fixtures.
 | Transition | Current evidence | Required before a live E2E claim |
 | --- | --- | --- |
 | Issue → admission → plan | Installed signed shadow flow with real Homedir issues | Approved non-shadow profile and current eligibility |
-| Plan → generated candidate | [Reusable bounded controller](security/innerloop-controller.md), isolated SCC/gVisor/PostgreSQL fixtures | Operational scheduler/inbox, scoped grants, containerized model gateway and failure recovery |
+| Plan → generated candidate | [Reusable bounded controller](security/innerloop-controller.md), isolated SCC/gVisor/PostgreSQL fixtures | [Candidate profile](operations/candidate-runtime.md) supplies scheduler/inbox, scoped grants, model gateway and terminal recovery; published-image rollout and real issue evidence remain required |
 | Candidate → verified PR | Candidate delta reconstruction; authority contracts | Independent test/scope verification, signed handoff, idempotent publisher and real PR evidence |
 | PR → merge | Policy requirements documented | Current head/base, resolved threads/change requests/check failures and repository-required approvals |
 | Merge → trusted image | Real pinned Homedir build, Chains signature/identity checks and runtime smoke | Component-triggered merged-source build plus enterprise Conforma release policy |

@@ -124,3 +124,25 @@ func TestDurationOrDefaultFallsBackOnUnparsableValue(t *testing.T) {
 		t.Fatalf("got %v, want fallback of 1m for an unparsable value", got)
 	}
 }
+
+func TestCandidateBoundaryExposesOnlyThreeSignedPaths(t *testing.T) {
+	t.Setenv("AI_SDLC_RUNTIME_MODE", "candidate")
+	server := httptest.NewServer(runtimeBoundary(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })))
+	defer server.Close()
+	for _, path := range []string{"/internal/admit-issue", "/internal/plan-admission", "/internal/execute-work", "/internal/execute-work?override=1", "/internal/publish", "/v1/attempts/dispatch"} {
+		response, err := http.Post(server.URL+path, "application/json", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		allowed := path == "/internal/admit-issue" || path == "/internal/plan-admission" || path == "/internal/execute-work"
+		if (response.StatusCode == 204) != allowed {
+			t.Fatalf("route boundary %s: %d", path, response.StatusCode)
+		}
+	}
+	w := httptest.NewRecorder()
+	readiness(nil).ServeHTTP(w, httptest.NewRequest("GET", "/readyz", nil))
+	if !strings.Contains(w.Body.String(), `"delivery":"candidate-only"`) {
+		t.Fatal("readiness misrepresents mode")
+	}
+}

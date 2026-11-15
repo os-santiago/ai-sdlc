@@ -112,12 +112,13 @@ func maintenanceBoundary(next http.Handler) http.Handler {
 }
 
 func runtimeBoundary(next http.Handler) http.Handler {
-	if os.Getenv("AI_SDLC_RUNTIME_MODE") != "shadow" {
+	mode := os.Getenv("AI_SDLC_RUNTIME_MODE")
+	if mode != "shadow" && mode != "candidate" {
 		return maintenanceBoundary(next)
 	}
 	observation := maintenanceBoundary(next)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.RawQuery == "" && (r.URL.Path == "/internal/admit-issue" || r.URL.Path == "/internal/plan-admission") {
+		if r.Method == http.MethodPost && r.URL.RawQuery == "" && (r.URL.Path == "/internal/admit-issue" || r.URL.Path == "/internal/plan-admission" || (mode == "candidate" && r.URL.Path == "/internal/execute-work")) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -138,6 +139,8 @@ func readiness(ready func(context.Context) error) http.Handler {
 		mode, delivery := "maintenance", "disabled"
 		if os.Getenv("AI_SDLC_RUNTIME_MODE") == "shadow" {
 			mode, delivery = "shadow", "admission-only"
+		} else if os.Getenv("AI_SDLC_RUNTIME_MODE") == "candidate" {
+			mode, delivery = "candidate", "candidate-only"
 		}
 		WriteJSON(w, http.StatusOK, map[string]string{"status": "ready", "mode": mode, "delivery": delivery})
 	})

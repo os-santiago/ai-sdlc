@@ -168,7 +168,7 @@ def identity_material(provider, image, repository, environment):
     return json.loads(result.stdout)
 
 
-def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None):
+def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False):
     image = lock['image']['repository'] + '@' + lock['migrator']['digest']
     material = identity_material(provider, image, repository, environment)
     pending, passwords = [], {}
@@ -218,9 +218,15 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
                 raise ValueError('Existing authority policy and component identity differ; restore or rotate through reviewed configuration')
         material['policy'] = policy
     if freeze is not None:
-        if type(freeze) is not bool or material['policy'].get('autonomy') != 'shadow':
-            raise ValueError('Installation profiles require the shadow authority ceiling')
+        if type(freeze) is not bool or material['policy'].get('autonomy') not in ('shadow', 'auto-pr'):
+            raise ValueError('Unsupported installation authority ceiling')
         material['policy']['freeze'] = freeze
+        material['policy']['autonomy'] = 'auto-pr' if candidate else 'shadow'
+        # Candidate mode grants only issue ingress and isolated execution.
+        # Candidate authority is restricted to intake, planning and execution.
+        if candidate:
+            material['policy']['grants'] = [g for g in material['policy']['grants']
+                if g['operation'] in ('admit-issue', 'plan-admission', 'execute-work')]
     current_passwords = owned_secret(kubectl, 'ai-sdlc-database-roles', cluster_uid)
     if current_passwords is not None:
         if set(current_passwords) != {'passwords.json'} or json.loads(current_passwords['passwords.json']) != passwords:
@@ -275,9 +281,11 @@ def main(argv=None):
     parser.add_argument('--timeout', default='10m')
     parser.add_argument('--repository')
     parser.add_argument('--environment')
-    parser.add_argument('--profile', choices=['maintenance', 'shadow'])
+    parser.add_argument('--profile', choices=['maintenance', 'shadow', 'candidate'])
     parser.add_argument('--github-auth', choices=['none', 'gh-cli'], default='none')
     parser.add_argument('--refresh-github-credential', action='store_true')
+    parser.add_argument('--codex-auth-file', type=Path, help='Explicit local Codex authentication source for the candidate sidecar Secret')
+    parser.add_argument('--refresh-model-credential', action='store_true')
     args = parser.parse_args(argv)
     config_digest = install_config.resolve(args)
     defaults = dict(cluster='ai-sdlc', provider='auto', images=LOCAL / 'images.lock.json',
@@ -285,8 +293,12 @@ def main(argv=None):
     for key, value in defaults.items():
         if getattr(args, key) is None:
             setattr(args, key, value)
-    if args.profile == 'shadow' and args.command not in ('plan', 'local'):
-        raise ValueError('--profile shadow is valid only with plan or local')
+    if args.profile in ('shadow', 'candidate') and args.command not in ('plan', 'local'):
+        raise ValueError('--profile shadow/candidate is valid only with plan or local')
+    if (args.codex_auth_file is not None or args.refresh_model_credential) and (args.command != 'local' or args.profile != 'candidate'):
+        raise ValueError('Model credentials are only accepted by an explicit local candidate installation')
+    if args.refresh_model_credential and args.codex_auth_file is None:
+        raise ValueError('Model credential refresh requires an explicit authentication file')
     if args.github_auth != 'none' and args.command not in ('plan', 'local', 'credentials'):
         raise ValueError('--github-auth is valid only with plan, local or credentials')
     if args.command == 'credentials' and args.github_auth != 'gh-cli':
@@ -315,7 +327,13 @@ def main(argv=None):
         return 0
     helm_args = [binaries['helm'], 'template', 'ai-sdlc', CHART, '--namespace', NAMESPACE,
                  '-f', LOCAL / 'values.yaml', '-f', LOCAL / 'profiles' / (args.profile + '.json'), '-f', args.images]
-    run(helm_args, stdout=subprocess.DEVNULL)
+    execution_values = None
+    if args.profile == 'candidate':
+        import candidate_install
+        execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images))
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as preview:
+        json.dump(execution_values or {}, preview); preview.flush()
+        run(helm_args + ['-f', preview.name], stdout=subprocess.DEVNULL)
     if args.command == 'plan':
         print(json.dumps({'cluster': args.cluster, 'namespace': NAMESPACE,
                           'chart': str(CHART.relative_to(ROOT)), 'mode': args.profile,
@@ -394,7 +412,7 @@ def main(argv=None):
     if args.github_auth == 'gh-cli':
         configure_github_client(kubectl, cluster_uid, args.repository, args.refresh_github_credential)
     intake_values = None
-    if args.profile == 'shadow':
+    if args.profile in ('shadow', 'candidate'):
         intake_values = shadow_intake_config(kubectl, cluster_uid, args.repository)
     # Bootstrap secret boundary: values refer to a Secret, never its contents.
     # An existing Secret is reused unchanged, including on repeat installs.
@@ -410,9 +428,18 @@ def main(argv=None):
         run(kubectl + ['create', '-f', '-'], input=json.dumps(secret), stdout=subprocess.DEVNULL)
     public_values = configure_identities(kubectl, provider, image_lock(args.images),
                                          cluster_uid, args.repository, args.environment,
-                                         freeze=args.profile == 'maintenance')
+                                         freeze=args.profile == 'maintenance', candidate=args.profile == 'candidate')
     if intake_values is not None:
         public_values['intake'] = intake_values
+    if args.profile == 'candidate':
+        import candidate_install
+        import offline_runtime
+        lock = image_lock(args.images)
+        execution_values["candidate"]["credentialRevision"] = candidate_install.model_credentials(kubectl, cluster_uid, args.codex_auth_file, args.refresh_model_credential)
+        offline_runtime.install(kubectl, provider, kind, args.cluster, cluster_uid, cache,
+                                lock['image']['repository'] + '@' + lock['components']['worker']['digest'])
+        execution_values['candidate']['apiServerCIDRs'] = candidate_install.api_cidrs(kubectl)
+        public_values.update(execution_values)
     # This temporary Helm input contains public verification keys only. Helm
     # owns workloads and the policy ConfigMap; private data stays in Secrets.
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as values:
@@ -436,7 +463,8 @@ def main(argv=None):
               'repository': args.repository, 'environment': args.environment,
               'configurationDigest': config_digest,
               'mode': args.profile, 'installationReady': True, 'deliveryEnabled': False,
-              'issueIntakeEnabled': args.profile == 'shadow',
+              'issueIntakeEnabled': args.profile in ('shadow', 'candidate'),
+              'candidateExecutionEnabled': args.profile == 'candidate',
               'networkPolicyVerification': network,
               'images': image_lock(args.images)}
     (state / 'installation.json').write_text(json.dumps(report, indent=2) + '\n')

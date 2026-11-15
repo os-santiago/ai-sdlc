@@ -18,7 +18,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer component.DB.Close()
-	if os.Getenv("AI_SDLC_RUNTIME_MODE") == "shadow" {
+	if bootstrap.IntakeEnabled() {
 		policy, _, err := component.Authority()
 		if err != nil {
 			log.Fatal(err)

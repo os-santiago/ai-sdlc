@@ -83,7 +83,7 @@ func run() error {
 		if err := db.Migrate(ctx); err != nil {
 			return errors.New("schema migration failed")
 		}
-		if err := db.ProvisionRoles(ctx, passwords); err != nil {
+		if err := db.ProvisionRolesForMode(ctx, passwords, os.Getenv("AI_SDLC_RUNTIME_MODE")); err != nil {
 			return err
 		}
 		log.Print("schema and component database roles ready")

@@ -25,8 +25,8 @@ type Component struct {
 // active. An omitted mode is maintenance, not a stateless public evaluator.
 func ValidateMode() error {
 	mode := os.Getenv("AI_SDLC_RUNTIME_MODE")
-	if mode != "" && mode != "maintenance" && mode != "shadow" {
-		return errors.New("runtime supports maintenance and bounded shadow modes only")
+	if mode != "" && mode != "maintenance" && mode != "shadow" && mode != "candidate" {
+		return errors.New("runtime supports maintenance, shadow and bounded candidate modes only")
 	}
 	return nil
 }
@@ -81,6 +81,16 @@ func (c *Component) Authority() (authority.Policy, authority.Identity, error) {
 	if os.Getenv("AI_SDLC_RUNTIME_MODE") == "shadow" && p.Autonomy != "shadow" {
 		return authority.Policy{}, authority.Identity{}, errors.New("shadow mode requires shadow authority ceiling")
 	}
+	if os.Getenv("AI_SDLC_RUNTIME_MODE") == "candidate" {
+		if p.Autonomy != "auto-pr" {
+			return authority.Policy{}, authority.Identity{}, errors.New("candidate mode requires auto-pr ceiling")
+		}
+		for _, grant := range p.Grants {
+			if grant.Operation != "admit-issue" && grant.Operation != "plan-admission" && grant.Operation != "execute-work" {
+				return authority.Policy{}, authority.Identity{}, errors.New("candidate mode denies downstream authority")
+			}
+		}
+	}
 	raw, err = boundedFile(c.IdentityPath)
 	if err != nil {
 		return authority.Policy{}, authority.Identity{}, err
@@ -108,4 +118,10 @@ func (c *Component) Ready(ctx context.Context) error {
 		return err
 	}
 	return c.DB.CheckMigrations(ctx)
+}
+
+// IntakeEnabled installs only authenticated issue ingress and component routes.
+func IntakeEnabled() bool {
+	m := os.Getenv("AI_SDLC_RUNTIME_MODE")
+	return m == "shadow" || m == "candidate"
 }

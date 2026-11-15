@@ -84,7 +84,8 @@
           "type": "string",
           "enum": [
             "maintenance",
-            "shadow"
+            "shadow",
+            "candidate"
           ]
         }
       },
@@ -743,6 +744,33 @@
         "credentialSecret": {
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9-]*$"
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configJSON",
+        "apiServerCIDRs"
+      ],
+      "properties": {
+        "configJSON": {
+          "type": "string",
+          "maxLength": 131072
+        },
+        "apiServerCIDRs": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/32$"
+          }
+        },
+        "credentialRevision": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[0-9]*$"
         }
       }
     }

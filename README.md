@@ -53,6 +53,11 @@ Only issues carrying `ai-sdlc:shadow`, labeled by the configured local account,
 can enter that profile. See [shadow intake](docs/installation.md#shadow-intake)
 for scope, verification and returning to maintenance.
 
+The opt-in [candidate profile](docs/operations/candidate-runtime.md) adds signed
+issue-to-candidate execution with an isolated SCC executor, a containerized Codex
+gateway and terminal crash recovery. It requires reviewed matching images and
+stops at an unvalidated candidate; it does not authorize PR publication or release.
+
 The [Homedir enterprise pilot](docs/enterprise-pilot.md) uses a separate,
 declaratively configured installation and real product validation. Start with
 `./install.sh plan --config examples/homedir.local-install.json`; the example

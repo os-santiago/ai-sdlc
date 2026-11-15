@@ -82,3 +82,16 @@ ENV TMPDIR=/workspaces/tmp
 USER 1000:1000
 EXPOSE 8080
 ENTRYPOINT ["/component"]
+
+# The same reviewed image supplies a trusted completion-only sidecar. Executor
+# Pods mount no model credentials and retain their offline gVisor boundary.
+USER 0
+RUN apk add --no-cache python3 curl \
+    && curl --fail --location --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 180 \
+       https://github.com/openai/codex/releases/download/rust-v0.169.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz \
+    && echo '9af4d751fce183faedea629437d5252dbf458eeb04130cf4f97be844621ea985  /tmp/codex.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/codex.tar.gz -C /usr/local/bin codex-x86_64-unknown-linux-musl \
+    && mv /usr/local/bin/codex-x86_64-unknown-linux-musl /usr/local/bin/codex \
+    && chmod 0555 /usr/local/bin/codex && rm /tmp/codex.tar.gz
+COPY tools/codex_completion_process.py tools/codex_completion_child.py tools/codex_completion_policy.py tools/codex_completion_catalog.json tools/codex_completion_instructions.txt tools/codexcli_openai_wrapper.py tools/codex_gateway.py /opt/ai-sdlc/model/
+USER 1000:1000

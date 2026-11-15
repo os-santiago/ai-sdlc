@@ -34,8 +34,8 @@ func signedEffect(component *bootstrap.Component, config intake.Config, trusted 
 		if err != nil {
 			return nil, err
 		}
-		if snapshot.AuthorityRevision != policy.Revision() || policy.Autonomy != "shadow" {
-			return nil, errors.New("stale shadow authority")
+		if snapshot.AuthorityRevision != policy.Revision() || (policy.Autonomy != "shadow" && policy.Autonomy != "auto-pr") {
+			return nil, errors.New("stale intake authority")
 		}
 		advanced, err := store.AdvanceIssue(ctx, tx, "admission-controller", snapshot.Repository, snapshot.Issue.Number, snapshot.Generation, receipt.ID, raw)
 		if err != nil {

@@ -5,8 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/execution"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 	"net/http"
+	"os"
 	"strconv"
+	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/delivery"
@@ -30,12 +34,12 @@ func signedEffect(component *bootstrap.Component, config intake.Config) delivery
 			return nil, errors.New("invalid admission binding")
 		}
 		snapshot := admission.Snapshot
-		policy, _, err := component.Authority()
+		policy, identity, err := component.Authority()
 		if err != nil {
 			return nil, err
 		}
-		if snapshot.AuthorityRevision != policy.Revision() || policy.Autonomy != "shadow" {
-			return nil, errors.New("stale shadow authority")
+		if snapshot.AuthorityRevision != policy.Revision() || (policy.Autonomy != "shadow" && policy.Autonomy != "auto-pr") {
+			return nil, errors.New("stale planning authority")
 		}
 		advanced, err := store.AdvanceIssue(ctx, tx, "orchestrator", snapshot.Repository, snapshot.Issue.Number, snapshot.Generation, receipt.ID, raw)
 		if err != nil {
@@ -52,18 +56,41 @@ func signedEffect(component *bootstrap.Component, config intake.Config) delivery
 		if admission.Decision != "accepted" {
 			return []byte(`{"recorded":true,"planCreated":false}`), nil
 		}
+		state := Blocked
+		var profile []byte
+		if policy.Autonomy == "auto-pr" && admission.Risk == "low" {
+			_, profile, err = execution.LoadRuntime(os.Getenv("AI_SDLC_EXECUTION_CONFIG_PATH"))
+			if err != nil {
+				return nil, err
+			}
+			state = Ready
+		}
 		criteria := normalizedevent.ExtractAcceptanceCriteria(snapshot.Issue.Body)
 		planID, itemID := store.NewID(), store.NewID()
-		plan := Plan{ID: planID, Repository: snapshot.Repository, Items: []WorkItem{{ID: "issue-" + strconv.Itoa(snapshot.Issue.Number), IssueNumbers: []int{snapshot.Issue.Number}, AcceptanceCriteria: criteria, Status: Blocked}}}
+		plan := Plan{ID: planID, Repository: snapshot.Repository, Items: []WorkItem{{ID: "issue-" + strconv.Itoa(snapshot.Issue.Number), IssueNumbers: []int{snapshot.Issue.Number}, AcceptanceCriteria: criteria, Status: state}}}
 		if err := Validate(plan); err != nil {
 			return nil, err
 		}
 		if err := store.UpsertPlan(ctx, tx, store.PlanRecord{ID: planID, Repository: snapshot.Repository, CorrelationID: snapshot.ID()}); err != nil {
 			return nil, err
 		}
-		if err := store.UpsertWorkItem(ctx, tx, store.WorkItemRecord{PlanID: planID, ID: plan.Items[0].ID, UUID: itemID, IssueNumbers: plan.Items[0].IssueNumbers, AcceptanceCriteria: criteria, DependsOn: []string{}, Status: string(Blocked)}); err != nil {
+		if err := store.UpsertWorkItem(ctx, tx, store.WorkItemRecord{PlanID: planID, ID: plan.Items[0].ID, UUID: itemID, IssueNumbers: plan.Items[0].IssueNumbers, AcceptanceCriteria: criteria, DependsOn: []string{}, Status: string(state)}); err != nil {
 			return nil, err
 		}
-		return json.Marshal(map[string]any{"recorded": true, "planId": planID, "mode": "shadow", "generation": snapshot.Generation})
+		if state == Ready {
+			command := execution.Command{Version: execution.Version, WorkItemID: itemID, Attempt: 1, Repository: snapshot.Repository, IssueNumber: snapshot.Issue.Number, Generation: snapshot.Generation, AdmissionID: admission.ID(), SourceSHA: snapshot.BaseSHA, ProfileSHA256: workspacebundle.Digest(profile), AuthorityRevision: policy.Revision(), ExpiresAt: time.Now().Add(20 * time.Minute).UnixMilli()}
+			payload, e := json.Marshal(command)
+			if e != nil {
+				return nil, e
+			}
+			current, _, e := component.Authority()
+			if e != nil || current.Revision() != policy.Revision() {
+				return nil, errors.New("planning authority changed")
+			}
+			if e = delivery.Append(ctx, tx, policy, identity, command.ID(), "execute-work", payload); e != nil {
+				return nil, e
+			}
+		}
+		return json.Marshal(map[string]any{"recorded": true, "planId": planID, "mode": policy.Autonomy, "generation": snapshot.Generation})
 	}
 }

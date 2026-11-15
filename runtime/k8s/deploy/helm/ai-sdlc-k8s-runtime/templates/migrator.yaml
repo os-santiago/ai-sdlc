@@ -32,6 +32,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: [migrate]
           env:
+            - {name: AI_SDLC_RUNTIME_MODE, value: {{ .Values.runtime.mode | quote }}}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" . }}, key: {{ include "ai-sdlc-k8s-runtime.databaseSecretKey" . }}}

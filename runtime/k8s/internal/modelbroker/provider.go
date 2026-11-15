@@ -14,9 +14,11 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
 )
 
@@ -50,9 +52,9 @@ func NewProvider(config ProviderConfig) (*Provider, error) {
 	}
 	transport := &http.Transport{
 		Proxy: nil, DisableKeepAlives: true, DisableCompression: true,
-		DialContext:         (&net.Dialer{Timeout: 3 * time.Second, KeepAlive: -1}).DialContext,
-		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}},
-		TLSNextProto:        map[string]func(string, *tls.Conn) http.RoundTripper{},
+		DialContext:     (&net.Dialer{Timeout: 3 * time.Second, KeepAlive: -1}).DialContext,
+		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}},
+		TLSNextProto:    map[string]func(string, *tls.Conn) http.RoundTripper{},
 		// The supervised completion adapter buffers its result for up to 24s.
 		// Keep a bounded margin for its response; the entire request still has
 		// a 30s ceiling and an earlier caller deadline always takes precedence.
@@ -108,4 +110,33 @@ func (p *Provider) invoke(ctx context.Context, request []byte, responseLimit int
 		}
 	}
 	return raw, nil
+}
+
+// CheckGateway checks only the trusted loopback sidecar. It neither reserves
+// nor invokes a model completion, and never follows redirects.
+func (p *Provider) CheckGateway(ctx context.Context) error {
+	if p == nil || !strings.HasPrefix(p.endpoint, "http://127.0.0.1:") {
+		return ErrProvider
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, e := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(p.endpoint, "/v1/chat/completions")+"/readyz", nil)
+	if e != nil {
+		return ErrProvider
+	}
+	req.Header.Set("Authorization", "Bearer "+p.token)
+	response, e := p.client.Do(req)
+	if e != nil {
+		return ErrProvider
+	}
+	defer response.Body.Close()
+	raw, e := io.ReadAll(io.LimitReader(response.Body, 65))
+	if e != nil || response.StatusCode != 200 || len(raw) > 64 {
+		return ErrProvider
+	}
+	var ready map[string]bool
+	if authority.DecodeStrict(raw, &ready) != nil || len(ready) != 1 || !ready["ready"] {
+		return ErrProvider
+	}
+	return nil
 }
