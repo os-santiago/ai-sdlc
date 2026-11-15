@@ -29,3 +29,16 @@ request without taking a claim, allowing the next valid request to progress.
 Unavailable observations, canceled reads, and failed configuration loads defer
 instead. This distinction is exercised with two signed queued requests, including
 an obsolete generation followed by current work and a database permission outage.
+
+## Conformance source authentication
+
+Quality workflows supply their read-only `github.token` only to the trusted
+conformance step. Test drivers explicitly bind it to the Homedir source reader's
+context. Production code does not discover that test environment variable.
+The credential is used only for fixed-host API GETs; archive requests, generated
+Pods, fixture control documents and model subprocesses do not receive it.
+
+Treat GitHub tokens as opaque strings. The source reader accepts a bounded
+header-safe value up to 4096 bytes, including dots and hyphens; it never parses or
+trusts JWT claims. [GitHub's stateless installation-token rollout](https://github.blog/changelog/2026-10-02-stateless-github-app-installation-tokens-rolled-out/)
+made the earlier 512-byte/alphanumeric-only assumption incompatible with Actions.
