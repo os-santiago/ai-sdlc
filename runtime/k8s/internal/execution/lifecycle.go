@@ -26,6 +26,7 @@ type Lifecycle struct {
 	placement Placement
 	durable   store.Lifecycle
 	stopped   bool
+	model     *lifecycleModel
 }
 
 // EffectInput contains only immutable copies and previously acknowledged UIDs.
@@ -117,15 +118,40 @@ func OpenLifecycle(ctx context.Context, db *store.DB, load LifecycleLoader, p Pr
 	return l, nil
 }
 func (l *Lifecycle) proof(ctx context.Context) (executor.Workload, error) {
-	c, _, in, err := preparationProof(ctx, l.db, lifecycleInputs(l.load, l.placement), l.prepared.claim)
+	w, _, err := l.proofPhase(ctx)
+	return w, err
+}
+func (l *Lifecycle) proofPhase(ctx context.Context) (executor.Workload, string, error) {
+	status := "ready"
+	phase := ""
+	if l.model != nil {
+		var err error
+		if phase, err = l.modelProof(ctx); err != nil {
+			return executor.Workload{}, "", ErrAuthority
+		}
+		status = "running"
+	}
+	// Model DB observations precede the final signed/current-input proof. Every
+	// preparation reload checks model policy before reading execution authority,
+	// so revocation during model I/O cannot be concealed by an earlier snapshot.
+	load := func(ctx context.Context) (PreparationInputs, error) {
+		if l.model != nil {
+			current, err := l.model.load(ctx)
+			if err != nil || current != l.model.policy {
+				return PreparationInputs{}, ErrAuthority
+			}
+		}
+		return lifecycleInputs(l.load, l.placement)(ctx)
+	}
+	c, _, in, err := preparationProofStatus(ctx, l.db, load, l.prepared.claim, status)
 	if err != nil || !samePrepared(l.prepared, c, in) {
-		return executor.Workload{}, ErrAuthority
+		return executor.Workload{}, "", ErrAuthority
 	}
 	binding, w, err := lifecycleBinding(l.prepared, l.placement)
 	if err != nil || binding != l.durable.Binding {
-		return executor.Workload{}, ErrAuthority
+		return executor.Workload{}, "", ErrAuthority
 	}
-	return w, nil
+	return w, phase, nil
 }
 
 // RunEffect persists intent before calling the trusted effect exactly once in

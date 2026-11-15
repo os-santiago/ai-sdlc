@@ -89,6 +89,9 @@ func verifyRecord(p authority.Policy, r store.ExecutionRequest) (Command, error)
 	return c, nil
 }
 func preparationProof(ctx context.Context, db *store.DB, load PreparationLoader, claim store.ExecutionClaim) (Command, intake.Snapshot, PreparationInputs, error) {
+	return preparationProofStatus(ctx, db, load, claim, "ready")
+}
+func preparationProofStatus(ctx context.Context, db *store.DB, load PreparationLoader, claim store.ExecutionClaim, status string) (Command, intake.Snapshot, PreparationInputs, error) {
 	fail := func() (Command, intake.Snapshot, PreparationInputs, error) {
 		return Command{}, intake.Snapshot{}, PreparationInputs{}, ErrAuthority
 	}
@@ -111,7 +114,7 @@ func preparationProof(ctx context.Context, db *store.DB, load PreparationLoader,
 	if err != nil || checkInputs(in, c) != nil {
 		return fail()
 	}
-	snapshot, err := verifiedSnapshot(ctx, db, in.Policy, in.Intake, c)
+	snapshot, err := verifiedSnapshotStatus(ctx, db, in.Policy, in.Intake, c, status)
 	if err != nil {
 		return fail()
 	}

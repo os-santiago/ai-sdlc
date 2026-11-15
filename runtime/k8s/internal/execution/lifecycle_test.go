@@ -445,7 +445,7 @@ func TestLifecycleExpiryAfterEveryDurableLock(t *testing.T) {
 
 func TestLifecycleOperationalRolesHaveNoAccess(t *testing.T) {
 	f := newPreparationFixture(t)
-	for _, table := range []string{"execution_lifecycles", "execution_effects"} {
+	for _, table := range []string{"execution_lifecycles", "execution_effects", "execution_models"} {
 		var allowed bool
 		if err := f.Admin.Pool.QueryRow(`SELECT has_table_privilege('aisdlc_worker',$1,'SELECT,INSERT,UPDATE,DELETE')`, table).Scan(&allowed); err != nil {
 			t.Fatal(err)
