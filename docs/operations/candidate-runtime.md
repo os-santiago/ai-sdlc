@@ -116,3 +116,9 @@ The [first live Homedir candidate installation](../evidence/2026-11-15-homedir-c
 confirmed two model handoffs and then stopped with an unconfirmed third response.
 Its resources were removed and no candidate or release was produced. The older
 image had no failure-stage diagnostic, so its precise cause remains unknown.
+
+
+A cleanup failure is reported separately as `cleanupPending=true`. The primary
+fixed diagnostic stage is retained when both model handoff and cleanup fail;
+raw helper/provider exceptions are still excluded. A successful cleanup recovery
+cannot turn an ambiguous model call into a completed handoff or replay it.
