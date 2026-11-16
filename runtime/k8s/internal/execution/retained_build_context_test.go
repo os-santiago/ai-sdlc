@@ -195,6 +195,23 @@ func TestBuildContextExpiryWhileWaitingForLockLeavesNoIntent(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() { _, e := b.journal.BeginBuildEffect(ctx, c, b.plan(), b.compiled.Retained); done <- e }()
+	var blocker int
+	if e = tx.QueryRow(`SELECT pg_backend_pid()`).Scan(&blocker); e != nil {
+		t.Fatal(e)
+	}
+	blocked := false
+	for time.Now().Before(time.UnixMilli(b.command.ExpiresAt)) {
+		if e = b.f.Admin.Pool.QueryRow(`SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE usename='aisdlc_build_controller' AND wait_event_type='Lock' AND $1=ANY(pg_blocking_pids(pid)))`, blocker).Scan(&blocked); e != nil {
+			t.Fatal(e)
+		}
+		if blocked {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !blocked {
+		t.Fatal("build intention did not observably wait for the original row lock before expiry")
+	}
 	time.Sleep(time.Until(time.UnixMilli(b.command.ExpiresAt)) + 50*time.Millisecond)
 	if e = tx.Commit(); e != nil {
 		t.Fatal(e)
