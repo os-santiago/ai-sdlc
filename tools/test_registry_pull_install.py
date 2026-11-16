@@ -4,10 +4,19 @@ import unittest
 import subprocess
 from unittest.mock import Mock,patch
 
-from verify_registry_node_pull import event_proof,create_namespaced,frozen
+from verify_registry_node_pull import event_proof,create_namespaced,frozen,marker_execution_rejected
 
 
 class PullEvidenceTests(unittest.TestCase):
+    def test_expected_missing_marker_executable_in_waiting_or_terminal_state(self):
+        message='exec: /ai-sdlc-marker-has-no-executable: no such file or directory'
+        for field,reason in (('waiting','CreateContainerError'),('terminated','StartError')):
+            detail={'reason':reason,'exitCode':128,'message':message}
+            self.assertTrue(marker_execution_rejected([{'state':{field:detail}}]))
+            detail['message']='unrelated failure'
+            self.assertFalse(marker_execution_rejected([{'state':{field:detail}}]))
+        self.assertFalse(marker_execution_rejected([{'state':{'running':{}}}]))
+
     def test_replaced_or_terminating_namespace_receives_no_credential(self):
         value={'kind':'Secret','metadata':{'namespace':'original'},'data':{'synthetic':'never-written'}}
         for meta in ({'name':'original','uid':'replacement','labels':{'ai-sdlc.pull-fixture':'nonce'}},

@@ -42,6 +42,16 @@ def create_namespaced(get,create,value,namespace,uid,nonce):
     return create(value)
 
 
+def marker_execution_rejected(statuses):
+    if len(statuses)!=1:return False
+    state=statuses[0].get('state',{})
+    detail=state.get('waiting') or state.get('terminated') or {}
+    message=detail.get('message','')
+    if '/ai-sdlc-marker-has-no-executable' not in message or 'no such file or directory' not in message:return False
+    return (detail.get('reason') in ('CreateContainerError','RunContainerError')
+        or detail.get('reason')=='StartError' and detail.get('exitCode')==128)
+
+
 def event_proof(events,pod,image,node,positive):
     if not isinstance(events,list) or len(events)>64:raise ValueError('Bounded kubelet event inventory required')
     created=datetime.fromisoformat(pod['metadata']['creationTimestamp'].replace('Z','+00:00'))
@@ -134,7 +144,7 @@ def main():
                     original_namespace(get,namespace,uid,nonce)
                     if not positive:return proof
                     statuses=current.get('status',{}).get('containerStatuses',[])
-                    if len(statuses)==1 and statuses[0].get('state',{}).get('waiting',{}).get('reason') in ('CreateContainerError','RunContainerError'):
+                    if marker_execution_rejected(statuses):
                         proof['expectedNonExecutableMarker']=True
                         return proof
                 time.sleep(1)
