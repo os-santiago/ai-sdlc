@@ -61,3 +61,38 @@ func compileReleaseInstallation(input io.Reader, output io.Writer) error {
 		TrustSHA256  string           `json:"trustSHA256"`
 	}{"ai-sdlc.release-installation/v1", target, target.Digest(), trust.Digest()})
 }
+
+// describeReleaseSpecs emits public canonical observations for independent
+// review. It grants no target approval and has no Kubernetes or DB client.
+func describeReleaseSpecs(input io.Reader, output io.Writer) error {
+	denied := errors.New("release observation input denied")
+	raw, e := io.ReadAll(io.LimitReader(input, 512*1024+1))
+	if e != nil || len(raw) > 512*1024 {
+		return denied
+	}
+	var req struct {
+		Deployment apps.Deployment `json:"deployment"`
+		Service    core.Service    `json:"service"`
+	}
+	if !exactInstallFields(raw, []string{"deployment", "service"}, nil) || authority.DecodeStrict(raw, &req) != nil {
+		return denied
+	}
+	d, s := req.Deployment, req.Service
+	if d.APIVersion != "apps/v1" || d.Kind != "Deployment" || s.APIVersion != "v1" || s.Kind != "Service" || d.Name != "saferus-console" || s.Name != d.Name || d.Namespace != "ai-sdlc-production" || s.Namespace != d.Namespace || d.DeletionTimestamp != nil || s.DeletionTimestamp != nil {
+		return denied
+	}
+	dh, e := podtransport.ConsoleSpecDigest(d.Spec)
+	if e != nil {
+		return denied
+	}
+	sh, e := podtransport.ConsoleServiceDigest(s.Spec)
+	if e != nil {
+		return denied
+	}
+	return json.NewEncoder(output).Encode(struct {
+		Version              string `json:"version"`
+		DeploymentSpecSHA256 string `json:"deploymentSpecSHA256"`
+		ServiceSpecSHA256    string `json:"serviceSpecSHA256"`
+		BaselineImage        string `json:"baselineImage"`
+	}{"ai-sdlc.release-specs/v1", dh, sh, d.Spec.Template.Spec.Containers[0].Image})
+}

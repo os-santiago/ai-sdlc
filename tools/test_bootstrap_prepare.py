@@ -139,3 +139,17 @@ class PreparationTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class DigestPullDefaultTests(unittest.TestCase):
+    def test_digest_sidecar_default_is_shared_without_changing_raw_custody(self):
+        expected={'spec':{'containers':[{'name':'main','image':'registry.invalid/main@sha256:'+'a'*64,'imagePullPolicy':'Always'}, {'name':'sidecar','image':'registry.invalid/sidecar@sha256:'+'b'*64}]}}
+        actual=copy.deepcopy(expected);actual['spec']['containers'][1]['imagePullPolicy']='IfNotPresent';before=copy.deepcopy(actual)
+        self.assertEqual(prep.normalized_template(actual),prep.normalized_template(expected))
+        self.assertEqual(actual,before)
+        for policy in ('Always','Never'):
+            actual['spec']['containers'][1]['imagePullPolicy']=policy
+            self.assertNotEqual(prep.normalized_template(actual),prep.normalized_template(expected))
+        expected['spec']['containers'][1]['image']='registry.invalid/sidecar:tag'
+        actual=copy.deepcopy(expected);actual['spec']['containers'][1]['imagePullPolicy']='IfNotPresent'
+        self.assertNotEqual(prep.normalized_template(actual),prep.normalized_template(expected))

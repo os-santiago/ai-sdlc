@@ -25,6 +25,23 @@ func TestReleaseInstallationCompilerRejectsChangedApprovedTarget(t *testing.T) {
 	s := core.Service{TypeMeta: meta.TypeMeta{APIVersion: "v1", Kind: "Service"}, ObjectMeta: meta.ObjectMeta{Name: target.Service, Namespace: target.Namespace, UID: types.UID(target.ServiceUID)}, Spec: core.ServiceSpec{Type: core.ServiceTypeClusterIP, ClusterIP: "10.96.0.8", Selector: map[string]string{"app": "saferus-console"}, Ports: []core.ServicePort{{Port: 8443, Protocol: core.ProtocolTCP, TargetPort: intstr.FromString("https")}}}}
 	target.DeploymentSpecSHA256, _ = podtransport.ConsoleSpecDigest(d.Spec)
 	target.ServiceSpecSHA256, _ = podtransport.ConsoleServiceDigest(s.Spec)
+	observations, _ := json.Marshal(map[string]any{"deployment": d, "service": s})
+	var description bytes.Buffer
+	if e := describeReleaseSpecs(bytes.NewReader(observations), &description); e != nil {
+		t.Fatal(e)
+	}
+	var specs map[string]string
+	if json.Unmarshal(description.Bytes(), &specs) != nil || len(specs) != 4 || specs["version"] != "ai-sdlc.release-specs/v1" || specs["deploymentSpecSHA256"] != target.DeploymentSpecSHA256 || specs["serviceSpecSHA256"] != target.ServiceSpecSHA256 || specs["baselineImage"] != target.BaselineImage {
+		t.Fatal("canonical public observation changed")
+	}
+	foreign := *d.DeepCopy()
+	foreign.Namespace = "foreign"
+	rejected, _ := json.Marshal(map[string]any{"deployment": foreign, "service": s})
+	description.Reset()
+	if describeReleaseSpecs(bytes.NewReader(rejected), &description) == nil || description.Len() != 0 {
+		t.Fatal("foreign observation accepted")
+	}
+
 	raw, _ := json.Marshal(map[string]any{"target": target, "trust": trust, "deployment": d, "service": s})
 	var output bytes.Buffer
 	if e := compileReleaseInstallation(bytes.NewReader(raw), &output); e != nil {

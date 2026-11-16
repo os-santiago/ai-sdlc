@@ -18,9 +18,6 @@ def content(obj):
     kind=value['kind'];spec=value.get('spec',{})
     if kind in ('Deployment','StatefulSet'):
         spec['template']=normalized_template(spec['template'])
-        for container in spec['template']['spec'].get('containers',[]):
-            if container.get('imagePullPolicy')=='IfNotPresent' and '@sha256:' in container.get('image',''):
-                container.pop('imagePullPolicy')
         if spec.get('revisionHistoryLimit')==10:spec.pop('revisionHistoryLimit')
     if kind=='Deployment':
         if spec.get('progressDeadlineSeconds')==600:spec.pop('progressDeadlineSeconds')
