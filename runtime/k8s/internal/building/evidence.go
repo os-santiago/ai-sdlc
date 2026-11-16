@@ -101,9 +101,11 @@ func (o Termination) Validate(c Command, p Plan, s Slot, now time.Time) error {
 	seen := map[string]bool{}
 	ids := map[string]bool{}
 	kinds := map[string]int{}
+	// Kubernetes timestamps preserve seconds, not issuance milliseconds.
+	// Causal ordering also depends on original UID and pre-POST intent checks.
 	for _, v := range o.Containers {
 		key := v.Name
-		if !resourceName.MatchString(v.Name) || (v.Kind != "init" && v.Kind != "normal") || seen[key] || ids[v.ContainerID] || !imageDigest.MatchString(v.ImageDigest) || !containerID.MatchString(v.ContainerID) || v.ExitCode != 0 || v.Restarts != 0 || v.StartedAt < c.IssuedAt || v.FinishedAt < v.StartedAt || v.FinishedAt > o.ObservedAt {
+		if !resourceName.MatchString(v.Name) || (v.Kind != "init" && v.Kind != "normal") || seen[key] || ids[v.ContainerID] || !imageDigest.MatchString(v.ImageDigest) || !containerID.MatchString(v.ContainerID) || v.ExitCode != 0 || v.Restarts != 0 || v.StartedAt < c.IssuedAt/1000*1000 || v.FinishedAt < v.StartedAt || v.FinishedAt > o.ObservedAt {
 			return ErrBuild
 		}
 		seen[key] = true

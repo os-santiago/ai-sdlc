@@ -34,6 +34,7 @@ func TestRealBuildSlotAPICustody(t *testing.T) {
 	if r.inspectBuildSlot(ctx) != nil {
 		t.Fatal("actual original slot API custody rejected")
 	}
+	accepted, rejected := 1, 0
 	for _, field := range []string{"cluster", "namespace", "pvc", "pv", "node", "boot", "physical"} {
 		r.slot = input.Slot
 		replacement := "ffffffff-ffff-ffff-ffff-ffffffffffff"
@@ -56,6 +57,9 @@ func TestRealBuildSlotAPICustody(t *testing.T) {
 		if r.inspectBuildSlot(ctx) == nil {
 			t.Fatal("mismatched real API custody accepted", field)
 		}
+		rejected++
 	}
+	result, _ := json.Marshal(map[string]int{"accepted": accepted, "rejected": rejected})
+	t.Logf("AI_SDLC_SLOT_RESULT %s", result)
 	t.Log("original bound PVC/PV, namespace, node and fresh lease accepted; seven changed custody identities rejected; no Pod or mount")
 }

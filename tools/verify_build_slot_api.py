@@ -5,10 +5,23 @@ import json
 import os
 from pathlib import Path
 import secrets
+import re
 import subprocess
 import tempfile
 import time
 import konflux_fixture_guard as guard
+
+
+def test_result(stdout):
+    if not re.search(r'^--- PASS: TestRealBuildSlotAPICustody \(',stdout,re.MULTILINE) or re.search(r'^--- (SKIP|FAIL): TestRealBuildSlotAPICustody',stdout,re.MULTILINE):
+        raise ValueError('Required real API test did not pass')
+    matches=re.findall(r'AI_SDLC_SLOT_RESULT (\{[^\n]*\})',stdout)
+    if len(matches)!=1:
+        raise ValueError('Missing or ambiguous executed API controls')
+    result=json.loads(matches[0])
+    if set(result)!={'accepted','rejected'} or any(type(v) is not int or v<1 for v in result.values()):
+        raise ValueError('Invalid executed API control counts')
+    return result
 
 
 def main():
@@ -102,7 +115,7 @@ def main():
             (args.output / 'test.log').write_text(result.stdout)
             if result.returncode:
                 raise ValueError('Real slot API test failed; see sanitized test.log')
-        report.update(status='passed', accepted=1, rejected=7)
+        report.update(status='passed', **test_result(result.stdout))
     finally:
         try:
             for path, uid in reversed(owned):
