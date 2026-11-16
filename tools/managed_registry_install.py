@@ -112,15 +112,18 @@ def prepare(state_dir, cluster, provider, lock, existing_cluster):
 
 
 class Installer:
-    def __init__(self, state_dir, state, kubectl, binaries, deadline, cluster_uid):
+    def __init__(self, state_dir, state, kubectl, binaries, deadline, cluster_uid, read_only=False):
         self.path=state_dir/'managed-registry.json'
+        self.read_only=read_only
         self.state,self.kubectl,self.binaries,self.deadline=state,kubectl,binaries,deadline
         if state.get('clusterUID',cluster_uid)!=cluster_uid:
             raise ValueError('Original managed registry cluster changed')
         candidate=dict(state,clusterUID=cluster_uid)
-        write_record(self.path,candidate);self.state=candidate
+        if not read_only:write_record(self.path,candidate)
+        self.state=candidate
 
     def save(self,candidate):
+        if self.read_only:raise ValueError('Registry observer cannot mutate custody')
         write_record(self.path,candidate)
         self.state=candidate
 
@@ -135,8 +138,8 @@ class Installer:
         raw=self.call(['get',kind,name,*(['-n',namespace] if namespace else []),'--ignore-not-found','-o','json'])
         return json.loads(raw) if raw.strip() else None
 
-    def fence(self):
-        self.require_cold()
+    def fence(self, cold=True):
+        if cold:self.require_cold()
         cluster=self.read('namespace','kube-system')
         if cluster is None or cluster['metadata']['uid']!=self.state['clusterUID']:
             raise ValueError('Original registry cluster identity changed')
@@ -150,6 +153,7 @@ class Installer:
         return parent['metadata']['uid']
 
     def require_cold(self):
+        if self.read_only:raise ValueError('Registry observer cannot mutate installation')
         for namespace in ('ai-sdlc-runtime','ai-sdlc-builds'):
             if self.read('namespace',namespace) is not None:
                 raise ValueError('Managed registry mutation is cold-only, before runtime or build installation; use status')

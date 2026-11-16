@@ -88,6 +88,31 @@ class Preparation:
         self.deadline = time.monotonic() + 600
         self.expected = None
         self.templates = None
+        self.configured_maps = None
+
+    def use_configured_render(self, documents):
+        """Explicit initial configuration observer; ordinary prepare stays strict.
+
+        The caller supplies a reviewed render bound to its persisted transition,
+        never templates learned from the running controllers.
+        """
+        self.templates = {d['metadata']['name']:d['spec']['template'] for d in documents if d.get('kind')=='Deployment'}
+        allowed={'ai-sdlc-'+x for x in ('intake','admission-controller','orchestrator','worker','release-manager','relay',
+            'verifier','build-controller','provenance-verifier')}
+        if set(self.templates)!=allowed or any(
+                d.get('spec',{}).get('replicas')!=0 for d in documents if d.get('kind')=='Deployment'):
+            raise ValueError('Prepared configuration must exclude its closed producer inventory')
+        self.configured_maps={d['metadata']['name']:d.get('data',{}) for d in documents if d.get('kind')=='ConfigMap'
+            and d['metadata'].get('namespace')==platform.NAMESPACE}
+        inner=json.loads(self.configured_maps.get('ai-sdlc-authority',{}).get('policy.json','{}'))
+        config=self.configured_maps.get('ai-sdlc-config',{})
+        if (inner.get('freeze') is not True or config.get('AI_SDLC_RUNTIME_MODE')!='verification'
+                or any(config.get(k)!='true' for k in ('AI_SDLC_BUILD','AI_SDLC_PROVENANCE','AI_SDLC_PUBLICATION','AI_SDLC_MERGE'))):
+            raise ValueError('Complete frozen prepared capability configuration required')
+        outer=json.loads(self.configured_maps.get('ai-sdlc-outer-policy',{}).get('policy.json','{}'))
+        if (outer.get('freeze') is not True or outer.get('repository')!=inner.get('repository')
+                or outer.get('environment')!=inner.get('environment')):
+            raise ValueError('Prepared outer authority must remain frozen')
 
     def call(self, argv, **kwargs):
         remaining = self.deadline - time.monotonic()
@@ -121,12 +146,22 @@ class Preparation:
         policy = self.get('configmap', 'ai-sdlc-authority')
         data = config.get('data', {})
         inner = json.loads(policy.get('data', {}).get('policy.json', '{}'))
-        if (data.get('AI_SDLC_RUNTIME_MODE') != 'maintenance'
-                or any(data.get(key, 'false') != 'false' for key in ('AI_SDLC_BUILD', 'AI_SDLC_PROVENANCE', 'AI_SDLC_PUBLICATION', 'AI_SDLC_MERGE'))
+        legacy = self.configured_maps is None
+        if (legacy and (data.get('AI_SDLC_RUNTIME_MODE') != 'maintenance'
+                or any(data.get(key, 'false') != 'false' for key in ('AI_SDLC_BUILD', 'AI_SDLC_PROVENANCE', 'AI_SDLC_PUBLICATION', 'AI_SDLC_MERGE')))
                 or inner.get('freeze') is not True or inner.get('repository') != 'os-santiago/saferus'
                 or inner.get('environment') != 'ai-sdlc-production'
                 or policy['metadata'].get('annotations', {}).get('ai-sdlc.io/cluster-uid') != cluster_uid):
             raise ValueError('Initial preparation requires existing frozen Saferus maintenance authority')
+        configured_maps = {}
+        if not legacy:
+            if not paused:
+                raise ValueError('Configured initial runtime must remain paused')
+            for name,expected in self.configured_maps.items():
+                actual=self.get('configmap',name)
+                if actual.get('data',{})!=expected:
+                    raise ValueError('Prepared configuration differs from its reviewed render')
+                configured_maps[name]={'uid':self.identity(actual),'sha256':digest(actual.get('data',{}))}
         node = json.loads(self.call([self.provider, 'inspect', self.cluster+'-control-plane']).stdout)[0]
         if (node.get('Config', {}).get('Labels', {}).get('io.x-k8s.kind.cluster') != self.cluster
                 or node.get('State', {}).get('Status') != 'running'
@@ -166,7 +201,8 @@ class Preparation:
         # Exact Pod address bound through original Service/Endpoint/STS/PVC. The
         # private URI is sent only to the migrator's stdin in the node network.
         private_uri = urlunsplit((parsed.scheme, parsed.netloc.rsplit('@', 1)[0]+'@'+address+':5432', parsed.path, parsed.query, ''))
-        expected_names = {'ai-sdlc-'+name for name in ('intake','admission-controller','orchestrator','worker','release-manager','relay')}
+        expected_names = ({'ai-sdlc-'+name for name in ('intake','admission-controller','orchestrator','worker','release-manager','relay')}
+            if legacy else set(self.templates))
         deployments = self.get('deployments')['items']
         if {d['metadata']['name'] for d in deployments} != expected_names:
             raise ValueError('Unexpected delivery controller inventory')
@@ -180,14 +216,17 @@ class Preparation:
             role = d['metadata']['name'].removeprefix('ai-sdlc-')
             key = {'admission-controller':'admissionController','release-manager':'releaseManager'}.get(role, role)
             containers = d['spec']['template']['spec']['containers']
-            if (len(containers) != 1 or containers[0].get('name') != role
+            if legacy and (len(containers) != 1 or containers[0].get('name') != role
                     or containers[0].get('image') != self.lock['image']['repository']+'@'+self.lock['components'][key]['digest']):
                 raise ValueError('Installed producer differs from the reviewed image identity')
             if (self.templates is None or normalized_template(d['spec']['template'])
                     != normalized_template(self.templates.get(d['metadata']['name'], {}))):
                 raise ValueError('Installed producer template differs from reviewed declarative authority')
         role_secrets = {}
-        for role in ('intake','admission-controller','orchestrator','worker','release-manager','relay'):
+        roles={name.removeprefix('ai-sdlc-') for name in expected_names}
+        if 'provenance-verifier' in roles:
+            roles.remove('provenance-verifier');roles.add('verifier')
+        for role in sorted(roles):
             resource = self.get('secret', 'ai-sdlc-database-'+role)
             material = {key:base64.b64decode(value, validate=True).decode() for key,value in resource.get('data', {}).items()}
             if (set(material) != {'uri','password'} or not re.fullmatch('[A-Za-z0-9_-]{32,128}',material['password'])
@@ -246,6 +285,8 @@ class Preparation:
             'policySHA256': digest(policy['data']), 'configSHA256': digest(data), 'databaseSecretSHA256': digest(secret['data']),
             'roleSecrets':role_secrets,
             'deployments': {d['metadata']['name']: {'uid':self.identity(d), 'templateSHA256':digest(d['spec']['template'])} for d in deployments}}
+        if not legacy:
+            observed['configuredMaps']=configured_maps
         if self.expected is not None and observed != self.expected:
             raise ValueError('Original preparation identity or frozen authority changed')
         return observed, private_uri
