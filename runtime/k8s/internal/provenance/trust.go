@@ -102,3 +102,13 @@ func (t Trust) Validate(now time.Time) error {
 	_, err := trustRoots(t.RegistryCA)
 	return err
 }
+
+// ParseTrust decodes the independently mounted public trust document with the
+// same closed schema as evidence. It does not approve candidate observations.
+func ParseTrust(raw []byte, now time.Time) (Trust, error) {
+	var out Trust
+	if len(raw) > 128*1024 || strictObject(raw, &out) != nil || out.Validate(now) != nil {
+		return Trust{}, ErrProvenance
+	}
+	return out, nil
+}

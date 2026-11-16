@@ -12,6 +12,9 @@ type Runtime struct {
 	DB     *store.DB
 	Load   PolicyLoader
 	Client func() (*podtransport.Client, error)
+	// AfterRecovery may dispatch authenticated completed history only after all
+	// archived containment is retired, under this controller's exclusive lease.
+	AfterRecovery func(context.Context) (bool, error)
 }
 
 // PollOnce has no issue/source/stage argument. Recovery always precedes new
@@ -46,6 +49,16 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		if i.Inner.Freeze || i.Outer.Freeze {
 			state = "build-frozen"
 			return nil
+		}
+		if r.AfterRecovery != nil {
+			sent, err := r.AfterRecovery(ctx)
+			if err != nil {
+				return err
+			}
+			if sent {
+				state = "build-verification-handoff"
+				return nil
+			}
 		}
 		id, e := journal.NextBuild(ctx)
 		if e != nil || id == "" {

@@ -18,6 +18,8 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/provenance"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/provenanceflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
 
@@ -93,6 +95,14 @@ func run() error {
 		return podtransport.NewClient(podtransport.Config{APIServer: "https://kubernetes.default.svc:443", CA: ca, BearerToken: string(token)})
 	}
 	runtime := buildflow.Runtime{DB: db, Load: load, Client: client}
+	provenanceMounts := provenanceflow.InstalledMounts(os.Getenv("AI_SDLC_PROVENANCE_VERIFIER_IMAGE"))
+	if bootstrap.ProvenanceEnabled() {
+		runtime.AfterRecovery = func(ctx context.Context) (bool, error) {
+			return provenanceflow.DispatchBuilt(ctx, db, func() (provenance.Configuration, authority.Identity, error) {
+				return provenanceMounts.Load("build-controller")
+			})
+		}
+	}
 	stop := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
 		state, e := runtime.PollOnce(ctx)
 		if e != nil {
@@ -100,11 +110,17 @@ func run() error {
 		} else if state != "build-idle" && state != "build-other-replica" {
 			log.Print(state)
 		}
+
 	})
 	defer stop()
 	ready := func(ctx context.Context) error {
 		if e := dependencies(ctx); e != nil {
 			return e
+		}
+		if bootstrap.ProvenanceEnabled() {
+			if _, _, e := provenanceMounts.Load("build-controller"); e != nil {
+				return e
+			}
 		}
 		if option == "true" {
 			_, _, e := identity()
