@@ -12,6 +12,10 @@ import (
 const PlanVersion = "ai-sdlc.saferus-release-plan/v1"
 const PlanMaxAge = 15 * time.Minute
 
+// Reserve advance and containment (rollout and health for each), plus bounded
+// observation/patch/journal overhead. Expiry is never bypassed for rollback.
+const MinimumEffectBudget = 14 * time.Minute
+
 // Plan is a deterministic decision, not permission to patch a workload. The
 // future deployer must receive separate signed authority, record an effect
 // intent and compare live target identity/content before its image-only CAS.
@@ -40,7 +44,7 @@ func CompilePlan(cfg Configuration, c Command, r provenancerecord.Record, b buil
 		}
 	}
 	// Retain enough time for fresh deployment admission, rollout and smoke.
-	if expires-now.UnixMilli() < int64((6*time.Minute)/time.Millisecond) {
+	if expires-now.UnixMilli() < MinimumEffectBudget.Milliseconds() {
 		return Plan{}, ErrRelease
 	}
 	image := building.Registry + "@" + c.ImageDigest

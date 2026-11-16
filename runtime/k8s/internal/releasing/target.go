@@ -27,35 +27,36 @@ var imageDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 // spec. The operational adapter must re-observe these before every effect.
 // This first recipe supports exactly one console container in kind test prod.
 type Target struct {
-	Version              string `json:"version"`
-	Scope                string `json:"scope"`
-	Repository           string `json:"repository"`
-	Environment          string `json:"environment"`
-	ClusterUID           string `json:"clusterUID"`
-	NamespaceUID         string `json:"namespaceUID"`
-	Namespace            string `json:"namespace"`
-	Deployment           string `json:"deployment"`
-	DeploymentUID        string `json:"deploymentUID"`
-	Container            string `json:"container"`
-	DeploymentSpecSHA256 string `json:"deploymentSpecSHA256"`
-	Service              string `json:"service"`
-	ServiceUID           string `json:"serviceUID"`
-	ServiceSpecSHA256    string `json:"serviceSpecSHA256"`
-	PullSecret           string `json:"pullSecret"`
-	PullSecretUID        string `json:"pullSecretUID"`
-	TLSSecretUID         string `json:"tlsSecretUID"`
-	TLSCA                string `json:"tlsCA"`
-	TLSHostname          string `json:"tlsHostname"`
-	BaselineImage        string `json:"baselineImage"`
-	RolloutSeconds       int    `json:"rolloutSeconds"`
-	SmokeSeconds         int    `json:"smokeSeconds"`
-	ApprovedAt           int64  `json:"approvedAt"`
-	ExpiresAt            int64  `json:"expiresAt"`
+	Version               string `json:"version"`
+	Scope                 string `json:"scope"`
+	Repository            string `json:"repository"`
+	Environment           string `json:"environment"`
+	ClusterUID            string `json:"clusterUID"`
+	NamespaceUID          string `json:"namespaceUID"`
+	Namespace             string `json:"namespace"`
+	Deployment            string `json:"deployment"`
+	DeploymentUID         string `json:"deploymentUID"`
+	Container             string `json:"container"`
+	DeploymentSpecSHA256  string `json:"deploymentSpecSHA256"`
+	Service               string `json:"service"`
+	ServiceUID            string `json:"serviceUID"`
+	ServiceSpecSHA256     string `json:"serviceSpecSHA256"`
+	PullSecret            string `json:"pullSecret"`
+	PullSecretUID         string `json:"pullSecretUID"`
+	TLSSecretUID          string `json:"tlsSecretUID"`
+	TLSCA                 string `json:"tlsCA"`
+	TLSHostname           string `json:"tlsHostname"`
+	BaselineImage         string `json:"baselineImage"`
+	BaselineRuntimeDigest string `json:"baselineRuntimeDigest"`
+	RolloutSeconds        int    `json:"rolloutSeconds"`
+	SmokeSeconds          int    `json:"smokeSeconds"`
+	ApprovedAt            int64  `json:"approvedAt"`
+	ExpiresAt             int64  `json:"expiresAt"`
 }
 
 func (t Target) Digest() string { b, _ := json.Marshal(t); return authority.Digest(b) }
 func (t Target) Validate(now time.Time) error {
-	if t.Version != TargetVersion || t.Scope != "kind-test-production" || t.Repository != "os-santiago/saferus" || t.Environment != "ai-sdlc-production" || t.Namespace != t.Environment || t.Deployment != "saferus-console" || t.Container != "console" || t.Service != "saferus-console" || t.PullSecret != "ai-sdlc-release-reader" || t.TLSHostname != "saferus-console.ai-sdlc-production.svc" || t.RolloutSeconds != 300 || t.SmokeSeconds != 30 || t.ApprovedAt <= 0 || t.ApprovedAt > now.UnixMilli() || t.ExpiresAt <= now.UnixMilli() || t.ExpiresAt-t.ApprovedAt > (24*time.Hour).Milliseconds() {
+	if t.Version != TargetVersion || t.Scope != "kind-test-production" || t.Repository != "os-santiago/saferus" || t.Environment != "ai-sdlc-production" || t.Namespace != t.Environment || t.Deployment != "saferus-console" || t.Container != "console" || t.Service != "saferus-console" || t.PullSecret != "ai-sdlc-release-reader" || t.TLSHostname != "saferus-console" || t.RolloutSeconds != 300 || t.SmokeSeconds != 30 || t.ApprovedAt <= 0 || t.ApprovedAt > now.UnixMilli() || t.ExpiresAt <= now.UnixMilli() || t.ExpiresAt-t.ApprovedAt > (24*time.Hour).Milliseconds() {
 		return ErrRelease
 	}
 	seen := map[string]bool{}
@@ -78,7 +79,7 @@ func (t Target) Validate(now time.Time) error {
 			validImage = true
 		}
 	}
-	if !validImage || len(t.TLSCA) == 0 || len(t.TLSCA) > 65536 {
+	if !imageDigest.MatchString(t.BaselineRuntimeDigest) || !validImage || len(t.TLSCA) == 0 || len(t.TLSCA) > 65536 {
 		return ErrRelease
 	}
 	raw := bytes.TrimSpace([]byte(t.TLSCA))

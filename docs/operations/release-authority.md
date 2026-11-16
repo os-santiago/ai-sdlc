@@ -65,7 +65,7 @@ a lost commit response consumes the original attempt and cannot authorize replay
 A completed plan records exactly the retained registry image, source and approved
 baseline. Its maximum 15-minute lifetime is separate from the two-minute
 promotion command and bounded by the installed target and provenance trust. It
-must retain six minutes for deployment admission, rollout and smoke. This first
+must retain fourteen minutes for advance and containment (rollback and health), including bounded observation and journal overhead. This first
 recipe plans from the approved initial baseline only. Promotion of a subsequent
 release will require authenticated prior successful deployment history; a changed
 live baseline cannot be adopted from image equality.
