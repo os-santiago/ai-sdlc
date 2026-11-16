@@ -31,7 +31,7 @@ func inspectBootstrap(input io.Reader, output io.Writer) error {
 	defer cancel()
 	db, err := store.Open(ctx, request.DatabaseURL)
 	if err != nil {
-		return errors.New("initial database inspection denied: connection")
+		return fmt.Errorf("initial database inspection denied: %s", store.BootstrapConnectionBoundary(err))
 	}
 	defer db.Close()
 	if boundary := db.BootstrapInspectionBoundary(ctx, request.Database); boundary != "" {
