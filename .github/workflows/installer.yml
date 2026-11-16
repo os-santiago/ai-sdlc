@@ -43,6 +43,7 @@ jobs:
           python3 -m unittest discover -s tools -p test_helm.py -v
           python3 -m unittest discover -s tools -p test_build_foundation_state.py -v
           python3 -m unittest discover -s tools -p test_build_foundation_node.py -v
+          python3 -m unittest discover -s tools -p test_build_foundation_fixture.py -v
           python3 -m unittest discover -s tools -p test_verify_shadow_intake.py -v
           python3 -m unittest discover -s tools -p test_workspace_writer.py -v
           python3 -m unittest discover -s tools -p test_fixture_images.py -v

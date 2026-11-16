@@ -65,18 +65,26 @@ def main():
         if isinstance(error,subprocess.CalledProcessError):report['boundedDiagnostic']=(error.stderr or '')[-2048:]
         raise
     finally:
-        # Explicit ownership recovery is administrative fixture cleanup only.
-        found=call(['inspect',name],check=False)
-        if found.returncode==0:
-            original=json.loads(found.stdout)[0]
-            if (original.get('Config',{}).get('Labels',{}).get('ai-sdlc.foundation-node-fixture')!=nonce
-                    or not re.fullmatch(r'[a-f0-9]{64}',original.get('Id','')) or cid is not None and original['Id']!=cid):
-                raise ValueError('Fixture cleanup identity changed')
-            call(['rm','-f','-v',original['Id']])
-        elif name in call(['ps','-a','--format','{{.Names}}']).stdout.splitlines():
-            raise ValueError('Fixture absence not proven')
-        report['cleanupComplete']=True
-        args.output.write_text(json.dumps(report,indent=2)+'\n')
+        # Teardown has an independent budget even after execution timeout.
+        deadline=time.monotonic()+60
+        try:
+            # Explicit ownership recovery is administrative fixture cleanup only.
+            found=call(['inspect',name],check=False)
+            if found.returncode==0:
+                original=json.loads(found.stdout)[0]
+                if (original.get('Config',{}).get('Labels',{}).get('ai-sdlc.foundation-node-fixture')!=nonce
+                        or not re.fullmatch(r'[a-f0-9]{64}',original.get('Id','')) or cid is not None and original['Id']!=cid):
+                    raise ValueError('Fixture cleanup identity changed')
+                call(['rm','-f','-v',original['Id']])
+            elif name in call(['ps','-a','--format','{{.Names}}']).stdout.splitlines():
+                raise ValueError('Fixture absence not proven')
+            report['cleanupComplete']=True
+        except BaseException as cleanup_error:
+            report['status']='failed'
+            report['cleanupFailureType']=type(cleanup_error).__name__
+            raise
+        finally:
+            args.output.write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps({'status':report['status'],'checks':report['checks'],'cleanupComplete':True,'autonomousE2E':False}))
 
 if __name__=='__main__':main()
