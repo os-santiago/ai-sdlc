@@ -65,6 +65,8 @@ def main():
     images = json.loads(args.images.read_text())
     if set(images) != {'worker', 'model-mailbox', 'verifier', 'migrator'} or any((not re.fullmatch('quay.io/os-santiago/ai-sdlc@sha256:[a-f0-9]{64}', v) for v in images.values())):
         raise ValueError('Expected exactly four immutable imported fixture images')
+    # Bootstrap from the same migrator that will reconcile database roles.
+    lock['migrator']['digest'] = images['migrator'].split('@')[1]
     public = install.configure_identities(k, provider, lock, uid, repository, 'ai-sdlc-production', freeze=True, candidate=True, verification=True)
     if args.github_auth == 'gh-cli':
         install.configure_github_client(k, uid, repository)
