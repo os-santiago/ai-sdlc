@@ -120,7 +120,7 @@ Endpoint, Pod, StatefulSet, PVC and PV. It checks for other producers and
 execution/cleanup workloads before observing the database. The migrator uses a
 bounded read-only snapshot, requires RLS-independent visibility and rejects any
 workflow row, including completed history, as well as unknown or missing tables
-and migrations. No SQL is supplied by the operator.
+and migrations. No SQL is supplied by the operator. The non-root inspector uses an authenticated Kubernetes API tunnel bound to the original PostgreSQL Pod UID, checked before and after observation. It listens only on host loopback and is capped at 120 seconds by the Linux `timeout` utility; the inspector has a 30-second container deadline, no capabilities, a read-only filesystem and no mounted host credentials. Only this fixed read-only operation accepts the loopback network mode. Native policy need not allow auxiliary node-network containers to access Pod IPs. Tunnel success is administrative access evidence, not runtime network readiness.
 
 After recording original identities and its intent, the installer reapplies
 the same Helm desired state with `runtime.paused: true`. The chart requires
@@ -143,7 +143,7 @@ delivery. No issue is admitted and no workflow stage is advanced by preparation.
 
 After `prepare`, use the explicit [prepared configuration](prepared-runtime-configuration.md) procedure to install reviewed capabilities while keeping all delivery producers paused and both policies frozen. The earlier ordinary `local --config` example applies before preparation only. Do not delete preparation custody or unpause the release manually. Activation, promotion/deployment and containment-preserving recovery remain separate gates.
 
-If initial inspection is rejected, the installer reports a finite boundary such as `connection`, `primary-authority`, `table-inventory`, `migration-inventory` or `history`. These identify where validation stopped, not permission to bypass it. A history-boundary failure can also be a read failure; it does not itself prove rows exist. Driver messages, connection strings and row contents remain private. Keep the runtime frozen and resolve the condition through reviewed installation changes.
+If initial inspection is rejected, the installer reports a finite boundary such as `connection`, `primary-authority`, `table-inventory`, `migration-inventory` or `history`. These identify where validation stopped, not permission to bypass it. A history-boundary failure can also be a read failure; it does not itself prove rows exist. Connection diagnostics may further distinguish configuration, authentication, missing database, permission, capacity, unavailable server, timeout or network failure using fixed categories derived from driver types and known SQLSTATE codes. An unknown cause remains `connection`. Driver messages, connection strings and row contents remain private. Keep the runtime frozen and resolve the condition through reviewed installation changes.
 
 ### Cold installation with a Helm-owned registry
 
