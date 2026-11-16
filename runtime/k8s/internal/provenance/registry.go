@@ -61,8 +61,18 @@ func newRegistry(t Trust, c Credential) (*registry, error) {
 	if c.Username != "ai-sdlc-verifier" || len(c.Password) < 32 || len(c.Password) > 256 || strings.ContainsAny(c.Password, "\r\n\x00") {
 		return nil, ErrProvenance
 	}
+	roots, err := trustRoots(t.RegistryCA)
+	if err != nil {
+		return nil, err
+	}
+	transport := &http.Transport{Proxy: nil, DisableCompression: true, DisableKeepAlives: true,
+		DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext, TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 10 * time.Second,
+		MaxResponseHeaderBytes: 16384, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, ServerName: registryHost}}
+	return &registry{client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return ErrProvenance }}, credential: c}, nil
+}
+func trustRoots(raw string) (*x509.CertPool, error) {
 	roots := x509.NewCertPool()
-	remaining := []byte(t.RegistryCA)
+	remaining := []byte(raw)
 	count := 0
 	for len(bytes.TrimSpace(remaining)) > 0 {
 		remaining = bytes.TrimSpace(remaining)
@@ -87,10 +97,7 @@ func newRegistry(t Trust, c Credential) (*registry, error) {
 	if count == 0 {
 		return nil, ErrProvenance
 	}
-	transport := &http.Transport{Proxy: nil, DisableCompression: true, DisableKeepAlives: true,
-		DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext, TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 10 * time.Second,
-		MaxResponseHeaderBytes: 16384, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, ServerName: registryHost}}
-	return &registry{client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return ErrProvenance }}, credential: c}, nil
+	return roots, nil
 }
 func (r *registry) get(ctx context.Context, route string, limit int) ([]byte, error) {
 	if r.requests >= 5 {
