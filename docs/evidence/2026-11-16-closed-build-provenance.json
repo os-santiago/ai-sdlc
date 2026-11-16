@@ -1,0 +1,28 @@
+{
+  "scope": "isolated closed Saferus artifact verification",
+  "autonomousE2E": false,
+  "releaseAuthorized": false,
+  "slsaLevelClaimed": false,
+  "report": "/tmp/ai-sdlc-closed-build-provenance-v3/report.json",
+  "buildReport": "/tmp/ai-sdlc-closed-build-execution-v6/report.json",
+  "sourceSHA": "e4fc0085051a9c4dee088b5cc164d8b51b0fae67",
+  "imageDigest": "sha256:28954de1acb20c769770d5b662e95b24ff7bdc25a1f44f97f0941d2c02500253",
+  "imageSignatureVerified": true,
+  "attestationSignatureVerified": true,
+  "closedRecipeAndOriginalRunBound": true,
+  "wrongKeyRejected": true,
+  "missingArtifactRejected": true,
+  "conformaScope": "builtin image and attestation signatures; no release or SLSA policy",
+  "temporaryNamespaceRemoved": true,
+  "unitTests": 8,
+  "signedRecipeMutationControls": 22,
+  "limits": [
+    "Expected inputs come from an operator-selected local fixture evidence bundle, not the operational built-record journal",
+    "The signed statement is Chains SLSA provenance v0.2; no SLSA level is inferred",
+    "The complete build request and tree are committed by the signed definition digest; original container termination remains separately validated transport evidence",
+    "The isolated local signing key is not enterprise key custody",
+    "Transparency-log verification is disabled in this isolated registry fixture"
+  ],
+  "signedTreeDefinitionBound": true,
+  "actualAttestationRejectsRewrittenTreeAndAllLocalHashes": true
+}
