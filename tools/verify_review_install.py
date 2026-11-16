@@ -12,6 +12,29 @@ def require(condition, message):
     if not condition:
         raise ValueError(message)
 
+def require_review_disabled(spec):
+    """Inspect both the desired template and every current verifier Pod."""
+    require([c['name'] for c in spec.get('containers', [])] == ['verifier'], 'Review sidecar remains')
+    names = {'review', 'review-model-client', 'model-auth', 'model-home'}
+    paths = ('/etc/ai-sdlc/review', '/var/run/ai-sdlc/review-model', '/var/run/ai-sdlc/codex', '/model-home')
+    secrets = {'ai-sdlc-review-model-client', 'ai-sdlc-codex-auth'}
+    for volume in spec.get('volumes', []):
+        require(volume.get('name') not in names, 'Review volume remains')
+    for container in spec.get('containers', []) + spec.get('initContainers', []) + spec.get('ephemeralContainers', []):
+        for mount in container.get('volumeMounts', []):
+            path = mount.get('mountPath', '').rstrip('/')
+            require(mount.get('name') not in names and not any(path == p or path.startswith(p + '/') for p in paths), 'Review mount remains')
+    def inspect(value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key in ('secretName', 'name') and isinstance(child, str):
+                    require(child not in secrets, 'Review credential reference remains')
+                inspect(child)
+        elif isinstance(value, list):
+            for child in value:
+                inspect(child)
+    inspect(spec)
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--images', type=pathlib.Path, required=True, help='Imported immutable fixture references')
@@ -100,7 +123,12 @@ def main():
     require(item('resourcequota', 'reviewer-bounds', 'ai-sdlc-reviewers')['spec']['hard']['pods'] == '2', 'Independent review installation invariant failed')
     require(run(k + ['get', 'rolebinding', 'review-controller', '-n', 'ai-sdlc-reviewers', '--ignore-not-found', '-o', 'name']).strip() == '', 'Independent review installation invariant failed')
     dep = item('deployment', 'ai-sdlc-verifier', 'ai-sdlc-runtime')
-    require([c['name'] for c in dep['spec']['template']['spec']['containers']] == ['verifier'], 'Independent review installation invariant failed')
+    require_review_disabled(dep['spec']['template']['spec'])
+    selector = ','.join(key + '=' + value for key, value in sorted(dep['spec']['selector']['matchLabels'].items()))
+    pods = json.loads(run(k + ['get', 'pods', '-n', 'ai-sdlc-runtime', '-l', selector, '-o', 'json']))['items']
+    require(len(pods) == dep['spec']['replicas'] and all(p.get('status', {}).get('phase') == 'Running' for p in pods), 'Disabled verifier rollout incomplete')
+    for pod in pods:
+        require_review_disabled(pod['spec'])
     apply(True)
     require(item('namespace', 'ai-sdlc-reviewers', 'ai-sdlc-reviewers')['metadata']['uid'] == namespaceUID, 'Independent review installation invariant failed')
     require(item('configmap', 'fixture-retention-marker', 'ai-sdlc-reviewers')['metadata']['uid'] == markerUID, 'Independent review installation invariant failed')

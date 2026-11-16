@@ -55,6 +55,12 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	if e != nil {
 		return proof, ControllerError{Stage: "preparation"}
 	}
+	// Observe the authenticated sidecar before queuing or claiming authority.
+	// Startup unavailability must not consume an irreversible model attempt.
+	provider, e := modelbroker.NewProvider(p.config.Model)
+	if e != nil || provider.CheckGateway(ctx) != nil {
+		return proof, ControllerError{Stage: "gateway-unavailable"}
+	}
 	resources, e := podtransport.PlanResources(client, p.binding)
 	if e != nil {
 		return proof, ControllerError{Stage: "template"}
@@ -165,10 +171,6 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	stage = "start"
 	if effect("start", func() (string, string, error) { return podUID, "", session.Start(ctx) }) != nil {
 		return proof, ControllerError{Stage: stage}
-	}
-	provider, e := modelbroker.NewProvider(p.config.Model)
-	if e != nil {
-		return proof, ControllerError{Stage: "provider-configuration"}
 	}
 	dispatcher := modelbroker.ReviewDispatcher{DB: db, Provider: provider, Mailbox: session, Authority: auth, ConfigurationDigest: p.run.ConfigurationDigest}
 	stage = "model"
