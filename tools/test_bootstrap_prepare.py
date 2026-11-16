@@ -1,4 +1,6 @@
 """Fault tests for administrative exclusion, not autonomous delivery evidence."""
+import contextlib
+import io
 import base64
 import copy
 import json
@@ -17,6 +19,13 @@ def resource(kind, name, **fields):
 
 
 class PreparationTests(unittest.TestCase):
+    def test_misplaced_prepare_rejected_before_host_effects(self):
+        with patch.object(install, "run") as run, contextlib.redirect_stderr(io.StringIO()), contextlib.ExitStack() as stack:
+            with self.assertRaises(SystemExit) as result:
+                install._main(["--cluster", "fixture", "prepare"], stack)
+            self.assertEqual(result.exception.code, 2)
+            run.assert_not_called()
+
     def setUp(self):
         self.roles = tuple(install.COMPONENT_NAMES.values())
         self.lock = {'image':{'repository':'quay.io/os-santiago/ai-sdlc','tag':'a'*40},

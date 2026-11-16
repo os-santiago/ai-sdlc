@@ -60,6 +60,13 @@ func (db *DB) InspectEmptyBootstrap(ctx context.Context, database string) error 
 		AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = current_user AND (rolsuper OR rolbypassrls))`, database).Scan(&valid); err != nil || !valid {
 		return ErrBootstrapInspection
 	}
+	// Supported runtime migrations create relations only in public. Reject
+	// unknown application schemas instead of silently excluding archived work.
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+		WHERE n.nspname <> 'public' AND n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
+		AND c.relkind IN ('r','p','v','m','f'))`).Scan(&valid); err != nil || valid {
+		return ErrBootstrapInspection
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT c.relname, c.relkind::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
 		WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','f') ORDER BY c.relname`)
 	if err != nil {

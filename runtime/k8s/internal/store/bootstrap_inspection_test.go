@@ -24,11 +24,19 @@ func bootstrapInspectionDB(t *testing.T) (*DB, string, string) {
 		t.Fatal(err)
 	}
 	u.Path = "/" + name
+	query := u.Query()
+	query.Del("dbname")
+	query.Del("database")
+	u.RawQuery = query.Encode()
 	db, err := Open(context.Background(), u.String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	var actual string
+	if err = db.Pool.QueryRowContext(context.Background(), `SELECT current_database()`).Scan(&actual); err != nil || actual != name {
+		t.Fatal("disposable database was not selected")
+	}
 	if err = db.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -55,12 +63,37 @@ func TestBootstrapInspectionEmptyAndCompletedHistory(t *testing.T) {
 	}
 }
 
+func TestBootstrapFixtureRejectsDatabaseQueryOverride(t *testing.T) {
+	base := testDB(t)
+	var original string
+	if err := base.Pool.QueryRowContext(context.Background(), `SELECT current_database()`).Scan(&original); err != nil {
+		t.Fatal(err)
+	}
+	for _, alias := range []string{"dbname", "database"} {
+		t.Run(alias, func(t *testing.T) {
+			u, err := url.Parse(os.Getenv("AI_SDLC_TEST_DATABASE_URL"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			q := u.Query()
+			q.Set(alias, original)
+			u.RawQuery = q.Encode()
+			t.Setenv("AI_SDLC_TEST_DATABASE_URL", u.String())
+			db, name, _ := bootstrapInspectionDB(t)
+			if name == original || db.InspectEmptyBootstrap(context.Background(), name) != nil {
+				t.Fatal("fixture did not isolate its database")
+			}
+		})
+	}
+}
+
 func TestBootstrapInspectionRejectsMissingOrUnknownSchema(t *testing.T) {
 	for _, change := range []string{
 		`ALTER TABLE public.outbox RENAME TO unexpected_outbox`,
 		`CREATE TABLE public.unreviewed_work(id integer)`,
 		`DELETE FROM public.schema_migrations WHERE filename='0026_provenance_handoff.sql'`,
 		`ALTER TABLE public.outbox SET SCHEMA pg_catalog`,
+		`CREATE SCHEMA archive; CREATE TABLE archive.archived_work(id integer); INSERT INTO archive.archived_work VALUES (1)`,
 	} {
 		t.Run(change, func(t *testing.T) {
 			db, name, _ := bootstrapInspectionDB(t)

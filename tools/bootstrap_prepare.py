@@ -323,6 +323,8 @@ def main(argv=None):
         prep.inspect()
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as value_file:
             json.dump(values, value_file); value_file.flush()
+            if prep.deadline - time.monotonic() < 330:
+                raise ValueError('Insufficient preparation budget for Helm upgrade; runtime remains frozen')
             prep.call(helm+['upgrade','ai-sdlc',str(install.CHART),'-f',value_file.name,
                 '--wait=legacy','--wait-for-jobs','--timeout','5m'], timeout=330)
         until = min(prep.deadline, time.monotonic()+90)

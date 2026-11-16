@@ -140,3 +140,5 @@ promotion and deployment remain separate required installation gates.
 
 The successful result is **paused and empty**, not ready for autonomous
 delivery. No issue is admitted and no workflow stage is advanced by preparation.
+
+After `prepare`, continuation is not implemented yet: [issue #574](https://github.com/os-santiago/ai-sdlc/issues/574) tracks the remaining capability transition. The earlier `local --config` example applies before preparation only. Do not delete the preparation record or unpause the release manually. This command currently ends at a frozen, empty installation for administrative integration checks.
