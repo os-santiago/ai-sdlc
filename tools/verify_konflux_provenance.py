@@ -17,6 +17,8 @@ import konflux_build_fixture as homedir_fixture
 import saferus_build_fixture
 import konflux_fixture_guard as guard
 import konflux_provenance as provenance
+import closed_build_provenance
+import fixture_cleanup
 import network_probe
 import supply_chain_install
 
@@ -27,22 +29,28 @@ def main():
     p.add_argument('--project',choices=['homedir','saferus'],default='homedir')
     p.add_argument('--build-report',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
+    p.add_argument('--closed-source-sha')
+    p.add_argument('--closed-tree-sha')
     args=p.parse_args()
     fixture = homedir_fixture if args.project == "homedir" else saferus_build_fixture
     if not re.fullmatch(r'[a-z][a-z0-9-]{0,35}',args.cluster):raise ValueError('Invalid cluster')
     args.output.mkdir(mode=0o700,parents=True,exist_ok=False)
-    build=json.loads(args.build_report.read_text());results=build['results']
+    closed = args.closed_source_sha is not None or args.closed_tree_sha is not None
+    if closed and (args.project != 'saferus' or not args.closed_source_sha or not args.closed_tree_sha):raise ValueError('Closed Saferus source and tree required together')
+    build = closed_build_provenance.load_fixture(args.build_report,args.closed_source_sha,args.closed_tree_sha) if closed else json.loads(args.build_report.read_text())
+    results=build['results']
     digest=results['IMAGE_DIGEST'];repository=results['IMAGE_URL']
     if not re.fullmatch(r'sha256:[a-f0-9]{64}',digest) or repository!='registry-service.kind-registry/ai-sdlc-fixtures/'+args.project:raise ValueError('Unexpected isolated image identity')
-    if results['CHAINS-GIT_URL']!=fixture.INPUTS['sourceURL'] or results['CHAINS-GIT_COMMIT']!=fixture.INPUTS['sourceSHA'] or results['RUN_UID']!=build['publishRunUID'] or results['DEFINITION_DIGEST']!=build['definitionDigest']:raise ValueError('Trusted publisher result identity mismatch')
-    if fixture.definition_digest(build['publisherImage'],build['network']['deniedTargets'])!=build['definitionDigest']:raise ValueError('Build definition differs from this trusted checkout')
+    if not closed and (results['CHAINS-GIT_URL']!=fixture.INPUTS['sourceURL'] or results['CHAINS-GIT_COMMIT']!=fixture.INPUTS['sourceSHA'] or results['RUN_UID']!=build['publishRunUID'] or results['DEFINITION_DIGEST']!=build['definitionDigest']):raise ValueError('Trusted publisher result identity mismatch')
+    if not closed and fixture.definition_digest(build['publisherImage'],build['network']['deniedTargets'])!=build['definitionDigest']:raise ValueError('Build definition differs from this trusted checkout')
     image=repository+'@'+digest
     state,tools=guard.installation_paths(args.cluster);ownership=json.loads((state/'konflux-ownership.json').read_text())
     if ownership['cluster']!=args.cluster or ownership['scope']!='isolated-konflux':raise ValueError('Unexpected cluster ownership')
     kubectl=[str(tools/'kubectl-1.35.8'),'--kubeconfig',str(state/'kubeconfig')]
     deadline=supply_chain_install.Deadline(600)
-    namespace='ai-sdlc-provenance-'+secrets.token_hex(6);uid=None
-    report={'version':1,'image':image,'namespace':namespace,'sourceSHA':fixture.INPUTS['sourceSHA'],'definitionDigest':build['definitionDigest'],'publishRunUID':build['publishRunUID'],'status':'running','slsaLevelClaimed':False,'releaseAuthorized':False}
+    nonce=secrets.token_hex(12)
+    namespace='ai-sdlc-provenance-'+nonce[:12];uid=None;create_attempted=False
+    report={'version':1,'image':image,'namespace':namespace,'sourceSHA':results['CHAINS-GIT_COMMIT'],'definitionDigest':build['definitionDigest'],'publishRunUID':build['publishRunUID'],'status':'running','slsaLevelClaimed':False,'releaseAuthorized':False}
     def save():(args.output/'report.json').write_text(json.dumps(report,indent=2)+'\n')
     def call(a,value=None,check=True,limit=60):
         r=deadline.run(kubectl+a,input=json.dumps(value) if value is not None else None,capture_output=True,check=False,limit=limit)
@@ -63,7 +71,9 @@ def main():
         return r.returncode,out
     try:
         if get('namespace','kube-system','default')['metadata']['uid']!=ownership['clusterUID']:raise ValueError('Cluster identity changed')
-        ns=create({'apiVersion':'v1','kind':'Namespace','metadata':{'name':namespace,'labels':{'app.kubernetes.io/part-of':'ai-sdlc-provenance-fixture','pod-security.kubernetes.io/enforce':'restricted'}}});uid=ns['metadata']['uid'];report['namespaceUID']=uid;save()
+        report['namespaceCreateIntent']={'name':namespace,'nonce':nonce};save()
+        create_attempted=True
+        ns=create({'apiVersion':'v1','kind':'Namespace','metadata':{'name':namespace,'labels':{'app.kubernetes.io/part-of':'ai-sdlc-provenance-fixture','ai-sdlc.provenance-fixture':nonce,'pod-security.kubernetes.io/enforce':'restricted'}}});uid=ns['metadata']['uid'];report['namespaceUID']=uid;save()
         policy=fixture.policies(namespace)[1];policy['metadata']['name']='verify';policy['spec']['podSelector']={'matchLabels':{'ai-sdlc.role':'verify'}};policy['spec']['egress']=[fixture.PUBLIC_EGRESS[0],fixture.REGISTRY_EGRESS];create(policy)
         secret=get('secret','internal-registry-client-auth','kind-registry')
         create({'apiVersion':'v1','kind':'Secret','metadata':{'name':'registry-auth','namespace':namespace},'type':'kubernetes.io/dockerconfigjson','data':{'.dockerconfigjson':secret['data']['.dockerconfigjson']}})
@@ -90,7 +100,7 @@ def main():
         rc,out=execute('cosign',attest+[image],'attestation')
         if rc:raise ValueError('Actual attestation signature validation failed')
         report['attestationSignatureVerified']=True;save()
-        statement=provenance.verified_statement(out,results,build['publisherImage'])
+        statement=(closed_build_provenance.verified_statement(out,results,build['publisherImage'],build['closedSteps']) if closed else provenance.verified_statement(out,results,build['publisherImage']))
         (args.output/'verified-payload.json').write_text(json.dumps(statement,indent=2)+'\n')
         report['signedIdentityBound']=True;save()
         rc,_=execute('cosign',[x.replace('/keys/cosign.pub','/keys/wrong.pub') for x in attest]+[image],'wrong-key')
@@ -108,8 +118,16 @@ def main():
         report['status']='failed';report['failureType']=type(exc).__name__;save();raise
     finally:
         deadline=supply_chain_install.Deadline(90)
-        if uid:network_probe.cleanup_namespace(lambda a,v=None:call(a,v).stdout,namespace,uid)
-        report['temporaryNamespaceRemoved']=True;save()
+        def cleanup(checkpoint):
+            nonlocal uid
+            if uid is None and create_attempted:
+                uid=fixture_cleanup.recover_namespace_uid(lambda a:call(a).stdout,namespace,'ai-sdlc.provenance-fixture',nonce)
+                report['recoveredNamespaceUIDForCleanup']=uid
+                checkpoint()
+            if uid:network_probe.cleanup_namespace(lambda a,v=None:call(a,v).stdout,namespace,uid)
+            report['temporaryNamespaceRemoved']=True
+            report['cleanupComplete']=True
+        fixture_cleanup.finish_fixture(report,save,cleanup)
     return 0
 
 if __name__=='__main__':

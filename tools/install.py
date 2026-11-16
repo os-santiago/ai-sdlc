@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Install the committed Helm desired state; never advance delivery work."""
 import argparse
+from contextlib import ExitStack
 import base64
 import hashlib
 import json
@@ -20,6 +21,7 @@ import urllib.request
 import github_client
 import network_probe
 import install_config
+import konflux_runtime_install
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL = ROOT / 'runtime/k8s/deploy/local'
@@ -336,7 +338,7 @@ def shadow_intake_config(kubectl, cluster_uid, repository):
     return {'configJSON': json.dumps(policy, sort_keys=True)}
 
 
-def main(argv=None):
+def _main(argv, stack):
     selected = sys.argv[1:] if argv is None else argv
     if selected and selected[0] == 'supply-chain':
         import supply_chain_install
@@ -345,6 +347,7 @@ def main(argv=None):
     parser.add_argument('command', choices=['plan', 'local', 'status', 'tools', 'host', 'credentials', 'sandbox', 'supply-chain'])
     parser.add_argument('--configure-host', action='store_true', help='Raise inotify limits to committed minima for this boot; requires root')
     parser.add_argument('--config', type=Path, help='Reviewed local installation JSON; credentials remain explicit CLI choices')
+    parser.add_argument('--platform', choices=['kind', 'konflux'])
     parser.add_argument('--cluster')
     parser.add_argument('--provider', choices=['auto', 'docker', 'podman'])
     parser.add_argument('--images', type=Path)
@@ -361,11 +364,12 @@ def main(argv=None):
     parser.add_argument('--refresh-model-credential', action='store_true')
     args = parser.parse_args(argv)
     config_digest = install_config.resolve(args)
-    defaults = dict(cluster='ai-sdlc', provider='auto', images=LOCAL / 'images.lock.json',
+    defaults = dict(platform='kind', cluster='ai-sdlc', provider='auto', images=LOCAL / 'images.lock.json',
                     repository='os-santiago/ai-sdlc', environment='ai-sdlc-production', profile='maintenance')
     for key, value in defaults.items():
         if getattr(args, key) is None:
             setattr(args, key, value)
+    konflux_runtime_install.validate_options(args)
     if args.merge and not args.publication:
         raise ValueError('Merge requires explicit verified publication')
     if args.merge is not None and args.command not in ('plan', 'local', 'status', 'credentials', 'sandbox'):
@@ -425,7 +429,7 @@ def main(argv=None):
         json.dump(preview_values, preview); preview.flush()
         run(helm_args + ['-f', preview.name], stdout=subprocess.DEVNULL)
     if args.command == 'plan':
-        print(json.dumps({'cluster': args.cluster, 'namespace': NAMESPACE,
+        print(json.dumps({'cluster': args.cluster, 'platform': args.platform, 'namespace': NAMESPACE,
                           'chart': str(CHART.relative_to(ROOT)), 'mode': args.profile,
                           'images': image_lock(args.images), 'deliveryEnabled': False,
                           'independentReviewEnabled': bool(args.independent_review),
@@ -434,7 +438,12 @@ def main(argv=None):
                           'githubAuth': args.github_auth, 'repository': args.repository,
                           'environment': args.environment, 'configurationDigest': config_digest}, indent=2))
         return 0
+    state = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'ai-sdlc' / args.cluster
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
     provider = args.provider
+    if args.platform == 'konflux':
+        konflux_runtime_install.lock_state(state, stack)
+        provider = konflux_runtime_install.select_provider(provider, state, args.cluster)
     if provider == 'auto':
         provider = next((p for p in ('docker', 'podman') if shutil.which(p)), None)
     if not provider or not shutil.which(provider):
@@ -443,12 +452,12 @@ def main(argv=None):
     if args.command == 'local':
         host_prerequisites(args.configure_host)
     env = dict(os.environ, KIND_EXPERIMENTAL_PROVIDER=provider)
-    state = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'ai-sdlc' / args.cluster
-    state.mkdir(parents=True, exist_ok=True, mode=0o700)
     kubeconfig = state / 'kubeconfig'
     kind = binaries['kind']
     clusters = run([kind, 'get', 'clusters'], env=env, capture_output=True).stdout.splitlines()
-    marker = state / 'ownership.json'
+    marker = state / ('konflux-ownership.json' if args.platform == 'konflux' else 'ownership.json')
+    if args.platform == 'konflux' and args.cluster not in clusters:
+        raise ValueError('Recorded Konflux cluster is absent; refusing recreation')
     if args.cluster in clusters and not marker.exists():
         raise ValueError('Cluster already exists without this installer ownership record; choose a different --cluster.')
     if args.command in ('status', 'credentials', 'sandbox') and args.cluster not in clusters:
@@ -465,6 +474,10 @@ def main(argv=None):
         if not cluster_uid:
             raise ValueError('Cannot establish the created cluster identity')
         marker.write_text(json.dumps({'cluster': args.cluster, 'provider': provider, 'clusterUID': cluster_uid}) + '\n')
+    elif args.platform == 'konflux':
+        konflux_runtime_install.verify_cluster(run, kubectl, state, args.cluster, provider, cluster_uid)
+        konflux_runtime_install.namespace(run, kubectl, state, cluster_uid, create=args.command == 'local')
+        konflux_runtime_install.require_frozen(run, kubectl)
     else:
         check_ownership(marker, args.cluster, provider, cluster_uid)
     if args.command == 'status':
@@ -501,7 +514,8 @@ def main(argv=None):
                    '--timeout', args.timeout])
     run(kubectl + ['rollout', 'status', 'deployment/local-path-provisioner',
                    '-n', 'local-path-storage', '--timeout', args.timeout])
-    run(kubectl + ['apply', '-f', LOCAL / 'namespace.yaml'])
+    if args.platform != 'konflux':
+        run(kubectl + ['apply', '-f', LOCAL / 'namespace.yaml'])
     if args.github_auth == 'gh-cli':
         configure_github_client(kubectl, cluster_uid, args.repository, args.refresh_github_credential)
     intake_values = None
@@ -560,7 +574,7 @@ def main(argv=None):
                        '--timeout', args.timeout])
     lock = image_lock(args.images)
     network = network_probe.verify(kubectl, lock['image']['repository'] + '@' + lock['components']['worker']['digest'])
-    report = {'cluster': args.cluster, 'namespace': NAMESPACE, 'provider': provider,
+    report = {'cluster': args.cluster, 'platform': args.platform, 'namespace': NAMESPACE, 'provider': provider,
               'repository': args.repository, 'environment': args.environment,
               'configurationDigest': config_digest,
               'mode': args.profile, 'installationReady': True, 'deliveryEnabled': False,
@@ -575,6 +589,11 @@ def main(argv=None):
     (state / 'installation.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
     return 0
+
+
+def main(argv=None):
+    with ExitStack() as stack:
+        return _main(argv, stack)
 
 
 if __name__ == '__main__':
