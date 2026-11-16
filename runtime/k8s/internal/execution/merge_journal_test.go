@@ -27,6 +27,9 @@ func mergeJournalFixture(t *testing.T, configure ...func(*fixture)) (*lifecycleF
 			t.Fatal(e)
 		}
 		receipt := publicationReceipt(kind)
+		if kind == "tree" && f.buildFixtureTree != "" {
+			receipt.SHA = f.buildFixtureTree
+		}
 		if kind != "tree" {
 			receipt.SHA = strings.Repeat("c", 40)
 		}
@@ -54,6 +57,9 @@ func mergeJournalFixture(t *testing.T, configure ...func(*fixture)) (*lifecycleF
 	f.Material.Policy.Autonomy = "auto-merge-low"
 	now := time.Now()
 	cmd := merging.Command{Version: merging.Version, PublicationID: pub.ID, PublicationRecordSHA256: record.Digest(), GateSHA256: strings.Repeat("e", 64), Repository: original.Repository, IssueNumber: original.IssueNumber, PullRequest: 17, HeadSHA: strings.Repeat("c", 40), BaseSHA: original.SourceSHA, TreeSHA: strings.Repeat("a", 40), Branch: "ai-sdlc/issue-3-" + strings.Repeat("b", 32), AuthorityRevision: f.Material.Policy.Revision(), IssuedAt: now.UnixMilli(), ExpiresAt: now.Add(25 * time.Second).UnixMilli()}
+	if f.buildFixtureTree != "" {
+		cmd.TreeSHA = f.buildFixtureTree
+	}
 	gate, _ := json.Marshal(mergegate.Observation{Expected: mergegate.Expected{Repository: cmd.Repository, PullRequest: cmd.PullRequest, HeadSHA: cmd.HeadSHA, BaseSHA: cmd.BaseSHA, TreeSHA: cmd.TreeSHA, Branch: cmd.Branch}, PolicySHA256: strings.Repeat("e", 64), ChecksSHA256: strings.Repeat("f", 64), ReviewsSHA256: strings.Repeat("a", 64), ObservedAt: now, Ready: true, Reasons: []string{}})
 	cmd.GateSHA256 = authority.Digest(gate)
 	raw, _ = json.Marshal(cmd)
@@ -83,14 +89,18 @@ func queuedMerge(t *testing.T, db *store.MergeJournal, r store.MergeRequest) sto
 func mergeReceipt(c merging.Command) store.MergeReceipt {
 	return store.MergeReceipt{Version: "ai-sdlc.merge-receipt/v1", CommitSHA: strings.Repeat("d", 40), HeadSHA: c.HeadSHA, BaseSHA: c.BaseSHA, TreeSHA: c.TreeSHA, PullRequest: c.PullRequest}
 }
-func completeMerge(t *testing.T, db *store.MergeJournal, c store.MergeClaim, cmd merging.Command) []byte {
+func completeMerge(t *testing.T, db *store.MergeJournal, c store.MergeClaim, cmd merging.Command, override ...store.MergeReceipt) []byte {
 	t.Helper()
 	ctx := context.Background()
 	effect, e := db.BeginMergeEffect(ctx, c, strings.Repeat("f", 64))
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = db.AcknowledgeMergeEffect(ctx, effect, mergeReceipt(cmd)); e != nil {
+	receipt := mergeReceipt(cmd)
+	if len(override) == 1 {
+		receipt = override[0]
+	}
+	if e = db.AcknowledgeMergeEffect(ctx, effect, receipt); e != nil {
 		t.Fatal(e)
 	}
 	evidence, e := db.ReadMergeEvidence(ctx, c)
@@ -98,7 +108,7 @@ func completeMerge(t *testing.T, db *store.MergeJournal, c store.MergeClaim, cmd
 		t.Fatal(e)
 	}
 	raw, _ := json.Marshal(evidence)
-	p := store.MergeProof{Version: "ai-sdlc.merge-proof/v1", MergeID: c.ID, PublicationID: cmd.PublicationID, PublicationRecordSHA256: c.RecordDigest, GateSHA256: c.GateDigest, EffectSHA256: authority.Digest(raw), Receipt: mergeReceipt(cmd)}
+	p := store.MergeProof{Version: "ai-sdlc.merge-proof/v1", MergeID: c.ID, PublicationID: cmd.PublicationID, PublicationRecordSHA256: c.RecordDigest, GateSHA256: c.GateDigest, EffectSHA256: authority.Digest(raw), Receipt: receipt}
 	raw, _ = json.Marshal(p)
 	return raw
 }

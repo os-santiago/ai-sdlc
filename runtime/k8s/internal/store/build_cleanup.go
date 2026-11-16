@@ -36,21 +36,24 @@ type BuildCleanupProof struct {
 // It accepts only terminal requests. Credential removal requires installer-owned
 // cleanup first; a policy freeze alone does not remove the installed DB identity.
 func (j *BuildJournal) ReadBuildCleanup(ctx context.Context, c BuildClaim) (BuildCleanup, error) {
-	out := BuildCleanup{Claim: c}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if !buildIDPattern.MatchString(c.ID) || !lifecycleUUID.MatchString(c.Token) || AssertComponent(ctx, j.Pool, "build-controller") != nil {
+	return j.readBuildCleanup(ctx, j.Pool, c)
+}
+func (j *BuildJournal) readBuildCleanup(ctx context.Context, q Querier, c BuildClaim) (BuildCleanup, error) {
+	out := BuildCleanup{Claim: c}
+	if !buildIDPattern.MatchString(c.ID) || !lifecycleUUID.MatchString(c.Token) || AssertComponent(ctx, q, "build-controller") != nil {
 		return out, ErrExecution
 	}
 	var raw, payload, receipt, inner, outer []byte
-	if j.Pool.QueryRowContext(ctx, `SELECT s.slot,r.payload,r.receipt,r.inner_policy,r.outer_policy FROM build_requests r JOIN build_slots s ON s.request_id=r.id WHERE r.id=$1 AND r.claim_token=$2 AND s.slot_id=$3 AND s.slot_digest=$4 AND r.state IN ('failed','built')`, c.ID, c.Token, c.SlotID, c.SlotDigest).Scan(&raw, &payload, &receipt, &inner, &outer) != nil {
+	if q.QueryRowContext(ctx, `SELECT s.slot,r.payload,r.receipt,r.inner_policy,r.outer_policy FROM build_requests r JOIN build_slots s ON s.request_id=r.id WHERE r.id=$1 AND r.claim_token=$2 AND s.slot_id=$3 AND s.slot_digest=$4 AND r.state IN ('failed','built')`, c.ID, c.Token, c.SlotID, c.SlotDigest).Scan(&raw, &payload, &receipt, &inner, &outer) != nil {
 		return BuildCleanup{}, ErrExecution
 	}
 	cmd, e := archivedBuild(payload, receipt, inner, outer)
 	if e != nil || cmd.ID() != c.ID || authority.DecodeStrict(raw, &out.Slot) != nil || out.Slot.Validate() != nil || out.Slot.ID() != c.SlotID || out.Slot.Digest() != c.SlotDigest {
 		return BuildCleanup{}, ErrExecution
 	}
-	rows, e := j.Pool.QueryContext(ctx, `SELECT kind,resource_name,coalesce(resource_uid::text,'') FROM build_effects WHERE request_id=$1 ORDER BY kind`, c.ID)
+	rows, e := q.QueryContext(ctx, `SELECT kind,resource_name,coalesce(resource_uid::text,'') FROM build_effects WHERE request_id=$1 ORDER BY kind`, c.ID)
 	if e != nil {
 		return BuildCleanup{}, ErrExecution
 	}
@@ -120,10 +123,6 @@ func (j *BuildJournal) RecordBuildCleanup(ctx context.Context, c BuildClaim, p B
 	if p.Version != "ai-sdlc.build-cleanup/v1" || p.BuildID != c.ID || p.SlotDigest != c.SlotDigest || observed.Before(now.Add(-30*time.Second)) || observed.After(now.Add(5*time.Second)) {
 		return ErrExecution
 	}
-	original, e := j.ReadBuildCleanup(ctx, c)
-	if e != nil || p.UnknownCreate != original.UnknownCreate || !reflect.DeepEqual(p.Resources, original.Resources) {
-		return ErrExecution
-	}
 	raw, _ := json.Marshal(p)
 	return j.DB.WithTx(ctx, func(tx *sql.Tx) error {
 		if AssertComponent(ctx, tx, "build-controller") != nil {
@@ -133,7 +132,11 @@ func (j *BuildJournal) RecordBuildCleanup(ctx context.Context, c BuildClaim, p B
 		if tx.QueryRowContext(ctx, `SELECT id FROM build_requests WHERE id=$1 AND claim_token=$2 AND state IN ('failed','built') FOR UPDATE`, c.ID, c.Token).Scan(&id) != nil {
 			return ErrExecution
 		}
-		_, e := tx.ExecContext(ctx, `INSERT INTO build_cleanups(request_id,digest,proof) VALUES($1,$2,$3)`, c.ID, authority.Digest(raw), raw)
+		original, e := j.readBuildCleanup(ctx, tx, c)
+		if e != nil || p.UnknownCreate != original.UnknownCreate || !reflect.DeepEqual(p.Resources, original.Resources) {
+			return ErrExecution
+		}
+		_, e = tx.ExecContext(ctx, `INSERT INTO build_cleanups(request_id,digest,proof) VALUES($1,$2,$3)`, c.ID, authority.Digest(raw), raw)
 		if e != nil {
 			return ErrExecution
 		}
