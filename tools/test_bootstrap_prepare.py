@@ -79,6 +79,25 @@ class PreparationTests(unittest.TestCase):
         self.forward=patch.object(prep.bootstrap_database_forward,'original_database',side_effect=lambda *args:contextlib.nullcontext(('fixture-private-uri',15432)))
         self.forward.start();self.addCleanup(self.forward.stop)
 
+    def test_digest_pull_default_shared_by_controllers_and_pods(self):
+        desired = {'metadata': {}, 'spec': {'containers': [
+            {'name': 'main', 'image': 'example.invalid/main@sha256:'+'a'*64},
+            {'name': 'auxiliary', 'image': 'example.invalid/aux@sha256:'+'b'*64}]}}
+        admitted = copy.deepcopy(desired)
+        for container in admitted['spec']['containers']:
+            container['imagePullPolicy'] = 'IfNotPresent'
+        self.assertEqual(prep.normalized_template(desired), prep.normalized_template(admitted))
+        for policy in ('Always', 'Never'):
+            changed = copy.deepcopy(admitted)
+            changed['spec']['containers'][1]['imagePullPolicy'] = policy
+            self.assertNotEqual(prep.normalized_template(desired), prep.normalized_template(changed))
+        for image in ('example.invalid/aux:latest', 'example.invalid/aux:v1'):
+            tagged = copy.deepcopy(desired)
+            tagged['spec']['containers'][1]['image'] = image
+            changed = copy.deepcopy(tagged)
+            changed['spec']['containers'][1]['imagePullPolicy'] = 'IfNotPresent'
+            self.assertNotEqual(prep.normalized_template(tagged), prep.normalized_template(changed))
+
     def test_original_authority_and_paused_positive_controls(self):
         original,_=self.p.observe()
         self.p.expected=original

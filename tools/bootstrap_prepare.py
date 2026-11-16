@@ -40,6 +40,8 @@ def normalized_template(template):
     if spec.get('serviceAccount') == spec.get('serviceAccountName'):
         spec.pop('serviceAccount', None)
     for container in spec.get('containers', []):
+        if container.get('imagePullPolicy') == 'IfNotPresent' and '@sha256:' in container.get('image', ''):
+            container.pop('imagePullPolicy')
         for key, default in {'terminationMessagePath':'/dev/termination-log','terminationMessagePolicy':'File'}.items():
             if container.get(key) == default:
                 container.pop(key)
