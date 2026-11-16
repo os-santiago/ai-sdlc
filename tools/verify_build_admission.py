@@ -92,7 +92,8 @@ def main():
         persist_report()
         create({'apiVersion': 'v1', 'kind': 'LimitRange', 'metadata': {'name': 'build-budget', 'namespace': namespace}, 'spec': {'limits': [{'type': 'Container', 'default': {'cpu': '100m', 'memory': '256Mi', 'ephemeral-storage': '64Mi'}, 'defaultRequest': {'cpu': '100m', 'memory': '64Mi', 'ephemeral-storage': '64Mi'}}]}})
         # Deliberately synthetic credential, never usable against the real registry.
-        dummy = base64.b64encode(b'{"auths":{"registry-service.kind-registry":{"auth":"Zml4dHVyZTpmaXh0dXJl"}}}').decode()
+        synthetic_auth = base64.b64encode((nonce + ':' + secrets.token_hex(16)).encode()).decode()
+        dummy = base64.b64encode(json.dumps({'auths': {'registry-service.kind-registry': {'auth': synthetic_auth}}}).encode()).decode()
         create({'apiVersion': 'v1', 'kind': 'Secret', 'metadata': {'name': 'registry-auth', 'namespace': namespace},
                 'type': 'kubernetes.io/dockerconfigjson', 'data': {'.dockerconfigjson': dummy}})
         for file, kind in [('mutation.json', 'mutatingadmissionpolicies'), ('mutation-binding.json','mutatingadmissionpolicybindings')]:

@@ -18,3 +18,6 @@ e54412ba8a62e920eb31520a0497832c0555737e:scripts/risk-classifier.test.js:generic
 
 # SQL column-to-column UPSERT; triaged under issue #481.
 c035a7ad14f870837d452d37c09cd5a7f7f2eee7:runtime/k8s/internal/intake/poller.go:generic-api-key:239
+
+# Historical synthetic fixture-only Basic identity, never valid at a registry.
+e230101d596e7639432a8198639f74cc6dd656f0:tools/verify_build_admission.py:generic-api-key:93

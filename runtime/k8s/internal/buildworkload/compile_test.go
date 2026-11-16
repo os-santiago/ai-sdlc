@@ -177,3 +177,21 @@ func TestEmitClosedBuildAPIFixture(t *testing.T) {
 		}
 	}
 }
+
+func TestCELLiteralsPreserveQuotesAndCannotIntroduceApostrophes(t *testing.T) {
+	for _, value := range []any{"' || true || '", "\\'\"\\u0027", []string{"safe", "'\\'"}, map[string]string{"'key": "value'"}} {
+		literal := cel(value)
+		if strings.Contains(literal, "'") {
+			t.Fatal("raw apostrophe escaped literal boundary")
+		}
+		original, _ := json.Marshal(value)
+		var decoded any
+		if json.Unmarshal([]byte(literal), &decoded) != nil {
+			t.Fatal("not a complete JSON literal")
+		}
+		roundtrip, _ := json.Marshal(decoded)
+		if string(roundtrip) != string(original) {
+			t.Fatal("literal escaping changed meaning")
+		}
+	}
+}

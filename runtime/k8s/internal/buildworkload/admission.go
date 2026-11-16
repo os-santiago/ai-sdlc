@@ -13,7 +13,12 @@ const AdmissionName = "ai-sdlc-build-pods"
 const resultNames = "IMAGE_URL,IMAGE_DIGEST,CHAINS-GIT_URL,CHAINS-GIT_COMMIT,DEFINITION_DIGEST,RUN_UID"
 const ControllerUser = "system:serviceaccount:tekton-pipelines:tekton-pipelines-controller"
 
-func cel(v any) string { raw, _ := json.Marshal(v); return string(raw) }
+// cel emits complete JSON/CEL literals, never fragments inside quoted text.
+// Encoding apostrophes also makes that boundary explicit to static analysis.
+func cel(v any) string {
+	raw, _ := json.Marshal(v)
+	return strings.ReplaceAll(string(raw), "'", `\u0027`)
+}
 func guardArguments(s building.Slot, phase string) []string {
 	args := []string{"-wait_file", "/tekton/downward/ready", "-wait_file_content", "-post_file", "/tekton/run/0/out", "-termination_path", "/tekton/termination", "-step_metadata_dir", "/tekton/run/0/status"}
 	if phase == "publish" {
