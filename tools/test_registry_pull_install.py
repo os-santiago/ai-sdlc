@@ -55,6 +55,10 @@ class PullEvidenceTests(unittest.TestCase):
         event['message']='Failed to pull image "'+image+'": 401 Unauthorized'
         self.assertEqual(event_proof([event],pod,image,'original-node',False)['result'],'anonymous-denied')
         self.assertIsNone(event_proof([event],pod,image,'original-node',True))
+        event['message']='Failed to pull image "'+image+'": authorization failed: no basic auth credentials'
+        self.assertEqual(event_proof([event],pod,image,'original-node',False)['result'],'anonymous-denied')
+        event['message']='Failed to pull image "'+image+'": connection refused'
+        self.assertIsNone(event_proof([event],pod,image,'original-node',False))
 
 
 if __name__=='__main__':unittest.main()

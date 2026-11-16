@@ -58,7 +58,8 @@ def event_proof(events,pod,image,node,positive):
         if not isinstance(message,str) or len(message)>16384:continue
         if positive and event.get('reason')=='Pulled' and message.startswith('Successfully pulled image "'+image+'"'):
             return {'eventUID':event['metadata']['uid'],'podUID':pod['metadata']['uid'],'observedAt':stamp,'result':'pulled'}
-        if not positive and event.get('reason')=='Failed' and image in message and '401 Unauthorized' in message:
+        denied=('401 Unauthorized' in message or message.endswith('authorization failed: no basic auth credentials'))
+        if not positive and event.get('reason')=='Failed' and image in message and denied:
             return {'eventUID':event['metadata']['uid'],'podUID':pod['metadata']['uid'],'observedAt':stamp,'result':'anonymous-denied'}
     return None
 
