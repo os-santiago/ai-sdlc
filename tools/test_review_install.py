@@ -9,8 +9,25 @@ from unittest.mock import patch
 import candidate_install
 import install
 import install_config
+from verify_review_install import require_review_disabled
 
 class ReviewInstallTests(unittest.TestCase):
+    def test_disabled_inspection_rejects_hidden_review_credentials(self):
+        base = {'containers': [{'name': 'verifier'}]}
+        require_review_disabled(base)
+        variants = [
+            {'volumes': [{'name': 'review'}]},
+            {'volumes': [{'name': 'renamed', 'secret': {'secretName': 'ai-sdlc-codex-auth'}}]},
+            {'volumes': [{'name': 'renamed', 'projected': {'sources': [{'secret': {'name': 'ai-sdlc-review-model-client'}}]}}]},
+            {'containers': [{'name': 'verifier', 'volumeMounts': [{'name': 'renamed', 'mountPath': '/var/run/ai-sdlc/review-model/token'}]}]},
+            {'containers': [{'name': 'verifier', 'env': [{'name': 'TOKEN', 'valueFrom': {'secretKeyRef': {'name': 'ai-sdlc-review-model-client', 'key': 'token'}}}]}]},
+            {'initContainers': [{'name': 'hidden', 'envFrom': [{'secretRef': {'name': 'ai-sdlc-codex-auth'}}]}]},
+            {'ephemeralContainers': [{'name': 'hidden', 'volumeMounts': [{'name': 'model-auth', 'mountPath': '/elsewhere'}]}]},
+        ]
+        for variant in variants:
+            with self.subTest(variant=variant), self.assertRaises(ValueError):
+                require_review_disabled(dict(base, **variant))
+
     def test_review_configuration_is_bounded_and_credential_free(self):
         lock_path = install.LOCAL / 'images.lock.json'
         evidence = json.loads(lock_path.with_name('images.evidence.json').read_text())

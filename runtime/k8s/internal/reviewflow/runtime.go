@@ -18,6 +18,16 @@ type Runtime struct {
 	Client *podtransport.Client
 }
 
+// VerificationMayProceed keeps independent queues moving only when review has
+// performed no new work. Cleanup uncertainty and post-claim failures stop both.
+func VerificationMayProceed(state string, err error) bool {
+	if err != nil {
+		var diagnostic ControllerError
+		return errors.As(err, &diagnostic) && !diagnostic.CleanupPending && diagnostic.Stage == "gateway-unavailable"
+	}
+	return state == "" || state == "rejected"
+}
+
 func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if r.DB == nil || r.Policy == nil || r.Load == nil || r.Client == nil {
 		return "", ControllerError{Stage: "configuration"}

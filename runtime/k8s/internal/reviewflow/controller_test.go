@@ -16,6 +16,26 @@ type testSession struct {
 	exit                 int32
 }
 
+func TestIndependentQueueScheduling(t *testing.T) {
+	for _, test := range []struct {
+		state string
+		err   error
+		want  bool
+	}{
+		{"", nil, true}, {"rejected", nil, true},
+		{"stopped", ControllerError{Stage: "gateway-unavailable"}, true},
+		{"review-passed", nil, false},
+		{"stopped", ControllerError{Stage: "model"}, false},
+		{"cleanup-uncertain", ControllerError{Stage: "cleanup", CleanupPending: true}, false},
+		{"stopped", ControllerError{Stage: "gateway-unavailable", CleanupPending: true}, false},
+		{"", errors.New("unclassified"), false},
+	} {
+		if got := VerificationMayProceed(test.state, test.err); got != test.want {
+			t.Fatalf("state %q error %v: may proceed = %t", test.state, test.err, got)
+		}
+	}
+}
+
 func (s *testSession) WorkerExit(context.Context) (int32, bool, error) {
 	return s.exit, s.reads >= 3, nil
 }
