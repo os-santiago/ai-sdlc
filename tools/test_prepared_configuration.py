@@ -2,6 +2,7 @@
 import base64
 import copy
 import json
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -12,6 +13,7 @@ import uuid
 import yaml
 
 import bootstrap_prepare
+import candidate_install
 import install
 import managed_registry_install
 import prepared_configuration as prepared
@@ -261,6 +263,24 @@ class PreparedCustodyTests(unittest.TestCase):
             with patch.object(install,'tools') as tools,patch.object(install,'run') as run:
                 with self.assertRaises(ValueError):install.main(args)
                 tools.assert_not_called();run.assert_not_called()
+
+    def test_prepared_entrypoint_defers_render_until_native_policy_is_known(self):
+        selected={'merge':{'enabled':True}}
+        args=['local','--platform','konflux','--cluster','prepared-fixture','--provider','podman',
+            '--repository','os-santiago/saferus','--environment','ai-sdlc-production','--profile','verification',
+            '--independent-review','--publication','--merge','--github-auth','gh-cli','--configure-prepared',
+            '--build-bundle','/reviewed/bundle.json','--build-images','/reviewed/build-images.json',
+            '--provenance-trust','/reviewed/trust.json']
+        with tempfile.TemporaryDirectory() as directory,patch.dict(os.environ,{'XDG_STATE_HOME':directory}),\
+                patch.object(install,'tools',return_value={'helm':'helm'}),\
+                patch.object(candidate_install,'desired_values',return_value=selected),\
+                patch.object(install.konflux_runtime_install,'lock_state'),\
+                patch.object(install.konflux_runtime_install,'select_provider',return_value='podman'),\
+                patch.object(install,'run',side_effect=AssertionError('Partial configuration must not be rendered')),\
+                patch.object(prepared,'install_prepared',return_value=0) as transition:
+            self.assertEqual(install.main(args),0)
+        self.assertEqual(transition.call_args.args[-1],selected)
+        self.assertNotIn('configJSON',selected['merge'])
 
 
 if __name__=='__main__':unittest.main()
