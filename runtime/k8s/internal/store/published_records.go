@@ -38,9 +38,12 @@ func (db *DB) ReadPublishedRecord(ctx context.Context, id string) (PublishedReco
 }
 
 func readPublishedRecord(ctx context.Context, q Querier, id string) (PublishedRecord, error) {
+	return readPublishedRecordAs(ctx, q, id, "release-manager")
+}
+func readPublishedRecordAs(ctx context.Context, q Querier, id, role string) (PublishedRecord, error) {
 	var r PublishedRecord
 	var planDigest string
-	if !publicationIDPattern.MatchString(id) || AssertComponent(ctx, q, "release-manager") != nil {
+	if (role != "release-manager" && role != "build-controller") || !publicationIDPattern.MatchString(id) || AssertComponent(ctx, q, role) != nil {
 		return r, ErrExecution
 	}
 	err := q.QueryRowContext(ctx, `SELECT f.publication_id,f.payload_digest,f.payload,f.receipt,f.proof_digest,f.proof,f.effects_digest,f.effects,f.published_at,f.authority_expires_at,r.plan_digest FROM published_records f JOIN publication_requests r ON r.id=f.publication_id WHERE f.publication_id=$1 AND r.state='published' AND r.payload_digest=f.payload_digest AND r.payload=f.payload AND r.receipt=f.receipt AND r.proof=f.proof AND f.authority_expires_at=r.expires_at AND f.published_at<=clock_timestamp() AND f.published_at>=r.commit_time`, id).Scan(&r.PublicationID, &r.PayloadDigest, &r.Payload, &r.Receipt, &r.ProofDigest, &r.Proof, &r.EffectsDigest, &r.Effects, &r.PublishedAt, &r.AuthorityExpiresAt, &planDigest)
