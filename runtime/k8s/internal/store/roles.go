@@ -199,6 +199,9 @@ func (db *DB) ProvisionRolesForBuild(ctx context.Context, passwords map[string]s
 			if merge && component == "release-manager" {
 				statements = append(statements, mergePrivileges...)
 			}
+			if build && component == "verifier" {
+				statements = append(statements, buildVerifierPrivileges...)
+			}
 			if build && component == "build-controller" {
 				statements = append(statements, buildPrivileges...)
 			}

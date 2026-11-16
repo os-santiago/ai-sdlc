@@ -136,11 +136,11 @@ func TestBuildJournalOwnIdentityCurrentMergeAndOneClaim(t *testing.T) {
 	if e := b.journal.CheckBuild(ctx, winner); e != nil {
 		t.Fatal("loser stopped winning claim", e)
 	}
-	effect, e := b.journal.BeginBuildEffect(ctx, winner, strings.Repeat("c", 64))
+	effect, e := b.journal.BeginBuildEffect(ctx, winner, b.plan())
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, e = b.journal.BeginBuildEffect(ctx, winner, strings.Repeat("c", 64)); e == nil {
+	if _, e = b.journal.BeginBuildEffect(ctx, winner, b.plan()); e == nil {
 		t.Fatal("replayed create intent")
 	}
 	uid := store.NewID()
@@ -204,7 +204,7 @@ func TestBuildJournalRejectsChangedCurrentAuthority(t *testing.T) {
 			if b.journal.CheckBuild(ctx, c) == nil {
 				t.Fatal("stale build authority remained live")
 			}
-			if _, e = b.journal.BeginBuildEffect(ctx, c, strings.Repeat("c", 64)); e == nil {
+			if _, e = b.journal.BeginBuildEffect(ctx, c, b.plan()); e == nil {
 				t.Fatal("revoked authority began external effect")
 			}
 		})
@@ -220,7 +220,7 @@ func TestBuildUnknownCreateQuarantinesMergeAndPhysicalSlot(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, e = b.journal.BeginBuildEffect(ctx, c, strings.Repeat("c", 64)); e != nil {
+	if _, e = b.journal.BeginBuildEffect(ctx, c, b.plan()); e != nil {
 		t.Fatal(e)
 	}
 	if e = b.journal.StopBuild(ctx, c, "uncertain"); e != nil {
@@ -259,7 +259,7 @@ func TestBuildPhysicalSlotCannotBeReintroducedWithNewKubernetesIDs(t *testing.T)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, e = b.journal.BeginBuildEffect(ctx, c, strings.Repeat("c", 64)); e != nil {
+	if _, e = b.journal.BeginBuildEffect(ctx, c, b.plan()); e != nil {
 		t.Fatal(e)
 	}
 	if e = b.journal.StopBuild(ctx, c, "uncertain"); e != nil {
@@ -292,7 +292,7 @@ func TestBuildClaimCannotOutliveExpiryWhileWaitingForRowLock(t *testing.T) {
 	b := newBuildFixture(t)
 	ctx := context.Background()
 	cmd := b.command
-	cmd.ExpiresAt = time.Now().Add(700 * time.Millisecond).UnixMilli()
+	cmd.ExpiresAt = time.Now().Add(2 * time.Second).UnixMilli()
 	raw, _ := json.Marshal(cmd)
 	signed, e := b.f.Material.Identities["release-manager"].Seal(b.cfg.Outer, cmd.ID(), "build-merged", raw)
 	if e != nil {
@@ -313,6 +313,21 @@ func TestBuildClaimCannotOutliveExpiryWhileWaitingForRowLock(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() { _, e := b.journal.ClaimBuild(ctx, cmd.ID(), b.cfg.Slots[0]); done <- e }()
+	blocked := false
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+		var count int
+		if e = b.f.Admin.Pool.QueryRow(`SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'UPDATE build_requests SET state=%'`).Scan(&count); e != nil {
+			t.Fatal(e)
+		}
+		if count > 0 {
+			blocked = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !blocked {
+		t.Fatal("claimant did not actually wait on the held row lock")
+	}
 	time.Sleep(time.Until(time.UnixMilli(cmd.ExpiresAt).Add(50 * time.Millisecond)))
 	if e = tx.Commit(); e != nil {
 		t.Fatal(e)

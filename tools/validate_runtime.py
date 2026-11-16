@@ -92,6 +92,29 @@ class Run:
         finally:
             record['seconds'] = round(time.monotonic() - start, 3)
 
+    def database_diagnostics(self):
+        # Report only allowlisted state and error classifications; PostgreSQL
+        # logs or container configuration can contain fixture credential data.
+        try:
+            result = subprocess.run([self.provider, 'container', 'inspect', self.names[0]],
+                                    capture_output=True, text=True, timeout=10, check=True)
+            item = json.loads(result.stdout)[0]
+            if item.get('Config', {}).get('Labels', {}).get(OWNER_LABEL) != self.identity:
+                return
+            state = item.get('State', {})
+            logs = subprocess.run([self.provider, 'logs', '--tail', '40', item['Id']],
+                                  capture_output=True, text=True, timeout=10, check=False)
+            diagnostic = (logs.stdout + logs.stderr)[-262144:].lower()
+            self.report['databaseDiagnostics'] = {
+                'status': state.get('Status'), 'exitCode': state.get('ExitCode'),
+                'oomKilled': bool(state.get('OOMKilled')),
+                'noSpaceReported': 'no space left on device' in diagnostic,
+                'outOfMemoryReported': 'out of memory' in diagnostic,
+                'walMaxMB': 128, 'walMinMB': 32, 'checkpointSeconds': 30,
+            }
+        except (subprocess.SubprocessError, OSError, ValueError, KeyError, IndexError):
+            self.report['databaseDiagnostics'] = {'unavailable': True}
+
     def cleanup(self):
         # Cleanup has its own bounded window, including after the work deadline.
         for name in reversed(self.names):
@@ -156,7 +179,9 @@ class Run:
             shared = ['--platform', self.lock['platform'], '--label', OWNER_LABEL + '=' + self.identity]
             self.stage('database-start', ['run', '-d', '--name', db, *shared, *fixture_env,
                                          '--tmpfs', '/var/lib/postgresql/data:rw,size=512m',
-                                         self.lock['postgres'], 'postgres', '-c', 'listen_addresses=127.0.0.1'], 180)
+                                         self.lock['postgres'], 'postgres', '-c', 'listen_addresses=127.0.0.1',
+                                         '-c', 'max_wal_size=128MB', '-c', 'min_wal_size=32MB',
+                                         '-c', 'checkpoint_timeout=30s'], 180)
             inspected = self.call(['container', 'inspect', db])
             database = json.loads(inspected.stdout)[0]
             mounts = database['Mounts']
@@ -208,6 +233,7 @@ class Run:
             # Never include subprocess arguments or environment values in the report.
             self.report['error'] = str(exc) if isinstance(exc, ValidationError) else type(exc).__name__
         finally:
+            self.database_diagnostics()
             self.cleanup()
             self.environment = None
             if any(item['status'] not in ('removed', 'absent') for item in self.report['cleanup']):
