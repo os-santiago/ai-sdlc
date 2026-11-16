@@ -400,6 +400,8 @@ def _main(argv, stack):
     parser.add_argument('--codex-auth-file', type=Path, help='Explicit local Codex authentication source for the candidate sidecar Secret')
     parser.add_argument('--refresh-model-credential', action='store_true')
     args = parser.parse_args(argv)
+    if args.command not in ('plan','local','status','tools','host','credentials','sandbox'):
+        raise ValueError('Delegated installer subcommands must be the first argument')
     config_digest = install_config.resolve(args)
     defaults = dict(platform='kind', cluster='ai-sdlc', provider='auto', images=LOCAL / 'images.lock.json',
                     repository='os-santiago/ai-sdlc', environment='ai-sdlc-production', profile='maintenance')
