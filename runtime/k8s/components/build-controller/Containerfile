@@ -1,0 +1,12 @@
+FROM docker.io/library/golang:1.25-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY internal ./internal
+COPY components/build-controller ./components/build-controller
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/component ./components/build-controller/cmd
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/component /component
+USER 1000:1000
+ENTRYPOINT ["/component"]

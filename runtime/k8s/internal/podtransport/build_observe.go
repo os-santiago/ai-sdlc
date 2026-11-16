@@ -45,7 +45,10 @@ func buildLabel(obj map[string]any, key string) string {
 	return text
 }
 func (r *BuildResources) listBuildObjects(ctx context.Context, path string) ([]map[string]any, error) {
-	obj, _, e := r.getBuildObject(ctx, path)
+	return r.listBuildObjectsWith(ctx, path, r.getBuildObject)
+}
+func (r *BuildResources) listBuildObjectsWith(ctx context.Context, path string, get func(context.Context, string) (map[string]any, []byte, error)) ([]map[string]any, error) {
+	obj, _, e := get(ctx, path)
 	if e != nil {
 		return nil, e
 	}

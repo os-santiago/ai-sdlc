@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "status": "passed",
+  "scope": "isolated build process and real PostgreSQL leadership/HTTP boundary",
+  "autonomousE2E": false,
+  "releaseAuthorized": false,
+  "tests": {
+    "passedTests": 1547,
+    "passedPackages": 43,
+    "skippedTests": [
+      "internal/buildstorage/TestPrepareWorkspaceGuardFixture",
+      "internal/buildworkload/TestEmitClosedBuildAPIFixture",
+      "internal/engine/TestInvokeAgainstRealBinary",
+      "internal/execution/TestActualPinnedHomedirPreparationFixture",
+      "internal/execution/TestRealCandidateRecoveryFixture",
+      "internal/execution/TestRealCandidateRuntimeFixture",
+      "internal/execution/TestRealJournalBackedClosedBuild",
+      "internal/execution/TestRealLifecycleModelFixture",
+      "internal/mergegate/TestRealHomedirReadonlyGateFixture",
+      "internal/podtransport/TestRealBuildSlotAPICustody",
+      "internal/podtransport/TestRealClosedBuildTransport",
+      "internal/podtransport/TestRealCodexKubernetesMailboxFixture",
+      "internal/podtransport/TestRealKubernetesMailboxFixture",
+      "internal/podtransport/TestRealReadonlyReviewerFixture",
+      "internal/podtransport/TestRealVerificationTransportFixture",
+      "internal/podtransport/TestRealWorkloadResourcesFixture",
+      "internal/podtransport/TestRealWorkspaceLifecycleFixture",
+      "internal/podtransport/TestRecordedBuildContainerTermination",
+      "internal/podtransport/TestRecordedTektonHierarchyMatchesClosedTemplates",
+      "internal/publication/TestRealHomedirPublicationTreeFixture",
+      "internal/reviewflow/TestRealVerificationFlowFixture",
+      "internal/sourcefetch/TestActualPinnedGitTreeManifest",
+      "internal/sourcefetch/TestActualPinnedHomedirArchive",
+      "internal/sourcefetch/TestActualPublicGitHubPinnedSource",
+      "internal/verification/TestRealVerificationRecipeFixture",
+      "internal/verificationflow/TestRealVerificationFlowFixture"
+    ],
+    "missingDatabaseProof": []
+  },
+  "cleanup": [
+    {
+      "container": "ai-sdlc-validation-ea67ef356b10448fb744d6576e9ff6ca-go",
+      "status": "removed"
+    },
+    {
+      "container": "ai-sdlc-validation-ea67ef356b10448fb744d6576e9ff6ca-db",
+      "status": "removed"
+    }
+  ],
+  "report": "/tmp/ai-sdlc-build-runtime-validation-v3/report.json",
+  "image": "localhost/ai-sdlc-build-controller:process-v2",
+  "imageID": "sha256:dfc442da2a52d59830010df44f843742b5737fdd8ab057eb3a1fb0897069593a"
+}

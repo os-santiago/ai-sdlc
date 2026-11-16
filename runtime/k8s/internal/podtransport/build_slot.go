@@ -10,16 +10,20 @@ import (
 var buildPVName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 func (r *BuildResources) inspectBuildSlot(ctx context.Context) error {
+	return r.inspectBuildSlotWith(ctx, r.getBuildObject)
+}
+
+func (r *BuildResources) inspectBuildSlotWith(ctx context.Context, get func(context.Context, string) (map[string]any, []byte, error)) error {
 	if r == nil || r.slot.Validate() != nil {
 		return ErrBuildTransport
 	}
 	for name, uid := range map[string]string{"kube-system": r.slot.ClusterUID, r.slot.Namespace: r.slot.NamespaceUID} {
-		obj, _, e := r.getBuildObject(ctx, "/api/v1/namespaces/"+name)
+		obj, _, e := get(ctx, "/api/v1/namespaces/"+name)
 		if e != nil || !sameObjectUID(obj, uid) {
 			return ErrBuildTransport
 		}
 	}
-	pvc, _, e := r.getBuildObject(ctx, "/api/v1/namespaces/"+r.slot.Namespace+"/persistentvolumeclaims/"+r.slot.PVC)
+	pvc, _, e := get(ctx, "/api/v1/namespaces/"+r.slot.Namespace+"/persistentvolumeclaims/"+r.slot.PVC)
 	if e != nil || !sameObjectUID(pvc, r.slot.PVCUID) {
 		return ErrBuildTransport
 	}
@@ -36,7 +40,7 @@ func (r *BuildResources) inspectBuildSlot(ctx context.Context) error {
 	if !ok || status["phase"] != "Bound" || !reflect.DeepEqual(spec, expectedPVC) {
 		return ErrBuildTransport
 	}
-	pv, _, e := r.getBuildObject(ctx, "/api/v1/persistentvolumes/"+volume)
+	pv, _, e := get(ctx, "/api/v1/persistentvolumes/"+volume)
 	if e != nil || !sameObjectUID(pv, r.slot.PVUID) {
 		return ErrBuildTransport
 	}
@@ -61,7 +65,7 @@ func (r *BuildResources) inspectBuildSlot(ctx context.Context) error {
 	if !reflect.DeepEqual(pvSpec, expectedPV) {
 		return ErrBuildTransport
 	}
-	node, _, e := r.getBuildObject(ctx, "/api/v1/nodes/"+r.slot.Node)
+	node, _, e := get(ctx, "/api/v1/nodes/"+r.slot.Node)
 	if e != nil || !sameObjectUID(node, r.slot.NodeUID) {
 		return ErrBuildTransport
 	}
@@ -90,7 +94,7 @@ func (r *BuildResources) inspectBuildSlot(ctx context.Context) error {
 	if !ready {
 		return ErrBuildTransport
 	}
-	lease, _, e := r.getBuildObject(ctx, "/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/"+r.slot.Node)
+	lease, _, e := get(ctx, "/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/"+r.slot.Node)
 	if e != nil {
 		return ErrBuildTransport
 	}
