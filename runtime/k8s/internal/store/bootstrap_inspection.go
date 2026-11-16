@@ -17,6 +17,7 @@ var bootstrapTables = []string{
 	"admission_heads", "admissions", "attempts", "authorized_inbox", "authorized_nonces", "authorized_outbox",
 	"build_cleanups", "build_contexts", "build_effects", "build_handoffs", "build_observations", "build_plans", "build_requests", "build_slots", "built_records",
 	"completion_handoffs",
+	"terminal_requests", "terminal_intents", "terminal_sends", "terminal_receipts",
 	"deployment_handoffs", "deployment_health", "deployment_intents", "deployment_receipts", "deployment_requests", "deployment_sends",
 	"execution_candidates", "execution_effects", "execution_lifecycles", "execution_models", "execution_requests",
 	"intake_cursors", "intake_heads", "intake_observations", "intake_revisions",
