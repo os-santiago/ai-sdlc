@@ -12,8 +12,8 @@ type EvidenceVerifier interface {
 	Verify(context.Context, buildrecord.Record) (provenance.Proof, error)
 }
 
-// Runtime is not yet wired to an installed component. Its production factory
-// must construct the closed registry verifier with separately mounted custody.
+// Runtime coordinates the dedicated provenance process. Its production factory
+// constructs the closed registry verifier with separately mounted custody.
 type Runtime struct {
 	DB       *store.DB
 	Load     func() (provenance.Configuration, error)

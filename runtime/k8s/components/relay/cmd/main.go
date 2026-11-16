@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"time"
@@ -21,22 +22,9 @@ func main() {
 	}
 	defer component.DB.Close()
 	if bootstrap.IntakeEnabled() {
-		var routes map[string]string
-		expected := 2
-		if bootstrap.CandidateEnabled() {
-			expected = 3
-		}
-		if os.Getenv("AI_SDLC_RUNTIME_MODE") == "verification" {
-			expected = 4
-		}
-		if bootstrap.PublicationEnabled() {
-			expected = 5
-		}
-		if bootstrap.BuildEnabled() {
-			expected = 6
-		}
-		if authority.DecodeStrict([]byte(os.Getenv("AI_SDLC_RELAY_ROUTES")), &routes) != nil || len(routes) != expected || (expected >= 3 && routes["execute-work"] == "") || (expected >= 4 && routes["verify-artifact"] == "") || (expected >= 5 && routes["publish-candidate"] == "") || (expected == 6 && routes["build-merged"] == "") || routes["admit-issue"] == "" || routes["plan-admission"] == "" {
-			log.Fatal("relay requires exactly its reviewed routes")
+		routes, err := reviewedRoutes(os.Getenv("AI_SDLC_RELAY_ROUTES"))
+		if err != nil {
+			log.Fatal(err)
 		}
 		stop := bootstrap.Periodic(time.Second, func(ctx context.Context) {
 			policy, identity, err := component.Authority()
@@ -70,4 +58,38 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+// reviewedRoutes admits exactly the finite operations enabled by installation.
+// Delivery still authenticates each receipt, transport and destination path.
+func reviewedRoutes(raw string) (map[string]string, error) {
+	if bootstrap.ValidateMode() != nil || !bootstrap.IntakeEnabled() || len(raw) > 32768 {
+		return nil, errors.New("invalid relay capability")
+	}
+	required := []string{"admit-issue", "plan-admission"}
+	if bootstrap.CandidateEnabled() {
+		required = append(required, "execute-work")
+	}
+	if os.Getenv("AI_SDLC_RUNTIME_MODE") == "verification" {
+		required = append(required, "verify-artifact")
+	}
+	if bootstrap.PublicationEnabled() {
+		required = append(required, "publish-candidate")
+	}
+	if bootstrap.BuildEnabled() {
+		required = append(required, "build-merged")
+	}
+	if bootstrap.ProvenanceEnabled() {
+		required = append(required, "verify-built")
+	}
+	var routes map[string]string
+	if authority.DecodeStrict([]byte(raw), &routes) != nil || len(routes) != len(required) {
+		return nil, errors.New("relay requires exactly its reviewed routes")
+	}
+	for _, operation := range required {
+		if routes[operation] == "" {
+			return nil, errors.New("relay route missing")
+		}
+	}
+	return routes, nil
 }

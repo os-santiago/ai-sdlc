@@ -287,3 +287,34 @@ func TestMergeRequiresExplicitPilotCapabilityAndCannotDeploy(t *testing.T) {
 		t.Fatal("merge escaped pilot")
 	}
 }
+
+func TestProvenanceCapabilityRequiresCompletePredecessorChain(t *testing.T) {
+	for _, key := range []string{"AI_SDLC_PUBLICATION", "AI_SDLC_MERGE", "AI_SDLC_BUILD", "AI_SDLC_INDEPENDENT_REVIEW", "AI_SDLC_PROVENANCE"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("AI_SDLC_RUNTIME_MODE", "maintenance")
+	t.Setenv("AI_SDLC_PROVENANCE", "true")
+	if ValidateMode() == nil || ProvenanceEnabled() {
+		t.Fatal("maintenance enabled provenance")
+	}
+	t.Setenv("AI_SDLC_RUNTIME_MODE", "verification")
+	for _, key := range []string{"AI_SDLC_INDEPENDENT_REVIEW", "AI_SDLC_PUBLICATION", "AI_SDLC_MERGE", "AI_SDLC_BUILD"} {
+		if ProvenanceEnabled() {
+			t.Fatal("missing predecessor accepted", key)
+		}
+		t.Setenv(key, "true")
+	}
+	if ValidateMode() != nil || !ProvenanceEnabled() {
+		t.Fatal("complete capability chain rejected")
+	}
+	for _, option := range []string{"yes", "TRUE", "1"} {
+		t.Setenv("AI_SDLC_PROVENANCE", option)
+		if ValidateMode() == nil || ProvenanceEnabled() {
+			t.Fatal("unknown capability accepted")
+		}
+	}
+	t.Setenv("AI_SDLC_PROVENANCE", "false")
+	if ValidateMode() != nil || ProvenanceEnabled() {
+		t.Fatal("disabled capability")
+	}
+}

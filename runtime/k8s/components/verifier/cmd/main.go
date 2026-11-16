@@ -23,6 +23,16 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "provenance" {
+		if e := runProvenance(); e != nil {
+			log.Fatal(e)
+		}
+		return
+	}
+	if len(os.Args) != 1 {
+		log.Fatal("unknown verifier operation")
+	}
+
 	c, err := bootstrap.Open(context.Background(), "verifier")
 	if err != nil {
 		log.Fatal(err)

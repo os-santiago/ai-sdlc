@@ -114,7 +114,11 @@ func run() error {
 		if build != "" && build != "false" && build != "true" {
 			return errors.New("invalid build option")
 		}
-		if err := db.ProvisionRolesForBuild(ctx, passwords, os.Getenv("AI_SDLC_RUNTIME_MODE"), review == "true", publication == "true", merge == "true", build == "true"); err != nil {
+		provenance := os.Getenv("AI_SDLC_PROVENANCE")
+		if provenance != "" && provenance != "false" && provenance != "true" {
+			return errors.New("invalid provenance option")
+		}
+		if err := db.ProvisionRolesForProvenance(ctx, passwords, os.Getenv("AI_SDLC_RUNTIME_MODE"), review == "true", publication == "true", merge == "true", build == "true", provenance == "true"); err != nil {
 			return err
 		}
 		log.Print("schema and component database roles ready")

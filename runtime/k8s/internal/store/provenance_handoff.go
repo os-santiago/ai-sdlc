@@ -70,6 +70,7 @@ func (db *DB) NextBuiltForProvenance(ctx context.Context, cfg provenance.Configu
  AND convert_from(q.payload,'UTF8')::jsonb->>'innerPolicyRevision'=$3
  AND convert_from(q.payload,'UTF8')::jsonb->>'outerPolicyRevision'=$4
  AND NOT EXISTS(SELECT 1 FROM provenance_handoffs ph WHERE ph.build_id=q.id)
+ AND NOT EXISTS(SELECT 1 FROM provenance_handoffs WHERE created_at>clock_timestamp()-interval '125 seconds')
  ORDER BY b.recorded_at,q.id LIMIT 1`, cfg.Build.ProfileDigest(), cfg.Build.IntakeConfigSHA256, cfg.Build.Inner.Revision(), cfg.Build.Outer.Revision(), cfg.Build.IssueMaxAgeSeconds, cfg.Build.Outer.Repository).Scan(&id)
 	if errors.Is(e, sql.ErrNoRows) {
 		return "", nil
@@ -103,6 +104,10 @@ func RecordProvenanceHandoff(ctx context.Context, tx *sql.Tx, load func() (prove
 		}
 		return cfg, c, nil
 	}
+	if busy, e := provenanceWindowBusy(ctx, tx); e != nil || busy {
+		return ErrExecution
+	}
+
 	cfg, c, e := current()
 	if e != nil {
 		return e
@@ -155,4 +160,19 @@ func CheckProvenanceHandoff(ctx context.Context, tx *sql.Tx, load func() (proven
 		return ErrExecution
 	}
 	return nil
+}
+
+// The signed command is bounded to two minutes with at most five seconds of
+// future clock skew. Holding its reservation for 125 seconds from insertion
+// therefore covers its entire original lifetime; delivery flags cannot release
+// it early. This lock is distinct from the session-level controller lease.
+func provenanceWindowBusy(ctx context.Context, tx *sql.Tx) (bool, error) {
+	if _, e := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(73421036)`); e != nil {
+		return true, ErrExecution
+	}
+	var busy bool
+	if tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM provenance_handoffs WHERE created_at>clock_timestamp()-interval '125 seconds')`).Scan(&busy) != nil {
+		return true, ErrExecution
+	}
+	return busy, nil
 }

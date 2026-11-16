@@ -1,8 +1,8 @@
 # Operational provenance boundary
 
 **Context retention, the inactive registry-verification library and a bounded
-verification journal and signed handoff library are implemented; component
-wiring and installation remain work for
+verification journal, signed handoff and explicitly gated component wiring are
+implemented; installation remains work for
 [#574](https://github.com/os-santiago/ai-sdlc/issues/574).**
 This does not activate the installed build controller or authorize promotion.
 The current [readiness report](../operations/saferus-e2e-readiness.md)
@@ -84,8 +84,8 @@ mutable profile, or rebuild another artifact and label it the original result.
 [`provenance`](../../runtime/k8s/internal/provenance/) verifies a structurally valid
 historical record using independently supplied public trust and a separately
 provisioned registry identity. Only the role-checked database reader establishes
-record authenticity; a caller-created `buildrecord.Record` does not. No runtime
-component calls this library yet.
+record authenticity; a caller-created `buildrecord.Record` does not. The explicitly enabled dedicated provenance process calls this library; the
+installed runtime remains inactive.
 
 Trust explicitly restricts this version to Saferus in `ai-sdlc-production` in kind.
 It pins cluster/namespace, publisher/compiler/verifier identities, registry CA,
@@ -151,8 +151,9 @@ completion time. It grants no current promotion permission.
 build. Existing build provisioning and maintenance do not grant access to this
 journal. The verifier can append its proof, but cannot modify the stored command,
 configuration, expiry or accepted proof; other components cannot write it. These
-methods remain inactive in the installation. The handoff library below uses
-them; no component route or installer option enables them yet.
+methods remain inactive in the installation. The handoff library and dedicated
+process below use them only with an explicit capability; no installer option
+enables them yet.
 
 ## Implemented fourth slice: signed handoff and bounded coordination
 
@@ -169,14 +170,14 @@ reusing a transport nonce is rejected, while semantic duplicate delivery has no
 second queue effect. Current policy is reloaded after potentially blocking reads
 and writes before returning from the dispatch transaction.
 
-The inactive runtime coordinator expires old requests before loading current
+The runtime coordinator expires old requests before loading current
 policy, obtains an exclusive claim, reads authenticated input, constructs the
 verifier, and revalidates input after that potentially blocking construction.
 It bounds registry work by the claim deadline. Verification or completion failure
 retires the attempt; a lost completion response is resolved from immutable history
 without repeating network verification. All results remain non-authorizing for
-release. Component wiring must preserve existing cleanup priority and prevent
-this queue from delaying containment in other verifier workloads.
+release. The dedicated process below keeps this bounded read-only queue from delaying
+containment in the inner verifier process.
 
 Real PostgreSQL tests exercise signed outbox/inbox delivery, idempotency, rollback,
 cleanup substitutions and revocation before/during the verifier call. Those tests
@@ -230,6 +231,62 @@ deployment, rollback and acceptance. [#441](https://github.com/os-santiago/ai-sd
 must preserve containment across installation changes. Only then may the actual
 Saferus issue enter the installed chain for [#440](https://github.com/os-santiago/ai-sdlc/issues/440).
 
+
+## Implemented fifth slice: dedicated component process
+
+`AI_SDLC_PROVENANCE=true` requires the complete existing verification, independent
+review, publication, merge and build capability chain. Unknown options fail
+closed. The migrator grants provenance privileges only for that explicit option.
+Maintenance and build-only installations retain their previous privileges.
+
+The build-controller runs handoff **inside its existing exclusive lease**, after
+original workload containment and before selecting a new build. A separate SQL
+transaction lock serializes provenance dispatch. A retained handoff reserves the
+single local verification lane for 125 seconds from its database insertion: the
+command lifetime is at most 120 seconds with at most five seconds of future clock
+skew. This conservative backpressure covers the original command's entire
+lifetime, even if relay delivery is marked published or exhausted. It does not
+renew a command, retry a consumed verification or reopen a completed build.
+The next distinct eligible build may enter after that window. This limits the
+local test profile to at most one provenance dispatch per 125 seconds.
+
+Run the existing verifier image with the single argument `provenance` in a
+**dedicated process and Service**. Its only work route is authenticated
+`POST /internal/verify-built`; `RuntimeBoundary` and the relay's exact seven-route
+contract require the capability. The normal verifier process continues inner
+behavior/review work and does not register this route. No new container image is
+required. The installer must route `verify-built` to `provenance-verifier`, not
+to the inner verifier Service.
+
+This separation matters: model reviews can last several minutes, while a fresh
+provenance command lasts only two. A shared serial queue or readiness dependent
+on the model gateway would consume valid requests while waiting for unrelated
+work. Dedicated readiness checks the database role/migrations, canonical loop
+policies, public trust and pull-only credential, without loading model or
+candidate-execution configuration. The periodic coordinator bounds each poll to
+75 seconds and retires expired requests even when current trust or policy cannot
+be loaded.
+
+Both processes currently share the `verifier` signing identity and database role.
+This separates scheduling and mounted credentials, **not** database privileges or
+cryptographic authority between the two processes. Mount registry custody only
+into the dedicated process. `AI_SDLC_PROVENANCE_VERIFIER_IMAGE` is the independently
+installed image pin and must match public trust; the installer must also verify
+the actual Deployment uses that digest. The loader checks cluster, namespace and
+publisher bindings against the installed build profile and rereads canonical
+policy documents on each call. It never derives approved trust from evidence.
+
+The dedicated loader also fences uncertain or expired inner custody at inbox,
+claim/input and completion. It rejects failed cleanup, explicit uncertainty and
+expired claimed review/behavior work; database errors reject as well. A live
+inner claim is allowed to run independently. Inner reconcilers keep their
+stronger unchanged exclusion checks before creating Kubernetes resources.
+
+The code is not an installation: reviewed Helm manifests, independent trust and
+native registry ACL/credentials, network restrictions and actual installed
+component validation still precede activation. Model outage and remote registry
+or relay failure cannot create a release permission; a failed or expired attempt
+remains consumed under the journal's current policy.
 ## Native registry access conformance
 
 The [registry ACL blueprint](../../runtime/k8s/deploy/konflux/provenance-registry-access.json)

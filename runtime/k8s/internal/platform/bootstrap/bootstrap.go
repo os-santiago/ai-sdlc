@@ -50,7 +50,18 @@ func ValidateMode() error {
 	if build == "true" && merge != "true" {
 		return errors.New("build requires verified merge")
 	}
+	provenance := os.Getenv("AI_SDLC_PROVENANCE")
+	if provenance != "" && provenance != "false" && provenance != "true" {
+		return errors.New("invalid provenance option")
+	}
+	if provenance == "true" && build != "true" {
+		return errors.New("provenance requires verified build")
+	}
 	return nil
+}
+
+func ProvenanceEnabled() bool {
+	return ValidateMode() == nil && os.Getenv("AI_SDLC_PROVENANCE") == "true"
 }
 
 func MergeEnabled() bool { return ValidateMode() == nil && os.Getenv("AI_SDLC_MERGE") == "true" }
