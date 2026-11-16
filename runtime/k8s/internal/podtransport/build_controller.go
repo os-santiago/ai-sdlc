@@ -2,6 +2,7 @@ package podtransport
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -43,8 +44,18 @@ func ExecuteQueuedBuild(ctx context.Context, client *Client, journal *store.Buil
 	defer func() {
 		if err != nil {
 			stopCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
-			defer stop()
-			_ = journal.StopBuild(stopCtx, claim, "uncertain")
+			stopErr := journal.StopBuild(stopCtx, claim, "uncertain")
+			stop()
+			if stopErr != nil {
+				err = errors.Join(err, stopErr)
+			}
+			// A concurrent expiry or a lost stop ACK may already have made the
+			// claim terminal. Cleanup rechecks archived state independently.
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 245*time.Second)
+			defer cleanupCancel()
+			if cleanupErr := CleanupQueuedBuild(cleanupCtx, client, journal, claim); cleanupErr != nil {
+				err = errors.Join(err, cleanupErr)
+			}
 		}
 	}()
 	fence := func() error { return journal.CheckBuild(ctx, claim) }

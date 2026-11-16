@@ -99,7 +99,10 @@ func BuildObjectFingerprint(raw []byte) (buildworkload.Dependency, error) {
 	return buildworkload.Dependency{UID: uid, SpecSHA256: authority.Digest(canonical)}, nil
 }
 func (r *BuildResources) getBuildObject(ctx context.Context, path string) (map[string]any, []byte, error) {
-	raw, status, e := r.request(ctx, http.MethodGet, path, nil, false)
+	return r.getBuildObjectMode(ctx, path, false)
+}
+func (r *BuildResources) getBuildObjectMode(ctx context.Context, path string, cleanup bool) (map[string]any, []byte, error) {
+	raw, status, e := r.request(ctx, http.MethodGet, path, nil, cleanup)
 	if e != nil || status != http.StatusOK {
 		return nil, nil, ErrBuildTransport
 	}

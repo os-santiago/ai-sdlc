@@ -105,4 +105,19 @@ func TestRealJournalBackedClosedBuild(t *testing.T) {
 	report["publishTermination"] = record.Publish
 	report["results"] = map[string]string{"IMAGE_URL": result.ImageURL, "IMAGE_DIGEST": result.ImageDigest, "CHAINS-GIT_URL": "https://github.com/os-santiago/saferus", "CHAINS-GIT_COMMIT": result.SourceSHA, "DEFINITION_DIGEST": "sha256:" + result.DefinitionSHA256, "RUN_UID": result.PublishRunUID}
 	write("transport-report.json", report)
+	claim, e := b.journal.NextBuildRecovery(ctx)
+	if e != nil || claim.ID != selected {
+		t.Fatal("original cleanup claim", e)
+	}
+	if e = podtransport.CleanupQueuedBuild(ctx, client, b.journal, claim); e != nil {
+		t.Fatal("original UID cleanup", e)
+	}
+	if next, e := b.journal.NextBuildRecovery(ctx); e != nil || next.ID != "" {
+		t.Fatal("cleanup not durably acknowledged", e)
+	}
+	if _, e = b.journal.UnusedBuildSlot(ctx); e == nil {
+		t.Fatal("cleanup freed physical slot")
+	}
+	report["originalUIDCleanupValidated"] = true
+	write("transport-report.json", report)
 }
