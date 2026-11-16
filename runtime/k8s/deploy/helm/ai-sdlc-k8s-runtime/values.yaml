@@ -11,6 +11,9 @@ imagePullSecrets: []
 serviceAccount: {create: true, name: ""}
 runtime:
   mode: maintenance
+  # Administrative first-install exclusion; not a workflow pause/cleanup API.
+  # Installer must prove no history or owned execution before stopping services.
+  paused: false
 candidate:
   credentialRevision: ""
   configJSON: ""

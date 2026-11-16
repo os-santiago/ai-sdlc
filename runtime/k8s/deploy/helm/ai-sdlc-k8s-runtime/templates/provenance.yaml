@@ -36,7 +36,7 @@ metadata:
   name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-provenance-verifier
   namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
 spec:
-  replicas: 1
+  replicas: {{ include "ai-sdlc-k8s-runtime.replicas" . }}
   strategy: {type: Recreate}
   selector:
     matchLabels:
