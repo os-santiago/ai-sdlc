@@ -5,6 +5,8 @@ bounded, evidence-driven AI-assisted software delivery.
 See the [innerloop/outerloop architecture](docs/innerloop-outerloop.md) for component
 responsibilities, authority boundaries and the remaining E2E graduation gates.
 
+For the current local demonstration, see [Saferus E2E readiness](docs/operations/saferus-e2e-readiness.md): verified preparation and remaining autonomous-delivery gates.
+
 ## Install locally with kind and Helm
 
 On Linux amd64 with Python 3.11+ and Docker or Podman:

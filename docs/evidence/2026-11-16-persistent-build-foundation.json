@@ -1,0 +1,90 @@
+{
+  "date": "2026-11-16",
+  "scope": "persistent administrative build foundation; autonomous runtime remains frozen",
+  "publication": {
+    "repository": "os-santiago/ai-sdlc",
+    "revision": "bd967118eb16aaeea607eecab07b552ed351559b",
+    "run": 43845289196,
+    "runURL": "https://github.com/os-santiago/ai-sdlc/actions/runs/43845289196",
+    "components": {
+      "admission-controller": "sha256:7593836514cbca4785fe73b5047f45bf095f1de6ce33bb62d76f3e1a20ed219b",
+      "artifact-builder": "sha256:b84e8b73b2022ed6c80ccd7162c2578c1a4e39740987304fec4d4c5b0a285ab4",
+      "build-controller": "sha256:c63a0e051a008f55935f04810fce7ea6736b50afc62803330922863747c51f9e",
+      "intake": "sha256:3e66c938d36ed1e2fa01540089a8c986f7f362692c3a18eb0b1121f13806f2c1",
+      "migrator": "sha256:eebff50a2564797b6a969fbcf8ed0887525f379010394201572fc0b820c6c946",
+      "model-mailbox": "sha256:f213ca5e59ef363f0864398ca5ef3a60c3cd19555764c6dec3bc3714b84311c1",
+      "orchestrator": "sha256:026994d8b1c4fe718e5345e663eb94706a695f53b7a4453ad3e9a5ff9989698e",
+      "relay": "sha256:21e219bfcc2e3dda510c47c7502c759e454d86edea8d18b672d6c474ec66890f",
+      "release-manager": "sha256:65c64c0c2ae7d08c98b334bdd3d819b573c43e93e48014f648c501cb05e4c4f6",
+      "verifier": "sha256:d47001b01231b6c0c0e007ca4946eed06f1b161c4c70f1d77656b20a6a195c19",
+      "worker": "sha256:6af531eb999b7268e8131556ec934b2ebdb6c2ff87da94219f411623ed9c19f2"
+    }
+  },
+  "cluster": "ai-sdlc-konflux-reviewed",
+  "clusterUID": "73198ec7-6964-45d9-bf51-6512e96c2452",
+  "buildNamespaceUID": "fe7f3dc8-f494-49db-9b45-e54f4a0eb4fa",
+  "status": "prepared",
+  "resources": 16,
+  "bundleSHA256": "5653744ac0155ecceecf689efa0b619532c53c985e70db8c7b0a2abbb8141f22",
+  "trustReview": {
+    "version": 1,
+    "candidateSHA256": "852c3b5be9ff0e507ae8f83296fd541200b27af5ecc1c52c52f12ca686b01b38",
+    "reviewer": "independent Codex auditor /root/audit_scc413",
+    "decision": "approved administrative snapshot only",
+    "revision": "bd967118eb16aaeea607eecab07b552ed351559b",
+    "publicationRun": 43845289196,
+    "verifiedComponents": 6,
+    "mutatingWebhookConfigurations": 7,
+    "mutatingAdmissionPolicies": 2,
+    "mutatingAdmissionPolicyBindings": 2,
+    "requiredDeploymentsReady": 31,
+    "networkConformanceEvidenceAt": "2026-11-16T02:50:40Z",
+    "continuousEnforcementCertified": false,
+    "provenanceVerified": false,
+    "releaseAuthorized": false,
+    "autonomousE2E": false
+  },
+  "preflight": {
+    "status": "passed",
+    "scope": "read-only original-node production migrator installation preflight",
+    "revision": "bd967118eb16aaeea607eecab07b552ed351559b",
+    "namespaceUID": "fe7f3dc8-f494-49db-9b45-e54f4a0eb4fa",
+    "profileMatchedApprovedBundle": true,
+    "deliveryActivated": false,
+    "releaseAuthorized": false,
+    "autonomousE2E": false
+  },
+  "reapply": {
+    "status": "passed",
+    "originalIdentitiesPreserved": true,
+    "resources": 16,
+    "bundleSHA256": "5653744ac0155ecceecf689efa0b619532c53c985e70db8c7b0a2abbb8141f22",
+    "workflowAdvanced": false,
+    "deliveryActivated": false,
+    "autonomousE2E": false
+  },
+  "authority": {
+    "repository": "os-santiago/saferus",
+    "environment": "ai-sdlc-production",
+    "freeze": true
+  },
+  "saferusBaseline": {
+    "clusterVersion": "v1.36.4",
+    "namespace": "ai-sdlc-production",
+    "namespaceUID": "9d4439de-e912-47af-986b-e39d87008dca",
+    "implementationReview": "https://github.com/os-santiago/saferus/pull/6",
+    "coldInstallAndReapply": "passed",
+    "normalTLSDesktopMobile": "passed",
+    "boundedPressure": "passed"
+  },
+  "buildControllerActivated": false,
+  "liveWorkflowAdvanced": false,
+  "releaseAuthorized": false,
+  "autonomousE2E": false,
+  "limitations": [
+    "Single local kind node and one bounded single-use tmpfs build slot; not HA or durable across node reboot.",
+    "Trust review is an administrative snapshot; stored network conformance does not certify continuous enforcement.",
+    "Operational independent provenance, promotion, deployment and acceptance remain pending.",
+    "Enabled-build upgrades/teardown need a containment-preserving procedure; do not revoke cleanup authority."
+  ]
+}
