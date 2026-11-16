@@ -22,6 +22,18 @@ def objects():
 
 
 class FixtureGuardTests(unittest.TestCase):
+    def test_private_json_input_reaches_original_node_with_explicit_budget(self):
+        calls = []
+        def run(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return SimpleNamespace(stdout='original-id\n')
+        guard.owned_node_exec(run, 'podman', 'node-name', 'original-id',
+                              ['/installer', 'observe-build-profile'],
+                              input='private-json', capture_output=True, limit=130)
+        self.assertEqual(calls[-1][0][:4], ['podman', 'exec', '-i', 'original-id'])
+        self.assertEqual(calls[-1][1]['input'], 'private-json')
+        self.assertEqual(calls[-1][1]['limit'], 130)
+
     def test_custom_installation_roots_match_installer(self):
         with patch.dict('os.environ', {'XDG_STATE_HOME':'/custom/state','XDG_CACHE_HOME':'/custom/cache'}):
             self.assertEqual(guard.installation_paths('fixture'), (Path('/custom/state/ai-sdlc/fixture'),Path('/custom/cache/ai-sdlc/tools')))

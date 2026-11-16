@@ -26,8 +26,10 @@ def owned_node_exec(run, provider, name, expected_id, arguments, **kwargs):
     observed=run([provider,'inspect',name,'--format','{{.Id}}'],capture_output=True,limit=15).stdout.strip()
     if observed!=expected_id:raise ValueError('Owned kind node was replaced')
     # Never use the mutable name for the operation after checking identity.
-    flags=['-i'] if kwargs.get('stdin') is not None else []
-    return run([provider,'exec']+flags+[expected_id]+arguments,capture_output=True,limit=60,**kwargs)
+    flags=['-i'] if kwargs.get('stdin') is not None or kwargs.get('input') is not None else []
+    kwargs.setdefault('capture_output', True)
+    kwargs.setdefault('limit', 60)
+    return run([provider,'exec']+flags+[expected_id]+arguments,**kwargs)
 
 
 def has_owner(resource,kind,uid):
