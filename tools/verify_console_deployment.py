@@ -95,14 +95,14 @@ def main():
             if len(data)>32*1024*1024 or 'sha256:'+hashlib.sha256(data).hexdigest()!=digest:raise ValueError('Fixture OCI content hash mismatch')
             return data
         root_doc=json.loads(blob(matches[0]));runtime_doc=json.loads(blob(runtime))
-        manifest_doc=root_doc
+        manifest_doc=root_doc;manifest_digest=matches[0]
         if runtime!=matches[0]:
             # Docker can retain a single-platform index as the image reference
             # and report its child manifest. OCI tar import can instead report
             # a wrapper index for the directly referenced manifest. Accept only
             # either exact one-edge relationship, verifying every blob hash.
             if root_doc.get('manifests'):
-                desc=root_doc['manifests'];child=runtime;manifest_doc=runtime_doc
+                desc=root_doc['manifests'];child=runtime;manifest_doc=runtime_doc;manifest_digest=runtime
             else:
                 desc=runtime_doc.get('manifests',[]);child=matches[0]
             child_raw=blob(child)
@@ -113,7 +113,7 @@ def main():
         if len(config_raw)!=config['size']:raise ValueError('Fixture config size differs')
         for layer in manifest['layers']:
             if len(blob(layer['digest']))!=layer['size']:raise ValueError('Fixture layer size differs')
-        report['baselineBinding']={'manifest':matches[0],'runtimeDescriptor':runtime,'configuration':config['digest'],'allContentHashesVerified':True}
+        report['baselineBinding']={'referenceDescriptor':matches[0],'manifestDigest':manifest_digest,'runtimeDescriptor':runtime,'configuration':config['digest'],'allContentHashesVerified':True}
         cfg=yaml.safe_load((out/'kubeconfig').read_text());user=cfg['users'][0]['user'];cluster_cfg=cfg['clusters'][0]['cluster']
         now=int(time.time()*1000)
         target={'version':'ai-sdlc.saferus-release-target/v1','scope':'kind-test-production','repository':'os-santiago/saferus','environment':ns,'clusterUID':get('namespace','kube-system')['metadata']['uid'],'namespaceUID':namespace['metadata']['uid'],'namespace':ns,'deployment':name,'deploymentUID':deployment['metadata']['uid'],'container':'console','deploymentSpecSHA256':'0'*64,'service':name,'serviceUID':service['metadata']['uid'],'serviceSpecSHA256':'0'*64,'pullSecret':'ai-sdlc-release-reader','pullSecretUID':pull['metadata']['uid'],'tlsSecretUID':tls_secret['metadata']['uid'],'tlsCA':(out/'ca.crt').read_text(),'tlsHostname':name,'baselineImage':baseline,'baselineRuntimeDigest':runtime,'rolloutSeconds':300,'smokeSeconds':30,'approvedAt':now-1000,'expiresAt':now+3600000}
