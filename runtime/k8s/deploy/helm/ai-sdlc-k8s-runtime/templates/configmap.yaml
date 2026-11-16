@@ -10,6 +10,10 @@ data:
   AI_SDLC_AUTHORITY_POLICY_PATH: /etc/ai-sdlc/authority/policy.json
   AI_SDLC_IDENTITY_PATH: /etc/ai-sdlc/identity/identity.json
   AI_SDLC_MERGE: {{ .Values.merge.enabled | quote }}
+  AI_SDLC_PROVENANCE: {{ .Values.provenance.enabled | quote }}
+  {{- if .Values.provenance.enabled }}
+  AI_SDLC_PROVENANCE_VERIFIER_IMAGE: {{ printf "%s@%s" .Values.image.repository .Values.verifier.digest | quote }}
+  {{- end }}
   AI_SDLC_BUILD: {{ .Values.build.enabled | quote }}
   AI_SDLC_PUBLICATION: {{ .Values.publication.enabled | quote }}
   AI_SDLC_INDEPENDENT_REVIEW: {{ .Values.review.enabled | quote }}
@@ -28,6 +32,9 @@ data:
   {{- end }}
   {{- if .Values.build.enabled }}
   {{- $_ := set $routes "build-merged" (printf "http://%s-build-controller:8088/internal/build-merged" (include "ai-sdlc-k8s-runtime.fullname" .)) }}
+  {{- end }}
+  {{- if .Values.provenance.enabled }}
+  {{- $_ := set $routes "verify-built" (printf "http://%s-provenance-verifier:8089/internal/verify-built" (include "ai-sdlc-k8s-runtime.fullname" .)) }}
   {{- end }}
   AI_SDLC_RELAY_ROUTES: {{ $routes | toJson | quote }}
   {{- if has .Values.runtime.mode (list "candidate" "verification") }}

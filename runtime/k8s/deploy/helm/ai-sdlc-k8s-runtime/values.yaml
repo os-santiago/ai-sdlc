@@ -121,3 +121,11 @@ build:
   digest: ""
   configJSON: ""
   outerPolicyJSON: ""
+
+# Separate process using the verifier image; installation must independently
+# approve trust and provision/test the native pull-only registry identity first.
+provenance:
+  enabled: false
+  trustJSON: ""
+  registryCredentialSecret: ai-sdlc-provenance-registry
+  credentialRevision: ""

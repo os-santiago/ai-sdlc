@@ -11,6 +11,9 @@ spec:
     {{- if .Values.build.enabled }}
     matchExpressions:
       - {key: app.kubernetes.io/component, operator: NotIn, values: [build-controller]}
+      {{- if .Values.provenance.enabled }}
+      - {key: app.kubernetes.io/component, operator: NotIn, values: [provenance-verifier]}
+      {{- end }}
     {{- end }}
   policyTypes: [Ingress, Egress]
   ingress:
@@ -44,6 +47,9 @@ spec:
             matchLabels:
               {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 14 }}
       ports:
+        {{- if .Values.provenance.enabled }}
+        - {protocol: TCP, port: 8089}
+        {{- end }}
         - {protocol: TCP, port: 5432}
         {{- if .Values.build.enabled }}
         - {protocol: TCP, port: 8088}

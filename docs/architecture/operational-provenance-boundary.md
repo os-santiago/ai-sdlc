@@ -329,3 +329,32 @@ history. It neither authenticates operational build history nor installs approve
 trust, activates controllers, authorizes release or proves the issue-driven E2E.
 Installation must still provision the separate identity, apply the reviewed ACL,
 revalidate foundation trust and run equivalent installed-access checks.
+
+## Declarative deployment boundary
+
+The Helm chart defines the dedicated process through `provenance.enabled`
+(default `false`), `trustJSON`, a fixed dedicated registry Secret name and an
+opaque credential revision. It requires the entire preceding capability chain,
+a pinned verifier image and matching public trust/build profile. Runtime parsing
+still validates actual CA, signing key, policy format and expiry; Helm rendering
+alone does not approve those values.
+
+The dedicated ServiceAccount has no token or role binding. Only this process
+mounts the pull-only registry credential, selecting the `credential.json` key;
+the builder mounts public trust only. Its Secret must be named
+`<release-fullname>-provenance-registry` and cannot alias configured identity,
+database, migrator, intake or model custody. The installation procedure must
+verify its exact key set, identity, revision and native registry permissions.
+
+An always-present policy admits only relay ingress on port 8089 and limits egress
+to DNS, the configured database and the Zot Pods in `kind-registry` on target port
+5000. The shared runtime policy explicitly excludes this Pod, so additive
+NetworkPolicy semantics cannot restore its broader internal access. Database
+selectors cover local PostgreSQL and the configured CloudNativePG cluster;
+explicit database CIDRs retain their existing port-5432 restriction.
+
+The chart is a reviewed declaration, not the completed installer workflow.
+`tools/install.py` still needs provenance foundation preparation, independent
+trust approval and ACL/custody preflight before it can safely expose this option.
+Rendering and Kubernetes server dry-run validate object shape and admission;
+they do not demonstrate effective network enforcement or a running verifier.
