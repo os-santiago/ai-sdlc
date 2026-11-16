@@ -20,7 +20,7 @@ def load_bundle(path, lock):
             or value['version'] != 'ai-sdlc.build-desired/v1' or value['revision'] != lock['image']['tag']
             or not re.fullmatch(r'sha256:[a-f0-9]{64}', str(value['controllerDigest']))
             or not isinstance(value['profile'], dict)
-            or not re.fullmatch(r'quay.io/os-santiago/ai-sdlc@sha256:[a-f0-9]{64}', str(value['profile'].get('publisherImage', '')))
+            or not re.fullmatch(r'quay\.io/os-santiago/ai-sdlc@sha256:[a-f0-9]{64}', str(value['profile'].get('publisherImage', '')))
             or not isinstance(value['slots'], list)
             or not 1 <= len(value['slots']) <= 8
             or type(value['issueMaxAgeSeconds']) is not int or not 30 <= value['issueMaxAgeSeconds'] <= 300):
@@ -29,7 +29,7 @@ def load_bundle(path, lock):
 
 
 def component_call(provider, image, operation, value, node_id=None):
-    if provider not in ('podman', 'docker') or not re.fullmatch(r'quay.io/os-santiago/ai-sdlc@sha256:[a-f0-9]{64}', image):
+    if provider not in ('podman', 'docker') or not re.fullmatch(r'quay\.io/os-santiago/ai-sdlc@sha256:[a-f0-9]{64}', image):
         raise ValueError('Pinned reviewed migrator image required')
     if node_id is not None and not re.fullmatch(r'[a-f0-9]{64}', node_id):
         raise ValueError('Original node container ID required')
