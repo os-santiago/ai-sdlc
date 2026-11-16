@@ -1,0 +1,12 @@
+{
+  "repositories": {
+    "ai-sdlc-fixtures/saferus": {
+      "policies": [
+        {"users": ["ai-sdlc-publisher"], "actions": ["read", "create", "update"]},
+        {"users": ["ai-sdlc-verifier"], "actions": ["read"]}
+      ],
+      "defaultPolicy": []
+    },
+    "**": {"defaultPolicy": []}
+  }
+}

@@ -71,3 +71,11 @@ Module and build caches remain under `$XDG_CACHE_HOME/ai-sdlc/validation/go`
 (or `~/.cache/ai-sdlc/validation/go`). On a failure, inspect the first failed
 stage's log, fix the underlying dependency or test, then start a new run. A
 retry produces separate evidence rather than overwriting the failure.
+
+## Native provenance registry
+
+Use `python3 tools/validate_provenance_registry.py --output /tmp/new-registry-evidence`
+for the separate Linux/Podman native registry test. It verifies the committed
+pull-only ACL, actual TLS/signatures and bounded Go verifier against disposable
+Zot with synthetic history. See the [scope and cleanup contract](../architecture/operational-provenance-boundary.md#native-registry-access-conformance).
+It does not install trust or activate the operational pipeline.

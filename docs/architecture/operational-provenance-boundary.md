@@ -287,3 +287,45 @@ native registry ACL/credentials, network restrictions and actual installed
 component validation still precede activation. Model outage and remote registry
 or relay failure cannot create a release permission; a failed or expired attempt
 remains consumed under the journal's current policy.
+## Native registry access conformance
+
+The [registry ACL blueprint](../../runtime/k8s/deploy/konflux/provenance-registry-access.json)
+gives `ai-sdlc-verifier` only read access to `ai-sdlc-fixtures/saferus`. The publisher
+can read/create/update that repository, with no delete or cross-repository rights.
+Anonymous and unmatched users receive no default access. This blueprint is not
+installed automatically and is not evidence that the live registry has this ACL.
+
+On Linux with Podman, run:
+
+```bash
+python3 tools/validate_provenance_registry.py --output /tmp/provenance-registry-evidence
+```
+
+The output directory must not exist. The tool uses the pinned Go toolchain and
+native Zot image, creates a private TLS registry bound only to a random loopback
+port, generates fixture-only passwords/signatures, and publishes the actual image,
+Cosign signature and DSSE attestation with their referenced blobs. Python uses only
+its standard library; cryptographic fixture generation uses the locked Go modules.
+The registry runs without root, capabilities or a writable root filesystem. Its
+bounded ephemeral storage and test administrator exist only inside the disposable
+fixture; the administrator is absent from the installation blueprint.
+
+The test verifies TLS 1.3 and positive read → denied upload/manifest write/delete/
+cross-repository read → positive read. It also proves publisher cross-repository
+write/delete and anonymous read are denied. The other repository is populated,
+so a missing artifact cannot masquerade as access control. Finally the actual Go
+verifier authenticates the retained fixture using five registry GETs; only its
+socket dial destination is mapped to the owned loopback port. The fixed registry
+hostname, TLS server identity, scope and cryptographic checks remain intact.
+
+`report.json` records source revision/dirty state, image digests, exact status
+codes, required Go test completion and owned-container cleanup. A public proof is
+retained; generated credentials, private TLS key and synthetic history are
+removed. Cleanup deletes only inspected container IDs bearing this run's ownership
+label and verifies absence with a successful container listing.
+
+This validates native registry protocol and ACL behavior with synthetic retained
+history. It neither authenticates operational build history nor installs approved
+trust, activates controllers, authorizes release or proves the issue-driven E2E.
+Installation must still provision the separate identity, apply the reviewed ACL,
+revalidate foundation trust and run equivalent installed-access checks.
