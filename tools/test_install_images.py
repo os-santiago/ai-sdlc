@@ -66,6 +66,21 @@ class ImageResolutionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 images.select_artifacts(value, RUN, SHA)
 
+    def test_build_images_require_complete_matching_supplemental_artifact_class(self):
+        catalog={'total_count':11,'artifacts':[archive(c)[1] for c in sorted(images.ARTIFACT_COMPONENTS)]}
+        for index,component in enumerate(('artifact-builder','build-controller'),100):
+            metadata=dict(archive('worker')[1],id=index,name='supply-chain-image-'+component)
+            catalog['artifacts'].append(metadata)
+        selected=images.select_artifacts(catalog,RUN,SHA,include_build=True)
+        self.assertEqual(set(selected),images.ARTIFACT_COMPONENTS|{'artifact-builder','build-controller'})
+        self.assertEqual(len(images.select_artifacts(catalog,RUN,SHA)),9)
+        for fault in ('missing','class','revision'):
+            changed=copy.deepcopy(catalog)
+            if fault=='missing':changed['artifacts'].pop();changed['total_count']-=1
+            elif fault=='class':changed['artifacts'][-1]['name']='image-build-controller'
+            else:changed['artifacts'][-1]['workflow_run']['head_sha']='f'*40
+            with self.assertRaises(ValueError):images.select_artifacts(changed,RUN,SHA,include_build=True)
+
     def test_rejects_tampering_wrong_source_and_archive_paths(self):
         cases = [{'changes': {'revision': 'c' * 40}}, {'changes': {'repository': 'other/image'}},
                  {'changes': {'platform': 'linux/arm64'}}, {'changes': {'digest': 'mutable:tag'}},
@@ -95,6 +110,27 @@ class ImageResolutionTests(unittest.TestCase):
                 with self.assertRaises(subprocess.TimeoutExpired):
                     api.get('fixture')
                 self.assertLess(time.monotonic() - started, 2)
+
+    def test_cli_output_is_consumable_by_execution_installer(self):
+        import candidate_install
+        identities = {name: {'component': name, 'digest': 'sha256:'+'b'*64,
+                            'repository': images.REGISTRY, 'revision': SHA,
+                            'platform': 'linux/amd64'}
+                      for name in images.ARTIFACT_COMPONENTS | {'artifact-builder','build-controller'}}
+        lock = {'image': {'repository': images.REGISTRY, 'tag': SHA},
+                'components': {key: {'digest': identities[name]['digest']} for key,name in images.COMPONENTS.items()},
+                'migrator': {'digest': identities['migrator']['digest']}}
+        evidence = {'revision': SHA, 'repository': images.REPOSITORY, 'images': identities}
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)/'publication'
+            with patch.object(images, 'resolve', return_value=(lock,evidence)):
+                self.assertEqual(images.main(['--include-build','--run',str(RUN),'--revision',SHA,'--output',str(output)]),0)
+            self.assertEqual((output/'evidence.json').read_bytes(),(output/'images.evidence.json').read_bytes())
+            actual = candidate_install.desired_values(Path(__file__).resolve().parents[1],output/'images.lock.json',lock,
+                                                     verification=True,review=True,publication=True,merge=True)
+            self.assertTrue(actual['merge']['enabled'])
+            self.assertEqual(actual['verifier']['digest'],identities['verifier']['digest'])
+            self.assertEqual(json.loads((output/'build-images.json').read_text())['controllerDigest'],identities['build-controller']['digest'])
 
     def test_resolves_exact_publication_into_installer_shape(self):
         responses = {'actions/runs/123': json.dumps(run()).encode()}

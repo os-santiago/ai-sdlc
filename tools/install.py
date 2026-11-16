@@ -37,7 +37,7 @@ ALL_ROLES = ROLES + ('build-controller',)
 
 
 def run(args, **kwargs):
-    return subprocess.run([str(a) for a in args], check=True, text=True, **kwargs)
+    return subprocess.run([str(a) for a in args], check=kwargs.pop('check', True), text=True, **kwargs)
 
 
 def digest(data):
@@ -354,11 +354,14 @@ def shadow_intake_config(kubectl, cluster_uid, repository):
 
 def _main(argv, stack):
     selected = sys.argv[1:] if argv is None else argv
+    if selected and selected[0] == 'build-foundation':
+        import build_foundation_install
+        return build_foundation_install.main(selected[1:])
     if selected and selected[0] == 'supply-chain':
         import supply_chain_install
         return supply_chain_install.main(selected[1:])
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['plan', 'local', 'status', 'tools', 'host', 'credentials', 'sandbox', 'supply-chain'])
+    parser.add_argument('command', choices=['plan', 'local', 'status', 'tools', 'host', 'credentials', 'sandbox', 'supply-chain', 'build-foundation'])
     parser.add_argument('--configure-host', action='store_true', help='Raise inotify limits to committed minima for this boot; requires root')
     parser.add_argument('--config', type=Path, help='Reviewed local installation JSON; credentials remain explicit CLI choices')
     parser.add_argument('--platform', choices=['kind', 'konflux'])
