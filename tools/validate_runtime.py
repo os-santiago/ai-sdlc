@@ -30,6 +30,8 @@ REQUIRED_TESTS = {
     ('internal/execution', 'TestDeploymentCommandBindsHistoryAndCannotExtendPlan'),
     ('internal/execution', 'TestDeploymentJournalRevocationDuringBlockedHistory'),
     ('internal/execution', 'TestDeploymentJournalLostFactAndCompletionAcknowledgements'),
+    ('internal/execution', 'TestDeploymentCommandPreservesSubmillisecondHistoryOrder'),
+    ('internal/execution', 'TestDeploymentHealthExpiryWhileInsertWaits'),
     ('internal/store', 'TestConcurrentFreshMigrations'),
     ('internal/intake', 'TestDurableDedupeAndWithdrawal'),
     ('internal/execution', 'TestSignedExecutionDuplicateDeliveryAndSingleClaim'),
