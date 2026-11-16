@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import secrets
 import subprocess
+from urllib.parse import urlsplit
 from install_config import _unique
 
 
@@ -28,24 +29,30 @@ def load_bundle(path, lock):
     return value
 
 
-def component_call(provider, image, operation, value, node_id=None):
+def component_call(provider, image, operation, value, node_id=None, host_loopback_port=None):
     if provider not in ('podman', 'docker') or not re.fullmatch(r'quay\.io/os-santiago/ai-sdlc@sha256:[a-f0-9]{64}', image):
         raise ValueError('Pinned reviewed migrator image required')
     if node_id is not None and not re.fullmatch(r'[a-f0-9]{64}', node_id):
         raise ValueError('Original node container ID required')
+    if host_loopback_port is not None:
+        parsed=urlsplit(value.get('databaseURL',''))
+        if (operation!='inspect-empty-bootstrap' or node_id is not None
+                or type(host_loopback_port) is not int or not 1024<=host_loopback_port<=65535
+                or parsed.hostname!='127.0.0.1' or parsed.port!=host_loopback_port):
+            raise ValueError('Host network is limited to the original loopback database observation')
     nonce = secrets.token_hex(24)
     name = 'ai-sdlc-build-install-' + nonce
-    network = 'container:' + node_id if node_id else 'none'
+    network = 'host' if host_loopback_port is not None else ('container:' + node_id if node_id else 'none')
     try:
         result = subprocess.run([provider, 'run', '--rm', '--name', name, '-i',
             '--label', 'ai-sdlc.build-install=' + nonce, '--network', network,
             '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges',
             '--memory=256m', '--cpus=1', '--log-driver=none', image, operation],
-            input=json.dumps(value), capture_output=True, text=True, timeout=150, check=False)
+            input=json.dumps(value), capture_output=True, text=True, timeout=30 if host_loopback_port is not None else 150, check=False)
         if result.returncode and operation == 'inspect-empty-bootstrap':
             boundary = re.search(r'initial database inspection denied: ([a-z-]+(?:/[a-z_]+)?)\s*$', result.stderr)
             category = boundary[1].split('/')[0] if boundary is not None else None
-            if category in {'input','connection','transaction','settings','primary-authority','foreign-schema',
+            if category in {'input','connection','connection-configuration','connection-authentication','connection-database','connection-permission','connection-capacity','connection-unavailable','connection-timeout','connection-network','transaction','settings','primary-authority','foreign-schema',
                             'table-inventory','migration-inventory','history','commit'}:
                 raise ValueError('Initial database inspection rejected boundary: '+category)
         if result.returncode or len(result.stdout) > 262144:

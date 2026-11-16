@@ -18,7 +18,7 @@ func TestBootstrapInspectionProtocolRejectsMalformedAndPrivateErrors(t *testing.
 	} {
 		var output bytes.Buffer
 		err := inspectBootstrap(strings.NewReader(raw), &output)
-		if err == nil || (err.Error() != "initial database inspection denied" && err.Error() != "initial database inspection denied: connection") || output.Len() != 0 {
+		if err == nil || (err.Error() != "initial database inspection denied" && err.Error() != "initial database inspection denied: connection-configuration") || output.Len() != 0 {
 			t.Fatal("invalid input leaked data or produced a successful observation")
 		}
 	}
