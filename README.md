@@ -177,6 +177,8 @@ tests skip; that result is not full database validation. Build local images with
 `make containers` from `runtime/k8s`. Runtime details are in
 [runtime/k8s/README.md](runtime/k8s/README.md).
 
+For the opt-in Saferus outerloop, see [paused deployer installation](docs/operations/deployer-installation.md). It adds a dedicated container and scoped Kubernetes permissions; activation, recovery and autonomous E2E validation remain separate gates.
+
 ## Scope
 
 This repository does not ship a GitHub Actions runtime, a `gh` bootstrap

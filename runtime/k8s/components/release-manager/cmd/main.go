@@ -6,6 +6,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/building"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/delivery"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/deploymentflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/execution"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/forge"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
@@ -17,6 +18,8 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publication"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/releaseflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/releasing"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/reviewflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"log"
@@ -32,6 +35,11 @@ func main() {
 	}
 	defer c.DB.Close()
 	metadata := service.Metadata{Name: "release-manager", Responsibility: "publish independently verified proposals under explicit authority", Consumes: []string{"publish-candidate"}, Produces: []string{"ai-sdlc.publication-proof/v1"}}
+	if bootstrap.ReleaseEnabled() {
+		metadata.Responsibility = "publish reviewed proposals and promote verified artifacts under finite authority"
+		metadata.Consumes = append(metadata.Consumes, "promote-artifact")
+		metadata.Produces = append(metadata.Produces, "deploy-release")
+	}
 	if !bootstrap.PublicationEnabled() {
 		if e = service.RunWithReadiness(metadata, c.Ready); e != nil {
 			log.Fatal(e)
@@ -102,7 +110,28 @@ func main() {
 			},
 			Gates: gates, Writer: writer}, nil
 	}
+	releaseMounts := releaseflow.InstalledMounts(os.Getenv("AI_SDLC_PROVENANCE_VERIFIER_IMAGE"))
+	releaseMounts.Inner, releaseMounts.Identity = c.PolicyPath, c.IdentityPath
+	loadRelease := func() (releasing.Configuration, error) {
+		if !bootstrap.ReleaseEnabled() {
+			return releasing.Configuration{}, releaseflow.ErrFlow
+		}
+		cfg, _, e := releaseMounts.Load("release-manager")
+		return cfg, e
+	}
+	releaseIdentity := func() (authority.Policy, authority.Identity, error) {
+		cfg, key, e := releaseMounts.Load("release-manager")
+		if !bootstrap.ReleaseEnabled() || e != nil {
+			return authority.Policy{}, authority.Identity{}, releaseflow.ErrFlow
+		}
+		return cfg.Provenance.Build.Outer, key, nil
+	}
 	ready := func(ctx context.Context) error {
+		if bootstrap.ReleaseEnabled() {
+			if _, e := loadRelease(); e != nil {
+				return e
+			}
+		}
 		if e := c.Ready(ctx); e != nil {
 			return e
 		}
@@ -181,8 +210,28 @@ func main() {
 		})
 		defer stopMerge()
 	}
+	if bootstrap.ReleaseEnabled() {
+		stopRelease := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
+			state, e := (releaseflow.Runtime{DB: c.DB, Load: loadRelease}).PollOnce(ctx)
+			if e != nil {
+				log.Print("promotion reconciliation stopped safely")
+			} else if state != "promotion-idle" {
+				log.Print(state)
+			}
+			_, e = deploymentflow.DispatchPlanned(ctx, c.DB, func() (releasing.Configuration, authority.Identity, error) {
+				return releaseMounts.Load("release-manager")
+			})
+			if e != nil {
+				log.Print("planned-release dispatch stopped safely")
+			}
+		})
+		defer stopRelease()
+	}
 	e = service.RunWithReadiness(metadata, ready, func(mux *http.ServeMux) {
 		inbox := delivery.Inbox{DB: c.DB, Target: "release-manager"}
+		if bootstrap.ReleaseEnabled() {
+			mux.Handle("POST /internal/promote-artifact", inbox.Handler(releaseIdentity, "promote-artifact", "/internal/promote-artifact", releaseflow.InboxEffect(store.NewPromotionJournal(c.DB, loadRelease))))
+		}
 		mux.Handle("POST /internal/publish-candidate", inbox.Handler(c.Authority, "publish-candidate", "/internal/publish-candidate", publicationflow.Effect(func() (authority.Policy, error) { p, _, e := c.Authority(); return p, e })))
 	})
 	if e != nil {

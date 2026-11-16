@@ -8,9 +8,12 @@ import (
 	"os"
 	"time"
 
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/provenanceflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/releaseflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/releasing"
 )
 
 // A separate process prevents long generative review and its gateway readiness
@@ -28,12 +31,25 @@ func runProvenance() error {
 	mounts := provenanceflow.InstalledMounts(os.Getenv("AI_SDLC_PROVENANCE_VERIFIER_IMAGE"))
 	mounts.Inner, mounts.Identity = c.PolicyPath, c.IdentityPath
 	runtime := provenanceflow.Service{DB: c.DB, Mounts: mounts}
+	releaseMounts := releaseflow.InstalledMounts(os.Getenv("AI_SDLC_PROVENANCE_VERIFIER_IMAGE"))
+	releaseMounts.Inner, releaseMounts.Identity = c.PolicyPath, c.IdentityPath
 	stop := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
 		state, e := runtime.PollOnce(ctx)
 		if e != nil {
 			log.Print("provenance reconciliation stopped safely")
 		} else if state != "provenance-idle" {
 			log.Print(state)
+		}
+		if bootstrap.ReleaseEnabled() {
+			_, err := releaseflow.DispatchVerified(ctx, c.DB, func() (releasing.Configuration, authority.Identity, error) {
+				if _, e := runtime.Load(); e != nil {
+					return releasing.Configuration{}, authority.Identity{}, e
+				}
+				return releaseMounts.Load("verifier")
+			})
+			if err != nil {
+				log.Print("verified-artifact promotion dispatch stopped safely")
+			}
 		}
 	})
 	defer stop()

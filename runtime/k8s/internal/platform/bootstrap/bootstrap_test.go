@@ -318,3 +318,25 @@ func TestProvenanceCapabilityRequiresCompletePredecessorChain(t *testing.T) {
 		t.Fatal("disabled capability")
 	}
 }
+
+func TestReleaseRequiresCompleteExplicitCapabilities(t *testing.T) {
+	values := map[string]string{"AI_SDLC_RUNTIME_MODE": "verification", "AI_SDLC_INDEPENDENT_REVIEW": "true", "AI_SDLC_PUBLICATION": "true", "AI_SDLC_MERGE": "true", "AI_SDLC_BUILD": "true", "AI_SDLC_PROVENANCE": "true", "AI_SDLC_RELEASE": "true"}
+	for k, v := range values {
+		t.Setenv(k, v)
+	}
+	if !ReleaseEnabled() {
+		t.Fatal("complete release denied")
+	}
+	for key := range values {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, "false")
+			if ReleaseEnabled() {
+				t.Fatal("incomplete release enabled")
+			}
+		})
+	}
+	t.Setenv("AI_SDLC_RELEASE", "TRUE")
+	if ValidateMode() == nil {
+		t.Fatal("unknown release boolean accepted")
+	}
+}

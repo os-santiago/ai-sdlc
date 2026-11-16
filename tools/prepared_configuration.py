@@ -327,9 +327,11 @@ def install_prepared(args,state,binaries,provider,execution_values):
     import github_merge_install
     import offline_runtime
     import provenance_runtime_install
+    import release_runtime_install
     lock=install.image_lock(args.images)
     bundle,foundation=derive_bundle(args.build_bundle,lock,args.build_images,state)
     approved=build_foundation_install.bounded_json(args.provenance_trust)
+    release=release_runtime_install.inputs(args.release_target,args.release_images,lock) if getattr(args,'release_target',None) is not None else None
     chart_digest=hashlib.sha256()
     for path in sorted(install.CHART.rglob('*')):
         if path.is_symlink():raise ValueError('Reviewed chart cannot contain symbolic links')
@@ -339,7 +341,7 @@ def install_prepared(args,state,binaries,provider,execution_values):
         'repository':args.repository,'environment':args.environment,
         'localValues':yaml.safe_load((install.LOCAL/'values.yaml').read_text()),
         'profile':json.loads((install.LOCAL/'profiles/verification.json').read_text()),
-        'execution':execution_values}
+        'execution':execution_values,'release':release}
     kubectl=[binaries['kubectl'],'--kubeconfig',str(state/'kubeconfig'),'--context','kind-'+args.cluster,'--request-timeout=10s']
     config=Configuration(install.run,kubectl,binaries,provider,args.cluster,state,request)
     config.begin()  # durable intent before credentials, sandbox or Helm effects
@@ -367,6 +369,8 @@ def install_prepared(args,state,binaries,provider,execution_values):
     public.update(execution)
     public['build']=build_runtime_install.values(provider,lock,bundle,public,intake)
     public['provenance']=provenance_values
+    if release is not None:
+        public['release']=release_runtime_install.configure(install.run,kubectl,provider,lock,release,approved,config)
     public['runtime']={'mode':'verification','paused':True}
     desired=merge_values(request['localValues'],request['profile'],lock,public)
     config.set_target(desired,lock)
@@ -380,11 +384,13 @@ def install_prepared(args,state,binaries,provider,execution_values):
     final_provenance=provenance_runtime_install.configure(install.run,kubectl,provider,state,lock,bundle,args.provenance_trust,execution['verifier']['digest'],config)
     if final_provenance!=public['provenance']:
         raise ValueError('Provenance installation changed during Helm application')
+    if release is not None and release_runtime_install.configure(install.run,kubectl,provider,lock,release,approved,config)!=public['release']:
+        raise ValueError('Release target changed during prepared installation')
     config.finish()
     report={'cluster':args.cluster,'platform':'konflux','mode':'verification','configuration':'prepared-paused',
         'configurationReady':True,'runtimeReadinessValidated':False,'runtimePaused':True,'innerFrozen':True,'outerFrozen':True,
         'deliveryEnabled':False,'issueIntakeEnabled':False,'liveWorkflowAdvanced':False,
-        'capabilitiesConfigured':['verification','review','publication','merge','build','provenance'],
+        'capabilitiesConfigured':['verification','review','publication','merge','build','provenance']+(['release'] if release else []),
         'repository':args.repository,'environment':args.environment,'images':lock}
     platform.write_record(state/'installation.json',report)
     print(json.dumps(report,indent=2))

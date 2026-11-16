@@ -81,3 +81,5 @@ are checked again. The result is `prepared-paused`, with `deliveryEnabled: false
 and `liveWorkflowAdvanced: false`. These checks establish configuration custody,
 not running component readiness, an autonomous E2E, an SLSA level or production
 acceptance. Activation, promotion/deployment and recovery remain separate gates.
+
+For the additional opt-in release capability and its tenth paused producer, see [deployer installation](deployer-installation.md). Supply the reviewed release target and same-publication deployer pins together; the original preparation custody remains mandatory.

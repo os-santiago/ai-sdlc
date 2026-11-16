@@ -1,0 +1,204 @@
+{{- if .Values.release.enabled }}
+{{- if or (not .Values.provenance.enabled) (not .Values.build.enabled) (not (regexMatch "^sha256:[a-f0-9]{64}$" .Values.release.digest)) (lt (len .Values.candidate.apiServerCIDRs) 1) }}
+{{- fail "release requires verified provenance, pinned deployer and installed API CIDRs" }}
+{{- end }}
+{{- $target := .Values.release.targetJSON | fromJson }}
+{{- $trust := .Values.provenance.trustJSON | fromJson }}
+{{- if or (ne $target.version "ai-sdlc.saferus-release-target/v1") (ne $target.scope "kind-test-production") (ne $target.repository "os-santiago/saferus") (ne $target.environment "ai-sdlc-production") (ne $target.namespace "ai-sdlc-production") (ne $target.clusterUID $trust.clusterUID) (ne $target.deployment "saferus-console") (ne $target.service "saferus-console") (ne $target.container "console") (ne $target.pullSecret "ai-sdlc-release-reader") (ne $target.tlsHostname "saferus-console") (not $target.deploymentUID) (not $target.namespaceUID) (not $target.serviceUID) (not $target.tlsSecretUID) (not $target.pullSecretUID) (not $target.tlsCA) (not (regexMatch "^[a-f0-9]{64}$" $target.deploymentSpecSHA256)) (not (regexMatch "^[a-f0-9]{64}$" $target.serviceSpecSHA256)) (not (regexMatch "^sha256:[a-f0-9]{64}$" $target.baselineRuntimeDigest)) }}
+{{- fail "release requires the independently approved closed Saferus target" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-release-target, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+data:
+  target.json: {{ .Values.release.targetJSON | quote }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-deployer, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-deployer-identity}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    resourceNames: [kube-system, ai-sdlc-production]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-deployer-identity}
+subjects:
+  - {kind: ServiceAccount, name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-deployer, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-deployer-identity}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-deployer, namespace: ai-sdlc-production}
+rules:
+  - {apiGroups: [apps], resources: [deployments], resourceNames: [saferus-console], verbs: [get, patch]}
+  - {apiGroups: [apps], resources: [replicasets], verbs: [get, list]}
+  - {apiGroups: [""], resources: [pods], verbs: [get, list]}
+  - {apiGroups: [""], resources: [services], resourceNames: [saferus-console], verbs: [get]}
+  - {apiGroups: [""], resources: [secrets], resourceNames: [ai-sdlc-release-reader, saferus-console-tls], verbs: [get]}
+  - {apiGroups: [discovery.k8s.io], resources: [endpointslices], verbs: [list]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-deployer, namespace: ai-sdlc-production}
+subjects:
+  - {kind: ServiceAccount, name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-deployer, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-deployer}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-deployer
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+spec:
+  replicas: {{ include "ai-sdlc-k8s-runtime.replicas" . }}
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: deployer
+  template:
+    metadata:
+      labels:
+        {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: deployer
+      annotations:
+        checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/build: {{ .Values.build.configJSON | sha256sum }}
+        checksum/trust: {{ .Values.provenance.trustJSON | sha256sum }}
+        checksum/target: {{ .Values.release.targetJSON | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-deployer
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: deployer
+          image: "{{ .Values.image.repository }}@{{ .Values.release.digest }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
+          env:
+            - {name: AI_SDLC_HTTP_ADDRESS, value: ":8090"}
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: {{ .Values.authority.databaseSecretPrefix }}-deployer, key: uri}}
+          ports: [{name: http, containerPort: 8090}]
+          readinessProbe: {httpGet: {path: /readyz, port: http}, timeoutSeconds: 5}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, initialDelaySeconds: 10}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
+          volumeMounts:
+            {{- if .Values.release.enabled }}
+            - {name: release-target, mountPath: /etc/ai-sdlc/release, readOnly: true}
+            {{- end }}
+            - {name: build, mountPath: /etc/ai-sdlc/build, readOnly: true}
+            - {name: authority, mountPath: /etc/ai-sdlc/authority, readOnly: true}
+            - {name: outer-policy, mountPath: /etc/ai-sdlc/outer-policy, readOnly: true}
+            - {name: trust, mountPath: /etc/ai-sdlc/provenance, readOnly: true}
+            - {name: identity, mountPath: /etc/ai-sdlc/identity, readOnly: true}
+            - {name: kubernetes, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true}
+      volumes:
+        {{- if .Values.release.enabled }}
+        - name: release-target
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-release-target}
+        {{- end }}
+        - name: build
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-build}
+        - name: authority
+          configMap: {name: {{ .Values.authority.policyConfigMap }}}
+        - name: outer-policy
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-outer-policy}
+        - name: trust
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-provenance-trust}
+        - name: identity
+          secret: {secretName: {{ .Values.authority.identitySecretPrefix }}-deployer, defaultMode: 0440}
+        - name: kubernetes
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken: {path: token, expirationSeconds: 3600}
+              - configMap:
+                  name: kube-root-ca.crt
+                  items: [{key: ca.crt, path: ca.crt}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-deployer, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+spec:
+  selector:
+    {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: deployer
+  ports: [{name: http, port: 8090, targetPort: http}]
+---
+# Mandatory restricted policy, even when the shared runtime policy is disabled.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-deployer, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: deployer
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: relay
+      ports: [{protocol: TCP, port: 8090}]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: postgres
+        {{- if .Values.postgres.cloudNativePG.enabled }}
+        - podSelector:
+            matchLabels: {cnpg.io/cluster: {{ .Values.postgres.cloudNativePG.clusterName | quote }}}
+        {{- end }}
+      ports: [{protocol: TCP, port: 5432}]
+    {{- range .Values.networkPolicy.databaseEgressCIDRs }}
+    - to: [{ipBlock: {cidr: {{ . | quote }}}}]
+      ports: [{protocol: TCP, port: 5432}]
+    {{- end }}
+    {{- range .Values.candidate.apiServerCIDRs }}
+    - to: [{ipBlock: {cidr: {{ . | quote }}}}]
+      ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 6443}]
+    {{- end }}
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ai-sdlc-production}}
+          podSelector: {matchLabels: {app: saferus-console}}
+      ports: [{protocol: TCP, port: 8443}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-deployer-console, namespace: ai-sdlc-production}
+spec:
+  podSelector: {matchLabels: {app: saferus-console}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}}
+          podSelector:
+            matchLabels:
+              {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: deployer
+      ports: [{protocol: TCP, port: 8443}]
+{{- end }}

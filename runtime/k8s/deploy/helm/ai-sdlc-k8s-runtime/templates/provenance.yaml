@@ -79,6 +79,9 @@ spec:
             limits: {cpu: 500m, memory: 256Mi}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
           volumeMounts:
+            {{- if .Values.release.enabled }}
+            - {name: release-target, mountPath: /etc/ai-sdlc/release, readOnly: true}
+            {{- end }}
             - {name: build, mountPath: /etc/ai-sdlc/build, readOnly: true}
             - {name: authority, mountPath: /etc/ai-sdlc/authority, readOnly: true}
             - {name: outer-policy, mountPath: /etc/ai-sdlc/outer-policy, readOnly: true}
@@ -86,6 +89,10 @@ spec:
             - {name: identity, mountPath: /etc/ai-sdlc/identity, readOnly: true}
             - {name: registry, mountPath: /var/run/ai-sdlc/provenance-registry, readOnly: true}
       volumes:
+        {{- if .Values.release.enabled }}
+        - name: release-target
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-release-target}
+        {{- end }}
         - name: build
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-build}
         - name: authority

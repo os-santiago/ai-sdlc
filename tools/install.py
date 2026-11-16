@@ -380,6 +380,8 @@ def _main(argv, stack):
     parser.add_argument('--configure-prepared', action='store_true', help='Configure an empty prepared runtime while retaining both freezes and zero replicas')
     parser.add_argument('--provenance-trust', type=Path, help='Separately approved public provenance trust; prepared configuration only')
     parser.add_argument('--build-images', type=Path, help='Reviewed target controller image pins; prepared configuration only')
+    parser.add_argument('--release-target', type=Path, help='Separately approved public Saferus target; prepared configuration only')
+    parser.add_argument('--release-images', type=Path, help='Reviewed pinned deployer publication; requires release target')
     parser.add_argument('--timeout', default='10m')
     parser.add_argument('--repository')
     parser.add_argument('--environment')
@@ -407,6 +409,9 @@ def _main(argv, stack):
                 or args.build_bundle is None or args.build_images is None or args.provenance_trust is None
                 or args.refresh_github_credential or args.refresh_model_credential):
             raise ValueError('Prepared configuration requires explicit local Konflux build bundle, controller pins and approved provenance trust, without credential rotation')
+    if args.release_target is not None or args.release_images is not None:
+        if not args.configure_prepared or args.release_target is None or args.release_images is None:
+            raise ValueError('Release configuration requires prepared mode, approved target and published deployer pins')
     konflux_runtime_install.validate_options(args)
     if args.merge and not args.publication:
         raise ValueError('Merge requires explicit verified publication')

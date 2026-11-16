@@ -9,6 +9,7 @@ data:
   AI_SDLC_ENVIRONMENT: {{ .Release.Namespace | default "default" | quote }}
   AI_SDLC_AUTHORITY_POLICY_PATH: /etc/ai-sdlc/authority/policy.json
   AI_SDLC_IDENTITY_PATH: /etc/ai-sdlc/identity/identity.json
+  AI_SDLC_RELEASE: {{ .Values.release.enabled | quote }}
   AI_SDLC_MERGE: {{ .Values.merge.enabled | quote }}
   AI_SDLC_PROVENANCE: {{ .Values.provenance.enabled | quote }}
   {{- if .Values.provenance.enabled }}
@@ -35,6 +36,10 @@ data:
   {{- end }}
   {{- if .Values.provenance.enabled }}
   {{- $_ := set $routes "verify-built" (printf "http://%s-provenance-verifier:8089/internal/verify-built" (include "ai-sdlc-k8s-runtime.fullname" .)) }}
+  {{- end }}
+  {{- if .Values.release.enabled }}
+  {{- $_ := set $routes "promote-artifact" (printf "http://%s-release-manager:%v/internal/promote-artifact" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.releaseManager.port) }}
+  {{- $_ := set $routes "deploy-release" (printf "http://%s-deployer:8090/internal/deploy-release" (include "ai-sdlc-k8s-runtime.fullname" .)) }}
   {{- end }}
   AI_SDLC_RELAY_ROUTES: {{ $routes | toJson | quote }}
   {{- if has .Values.runtime.mode (list "candidate" "verification") }}

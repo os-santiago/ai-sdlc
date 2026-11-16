@@ -21,6 +21,11 @@ func run() error {
 		return errors.New("select migrate or bootstrap-identities")
 	}
 	switch os.Args[1] {
+	case "compile-release-installation":
+		if len(os.Args) != 2 {
+			return errors.New("unexpected release installation arguments")
+		}
+		return compileReleaseInstallation(os.Stdin, os.Stdout)
 	case "create-registry-custody":
 		if len(os.Args) != 2 {
 			return errors.New("unexpected registry bootstrap arguments")
@@ -136,7 +141,11 @@ func run() error {
 		if provenance != "" && provenance != "false" && provenance != "true" {
 			return errors.New("invalid provenance option")
 		}
-		if err := db.ProvisionRolesForProvenance(ctx, passwords, os.Getenv("AI_SDLC_RUNTIME_MODE"), review == "true", publication == "true", merge == "true", build == "true", provenance == "true"); err != nil {
+		release := os.Getenv("AI_SDLC_RELEASE")
+		if release != "" && release != "false" && release != "true" {
+			return errors.New("invalid release option")
+		}
+		if err := db.ProvisionRolesForDeployment(ctx, passwords, os.Getenv("AI_SDLC_RUNTIME_MODE"), review == "true", publication == "true", merge == "true", build == "true", provenance == "true", release == "true", release == "true"); err != nil {
 			return err
 		}
 		log.Print("schema and component database roles ready")

@@ -32,6 +32,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: [migrate]
           env:
+            - {name: AI_SDLC_RELEASE, value: {{ .Values.release.enabled | quote }}}
             - {name: AI_SDLC_PROVENANCE, value: {{ .Values.provenance.enabled | quote }}}
             - {name: AI_SDLC_BUILD, value: {{ .Values.build.enabled | quote }}}
             - {name: AI_SDLC_MERGE, value: {{ .Values.merge.enabled | quote }}}
