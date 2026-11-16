@@ -20,7 +20,7 @@ const Namespace = "ai-sdlc-builds"
 var ErrWorkload = errors.New("closed Saferus build workload denied")
 var image = regexp.MustCompile(`^(quay\.io/os-santiago/ai-sdlc|localhost/ai-sdlc-artifact-builder)@sha256:[a-f0-9]{64}$`)
 var uuid = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
-var required = []string{"mutatingAdmissionPolicy/ai-sdlc-build-bounds", "mutatingAdmissionPolicyBinding/ai-sdlc-build-bounds", "limitRange/build-budget", "serviceAccount/build", "serviceAccount/publish", "secret/registry-auth", "configMap/trusted-ca", "networkPolicy/build", "networkPolicy/publish", "validatingAdmissionPolicy/ai-sdlc-build-pods", "validatingAdmissionPolicyBinding/ai-sdlc-build-pods", "configMap/tekton-flags", "default/service/kubernetes", "default/endpoints/kubernetes", "kind-registry/service/registry-service", "kind-registry/endpoints/registry-service"}
+var required = []string{"configMap/build-trust", "mutatingAdmissionPolicy/ai-sdlc-build-bounds", "mutatingAdmissionPolicyBinding/ai-sdlc-build-bounds", "limitRange/build-budget", "serviceAccount/build", "serviceAccount/publish", "secret/registry-auth", "configMap/trusted-ca", "networkPolicy/build", "networkPolicy/publish", "validatingAdmissionPolicy/ai-sdlc-build-pods", "validatingAdmissionPolicyBinding/ai-sdlc-build-pods", "configMap/tekton-flags", "default/service/kubernetes", "default/endpoints/kubernetes", "kind-registry/service/registry-service", "kind-registry/endpoints/registry-service"}
 
 type Dependency struct {
 	UID        string `json:"uid"`
@@ -63,3 +63,6 @@ func (p Profile) Validate() error {
 	}
 	return nil
 }
+
+// DependencyKeys returns the finite installed inventory expected by this version.
+func DependencyKeys() []string { return append([]string(nil), required...) }

@@ -1,0 +1,535 @@
+{
+  "activeDeadlineSeconds": 600,
+  "automountServiceAccountToken": false,
+  "containers": [
+    {
+      "args": [
+        "-wait_file",
+        "/tekton/downward/ready",
+        "-wait_file_content",
+        "-post_file",
+        "/tekton/run/0/out",
+        "-termination_path",
+        "/tekton/termination",
+        "-step_metadata_dir",
+        "/tekton/run/0/status",
+        "-timeout",
+        "30s",
+        "-entrypoint",
+        "/component",
+        "--",
+        "--guard-workspace",
+        "--storage-identity=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--node-boot-id=11111111-1111-1111-1111-111111111111",
+        "--workspace-phase=build",
+        "--authority-expires-at=1794808137159"
+      ],
+      "command": [
+        "/tekton/bin/entrypoint"
+      ],
+      "env": [
+        {
+          "name": "SSL_CERT_DIR",
+          "value": "/tekton-custom-certs:/etc/ssl/certs:/etc/pki/tls/certs"
+        }
+      ],
+      "image": "quay.io/os-santiago/ai-sdlc@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "imagePullPolicy": "IfNotPresent",
+      "name": "step-custody",
+      "resources": {
+        "limits": {
+          "cpu": "100m",
+          "ephemeral-storage": "64Mi",
+          "memory": "64Mi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "ephemeral-storage": "64Mi",
+          "memory": "64Mi"
+        }
+      },
+      "securityContext": {
+        "allowPrivilegeEscalation": false,
+        "capabilities": {
+          "drop": [
+            "ALL"
+          ]
+        },
+        "readOnlyRootFilesystem": true,
+        "runAsGroup": 1000,
+        "runAsNonRoot": true,
+        "runAsUser": 1000,
+        "seccompProfile": {
+          "type": "RuntimeDefault"
+        }
+      },
+      "terminationMessagePath": "/tekton/termination",
+      "terminationMessagePolicy": "File",
+      "volumeMounts": [
+        {
+          "mountPath": "/slot",
+          "name": "slot"
+        },
+        {
+          "mountPath": "/tekton/downward",
+          "name": "tekton-internal-downward",
+          "readOnly": true
+        },
+        {
+          "mountPath": "/tekton/creds",
+          "name": "tekton-creds-init-home-0"
+        },
+        {
+          "mountPath": "/tekton/run/0",
+          "name": "tekton-internal-run-0"
+        },
+        {
+          "mountPath": "/tekton/run/1",
+          "name": "tekton-internal-run-1",
+          "readOnly": true
+        },
+        {
+          "mountPath": "/tekton/bin",
+          "name": "tekton-internal-bin",
+          "readOnly": true
+        },
+        {
+          "mountPath": "/workspace",
+          "name": "tekton-internal-workspace"
+        },
+        {
+          "mountPath": "/tekton/home",
+          "name": "tekton-internal-home"
+        },
+        {
+          "mountPath": "/tekton/results",
+          "name": "tekton-internal-results"
+        },
+        {
+          "mountPath": "/tekton/steps",
+          "name": "tekton-internal-steps",
+          "readOnly": true
+        },
+        {
+          "mountPath": "/tekton/artifacts",
+          "name": "tekton-internal-artifacts"
+        },
+        {
+          "mountPath": "/tekton-custom-certs/ca-bundle.crt",
+          "name": "config-trusted-cabundle-volume",
+          "readOnly": true,
+          "subPath": "ca-bundle.crt"
+        },
+        {
+          "mountPath": "/tekton-custom-certs/service-ca.crt",
+          "name": "config-service-cabundle-volume",
+          "readOnly": true,
+          "subPath": "service-ca.crt"
+        }
+      ]
+    },
+    {
+      "args": [
+        "-wait_file",
+        "/tekton/run/0/out",
+        "-post_file",
+        "/tekton/run/1/out",
+        "-termination_path",
+        "/tekton/termination",
+        "-step_metadata_dir",
+        "/tekton/run/1/status",
+        "-timeout",
+        "9m0s",
+        "-entrypoint",
+        "/tekton/scripts/script-1-nx2r7",
+        "--"
+      ],
+      "command": [
+        "/tekton/bin/entrypoint"
+      ],
+      "env": [
+        {
+          "name": "AI_SDLC_SOURCE_SHA",
+          "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        {
+          "name": "AI_SDLC_SOURCE_TREE",
+          "value": "cccccccccccccccccccccccccccccccccccccccc"
+        },
+        {
+          "name": "SSL_CERT_DIR",
+          "value": "/tekton-custom-certs:/etc/ssl/certs:/etc/pki/tls/certs"
+        }
+      ],
+      "image": "docker.io/library/golang@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d",
+      "imagePullPolicy": "IfNotPresent",
+      "name": "step-verify",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "ephemeral-storage": "2Gi",
+          "memory": "2Gi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "ephemeral-storage": "64Mi",
+          "memory": "64Mi"
+        }
+      },
+      "securityContext": {
+        "allowPrivilegeEscalation": false,
+        "capabilities": {
+          "drop": [
+            "ALL"
+          ]
+        },
+        "readOnlyRootFilesystem": true,
+        "runAsGroup": 1000,
+        "runAsNonRoot": true,
+        "runAsUser": 1000,
+        "seccompProfile": {
+          "type": "RuntimeDefault"
+        }
+      },
+      "terminationMessagePath": "/tekton/termination",
+      "terminationMessagePolicy": "File",
+      "volumeMounts": [
+        {
+          "mountPath": "/slot",
+          "name": "slot"
+        },
+        {
+          "mountPath": "/tmp",
+          "name": "tmp"
+        },
+        {
+          "mountPath": "/tekton/scripts",
+          "name": "tekton-internal-scripts",
+          "readOnly": true
+        },
+        {
+          "mountPath": "/tekton/creds",
+          "name": "tekton-creds-init-home-1"
+        },
+        {
+          "mountPath": "/tekton/run/0",
+          "name": "tekton-internal-run-0",
+          "readOnly": true
+        },
+        {
+          "mountPath": "/tekton/run/1",
+          "name": "tekton-internal-run-1"
+        },
+        {
+          "mountPath": "/tekton/bin",
+          "name": "tekton-internal-bin",
+          "readOnly": true
+        },
+        {
+          "mountPath": "/workspace",
+          "name": "tekton-internal-workspace"
+        },
+        {
+          "mountPath": "/tekton/home",
+          "name": "tekton-internal-home"
+        },
+        {
+          "mountPath": "/tekton/results",
+          "name": "tekton-internal-results"
+        },
+        {
+          "mountPath": "/tekton/steps",
+          "name": "tekton-internal-steps",
+          "readOnly": true
+        },
+        {
+          "mountPath": "/tekton/artifacts",
+          "name": "tekton-internal-artifacts"
+        },
+        {
+          "mountPath": "/tekton-custom-certs/ca-bundle.crt",
+          "name": "config-trusted-cabundle-volume",
+          "readOnly": true,
+          "subPath": "ca-bundle.crt"
+        },
+        {
+          "mountPath": "/tekton-custom-certs/service-ca.crt",
+          "name": "config-service-cabundle-volume",
+          "readOnly": true,
+          "subPath": "service-ca.crt"
+        }
+      ]
+    }
+  ],
+  "dnsPolicy": "ClusterFirst",
+  "enableServiceLinks": false,
+  "initContainers": [
+    {
+      "command": [
+        "/ko-app/entrypoint",
+        "init",
+        "/ko-app/entrypoint",
+        "/tekton/bin/entrypoint",
+        "step-custody",
+        "step-verify"
+      ],
+      "image": "ghcr.io/tektoncd/pipeline/entrypoint-bff0a22da108bc2f16c818c97641a296:v1.15.0@sha256:1ae5944a51f5c5f19e575de5abf268ea7a49a3a54bdad411cf27e3142af5f5c0",
+      "imagePullPolicy": "IfNotPresent",
+      "name": "prepare",
+      "resources": {
+        "limits": {
+          "cpu": "100m",
+          "ephemeral-storage": "64Mi",
+          "memory": "256Mi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "ephemeral-storage": "64Mi",
+          "memory": "64Mi"
+        }
+      },
+      "securityContext": {
+        "allowPrivilegeEscalation": false,
+        "capabilities": {
+          "drop": [
+            "ALL"
+          ]
+        },
+        "readOnlyRootFilesystem": true,
+        "runAsNonRoot": true,
+        "seccompProfile": {
+          "type": "RuntimeDefault"
+        }
+      },
+      "terminationMessagePath": "/dev/termination-log",
+      "terminationMessagePolicy": "File",
+      "volumeMounts": [
+        {
+          "mountPath": "/tekton/bin",
+          "name": "tekton-internal-bin"
+        },
+        {
+          "mountPath": "/tekton/steps",
+          "name": "tekton-internal-steps"
+        }
+      ],
+      "workingDir": "/"
+    },
+    {
+      "args": [
+        "-c",
+        "scriptfile=\"/tekton/scripts/script-1-nx2r7\"\ntouch ${scriptfile} && chmod +x ${scriptfile}\ncat > ${scriptfile} << '_EOF_'\nIyEvYmluL2Jhc2gKc2V0IC1ldW8gcGlwZWZhaWwKdW1hc2sgMDIyCmNvdW50PTAKZm9yIGF0dGVtcHQgaW4gezEuLjIwfTsgZG8KICBzZXQgK2UKICB0aW1lb3V0IDMgYmFzaCAtYyAnZXhlYyAzPD4vZGV2L3RjcC8kMS8kMicgcHJvYmUgMTAuOTYuMC4xIDQ0MwogIHN0YXR1cz0kPwogIHNldCAtZQogIGlmIFsgIiRzdGF0dXMiIC1lcSAxMjQgXTsgdGhlbiBjb3VudD0kKChjb3VudCsxKSk7IGVsaWYgWyAiJHN0YXR1cyIgLWVxIDAgXTsgdGhlbiBjb3VudD0wOyBlbHNlIGV4aXQgMTsgZmkKICBpZiBbICIkY291bnQiIC1lcSAyIF07IHRoZW4gYnJlYWs7IGZpCiAgc2xlZXAgMQpkb25lCnRlc3QgIiRjb3VudCIgLWVxIDIKY291bnQ9MApmb3IgYXR0ZW1wdCBpbiB7MS4uMjB9OyBkbwogIHNldCArZQogIHRpbWVvdXQgMyBiYXNoIC1jICdleGVjIDM8Pi9kZXYvdGNwLyQxLyQyJyBwcm9iZSAxMC45Ni4wLjIgNDQzCiAgc3RhdHVzPSQ/CiAgc2V0IC1lCiAgaWYgWyAiJHN0YXR1cyIgLWVxIDEyNCBdOyB0aGVuIGNvdW50PSQoKGNvdW50KzEpKTsgZWxpZiBbICIkc3RhdHVzIiAtZXEgMCBdOyB0aGVuIGNvdW50PTA7IGVsc2UgZXhpdCAxOyBmaQogIGlmIFsgIiRjb3VudCIgLWVxIDIgXTsgdGhlbiBicmVhazsgZmkKICBzbGVlcCAxCmRvbmUKdGVzdCAiJGNvdW50IiAtZXEgMgp0ZXN0ICEgLWUgL3Zhci9ydW4vc2VjcmV0cy9rdWJlcm5ldGVzLmlvL3NlcnZpY2VhY2NvdW50L3Rva2VuCnRlc3QgISAtZSAvcmVnaXN0cnktYXV0aApta2RpciAtcCAvc2xvdC93b3Jrc3BhY2UvY2FjaGUgL3Nsb3Qvd29ya3NwYWNlL21vZGNhY2hlIC9zbG90L3dvcmtzcGFjZS90bXAgL3Nsb3Qvd29ya3NwYWNlL291dHB1dApleHBvcnQgR09DQUNIRT0vc2xvdC93b3Jrc3BhY2UvY2FjaGUgR09NT0RDQUNIRT0vc2xvdC93b3Jrc3BhY2UvbW9kY2FjaGUgVE1QRElSPS9zbG90L3dvcmtzcGFjZS90bXAKZXhwb3J0IEdPVE9PTENIQUlOPWxvY2FsIEdPV09SSz1vZmYgR09GTEFHUz0tbW9kPXJlYWRvbmx5CmV4cG9ydCBHSVRfQ09ORklHX05PU1lTVEVNPTEgR0lUX0NPTkZJR19HTE9CQUw9L2Rldi9udWxsIEdJVF9URVJNSU5BTF9QUk9NUFQ9MAp0ZXN0ICIkKGdvIGVudiBHT1ZFUlNJT04pIiA9IGdvMS4yNy40CmdpdCAtYyBjb3JlLmhvb2tzUGF0aD0vZGV2L251bGwgaW5pdCAvc2xvdC93b3Jrc3BhY2Uvc291cmNlCmNkIC9zbG90L3dvcmtzcGFjZS9zb3VyY2UKZ2l0IC1jIGNvcmUuaG9va3NQYXRoPS9kZXYvbnVsbCAtYyBwcm90b2NvbC5maWxlLmFsbG93PW5ldmVyIGZldGNoIC0tbm8tdGFncyAtLWRlcHRoPTEgaHR0cHM6Ly9naXRodWIuY29tL29zLXNhbnRpYWdvL3NhZmVydXMgIiRBSV9TRExDX1NPVVJDRV9TSEEiCmdpdCAtYyBjb3JlLmhvb2tzUGF0aD0vZGV2L251bGwgY2hlY2tvdXQgLS1kZXRhY2ggRkVUQ0hfSEVBRAp0ZXN0ICIkKGdpdCByZXYtcGFyc2UgSEVBRCkiID0gIiRBSV9TRExDX1NPVVJDRV9TSEEiCnRlc3QgIiQoZ2l0IHJldi1wYXJzZSAnSEVBRF57dHJlZX0nKSIgPSAiJEFJX1NETENfU09VUkNFX1RSRUUiCmdvIHZldCAuLy4uLgpnbyB0ZXN0IC1yYWNlIC4vLi4uCkNHT19FTkFCTEVEPTAgR09PUz1saW51eCBHT0FSQ0g9YW1kNjQgZ28gYnVpbGQgLXRyaW1wYXRoIC1sZGZsYWdzPSctcyAtdycgLW8gL3Nsb3Qvd29ya3NwYWNlL291dHB1dC9zYWZlcnVzIC4vY21kL2NvbnNvbGUKY2htb2QgMDc1NSAvc2xvdC93b3Jrc3BhY2Uvb3V0cHV0L3NhZmVydXMK\n_EOF_\n/tekton/bin/entrypoint decode-script \"${scriptfile}\"\n"
+      ],
+      "command": [
+        "sh"
+      ],
+      "image": "cgr.dev/chainguard/busybox@sha256:19f02276bf8dbdd62f069b922f10c65262cc34b710eea26ff928129a736be791",
+      "imagePullPolicy": "IfNotPresent",
+      "name": "place-scripts",
+      "resources": {
+        "limits": {
+          "cpu": "100m",
+          "ephemeral-storage": "64Mi",
+          "memory": "256Mi"
+        },
+        "requests": {
+          "cpu": "100m",
+          "ephemeral-storage": "64Mi",
+          "memory": "64Mi"
+        }
+      },
+      "securityContext": {
+        "allowPrivilegeEscalation": false,
+        "capabilities": {
+          "drop": [
+            "ALL"
+          ]
+        },
+        "readOnlyRootFilesystem": true,
+        "runAsNonRoot": true,
+        "seccompProfile": {
+          "type": "RuntimeDefault"
+        }
+      },
+      "terminationMessagePath": "/dev/termination-log",
+      "terminationMessagePolicy": "File",
+      "volumeMounts": [
+        {
+          "mountPath": "/tekton/scripts",
+          "name": "tekton-internal-scripts"
+        },
+        {
+          "mountPath": "/tekton/bin",
+          "name": "tekton-internal-bin"
+        }
+      ]
+    }
+  ],
+  "nodeSelector": {
+    "kubernetes.io/hostname": "fixture-node"
+  },
+  "preemptionPolicy": "PreemptLowerPriority",
+  "priority": 0,
+  "restartPolicy": "Never",
+  "schedulerName": "default-scheduler",
+  "securityContext": {
+    "runAsGroup": 1000,
+    "runAsNonRoot": true,
+    "runAsUser": 1000,
+    "seccompProfile": {
+      "type": "RuntimeDefault"
+    }
+  },
+  "serviceAccount": "build",
+  "serviceAccountName": "build",
+  "terminationGracePeriodSeconds": 30,
+  "tolerations": [
+    {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/not-ready",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+    },
+    {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/unreachable",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+    }
+  ],
+  "volumes": [
+    {
+      "emptyDir": {
+        "medium": "Memory",
+        "sizeLimit": "16Mi"
+      },
+      "name": "tekton-internal-workspace"
+    },
+    {
+      "emptyDir": {
+        "medium": "Memory",
+        "sizeLimit": "16Mi"
+      },
+      "name": "tekton-internal-home"
+    },
+    {
+      "emptyDir": {
+        "medium": "Memory",
+        "sizeLimit": "16Mi"
+      },
+      "name": "tekton-internal-results"
+    },
+    {
+      "emptyDir": {
+        "medium": "Memory",
+        "sizeLimit": "16Mi"
+      },
+      "name": "tekton-internal-steps"
+    },
+    {
+      "emptyDir": {
+        "medium": "Memory",
+        "sizeLimit": "16Mi"
+      },
+      "name": "tekton-internal-artifacts"
+    },
+    {
+      "emptyDir": {
+        "medium": "Memory",
+        "sizeLimit": "16Mi"
+      },
+      "name": "tekton-internal-scripts"
+    },
+    {
+      "emptyDir": {
+        "medium": "Memory",
+        "sizeLimit": "96Mi"
+      },
+      "name": "tekton-internal-bin"
+    },
+    {
+      "downwardAPI": {
+        "defaultMode": 420,
+        "items": [
+          {
+            "fieldRef": {
+              "apiVersion": "v1",
+              "fieldPath": "metadata.annotations['tekton.dev/ready']"
+            },
+            "path": "ready"
+          }
+        ]
+      },
+      "name": "tekton-internal-downward"
+    },
+    {
+      "emptyDir": {
+        "medium": "Memory",
+        "sizeLimit": "16Mi"
+      },
+      "name": "tekton-creds-init-home-0"
+    },
+    {
+      "emptyDir": {
+        "medium": "Memory",
+        "sizeLimit": "16Mi"
+      },
+      "name": "tekton-internal-run-0"
+    },
+    {
+      "emptyDir": {
+        "medium": "Memory",
+        "sizeLimit": "16Mi"
+      },
+      "name": "tekton-creds-init-home-1"
+    },
+    {
+      "emptyDir": {
+        "medium": "Memory",
+        "sizeLimit": "16Mi"
+      },
+      "name": "tekton-internal-run-1"
+    },
+    {
+      "name": "slot",
+      "persistentVolumeClaim": {
+        "claimName": "build-slot-0"
+      }
+    },
+    {
+      "emptyDir": {
+        "medium": "Memory",
+        "sizeLimit": "64Mi"
+      },
+      "name": "tmp"
+    },
+    {
+      "configMap": {
+        "defaultMode": 420,
+        "items": [
+          {
+            "key": "ca-bundle.crt",
+            "path": "ca-bundle.crt"
+          }
+        ],
+        "name": "config-trusted-cabundle",
+        "optional": true
+      },
+      "name": "config-trusted-cabundle-volume"
+    },
+    {
+      "configMap": {
+        "defaultMode": 420,
+        "items": [
+          {
+            "key": "service-ca.crt",
+            "path": "service-ca.crt"
+          }
+        ],
+        "name": "config-service-cabundle",
+        "optional": true
+      },
+      "name": "config-service-cabundle-volume"
+    }
+  ]
+}
