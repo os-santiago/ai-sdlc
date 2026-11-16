@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "status": "component-validation-passed",
+  "scope": "production migrator against isolated Kubernetes installation",
+  "autonomousE2E": false,
+  "syntheticAuthority": false,
+  "releaseAuthorized": false,
+  "workloadExecuted": false,
+  "report": "/tmp/ai-sdlc-production-bootstrap-observe-v4/report.json",
+  "changedApprovedTrustDenied": true,
+  "cleanupComplete": true,
+  "container": "localhost/ai-sdlc-migrator:observe-v1",
+  "fullSuite": {
+    "status": "passed",
+    "tests": {
+      "passedTests": 1475,
+      "passedPackages": 43,
+      "skippedTests": [
+        "internal/buildstorage/TestPrepareWorkspaceGuardFixture",
+        "internal/buildworkload/TestEmitClosedBuildAPIFixture",
+        "internal/engine/TestInvokeAgainstRealBinary",
+        "internal/execution/TestActualPinnedHomedirPreparationFixture",
+        "internal/execution/TestRealCandidateRecoveryFixture",
+        "internal/execution/TestRealCandidateRuntimeFixture",
+        "internal/execution/TestRealLifecycleModelFixture",
+        "internal/mergegate/TestRealHomedirReadonlyGateFixture",
+        "internal/podtransport/TestRealBuildSlotAPICustody",
+        "internal/podtransport/TestRealClosedBuildTransport",
+        "internal/podtransport/TestRealCodexKubernetesMailboxFixture",
+        "internal/podtransport/TestRealKubernetesMailboxFixture",
+        "internal/podtransport/TestRealReadonlyReviewerFixture",
+        "internal/podtransport/TestRealVerificationTransportFixture",
+        "internal/podtransport/TestRealWorkloadResourcesFixture",
+        "internal/podtransport/TestRealWorkspaceLifecycleFixture",
+        "internal/podtransport/TestRecordedBuildContainerTermination",
+        "internal/podtransport/TestRecordedTektonHierarchyMatchesClosedTemplates",
+        "internal/publication/TestRealHomedirPublicationTreeFixture",
+        "internal/reviewflow/TestRealVerificationFlowFixture",
+        "internal/sourcefetch/TestActualPinnedGitTreeManifest",
+        "internal/sourcefetch/TestActualPinnedHomedirArchive",
+        "internal/sourcefetch/TestActualPublicGitHubPinnedSource",
+        "internal/verification/TestRealVerificationRecipeFixture",
+        "internal/verificationflow/TestRealVerificationFlowFixture"
+      ],
+      "missingDatabaseProof": []
+    },
+    "report": "/tmp/ai-sdlc-build-profile-validation-v1/report.json"
+  },
+  "installerIdentity": {
+    "imageID": "sha256:3d13f79ab4dbf8bce0d6a77efdd178e9c6381cc5491444e4058fa198ec91633d",
+    "binarySHA256": "216a4c79245c3a7108340efe459139b3837fce5b0a262be42261da2369fe0a61"
+  },
+  "substitutedBinaryDenied": true
+}

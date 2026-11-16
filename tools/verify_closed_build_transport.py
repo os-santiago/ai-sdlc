@@ -20,8 +20,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--preflight-only', action='store_true')
     parser.add_argument('--cluster', default='ai-sdlc-konflux-reviewed')
-    parser.add_argument('--test-binary', required=True, type=Path)
+    parser.add_argument('--test-binary', type=Path)
     parser.add_argument('--journal-test-binary', type=Path)
+    parser.add_argument('--installer-binary', type=Path)
+    parser.add_argument('--installer-image')
     parser.add_argument('--publisher-image', required=True)
     parser.add_argument('--publisher-archive', required=True, type=Path)
     parser.add_argument('--source-sha', required=True)
@@ -32,7 +34,12 @@ def main():
         raise ValueError('Exact local publisher required')
     if any(not re.fullmatch(r'[a-f0-9]{40}', value) for value in (args.source_sha, args.tree_sha)):
         raise ValueError('Exact source and tree required')
-    if not args.test_binary.is_file() or args.test_binary.stat().st_size > 128 << 20:
+    if bool(args.test_binary) == bool(args.installer_binary):
+        raise ValueError('Select exactly one fixture test or production installer binary')
+    if args.installer_binary and not args.preflight_only:
+        raise ValueError('Production installer validation cannot execute a workload')
+    selected_binary = args.installer_binary or args.test_binary
+    if selected_binary.is_symlink() or not selected_binary.is_file() or not 0 < selected_binary.stat().st_size < 128 << 20:
         raise ValueError('Bounded compiled fixture binary required')
     if args.journal_test_binary is not None and (args.preflight_only or not args.journal_test_binary.is_file() or args.journal_test_binary.stat().st_size>128<<20):
         raise ValueError('Bounded explicit journal test binary and execution mode required')
@@ -42,6 +49,12 @@ def main():
     if owner['cluster'] != args.cluster or owner['scope'] != 'isolated-konflux':
         raise ValueError('Owned isolated Konflux installation required')
     provider = owner['provider']
+    installer_identity = None
+    if args.installer_binary:
+        import build_install_identity
+        installer_identity = build_install_identity.verify(provider, args.installer_image or '', args.installer_binary)
+    elif args.installer_image:
+        raise ValueError('Installer image requires production installer mode')
     node = args.cluster + '-control-plane'
     kubectl = [str(tools / 'kubectl-1.35.8'), '--kubeconfig', str(state / 'kubeconfig')]
     deadline = supply_chain_install.Deadline(1400)
@@ -61,7 +74,7 @@ def main():
     owned_policies = []
     global_intents = []
     report = {'status': 'running', 'scope': 'isolated closed transport integration fixture',
-              'autonomousE2E': False, 'syntheticAuthority': True, 'liveWorkflowAdvanced': False,
+              'autonomousE2E': False, 'syntheticAuthority': not bool(args.installer_binary), 'liveWorkflowAdvanced': False,
               'releaseAuthorized': False, 'workloadExecuted': False, 'preflightOnly': args.preflight_only, 'cleanupComplete': False, 'sourceSHA': args.source_sha,
               'treeSHA': args.tree_sha, 'publisherImage': args.publisher_image}
 
@@ -216,7 +229,13 @@ def main():
         prepared = True  # Attempt may succeed even if its response is lost.
         node_call(['bash', '-ceu', 'mkdir -m 700 "$1"; printf "%s" "$2" > "$1/owner"; mkdir -m 700 "$1/evidence"; mkdir -p /var/local/ai-sdlc/build-slots; mkdir -m 700 "$3"', 'fixture', root, namespace_uid, slotpath])
         prepared = True
-        copy_to(args.test_binary, root + '/test')
+        copy_to(selected_binary, root + ('/installer' if args.installer_binary else '/test'))
+        if args.installer_binary:
+            actual_digest = node_call(['sha256sum', root + '/installer']).stdout.split()[0]
+            if actual_digest != installer_identity['binarySHA256']:
+                raise ValueError('Copied installer differs from pinned image')
+            report['installerIdentity'] = installer_identity
+            save()
         node_call(['mount', '-t', 'tmpfs', '-o', 'size=4294967296,nr_inodes=32768,mode=0755,uid=0,gid=0', mount_source, slotpath])
         mounted = True
         mounted_info = json.loads(node_call(['findmnt', '-J', '-M', slotpath, '-o', 'SOURCE,TARGET,FSTYPE,OPTIONS']).stdout)['filesystems'][0]
@@ -260,28 +279,63 @@ def main():
         payload = {'Config': {'APIServer': 'https://127.0.0.1:6443', 'CA': cluster['certificate-authority-data'],
                              'ClientCertificate': user['client-certificate-data'], 'ClientKey': user['client-key-data']},
                    'Slot': slot, 'PublisherImage': args.publisher_image, 'SourceSHA': args.source_sha, 'TreeSHA': args.tree_sha}
-        execute('definitions', payload)
+        def observe(operation, value):
+            # Only this disposable fixture approves its own candidate snapshot.
+            # No operational configuration or workflow state is installed here.
+            result = node_call([root + '/installer', operation], input=json.dumps(value),
+                               capture_output=True, limit=130)
+            return json.loads(result.stdout)
+
+        public_definitions = {}
+        if args.installer_binary:
+            observe('prepare-build-slot', {'storageIdentitySHA256': identity, 'nodeBootID': slot['nodeBootID']})
+            request = {'client': payload['Config'], 'slots': [slot], 'publisherImage': args.publisher_image}
+            admission = observe('observe-build-admission', request)
+            definitions = observe('build-admission', {'admission': admission, 'slots': [slot]})
+            for filename, obj in zip(('policy.json', 'binding.json', 'mutation.json', 'mutation-binding.json'), definitions['items'], strict=True):
+                public_definitions[filename] = obj
+                (args.output / filename).write_text(json.dumps(obj, indent=2) + '\n')
+        else:
+            execute('definitions', payload)
         for filename, resource in [('mutation.json', 'mutatingadmissionpolicies'), ('mutation-binding.json', 'mutatingadmissionpolicybindings'),
                                    ('policy.json', 'validatingadmissionpolicies'), ('binding.json', 'validatingadmissionpolicybindings')]:
-            obj = create_global(resource, node_json(filename))
+            obj = create_global(resource, public_definitions[filename] if args.installer_binary else node_json(filename))
             owned_policies.append((resource, obj['metadata']['name'], obj['metadata']['uid']))
             report['ownedPolicies'] = list(owned_policies)
             save()
         time.sleep(3)
-        execute('trust', payload)
-        create(node_json('build-trust.json'))
+        if args.installer_binary:
+            trust = observe('observe-build-trust', {'client': payload['Config'], 'slots': [slot]})
+            create({'apiVersion': 'v1', 'kind': 'ConfigMap', 'metadata': {'name': 'build-trust', 'namespace': namespace},
+                    'immutable': True, 'data': {'trust.json': json.dumps(trust)}})
+            (args.output / 'observed-trust.json').write_text(json.dumps(trust, indent=2) + '\n')
+            request = {'client': payload['Config'], 'slots': [slot], 'admission': admission, 'approvedTrust': trust}
+            profile = observe('observe-build-profile', request)
+            (args.output / 'profile.json').write_text(json.dumps(profile, indent=2) + '\n')
+            wrong = json.loads(json.dumps(request))
+            wrong['approvedTrust']['components']['kindnet']['specSHA256'] = '0' * 64
+            negative = node_call([root + '/installer', 'observe-build-profile'], input=json.dumps(wrong),
+                                 capture_output=True, check=False, limit=130)
+            if negative.returncode == 0:
+                raise ValueError('Changed separately approved trust was accepted')
+            report['transport'] = {'status': 'passed', 'productionInstaller': True,
+                                   'trustApproval': 'isolated fixture only', 'changedApprovedTrustDenied': True}
+        else:
+            execute('trust', payload)
+            create(node_json('build-trust.json'))
         if not args.preflight_only:
             report['workloadExecuted'] = None
             report['workloadMayHaveExecuted'] = True
             save()
-        if args.journal_test_binary is not None:
-            execute('journal-prepare', payload)
-            import closed_build_journal_fixture
-            closed_build_journal_fixture.execute(deadline,provider,node_id,args.journal_test_binary,payload,node_json('profile.json'),args.output,
-                                                lambda source,name:copy_to(source,root+'/evidence/'+name))
-        else:
-            execute('preflight' if args.preflight_only else 'execute', payload)
-        report['transport'] = node_json('transport-report.json')
+        if not args.installer_binary:
+            if args.journal_test_binary is not None:
+                execute('journal-prepare', payload)
+                import closed_build_journal_fixture
+                closed_build_journal_fixture.execute(deadline,provider,node_id,args.journal_test_binary,payload,node_json('profile.json'),args.output,
+                                                    lambda source,name:copy_to(source,root+'/evidence/'+name))
+            else:
+                execute('preflight' if args.preflight_only else 'execute', payload)
+            report['transport'] = node_json('transport-report.json')
         if report['transport'].get('status') != 'passed':
             raise ValueError('Transport did not complete both original phases')
         report['workloadExecuted'] = not args.preflight_only
