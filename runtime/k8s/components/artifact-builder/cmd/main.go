@@ -22,6 +22,7 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/artifact"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildstorage"
 )
 
 const registryHost = "registry-service.kind-registry"
@@ -87,6 +88,10 @@ func registryAuth(file string) (authn.Authenticator, error) {
 	return authn.FromConfig(a), nil
 }
 func run() error {
+	guard := flag.Bool("guard-workspace", false, "verify installed local-kind workspace without publishing")
+	storageID := flag.String("storage-identity", "", "installed physical storage identity")
+	bootID := flag.String("node-boot-id", "", "installed node boot identity")
+	phase := flag.String("workspace-phase", "", "build or publish workspace inspection")
 	recipe := flag.String("recipe", artifact.Recipe, "reviewed artifact recipe")
 	directory := flag.String("input", "/artifacts/quarkus-app", "read-only package directory")
 	output := flag.String("output", "", "isolated internal registry image tag")
@@ -98,6 +103,26 @@ func run() error {
 	results := flag.String("results", "/tekton/results", "trusted result directory")
 	timeout := flag.Duration("timeout", 10*time.Minute, "total operation deadline")
 	flag.Parse()
+	if *guard {
+		valid := flag.NArg() == 0
+		allowed := map[string]bool{"guard-workspace": true, "storage-identity": true, "node-boot-id": true, "workspace-phase": true}
+		flag.Visit(func(f *flag.Flag) {
+			if !allowed[f.Name] {
+				valid = false
+			}
+		})
+		if !valid {
+			return buildstorage.ErrCustody
+		}
+		proof, e := buildstorage.Inspect("/slot", *storageID, *bootID, *phase)
+		if e != nil {
+			return e
+		}
+		return json.NewEncoder(os.Stdout).Encode(proof)
+	}
+	if *storageID != "" || *bootID != "" || *phase != "" {
+		return errors.New("workspace arguments require guard mode")
+	}
 	if flag.NArg() != 0 || !validRecipeOutput(*recipe, *output) || *timeout < time.Second || *timeout > 15*time.Minute {
 		return errors.New("invalid publisher arguments")
 	}

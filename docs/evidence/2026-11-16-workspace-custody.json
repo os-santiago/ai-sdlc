@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "status": "passed",
+  "scope": "isolated local tmpfs guard",
+  "autonomousE2E": false,
+  "network": "none",
+  "checks": [
+    "bounded-empty-build-workspace",
+    "wrong-identity-boot-and-publisher-arguments-denied",
+    "writer-cannot-replace-custody",
+    "nonempty-build-denied-readonly-publish-inspection-accepted",
+    "mode-hardlink-symlink-and-root-permission-controls",
+    "actual-capacity-and-inode-limits-enforced"
+  ],
+  "cleanupComplete": true,
+  "fixtureSetupCapability": "SYS_ADMIN; guard effective capabilities verified zero",
+  "date": "2026-11-16",
+  "report": "/tmp/ai-sdlc-workspace-guard-proof-v5.json",
+  "source": "working tree before commit",
+  "validation": "Go build ./..., vet guard/CLI, tests guard/artifact/CLI; real isolated tmpfs fixture",
+  "review": "Independent read-only audit found no P1/P2 blockers for guard-only scope."
+}
