@@ -51,8 +51,16 @@ def bind_statement(statement,expected,publisher_image):
         steps=task['steps']
         if len(steps)!=1 or steps[0]['entryPoint']!='/component' or steps[0]['environment']['image']!='oci://'+publisher_image:raise ValueError('Untrusted publisher image or entry point')
         args=steps[0]['arguments']
-        if len(args)!=6 or args[0]!='--input=/artifacts/source/quarkus-app/target/quarkus-app' or not re.fullmatch(re.escape('--output='+expected['IMAGE_URL']+':')+r'[a-f0-9]{12}',args[1]):raise ValueError('Unexpected publisher recipe arguments')
-        if args[2:]!=['--source-sha='+expected['CHAINS-GIT_COMMIT'],'--definition-digest='+expected['DEFINITION_DIGEST'],'--run-uid='+expected['RUN_UID'],'--timeout=8m']:raise ValueError('Publisher arguments differ from expected identity')
+        recipes = {
+            'https://github.com/os-santiago/homedir': ('homedir', ['--input=/artifacts/source/quarkus-app/target/quarkus-app']),
+            'https://github.com/os-santiago/saferus': ('saferus', ['--recipe=ai-sdlc.saferus-go-static/v1', '--input=/artifacts/output']),
+        }
+        project, prefix = recipes[expected['CHAINS-GIT_URL']]
+        if expected['IMAGE_URL'] != 'registry-service.kind-registry/ai-sdlc-fixtures/' + project:
+            raise ValueError('Source repository and artifact destination differ')
+        offset = len(prefix)
+        if len(args)!=offset+5 or args[:offset]!=prefix or not re.fullmatch(re.escape('--output='+expected['IMAGE_URL']+':')+r'[a-f0-9]{12}',args[offset]):raise ValueError('Unexpected publisher recipe arguments')
+        if args[offset+1:]!=['--source-sha='+expected['CHAINS-GIT_COMMIT'],'--definition-digest='+expected['DEFINITION_DIGEST'],'--run-uid='+expected['RUN_UID'],'--timeout=8m']:raise ValueError('Publisher arguments differ from expected identity')
         repository,digest=publisher_image.rsplit('@sha256:',1)
         materials=p['materials']
         wanted_materials=[{'uri':'oci://'+repository,'digest':{'sha256':digest}},

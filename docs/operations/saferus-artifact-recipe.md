@@ -50,8 +50,11 @@ python3 tools/verify_konflux_build.py \
 The fixture performs positive/negative/positive network controls, a real Go build,
 separate OCI publication and observation of Chains signing, then cleans up only
 its owned resources. Signing observation alone is not cryptographic acceptance.
-The existing Homedir provenance/runtime validators have project-specific schema
-checks and must not be treated as Saferus release gates without a reviewed
-adapter. No SLSA level, production release or autonomous E2E is established by
+Run `tools/verify_konflux_provenance.py --project saferus` with the same cluster
+and the build report to validate the real image/attestation signatures and bind
+the signed source, destination, recipe, arguments, materials and run identity.
+This adapter validates the installed legacy SLSA v0.2 statement format; migration
+to SLSA v1 is separate work. The Homedir runtime validator remains project-specific
+and must not be treated as a Saferus runtime release gate. No SLSA level, production release or autonomous E2E is established by
 this isolated build. Operational orchestration must consume the immutable merge
 record and acquire its own current authority; this fixture cannot advance it.
