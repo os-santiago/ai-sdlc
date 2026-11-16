@@ -12,7 +12,7 @@ import (
 
 const Registry = "registry-service.kind-registry/ai-sdlc-fixtures/saferus"
 
-var publisherImage = regexp.MustCompile(`^(quay.io/os-santiago/ai-sdlc|localhost/ai-sdlc-artifact-builder)@sha256:[a-f0-9]{64}$`)
+var publisherImage = regexp.MustCompile(`^(quay\.io/os-santiago/ai-sdlc|localhost/ai-sdlc-artifact-builder)@sha256:[a-f0-9]{64}$`)
 var containerID = regexp.MustCompile(`^containerd://[a-f0-9]{64}$`)
 var imageDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
