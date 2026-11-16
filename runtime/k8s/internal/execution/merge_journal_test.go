@@ -484,6 +484,9 @@ func TestMergedRecordRejectsCorruption(t *testing.T) {
 			if _, e := db.ReadMergedRecord(ctx, r.ID); e == nil {
 				t.Fatal("corrupt fact accepted")
 			}
+			if _, e := db.ReadMergedBuildSource(ctx, r.ID); e == nil {
+				t.Fatal("corrupt fact became build input")
+			}
 		})
 	}
 }
@@ -562,6 +565,10 @@ func TestMergedRecordSurvivesExpiryWithoutRenewal(t *testing.T) {
 	after, e := db.ReadMergedRecord(ctx, r.ID)
 	if e != nil || after.ProofDigest != before.ProofDigest || !after.MergedAt.Equal(before.MergedAt) {
 		t.Fatal("historical evidence expired", e)
+	}
+	source, e := db.ReadMergedBuildSource(ctx, r.ID)
+	if e != nil || source.SourceSHA != mergeReceipt(c).CommitSHA || source.MergeRecordSHA256 != before.Digest() {
+		t.Fatal("expired merge lost historical build identity", e)
 	}
 	if _, e = db.ClaimMerge(ctx, r.ID); e == nil {
 		t.Fatal("terminal fact renewed authority")
