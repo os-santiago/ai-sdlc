@@ -166,74 +166,81 @@ func (r *BuildResources) checkMutationInventory(ctx context.Context, expected st
 	return nil
 }
 
-// inspectInstalledProfile is private until physical-slot checks and an explicit
-// installer trust snapshot are integrated. A matching snapshot is a point-in-time
-// observation; concurrent administrator mutation is outside this profile's TCB.
+// inspectInstalledProfile always includes positive connectivity from the actual
+// trusted controller network before either build or publish can begin an effect.
 func (r *BuildResources) inspectInstalledProfile(ctx context.Context) error {
+	targets, err := r.inspectInstalledProfileConfiguration(ctx)
+	if err != nil {
+		return err
+	}
+	return positiveBuildTargets(ctx, targets)
+}
+
+// Administrative observation validates the same inventory but cannot establish
+// reachability from a future controller Pod. No request flag can skip the runtime
+// wrapper above. A snapshot never authorizes execution or relearns trust.
+func (r *BuildResources) inspectInstalledProfileConfiguration(ctx context.Context) ([]buildworkload.DeniedTarget, error) {
 	if r == nil || r.profile.Validate() != nil {
-		return ErrBuildTransport
+		return nil, ErrBuildTransport
 	}
 	observed := map[string]map[string]any{}
 	for _, key := range buildworkload.DependencyKeys() {
 		path, ok := dependencyPath(key)
 		if !ok {
-			return ErrBuildTransport
+			return nil, ErrBuildTransport
 		}
 		obj, e := r.checkDependency(ctx, path, r.profile.Dependencies[key])
 		if e != nil {
-			return e
+			return nil, e
 		}
 		observed[key] = obj
 	}
 	targets, e := BuildNetworkTargets(observed)
 	if e != nil || !checkTargetEquality(r.profile.DeniedTargets, targets) {
-		return ErrBuildTransport
-	}
-	if e := positiveBuildTargets(ctx, targets); e != nil {
-		return e
+		return nil, ErrBuildTransport
 	}
 	config := observed["configMap/build-trust"]
 	if config["immutable"] != true {
-		return ErrBuildTransport
+		return nil, ErrBuildTransport
 	}
 	data, ok := config["data"].(map[string]any)
 	if !ok || len(data) != 1 {
-		return ErrBuildTransport
+		return nil, ErrBuildTransport
 	}
 	raw, ok := data["trust.json"].(string)
 	if !ok || len(raw) > 65536 {
-		return ErrBuildTransport
+		return nil, ErrBuildTransport
 	}
 	var trust BuildTrust
 	if authority.DecodeStrict([]byte(raw), &trust) != nil || trust.Validate() != nil {
-		return ErrBuildTransport
+		return nil, ErrBuildTransport
 	}
 	for key, path := range buildTrustPaths {
 		obj, e := r.checkDependency(ctx, path, trust.Components[key])
 		if e != nil {
-			return e
+			return nil, e
 		}
 		if (key == "tekton-controller" || key == "kindnet") && !buildControllerReady(obj, key == "kindnet") {
-			return ErrBuildTransport
+			return nil, ErrBuildTransport
 		}
 	}
 	if e := r.checkMutationInventory(ctx, trust.MutationInventorySHA256); e != nil {
-		return e
+		return nil, e
 	}
 	// A sealed digest cannot authorize a different admission definition. Compare
 	// the installed own policies with this compiler's exact reviewed definitions.
 	policy, binding, e := buildworkload.Admission(r.profile, r.slots)
 	if e != nil {
-		return ErrBuildTransport
+		return nil, ErrBuildTransport
 	}
 	mutation, mutationBinding := buildworkload.BoundsMutation()
 	definitions := map[string][]byte{"validatingAdmissionPolicy/ai-sdlc-build-pods": policy, "validatingAdmissionPolicyBinding/ai-sdlc-build-pods": binding, "mutatingAdmissionPolicy/ai-sdlc-build-bounds": mutation, "mutatingAdmissionPolicyBinding/ai-sdlc-build-bounds": mutationBinding}
 	for key, raw := range definitions {
 		if !exactAdmissionDefinition(observed[key], raw) {
-			return ErrBuildTransport
+			return nil, ErrBuildTransport
 		}
 	}
-	return nil
+	return targets, nil
 }
 
 func exactAdmissionDefinition(actual map[string]any, raw []byte) bool {
