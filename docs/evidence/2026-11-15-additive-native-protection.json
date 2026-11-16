@@ -78,5 +78,16 @@
     "No actual GitHub merge",
     "Konflux fixtures are not autonomous build/promotion controllers",
     "No E2E or SLSA level claimed"
-  ]
+  ],
+  "currentSelectionIntegration": {
+    "sourceCommit": "7e6c3cf1cb979872b7e076da8a1dbe90e09b837e",
+    "status": "passed",
+    "passedTests": 1224,
+    "passedPackages": 38,
+    "build": true,
+    "vet": true,
+    "database": "real disposable PostgreSQL",
+    "forge": "synthetic",
+    "installationRetested": false
+  }
 }
