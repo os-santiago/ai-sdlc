@@ -333,3 +333,53 @@ func TestPromotionCannotOutliveInstalledTrustAndTarget(t *testing.T) {
 		})
 	}
 }
+
+func TestPromotionPlanIsClosedFiniteAndNotRenewable(t *testing.T) {
+	cfg, r, b, _, now := releaseFixture(t)
+	c, e := NewCommand(cfg, r, b, now)
+	if e != nil {
+		t.Fatal(e)
+	}
+	p, e := CompilePlan(cfg, c, r, b, now)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if p.Validate(cfg, c, r, b) != nil || p.ExpiresAt != now.Add(PlanMaxAge).UnixMilli() {
+		t.Fatal("plan binding")
+	}
+	if _, e = CompilePlan(cfg, c, r, b, time.UnixMilli(c.ExpiresAt)); e == nil {
+		t.Fatal("expired promotion compiled new plan")
+	}
+	for _, name := range []string{"image", "baseline", "source", "target", "id", "expiry", "future"} {
+		t.Run(name, func(t *testing.T) {
+			q := p
+			switch name {
+			case "image":
+				q.Image = "attacker.invalid/x:latest"
+			case "baseline":
+				q.PreviousImage = q.Image
+			case "source":
+				q.SourceSHA = strings.Repeat("f", 40)
+			case "target":
+				q.TargetSHA256 = strings.Repeat("f", 64)
+			case "id":
+				q.PromotionID = "promote-" + strings.Repeat("f", 64)
+			case "expiry":
+				q.ExpiresAt++
+			case "future":
+				q.CompiledAt = c.ExpiresAt
+			}
+			if q.Validate(cfg, c, r, b) == nil {
+				t.Fatal("changed plan accepted")
+			}
+		})
+	}
+	cfg.Target.ExpiresAt = now.Add(5 * time.Minute).UnixMilli()
+	c, e = NewCommand(cfg, r, b, now)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = CompilePlan(cfg, c, r, b, now); e == nil {
+		t.Fatal("insufficient rollout budget")
+	}
+}

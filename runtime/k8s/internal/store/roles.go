@@ -77,6 +77,14 @@ func (db *DB) ProvisionRolesForBuild(ctx context.Context, passwords map[string]s
 
 // Provenance privileges require their own reviewed installation opt-in.
 func (db *DB) ProvisionRolesForProvenance(ctx context.Context, passwords map[string]string, mode string, review, publication, merge, build, provenance bool) error {
+	return db.ProvisionRolesForPromotion(ctx, passwords, mode, review, publication, merge, build, provenance, false)
+}
+
+// Promotion remains inactive unless separately selected by reviewed installation.
+func (db *DB) ProvisionRolesForPromotion(ctx context.Context, passwords map[string]string, mode string, review, publication, merge, build, provenance, promotion bool) error {
+	if promotion && !provenance {
+		return errors.New("promotion requires verified provenance capability")
+	}
 	if provenance && !build {
 		return errors.New("provenance requires verified build capability")
 	}
@@ -221,6 +229,9 @@ func (db *DB) ProvisionRolesForProvenance(ctx context.Context, passwords map[str
 			}
 			if provenance && component == "verifier" {
 				statements = append(statements, provenancePrivileges...)
+			}
+			if promotion && component == "release-manager" {
+				statements = append(statements, promotionPrivileges...)
 			}
 			// REVOKE table privileges alone does not remove column grants.
 			for _, revoke := range columnRevocations {
