@@ -72,6 +72,14 @@ func (db *DB) ProvisionRolesForMerge(ctx context.Context, passwords map[string]s
 
 // Build grants remain absent unless the reviewed installation explicitly opts in.
 func (db *DB) ProvisionRolesForBuild(ctx context.Context, passwords map[string]string, mode string, review, publication, merge, build bool) error {
+	return db.ProvisionRolesForProvenance(ctx, passwords, mode, review, publication, merge, build, false)
+}
+
+// Provenance privileges require their own reviewed installation opt-in.
+func (db *DB) ProvisionRolesForProvenance(ctx context.Context, passwords map[string]string, mode string, review, publication, merge, build, provenance bool) error {
+	if provenance && !build {
+		return errors.New("provenance requires verified build capability")
+	}
 	if build && !merge {
 		return errors.New("build requires verified merge capability")
 	}
@@ -207,6 +215,9 @@ func (db *DB) ProvisionRolesForBuild(ctx context.Context, passwords map[string]s
 			}
 			if build && component == "build-controller" {
 				statements = append(statements, buildPrivileges...)
+			}
+			if provenance && component == "verifier" {
+				statements = append(statements, provenancePrivileges...)
 			}
 			// REVOKE table privileges alone does not remove column grants.
 			for _, revoke := range columnRevocations {

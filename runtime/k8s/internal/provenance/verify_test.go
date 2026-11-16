@@ -42,6 +42,10 @@ func jsonBytes(t *testing.T, v any) []byte {
 }
 func uid(n int) string { return fmt.Sprintf("%08d-1111-1111-1111-111111111111", n) }
 func recordFixture(t *testing.T, image string) buildrecord.Record {
+	r, _, _ := recordAndAuthorityFixture(t, image)
+	return r
+}
+func recordAndAuthorityFixture(t *testing.T, image string) (buildrecord.Record, building.Configuration, authority.BootstrapMaterial) {
 	t.Helper()
 	m, e := authority.Bootstrap("os-santiago/saferus", "ai-sdlc-production")
 	if e != nil {
@@ -105,7 +109,7 @@ func recordFixture(t *testing.T, image string) buildrecord.Record {
 	if r.Validate() != nil {
 		t.Fatal("invalid synthetic historical fixture")
 	}
-	return r
+	return r, cfg, m
 }
 func statementFixture(t *testing.T, r buildrecord.Record) map[string]any {
 	t.Helper()
@@ -135,6 +139,8 @@ func statementFixture(t *testing.T, r buildrecord.Record) map[string]any {
 
 type signatureFixture struct {
 	record                   buildrecord.Record
+	config                   building.Configuration
+	material                 authority.BootstrapMaterial
 	trust                    Trust
 	credential               Credential
 	signer                   signature.SignerVerifier
@@ -147,7 +153,7 @@ type signatureFixture struct {
 func newFixture(t *testing.T) *signatureFixture {
 	t.Helper()
 	image := jsonBytes(t, manifest{SchemaVersion: 2, MediaType: ociManifest, Config: descriptor{MediaType: "application/vnd.oci.image.config.v1+json", Digest: "sha256:" + strings.Repeat("1", 64), Size: 2}, Layers: []descriptor{{MediaType: "application/vnd.oci.image.layer.v1.tar+gzip", Digest: "sha256:" + strings.Repeat("2", 64), Size: 100}}})
-	r := recordFixture(t, digest(image))
+	r, cfg, material := recordAndAuthorityFixture(t, digest(image))
 	key, e := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if e != nil {
 		t.Fatal(e)
@@ -162,7 +168,7 @@ func newFixture(t *testing.T) *signatureFixture {
 	}
 	trust := Trust{Version: PolicyVersion, Scope: LocalScope, Repository: r.Command.Repository, Environment: r.Command.Environment, ClusterUID: r.Context.Profile.ClusterUID, BuildNamespaceUID: r.Context.Profile.NamespaceUID, Registry: building.Registry, SignerPublicKey: string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: spki})), SignerSHA256: authority.Digest(spki), PublisherImage: r.Result.PublisherImage, VerifierImage: "quay.io/os-santiago/ai-sdlc@sha256:" + strings.Repeat("e", 64), VerifierVersion: VerifierVersion, CompilerVersion: buildworkload.CompilerVersion, PredicateType: PredicateType, Transparency: LocalTransparency, ApprovedAt: time.Now().Add(-time.Minute).UnixMilli(), ExpiresAt: time.Now().Add(time.Hour).UnixMilli()}
 	payload := jsonBytes(t, map[string]any{"critical": map[string]any{"type": "cosign container image signature", "identity": map[string]string{"docker-reference": r.Result.ImageURL}, "image": map[string]string{"docker-manifest-digest": r.Result.ImageDigest}}, "optional": nil})
-	f := &signatureFixture{record: r, trust: trust, credential: Credential{"ai-sdlc-verifier", strings.Repeat("x", 40)}, signer: signer, routes: map[string][]byte{registryPath + "manifests/" + r.Result.ImageDigest: image}, imagePayload: payload, statement: statementFixture(t, r)}
+	f := &signatureFixture{record: r, config: cfg, material: material, trust: trust, credential: Credential{"ai-sdlc-verifier", strings.Repeat("x", 40)}, signer: signer, routes: map[string][]byte{registryPath + "manifests/" + r.Result.ImageDigest: image}, imagePayload: payload, statement: statementFixture(t, r)}
 	f.resign(t)
 	return f
 }

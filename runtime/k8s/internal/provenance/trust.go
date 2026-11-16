@@ -93,3 +93,12 @@ func (t Trust) matches(r buildrecord.Record) bool {
 		r.Context.Profile.ClusterUID == t.ClusterUID && r.Context.Profile.NamespaceUID == t.BuildNamespaceUID &&
 		r.Result.ImageURL == t.Registry && r.Result.PublisherImage == t.PublisherImage && r.Context.Compiler == t.CompilerVersion
 }
+
+// Validate checks independently installed public trust without credentials or I/O.
+func (t Trust) Validate(now time.Time) error {
+	if _, err := t.verifier(now); err != nil {
+		return err
+	}
+	_, err := trustRoots(t.RegistryCA)
+	return err
+}

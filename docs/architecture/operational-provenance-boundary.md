@@ -1,7 +1,7 @@
 # Operational provenance boundary
 
-**Context retention and an inactive registry-verification library are implemented;
-the authorized operational verification journal remains work for
+**Context retention, the inactive registry-verification library and a bounded
+verification journal are implemented; component wiring and installation remain work for
 [#574](https://github.com/os-santiago/ai-sdlc/issues/574).**
 This does not activate the installed build controller or authorize promotion.
 The current [readiness report](../operations/saferus-e2e-readiness.md)
@@ -116,10 +116,44 @@ is partial format evidence, never operational history or approved trust.
 The username requirement does not establish registry permissions. Installation
 must provision a native pull-only ACL and prove denied push/delete/other-repository
 access before activation. The existing kind registry does not yet satisfy this
-requirement. Current policy, freeze, revocation and durable completion still
-belong to the next journal increment.
+requirement. The journal below provides current-policy and durable-completion fences; it
+is not yet wired to a runtime component.
 
-## Next slice: independent current verification
+## Implemented third slice: separately authorized verification journal
+
+[`provenance.Command`](../../runtime/k8s/internal/provenance/command.go) binds one
+existing authenticated build record, the installed trust revision, both current
+loop policies, intake configuration and original compilation configuration. A
+fresh `verify-built` signature must come from the build-controller identity and
+target the verifier. Its lifetime is at most two minutes and cannot outlast
+approved trust. Expired build authority remains historical; it does not authorize
+this new attempt or prevent a separately authorized verification of valid history.
+
+[`ProvenanceJournal`](../../runtime/k8s/internal/store/provenance_journal.go)
+rechecks signed authority, original history and current issue eligibility at
+queue, exclusive claim, input read and completion. Configuration maps/slices are
+copied. Policy/trust, clock and cancellation are reobserved after potentially
+blocking SQL reads and after COMMIT before returning a claim or input. Completion
+rechecks after inserting the proof and after the final state update. Unknown,
+expired, frozen, revoked or changed authority prevents a successful result.
+These checks do not create an atomic transaction across mounted configuration,
+PostgreSQL and the registry; later promotion must obtain its own current authority.
+
+Migration 0025 permits one command per built record. A consumed claim is never
+reissued after expiry, restart or an uncertain COMMIT response. The immutable
+proof and terminal `verified` state commit together; a lost response can be
+resolved by the role-checked historical reader. Historical readback validates
+archived signed authority and the complete proof binding at its original
+completion time. It grants no current promotion permission.
+
+`ProvisionRolesForProvenance` requires its own explicit capability in addition to
+build. Existing build provisioning and maintenance do not grant access to this
+journal. The verifier can append its proof, but cannot modify the stored command,
+configuration, expiry or accepted proof; other components cannot write it. These
+methods remain inactive: no new HTTP route, dispatcher, controller or installer
+option is introduced by the journal increment.
+
+## Remaining integration before activation
 
 A new bounded verification attempt consumes the authenticated historical record
 and independently installed current trust. Its identity binds the build record,
