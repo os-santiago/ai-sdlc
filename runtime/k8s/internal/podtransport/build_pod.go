@@ -142,7 +142,7 @@ func (r *BuildResources) expectedBuildPodSpec(phase, runUID string, actual map[s
 	}
 	if phase == "build" {
 		initializer := expected["initContainers"].([]any)[1].(map[string]any)
-		initializer["args"] = []any{"-c", "scriptfile=\"" + scriptFile + "\"\ntouch ${scriptfile} && chmod +x ${scriptfile}\ncat > ${scriptfile} << '_EOF_'\n" + r.compiled.BuildScriptBase64 + "\n_EOF_\n/tekton/bin/entrypoint decode-script \"${scriptfile}\"\n"}
+		initializer["args"] = []any{"-c", "scriptfile=\"" + quoteBuildShellValue(scriptFile) + "\"\ntouch ${scriptfile} && chmod +x ${scriptfile}\ncat > ${scriptfile} << '_EOF_'\n" + r.compiled.BuildScriptBase64 + "\n_EOF_\n/tekton/bin/entrypoint decode-script \"${scriptfile}\"\n"}
 	}
 	return expected, nil
 }
@@ -161,4 +161,13 @@ func (r *BuildResources) checkBuildPodSpec(raw []byte, phase, runUID string) (st
 	}
 	canonical, _ := json.Marshal(actual)
 	return authority.Digest(canonical), nil
+}
+
+// Quote every character with special meaning inside shell double quotes even
+// though scriptBasename already restricts this observed alias to safe syntax.
+func quoteBuildShellValue(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `"`, `\"`)
+	value = strings.ReplaceAll(value, `$`, `\$`)
+	return strings.ReplaceAll(value, "`", "\\`")
 }

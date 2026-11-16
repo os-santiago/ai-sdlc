@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -217,4 +218,15 @@ func changedBuildPaths(a, b any, path string) []string {
 		return out
 	}
 	return []string{path}
+}
+
+func TestBuildShellAliasQuoting(t *testing.T) {
+	for _, value := range []string{`/tekton/scripts/script-1-abc12`, `x";touch /tmp/unwanted;"`, "$(id)`id`\\", "line\nend"} {
+		quoted := quoteBuildShellValue(value)
+		command := exec.Command("sh", "-c", "printf '%s' \""+quoted+"\"")
+		got, err := command.Output()
+		if err != nil || string(got) != value {
+			t.Fatalf("quoted round trip failed: %v", err)
+		}
+	}
 }
