@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "scope": "inactive closed Saferus build transport",
+  "autonomousE2E": false,
+  "operationalControllerActive": false,
+  "fullWorkloadExecutionThroughTransport": false,
+  "runtimeValidation": {
+    "report": "/tmp/ai-sdlc-build-transport-validation-v1/report.json",
+    "passedTests": 1455,
+    "passedPackages": 42,
+    "status": "passed",
+    "source": "uncommitted transport on c3ad31a; opt-in closed fixture added afterward; runtime implementation unchanged afterward"
+  },
+  "realSlotAPICustody": {
+    "report": "/tmp/ai-sdlc-build-slot-api-proof-v1/report.json",
+    "accepted": 1,
+    "rejected": 7,
+    "cleanupComplete": true,
+    "physicalMountValidated": false
+  },
+  "realInstalledPreflight": {
+    "report": "/tmp/ai-sdlc-closed-build-preflight-v5/report.json",
+    "status": "passed",
+    "cleanupComplete": true,
+    "workloadExecuted": false,
+    "syntheticAuthority": true,
+    "physicalMountPrepared": true
+  },
+  "syntheticTerminalObserver": {
+    "positiveCases": 2,
+    "negativeCases": 27,
+    "additionalRegressions": [
+      "sticky invalidation after error or completion regression",
+      "retained completion does not alias returned containers"
+    ]
+  },
+  "pending": [
+    "execute actual build and publication through transport",
+    "integrate durable journal controller and preflight at every effect",
+    "install runtime component and authority",
+    "independent provenance and promotion",
+    "genuine issue-to-test-production E2E"
+  ]
+}
