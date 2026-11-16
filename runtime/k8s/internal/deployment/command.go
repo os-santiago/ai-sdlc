@@ -41,7 +41,15 @@ func (c Command) ID() string { b, _ := json.Marshal(c); return "deploy-" + autho
 // Callers must authenticate every record and current issue eligibility. A pure
 // value, including one passing this function, is not evidence of its origin.
 func NewCommand(cfg releasing.Configuration, r promotionrecord.Record, p provenancerecord.Record, b buildrecord.Record, now time.Time) (Command, error) {
-	c := Command{Version, r.Command.ID(), r.Digest(), r.Plan.Digest(), ConfigurationDigest(cfg), now.UnixMilli(), r.Plan.ExpiresAt}
+	// Round issuance up to the wire precision. Flooring could place issuance
+	// before a promotion recorded earlier in the same millisecond and make its
+	// authenticated historical read reject the command. Keep strict ordering
+	// checks, including rejection of a promotion later than the actual caller time.
+	issued := now.Truncate(time.Millisecond)
+	if issued.Before(now) {
+		issued = issued.Add(time.Millisecond)
+	}
+	c := Command{Version, r.Command.ID(), r.Digest(), r.Plan.Digest(), ConfigurationDigest(cfg), issued.UnixMilli(), r.Plan.ExpiresAt}
 	if c.BindRecords(cfg, r, p, b, now) != nil || c.ExpiresAt-now.UnixMilli() < releasing.MinimumEffectBudget.Milliseconds() {
 		return Command{}, ErrDeployment
 	}
