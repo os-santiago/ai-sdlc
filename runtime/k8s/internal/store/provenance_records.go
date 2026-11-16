@@ -2,21 +2,15 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/provenance"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/provenancerecord"
 	"time"
 )
 
-// ProvenanceRecord is immutable historical evidence, never promotion authority.
-type ProvenanceRecord struct {
-	Command       provenance.Command
-	Configuration provenance.Configuration
-	Proof         provenance.Proof
-	RecordedAt    time.Time
-}
+// ProvenanceRecord preserves the historical wire encoding. Authenticity is established only by this role-checked reader.
+type ProvenanceRecord = provenancerecord.Record
 
-func (r ProvenanceRecord) Digest() string { raw, _ := json.Marshal(r); return authority.Digest(raw) }
 func (db *DB) ReadProvenanceRecord(ctx context.Context, id string) (ProvenanceRecord, error) {
 	var r ProvenanceRecord
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
