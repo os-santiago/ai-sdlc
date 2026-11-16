@@ -113,7 +113,10 @@ func TestRealConsoleDeploymentRollback(t *testing.T) {
 	}
 	report := map[string]any{"version": 1, "scope": "isolated-kubernetes-console-rollback", "workflowEvidence": false, "vaultCryptographyValidated": false, "candidateSuccessfulRolloutValidated": false, "status": "passed", "baseline": baseline, "applied": applied, "rolledBack": rolled, "health": health}
 	data, _ := json.MarshalIndent(report, "", "  ")
-	if os.WriteFile(input.Report, append(data, '\n'), 0600) != nil {
+	// Public observations only. Docker may write this as container root while
+	// the host runner owns the private parent directory and reads the report.
+	// Credentials, keys and fixture input remain separate private files.
+	if os.WriteFile(input.Report, append(data, '\n'), 0644) != nil {
 		t.Fatal("public fixture report unavailable")
 	}
 }

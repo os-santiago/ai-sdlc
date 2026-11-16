@@ -95,6 +95,8 @@ def main():
             if len(data)>32*1024*1024 or 'sha256:'+hashlib.sha256(data).hexdigest()!=digest:raise ValueError('Fixture OCI content hash mismatch')
             return data
         root_doc=json.loads(blob(matches[0]));runtime_doc=json.loads(blob(runtime))
+        report['baselineDescriptors']={'referenceDigest':matches[0],'runtimeDigest':runtime,'reference':root_doc,'runtime':runtime_doc}
+        save()
         manifest_doc=root_doc;manifest_digest=matches[0]
         if runtime!=matches[0]:
             # Docker can retain a single-platform index as the image reference
@@ -106,7 +108,11 @@ def main():
             else:
                 desc=runtime_doc.get('manifests',[]);child=matches[0]
             child_raw=blob(child)
-            if len(desc)!=1 or desc[0].get('digest')!=child or desc[0].get('size')!=len(child_raw) or desc[0].get('platform',{}).get('os')!='linux' or desc[0].get('platform',{}).get('architecture')!='amd64':raise ValueError('Runtime and reference do not share the sole approved manifest')
+            if len(desc)!=1 or desc[0].get('digest')!=child or desc[0].get('size')!=len(child_raw):raise ValueError('Runtime and reference do not share the sole approved manifest')
+            # Docker archive import omits platform on its wrapper descriptor.
+            # The hash-verified image configuration below remains mandatory.
+            # If descriptor platform metadata exists, it must agree as well.
+            if 'platform' in desc[0] and (desc[0]['platform'].get('os')!='linux' or desc[0]['platform'].get('architecture')!='amd64'):raise ValueError('Fixture descriptor platform differs')
         manifest=manifest_doc;config=manifest['config'];config_raw=blob(config['digest'])
         platform=json.loads(config_raw)
         if platform.get('os')!='linux' or platform.get('architecture')!='amd64':raise ValueError('Fixture image platform differs')
