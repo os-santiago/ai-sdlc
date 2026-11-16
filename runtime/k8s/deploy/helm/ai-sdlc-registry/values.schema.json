@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "clusterUID",
+    "creationNonce",
+    "credentialRevision",
+    "image",
+    "storageSize"
+  ],
+  "properties": {
+    "clusterUID": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$"
+    },
+    "creationNonce": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{48}$"
+    },
+    "credentialRevision": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "image": {
+      "const": "quay.io/konflux-ci/zot@sha256:92cb058816f30d14d3b64d85f8ddd6c4c681fbf9263af04085cd520c0bc7db42"
+    },
+    "storageSize": {
+      "const": "2Gi"
+    }
+  }
+}

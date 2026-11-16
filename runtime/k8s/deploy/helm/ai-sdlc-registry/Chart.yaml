@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ai-sdlc-registry
+description: Single-owner local OCI registry with native publisher and verifier permissions
+type: application
+version: 0.1.0
+appVersion: pinned-zot
