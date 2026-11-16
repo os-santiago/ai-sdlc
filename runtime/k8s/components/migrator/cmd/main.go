@@ -21,6 +21,11 @@ func run() error {
 		return errors.New("select migrate or bootstrap-identities")
 	}
 	switch os.Args[1] {
+	case "create-registry-custody":
+		if len(os.Args) != 2 {
+			return errors.New("unexpected registry bootstrap arguments")
+		}
+		return createRegistryCustody(os.Stdin, os.Stdout)
 	case "inspect-empty-bootstrap":
 		if len(os.Args) != 2 {
 			return errors.New("unexpected bootstrap inspection arguments")

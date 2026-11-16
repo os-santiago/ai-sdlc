@@ -144,3 +144,68 @@ delivery. No issue is admitted and no workflow stage is advanced by preparation.
 After `prepare`, continuation is not implemented yet: [issue #574](https://github.com/os-santiago/ai-sdlc/issues/574) tracks the remaining capability transition. The earlier `local --config` example applies before preparation only. Do not delete the preparation record or unpause the release manually. This command currently ends at a frozen, empty installation for administrative integration checks.
 
 If initial inspection is rejected, the installer reports a finite boundary such as `connection`, `primary-authority`, `table-inventory`, `migration-inventory` or `history`. These identify where validation stopped, not permission to bypass it. A history-boundary failure can also be a read failure; it does not itself prove rows exist. Driver messages, connection strings and row contents remain private. Keep the runtime frozen and resolve the condition through reviewed installation changes.
+
+### Cold installation with a Helm-owned registry
+
+Konflux v0.2.2 continuously reconciles its embedded Zot configuration and does
+not expose native ACL configuration. For the Saferus demonstration, select the
+following profile when creating a **new** cluster:
+
+```sh
+./install.sh supply-chain local --cluster ai-sdlc-demo --provider podman \
+  --managed-registry --images ./reviewed-images.lock.json
+```
+
+The reviewed image lock must include a migrator implementing
+`create-registry-custody`. This profile also requires the pinned Python packages
+in `tools/quality-requirements.txt`. Reapply with exactly the same command and
+image lock, before creating either `ai-sdlc-runtime` or `ai-sdlc-builds`. Once either namespace exists, this profile allows only status; runtime freeze is not proof of absent workflow history. An existing operator-owned registry cannot be converted by this
+command; keep it intact and choose a new cluster name.
+
+The installer disables only Konflux's internal-registry subcontroller during
+cold creation. A separate Helm release declares Zot at the existing
+`registry-service.kind-registry` endpoint, native repository ACL, restricted
+workload, private network boundary, certificate and trust-manager Bundle. The
+publisher can read/create/update only `ai-sdlc-fixtures/saferus`; the provenance
+reader can only read it. Neither can delete. Credentials are generated once
+through the pinned migrator and stored in protected local custody and immutable
+Kubernetes Secrets, outside Helm values and history.
+
+A two-GiB retained PVC replaces ephemeral registry storage. Reapplication checks
+original cluster, Konflux parent, namespace, Secrets, Helm resource and storage
+identities; replacements are not adopted. A complete lost-create response may
+be recovered from its original recorded nonce and bytes. An incomplete Helm
+creation is retained for inspection, not overwritten automatically. This is an
+initial-installation profile, not a procedure for upgrading installations with
+workflow history.
+
+Installation creates one explicitly administrative OCI marker and verifies real
+TLS/hostname, publisher writes, reader reads, write/delete/cross-repository
+and anonymous denials, followed by another successful read. The deletion probe
+uses a confirmed absent digest, never retained software. This marker is not a
+build, signature, provenance receipt, release or autonomous workflow evidence.
+The endpoint's local CA check does not approve a provenance signing key.
+
+Registry storage remains local to the kind node. Retain protects against PVC
+release deletion; it does not provide high availability, off-node backup or
+recovery after deleting the cluster. Pod-replacement persistence and Konflux
+reconciliation must also pass the real installation acceptance check before
+this profile is used for delivery.
+
+Before installing the runtime/build namespaces, execute the same installer's cold
+acceptance procedure:
+
+```sh
+./install.sh supply-chain verify-registry --cluster ai-sdlc-demo --provider podman \
+  --managed-registry --images ./reviewed-images.lock.json
+```
+
+It reapplies the same reviewed chart, records the original registry Pod and
+storage identities, deletes only that Pod with a UID precondition, and waits for
+a healthy replacement. The original administrative marker must still exist;
+the probe refuses to recreate missing persistence evidence. It also observes
+configuration after annotating the existing Konflux parent. Evidence remains in
+protected installation state and does not advance any workflow. Repetition uses
+the retained result plus fresh ACL checks; it does not repeatedly delete Pods.
+
+To reproduce role provisioning and inspection safely, run `python3 tools/validate_bootstrap_inspection.py --provider podman --output /path/to/new-evidence-directory`. It creates and removes its own PostgreSQL instance; it never contacts the installed database.

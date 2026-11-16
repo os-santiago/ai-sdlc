@@ -1,0 +1,184 @@
+{{- if or (not (regexMatch "^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$" .Values.clusterUID)) (not (regexMatch "^[a-f0-9]{48}$" .Values.creationNonce)) (not (regexMatch "^[a-f0-9]{64}$" .Values.credentialRevision)) }}
+{{- fail "original cluster, creation nonce and credential revision required" }}
+{{- end }}
+{{- if ne .Values.image "quay.io/konflux-ci/zot@sha256:92cb058816f30d14d3b64d85f8ddd6c4c681fbf9263af04085cd520c0bc7db42" }}
+{{- fail "reviewed native registry image required" }}
+{{- end }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kind-registry
+  annotations:
+    ai-sdlc.io/cluster-uid: {{ .Values.clusterUID | quote }}
+    ai-sdlc.io/creation-nonce: {{ .Values.creationNonce | quote }}
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: registry
+  namespace: kind-registry
+  annotations:
+    ai-sdlc.io/creation-nonce: {{ .Values.creationNonce | quote }}
+automountServiceAccountToken: false
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ai-sdlc-registry-retain
+  annotations:
+    ai-sdlc.io/creation-nonce: {{ .Values.creationNonce | quote }}
+provisioner: rancher.io/local-path
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: registry-data
+  namespace: kind-registry
+  annotations:
+    helm.sh/resource-policy: keep
+    ai-sdlc.io/creation-nonce: {{ .Values.creationNonce | quote }}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ai-sdlc-registry-retain
+  resources:
+    requests: {storage: {{ .Values.storageSize }}}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: registry-cert
+  namespace: kind-registry
+  annotations:
+    ai-sdlc.io/creation-nonce: {{ .Values.creationNonce | quote }}
+spec:
+  secretName: local-registry-tls
+  duration: 168h
+  renewBefore: 24h
+  isCA: false
+  privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Never}
+  dnsNames: [registry-service.kind-registry, registry-service.kind-registry.svc, registry-service.kind-registry.svc.cluster.local]
+  issuerRef: {kind: ClusterIssuer, name: konflux-issuer}
+---
+apiVersion: trust.cert-manager.io/v1alpha1
+kind: Bundle
+metadata:
+  name: trusted-ca
+  annotations:
+    ai-sdlc.io/creation-nonce: {{ .Values.creationNonce | quote }}
+spec:
+  sources:
+    - useDefaultCAs: true
+    - secret: {name: konflux-ca-secret, key: ca.crt}
+  target:
+    configMap: {key: ca-bundle.crt}
+    namespaceSelector: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zot-config
+  namespace: kind-registry
+  annotations:
+    ai-sdlc.io/creation-nonce: {{ .Values.creationNonce | quote }}
+data:
+  config.json: |
+    {
+      "distSpecVersion": "1.1.1",
+      "storage": {"rootDirectory": "/var/lib/registry"},
+      "http": {
+        "address": "0.0.0.0", "port": 5000, "compat": ["docker2s2"],
+        "tls": {"cert": "/certs/tls.crt", "key": "/certs/tls.key"},
+        "auth": {"htpasswd": {"path": "/etc/zot/auth/htpasswd"}},
+        "accessControl": {"repositories": {
+          "ai-sdlc-fixtures/saferus": {
+            "policies": [
+              {"users": ["konflux"], "actions": ["read", "create", "update"]},
+              {"users": ["ai-sdlc-verifier"], "actions": ["read"]}
+            ], "defaultPolicy": []
+          }, "**": {"defaultPolicy": []}
+        }}
+      },
+      "log": {"level": "info"}
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry-service
+  namespace: kind-registry
+  annotations:
+    ai-sdlc.io/creation-nonce: {{ .Values.creationNonce | quote }}
+spec:
+  type: ClusterIP
+  selector: {run: registry}
+  ports: [{name: https, port: 443, targetPort: 5000}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry
+  namespace: kind-registry
+  annotations:
+    ai-sdlc.io/creation-nonce: {{ .Values.creationNonce | quote }}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {run: registry}}
+  template:
+    metadata:
+      labels: {run: registry, app.kubernetes.io/part-of: ai-sdlc}
+      annotations:
+        ai-sdlc.io/credential-revision: {{ .Values.credentialRevision | quote }}
+    spec:
+      serviceAccountName: registry
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 10000, runAsGroup: 10000, fsGroup: 10000, fsGroupChangePolicy: OnRootMismatch, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: registry
+          image: {{ .Values.image | quote }}
+          args: [/etc/zot/config.json]
+          imagePullPolicy: IfNotPresent
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          resources: {requests: {cpu: 25m, memory: 64Mi}, limits: {cpu: "1", memory: 512Mi}}
+          ports: [{name: https, containerPort: 5000}]
+          readinessProbe: {tcpSocket: {port: https}, periodSeconds: 2}
+          livenessProbe: {tcpSocket: {port: https}, initialDelaySeconds: 10}
+          volumeMounts:
+            - {name: config, mountPath: /etc/zot, readOnly: true}
+            - {name: auth, mountPath: /etc/zot/auth, readOnly: true}
+            - {name: certs, mountPath: /certs, readOnly: true}
+            - {name: storage, mountPath: /var/lib/registry}
+      volumes:
+        - name: config
+          configMap: {name: zot-config, defaultMode: 0440}
+        - name: auth
+          secret: {secretName: zot-htpasswd, defaultMode: 0440}
+        - name: certs
+          secret: {secretName: local-registry-tls, defaultMode: 0440}
+        - name: storage
+          persistentVolumeClaim: {claimName: registry-data}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: registry-boundary
+  namespace: kind-registry
+  annotations:
+    ai-sdlc.io/creation-nonce: {{ .Values.creationNonce | quote }}
+spec:
+  podSelector: {matchLabels: {run: registry}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - {key: kubernetes.io/metadata.name, operator: In, values: [ai-sdlc-runtime, ai-sdlc-builds, ai-sdlc-production]}
+      ports: [{protocol: TCP, port: 5000}]
+  egress: []

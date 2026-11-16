@@ -189,3 +189,5 @@ event schemas under `spec/`.
 Apache-2.0
 
 For supply-chain component validation, see the [isolated Homedir/Konflux fixture](docs/operations/konflux-homedir-fixture.md). It records actual builds and signature checks without advancing live delivery.
+
+For a new Saferus demonstration cluster, the [cold Helm registry profile](docs/operations/build-runtime-install.md#cold-installation-with-a-helm-owned-registry) adds native read-only provenance credentials and retained local registry storage. It preserves existing installations and does not activate autonomous delivery by itself.

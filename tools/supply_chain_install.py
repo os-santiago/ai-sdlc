@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Install an isolated, pinned Konflux validation environment through Helm."""
 import argparse
+from contextlib import ExitStack
 import hashlib
 import io
 import json
@@ -265,24 +266,45 @@ def bootstrap_tools(deadline):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('plan','local','status'))
+    parser.add_argument('action', choices=('plan','local','status','verify-registry'))
     parser.add_argument('--cluster', default='ai-sdlc-konflux')
     parser.add_argument('--provider', choices=('auto','docker','podman'), default='auto')
     parser.add_argument('--timeout', type=int, default=1800, help='Overall seconds, maximum 1800')
+    parser.add_argument('--managed-registry', action='store_true', help='Cold installation: Helm-owned Zot with native ACL and retained storage')
+    parser.add_argument('--images', type=Path, help='Reviewed runtime image lock for private cold registry custody')
     args = parser.parse_args(argv)
     if not re.fullmatch(r'[a-z][a-z0-9-]{0,35}',args.cluster) or not 30<=args.timeout<=1800:
         raise ValueError('Invalid isolated cluster name or timeout (30..1800 seconds)')
     lock, source_digest = lockfile()
+    if args.images is not None and not args.managed_registry:
+        raise ValueError('--images requires --managed-registry')
+    if args.action=='verify-registry' and not args.managed_registry:
+        raise ValueError('Registry acceptance requires --managed-registry')
+    if args.managed_registry and args.action in ('local','verify-registry') and args.images is None:
+        raise ValueError('Managed registry requires reviewed --images')
     if args.action=='plan':
         print(json.dumps({'cluster':args.cluster,'release':lock['release'],'nodeImage':lock['nodeImage'],
             'operatorImage':lock['operator']['image'],'sourceLockSHA256':source_digest,'prerequisites':lock['prerequisites'],
             'chart':str(CHART.relative_to(ROOT)), 'hostPortMappings':[], 'defaultUsers':[],
+            'registryOwner':'Helm' if args.managed_registry else 'Konflux',
             'networkConformanceRequired':True,'liveWorkflowAdvanced':False,'githubAppConfigured':False,'externalRegistryConfigured':False},indent=2))
         return 0
+    with ExitStack() as stack:
+        return install_platform(args, lock, source_digest, stack)
+
+
+def install_platform(args, lock, source_digest, stack):
     import install
+    import konflux_runtime_install as platform
+    if args.managed_registry:
+        import managed_registry_install
     deadline = Deadline(args.timeout)
     state = Path(os.environ.get('XDG_STATE_HOME',Path.home()/'.local/state'))/'ai-sdlc'/args.cluster
     state.mkdir(mode=0o700,parents=True,exist_ok=True)
+    platform.lock_state(state, stack)
+    managed_record=state/'managed-registry.json'
+    if (managed_record.exists() or managed_record.is_symlink()) and not args.managed_registry and args.action=='local':
+        raise ValueError('Original installation requires --managed-registry; registry ownership cannot change')
     marker = state/'konflux-ownership.json'
     kubeconfig = state/'kubeconfig'
     if marker.is_symlink() or kubeconfig.is_symlink():
@@ -300,8 +322,10 @@ def main(argv=None):
         raise ValueError('Recorded cluster is absent from its provider; refusing to overwrite its identity. Choose a new --cluster.')
     if exists and not marker.exists():
         raise ValueError('Cluster exists without this supply-chain ownership record; choose a new --cluster')
-    if args.action=='status' and not exists:
+    if args.action in ('status','verify-registry') and not exists:
         raise ValueError('The isolated supply-chain cluster does not exist')
+    registry_state = managed_registry_install.prepare(state,args.cluster,provider,
+        install.image_lock(args.images),exists) if args.managed_registry and args.action!='status' else None
     if args.action=='local':
         prerequisites(lock)
         install.host_prerequisites(False)
@@ -325,6 +349,17 @@ def main(argv=None):
         report = observe(kubectl,deadline,uid,source_digest,lock['requiredDeployments'])
         print(json.dumps(report,indent=2))
         return 0 if report['status']=='ready' else 1
+    platform.require_frozen(deadline.run,kubectl)
+    registry = managed_registry_install.Installer(state,registry_state,kubectl,binaries,deadline,uid) if registry_state else None
+    if registry:
+        registry.require_cold()
+    # Check the original parent and registry before any platform reapplication.
+    if registry and registry.state.get('parentUID'):
+        registry.fence()
+        registry.check_chart_objects(capture=bool(registry.state.get('chartIntent') and not registry.state.get('chartObjects')))
+    if args.action=='verify-registry':
+        print(json.dumps(registry.verify_recovery(),indent=2))
+        return 0
 
     def apply(name):
         print('Applying verified Konflux dependency: '+name,flush=True)
@@ -368,11 +403,14 @@ def main(argv=None):
         enabled = existing_konflux(kubectl,deadline)
         helm = [binaries['helm'],'upgrade','--install',RELEASE,chart,'--kubeconfig',kubeconfig,
                 '--namespace',RELEASE_NAMESPACE,'--create-namespace','--server-side=false']
+        if registry:
+            helm += ['--set','konflux.spec.internalRegistry.enabled=false']
         deadline.run(helm+['--set','konflux.enabled='+str(enabled).lower()],limit=180)
         wait(['--for=condition=Available','deployment/konflux-operator-controller-manager','-n','konflux-operator'],300)
         if not enabled:
             deadline.run(helm+['--set','konflux.enabled=true'],limit=180)
         wait(['--for=condition=Ready=True','konflux/konflux'],600)
+    registry_report=registry.install() if registry else None
     ready_deadline=min(deadline.end,time.monotonic()+600)
     while True:
         report = observe(kubectl,deadline,uid,source_digest,lock['requiredDeployments'])
@@ -392,6 +430,8 @@ def main(argv=None):
     evidence = network_probe.verify(kubectl,probe_image,runner=probe_run)
     report['networkConformance'] = {'status':'passed','scope':'point-in-time','image':probe_image,
                                   'observedAt':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),**evidence}
+    if registry_report is not None:
+        report['managedRegistry']=registry_report
     (state/'konflux-installation-report.json').write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps({'status':report['status'],'cluster':args.cluster,'release':lock['release'],
                       'deploymentsAvailable':len(report['deployments']),
