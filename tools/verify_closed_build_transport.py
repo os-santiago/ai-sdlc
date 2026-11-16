@@ -295,15 +295,18 @@ def main():
     finally:
         deadline = supply_chain_install.Deadline(240)
         def cleanup(checkpoint):
-            nonlocal namespace_uid
+            nonlocal namespace_uid, deadline
             if namespace_uid is None and namespace_create_attempted:
                 namespace_uid = fixture_cleanup.recover_namespace_uid(
                     lambda argv: call(argv).stdout, namespace, 'ai-sdlc.closed-build-fixture', nonce)
                 report['recoveredNamespaceUIDForCleanup'] = namespace_uid
             fixture_cleanup.recover_global_resources(lambda argv: call(argv).stdout, global_intents)
             checkpoint()
+            deadline = supply_chain_install.Deadline(90)
             guard.collect_best_effort(quiesce, report)
+            deadline = supply_chain_install.Deadline(60)
             guard.collect_best_effort(collect, report)
+            deadline = supply_chain_install.Deadline(45)
             def archive_reports():
                 if prepared:
                     # Only sanitized, explicitly named evidence is copied out; never private.json.
@@ -312,11 +315,16 @@ def main():
                         if check.returncode == 0:
                             deadline.run([provider, 'cp', node_id + ':' + root + '/evidence/' + filename, str(args.output / filename)], capture_output=True, limit=15)
                     listing = node_call(['find', root + '/evidence', '-maxdepth', '1', '-type', 'f', '-name', 'observation-*.json', '-printf', '%f\n']).stdout.splitlines()
+                    if len(listing)>256:
+                        report['diagnosticArchiveTruncated']=True
+                        listing=sorted(listing)[:128]+sorted(listing)[-128:]
                     for filename in listing:
                         if not re.fullmatch(r'observation-[0-9]{4}.json', filename):
                             raise ValueError('Unexpected diagnostic filename')
                         deadline.run([provider, 'cp', node_id + ':' + root + '/evidence/' + filename, str(args.output / filename)], capture_output=True, limit=15)
             guard.collect_best_effort(archive_reports, report)
+            # Evidence exhaustion cannot consume the teardown budget.
+            deadline = supply_chain_install.Deadline(240)
             if namespace_uid:
                 guard.cleanup_archived_namespace(lambda a, v=None: call(a, v).stdout, namespace, namespace_uid,
                                                  report.get('archivedTaskUIDs', []), report.get('runUIDs', []), timeout=120)
