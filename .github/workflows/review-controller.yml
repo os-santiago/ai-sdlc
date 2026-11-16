@@ -1,0 +1,93 @@
+name: review-controller
+on:
+  pull_request:
+    paths: ['runtime/k8s/**', 'tools/verify_review_flow.py', 'tools/verify_verification_flow.py', 'tools/verify_candidate_runtime.py', 'tools/prepare_verification_fixture.py', 'tools/fixtures/**', '.github/workflows/review-controller.yml']
+  push:
+    branches: [main]
+    paths: ['runtime/k8s/**', 'tools/verify_review_flow.py', 'tools/verify_verification_flow.py', 'tools/verify_candidate_runtime.py', 'tools/prepare_verification_fixture.py', 'tools/fixtures/**', '.github/workflows/review-controller.yml']
+permissions:
+  contents: read
+jobs:
+  review-kind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: local-ci-only
+          POSTGRES_DB: ai_sdlc_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Prepare disposable kind and offline runtime
+        run: |
+          ./install.sh tools > "$RUNNER_TEMP/install-tools.json"
+          python3 -m venv "$RUNNER_TEMP/review-venv"
+          "$RUNNER_TEMP/review-venv/bin/pip" install -r tools/quality-requirements.txt
+          echo "$RUNNER_TEMP/review-venv/bin" >> "$GITHUB_PATH"
+          sudo ./install.sh host --configure-host
+          python3 - <<'PY'
+          import json, os, pathlib
+          config = json.loads(pathlib.Path('examples/homedir.local-install.json').read_text())
+          config.update(cluster='ai-sdlc', repository='os-santiago/ai-sdlc', provider='docker',
+                        profile='maintenance', images=str(pathlib.Path('runtime/k8s/deploy/local/images.lock.json').resolve()))
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'local-install.json').write_text(json.dumps(config))
+          PY
+          ./install.sh local --config "$RUNNER_TEMP/local-install.json" --timeout 10m
+          ./install.sh sandbox --config "$RUNNER_TEMP/local-install.json"
+      - name: Build and import exact reviewer fixture images
+        run: |
+          docker buildx create --name ai-sdlc-review-fixtures --driver docker-container
+          for component in worker model-mailbox; do
+            docker buildx build --builder ai-sdlc-review-fixtures --provenance=false --load \
+              --output "type=oci,name=localhost/ai-sdlc-${component}:conformance,dest=$RUNNER_TEMP/${component}.oci" \
+              -f "runtime/k8s/components/${component}/Containerfile" -t "localhost/ai-sdlc-${component}:conformance" runtime/k8s
+            docker exec -i ai-sdlc-control-plane ctr -n k8s.io images import --local --digests - < "$RUNNER_TEMP/${component}.oci"
+          done
+          git init -q "$RUNNER_TEMP/homedir-source"
+          git -C "$RUNNER_TEMP/homedir-source" fetch -q --depth 1 https://github.com/os-santiago/homedir.git 0622cdaeb59a11a27bd5f3d7e18183c401a5e412
+      - uses: actions/setup-go@802e89cd7394b98352d79117a8b463bbfc2fdacf
+        with:
+          go-version-file: runtime/k8s/go.mod
+          cache-dependency-path: runtime/k8s/go.sum
+      - name: Build trusted controller test drivers
+        working-directory: runtime/k8s
+        run: |
+          CGO_ENABLED=0 go test -c ./internal/execution -o "$RUNNER_TEMP/execution.test"
+          CGO_ENABLED=0 go test -c ./internal/reviewflow -o "$RUNNER_TEMP/review.test"
+      - name: Verify candidate, behavior and independent review composition
+        env:
+          AI_SDLC_TEST_SOURCE_TOKEN: ${{ github.token }}
+          AI_SDLC_TEST_DATABASE_URL: postgres://postgres:local-ci-only@127.0.0.1:5432/ai_sdlc_test?sslmode=disable
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, sys
+          sys.path.insert(0, 'tools')
+          from fixture_images import register_digest
+          from prepare_verification_fixture import prepare
+          from verify_review_flow import verify
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          tools = json.loads((root / 'install-tools.json').read_text())
+          candidate = prepare(root / 'homedir-source', root / 'review-candidate')
+          kubectl = [tools['kubectl'], '--kubeconfig', str(pathlib.Path.home() / '.local/state/ai-sdlc/ai-sdlc/kubeconfig')]
+          worker = register_digest('docker', 'ai-sdlc-control-plane', 'localhost/ai-sdlc-worker:conformance')
+          mailbox = register_digest('docker', 'ai-sdlc-control-plane', 'localhost/ai-sdlc-model-mailbox:conformance')
+          for scenario in ('approve', 'request_changes', 'mutation', 'revoke-model', 'revoke-config', 'lost-config-reply'):
+              report = verify(kubectl, worker, mailbox, root / 'execution.test', root / 'review.test',
+                              '0622cdaeb59a11a27bd5f3d7e18183c401a5e412', candidate, scenario)
+              (root / f'review-controller-{scenario}-report.json').write_text(json.dumps(report, indent=2))
+              print(json.dumps(report), flush=True)
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: independent-review-controller-conformance
+          path: ${{ runner.temp }}/review-controller-*-report.json
+          retention-days: 14

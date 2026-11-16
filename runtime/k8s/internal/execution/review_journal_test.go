@@ -15,7 +15,7 @@ func reviewJournalFixture(t *testing.T, profileOverride ...string) (*lifecycleFi
 	t.Helper()
 	f, db, v := verificationClaimFixture(t)
 	ctx := context.Background()
-	if _, err := f.Admin.Pool.Exec(`GRANT SELECT ON execution_requests TO aisdlc_verifier; GRANT SELECT,INSERT,UPDATE ON review_runs,review_effects,review_model_calls TO aisdlc_verifier`); err != nil {
+	if _, err := f.Admin.Pool.Exec(`GRANT SELECT ON execution_requests TO aisdlc_verifier; GRANT SELECT(repository,issue_number,generation,content_key) ON intake_heads TO aisdlc_verifier; GRANT SELECT,INSERT,UPDATE ON review_runs,review_effects,review_model_calls TO aisdlc_verifier`); err != nil {
 		t.Fatal(err)
 	}
 	proof := []byte(`{"behaviorVerified":true,"publicationAuthorized":false}`)
