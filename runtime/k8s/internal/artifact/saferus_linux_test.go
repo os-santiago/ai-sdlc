@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"io"
 	"os"
 	"os/exec"
@@ -142,5 +143,51 @@ func TestSaferusRejectsLinksExtrasSpecialModesAndInvalidELF(t *testing.T) {
 	os.Symlink(root, alias)
 	if _, _, err := AssembleSaferus(context.Background(), alias, identity); err == nil {
 		t.Fatal("ancestor symlink accepted")
+	}
+}
+
+func TestSaferusELFMetadataIsBoundedBeforeLibraryParsing(t *testing.T) {
+	saferusFixture(t)
+	for _, scenario := range []string{"section-count", "program-count", "extended-numbering", "section-offset-overflow", "program-offset-overflow", "section-entry-size", "compressed-names", "huge-names", "wrong-string-table"} {
+		t.Run(scenario, func(t *testing.T) {
+			raw := bytes.Clone(staticFixture.raw)
+			le := binary.LittleEndian
+			off := le.Uint64(raw[40:48]) + uint64(le.Uint16(raw[62:64]))*64
+			switch scenario {
+			case "section-count":
+				le.PutUint16(raw[60:62], 65535)
+			case "program-count":
+				le.PutUint16(raw[56:58], 65535)
+			case "extended-numbering":
+				le.PutUint16(raw[60:62], 0)
+			case "section-offset-overflow":
+				le.PutUint64(raw[40:48], ^uint64(0))
+			case "program-offset-overflow":
+				le.PutUint64(raw[32:40], ^uint64(0))
+			case "section-entry-size":
+				le.PutUint16(raw[58:60], 1)
+			case "compressed-names":
+				le.PutUint64(raw[off+8:off+16], 0x800)
+			case "huge-names":
+				le.PutUint64(raw[off+32:off+40], 16*1024+1)
+			case "wrong-string-table":
+				le.PutUint32(raw[off+4:off+8], 8)
+			}
+			if staticLinuxAMD64(raw) {
+				t.Fatal("hostile ELF metadata accepted")
+			}
+			if allocations := testing.AllocsPerRun(5, func() {
+				if staticLinuxAMD64(raw) {
+					panic("accepted")
+				}
+			}); allocations != 0 {
+				t.Fatalf("preflight allocated: %v", allocations)
+			}
+		})
+	}
+	for n := 0; n < 64; n++ {
+		if staticLinuxAMD64(staticFixture.raw[:n]) {
+			t.Fatal("truncated header accepted")
+		}
 	}
 }

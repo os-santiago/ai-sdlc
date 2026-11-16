@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"debug/elf"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -108,7 +109,48 @@ func AssembleSaferus(ctx context.Context, directory string, id Identity) (v1.Ima
 	return img, report, nil
 }
 
+// boundELFMetadata runs before debug/elf, whose parser is not hardened for
+// adversarial object files. This recipe supports only ordinary ELF64 tables;
+// extended numbering and compressed sections are outside the stripped profile.
+// At most 128 section names of 16 KiB can be copied (2 MiB aggregate).
+func boundELFMetadata(raw []byte) bool {
+	if len(raw) < 64 || !bytes.Equal(raw[:4], []byte{0x7f, 'E', 'L', 'F'}) || raw[4] != 2 || raw[5] != 1 || raw[6] != 1 {
+		return false
+	}
+	le := binary.LittleEndian
+	if le.Uint16(raw[52:54]) != 64 {
+		return false
+	}
+	phoff, shoff := le.Uint64(raw[32:40]), le.Uint64(raw[40:48])
+	phsize, phnum := uint64(le.Uint16(raw[54:56])), uint64(le.Uint16(raw[56:58]))
+	shsize, shnum := uint64(le.Uint16(raw[58:60])), uint64(le.Uint16(raw[60:62]))
+	names := uint64(le.Uint16(raw[62:64]))
+	length := uint64(len(raw))
+	if phsize != 56 || phnum == 0 || phnum > 64 || phoff > length || phnum*phsize > length-phoff ||
+		shsize != 64 || shnum == 0 || shnum > 128 || shoff > length || shnum*shsize > length-shoff || names == 0 || names >= shnum {
+		return false
+	}
+	for n := uint64(0); n < shnum; n++ {
+		sh := raw[shoff+n*64 : shoff+(n+1)*64]
+		typ, flags := le.Uint32(sh[4:8]), le.Uint64(sh[8:16])
+		offset, size := le.Uint64(sh[24:32]), le.Uint64(sh[32:40])
+		if flags&uint64(elf.SHF_COMPRESSED) != 0 {
+			return false
+		}
+		if typ != uint32(elf.SHT_NOBITS) && (offset > length || size > length-offset) {
+			return false
+		}
+		if n == names && (typ != uint32(elf.SHT_STRTAB) || size > 16*1024) {
+			return false
+		}
+	}
+	return true
+}
+
 func staticLinuxAMD64(raw []byte) bool {
+	if !boundELFMetadata(raw) {
+		return false
+	}
 	f, err := elf.NewFile(bytes.NewReader(raw))
 	if err != nil {
 		return false
