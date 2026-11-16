@@ -131,7 +131,7 @@ func releaseFixture(t *testing.T) (Configuration, provenancerecord.Record, build
 	raw, _ := b.Context.Encode()
 	proof := provenance.Proof{Version: provenance.PolicyVersion, Scope: provenance.LocalScope, BuildRecordSHA256: b.Digest(), RetainedContextSHA256: authority.Digest(raw), TrustSHA256: trust.Digest(), VerifierImage: trust.VerifierImage, VerifierVersion: trust.VerifierVersion, ImageDigest: b.Result.ImageDigest, SignatureManifestDigest: "sha256:" + strings.Repeat("1", 64), SignatureBlobDigest: "sha256:" + strings.Repeat("2", 64), AttestationManifestDigest: "sha256:" + strings.Repeat("3", 64), AttestationBlobDigest: "sha256:" + strings.Repeat("4", 64), BuildObservationSHA256: b.Build.Digest(), PublishObservationSHA256: b.Publish.Digest(), Transparency: provenance.LocalTransparency}
 	r := provenancerecord.Record{Command: verify, Configuration: pc, Proof: proof, RecordedAt: now}
-	target := Target{Version: TargetVersion, Scope: provenance.LocalScope, Repository: trust.Repository, Environment: trust.Environment, ClusterUID: trust.ClusterUID, NamespaceUID: uid(200), Namespace: trust.Environment, Deployment: "saferus-console", DeploymentUID: uid(201), Container: "console", DeploymentSpecSHA256: strings.Repeat("5", 64), Service: "saferus-console", ServiceUID: uid(202), ServiceSpecSHA256: strings.Repeat("6", 64), PullSecret: "ai-sdlc-release-reader", PullSecretUID: uid(203), TLSSecretUID: uid(204), TLSCA: ca, TLSHostname: "saferus-console.ai-sdlc-production.svc", BaselineImage: "localhost/saferus-console@sha256:" + strings.Repeat("7", 64), RolloutSeconds: 300, SmokeSeconds: 30, ApprovedAt: now.Add(-time.Minute).UnixMilli(), ExpiresAt: now.Add(time.Hour).UnixMilli()}
+	target := Target{Version: TargetVersion, Scope: provenance.LocalScope, Repository: trust.Repository, Environment: trust.Environment, ClusterUID: trust.ClusterUID, NamespaceUID: uid(200), Namespace: trust.Environment, Deployment: "saferus-console", DeploymentUID: uid(201), Container: "console", DeploymentSpecSHA256: strings.Repeat("5", 64), Service: "saferus-console", ServiceUID: uid(202), ServiceSpecSHA256: strings.Repeat("6", 64), PullSecret: "ai-sdlc-release-reader", PullSecretUID: uid(203), TLSSecretUID: uid(204), TLSCA: ca, TLSHostname: "saferus-console", BaselineImage: "localhost/saferus-console@sha256:" + strings.Repeat("7", 64), BaselineRuntimeDigest: "sha256:" + strings.Repeat("7", 64), RolloutSeconds: 300, SmokeSeconds: 30, ApprovedAt: now.Add(-time.Minute).UnixMilli(), ExpiresAt: now.Add(time.Hour).UnixMilli()}
 	return Configuration{Provenance: pc, Target: target}, r, b, m, now
 }
 func TestPromotionHasFreshFiniteAuthorityForExpiredHistory(t *testing.T) {
@@ -248,7 +248,7 @@ func TestPromotionRejectsSubstitutionRevocationAndAmbiguousPayload(t *testing.T)
 	}
 }
 func TestInstalledTargetRejectsEffectAndTrustExpansion(t *testing.T) {
-	for _, name := range []string{"cluster", "duplicate-uid", "namespace", "workload", "container", "service", "secret", "hostname", "registry", "tag", "spec", "ca", "nonca", "budget", "scope", "expiry", "expired"} {
+	for _, name := range []string{"cluster", "duplicate-uid", "namespace", "workload", "container", "service", "secret", "hostname", "registry", "tag", "spec", "runtime-digest", "ca", "nonca", "budget", "scope", "expiry", "expired"} {
 		t.Run(name, func(t *testing.T) {
 			cfg, _, _, _, now := releaseFixture(t)
 			x := cfg.Target
@@ -275,6 +275,8 @@ func TestInstalledTargetRejectsEffectAndTrustExpansion(t *testing.T) {
 				x.BaselineImage = "localhost/saferus-console:latest"
 			case "spec":
 				x.DeploymentSpecSHA256 = ""
+			case "runtime-digest":
+				x.BaselineRuntimeDigest = "unapproved"
 			case "ca":
 				x.TLSCA = "prefix" + x.TLSCA
 			case "nonca":
