@@ -50,6 +50,14 @@ issue-to-production delivery. No GitOps controller is installed; reconciliation
 is explicit through Helm. See [installation and configuration](docs/installation.md)
 for credentials, supported scope, limitations and recovery guidance.
 
+Before installing the remaining delivery capabilities on an owned, frozen
+Saferus Konflux environment, `./install.sh prepare --cluster <name> --images
+<reviewed-images.lock.json>` verifies an empty current database and pauses all
+delivery services through Helm. It preserves PostgreSQL and frozen authority;
+ordinary `local` reapplication cannot silently resume it. See
+[initial preparation](docs/operations/build-runtime-install.md#initial-empty-runtime-preparation)
+for prerequisites and the distinction from upgrading a runtime with history.
+
 For local GitHub client access, run `./install.sh credentials --github-auth gh-cli`
 after installation and `gh auth login`. See the
 [credential setup](docs/installation.md#optional-local-github-client) for its scope

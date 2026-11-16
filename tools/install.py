@@ -354,6 +354,9 @@ def shadow_intake_config(kubectl, cluster_uid, repository):
 
 def _main(argv, stack):
     selected = sys.argv[1:] if argv is None else argv
+    if selected and selected[0] == 'prepare':
+        import bootstrap_prepare
+        return bootstrap_prepare.main(selected[1:])
     if selected and selected[0] == 'build-foundation':
         import build_foundation_install
         return build_foundation_install.main(selected[1:])
@@ -468,6 +471,8 @@ def _main(argv, stack):
     if args.platform == 'konflux':
         konflux_runtime_install.lock_state(state, stack)
         provider = konflux_runtime_install.select_provider(provider, state, args.cluster)
+        if args.command == 'local' and ((state / 'bootstrap-preparation.json').exists() or (state / 'bootstrap-preparation.json').is_symlink()):
+            raise ValueError('Prepared runtime remains paused; continuation is not implemented yet (issue #574); retain frozen state and do not delete the preparation record instead of ordinary local reconciliation')
     if provider == 'auto':
         provider = next((p for p in ('docker', 'podman') if shutil.which(p)), None)
     if not provider or not shutil.which(provider):

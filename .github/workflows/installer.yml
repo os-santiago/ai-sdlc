@@ -41,6 +41,8 @@ jobs:
           node --test tools/test_offline_probe.js
           python3 -m unittest discover -s tools -p 'test_*install*.py' -v
           python3 -m unittest discover -s tools -p test_helm.py -v
+          python3 -m unittest discover -s tools -p test_provenance_helm.py -v
+          python3 -m unittest discover -s tools -p test_bootstrap_prepare.py -v
           python3 -m unittest discover -s tools -p test_build_foundation_state.py -v
           python3 -m unittest discover -s tools -p test_build_foundation_node.py -v
           python3 -m unittest discover -s tools -p test_build_foundation_fixture.py -v

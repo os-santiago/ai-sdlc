@@ -97,3 +97,48 @@ innerloop runtime. Preserve controller, credentials and storage during containme
 through reviewed authority configuration and prove archived cleanup complete
 before changing privileges or removing capability resources. Current runtime
 status is observable without requiring the deployment to be frozen.
+## Initial empty runtime preparation
+
+Before installing additional capabilities, an existing owned Saferus Konflux
+runtime can be excluded from producing work through the single installer:
+
+```sh
+./install.sh prepare --cluster ai-sdlc-konflux-reviewed \
+  --provider podman --images /path/to/reviewed/images.lock.json
+```
+
+Prerequisites are the current reviewed image set and schema already installed
+through the normal maintenance installation, frozen Saferus authority, and no
+delivery history. The migrator image must support `inspect-empty-bootstrap`.
+An older schema is rejected; that rejection is not evidence of existing work.
+Do not erase history or bypass the inspection to make preparation pass.
+
+The installer holds the existing installation lock. It compares effective
+Deployments and admitted Pods with the reviewed Helm render, checks each role's
+database custody, and binds the primary database to its Secret, Service,
+Endpoint, Pod, StatefulSet, PVC and PV. It checks for other producers and
+execution/cleanup workloads before observing the database. The migrator uses a
+bounded read-only snapshot, requires RLS-independent visibility and rejects any
+workflow row, including completed history, as well as unknown or missing tables
+and migrations. No SQL is supplied by the operator.
+
+After recording original identities and its intent, the installer reapplies
+the same Helm desired state with `runtime.paused: true`. The chart requires
+explicitly frozen policies and renders every delivery Deployment with zero
+replicas. PostgreSQL and the schema migrator remain available. Preparation
+waits for producer Pods to disappear and repeats the database and authority
+checks. A snapshot alone does not exclude concurrent producers.
+
+`bootstrap-preparation.json` records this administrative state independently
+from workflow records. Reapplication must match the original inputs and
+identities. Drift or uncertain completion leaves the installation frozen;
+there is no automatic rollback or unpause. Ordinary `install.sh local` refuses
+to resume a recorded preparation. This command is limited to initial setup;
+upgrades with history require the separate containment-preserving lifecycle
+procedure. Registry ACLs, independent signing trust, provenance verification,
+promotion and deployment remain separate required installation gates.
+
+The successful result is **paused and empty**, not ready for autonomous
+delivery. No issue is admitted and no workflow stage is advanced by preparation.
+
+After `prepare`, continuation is not implemented yet: [issue #574](https://github.com/os-santiago/ai-sdlc/issues/574) tracks the remaining capability transition. The earlier `local --config` example applies before preparation only. Do not delete the preparation record or unpause the release manually. This command currently ends at a frozen, empty installation for administrative integration checks.

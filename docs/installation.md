@@ -404,3 +404,5 @@ separate service identities and applies the additive signed-delivery migration.
 Do not combine a 0.3 chart with older service images: older binaries do not use
 the new identity/readiness boundary. Migration and role provisioning are
 installation operations; they do not enqueue issues or advance delivery state.
+
+The administrative `prepare` command also requires PyYAML. Install the pinned installer validation dependencies in a Python virtual environment with `python3 -m pip install -r tools/quality-requirements.txt` before using it. Ordinary installation does not require this additional parser.

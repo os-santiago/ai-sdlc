@@ -21,6 +21,11 @@ func run() error {
 		return errors.New("select migrate or bootstrap-identities")
 	}
 	switch os.Args[1] {
+	case "inspect-empty-bootstrap":
+		if len(os.Args) != 2 {
+			return errors.New("unexpected bootstrap inspection arguments")
+		}
+		return inspectBootstrap(os.Stdin, os.Stdout)
 	case "compile-provenance-installation", "prepare-provenance-registry-custody":
 		if len(os.Args) != 2 {
 			return errors.New("unexpected provenance installation arguments")

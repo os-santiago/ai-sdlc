@@ -9,7 +9,7 @@ metadata:
     {{- include "ai-sdlc-k8s-runtime.labels" $ | nindent 4 }}
     app.kubernetes.io/component: {{ $component.name }}
 spec:
-  replicas: 1
+  replicas: {{ include "ai-sdlc-k8s-runtime.replicas" $ }}
   strategy: {type: Recreate}
   selector:
     matchLabels:

@@ -6,6 +6,37 @@ import test_helm
 
 
 class ProvenanceChartTests(unittest.TestCase):
+    def test_paused_preparation_excludes_all_delivery_components(self):
+        values = self.provenance_values()
+        values['runtime']['paused'] = True
+        for section, key in (('authority', 'policyJSON'), ('build', 'outerPolicyJSON')):
+            policy = json.loads(values[section][key]); policy['freeze'] = True
+            values[section][key] = json.dumps(policy)
+        config = json.loads(values['build']['configJSON'])
+        config['inner'] = json.loads(values['authority']['policyJSON'])
+        config['outer'] = json.loads(values['build']['outerPolicyJSON'])
+        values['build']['configJSON'] = json.dumps(config)
+        result = self.render_build(values)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        docs = [d for d in yaml.safe_load_all(result.stdout) if d]
+        deployments = [d for d in docs if d['kind'] == 'Deployment']
+        self.assertEqual(len(deployments), 9)
+        self.assertTrue(all(d['spec']['replicas'] == 0 for d in deployments))
+        postgres = next(d for d in docs if d['kind'] == 'StatefulSet')
+        self.assertEqual(postgres['spec']['replicas'], 1)
+        self.assertTrue(any(d['kind'] == 'Job' for d in docs))
+
+    def test_paused_preparation_rejects_unfrozen_or_absent_authority(self):
+        values = self.provenance_values()
+        values['runtime']['paused'] = True
+        self.assertNotEqual(self.render_build(values).returncode, 0)
+        policy = json.loads(values['authority']['policyJSON']); policy['freeze'] = True
+        values['authority']['policyJSON'] = json.dumps(policy)
+        config = json.loads(values['build']['configJSON']); config['inner'] = policy
+        values['build']['configJSON'] = json.dumps(config)
+        self.assertNotEqual(self.render_build(values).returncode, 0)
+        self.assertNotEqual(self.render('--set', 'runtime.paused=true').returncode, 0)
+
     render = test_helm.ChartTests.render
     render_build = test_helm.ChartTests.render_build
     build_values = test_helm.ChartTests.build_values

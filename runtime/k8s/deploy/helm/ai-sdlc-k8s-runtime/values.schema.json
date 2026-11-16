@@ -88,6 +88,10 @@
             "candidate",
             "verification"
           ]
+        },
+        "paused": {
+          "type": "boolean",
+          "default": false
         }
       },
       "required": [

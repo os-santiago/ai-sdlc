@@ -1,3 +1,23 @@
+{{/* A paused installation requires explicit frozen authority. PostgreSQL and
+the schema migrator remain available; every delivery Deployment uses this. */}}
+{{- define "ai-sdlc-k8s-runtime.replicas" -}}
+{{- if .Values.runtime.paused -}}
+{{- $inner := .Values.authority.policyJSON | fromJson -}}
+{{- if ne (toJson $inner.freeze) "true" -}}
+{{- fail "paused installation requires explicit frozen inner authority" -}}
+{{- end -}}
+{{- if .Values.build.enabled -}}
+{{- $outer := .Values.build.outerPolicyJSON | fromJson -}}
+{{- if ne (toJson $outer.freeze) "true" -}}
+{{- fail "paused installation requires explicit frozen outer authority" -}}
+{{- end -}}
+{{- end -}}
+0
+{{- else -}}
+1
+{{- end -}}
+{{- end -}}
+
 {{/*
 Expand the name of the chart.
 */}}
