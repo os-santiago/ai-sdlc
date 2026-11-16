@@ -29,11 +29,23 @@ objects; retention belongs in the authenticated journal, not in live objects.
 ## First implementation slice: immutable compilation context
 
 Extend the existing pre-effect transaction to retain a versioned, bounded context
-with the exact compiler profile, selected slot, both compiled request byte
-sequences and the approved compiler/recipe identity. Persist it with the plan
+with the exact compiler profile, complete public configuration binding, selected
+slot, both compiled request byte sequences and the approved compiler/recipe
+identity. Persist it with the plan
 before any external create. Validation must bind it to the authenticated command,
 plan, allocated slot and effect request digests. Do not add an arbitrary manifest
 input or a second execution path.
+
+There are two distinct profile digests to reconstruct. The template uses
+`Profile.Digest()`. The signed command instead binds
+[`Configuration.ProfileDigest()`](../../runtime/k8s/internal/building/configuration.go),
+whose preimage includes version `ai-sdlc.build-profile/v1`, `RecipeProfile`
+(the compiler profile digest), `IssueMaxAgeSeconds` and the complete ordered
+`Slots` list. Retain that exact public preimage, validate every slot and prove
+that the selected slot is an exact member. Bind the separately signed
+`IntakeConfigSHA256` as well; a selected slot alone cannot reconstruct the signed
+configuration binding. Preserve the archived signed policies already held by the
+journal for historical validation without treating them as current authority.
 
 The retained context must contain only public compilation facts. Registry
 credentials, private keys and kubeconfig material remain outside it. Validate
@@ -85,7 +97,7 @@ select a production trust policy or claim an SLSA level.
 | Boundary | Required real validation |
 |---|---|
 | Pre-effect retention | PostgreSQL rollback/failure injection proves that incomplete context never permits a create; a lost response does not replace context or duplicate execution. |
-| Historical reader | Wrong role, changed bytes/digests, mismatched source/tree/slot/profile, unknown version and missing legacy context all fail; valid history remains readable after build authority expires. |
+| Historical reader | Wrong role, changed bytes/digests, mismatched source/tree/slot/profile, altered unselected slot, slot ordering or freshness budget, unknown version and missing legacy context all fail; valid history remains readable after build authority expires. |
 | Immutability | Component roles cannot update/delete accepted context or manufacture another component's record; repeated reads after restart preserve exact identity. |
 | Registry and signatures | Real retained image/DSSE succeeds after Tekton cleanup; wrong key, subject, source/tree/definition/run, missing/truncated/ambiguous evidence and forbidden redirects fail. |
 | Current authority | Real PostgreSQL tests cover exclusive claim, duplicate delivery, expiry, freeze, revocation and policy change while verification is running. |
