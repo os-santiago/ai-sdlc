@@ -150,9 +150,12 @@ type signatureFixture struct {
 	sigManifest, attManifest string
 }
 
-func newFixture(t *testing.T) *signatureFixture {
+func newFixture(t *testing.T, actualImage ...[]byte) *signatureFixture {
 	t.Helper()
 	image := jsonBytes(t, manifest{SchemaVersion: 2, MediaType: ociManifest, Config: descriptor{MediaType: "application/vnd.oci.image.config.v1+json", Digest: "sha256:" + strings.Repeat("1", 64), Size: 2}, Layers: []descriptor{{MediaType: "application/vnd.oci.image.layer.v1.tar+gzip", Digest: "sha256:" + strings.Repeat("2", 64), Size: 100}}})
+	if len(actualImage) == 1 {
+		image = actualImage[0]
+	}
 	r, cfg, material := recordAndAuthorityFixture(t, digest(image))
 	key, e := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if e != nil {
@@ -190,7 +193,7 @@ func (f *signatureFixture) layer(t *testing.T, suffix, media string, data []byte
 	blob := digest(data)
 	f.routes[registryPath+"blobs/"+blob] = data
 	path := registryPath + "manifests/sha256-" + strings.TrimPrefix(f.record.Result.ImageDigest, "sha256:") + "." + suffix
-	f.routes[path] = jsonBytes(t, manifest{SchemaVersion: 2, MediaType: ociManifest, Config: descriptor{MediaType: "application/vnd.oci.image.config.v1+json", Digest: "sha256:" + strings.Repeat("0", 64), Size: 2}, Layers: []descriptor{{MediaType: media, Digest: blob, Size: int64(len(data)), Annotations: annotations}}})
+	f.routes[path] = jsonBytes(t, manifest{SchemaVersion: 2, MediaType: ociManifest, Config: descriptor{MediaType: "application/vnd.oci.image.config.v1+json", Digest: digest([]byte("{}")), Size: 2}, Layers: []descriptor{{MediaType: media, Digest: blob, Size: int64(len(data)), Annotations: annotations}}})
 	return path
 }
 func tlsFixture(t *testing.T) (tls.Certificate, string) {
@@ -204,7 +207,11 @@ func tlsFixture(t *testing.T) (tls.Certificate, string) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	leaf := &x509.Certificate{SerialNumber: big.NewInt(2), DNSNames: []string{registryHost}, NotBefore: ca.NotBefore, NotAfter: ca.NotAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	ca, e = x509.ParseCertificate(caRaw)
+	if e != nil {
+		t.Fatal(e)
+	}
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(2), DNSNames: []string{registryHost}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, NotBefore: ca.NotBefore, NotAfter: ca.NotAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
 	cert, e := x509.CreateCertificate(rand.Reader, leaf, ca, &key.PublicKey, key)
 	if e != nil {
 		t.Fatal(e)
