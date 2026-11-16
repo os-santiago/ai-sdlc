@@ -490,3 +490,54 @@ func TestConsoleAdvanceRequiresReservedContainmentBudget(t *testing.T) {
 		t.Fatal("advance consumed containment budget")
 	}
 }
+
+func TestConsoleRollbackRPCDoesNotOutliveOriginalClaimDeadline(t *testing.T) {
+	f := newConsoleFixture(t)
+	before, e := f.adapter.Observe(context.Background())
+	if e != nil {
+		t.Fatal(e)
+	}
+	effects := &ConsoleEffects{Deployment: f.adapter, Gate: allowConsoleGate()}
+	original, e := effects.Apply(context.Background(), f.plan(), before)
+	if e != nil {
+		t.Fatal(e)
+	}
+	current, e := f.adapter.Observe(context.Background())
+	if e != nil {
+		t.Fatal(e)
+	}
+	// Simulate the last short remainder of an original claim, while the target
+	// remains approved for much longer. The real TLS API delays only PATCH ACK.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	until, _ := ctx.Deadline()
+	gateCalled := false
+	responseDelayed := make(chan struct{})
+	effects.Gate = consoleGate{func(gctx context.Context, _ ConsoleSnapshot, _ string, rollback bool) error {
+		deadline, ok := gctx.Deadline()
+		if !ok || deadline.After(until) || !rollback {
+			return ErrTransport
+		}
+		gateCalled = true
+		return nil
+	}}
+	f.tamper = func(_ string, obj any) any {
+		if d, ok := obj.(apps.Deployment); ok && d.Generation == original.After.Generation+1 {
+			close(responseDelayed)
+			<-ctx.Done()
+		}
+		return obj
+	}
+	receipt, e := effects.Rollback(ctx, original, current)
+	if !errors.Is(e, ErrConsoleUncertain) || receipt != (ConsoleReceipt{}) || !errors.Is(ctx.Err(), context.DeadlineExceeded) || !gateCalled {
+		t.Fatal("RPC deadline or uncertainty was lost", e)
+	}
+	select {
+	case <-responseDelayed:
+	default:
+		t.Fatal("API did not observe the conditional rollback")
+	}
+	if f.target.Validate(time.Now()) != nil {
+		t.Fatal("fixture target expired instead of caller authority")
+	}
+}
