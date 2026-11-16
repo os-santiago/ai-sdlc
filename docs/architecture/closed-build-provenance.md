@@ -39,3 +39,7 @@ authority source for operational promotion. The runtime verifier must read the
 signed built-record journal, obtain its expected identities from that record and
 reviewed installation, and emit a separately authorized verification fact. That
 runtime integration and issue-to-test-production acceptance remain pending.
+
+The proposed [operational provenance boundary](operational-provenance-boundary.md)
+records the missing durable compilation context, independent trust and acceptance
+gates for that runtime integration. It does not activate a verifier.
