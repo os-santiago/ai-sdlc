@@ -13,7 +13,8 @@ import subprocess
 import tempfile
 import time
 
-import konflux_build_fixture as fixture
+import konflux_build_fixture as homedir_fixture
+import saferus_build_fixture
 import konflux_fixture_guard as guard
 import konflux_provenance as provenance
 import network_probe
@@ -23,14 +24,16 @@ import supply_chain_install
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--cluster',default='ai-sdlc-konflux')
+    p.add_argument('--project',choices=['homedir','saferus'],default='homedir')
     p.add_argument('--build-report',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
     args=p.parse_args()
+    fixture = homedir_fixture if args.project == "homedir" else saferus_build_fixture
     if not re.fullmatch(r'[a-z][a-z0-9-]{0,35}',args.cluster):raise ValueError('Invalid cluster')
     args.output.mkdir(mode=0o700,parents=True,exist_ok=False)
     build=json.loads(args.build_report.read_text());results=build['results']
     digest=results['IMAGE_DIGEST'];repository=results['IMAGE_URL']
-    if not re.fullmatch(r'sha256:[a-f0-9]{64}',digest) or repository!='registry-service.kind-registry/ai-sdlc-fixtures/homedir':raise ValueError('Unexpected isolated image identity')
+    if not re.fullmatch(r'sha256:[a-f0-9]{64}',digest) or repository!='registry-service.kind-registry/ai-sdlc-fixtures/'+args.project:raise ValueError('Unexpected isolated image identity')
     if results['CHAINS-GIT_URL']!=fixture.INPUTS['sourceURL'] or results['CHAINS-GIT_COMMIT']!=fixture.INPUTS['sourceSHA'] or results['RUN_UID']!=build['publishRunUID'] or results['DEFINITION_DIGEST']!=build['definitionDigest']:raise ValueError('Trusted publisher result identity mismatch')
     if fixture.definition_digest(build['publisherImage'],build['network']['deniedTargets'])!=build['definitionDigest']:raise ValueError('Build definition differs from this trusted checkout')
     image=repository+'@'+digest

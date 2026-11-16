@@ -27,6 +27,18 @@ import (
 const registryHost = "registry-service.kind-registry"
 
 var outputPattern = regexp.MustCompile(`^registry-service\.kind-registry/ai-sdlc-fixtures/homedir:[a-z0-9][a-z0-9-]{0,62}$`)
+var saferusOutputPattern = regexp.MustCompile(`^registry-service\.kind-registry/ai-sdlc-fixtures/saferus:[a-z0-9][a-z0-9-]{0,62}$`)
+
+func validRecipeOutput(recipe, output string) bool {
+	switch recipe {
+	case artifact.Recipe:
+		return outputPattern.MatchString(output)
+	case artifact.SaferusRecipe:
+		return saferusOutputPattern.MatchString(output)
+	default:
+		return false
+	}
+}
 
 // registryTransport applies to every HTTP exchange, including bearer realms,
 // upload Location URLs and redirects resolved by the registry client.
@@ -75,6 +87,7 @@ func registryAuth(file string) (authn.Authenticator, error) {
 	return authn.FromConfig(a), nil
 }
 func run() error {
+	recipe := flag.String("recipe", artifact.Recipe, "reviewed artifact recipe")
 	directory := flag.String("input", "/artifacts/quarkus-app", "read-only package directory")
 	output := flag.String("output", "", "isolated internal registry image tag")
 	source := flag.String("source-sha", "", "trusted original source revision")
@@ -85,7 +98,7 @@ func run() error {
 	results := flag.String("results", "/tekton/results", "trusted result directory")
 	timeout := flag.Duration("timeout", 10*time.Minute, "total operation deadline")
 	flag.Parse()
-	if flag.NArg() != 0 || !outputPattern.MatchString(*output) || *timeout < time.Second || *timeout > 15*time.Minute {
+	if flag.NArg() != 0 || !validRecipeOutput(*recipe, *output) || *timeout < time.Second || *timeout > 15*time.Minute {
 		return errors.New("invalid publisher arguments")
 	}
 	id := artifact.Identity{SourceSHA: *source, DefinitionDigest: *definition, RunUID: *runUID}
@@ -105,15 +118,24 @@ func run() error {
 	transport := &http.Transport{DialContext: (&net.Dialer{Timeout: 15 * time.Second}).DialContext, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 15 * time.Second, ResponseHeaderTimeout: 30 * time.Second, IdleConnTimeout: 30 * time.Second, MaxIdleConns: 4}
 	defer transport.CloseIdleConnections()
 	options := []remote.Option{remote.WithContext(ctx), remote.WithTransport(transport), remote.WithJobs(2)}
-	baseRef, e := name.NewDigest(artifact.Base, name.StrictValidation)
-	if e != nil {
-		return e
+
+	var img v1.Image
+	var report artifact.Report
+	sourceURL := artifact.SourceURL
+	if *recipe == artifact.SaferusRecipe {
+		sourceURL = artifact.SaferusSourceURL
+		img, report, e = artifact.AssembleSaferus(ctx, *directory, id)
+	} else {
+		baseRef, err := name.NewDigest(artifact.Base, name.StrictValidation)
+		if err != nil {
+			return err
+		}
+		base, err := remote.Image(baseRef, append(options, remote.WithAuth(authn.Anonymous), remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}))...)
+		if err != nil {
+			return errors.New("cannot fetch pinned base with verified TLS")
+		}
+		img, report, e = artifact.Assemble(ctx, base, *directory, id)
 	}
-	base, e := remote.Image(baseRef, append(options, remote.WithAuth(authn.Anonymous), remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}))...)
-	if e != nil {
-		return errors.New("cannot fetch pinned base with verified TLS")
-	}
-	img, report, e := artifact.Assemble(ctx, base, *directory, id)
 	if e != nil {
 		return e
 	}
@@ -134,7 +156,7 @@ func run() error {
 		return errors.New("published registry digest mismatch")
 	}
 	// Results originate here, after registry verification; Maven has no mount here.
-	values := map[string]string{"IMAGE_URL": target.Context().Name(), "IMAGE_DIGEST": report.ImageDigest, "CHAINS-GIT_URL": artifact.SourceURL, "CHAINS-GIT_COMMIT": id.SourceSHA, "DEFINITION_DIGEST": id.DefinitionDigest, "RUN_UID": id.RunUID}
+	values := map[string]string{"IMAGE_URL": target.Context().Name(), "IMAGE_DIGEST": report.ImageDigest, "CHAINS-GIT_URL": sourceURL, "CHAINS-GIT_COMMIT": id.SourceSHA, "DEFINITION_DIGEST": id.DefinitionDigest, "RUN_UID": id.RunUID}
 	for key, value := range values {
 		if e = os.WriteFile(filepath.Join(*results, key), []byte(value), 0600); e != nil {
 			return errors.New("cannot write trusted publisher result")

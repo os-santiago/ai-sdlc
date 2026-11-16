@@ -1,0 +1,55 @@
+{
+  "date": "2026-11-16",
+  "scope": "isolated-saferus-artifact-recipe",
+  "sourceSHA": "d5df3a8aa0a19b8f55dfc29c7bc13a10405a2aaa",
+  "publisherImage": "localhost/ai-sdlc-artifact-builder@sha256:0a1c93a62ed9822d9101211f595937de9fd8230563afb0d1b3357ef0b8537470",
+  "publisherSourceCommit": "5af86cb15c45e96f1e6688c711f5b08b7e25f0f4",
+  "definitionDigest": "sha256:9ec12b91b56649dc57dfe8fb35ca3fabf743bc16f4c225f7861f9cea5e0cb438",
+  "image": "registry-service.kind-registry/ai-sdlc-fixtures/saferus@sha256:17bb050533c72af816ddb61391465c6dced4fc812e5e4a39e46135cfe932d3d8",
+  "buildRunUID": "dfe621e2-8434-4b5c-b287-cb7b66552ec5",
+  "publishRunUID": "80d72baa-9f56-427b-98f2-868918c97386",
+  "actualGoBuildAndRaceTests": true,
+  "writerTerminatedBeforePublisher": true,
+  "buildNetworkControls": {
+    "deniedTargets": [
+      {
+        "host": "10.96.153.117",
+        "port": 443
+      },
+      {
+        "host": "10.96.0.1",
+        "port": 443
+      },
+      {
+        "host": "10.244.0.34",
+        "port": 5000
+      },
+      {
+        "host": "10.89.0.9",
+        "port": 6443
+      }
+    ],
+    "positiveControls": true,
+    "dnsAndPublicHTTPS": true,
+    "serviceAccountTokenAbsent": true,
+    "scope": "point-in-time-before-build"
+  },
+  "buildCleanupComplete": true,
+  "imageSignatureVerified": true,
+  "attestationSignatureVerified": true,
+  "signedIdentityBound": true,
+  "wrongKeyRejected": true,
+  "missingArtifactRejected": true,
+  "conformaSignatureGate": {
+    "exitCode": 0,
+    "scope": "builtin image and attestation signature checks; no release/SLSA policy"
+  },
+  "verifierNamespaceRemoved": true,
+  "provenanceFormat": "SLSA v0.2 legacy",
+  "runtimeTests": 1251,
+  "runtimePackages": 39,
+  "pythonFixtureTests": 19,
+  "autonomousE2E": false,
+  "slsaLevelClaimed": false,
+  "runtimeAcceptancePerformed": false
+}
