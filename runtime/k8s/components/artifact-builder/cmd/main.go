@@ -92,6 +92,7 @@ func run() error {
 	storageID := flag.String("storage-identity", "", "installed physical storage identity")
 	bootID := flag.String("node-boot-id", "", "installed node boot identity")
 	phase := flag.String("workspace-phase", "", "build or publish workspace inspection")
+	expires := flag.Int64("authority-expires-at", 0, "optional signed authority expiry in Unix milliseconds")
 	recipe := flag.String("recipe", artifact.Recipe, "reviewed artifact recipe")
 	directory := flag.String("input", "/artifacts/quarkus-app", "read-only package directory")
 	output := flag.String("output", "", "isolated internal registry image tag")
@@ -105,7 +106,7 @@ func run() error {
 	flag.Parse()
 	if *guard {
 		valid := flag.NArg() == 0
-		allowed := map[string]bool{"guard-workspace": true, "storage-identity": true, "node-boot-id": true, "workspace-phase": true}
+		allowed := map[string]bool{"guard-workspace": true, "storage-identity": true, "node-boot-id": true, "workspace-phase": true, "authority-expires-at": true}
 		flag.Visit(func(f *flag.Flag) {
 			if !allowed[f.Name] {
 				valid = false
@@ -114,13 +115,16 @@ func run() error {
 		if !valid {
 			return buildstorage.ErrCustody
 		}
+		if *expires != 0 && buildstorage.CheckDeadline(*phase, *expires, time.Now()) != nil {
+			return buildstorage.ErrCustody
+		}
 		proof, e := buildstorage.Inspect("/slot", *storageID, *bootID, *phase)
 		if e != nil {
 			return e
 		}
 		return json.NewEncoder(os.Stdout).Encode(proof)
 	}
-	if *storageID != "" || *bootID != "" || *phase != "" {
+	if *storageID != "" || *bootID != "" || *phase != "" || *expires != 0 {
 		return errors.New("workspace arguments require guard mode")
 	}
 	if flag.NArg() != 0 || !validRecipeOutput(*recipe, *output) || *timeout < time.Second || *timeout > 15*time.Minute {
