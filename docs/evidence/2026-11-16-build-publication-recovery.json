@@ -31,6 +31,6 @@
   "limits": [
     "Kubernetes observations are synthetic.",
     "No operational build, cryptographic provenance, promotion or deployment activated.",
-    "Earlier v2 lost PostgreSQL connectivity; root cause was not captured. V3 uses bounded WAL and sanitized diagnostics."
+    "Earlier v2 lost PostgreSQL connectivity; root cause was not captured. V3 uses reduced WAL/checkpoint targets and sanitized diagnostics."
   ]
 }

@@ -47,5 +47,5 @@ they do not prove execution or isolation of a Kubernetes build.
 The first full run exposed an invalid negative-test value equal to the fixture's
 actual tree and was corrected. A later run lost its disposable PostgreSQL
 connection after the new tests passed; the cause was not captured before cleanup.
-The validation harness now bounds WAL within its existing 512 MiB tmpfs and records
+The validation harness now reduces WAL/checkpoint targets within its existing 512 MiB tmpfs and records
 allowlisted container diagnostics without exposing SQL logs or credentials.
