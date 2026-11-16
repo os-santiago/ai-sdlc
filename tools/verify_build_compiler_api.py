@@ -8,6 +8,7 @@ import secrets
 import subprocess
 
 import konflux_fixture_guard as guard
+import fixture_cleanup
 
 
 def main():
@@ -26,6 +27,7 @@ def main():
     namespace = 'ai-sdlc-builds'
     nonce = secrets.token_hex(16)
     uid = None
+    create_attempted = False
     report = {'version': 1, 'status': 'failed', 'scope': 'server-side dry-run only',
               'autonomousE2E': False, 'workloadExecuted': False,
               'dependencies': 'synthetic compiler fixture identities; not operational custody',
@@ -35,6 +37,10 @@ def main():
         return subprocess.run(kubectl + argv, input=json.dumps(value) if value is not None else None,
                               capture_output=True, text=True, timeout=30, check=check)
 
+    def persist_report():
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(report, indent=2) + '\n')
+
     try:
         actual = json.loads(call(['get', 'namespace', 'kube-system', '-o', 'json']).stdout)
         if actual['metadata']['uid'] != owner['clusterUID']:
@@ -42,6 +48,9 @@ def main():
         existing = json.loads(call(['get', 'namespaces', '-o', 'json']).stdout)['items']
         if any(x['metadata']['name'] == namespace for x in existing):
             raise ValueError('Refusing to adopt an existing build namespace')
+        report['namespaceCreateIntent'] = {'name': namespace, 'nonce': nonce}
+        persist_report()
+        create_attempted = True
         created = json.loads(call(['create', '-f', '-', '-o', 'json'], {
             'apiVersion': 'v1', 'kind': 'Namespace', 'metadata': {'name': namespace,
             'labels': {'ai-sdlc.compiler-fixture': nonce, 'pod-security.kubernetes.io/enforce': 'restricted'}}}).stdout)
@@ -68,16 +77,21 @@ def main():
         report['apiError'] = (exc.stderr or '')[-2000:]
         raise
     finally:
-        if uid:
-            actual = json.loads(call(['get', 'namespace', namespace, '-o', 'json']).stdout)
-            if actual['metadata']['uid'] != uid or actual['metadata']['labels'].get('ai-sdlc.compiler-fixture') != nonce:
-                raise ValueError('Refusing cleanup of replaced namespace')
-            call(['delete', '--raw', '/api/v1/namespaces/' + namespace, '-f', '-'], {
-                'apiVersion': 'v1', 'kind': 'DeleteOptions', 'preconditions': {'uid': uid}})
-            call(['wait', '--for=delete', 'namespace/' + namespace, '--timeout=25s'])
-            report['cleanupComplete'] = True
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(report, indent=2) + '\n')
+        def cleanup(checkpoint):
+            nonlocal uid
+            if uid is None and create_attempted:
+                uid = fixture_cleanup.recover_namespace_uid(
+                    lambda argv: call(argv).stdout, namespace, 'ai-sdlc.compiler-fixture', nonce)
+                report['recoveredNamespaceUIDForCleanup'] = uid
+            if uid:
+                actual = json.loads(call(['get', 'namespace', namespace, '-o', 'json']).stdout)
+                if actual['metadata']['uid'] != uid or actual['metadata']['labels'].get('ai-sdlc.compiler-fixture') != nonce:
+                    raise ValueError('Refusing cleanup of replaced namespace')
+                call(['delete', '--raw', '/api/v1/namespaces/' + namespace, '-f', '-'], {
+                    'apiVersion': 'v1', 'kind': 'DeleteOptions', 'preconditions': {'uid': uid}})
+                call(['wait', '--for=delete', 'namespace/' + namespace, '--timeout=25s'])
+                report['cleanupComplete'] = True
+        fixture_cleanup.finish_fixture(report, persist_report, cleanup)
     print(json.dumps(report))
 
 

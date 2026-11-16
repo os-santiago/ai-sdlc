@@ -195,5 +195,14 @@
       ]
     },
     "fullSuiteBaseline": "1364 tests/42 packages before this literal-encoding change; full required CI reruns on final head"
+  },
+  "fixtureCleanupHardening": {
+    "faultTests": "3 passed: report storage errors, API cleanup error reporting, nonce-bound cleanup-only recovery",
+    "nativePolicyProof": "/tmp/ai-sdlc-build-admission-proof-v14/report.json",
+    "accepted": 4,
+    "rejected": 34,
+    "cleanupComplete": true,
+    "realLostNamespaceReplyProof": "/tmp/ai-sdlc-build-compiler-lost-create-v1.json",
+    "scope": "administrative isolated fixtures only; never live workflow adoption"
   }
 }

@@ -10,6 +10,7 @@ import subprocess
 import time
 
 import konflux_fixture_guard as guard
+import fixture_cleanup
 
 
 def main():
@@ -27,7 +28,7 @@ def main():
     kubectl = [str(tools / 'kubectl-1.35.8'), '--kubeconfig', str(state / 'kubeconfig')]
     namespace = 'ai-sdlc-builds'; nonce = secrets.token_hex(12)
     policy_name = 'ai-sdlc-build-pods-fixture-' + nonce
-    uid = None; owned = []; run_uids = []
+    uid = None; owned = []; run_uids = []; create_attempted = False
     deadline = time.monotonic() + 240
     report = {'version': 1, 'status': 'failed', 'scope': 'nonexecuting synthetic Pod admission fixture',
               'autonomousE2E': False, 'workloadExecuted': False, 'accepted': [], 'rejected': [],
@@ -85,6 +86,9 @@ def main():
             raise ValueError('Fixture node selector could schedule')
         if any(n['metadata']['name'] == namespace for n in get('namespaces', ns=None)['items']):
             raise ValueError('Refusing existing build namespace')
+        report['namespaceCreateIntent'] = {'name': namespace, 'nonce': nonce}
+        persist_report()
+        create_attempted = True
         ns = create({'apiVersion': 'v1', 'kind': 'Namespace', 'metadata': {'name': namespace,
                      'labels': {'ai-sdlc.admission-fixture': nonce, 'pod-security.kubernetes.io/enforce': 'restricted'}}})
         uid = ns['metadata']['uid']
@@ -210,9 +214,13 @@ def main():
         report['failure'] = str(exc)[-4000:]
         raise
     finally:
-        persist_report()
         deadline = time.monotonic() + 120
-        try:
+        def cleanup(checkpoint):
+            nonlocal uid
+            if uid is None and create_attempted:
+                uid = fixture_cleanup.recover_namespace_uid(
+                    lambda argv: call(argv).stdout, namespace, 'ai-sdlc.admission-fixture', nonce)
+                report['recoveredNamespaceUIDForCleanup'] = uid
             for kind, resource_uid in reversed(owned):
                 call(['delete', '--raw', '/apis/admissionregistration.k8s.io/v1/' + kind + '/' + policy_name, '-f', '-'],
                      {'apiVersion': 'v1', 'kind': 'DeleteOptions', 'preconditions': {'uid': resource_uid}})
@@ -222,7 +230,7 @@ def main():
                 pods_stopped()
                 # No container ever ran, so there are no execution logs/results to preserve.
                 task_uids = [t['metadata']['uid'] for t in get('taskruns')['items']]
-                report['taskUIDs']=task_uids;persist_report()
+                report['taskUIDs']=task_uids;checkpoint()
                 for attempt in range(3):
                     current=call(['get','namespace',namespace,'--ignore-not-found','-o','json']).stdout
                     if not current.strip():break
@@ -235,13 +243,9 @@ def main():
                         # Re-enter the guard to re-read all ownership/state and build a new
                         # CAS; never retry the stale patch itself or remove arbitrary finalizers.
                         if 'patch' not in exc.cmd or 'taskrun' not in exc.cmd or attempt==2:raise
-                        report['guardedCleanupRetries']=attempt+1;persist_report()
+                        report['guardedCleanupRetries']=attempt+1;checkpoint()
                 report['cleanupComplete'] = True
-        except Exception as exc:
-            report['status']='failed';report['cleanupFailure']=type(exc).__name__
-            raise
-        finally:
-            persist_report()
+        fixture_cleanup.finish_fixture(report, persist_report, cleanup)
     print(json.dumps(report))
 
 
