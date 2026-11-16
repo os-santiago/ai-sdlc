@@ -420,3 +420,27 @@ The chart is a reviewed declaration, not the completed installer workflow.
 trust approval and ACL/custody preflight before it can safely expose this option.
 Rendering and Kubernetes server dry-run validate object shape and admission;
 they do not demonstrate effective network enforcement or a running verifier.
+
+## Private installation compiler
+
+The migrator exposes two bounded stdin/stdout operations for the installer.
+`compile-provenance-installation` validates independently supplied public trust,
+the approved build profile and a separately supplied verifier image pin. Its
+output preserves the trust and binds both document digests; it does not inspect
+the cluster or approve observed CA/signing material.
+
+`prepare-provenance-registry-custody` accepts only the existing `konflux` bcrypt
+entry (cost 10–14), generates a dedicated reader with 256 random bits and bcrypt
+cost 12, and preserves the publisher line byte-for-byte. A retry must supply the
+recorded credential and reader hash; it accepts either the old publisher-only
+file or the exact updated file without rotating custody. Existing readers without
+that material, additional users, reordered/duplicate entries, noncanonical input
+fields and explicit null custody are rejected. Private values belong only in
+captured stdin/stdout and the installer's protected custody, never arguments or
+logs. Neither operation contacts a database, registry or Kubernetes API.
+
+These operations do not install or activate anything. The installer must persist
+custody before any external effect, recover lost acknowledgements through exact
+UID/content checks, serialize configuration changes, recheck freeze and workload
+containment, and preserve restrictive ACLs after interruption. A successful
+compiler result alone grants no delivery or trust-approval authority.

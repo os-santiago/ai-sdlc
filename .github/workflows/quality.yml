@@ -15,6 +15,16 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Acquire the pinned node image before the bounded startup test
+        timeout-minutes: 4
+        run: |
+          python3 - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          image = json.loads(Path('runtime/k8s/deploy/konflux/upstream.lock.json').read_text())['nodeImage']
+          subprocess.run(['docker', 'pull', '--platform', 'linux/amd64', image], check=True, timeout=180)
+          PY
       - name: Verify original node mount custody using published production migrator
         run: >-
           python3 tools/verify_build_foundation_node.py --provider docker
