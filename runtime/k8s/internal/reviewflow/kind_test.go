@@ -144,7 +144,20 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 		t.Fatal("verified review input")
 	}
 	var calls atomic.Int32
+	var gatewayReady atomic.Bool
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/readyz" {
+			if r.Header.Get("Authorization") != "Bearer "+strings.Repeat("x", 48) {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			if !gatewayReady.Load() {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			io.WriteString(w, `{"ready":true}`)
+			return
+		}
 		raw, e := io.ReadAll(io.LimitReader(r.Body, 131073))
 		if e != nil || len(raw) > 131072 {
 			w.WriteHeader(400)
@@ -242,6 +255,33 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 		t.Fatal("review Kubernetes")
 	}
 	runtime := Runtime{DB: db, Policy: policy, Load: load, Client: reviewClient}
+	// Readiness failure is a pre-claim observation, not a consumed workflow
+	// attempt. Exercise real HTTP 503 and connection refusal against PostgreSQL.
+	var originalExpiry time.Time
+	if db.Pool.QueryRow(`SELECT expires_at FROM verification_requests WHERE id=$1`, id).Scan(&originalExpiry) != nil {
+		t.Fatal("verification expiry")
+	}
+	originalEndpoint := config.Model.Endpoint
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closedEndpoint := closed.URL + "/v1/chat/completions"
+	closed.Close()
+	for _, endpoint := range []string{originalEndpoint, closedEndpoint} {
+		config.Model.Endpoint = endpoint
+		state, err := runtime.PollOnce(ctx)
+		if err == nil || !VerificationMayProceed(state, err) {
+			t.Fatal("gateway failure did not defer before claim", state, err)
+		}
+		var rows int
+		if db.Pool.QueryRow(`SELECT (SELECT count(*) FROM review_runs)+(SELECT count(*) FROM review_effects)+(SELECT count(*) FROM review_model_calls)`).Scan(&rows) != nil || rows != 0 || calls.Load() != 0 {
+			t.Fatal("unready gateway consumed review authority")
+		}
+		var currentExpiry time.Time
+		if db.Pool.QueryRow(`SELECT expires_at FROM verification_requests WHERE id=$1`, id).Scan(&currentExpiry) != nil || !originalExpiry.Equal(currentExpiry) {
+			t.Fatal("gateway deferral changed expiry")
+		}
+	}
+	config.Model.Endpoint = originalEndpoint
+	gatewayReady.Store(true)
 	state, runErr := runtime.PollOnce(ctx)
 	var storedState, cleanup, reason string
 	var proofRaw []byte
@@ -277,6 +317,7 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 		}
 	}
 	before := calls.Load()
+	gatewayReady.Store(false)
 	next, pollErr := runtime.PollOnce(ctx)
 	if control.Scenario == "lost-config-reply" {
 		if pollErr == nil || next != "cleanup-uncertain" || calls.Load() != before || creates.Load() != 1 || deletes.Load() != 0 {

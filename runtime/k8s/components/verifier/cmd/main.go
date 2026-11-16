@@ -129,10 +129,10 @@ func main() {
 			state, e := review.PollOnce(ctx)
 			if e != nil {
 				log.Print("independent review stopped safely")
-				return
-			}
-			if state != "" {
+			} else if state != "" {
 				log.Print("independent review: " + state)
+			}
+			if !reviewflow.VerificationMayProceed(state, e) {
 				return
 			}
 		}
