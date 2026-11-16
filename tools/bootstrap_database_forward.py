@@ -36,8 +36,10 @@ def original_database(run,kubectl,uri,pod_uid):
             raise ValueError('Original database Pod changed during read-only observation')
     original()
     # timeout bounds the forwarding process even if the supervising installer
-    # disappears. Neither argv nor output contains a database credential.
-    process=subprocess.Popen([timeout,'--kill-after=5s','75s',*kubectl,'port-forward',
+    # disappears. Reserve 15s announcement + 2*10s identity reads + 30s inspector
+    # + up to 40s component cleanup, with margin before the final liveness check.
+    # Neither argv nor output contains a database credential.
+    process=subprocess.Popen([timeout,'--kill-after=5s','120s',*kubectl,'port-forward',
         '-n','ai-sdlc-runtime','pod/ai-sdlc-postgres-0',':5432','--address','127.0.0.1'],
         stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,bufsize=0)
     try:

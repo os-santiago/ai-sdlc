@@ -32,7 +32,7 @@ class ForwardTests(unittest.TestCase):
             finally:
                 self.assertTrue(process.terminated);self.assertTrue(process.stdout.closed)
                 command=popen.call_args.args[0]
-                self.assertEqual(command[:3],['/usr/bin/timeout','--kill-after=5s','75s'])
+                self.assertEqual(command[:3],['/usr/bin/timeout','--kill-after=5s','120s'])
                 self.assertIn(':5432',command);self.assertNotIn('synthetic',' '.join(command))
 
     def test_original_endpoint_and_successful_cleanup(self):
