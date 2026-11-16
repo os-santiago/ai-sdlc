@@ -10,6 +10,26 @@ concurrency:
   group: quality-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  build-custody-install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@802e89cd7394b98352d79117a8b463bbfc2fdacf
+        with:
+          go-version-file: runtime/k8s/go.mod
+          cache-dependency-path: runtime/k8s/go.sum
+      - name: Build production installation binary
+        working-directory: runtime/k8s
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/build-migrator" ./components/migrator/cmd
+      - name: Verify bounded custody initialization and non-destructive reapply
+        run: python3 tools/verify_build_install.py --provider docker --binary "$RUNNER_TEMP/build-migrator" --output "$RUNNER_TEMP/build-custody-report.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: build-custody-install
+          path: ${{ runner.temp }}/build-custody-report.json
+          if-no-files-found: error
   codex-wrapper-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 5
