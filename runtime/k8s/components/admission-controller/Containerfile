@@ -1,6 +1,6 @@
 # Build context: runtime/k8s/ (not the repo root)
 #   podman build -f components/admission-controller/Containerfile -t ai-sdlc-admission-controller:dev .
-FROM docker.io/library/golang:1.25-alpine AS build
+FROM docker.io/library/golang@sha256:ea30e25680a5470bac02b08bb0e0a735fb75bd0ab7d431b9b95ee0abef362586 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

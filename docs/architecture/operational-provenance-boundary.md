@@ -1,7 +1,8 @@
 # Operational provenance boundary
 
-**Context retention is implemented; independent operational verification remains
-proposed work for [#574](https://github.com/os-santiago/ai-sdlc/issues/574).**
+**Context retention and an inactive registry-verification library are implemented;
+the authorized operational verification journal remains work for
+[#574](https://github.com/os-santiago/ai-sdlc/issues/574).**
 This does not activate the installed build controller or authorize promotion.
 The current [readiness report](../operations/saferus-e2e-readiness.md)
 separates tested foundation preparation from the unproven autonomous E2E.
@@ -77,7 +78,48 @@ approval to switch a live controller or downgrade it to a context-free writer.
 Do not backfill them from current cluster state, infer missing bytes from a
 mutable profile, or rebuild another artifact and label it the original result.
 
-## Second slice: independent current verification
+## Implemented second slice: inactive cryptographic verifier
+
+[`provenance`](../../runtime/k8s/internal/provenance/) verifies a structurally valid
+historical record using independently supplied public trust and a separately
+provisioned registry identity. Only the role-checked database reader establishes
+record authenticity; a caller-created `buildrecord.Record` does not. No runtime
+component calls this library yet.
+
+Trust explicitly restricts this version to Saferus in `ai-sdlc-production` in kind.
+It pins cluster/namespace, publisher/compiler/verifier identities, registry CA,
+ECDSA P-256 public key fingerprint, format and a validity window of at most 24
+hours. The pinned Sigstore 1.11.3 library requires Go 1.27; all eleven component
+build stages and local validation use the same immutable Go 1.27.4 image.
+
+A single-use verifier permits five GET requests within one 60-second deadline:
+image manifest by immutable digest, Cosign signature manifest and blob, and DSSE
+attestation manifest and blob. It uses TLS 1.3, its approved CA, a fixed registry
+host/repository, bounded response sizes, and no proxy, redirect, compression or
+implicit retry. Legacy `.sig`/`.att` tags only locate evidence: their exact
+manifest/blob digests are retained, and signed claims must bind the expected
+image digest. Multiple evidence layers or signatures are rejected as ambiguous.
+
+The proof binds the complete record, context and trust digests, image and evidence
+digests, verifier identity and original build/publish observation digests. The
+signed publisher Run UID is checked; original Pod/Task UIDs remain authenticated
+journal observations, not claims directly signed by Chains. The verifier checks
+the image manifest, but does not download every application config/layer blob or
+certify their availability for deployment. Deployment must verify those needs.
+
+This version explicitly uses a local key without transparency-log verification.
+It claims no SLSA level and always returns `releaseAuthorized: false`. Tests use
+an isolated TLS registry and actual Sigstore signing/verification, plus an
+unmodified archived Chains signature from a removed real workload. That archive
+is partial format evidence, never operational history or approved trust.
+
+The username requirement does not establish registry permissions. Installation
+must provision a native pull-only ACL and prove denied push/delete/other-repository
+access before activation. The existing kind registry does not yet satisfy this
+requirement. Current policy, freeze, revocation and durable completion still
+belong to the next journal increment.
+
+## Next slice: independent current verification
 
 A new bounded verification attempt consumes the authenticated historical record
 and independently installed current trust. Its identity binds the build record,

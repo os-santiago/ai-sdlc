@@ -2,23 +2,16 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/building"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildrecord"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildworkload"
 )
 
 // BuiltRecord is historical evidence, not verified provenance or release authority.
-type BuiltRecord struct {
-	Context        buildworkload.RetainedContext
-	Command        building.Command
-	Plan           building.Plan
-	Build, Publish building.Termination
-	Result         building.Result
-	RecordedAt     time.Time
-}
+type BuiltRecord = buildrecord.Record
 
 func (db *DB) ReadBuiltRecord(ctx context.Context, id string) (BuiltRecord, error) {
 	return db.readBuiltRecord(ctx, id, "verifier")
@@ -83,6 +76,3 @@ func (db *DB) readBuiltRecord(ctx context.Context, id, role string) (BuiltRecord
 	}
 	return r, nil
 }
-
-// CanonicalResultBytes is useful for hashing evidence without logging it.
-func (r BuiltRecord) Digest() string { raw, _ := json.Marshal(r); return authority.Digest(raw) }
