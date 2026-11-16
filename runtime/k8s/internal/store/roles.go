@@ -230,6 +230,9 @@ func (db *DB) ProvisionRolesForPromotion(ctx context.Context, passwords map[stri
 			if provenance && component == "verifier" {
 				statements = append(statements, provenancePrivileges...)
 			}
+			if promotion && component == "verifier" {
+				statements = append(statements, `GRANT SELECT ON promotion_handoffs TO aisdlc_verifier`, `GRANT INSERT(provenance_id,command_id,payload_digest) ON promotion_handoffs TO aisdlc_verifier`)
+			}
 			if promotion && component == "release-manager" {
 				statements = append(statements, promotionPrivileges...)
 			}
