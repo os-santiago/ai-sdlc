@@ -560,3 +560,94 @@ func TestDeploymentJournalLostFactAndCompletionAcknowledgements(t *testing.T) {
 		})
 	}
 }
+
+func TestDeploymentCommandPreservesSubmillisecondHistoryOrder(t *testing.T) {
+	f := newDeploymentFixture(t)
+	record, e := f.p.j.ReadPromotionRecord(context.Background(), f.command.PromotionID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	base := time.Now().Add(time.Millisecond).Truncate(time.Millisecond)
+	record.RecordedAt = base.Add(250 * time.Microsecond)
+	now := base.Add(750 * time.Microsecond)
+	command, e := deployment.NewCommand(*f.p.cfg, record, f.p.record, f.p.built, now)
+	if e != nil {
+		t.Fatal("earlier promotion in same millisecond rejected", e)
+	}
+	if command.IssuedAt != base.Add(time.Millisecond).UnixMilli() {
+		t.Fatal("issuance did not retain ordering at wire precision")
+	}
+	if command.ExpiresAt != record.Plan.ExpiresAt {
+		t.Fatal("wire precision extended original expiry")
+	}
+	if e = command.BindRecords(*f.p.cfg, record, f.p.record, f.p.built, time.UnixMilli(command.IssuedAt)); e != nil {
+		t.Fatal("historical issuance boundary rejected", e)
+	}
+	record.RecordedAt = now
+	if _, e = deployment.NewCommand(*f.p.cfg, record, f.p.record, f.p.built, now); e != nil {
+		t.Fatal("same-instant submillisecond promotion rejected", e)
+	}
+	record.RecordedAt = now.Add(time.Microsecond)
+	if _, e = deployment.NewCommand(*f.p.cfg, record, f.p.record, f.p.built, now); e == nil {
+		t.Fatal("future promotion accepted within same millisecond")
+	}
+}
+
+// This waits for the actual 45-second freshness window; no fixture clock or
+// persisted timestamp is rewritten. An observed PostgreSQL lock delays INSERT.
+func TestDeploymentHealthExpiryWhileInsertWaits(t *testing.T) {
+	f := newDeploymentFixture(t)
+	ctx := context.Background()
+	claim := f.claim(t)
+	receipt := f.effect(t, claim, f.before(), false)
+	if e := f.j.RecordDeploymentReceipt(ctx, claim, receipt); e != nil {
+		t.Fatal(e)
+	}
+	health := f.health(receipt)
+	time.Sleep(time.Until(time.UnixMilli(health.ObservedAt).Add(43500 * time.Millisecond)))
+	tx, e := f.p.b.f.Admin.Pool.BeginTx(ctx, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer tx.Rollback()
+	if _, e = tx.Exec(`LOCK TABLE deployment_health IN ACCESS EXCLUSIVE MODE`); e != nil {
+		t.Fatal(e)
+	}
+	var blocker int
+	if e = tx.QueryRow(`SELECT pg_backend_pid()`).Scan(&blocker); e != nil {
+		t.Fatal(e)
+	}
+	done := make(chan error, 1)
+	go func() { done <- f.j.FinishDeployment(ctx, claim, health, false) }()
+	blocked := false
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if e = f.p.b.f.Admin.Pool.QueryRow(`SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE usename='aisdlc_deployer' AND wait_event_type='Lock' AND $1=ANY(pg_blocking_pids(pid)) AND query LIKE 'INSERT INTO deployment_health%')`, blocker).Scan(&blocked); e != nil {
+			t.Fatal(e)
+		}
+		if blocked {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !blocked {
+		t.Fatal("health INSERT did not observably wait")
+	}
+	time.Sleep(time.Until(time.UnixMilli(health.ObservedAt).Add(46 * time.Second)))
+	if e = tx.Commit(); e != nil {
+		t.Fatal(e)
+	}
+	if e = <-done; e == nil {
+		t.Fatal("terminal state accepted health expired at persisted timestamp")
+	}
+	var count int
+	if e = f.p.b.f.Admin.Pool.QueryRow(`SELECT count(*) FROM deployment_health WHERE request_id=$1`, claim.ID).Scan(&count); e != nil || count != 0 {
+		t.Fatal("stale health survived transaction rollback", count, e)
+	}
+	if e = f.j.FinishDeployment(ctx, claim, f.health(receipt), false); e != nil {
+		t.Fatal("fresh health failed after original INSERT rolled back", e)
+	}
+	if _, e = f.j.ReadDeploymentRecord(ctx, claim); e != nil {
+		t.Fatal("completed record cannot be authenticated", e)
+	}
+}

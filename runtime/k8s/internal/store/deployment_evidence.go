@@ -128,7 +128,11 @@ func (j *DeploymentJournal) FinishDeployment(ctx context.Context, c DeploymentCl
 			}
 		}
 		raw, _ := json.Marshal(h)
-		if _, e = tx.ExecContext(ctx, `INSERT INTO deployment_health(request_id,kind,digest,health)VALUES($1,$2,$3,$4)`, c.ID, kind, authority.Digest(raw), raw); e != nil {
+		var recordedAt time.Time
+		if e = tx.QueryRowContext(ctx, `INSERT INTO deployment_health(request_id,kind,digest,health)VALUES($1,$2,$3,$4) RETURNING recorded_at`, c.ID, kind, authority.Digest(raw), raw).Scan(&recordedAt); e != nil {
+			return ErrExecution
+		}
+		if deployment.ValidateHealth(cfg.Target, receipt, h, recordedAt) != nil {
 			return ErrExecution
 		}
 		if _, _, e = j.check(ctx, tx, c, rollback); e != nil {
@@ -147,9 +151,14 @@ func (j *DeploymentJournal) FinishDeployment(ctx context.Context, c DeploymentCl
 			return ErrExecution
 		}
 		if rollback {
-			return j.containmentCurrent(ctx, cfg, r.Command)
+			e = j.containmentCurrent(ctx, cfg, r.Command)
+		} else {
+			e = j.stillCurrent(ctx, r)
 		}
-		return j.stillCurrent(ctx, r)
+		if e != nil || deployment.ValidateHealth(cfg.Target, receipt, h, time.Now()) != nil {
+			return ErrExecution
+		}
+		return nil
 	})
 }
 func (j *DeploymentJournal) QuarantineDeployment(ctx context.Context, c DeploymentClaim, reason string) error {
