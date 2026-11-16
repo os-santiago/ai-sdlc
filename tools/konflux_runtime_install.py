@@ -19,6 +19,16 @@ LABELS = {'app.kubernetes.io/part-of': 'ai-sdlc',
 def validate_options(args):
     if args.platform != 'konflux':
         return
+    if (args.command == 'status' and args.repository == 'os-santiago/saferus'
+            and args.environment == 'ai-sdlc-production' and args.github_auth == 'none'
+            and args.codex_auth_file is None and not args.refresh_github_credential and not args.refresh_model_credential):
+        return
+    if getattr(args, 'build_bundle', None) is not None:
+        if (args.command not in ('plan', 'local') or args.profile != 'verification'
+                or args.repository != 'os-santiago/saferus' or args.environment != 'ai-sdlc-production'
+                or not args.merge or not args.publication or not args.independent_review):
+            raise ValueError('Build capability requires reviewed Saferus test-production scope')
+        return
     if (args.command not in ('plan', 'local', 'status') or args.profile != 'maintenance'
             or args.repository != 'os-santiago/saferus' or args.environment != 'ai-sdlc-production'
             or args.github_auth != 'none' or args.codex_auth_file is not None
@@ -140,6 +150,8 @@ def require_frozen(run, kubectl):
         if not raw.strip():
             continue
         data = json.loads(raw).get('data', {})
+        if name == 'ai-sdlc-config' and data.get('AI_SDLC_BUILD', 'false') != 'false':
+            raise ValueError('Installed build capability requires a containment-preserving upgrade or teardown; automatic reconciliation is not supported')
         if required is not None:
             valid = data.get(field) == required
         else:

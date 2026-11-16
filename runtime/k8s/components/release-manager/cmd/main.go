@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/building"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/delivery"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/execution"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/forge"
@@ -144,6 +146,25 @@ func main() {
 		}
 	})
 	defer stop()
+	if bootstrap.BuildEnabled() {
+		loadBuild := func() (building.Configuration, authority.Identity, error) {
+			p, key, e := c.Authority()
+			if e != nil {
+				return building.Configuration{}, key, e
+			}
+			i, e := buildflow.LoadCurrent("/etc/ai-sdlc/build/config.json", c.PolicyPath, "/etc/ai-sdlc/outer-policy/policy.json")
+			if e != nil || i.Inner.Revision() != p.Revision() || key.Validate(i.Outer) != nil {
+				return building.Configuration{}, key, buildflow.ErrBuildFlow
+			}
+			return i.Configuration(), key, nil
+		}
+		stopBuild := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
+			if _, e := buildflow.DispatchMerged(ctx, c.DB, loadBuild); e != nil {
+				log.Print("merged-source dispatch stopped safely")
+			}
+		})
+		defer stopBuild()
+	}
 	if bootstrap.MergeEnabled() {
 		stopMerge := bootstrap.Periodic(time.Minute, func(ctx context.Context) {
 			r, e := mergeRuntime()

@@ -115,3 +115,9 @@ publication:
 merge:
   enabled: false
   configJSON: ""
+
+build:
+  enabled: false
+  digest: ""
+  configJSON: ""
+  outerPolicyJSON: ""

@@ -19,6 +19,7 @@ import supply_chain_install
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--preflight-only', action='store_true')
+    parser.add_argument('--verify-runtime-chart', action='store_true')
     parser.add_argument('--cluster', default='ai-sdlc-konflux-reviewed')
     parser.add_argument('--test-binary', type=Path)
     parser.add_argument('--journal-test-binary', type=Path)
@@ -36,6 +37,8 @@ def main():
         raise ValueError('Exact source and tree required')
     if bool(args.test_binary) == bool(args.installer_binary):
         raise ValueError('Select exactly one fixture test or production installer binary')
+    if args.verify_runtime_chart and not args.installer_binary:
+        raise ValueError('Runtime chart validation requires production installer mode')
     if args.installer_binary and not args.preflight_only:
         raise ValueError('Production installer validation cannot execute a workload')
     selected_binary = args.installer_binary or args.test_binary
@@ -318,6 +321,12 @@ def main():
                                  capture_output=True, check=False, limit=130)
             if negative.returncode == 0:
                 raise ValueError('Changed separately approved trust was accepted')
+            if args.verify_runtime_chart:
+                import build_runtime_chart_fixture
+                bootstrap = json.loads(node_call([root + '/installer', 'bootstrap-identities', '--repository', 'os-santiago/saferus', '--environment', 'ai-sdlc-production'], capture_output=True, limit=30).stdout)
+                report['runtimeChart'] = build_runtime_chart_fixture.verify(
+                    lambda argv, **kw: deadline.run(kubectl + argv, **kw), tools, Path(__file__).resolve().parents[1],
+                    observe, bootstrap, profile, slot, args.output)
             report['transport'] = {'status': 'passed', 'productionInstaller': True,
                                    'trustApproval': 'isolated fixture only', 'changedApprovedTrustDenied': True}
         else:

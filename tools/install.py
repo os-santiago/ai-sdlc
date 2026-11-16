@@ -22,6 +22,7 @@ import github_client
 import network_probe
 import install_config
 import konflux_runtime_install
+import build_runtime_install
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL = ROOT / 'runtime/k8s/deploy/local'
@@ -190,7 +191,10 @@ def identity_material(provider, image, repository, environment):
     return json.loads(result.stdout)
 
 
-def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False, verification=False, publication=False, merge=False, require_build=False):
+def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False, verification=False, publication=False, merge=False, require_build=False, build=False):
+    if build and (not merge or repository != 'os-santiago/saferus' or environment != 'ai-sdlc-production'):
+        raise ValueError('Build requires reviewed Saferus merge and test production')
+    require_build = require_build or build
     if merge and not publication:
         raise ValueError('Merge requires verified publication')
     if publication and (not candidate or not verification or repository not in ('os-santiago/homedir', 'os-santiago/saferus')):
@@ -284,6 +288,13 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
     # resources. Neither subprocess output nor private input is printed.
     run([provider, 'run', '--rm', '-i', '--network=none', '--log-driver=none', image,
          'validate-bootstrap'], input=json.dumps(material), capture_output=True)
+    outer_policy = None
+    if build:
+        outer_policy = dict(material['policy'], autonomy='auto-deploy',
+                            keys={key_id: key for key_id, key in material['policy']['keys'].items()
+                                  if key['role'] in ('release-manager', 'build-controller', 'verifier', 'deployer', 'relay')},
+                            grants=[grant for grant in reviewed_grants if grant['operation'] in
+                                    ('build-merged', 'verify-built', 'promote-artifact', 'deploy-release', 'record-deployment')])
     # Bootstrap validation uses all public keys only in this private input.
     # The build identity is not added to the inner policy or its revision.
     for key_id, key in list(material['policy']['keys'].items()):
@@ -295,8 +306,11 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
         create_owned_secret(kubectl, name, values, cluster_uid)
     if password_upgrade is not None:
         extend_owned_role_secret(kubectl, cluster_uid, *password_upgrade)
-    return {'authority': {'policyJSON': json.dumps(material['policy'], sort_keys=True),
-                          'installationUID': cluster_uid}}
+    result = {'authority': {'policyJSON': json.dumps(material['policy'], sort_keys=True),
+                            'installationUID': cluster_uid}}
+    if outer_policy is not None:
+        result['build'] = {'outerPolicyJSON': json.dumps(outer_policy, sort_keys=True)}
+    return result
 
 
 def configure_github_client(kubectl, cluster_uid, repository, refresh=False):
@@ -351,6 +365,7 @@ def _main(argv, stack):
     parser.add_argument('--cluster')
     parser.add_argument('--provider', choices=['auto', 'docker', 'podman'])
     parser.add_argument('--images', type=Path)
+    parser.add_argument('--build-bundle', type=Path, help='Reviewed public build profile, original slots and pinned controller image; Konflux only')
     parser.add_argument('--timeout', default='10m')
     parser.add_argument('--repository')
     parser.add_argument('--environment')
@@ -369,6 +384,10 @@ def _main(argv, stack):
     for key, value in defaults.items():
         if getattr(args, key) is None:
             setattr(args, key, value)
+    if args.build_bundle is not None and (args.command not in ('plan', 'local') or args.platform != 'konflux'
+            or args.profile != 'verification' or args.repository != 'os-santiago/saferus'
+            or args.environment != 'ai-sdlc-production' or not args.merge or not args.publication or not args.independent_review):
+        raise ValueError('Build installation requires explicit Konflux Saferus verification/review/publication/merge scope')
     konflux_runtime_install.validate_options(args)
     if args.merge and not args.publication:
         raise ValueError('Merge requires explicit verified publication')
@@ -412,6 +431,7 @@ def _main(argv, stack):
     cache = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'ai-sdlc/tools'
     if args.command != 'tools':
         image_lock(args.images)
+    build_bundle = build_runtime_install.load_bundle(args.build_bundle, image_lock(args.images)) if args.build_bundle is not None else None
     binaries = tools(cache)
     if args.command == 'tools':
         print(json.dumps(binaries, indent=2))
@@ -435,6 +455,7 @@ def _main(argv, stack):
                           'independentReviewEnabled': bool(args.independent_review),
                           'publicationEnabled': bool(args.publication),
                           'mergeEnabled': bool(args.merge),
+                          'buildEnabled': build_bundle is not None,
                           'githubAuth': args.github_auth, 'repository': args.repository,
                           'environment': args.environment, 'configurationDigest': config_digest}, indent=2))
         return 0
@@ -477,7 +498,8 @@ def _main(argv, stack):
     elif args.platform == 'konflux':
         konflux_runtime_install.verify_cluster(run, kubectl, state, args.cluster, provider, cluster_uid)
         konflux_runtime_install.namespace(run, kubectl, state, cluster_uid, create=args.command == 'local')
-        konflux_runtime_install.require_frozen(run, kubectl)
+        if args.command != 'status':
+            konflux_runtime_install.require_frozen(run, kubectl)
     else:
         check_ownership(marker, args.cluster, provider, cluster_uid)
     if args.command == 'status':
@@ -516,6 +538,8 @@ def _main(argv, stack):
                    '-n', 'local-path-storage', '--timeout', args.timeout])
     if args.platform != 'konflux':
         run(kubectl + ['apply', '-f', LOCAL / 'namespace.yaml'])
+    if build_bundle is not None:
+        build_runtime_install.preflight(run, kubectl, provider, args.cluster, image_lock(args.images), build_bundle)
     if args.github_auth == 'gh-cli':
         configure_github_client(kubectl, cluster_uid, args.repository, args.refresh_github_credential)
     intake_values = None
@@ -539,7 +563,7 @@ def _main(argv, stack):
         execution_values['merge']['configJSON'] = json.dumps(native_policy, sort_keys=True)
     public_values = configure_identities(kubectl, provider, image_lock(args.images),
                                          cluster_uid, args.repository, args.environment,
-                                         freeze=args.profile == 'maintenance', candidate=args.profile in ('candidate', 'verification'), verification=args.profile == 'verification', publication=bool(args.publication), merge=bool(args.merge))
+                                         freeze=args.profile == 'maintenance', candidate=args.profile in ('candidate', 'verification'), verification=args.profile == 'verification', publication=bool(args.publication), merge=bool(args.merge), build=build_bundle is not None)
     if intake_values is not None:
         public_values['intake'] = intake_values
     if args.profile in ('candidate', 'verification'):
@@ -555,6 +579,8 @@ def _main(argv, stack):
                                 lock['image']['repository'] + '@' + lock['components']['worker']['digest'])
         execution_values['candidate']['apiServerCIDRs'] = candidate_install.api_cidrs(kubectl)
         public_values.update(execution_values)
+    if build_bundle is not None:
+        public_values['build'] = build_runtime_install.values(provider, image_lock(args.images), build_bundle, public_values, intake_values)
     # This temporary Helm input contains public verification keys only. Helm
     # owns workloads and the policy ConfigMap; private data stays in Secrets.
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as values:
@@ -569,7 +595,7 @@ def _main(argv, stack):
              '-f', values.name, '--wait=legacy', '--wait-for-jobs', '--timeout', args.timeout])
     run(kubectl + ['rollout', 'status', 'statefulset/ai-sdlc-postgres', '-n', NAMESPACE,
                    '--timeout', args.timeout])
-    for name in list(COMPONENT_NAMES.values()) + (["verifier"] if args.profile == "verification" else []):
+    for name in list(COMPONENT_NAMES.values()) + (["verifier"] if args.profile == "verification" else []) + (["build-controller"] if build_bundle is not None else []):
         run(kubectl + ['rollout', 'status', 'deployment/ai-sdlc-' + name, '-n', NAMESPACE,
                        '--timeout', args.timeout])
     lock = image_lock(args.images)
@@ -584,6 +610,7 @@ def _main(argv, stack):
               'independentReviewEnabled': bool(args.independent_review),
                           'publicationEnabled': bool(args.publication),
                           'mergeEnabled': bool(args.merge),
+                          'buildEnabled': build_bundle is not None,
               'networkPolicyVerification': network,
               'images': image_lock(args.images)}
     (state / 'installation.json').write_text(json.dumps(report, indent=2) + '\n')

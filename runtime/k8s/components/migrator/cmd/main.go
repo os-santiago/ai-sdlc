@@ -21,6 +21,11 @@ func run() error {
 		return errors.New("select migrate or bootstrap-identities")
 	}
 	switch os.Args[1] {
+	case "compile-build-installation":
+		if len(os.Args) != 2 {
+			return errors.New("unexpected build configuration arguments")
+		}
+		return compileBuildInstallation(os.Stdin, os.Stdout)
 	case "observe-build-admission", "observe-build-trust", "observe-build-profile":
 		if len(os.Args) != 2 {
 			return errors.New("unexpected build observation arguments")
@@ -105,7 +110,11 @@ func run() error {
 		if merge != "" && merge != "false" && merge != "true" {
 			return errors.New("invalid merge option")
 		}
-		if err := db.ProvisionRolesForMerge(ctx, passwords, os.Getenv("AI_SDLC_RUNTIME_MODE"), review == "true", publication == "true", merge == "true"); err != nil {
+		build := os.Getenv("AI_SDLC_BUILD")
+		if build != "" && build != "false" && build != "true" {
+			return errors.New("invalid build option")
+		}
+		if err := db.ProvisionRolesForBuild(ctx, passwords, os.Getenv("AI_SDLC_RUNTIME_MODE"), review == "true", publication == "true", merge == "true", build == "true"); err != nil {
 			return err
 		}
 		log.Print("schema and component database roles ready")

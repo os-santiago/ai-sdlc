@@ -8,6 +8,10 @@ spec:
   podSelector:
     matchLabels:
       {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+    {{- if .Values.build.enabled }}
+    matchExpressions:
+      - {key: app.kubernetes.io/component, operator: NotIn, values: [build-controller]}
+    {{- end }}
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
@@ -16,6 +20,9 @@ spec:
               {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 14 }}
               app.kubernetes.io/component: relay
       ports:
+        {{- if .Values.build.enabled }}
+        - {protocol: TCP, port: 8088}
+        {{- end }}
         {{- if eq .Values.runtime.mode "verification" }}
         - {protocol: TCP, port: 8087}
         {{- end }}
@@ -38,6 +45,9 @@ spec:
               {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 14 }}
       ports:
         - {protocol: TCP, port: 5432}
+        {{- if .Values.build.enabled }}
+        - {protocol: TCP, port: 8088}
+        {{- end }}
         {{- if eq .Values.runtime.mode "verification" }}
         - {protocol: TCP, port: 8087}
         {{- end }}

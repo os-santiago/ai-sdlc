@@ -70,7 +70,13 @@
         "kind",
         "konflux"
       ],
-      "description": "kind creates an owned runtime cluster; konflux adds only a frozen runtime to an existing owned supply-chain cluster."
+      "description": "kind creates an owned runtime cluster; konflux uses an existing owned supply-chain cluster with frozen default or explicitly approved build capability."
+    },
+    "buildBundle": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\u0000]+$",
+      "description": "Reviewed public build desired state path; requires the Konflux Saferus verification/review/publication/merge scope."
     }
   },
   "allOf": [
@@ -150,6 +156,11 @@
           "platform": {
             "const": "konflux"
           }
+        },
+        "not": {
+          "required": [
+            "buildBundle"
+          ]
         }
       },
       "then": {
@@ -174,6 +185,44 @@
           "required": [
             "independentReview"
           ]
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "buildBundle"
+        ]
+      },
+      "then": {
+        "required": [
+          "platform",
+          "merge",
+          "publication",
+          "independentReview"
+        ],
+        "properties": {
+          "platform": {
+            "const": "konflux"
+          },
+          "profile": {
+            "const": "verification"
+          },
+          "repository": {
+            "const": "os-santiago/saferus"
+          },
+          "environment": {
+            "const": "ai-sdlc-production"
+          },
+          "merge": {
+            "const": true
+          },
+          "publication": {
+            "const": true
+          },
+          "independentReview": {
+            "const": true
+          }
         }
       }
     }
