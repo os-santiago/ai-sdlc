@@ -42,5 +42,7 @@ python3 tools/verify_build_install.py --binary /tmp/ai-sdlc-migrator \
 The fixture checks initialization, non-root denial, malformed/unknown input,
 boot/path rejection, reapply with existing data, altered capacity/inodes and
 partial/symlink custody. Its SYS_ADMIN capability belongs only to the disposable
-fixture setup. It deletes only its nonce-labelled original container. This
+fixture setup. Docker's fixture additionally disables its default AppArmor
+profile to permit the intentional tmpfs remount controls; production containers
+receive neither this exception nor SYS_ADMIN. It deletes only its nonce-labelled original container. This
 component validation is not the autonomous end-to-end demonstration.

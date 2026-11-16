@@ -38,8 +38,14 @@ def main():
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise ValueError('Custody fixture deadline exceeded')
-        return subprocess.run([args.provider, *argv], capture_output=True, text=True,
-                              timeout=min(30, remaining), **options)
+        try:
+            return subprocess.run([args.provider, *argv], capture_output=True, text=True,
+                                  timeout=min(30, remaining), **options)
+        except subprocess.CalledProcessError as error:
+            # This fixture carries no credentials. Preserve bounded diagnostics
+            # for provider/kernel differences without losing cleanup evidence.
+            report['operationError'] = (error.stderr or '')[-2048:]
+            raise
 
     def execute(argv, user='0:0', **options):
         return call(['exec', '-i', '--user', user, cid, *argv], **options)
@@ -56,8 +62,10 @@ def main():
                 raise ValueError('Installation proof mismatch')
 
     try:
+        setup_security = ['--security-opt', 'apparmor=unconfined'] if args.provider == 'docker' else []
         cid = call(['run', '-d', '--name', name, '--network=none', '--read-only',
                     '--label', 'ai-sdlc.install-fixture=' + owner, '--cap-add', 'SYS_ADMIN',
+                    *setup_security,
                     '--tmpfs', root + ':rw,size=4294967296,mode=0755',
                     '-v', str(args.binary.resolve()) + ':/installer:ro,z',
                     image, 'sleep', '240'], check=True).stdout.strip()
