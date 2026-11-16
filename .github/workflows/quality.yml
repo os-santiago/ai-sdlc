@@ -30,6 +30,14 @@ jobs:
           python3 tools/verify_build_foundation_node.py --provider docker
           --migrator-image quay.io/os-santiago/ai-sdlc@sha256:9b25dfae825ed5a27308f9a2792da8476a560e66b918cc5d34869f306dbdba1d
           --output "$RUNNER_TEMP/build-foundation-node.json"
+      - name: Verify public registry node files in an offline disposable container
+        run: python3 tools/verify_registry_node_files.py --provider docker --output "$RUNNER_TEMP/registry-node-files"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: registry-node-files
+          path: ${{ runner.temp }}/registry-node-files/
+          if-no-files-found: error
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
