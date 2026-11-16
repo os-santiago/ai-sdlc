@@ -18,19 +18,22 @@ The normal `images.lock.json` remains compatible with existing installations.
 `build-images.json` additionally records the exact published publisher image and
 controller digest; `evidence.json` binds artifact IDs, archive digests, workflow
 origin and source revision. The identical `images.evidence.json` sibling is consumed
-by execution installation without a manual rename. Select those two values explicitly below. Do not use
+by execution installation without a manual rename. Select the reviewed
+`build-images.json` file directly; its revision must match the runtime image lock. Do not use
 illustrative or locally retagged image digests.
 
 ```sh
 ./install.sh build-foundation plan --cluster ai-sdlc-konflux-reviewed \
   --images ./reviewed-images/images.lock.json \
-  --publisher-image quay.io/os-santiago/ai-sdlc@sha256:PUBLISHED_PUBLISHER_DIGEST \
-  --controller-digest sha256:PUBLISHED_CONTROLLER_DIGEST
+  --build-images ./reviewed-images/build-images.json
 ./install.sh build-foundation local --cluster ai-sdlc-konflux-reviewed \
   --images ./reviewed-images/images.lock.json \
-  --publisher-image quay.io/os-santiago/ai-sdlc@sha256:PUBLISHED_PUBLISHER_DIGEST \
-  --controller-digest sha256:PUBLISHED_CONTROLLER_DIGEST
+  --build-images ./reviewed-images/build-images.json
 ```
+
+The explicit `--publisher-image` and `--controller-digest` pair remains supported.
+Do not combine it with `--build-images`. Selecting image identities does not
+approve platform trust or activate delivery.
 
 The first local call creates only the finite desired foundation:
 

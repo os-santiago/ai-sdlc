@@ -39,17 +39,29 @@ def main(argv):
     parser.add_argument('--cluster',required=True)
     parser.add_argument('--provider',choices=['auto','podman','docker'],default='auto')
     parser.add_argument('--images',required=True,type=Path)
-    parser.add_argument('--publisher-image',required=True)
-    parser.add_argument('--controller-digest',required=True)
+    parser.add_argument('--publisher-image')
+    parser.add_argument('--build-images',type=Path,help='Reviewed build-images.json emitted with --include-build')
+    parser.add_argument('--controller-digest')
     parser.add_argument('--approved-trust',type=Path)
     args=parser.parse_args(argv)
+    lock=install.image_lock(args.images)
+    if args.build_images is not None:
+        if args.publisher_image is not None or args.controller_digest is not None:
+            raise ValueError('Choose the build image file or both explicit image pins, never a mixture')
+        selected=bounded_json(args.build_images,4096)
+        if (not isinstance(selected,dict) or set(selected)!={'version','revision','publisherImage','controllerDigest'}
+                or selected['version']!='ai-sdlc.build-images/v1' or selected['revision']!=lock['image']['tag']):
+            raise ValueError('Build image file must match the reviewed runtime image revision')
+        args.publisher_image=selected['publisherImage']
+        args.controller_digest=selected['controllerDigest']
     if (not re.fullmatch(r'[a-z][a-z0-9-]{0,35}',args.cluster)
+            or not isinstance(args.publisher_image,str)
             or not re.fullmatch(r'quay\.io/os-santiago/ai-sdlc@sha256:[a-f0-9]{64}',args.publisher_image)
+            or not isinstance(args.controller_digest,str)
             or not re.fullmatch(r'sha256:[a-f0-9]{64}',args.controller_digest)
             or args.approved_trust is not None and args.command!='local'):
         raise ValueError('Reviewed local build foundation scope required')
     approved_input = bounded_json(args.approved_trust) if args.approved_trust is not None else None
-    lock=install.image_lock(args.images)
     if not re.fullmatch(r'[a-f0-9]{40}',lock['image'].get('tag','')):raise ValueError('Exact reviewed image revision required')
     image=lock['image']['repository']+'@'+lock['migrator']['digest']
     blueprint=bounded_json(install.ROOT/'runtime/k8s/deploy/konflux/build-foundation.json')
