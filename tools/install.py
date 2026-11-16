@@ -464,12 +464,16 @@ def _main(argv, stack):
     if args.profile in ('candidate', 'verification'):
         import candidate_install
         execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images), verification=args.profile == "verification", review=bool(args.independent_review), publication=bool(args.publication), merge=bool(args.merge))
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as preview:
-        preview_values = dict(execution_values or {})
-        if args.publication:
-            preview_values['authority'] = {'policyJSON': json.dumps({'repository': args.repository})}
-        json.dump(preview_values, preview); preview.flush()
-        run(helm_args + ['-f', preview.name], stdout=subprocess.DEVNULL)
+    # The prepared transition renders the original complete state first and its
+    # complete target after native policy reconciliation. Its partial selection
+    # cannot satisfy the chart's mandatory installed merge-policy input yet.
+    if not args.configure_prepared:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as preview:
+            preview_values = dict(execution_values or {})
+            if args.publication:
+                preview_values['authority'] = {'policyJSON': json.dumps({'repository': args.repository})}
+            json.dump(preview_values, preview); preview.flush()
+            run(helm_args + ['-f', preview.name], stdout=subprocess.DEVNULL)
     if args.command == 'plan':
         print(json.dumps({'cluster': args.cluster, 'platform': args.platform, 'namespace': NAMESPACE,
                           'chart': str(CHART.relative_to(ROOT)), 'mode': args.profile,
