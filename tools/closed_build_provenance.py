@@ -137,4 +137,3 @@ def definition_digest(documents,profile,slot,definition):
                 'slotDigest':hashlib.sha256(go_json(slot)).hexdigest(),
                 'build':templates['build'],'publish':templates['publish']}
     return hashlib.sha256(go_json(template, sort_keys=True)).hexdigest()
-
