@@ -72,12 +72,29 @@ func (relay Relay) reserve(ctx context.Context, p authority.Policy, now time.Tim
 // then conditionally records the result for that lease. No transaction spans
 // external I/O. Eight reservations bound attempts even across process crashes.
 func (relay Relay) PollOnce(ctx context.Context, p authority.Policy, now time.Time) (bool, error) {
+	return relay.poll(ctx, p, nil, now)
+}
+
+// PollLoops reserves once under the shared freeze guard, then selects exactly
+// one reviewed policy from the finite operation. Never call PollOnce twice with
+// different policies: that would consume attempts for valid foreign-loop work.
+func (relay Relay) PollLoops(ctx context.Context, inner, outer authority.Policy, now time.Time) (bool, error) {
+	if authority.ValidateLoopPolicies(inner, outer) != nil || inner.Freeze || outer.Freeze || relay.Identity.Validate(outer) != nil {
+		return false, ErrUnauthorized
+	}
+	return relay.poll(ctx, inner, &outer, now)
+}
+
+func (relay Relay) poll(ctx context.Context, p authority.Policy, outer *authority.Policy, now time.Time) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	started := time.Now()
 	row, err := relay.reserve(ctx, p, now)
 	if err != nil || row == nil {
 		return false, err
+	}
+	if outer != nil && authority.OuterOperation(row.operation) {
+		p = *outer
 	}
 	var receipt authority.Receipt
 	failure := "authority_denied"

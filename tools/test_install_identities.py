@@ -14,14 +14,14 @@ spec.loader.exec_module(installer)
 
 def fixture():
     identities = {role: {'keyId': role + '-1', 'role': role, 'privateKey': 'fixture-kept-' + role}
-                  for role in installer.ROLES}
-    keys = {role + '-1': {'role': role, 'value': 'fixture-public-' + role} for role in installer.ROLES}
+                  for role in installer.ALL_ROLES}
+    keys = {role + '-1': {'role': role, 'value': 'fixture-public-' + role} for role in installer.ALL_ROLES}
     policy = {'version': '1', 'repository': 'example/project', 'environment': 'production-test',
-              'autonomy': 'shadow', 'freeze': True, 'keys': keys, 'grants': []}
+              'autonomy': 'shadow', 'freeze': True, 'keys': {k:v for k,v in keys.items() if v['role'] != 'build-controller'}, 'grants': []}
     # Cryptographic validation is exercised by the Go bootstrap tests and the
     # real installer integration; these fixtures isolate Python reconciliation.
     secrets, passwords = {}, {}
-    for role in installer.ROLES:
+    for role in installer.ALL_ROLES:
         secrets['ai-sdlc-identity-' + role] = {'identity.json': json.dumps(identities[role]),
                                              'public-key.json': json.dumps(keys[role + '-1'])}
         password = role.replace('-', '_') + 'x' * 40
@@ -29,6 +29,7 @@ def fixture():
         secrets['ai-sdlc-database-' + role] = {'password': password, 'uri': installer.component_uri(role, password)}
     secrets['ai-sdlc-database-roles'] = {'passwords.json': json.dumps(passwords)}
     material = {'policy': copy.deepcopy(policy), 'identities': copy.deepcopy(identities)}
+    material['policy']['keys'] = copy.deepcopy(keys)
     for identity in material['identities'].values():
         identity['privateKey'] = 'fixture-new-' + identity['role']
     resource = {'metadata': {'annotations': {'ai-sdlc.io/cluster-uid': 'owned-uid'}},
@@ -52,7 +53,7 @@ class IdentityInstallationTests(unittest.TestCase):
                 create.assert_not_called()
             self.assertEqual(run.call_count, 1)
             private_input = json.loads(run.call_args.kwargs['input'])
-            for role in installer.ROLES:
+            for role in installer.ALL_ROLES:
                 self.assertEqual(private_input['identities'][role]['privateKey'], 'fixture-kept-' + role)
             self.assertNotIn('privateKey', json.dumps(result))
             self.assertNotIn('password', json.dumps(result))
@@ -76,6 +77,68 @@ class IdentityInstallationTests(unittest.TestCase):
                     secrets['ai-sdlc-database-roles']['passwords.json'] = '{}'
                 with self.assertRaises(ValueError):
                     self.configure(material, secrets, resource)
+
+    def test_additive_builder_upgrade_preserves_inner_policy_and_old_credentials(self):
+        material, secrets, resource = fixture()
+        before = copy.deepcopy(secrets)
+        for name in ('ai-sdlc-identity-build-controller', 'ai-sdlc-database-build-controller'):
+            del secrets[name]
+        passwords = json.loads(secrets['ai-sdlc-database-roles']['passwords.json'])
+        del passwords['build-controller']
+        secrets['ai-sdlc-database-roles']['passwords.json'] = json.dumps(passwords)
+        lock = {'image': {'repository': 'quay.io/os-santiago/ai-sdlc'}, 'migrator': {'digest': 'sha256:' + 'a'*64}}
+        with patch.object(installer, 'identity_material', return_value=material), \
+             patch.object(installer, 'owned_secret', side_effect=lambda k,n,u: secrets.get(n)), \
+             patch.object(installer, 'read_resource', return_value=resource), \
+             patch.object(installer, 'run') as run, \
+             patch.object(installer, 'create_owned_secret') as create, \
+             patch.object(installer, 'extend_owned_role_secret') as extend:
+            result = installer.configure_identities([], 'podman', lock, 'owned-uid', 'example/project', 'production-test')
+        self.assertEqual(json.loads(result['authority']['policyJSON']), json.loads(resource['data']['policy.json']))
+        self.assertEqual([c.args[1] for c in create.call_args_list], ['ai-sdlc-identity-build-controller', 'ai-sdlc-database-build-controller'])
+        upgraded = json.loads(extend.call_args.args[3]['passwords.json'])
+        self.assertEqual({k:v for k,v in upgraded.items() if k != 'build-controller'}, passwords)
+        validated = json.loads(run.call_args.kwargs['input'])
+        for role in installer.ALL_ROLES:
+            if role != 'build-controller':
+                self.assertEqual(validated['identities'][role], json.loads(before['ai-sdlc-identity-'+role]['identity.json']))
+
+    def test_migrator_addition_uses_resource_version_and_rejects_changed_owner(self):
+        import base64
+        previous = {'passwords.json': '{"fixture":"old"}'}
+        resource = {'apiVersion':'v1','kind':'Secret','type':'Opaque',
+                    'metadata':{'uid':'secret-uid','resourceVersion':'23','annotations':{'ai-sdlc.io/cluster-uid':'owned-uid'}},
+                    'data':{k:base64.b64encode(v.encode()).decode() for k,v in previous.items()}}
+        with patch.object(installer, 'read_resource', return_value=resource), patch.object(installer, 'run') as run:
+            installer.extend_owned_role_secret([], 'owned-uid', previous, {'passwords.json':'{"fixture":"old","build":"new"}'})
+            sent=json.loads(run.call_args.kwargs['input'])
+            self.assertEqual(sent['metadata']['resourceVersion'],'23')
+            self.assertEqual(sent['metadata']['uid'],'secret-uid')
+            self.assertEqual(run.call_args.args[0], ['replace','-f','-'])
+            run.reset_mock()
+            with self.assertRaisesRegex(ValueError, 'changed'):
+                installer.extend_owned_role_secret([], 'owned-uid', previous, {})
+            run.assert_not_called()
+
+    def test_old_pinned_image_remains_inner_only_and_cannot_enable_build(self):
+        material, secrets, resource = fixture()
+        del material['identities']['build-controller']
+        del material['policy']['keys']['build-controller-1']
+        for name in ('ai-sdlc-identity-build-controller','ai-sdlc-database-build-controller'):
+            del secrets[name]
+        old=json.loads(secrets['ai-sdlc-database-roles']['passwords.json'])
+        del old['build-controller']
+        secrets['ai-sdlc-database-roles']['passwords.json']=json.dumps(old)
+        lock={'image':{'repository':'quay.io/os-santiago/ai-sdlc'},'migrator':{'digest':'sha256:'+'a'*64}}
+        with patch.object(installer,'identity_material',return_value=material), \
+             patch.object(installer,'owned_secret',side_effect=lambda k,n,u:secrets.get(n)), \
+             patch.object(installer,'read_resource',return_value=resource), \
+             patch.object(installer,'run'), patch.object(installer,'create_owned_secret') as create:
+            result=installer.configure_identities([], 'podman', lock, 'owned-uid','example/project','production-test')
+            self.assertEqual(json.loads(result['authority']['policyJSON']),json.loads(resource['data']['policy.json']))
+            with self.assertRaisesRegex(ValueError,'required component'):
+                installer.configure_identities([], 'podman', lock, 'owned-uid','example/project','production-test',require_build=True)
+            create.assert_not_called()
 
     def test_foreign_secret_is_not_adopted(self):
         resource = {'type': 'Opaque', 'metadata': {'annotations': {'ai-sdlc.io/cluster-uid': 'other'}}}

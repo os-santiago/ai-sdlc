@@ -59,7 +59,7 @@ func setup(t *testing.T) fixture {
 	f := fixture{p: p, admin: admin, ids: map[string]authority.Identity{}, dbs: map[string]*store.DB{}, passwords: map[string]string{}}
 	f.p.Keys = map[string]authority.PublicKey{}
 	f.p.Autonomy, f.p.Freeze = "auto-deploy", false
-	for _, role := range []string{"intake", "admission-controller", "orchestrator", "worker", "verifier", "release-manager", "relay", "deployer"} {
+	for _, role := range []string{"intake", "admission-controller", "orchestrator", "worker", "verifier", "release-manager", "relay", "deployer", "build-controller"} {
 		i, key, err := authority.NewIdentity(role, role+"-1")
 		if err != nil {
 			t.Fatal(err)

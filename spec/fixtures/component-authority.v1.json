@@ -36,6 +36,10 @@
     "worker-example": {
       "role": "worker",
       "value": "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg="
+    },
+    "build-controller-example": {
+      "role": "build-controller",
+      "value": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk="
     }
   },
   "grants": [
@@ -108,6 +112,27 @@
       "operation": "record-deployment",
       "minimumLevel": "auto-deploy",
       "eventType": "DeploymentVerified"
+    },
+    {
+      "caller": "release-manager",
+      "target": "build-controller",
+      "operation": "build-merged",
+      "minimumLevel": "auto-deploy",
+      "eventType": "MergedBuildRequested"
+    },
+    {
+      "caller": "build-controller",
+      "target": "verifier",
+      "operation": "verify-built",
+      "minimumLevel": "auto-deploy",
+      "eventType": "ArtifactBuildCompleted"
+    },
+    {
+      "caller": "verifier",
+      "target": "release-manager",
+      "operation": "promote-artifact",
+      "minimumLevel": "auto-deploy",
+      "eventType": "ArtifactProvenanceVerified"
     }
   ]
 }

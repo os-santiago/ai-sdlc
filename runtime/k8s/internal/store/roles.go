@@ -12,7 +12,7 @@ var componentTables = map[string][]string{
 	"intake": {"intake_cursors", "intake_revisions", "intake_heads", "intake_observations"}, "admission-controller": {"admissions", "admission_heads"},
 	"orchestrator": {"plans", "work_items", "planning_heads"}, "worker": {"attempts"},
 	"verifier": {}, "release-manager": {"release_gates"},
-	"relay": {}, "deployer": {},
+	"relay": {}, "deployer": {}, "build-controller": {},
 }
 var rolePasswordPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{32,128}$`)
 

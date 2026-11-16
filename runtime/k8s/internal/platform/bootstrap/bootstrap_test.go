@@ -87,7 +87,7 @@ func TestDedicatedStartupAndReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 	passwords := map[string]string{}
-	for _, role := range []string{"intake", "admission-controller", "orchestrator", "worker", "verifier", "release-manager", "relay", "deployer"} {
+	for _, role := range []string{"intake", "admission-controller", "orchestrator", "worker", "verifier", "release-manager", "relay", "deployer", "build-controller"} {
 		passwords[role] = strings.ReplaceAll(role, "-", "_") + strings.Repeat("x", 40)
 	}
 	if err := admin.ProvisionRoles(ctx, passwords); err != nil {
