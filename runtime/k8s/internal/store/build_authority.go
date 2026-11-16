@@ -38,7 +38,10 @@ func (j *BuildJournal) current(payload, receipt []byte) (building.Configuration,
 	return cfg, c, nil
 }
 func (j *BuildJournal) fresh(ctx context.Context, q Querier, cfg building.Configuration, c building.Command) error {
-	input, e := readBuildInput(ctx, q, c.MergeID, "build-controller")
+	return freshBuildInput(ctx, q, cfg, c, "build-controller")
+}
+func freshBuildInput(ctx context.Context, q Querier, cfg building.Configuration, c building.Command, role string) error {
+	input, e := readBuildInput(ctx, q, c.MergeID, role)
 	s := input.Source
 	if e != nil || s.MergeRecordSHA256 != c.MergeRecordSHA256 || s.Repository != c.Repository || s.IssueNumber != c.IssueNumber || s.SourceSHA != c.SourceSHA || s.TreeSHA != c.TreeSHA || input.IssueRevision != c.IssueRevision || input.Generation != c.Generation || input.InnerPolicyRevision != c.InnerPolicyRevision {
 		return ErrExecution

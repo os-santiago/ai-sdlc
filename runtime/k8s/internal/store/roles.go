@@ -199,6 +199,9 @@ func (db *DB) ProvisionRolesForBuild(ctx context.Context, passwords map[string]s
 			if merge && component == "release-manager" {
 				statements = append(statements, mergePrivileges...)
 			}
+			if build && component == "release-manager" {
+				statements = append(statements, `GRANT SELECT ON build_handoffs TO aisdlc_release_manager`, `GRANT INSERT(merge_id,command_id,payload_digest) ON build_handoffs TO aisdlc_release_manager`)
+			}
 			if build && component == "verifier" {
 				statements = append(statements, buildVerifierPrivileges...)
 			}
