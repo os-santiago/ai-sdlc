@@ -37,9 +37,19 @@ func guardArguments(s building.Slot, phase string) []string {
 // Canonical controller and mutating-admission inventories must be installed and
 // rechecked separately. This policy is not a defense against cluster admins.
 func Admission(p Profile, slots []building.Slot) ([]byte, []byte, error) {
-	if p.Validate() != nil || len(slots) < 1 || len(slots) > 8 {
+	if p.Validate() != nil {
 		return nil, nil, ErrWorkload
 	}
+	return AdmissionForInstallation(p.admissionConfiguration(), slots)
+}
+
+// AdmissionForInstallation breaks the bootstrap dependency cycle without fake
+// dependency digests or synthetic issue/signing authority.
+func AdmissionForInstallation(c AdmissionConfiguration, slots []building.Slot) ([]byte, []byte, error) {
+	if c.Validate() != nil || len(slots) < 1 || len(slots) > 8 {
+		return nil, nil, ErrWorkload
+	}
+	p := Profile{ClusterUID: c.ClusterUID, NamespaceUID: c.NamespaceUID, PublisherImage: c.PublisherImage, DeniedTargets: append([]DeniedTarget(nil), c.DeniedTargets...)}
 	pvcs := []string{}
 	nodes := []string{}
 	guardOptions := []string{}

@@ -1,5 +1,5 @@
-// Package buildstorage checks installed local-kind storage custody. It never
-// allocates, repairs, reclaims or changes a workspace and never executes source.
+// Package buildstorage checks local-kind storage custody. Its explicit installer
+// operation initializes an empty dedicated mount; execution checks never mutate it.
 package buildstorage
 
 import (
@@ -77,6 +77,11 @@ func Inspect(path, identity, boot, phase string) (Proof, error) {
 		return out, ErrCustody
 	}
 	defer unix.Close(fd)
+	return inspectFD(fd, identity, boot, phase)
+}
+
+func inspectFD(fd int, identity, boot, phase string) (Proof, error) {
+	var out Proof
 	var root unix.Stat_t
 	if unix.Fstat(fd, &root) != nil || root.Uid != 0 || root.Gid != 0 || root.Mode&0o7777 != 0o555 {
 		return out, ErrCustody
