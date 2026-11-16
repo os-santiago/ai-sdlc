@@ -49,6 +49,9 @@ func TestBootstrapInspectionEmptyAndCompletedHistory(t *testing.T) {
 	if err := db.InspectEmptyBootstrap(ctx, name); err != nil {
 		t.Fatal(err)
 	}
+	if boundary := db.BootstrapInspectionBoundary(ctx, name); boundary != "" {
+		t.Fatalf("empty fixture rejected at compiled boundary %s", boundary)
+	}
 	// Even successfully delivered historical work disqualifies first install.
 	if _, err := db.Pool.ExecContext(ctx, `INSERT INTO public.outbox(id,aggregate_type,aggregate_id,event_type,payload,correlation_id,published_at)
 		VALUES($1,'fixture','fixture','completed','{}','fixture',now())`, NewID()); err != nil {
@@ -56,6 +59,9 @@ func TestBootstrapInspectionEmptyAndCompletedHistory(t *testing.T) {
 	}
 	if err := db.InspectEmptyBootstrap(ctx, name); err != ErrBootstrapInspection {
 		t.Fatalf("history accepted: %v", err)
+	}
+	if boundary := db.BootstrapInspectionBoundary(ctx, name); boundary != "history/outbox" {
+		t.Fatalf("unexpected compiled rejection boundary %s", boundary)
 	}
 	var count int
 	if err := db.Pool.QueryRowContext(ctx, `SELECT count(*) FROM public.outbox`).Scan(&count); err != nil || count != 1 {

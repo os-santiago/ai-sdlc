@@ -42,6 +42,12 @@ def component_call(provider, image, operation, value, node_id=None):
             '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges',
             '--memory=256m', '--cpus=1', '--log-driver=none', image, operation],
             input=json.dumps(value), capture_output=True, text=True, timeout=150, check=False)
+        if result.returncode and operation == 'inspect-empty-bootstrap':
+            boundary = re.search(r'initial database inspection denied: ([a-z-]+(?:/[a-z_]+)?)\s*$', result.stderr)
+            category = boundary[1].split('/')[0] if boundary is not None else None
+            if category in {'input','connection','transaction','settings','primary-authority','foreign-schema',
+                            'table-inventory','migration-inventory','history','commit'}:
+                raise ValueError('Initial database inspection rejected boundary: '+category)
         if result.returncode or len(result.stdout) > 262144:
             raise ValueError('Build installation compiler or preflight rejected its input')
         return json.loads(result.stdout)
