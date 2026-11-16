@@ -74,3 +74,12 @@ only after validating the finite endpoint and the enclosing list type. Initial
 TaskRun annotations and terminal Pod phase may lag controller updates. Those
 observations remain pending, while conflicting versions and terminal regressions
 are still rejected.
+
+The API-only slot harness also records ownership intent before Namespace, PV and
+PVC POSTs. Cleanup resolves only its exact kind/name/namespace/nonce/cluster and
+original UID, then uses UID-preconditioned deletion. Lost successful responses
+were injected separately for all three resource kinds on 2026-11-16; all failed
+as expected and reported complete cleanup. The normal real API run still passed
+one positive and seven negative custody controls (`/tmp/ai-sdlc-build-slot-api-proof-v3`).
+Evidence-write failures cannot suppress its teardown. This is isolated fixture
+recovery; it does not adopt unknown workload creates in the runtime.

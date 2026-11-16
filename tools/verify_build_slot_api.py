@@ -5,10 +5,24 @@ import json
 import os
 from pathlib import Path
 import secrets
+import re
 import subprocess
 import tempfile
 import time
 import konflux_fixture_guard as guard
+import fixture_cleanup
+
+
+def test_result(stdout):
+    if not re.search(r'^--- PASS: TestRealBuildSlotAPICustody \(',stdout,re.MULTILINE) or re.search(r'^--- (SKIP|FAIL): TestRealBuildSlotAPICustody',stdout,re.MULTILINE):
+        raise ValueError('Required real API test did not pass')
+    matches=re.findall(r'AI_SDLC_SLOT_RESULT (\{[^\n]*\})',stdout)
+    if len(matches)!=1:
+        raise ValueError('Missing or ambiguous executed API controls')
+    result=json.loads(matches[0])
+    if set(result)!={'accepted','rejected'} or any(type(v) is not int or v<1 for v in result.values()):
+        raise ValueError('Invalid executed API control counts')
+    return result
 
 
 def main():
@@ -16,6 +30,7 @@ def main():
     parser.add_argument('--cluster', default='ai-sdlc-konflux-reviewed')
     parser.add_argument('--test-binary', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--inject-lost-ack', choices=('Namespace', 'PersistentVolume', 'PersistentVolumeClaim'))
     args = parser.parse_args()
     args.output.mkdir(mode=0o700, parents=True, exist_ok=False)
     state, tools = guard.installation_paths(args.cluster)
@@ -27,9 +42,9 @@ def main():
     nonce = secrets.token_hex(16)
     pvname = 'build-api-fixture-' + nonce
     identity = secrets.token_hex(32)
-    owned = []
+    intents = []
     report = {'status': 'failed', 'scope': 'isolated bound-volume API custody', 'autonomousE2E': False,
-              'workloadExecuted': False, 'physicalMountValidated': False, 'cleanupComplete': False}
+              'workloadExecuted': False, 'physicalMountValidated': False, 'cleanupComplete': False, 'createIntents': intents}
 
     def persist():
         (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
@@ -44,12 +59,14 @@ def main():
     def get(kind, name=None, ns=None):
         return json.loads(call(['get', kind] + ([name] if name else []) + (['-n', ns] if ns else []) + ['-o', 'json']))
 
-    def create(obj, path):
-        result = json.loads(call(['create', '-f', '-', '-o', 'json'], obj))
-        owned.append((path, result['metadata']['uid']))
-        report['owned'] = list(owned)
-        persist()
-        return result
+    def create(obj):
+        def post(value):
+            result = json.loads(call(['create', '-f', '-', '-o', 'json'], value))
+            if args.inject_lost_ack == value['kind']:
+                report['injectedLostAcknowledgement'] = value['kind']
+                raise TimeoutError('Injected successful create acknowledgement loss')
+            return result
+        return fixture_cleanup.create_slot_resource(post, persist, intents, obj, owner['clusterUID'], nonce)
 
     try:
         if get('namespace', 'kube-system')['metadata']['uid'] != owner['clusterUID']:
@@ -62,14 +79,14 @@ def main():
         node = nodes[0]
         nodename = node['metadata']['name']
         ns = create({'apiVersion': 'v1', 'kind': 'Namespace', 'metadata': {'name': namespace,
-                    'labels': {'ai-sdlc.slot-api-fixture': nonce, 'pod-security.kubernetes.io/enforce': 'restricted'}}}, '/api/v1/namespaces/' + namespace)
+                    'labels': {'ai-sdlc.slot-api-fixture': nonce, 'pod-security.kubernetes.io/enforce': 'restricted'}}})
         pv = create({'apiVersion': 'v1', 'kind': 'PersistentVolume', 'metadata': {'name': pvname}, 'spec': {
             'capacity': {'storage': '4Gi'}, 'accessModes': ['ReadWriteOnce'], 'storageClassName': '', 'volumeMode': 'Filesystem',
             'persistentVolumeReclaimPolicy': 'Retain', 'local': {'path': '/var/local/ai-sdlc/build-slots/' + identity},
-            'nodeAffinity': {'required': {'nodeSelectorTerms': [{'matchExpressions': [{'key': 'kubernetes.io/hostname', 'operator': 'In', 'values': [nodename]}]}]}}}}, '/api/v1/persistentvolumes/' + pvname)
+            'nodeAffinity': {'required': {'nodeSelectorTerms': [{'matchExpressions': [{'key': 'kubernetes.io/hostname', 'operator': 'In', 'values': [nodename]}]}]}}}})
         pvc = create({'apiVersion': 'v1', 'kind': 'PersistentVolumeClaim', 'metadata': {'name': 'build-slot-0', 'namespace': namespace},
                       'spec': {'accessModes': ['ReadWriteOnce'], 'storageClassName': '', 'volumeMode': 'Filesystem',
-                               'resources': {'requests': {'storage': '4Gi'}}, 'volumeName': pvname}}, '/api/v1/namespaces/' + namespace + '/persistentvolumeclaims/build-slot-0')
+                               'resources': {'requests': {'storage': '4Gi'}}, 'volumeName': pvname}})
         deadline = time.monotonic() + 40
         while time.monotonic() < deadline:
             current = get('pvc', 'build-slot-0', namespace)
@@ -102,23 +119,32 @@ def main():
             (args.output / 'test.log').write_text(result.stdout)
             if result.returncode:
                 raise ValueError('Real slot API test failed; see sanitized test.log')
-        report.update(status='passed', accepted=1, rejected=7)
+        report.update(status='passed', **test_result(result.stdout))
     finally:
-        try:
-            for path, uid in reversed(owned):
-                call(['delete', '--raw', path, '-f', '-'], {'apiVersion': 'v1', 'kind': 'DeleteOptions', 'preconditions': {'uid': uid}})
+        def cleanup(checkpoint):
+            if get('namespace', 'kube-system')['metadata']['uid'] != owner['clusterUID']:
+                raise ValueError('Original cluster changed before cleanup')
+            fixture_cleanup.recover_slot_resources(call, intents)
+            checkpoint()
+            for intent in reversed(intents):
+                if intent['absent']:
+                    continue
+                prefix = '/api/v1/'
+                if intent['namespace']:
+                    prefix += 'namespaces/' + intent['namespace'] + '/'
+                plural = {'namespace': 'namespaces', 'pv': 'persistentvolumes', 'pvc': 'persistentvolumeclaims'}[intent['resource']]
+                call(['delete', '--raw', prefix + plural + '/' + intent['name'], '-f', '-'],
+                     {'apiVersion': 'v1', 'kind': 'DeleteOptions', 'preconditions': {'uid': intent['uid']}})
             deadline = time.monotonic() + 60
             while time.monotonic() < deadline:
-                ns_exists = any(n['metadata']['name'] == namespace for n in get('namespaces')['items'])
-                pv_exists = any(n['metadata']['name'] == pvname for n in get('pv')['items'])
-                if not ns_exists and not pv_exists:
+                fixture_cleanup.recover_slot_resources(call, intents)
+                if all(intent['absent'] for intent in intents):
                     report['cleanupComplete'] = True
                     break
                 time.sleep(1)
             if not report['cleanupComplete']:
                 raise ValueError('Original fixture cleanup not complete')
-        finally:
-            persist()
+        fixture_cleanup.finish_fixture(report, persist, cleanup)
     print(json.dumps(report))
 
 

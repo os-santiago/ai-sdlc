@@ -12,7 +12,7 @@
     "source": "eb1b7d0d630d0463542502657419929222212a25; later pending TaskRun release-annotation correction covered by focused tests and real execution v6"
   },
   "realSlotAPICustody": {
-    "report": "/tmp/ai-sdlc-build-slot-api-proof-v1/report.json",
+    "report": "/tmp/ai-sdlc-build-slot-api-proof-v2/report.json",
     "accepted": 1,
     "rejected": 7,
     "cleanupComplete": true,
@@ -69,5 +69,20 @@
     "expectedFailurePropagated": true,
     "cleanupComplete": true,
     "foreignUIDRejectedByUnitTest": true
+  },
+  "postReviewHardening": {
+    "containerTime": "preserves Kubernetes second precision; previous issuance second rejected",
+    "slotEvidence": "requires named test PASS and emitted executed counts; zero-exit skip rejected",
+    "archiveDeadlineFault": {
+      "report": "/tmp/ai-sdlc-closed-build-archive-deadline-v1/report.json",
+      "injection": "diagnostic archive deadline exhausted before first copy",
+      "archiveFailureRecorded": true,
+      "cleanupComplete": true
+    },
+    "ciTransientFailure": {
+      "run": 43819758814,
+      "step": "fixed SCC executor, scc-timeout variant",
+      "observation": "Mailbox read failed; exact cause unproven; failed job rerun requested"
+    }
   }
 }
