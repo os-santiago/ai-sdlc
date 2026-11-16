@@ -67,6 +67,14 @@ func (db *DB) ProvisionRolesForCapabilities(ctx context.Context, passwords map[s
 	return db.ProvisionRolesForMerge(ctx, passwords, mode, review, publication, false)
 }
 func (db *DB) ProvisionRolesForMerge(ctx context.Context, passwords map[string]string, mode string, review, publication, merge bool) error {
+	return db.ProvisionRolesForBuild(ctx, passwords, mode, review, publication, merge, false)
+}
+
+// Build grants remain absent unless the reviewed installation explicitly opts in.
+func (db *DB) ProvisionRolesForBuild(ctx context.Context, passwords map[string]string, mode string, review, publication, merge, build bool) error {
+	if build && !merge {
+		return errors.New("build requires verified merge capability")
+	}
 	if merge && !publication {
 		return errors.New("merge requires verified publication")
 	}
@@ -190,6 +198,9 @@ func (db *DB) ProvisionRolesForMerge(ctx context.Context, passwords map[string]s
 			}
 			if merge && component == "release-manager" {
 				statements = append(statements, mergePrivileges...)
+			}
+			if build && component == "build-controller" {
+				statements = append(statements, buildPrivileges...)
 			}
 			// REVOKE table privileges alone does not remove column grants.
 			for _, revoke := range columnRevocations {

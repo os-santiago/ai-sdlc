@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "date": "2026-11-16",
+  "scope": "inactive merged-source build journal",
+  "autonomousE2E": false,
+  "operationalBuildEnabled": false,
+  "validation": {
+    "status": "passed",
+    "sourceAtStart": {
+      "commit": "720c81945b9fdc2c817f10015dbd2e0fdf5b281a",
+      "dirty": true,
+      "gitLayout": "worktree"
+    },
+    "report": "/tmp/ai-sdlc-build-journal-validation-v3/report.json",
+    "passedTests": 1309,
+    "passedPackages": 40,
+    "missingDatabaseProof": [],
+    "cleanupComplete": true
+  },
+  "sourceNote": "Validated working tree before commit. Afterwards fast-forwarded parent from 720c819 to 61fceaa; only portable schema maxItems and Python fixture migrator selection changed, no Go changes.",
+  "review": "Independent audit closed physical identity reuse finding. Approval conditional on final CI.",
+  "limitations": [
+    "PostgreSQL fixtures use synthetic forge responses.",
+    "Physical collision test proves the allocation key under changed Kubernetes UIDs, not a second complete merge.",
+    "Kubernetes build execution, cleanup after revocation, completion, provenance, promotion and deployment remain separate work."
+  ]
+}

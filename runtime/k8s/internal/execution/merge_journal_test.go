@@ -16,9 +16,9 @@ import (
 )
 
 // Explicit fixture-only grants: no installed profile enables this capability.
-func mergeJournalFixture(t *testing.T) (*lifecycleFixture, *store.MergeJournal, store.MergeRequest, merging.Command) {
+func mergeJournalFixture(t *testing.T, configure ...func(*fixture)) (*lifecycleFixture, *store.MergeJournal, store.MergeRequest, merging.Command) {
 	t.Helper()
-	f, db, pub := publicationJournalFixture(t)
+	f, db, pub := publicationJournalFixture(t, configure...)
 	ctx := context.Background()
 	c := publicationClaim(t, db, pub)
 	for _, kind := range []string{"tree", "commit", "branch", "pull-request"} {
