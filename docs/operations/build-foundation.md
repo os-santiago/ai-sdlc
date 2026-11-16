@@ -116,7 +116,8 @@ python3 tools/verify_build_foundation_resources.py \
   --cluster ai-sdlc-konflux-reviewed --output /tmp/build-foundation-resources
 ```
 
-Use a new output directory and an existing installer-owned cluster. The quality
-workflow also executes this check on its disposable kind installation. This
+Use a new output directory and an existing installer-owned cluster. The installer
+workflow also executes this check on its disposable kind installation and retains
+the sanitized report and ownership journal as artifacts, including after failure. This
 checks API defaulting and durable ownership, not storage custody, native admission
 policy readiness, persistent complete installation or autonomous delivery.
