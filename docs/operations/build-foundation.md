@@ -74,6 +74,25 @@ revision. Use that bundle with the
 [build runtime installation](build-runtime-install.md). Foundation preparation
 alone does not prove controller readiness or issue-to-production E2E.
 
+The administrative profile observer validates original storage custody, endpoint
+inventory, admission rules, dependencies and approved platform trust. It does not
+probe workload connectivity from the installer's network identity. Reports set
+`networkReadinessValidated: false`. The build controller still requires successful
+TCP probes from its own Pod before each build and publish effect; this gate has
+no installer option to disable it. A successful observation cannot authorize a
+build or substitute for runtime network validation.
+
+An observer correction can be selected explicitly without recreating an original
+foundation. Preserve `--images`, `--build-images` and the separately approved trust
+from initial creation, and add `--observer-images NEW_REVIEWED/images.lock.json`
+to the same `plan` or `local` command. Only the three read-only admission, trust
+and profile observers use the new migrator image. Node initialization and the
+admission policy compiler retain their original image; the publisher, controller,
+storage slot, resource UIDs and bundle creation revision remain unchanged.
+The private record stores the observer's revision and digest separately. Repeat
+the explicit observer input on reapply; silently returning to a different default
+observer is rejected. A drifted foundation or changed trust is still rejected.
+
 ## Reapply, status and recovery
 
 The cluster's installation lock excludes concurrent administrative reconciles.

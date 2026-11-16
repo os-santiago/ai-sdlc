@@ -62,4 +62,39 @@ class FoundationInstallTests(unittest.TestCase):
             result=install.run(['podman','inspect','owned'],check=False,capture_output=True)
         self.assertEqual(result.returncode,1);self.assertFalse(run.call_args.kwargs['check'])
 
+    def test_observer_update_preserves_creation_and_compiler_identity(self):
+        import contextlib,copy,io
+        original=install.image_lock(install.LOCAL/'images.lock.json')
+        updated=copy.deepcopy(original)
+        updated['image']['tag']='e'*40
+        updated['migrator']['digest']='sha256:'+'e'*64
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'observer-images.json';path.write_text(json.dumps(updated))
+            with patch.object(install,'tools') as tools,contextlib.redirect_stdout(io.StringIO()) as before:
+                foundation.main(self.args('plan'))
+            with patch.object(install,'tools') as tools,contextlib.redirect_stdout(io.StringIO()) as after:
+                foundation.main(self.args('plan')+['--observer-images',str(path)])
+            tools.assert_not_called()
+            old,new=json.loads(before.getvalue()),json.loads(after.getvalue())
+            self.assertEqual(old['desired'],new['desired'])
+            self.assertEqual(old['physicalStorage'],new['physicalStorage'])
+            self.assertEqual(old['resources'],new['resources'])
+            self.assertFalse(new['networkReadinessValidated'])
+            self.assertEqual(new['profileObserver'],foundation.observer_identity(updated))
+            original_image=old['desired']['migratorImage'];new_image=new['profileObserver']['image']
+            for operation in ('observe-build-admission','observe-build-trust','observe-build-profile'):
+                self.assertEqual(foundation.observation_image(operation,original_image,new_image),new_image)
+            self.assertEqual(foundation.observation_image('build-admission',original_image,new_image),original_image)
+            for operation in ('prepare-build-slot','compile-build-installation','unknown'):
+                with self.assertRaises(ValueError):foundation.observation_image(operation,original_image,new_image)
+            state=dict(old['desired'],profileObserver=new['profileObserver'],resources={'original':'retained'})
+            before_state=copy.deepcopy(state)
+            with self.assertRaisesRegex(ValueError,'implicit observer replacement'):
+                foundation.select_observer(state,old['profileObserver'],False)
+            self.assertEqual(foundation.select_observer(state,new['profileObserver'],True),new['profileObserver'])
+            self.assertEqual(state,before_state)
+            with patch.object(install,'tools') as tools,self.assertRaisesRegex(ValueError,'Status cannot'):
+                foundation.main(self.args('status')+['--observer-images',str(path)])
+            tools.assert_not_called()
+
 if __name__=='__main__':unittest.main()
