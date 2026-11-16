@@ -1,0 +1,22 @@
+[
+  {"input":60,"expected":"1 minute"},
+  {"input":0,"expected":"0 seconds"},
+  {"input":1,"expected":"1 second"},
+  {"input":59,"expected":"59 seconds"},
+  {"input":61,"expected":"1 minute 1 second"},
+  {"input":120,"expected":"2 minutes"},
+  {"input":3600,"expected":"1 hour"},
+  {"input":3661,"expected":"1 hour 1 minute 1 second"},
+  {"input":86400,"expected":"1 day"},
+  {"input":90061,"expected":"1 day 1 hour 1 minute 1 second"},
+  {"input":-1,"expected":"Unavailable"},
+  {"input":1.5,"expected":"Unavailable"},
+  {"input":"60","expected":"Unavailable"},
+  {"input":null,"expected":"Unavailable"},
+  {"input":9007199254740992,"expected":"Unavailable"},
+  {"kind":"nan","expected":"Unavailable"},
+  {"kind":"infinity","expected":"Unavailable"},
+  {"kind":"undefined","expected":"Unavailable"},
+  {"input":true,"expected":"Unavailable"},
+  {"input":9007199254740991,"expected":"104249991374 days 7 hours 36 minutes 31 seconds"}
+]

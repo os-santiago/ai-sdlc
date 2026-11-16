@@ -42,8 +42,8 @@ def load(path):
         raise ValueError('Invalid or unsupported local installation scope')
     if 'independentReview' in config and (type(config['independentReview']) is not bool or config['profile'] != 'verification'):
         raise ValueError('Independent review requires a boolean and verification profile')
-    if 'publication' in config and (type(config['publication']) is not bool or (config['publication'] and (config['profile'] != 'verification' or config.get('independentReview') is not True or config['repository'] != 'os-santiago/homedir'))):
-        raise ValueError('Publication requires verification, independent review and the Homedir pilot')
+    if 'publication' in config and (type(config['publication']) is not bool or (config['publication'] and (config['profile'] != 'verification' or config.get('independentReview') is not True or config['repository'] not in ('os-santiago/homedir', 'os-santiago/saferus')))):
+        raise ValueError('Publication requires verification, independent review and a reviewed repository')
     if 'merge' in config and (type(config['merge']) is not bool or (config['merge'] and config.get('publication') is not True)):
         raise ValueError('Merge requires explicit verified publication')
     digest = 'sha256:' + hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest()

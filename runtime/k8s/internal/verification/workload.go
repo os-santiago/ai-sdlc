@@ -17,7 +17,7 @@ type Workload struct {
 }
 
 func Compile(c Command, in Inputs, image string, now time.Time) (Workload, error) {
-	if executor.ValidatePlacement("ai-sdlc-verifiers", image, image) != nil || c.Recipe != LocaleRecipe || c.RecipeRevision != RecipeRevision() || !time.UnixMilli(c.ExpiresAt).After(now) || c.SourceSHA != in.delta.SourceSHA || c.CandidateTreeSHA256 != in.delta.CandidateTreeSHA256 {
+	if executor.ValidatePlacement("ai-sdlc-verifiers", image, image) != nil || !ValidRecipe(c.Repository, c.Recipe) || c.RecipeRevision != RevisionForRecipe(c.Recipe) || !time.UnixMilli(c.ExpiresAt).After(now) || c.SourceSHA != in.delta.SourceSHA || c.CandidateTreeSHA256 != in.delta.CandidateTreeSHA256 {
 		return Workload{}, ErrVerification
 	}
 	delta, err := candidate.Encode(in.delta)
@@ -30,19 +30,31 @@ func Compile(c Command, in Inputs, image string, now time.Time) (Workload, error
 	metadata := func(name string) map[string]any {
 		return map[string]any{"name": name, "namespace": "ai-sdlc-verifiers", "labels": labels, "annotations": map[string]any{"ai-sdlc.io/command": c.ID(), "ai-sdlc.io/candidate": c.CandidateID, "ai-sdlc.io/recipe-revision": c.RecipeRevision}}
 	}
-	cases, _ := recipes.ReadFile("recipes/homedir-date-locale/cases.json")
+	directory := recipeDirectory(c.Recipe)
+	sourcePath, existingTest, newTest := LocaleSource, LocaleExistingTest, LocaleNewTest
+	if c.Recipe == LifetimeRecipe {
+		sourcePath, existingTest, newTest = LifetimeSource, "", LifetimeTest
+	}
+	cases, _ := recipes.ReadFile(directory + "/cases.json")
 	var publicCases []map[string]any
 	if json.Unmarshal(cases, &publicCases) != nil {
 		return Workload{}, ErrVerification
 	}
 	for _, item := range publicCases {
 		delete(item, "locale")
+		delete(item, "expected")
 	}
 	publicRaw, _ := json.Marshal(publicCases)
 	// Values are bytes to preserve exact source identities in binaryData.
-	candidateDriver, _ := recipes.ReadFile("recipes/homedir-date-locale/candidate.cjs")
-	referenceDriver, _ := recipes.ReadFile("recipes/homedir-date-locale/reference.cjs")
-	data := map[string][]byte{"candidate-driver": candidateDriver, "reference-driver": referenceDriver, "baseline": in.files["baseline/"+LocaleSource], "candidate": in.files["candidate/"+LocaleSource], "cases": publicRaw, "reference-cases": cases, "existing-test": in.files["candidate/"+LocaleExistingTest], "new-test": in.files["candidate/"+LocaleNewTest]}
+	candidateDriver, _ := recipes.ReadFile(directory + "/candidate.cjs")
+	referenceDriver, _ := recipes.ReadFile(directory + "/reference.cjs")
+	data := map[string][]byte{"candidate-driver": candidateDriver, "reference-driver": referenceDriver, "baseline": in.files["baseline/"+sourcePath], "candidate": in.files["candidate/"+sourcePath], "cases": publicRaw, "reference-cases": cases, "new-test": in.files["candidate/"+newTest]}
+	if existingTest != "" {
+		data["existing-test"] = in.files["candidate/"+existingTest]
+	}
+	if c.Recipe == LifetimeRecipe {
+		data["package"] = []byte(`{"type":"module"}`)
+	}
 	for _, value := range data {
 		if len(value) == 0 || len(value) > 32768 {
 			return Workload{}, ErrVerification
@@ -58,12 +70,23 @@ func Compile(c Command, in Inputs, image string, now time.Time) (Workload, error
 			items = []any{map[string]any{"key": "reference-cases", "path": "cases.json"}}
 			driverKey = "reference-driver"
 		} else {
-			items = append(items, map[string]any{"key": kind, "path": LocaleSource})
+			items = append(items, map[string]any{"key": kind, "path": sourcePath})
 		}
 		command := []string{"node", "/check/driver.cjs"}
+		if c.Recipe == LifetimeRecipe {
+			command = []string{"node", "--no-warnings", "--experimental-vm-modules", "/check/driver.cjs"}
+		}
 		if kind == "tests" {
-			items = []any{map[string]any{"key": "candidate", "path": LocaleSource}, map[string]any{"key": "existing-test", "path": LocaleExistingTest}, map[string]any{"key": "new-test", "path": LocaleNewTest}}
-			command = []string{"node", "--test", "/check/" + LocaleExistingTest, "/check/" + LocaleNewTest}
+			items = []any{map[string]any{"key": "candidate", "path": sourcePath}, map[string]any{"key": "new-test", "path": newTest}}
+			command = []string{"node", "--test"}
+			if existingTest != "" {
+				items = append(items, map[string]any{"key": "existing-test", "path": existingTest})
+				command = append(command, "/check/"+existingTest)
+			}
+			command = append(command, "/check/"+newTest)
+			if c.Recipe == LifetimeRecipe {
+				items = append(items, map[string]any{"key": "package", "path": "package.json"})
+			}
 		} else {
 			items = append(items, map[string]any{"key": driverKey, "path": "driver.cjs"})
 		}

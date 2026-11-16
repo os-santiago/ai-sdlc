@@ -14,7 +14,7 @@ func (c *Client) checks(ctx context.Context, head string, required []RequiredChe
 		Total *int       `json:"total_count"`
 		Runs  []checkRun `json:"check_runs"`
 	}
-	if c.read(ctx, repoPath("/commits/"+head+"/check-runs?filter=latest&per_page=100"), nil, &runs) != nil || runs.Total == nil || *runs.Total < 0 || *runs.Total > 100 || len(runs.Runs) != *runs.Total || runs.Runs == nil {
+	if c.read(ctx, c.repoPath("/commits/"+head+"/check-runs?filter=latest&per_page=100"), nil, &runs) != nil || runs.Total == nil || *runs.Total < 0 || *runs.Total > 100 || len(runs.Runs) != *runs.Total || runs.Runs == nil {
 		return false, "", ErrGate
 	}
 	ready := true
@@ -52,7 +52,7 @@ func (c *Client) checks(ctx context.Context, head string, required []RequiredChe
 			Context, State string
 		}
 	}
-	if c.read(ctx, repoPath("/commits/"+head+"/status?per_page=100"), nil, &statuses) != nil || statuses.SHA != head || statuses.Total == nil || *statuses.Total < 0 || *statuses.Total > 100 || len(statuses.Statuses) != *statuses.Total || statuses.Statuses == nil {
+	if c.read(ctx, c.repoPath("/commits/"+head+"/status?per_page=100"), nil, &statuses) != nil || statuses.SHA != head || statuses.Total == nil || *statuses.Total < 0 || *statuses.Total > 100 || len(statuses.Statuses) != *statuses.Total || statuses.Statuses == nil {
 		return false, "", ErrGate
 	}
 	contexts := map[string]bool{}

@@ -1,0 +1,32 @@
+{
+  "date": "2026-11-16",
+  "scope": "saferus-reference-adapter",
+  "runtimeValidation": {
+    "status": "passed",
+    "tests": 1251,
+    "packages": 39,
+    "missingDatabaseProof": [],
+    "workingTreeBasedOn": "60755327323fa88f7c079ee142f71ef96ad806f1",
+    "workingTreeHadChanges": true
+  },
+  "installerTests": {
+    "passed": 57,
+    "helmRendered": true
+  },
+  "kindRecipe": {
+    "actualTransport": true,
+    "autonomousE2E": false,
+    "deltaSHA256": "1acd53bcc5212de99bd677339412edc2ea2be2667b55f27416c8cc8fc5c6e882",
+    "independentBehaviorCompared": true,
+    "recipeRevision": "eed3bff9dc8b4719e41d01ecc9574af691e332c441d2b77a51de9d65bd45f329",
+    "scope": "isolated-verification-transport-fixture",
+    "separatePods": 4,
+    "sourceSHA": "d5df3a8aa0a19b8f55dfc29c7bc13a10405a2aaa",
+    "syntheticCommand": true,
+    "ownedNamespaceRemoved": true,
+    "restrictedServiceAccount": true
+  },
+  "independentAudit": "cross-repository merge evidence finding corrected; conditional approval requires final CI",
+  "autonomousE2E": false,
+  "deploymentPerformed": false
+}

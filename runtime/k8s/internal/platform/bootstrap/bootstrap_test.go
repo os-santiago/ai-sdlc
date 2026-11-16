@@ -270,6 +270,11 @@ func TestMergeRequiresExplicitPilotCapabilityAndCannotDeploy(t *testing.T) {
 			}
 		})
 	}
+	m.Policy.Repository = "os-santiago/saferus"
+	write()
+	if _, _, e := c.Authority(); e != nil {
+		t.Fatal("reviewed Saferus denied", e)
+	}
 	m.Policy.Autonomy = "auto-deploy"
 	write()
 	if _, _, e := c.Authority(); e == nil {

@@ -20,9 +20,9 @@ func TestRealVerificationTransportFixture(t *testing.T) {
 		t.Skip("explicit isolated kind fixture required")
 	}
 	var in struct {
-		Config                        Config
-		SourceFile, ReportFile, Image string
-		Changes                       map[string][]byte
+		Config                                    Config
+		SourceFile, ReportFile, Image, Repository string
+		Changes                                   map[string][]byte
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil || len(raw) > 256*1024 || json.Unmarshal(raw, &in) != nil {
@@ -59,11 +59,15 @@ func TestRealVerificationTransportFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal("candidate encode")
 	}
-	inputs, err := verification.Prepare("os-santiago/homedir", verification.LocaleRecipe, verification.RecipeMarker, source, raw)
+	if in.Repository == "" {
+		in.Repository = "os-santiago/homedir"
+	}
+	recipe := verification.RecipeForRepository(in.Repository)
+	inputs, err := verification.Prepare(in.Repository, recipe, "AI-SDLC validation recipe: "+recipe, source, raw)
 	if err != nil {
 		t.Fatal("recipe prepare")
 	}
-	c := verification.Command{CandidateID: "execution-" + workspacebundle.Digest(raw), Recipe: verification.LocaleRecipe, RecipeRevision: verification.RecipeRevision(), SourceSHA: source.SourceSHA, CandidateTreeSHA256: d.CandidateTreeSHA256, DeltaSHA256: workspacebundle.Digest(raw), ExpiresAt: time.Now().Add(3 * time.Minute).UnixMilli()}
+	c := verification.Command{Repository: in.Repository, CandidateID: "execution-" + workspacebundle.Digest(raw), Recipe: recipe, RecipeRevision: verification.RevisionForRecipe(recipe), SourceSHA: source.SourceSHA, CandidateTreeSHA256: d.CandidateTreeSHA256, DeltaSHA256: workspacebundle.Digest(raw), ExpiresAt: time.Now().Add(3 * time.Minute).UnixMilli()}
 	client, err := NewClient(in.Config)
 	if err != nil {
 		t.Fatal("fixture client")
@@ -102,7 +106,7 @@ func TestRealVerificationTransportFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal("transport results")
 	}
-	if verification.Compare(output.Baseline, output.Candidate, output.Reference) != nil {
+	if verification.CompareRecipe(recipe, output.Baseline, output.Candidate, output.Reference) != nil {
 		t.Fatal("independent behavior comparison")
 	}
 	report, _ := json.Marshal(map[string]any{"scope": "isolated-verification-transport-fixture", "syntheticCommand": true, "actualTransport": true, "separatePods": 4, "sourceSHA": c.SourceSHA, "deltaSHA256": c.DeltaSHA256, "recipeRevision": c.RecipeRevision, "independentBehaviorCompared": true, "autonomousE2E": false})

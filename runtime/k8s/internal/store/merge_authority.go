@@ -43,7 +43,7 @@ func verifyMergeAuthority(p authority.Policy, payload, receipt, gate []byte, now
 		return ErrExecution
 	}
 	var observed mergegate.Observation
-	if authority.DecodeStrict(gate, &observed) != nil || !observed.Ready || observed.MergeAuthorized || observed.Reasons == nil || len(observed.Reasons) != 0 || observed.Expected != (mergegate.Expected{PullRequest: c.PullRequest, HeadSHA: c.HeadSHA, BaseSHA: c.BaseSHA, TreeSHA: c.TreeSHA, Branch: c.Branch}) {
+	if authority.DecodeStrict(gate, &observed) != nil || !observed.Ready || observed.MergeAuthorized || observed.Reasons == nil || len(observed.Reasons) != 0 || observed.Expected != (mergegate.Expected{Repository: c.Repository, PullRequest: c.PullRequest, HeadSHA: c.HeadSHA, BaseSHA: c.BaseSHA, TreeSHA: c.TreeSHA, Branch: c.Branch}) {
 		return ErrExecution
 	}
 	for _, d := range []string{observed.PolicySHA256, observed.ChecksSHA256, observed.ReviewsSHA256} {

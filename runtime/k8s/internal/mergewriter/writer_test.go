@@ -15,10 +15,15 @@ import (
 	"time"
 )
 
+const repository = "os-santiago/homedir"
+
 func expected() mergegate.Expected {
-	return mergegate.Expected{PullRequest: 42, HeadSHA: strings.Repeat("a", 40), BaseSHA: strings.Repeat("b", 40), TreeSHA: strings.Repeat("c", 40), Branch: "ai-sdlc/issue-3-" + strings.Repeat("d", 32)}
+	return mergegate.Expected{Repository: repository, PullRequest: 42, HeadSHA: strings.Repeat("a", 40), BaseSHA: strings.Repeat("b", 40), TreeSHA: strings.Repeat("c", 40), Branch: "ai-sdlc/issue-3-" + strings.Repeat("d", 32)}
 }
 func fixture(t *testing.T, h http.HandlerFunc) (*Writer, context.Context) {
+	return fixtureFor(t, h, repository)
+}
+func fixtureFor(t *testing.T, h http.HandlerFunc, repository string) (*Writer, context.Context) {
 	t.Helper()
 	s := httptest.NewTLSServer(h)
 	t.Cleanup(s.Close)
@@ -83,7 +88,7 @@ func TestMergeRejectsInvalidOrUnboundedAuthorityBeforeSend(t *testing.T) {
 	var requests atomic.Int32
 	w, ctx := fixture(t, func(http.ResponseWriter, *http.Request) { requests.Add(1) })
 	fence := func(context.Context, string) error { return nil }
-	for _, change := range []func(*mergegate.Expected){func(e *mergegate.Expected) { e.HeadSHA = "main" }, func(e *mergegate.Expected) { e.HeadSHA = e.BaseSHA }, func(e *mergegate.Expected) { e.Branch = "main" }, func(e *mergegate.Expected) { e.Branch = "ai-sdlc/issue-4-" + strings.Repeat("d", 32) }, func(e *mergegate.Expected) { e.TreeSHA = "" }, func(e *mergegate.Expected) { e.PullRequest = 0 }} {
+	for _, change := range []func(*mergegate.Expected){func(e *mergegate.Expected) { e.Repository = "os-santiago/saferus" }, func(e *mergegate.Expected) { e.HeadSHA = "main" }, func(e *mergegate.Expected) { e.HeadSHA = e.BaseSHA }, func(e *mergegate.Expected) { e.Branch = "main" }, func(e *mergegate.Expected) { e.Branch = "ai-sdlc/issue-4-" + strings.Repeat("d", 32) }, func(e *mergegate.Expected) { e.TreeSHA = "" }, func(e *mergegate.Expected) { e.PullRequest = 0 }} {
 		e := expected()
 		change(&e)
 		if _, err := w.Merge(ctx, e, 3, fence); err == nil {
@@ -172,5 +177,34 @@ func TestMergeUnknownResponsesNeverRetryOrRedirect(t *testing.T) {
 				t.Fatal("credential leaked")
 			}
 		})
+	}
+}
+
+func TestSaferusMergeUsesOnlyCredentialRepository(t *testing.T) {
+	var calls atomic.Int32
+	w, ctx := fixtureFor(t, func(out http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if !strings.HasPrefix(r.URL.Path, "/repos/os-santiago/saferus/") {
+			t.Error("cross-repository request")
+		}
+		if r.Method == http.MethodPut {
+			if r.URL.Path != "/repos/os-santiago/saferus/pulls/42/merge" {
+				t.Error("merge path")
+			}
+			json.NewEncoder(out).Encode(map[string]any{"merged": true, "sha": strings.Repeat("e", 40)})
+		} else {
+			json.NewEncoder(out).Encode(commitResponse())
+		}
+	}, "os-santiago/saferus")
+	want := expected()
+	want.Repository = "os-santiago/saferus"
+	if _, err := w.Merge(ctx, want, 3, func(context.Context, string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Merge(ctx, expected(), 3, func(context.Context, string) error { return nil }); err != ErrMerge {
+		t.Fatal("cross-repo evidence accepted")
+	}
+	if calls.Load() != 2 {
+		t.Fatal("write or observation count")
 	}
 }

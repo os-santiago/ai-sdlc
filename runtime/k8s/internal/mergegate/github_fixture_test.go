@@ -50,7 +50,7 @@ func TestRealHomedirReadonlyGateFixture(t *testing.T) {
 	if c.read(ctx, repoPath("/pulls/1580"), nil, &p) != nil || p.Number != 1580 || p.State != "closed" || p.Merged == nil || !*p.Merged {
 		t.Fatal("closed read-only fixture identity")
 	}
-	expected := Expected{PullRequest: 1580, HeadSHA: p.Head.SHA, BaseSHA: p.Base.SHA, Branch: p.Head.Ref}
+	expected := Expected{Repository: repository, PullRequest: 1580, HeadSHA: p.Head.SHA, BaseSHA: p.Base.SHA, Branch: p.Head.Ref}
 	checks, _, e := c.checks(ctx, expected.HeadSHA, required)
 	if e != nil {
 		t.Fatal("authenticated checks API", e)

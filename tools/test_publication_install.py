@@ -100,5 +100,16 @@ class PublicationInstallTests(unittest.TestCase):
                         {'authority': {'policyJSON': json.dumps({'repository': 'os-santiago/ai-sdlc'})}}):
             self.assertNotEqual(self.render(True, **changes).returncode, 0)
 
+    def test_saferus_config_and_helm_bind_reviewed_repository(self):
+        values, _ = install_config.load(install.ROOT / 'examples/saferus.local-install.json')
+        self.assertEqual(values['repository'], 'os-santiago/saferus')
+        self.assertTrue(values['merge'])
+        rendered = self.render(True, authority={'policyJSON': json.dumps({'repository':'os-santiago/saferus'})}, merge={'enabled':True, 'configJSON':'{}'})
+        self.assertEqual(rendered.returncode, 0, rendered.stderr)
+        self.assertIn('AI_SDLC_MERGE', rendered.stdout)
+        with patch.object(install, 'owned_secret', return_value=None), patch.object(install.github_client, 'configure') as configure, patch.object(install, 'read_resource', return_value={'metadata':{'resourceVersion':'17'}}):
+            self.assertEqual(install.configure_publication_client(['kubectl'], 'fixture', 'os-santiago/saferus', 'gh-cli'), '17')
+            self.assertEqual(configure.call_args.args[3], 'os-santiago/saferus')
+
 if __name__ == '__main__':
     unittest.main()

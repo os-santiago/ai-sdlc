@@ -1,0 +1,9 @@
+{
+  "repository": "os-santiago/saferus",
+  "rulesetID": 27343088,
+  "required": [{"Context":"quality","AppID":15368}],
+  "strictChecks": true,
+  "resolveThreads": true,
+  "humanApprovals": 0,
+  "bypassActors": []
+}
