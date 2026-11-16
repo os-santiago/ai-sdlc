@@ -114,6 +114,7 @@ def main():
                 raise ValueError('Fixture must remain bound to an absent node')
             run = create(value); run_uids.append(run['metadata']['uid'])
             report['runUIDs']=list(run_uids);persist_report()
+            (args.output / (phase+'-run.json')).write_text(json.dumps(run,indent=2)+'\n')
         until = time.monotonic() + 60
         while time.monotonic() < until:
             pods = pods_stopped()
@@ -124,6 +125,8 @@ def main():
         for pod in pods:
             phase = pod['metadata']['labels']['ai-sdlc.role']
             (args.output / (phase + '-pod.json')).write_text(json.dumps(pod, indent=2) + '\n')
+            task=get('taskrun',pod['metadata']['labels']['tekton.dev/taskRun'])
+            (args.output / (phase+'-task.json')).write_text(json.dumps(task,indent=2)+'\n')
         report['podShapeObserved'] = True
         if not args.inspect_only:
             for file, kind in [('policy.json', 'validatingadmissionpolicies'), ('binding.json', 'validatingadmissionpolicybindings')]:
