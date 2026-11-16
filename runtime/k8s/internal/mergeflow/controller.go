@@ -74,11 +74,15 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		return "", ErrMerge
 	}
 	if id == "" {
-		p, _, _, e := r.Policy()
+		p, intake, profile, e := r.Policy()
 		if e != nil {
 			return "", ErrMerge
 		}
-		publicationID, e := r.DB.NextMergePublication(ctx, p.Revision())
+		review, e := r.Review()
+		if e != nil {
+			return "", ErrMerge
+		}
+		publicationID, e := r.DB.NextMergePublication(ctx, store.MergeSelection{AuthorityRevision: p.Revision(), IntakeConfiguration: intake.Digest(), ExecutionProfile: profile, ReviewProfile: review.Profile, ReviewConfiguration: review.Configuration})
 		if e != nil {
 			return "", ErrMerge
 		}

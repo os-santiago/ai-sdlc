@@ -1,0 +1,25 @@
+{
+  "scope": "skip-obsolete-publications-before-merge-claim",
+  "observedAt": "2026-11-16T00:07:48.484718+00:00",
+  "baseCommit": "8d73c81a7c9cb79d89f44fe8a46c004610da6c40",
+  "runtime": {
+    "status": "passed",
+    "build": true,
+    "vet": true,
+    "passedTests": 1213,
+    "passedPackages": 38,
+    "database": "real disposable PostgreSQL",
+    "forge": "synthetic"
+  },
+  "scenarios": [
+    "current publication selected with installed column privileges",
+    "old policy, intake, execution profile, review profile and review configuration excluded",
+    "superseded issue generation and stopped work excluded",
+    "profile change during observation prevents merge write",
+    "historical publication preserved without creating or renewing authority"
+  ],
+  "limitations": [
+    "No real GitHub merge or live installation upgrade",
+    "No artifact build or deployment verified"
+  ]
+}

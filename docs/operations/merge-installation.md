@@ -27,8 +27,10 @@ and a single guarded merge request. The signed authority ceiling becomes
 
 The controller waits for GitHub checks using durable publication facts, without
 extending execution, verification or publication leases. It selects facts from
-the current policy revision; activation does not adopt publications created
-under an earlier policy. A fresh eligible issue is needed for a new cycle.
+the current policy revision, issue generation and intake/execution/review
+configuration. Obsolete historical facts do not block later eligible work;
+selection never replaces the complete proof validation or grants authority.
+Activation does not adopt publications created under an earlier policy. A fresh eligible issue is needed for a new cycle.
 Every attempted merge receives a fresh bounded command, original claim, effect
 journal and immutable terminal record. Uncertain effects quarantine the stage.
 Generated merge commits retain `[skip release]` so this local pilot does not
