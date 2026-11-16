@@ -69,6 +69,25 @@ func TestBootstrapInspectionEmptyAndCompletedHistory(t *testing.T) {
 	}
 }
 
+// Role names are cluster-wide, so this case requires its own disposable
+// PostgreSQL instance rather than sharing one with the complete role suite.
+func TestBootstrapInspectionProvisionedMaintenance(t *testing.T) {
+	if os.Getenv("AI_SDLC_BOOTSTRAP_PROVISIONED_FIXTURE") != "true" {
+		t.Skip("requires isolated provisioned-maintenance fixture")
+	}
+	db, name, _ := bootstrapInspectionDB(t)
+	passwords := map[string]string{}
+	for role := range componentTables {
+		passwords[role] = strings.ReplaceAll(NewID(), "-", "") + strings.ReplaceAll(role, "-", "_")
+	}
+	if err := db.ProvisionRolesForProvenance(context.Background(), passwords, "maintenance", false, false, false, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if boundary := db.BootstrapInspectionBoundary(context.Background(), name); boundary != "" {
+		t.Fatalf("provisioned maintenance rejected at compiled boundary %s", boundary)
+	}
+}
+
 func TestBootstrapFixtureRejectsDatabaseQueryOverride(t *testing.T) {
 	base := testDB(t)
 	var original string
