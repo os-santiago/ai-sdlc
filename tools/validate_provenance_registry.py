@@ -42,6 +42,16 @@ class Run:
                        'liveRegistryModified': False, 'releaseAuthorized': False,
                        'operationalTrustInstalled': False, 'cleanup': []}
         self.deadline = time.monotonic() + 600
+        self.publisher = 'ai-sdlc-publisher'
+
+    def prepare_configuration(self):
+        """Optional fixture preparation before any registry process starts."""
+
+    def storage_options(self):
+        return ['--tmpfs', '/var/lib/zot:rw,size=128m,mode=1777']
+
+    def after_seed(self, request, image_path, endpoint):
+        """Optional recovery exercise before the native denial matrix."""
 
     def call(self, args, limit=60):
         remaining = self.deadline - time.monotonic()
@@ -155,6 +165,7 @@ class Run:
                 'commit': self.call(['git', '-C', str(ROOT), 'rev-parse', 'HEAD']).strip(),
                 'dirty': bool(self.call(['git', '-C', str(ROOT), 'status', '--porcelain']))}
             self.go_test('TestEmitNativeZotProvenanceFixture')
+            self.prepare_configuration()
             credentials = json.loads((self.private / 'credentials.json').read_text())
             routes = {k: base64.b64decode(v, validate=True)
                       for k, v in json.loads((self.private / 'routes.json').read_text()).items()}
@@ -163,6 +174,8 @@ class Run:
             if os.getuid() == 0:
                 os.chown(self.private, 0, gid)
             for path in self.private.iterdir():
+                if path.is_dir():
+                    continue  # Optional fixture storage/projection owns its modes.
                 path.chmod(0o640)
                 if os.getuid() == 0:
                     os.chown(path, 0, gid)
@@ -172,7 +185,7 @@ class Run:
             self.report['stage'] = 'native-registry-acl'
             self.call(['podman', 'run', '-d', '--name', container, '--label', LABEL + '=' + self.identity, *userns,
                        '--user', str(uid) + ':' + str(gid), '--read-only', '--cap-drop=ALL',
-                       '--security-opt=no-new-privileges', '--tmpfs', '/var/lib/zot:rw,size=128m,mode=1777',
+                       '--security-opt=no-new-privileges', *self.storage_options(),
                        '-p', '127.0.0.1::5000', '-v', str(self.private) + ':/cfg:ro,z', IMAGE, '/cfg/config.json'])
             endpoint = self.call(['podman', 'port', container, '5000/tcp']).strip()
             if not re.fullmatch(r'127\.0\.0\.1:[0-9]+', endpoint):
@@ -181,7 +194,9 @@ class Run:
             context = ssl.create_default_context(cafile=str(self.private / 'ca.crt'))
             context.minimum_version = ssl.TLSVersion.TLSv1_3
 
-            def request(method, path, user='ai-sdlc-publisher', body=b'', media='application/octet-stream'):
+            def request(method, path, user='publisher', body=b'', media='application/octet-stream'):
+                if user == 'publisher':
+                    user = self.publisher
                 connection = http.client.HTTPSConnection('127.0.0.1', port, context=context, timeout=5)
                 headers = {'Content-Type': media}
                 if user:
@@ -220,7 +235,7 @@ class Run:
             # each image/signature/attestation manifest. No HTTP mock is used.
             for path, raw in routes.items():
                 if path.startswith(PREFIX + 'blobs/'):
-                    upload(REPO, raw, 'ai-sdlc-publisher')
+                    upload(REPO, raw, self.publisher)
             manifests = {p: raw for p, raw in routes.items() if p.startswith(PREFIX + 'manifests/')}
             for path, raw in manifests.items():
                 self.check('store-manifest', request('PUT', path, body=raw, media=json.loads(raw)['mediaType'])[0], 201)
@@ -231,6 +246,7 @@ class Run:
                 upload('other/fixture', routes[PREFIX + 'blobs/' + descriptor['digest']], 'fixture-admin')
             self.check('seed-other-repository', request('PUT', '/v2/other/fixture/manifests/fixture',
                        'fixture-admin', image, image_manifest['mediaType'])[0], 201)
+            self.after_seed(request, image_path, endpoint)
             verifier = 'ai-sdlc-verifier'
             self.check('verifier-read-before-denials', request('GET', image_path, verifier)[0], 200)
             self.check('verifier-cannot-upload', request('POST', PREFIX + 'blobs/uploads/', verifier)[0], 403)
