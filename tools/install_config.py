@@ -26,7 +26,7 @@ def load(path):
         raise ValueError('Invalid installation configuration JSON') from exc
     fields = {'apiVersion', 'kind', 'cluster', 'provider', 'repository',
               'environment', 'profile', 'images'}
-    if not isinstance(config, dict) or set(config) - {'independentReview', 'publication', 'merge'} != fields:
+    if not isinstance(config, dict) or set(config) - {'independentReview', 'publication', 'merge', 'platform'} != fields:
         raise ValueError('Installation configuration requires exactly the documented fields')
     if any(not isinstance(value, str) for key, value in config.items() if key not in ('independentReview', 'publication', 'merge')):
         raise ValueError('Installation configuration fields must be strings')
@@ -40,6 +40,12 @@ def load(path):
             or config['profile'] not in ('maintenance', 'shadow', 'candidate', 'verification')
             or not config['images'] or '\x00' in config['images']):
         raise ValueError('Invalid or unsupported local installation scope')
+    if config.get('platform', 'kind') not in ('kind', 'konflux'):
+        raise ValueError('Unsupported installation platform')
+    if config.get('platform') == 'konflux' and (config['profile'] != 'maintenance'
+            or config['repository'] != 'os-santiago/saferus' or config['environment'] != 'ai-sdlc-production'
+            or config.get('publication') or config.get('merge') or 'independentReview' in config):
+        raise ValueError('Konflux capability supports only frozen Saferus test production')
     if 'independentReview' in config and (type(config['independentReview']) is not bool or config['profile'] != 'verification'):
         raise ValueError('Independent review requires a boolean and verification profile')
     if 'publication' in config and (type(config['publication']) is not bool or (config['publication'] and (config['profile'] != 'verification' or config.get('independentReview') is not True or config['repository'] not in ('os-santiago/homedir', 'os-santiago/saferus')))):
