@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
@@ -26,6 +27,7 @@ type TreeRequest struct {
 	Tree     []TreeEntry `json:"tree"`
 }
 type TreePlan struct {
+	Repository      string
 	Request         TreeRequest
 	ExpectedTreeSHA string
 	Branch          string
@@ -34,12 +36,12 @@ type TreePlan struct {
 
 // PrepareTree is pure reconstruction, not a publication authorization. It must
 // be followed by current signed evidence checks and a durable effect journal.
-// Only the two files in the reviewed low-risk Homedir recipe can be written.
+// Only the finite files in the repository-specific reviewed recipe can be written.
 func PrepareTree(c Command, source workspacebundle.Bundle, delta []byte) (TreePlan, error) {
-	if c.Repository != "os-santiago/homedir" || c.SourceSHA != source.SourceSHA || c.IssueNumber < 1 || !candidateID.MatchString(c.CandidateID) || workspacebundle.Digest(delta) != c.DeltaSHA256 {
+	if !project.Supported(c.Repository) || c.SourceSHA != source.SourceSHA || c.IssueNumber < 1 || !candidateID.MatchString(c.CandidateID) || workspacebundle.Digest(delta) != c.DeltaSHA256 {
 		return TreePlan{}, ErrPublication
 	}
-	if _, err := verification.Prepare(c.Repository, verification.LocaleRecipe, verification.RecipeMarker, source, delta); err != nil {
+	if _, err := verification.Prepare(c.Repository, verification.RecipeForRepository(c.Repository), "AI-SDLC validation recipe: "+verification.RecipeForRepository(c.Repository), source, delta); err != nil {
 		return TreePlan{}, ErrPublication
 	}
 	d, err := candidate.Decode(delta)
@@ -67,7 +69,7 @@ func PrepareTree(c Command, source workspacebundle.Bundle, delta []byte) (TreePl
 	}
 	// Keep the tested public VPS release workflow out of the local-kind pilot.
 	// No model or issue text can remove the explicit release-skip marker.
-	return TreePlan{Request: TreeRequest{base, entries}, ExpectedTreeSHA: expected,
+	return TreePlan{Repository: c.Repository, Request: TreeRequest{base, entries}, ExpectedTreeSHA: expected,
 		Branch:        "ai-sdlc/issue-" + strconv.Itoa(c.IssueNumber) + "-" + strings.TrimPrefix(c.CandidateID, "execution-")[:32],
 		CommitMessage: fmt.Sprintf("fix(ai-sdlc): address issue #%d [skip release]", c.IssueNumber)}, nil
 }

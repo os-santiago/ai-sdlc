@@ -18,7 +18,7 @@ import (
 )
 
 func writerPlan() TreePlan {
-	return TreePlan{Request: TreeRequest{BaseTree: strings.Repeat("a", 40), Tree: []TreeEntry{{verification.LocaleSource, "100644", "blob", "source"}, {verification.LocaleNewTest, "100644", "blob", "test"}}}, ExpectedTreeSHA: strings.Repeat("b", 40), Branch: "ai-sdlc/issue-1581-" + strings.Repeat("c", 32), CommitMessage: "fix(ai-sdlc): address issue #1581 [skip release]"}
+	return TreePlan{Repository: "os-santiago/homedir", Request: TreeRequest{BaseTree: strings.Repeat("a", 40), Tree: []TreeEntry{{verification.LocaleSource, "100644", "blob", "source"}, {verification.LocaleNewTest, "100644", "blob", "test"}}}, ExpectedTreeSHA: strings.Repeat("b", 40), Branch: "ai-sdlc/issue-1581-" + strings.Repeat("c", 32), CommitMessage: "fix(ai-sdlc): address issue #1581 [skip release]"}
 }
 func writerFixture(t *testing.T, handler http.HandlerFunc) (*Writer, *httptest.Server) {
 	t.Helper()
@@ -179,5 +179,49 @@ func TestPublisherDeniesUnreviewedPlanBeforeNetwork(t *testing.T) {
 	}
 	if calls.Load() != 0 {
 		t.Fatal("invalid write reached network")
+	}
+}
+
+func TestSaferusWriterBindsRepositoryAndFinitePaths(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(out http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Method != "POST" || r.URL.Path != "/repos/os-santiago/saferus/git/trees" {
+			t.Error("wrong repository path")
+		}
+		out.WriteHeader(201)
+		json.NewEncoder(out).Encode(map[string]any{"sha": strings.Repeat("b", 40), "truncated": false})
+	}))
+	defer server.Close()
+	w, err := NewWriter(forge.Credential{Version: 1, Mode: "gh-cli", Host: "github.com", Repository: "os-santiago/saferus", ActorID: 1, ActorLogin: "fixture", Token: strings.Repeat("x", 40)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.base = server.URL
+	w.http.Transport.(*http.Transport).TLSClientConfig.RootCAs = server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+	p := writerPlan()
+	p.Repository = "os-santiago/saferus"
+	p.Request.Tree = []TreeEntry{{verification.LifetimeSource, "100644", "blob", "source"}, {verification.LifetimeTest, "100644", "blob", "test"}, {verification.LifetimeBrowser, "100644", "blob", "browser assertion"}}
+	fence := func(context.Context, string) error { return nil }
+	if _, err := w.CreateTree(context.Background(), fence, p); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 {
+		t.Fatal("write count")
+	}
+	for _, mutate := range []func(*TreePlan){
+		func(p *TreePlan) { p.Repository = "os-santiago/homedir" },
+		func(p *TreePlan) { p.Request.Tree[0].Path = "cmd/console/main.go" },
+		func(p *TreePlan) { p.Request.Tree = p.Request.Tree[:2] },
+	} {
+		copy := p
+		copy.Request.Tree = append([]TreeEntry{}, p.Request.Tree...)
+		mutate(&copy)
+		if _, err := w.CreateTree(context.Background(), fence, copy); err != ErrPublication {
+			t.Fatal("scope escaped")
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatal("invalid plan reached network")
 	}
 }

@@ -17,22 +17,21 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/forge"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 )
 
 var ErrGate = errors.New("merge gate observation unavailable or denied")
 
-const repository = "os-santiago/homedir"
-
 type Client struct {
-	token, base string
-	http        *http.Client
+	token, base, repository string
+	http                    *http.Client
 }
 
 func New(credential forge.Credential) (*Client, error) {
-	if credential.Repository != repository {
+	if !project.Supported(credential.Repository) {
 		return nil, ErrGate
 	}
-	if _, e := forge.New(credential, repository); e != nil {
+	if _, e := forge.New(credential, credential.Repository); e != nil {
 		return nil, ErrGate
 	}
 	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DisableCompression: true,
@@ -40,7 +39,7 @@ func New(credential forge.Credential) (*Client, error) {
 		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}},
 		TLSNextProto:        map[string]func(string, *tls.Conn) http.RoundTripper{},
 		TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 5 * time.Second, MaxResponseHeaderBytes: 8192}
-	return &Client{credential.Token, "https://api.github.com", &http.Client{Transport: transport, Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	return &Client{token: credential.Token, base: "https://api.github.com", repository: credential.Repository, http: &http.Client{Transport: transport, Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 // A GraphQL POST below carries a fixed query, never a mutation. Public entry
@@ -81,5 +80,6 @@ func (c *Client) read(ctx context.Context, path string, body []byte, out any) er
 	}
 	return nil
 }
-func repoPath(suffix string) string { return "/repos/" + repository + suffix }
-func number(n int) string           { return strconv.Itoa(n) }
+func number(n int) string { return strconv.Itoa(n) }
+
+func (c *Client) repoPath(suffix string) string { return "/repos/" + c.repository + suffix }

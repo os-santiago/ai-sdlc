@@ -75,7 +75,8 @@ func CurrentPublishedProof(ctx context.Context, db *store.DB, load verificationf
 		return deny()
 	}
 	current, e := execution.PublicationSnapshot(ctx, db, p, config, generated)
-	if e != nil || current.Revision != c.IssueRevision || !verification.SelectLocaleRecipe(current.Issue.Body) {
+	_, selected := verification.SelectRecipe(c.Repository, current.Issue.Body)
+	if e != nil || current.Revision != c.IssueRevision || !selected {
 		return deny()
 	}
 	latest, latestConfig, latestProfile, e := load()

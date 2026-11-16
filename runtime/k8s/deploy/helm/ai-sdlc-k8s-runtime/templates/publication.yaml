@@ -6,8 +6,8 @@
 {{- fail "publication requires verification and independent review" }}
 {{- end }}
 {{- $policy := .Values.authority.policyJSON | fromJson }}
-{{- if ne $policy.repository "os-santiago/homedir" }}
-{{- fail "publication supports only the reviewed Homedir pilot" }}
+{{- if not (has $policy.repository (list "os-santiago/homedir" "os-santiago/saferus")) }}
+{{- fail "publication supports only reviewed Homedir or Saferus" }}
 {{- end }}
 {{- if .Values.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1

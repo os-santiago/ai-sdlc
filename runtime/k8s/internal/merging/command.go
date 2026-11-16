@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
@@ -39,7 +40,7 @@ type Command struct {
 func (c Command) ID() string { raw, _ := json.Marshal(c); return "merge-" + authority.Digest(raw) }
 func Verify(p authority.Policy, receipt authority.Receipt, raw []byte, now time.Time) (Command, error) {
 	var c Command
-	if len(raw) == 0 || len(raw) > 16384 || authority.DecodeStrict(raw, &c) != nil || c.Version != Version || c.Repository != "os-santiago/homedir" || p.Repository != c.Repository || p.Autonomy != "auto-merge-low" || c.AuthorityRevision != p.Revision() || !publicationID.MatchString(c.PublicationID) || c.IssueNumber < 1 || c.IssueNumber > 2147483647 || c.PullRequest < 1 || c.PullRequest > 2147483647 || !branch.MatchString(c.Branch) || receipt.ID != c.ID() {
+	if len(raw) == 0 || len(raw) > 16384 || authority.DecodeStrict(raw, &c) != nil || c.Version != Version || !project.Supported(c.Repository) || p.Repository != c.Repository || p.Autonomy != "auto-merge-low" || c.AuthorityRevision != p.Revision() || !publicationID.MatchString(c.PublicationID) || c.IssueNumber < 1 || c.IssueNumber > 2147483647 || c.PullRequest < 1 || c.PullRequest > 2147483647 || !branch.MatchString(c.Branch) || receipt.ID != c.ID() {
 		return Command{}, ErrMerge
 	}
 	for _, sha := range []string{c.HeadSHA, c.BaseSHA, c.TreeSHA} {

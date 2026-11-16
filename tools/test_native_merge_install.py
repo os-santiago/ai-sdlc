@@ -13,7 +13,7 @@ class NativeMergeInstallTests(unittest.TestCase):
         return dict(copy.deepcopy(native.BODY), id=999, source=native.floor.REPOSITORY, source_type='Repository')
 
     def fake(self, records, calls, lose=False, duplicate=False):
-        def request(method, path, body=None):
+        def request(method, path, body=None, repository=native.floor.REPOSITORY):
             calls.append((method, path))
             if method == 'POST':
                 self.assertEqual(body, native.BODY)
@@ -67,7 +67,7 @@ class NativeMergeInstallTests(unittest.TestCase):
     def test_concurrent_stricter_old_policy_survives_and_duplicate_create_blocks(self):
         records, calls = [{'id': 9071701, 'name': 'Old', 'approvals': 0}], []
         fake = self.fake(records, calls)
-        def request(method, path, body=None):
+        def request(method, path, body=None, repository=native.floor.REPOSITORY):
             if method == 'POST':
                 records[0]['approvals'] = 2
             return fake(method, path, body)
@@ -105,7 +105,7 @@ class NativeMergeInstallTests(unittest.TestCase):
             def sync(fd):
                 synced.append(Path(os.readlink('/proc/self/fd/' + str(fd))))
                 fsync(fd)
-            def request(method, path, body=None):
+            def request(method, path, body=None, repository=native.floor.REPOSITORY):
                 if method == 'POST':
                     self.assertIn(state.parent, synced)
                     self.assertIn(Path(tmp), synced)
@@ -126,6 +126,41 @@ class NativeMergeInstallTests(unittest.TestCase):
                 with self.assertRaises(OSError):
                     native.reconcile(Path(tmp))
                 request.assert_not_called()
+
+    def test_saferus_additive_install_and_cross_repository_receipt_block(self):
+        repo = 'os-santiago/saferus'
+        manifest, body, base, _ = native.configuration(repo)
+        original = {'id': 27343088, 'name': 'reviewed-main', 'humanApprovals': 1}
+        records, writes = [copy.deepcopy(original)], []
+        def request(method, path, value=None, repository=native.floor.REPOSITORY):
+            self.assertEqual(repository, repo)
+            self.assertTrue(path.startswith(base))
+            if method == 'POST':
+                self.assertEqual(value, body)
+                writes.append(method)
+                records.append(dict(copy.deepcopy(body), id=999, source=repo, source_type='Repository'))
+                return copy.deepcopy(records[-1])
+            if '?' in path:
+                return copy.deepcopy(records)
+            return copy.deepcopy(records[-1])
+        with tempfile.TemporaryDirectory() as tmp, patch.object(native, 'request', side_effect=request) as api:
+            policy = native.reconcile(tmp, repo)
+            self.assertEqual(native.reconcile(tmp, repo), policy)
+            self.assertEqual(policy['Repository'], repo)
+            self.assertEqual(policy['Required'], [{'Context':'quality', 'AppID':15368}])
+            self.assertEqual(records[0], original)
+            self.assertEqual(writes, ['POST'])
+            calls = api.call_count
+            with self.assertRaises(ValueError):
+                native.reconcile(tmp, 'os-santiago/homedir')
+            self.assertEqual(api.call_count, calls)
+            with self.assertRaises(ValueError):
+                native.reconcile(tmp, 'other/repo')
+            self.assertEqual(api.call_count, calls)
+        with patch.object(native.subprocess, 'run') as run:
+            with self.assertRaises(ValueError):
+                native.request('POST', native.BASE, native.BODY, repository=repo)
+            run.assert_not_called()
 
 
 if __name__ == '__main__':

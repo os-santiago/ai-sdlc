@@ -46,7 +46,7 @@ func expected(c publication.Command, f store.PublishedRecord) (mergegate.Expecte
 	if authority.DecodeStrict(f.Proof, &proof) != nil || authority.DecodeStrict(f.Effects, &effects) != nil || len(effects) != 4 || proof.PublicationID != c.ID() {
 		return mergegate.Expected{}, ErrMerge
 	}
-	return mergegate.Expected{PullRequest: proof.PullRequest, HeadSHA: proof.CommitSHA, BaseSHA: c.SourceSHA, TreeSHA: effects[0].Receipt.SHA, Branch: proof.Branch}, nil
+	return mergegate.Expected{Repository: c.Repository, PullRequest: proof.PullRequest, HeadSHA: proof.CommitSHA, BaseSHA: c.SourceSHA, TreeSHA: effects[0].Receipt.SHA, Branch: proof.Branch}, nil
 }
 func sameGate(a, b mergegate.Observation) bool {
 	return a.Ready && b.Ready && !a.MergeAuthorized && !b.MergeAuthorized && len(a.Reasons) == 0 && len(b.Reasons) == 0 && a.Expected == b.Expected && a.PolicySHA256 == b.PolicySHA256 && a.ChecksSHA256 == b.ChecksSHA256 && a.ReviewsSHA256 == b.ReviewsSHA256

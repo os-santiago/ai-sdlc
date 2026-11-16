@@ -97,7 +97,7 @@ func TestCompilerIsolatesOracleAndCandidateInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := Command{CandidateID: "execution-" + strings.Repeat("a", 64), Recipe: LocaleRecipe, RecipeRevision: RecipeRevision(), SourceSHA: source.SourceSHA, CandidateTreeSHA256: inputs.delta.CandidateTreeSHA256, DeltaSHA256: workspacebundle.Digest(raw), ExpiresAt: time.Now().Add(time.Minute).UnixMilli()}
+	command := Command{Repository: "os-santiago/homedir", CandidateID: "execution-" + strings.Repeat("a", 64), Recipe: LocaleRecipe, RecipeRevision: RecipeRevision(), SourceSHA: source.SourceSHA, CandidateTreeSHA256: inputs.delta.CandidateTreeSHA256, DeltaSHA256: workspacebundle.Digest(raw), ExpiresAt: time.Now().Add(time.Minute).UnixMilli()}
 	w, err := Compile(command, inputs, "example/runner@sha256:"+strings.Repeat("b", 64), time.Now())
 	if err != nil {
 		t.Fatal(err)

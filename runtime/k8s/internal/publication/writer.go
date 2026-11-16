@@ -16,6 +16,7 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/forge"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
@@ -34,7 +35,7 @@ type WriteFence func(context.Context, string) error
 var pilotBranch = regexp.MustCompile(`^ai-sdlc/issue-([1-9][0-9]{0,9})-[a-f0-9]{32}$`)
 
 func NewWriter(credential forge.Credential) (*Writer, error) {
-	if credential.Repository != "os-santiago/homedir" {
+	if !project.Supported(credential.Repository) {
 		return nil, ErrPublication
 	}
 	if _, e := forge.New(credential, credential.Repository); e != nil {
@@ -51,7 +52,7 @@ func NewWriter(credential forge.Credential) (*Writer, error) {
 // Exactly one non-replayable POST. No response body, credential, URL or generated
 // source appears in an error. A non-201 response is not proof that nothing happened.
 func (w *Writer) post(ctx context.Context, fence WriteFence, suffix string, value, out any) error {
-	if w == nil || w.http == nil || fence == nil || w.repository != "os-santiago/homedir" {
+	if w == nil || w.http == nil || fence == nil || !project.Supported(w.repository) {
 		return ErrPublication
 	}
 	switch suffix {
@@ -97,26 +98,39 @@ func (w *Writer) post(ctx context.Context, fence WriteFence, suffix string, valu
 	}
 	return nil
 }
-func validatePlan(p TreePlan) (int, error) {
+func validatePlan(repository string, p TreePlan) (int, error) {
+	count := 2
+	if repository == project.Saferus {
+		count = 3
+	}
+	if !project.Supported(repository) || p.Repository != repository {
+		return 0, ErrPublication
+	}
 	match := pilotBranch.FindStringSubmatch(p.Branch)
 	if match == nil {
 		return 0, ErrPublication
 	}
 	n, e := strconv.Atoi(match[1])
-	if e != nil || n > 2147483647 || p.CommitMessage != "fix(ai-sdlc): address issue #"+match[1]+" [skip release]" || !workspacebundle.ValidSourceSHA(p.Request.BaseTree) || !workspacebundle.ValidSourceSHA(p.ExpectedTreeSHA) || len(p.Request.Tree) != 2 {
+	if e != nil || n > 2147483647 || p.CommitMessage != "fix(ai-sdlc): address issue #"+match[1]+" [skip release]" || !workspacebundle.ValidSourceSHA(p.Request.BaseTree) || !workspacebundle.ValidSourceSHA(p.ExpectedTreeSHA) || len(p.Request.Tree) != count {
 		return 0, ErrPublication
 	}
 	paths := map[string]bool{}
 	for _, v := range p.Request.Tree {
-		if (v.Path != verification.LocaleSource && v.Path != verification.LocaleNewTest) || paths[v.Path] || v.Mode != "100644" || v.Type != "blob" || len(v.Content) == 0 || len(v.Content) > 512*1024 || !utf8.ValidString(v.Content) || strings.ContainsRune(v.Content, 0) {
+		if !verification.AllowedPublicationPath(repository, v.Path) || paths[v.Path] || v.Mode != "100644" || v.Type != "blob" || len(v.Content) == 0 || len(v.Content) > 512*1024 || !utf8.ValidString(v.Content) || strings.ContainsRune(v.Content, 0) {
 			return 0, ErrPublication
 		}
 		paths[v.Path] = true
 	}
 	return n, nil
 }
+func (w *Writer) validatePlan(p TreePlan) (int, error) {
+	if w == nil {
+		return 0, ErrPublication
+	}
+	return validatePlan(w.repository, p)
+}
 func (w *Writer) CreateTree(ctx context.Context, fence WriteFence, p TreePlan) (string, error) {
-	if _, e := validatePlan(p); e != nil {
+	if _, e := w.validatePlan(p); e != nil {
 		return "", e
 	}
 	var result struct {
@@ -143,7 +157,7 @@ type commitRequest struct {
 }
 
 func (w *Writer) CreateCommit(ctx context.Context, fence WriteFence, p TreePlan, sourceSHA string, date time.Time) (string, error) {
-	if _, e := validatePlan(p); e != nil || !workspacebundle.ValidSourceSHA(sourceSHA) || date.IsZero() || date.Nanosecond() != 0 || date.Before(time.Now().Add(-time.Hour)) || date.After(time.Now().Add(time.Minute)) {
+	if _, e := w.validatePlan(p); e != nil || !workspacebundle.ValidSourceSHA(sourceSHA) || date.IsZero() || date.Nanosecond() != 0 || date.Before(time.Now().Add(-time.Hour)) || date.After(time.Now().Add(time.Minute)) {
 		return "", ErrPublication
 	}
 	person := commitPerson{"Sergio Canales", "sergio.canales.e@gmail.com", date.UTC().Format(time.RFC3339)}
@@ -167,7 +181,7 @@ func (w *Writer) CreateCommit(ctx context.Context, fence WriteFence, p TreePlan,
 	return result.SHA, nil
 }
 func (w *Writer) CreateBranch(ctx context.Context, fence WriteFence, p TreePlan, commit string) error {
-	if _, e := validatePlan(p); e != nil || !workspacebundle.ValidSourceSHA(commit) {
+	if _, e := w.validatePlan(p); e != nil || !workspacebundle.ValidSourceSHA(commit) {
 		return ErrPublication
 	}
 	ref := "refs/heads/" + p.Branch
@@ -194,7 +208,7 @@ type PublishedPullRequest struct {
 }
 
 func (w *Writer) CreatePullRequest(ctx context.Context, fence WriteFence, p TreePlan, sourceSHA, commit, proofDigest string) (PublishedPullRequest, error) {
-	number, e := validatePlan(p)
+	number, e := w.validatePlan(p)
 	if e != nil || !workspacebundle.ValidSourceSHA(sourceSHA) || !workspacebundle.ValidSourceSHA(commit) || !workspacebundle.ValidDigest(proofDigest) {
 		return PublishedPullRequest{}, ErrPublication
 	}

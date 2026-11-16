@@ -175,7 +175,7 @@ func Run(ctx context.Context, db *store.DB, load PolicyLoader, id string, client
 		return proof, ControllerError{stage}
 	}
 	stage = "comparison"
-	if verification.Compare(results.Baseline, results.Candidate, results.Reference) != nil {
+	if verification.CompareRecipe(c.Recipe, results.Baseline, results.Candidate, results.Reference) != nil {
 		return proof, ControllerError{stage}
 	}
 	if fence() != nil {

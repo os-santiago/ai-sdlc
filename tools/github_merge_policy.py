@@ -14,6 +14,20 @@ if (REPOSITORY != 'os-santiago/homedir' or RULESET != 9071701
     raise ValueError('Unsupported merge policy scope')
 
 
+def manifest_for(repository):
+    names = {'os-santiago/homedir': ('homedir', 9071701),
+             'os-santiago/saferus': ('saferus', 27343088)}
+    if repository not in names:
+        raise ValueError('Unsupported reviewed repository')
+    name, ruleset = names[repository]
+    value = json.loads((Path(__file__).resolve().parents[1] / f'runtime/k8s/internal/mergegate/{name}-policy.json').read_text())
+    if (value['repository'] != repository or value['rulesetID'] != ruleset
+            or value['strictChecks'] is not True or value['resolveThreads'] is not True
+            or value['humanApprovals'] != 0 or value['bypassActors'] != []):
+        raise ValueError('Unsupported merge policy scope')
+    return value
+
+
 def desired(current):
     """Preserve all unrelated rules and fail closed on scope/approval drift."""
     if (current.get('id') != RULESET or current.get('source') != REPOSITORY

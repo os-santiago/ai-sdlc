@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
 
@@ -48,7 +49,7 @@ func ValidateMode() error {
 func MergeEnabled() bool { return ValidateMode() == nil && os.Getenv("AI_SDLC_MERGE") == "true" }
 func CandidateAutonomy(p authority.Policy) bool {
 	if MergeEnabled() {
-		return p.Repository == "os-santiago/homedir" && p.Autonomy == "auto-merge-low"
+		return project.Supported(p.Repository) && p.Autonomy == "auto-merge-low"
 	}
 	return p.Autonomy == "auto-pr"
 }

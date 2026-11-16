@@ -171,7 +171,7 @@ def identity_material(provider, image, repository, environment):
 def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False, verification=False, publication=False, merge=False):
     if merge and not publication:
         raise ValueError('Merge requires verified publication')
-    if publication and (not candidate or not verification or repository != 'os-santiago/homedir'):
+    if publication and (not candidate or not verification or repository not in ('os-santiago/homedir', 'os-santiago/saferus')):
         raise ValueError('Invalid publication authority scope')
     image = lock['image']['repository'] + '@' + lock['migrator']['digest']
     material = identity_material(provider, image, repository, environment)
@@ -258,8 +258,8 @@ def configure_github_client(kubectl, cluster_uid, repository, refresh=False):
 
 def configure_publication_client(kubectl, cluster_uid, repository, auth, refresh=False):
     name = 'ai-sdlc-publication-client'
-    if repository != 'os-santiago/homedir':
-        raise ValueError('Publication supports only the reviewed Homedir pilot')
+    if repository not in ('os-santiago/homedir', 'os-santiago/saferus'):
+        raise ValueError('Publication supports only reviewed Homedir or Saferus')
     if owned_secret(kubectl, name, cluster_uid) is None and auth != 'gh-cli':
         raise ValueError('Publication needs an explicitly imported client via --github-auth gh-cli')
     api = SimpleNamespace(owned_secret=owned_secret, read_resource=read_resource,
@@ -305,8 +305,8 @@ def main(argv=None):
     parser.add_argument('--repository')
     parser.add_argument('--environment')
     parser.add_argument('--profile', choices=['maintenance', 'shadow', 'candidate', 'verification'])
-    parser.add_argument('--merge', action='store_true', default=None, help='Enable low-risk Homedir merge after authenticated required checks')
-    parser.add_argument('--publication', action='store_true', default=None, help='Enable signed verified Homedir PR publication; requires independent review')
+    parser.add_argument('--merge', action='store_true', default=None, help='Enable low-risk reviewed-repository merge after authenticated required checks')
+    parser.add_argument('--publication', action='store_true', default=None, help='Enable signed verified reviewed-repository PR publication; requires independent review')
     parser.add_argument('--independent-review', action='store_true', default=None, help='Enable isolated read-only review after behavior verification')
     parser.add_argument('--github-auth', choices=['none', 'gh-cli'], default='none')
     parser.add_argument('--refresh-github-credential', action='store_true')
@@ -325,8 +325,8 @@ def main(argv=None):
         raise ValueError('Merge option requires an installation scope')
     if args.merge and args.command == 'local' and args.github_auth != 'gh-cli':
         raise ValueError('Merge installation requires gh-cli authentication for native protection')
-    if args.publication and (args.repository != 'os-santiago/homedir' or not args.independent_review or (args.command in ('plan', 'local') and args.profile != 'verification')):
-        raise ValueError('Publication requires Homedir, verification and independent review')
+    if args.publication and (args.repository not in ('os-santiago/homedir', 'os-santiago/saferus') or not args.independent_review or (args.command in ('plan', 'local') and args.profile != 'verification')):
+        raise ValueError('Publication requires a reviewed repository, verification and independent review')
     if args.publication is not None and args.command not in ('plan', 'local', 'status', 'credentials', 'sandbox'):
         raise ValueError('Publication option requires an installation scope')
     if args.independent_review and args.command in ('plan', 'local') and args.profile != 'verification':
@@ -474,7 +474,7 @@ def main(argv=None):
         run(kubectl + ['create', '-f', '-'], input=json.dumps(secret), stdout=subprocess.DEVNULL)
     if args.merge:
         import github_merge_install
-        native_policy = github_merge_install.reconcile(state)
+        native_policy = github_merge_install.reconcile(state, args.repository)
         execution_values['merge']['configJSON'] = json.dumps(native_policy, sort_keys=True)
     public_values = configure_identities(kubectl, provider, image_lock(args.images),
                                          cluster_uid, args.repository, args.environment,

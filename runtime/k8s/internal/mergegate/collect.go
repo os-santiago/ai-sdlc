@@ -9,12 +9,14 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
 // Expected must come from a checked terminal publication record, not an issue
 // field or unauthenticated caller. This collector alone does not verify it.
 type Expected struct {
+	Repository                        string
 	PullRequest                       int
 	HeadSHA, BaseSHA, TreeSHA, Branch string
 }
@@ -25,17 +27,34 @@ type RequiredCheck struct {
 
 // Policy is reviewed installation configuration, outside generated workspaces.
 type Policy struct {
-	Name      string `json:"Name,omitempty"`
-	RulesetID int
-	Required  []RequiredCheck
+	Repository string `json:"Repository"`
+	Name       string `json:"Name,omitempty"`
+	RulesetID  int
+	Required   []RequiredCheck
 }
 
 //go:embed homedir-policy.json
 var pilotManifest []byte
 
+//go:embed saferus-policy.json
+var saferusManifest []byte
+
 func PilotPolicy() Policy {
+	return PolicyForRepository(project.Homedir)
+}
+
+func PolicyForRepository(repository string) Policy {
+	var raw []byte
+	switch repository {
+	case project.Homedir:
+		raw = pilotManifest
+	case project.Saferus:
+		raw = saferusManifest
+	default:
+		return Policy{}
+	}
 	var p Policy
-	if json.Unmarshal(pilotManifest, &p) != nil {
+	if json.Unmarshal(raw, &p) != nil {
 		return Policy{}
 	}
 	return p
@@ -55,7 +74,7 @@ type Observation struct {
 var branch = regexp.MustCompile(`^ai-sdlc/issue-[1-9][0-9]{0,9}-[a-f0-9]{32}$`)
 
 func (p Policy) valid() bool {
-	if p.RulesetID <= 0 || len(p.Required) < 1 || len(p.Required) > 16 {
+	if !project.Supported(p.Repository) || p.RulesetID <= 0 || len(p.Required) < 1 || len(p.Required) > 16 {
 		return false
 	}
 	seen := map[string]bool{}
@@ -82,18 +101,18 @@ type pull struct {
 	}
 }
 
-func (p pull) matches(e Expected) bool {
+func (p pull) matches(e Expected, repository string) bool {
 	return p.Number == e.PullRequest && p.State == "open" && p.Draft != nil && !*p.Draft && p.Merged != nil && !*p.Merged && p.Head.SHA == e.HeadSHA && p.Head.Ref == e.Branch && p.Head.Repo.FullName == repository && p.Base.SHA == e.BaseSHA && p.Base.Ref == "main" && p.Base.Repo.FullName == repository && p.Base.Repo.DefaultBranch == "main"
 }
 func (c *Client) Collect(ctx context.Context, e Expected, p Policy) (Observation, error) {
 	deny := func() (Observation, error) { return Observation{}, ErrGate }
-	if c == nil || c.http == nil || e.PullRequest < 1 || e.PullRequest > 2147483647 || !workspacebundle.ValidSourceSHA(e.HeadSHA) || !workspacebundle.ValidSourceSHA(e.BaseSHA) || !workspacebundle.ValidSourceSHA(e.TreeSHA) || !branch.MatchString(e.Branch) || !p.valid() {
+	if c == nil || c.http == nil || !project.Supported(c.repository) || p.Repository != c.repository || e.Repository != c.repository || e.PullRequest < 1 || e.PullRequest > 2147483647 || !workspacebundle.ValidSourceSHA(e.HeadSHA) || !workspacebundle.ValidSourceSHA(e.BaseSHA) || !workspacebundle.ValidSourceSHA(e.TreeSHA) || !branch.MatchString(e.Branch) || !p.valid() {
 		return deny()
 	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	var first pull
-	if c.read(ctx, repoPath("/pulls/"+number(e.PullRequest)), nil, &first) != nil || !first.matches(e) {
+	if c.read(ctx, c.repoPath("/pulls/"+number(e.PullRequest)), nil, &first) != nil || !first.matches(e, c.repository) {
 		return deny()
 	}
 	reasons := map[string]bool{}
@@ -105,7 +124,7 @@ func (c *Client) Collect(ctx context.Context, e Expected, p Policy) (Observation
 		Tree    struct{ SHA string }
 		Parents []struct{ SHA string }
 	}
-	if c.read(ctx, repoPath("/git/commits/"+e.HeadSHA), nil, &commit) != nil || commit.SHA != e.HeadSHA || commit.Tree.SHA != e.TreeSHA || len(commit.Parents) != 1 || commit.Parents[0].SHA != e.BaseSHA {
+	if c.read(ctx, c.repoPath("/git/commits/"+e.HeadSHA), nil, &commit) != nil || commit.SHA != e.HeadSHA || commit.Tree.SHA != e.TreeSHA || len(commit.Parents) != 1 || commit.Parents[0].SHA != e.BaseSHA {
 		return deny()
 	}
 	policyDigest, required, safe, err := c.nativePolicy(ctx, p)
@@ -146,7 +165,7 @@ func (c *Client) Collect(ctx context.Context, e Expected, p Policy) (Observation
 		return deny()
 	}
 	var latest pull
-	if c.read(ctx, repoPath("/pulls/"+number(e.PullRequest)), nil, &latest) != nil || !latest.matches(e) {
+	if c.read(ctx, c.repoPath("/pulls/"+number(e.PullRequest)), nil, &latest) != nil || !latest.matches(e, c.repository) {
 		return deny()
 	}
 	if latest.Mergeable == nil || !*latest.Mergeable || latest.MergeableState != "clean" {

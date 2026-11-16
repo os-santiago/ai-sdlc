@@ -27,10 +27,10 @@ type ruleset struct {
 func (c *Client) nativePolicy(ctx context.Context, p Policy) (string, []RequiredCheck, bool, error) {
 	var set ruleset
 	var effective []rule
-	if c.read(ctx, repoPath("/rulesets/"+number(p.RulesetID)), nil, &set) != nil || c.read(ctx, repoPath("/rules/branches/main"), nil, &effective) != nil {
+	if c.read(ctx, c.repoPath("/rulesets/"+number(p.RulesetID)), nil, &set) != nil || c.read(ctx, c.repoPath("/rules/branches/main"), nil, &effective) != nil {
 		return "", nil, false, ErrGate
 	}
-	if (p.Name != "" && set.Name != p.Name) || set.ID != p.RulesetID || set.Target != "branch" || set.Enforcement != "active" || set.Source != repository || set.SourceType != "Repository" || set.Bypass == nil || set.Conditions.Ref.Exclude == nil || len(set.Conditions.Ref.Exclude) != 0 || len(set.Conditions.Ref.Include) == 0 || len(set.Rules) == 0 || len(set.Rules) > 32 || len(effective) == 0 || len(effective) > 32 {
+	if (p.Name != "" && set.Name != p.Name) || set.ID != p.RulesetID || set.Target != "branch" || set.Enforcement != "active" || set.Source != c.repository || set.SourceType != "Repository" || set.Bypass == nil || set.Conditions.Ref.Exclude == nil || len(set.Conditions.Ref.Exclude) != 0 || len(set.Conditions.Ref.Include) == 0 || len(set.Rules) == 0 || len(set.Rules) > 32 || len(effective) == 0 || len(effective) > 32 {
 		return "", nil, false, ErrGate
 	}
 	applies := false
@@ -50,7 +50,7 @@ func (c *Client) nativePolicy(ctx context.Context, p Policy) (string, []Required
 	for _, r := range effective {
 		own := r.RulesetID == p.RulesetID
 		if r.RulesetID <= 0 || (!own && p.Name == "") ||
-			!((r.SourceType == "Repository" && r.Source == repository) || (!own && r.SourceType == "Organization" && r.Source == strings.Split(repository, "/")[0])) {
+			!((r.SourceType == "Repository" && r.Source == c.repository) || (!own && r.SourceType == "Organization" && r.Source == strings.Split(c.repository, "/")[0])) {
 			return "", nil, false, ErrGate
 		}
 		// The dedicated floor must match its configured rules. Other authenticated

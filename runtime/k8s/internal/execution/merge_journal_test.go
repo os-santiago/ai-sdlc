@@ -54,7 +54,7 @@ func mergeJournalFixture(t *testing.T) (*lifecycleFixture, *store.MergeJournal, 
 	f.Material.Policy.Autonomy = "auto-merge-low"
 	now := time.Now()
 	cmd := merging.Command{Version: merging.Version, PublicationID: pub.ID, PublicationRecordSHA256: record.Digest(), GateSHA256: strings.Repeat("e", 64), Repository: original.Repository, IssueNumber: original.IssueNumber, PullRequest: 17, HeadSHA: strings.Repeat("c", 40), BaseSHA: original.SourceSHA, TreeSHA: strings.Repeat("a", 40), Branch: "ai-sdlc/issue-3-" + strings.Repeat("b", 32), AuthorityRevision: f.Material.Policy.Revision(), IssuedAt: now.UnixMilli(), ExpiresAt: now.Add(25 * time.Second).UnixMilli()}
-	gate, _ := json.Marshal(mergegate.Observation{Expected: mergegate.Expected{PullRequest: cmd.PullRequest, HeadSHA: cmd.HeadSHA, BaseSHA: cmd.BaseSHA, TreeSHA: cmd.TreeSHA, Branch: cmd.Branch}, PolicySHA256: strings.Repeat("e", 64), ChecksSHA256: strings.Repeat("f", 64), ReviewsSHA256: strings.Repeat("a", 64), ObservedAt: now, Ready: true, Reasons: []string{}})
+	gate, _ := json.Marshal(mergegate.Observation{Expected: mergegate.Expected{Repository: cmd.Repository, PullRequest: cmd.PullRequest, HeadSHA: cmd.HeadSHA, BaseSHA: cmd.BaseSHA, TreeSHA: cmd.TreeSHA, Branch: cmd.Branch}, PolicySHA256: strings.Repeat("e", 64), ChecksSHA256: strings.Repeat("f", 64), ReviewsSHA256: strings.Repeat("a", 64), ObservedAt: now, Ready: true, Reasons: []string{}})
 	cmd.GateSHA256 = authority.Digest(gate)
 	raw, _ = json.Marshal(cmd)
 	signed, e := f.Material.Identities["release-manager"].Seal(f.Material.Policy, cmd.ID(), "merge-publication", raw)
@@ -112,7 +112,7 @@ func TestMergeJournalBindsPublicationAndExclusiveOwner(t *testing.T) {
 		if json.Unmarshal(r.Gate, &gate) != nil {
 			t.Fatal("gate fixture")
 		}
-		gate.Expected = mergegate.Expected{PullRequest: changed.PullRequest, HeadSHA: changed.HeadSHA, BaseSHA: changed.BaseSHA, TreeSHA: changed.TreeSHA, Branch: changed.Branch}
+		gate.Expected = mergegate.Expected{Repository: changed.Repository, PullRequest: changed.PullRequest, HeadSHA: changed.HeadSHA, BaseSHA: changed.BaseSHA, TreeSHA: changed.TreeSHA, Branch: changed.Branch}
 		gateRaw, _ := json.Marshal(gate)
 		changed.GateSHA256 = authority.Digest(gateRaw)
 		bad := signedMergeRequest(t, f, r, changed, gateRaw)

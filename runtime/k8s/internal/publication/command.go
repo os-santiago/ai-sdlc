@@ -70,7 +70,7 @@ func Verify(p authority.Policy, receipt authority.Receipt, raw []byte, now time.
 // must verify the original worker receipt, current issue/authority and the
 // persisted independent behavior/review evidence before performing any effect.
 func MatchVerification(c Command, v verification.Command) error {
-	if c.VerificationID != v.ID() || c.CandidateID != v.CandidateID || c.WorkItemID != v.WorkItemID || c.Repository != v.Repository || c.IssueNumber != v.IssueNumber || c.Generation != v.Generation || c.IssueRevision != v.IssueRevision || c.SourceSHA != v.SourceSHA || c.DeltaSHA256 != v.DeltaSHA256 || c.CandidateTreeSHA256 != v.CandidateTreeSHA256 || c.AuthorityRevision != v.AuthorityRevision || c.ExpiresAt > v.ExpiresAt || v.Recipe != verification.LocaleRecipe || v.RecipeRevision != verification.RecipeRevision() {
+	if c.VerificationID != v.ID() || c.CandidateID != v.CandidateID || c.WorkItemID != v.WorkItemID || c.Repository != v.Repository || c.IssueNumber != v.IssueNumber || c.Generation != v.Generation || c.IssueRevision != v.IssueRevision || c.SourceSHA != v.SourceSHA || c.DeltaSHA256 != v.DeltaSHA256 || c.CandidateTreeSHA256 != v.CandidateTreeSHA256 || c.AuthorityRevision != v.AuthorityRevision || c.ExpiresAt > v.ExpiresAt || !verification.ValidRecipe(v.Repository, v.Recipe) || v.RecipeRevision != verification.RevisionForRecipe(v.Recipe) {
 		return ErrPublication
 	}
 	return nil
