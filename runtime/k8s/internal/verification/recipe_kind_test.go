@@ -58,7 +58,7 @@ func TestRealVerificationRecipeFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := Command{CandidateID: "execution-" + workspacebundle.Digest(raw), Recipe: LocaleRecipe, RecipeRevision: RecipeRevision(), SourceSHA: source.SourceSHA, CandidateTreeSHA256: delta.CandidateTreeSHA256, DeltaSHA256: workspacebundle.Digest(raw), ExpiresAt: time.Now().Add(3 * time.Minute).UnixMilli()}
+	c := Command{Repository: "os-santiago/homedir", CandidateID: "execution-" + workspacebundle.Digest(raw), Recipe: LocaleRecipe, RecipeRevision: RecipeRevision(), SourceSHA: source.SourceSHA, CandidateTreeSHA256: delta.CandidateTreeSHA256, DeltaSHA256: workspacebundle.Digest(raw), ExpiresAt: time.Now().Add(3 * time.Minute).UnixMilli()}
 	w, err := Compile(c, prepared, in.Image, time.Now())
 	if err != nil {
 		t.Fatal(err)

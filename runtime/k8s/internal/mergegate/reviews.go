@@ -3,6 +3,7 @@ package mergegate
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 type review struct {
@@ -15,11 +16,11 @@ type review struct {
 	CommitID string `json:"commit_id"`
 }
 
-const threadQuery = `query($number:Int!){repository(owner:"os-santiago",name:"homedir"){nameWithOwner pullRequest(number:$number){number headRefOid baseRefOid reviewThreads(first:100){totalCount pageInfo{hasNextPage} nodes{id isResolved}}}}}`
+const threadQuery = `query($number:Int!,$owner:String!,$name:String!){repository(owner:$owner,name:$name){nameWithOwner pullRequest(number:$number){number headRefOid baseRefOid reviewThreads(first:100){totalCount pageInfo{hasNextPage} nodes{id isResolved}}}}}`
 
 func (c *Client) reviews(ctx context.Context, e Expected) (bool, string, error) {
 	var reviews []review
-	if c.read(ctx, repoPath("/pulls/"+number(e.PullRequest)+"/reviews?per_page=100"), nil, &reviews) != nil || reviews == nil || len(reviews) > 100 {
+	if c.read(ctx, c.repoPath("/pulls/"+number(e.PullRequest)+"/reviews?per_page=100"), nil, &reviews) != nil || reviews == nil || len(reviews) > 100 {
 		return false, "", ErrGate
 	}
 	latest := map[int64]review{}
@@ -54,7 +55,7 @@ func (c *Client) reviews(ctx context.Context, e Expected) (bool, string, error) 
 			ready = false
 		}
 	}
-	raw, _ := json.Marshal(map[string]any{"query": threadQuery, "variables": map[string]int{"number": e.PullRequest}})
+	raw, _ := json.Marshal(map[string]any{"query": threadQuery, "variables": map[string]any{"number": e.PullRequest, "owner": strings.Split(c.repository, "/")[0], "name": strings.Split(c.repository, "/")[1]}})
 	var response struct {
 		Errors []json.RawMessage
 		Data   *struct {
@@ -78,7 +79,7 @@ func (c *Client) reviews(ctx context.Context, e Expected) (bool, string, error) 
 			}
 		}
 	}
-	if c.read(ctx, "/graphql", raw, &response) != nil || len(response.Errors) != 0 || response.Data == nil || response.Data.Repository == nil || response.Data.Repository.Name != repository || response.Data.Repository.Pull == nil {
+	if c.read(ctx, "/graphql", raw, &response) != nil || len(response.Errors) != 0 || response.Data == nil || response.Data.Repository == nil || response.Data.Repository.Name != c.repository || response.Data.Repository.Pull == nil {
 		return false, "", ErrGate
 	}
 	p := response.Data.Repository.Pull

@@ -18,10 +18,14 @@ from verify_pod_transport import TransportFixture
 from verify_workspace_bundle import source_bundle, wire
 
 
-def verify(kubectl, binary, repository, revision, candidate, image):
+def verify(kubectl, binary, repository, revision, candidate, image, project="os-santiago/homedir"):
     source = source_bundle(repository, revision)
     paths = ('quarkus-app/src/main/resources/META-INF/resources/js/utils.js',
              'tests/js/utils-locale-fallback.test.js')
+    if project == "os-santiago/saferus":
+        paths = ("web/static/ttl.js", "tests/ttl.test.mjs", "tools/verify_browser.py")
+    elif project != "os-santiago/homedir":
+        raise ValueError("Unsupported reviewed fixture project")
     changes = {}
     for name in paths:
         raw = (candidate / name).read_bytes()
@@ -67,7 +71,7 @@ def verify(kubectl, binary, repository, revision, candidate, image):
             root = Path(directory)
             (root / 'source.json').write_bytes(wire(source))
             control = {'Config': restricted, 'SourceFile': str(root / 'source.json'),
-                       'ReportFile': str(root / 'report.json'), 'Image': image, 'Changes': changes}
+                       'ReportFile': str(root / 'report.json'), 'Image': image, 'Changes': changes, 'Repository': project}
             fd = os.open(root / 'control.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, 'wb') as stream:
                 stream.write(wire(control))
@@ -93,9 +97,10 @@ def main():
     parser.add_argument('--candidate-directory', required=True, type=Path)
     parser.add_argument('--image', required=True)
     parser.add_argument('--report', required=True, type=Path)
+    parser.add_argument('--project', choices=['os-santiago/homedir', 'os-santiago/saferus'], default='os-santiago/homedir')
     args = parser.parse_args()
     result = verify([args.kubectl, '--kubeconfig', args.kubeconfig], args.test_binary,
-                    args.source_repository, args.source_sha, args.candidate_directory, args.image)
+                    args.source_repository, args.source_sha, args.candidate_directory, args.image, args.project)
     args.report.write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result, indent=2))
 

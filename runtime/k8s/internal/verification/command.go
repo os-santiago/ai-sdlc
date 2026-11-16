@@ -44,7 +44,7 @@ func Verify(p authority.Policy, receipt authority.Receipt, raw []byte, now time.
 	if len(raw) == 0 || len(raw) > 16384 || authority.DecodeStrict(raw, &c) != nil {
 		return c, ErrVerification
 	}
-	if c.Version != CommandVersion || !candidateID.MatchString(c.CandidateID) || !workID.MatchString(c.WorkItemID) || c.Repository != p.Repository || c.IssueNumber < 1 || c.IssueNumber > 2147483647 || c.Generation < 1 || !workspacebundle.ValidDigest(c.IssueRevision) || !workspacebundle.ValidSourceSHA(c.SourceSHA) || !workspacebundle.ValidDigest(c.DeltaSHA256) || !workspacebundle.ValidDigest(c.CandidateTreeSHA256) || c.Recipe != LocaleRecipe || c.RecipeRevision != RecipeRevision() || c.AuthorityRevision != p.Revision() || receipt.ID != c.ID() || !time.UnixMilli(c.ExpiresAt).After(now) || time.UnixMilli(c.ExpiresAt).After(now.Add(MaxCommandAge)) || p.VerifyReceipt(receipt, "verifier", "verify-artifact", raw) != nil {
+	if c.Version != CommandVersion || !candidateID.MatchString(c.CandidateID) || !workID.MatchString(c.WorkItemID) || c.Repository != p.Repository || c.IssueNumber < 1 || c.IssueNumber > 2147483647 || c.Generation < 1 || !workspacebundle.ValidDigest(c.IssueRevision) || !workspacebundle.ValidSourceSHA(c.SourceSHA) || !workspacebundle.ValidDigest(c.DeltaSHA256) || !workspacebundle.ValidDigest(c.CandidateTreeSHA256) || !ValidRecipe(c.Repository, c.Recipe) || c.RecipeRevision != RevisionForRecipe(c.Recipe) || c.AuthorityRevision != p.Revision() || receipt.ID != c.ID() || !time.UnixMilli(c.ExpiresAt).After(now) || time.UnixMilli(c.ExpiresAt).After(now.Add(MaxCommandAge)) || p.VerifyReceipt(receipt, "verifier", "verify-artifact", raw) != nil {
 		return Command{}, ErrVerification
 	}
 	return c, nil

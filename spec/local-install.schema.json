@@ -59,7 +59,7 @@
     },
     "publication": {
       "type": "boolean",
-      "description": "Explicit signed verified PR publication; requires Homedir verification and independent review."
+      "description": "Explicit signed verified PR publication; requires a reviewed repository, verification and independent review."
     },
     "merge": {
       "type": "boolean",
@@ -104,7 +104,10 @@
             "const": "verification"
           },
           "repository": {
-            "const": "os-santiago/homedir"
+            "enum": [
+              "os-santiago/homedir",
+              "os-santiago/saferus"
+            ]
           }
         }
       }

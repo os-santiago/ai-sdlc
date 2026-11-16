@@ -12,6 +12,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergewriter"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publication"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/reviewflow"
@@ -37,7 +38,7 @@ func main() {
 	}
 	policy := func() (authority.Policy, intake.Config, string, error) {
 		p, _, e := c.Authority()
-		if e != nil || p.Repository != "os-santiago/homedir" || !bootstrap.PublicationEnabled() {
+		if e != nil || !project.Supported(p.Repository) || !bootstrap.PublicationEnabled() {
 			return p, intake.Config{}, "", publication.ErrPublication
 		}
 		_, profile, e := execution.LoadRuntime(os.Getenv("AI_SDLC_EXECUTION_CONFIG_PATH"))
@@ -60,6 +61,13 @@ func main() {
 		if authority.DecodeStrict(raw, &credential) != nil {
 			return forge.Credential{}, publication.ErrPublication
 		}
+		p, _, e := c.Authority()
+		if e != nil {
+			return forge.Credential{}, publication.ErrPublication
+		}
+		if _, e = forge.New(credential, p.Repository); e != nil {
+			return forge.Credential{}, publication.ErrPublication
+		}
 		return credential, nil
 	}
 	writer := func() (*publication.Writer, error) {
@@ -74,7 +82,7 @@ func main() {
 		if e != nil {
 			return mergeflow.Runtime{}, e
 		}
-		if _, e := mergegate.LoadInstalled("/etc/ai-sdlc/merge/policy.json"); e != nil {
+		if _, e := mergegate.LoadInstalledForRepository("/etc/ai-sdlc/merge/policy.json", value.Repository); e != nil {
 			return mergeflow.Runtime{}, e
 		}
 		gates, e := mergegate.New(value)
@@ -86,9 +94,11 @@ func main() {
 			return mergeflow.Runtime{}, e
 		}
 		return mergeflow.Runtime{DB: c.DB, Policy: policy, Review: review,
-			Identity:   func() (authority.Identity, error) { _, key, e := c.Authority(); return key, e },
-			GatePolicy: func() (mergegate.Policy, error) { return mergegate.LoadInstalled("/etc/ai-sdlc/merge/policy.json") },
-			Gates:      gates, Writer: writer}, nil
+			Identity: func() (authority.Identity, error) { _, key, e := c.Authority(); return key, e },
+			GatePolicy: func() (mergegate.Policy, error) {
+				return mergegate.LoadInstalledForRepository("/etc/ai-sdlc/merge/policy.json", value.Repository)
+			},
+			Gates: gates, Writer: writer}, nil
 	}
 	ready := func(ctx context.Context) error {
 		if e := c.Ready(ctx); e != nil {

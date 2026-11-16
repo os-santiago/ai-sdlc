@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -13,14 +14,20 @@ import (
 )
 
 func fixtureExpected() Expected {
-	return Expected{42, strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40), "ai-sdlc/issue-3-" + strings.Repeat("d", 32)}
+	return Expected{repository, 42, strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40), "ai-sdlc/issue-3-" + strings.Repeat("d", 32)}
 }
 func fixtureCredential() forge.Credential {
 	return forge.Credential{Version: 1, Mode: "gh-cli", Host: "github.com", Repository: repository, ActorID: 42, ActorLogin: "fixture", Token: strings.Repeat("x", 40)}
 }
-func fixtureRules() []map[string]any {
+
+const repository = "os-santiago/homedir"
+
+func repoPath(suffix string) string { return "/repos/" + repository + suffix }
+
+func fixtureRules() []map[string]any { return fixtureRulesFor(PilotPolicy()) }
+func fixtureRulesFor(policy Policy) []map[string]any {
 	required := []map[string]any{}
-	for _, r := range PilotPolicy().Required {
+	for _, r := range policy.Required {
 		required = append(required, map[string]any{"context": r.Context, "integration_id": r.AppID})
 	}
 	return []map[string]any{
@@ -29,6 +36,11 @@ func fixtureRules() []map[string]any {
 	}
 }
 func fixtureAPI(t *testing.T, mode string) (*Client, *atomic.Int32) {
+	return fixtureAPIForRepository(t, mode, repository)
+}
+func fixtureAPIForRepository(t *testing.T, mode, repository string) (*Client, *atomic.Int32) {
+	policy := PolicyForRepository(repository)
+	repoPath := func(suffix string) string { return "/repos/" + repository + suffix }
 	t.Helper()
 	calls := new(atomic.Int32)
 	pulls := new(atomic.Int32)
@@ -38,6 +50,7 @@ func fixtureAPI(t *testing.T, mode string) (*Client, *atomic.Int32) {
 	reviewReads := new(atomic.Int32)
 	threadReads := new(atomic.Int32)
 	expected := fixtureExpected()
+	expected.Repository = repository
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		if r.Header.Get("Authorization") != "Bearer "+fixtureCredential().Token {
@@ -85,24 +98,24 @@ func fixtureAPI(t *testing.T, mode string) (*Client, *atomic.Int32) {
 				tree = strings.Repeat("e", 40)
 			}
 			out = map[string]any{"sha": expected.HeadSHA, "tree": map[string]string{"sha": tree}, "parents": []map[string]string{{"sha": expected.BaseSHA}}}
-		case repoPath("/rulesets/9071701"), repoPath("/rules/branches/main"):
-			rules := fixtureRules()
+		case repoPath("/rulesets/" + strconv.Itoa(policy.RulesetID)), repoPath("/rules/branches/main"):
+			rules := fixtureRulesFor(policy)
 			if mode == "strict-off" {
 				rules[0]["parameters"].(map[string]any)["strict_required_status_checks_policy"] = false
 			}
 			if mode == "threads-rule-off" {
 				rules[1]["parameters"].(map[string]any)["required_review_thread_resolution"] = false
 			}
-			if r.URL.Path == repoPath("/rulesets/9071701") {
+			if r.URL.Path == repoPath("/rulesets/"+strconv.Itoa(policy.RulesetID)) {
 				bypass := []any{}
 				if mode == "bypass" || mode == "late-protection" && sets.Load() > 0 {
 					bypass = append(bypass, map[string]any{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "pull_request"})
 				}
 				sets.Add(1)
-				out = map[string]any{"id": 9071701, "target": "branch", "enforcement": "active", "source": repository, "source_type": "Repository", "bypass_actors": bypass, "conditions": map[string]any{"ref_name": map[string]any{"include": []string{"~DEFAULT_BRANCH"}, "exclude": []string{}}}, "rules": rules}
+				out = map[string]any{"id": policy.RulesetID, "target": "branch", "enforcement": "active", "source": repository, "source_type": "Repository", "bypass_actors": bypass, "conditions": map[string]any{"ref_name": map[string]any{"include": []string{"~DEFAULT_BRANCH"}, "exclude": []string{}}}, "rules": rules}
 			} else {
 				for _, rule := range rules {
-					rule["ruleset_id"] = 9071701
+					rule["ruleset_id"] = policy.RulesetID
 					rule["ruleset_source"] = repository
 					rule["ruleset_source_type"] = "Repository"
 				}
@@ -113,7 +126,7 @@ func fixtureAPI(t *testing.T, mode string) (*Client, *atomic.Int32) {
 				t.Error("unbounded checks")
 			}
 			runs := []map[string]any{}
-			for i, check := range PilotPolicy().Required {
+			for i, check := range policy.Required {
 				runs = append(runs, map[string]any{"id": i + 1, "name": check.Context, "head_sha": expected.HeadSHA, "app": map[string]any{"id": check.AppID}, "status": "completed", "conclusion": "success"})
 			}
 			switch mode {
@@ -126,7 +139,7 @@ func fixtureAPI(t *testing.T, mode string) (*Client, *atomic.Int32) {
 			case "skipped-required":
 				runs[0]["conclusion"] = "skipped"
 			case "missing-check":
-				runs = runs[:2]
+				runs = runs[:len(runs)-1]
 			case "cross-app-check":
 				runs[1]["name"] = runs[0]["name"]
 				runs[1]["app"] = map[string]any{"id": 99}
@@ -199,9 +212,12 @@ func fixtureAPI(t *testing.T, mode string) (*Client, *atomic.Int32) {
 			}
 			var query struct {
 				Query     string
-				Variables map[string]int
+				Variables struct {
+					Number      int
+					Owner, Name string
+				}
 			}
-			if json.NewDecoder(r.Body).Decode(&query) != nil || query.Query != threadQuery || query.Variables["number"] != 42 {
+			if json.NewDecoder(r.Body).Decode(&query) != nil || query.Query != threadQuery || query.Variables.Number != 42 || query.Variables.Owner != "os-santiago" || query.Variables.Name != strings.Split(repository, "/")[1] {
 				t.Error("caller controlled query")
 			}
 			out = map[string]any{"data": map[string]any{"repository": map[string]any{"nameWithOwner": repository, "pullRequest": map[string]any{"number": 42, "headRefOid": expected.HeadSHA, "baseRefOid": expected.BaseSHA, "reviewThreads": map[string]any{"totalCount": 1, "pageInfo": map[string]any{"hasNextPage": mode == "truncated-threads"}, "nodes": []map[string]any{{"id": "thread1", "isResolved": mode != "unresolved-thread" && !(mode == "late-thread" && threadReads.Load() > 0)}}}}}}}
@@ -217,7 +233,9 @@ func fixtureAPI(t *testing.T, mode string) (*Client, *atomic.Int32) {
 		json.NewEncoder(w).Encode(out)
 	}))
 	t.Cleanup(server.Close)
-	c, e := New(fixtureCredential())
+	credential := fixtureCredential()
+	credential.Repository = repository
+	c, e := New(credential)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -265,6 +283,11 @@ func TestGateCannotWriteAndHonorsCancellation(t *testing.T) {
 	if _, e := c.Collect(ctx, fixtureExpected(), PilotPolicy()); e != ErrGate || calls.Load() != 0 {
 		t.Fatal("canceled query reached API")
 	}
+	wrong := fixtureExpected()
+	wrong.Repository = "os-santiago/saferus"
+	if _, e := c.Collect(context.Background(), wrong, PilotPolicy()); e != ErrGate || calls.Load() != 0 {
+		t.Fatal("cross-repository evidence reached API")
+	}
 	p := PilotPolicy()
 	p.Required = nil
 	if _, e := c.Collect(context.Background(), fixtureExpected(), p); e != ErrGate || calls.Load() != 0 {
@@ -274,5 +297,26 @@ func TestGateCannotWriteAndHonorsCancellation(t *testing.T) {
 	credential.Repository = "other/repo"
 	if _, e := New(credential); e != ErrGate {
 		t.Fatal("wrong repository accepted")
+	}
+}
+
+func TestSaferusPolicyAndCredentialScope(t *testing.T) {
+	for _, mode := range []string{"success", "wrong-app", "failed-check", "unresolved-thread", "changes-requested", "missing-check"} {
+		t.Run(mode, func(t *testing.T) {
+			c, calls := fixtureAPIForRepository(t, mode, "os-santiago/saferus")
+			expected := fixtureExpected()
+			expected.Repository = "os-santiago/saferus"
+			r, err := c.Collect(context.Background(), expected, PolicyForRepository("os-santiago/saferus"))
+			if err != nil || r.Ready != (mode == "success") || calls.Load() == 0 {
+				t.Fatal(r, err)
+			}
+			before := calls.Load()
+			if _, err := c.Collect(context.Background(), fixtureExpected(), PolicyForRepository("os-santiago/saferus")); err != ErrGate || calls.Load() != before {
+				t.Fatal("cross-repository evidence reached API")
+			}
+			if _, err := c.Collect(context.Background(), fixtureExpected(), PilotPolicy()); err != ErrGate || calls.Load() != before {
+				t.Fatal("cross-repository policy reached API")
+			}
+		})
 	}
 }

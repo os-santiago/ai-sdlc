@@ -21,18 +21,17 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/forge"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergegate"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
 var ErrMerge = errors.New("merge transport unavailable or denied")
 
-const repository = "os-santiago/homedir"
-
 var branch = regexp.MustCompile(`^ai-sdlc/issue-([1-9][0-9]{0,9})-[a-f0-9]{32}$`)
 
 type Writer struct {
-	token, base string
-	http        *http.Client
+	token, base, repository string
+	http                    *http.Client
 }
 type Fence func(context.Context, string) error
 type Receipt struct {
@@ -45,14 +44,14 @@ type Receipt struct {
 }
 
 func New(credential forge.Credential) (*Writer, error) {
-	if credential.Repository != repository {
+	if !project.Supported(credential.Repository) {
 		return nil, ErrMerge
 	}
-	if _, e := forge.New(credential, repository); e != nil {
+	if _, e := forge.New(credential, credential.Repository); e != nil {
 		return nil, ErrMerge
 	}
 	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DisableCompression: true, DialContext: (&net.Dialer{Timeout: 3 * time.Second, KeepAlive: -1}).DialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}}, TLSNextProto: map[string]func(string, *tls.Conn) http.RoundTripper{}, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 5 * time.Second, MaxResponseHeaderBytes: 8192}
-	return &Writer{credential.Token, "https://api.github.com", &http.Client{Transport: transport, Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	return &Writer{token: credential.Token, base: "https://api.github.com", repository: credential.Repository, http: &http.Client{Transport: transport, Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 // Merge sends exactly one PUT, guarded by the expected head SHA and native
@@ -61,7 +60,7 @@ func New(credential forge.Credential) (*Writer, error) {
 // It does not retry, adopt an already-merged PR, close an issue or deploy.
 func (w *Writer) Merge(ctx context.Context, e mergegate.Expected, issue int, fence Fence) (Receipt, error) {
 	deny := func() (Receipt, error) { return Receipt{}, ErrMerge }
-	if w == nil || w.http == nil || fence == nil || issue < 1 || issue > 2147483647 || e.PullRequest < 1 || e.PullRequest > 2147483647 || e.HeadSHA == e.BaseSHA {
+	if w == nil || w.http == nil || e.Repository != w.repository || !project.Supported(w.repository) || fence == nil || issue < 1 || issue > 2147483647 || e.PullRequest < 1 || e.PullRequest > 2147483647 || e.HeadSHA == e.BaseSHA {
 		return deny()
 	}
 	match := branch.FindStringSubmatch(e.Branch)
@@ -87,7 +86,7 @@ func (w *Writer) Merge(ctx context.Context, e mergegate.Expected, issue int, fen
 		Message string `json:"commit_message"`
 	}{e.HeadSHA, "merge", title, "Refs #" + strconv.Itoa(issue) + "\n\nSigned-off-by: Sergio Canales <sergio.canales.e@gmail.com>"}
 	body, _ := json.Marshal(value)
-	path := "/repos/" + repository + "/pulls/" + strconv.Itoa(e.PullRequest) + "/merge"
+	path := "/repos/" + w.repository + "/pulls/" + strconv.Itoa(e.PullRequest) + "/merge"
 	binding, _ := json.Marshal(struct {
 		Method, Path string
 		Body         json.RawMessage
@@ -108,7 +107,7 @@ func (w *Writer) Merge(ctx context.Context, e mergegate.Expected, issue int, fen
 		Tree         struct{ SHA string }
 		Parents      []struct{ SHA string }
 	}
-	if w.request(ctx, http.MethodGet, "/repos/"+repository+"/git/commits/"+response.SHA, nil, &commit) != nil || commit.SHA != response.SHA || commit.Tree.SHA != e.TreeSHA || len(commit.Parents) != 2 || commit.Parents[0].SHA != e.BaseSHA || commit.Parents[1].SHA != e.HeadSHA || !strings.HasPrefix(commit.Message, title+"\n") {
+	if w.request(ctx, http.MethodGet, "/repos/"+w.repository+"/git/commits/"+response.SHA, nil, &commit) != nil || commit.SHA != response.SHA || commit.Tree.SHA != e.TreeSHA || len(commit.Parents) != 2 || commit.Parents[0].SHA != e.BaseSHA || commit.Parents[1].SHA != e.HeadSHA || !strings.HasPrefix(commit.Message, title+"\n") {
 		return deny()
 	}
 	if ctx.Err() != nil || fence(ctx, digest) != nil {

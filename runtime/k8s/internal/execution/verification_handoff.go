@@ -48,12 +48,13 @@ func HandoffCandidate(ctx context.Context, db *store.DB, load func() (authority.
 	}
 	// Marker parsing is deliberately finite. Full reconstruction remains the
 	// independent verifier's responsibility, never the generator's assertion.
-	if !verification.SelectLocaleRecipe(snapshot.Issue.Body) {
+	recipe, selected := verification.SelectRecipe(command.Repository, snapshot.Issue.Body)
+	if !selected {
 		_ = db.RejectCandidateHandoff(ctx, id, "unsupported-recipe")
 		return false, nil
 	}
 	expires := min(command.ExpiresAt, time.Now().Add(verification.MaxCommandAge).UnixMilli())
-	c := verification.Command{Version: verification.CommandVersion, CandidateID: id, WorkItemID: record.WorkItem, Repository: record.Repository, IssueNumber: command.IssueNumber, Generation: command.Generation, IssueRevision: snapshot.Revision, SourceSHA: command.SourceSHA, DeltaSHA256: record.Record.DeltaSHA256, CandidateTreeSHA256: record.Record.CandidateTreeSHA256, Recipe: verification.LocaleRecipe, RecipeRevision: verification.RecipeRevision(), AuthorityRevision: p.Revision(), ExpiresAt: expires}
+	c := verification.Command{Version: verification.CommandVersion, CandidateID: id, WorkItemID: record.WorkItem, Repository: record.Repository, IssueNumber: command.IssueNumber, Generation: command.Generation, IssueRevision: snapshot.Revision, SourceSHA: command.SourceSHA, DeltaSHA256: record.Record.DeltaSHA256, CandidateTreeSHA256: record.Record.CandidateTreeSHA256, Recipe: recipe, RecipeRevision: verification.RevisionForRecipe(recipe), AuthorityRevision: p.Revision(), ExpiresAt: expires}
 	if verification.MatchLedger(c, record) != nil {
 		return false, ErrAuthority
 	}

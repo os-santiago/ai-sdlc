@@ -82,7 +82,8 @@ func currentProof(ctx context.Context, db *store.DB, load PolicyLoader, id strin
 	if errors.Is(err, store.ErrObservationUnavailable) {
 		return unavailable()
 	}
-	if err != nil || snapshot.Revision != c.IssueRevision || !verification.SelectLocaleRecipe(snapshot.Issue.Body) {
+	_, selected := verification.SelectRecipe(c.Repository, snapshot.Issue.Body)
+	if err != nil || snapshot.Revision != c.IssueRevision || !selected {
 		return reject()
 	}
 	latest, latestConfig, latestProfile, err := load()

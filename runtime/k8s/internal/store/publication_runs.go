@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 )
 
 var publicationIDPattern = regexp.MustCompile(`^publication-[a-f0-9]{64}$`)
@@ -26,7 +27,7 @@ type PublicationClaim struct {
 // InsertPublication is called only by the signed inbox, in the same transaction
 // as its receipt. It also binds the verifier's committed handoff and passed proof.
 func InsertPublication(ctx context.Context, tx *sql.Tx, r PublicationRequest, reviewDigest, behaviorDigest string) error {
-	if tx == nil || AssertComponent(ctx, tx, "release-manager") != nil || !publicationIDPattern.MatchString(r.ID) || r.Repository != "os-santiago/homedir" || authority.Digest(r.Payload) != r.PayloadDigest || !modelDigest.MatchString(reviewDigest) || !modelDigest.MatchString(behaviorDigest) {
+	if tx == nil || AssertComponent(ctx, tx, "release-manager") != nil || !publicationIDPattern.MatchString(r.ID) || !project.Supported(r.Repository) || authority.Digest(r.Payload) != r.PayloadDigest || !modelDigest.MatchString(reviewDigest) || !modelDigest.MatchString(behaviorDigest) {
 		return ErrExecution
 	}
 	var review, behavior []byte

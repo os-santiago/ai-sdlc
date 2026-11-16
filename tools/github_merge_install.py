@@ -17,12 +17,23 @@ BASE = 'repos/os-santiago/homedir/rulesets'
 HASH = hashlib.sha256(json.dumps(BODY, sort_keys=True).encode()).hexdigest()
 
 
-def validate(value):
+def configuration(repository):
+    manifest = floor.manifest_for(repository)
+    name = repository.split('/')[1]
+    body = json.loads((ROOT / f'runtime/k8s/deploy/github/{name}-merge-ruleset.json').read_text())
+    return (manifest, body, f'repos/{repository}/rulesets',
+            hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest())
+
+
+def validate(value, repository=floor.REPOSITORY):
+    manifest, body, _, _ = configuration(repository)
+    required = {(c['Context'], c['AppID']) for c in manifest['required']}
+
     if (type(value.get('id')) is not int or value['id'] <= 0
-            or value.get('name') != NAME or value.get('source') != floor.REPOSITORY
+            or value.get('name') != NAME or value.get('source') != repository
             or value.get('source_type') != 'Repository' or value.get('target') != 'branch'
             or value.get('enforcement') != 'active' or value.get('bypass_actors') != []
-            or value.get('conditions') != BODY['conditions']):
+            or value.get('conditions') != body['conditions']):
         raise ValueError('Dedicated native merge protection has invalid scope')
     rules = value.get('rules', [])
     if not isinstance(rules, list) or len(rules) != 2 or {r.get('type') for r in rules} != {'pull_request', 'required_status_checks'}:
@@ -35,15 +46,16 @@ def validate(value):
         else:
             checks = p.get('required_status_checks', [])
             if (p.get('strict_required_status_checks_policy') is not True
-                    or len(checks) != len(floor.REQUIRED)
-                    or {(c.get('context'), c.get('integration_id')) for c in checks} != floor.REQUIRED):
+                    or len(checks) != len(required)
+                    or {(c.get('context'), c.get('integration_id')) for c in checks} != required):
                 raise ValueError('Dedicated native check policy changed')
-    return {'RulesetID': value['id'], 'Required': floor.MANIFEST['required'], 'Name': NAME}
+    return {'RulesetID': value['id'], 'Required': manifest['required'], 'Name': NAME, 'Repository': repository}
 
 
-def request(method, path, body=None):
-    if not ((method == 'GET' and (path == BASE + '?per_page=100&includes_parents=true' or path.startswith(BASE + '/') and path.removeprefix(BASE + '/').isdigit()))
-            or (method == 'POST' and path == BASE and body == BODY)):
+def request(method, path, body=None, repository=floor.REPOSITORY):
+    _, wanted, base, _ = configuration(repository)
+    if not ((method == 'GET' and (path == base + '?per_page=100&includes_parents=true' or path.startswith(base + '/') and path.removeprefix(base + '/').isdigit()))
+            or (method == 'POST' and path == base and body == wanted)):
         raise ValueError('Unsupported native protection operation')
     args = ['gh', 'api', '--hostname', 'github.com', '--include', '--method', method, path,
             '-H', 'X-GitHub-Api-Version: 2022-11-28']
@@ -62,8 +74,9 @@ def request(method, path, body=None):
         raise ValueError('Native protection unavailable; no write retry') from None
 
 
-def candidates():
-    rows = request('GET', BASE + '?per_page=100&includes_parents=true')
+def candidates(repository=floor.REPOSITORY):
+    _, _, base, _ = configuration(repository)
+    rows = request('GET', base + '?per_page=100&includes_parents=true', repository=repository)
     if not isinstance(rows, list) or len(rows) >= 100:
         raise ValueError('Native protection inventory unavailable')
     found = [r for r in rows if r.get('name') == NAME]
@@ -90,8 +103,9 @@ def _save(path, value):
             os.unlink(name)
 
 
-def reconcile(state):
+def reconcile(state, repository=floor.REPOSITORY):
     """The local installer owns this lock and receipt; neither enters a workspace."""
+    configuration(repository)  # Reject unsupported scope before filesystem effects.
     state = Path(state)
     if not state.is_absolute():
         raise ValueError('Native protection state must be absolute')
@@ -116,14 +130,15 @@ def reconcile(state):
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise ValueError('Native protection installation already running') from None
-        return _reconcile(state / 'merge-protection.json')
+        return _reconcile(state / 'merge-protection.json', repository)
     finally:
         os.close(fd)
 
 
-def _reconcile(path):
+def _reconcile(path, repository):
+    _, body, base, manifest_hash = configuration(repository)
     # Validate the reviewed manifest itself against the runtime floor before I/O.
-    validate(dict(BODY, id=1, source=floor.REPOSITORY, source_type='Repository'))
+    validate(dict(body, id=1, source=repository, source_type='Repository'), repository)
     receipt = None
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
@@ -141,25 +156,25 @@ def _reconcile(path):
         finally:
             os.close(fd)
         if (set(receipt) != {'repository', 'manifestSHA256', 'state', 'id'}
-                or receipt['repository'] != floor.REPOSITORY or receipt['manifestSHA256'] != HASH
+                or receipt['repository'] != repository or receipt['manifestSHA256'] != manifest_hash
                 or receipt['state'] != 'ready' or type(receipt['id']) is not int or receipt['id'] <= 0):
             raise ValueError('Native protection installation is uncertain or has changed scope')
-    matches = candidates()
+    matches = candidates(repository)
     if receipt is not None and (len(matches) != 1 or matches[0].get('id') != receipt['id']):
         raise ValueError('Native protection identity changed')
     if matches:
-        ruleset = request('GET', BASE + '/' + str(matches[0]['id']))
+        ruleset = request('GET', base + '/' + str(matches[0]['id']), repository=repository)
     else:
         # Durable pre-send intent: a lost response cannot trigger another POST.
-        intent = {'repository': floor.REPOSITORY, 'manifestSHA256': HASH, 'state': 'sending', 'id': 0}
+        intent = {'repository': repository, 'manifestSHA256': manifest_hash, 'state': 'sending', 'id': 0}
         _save(path, intent)
-        ruleset = request('POST', BASE, BODY)
-    policy = validate(ruleset)
-    observed = request('GET', BASE + '/' + str(policy['RulesetID']))
-    if validate(observed) != policy:
+        ruleset = request('POST', base, body, repository=repository)
+    policy = validate(ruleset, repository)
+    observed = request('GET', base + '/' + str(policy['RulesetID']), repository=repository)
+    if validate(observed, repository) != policy:
         raise ValueError('Native protection changed before activation')
-    matches = candidates()
+    matches = candidates(repository)
     if len(matches) != 1 or matches[0].get('id') != policy['RulesetID']:
         raise ValueError('Native protection identity became ambiguous')
-    _save(path, {'repository': floor.REPOSITORY, 'manifestSHA256': HASH, 'state': 'ready', 'id': policy['RulesetID']})
+    _save(path, {'repository': repository, 'manifestSHA256': manifest_hash, 'state': 'ready', 'id': policy['RulesetID']})
     return policy
