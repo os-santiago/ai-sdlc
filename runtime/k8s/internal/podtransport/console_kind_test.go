@@ -88,9 +88,10 @@ func TestRealConsoleDeploymentRollback(t *testing.T) {
 	}
 	wait, stop := context.WithTimeout(ctx, 8*time.Second)
 	_, e = adapter.WaitReady(wait, applied.After)
+	timedOut := errors.Is(wait.Err(), context.DeadlineExceeded)
 	stop()
-	if e == nil {
-		t.Fatal("unpullable candidate accepted")
+	if e == nil || !timedOut {
+		t.Fatal("unpullable candidate did not reach the bounded readiness deadline")
 	}
 	current, e := adapter.Observe(ctx)
 	if e != nil {

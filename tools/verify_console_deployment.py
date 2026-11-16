@@ -52,7 +52,7 @@ def main():
             lock['go'],'go','build','-trimpath','-ldflags=-s -w','-o','/output/console','/fixture/main.go'],limit=180)
         (out/'Containerfile').write_text('FROM scratch\nCOPY console /console\nUSER 1000:1000\nENTRYPOINT ["/console"]\nLABEL '+label+'="'+nonce+'"\n')
         tag='localhost/saferus-console:fixture-'+nonce
-        run([args.provider,'build','-t',tag,'-f',out/'Containerfile',out],limit=120)
+        run([args.provider,'build',*(['--platform=linux/amd64','--provenance=false'] if args.provider=='docker' else []),'-t',tag,'-f',out/'Containerfile',out],limit=120)
         item=json.loads(run([args.provider,'image','inspect',tag]))[0];image_id=item['Id']
         run([args.provider,'save','-o',out/'console.tar',tag],limit=60)
         stage('create-owned-disposable-kind')
@@ -94,15 +94,26 @@ def main():
             data=run([args.provider,'exec',cid,'ctr','-n','k8s.io','content','get',digest],limit=30)
             if len(data)>32*1024*1024 or 'sha256:'+hashlib.sha256(data).hexdigest()!=digest:raise ValueError('Fixture OCI content hash mismatch')
             return data
-        runtime_doc=json.loads(blob(runtime))
+        root_doc=json.loads(blob(matches[0]));runtime_doc=json.loads(blob(runtime))
+        manifest_doc=root_doc;manifest_digest=matches[0]
         if runtime!=matches[0]:
-            desc=runtime_doc.get('manifests',[])
-            if len(desc)!=1 or desc[0].get('digest')!=matches[0] or desc[0].get('platform',{}).get('os')!='linux' or desc[0].get('platform',{}).get('architecture')!='amd64':raise ValueError('Runtime index is not the sole approved baseline')
-        manifest=json.loads(blob(matches[0]));config=manifest['config'];config_raw=blob(config['digest'])
+            # Docker can retain a single-platform index as the image reference
+            # and report its child manifest. OCI tar import can instead report
+            # a wrapper index for the directly referenced manifest. Accept only
+            # either exact one-edge relationship, verifying every blob hash.
+            if root_doc.get('manifests'):
+                desc=root_doc['manifests'];child=runtime;manifest_doc=runtime_doc;manifest_digest=runtime
+            else:
+                desc=runtime_doc.get('manifests',[]);child=matches[0]
+            child_raw=blob(child)
+            if len(desc)!=1 or desc[0].get('digest')!=child or desc[0].get('size')!=len(child_raw) or desc[0].get('platform',{}).get('os')!='linux' or desc[0].get('platform',{}).get('architecture')!='amd64':raise ValueError('Runtime and reference do not share the sole approved manifest')
+        manifest=manifest_doc;config=manifest['config'];config_raw=blob(config['digest'])
+        platform=json.loads(config_raw)
+        if platform.get('os')!='linux' or platform.get('architecture')!='amd64':raise ValueError('Fixture image platform differs')
         if len(config_raw)!=config['size']:raise ValueError('Fixture config size differs')
         for layer in manifest['layers']:
             if len(blob(layer['digest']))!=layer['size']:raise ValueError('Fixture layer size differs')
-        report['baselineBinding']={'manifest':matches[0],'runtimeDescriptor':runtime,'configuration':config['digest'],'allContentHashesVerified':True}
+        report['baselineBinding']={'referenceDescriptor':matches[0],'manifestDigest':manifest_digest,'runtimeDescriptor':runtime,'configuration':config['digest'],'allContentHashesVerified':True}
         cfg=yaml.safe_load((out/'kubeconfig').read_text());user=cfg['users'][0]['user'];cluster_cfg=cfg['clusters'][0]['cluster']
         now=int(time.time()*1000)
         target={'version':'ai-sdlc.saferus-release-target/v1','scope':'kind-test-production','repository':'os-santiago/saferus','environment':ns,'clusterUID':get('namespace','kube-system')['metadata']['uid'],'namespaceUID':namespace['metadata']['uid'],'namespace':ns,'deployment':name,'deploymentUID':deployment['metadata']['uid'],'container':'console','deploymentSpecSHA256':'0'*64,'service':name,'serviceUID':service['metadata']['uid'],'serviceSpecSHA256':'0'*64,'pullSecret':'ai-sdlc-release-reader','pullSecretUID':pull['metadata']['uid'],'tlsSecretUID':tls_secret['metadata']['uid'],'tlsCA':(out/'ca.crt').read_text(),'tlsHostname':name,'baselineImage':baseline,'baselineRuntimeDigest':runtime,'rolloutSeconds':300,'smokeSeconds':30,'approvedAt':now-1000,'expiresAt':now+3600000}
