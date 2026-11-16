@@ -56,6 +56,7 @@ def main():
     mounted = False
     prepared = False
     owned_policies = []
+    global_intents = []
     report = {'status': 'running', 'scope': 'isolated closed transport integration fixture',
               'autonomousE2E': False, 'syntheticAuthority': True, 'liveWorkflowAdvanced': False,
               'releaseAuthorized': False, 'workloadExecuted': False, 'preflightOnly': args.preflight_only, 'cleanupComplete': False, 'sourceSHA': args.source_sha,
@@ -76,6 +77,10 @@ def main():
 
     def create(value):
         return json.loads(call(['create', '-f', '-', '-o', 'json'], value).stdout)
+
+    def create_global(resource, value):
+        report['globalCreateIntents'] = global_intents
+        return fixture_cleanup.create_global_resource(create, save, global_intents, resource, value, namespace_uid, nonce)
 
     def node_call(arguments, **kwargs):
         return guard.owned_node_exec(deadline.run, provider, node, node_id, arguments, **kwargs)
@@ -205,6 +210,7 @@ def main():
         namespace_uid = ns['metadata']['uid']
         report['namespaceUID'] = namespace_uid
         save()
+        prepared = True  # Attempt may succeed even if its response is lost.
         node_call(['bash', '-ceu', 'mkdir -m 700 "$1"; printf "%s" "$2" > "$1/owner"; mkdir -m 700 "$1/evidence"; mkdir -p /var/local/ai-sdlc/build-slots; mkdir -m 700 "$3"', 'fixture', root, namespace_uid, slotpath])
         prepared = True
         copy_to(args.test_binary, root + '/test')
@@ -216,7 +222,7 @@ def main():
         report['mount'] = mounted_info
         pvc = create({'apiVersion': 'v1', 'kind': 'PersistentVolumeClaim', 'metadata': {'name': 'build-slot-0', 'namespace': namespace},
                       'spec': {'storageClassName': '', 'volumeName': pvname, 'accessModes': ['ReadWriteOnce'], 'resources': {'requests': {'storage': '4Gi'}}}})
-        pv = create({'apiVersion': 'v1', 'kind': 'PersistentVolume', 'metadata': {'name': pvname}, 'spec': {
+        pv = create_global('persistentvolumes', {'apiVersion': 'v1', 'kind': 'PersistentVolume', 'metadata': {'name': pvname}, 'spec': {
             'capacity': {'storage': '4Gi'}, 'accessModes': ['ReadWriteOnce'], 'persistentVolumeReclaimPolicy': 'Retain', 'storageClassName': '',
             'local': {'path': slotpath}, 'claimRef': {'apiVersion': 'v1', 'kind': 'PersistentVolumeClaim', 'namespace': namespace, 'name': 'build-slot-0', 'uid': pvc['metadata']['uid']},
             'nodeAffinity': {'required': {'nodeSelectorTerms': [{'matchExpressions': [{'key': 'kubernetes.io/hostname', 'operator': 'In', 'values': [node]}]}]}}}})
@@ -254,7 +260,7 @@ def main():
         execute('definitions', payload)
         for filename, resource in [('mutation.json', 'mutatingadmissionpolicies'), ('mutation-binding.json', 'mutatingadmissionpolicybindings'),
                                    ('policy.json', 'validatingadmissionpolicies'), ('binding.json', 'validatingadmissionpolicybindings')]:
-            obj = create(node_json(filename))
+            obj = create_global(resource, node_json(filename))
             owned_policies.append((resource, obj['metadata']['name'], obj['metadata']['uid']))
             report['ownedPolicies'] = list(owned_policies)
             save()
@@ -285,6 +291,8 @@ def main():
                 namespace_uid = fixture_cleanup.recover_namespace_uid(
                     lambda argv: call(argv).stdout, namespace, 'ai-sdlc.closed-build-fixture', nonce)
                 report['recoveredNamespaceUIDForCleanup'] = namespace_uid
+            fixture_cleanup.recover_global_resources(lambda argv: call(argv).stdout, global_intents)
+            checkpoint()
             guard.collect_best_effort(quiesce, report)
             guard.collect_best_effort(collect, report)
             def archive_reports():
@@ -303,13 +311,16 @@ def main():
             if namespace_uid:
                 guard.cleanup_archived_namespace(lambda a, v=None: call(a, v).stdout, namespace, namespace_uid,
                                                  report.get('archivedTaskUIDs', []), report.get('runUIDs', []), timeout=120)
-            for resource, name, uid in reversed(owned_policies):
-                call(['delete', '--raw', '/apis/admissionregistration.k8s.io/v1/' + resource + '/' + name, '-f', '-'],
+            for intent in reversed(global_intents):
+                if intent.get('absent'):
+                    continue
+                resource, name, uid = intent['resource'], intent['name'], intent['uid']
+                prefix = '/api/v1/' if resource == 'persistentvolumes' else '/apis/admissionregistration.k8s.io/v1/'
+                call(['delete', '--raw', prefix + resource + '/' + name, '-f', '-'],
                      {'apiVersion': 'v1', 'kind': 'DeleteOptions', 'preconditions': {'uid': uid}})
-            if pv_uid:
-                call(['delete', '--raw', '/api/v1/persistentvolumes/' + pvname, '-f', '-'],
-                     {'apiVersion': 'v1', 'kind': 'DeleteOptions', 'preconditions': {'uid': pv_uid}})
-                call(['wait', '--for=delete', 'pv/' + pvname, '--timeout=30s'])
+                call(['wait', '--for=delete', resource + '/' + name, '--timeout=30s'])
+                intent['absent'] = True
+                checkpoint()
             if prepared:
                 node_call(['bash', '-ceu', 'test "$(cat "$1/owner")" = "$2"; if mountpoint -q "$3"; then test "$(findmnt -n -M "$3" -o SOURCE)" = "$4"; umount "$3"; fi; rmdir "$3"; rm -rf -- "$1"', 'fixture', root, namespace_uid, slotpath, mount_source])
             report['cleanupComplete'] = True

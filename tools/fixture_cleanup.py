@@ -40,3 +40,43 @@ def finish_fixture(report, persist, cleanup):
         checkpoint()
     if write_errors:
         raise write_errors[0]
+
+
+def create_global_resource(create, persist, intents, resource, value, namespace_uid, nonce):
+    """Persist ownership intent before POST; ACK loss is cleanup-only recovery."""
+    value = json.loads(json.dumps(value))
+    metadata = value['metadata']
+    metadata.setdefault('labels', {})['ai-sdlc.closed-build-fixture'] = nonce
+    metadata.setdefault('annotations', {})['ai-sdlc.fixture-namespace-uid'] = namespace_uid
+    intent = {'resource': resource, 'name': metadata['name'], 'apiVersion': value['apiVersion'],
+              'kind': value['kind'], 'namespaceUID': namespace_uid, 'nonce': nonce, 'uid': None}
+    intents.append(intent)
+    persist()
+    result = create(value)
+    intent['uid'] = global_resource_uid(result, intent)
+    persist()
+    return result
+
+
+def global_resource_uid(obj, intent):
+    metadata = obj.get('metadata', {})
+    uid = metadata.get('uid', '')
+    if (obj.get('apiVersion') != intent['apiVersion'] or obj.get('kind') != intent['kind']
+            or metadata.get('name') != intent['name'] or metadata.get('namespace')
+            or metadata.get('labels', {}).get('ai-sdlc.closed-build-fixture') != intent['nonce']
+            or metadata.get('annotations', {}).get('ai-sdlc.fixture-namespace-uid') != intent['namespaceUID']
+            or not re.fullmatch(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', uid)
+            or intent.get('uid') is not None and intent['uid'] != uid):
+        raise ValueError('Refusing unrelated global fixture cleanup identity')
+    return uid
+
+
+def recover_global_resources(call, intents):
+    """Resolve all uncertain creates before any storage cleanup, never resume work."""
+    for intent in intents:
+        raw = call(['get', intent['resource'], intent['name'], '--ignore-not-found', '-o', 'json'])
+        if not raw.strip():
+            intent['absent'] = True
+            continue
+        intent['uid'] = global_resource_uid(json.loads(raw), intent)
+        intent['absent'] = False

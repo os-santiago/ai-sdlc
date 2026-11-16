@@ -1,6 +1,6 @@
 import json
 import unittest
-from fixture_cleanup import finish_fixture, recover_namespace_uid
+from fixture_cleanup import finish_fixture, recover_namespace_uid, create_global_resource, recover_global_resources
 
 
 class FixtureCleanupTest(unittest.TestCase):
@@ -40,6 +40,31 @@ class FixtureCleanupTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             recover_namespace_uid(call, 'ai-sdlc-builds', 'fixture', 'foreign-nonce')
         self.assertIsNone(recover_namespace_uid(lambda argv: '', 'ai-sdlc-builds', 'fixture', 'owned-nonce'))
+
+    def test_lost_global_ack_recovers_only_original_resource(self):
+        for resource, kind in [('persistentvolumes', 'PersistentVolume'), ('validatingadmissionpolicies', 'ValidatingAdmissionPolicy')]:
+            with self.subTest(resource=resource):
+                intents, created, snapshots = [], [], []
+                value = {'apiVersion': 'v1' if resource == 'persistentvolumes' else 'admissionregistration.k8s.io/v1',
+                         'kind': kind, 'metadata': {'name': 'fixture-resource'}}
+                def persist():
+                    snapshots.append(json.loads(json.dumps(intents)))
+                def create(obj):
+                    self.assertIsNone(snapshots[-1][0]['uid'])
+                    obj['metadata']['uid'] = '11111111-1111-1111-1111-111111111111'
+                    created.append(obj)
+                    raise TimeoutError('real effect, lost reply')
+                with self.assertRaises(TimeoutError):
+                    create_global_resource(create, persist, intents, resource, value, 'namespace-uid', 'nonce')
+                recover_global_resources(lambda argv: json.dumps(created[0]), intents)
+                self.assertEqual(intents[0]['uid'], created[0]['metadata']['uid'])
+                created[0]['metadata']['uid'] = '22222222-2222-2222-2222-222222222222'
+                with self.assertRaises(ValueError):
+                    recover_global_resources(lambda argv: json.dumps(created[0]), intents)
+                created[0]['metadata']['labels']['ai-sdlc.closed-build-fixture'] = 'foreign'
+                intents[0]['uid'] = None
+                with self.assertRaises(ValueError):
+                    recover_global_resources(lambda argv: json.dumps(created[0]), intents)
 
 
 if __name__ == '__main__':

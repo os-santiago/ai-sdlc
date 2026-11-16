@@ -59,5 +59,15 @@
     "v4": "Pod phase lagged successful terminated containers; now waits for Succeeded",
     "v5": "pending TaskRun release annotation absent before controller update; now waits while rejecting explicit mismatches",
     "cleanup": "all six attempts cleaned; v1/v2 required separate original-UID recovery reports; no stopped attempt resumed"
+  },
+  "lostGlobalCreateACK": {
+    "reports": [
+      "/tmp/ai-sdlc-closed-build-lost-pv-v1/report.json",
+      "/tmp/ai-sdlc-closed-build-lost-policy-v1/report.json"
+    ],
+    "injection": "real Kubernetes create succeeds, client reply is discarded",
+    "expectedFailurePropagated": true,
+    "cleanupComplete": true,
+    "foreignUIDRejectedByUnitTest": true
   }
 }
