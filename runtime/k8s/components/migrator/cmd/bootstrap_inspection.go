@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
@@ -30,11 +31,11 @@ func inspectBootstrap(input io.Reader, output io.Writer) error {
 	defer cancel()
 	db, err := store.Open(ctx, request.DatabaseURL)
 	if err != nil {
-		return denied
+		return errors.New("initial database inspection denied: connection")
 	}
 	defer db.Close()
-	if db.InspectEmptyBootstrap(ctx, request.Database) != nil {
-		return denied
+	if boundary := db.BootstrapInspectionBoundary(ctx, request.Database); boundary != "" {
+		return fmt.Errorf("initial database inspection denied: %s", boundary)
 	}
 	return json.NewEncoder(output).Encode(struct {
 		Version            string    `json:"version"`

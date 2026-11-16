@@ -17,6 +17,24 @@ LOCK = {'image': {'repository': 'quay.io/os-santiago/ai-sdlc', 'tag': 'b'*40}, '
 
 
 class BuildInstallTests(unittest.TestCase):
+    def test_bootstrap_diagnostics_expose_only_finite_boundary_categories(self):
+        for operation,stderr,expected in (
+            ('inspect-empty-bootstrap','timestamp initial database inspection denied: history/outbox\n','boundary: history'),
+            ('inspect-empty-bootstrap','initial database inspection denied: primary-authority','boundary: primary-authority'),
+            ('inspect-empty-bootstrap','initial database inspection denied: private-sentinel','preflight rejected'),
+            ('inspect-empty-bootstrap','driver failed postgres://private-sentinel:secret-sentinel@host/database','preflight rejected'),
+            ('compile-build-installation','initial database inspection denied: connection','preflight rejected'),
+        ):
+            def run(args,**kwargs):
+                if args[1]=='run':return subprocess.CompletedProcess(args,1,'',stderr)
+                if args[1]=='inspect':return subprocess.CompletedProcess(args,1,'','')
+                return subprocess.CompletedProcess(args,0,'','')
+            with self.subTest(operation=operation,expected=expected),patch.object(build.subprocess,'run',side_effect=run):
+                with self.assertRaisesRegex(ValueError,expected) as caught:
+                    build.component_call('podman',IMAGE,operation,{})
+                self.assertNotIn('private-sentinel',str(caught.exception))
+                self.assertNotIn('secret-sentinel',str(caught.exception))
+
     def bundle(self):
         return {'version':'ai-sdlc.build-desired/v1','revision':'b'*40,'controllerDigest':'sha256:'+'c'*64,
                 'profile':{'clusterUID':'original','publisherImage':IMAGE},'slots':[{'original':'slot'}],'issueMaxAgeSeconds':60}

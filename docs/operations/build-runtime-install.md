@@ -143,6 +143,7 @@ delivery. No issue is admitted and no workflow stage is advanced by preparation.
 
 After `prepare`, continuation is not implemented yet: [issue #574](https://github.com/os-santiago/ai-sdlc/issues/574) tracks the remaining capability transition. The earlier `local --config` example applies before preparation only. Do not delete the preparation record or unpause the release manually. This command currently ends at a frozen, empty installation for administrative integration checks.
 
+If initial inspection is rejected, the installer reports a finite boundary such as `connection`, `primary-authority`, `table-inventory`, `migration-inventory` or `history`. These identify where validation stopped, not permission to bypass it. A history-boundary failure can also be a read failure; it does not itself prove rows exist. Driver messages, connection strings and row contents remain private. Keep the runtime frozen and resolve the condition through reviewed installation changes.
 
 ### Cold installation with a Helm-owned registry
 
@@ -206,3 +207,5 @@ the probe refuses to recreate missing persistence evidence. It also observes
 configuration after annotating the existing Konflux parent. Evidence remains in
 protected installation state and does not advance any workflow. Repetition uses
 the retained result plus fresh ACL checks; it does not repeatedly delete Pods.
+
+To reproduce role provisioning and inspection safely, run `python3 tools/validate_bootstrap_inspection.py --provider podman --output /path/to/new-evidence-directory`. It creates and removes its own PostgreSQL instance; it never contacts the installed database.
