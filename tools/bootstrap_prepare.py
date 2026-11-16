@@ -92,6 +92,8 @@ class Preparation:
         self.expected = None
         self.templates = None
         self.configured_maps = None
+        self.activation_phase = None
+        self.activation_replicas = None
 
     def use_configured_render(self, documents):
         """Explicit initial configuration observer; ordinary prepare stays strict.
@@ -99,24 +101,42 @@ class Preparation:
         The caller supplies a reviewed render bound to its persisted transition,
         never templates learned from the running controllers.
         """
+        self.activation_phase=None
+        self._configured_render(documents)
+
+    def use_activation_render(self, documents, phase):
+        """Observe one persisted initial-activation phase, never ordinary prepare.
+
+        The activation installer owns intent/custody and selects this closed
+        render. This grants no workflow transition or database-write capability.
+        """
+        if phase not in ('warming','armed','active'):
+            raise ValueError('Unknown initial activation phase')
+        self.activation_phase=phase
+        self._configured_render(documents)
+
+    def _configured_render(self, documents):
         self.templates = {d['metadata']['name']:d['spec']['template'] for d in documents if d.get('kind')=='Deployment'}
         allowed={'ai-sdlc-'+x for x in ('intake','admission-controller','orchestrator','worker','release-manager','relay',
             'verifier','build-controller','provenance-verifier')}
         config=next((d.get('data',{}) for d in documents if d.get('kind')=='ConfigMap' and d['metadata']['name']=='ai-sdlc-config'),{})
         if config.get('AI_SDLC_RELEASE')=='true':allowed.add('ai-sdlc-deployer')
         elif config.get('AI_SDLC_RELEASE') not in (None,'false'):raise ValueError('Unknown prepared release capability')
+        self.activation_replicas={name:(0 if name=='ai-sdlc-intake' and self.activation_phase!='active' else 1) for name in allowed} if self.activation_phase else None
+        if self.activation_phase and config.get('AI_SDLC_RELEASE')!='true':raise ValueError('Initial activation requires the complete release capability')
         if set(self.templates)!=allowed or any(
-                d.get('spec',{}).get('replicas')!=0 for d in documents if d.get('kind')=='Deployment'):
+                d.get('spec',{}).get('replicas')!=(self.activation_replicas[d['metadata']['name']] if self.activation_phase else 0) for d in documents if d.get('kind')=='Deployment'):
             raise ValueError('Prepared configuration must exclude its closed producer inventory')
         self.configured_maps={d['metadata']['name']:d.get('data',{}) for d in documents if d.get('kind')=='ConfigMap'
             and d['metadata'].get('namespace')==platform.NAMESPACE}
         inner=json.loads(self.configured_maps.get('ai-sdlc-authority',{}).get('policy.json','{}'))
         config=self.configured_maps.get('ai-sdlc-config',{})
-        if (inner.get('freeze') is not True or config.get('AI_SDLC_RUNTIME_MODE')!='verification'
+        frozen=self.activation_phase in (None,'warming')
+        if (inner.get('freeze') is not frozen or config.get('AI_SDLC_RUNTIME_MODE')!='verification'
                 or any(config.get(k)!='true' for k in ('AI_SDLC_BUILD','AI_SDLC_PROVENANCE','AI_SDLC_PUBLICATION','AI_SDLC_MERGE'))):
             raise ValueError('Complete frozen prepared capability configuration required')
         outer=json.loads(self.configured_maps.get('ai-sdlc-outer-policy',{}).get('policy.json','{}'))
-        if (outer.get('freeze') is not True or outer.get('repository')!=inner.get('repository')
+        if (outer.get('freeze') is not frozen or outer.get('repository')!=inner.get('repository')
                 or outer.get('environment')!=inner.get('environment')):
             raise ValueError('Prepared outer authority must remain frozen')
 
@@ -155,13 +175,13 @@ class Preparation:
         legacy = self.configured_maps is None
         if (legacy and (data.get('AI_SDLC_RUNTIME_MODE') != 'maintenance'
                 or any(data.get(key, 'false') != 'false' for key in ('AI_SDLC_BUILD', 'AI_SDLC_PROVENANCE', 'AI_SDLC_PUBLICATION', 'AI_SDLC_MERGE')))
-                or inner.get('freeze') is not True or inner.get('repository') != 'os-santiago/saferus'
+                or inner.get('freeze') is not (self.activation_phase in (None,'warming')) or inner.get('repository') != 'os-santiago/saferus'
                 or inner.get('environment') != 'ai-sdlc-production'
                 or policy['metadata'].get('annotations', {}).get('ai-sdlc.io/cluster-uid') != cluster_uid):
             raise ValueError('Initial preparation requires existing frozen Saferus maintenance authority')
         configured_maps = {}
         if not legacy:
-            if not paused:
+            if not paused and self.activation_phase is None:
                 raise ValueError('Configured initial runtime must remain paused')
             for name,expected in self.configured_maps.items():
                 actual=self.get('configmap',name)
@@ -215,9 +235,11 @@ class Preparation:
         if self.templates is None or set(self.templates) != expected_names:
             raise ValueError('Reviewed declarative producer inventory required')
         for d in deployments:
+            if self.activation_phase and (paused or d['spec'].get('replicas')!=self.activation_replicas[d['metadata']['name']]):
+                raise ValueError('Initial activation producer inventory differs from its phase')
             if d['spec'].get('replicas') not in ((0,) if paused else (0, 1)):
                 raise ValueError('Delivery producers are not declaratively excluded')
-            if paused and d.get('status', {}).get('observedGeneration', 0) < d['metadata'].get('generation', 1):
+            if (paused or self.activation_phase) and d.get('status', {}).get('observedGeneration', 0) < d['metadata'].get('generation', 1):
                 raise ValueError('Deployment controller has not observed preparation')
             role = d['metadata']['name'].removeprefix('ai-sdlc-')
             key = {'admission-controller':'admissionController','release-manager':'releaseManager'}.get(role, role)
@@ -249,10 +271,10 @@ class Preparation:
                     or not any(c.get('type') == 'Complete' and c.get('status') == 'True' for c in job.get('status', {}).get('conditions', []))):
                 raise ValueError('Administrative migration or unexpected Job is still active')
         namespace_names = {n['metadata']['name'] for n in self.get('namespaces', namespace=None)['items']}
-        for ns in EXECUTION_NAMESPACES:
+        for ns in (() if self.activation_phase=='active' else EXECUTION_NAMESPACES):
             if ns in namespace_names and self.get('pods,jobs,cronjobs', namespace=ns)['items']:
                 raise ValueError('Execution or cleanup workload still exists')
-        if 'ai-sdlc-builds' in namespace_names and self.get('pipelineruns,taskruns', namespace='ai-sdlc-builds')['items']:
+        if self.activation_phase!='active' and 'ai-sdlc-builds' in namespace_names and self.get('pipelineruns,taskruns', namespace='ai-sdlc-builds')['items']:
             raise ValueError('Build execution object still exists')
         deployment_uids = {self.identity(d) for d in deployments}
         replicasets = {}
@@ -261,6 +283,8 @@ class Preparation:
             if len(owners) != 1:
                 raise ValueError('Unexpected runtime ReplicaSet')
             replicas = replica.get('spec', {}).get('replicas', 1)
+            if self.activation_phase and replicas not in (0,self.activation_replicas[owners[0]['name']]):
+                raise ValueError('ReplicaSet differs from the initial activation phase')
             if paused and replicas != 0:
                 raise ValueError('ReplicaSet still authorizes runtime producers')
             if replicas:
@@ -270,6 +294,7 @@ class Preparation:
                     raise ValueError('Active ReplicaSet differs from reviewed declarative authority')
             replicasets[self.identity(replica)] = owners[0]['name']
         job_uids = {self.identity(j) for j in jobs}
+        producer_counts={name:0 for name in self.templates}
         for current in self.get('pods')['items']:
             if current['metadata']['uid'] == pod['metadata']['uid']:
                 continue
@@ -285,6 +310,15 @@ class Preparation:
                 raise ValueError('Unexpected runtime Pod may own unresolved work')
             if runtime_pod_template(current, self.cluster+'-control-plane') != normalized_template(self.templates[replicasets[owners[0]['uid']]]):
                 raise ValueError('Admitted producer Pod differs from reviewed declarative authority')
+            if self.activation_phase:
+                name=replicasets[owners[0]['uid']];producer_counts[name]+=1
+                statuses=current.get('status',{}).get('containerStatuses',[])
+                if (current['metadata'].get('deletionTimestamp') or current.get('status',{}).get('phase')!='Running'
+                        or len(statuses)!=len(current['spec']['containers']) or any('running' not in s.get('state',{}) for s in statuses)
+                        or self.activation_phase!='warming' and not all(s.get('ready') is True for s in statuses)):
+                    raise ValueError('Initial activation producer health has not converged')
+        if self.activation_phase and producer_counts!=self.activation_replicas:
+            raise ValueError('Initial activation producer Pod count differs')
         observed = {'clusterUID': cluster_uid, 'namespaceUID': capability['namespaceUID'],
             'nodeID': node['Id'], 'nodeUID': self.identity(node_object), 'nodeBootID': node_object['status']['nodeInfo']['bootID'],
             'resources': {key:self.identity(value) for key,value in {'config':config,'policy':policy,'databaseSecret':secret,'service':service,'statefulset':sts,'pod':pod,'pvc':pvc,'pv':pv}.items()},
@@ -298,6 +332,7 @@ class Preparation:
         return observed, private_uri
 
     def inspect(self, paused=False):
+        if self.activation_phase=='active':raise ValueError('Active workflow history is not an empty bootstrap')
         observed, uri = self.observe(paused)
         image = self.lock['image']['repository']+'@'+self.lock['migrator']['digest']
         with bootstrap_database_forward.original_database(self.run,self.kubectl,uri,observed['resources']['pod']) as (forwarded,port):

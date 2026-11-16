@@ -359,6 +359,9 @@ def shadow_intake_config(kubectl, cluster_uid, repository, installer=None):
 
 def _main(argv, stack):
     selected = sys.argv[1:] if argv is None else argv
+    if selected and selected[0] == 'initial-runtime':
+        import initial_activation
+        return initial_activation.main(selected[1:])
     if selected and selected[0] == 'release-target':
         import release_target_install
         return release_target_install.main(selected[1:])
@@ -375,7 +378,7 @@ def _main(argv, stack):
         import supply_chain_install
         return supply_chain_install.main(selected[1:])
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['plan', 'local', 'status', 'tools', 'host', 'credentials', 'sandbox', 'supply-chain', 'build-foundation', 'release-target', 'registry-node'])
+    parser.add_argument('command', choices=['plan', 'local', 'status', 'tools', 'host', 'credentials', 'sandbox', 'supply-chain', 'build-foundation', 'release-target', 'registry-node', 'initial-runtime'])
     parser.add_argument('--configure-host', action='store_true', help='Raise inotify limits to committed minima for this boot; requires root')
     parser.add_argument('--config', type=Path, help='Reviewed local installation JSON; credentials remain explicit CLI choices')
     parser.add_argument('--platform', choices=['kind', 'konflux'])
@@ -400,6 +403,8 @@ def _main(argv, stack):
     parser.add_argument('--codex-auth-file', type=Path, help='Explicit local Codex authentication source for the candidate sidecar Secret')
     parser.add_argument('--refresh-model-credential', action='store_true')
     args = parser.parse_args(argv)
+    if args.command not in ('plan','local','status','tools','host','credentials','sandbox'):
+        raise ValueError('Delegated installer subcommands must be the first argument')
     config_digest = install_config.resolve(args)
     defaults = dict(platform='kind', cluster='ai-sdlc', provider='auto', images=LOCAL / 'images.lock.json',
                     repository='os-santiago/ai-sdlc', environment='ai-sdlc-production', profile='maintenance')

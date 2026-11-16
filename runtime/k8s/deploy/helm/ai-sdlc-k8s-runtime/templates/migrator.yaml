@@ -1,3 +1,4 @@
+{{- if .Values.migrator.enabled }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -57,3 +58,4 @@ spec:
           secret:
             secretName: {{ .Values.migrator.credentialsSecret }}
             defaultMode: 0440
+{{- end }}

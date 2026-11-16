@@ -92,6 +92,10 @@
         "paused": {
           "type": "boolean",
           "default": false
+        },
+        "intakePaused": {
+          "type": "boolean",
+          "default": false
         }
       },
       "required": [
@@ -732,6 +736,10 @@
         "credentialsSecret": {
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
         }
       }
     },

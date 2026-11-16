@@ -10,6 +10,7 @@ image:
 imagePullSecrets: []
 serviceAccount: {create: true, name: ""}
 runtime:
+  intakePaused: false
   mode: maintenance
   # Administrative first-install exclusion; not a workflow pause/cleanup API.
   # Installer must prove no history or owned execution before stopping services.
@@ -30,6 +31,7 @@ authority:
   identitySecretPrefix: ai-sdlc-identity
   databaseSecretPrefix: ai-sdlc-database
 migrator:
+  enabled: true
   digest: ""
   credentialsSecret: ai-sdlc-database-roles
 logLevel: info

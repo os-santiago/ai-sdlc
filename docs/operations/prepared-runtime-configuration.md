@@ -83,3 +83,5 @@ not running component readiness, an autonomous E2E, an SLSA level or production
 acceptance. Activation, promotion/deployment and recovery remain separate gates.
 
 For the additional opt-in release capability and its tenth paused producer, see [deployer installation](deployer-installation.md). Supply the reviewed release target and same-publication deployer pins together; the original preparation custody remains mandatory.
+
+Once all prerequisites are installed, use [finite initial activation](initial-runtime-activation.md). The activation record preserves the original paused configuration and enables issue ingress last.
