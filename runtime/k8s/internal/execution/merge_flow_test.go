@@ -14,6 +14,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergegate"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergewriter"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
 
 type mergeGatesFunc func(context.Context, mergegate.Expected, mergegate.Policy) (mergegate.Observation, error)
@@ -28,7 +29,7 @@ func (f mergeWriterFunc) Merge(c context.Context, e mergegate.Expected, n int, g
 	return f(c, e, n, g)
 }
 func TestMergeControllerActualJournalAndSyntheticForge(t *testing.T) {
-	for _, scenario := range []string{"success", "checks-pending", "changed-checks", "revoked", "lost-write", "wrong-tree", "wrong-head", "issue-revoked", "wrong-profile", "expired-publication"} {
+	for _, scenario := range []string{"success", "checks-pending", "changed-checks", "changed-profile", "revoked", "lost-write", "wrong-tree", "wrong-head", "issue-revoked", "wrong-profile", "expired-publication"} {
 		t.Run(scenario, func(t *testing.T) {
 			var lifetime []time.Duration
 			if scenario == "expired-publication" {
@@ -57,6 +58,9 @@ func TestMergeControllerActualJournalAndSyntheticForge(t *testing.T) {
 			}, Identity: func() (authority.Identity, error) { return f.Identity, nil }, GatePolicy: func() (mergegate.Policy, error) { return mergegate.PilotPolicy(), nil }}
 			r.Gates = mergeGatesFunc(func(_ context.Context, e mergegate.Expected, _ mergegate.Policy) (mergegate.Observation, error) {
 				observations++
+				if scenario == "changed-profile" {
+					f.Profile = strings.Repeat("f", 64)
+				}
 				o := mergegate.Observation{Expected: e, PolicySHA256: strings.Repeat("a", 64), ChecksSHA256: strings.Repeat("b", 64), ReviewsSHA256: strings.Repeat("c", 64), Ready: true, Reasons: []string{}, ObservedAt: time.Now()}
 				if scenario == "checks-pending" {
 					o.Ready = false
@@ -105,6 +109,10 @@ func TestMergeControllerActualJournalAndSyntheticForge(t *testing.T) {
 				if _, e = f.DB.ReadMergedRecord(ctx, id); e != nil {
 					t.Fatal(e)
 				}
+			} else if scenario == "issue-revoked" || scenario == "wrong-profile" {
+				if e != nil || state != "" || writes != 0 || observations != 0 {
+					t.Fatal("obsolete fact acquired authority", state, e, writes, observations)
+				}
 			} else if scenario == "checks-pending" {
 				if e != nil || state != "merge-waiting-for-checks" || writes != 0 {
 					t.Fatal(state, e, writes)
@@ -122,7 +130,7 @@ func TestMergeControllerActualJournalAndSyntheticForge(t *testing.T) {
 					t.Fatal("unsafe terminal fact")
 				}
 			}
-			if (scenario == "changed-checks" || scenario == "issue-revoked" || scenario == "wrong-profile") && writes != 0 {
+			if (scenario == "changed-checks" || scenario == "changed-profile" || scenario == "issue-revoked" || scenario == "wrong-profile") && writes != 0 {
 				t.Fatal("rejected authority caused a write")
 			}
 			before := writes
@@ -137,12 +145,14 @@ func TestMergeControllerActualJournalAndSyntheticForge(t *testing.T) {
 func TestInstalledMergePrivilegesAndAuthoritySelection(t *testing.T) {
 	f := execution.NewPublishedMergeTestFixture(t)
 	ctx := context.Background()
-	if id, e := f.DB.NextMergePublication(ctx, f.Policy.Revision()); e != nil || id != f.PublicationID {
+	if id, e := f.DB.NextMergePublication(ctx, mergeSelection(f)); e != nil || id != f.PublicationID {
 		t.Fatal("installed selection", id, e)
 	}
 	changed := f.Policy
 	changed.Freeze = true
-	if id, e := f.DB.NextMergePublication(ctx, changed.Revision()); e != nil || id != "" {
+	changedSelection := mergeSelection(f)
+	changedSelection.AuthorityRevision = changed.Revision()
+	if id, e := f.DB.NextMergePublication(ctx, changedSelection); e != nil || id != "" {
 		t.Fatal("old policy publication remained selectable", id, e)
 	}
 	for _, query := range []string{
@@ -172,7 +182,53 @@ func TestInstalledMergePrivilegesAndAuthoritySelection(t *testing.T) {
 	if e := f.Admin.ProvisionRolesForMerge(ctx, passwords, "verification", true, true, true); e != nil {
 		t.Fatal(e)
 	}
-	if id, e := f.DB.NextMergePublication(ctx, f.Policy.Revision()); e != nil || id != f.PublicationID {
+	if id, e := f.DB.NextMergePublication(ctx, mergeSelection(f)); e != nil || id != f.PublicationID {
 		t.Fatal("fact lost during reactivation", e)
+	}
+}
+
+func mergeSelection(f execution.PublishedMergeTestFixture) store.MergeSelection {
+	return store.MergeSelection{AuthorityRevision: f.Policy.Revision(), IntakeConfiguration: f.Intake.Digest(), ExecutionProfile: f.Profile, ReviewProfile: f.ReviewProfile, ReviewConfiguration: f.ReviewConfiguration}
+}
+
+func TestMergeSelectionSkipsChangedConfigurationAndIssue(t *testing.T) {
+	for _, change := range []string{"intake", "execution-profile", "review-profile", "review-configuration", "generation", "work-state"} {
+		t.Run(change, func(t *testing.T) {
+			f := execution.NewPublishedMergeTestFixture(t)
+			ctx := context.Background()
+			selection := mergeSelection(f)
+			if id, e := f.DB.NextMergePublication(ctx, selection); e != nil || id != f.PublicationID {
+				t.Fatal("current fact", id, e)
+			}
+			stale := strings.Repeat("f", 64)
+			switch change {
+			case "intake":
+				selection.IntakeConfiguration = stale
+			case "execution-profile":
+				selection.ExecutionProfile = stale
+			case "review-profile":
+				selection.ReviewProfile = stale
+			case "review-configuration":
+				selection.ReviewConfiguration = stale
+			case "generation":
+				if _, e := f.Admin.Pool.Exec(`UPDATE intake_heads SET generation=generation+1`); e != nil {
+					t.Fatal(e)
+				}
+			case "work-state":
+				if _, e := f.Admin.Pool.Exec(`UPDATE work_items SET status='blocked'`); e != nil {
+					t.Fatal(e)
+				}
+			}
+			if id, e := f.DB.NextMergePublication(ctx, selection); e != nil || id != "" {
+				t.Fatal("obsolete fact remained selectable", id, e)
+			}
+			var facts, attempts int
+			if f.Admin.Pool.QueryRow(`SELECT count(*) FROM published_records`).Scan(&facts) != nil || facts != 1 {
+				t.Fatal("historical fact lost")
+			}
+			if f.Admin.Pool.QueryRow(`SELECT count(*) FROM merge_requests`).Scan(&attempts) != nil || attempts != 0 {
+				t.Fatal("selection created authority")
+			}
+		})
 	}
 }
