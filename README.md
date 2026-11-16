@@ -31,6 +31,11 @@ from [Quay](https://quay.io/repository/os-santiago/ai-sdlc) and are pinned by
 digest in Git. Reapply the same command to reconcile desired state. To refresh
 pins from a reviewed publication, use the [image upgrade procedure](docs/operations/image-lock-upgrades.md).
 
+For an existing installer-owned Konflux cluster, use the
+[frozen runtime capability](docs/operations/frozen-konflux-runtime.md) and
+`examples/saferus-konflux-frozen.local-install.json`. It preserves the platform identity and
+keeps Saferus delivery disabled while integration is validated.
+
 This first release installs **maintenance mode**, with delivery actions
 disabled. It verifies infrastructure installation, not autonomous
 issue-to-production delivery. No GitOps controller is installed; reconciliation
