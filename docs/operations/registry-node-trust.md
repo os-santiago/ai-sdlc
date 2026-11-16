@@ -6,6 +6,9 @@ frozen installation after registry persistence/ACL acceptance. Supply the public
 registry CA as a separately reviewed file; neither a downloaded image nor issue
 content can choose that trust root.
 
+Run `local` before `local --configure-prepared`: node setup and its reapply require
+maintenance mode with build disabled. `status` remains read-only afterward.
+
 ```sh
 ./install.sh registry-node plan --cluster ai-sdlc-demo --provider podman \
   --registry-ca /reviewed/registry-ca.crt
@@ -42,6 +45,24 @@ not a kubelet pull or application rollout. A separate restricted Pod with the
 original reader credential must validate image pulling before deployment
 acceptance; the runtime-owned deployment must additionally prove digest, health
 and user-visible behavior. No probe is workflow or provenance evidence.
+
+The bounded transport fixture reuses the retained empty OCI installation marker;
+it uploads nothing and changes no application Deployment:
+
+```sh
+python3 tools/verify_registry_node_pull.py --cluster ai-sdlc-demo \
+  --provider podman --registry-ca /reviewed/registry-ca.crt \
+  --output /private/new-pull-check
+```
+
+It creates an isolated restricted namespace, first proves an anonymous kubelet
+pull is denied, then supplies the original reader credential to a separate Pod.
+Acceptance requires a fresh kubelet `Pulled` event bound to that Pod UID and exact
+digest, plus the CRI image identity. The empty marker has no executable, so the
+expected container creation error is recorded separately and can never establish
+a successful pull by itself. Reports keep `workloadExecutionValidated: false` and
+`workflowEvidence: false`; cached layers may be reused. Cleanup uses the original
+namespace UID. This is a transport gate, not rollout acceptance.
 
 `tools/verify_registry_node_files.py` runs only in an owned, offline disposable
 container. CI exercises real file writes, lost replies, inode-preserving reapply,
