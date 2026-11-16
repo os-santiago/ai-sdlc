@@ -73,3 +73,26 @@ live baseline cannot be adopted from image equality.
 The journal makes no Kubernetes or GitHub calls. Its immutable plan alone grants
 no deployment or release permission. Installer/runtime opt-in, queue handoff,
 deployer effect journal, health verification and rollback remain separate work.
+
+## Authenticated handoff and planning loop (inactive)
+
+The verifier selects current eligible verified history and atomically records a
+single handoff with its signed outbox message. The release-manager inbox accepts
+only the matching verifier signature carried by the relay; duplicate deliveries
+reuse the original inbox result. Selection filters current issue generation,
+policy/trust/intake revisions and observation freshness. The transaction rechecks
+history and current eligibility after outbox waits. Lost acknowledgement cannot
+create a second handoff for the same verification.
+
+`releaseflow.Runtime` consumes one queued request, compiles its deterministic
+plan and persists it through the promotion journal. It can resolve a lost
+completion acknowledgement only by reading the exact authenticated stored plan.
+It performs no Kubernetes calls, generates no manifests, and does not publish a
+GitHub release. This library remains unwired until the installer, runtime feature
+gates and separate deployer are implemented and validated.
+
+Disposable PostgreSQL tests traverse real signed outbox/inbox transactions and
+the planning loop, reject missing transport signatures and duplicate effects,
+exercise actual COMMIT-response loss, and prove withdrawal during an observable
+outbox lock prevents the handoff. These are component integration tests; they do
+not demonstrate a running autonomous issue-to-production cycle.
