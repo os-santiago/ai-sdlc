@@ -62,9 +62,11 @@ def desired_values(root, image_lock_path, lock, verification=False, review=False
     return result
 
 
-def model_credentials(kubectl, cluster_uid, auth_file, refresh=False):
+def model_credentials(kubectl, cluster_uid, auth_file, refresh=False, installer=None):
     # Imported here so the pure desired-state function has no installer effects.
     from install import owned_secret, create_owned_secret, run
+    if installer is not None:
+        owned_secret, create_owned_secret, run = installer.owned_secret, installer.create_owned_secret, installer.run
     current = owned_secret(kubectl, 'ai-sdlc-codex-auth', cluster_uid)
     if current is None or refresh:
         if auth_file is None:
@@ -107,8 +109,10 @@ def api_cidrs(kubectl):
     return sorted({str(ipaddress.IPv4Address(value)) + '/32' for value in addresses})
 
 
-def review_credentials(kubectl, cluster_uid):
+def review_credentials(kubectl, cluster_uid, installer=None):
     from install import owned_secret, create_owned_secret
+    if installer is not None:
+        owned_secret, create_owned_secret = installer.owned_secret, installer.create_owned_secret
     current = owned_secret(kubectl, 'ai-sdlc-review-model-client', cluster_uid)
     if current is None:
         create_owned_secret(kubectl, 'ai-sdlc-review-model-client', {'token': secrets.token_urlsafe(48)}, cluster_uid)

@@ -191,7 +191,9 @@ def identity_material(provider, image, repository, environment):
     return json.loads(result.stdout)
 
 
-def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False, verification=False, publication=False, merge=False, require_build=False, build=False):
+def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False, verification=False, publication=False, merge=False, require_build=False, build=False, installer=None):
+    api = installer or SimpleNamespace(owned_secret=owned_secret, read_resource=read_resource,
+        create_owned_secret=create_owned_secret, run=run)
     if build and (not merge or repository != 'os-santiago/saferus' or environment != 'ai-sdlc-production'):
         raise ValueError('Build requires reviewed Saferus merge and test production')
     require_build = require_build or build
@@ -213,7 +215,7 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
     preserved_inner_policy = None
     for role in roles:
         name = 'ai-sdlc-identity-' + role
-        current = owned_secret(kubectl, name, cluster_uid)
+        current = api.owned_secret(kubectl, name, cluster_uid)
         if current is not None:
             if set(current) != {'identity.json', 'public-key.json'}:
                 raise ValueError('Unexpected identity Secret shape: ' + name)
@@ -233,7 +235,7 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
             pending.append((name, {'identity.json': json.dumps(identity, sort_keys=True),
                                    'public-key.json': json.dumps(material['policy']['keys'][identity['keyId']], sort_keys=True)}))
         name = 'ai-sdlc-database-' + role
-        current = owned_secret(kubectl, name, cluster_uid)
+        current = api.owned_secret(kubectl, name, cluster_uid)
         if current is not None:
             if set(current) != {'uri', 'password'} or current['uri'] != component_uri(role, current['password']):
                 raise ValueError('Inconsistent component database Secret: ' + name)
@@ -244,7 +246,7 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
         passwords[role] = password
     if len(set(passwords.values())) != len(roles):
         raise ValueError('Component database credentials must be distinct')
-    current_policy = read_resource(kubectl, 'configmap', 'ai-sdlc-authority')
+    current_policy = api.read_resource(kubectl, 'configmap', 'ai-sdlc-authority')
     if current_policy is not None:
         if current_policy.get('metadata', {}).get('annotations', {}).get('ai-sdlc.io/cluster-uid') != cluster_uid:
             raise ValueError('Authority policy ownership does not match this installation')
@@ -272,7 +274,7 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
         if candidate:
             material['policy']['grants'] = [g for g in reviewed_grants
                 if g['operation'] in ('admit-issue', 'plan-admission', 'execute-work') or (verification and g['operation'] == 'verify-artifact') or (publication and g['operation'] == 'publish-candidate') or (merge and g['operation'] == 'merge-publication')]
-    current_passwords = owned_secret(kubectl, 'ai-sdlc-database-roles', cluster_uid)
+    current_passwords = api.owned_secret(kubectl, 'ai-sdlc-database-roles', cluster_uid)
     if current_passwords is not None:
         if set(current_passwords) != {'passwords.json'}:
             raise ValueError('Migrator credentials differ from the component database Secrets')
@@ -286,7 +288,7 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
         pending.append(('ai-sdlc-database-roles', {'passwords.json': json.dumps(passwords, sort_keys=True)}))
     # Validate all key pairs and policy before creating any of this bootstrap's
     # resources. Neither subprocess output nor private input is printed.
-    run([provider, 'run', '--rm', '-i', '--network=none', '--log-driver=none', image,
+    api.run([provider, 'run', '--rm', '-i', '--network=none', '--log-driver=none', image,
          'validate-bootstrap'], input=json.dumps(material), capture_output=True)
     outer_policy = None
     if build:
@@ -302,8 +304,10 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
             if preserved_inner_policy is not None and key_id in preserved_inner_policy.get('keys', {}):
                 raise ValueError('Build identity must not belong to the inner policy')
             del material['policy']['keys'][key_id]
+    if installer is not None and (pending or password_upgrade is not None):
+        raise ValueError('Prepared configuration requires its original complete identities and database credentials')
     for name, values in pending:
-        create_owned_secret(kubectl, name, values, cluster_uid)
+        api.create_owned_secret(kubectl, name, values, cluster_uid)
     if password_upgrade is not None:
         extend_owned_role_secret(kubectl, cluster_uid, *password_upgrade)
     result = {'authority': {'policyJSON': json.dumps(material['policy'], sort_keys=True),
@@ -313,35 +317,36 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
     return result
 
 
-def configure_github_client(kubectl, cluster_uid, repository, refresh=False):
-    secrets_api = SimpleNamespace(owned_secret=owned_secret, read_resource=read_resource,
+def configure_github_client(kubectl, cluster_uid, repository, refresh=False, installer=None):
+    secrets_api = installer or SimpleNamespace(owned_secret=owned_secret, read_resource=read_resource,
                                   create_owned_secret=create_owned_secret, run=run)
     return github_client.configure(secrets_api, kubectl, cluster_uid, repository, refresh)
 
 
-def configure_publication_client(kubectl, cluster_uid, repository, auth, refresh=False):
+def configure_publication_client(kubectl, cluster_uid, repository, auth, refresh=False, installer=None):
+    api = installer or SimpleNamespace(owned_secret=owned_secret, read_resource=read_resource,
+        create_owned_secret=create_owned_secret, run=run)
     name = 'ai-sdlc-publication-client'
     if repository not in ('os-santiago/homedir', 'os-santiago/saferus'):
         raise ValueError('Publication supports only reviewed Homedir or Saferus')
-    if owned_secret(kubectl, name, cluster_uid) is None and auth != 'gh-cli':
+    if api.owned_secret(kubectl, name, cluster_uid) is None and auth != 'gh-cli':
         raise ValueError('Publication needs an explicitly imported client via --github-auth gh-cli')
-    api = SimpleNamespace(owned_secret=owned_secret, read_resource=read_resource,
-                          create_owned_secret=create_owned_secret, run=run)
     github_client.configure(api, kubectl, cluster_uid, repository, refresh, name=name)
-    resource = read_resource(kubectl, 'secret', name)
+    resource = api.read_resource(kubectl, 'secret', name)
     revision = (resource or {}).get('metadata', {}).get('resourceVersion', '')
     if not re.fullmatch(r'[0-9]{1,64}', revision):
         raise ValueError('Invalid publication credential resource version')
     return revision
 
 
-def shadow_intake_config(kubectl, cluster_uid, repository):
-    current = owned_secret(kubectl, 'ai-sdlc-github-client', cluster_uid)
+def shadow_intake_config(kubectl, cluster_uid, repository, installer=None):
+    api = installer or SimpleNamespace(owned_secret=owned_secret)
+    current = api.owned_secret(kubectl, 'ai-sdlc-github-client', cluster_uid)
     if current is None:
         raise ValueError('Shadow intake requires an explicitly imported GitHub client; run credentials --github-auth gh-cli first')
     # Revalidate the existing credential without falling back to ambient gh.
-    configure_github_client(kubectl, cluster_uid, repository)
-    if owned_secret(kubectl, 'ai-sdlc-github-client', cluster_uid) != current:
+    configure_github_client(kubectl, cluster_uid, repository, installer=installer)
+    if api.owned_secret(kubectl, 'ai-sdlc-github-client', cluster_uid) != current:
         raise ValueError('GitHub client changed while deriving intake authorization; retry installation')
     credential = json.loads(current['credential.json'])
     policy = json.loads((LOCAL / 'intake-policy.json').read_text())
@@ -372,6 +377,9 @@ def _main(argv, stack):
     parser.add_argument('--provider', choices=['auto', 'docker', 'podman'])
     parser.add_argument('--images', type=Path)
     parser.add_argument('--build-bundle', type=Path, help='Reviewed public build profile, original slots and pinned controller image; Konflux only')
+    parser.add_argument('--configure-prepared', action='store_true', help='Configure an empty prepared runtime while retaining both freezes and zero replicas')
+    parser.add_argument('--provenance-trust', type=Path, help='Separately approved public provenance trust; prepared configuration only')
+    parser.add_argument('--build-images', type=Path, help='Reviewed target controller image pins; prepared configuration only')
     parser.add_argument('--timeout', default='10m')
     parser.add_argument('--repository')
     parser.add_argument('--environment')
@@ -394,6 +402,11 @@ def _main(argv, stack):
             or args.profile != 'verification' or args.repository != 'os-santiago/saferus'
             or args.environment != 'ai-sdlc-production' or not args.merge or not args.publication or not args.independent_review):
         raise ValueError('Build installation requires explicit Konflux Saferus verification/review/publication/merge scope')
+    if args.configure_prepared or args.provenance_trust is not None or args.build_images is not None:
+        if (not args.configure_prepared or args.command != 'local' or args.platform != 'konflux'
+                or args.build_bundle is None or args.build_images is None or args.provenance_trust is None
+                or args.refresh_github_credential or args.refresh_model_credential):
+            raise ValueError('Prepared configuration requires explicit local Konflux build bundle, controller pins and approved provenance trust, without credential rotation')
     konflux_runtime_install.validate_options(args)
     if args.merge and not args.publication:
         raise ValueError('Merge requires explicit verified publication')
@@ -437,7 +450,7 @@ def _main(argv, stack):
     cache = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'ai-sdlc/tools'
     if args.command != 'tools':
         image_lock(args.images)
-    build_bundle = build_runtime_install.load_bundle(args.build_bundle, image_lock(args.images)) if args.build_bundle is not None else None
+    build_bundle = build_runtime_install.load_bundle(args.build_bundle, image_lock(args.images)) if args.build_bundle is not None and not args.configure_prepared else None
     binaries = tools(cache)
     if args.command == 'tools':
         print(json.dumps(binaries, indent=2))
@@ -471,8 +484,11 @@ def _main(argv, stack):
     if args.platform == 'konflux':
         konflux_runtime_install.lock_state(state, stack)
         provider = konflux_runtime_install.select_provider(provider, state, args.cluster)
+        if args.configure_prepared:
+            import prepared_configuration
+            return prepared_configuration.install_prepared(args,state,binaries,provider,execution_values)
         if args.command == 'local' and ((state / 'bootstrap-preparation.json').exists() or (state / 'bootstrap-preparation.json').is_symlink()):
-            raise ValueError('Prepared runtime remains paused; continuation is not implemented yet (issue #574); retain frozen state and do not delete the preparation record instead of ordinary local reconciliation')
+            raise ValueError('Prepared runtime remains paused; use explicit --configure-prepared with reviewed inputs; never delete preparation custody for ordinary reconciliation')
     if provider == 'auto':
         provider = next((p for p in ('docker', 'podman') if shutil.which(p)), None)
     if not provider or not shutil.which(provider):
