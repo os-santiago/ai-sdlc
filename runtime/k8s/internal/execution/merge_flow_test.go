@@ -168,7 +168,7 @@ func TestInstalledMergePrivilegesAndAuthoritySelection(t *testing.T) {
 		}
 	}
 	passwords := map[string]string{}
-	for _, role := range []string{"intake", "admission-controller", "orchestrator", "worker", "verifier", "release-manager", "relay", "deployer"} {
+	for _, role := range []string{"intake", "admission-controller", "orchestrator", "worker", "verifier", "release-manager", "relay", "deployer", "build-controller"} {
 		passwords[role] = strings.ReplaceAll(role, "-", "_") + strings.Repeat("q", 40)
 	}
 	if e := f.Admin.ProvisionRolesForCapabilities(ctx, passwords, "verification", true, true); e != nil {

@@ -56,6 +56,9 @@ var operations = map[string][2]string{
 	"verify-artifact":   {"worker", "verifier"},
 	"publish-candidate": {"verifier", "release-manager"},
 	"merge-publication": {"release-manager", "release-manager"},
+	"build-merged":      {"release-manager", "build-controller"},
+	"verify-built":      {"build-controller", "verifier"},
+	"promote-artifact":  {"verifier", "release-manager"},
 	"record-release":    {"release-manager", "orchestrator"},
 	"deploy-release":    {"release-manager", "deployer"},
 	"record-deployment": {"deployer", "release-manager"},
@@ -70,6 +73,7 @@ var floors = map[string]string{
 	"record-release": "auto-pr", "deploy-release": "auto-deploy",
 	"merge-publication": "auto-merge-low",
 	"record-deployment": "auto-deploy",
+	"build-merged":      "auto-deploy", "verify-built": "auto-deploy", "promote-artifact": "auto-deploy",
 }
 var eventTypes = map[string]string{
 	"admit-issue": "IssueObserved", "plan-admission": "IssueAdmissionDecided",
@@ -78,12 +82,13 @@ var eventTypes = map[string]string{
 	"record-release": "ReleaseGateDecided", "deploy-release": "ReleaseReady",
 	"merge-publication": "PublicationMergeRequested",
 	"record-deployment": "DeploymentVerified",
+	"build-merged":      "MergedBuildRequested", "verify-built": "ArtifactBuildCompleted", "promote-artifact": "ArtifactProvenanceVerified",
 }
 
 var roles = map[string]bool{
 	"intake": true, "admission-controller": true, "orchestrator": true,
 	"worker": true, "verifier": true, "release-manager": true,
-	"relay": true, "deployer": true,
+	"relay": true, "deployer": true, "build-controller": true,
 }
 
 func DecodeStrict(raw []byte, value any) error {

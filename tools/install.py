@@ -30,6 +30,7 @@ COMPONENT_NAMES = {'intake': 'intake', 'admissionController': 'admission-control
 COMPONENTS = tuple(COMPONENT_NAMES)
 NAMESPACE = 'ai-sdlc-runtime'
 ROLES = ('intake', 'admission-controller', 'orchestrator', 'worker', 'verifier', 'release-manager', 'relay', 'deployer')
+ALL_ROLES = ROLES + ('build-controller',)
 
 
 def run(args, **kwargs):
@@ -150,8 +151,27 @@ def create_owned_secret(kubectl, name, values, cluster_uid):
     run(kubectl + ['create', '-f', '-'], input=json.dumps(resource), stdout=subprocess.DEVNULL)
 
 
+
+def extend_owned_role_secret(kubectl, cluster_uid, previous, values):
+    """Append the reviewed role using Kubernetes UID/resourceVersion CAS."""
+    resource = read_resource(kubectl, 'secret', 'ai-sdlc-database-roles')
+    meta = (resource or {}).get('metadata', {})
+    if (resource is None or resource.get('type') != 'Opaque'
+            or meta.get('annotations', {}).get('ai-sdlc.io/cluster-uid') != cluster_uid
+            or not meta.get('uid') or not meta.get('resourceVersion')):
+        raise ValueError('Migrator credential ownership or version unavailable')
+    data = {key: base64.b64decode(value, validate=True).decode('utf-8')
+            for key, value in resource.get('data', {}).items()}
+    if data != previous:
+        raise ValueError('Migrator credentials changed during additive upgrade')
+    resource['data'] = {key: base64.b64encode(value.encode()).decode() for key, value in values.items()}
+    # Replace, never apply: stale versions fail without overwriting a new owner.
+    run(kubectl + ['replace', '-f', '-'], input=json.dumps(resource),
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def component_uri(role, password):
-    if role not in ROLES or not re.fullmatch(r'[A-Za-z0-9_-]{32,128}', password):
+    if role not in ALL_ROLES or not re.fullmatch(r'[A-Za-z0-9_-]{32,128}', password):
         raise ValueError('Invalid component database credential')
     return ('postgresql://aisdlc_' + role.replace('-', '_') + ':' + password
             + '@ai-sdlc-postgres:5432/ai_sdlc?sslmode=disable')
@@ -168,18 +188,24 @@ def identity_material(provider, image, repository, environment):
     return json.loads(result.stdout)
 
 
-def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False, verification=False, publication=False, merge=False):
+def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False, verification=False, publication=False, merge=False, require_build=False):
     if merge and not publication:
         raise ValueError('Merge requires verified publication')
     if publication and (not candidate or not verification or repository not in ('os-santiago/homedir', 'os-santiago/saferus')):
         raise ValueError('Invalid publication authority scope')
     image = lock['image']['repository'] + '@' + lock['migrator']['digest']
     material = identity_material(provider, image, repository, environment)
+    supplied_roles = set(material.get('identities', {}))
+    if supplied_roles not in (set(ROLES), set(ALL_ROLES)) or (require_build and supplied_roles != set(ALL_ROLES)):
+        raise ValueError('Pinned migrator image does not support the required component identity set')
+    roles = ALL_ROLES if supplied_roles == set(ALL_ROLES) else ROLES
     reviewed_grants = material['policy']['grants']
     if merge and not any(g.get('operation') == 'merge-publication' for g in reviewed_grants):
         raise ValueError('Pinned migrator image does not support the merge capability')
     pending, passwords = [], {}
-    for role in ROLES:
+    password_upgrade = None
+    preserved_inner_policy = None
+    for role in roles:
         name = 'ai-sdlc-identity-' + role
         current = owned_secret(kubectl, name, cluster_uid)
         if current is not None:
@@ -210,7 +236,7 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
             password = secrets.token_urlsafe(48)
             pending.append((name, {'password': password, 'uri': component_uri(role, password)}))
         passwords[role] = password
-    if len(set(passwords.values())) != len(ROLES):
+    if len(set(passwords.values())) != len(roles):
         raise ValueError('Component database credentials must be distinct')
     current_policy = read_resource(kubectl, 'configmap', 'ai-sdlc-authority')
     if current_policy is not None:
@@ -219,8 +245,14 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
         policy = json.loads(current_policy.get('data', {}).get('policy.json', '{}'))
         if policy.get('repository') != repository or policy.get('environment') != environment:
             raise ValueError('Existing authority scope differs; use its reviewed repository and environment')
+        preserved_inner_policy = json.loads(json.dumps(policy))
         for identity in material['identities'].values():
             key_id = identity['keyId']
+            # The new role is additive. Existing identities are never rotated.
+            if identity['role'] == 'build-controller' and key_id not in policy.get('keys', {}):
+                if any(key.get('role') == 'build-controller' for key in policy.get('keys', {}).values()):
+                    raise ValueError('Conflicting build-controller authority identity')
+                policy['keys'][key_id] = material['policy']['keys'][key_id]
             if policy.get('keys', {}).get(key_id) != material['policy']['keys'][key_id]:
                 raise ValueError('Existing authority policy and component identity differ; restore or rotate through reviewed configuration')
         material['policy'] = policy
@@ -236,16 +268,31 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
                 if g['operation'] in ('admit-issue', 'plan-admission', 'execute-work') or (verification and g['operation'] == 'verify-artifact') or (publication and g['operation'] == 'publish-candidate') or (merge and g['operation'] == 'merge-publication')]
     current_passwords = owned_secret(kubectl, 'ai-sdlc-database-roles', cluster_uid)
     if current_passwords is not None:
-        if set(current_passwords) != {'passwords.json'} or json.loads(current_passwords['passwords.json']) != passwords:
+        if set(current_passwords) != {'passwords.json'}:
             raise ValueError('Migrator credentials differ from the component database Secrets')
+        previous = json.loads(current_passwords['passwords.json'])
+        if previous != passwords:
+            if (set(previous) != set(roles) - {'build-controller'}
+                    or any(previous[role] != passwords[role] for role in previous)):
+                raise ValueError('Migrator credentials differ from the component database Secrets')
+            password_upgrade = (current_passwords, {'passwords.json': json.dumps(passwords, sort_keys=True)})
     else:
         pending.append(('ai-sdlc-database-roles', {'passwords.json': json.dumps(passwords, sort_keys=True)}))
     # Validate all key pairs and policy before creating any of this bootstrap's
     # resources. Neither subprocess output nor private input is printed.
     run([provider, 'run', '--rm', '-i', '--network=none', '--log-driver=none', image,
          'validate-bootstrap'], input=json.dumps(material), capture_output=True)
+    # Bootstrap validation uses all public keys only in this private input.
+    # The build identity is not added to the inner policy or its revision.
+    for key_id, key in list(material['policy']['keys'].items()):
+        if key.get('role') == 'build-controller':
+            if preserved_inner_policy is not None and key_id in preserved_inner_policy.get('keys', {}):
+                raise ValueError('Build identity must not belong to the inner policy')
+            del material['policy']['keys'][key_id]
     for name, values in pending:
         create_owned_secret(kubectl, name, values, cluster_uid)
+    if password_upgrade is not None:
+        extend_owned_role_secret(kubectl, cluster_uid, *password_upgrade)
     return {'authority': {'policyJSON': json.dumps(material['policy'], sort_keys=True),
                           'installationUID': cluster_uid}}
 

@@ -24,6 +24,9 @@ missing top-level fields and an implicit or null freeze value.
 | verifier | release-manager | publish-candidate / CandidateVerified | auto-pr |
 | release-manager | release-manager | merge-publication / PublicationMergeRequested | auto-merge-low |
 | release-manager | orchestrator | record-release / ReleaseGateDecided | auto-pr |
+| release-manager | build-controller | build-merged / MergedBuildRequested | auto-deploy |
+| build-controller | verifier | verify-built / ArtifactBuildCompleted | auto-deploy |
+| verifier | release-manager | promote-artifact / ArtifactProvenanceVerified | auto-deploy |
 | release-manager | deployer | deploy-release / ReleaseReady | auto-deploy |
 | deployer | release-manager | record-deployment / DeploymentVerified | auto-deploy |
 
@@ -156,3 +159,35 @@ fixture. Run `go test -count=1 -p 1 ./...` with `AI_SDLC_TEST_DATABASE_URL` poin
 dedicated disposable PostgreSQL database for durable delivery and ownership
 tests. Deployment integration must prove these same boundaries and fail-closed
 startup with the installed component identities before active mode is enabled.
+
+## Separated local outerloop contract
+
+The Saferus outerloop uses a separate reviewed policy for the exact repository
+`os-santiago/saferus` and test environment `ai-sdlc-production`. Its five finite
+operations are build, provenance verification, promotion, deployment and
+recording deployment. The inner policy remains `auto-merge-low`; raising its
+ceiling to `auto-deploy` is rejected. Both freezes stop new outer effects.
+
+The build command binds both policy revisions, the immutable merge record,
+actual merge commit/tree, current issue revision/generation, intake configuration,
+recipe and installation profile. The maximum authority lifetime is 20 minutes.
+A receipt alone is insufficient: receivers and journal fences must validate the
+command and fresh current authority. Commands cannot supply shell text, images,
+YAML, credentials or destinations.
+
+The new build-controller identity is distinct. Its creation grants only owned
+signed transport access; build journal privileges and Kubernetes effects require
+separate reviewed enablement. An existing installation adds its identity and
+password without rotating the original eight credentials or adding its key to
+the inner policy. The migrator password addition uses Secret UID/resourceVersion
+replacement, and interrupted creation can be reapplied. A pinned old migrator
+remains compatible with inner-only setup; requesting build support rejects it
+before resource mutation. New images supply the additional identity.
+
+`Relay.PollLoops` is a single consumer. It selects the verification, transport
+and acknowledgement policy by the closed operation mapping, with no fallback.
+The ordinary inner-only relay remains unchanged until outer enablement exists.
+
+This contract does **not** activate builds, promotions or deployments. The
+operational journal, closed Kubernetes compiler, admission policy, bounded
+storage custody, provenance binding and runtime acceptance remain prerequisites.
