@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/deployment"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/deploymentrecord"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/releasing"
 	"time"
 )
@@ -14,9 +15,12 @@ import (
 // Recording a fact grants no new effect authority. Expired/uncertain claims are
 // quarantined, not replayed or adopted from current Kubernetes image equality.
 func deploymentArchived(ctx context.Context, q Querier, c DeploymentClaim) (releasing.Configuration, DeploymentInput, error) {
+	return deploymentArchivedRole(ctx, q, c, "deployer")
+}
+func deploymentArchivedRole(ctx context.Context, q Querier, c DeploymentClaim, role string) (releasing.Configuration, DeploymentInput, error) {
 	var cfg releasing.Configuration
 	var r DeploymentInput
-	if !deploymentID.MatchString(c.ID) || !lifecycleUUID.MatchString(c.Token) || AssertComponent(ctx, q, "deployer") != nil {
+	if (role != "deployer" && role != "release-manager") || !deploymentID.MatchString(c.ID) || !lifecycleUUID.MatchString(c.Token) || AssertComponent(ctx, q, role) != nil {
 		return cfg, r, ErrExecution
 	}
 	var raw, signed, config []byte
@@ -37,15 +41,15 @@ func deploymentArchived(ctx context.Context, q Querier, c DeploymentClaim) (rele
 	// History reader authenticates every completed upstream stage. Bind at the
 	// original issuance time so recording an ACK cannot renew execution authority.
 	r.Command = command
-	r.Promotion, e = readPromotionRecord(ctx, q, command.PromotionID, "deployer")
+	r.Promotion, e = readPromotionRecord(ctx, q, command.PromotionID, role)
 	if e != nil {
 		return cfg, r, ErrExecution
 	}
-	r.Provenance, e = readProvenanceRecord(ctx, q, r.Promotion.Command.ProvenanceID, "deployer")
+	r.Provenance, e = readProvenanceRecord(ctx, q, r.Promotion.Command.ProvenanceID, role)
 	if e != nil {
 		return cfg, r, ErrExecution
 	}
-	r.Build, e = readBuiltRecord(ctx, q, r.Provenance.Command.BuildID, "deployer")
+	r.Build, e = readBuiltRecord(ctx, q, r.Provenance.Command.BuildID, role)
 	if e != nil || command.BindRecords(cfg, r.Promotion, r.Provenance, r.Build, time.UnixMilli(command.IssuedAt)) != nil {
 		return cfg, r, ErrExecution
 	}
@@ -186,34 +190,28 @@ func (j *DeploymentJournal) ExpireDeployments(ctx context.Context) error {
 
 // DeploymentRecord is historical evidence, not authority for another effect.
 // The authenticated reader can resolve lost terminal COMMIT acknowledgements.
-type DeploymentRecord struct {
-	Command       deployment.Command
-	Configuration releasing.Configuration
-	Plan          releasing.Plan
-	Receipt       releasing.Receipt
-	Health        releasing.Health
-	Outcome       string
-	RecordedAt    time.Time
-}
+type DeploymentRecord = deploymentrecord.Record
 
-func (r DeploymentRecord) Digest() string { raw, _ := json.Marshal(r); return authority.Digest(raw) }
 func (j *DeploymentJournal) ReadDeploymentRecord(ctx context.Context, c DeploymentClaim) (DeploymentRecord, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	cfg, input, e := deploymentArchived(ctx, j.Pool, c)
+	return readDeploymentRecord(ctx, j.Pool, c, "deployer")
+}
+func readDeploymentRecord(ctx context.Context, q Querier, c DeploymentClaim, role string) (DeploymentRecord, error) {
+	cfg, input, e := deploymentArchivedRole(ctx, q, c, role)
 	if e != nil {
 		return DeploymentRecord{}, e
 	}
 	var state, kind, hash string
 	var raw []byte
 	var at time.Time
-	if j.Pool.QueryRowContext(ctx, `SELECT q.state,h.kind,h.digest,h.health,h.recorded_at FROM deployment_requests q JOIN deployment_health h ON h.request_id=q.id WHERE q.id=$1 AND q.claim_token=$2 AND q.state IN('deployed','rolled-back') AND h.recorded_at<q.expires_at AND h.recorded_at>=q.created_at AND h.recorded_at<=clock_timestamp()`, c.ID, c.Token).Scan(&state, &kind, &hash, &raw, &at) != nil || authority.Digest(raw) != hash || (state == "deployed" && kind != "advance") || (state == "rolled-back" && kind != "rollback") {
+	if q.QueryRowContext(ctx, `SELECT q.state,h.kind,h.digest,h.health,h.recorded_at FROM deployment_requests q JOIN deployment_health h ON h.request_id=q.id WHERE q.id=$1 AND q.claim_token=$2 AND q.state IN('deployed','rolled-back') AND h.recorded_at<q.expires_at AND h.recorded_at>=q.created_at AND h.recorded_at<=clock_timestamp()`, c.ID, c.Token).Scan(&state, &kind, &hash, &raw, &at) != nil || authority.Digest(raw) != hash || (state == "deployed" && kind != "advance") || (state == "rolled-back" && kind != "rollback") {
 		return DeploymentRecord{}, ErrExecution
 	}
-	receipt, e := readDeploymentReceipt(ctx, j.Pool, c, kind, cfg, input)
+	receipt, e := readDeploymentReceipt(ctx, q, c, kind, cfg, input)
 	var health releasing.Health
 	if e != nil || authority.DecodeStrict(raw, &health) != nil || deployment.ValidateHealth(cfg.Target, receipt, health, at) != nil {
 		return DeploymentRecord{}, ErrExecution
 	}
-	return DeploymentRecord{input.Command, cfg, input.Promotion.Plan, receipt, health, state, at}, nil
+	return DeploymentRecord{Command: input.Command, Configuration: cfg, Plan: input.Promotion.Plan, Receipt: receipt, Health: health, Outcome: state, RecordedAt: at}, nil
 }
