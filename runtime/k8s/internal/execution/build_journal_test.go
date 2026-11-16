@@ -23,7 +23,9 @@ type buildFixture struct {
 	passwords    map[string]string
 }
 
-func newBuildFixture(t *testing.T) buildFixture {
+type buildFixtureSource struct{ Source, Tree string }
+
+func newBuildFixture(t *testing.T, actual ...buildFixtureSource) buildFixture {
 	t.Helper()
 	ctx := context.Background()
 	var outer authority.Policy
@@ -59,9 +61,18 @@ func newBuildFixture(t *testing.T) buildFixture {
 		f.Material.Policy = p
 		f.Config.Repository = p.Repository
 		f.command.Repository = p.Repository
+		if len(actual) == 1 {
+			f.buildFixtureTree = actual[0].Tree
+		}
 	})
 	claimed := queuedMerge(t, merge, r)
-	proof := completeMerge(t, merge, claimed, mc)
+	var overrides []store.MergeReceipt
+	if len(actual) == 1 {
+		v := mergeReceipt(mc)
+		v.CommitSHA = actual[0].Source
+		overrides = append(overrides, v)
+	}
+	proof := completeMerge(t, merge, claimed, mc, overrides...)
 	if e := merge.FinishMerge(ctx, claimed, proof); e != nil {
 		t.Fatal(e)
 	}

@@ -1,0 +1,32 @@
+{
+  "scope": "inactive journal-backed build composition",
+  "autonomousE2E": false,
+  "operationalControllerActive": false,
+  "releaseAuthorized": false,
+  "realIntegration": {
+    "report": "/tmp/ai-sdlc-journal-closed-build-v1/report.json",
+    "status": "passed",
+    "cleanupComplete": true,
+    "syntheticHistoricalMerge": true,
+    "actualWorkloadExecution": true,
+    "durableBuiltRecordValidated": true,
+    "imageDigest": "sha256:644b019b24df682d09c26a6c885912c985fcc14ae89521f8e0099ae20dc48076"
+  },
+  "baselineDatabaseSuite": {
+    "report": "/tmp/ai-sdlc-build-controller-validation-v3/report.json",
+    "passedTests": 1490,
+    "passedPackages": 42,
+    "status": "passed"
+  },
+  "postBaselineHardening": [
+    "required explicit inner/outer policy fields, including freeze; focused buildflow/podtransport tests",
+    "nil database guard before queued execution",
+    "named non-skipped test and durable result required by the isolated composition harness"
+  ],
+  "pending": [
+    "operational UID cleanup and containment",
+    "component installation and signed dispatch",
+    "operational provenance/promotion/deployment/acceptance",
+    "genuine issue-to-test-production E2E"
+  ]
+}

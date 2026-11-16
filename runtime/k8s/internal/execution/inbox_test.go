@@ -20,8 +20,9 @@ import (
 
 type fixture struct {
 	testsupport.Fixture
-	db      *store.DB
-	command Command
+	db               *store.DB
+	command          Command
+	buildFixtureTree string
 }
 
 func newFixture(t *testing.T, configure ...func(*fixture)) *fixture {

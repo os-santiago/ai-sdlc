@@ -18,29 +18,12 @@ type BuildClaim struct {
 }
 
 func (j *BuildJournal) QueueBuild(ctx context.Context, payload, receipt []byte) error {
-	cfg, c, e := j.current(payload, receipt)
-	if e != nil {
-		return e
+	if j == nil || j.DB == nil {
+		return ErrExecution
 	}
-	inner, _ := json.Marshal(cfg.Inner)
-	outer, _ := json.Marshal(cfg.Outer)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	return j.DB.WithTx(ctx, func(tx *sql.Tx) error {
-		if AssertComponent(ctx, tx, "build-controller") != nil || j.fresh(ctx, tx, cfg, c) != nil {
-			return ErrExecution
-		}
-		r, e := tx.ExecContext(ctx, `INSERT INTO build_requests(id,merge_id,payload_digest,payload,receipt,inner_policy,outer_policy,expires_at) SELECT $1,$2,$3,$4,$5,$6,$7,$8 WHERE $8>clock_timestamp() AND $8<=clock_timestamp()+interval '1200 seconds'`, c.ID(), c.MergeID, authority.Digest(payload), payload, receipt, inner, outer, time.UnixMilli(c.ExpiresAt))
-		if e != nil {
-			return ErrExecution
-		}
-		n, e := r.RowsAffected()
-		if e != nil || n != 1 {
-			return ErrExecution
-		}
-		_, _, e = j.current(payload, receipt)
-		return e
-	})
+	return j.DB.WithTx(ctx, func(tx *sql.Tx) error { return j.QueueBuildTx(ctx, tx, payload, receipt) })
 }
 func (j *BuildJournal) ClaimBuild(ctx context.Context, id string, slot building.Slot) (BuildClaim, error) {
 	c := BuildClaim{ID: id, Token: NewID(), SlotID: slot.ID(), SlotDigest: slot.Digest()}

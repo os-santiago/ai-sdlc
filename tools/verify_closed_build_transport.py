@@ -21,6 +21,7 @@ def main():
     parser.add_argument('--preflight-only', action='store_true')
     parser.add_argument('--cluster', default='ai-sdlc-konflux-reviewed')
     parser.add_argument('--test-binary', type=Path)
+    parser.add_argument('--journal-test-binary', type=Path)
     parser.add_argument('--installer-binary', type=Path)
     parser.add_argument('--installer-image')
     parser.add_argument('--publisher-image', required=True)
@@ -40,6 +41,8 @@ def main():
     selected_binary = args.installer_binary or args.test_binary
     if selected_binary.is_symlink() or not selected_binary.is_file() or not 0 < selected_binary.stat().st_size < 128 << 20:
         raise ValueError('Bounded compiled fixture binary required')
+    if args.journal_test_binary is not None and (args.preflight_only or not args.journal_test_binary.is_file() or args.journal_test_binary.stat().st_size>128<<20):
+        raise ValueError('Bounded explicit journal test binary and execution mode required')
     args.output.mkdir(mode=0o700, parents=True, exist_ok=False)
     state, tools = guard.installation_paths(args.cluster)
     owner = json.loads((state / 'konflux-ownership.json').read_text())
@@ -325,7 +328,13 @@ def main():
             report['workloadMayHaveExecuted'] = True
             save()
         if not args.installer_binary:
-            execute('preflight' if args.preflight_only else 'execute', payload)
+            if args.journal_test_binary is not None:
+                execute('journal-prepare', payload)
+                import closed_build_journal_fixture
+                closed_build_journal_fixture.execute(deadline,provider,node_id,args.journal_test_binary,payload,node_json('profile.json'),args.output,
+                                                    lambda source,name:copy_to(source,root+'/evidence/'+name))
+            else:
+                execute('preflight' if args.preflight_only else 'execute', payload)
             report['transport'] = node_json('transport-report.json')
         if report['transport'].get('status') != 'passed':
             raise ValueError('Transport did not complete both original phases')

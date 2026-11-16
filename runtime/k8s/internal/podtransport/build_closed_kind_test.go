@@ -112,7 +112,7 @@ func TestRealClosedBuildTransport(t *testing.T) {
 		write("build-trust.json", map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "build-trust", "namespace": buildworkload.Namespace}, "immutable": true, "data": map[string]any{"trust.json": string(body)}})
 		return
 	}
-	if input.Phase != "execute" && input.Phase != "preflight" {
+	if input.Phase != "execute" && input.Phase != "preflight" && input.Phase != "journal-prepare" {
 		t.Fatal("unknown fixture phase")
 	}
 	for _, key := range buildworkload.DependencyKeys() {
@@ -145,7 +145,7 @@ func TestRealClosedBuildTransport(t *testing.T) {
 	writeRaw("publish.json", r.compiled.Publish)
 	report := map[string]any{"status": "running", "scope": "isolated component fixture", "syntheticAuthority": true, "autonomousE2E": false, "liveWorkflowAdvanced": false, "releaseAuthorized": false, "buildName": r.runName("build"), "publishName": r.runName("publish"), "plan": r.Plan()}
 	write("transport-report.json", report)
-	if input.Phase == "preflight" {
+	if input.Phase == "preflight" || input.Phase == "journal-prepare" {
 		if r.inspectInstalledProfile(ctx) != nil {
 			t.Fatal("installed profile preflight rejected")
 		}
