@@ -39,6 +39,26 @@ class BuildInstallTests(unittest.TestCase):
                 self.assertNotIn('private-sentinel',str(caught.exception))
                 self.assertNotIn('secret-sentinel',str(caught.exception))
 
+    def test_loopback_observation_is_the_only_host_network_operation(self):
+        for operation,host,node in [('compile-build-installation','127.0.0.1',None),
+                ('inspect-empty-bootstrap','192.0.2.1',None),('inspect-empty-bootstrap','127.0.0.1','a'*64)]:
+            with patch.object(build.subprocess,'run') as run,self.assertRaises(ValueError):
+                build.component_call('podman',IMAGE,operation,{'databaseURL':'postgresql://private:secret@'+host+':15432/ai_sdlc'},node,host_loopback_port=15432)
+            run.assert_not_called()
+        calls=[]
+        def run(args,**kwargs):
+            calls.append((args,kwargs))
+            if args[1]=='run':return subprocess.CompletedProcess(args,0,'{}','')
+            if args[1]=='inspect':return subprocess.CompletedProcess(args,1,'','')
+            return subprocess.CompletedProcess(args,0,'','')
+        with patch.object(build.subprocess,'run',side_effect=run):
+            build.component_call('podman',IMAGE,'inspect-empty-bootstrap',{'databaseURL':'postgresql://private:secret@127.0.0.1:15432/ai_sdlc'},host_loopback_port=15432)
+        command,options=calls[0]
+        self.assertEqual(command[command.index('--network')+1],'host')
+        self.assertNotIn('--user',command)
+        self.assertIn('--read-only',command);self.assertIn('--cap-drop=ALL',command)
+        self.assertNotIn('secret',' '.join(command));self.assertEqual(options['timeout'],30)
+
     def bundle(self):
         return {'version':'ai-sdlc.build-desired/v1','revision':'b'*40,'controllerDigest':'sha256:'+'c'*64,
                 'profile':{'clusterUID':'original','publisherImage':IMAGE},'slots':[{'original':'slot'}],'issueMaxAgeSeconds':60}

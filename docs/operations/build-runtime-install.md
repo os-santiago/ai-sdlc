@@ -120,7 +120,7 @@ Endpoint, Pod, StatefulSet, PVC and PV. It checks for other producers and
 execution/cleanup workloads before observing the database. The migrator uses a
 bounded read-only snapshot, requires RLS-independent visibility and rejects any
 workflow row, including completed history, as well as unknown or missing tables
-and migrations. No SQL is supplied by the operator.
+and migrations. No SQL is supplied by the operator. The non-root inspector uses an authenticated Kubernetes API tunnel bound to the original PostgreSQL Pod UID, checked before and after observation. It listens only on host loopback and is capped at 75 seconds by the Linux `timeout` utility; the inspector has a 30-second container deadline, no capabilities, a read-only filesystem and no mounted host credentials. Only this fixed read-only operation accepts the loopback network mode. Native policy need not allow auxiliary node-network containers to access Pod IPs. Tunnel success is administrative access evidence, not runtime network readiness.
 
 After recording original identities and its intent, the installer reapplies
 the same Helm desired state with `runtime.paused: true`. The chart requires

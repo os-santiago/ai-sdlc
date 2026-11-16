@@ -20,6 +20,7 @@ from urllib.parse import urlsplit, urlunsplit
 import yaml
 
 import build_runtime_install
+import bootstrap_database_forward
 import konflux_runtime_install as platform
 
 VERSION = 'ai-sdlc.bootstrap-preparation/v1'
@@ -253,8 +254,9 @@ class Preparation:
     def inspect(self, paused=False):
         observed, uri = self.observe(paused)
         image = self.lock['image']['repository']+'@'+self.lock['migrator']['digest']
-        result = build_runtime_install.component_call(self.provider, image, 'inspect-empty-bootstrap',
-            {'databaseURL':uri, 'database':'ai_sdlc'}, observed['nodeID'])
+        with bootstrap_database_forward.original_database(self.run,self.kubectl,uri,observed['resources']['pod']) as (forwarded,port):
+            result = build_runtime_install.component_call(self.provider, image, 'inspect-empty-bootstrap',
+                {'databaseURL':forwarded, 'database':'ai_sdlc'}, host_loopback_port=port)
         if (set(result) != {'version','empty','observedAt','deliveryAuthorized'}
                 or result['version'] != 'ai-sdlc.empty-bootstrap-observation/v1'
                 or result['empty'] is not True or result['deliveryAuthorized'] is not False):

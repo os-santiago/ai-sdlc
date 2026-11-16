@@ -76,6 +76,8 @@ class PreparationTests(unittest.TestCase):
         self.p.call=lambda args:SimpleNamespace(stdout=json.dumps([{'Id':'a'*64,'Config':{'Labels':{'io.x-k8s.kind.cluster':'fixture'}},'State':{'Status':'running'}}]))
         self.namespace = patch.object(prep.platform,'namespace',return_value={'namespaceUID':'runtime-uid'})
         self.namespace.start(); self.addCleanup(self.namespace.stop)
+        self.forward=patch.object(prep.bootstrap_database_forward,'original_database',side_effect=lambda *args:contextlib.nullcontext(('fixture-private-uri',15432)))
+        self.forward.start();self.addCleanup(self.forward.stop)
 
     def test_original_authority_and_paused_positive_controls(self):
         original,_=self.p.observe()
