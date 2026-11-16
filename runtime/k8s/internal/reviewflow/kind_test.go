@@ -330,7 +330,7 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 		if storedState != "passed" || control.Scenario != "approve" {
 			t.Fatal("publication requires the approved isolated review fixture")
 		}
-		verifyPublicationFixture(t, admin, db, policy, config, in.Policy, in.Identity, in.PublicationIdentities)
+		verifyPublicationFixture(t, ctx, admin, db, policy, config, in.Policy, in.Identity, in.PublicationIdentities)
 	}
 	report, _ := json.Marshal(map[string]any{"scope": "isolated-candidate-behavior-review-controller", "scenario": control.Scenario, "realSCC": true, "realKubernetes": true, "realPostgres": true, "realHTTP": true, "syntheticIssue": true, "syntheticReviewModel": control.Scenario != "real-model", "syntheticGenerationModel": true, "realCodexCLI": control.Scenario == "real-model", "signedCandidateHandoff": true, "behaviorVerified": true, "reviewState": storedState, "cleanupState": cleanup, "modelCalls": calls.Load(), "confirmedHandoffs": handed, "proofCommitted": len(proofRaw) > 0, "secondPollDidNotReplay": true, "publicationAuthorized": false, "autonomousE2E": false})
 	if os.WriteFile(in.ReportFile, report, 0600) != nil {
