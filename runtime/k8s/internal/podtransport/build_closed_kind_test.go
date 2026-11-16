@@ -18,7 +18,6 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/building"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildstorage"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildworkload"
-	"golang.org/x/sys/unix"
 )
 
 // This explicitly isolated test bootstraps synthetic signing authority. It does
@@ -72,12 +71,9 @@ func TestRealClosedBuildTransport(t *testing.T) {
 	if e != nil {
 		t.Fatal("actual network targets invalid")
 	}
-	for _, key := range buildworkload.DependencyKeys() {
-		p.Dependencies[key] = buildworkload.Dependency{UID: input.Slot.NamespaceUID, SpecSHA256: strings.Repeat("a", 64)}
-	}
 	if input.Phase == "definitions" {
 		prepareClosedFixtureSlot(t, input.Slot)
-		policy, binding, e := buildworkload.Admission(p, []building.Slot{input.Slot})
+		policy, binding, e := buildworkload.AdmissionForInstallation(buildworkload.AdmissionConfiguration{Version: "ai-sdlc.build-admission-input/v1", ClusterUID: p.ClusterUID, NamespaceUID: p.NamespaceUID, PublisherImage: p.PublisherImage, DeniedTargets: p.DeniedTargets}, []building.Slot{input.Slot})
 		if e != nil {
 			t.Fatal("admission compilation")
 		}
@@ -242,35 +238,8 @@ func closedFixtureAuthority(t *testing.T, p buildworkload.Profile, slot building
 }
 func prepareClosedFixtureSlot(t *testing.T, s building.Slot) {
 	t.Helper()
-	root := "/var/local/ai-sdlc/build-slots/" + s.StorageIdentitySHA256
-	if os.Geteuid() != 0 {
-		t.Fatal("isolated custody setup requires node root")
-	}
-	entries, e := os.ReadDir(root)
-	if e != nil || len(entries) != 0 {
-		t.Fatal("fixture slot not empty")
-	}
-	var fs unix.Statfs_t
-	if unix.Statfs(root, &fs) != nil || fs.Type != unix.TMPFS_MAGIC || uint64(fs.Blocks)*uint64(fs.Bsize) != 4<<30 || fs.Files != 32768 {
-		t.Fatal("fixture mount not bounded tmpfs")
-	}
-	boot, e := os.ReadFile("/proc/sys/kernel/random/boot_id")
-	if e != nil || strings.TrimSpace(string(boot)) != s.NodeBootID {
-		t.Fatal("fixture node boot changed")
-	}
-	marker := buildstorage.Marker{Version: "ai-sdlc.local-build-custody/v1", StorageIdentitySHA256: s.StorageIdentitySHA256, NodeBootID: s.NodeBootID, FSID: fs.Fsid.Val, CapacityBytes: 4 << 30, InodeLimit: 32768}
-	raw, _ := json.Marshal(marker)
-	file, e := os.OpenFile(root+"/custody.json", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0444)
-	if e != nil {
-		t.Fatal("exclusive fixture marker")
-	}
-	_, writeErr := file.Write(raw)
-	closeErr := file.Close()
-	if writeErr != nil || closeErr != nil {
-		t.Fatal("fixture marker write")
-	}
-	if os.Mkdir(root+"/workspace", 0700) != nil || os.Chown(root+"/workspace", 1000, 1000) != nil || os.Chmod(root, 0555) != nil {
-		t.Fatal("fixture custody permissions")
+	if _, e := buildstorage.PrepareInstalled(s.StorageIdentitySHA256, s.NodeBootID); e != nil {
+		t.Fatal("production custody installation", e)
 	}
 }
 
