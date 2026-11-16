@@ -3,13 +3,13 @@
   "scope": "inactive closed Saferus build transport",
   "autonomousE2E": false,
   "operationalControllerActive": false,
-  "fullWorkloadExecutionThroughTransport": false,
+  "fullWorkloadExecutionThroughTransport": true,
   "runtimeValidation": {
-    "report": "/tmp/ai-sdlc-build-transport-validation-v1/report.json",
-    "passedTests": 1455,
+    "report": "/tmp/ai-sdlc-build-transport-validation-v2/report.json",
+    "passedTests": 1468,
     "passedPackages": 42,
     "status": "passed",
-    "source": "uncommitted transport on c3ad31a; opt-in closed fixture added afterward; runtime implementation unchanged afterward"
+    "source": "eb1b7d0d630d0463542502657419929222212a25; later pending TaskRun release-annotation correction covered by focused tests and real execution v6"
   },
   "realSlotAPICustody": {
     "report": "/tmp/ai-sdlc-build-slot-api-proof-v1/report.json",
@@ -35,10 +35,29 @@
     ]
   },
   "pending": [
-    "execute actual build and publication through transport",
     "integrate durable journal controller and preflight at every effect",
     "install runtime component and authority",
     "independent provenance and promotion",
     "genuine issue-to-test-production E2E"
-  ]
+  ],
+  "realBuildPublication": {
+    "report": "/tmp/ai-sdlc-closed-build-execution-v6/report.json",
+    "status": "passed",
+    "cleanupComplete": true,
+    "syntheticAuthority": true,
+    "autonomousE2E": false,
+    "releaseAuthorized": false,
+    "sourceSHA": "e4fc0085051a9c4dee088b5cc164d8b51b0fae67",
+    "imageDigest": "sha256:28954de1acb20c769770d5b662e95b24ff7bdc25a1f44f97f0941d2c02500253",
+    "buildRunUID": "cefab4a2-7531-4484-9e62-e78d26eac795",
+    "publishRunUID": "2bd3f99e-6f91-46cb-a97a-81231f2b805a"
+  },
+  "failedAttempts": {
+    "v1": "observer rejection; exact initial cause unproven; original container logs unavailable after namespace deletion",
+    "v2": "typed PodList items legitimately omit TypeMeta; original container logs unavailable after namespace deletion",
+    "v3": "inconsistent mutation-list normalization rejected preflight",
+    "v4": "Pod phase lagged successful terminated containers; now waits for Succeeded",
+    "v5": "pending TaskRun release annotation absent before controller update; now waits while rejecting explicit mismatches",
+    "cleanup": "all six attempts cleaned; v1/v2 required separate original-UID recovery reports; no stopped attempt resumed"
+  }
 }

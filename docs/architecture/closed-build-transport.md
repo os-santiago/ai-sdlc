@@ -61,8 +61,16 @@ and acceptance remain separate requirements.
   It creates no Pod or physical mount and deletes only original resource UIDs.
 - `tools/verify_closed_build_transport.py` is the opt-in real build/publication
   integration fixture. Its authority is explicitly synthetic; it never advances
-  a runtime journal or an issue. A passing report is required before claiming its
-  execution works. Merely having the harness is not passing evidence.
+  a runtime journal or an issue. The v6 execution built and tested Saferus at
+  `e4fc0085051a9c4dee088b5cc164d8b51b0fae67`, then published the artifact from
+  a separate Pod after observing the original builder terminate. Cleanup passed.
+  The evidence record includes preceding failed attempts and their corrections.
 
 Neither these fixtures nor the private transport prove an autonomous
 issue-to-test-production cycle, a SLSA level or production-grade vault security.
+
+Typed Kubernetes list items may omit their type metadata; the transport fills it
+only after validating the finite endpoint and the enclosing list type. Initial
+TaskRun annotations and terminal Pod phase may lag controller updates. Those
+observations remain pending, while conflicting versions and terminal regressions
+are still rejected.
