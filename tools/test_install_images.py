@@ -66,6 +66,21 @@ class ImageResolutionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 images.select_artifacts(value, RUN, SHA)
 
+    def test_build_images_require_complete_matching_supplemental_artifact_class(self):
+        catalog={'total_count':11,'artifacts':[archive(c)[1] for c in sorted(images.ARTIFACT_COMPONENTS)]}
+        for index,component in enumerate(('artifact-builder','build-controller'),100):
+            metadata=dict(archive('worker')[1],id=index,name='supply-chain-image-'+component)
+            catalog['artifacts'].append(metadata)
+        selected=images.select_artifacts(catalog,RUN,SHA,include_build=True)
+        self.assertEqual(set(selected),images.ARTIFACT_COMPONENTS|{'artifact-builder','build-controller'})
+        self.assertEqual(len(images.select_artifacts(catalog,RUN,SHA)),9)
+        for fault in ('missing','class','revision'):
+            changed=copy.deepcopy(catalog)
+            if fault=='missing':changed['artifacts'].pop();changed['total_count']-=1
+            elif fault=='class':changed['artifacts'][-1]['name']='image-build-controller'
+            else:changed['artifacts'][-1]['workflow_run']['head_sha']='f'*40
+            with self.assertRaises(ValueError):images.select_artifacts(changed,RUN,SHA,include_build=True)
+
     def test_rejects_tampering_wrong_source_and_archive_paths(self):
         cases = [{'changes': {'revision': 'c' * 40}}, {'changes': {'repository': 'other/image'}},
                  {'changes': {'platform': 'linux/arm64'}}, {'changes': {'digest': 'mutable:tag'}},

@@ -15,8 +15,8 @@ trusted CA bundles and separately approved immutable platform trust must already
 exist. Use the production [initialization](build-bootstrap.md) and
 [observation](build-profile-observation.md) operations. Disposable fixture reports
 are never operational installation inputs: their namespaces and slots are deleted.
-Provisioning this persistent foundation through the entrypoint remains a separate
-installation task. Do not create an eligible demo issue until the required chain
+Use the [persistent foundation entrypoint](build-foundation.md) to provision
+these original resources and produce a separately approved public bundle. Do not create an eligible demo issue until the required chain
 and its recovery behavior are installed and validated.
 
 Keep a reviewed public JSON bundle alongside the installation configuration:
