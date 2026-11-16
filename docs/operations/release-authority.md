@@ -51,3 +51,25 @@ TLS/Sigstore verification is tested separately in `internal/provenance`.
 The scope is kind test production with the existing local signing policy. This
 increment grants no enterprise readiness, SLSA level, autonomous deployment or
 end-to-end success claim.
+
+## Durable promotion decision (inactive)
+
+The explicit `ProvisionRolesForPromotion` option adds release-manager read access
+to immutable build/provenance history and write access only to its promotion
+requests and plans. Ordinary provenance provisioning removes these additional
+grants. The journal validates the original signed records, current issue and
+watermark, and current policies/trust/target before and after SQL waits. One
+provenance record can have only one promotion request. Claims are exclusive;
+a lost commit response consumes the original attempt and cannot authorize replay.
+
+A completed plan records exactly the retained registry image, source and approved
+baseline. Its maximum 15-minute lifetime is separate from the two-minute
+promotion command and bounded by the installed target and provenance trust. It
+must retain six minutes for deployment admission, rollout and smoke. This first
+recipe plans from the approved initial baseline only. Promotion of a subsequent
+release will require authenticated prior successful deployment history; a changed
+live baseline cannot be adopted from image equality.
+
+The journal makes no Kubernetes or GitHub calls. Its immutable plan alone grants
+no deployment or release permission. Installer/runtime opt-in, queue handoff,
+deployer effect journal, health verification and rollback remain separate work.
