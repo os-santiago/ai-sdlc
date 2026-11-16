@@ -101,6 +101,13 @@ func TestProvenanceHandoffRollbackAndCleanupSubstitution(t *testing.T) {
 				if _, e := p.b.f.Admin.Pool.Exec(`ALTER TABLE authorized_outbox ADD CONSTRAINT fixture_deny_provenance CHECK(operation<>'verify-built')`); e != nil {
 					t.Fatal(e)
 				}
+				// A TRUNCATE in the next fixture does not remove constraints.
+				// Register after opening the DB so LIFO cleanup runs first.
+				t.Cleanup(func() {
+					if _, e := p.b.f.Admin.Pool.Exec(`ALTER TABLE authorized_outbox DROP CONSTRAINT fixture_deny_provenance`); e != nil {
+						t.Error("remove injected constraint", e)
+					}
+				})
 			}
 			if name == "wrong-cleanup-uid" || name == "unknown-create" {
 				var raw []byte
@@ -267,5 +274,22 @@ func TestProvenanceHandoffWithdrawalDuringOutboxWait(t *testing.T) {
 	}
 	if p.b.f.Count(t, `SELECT count(*) FROM provenance_handoffs`) != 0 || p.b.f.Count(t, `SELECT count(*) FROM authorized_outbox WHERE operation='verify-built'`) != 0 {
 		t.Fatal("stale partial handoff")
+	}
+}
+
+// This positive control runs after the failure-injection cases, including on a
+// second -count invocation against the same disposable database.
+func TestProvenanceHandoffAfterFailureInjectionRemainsUsable(t *testing.T) {
+	p := newProvenanceFixture(t)
+	var leaked bool
+	if e := p.b.f.Admin.Pool.QueryRow(`SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='fixture_deny_provenance')`).Scan(&leaked); e != nil || leaked {
+		t.Fatal("fault constraint escaped its subtest", e)
+	}
+	provenanceCleanupFixture(t, p)
+	sent, e := provenanceflow.DispatchBuilt(context.Background(), p.b.journal.DB, func() (provenance.Configuration, authority.Identity, error) {
+		return *p.cfg, p.b.f.Material.Identities["build-controller"], nil
+	})
+	if e != nil || !sent {
+		t.Fatal("valid handoff after fault injection", e)
 	}
 }
