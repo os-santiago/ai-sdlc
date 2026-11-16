@@ -150,32 +150,11 @@ func mutationDigest(collections map[string][]map[string]any) (string, error) {
 func (r *BuildResources) checkMutationInventory(ctx context.Context, expected string) error {
 	collections := map[string][]map[string]any{}
 	for _, path := range buildMutationPaths {
-		obj, _, e := r.getBuildObject(ctx, path)
+		items, e := r.listBuildObjects(ctx, path)
 		if e != nil {
 			return e
 		}
-		if obj["apiVersion"] != "admissionregistration.k8s.io/v1" {
-			return ErrBuildTransport
-		}
-		metadata, ok := obj["metadata"].(map[string]any)
-		if !ok {
-			return ErrBuildTransport
-		}
-		if value, exists := metadata["continue"]; exists && value != "" {
-			return ErrBuildTransport
-		}
-		items, ok := obj["items"].([]any)
-		if !ok || len(items) > 128 {
-			return ErrBuildTransport
-		}
-		collections[path] = []map[string]any{}
-		for _, value := range items {
-			item, ok := value.(map[string]any)
-			if !ok {
-				return ErrBuildTransport
-			}
-			collections[path] = append(collections[path], item)
-		}
+		collections[path] = items
 	}
 	digest, e := mutationDigest(collections)
 	if e != nil || digest != expected {

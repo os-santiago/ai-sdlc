@@ -83,7 +83,7 @@ func syntheticSucceededObjects(r *BuildResources, phase string) (map[string]any,
 }
 func TestBuildObserverRequiresCompleteFreshTerminalEvidence(t *testing.T) {
 	for _, phase := range []string{"build", "publish"} {
-		for _, which := range []string{"success", "stale-lease", "node-boot", "node-unready", "foreign-volume", "missing-init", "restart", "failed-exit", "run-pending", "task-pending", "run-pipeline", "task-resolved", "child-ref", "pod-node", "result-drift"} {
+		for _, which := range []string{"success", "stale-lease", "node-boot", "node-unready", "foreign-volume", "pod-phase-lag", "missing-init", "restart", "failed-exit", "run-pending", "task-pending", "run-pipeline", "task-resolved", "child-ref", "pod-node", "result-drift"} {
 			if phase == "build" && which == "result-drift" {
 				continue
 			}
@@ -126,11 +126,14 @@ func TestBuildObserverRequiresCompleteFreshTerminalEvidence(t *testing.T) {
 						w.WriteHeader(500)
 						return
 					}
+					completeSyntheticList(req.URL.Path, obj)
 					_ = json.NewEncoder(w).Encode(obj)
 				})
 				run, task, pod = syntheticSucceededObjects(r, phase)
 				r.knownRuns[phase] = fixtureConfigUID
 				switch which {
+				case "pod-phase-lag":
+					pod["status"].(map[string]any)["phase"] = "Running"
 				case "missing-init":
 					delete(pod["status"].(map[string]any), "initContainerStatuses")
 				case "restart":
@@ -167,7 +170,7 @@ func TestBuildObserverRequiresCompleteFreshTerminalEvidence(t *testing.T) {
 					if _, ok := r.completed[phase]; ok {
 						t.Fatal("unproven completion retained")
 					}
-					if e == nil && which != "run-pending" && which != "task-pending" && which != "missing-init" {
+					if e == nil && which != "run-pending" && which != "task-pending" && which != "missing-init" && which != "pod-phase-lag" {
 						t.Fatal("invalid observation not rejected")
 					}
 				}
@@ -202,6 +205,7 @@ func TestBuildObservationFailurePermanentlyInvalidatesPublicationContext(t *test
 					w.WriteHeader(500)
 					return
 				}
+				completeSyntheticList(req.URL.Path, obj)
 				_ = json.NewEncoder(w).Encode(obj)
 			})
 			run, task, pod = syntheticSucceededObjects(r, "build")

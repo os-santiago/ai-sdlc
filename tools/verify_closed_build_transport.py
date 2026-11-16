@@ -101,6 +101,50 @@ def main():
     def node_json(filename):
         return json.loads(node_call(['cat', root + '/evidence/' + filename]).stdout)
 
+    def quiesce():
+        if not namespace_uid:
+            return
+        ns = get('namespace', namespace, None)
+        if ns['metadata']['uid'] != namespace_uid:
+            raise ValueError('Fixture namespace replaced before cancellation')
+        runs = get('pipelineruns')['items']
+        if not runs:
+            return
+        intent = node_json('transport-report.json')
+        expected = {intent['buildName']: intent.get('buildRunUID'), intent['publishName']: intent.get('publishRunUID')}
+        for original in runs:
+            name = original['metadata']['name']
+            if (name not in expected or original['metadata'].get('annotations', {}).get('ai-sdlc.build-id') != intent['plan']['buildID']
+                    or expected[name] is not None and original['metadata']['uid'] != expected[name]):
+                raise ValueError('Refusing cancellation of an unrelated fixture run')
+            uid = original['metadata']['uid']
+            for attempt in range(3):
+                current = get('pipelinerun', name)
+                if current['metadata']['uid'] != uid:
+                    raise ValueError('Original fixture run replaced before cancellation')
+                terminal = any(c.get('type') == 'Succeeded' and c.get('status') in ('True', 'False') for c in current.get('status', {}).get('conditions', []))
+                if terminal or current['spec'].get('status') == 'Cancelled':
+                    break
+                patch = [{'op': 'test', 'path': '/metadata/uid', 'value': uid},
+                         {'op': 'test', 'path': '/metadata/resourceVersion', 'value': current['metadata']['resourceVersion']},
+                         {'op': 'add', 'path': '/spec/status', 'value': 'Cancelled'}]
+                result = call(['patch', 'pipelinerun', name, '-n', namespace, '--type=json', '-p', json.dumps(patch)], check=False)
+                if result.returncode == 0:
+                    report.setdefault('cancelledOriginalRunUIDs', []).append(uid)
+                    break
+                if attempt == 2:
+                    raise ValueError('Original fixture cancellation not confirmed')
+        until = time.monotonic() + 45
+        while time.monotonic() < until:
+            pods = get('pods')['items']
+            tasks = get('taskruns')['items']
+            if (all(p.get('status', {}).get('phase') in ('Succeeded', 'Failed') for p in pods)
+                    and all(any(c.get('type') == 'Succeeded' and c.get('status') in ('True', 'False') for c in t.get('status', {}).get('conditions', [])) for t in tasks)):
+                report['originalWorkloadsQuiesced'] = True
+                return
+            time.sleep(1)
+        raise ValueError('Original fixture workloads did not stop before log archival')
+
     def collect():
         if not namespace_uid:
             return
@@ -124,7 +168,10 @@ def main():
         archived = set()
         for pod in pods:
             complete = True
-            for container in pod['spec'].get('containers', []):
+            states = {c['name']: c for key in ('containerStatuses', 'initContainerStatuses') for c in pod.get('status', {}).get(key, [])}
+            for container in pod['spec'].get('initContainers', []) + pod['spec'].get('containers', []):
+                if not states.get(container['name'], {}).get('containerID'):
+                    continue  # API status archives prove this container never started.
                 result = call(['logs', '-n', namespace, pod['metadata']['name'], '-c', container['name'], '--limit-bytes=2097152'], check=False)
                 (args.output / (pod['metadata']['name'] + '-' + container['name'] + '.log')).write_text(result.stdout)
                 complete = complete and result.returncode == 0
@@ -231,25 +278,31 @@ def main():
         save()
         raise
     finally:
-        deadline = supply_chain_install.Deadline(180)
+        deadline = supply_chain_install.Deadline(240)
         def cleanup(checkpoint):
             nonlocal namespace_uid
             if namespace_uid is None and namespace_create_attempted:
                 namespace_uid = fixture_cleanup.recover_namespace_uid(
                     lambda argv: call(argv).stdout, namespace, 'ai-sdlc.closed-build-fixture', nonce)
                 report['recoveredNamespaceUIDForCleanup'] = namespace_uid
+            guard.collect_best_effort(quiesce, report)
             guard.collect_best_effort(collect, report)
             def archive_reports():
                 if prepared:
                     # Only sanitized, explicitly named evidence is copied out; never private.json.
-                    for filename in ('transport-report.json', 'profile.json', 'build-trust.json', 'policy.json', 'binding.json', 'mutation.json', 'mutation-binding.json'):
+                    for filename in ('transport-report.json', 'profile.json', 'build-trust.json', 'policy.json', 'binding.json', 'mutation.json', 'mutation-binding.json', 'build.json', 'publish.json', 'fixture-slot.json', 'fixture-command.json'):
                         check = deadline.run([provider, 'exec', node_id, 'test', '-f', root + '/evidence/' + filename], capture_output=True, check=False, limit=10)
                         if check.returncode == 0:
                             deadline.run([provider, 'cp', node_id + ':' + root + '/evidence/' + filename, str(args.output / filename)], capture_output=True, limit=15)
+                    listing = node_call(['find', root + '/evidence', '-maxdepth', '1', '-type', 'f', '-name', 'observation-*.json', '-printf', '%f\n']).stdout.splitlines()
+                    for filename in listing:
+                        if not re.fullmatch(r'observation-[0-9]{4}.json', filename):
+                            raise ValueError('Unexpected diagnostic filename')
+                        deadline.run([provider, 'cp', node_id + ':' + root + '/evidence/' + filename, str(args.output / filename)], capture_output=True, limit=15)
             guard.collect_best_effort(archive_reports, report)
             if namespace_uid:
                 guard.cleanup_archived_namespace(lambda a, v=None: call(a, v).stdout, namespace, namespace_uid,
-                                                 report.get('archivedTaskUIDs', []), report.get('runUIDs', []))
+                                                 report.get('archivedTaskUIDs', []), report.get('runUIDs', []), timeout=120)
             for resource, name, uid in reversed(owned_policies):
                 call(['delete', '--raw', '/apis/admissionregistration.k8s.io/v1/' + resource + '/' + name, '-f', '-'],
                      {'apiVersion': 'v1', 'kind': 'DeleteOptions', 'preconditions': {'uid': uid}})

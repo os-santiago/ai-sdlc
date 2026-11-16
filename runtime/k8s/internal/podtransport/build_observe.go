@@ -56,6 +56,10 @@ func (r *BuildResources) listBuildObjects(ctx context.Context, path string) ([]m
 	if next, exists := metadata["continue"]; exists && next != "" {
 		return nil, ErrBuildTransport
 	}
+	version, listKind, itemKind, known := buildListType(path)
+	if !known || obj["apiVersion"] != version || obj["kind"] != listKind {
+		return nil, ErrBuildTransport
+	}
 	items, ok := obj["items"].([]any)
 	if !ok || len(items) > 128 {
 		return nil, ErrBuildTransport
@@ -65,6 +69,17 @@ func (r *BuildResources) listBuildObjects(ctx context.Context, path string) ([]m
 		item, ok := raw.(map[string]any)
 		if !ok {
 			return nil, ErrBuildTransport
+		}
+		// Core Kubernetes lists omit item TypeMeta. Derive it only from this
+		// authenticated, exact typed collection; conflicting types are denied.
+		actualVersion, hasVersion := item["apiVersion"]
+		actualKind, hasKind := item["kind"]
+		if hasVersion != hasKind || (hasVersion && (actualVersion != version || actualKind != itemKind)) {
+			return nil, ErrBuildTransport
+		}
+		if !hasVersion {
+			item["apiVersion"] = version
+			item["kind"] = itemKind
 		}
 		result = append(result, item)
 	}
@@ -124,9 +139,32 @@ func (r *BuildResources) observePhase(ctx context.Context, phase, runUID string)
 		return out, e
 	}
 	children := []map[string]any{}
-	for _, task := range tasks {
-		if objectOwnerUID(task, "PipelineRun", runUID) || buildLabel(task, "tekton.dev/pipelineRunUID") == runUID || buildLabel(task, "tekton.dev/pipelineRun") == r.runName(phase) {
-			children = append(children, task)
+	// Cross-resource LISTs are not one atomic snapshot. On the first sighting
+	// only, a newly created Pod may follow an earlier empty TaskRun list.
+	// Re-read that typed list once; never forgive a missing pinned parent,
+	// multiple children, a replaced UID or a terminal run without its parent.
+	for attempt := 0; attempt < 2; attempt++ {
+		children = nil
+		for _, task := range tasks {
+			if objectOwnerUID(task, "PipelineRun", runUID) || buildLabel(task, "tekton.dev/pipelineRunUID") == runUID || buildLabel(task, "tekton.dev/pipelineRun") == r.runName(phase) {
+				children = append(children, task)
+			}
+		}
+		if len(children) > 0 || attempt == 1 || pins.TaskUID != "" || runDone {
+			break
+		}
+		initialPod := false
+		for _, pod := range pods {
+			if buildLabel(pod, "tekton.dev/pipelineRunUID") == runUID || buildLabel(pod, "tekton.dev/pipelineRun") == r.runName(phase) {
+				initialPod = true
+			}
+		}
+		if !initialPod {
+			break
+		}
+		tasks, e = r.listBuildObjects(ctx, "/apis/tekton.dev/v1/namespaces/"+buildworkload.Namespace+"/taskruns")
+		if e != nil {
+			return out, e
 		}
 	}
 	if len(children) > 1 {
@@ -200,6 +238,11 @@ func (r *BuildResources) observePhase(ctx context.Context, phase, runUID string)
 		return out, e
 	}
 	if !complete || !runDone || !taskDone {
+		return out, nil
+	}
+	// Kubelet phase may lag the already terminated container statuses and
+	// Tekton's conditions. Keep waiting; never authorize publication yet.
+	if podStatus["phase"] == "Pending" || podStatus["phase"] == "Running" {
 		return out, nil
 	}
 	if podStatus["phase"] != "Succeeded" || podSpec["nodeName"] != r.slot.Node || taskStatus["podName"] != r.taskName(phase)+"-pod" || !reflect.DeepEqual(taskStatus["taskSpec"], r.expectedResolvedTask(phase, runUID)) {
@@ -336,4 +379,20 @@ func (r *BuildResources) checkSlotOccupants(pods []map[string]any, phase, runUID
 		}
 	}
 	return nil
+}
+
+func buildListType(path string) (version, listKind, itemKind string, known bool) {
+	switch path {
+	case "/api/v1/namespaces/ai-sdlc-builds/pods":
+		return "v1", "PodList", "Pod", true
+	case "/apis/tekton.dev/v1/namespaces/ai-sdlc-builds/taskruns":
+		return "tekton.dev/v1", "TaskRunList", "TaskRun", true
+	case "/apis/admissionregistration.k8s.io/v1/mutatingwebhookconfigurations":
+		return "admissionregistration.k8s.io/v1", "MutatingWebhookConfigurationList", "MutatingWebhookConfiguration", true
+	case "/apis/admissionregistration.k8s.io/v1/mutatingadmissionpolicies":
+		return "admissionregistration.k8s.io/v1", "MutatingAdmissionPolicyList", "MutatingAdmissionPolicy", true
+	case "/apis/admissionregistration.k8s.io/v1/mutatingadmissionpolicybindings":
+		return "admissionregistration.k8s.io/v1", "MutatingAdmissionPolicyBindingList", "MutatingAdmissionPolicyBinding", true
+	}
+	return "", "", "", false
 }

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -79,20 +81,55 @@ func TestRecordedTektonHierarchyMatchesClosedTemplates(t *testing.T) {
 			r.compiled.Plan.DefinitionSHA256 = strings.TrimPrefix(arg, "--definition-digest=sha256:")
 		}
 	}
-	for _, phase := range []string{"build", "publish"} {
+	phases := []string{"build", "publish"}
+	if os.Getenv("AI_SDLC_BUILD_OBSERVED_PHASE") == "build" {
+		phases = []string{"build"}
+	}
+	for _, phase := range phases {
 		runRaw := read(filepath.Join(observed, phase+"-run.json"))
 		runUID, _, e := r.checkRun(runRaw, phase, "")
 		if e != nil {
 			t.Fatalf("%s actual PipelineRun defaulting differs: %v", phase, e)
+		}
+		var recordedRun map[string]any
+		_ = json.Unmarshal(runRaw, &recordedRun)
+		if status, ok := recordedRun["status"].(map[string]any); ok {
+			if resolved, exists := status["pipelineSpec"]; exists {
+				wanted := defaultRunSpec(r.expected[phase]["spec"].(map[string]any))["pipelineSpec"].(map[string]any)
+				if phase == "publish" {
+					wanted["tasks"].([]any)[0].(map[string]any)["params"].([]any)[0].(map[string]any)["value"] = runUID
+				}
+				if !reflect.DeepEqual(resolved, wanted) {
+					t.Fatal("resolved Pipeline differs", changedBuildPaths(resolved, wanted, "pipelineSpec"))
+				}
+			}
 		}
 		taskRaw := read(filepath.Join(observed, phase+"-task.json"))
 		taskUID, _, e := r.checkTask(taskRaw, phase, runUID)
 		if e != nil {
 			t.Fatalf("%s actual TaskRun differs: %v", phase, e)
 		}
+		var recordedTask map[string]any
+		_ = json.Unmarshal(taskRaw, &recordedTask)
+		if status, ok := recordedTask["status"].(map[string]any); ok {
+			if resolved, exists := status["taskSpec"]; exists && !reflect.DeepEqual(resolved, r.expectedResolvedTask(phase, runUID)) {
+				t.Fatal("resolved task differs", changedBuildPaths(resolved, r.expectedResolvedTask(phase, runUID), "taskSpec"))
+			}
+		}
 		podRaw := read(filepath.Join(observed, phase+"-pod.json"))
 		if _, _, _, e := r.checkOwnedBuildPod(podRaw, phase, runUID, taskUID); e != nil {
+			var actual map[string]any
+			_ = json.Unmarshal(podRaw, &actual)
+			expected, _ := r.expectedBuildPodSpec(phase, runUID, actual["spec"].(map[string]any))
+			t.Log("differing spec paths", changedBuildPaths(actual["spec"], expected, "spec"))
 			t.Fatalf("%s actual Pod differs: %v", phase, e)
+		}
+		var recordedPod map[string]any
+		_ = json.Unmarshal(podRaw, &recordedPod)
+		if status, ok := recordedPod["status"].(map[string]any); ok {
+			if _, _, err := inspectContainerStates(recordedPod["spec"].(map[string]any), status, &buildPins{}); err != nil {
+				t.Fatal("recorded container states rejected", err)
+			}
 		}
 		for _, which := range []string{"image", "command", "environment", "mount", "secret", "security", "deadline", "unknown", "source", "run-uid", "alias", "script"} {
 			if phase == "build" && (which == "run-uid" || which == "alias") {
@@ -146,4 +183,38 @@ func TestRecordedTektonHierarchyMatchesClosedTemplates(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Only field paths are emitted, never credential or observed field values.
+func changedBuildPaths(a, b any, path string) []string {
+	if reflect.DeepEqual(a, b) {
+		return nil
+	}
+	am, aok := a.(map[string]any)
+	bm, bok := b.(map[string]any)
+	if aok && bok {
+		keys := map[string]bool{}
+		for k := range am {
+			keys[k] = true
+		}
+		for k := range bm {
+			keys[k] = true
+		}
+		out := []string{}
+		for k := range keys {
+			out = append(out, changedBuildPaths(am[k], bm[k], path+"."+k)...)
+		}
+		sort.Strings(out)
+		return out
+	}
+	aa, aok := a.([]any)
+	bb, bok := b.([]any)
+	if aok && bok && len(aa) == len(bb) {
+		out := []string{}
+		for i := range aa {
+			out = append(out, changedBuildPaths(aa[i], bb[i], path+"["+strconv.Itoa(i)+"]")...)
+		}
+		return out
+	}
+	return []string{path}
 }

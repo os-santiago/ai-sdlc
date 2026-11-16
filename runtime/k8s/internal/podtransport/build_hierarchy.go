@@ -111,6 +111,10 @@ func (r *BuildResources) checkChildMetadata(metadata map[string]any, phase, runU
 			if !pod || text != expected {
 				return "", ErrBuildTransport
 			}
+		case "results.tekton.dev/childReadyForDeletion":
+			if pod || (text != "true" && text != "false") {
+				return "", ErrBuildTransport
+			}
 		case "results.tekton.dev/record", "results.tekton.dev/result", "results.tekton.dev/stored", "chains.tekton.dev/signed":
 			if pod {
 				return "", ErrBuildTransport

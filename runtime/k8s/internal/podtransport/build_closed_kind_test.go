@@ -1,11 +1,16 @@
 package podtransport
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -133,6 +138,9 @@ func TestRealClosedBuildTransport(t *testing.T) {
 	if e != nil {
 		t.Fatal("synthetic signing")
 	}
+	write("fixture-slot.json", input.Slot)
+	write("fixture-command.json", command)
+	client.http.Transport = &closedFixtureTrace{next: client.http.Transport, directory: input.OutputDirectory}
 	r, e = PlanBuild(client, cfg, p, signed, payload, input.Slot)
 	if e != nil {
 		t.Fatal("closed authenticated compilation")
@@ -264,4 +272,44 @@ func prepareClosedFixtureSlot(t *testing.T, s building.Slot) {
 	if os.Mkdir(root+"/workspace", 0700) != nil || os.Chown(root+"/workspace", 1000, 1000) != nil || os.Chmod(root, 0555) != nil {
 		t.Fatal("fixture custody permissions")
 	}
+}
+
+// Test-only, secret-free snapshots preserve the exact transient observation that
+// failed. Configuration/Secret responses are never recorded.
+type closedFixtureTrace struct {
+	next      http.RoundTripper
+	directory string
+	sequence  atomic.Uint64
+}
+
+func (x *closedFixtureTrace) RoundTrip(req *http.Request) (*http.Response, error) {
+	response, e := x.next.RoundTrip(req)
+	if e != nil {
+		return response, e
+	}
+	path := req.URL.Path
+	selected := strings.Contains(path, "/pipelineruns") || strings.Contains(path, "/taskruns") || strings.HasSuffix(path, "/pods")
+	if !selected {
+		return response, nil
+	}
+	raw, e := io.ReadAll(io.LimitReader(response.Body, maxBuildObject+1))
+	_ = response.Body.Close()
+	response.Body = io.NopCloser(bytes.NewReader(raw))
+	if e != nil {
+		return nil, e
+	}
+	record := struct {
+		Method, Path string
+		Status       int
+		Body         json.RawMessage
+	}{req.Method, path, response.StatusCode, raw}
+	body, e := json.MarshalIndent(record, "", "  ")
+	if e != nil {
+		return nil, e
+	}
+	file := filepath.Join(x.directory, fmt.Sprintf("observation-%04d.json", x.sequence.Add(1)))
+	if e = os.WriteFile(file, body, 0600); e != nil {
+		return nil, e
+	}
+	return response, nil
 }

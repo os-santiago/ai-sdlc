@@ -45,10 +45,11 @@ func syntheticBuildChildren(r *BuildResources, phase, runUID string) (map[string
 	return task, map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": pm, "spec": spec}
 }
 func TestBuildObserverRetainsOriginalChildrenAndRejectsExtraWriters(t *testing.T) {
-	for _, which := range []string{"pending", "task-replaced", "pod-replaced", "task-missing", "pod-missing", "extra-task", "extra-pod", "foreign-slot-writer", "run-replaced", "failed", "pagination", "expired"} {
+	for _, which := range []string{"pending", "initial-list-race", "task-replaced", "pod-replaced", "task-missing", "pod-missing", "extra-task", "extra-pod", "foreign-slot-writer", "run-replaced", "failed", "pagination", "expired"} {
 		t.Run(which, func(t *testing.T) {
 			var task, pod map[string]any
 			step := 0
+			taskLists := 0
 			r, _, _ := buildResourceFixture(t, func(r *BuildResources, w http.ResponseWriter, req *http.Request) {
 				var value any
 				switch req.URL.Path {
@@ -63,6 +64,10 @@ func TestBuildObserverRetainsOriginalChildrenAndRejectsExtraWriters(t *testing.T
 					value = run
 				case "/apis/tekton.dev/v1/namespaces/ai-sdlc-builds/taskruns":
 					tasks := []any{cloneObject(task)}
+					taskLists++
+					if which == "initial-list-race" && taskLists == 1 {
+						tasks = []any{}
+					}
 					if step == 1 {
 						switch which {
 						case "task-replaced":
@@ -99,6 +104,7 @@ func TestBuildObserverRetainsOriginalChildrenAndRejectsExtraWriters(t *testing.T
 					w.WriteHeader(500)
 					return
 				}
+				completeSyntheticList(req.URL.Path, value)
 				_ = json.NewEncoder(w).Encode(value)
 			})
 			task, pod = syntheticBuildChildren(r, "build", fixtureConfigUID)
@@ -112,7 +118,7 @@ func TestBuildObserverRetainsOriginalChildrenAndRejectsExtraWriters(t *testing.T
 				r.compiled.ExpiresAt = time.Now().Add(-time.Second)
 			}
 			next, e := r.observePhase(context.Background(), "build", fixtureConfigUID)
-			if which == "pending" {
+			if which == "pending" || which == "initial-list-race" {
 				if e != nil || next.Complete {
 					t.Fatal("legitimate pending denied", e)
 				}
@@ -160,5 +166,80 @@ func TestBuildPublicationResultsRequireAllExactOriginalValues(t *testing.T) {
 				t.Fatal("invalid results accepted")
 			}
 		})
+	}
+}
+
+func completeSyntheticList(path string, value any) {
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return
+	}
+	if _, list := obj["items"]; !list {
+		return
+	}
+	version, kind, _, known := buildListType(path)
+	if known {
+		obj["apiVersion"] = version
+		obj["kind"] = kind
+	}
+}
+func TestBuildListsNormalizeOnlyKnownAuthenticatedCollectionTypes(t *testing.T) {
+	for _, which := range []string{"omitted-core-type", "explicit-core-type", "wrong-list-kind", "wrong-list-version", "wrong-item-kind", "wrong-item-version", "partial-item-type", "unknown-path"} {
+		t.Run(which, func(t *testing.T) {
+			r, _, _ := buildResourceFixture(t, func(_ *BuildResources, w http.ResponseWriter, req *http.Request) {
+				item := map[string]any{"metadata": map[string]any{"uid": fixtureOtherUID}, "spec": map[string]any{}}
+				obj := map[string]any{"apiVersion": "v1", "kind": "PodList", "metadata": map[string]any{}, "items": []any{item}}
+				switch which {
+				case "explicit-core-type":
+					item["apiVersion"] = "v1"
+					item["kind"] = "Pod"
+				case "wrong-list-kind":
+					obj["kind"] = "TaskRunList"
+				case "wrong-list-version":
+					obj["apiVersion"] = "unknown/v1"
+				case "wrong-item-kind":
+					item["apiVersion"] = "v1"
+					item["kind"] = "Secret"
+				case "wrong-item-version":
+					item["apiVersion"] = "unknown/v1"
+					item["kind"] = "Pod"
+				case "partial-item-type":
+					item["kind"] = "Pod"
+				}
+				_ = json.NewEncoder(w).Encode(obj)
+			})
+			path := "/api/v1/namespaces/ai-sdlc-builds/pods"
+			if which == "unknown-path" {
+				path = "/api/v1/namespaces/foreign/pods"
+			}
+			items, e := r.listBuildObjects(context.Background(), path)
+			if which == "omitted-core-type" || which == "explicit-core-type" {
+				if e != nil || len(items) != 1 || items[0]["apiVersion"] != "v1" || items[0]["kind"] != "Pod" {
+					t.Fatal("valid typed collection rejected", e)
+				}
+			} else if e == nil {
+				t.Fatal("untrusted type normalization accepted")
+			}
+		})
+	}
+}
+
+func TestBuildTaskAllowsOnlyTypedResultsDeletionObservation(t *testing.T) {
+	r, _, _ := buildResourceFixture(t, func(_ *BuildResources, _ http.ResponseWriter, _ *http.Request) { t.Fatal("unexpected HTTP") })
+	for _, value := range []any{"true", "false", "yes", true} {
+		task, pod := syntheticBuildChildren(r, "build", fixtureConfigUID)
+		task["metadata"].(map[string]any)["annotations"].(map[string]any)["results.tekton.dev/childReadyForDeletion"] = value
+		_, _, e := r.checkTask(marshalObject(task), "build", fixtureConfigUID)
+		if value == "true" || value == "false" {
+			if e != nil {
+				t.Fatal("valid Results observation rejected")
+			}
+		} else if e == nil {
+			t.Fatal("invalid Results observation accepted")
+		}
+		pod["metadata"].(map[string]any)["annotations"].(map[string]any)["results.tekton.dev/childReadyForDeletion"] = value
+		if _, _, _, e := r.checkOwnedBuildPod(marshalObject(pod), "build", fixtureConfigUID, fixtureOtherUID); e == nil {
+			t.Fatal("Task-only annotation accepted on Pod")
+		}
 	}
 }
