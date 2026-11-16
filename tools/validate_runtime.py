@@ -16,6 +16,9 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 OWNER_LABEL = 'ai-sdlc.io/validation-run'
 REQUIRED_TESTS = {
+    ('internal/execution', 'TestDeploymentRecoveryUsesOnlyOriginalAcknowledgedEffects'),
+    ('internal/execution', 'TestDeploymentControllerExcludesReplicaAndReleasesSession'),
+    ('internal/execution', 'TestDeploymentControllerCancelsWhenOriginalBackendDies'),
     ('internal/execution', 'TestDeploymentSignedHandoffInboxAndRuntime'),
     ('internal/execution', 'TestDeploymentRuntimeContainsFailuresAndQuarantinesAmbiguity'),
     ('internal/execution', 'TestDeploymentHandoffFailureIsAtomic'),
