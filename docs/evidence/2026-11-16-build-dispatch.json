@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "status": "passed",
+  "scope": "isolated signed build dispatch and PostgreSQL journal",
+  "autonomousE2E": false,
+  "releaseAuthorized": false,
+  "tests": {
+    "passedTests": 1518,
+    "passedPackages": 43,
+    "skippedTests": [
+      "internal/buildstorage/TestPrepareWorkspaceGuardFixture",
+      "internal/buildworkload/TestEmitClosedBuildAPIFixture",
+      "internal/engine/TestInvokeAgainstRealBinary",
+      "internal/execution/TestActualPinnedHomedirPreparationFixture",
+      "internal/execution/TestRealCandidateRecoveryFixture",
+      "internal/execution/TestRealCandidateRuntimeFixture",
+      "internal/execution/TestRealJournalBackedClosedBuild",
+      "internal/execution/TestRealLifecycleModelFixture",
+      "internal/mergegate/TestRealHomedirReadonlyGateFixture",
+      "internal/podtransport/TestRealBuildSlotAPICustody",
+      "internal/podtransport/TestRealClosedBuildTransport",
+      "internal/podtransport/TestRealCodexKubernetesMailboxFixture",
+      "internal/podtransport/TestRealKubernetesMailboxFixture",
+      "internal/podtransport/TestRealReadonlyReviewerFixture",
+      "internal/podtransport/TestRealVerificationTransportFixture",
+      "internal/podtransport/TestRealWorkloadResourcesFixture",
+      "internal/podtransport/TestRealWorkspaceLifecycleFixture",
+      "internal/podtransport/TestRecordedBuildContainerTermination",
+      "internal/podtransport/TestRecordedTektonHierarchyMatchesClosedTemplates",
+      "internal/publication/TestRealHomedirPublicationTreeFixture",
+      "internal/reviewflow/TestRealVerificationFlowFixture",
+      "internal/sourcefetch/TestActualPinnedGitTreeManifest",
+      "internal/sourcefetch/TestActualPinnedHomedirArchive",
+      "internal/sourcefetch/TestActualPublicGitHubPinnedSource",
+      "internal/verification/TestRealVerificationRecipeFixture",
+      "internal/verificationflow/TestRealVerificationFlowFixture"
+    ],
+    "missingDatabaseProof": []
+  },
+  "cleanup": [
+    {
+      "container": "ai-sdlc-validation-7b9a1e561dda4926bcdc64f4124c1d0e-go",
+      "status": "removed"
+    },
+    {
+      "container": "ai-sdlc-validation-7b9a1e561dda4926bcdc64f4124c1d0e-db",
+      "status": "removed"
+    }
+  ],
+  "report": "/tmp/ai-sdlc-build-dispatch-validation-v4/report.json"
+}
