@@ -22,6 +22,7 @@ missing top-level fields and an implicit or null freeze value.
 | worker | orchestrator | record-attempt / ImplementationAttemptDecided | auto-pr |
 | worker | verifier | verify-artifact / CandidateProduced | auto-pr |
 | verifier | release-manager | publish-candidate / CandidateVerified | auto-pr |
+| release-manager | release-manager | merge-publication / PublicationMergeRequested | auto-merge-low |
 | release-manager | orchestrator | record-release / ReleaseGateDecided | auto-pr |
 | release-manager | deployer | deploy-release / ReleaseReady | auto-deploy |
 | deployer | release-manager | record-deployment / DeploymentVerified | auto-deploy |
@@ -39,6 +40,13 @@ A grant does not satisfy later stage-specific gates. In particular,
 it does not authorize a merge. Merge requires the trust-ladder level, risk
 decision, independently collected checks for the exact head and applicable
 review requirements. Deployment also requires a verified rollback path.
+
+`merge-publication` is a distinct internal release-manager capability, not a
+public endpoint or a waiver of publication/audit evidence. Its bounded command
+must bind a durable publication record, fresh gate observation and exact PR
+head/base/tree. It does not renew generation authority. This contract is inactive
+until a separately reviewed runtime/installation explicitly enables it; the
+current `auto-pr` installation ceiling continues to reject merge grants.
 
 ## Two signatures, separate lifetimes
 

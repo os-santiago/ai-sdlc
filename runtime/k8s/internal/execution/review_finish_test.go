@@ -13,8 +13,8 @@ import (
 
 func TestReviewProofRequiresExactEvidenceAndCleanup(t *testing.T) { reviewProofFixture(t, false) }
 func TestInstalledReviewPrivilegesCompleteProof(t *testing.T)     { reviewProofFixture(t, true) }
-func reviewProofFixture(t *testing.T, installed bool) {
-	f, db, r := reviewJournalFixture(t)
+func reviewProofFixture(t *testing.T, installed bool, configure ...func(*fixture)) (*lifecycleFixture, *store.DB, store.ReviewRun) {
+	f, db, r := reviewJournalFixtureConfigured(t, nil, configure)
 	ctx := context.Background()
 	if installed {
 		passwords := map[string]string{}
@@ -114,6 +114,7 @@ func reviewProofFixture(t *testing.T, installed bool) {
 	if next, e := db.NextVerifiedForReview(ctx); e != nil || next != "" {
 		t.Fatal("completed review requeued")
 	}
+	return f, db, r
 }
 
 func TestReviewSelectionSkipsSupersededIssueWithoutMutatingProof(t *testing.T) {

@@ -119,7 +119,7 @@ func RuntimeBoundary(next http.Handler) http.Handler {
 	}
 	observation := maintenanceBoundary(next)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.RawQuery == "" && (r.URL.Path == "/internal/admit-issue" || r.URL.Path == "/internal/plan-admission" || ((mode == "candidate" || mode == "verification") && r.URL.Path == "/internal/execute-work") || (mode == "verification" && r.URL.Path == "/internal/verify-artifact")) {
+		if r.Method == http.MethodPost && r.URL.RawQuery == "" && (r.URL.Path == "/internal/admit-issue" || r.URL.Path == "/internal/plan-admission" || ((mode == "candidate" || mode == "verification") && r.URL.Path == "/internal/execute-work") || (mode == "verification" && r.URL.Path == "/internal/verify-artifact") || (bootstrap.PublicationEnabled() && r.URL.Path == "/internal/publish-candidate")) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -145,6 +145,12 @@ func readiness(ready func(context.Context) error) http.Handler {
 		}
 		if os.Getenv("AI_SDLC_RUNTIME_MODE") == "verification" {
 			mode, delivery = "verification", "verification-only"
+		}
+		if bootstrap.PublicationEnabled() {
+			delivery = "verified-publication-only"
+		}
+		if bootstrap.MergeEnabled() {
+			delivery = "verified-low-risk-merge-only"
 		}
 		WriteJSON(w, http.StatusOK, map[string]string{"status": "ready", "mode": mode, "delivery": delivery})
 	})

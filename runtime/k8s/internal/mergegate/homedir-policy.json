@@ -1,0 +1,13 @@
+{
+  "repository": "os-santiago/homedir",
+  "rulesetID": 9071701,
+  "required": [
+    {"Context": "Quality Summary", "AppID": 15368},
+    {"Context": "CI Summary", "AppID": 15368},
+    {"Context": "Quality Gate Summary", "AppID": 15368}
+  ],
+  "strictChecks": true,
+  "resolveThreads": true,
+  "humanApprovals": 0,
+  "bypassActors": []
+}

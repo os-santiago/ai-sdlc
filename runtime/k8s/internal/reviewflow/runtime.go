@@ -19,13 +19,14 @@ type Runtime struct {
 }
 
 // VerificationMayProceed keeps independent queues moving only when review has
-// performed no new work. Cleanup uncertainty and post-claim failures stop both.
+// completed its work or performed no new work. Cleanup uncertainty and
+// post-claim failures stop both; review-passed already confirms cleanup.
 func VerificationMayProceed(state string, err error) bool {
 	if err != nil {
 		var diagnostic ControllerError
 		return errors.As(err, &diagnostic) && !diagnostic.CleanupPending && diagnostic.Stage == "gateway-unavailable"
 	}
-	return state == "" || state == "rejected"
+	return state == "" || state == "rejected" || state == "review-passed"
 }
 
 func (r Runtime) PollOnce(ctx context.Context) (string, error) {

@@ -1,0 +1,93 @@
+{
+  "scope": "additive-native-merge-protection",
+  "observedAt": "2026-11-15T23:55:38+00:00",
+  "runtimeTestCommit": "927ce9a",
+  "fixtureImageSourceCommit": "9c91a94",
+  "runtime": {
+    "status": "passed",
+    "build": true,
+    "vet": true,
+    "passedTests": 1216,
+    "passedPackages": 38,
+    "realPostgres": true
+  },
+  "pythonInstallerTests": 83,
+  "layeredTLSGateScenarios": 9,
+  "actualGitHub": {
+    "readOnlyInventory": true,
+    "dedicatedRulesetCandidates": 0,
+    "writes": 0
+  },
+  "kind": {
+    "scope": "isolated-merge-installation-fixture",
+    "realKubernetes": true,
+    "realPostgres": true,
+    "authorityFrozen": true,
+    "autonomousE2E": false,
+    "githubWrites": false,
+    "workflowRequests": 0,
+    "locallyBuiltFixtureImages": true,
+    "publishedImages": false,
+    "credentialUIDPreserved": true,
+    "scenarios": [
+      {
+        "mergeEnabled": true,
+        "publicationEnabled": true,
+        "readyDeployments": 7,
+        "privilegesMatched": true,
+        "isolatedCredentialMounts": true,
+        "workflowRequests": 0
+      },
+      {
+        "mergeEnabled": true,
+        "publicationEnabled": true,
+        "readyDeployments": 7,
+        "privilegesMatched": true,
+        "isolatedCredentialMounts": true,
+        "workflowRequests": 0
+      },
+      {
+        "mergeEnabled": false,
+        "publicationEnabled": true,
+        "readyDeployments": 7,
+        "privilegesMatched": true,
+        "isolatedCredentialMounts": true,
+        "workflowRequests": 0
+      },
+      {
+        "mergeEnabled": true,
+        "publicationEnabled": true,
+        "readyDeployments": 7,
+        "privilegesMatched": true,
+        "isolatedCredentialMounts": true,
+        "workflowRequests": 0
+      }
+    ]
+  },
+  "nativeWriteTests": "mocked gh API boundary; single POST and no PUT/PATCH/DELETE",
+  "durabilityTests": [
+    "nested directory chain fsync before POST",
+    "synced pre-send intent",
+    "lost response cannot retry",
+    "symlink receipt rejects before API",
+    "failed fsync rejects before API"
+  ],
+  "limitations": [
+    "No live Homedir installation upgrade",
+    "Native rule creation still requires reviewed integration",
+    "No actual GitHub merge",
+    "Konflux fixtures are not autonomous build/promotion controllers",
+    "No E2E or SLSA level claimed"
+  ],
+  "currentSelectionIntegration": {
+    "sourceCommit": "7e6c3cf1cb979872b7e076da8a1dbe90e09b837e",
+    "status": "passed",
+    "passedTests": 1224,
+    "passedPackages": 38,
+    "build": true,
+    "vet": true,
+    "database": "real disposable PostgreSQL",
+    "forge": "synthetic",
+    "installationRetested": false
+  }
+}

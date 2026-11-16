@@ -87,7 +87,15 @@ func run() error {
 		if review != "" && review != "false" && review != "true" {
 			return errors.New("invalid independent review option")
 		}
-		if err := db.ProvisionRolesForOptions(ctx, passwords, os.Getenv("AI_SDLC_RUNTIME_MODE"), review == "true"); err != nil {
+		publication := os.Getenv("AI_SDLC_PUBLICATION")
+		if publication != "" && publication != "false" && publication != "true" {
+			return errors.New("invalid publication option")
+		}
+		merge := os.Getenv("AI_SDLC_MERGE")
+		if merge != "" && merge != "false" && merge != "true" {
+			return errors.New("invalid merge option")
+		}
+		if err := db.ProvisionRolesForMerge(ctx, passwords, os.Getenv("AI_SDLC_RUNTIME_MODE"), review == "true", publication == "true", merge == "true"); err != nil {
 			return err
 		}
 		log.Print("schema and component database roles ready")

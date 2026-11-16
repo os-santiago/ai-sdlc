@@ -170,3 +170,19 @@ func TestVerificationBoundaryRequiresExplicitModeAndOnlyFourPaths(t *testing.T) 
 		t.Fatal("readiness mode")
 	}
 }
+
+func TestPublicationBoundaryOnlyAllowsExplicitSignedRoute(t *testing.T) {
+	t.Setenv("AI_SDLC_RUNTIME_MODE", "verification")
+	t.Setenv("AI_SDLC_INDEPENDENT_REVIEW", "true")
+	for _, enabled := range []string{"", "false", "true", "unexpected"} {
+		t.Setenv("AI_SDLC_PUBLICATION", enabled)
+		handler := RuntimeBoundary(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
+		for _, path := range []string{"/internal/publish-candidate", "/internal/publish-candidate?override=1", "/internal/merge", "/internal/deploy", "/v1/releases/evaluate"} {
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, httptest.NewRequest("POST", path, strings.NewReader("{}")))
+			if (recorder.Code == 204) != (enabled == "true" && path == "/internal/publish-candidate") {
+				t.Fatal("publication route ceiling", enabled, path, recorder.Code)
+			}
+		}
+	}
+}

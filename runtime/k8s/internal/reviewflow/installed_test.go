@@ -29,6 +29,26 @@ func TestInstalledReviewConfigRejectsEndpointAndGenerationPurpose(t *testing.T) 
 	if e != nil || got.Namespace != "ai-sdlc-reviewers" || got.Model.Endpoint != "http://127.0.0.1:8787/v1/chat/completions" {
 		t.Fatal("valid independent profile rejected", e)
 	}
+	public, e := LoadPublicInstalled(configPath)
+	if e != nil || public.Model.BearerToken != "" || public.Digest() != got.Digest() {
+		t.Fatal("publisher projection requires a model credential or changes digest", e)
+	}
+	if os.Remove(tokenPath) != nil {
+		t.Fatal("remove fixture model credential")
+	}
+	if _, e := LoadPublicInstalled(configPath); e != nil {
+		t.Fatal("public config depends on model credential")
+	}
+	if _, e := LoadInstalled(configPath, tokenPath); e == nil {
+		t.Fatal("verifier accepted missing model credential")
+	}
+	if os.WriteFile(tokenPath, []byte(strings.Repeat("y", 48)), 0600) != nil {
+		t.Fatal("restore fixture model credential")
+	}
+	rotated, e := LoadInstalled(configPath, tokenPath)
+	if e != nil || rotated.Digest() != public.Digest() {
+		t.Fatal("token rotation changed public configuration digest")
+	}
 	c.Profile.Version = executor.ProfileVersion
 	write()
 	if _, e = LoadInstalled(configPath, tokenPath); e == nil {

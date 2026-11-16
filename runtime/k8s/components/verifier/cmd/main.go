@@ -16,6 +16,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/reviewflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
@@ -109,24 +110,21 @@ func main() {
 		// Recheck the complete installation config, including pinned images, before every effect.
 		sealed, _ := json.Marshal(config)
 		r := verificationflow.Runtime{DB: c.DB, Load: newLoader(workspacebundle.Digest(sealed)), Client: client, Image: config.Placement.WorkerImage}
+		var reviewPoll queuePoll
 		if reviewEnabled {
 			review := reviewflow.Runtime{DB: c.DB, Policy: r.Load, Load: loadReview, Client: client}
-			state, e := review.PollOnce(ctx)
-			if e != nil {
-				log.Print("independent review stopped safely")
-			} else if state != "" {
-				log.Print("independent review: " + state)
-			}
-			if !reviewflow.VerificationMayProceed(state, e) {
-				return
+			reviewPoll = review.PollOnce
+		}
+		var handoff func(context.Context) (bool, error)
+		if bootstrap.PublicationEnabled() {
+			handoff = func(ctx context.Context) (bool, error) {
+				return publicationflow.Handoff(ctx, c.DB, r.Load, func() (publicationflow.ReviewPolicy, error) {
+					current, e := loadReview(ctx)
+					return publicationflow.ReviewPolicy{Profile: authority.Digest(current.Profile), Configuration: current.Digest()}, e
+				}, c.Authority)
 			}
 		}
-		state, err := r.PollOnce(ctx)
-		if err != nil {
-			log.Print("verification reconciliation stopped safely: " + verificationflow.DiagnosticStage(err))
-		} else if state != "" {
-			log.Print("verification reconciliation: " + state)
-		}
+		reconcileQueues(ctx, reviewPoll, r.PollOnce, handoff)
 	})
 	defer stop()
 	err = service.RunWithReadiness(service.Metadata{Name: "verifier", Responsibility: "independently verify bounded candidate behavior", Consumes: []string{"verify-artifact"}, Produces: []string{"ai-sdlc.behavior-proof/v1"}}, ready, func(mux *http.ServeMux) {

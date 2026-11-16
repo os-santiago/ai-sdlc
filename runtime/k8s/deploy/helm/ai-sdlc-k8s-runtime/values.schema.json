@@ -804,6 +804,40 @@
           "maxLength": 131072
         }
       }
+    },
+    "publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "credentialRevision"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "credentialRevision": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[0-9]*$"
+        }
+      }
+    },
+    "merge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "configJSON": {
+          "type": "string",
+          "maxLength": 16384
+        }
+      }
     }
   },
   "required": [

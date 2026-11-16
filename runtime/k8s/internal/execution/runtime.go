@@ -78,7 +78,7 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	original, _ := json.Marshal(config)
 	load := func(ctx context.Context) (PreparationInputs, Placement, error) {
 		p, _, e := r.Component.Authority()
-		if e != nil || p.Autonomy != "auto-pr" || p.Freeze {
+		if e != nil || !bootstrap.CandidateAutonomy(p) || p.Freeze {
 			return PreparationInputs{}, Placement{}, ErrAuthority
 		}
 		current, raw, e := LoadRuntime(r.ConfigPath)

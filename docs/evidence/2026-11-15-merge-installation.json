@@ -1,0 +1,77 @@
+{
+  "scope": "explicit-low-risk-merge-installation",
+  "observedAt": "2026-11-15T23:33:58+00:00",
+  "baseCommit": "7ee0d3ca6291e6336299356c5d2a114d9bb3b3a6",
+  "runtime": {
+    "status": "passed",
+    "build": true,
+    "vet": true,
+    "passedTests": 1202,
+    "passedPackages": 38,
+    "database": "real disposable PostgreSQL",
+    "forge": "synthetic"
+  },
+  "installerPythonTests": 76,
+  "helmRendering": "passed",
+  "contracts": "passed",
+  "actionlint": "passed",
+  "gitleaks": "passed",
+  "installation": {
+    "scope": "isolated-merge-installation-fixture",
+    "realKubernetes": true,
+    "realPostgres": true,
+    "authorityFrozen": true,
+    "autonomousE2E": false,
+    "githubWrites": false,
+    "workflowRequests": 0,
+    "locallyBuiltFixtureImages": true,
+    "publishedImages": false,
+    "credentialUIDPreserved": true,
+    "scenarios": [
+      {
+        "mergeEnabled": true,
+        "publicationEnabled": true,
+        "readyDeployments": 7,
+        "privilegesMatched": true,
+        "isolatedCredentialMounts": true,
+        "workflowRequests": 0
+      },
+      {
+        "mergeEnabled": true,
+        "publicationEnabled": true,
+        "readyDeployments": 7,
+        "privilegesMatched": true,
+        "isolatedCredentialMounts": true,
+        "workflowRequests": 0
+      },
+      {
+        "mergeEnabled": false,
+        "publicationEnabled": true,
+        "readyDeployments": 7,
+        "privilegesMatched": true,
+        "isolatedCredentialMounts": true,
+        "workflowRequests": 0
+      },
+      {
+        "mergeEnabled": true,
+        "publicationEnabled": true,
+        "readyDeployments": 7,
+        "privilegesMatched": true,
+        "isolatedCredentialMounts": true,
+        "workflowRequests": 0
+      }
+    ]
+  },
+  "limitations": [
+    "No live Homedir installation upgraded by this change",
+    "No real GitHub publication or merge proven",
+    "Native ruleset verification is read-only; current Homedir floor needs a separately reviewed additive installation",
+    "No artifact build, provenance promotion or production deployment authority"
+  ],
+  "corrections": [
+    "Removed non-atomic native ruleset writes",
+    "Filter pending publications using current execution authority revision without renewing claims",
+    "Exercise actual installed column privileges",
+    "Reject pinned migrators missing merge capability"
+  ]
+}

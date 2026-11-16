@@ -24,6 +24,9 @@ func (db *DB) ReadExecutionEvidence(ctx context.Context, work, repository string
 func (db *DB) ReadVerificationEvidence(ctx context.Context, work, repository string, issue, maximumAgeSeconds int) (ExecutionEvidence, error) {
 	return db.readExecutionEvidence(ctx, "verifier", work, repository, issue, maximumAgeSeconds)
 }
+func (db *DB) ReadPublicationEvidence(ctx context.Context, work, repository string, issue, maximumAgeSeconds int) (ExecutionEvidence, error) {
+	return db.readExecutionEvidence(ctx, "release-manager", work, repository, issue, maximumAgeSeconds)
+}
 func (db *DB) readExecutionEvidence(ctx context.Context, component, work, repository string, issue, maximumAgeSeconds int) (ExecutionEvidence, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

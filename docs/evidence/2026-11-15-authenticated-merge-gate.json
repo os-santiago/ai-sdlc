@@ -1,0 +1,20 @@
+{
+  "autonomousE2E": false,
+  "checksPassed": true,
+  "closedPullRequest": 1580,
+  "githubWrites": false,
+  "mergeAuthorized": false,
+  "nativeProtectionSafe": false,
+  "repository": "os-santiago/homedir",
+  "reviewFeedbackResolved": true,
+  "scope": "read-only-authenticated-github-gate-schema",
+  "observedAt": "2026-11-15",
+  "runtimeValidation": {
+    "build": "passed",
+    "vet": "passed",
+    "tests": 1131,
+    "packages": 36
+  },
+  "nativeProtectionModified": false,
+  "installedActivation": false
+}

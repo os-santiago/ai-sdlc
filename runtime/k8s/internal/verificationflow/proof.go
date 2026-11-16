@@ -18,13 +18,30 @@ type PolicyLoader func() (authority.Policy, intake.Config, string, error)
 // CurrentProof is evidence for the next bounded step, never a reusable lease.
 // Callers repeat it before each effect and before persisting acceptance.
 func CurrentProof(ctx context.Context, db *store.DB, load PolicyLoader, id string) (verification.Command, store.VerificationCandidate, intake.Snapshot, error) {
+	return currentProof(ctx, db, load, id, false)
+}
+
+// CurrentPublicationProof repeats the entire signed chain using read-only
+// release-manager projections. No verifier or generator identity is borrowed.
+func CurrentPublicationProof(ctx context.Context, db *store.DB, load PolicyLoader, id string) (verification.Command, store.VerificationCandidate, intake.Snapshot, error) {
+	return currentProof(ctx, db, load, id, true)
+}
+func currentProof(ctx context.Context, db *store.DB, load PolicyLoader, id string, publication bool) (verification.Command, store.VerificationCandidate, intake.Snapshot, error) {
 	reject := func() (verification.Command, store.VerificationCandidate, intake.Snapshot, error) {
 		return verification.Command{}, store.VerificationCandidate{}, intake.Snapshot{}, verification.ErrVerification
 	}
 	unavailable := func() (verification.Command, store.VerificationCandidate, intake.Snapshot, error) {
 		return verification.Command{}, store.VerificationCandidate{}, intake.Snapshot{}, store.ErrObservationUnavailable
 	}
-	r, err := db.ReadVerification(ctx, id)
+	readVerification := db.ReadVerification
+	readCandidate := db.ReadVerificationCandidate
+	readSnapshot := execution.CandidateSnapshot
+	if publication {
+		readVerification = db.ReadPublicationVerification
+		readCandidate = db.ReadPublicationCandidate
+		readSnapshot = execution.PublicationSnapshot
+	}
+	r, err := readVerification(ctx, id)
 	if err != nil {
 		if errors.Is(err, store.ErrObservationUnavailable) {
 			return unavailable()
@@ -46,7 +63,7 @@ func CurrentProof(ctx context.Context, db *store.DB, load PolicyLoader, id strin
 	if err != nil || c.ID() != r.ID || c.CandidateID != r.CandidateID || !time.UnixMilli(c.ExpiresAt).Equal(r.ExpiresAt) {
 		return reject()
 	}
-	candidate, err := db.ReadVerificationCandidate(ctx, c.CandidateID)
+	candidate, err := readCandidate(ctx, c.CandidateID)
 	if errors.Is(err, store.ErrObservationUnavailable) {
 		return unavailable()
 	}
@@ -61,7 +78,7 @@ func CurrentProof(ctx context.Context, db *store.DB, load PolicyLoader, id strin
 	if err != nil || generated.ProfileSHA256 != profile || generated.ID() != c.CandidateID || generated.WorkItemID != c.WorkItemID || generated.Repository != c.Repository || generated.SourceSHA != c.SourceSHA || generated.Generation != c.Generation || generated.IssueNumber != c.IssueNumber || c.ExpiresAt > generated.ExpiresAt {
 		return reject()
 	}
-	snapshot, err := execution.CandidateSnapshot(ctx, db, p, config, generated)
+	snapshot, err := readSnapshot(ctx, db, p, config, generated)
 	if errors.Is(err, store.ErrObservationUnavailable) {
 		return unavailable()
 	}

@@ -56,6 +56,14 @@
     "independentReview": {
       "type": "boolean",
       "description": "Explicit read-only independent review; requires verification profile."
+    },
+    "publication": {
+      "type": "boolean",
+      "description": "Explicit signed verified PR publication; requires Homedir verification and independent review."
+    },
+    "merge": {
+      "type": "boolean",
+      "description": "Explicit low-risk authenticated merge; requires verified publication and native strict protection."
     }
   },
   "allOf": [
@@ -69,6 +77,56 @@
         "properties": {
           "profile": {
             "const": "verification"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "publication"
+        ],
+        "properties": {
+          "publication": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "independentReview"
+        ],
+        "properties": {
+          "independentReview": {
+            "const": true
+          },
+          "profile": {
+            "const": "verification"
+          },
+          "repository": {
+            "const": "os-santiago/homedir"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "merge"
+        ],
+        "properties": {
+          "merge": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "publication"
+        ],
+        "properties": {
+          "publication": {
+            "const": true
           }
         }
       }

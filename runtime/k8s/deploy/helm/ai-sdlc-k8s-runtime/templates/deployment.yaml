@@ -21,6 +21,13 @@ spec:
         {{- include "ai-sdlc-k8s-runtime.selectorLabels" $ | nindent 8 }}
         app.kubernetes.io/component: {{ $component.name }}
       annotations:
+        {{- if and (eq $key "releaseManager") $.Values.publication.enabled }}
+        checksum/review-config: {{ $.Values.review.configJSON | sha256sum }}
+        ai-sdlc.io/publication-credential-revision: {{ $.Values.publication.credentialRevision | quote }}
+        {{- end }}
+        {{- if and (eq $key "releaseManager") $.Values.merge.enabled }}
+        checksum/merge-policy: {{ $.Values.merge.configJSON | sha256sum }}
+        {{- end }}
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
         {{- if and (eq $key "worker") (has $.Values.runtime.mode (list "candidate" "verification")) }}
         ai-sdlc.io/model-credential-revision: {{ $.Values.candidate.credentialRevision | quote }}
@@ -76,7 +83,7 @@ spec:
             capabilities: {drop: [ALL]}
             readOnlyRootFilesystem: true
           volumeMounts:
-            {{- if and (has $key (list "worker" "orchestrator")) (has $.Values.runtime.mode (list "candidate" "verification")) }}
+            {{- if and (or (has $key (list "worker" "orchestrator")) (and (eq $key "releaseManager") $.Values.publication.enabled)) (has $.Values.runtime.mode (list "candidate" "verification")) }}
             - {name: execution, mountPath: /etc/ai-sdlc/execution, readOnly: true}
             {{- end }}
             {{- if and (eq $key "worker") (has $.Values.runtime.mode (list "candidate" "verification")) }}
@@ -86,6 +93,13 @@ spec:
             - {name: contract, mountPath: /etc/ai-sdlc/contract, readOnly: true}
             - {name: authority, mountPath: /etc/ai-sdlc/authority, readOnly: true}
             - {name: identity, mountPath: /etc/ai-sdlc/identity, readOnly: true}
+            {{- if and (eq $key "releaseManager") $.Values.publication.enabled }}
+            - {name: publication-client, mountPath: /etc/ai-sdlc/publication, readOnly: true}
+            - {name: review-config, mountPath: /etc/ai-sdlc/review, readOnly: true}
+            {{- end }}
+            {{- if and (eq $key "releaseManager") $.Values.merge.enabled }}
+            - {name: merge-policy, mountPath: /etc/ai-sdlc/merge, readOnly: true}
+            {{- end }}
             - {name: intake-config, mountPath: /etc/ai-sdlc/intake, readOnly: true}
             {{- if and (eq $key "intake") (has $.Values.runtime.mode (list "shadow" "candidate" "verification")) }}
             - {name: github-client, mountPath: /etc/ai-sdlc/github, readOnly: true}
@@ -118,7 +132,7 @@ spec:
             - {name: model-home, mountPath: /model-home}
         {{- end }}
       volumes:
-        {{- if and (has $key (list "worker" "orchestrator")) (has $.Values.runtime.mode (list "candidate" "verification")) }}
+        {{- if and (or (has $key (list "worker" "orchestrator")) (and (eq $key "releaseManager") $.Values.publication.enabled)) (has $.Values.runtime.mode (list "candidate" "verification")) }}
         - name: execution
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-execution}
         {{- end }}
@@ -137,6 +151,16 @@ spec:
               - configMap:
                   name: kube-root-ca.crt
                   items: [{key: ca.crt, path: ca.crt}]
+        {{- end }}
+        {{- if and (eq $key "releaseManager") $.Values.publication.enabled }}
+        - name: publication-client
+          secret: {secretName: ai-sdlc-publication-client, defaultMode: 0440}
+        - name: review-config
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-review}
+        {{- end }}
+        {{- if and (eq $key "releaseManager") $.Values.merge.enabled }}
+        - name: merge-policy
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-merge-policy}
         {{- end }}
         - name: intake-config
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-intake}

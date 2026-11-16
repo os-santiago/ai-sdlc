@@ -7,7 +7,11 @@ import re
 import secrets
 
 
-def desired_values(root, image_lock_path, lock, verification=False, review=False):
+def desired_values(root, image_lock_path, lock, verification=False, review=False, publication=False, merge=False):
+    if merge and not publication:
+        raise ValueError('Merge requires verified publication')
+    if publication and (not review or not verification):
+        raise ValueError('Publication requires verification and independent review')
     if review and not verification:
         raise ValueError('Independent review requires verification')
     evidence_path = Path(image_lock_path).with_name('images.evidence.json')
@@ -51,6 +55,10 @@ def desired_values(root, image_lock_path, lock, verification=False, review=False
                          'aDev': adev, 'workerImage': config['placement']['WorkerImage'],
                          'mailboxImage': config['placement']['MailboxImage']}
         result['review'] = {'enabled': True, 'configJSON': json.dumps(review_config, sort_keys=True)}
+    if publication:
+        result['publication'] = {'enabled': True}
+    if merge:
+        result['merge'] = {'enabled': True}
     return result
 
 

@@ -60,6 +60,19 @@ func (db *DB) ProvisionRolesForMode(ctx context.Context, passwords map[string]st
 
 // Review privileges require an explicit installation option and verification mode.
 func (db *DB) ProvisionRolesForOptions(ctx context.Context, passwords map[string]string, mode string, review bool) error {
+	return db.ProvisionRolesForCapabilities(ctx, passwords, mode, review, false)
+}
+
+func (db *DB) ProvisionRolesForCapabilities(ctx context.Context, passwords map[string]string, mode string, review, publication bool) error {
+	return db.ProvisionRolesForMerge(ctx, passwords, mode, review, publication, false)
+}
+func (db *DB) ProvisionRolesForMerge(ctx context.Context, passwords map[string]string, mode string, review, publication, merge bool) error {
+	if merge && !publication {
+		return errors.New("merge requires verified publication")
+	}
+	if publication && (mode != "verification" || !review) {
+		return errors.New("publication requires verification and independent review")
+	}
 	if review && mode != "verification" {
 		return errors.New("independent review requires verification mode")
 	}
@@ -166,6 +179,17 @@ func (db *DB) ProvisionRolesForOptions(ctx context.Context, passwords map[string
 						statements = append(statements, reviewPrivileges...)
 					}
 				}
+			}
+			if publication {
+				if component == "verifier" {
+					statements = append(statements, `GRANT SELECT ON publication_handoffs TO aisdlc_verifier`, `GRANT INSERT(review_id,command_id,payload_digest) ON publication_handoffs TO aisdlc_verifier`)
+				}
+				if component == "release-manager" {
+					statements = append(statements, publicationPrivileges...)
+				}
+			}
+			if merge && component == "release-manager" {
+				statements = append(statements, mergePrivileges...)
 			}
 			// REVOKE table privileges alone does not remove column grants.
 			for _, revoke := range columnRevocations {

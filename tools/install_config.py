@@ -26,9 +26,9 @@ def load(path):
         raise ValueError('Invalid installation configuration JSON') from exc
     fields = {'apiVersion', 'kind', 'cluster', 'provider', 'repository',
               'environment', 'profile', 'images'}
-    if not isinstance(config, dict) or set(config) - {'independentReview'} != fields:
+    if not isinstance(config, dict) or set(config) - {'independentReview', 'publication', 'merge'} != fields:
         raise ValueError('Installation configuration requires exactly the documented fields')
-    if any(not isinstance(value, str) for key, value in config.items() if key != 'independentReview'):
+    if any(not isinstance(value, str) for key, value in config.items() if key not in ('independentReview', 'publication', 'merge')):
         raise ValueError('Installation configuration fields must be strings')
     if config['apiVersion'] != 'ai-sdlc.io/local-install/v1' or config['kind'] != 'LocalInstallation':
         raise ValueError('Unsupported installation configuration version or kind')
@@ -42,6 +42,10 @@ def load(path):
         raise ValueError('Invalid or unsupported local installation scope')
     if 'independentReview' in config and (type(config['independentReview']) is not bool or config['profile'] != 'verification'):
         raise ValueError('Independent review requires a boolean and verification profile')
+    if 'publication' in config and (type(config['publication']) is not bool or (config['publication'] and (config['profile'] != 'verification' or config.get('independentReview') is not True or config['repository'] != 'os-santiago/homedir'))):
+        raise ValueError('Publication requires verification, independent review and the Homedir pilot')
+    if 'merge' in config and (type(config['merge']) is not bool or (config['merge'] and config.get('publication') is not True)):
+        raise ValueError('Merge requires explicit verified publication')
     digest = 'sha256:' + hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     values = {('independent_review' if key == 'independentReview' else key): value for key, value in config.items() if key not in ('apiVersion', 'kind')}
     values['images'] = (path.parent / config['images']).resolve()

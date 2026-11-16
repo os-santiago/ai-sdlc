@@ -68,6 +68,21 @@ func CandidateSnapshot(ctx context.Context, db *store.DB, p authority.Policy, co
 	}
 	return validateSnapshotEvidence(p, config, c, "running", e)
 }
+
+// PublicationSnapshot uses the same current low-risk issue checks under the
+// separate release-manager identity. It cannot advance generation or review.
+func PublicationSnapshot(ctx context.Context, db *store.DB, p authority.Policy, config intake.Config, c Command) (intake.Snapshot, error) {
+	if config.Validate(p.Repository) != nil {
+		return intake.Snapshot{}, ErrAuthority
+	}
+	age := min(2*config.PollSeconds, 300)
+	e, err := db.ReadPublicationEvidence(ctx, c.WorkItemID, c.Repository, c.IssueNumber, age)
+	if err != nil {
+		return intake.Snapshot{}, err
+	}
+	return validateSnapshotEvidence(p, config, c, "running", e)
+}
+
 func validateSnapshotEvidence(p authority.Policy, config intake.Config, c Command, expectedStatus string, e store.ExecutionEvidence) (intake.Snapshot, error) {
 	if e.Status != expectedStatus || e.IntakeGeneration != c.Generation || e.AdmissionGeneration != c.Generation || e.PlanningGeneration != c.Generation || e.ObservationAuthority != c.AuthorityRevision {
 		return intake.Snapshot{}, ErrAuthority

@@ -28,7 +28,10 @@ func main() {
 		if os.Getenv("AI_SDLC_RUNTIME_MODE") == "verification" {
 			expected = 4
 		}
-		if authority.DecodeStrict([]byte(os.Getenv("AI_SDLC_RELAY_ROUTES")), &routes) != nil || len(routes) != expected || (expected >= 3 && routes["execute-work"] == "") || (expected == 4 && routes["verify-artifact"] == "") || routes["admit-issue"] == "" || routes["plan-admission"] == "" {
+		if bootstrap.PublicationEnabled() {
+			expected = 5
+		}
+		if authority.DecodeStrict([]byte(os.Getenv("AI_SDLC_RELAY_ROUTES")), &routes) != nil || len(routes) != expected || (expected >= 3 && routes["execute-work"] == "") || (expected >= 4 && routes["verify-artifact"] == "") || (expected == 5 && routes["publish-candidate"] == "") || routes["admit-issue"] == "" || routes["plan-admission"] == "" {
 			log.Fatal("relay requires exactly its reviewed routes")
 		}
 		stop := bootstrap.Periodic(time.Second, func(ctx context.Context) {

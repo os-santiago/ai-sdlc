@@ -1,0 +1,60 @@
+{
+  "autonomousE2E": false,
+  "githubWrites": false,
+  "installedColumnPrivileges": true,
+  "realCandidateBehaviorReviewPrerequisite": true,
+  "realPostgres": true,
+  "realSignedHTTPInbox": true,
+  "scenarios": [
+    {
+      "durableRecord": true,
+      "effects": 4,
+      "noReplay": true,
+      "scenario": "success",
+      "secondPoll": "publication-idle",
+      "state": "published"
+    },
+    {
+      "durableRecord": false,
+      "effects": 1,
+      "noReplay": true,
+      "scenario": "lost-tree",
+      "secondPoll": "publication-quarantined",
+      "state": "failed"
+    },
+    {
+      "durableRecord": false,
+      "effects": 1,
+      "noReplay": true,
+      "scenario": "revoked-tree",
+      "secondPoll": "publication-quarantined",
+      "state": "failed"
+    },
+    {
+      "durableRecord": false,
+      "effects": 4,
+      "noReplay": true,
+      "scenario": "lost-pull-request",
+      "secondPoll": "publication-quarantined",
+      "state": "failed"
+    }
+  ],
+  "scope": "isolated-publication-controller",
+  "syntheticForge": true,
+  "observedAt": "2026-11-15",
+  "runtimeValidation": {
+    "build": "passed",
+    "vet": "passed",
+    "passedTests": 1085,
+    "passedPackages": 35
+  },
+  "realDatabaseRegression": [
+    "expiry-without-authority-renewal",
+    "atomic-terminal-record",
+    "lost-commit-response",
+    "corrupt-or-legacy-evidence-denied",
+    "parent-expiry-and-plan-bound",
+    "operational-insert-cannot-extend-expiry"
+  ],
+  "installedActivation": false
+}

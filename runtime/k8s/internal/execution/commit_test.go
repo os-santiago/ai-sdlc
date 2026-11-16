@@ -92,6 +92,8 @@ func executionCommitFault(t *testing.T, nth int32, role ...string) (*store.DB, <
 	component := "worker"
 	if len(role) == 1 && role[0] == "verifier" {
 		component = "verifier"
+	} else if len(role) == 1 && role[0] == "release-manager" {
+		component = "release_manager"
 	} else if len(role) != 0 {
 		t.Fatal("unsupported fixture identity")
 	}
