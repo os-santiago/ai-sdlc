@@ -21,6 +21,10 @@ class BuildInstallTests(unittest.TestCase):
         for operation,stderr,expected in (
             ('inspect-empty-bootstrap','timestamp initial database inspection denied: history/outbox\n','boundary: history'),
             ('inspect-empty-bootstrap','initial database inspection denied: primary-authority','boundary: primary-authority'),
+            ('inspect-empty-bootstrap','initial database inspection denied: connection-authentication','boundary: connection-authentication'),
+            ('inspect-empty-bootstrap','initial database inspection denied: connection-timeout','boundary: connection-timeout'),
+            ('inspect-empty-bootstrap','initial database inspection denied: connection-configuration','boundary: connection-configuration'),
+            ('inspect-empty-bootstrap','initial database inspection denied: connection-private-sentinel','preflight rejected'),
             ('inspect-empty-bootstrap','initial database inspection denied: private-sentinel','preflight rejected'),
             ('inspect-empty-bootstrap','driver failed postgres://private-sentinel:secret-sentinel@host/database','preflight rejected'),
             ('compile-build-installation','initial database inspection denied: connection','preflight rejected'),

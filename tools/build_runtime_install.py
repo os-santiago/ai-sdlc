@@ -45,7 +45,7 @@ def component_call(provider, image, operation, value, node_id=None):
         if result.returncode and operation == 'inspect-empty-bootstrap':
             boundary = re.search(r'initial database inspection denied: ([a-z-]+(?:/[a-z_]+)?)\s*$', result.stderr)
             category = boundary[1].split('/')[0] if boundary is not None else None
-            if category in {'input','connection','transaction','settings','primary-authority','foreign-schema',
+            if category in {'input','connection','connection-configuration','connection-authentication','connection-database','connection-permission','connection-capacity','connection-unavailable','connection-timeout','connection-network','transaction','settings','primary-authority','foreign-schema',
                             'table-inventory','migration-inventory','history','commit'}:
                 raise ValueError('Initial database inspection rejected boundary: '+category)
         if result.returncode or len(result.stdout) > 262144:
