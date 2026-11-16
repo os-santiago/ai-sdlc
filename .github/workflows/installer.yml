@@ -44,6 +44,7 @@ jobs:
           python3 -m unittest discover -s tools -p test_build_foundation_state.py -v
           python3 -m unittest discover -s tools -p test_build_foundation_node.py -v
           python3 -m unittest discover -s tools -p test_build_foundation_fixture.py -v
+          python3 -m unittest discover -s tools -p test_build_foundation_resources.py -v
           python3 -m unittest discover -s tools -p test_verify_shadow_intake.py -v
           python3 -m unittest discover -s tools -p test_workspace_writer.py -v
           python3 -m unittest discover -s tools -p test_fixture_images.py -v
@@ -65,6 +66,10 @@ jobs:
           python3 tools/verify_local_install.py --provider docker
           ./install.sh local --config "$RUNNER_TEMP/local-install.json" --timeout 10m
           ./install.sh status --config "$RUNNER_TEMP/local-install.json"
+      - name: Verify original foundation resources through the Kubernetes API
+        run: |
+          python3 tools/verify_build_foundation_resources.py --cluster ai-sdlc \
+            --output "$RUNNER_TEMP/build-foundation-resources"
       - name: Verify and reconcile the offline executor runtime
         run: |
           ./install.sh sandbox --config "$RUNNER_TEMP/local-install.json"

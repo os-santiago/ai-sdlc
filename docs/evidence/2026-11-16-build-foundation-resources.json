@@ -1,0 +1,16 @@
+{
+  "status": "passed",
+  "namespace": "foundation-resources-31d2287d6b8662d04a2cc0a8",
+  "clusterUID": "73198ec7-6964-45d9-bf51-6512e96c2452",
+  "scope": "isolated administrative resource journal; no workload, mount or delivery",
+  "podsCreated": false,
+  "storageMounted": false,
+  "autonomousE2E": false,
+  "cleanupComplete": true,
+  "resourcesReapplied": 10,
+  "originalUIDsRetained": true,
+  "date": "2026-11-16",
+  "foundationPythonTests": 15,
+  "persistentFoundationInstalled": false,
+  "releaseAuthorized": false
+}

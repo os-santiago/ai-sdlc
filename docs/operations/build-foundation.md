@@ -104,3 +104,19 @@ absence quarantine and extractor cleanup. The real Kubernetes journal fixture
 proves lost-ACK recovery to an original UID, drift rejection and no recreation
 following deletion. Both are explicitly administrative fixtures; they do not
 simulate or claim autonomous delivery.
+
+A separate API round-trip check exercises the same seven declarative resources,
+namespace and PVC/PV through the normal durable resource journal. It waits for
+PVC binding, then reapplies all ten objects and checks original UIDs. No Pod or
+host mount is created; the PV points at an unused fixture path. Cleanup recovers
+only original nonce/UID identities and deletes with UID preconditions.
+
+```sh
+python3 tools/verify_build_foundation_resources.py \
+  --cluster ai-sdlc-konflux-reviewed --output /tmp/build-foundation-resources
+```
+
+Use a new output directory and an existing installer-owned cluster. The quality
+workflow also executes this check on its disposable kind installation. This
+checks API defaulting and durable ownership, not storage custody, native admission
+policy readiness, persistent complete installation or autonomous delivery.
