@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
+import copy
 import unittest
 import yaml
 
@@ -15,6 +17,62 @@ HELM = os.environ.get('AI_SDLC_TEST_HELM', 'helm')
 class ChartTests(unittest.TestCase):
     def render(self, *args):
         return subprocess.run([HELM, 'template', 'ai-sdlc', str(CHART), '--namespace', 'ai-sdlc-runtime', '-f', str(LOCAL), *args], capture_output=True, text=True)
+
+    def build_values(self):
+        inner = {'repository': 'os-santiago/saferus', 'environment': 'ai-sdlc-production', 'autonomy': 'auto-merge-low', 'freeze': False}
+        outer = dict(inner, autonomy='auto-deploy')
+        installed = {'version': 'ai-sdlc.build-installation/v1', 'inner': inner, 'outer': outer,
+                     'profile': {'deniedTargets': [{'host': '10.96.0.1', 'port': 443}, {'host': '10.96.0.2', 'port': 443}]}}
+        return {'runtime': {'mode': 'verification'}, 'verifier': {'digest': 'sha256:'+'a'*64},
+                'review': {'enabled': True, 'configJSON': '{}'}, 'publication': {'enabled': True},
+                'merge': {'enabled': True, 'configJSON': '{}'}, 'authority': {'policyJSON': json.dumps(inner)},
+                'build': {'enabled': True, 'digest': 'sha256:'+'b'*64, 'configJSON': json.dumps(installed), 'outerPolicyJSON': json.dumps(outer)}}
+
+    def render_build(self, values, *args):
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as file:
+            json.dump(values, file); file.flush()
+            return self.render('-f', file.name, *args)
+
+    def test_build_controller_has_only_original_workload_authority_and_private_identity(self):
+        for global_policy in ('true', 'false'):
+            result = self.render_build(self.build_values(), '--set', 'networkPolicy.enabled='+global_policy)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            docs = [d for d in yaml.safe_load_all(result.stdout) if d]
+            deployment = next(d for d in docs if d['kind']=='Deployment' and d['metadata']['name']=='ai-sdlc-build-controller')
+            pod = deployment['spec']['template']['spec']; container = pod['containers'][0]
+            self.assertEqual(len(pod['containers']), 1)
+            self.assertEqual(pod['serviceAccountName'], 'ai-sdlc-build-controller')
+            self.assertFalse(pod['automountServiceAccountToken'])
+            self.assertTrue(container['securityContext']['readOnlyRootFilesystem'])
+            self.assertEqual(container['image'], 'quay.io/os-santiago/ai-sdlc@sha256:'+'b'*64)
+            self.assertEqual({v['secret']['secretName'] for v in pod['volumes'] if 'secret' in v}, {'ai-sdlc-identity-build-controller'})
+            self.assertEqual(next(e for e in container['env'] if e['name']=='DATABASE_URL')['valueFrom']['secretKeyRef']['name'], 'ai-sdlc-database-build-controller')
+            roles=[d for d in docs if d['kind'] in ('Role','ClusterRole') and d['metadata']['name'] in ('ai-sdlc-build-controller','ai-sdlc-build-inventory')]
+            writes=[]
+            for role in roles:
+                for rule in role['rules']:
+                    self.assertFalse(set(rule['verbs']) & {'patch','update','*','deletecollection'})
+                    if set(rule['verbs']) & {'create','delete'}: writes.append((role['metadata']['namespace'],rule['resources']))
+                    if 'secrets' in rule['resources']: self.assertEqual(rule['resourceNames'],['registry-auth'])
+            self.assertEqual(writes,[('ai-sdlc-builds',['pipelineruns'])])
+            policy=next(d for d in docs if d['kind']=='NetworkPolicy' and d['metadata']['name']=='ai-sdlc-build-controller')
+            self.assertEqual(policy['spec']['ingress'][0]['from'][0]['podSelector']['matchLabels']['app.kubernetes.io/component'],'relay')
+            self.assertEqual({p['ipBlock']['cidr'] for r in policy['spec']['egress'] for p in r['to'] if 'ipBlock' in p},{'10.96.0.1/32','10.96.0.2/32'})
+            if global_policy=='true':
+                general=next(d for d in docs if d['kind']=='NetworkPolicy' and d['metadata']['name']=='ai-sdlc-internal')
+                self.assertIn({'key':'app.kubernetes.io/component','operator':'NotIn','values':['build-controller']},general['spec']['podSelector']['matchExpressions'])
+            config=next(d['data'] for d in docs if d['kind']=='ConfigMap' and 'AI_SDLC_RELAY_ROUTES' in d.get('data',{}))
+            self.assertEqual(config['AI_SDLC_BUILD'],'true')
+            self.assertEqual(json.loads(config['AI_SDLC_RELAY_ROUTES'])['build-merged'],'http://ai-sdlc-build-controller:8088/internal/build-merged')
+
+    def test_build_rejects_partial_authority_configuration(self):
+        for fault in ('review','publication','merge','digest','outer','repository'):
+            values=self.build_values()
+            if fault in ('review','publication','merge'): values[fault]['enabled']=False
+            elif fault=='digest': values['build']['digest']=''
+            elif fault=='outer': values['build']['outerPolicyJSON']='{}'
+            else: values['authority']['policyJSON']=json.dumps({'repository':'os-santiago/homedir'})
+            self.assertNotEqual(self.render_build(values).returncode,0,fault)
 
     def test_verifier_effective_namespace_and_required_egress_without_global_policy(self):
         result = self.render('-f', str(ROOT / 'runtime/k8s/deploy/local/profiles/verification.json'),

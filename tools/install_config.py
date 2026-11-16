@@ -26,7 +26,7 @@ def load(path):
         raise ValueError('Invalid installation configuration JSON') from exc
     fields = {'apiVersion', 'kind', 'cluster', 'provider', 'repository',
               'environment', 'profile', 'images'}
-    if not isinstance(config, dict) or set(config) - {'independentReview', 'publication', 'merge', 'platform'} != fields:
+    if not isinstance(config, dict) or set(config) - {'independentReview', 'publication', 'merge', 'platform', 'buildBundle'} != fields:
         raise ValueError('Installation configuration requires exactly the documented fields')
     if any(not isinstance(value, str) for key, value in config.items() if key not in ('independentReview', 'publication', 'merge')):
         raise ValueError('Installation configuration fields must be strings')
@@ -42,7 +42,12 @@ def load(path):
         raise ValueError('Invalid or unsupported local installation scope')
     if config.get('platform', 'kind') not in ('kind', 'konflux'):
         raise ValueError('Unsupported installation platform')
-    if config.get('platform') == 'konflux' and (config['profile'] != 'maintenance'
+    if 'buildBundle' in config and (not config['buildBundle'] or '\x00' in config['buildBundle']
+            or config.get('platform') != 'konflux' or config['profile'] != 'verification'
+            or config['repository'] != 'os-santiago/saferus' or config['environment'] != 'ai-sdlc-production'
+            or config.get('merge') is not True or config.get('publication') is not True or config.get('independentReview') is not True):
+        raise ValueError('Build desired state requires reviewed Konflux Saferus scope')
+    if config.get('platform') == 'konflux' and 'buildBundle' not in config and (config['profile'] != 'maintenance'
             or config['repository'] != 'os-santiago/saferus' or config['environment'] != 'ai-sdlc-production'
             or config.get('publication') or config.get('merge') or 'independentReview' in config):
         raise ValueError('Konflux capability supports only frozen Saferus test production')
@@ -53,8 +58,10 @@ def load(path):
     if 'merge' in config and (type(config['merge']) is not bool or (config['merge'] and config.get('publication') is not True)):
         raise ValueError('Merge requires explicit verified publication')
     digest = 'sha256:' + hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    values = {('independent_review' if key == 'independentReview' else key): value for key, value in config.items() if key not in ('apiVersion', 'kind')}
+    values = {({'independentReview': 'independent_review', 'buildBundle': 'build_bundle'}.get(key, key)): value for key, value in config.items() if key not in ('apiVersion', 'kind')}
     values['images'] = (path.parent / config['images']).resolve()
+    if 'buildBundle' in config:
+        values['build_bundle'] = (path.parent / config['buildBundle']).resolve()
     return values, digest
 
 
@@ -67,12 +74,14 @@ def resolve(args):
     values, digest = load(args.config)
     for key, value in values.items():
         supplied = getattr(args, key)
-        if key == 'images' and supplied is not None:
+        if key in ('images', 'build_bundle') and supplied is not None:
             supplied = supplied.resolve()
         if supplied is not None and supplied != value:
             raise ValueError('CLI option conflicts with installation configuration: ' + key)
         # Status and credential operations address the same scope without
         # changing the installed profile or requesting shadow activation.
+        if key == 'build_bundle' and args.command not in ('plan', 'local'):
+            continue
         if key != 'profile' or args.command in ('plan', 'local'):
             setattr(args, key, value)
     return digest

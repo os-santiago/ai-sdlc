@@ -36,6 +36,11 @@ For an existing installer-owned Konflux cluster, use the
 `examples/saferus-konflux-frozen.local-install.json`. It preserves the platform identity and
 keeps Saferus delivery disabled while integration is validated.
 
+An explicit [closed-build capability](docs/operations/build-runtime-install.md)
+connects signed merged-source dispatch, relay and the build controller on that
+platform. It requires a separately approved current profile and original storage
+slots; installation does not authorize release or demonstrate the full E2E.
+
 This first release installs **maintenance mode**, with delivery actions
 disabled. It verifies infrastructure installation, not autonomous
 issue-to-production delivery. No GitOps controller is installed; reconciliation

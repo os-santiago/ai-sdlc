@@ -83,6 +83,10 @@ spec:
             capabilities: {drop: [ALL]}
             readOnlyRootFilesystem: true
           volumeMounts:
+            {{- if and $.Values.build.enabled (has $key (list "releaseManager" "relay")) }}
+            - {name: build-config, mountPath: /etc/ai-sdlc/build, readOnly: true}
+            - {name: outer-policy, mountPath: /etc/ai-sdlc/outer-policy, readOnly: true}
+            {{- end }}
             {{- if and (or (has $key (list "worker" "orchestrator")) (and (eq $key "releaseManager") $.Values.publication.enabled)) (has $.Values.runtime.mode (list "candidate" "verification")) }}
             - {name: execution, mountPath: /etc/ai-sdlc/execution, readOnly: true}
             {{- end }}
@@ -132,6 +136,12 @@ spec:
             - {name: model-home, mountPath: /model-home}
         {{- end }}
       volumes:
+        {{- if and $.Values.build.enabled (has $key (list "releaseManager" "relay")) }}
+        - name: build-config
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-build}
+        - name: outer-policy
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-outer-policy}
+        {{- end }}
         {{- if and (or (has $key (list "worker" "orchestrator")) (and (eq $key "releaseManager") $.Values.publication.enabled)) (has $.Values.runtime.mode (list "candidate" "verification")) }}
         - name: execution
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-execution}

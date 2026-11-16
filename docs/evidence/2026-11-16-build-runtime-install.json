@@ -1,0 +1,48 @@
+{
+  "date": "2026-11-16",
+  "scope": "signed build runtime installation integration; no autonomous E2E",
+  "runtimeValidation": {
+    "status": "passed",
+    "passedTests": 1570,
+    "passedPackages": 44,
+    "stages": [
+      "database-start",
+      "database-ready",
+      "runner-start",
+      "git-dependency",
+      "git-trust",
+      "build",
+      "vet",
+      "test"
+    ],
+    "disposableDatabaseCleanup": true
+  },
+  "productionMigrator": {
+    "imageID": "sha256:27da56495ae52f269cf96710c36917bb8ae2d662ae83eb8d8969089427f7660d",
+    "binarySHA256": "f4b859eb610eb9de373c1bd69ab55783d0743e55baf8b7ac6745090732a33b72"
+  },
+  "realKubernetesPreflight": {
+    "status": "passed",
+    "changedApprovedTrustDenied": true,
+    "cleanupComplete": true,
+    "workloadExecuted": false
+  },
+  "buildChart": {
+    "serverDryRun": true,
+    "resourceCount": 20,
+    "persistedResources": false,
+    "syntheticPublicPolicy": true,
+    "illustrativeImageDigests": true,
+    "scope": "build template API/admission only; no rollout or readiness proof"
+  },
+  "priorAttempt": {
+    "scope": "full chart API dry-run",
+    "status": "failed",
+    "cleanupComplete": true,
+    "resolution": "Narrowed validation to new build template; other capability prerequisites were not installed in this fixture."
+  },
+  "autonomousE2E": false,
+  "releaseAuthorized": false,
+  "persistentBuildFoundationInstalled": false,
+  "productionReadinessProven": false
+}

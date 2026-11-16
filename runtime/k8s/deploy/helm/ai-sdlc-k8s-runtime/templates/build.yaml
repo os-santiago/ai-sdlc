@@ -1,0 +1,257 @@
+{{- if .Values.build.enabled }}
+{{- if or (not .Values.merge.enabled) (not .Values.publication.enabled) (not .Values.review.enabled) (ne .Values.runtime.mode "verification") }}
+{{- fail "build requires verification, independent review, publication and merge" }}
+{{- end }}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" .Values.build.digest) }}
+{{- fail "build requires an immutable controller image digest" }}
+{{- end }}
+{{- $installed := .Values.build.configJSON | fromJson }}
+{{- $inner := .Values.authority.policyJSON | fromJson }}
+{{- $outer := .Values.build.outerPolicyJSON | fromJson }}
+{{- if or (ne $installed.version "ai-sdlc.build-installation/v1") (ne $inner.repository "os-santiago/saferus") (ne $inner.environment "ai-sdlc-production") (ne $inner.autonomy "auto-merge-low") (ne $outer.autonomy "auto-deploy") (ne (toJson $installed.inner) (toJson $inner)) (ne (toJson $installed.outer) (toJson $outer)) }}
+{{- fail "build requires matching installed Saferus inner/outer policy documents" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-build, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+data:
+  config.json: {{ .Values.build.configJSON | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-outer-policy, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+data:
+  policy.json: {{ .Values.build.outerPolicyJSON | quote }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: ai-sdlc-build-controller, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: ai-sdlc-build-controller, namespace: ai-sdlc-builds}
+rules:
+  - apiGroups: [tekton.dev]
+    resources: [pipelineruns]
+    verbs: [create, get, list, delete]
+  - apiGroups: [tekton.dev]
+    resources: [taskruns]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [serviceaccounts]
+    resourceNames: [build, publish]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [registry-auth]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [build-trust, trusted-ca, config-trusted-cabundle, config-service-cabundle]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [limitranges]
+    resourceNames: [build-budget]
+    verbs: [get]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    resourceNames: [build, publish]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: ai-sdlc-build-inventory}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    resourceNames: [kube-system, ai-sdlc-builds]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [persistentvolumes, nodes]
+    verbs: [get]
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [mutatingwebhookconfigurations, mutatingadmissionpolicies, mutatingadmissionpolicybindings]
+    verbs: [list]
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [validatingadmissionpolicies, validatingadmissionpolicybindings]
+    resourceNames: [ai-sdlc-build-pods]
+    verbs: [get]
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [mutatingadmissionpolicies, mutatingadmissionpolicybindings]
+    resourceNames: [ai-sdlc-build-bounds]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: ai-sdlc-build-inventory}
+subjects:
+  - {kind: ServiceAccount, name: ai-sdlc-build-controller, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: ai-sdlc-build-inventory}
+{{- range $ns := list "ai-sdlc-builds" "tekton-pipelines" "kube-system" "kube-node-lease" "default" "kind-registry" }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: ai-sdlc-build-controller, namespace: {{ $ns }}}
+subjects:
+  - {kind: ServiceAccount, name: ai-sdlc-build-controller, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" $ }}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: ai-sdlc-build-controller}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: ai-sdlc-build-controller, namespace: tekton-pipelines}
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [tekton-pipelines-controller]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [config-defaults, feature-flags]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: ai-sdlc-build-controller, namespace: kube-system}
+rules:
+  - apiGroups: [apps]
+    resources: [daemonsets]
+    resourceNames: [kindnet]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: ai-sdlc-build-controller, namespace: kube-node-lease}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get]
+{{- range $entry := list (dict "namespace" "default" "name" "kubernetes") (dict "namespace" "kind-registry" "name" "registry-service") }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: ai-sdlc-build-controller, namespace: {{ $entry.namespace }}}
+rules:
+  - apiGroups: [""]
+    resources: [services, endpoints]
+    resourceNames: [{{ $entry.name }}]
+    verbs: [get]
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-build-controller
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+    app.kubernetes.io/component: build-controller
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: build-controller
+  template:
+    metadata:
+      labels:
+        {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: build-controller
+      annotations:
+        checksum/build: {{ .Values.build.configJSON | sha256sum }}
+        checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: ai-sdlc-build-controller
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 300
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: build-controller
+          image: "{{ .Values.image.repository }}@{{ .Values.build.digest }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
+          env:
+            - {name: AI_SDLC_HTTP_ADDRESS, value: ":8088"}
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: {{ .Values.authority.databaseSecretPrefix }}-build-controller, key: uri}}
+          ports: [{name: http, containerPort: 8088}]
+          readinessProbe: {httpGet: {path: /readyz, port: http}}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, initialDelaySeconds: 10}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
+          volumeMounts:
+            - {name: build, mountPath: /etc/ai-sdlc/build, readOnly: true}
+            - {name: authority, mountPath: /etc/ai-sdlc/authority, readOnly: true}
+            - {name: outer-policy, mountPath: /etc/ai-sdlc/outer-policy, readOnly: true}
+            - {name: identity, mountPath: /etc/ai-sdlc/identity, readOnly: true}
+            - {name: kubernetes, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true}
+      volumes:
+        - name: build
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-build}
+        - name: authority
+          configMap: {name: {{ .Values.authority.policyConfigMap }}}
+        - name: outer-policy
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-outer-policy}
+        - name: identity
+          secret: {secretName: {{ .Values.authority.identitySecretPrefix }}-build-controller, defaultMode: 0440}
+        - name: kubernetes
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken: {path: token, expirationSeconds: 3600}
+              - configMap:
+                  name: kube-root-ca.crt
+                  items: [{key: ca.crt, path: ca.crt}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-build-controller, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+spec:
+  selector:
+    {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: build-controller
+  ports: [{name: http, port: 8088, targetPort: http}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: ai-sdlc-build-controller, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: build-controller
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: relay
+      ports: [{protocol: TCP, port: 8088}]
+  egress:
+    - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}}]
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 14 }}
+      ports: [{protocol: TCP, port: 5432}]
+    {{- range $installed.profile.deniedTargets }}
+    - to: [{ipBlock: {cidr: {{ printf "%s/32" .host | quote }}}}]
+      ports: [{protocol: TCP, port: {{ .port }}}]
+    {{- end }}
+{{- end }}

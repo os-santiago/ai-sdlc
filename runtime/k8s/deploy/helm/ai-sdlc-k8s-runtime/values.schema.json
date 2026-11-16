@@ -838,6 +838,33 @@
           "maxLength": 16384
         }
       }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^$|^sha256:[a-f0-9]{64}$"
+        },
+        "configJSON": {
+          "type": "string",
+          "maxLength": 131072
+        },
+        "outerPolicyJSON": {
+          "type": "string",
+          "maxLength": 131072
+        }
+      },
+      "required": [
+        "enabled",
+        "digest",
+        "configJSON",
+        "outerPolicyJSON"
+      ]
     }
   },
   "required": [

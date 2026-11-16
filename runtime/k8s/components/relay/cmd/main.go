@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/delivery"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
@@ -31,7 +32,10 @@ func main() {
 		if bootstrap.PublicationEnabled() {
 			expected = 5
 		}
-		if authority.DecodeStrict([]byte(os.Getenv("AI_SDLC_RELAY_ROUTES")), &routes) != nil || len(routes) != expected || (expected >= 3 && routes["execute-work"] == "") || (expected >= 4 && routes["verify-artifact"] == "") || (expected == 5 && routes["publish-candidate"] == "") || routes["admit-issue"] == "" || routes["plan-admission"] == "" {
+		if bootstrap.BuildEnabled() {
+			expected = 6
+		}
+		if authority.DecodeStrict([]byte(os.Getenv("AI_SDLC_RELAY_ROUTES")), &routes) != nil || len(routes) != expected || (expected >= 3 && routes["execute-work"] == "") || (expected >= 4 && routes["verify-artifact"] == "") || (expected >= 5 && routes["publish-candidate"] == "") || (expected == 6 && routes["build-merged"] == "") || routes["admit-issue"] == "" || routes["plan-admission"] == "" {
 			log.Fatal("relay requires exactly its reviewed routes")
 		}
 		stop := bootstrap.Periodic(time.Second, func(ctx context.Context) {
@@ -40,6 +44,17 @@ func main() {
 				return
 			}
 			relay := delivery.Relay{DB: component.DB, Identity: identity, Routes: routes}
+			if bootstrap.BuildEnabled() {
+				installed, e := buildflow.LoadCurrent("/etc/ai-sdlc/build/config.json", component.PolicyPath, "/etc/ai-sdlc/outer-policy/policy.json")
+				if e != nil || installed.Inner.Revision() != policy.Revision() || identity.Validate(installed.Outer) != nil {
+					log.Print("build relay authority unavailable")
+					return
+				}
+				if _, e = relay.PollLoops(ctx, policy, installed.Outer, time.Now()); e != nil {
+					log.Print("signed loop relay poll failed")
+				}
+				return
+			}
 			if _, err := relay.PollOnce(ctx, policy, time.Now()); err != nil {
 				log.Print("signed relay poll failed")
 			}
