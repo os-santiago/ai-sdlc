@@ -362,6 +362,36 @@ installation, durability across node loss or operational E2E. An installed
 upgrade must separately prove original Pod/container/volume custody and retained
 artifact access, and fail closed if those identities change.
 
+### Same-Pod recovery in Kubernetes
+
+When the owned `ai-sdlc-identities-test` administrative fixture cluster is
+available, run:
+
+```bash
+python3 tools/validate_provenance_registry_kubernetes.py --output /tmp/provenance-registry-kubernetes
+```
+
+The validator checks the recorded cluster UID and original kind node, then
+creates an isolated namespace and non-root Zot Pod with a bounded memory
+`emptyDir`. Fixture credentials remain in a private Secret and captured pipes.
+It waits for actual projected Secret hashes, signals only the observed
+containerd task ID, and requires a new container in the same Pod with exactly
+one additional restart and the same emptyDir device/inode. Both ACL-before-reader
+phases and the native denial/cryptographic matrix must pass with retained data.
+
+After successful verification, it deliberately replaces only its own fixture
+Pod and proves that recovery refuses the replacement before modifying the
+credential Secret. This is a rejection test, not a Pod replacement recovery
+strategy. Namespace deletion uses the observed UID and ownership label, and
+absence is checked before reporting cleanup success. Port forwarding is limited
+to loopback and terminated during cleanup. No operational registry, workflow
+record, runtime configuration or signing trust is modified.
+
+The test does not prove production network policy or installation readiness.
+It demonstrates the same-Pod restart mechanism and its containment boundary;
+reviewed administrative installer integration and operational trust remain
+separate prerequisites.
+
 ## Declarative deployment boundary
 
 The Helm chart defines the dedicated process through `provenance.enabled`

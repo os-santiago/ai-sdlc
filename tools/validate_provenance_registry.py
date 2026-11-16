@@ -17,6 +17,7 @@ import shutil
 import signal
 import ssl
 import subprocess
+import tempfile
 import time
 import uuid
 
@@ -53,12 +54,22 @@ class Run:
     def after_seed(self, request, image_path, endpoint):
         """Optional recovery exercise before the native denial matrix."""
 
-    def call(self, args, limit=60):
+    def after_verification(self, request, image_path, endpoint):
+        """Optional destructive fixture negatives after retained proof passes."""
+
+    def call(self, args, limit=60, stdin=None):
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
             raise FixtureError('Fixture deadline exceeded')
         deadline = time.monotonic() + min(limit, remaining)
-        process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        if stdin is not None and (not isinstance(stdin, bytes) or len(stdin) > 2 << 20):
+            raise FixtureError('Fixture input exceeded limit')
+        # A private anonymous file avoids blocking on a full stdin pipe while
+        # the bounded combined stdout/stderr consumer is starting.
+        with tempfile.TemporaryFile() as source:
+            source.write(stdin or b'')
+            source.seek(0)
+            process = subprocess.Popen(args, stdin=source, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         captured = bytearray()
         try:
             with selectors.DefaultSelector() as selector:
@@ -157,6 +168,18 @@ class Run:
             self.report['cleanupComplete'] = False
             self.report['privateFixtureCleanupFailed'] = True
 
+    def start_registry(self, uid, gid):
+        container = 'ai-sdlc-zot-' + self.identity + '-registry'
+        self.names.append(container)
+        userns = ['--userns=keep-id'] if os.getuid() != 0 else []
+        self.report['stage'] = 'native-registry-acl'
+        self.call(['podman', 'run', '-d', '--name', container, '--label', LABEL + '=' + self.identity, *userns,
+                   '--user', str(uid) + ':' + str(gid), '--read-only', '--cap-drop=ALL',
+                   '--security-opt=no-new-privileges', *self.storage_options(),
+                   '-p', '127.0.0.1::5000', '-v', str(self.private) + ':/cfg:ro,z', IMAGE, '/cfg/config.json'])
+        endpoint = self.call(['podman', 'port', container, '5000/tcp']).strip()
+        return endpoint
+
     def execute(self):
         self.output.mkdir(mode=0o700, parents=True, exist_ok=False)
         self.private.mkdir(mode=0o700)
@@ -179,15 +202,7 @@ class Run:
                 path.chmod(0o640)
                 if os.getuid() == 0:
                     os.chown(path, 0, gid)
-            container = 'ai-sdlc-zot-' + self.identity + '-registry'
-            self.names.append(container)
-            userns = ['--userns=keep-id'] if os.getuid() != 0 else []
-            self.report['stage'] = 'native-registry-acl'
-            self.call(['podman', 'run', '-d', '--name', container, '--label', LABEL + '=' + self.identity, *userns,
-                       '--user', str(uid) + ':' + str(gid), '--read-only', '--cap-drop=ALL',
-                       '--security-opt=no-new-privileges', *self.storage_options(),
-                       '-p', '127.0.0.1::5000', '-v', str(self.private) + ':/cfg:ro,z', IMAGE, '/cfg/config.json'])
-            endpoint = self.call(['podman', 'port', container, '5000/tcp']).strip()
+            endpoint = self.start_registry(uid, gid)
             if not re.fullmatch(r'127\.0\.0\.1:[0-9]+', endpoint):
                 raise FixtureError('Unexpected registry binding')
             port = int(endpoint.rsplit(':', 1)[1])
@@ -261,6 +276,7 @@ class Run:
             self.go_test('TestActualNativeZotRetainedProvenance', endpoint)
             proof = json.loads((self.private / 'verified-proof.json').read_text())
             (self.output / 'verified-proof.json').write_text(json.dumps(proof, indent=2) + '\n')
+            self.after_verification(request, image_path, endpoint)
             self.report.update(status='passed', tlsMinimum='TLS1.3', registryReads=5,
                                artifactDigest=image_path.rsplit('/', 1)[1])
         except (OSError, ValueError, StopIteration, subprocess.SubprocessError, FixtureError) as error:
