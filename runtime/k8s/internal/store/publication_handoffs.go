@@ -14,14 +14,37 @@ type PassedReview struct {
 	Proof, Behavior []byte
 }
 
-func (db *DB) NextPublicationHandoff(ctx context.Context) (string, error) {
+type PublicationSelection struct {
+	AuthorityRevision, IntakeConfiguration, ExecutionProfile, ReviewProfile, ReviewConfiguration string
+}
+
+func (db *DB) NextPublicationHandoff(ctx context.Context, selection PublicationSelection) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	for _, value := range []string{selection.AuthorityRevision, selection.IntakeConfiguration, selection.ExecutionProfile, selection.ReviewProfile, selection.ReviewConfiguration} {
+		if !modelDigest.MatchString(value) {
+			return "", ErrExecution
+		}
+	}
 	if e := AssertComponent(ctx, db.Pool, "verifier"); e != nil {
 		return "", identityObservationError(e)
 	}
 	var id string
-	e := db.Pool.QueryRowContext(ctx, `SELECT r.verification_id FROM review_runs r WHERE r.state='passed' AND r.cleanup_state='complete' AND r.expires_at>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM publication_handoffs h WHERE h.review_id=r.id) ORDER BY r.created_at,r.id LIMIT 1`).Scan(&id)
+	// Selection discards obsolete generations/configurations without modifying
+	// historical proof or extending authority. CurrentProof still authorizes.
+	e := db.Pool.QueryRowContext(ctx, `SELECT r.verification_id FROM review_runs r
+ JOIN execution_requests e ON e.id=r.candidate_id
+ JOIN work_items w ON w.uuid=e.work_item_uuid
+ JOIN intake_heads h ON h.repository=e.repository
+  AND h.issue_number=(convert_from(e.payload,'UTF8')::jsonb->>'issueNumber')::integer
+  AND h.generation=(convert_from(e.payload,'UTF8')::jsonb->>'generation')::bigint
+ JOIN intake_revisions i ON i.repository=h.repository AND i.issue_number=h.issue_number AND i.generation=h.generation
+ WHERE r.state='passed' AND r.cleanup_state='complete' AND r.expires_at>clock_timestamp()
+  AND e.authority_revision=$1 AND i.config_digest=$2
+  AND convert_from(e.payload,'UTF8')::jsonb->>'profileSHA256'=$3
+  AND r.profile_digest=$4 AND r.configuration_digest=$5 AND w.status='running'
+  AND NOT EXISTS(SELECT 1 FROM publication_handoffs p WHERE p.review_id=r.id)
+ ORDER BY r.created_at,r.id LIMIT 1`, selection.AuthorityRevision, selection.IntakeConfiguration, selection.ExecutionProfile, selection.ReviewProfile, selection.ReviewConfiguration).Scan(&id)
 	if errors.Is(e, sql.ErrNoRows) {
 		return "", nil
 	}

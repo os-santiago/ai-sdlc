@@ -22,13 +22,20 @@ func Handoff(ctx context.Context, db *store.DB, policy verificationflow.PolicyLo
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	id, e := db.NextPublicationHandoff(ctx)
-	if e != nil || id == "" {
-		return false, e
-	}
 	expected, e := review()
 	if e != nil {
 		return false, publication.ErrPublication
+	}
+	selectedPolicy, intake, profile, e := policy()
+	if e != nil {
+		return false, store.ErrObservationUnavailable
+	}
+	id, e := db.NextPublicationHandoff(ctx, store.PublicationSelection{
+		AuthorityRevision: selectedPolicy.Revision(), IntakeConfiguration: intake.Digest(),
+		ExecutionProfile: profile, ReviewProfile: expected.Profile, ReviewConfiguration: expected.Configuration,
+	})
+	if e != nil || id == "" {
+		return false, e
 	}
 	v, _, _, e := verificationflow.CurrentProof(ctx, db, policy, id)
 	if e != nil {
