@@ -24,6 +24,24 @@ import registry_node_install
 import supply_chain_install
 
 
+def frozen(deadline,kubectl):
+    def bounded(argv,**kwargs):return deadline.run(argv,limit=kwargs.pop('timeout',20),**kwargs)
+    platform.require_frozen(bounded,kubectl)
+
+
+def original_namespace(get,namespace,uid,nonce):
+    meta=get('namespace',namespace).get('metadata',{})
+    if (not uid or meta.get('uid')!=uid or meta.get('name')!=namespace or meta.get('deletionTimestamp')
+            or meta.get('labels',{}).get('ai-sdlc.pull-fixture')!=nonce):
+        raise ValueError('Original pull fixture namespace changed')
+
+
+def create_namespaced(get,create,value,namespace,uid,nonce):
+    if value.get('metadata',{}).get('namespace')!=namespace:raise ValueError('Pull fixture namespace scope changed')
+    original_namespace(get,namespace,uid,nonce)
+    return create(value)
+
+
 def event_proof(events,pod,image,node,positive):
     if not isinstance(events,list) or len(events)>64:raise ValueError('Bounded kubelet event inventory required')
     created=datetime.fromisoformat(pod['metadata']['creationTimestamp'].replace('Z','+00:00'))
@@ -74,18 +92,22 @@ def main():
         deadline=supply_chain_install.Deadline(360)
         observer=registry.Installer(state_dir,original,kubectl,binaries,deadline,node_state['clusterUID'],read_only=True)
         def call(argv,value=None):
-            result=deadline.run(kubectl+argv,input=json.dumps(value) if value is not None else None,capture_output=True,limit=20)
+            limit=70 if argv[:2]==['wait','--for=delete'] else 20
+            result=deadline.run(kubectl+argv,input=json.dumps(value) if value is not None else None,capture_output=True,limit=limit)
             if len(result.stdout)>1048576:raise ValueError('Fixture API output exceeds bound')
             return result.stdout
         def get(kind,name,ns=None):return json.loads(call(['get',kind,name,*(['-n',ns] if ns else []),'-o','json']))
         def fence():
-            platform.require_frozen(install.run,kubectl)
+            frozen(deadline,kubectl)
             if get('namespace','kube-system')['metadata']['uid']!=node_state['clusterUID']:raise ValueError('Fixture cluster replaced')
             current=get('node',args.cluster+'-control-plane')
             if current['metadata']['uid']!=node_state['nodeUID'] or current['status']['nodeInfo']['bootID']!=node_state['nodeBootID']:
                 raise ValueError('Fixture original node changed')
             observer.fence(cold=False);observer.check_chart_objects()
-        def create(value):return json.loads(call(['create','-f','-','-o','json'],value))
+        def create(value):
+            def post(document):return json.loads(call(['create','-f','-','-o','json'],document))
+            if value.get('kind')=='Namespace':return post(value)
+            return create_namespaced(get,post,value,namespace,uid,nonce)
         def pod(name,authenticated,image):
             spec={'nodeName':args.cluster+'-control-plane','restartPolicy':'Never','activeDeadlineSeconds':120,
                 'automountServiceAccountToken':False,'enableServiceLinks':False,'serviceAccountName':'default',
@@ -99,7 +121,8 @@ def main():
         def observe(original_pod,image,positive):
             end=time.monotonic()+80
             while time.monotonic()<end:
-                platform.require_frozen(install.run,kubectl)
+                frozen(deadline,kubectl)
+                original_namespace(get,namespace,uid,nonce)
                 current=get('pod',original_pod['metadata']['name'],namespace)
                 if current['metadata']['uid']!=original_pod['metadata']['uid'] or current['metadata'].get('deletionTimestamp'):
                     raise ValueError('Original pull probe Pod changed')
@@ -107,6 +130,7 @@ def main():
                 events=json.loads(call(['get','events','-n',namespace,'--field-selector','involvedObject.uid='+current['metadata']['uid'],'-o','json']))['items']
                 proof=event_proof(events,current,image,args.cluster+'-control-plane',positive)
                 if proof:
+                    original_namespace(get,namespace,uid,nonce)
                     if not positive:return proof
                     statuses=current.get('status',{}).get('containerStatuses',[])
                     if len(statuses)==1 and statuses[0].get('state',{}).get('waiting',{}).get('reason') in ('CreateContainerError','RunContainerError'):
@@ -131,6 +155,7 @@ def main():
             report['image']=image;save()
             negative=pod('anonymous',False,image)
             report['anonymous']=observe(negative,image,False);save()
+            original_namespace(get,namespace,uid,nonce)
             call(['delete','--raw','/api/v1/namespaces/'+namespace+'/pods/anonymous','-f','-'],
                 {'apiVersion':'v1','kind':'DeleteOptions','preconditions':{'uid':negative['metadata']['uid']},'gracePeriodSeconds':0})
             source=get('secret','provenance-registry-reader','kind-registry')
@@ -151,7 +176,7 @@ def main():
             if image not in actual.get('repoDigests',[]) or not re.fullmatch('sha256:[a-f0-9]{64}',actual.get('id','')):
                 raise ValueError('CRI image identity differs from retained marker')
             report['runtimeImageID']=actual['id'];report['cachedLayersMayBeReused']=True
-            fence()
+            fence();original_namespace(get,namespace,uid,nonce)
             report['imagePullValidated']=True;report['status']='passed';save()
         except BaseException as exc:
             report['status']='failed';report['failureType']=type(exc).__name__;save();raise

@@ -1,11 +1,28 @@
 from datetime import datetime,timezone,timedelta
 import copy
 import unittest
+import subprocess
+from unittest.mock import Mock,patch
 
-from verify_registry_node_pull import event_proof
+from verify_registry_node_pull import event_proof,create_namespaced,frozen
 
 
 class PullEvidenceTests(unittest.TestCase):
+    def test_replaced_or_terminating_namespace_receives_no_credential(self):
+        value={'kind':'Secret','metadata':{'namespace':'original'},'data':{'synthetic':'never-written'}}
+        for meta in ({'name':'original','uid':'replacement','labels':{'ai-sdlc.pull-fixture':'nonce'}},
+                     {'name':'original','uid':'uid','labels':{'ai-sdlc.pull-fixture':'wrong'}},
+                     {'name':'original','uid':'uid','labels':{'ai-sdlc.pull-fixture':'nonce'},'deletionTimestamp':'now'}):
+            post=Mock()
+            with self.assertRaises(ValueError):create_namespaced(lambda *a:{'metadata':meta},post,value,'original','uid','nonce')
+            post.assert_not_called()
+
+    def test_freeze_reads_always_receive_deadline_limit(self):
+        deadline=Mock()
+        deadline.run.side_effect=subprocess.TimeoutExpired(['kubectl'],20)
+        with self.assertRaises(subprocess.TimeoutExpired):frozen(deadline,['kubectl'])
+        self.assertEqual(deadline.run.call_args.kwargs['limit'],20)
+
     def fixture(self):
         stamp=datetime.now(timezone.utc).isoformat()
         pod={'metadata':{'uid':'original-pod','name':'reader','creationTimestamp':stamp}}

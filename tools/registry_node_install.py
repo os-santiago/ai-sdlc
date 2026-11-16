@@ -50,20 +50,22 @@ def main(argv):
     state_dir=Path(os.environ.get('XDG_STATE_HOME',Path.home()/'.local/state'))/'ai-sdlc'/args.cluster
     if not state_dir.is_dir() or state_dir.is_symlink():raise ValueError('Original installation state required')
     binaries=install.tools(Path(os.environ.get('XDG_CACHE_HOME',Path.home()/'.cache'))/'ai-sdlc/tools')
+    deadline=supply_chain_install.Deadline(600)
+    def run(argv,**kwargs):return deadline.run(argv,limit=kwargs.pop('timeout',25),**kwargs)
     kubectl=[str(binaries['kubectl']),'--kubeconfig',str(state_dir/'kubeconfig'),'--context','kind-'+args.cluster]
     def get(kind,name,namespace=None):
-        raw=install.run(kubectl+['get',kind,name,*(['-n',namespace] if namespace else []),'-o','json'],capture_output=True,timeout=20).stdout
+        raw=run(kubectl+['get',kind,name,*(['-n',namespace] if namespace else []),'-o','json'],capture_output=True,timeout=20).stdout
         if len(raw)>1048576:raise ValueError('Node trust inventory exceeds bound')
         return json.loads(raw)
     with ExitStack() as stack:
         platform.lock_state(state_dir,stack)
         cluster_uid=get('namespace','kube-system')['metadata']['uid']
-        platform.verify_cluster(install.run,kubectl,state_dir,args.cluster,args.provider,cluster_uid)
+        platform.verify_cluster(run,kubectl,state_dir,args.cluster,args.provider,cluster_uid)
         original=registry.read_record(state_dir/'managed-registry.json')
         if (original.get('clusterUID')!=cluster_uid or original.get('replacementProof',{}).get('status')!='passed'
                 or original.get('replacementProof',{}).get('workflowEvidence') is not False):
             raise ValueError('Original independently accepted managed registry required')
-        observer=registry.Installer(state_dir,original,kubectl,binaries,supply_chain_install.Deadline(300),cluster_uid,read_only=True)
+        observer=registry.Installer(state_dir,original,kubectl,binaries,deadline,cluster_uid,read_only=True)
         def registry_fence():
             observer.fence(cold=False);observer.check_chart_objects()
             if observer.storage()!=original['storage']:raise ValueError('Original registry storage changed')
@@ -74,12 +76,12 @@ def main(argv):
         if ip.version!=4 or not ip.is_private or ip.is_loopback or ip.is_link_local:raise ValueError('Reviewed private registry IPv4 required')
         node_name=args.cluster+'-control-plane'
         node=get('node',node_name)
-        container=json.loads(install.run([args.provider,'inspect',node_name],capture_output=True,timeout=15).stdout)[0]
+        container=json.loads(run([args.provider,'inspect',node_name],capture_output=True,timeout=15).stdout)[0]
         node_id=container.get('Id','')
         if not re.fullmatch('[a-f0-9]{64}',node_id) or container.get('Config',{}).get('Labels',{}).get('io.x-k8s.kind.cluster')!=args.cluster:
             raise ValueError('Original kind node container required')
         def node_call(command,**kwargs):
-            result=install.run([args.provider,'exec',*(['-i'] if 'input' in kwargs else []),node_id,*command],
+            result=run([args.provider,'exec',*(['-i'] if 'input' in kwargs else []),node_id,*command],
                 capture_output=True,timeout=25,check=False,**kwargs)
             if result.returncode or len(result.stdout)>1048576:
                 raise ValueError('Bounded node trust operation rejected')
@@ -107,7 +109,7 @@ def main(argv):
             print(json.dumps({'desired':desired,'files':['/etc/hosts',files.ROOT+'/hosts.toml',files.ROOT+'/ca.crt'],
                 'containerdRestartRequired':False,'imagePullValidated':False,'workflowEvidence':False},indent=2));return 0
         mutate=args.command=='local'
-        if mutate:platform.require_frozen(install.run,kubectl)
+        if mutate:platform.require_frozen(run,kubectl)
         if state is None:
             if not mutate:raise ValueError('Node trust is not installed')
             state=dict(desired,nonce=secrets.token_hex(24),files={});platform.write_record(path,state)
@@ -116,14 +118,14 @@ def main(argv):
             current=get('node',node_name)
             if current['metadata']['uid']!=desired['nodeUID'] or current['status']['nodeInfo']['bootID']!=desired['nodeBootID']:
                 raise ValueError('Original node or boot identity changed')
-            actual=json.loads(install.run([args.provider,'inspect',node_name],capture_output=True,timeout=15).stdout)[0]
+            actual=json.loads(run([args.provider,'inspect',node_name],capture_output=True,timeout=15).stdout)[0]
             if actual.get('Id')!=node_id:raise ValueError('Original node container replaced')
             endpoint=get('service','registry-service','kind-registry')
             if endpoint['metadata']['uid']!=desired['serviceUID'] or endpoint['spec']['clusterIP']!=address:
                 raise ValueError('Original registry service changed')
             if files.sha(node_call(['containerd','config','dump']).stdout)!=desired['containerdConfigSHA256']:
                 raise ValueError('Node registry configuration changed')
-            if mutate:platform.require_frozen(install.run,kubectl)
+            if mutate:platform.require_frozen(run,kubectl)
         def guarded(command,**kwargs):fence();return node_call(command,**kwargs)
         journal=files.Files(guarded,state,save)
         journal.directory(mutate)
