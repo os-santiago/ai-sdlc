@@ -32,6 +32,27 @@ def bounded_json(path,limit=262144):
     return json.loads(raw,object_pairs_hook=install_config._unique)
 
 
+def observer_identity(lock):
+    if not re.fullmatch(r'[a-f0-9]{40}',lock['image'].get('tag','')):
+        raise ValueError('Exact reviewed observer revision required')
+    return {'revision':lock['image']['tag'],'image':lock['image']['repository']+'@'+lock['migrator']['digest']}
+
+
+def select_observer(state, selected, explicit):
+    previous=state.get('profileObserver')
+    if previous is not None and previous!=selected and not explicit:
+        raise ValueError('Repeat the explicit reviewed observer image input; implicit observer replacement is denied')
+    return dict(selected)
+
+
+def observation_image(operation, original, observer):
+    if operation in ('observe-build-admission','observe-build-trust','observe-build-profile'):
+        return observer
+    if operation=='build-admission':
+        return original
+    raise ValueError('Unsupported foundation observation operation')
+
+
 def main(argv):
     import install
     parser=argparse.ArgumentParser(description=__doc__)
@@ -43,8 +64,12 @@ def main(argv):
     parser.add_argument('--build-images',type=Path,help='Reviewed build-images.json emitted with --include-build')
     parser.add_argument('--controller-digest')
     parser.add_argument('--approved-trust',type=Path)
+    parser.add_argument('--observer-images',type=Path,help='Explicit reviewed observer update; preserves original storage/compiler/publisher identities')
     args=parser.parse_args(argv)
     lock=install.image_lock(args.images)
+    observer=observer_identity(install.image_lock(args.observer_images) if args.observer_images is not None else lock)
+    if args.observer_images is not None and args.command=='status':
+        raise ValueError('Status cannot select a new observer')
     if args.build_images is not None:
         if args.publisher_image is not None or args.controller_digest is not None:
             raise ValueError('Choose the build image file or both explicit image pins, never a mixture')
@@ -72,6 +97,7 @@ def main(argv):
              'manifestSHA256':hashlib.sha256(build_foundation_state.canonical(blueprint)).hexdigest()}
     if args.command=='plan':
         print(json.dumps({'desired':desired,'resources':[build_foundation_state.identity(x) for x in blueprint['items']],
+                          'profileObserver':observer,'networkReadinessValidated':False,
                           'physicalStorage':{'bytes':4<<30,'inodes':32768,'singleUse':True},
                           'requiresSeparateTrustApproval':True,'deliveryActivated':False,'liveWorkflowAdvanced':False},indent=2))
         return 0
@@ -116,6 +142,9 @@ def main(argv):
             state=dict(scope,storageIdentitySHA256=secrets.token_hex(32),resources={})
             platform.write_record(path,state)
         def save():platform.write_record(path,state)
+        if args.command=='local':
+            state['profileObserver']=select_observer(state,observer,args.observer_images is not None)
+            save()
         def fence():
             if state.get('namespaceUID') is not None and get('namespaces',NAMESPACE)['metadata']['uid']!=state['namespaceUID']:
                 raise ValueError('Original build namespace identity changed')
@@ -147,6 +176,7 @@ def main(argv):
             fence()
             print(json.dumps({'recordedStatus':state.get('status','incomplete'),'cluster':args.cluster,'namespaceUID':state['namespaceUID'],
                               'resourcesChecked':len(state['resources']),'fullProfileReadinessValidated':False,
+                              'networkReadinessValidated':False,
                               'deliveryActivated':False,'liveWorkflowAdvanced':False},indent=2))
             return 0
         ns=resources.ensure(namespace)
@@ -179,7 +209,8 @@ def main(argv):
                 'ClientCertificate':user['client-certificate-data'],'ClientKey':user['client-key-data']}
         def observe(operation,value):
             fence()
-            return build_runtime_install.component_call(provider,image,operation,value,state['nodeID'])
+            selected_image=observation_image(operation,image,observer['image'])
+            return build_runtime_install.component_call(provider,selected_image,operation,value,state['nodeID'])
         admission=observe('observe-build-admission',{'client':client,'slots':[slot],'publisherImage':args.publisher_image})
         policies=observe('build-admission',{'admission':admission,'slots':[slot]})
         if policies.get('kind')!='List' or len(policies.get('items',[]))!=4:raise ValueError('Invalid finite admission definitions')
@@ -200,5 +231,6 @@ def main(argv):
         build_runtime_install.load_bundle(bundle_path,lock)
         state['status']='prepared';state['bundleSHA256']=hashlib.sha256(build_foundation_state.canonical(bundle)).hexdigest();save()
         print(json.dumps({'status':state['status'],'bundle':str(bundle_path),'originalNamespaceUID':state['namespaceUID'],
+                          'profileObserver':observer,'networkReadinessValidated':False,
                           'deliveryActivated':False,'liveWorkflowAdvanced':False,'releaseAuthorized':False},indent=2))
         return 0

@@ -160,7 +160,7 @@ func ObserveBuildProfile(ctx context.Context, client *Client, input buildworkloa
 	}
 	r.profile = p
 	r.slots = append([]building.Slot(nil), slots...)
-	if e = r.inspectInstalledProfile(ctx); e != nil {
+	if _, e = r.inspectInstalledProfileConfiguration(ctx); e != nil {
 		return buildworkload.Profile{}, e
 	}
 	if e = r.installationScope(ctx, slots); e != nil {
