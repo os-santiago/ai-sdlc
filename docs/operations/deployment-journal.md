@@ -53,3 +53,11 @@ kind, conditional Kubernetes patches, failed readiness, rollback and TLS.
 This increment supplies the journal and shared patch compiler. It does not wire
 a running deployer, handoff, GitHub release completion or installation activation.
 Those integrations and an actual issue-to-production run remain required.
+
+Containment authority is retained from the original signed command and durable
+acknowledgement. Changes to advance policy, signing keys or provenance trust do
+not themselves revoke that bounded restoration permission while the original
+target remains approved and unexpired. To stop containment as well, withdraw the
+installed target or the deployer's database/Kubernetes permissions. The runtime
+must propagate the original claim deadline to every adapter operation; the SQL
+gate alone cannot bound an RPC already in flight.
