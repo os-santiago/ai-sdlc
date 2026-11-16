@@ -355,7 +355,7 @@ func TestConsoleRolloutRejectsDriftAndForeignRouting(t *testing.T) {
 				f.adapter.target.ExpiresAt = time.Now().UnixMilli()
 			}
 			f.mu.Unlock()
-			if _, ready, e := f.adapter.ObserveRollout(ctx, snapshot); e == nil || ready {
+			if _, ready, e := f.adapter.ObserveRollout(ctx, snapshot); ready || e == nil && name != "endpoint-pod" {
 				t.Fatal("drift or foreign route accepted")
 			}
 			if f.patches != 0 {
@@ -488,5 +488,82 @@ func TestConsoleAdvanceRequiresReservedContainmentBudget(t *testing.T) {
 	effect := &ConsoleEffects{Deployment: f.adapter, Gate: allowConsoleGate()}
 	if _, e = effect.Apply(context.Background(), p, before); e == nil || f.patches != 0 {
 		t.Fatal("advance consumed containment budget")
+	}
+}
+
+func TestConsoleApprovedCustomTolerationsRetainAdmissionDefaults(t *testing.T) {
+	for _, kind := range []string{"custom", "explicit", "wildcard"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newConsoleFixture(t)
+			expected := *f.d.Spec.Template.Spec.DeepCopy()
+			actual := *f.p.Spec.DeepCopy()
+			custom := core.Toleration{Key: "dedicated", Operator: core.TolerationOpEqual, Value: "console", Effect: core.TaintEffectNoSchedule}
+			expected.Tolerations = []core.Toleration{custom}
+			actual.Tolerations = append([]core.Toleration{custom}, actual.Tolerations...)
+			if kind == "explicit" {
+				v := int64(90)
+				explicit := core.Toleration{Key: core.TaintNodeNotReady, Operator: core.TolerationOpExists, Effect: core.TaintEffectNoExecute, TolerationSeconds: &v}
+				expected.Tolerations = append(expected.Tolerations, explicit)
+				actual.Tolerations[1] = explicit
+			}
+			if kind == "wildcard" {
+				wild := core.Toleration{Operator: core.TolerationOpExists}
+				expected.Tolerations = append(expected.Tolerations, wild)
+				actual.Tolerations = append([]core.Toleration{custom}, wild)
+			}
+			if !consolePodSpec(actual, expected) {
+				t.Fatal("approved admission rejected")
+			}
+			actual.Tolerations[0].Value = "foreign"
+			if consolePodSpec(actual, expected) {
+				t.Fatal("approved toleration mutation accepted")
+			}
+		})
+	}
+}
+func TestConsoleEndpointConvergenceRemainsBoundedAndNeverGrantsEarlyHealth(t *testing.T) {
+	for _, converge := range []bool{true, false} {
+		t.Run(fmt.Sprint(converge), func(t *testing.T) {
+			f := newConsoleFixture(t)
+			snapshot, e := f.adapter.Observe(context.Background())
+			if e != nil {
+				t.Fatal(e)
+			}
+			reads := 0
+			f.mu.Lock()
+			f.tamper = func(path string, obj any) any {
+				if strings.HasSuffix(path, "/endpointslices") {
+					reads++
+					if !converge || reads <= 2 {
+						list := obj.(discovery.EndpointSliceList)
+						list.Items[0] = *list.Items[0].DeepCopy()
+						list.Items[0].Endpoints[0].TargetRef.UID = types.UID(consoleUID(30))
+						return list
+					}
+				}
+				return obj
+			}
+			f.mu.Unlock()
+			if _, ready, e := f.adapter.ObserveRollout(context.Background(), snapshot); e != nil || ready {
+				t.Fatal("stale route became ready or terminal", e)
+			}
+			limit := 4 * time.Second
+			if !converge {
+				limit = 80 * time.Millisecond
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), limit)
+			defer cancel()
+			proof, e := f.adapter.WaitReady(ctx, snapshot)
+			if converge {
+				if e != nil || proof.PodUID != string(f.p.UID) {
+					t.Fatal("did not wait for exact current Pod", e)
+				}
+			} else if e == nil || ctx.Err() != context.DeadlineExceeded {
+				t.Fatal("persistent stale route accepted")
+			}
+			if f.patches != 0 {
+				t.Fatal("wait changed workload")
+			}
+		})
 	}
 }

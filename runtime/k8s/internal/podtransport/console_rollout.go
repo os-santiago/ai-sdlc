@@ -48,9 +48,19 @@ func consolePodSpec(actual core.PodSpec, expected core.PodSpec) bool {
 	if e.DeprecatedServiceAccount == "" {
 		e.DeprecatedServiceAccount = e.ServiceAccountName
 	}
-	if len(e.Tolerations) == 0 {
-		v := int64(300)
-		e.Tolerations = []core.Toleration{{Key: "node.kubernetes.io/not-ready", Operator: core.TolerationOpExists, Effect: core.TaintEffectNoExecute, TolerationSeconds: &v}, {Key: "node.kubernetes.io/unreachable", Operator: core.TolerationOpExists, Effect: core.TaintEffectNoExecute, TolerationSeconds: &v}}
+	// Match the pinned DefaultTolerationSeconds admission plugin: append each
+	// missing default, preserving explicit and wildcard approved tolerations.
+	for _, key := range []string{core.TaintNodeNotReady, core.TaintNodeUnreachable} {
+		present := false
+		for _, tolerance := range e.Tolerations {
+			if (tolerance.Key == key || tolerance.Key == "") && (tolerance.Effect == core.TaintEffectNoExecute || tolerance.Effect == "") {
+				present = true
+			}
+		}
+		if !present {
+			v := int64(300)
+			e.Tolerations = append(e.Tolerations, core.Toleration{Key: key, Operator: core.TolerationOpExists, Effect: core.TaintEffectNoExecute, TolerationSeconds: &v})
+		}
 	}
 	return reflect.DeepEqual(a, e)
 }
@@ -171,7 +181,15 @@ func (c *ConsoleDeployment) ObserveRollout(ctx context.Context, expected Console
 		return empty, false, nil
 	}
 	endpoint := ep.Endpoints[0]
-	if endpoint.TargetRef == nil || endpoint.TargetRef.Kind != "Pod" || endpoint.TargetRef.Namespace != consoleNS || endpoint.TargetRef.Name != p.Name || string(endpoint.TargetRef.UID) != string(p.UID) || len(endpoint.Addresses) != 1 || endpoint.Addresses[0] != p.Status.PodIP || endpoint.NodeName == nil || *endpoint.NodeName != p.Spec.NodeName {
+	if endpoint.TargetRef == nil || endpoint.TargetRef.Kind != "Pod" || endpoint.TargetRef.Namespace != consoleNS || endpoint.TargetRef.Name == "" || !resourceUID.MatchString(string(endpoint.TargetRef.UID)) {
+		return empty, false, ErrTransport
+	}
+	// EndpointSlice reconciliation is asynchronous. A previous Pod reference
+	// never becomes health authority; allow bounded convergence before smoke.
+	if endpoint.TargetRef.Name != p.Name || endpoint.TargetRef.UID != p.UID {
+		return empty, false, nil
+	}
+	if len(endpoint.Addresses) != 1 || endpoint.Addresses[0] != p.Status.PodIP || endpoint.NodeName == nil || *endpoint.NodeName != p.Spec.NodeName {
 		return empty, false, ErrTransport
 	}
 	if endpoint.Conditions.Ready == nil || !*endpoint.Conditions.Ready || endpoint.Conditions.Terminating != nil && *endpoint.Conditions.Terminating || endpoint.Conditions.Serving != nil && !*endpoint.Conditions.Serving {
