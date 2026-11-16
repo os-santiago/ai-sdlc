@@ -166,6 +166,9 @@ spec:
         {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: build-controller
       annotations:
+        {{- if .Values.provenance.enabled }}
+        checksum/provenance-trust: {{ .Values.provenance.trustJSON | sha256sum }}
+        {{- end }}
         checksum/build: {{ .Values.build.configJSON | sha256sum }}
         checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
@@ -194,12 +197,19 @@ spec:
             limits: {cpu: 500m, memory: 256Mi}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
           volumeMounts:
+            {{- if .Values.provenance.enabled }}
+            - {name: provenance-trust, mountPath: /etc/ai-sdlc/provenance, readOnly: true}
+            {{- end }}
             - {name: build, mountPath: /etc/ai-sdlc/build, readOnly: true}
             - {name: authority, mountPath: /etc/ai-sdlc/authority, readOnly: true}
             - {name: outer-policy, mountPath: /etc/ai-sdlc/outer-policy, readOnly: true}
             - {name: identity, mountPath: /etc/ai-sdlc/identity, readOnly: true}
             - {name: kubernetes, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true}
       volumes:
+        {{- if .Values.provenance.enabled }}
+        - name: provenance-trust
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-provenance-trust}
+        {{- end }}
         - name: build
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-build}
         - name: authority

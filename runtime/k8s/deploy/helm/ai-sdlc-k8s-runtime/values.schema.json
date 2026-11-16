@@ -865,6 +865,34 @@
         "configJSON",
         "outerPolicyJSON"
       ]
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "trustJSON",
+        "registryCredentialSecret",
+        "credentialRevision"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "trustJSON": {
+          "type": "string",
+          "maxLength": 131072
+        },
+        "registryCredentialSecret": {
+          "type": "string",
+          "maxLength": 63,
+          "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "credentialRevision": {
+          "type": "string",
+          "pattern": "^$|^[a-f0-9]{64}$"
+        }
+      }
     }
   },
   "required": [

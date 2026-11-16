@@ -1,0 +1,155 @@
+{{- if .Values.provenance.enabled }}
+{{- if or (not .Values.build.enabled) (not .Values.merge.enabled) (not .Values.publication.enabled) (not .Values.review.enabled) (ne .Values.runtime.mode "verification") }}
+{{- fail "provenance requires the complete reviewed build capability chain" }}
+{{- end }}
+{{- if or (not (regexMatch "^sha256:[a-f0-9]{64}$" .Values.verifier.digest)) (not (regexMatch "^[a-f0-9]{64}$" .Values.provenance.credentialRevision)) (not .Values.provenance.registryCredentialSecret) }}
+{{- fail "provenance requires a pinned verifier and separate versioned registry credential" }}
+{{- end }}
+{{- $registrySecret := printf "%s-provenance-registry" (include "ai-sdlc-k8s-runtime.fullname" .) }}
+{{- $forbidden := list .Values.migrator.credentialsSecret .Values.intake.credentialSecret .Values.modelProvider.apiKeySecret.name .Values.postgres.databaseURLSecret.name (include "ai-sdlc-k8s-runtime.databaseSecretName" .) }}
+{{- range $role := list "intake" "admission-controller" "orchestrator" "worker" "verifier" "release-manager" "relay" "deployer" "build-controller" }}
+{{- $forbidden = append $forbidden (printf "%s-%s" $.Values.authority.identitySecretPrefix $role) }}
+{{- $forbidden = append $forbidden (printf "%s-%s" $.Values.authority.databaseSecretPrefix $role) }}
+{{- end }}
+{{- if or (ne .Values.provenance.registryCredentialSecret $registrySecret) (has $registrySecret $forbidden) }}
+{{- fail "provenance registry custody must use its dedicated non-aliased Secret" }}
+{{- end }}
+{{- $trust := .Values.provenance.trustJSON | fromJson }}
+{{- $build := .Values.build.configJSON | fromJson }}
+{{- if or (ne $trust.version "ai-sdlc.saferus-provenance/v1") (ne $trust.scope "kind-test-production") (ne $trust.repository "os-santiago/saferus") (ne $trust.environment "ai-sdlc-production") (ne $trust.verifierImage (printf "%s@%s" .Values.image.repository .Values.verifier.digest)) (not $trust.clusterUID) (not $trust.buildNamespaceUID) (ne $trust.clusterUID $build.profile.clusterUID) (ne $trust.buildNamespaceUID $build.profile.namespaceUID) (ne $trust.publisherImage $build.profile.publisherImage) (not $trust.registryCA) (not $trust.signerPublicKey) }}
+{{- fail "provenance requires independently approved trust matching the installed build and verifier" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-provenance-trust, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+data:
+  trust.json: {{ .Values.provenance.trustJSON | quote }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-provenance-verifier, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-provenance-verifier
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: provenance-verifier
+  template:
+    metadata:
+      labels:
+        {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: provenance-verifier
+      annotations:
+        checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/build: {{ .Values.build.configJSON | sha256sum }}
+        checksum/trust: {{ .Values.provenance.trustJSON | sha256sum }}
+        ai-sdlc.io/registry-credential-revision: {{ .Values.provenance.credentialRevision | quote }}
+    spec:
+      serviceAccountName: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-provenance-verifier
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 90
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: provenance-verifier
+          image: "{{ .Values.image.repository }}@{{ .Values.verifier.digest }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [provenance]
+          envFrom:
+            - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
+          env:
+            - {name: AI_SDLC_HTTP_ADDRESS, value: ":8089"}
+            - name: DATABASE_URL
+              valueFrom: {secretKeyRef: {name: {{ .Values.authority.databaseSecretPrefix }}-verifier, key: uri}}
+          ports: [{name: http, containerPort: 8089}]
+          readinessProbe: {httpGet: {path: /readyz, port: http}, timeoutSeconds: 5}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, initialDelaySeconds: 10}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
+          volumeMounts:
+            - {name: build, mountPath: /etc/ai-sdlc/build, readOnly: true}
+            - {name: authority, mountPath: /etc/ai-sdlc/authority, readOnly: true}
+            - {name: outer-policy, mountPath: /etc/ai-sdlc/outer-policy, readOnly: true}
+            - {name: trust, mountPath: /etc/ai-sdlc/provenance, readOnly: true}
+            - {name: identity, mountPath: /etc/ai-sdlc/identity, readOnly: true}
+            - {name: registry, mountPath: /var/run/ai-sdlc/provenance-registry, readOnly: true}
+      volumes:
+        - name: build
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-build}
+        - name: authority
+          configMap: {name: {{ .Values.authority.policyConfigMap }}}
+        - name: outer-policy
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-outer-policy}
+        - name: trust
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-provenance-trust}
+        - name: identity
+          secret: {secretName: {{ .Values.authority.identitySecretPrefix }}-verifier, defaultMode: 0440}
+        - name: registry
+          secret:
+            secretName: {{ .Values.provenance.registryCredentialSecret }}
+            defaultMode: 0440
+            items: [{key: credential.json, path: credential.json}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-provenance-verifier, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+spec:
+  selector:
+    {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: provenance-verifier
+  ports: [{name: http, port: 8089, targetPort: http}]
+---
+# Always installed, even when the optional shared policy is disabled. No API,
+# model gateway, public internet or workload-creation permission is granted.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-provenance-verifier, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: provenance-verifier
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: relay
+      ports: [{protocol: TCP, port: 8089}]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: postgres
+        {{- if .Values.postgres.cloudNativePG.enabled }}
+        - podSelector:
+            matchLabels: {cnpg.io/cluster: {{ .Values.postgres.cloudNativePG.clusterName | quote }}}
+        {{- end }}
+      ports: [{protocol: TCP, port: 5432}]
+    {{- range .Values.networkPolicy.databaseEgressCIDRs }}
+    - to: [{ipBlock: {cidr: {{ . | quote }}}}]
+      ports: [{protocol: TCP, port: 5432}]
+    {{- end }}
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kind-registry}}
+          podSelector: {matchLabels: {run: registry}}
+      ports: [{protocol: TCP, port: 5000}]
+{{- end }}
