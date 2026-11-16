@@ -44,7 +44,7 @@ type Profile struct {
 
 func (p Profile) Digest() string { raw, _ := json.Marshal(p); return authority.Digest(raw) }
 func (p Profile) Validate() error {
-	if p.Version != "ai-sdlc.saferus-build-profile/v1" || !uuid.MatchString(p.ClusterUID) || !uuid.MatchString(p.NamespaceUID) || !image.MatchString(p.PublisherImage) || len(p.Dependencies) != len(required) || len(p.DeniedTargets) < 2 || len(p.DeniedTargets) > 8 {
+	if p.Version != "ai-sdlc.saferus-build-profile/v1" || p.admissionConfiguration().Validate() != nil || len(p.Dependencies) != len(required) {
 		return ErrWorkload
 	}
 	for _, key := range required {
@@ -53,8 +53,28 @@ func (p Profile) Validate() error {
 			return ErrWorkload
 		}
 	}
+	return nil
+}
+
+// AdmissionConfiguration contains only the finite facts needed before admission
+// resources exist. It is not an operational Profile and grants no build authority.
+type AdmissionConfiguration struct {
+	Version        string         `json:"version"`
+	ClusterUID     string         `json:"clusterUID"`
+	NamespaceUID   string         `json:"namespaceUID"`
+	PublisherImage string         `json:"publisherImage"`
+	DeniedTargets  []DeniedTarget `json:"deniedTargets"`
+}
+
+func (p Profile) admissionConfiguration() AdmissionConfiguration {
+	return AdmissionConfiguration{"ai-sdlc.build-admission-input/v1", p.ClusterUID, p.NamespaceUID, p.PublisherImage, p.DeniedTargets}
+}
+func (c AdmissionConfiguration) Validate() error {
+	if c.Version != "ai-sdlc.build-admission-input/v1" || !uuid.MatchString(c.ClusterUID) || !uuid.MatchString(c.NamespaceUID) || !image.MatchString(c.PublisherImage) || len(c.DeniedTargets) < 2 || len(c.DeniedTargets) > 8 {
+		return ErrWorkload
+	}
 	seen := map[DeniedTarget]bool{}
-	for _, t := range p.DeniedTargets {
+	for _, t := range c.DeniedTargets {
 		ip, e := netip.ParseAddr(t.Host)
 		if e != nil || !ip.Is4() || !ip.IsPrivate() || ip.String() != t.Host || t.Port < 1 || t.Port > 65535 || seen[t] {
 			return ErrWorkload

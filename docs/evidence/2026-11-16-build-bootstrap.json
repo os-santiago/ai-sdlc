@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "status": "passed",
+  "scope": "production build installation primitives, isolated container and Kubernetes preflight",
+  "autonomousE2E": false,
+  "releaseAuthorized": false,
+  "tests": {
+    "passedTests": 1474,
+    "passedPackages": 43,
+    "skippedTests": [
+      "internal/buildstorage/TestPrepareWorkspaceGuardFixture",
+      "internal/buildworkload/TestEmitClosedBuildAPIFixture",
+      "internal/engine/TestInvokeAgainstRealBinary",
+      "internal/execution/TestActualPinnedHomedirPreparationFixture",
+      "internal/execution/TestRealCandidateRecoveryFixture",
+      "internal/execution/TestRealCandidateRuntimeFixture",
+      "internal/execution/TestRealLifecycleModelFixture",
+      "internal/mergegate/TestRealHomedirReadonlyGateFixture",
+      "internal/podtransport/TestRealBuildSlotAPICustody",
+      "internal/podtransport/TestRealClosedBuildTransport",
+      "internal/podtransport/TestRealCodexKubernetesMailboxFixture",
+      "internal/podtransport/TestRealKubernetesMailboxFixture",
+      "internal/podtransport/TestRealReadonlyReviewerFixture",
+      "internal/podtransport/TestRealVerificationTransportFixture",
+      "internal/podtransport/TestRealWorkloadResourcesFixture",
+      "internal/podtransport/TestRealWorkspaceLifecycleFixture",
+      "internal/podtransport/TestRecordedBuildContainerTermination",
+      "internal/podtransport/TestRecordedTektonHierarchyMatchesClosedTemplates",
+      "internal/publication/TestRealHomedirPublicationTreeFixture",
+      "internal/reviewflow/TestRealVerificationFlowFixture",
+      "internal/sourcefetch/TestActualPinnedGitTreeManifest",
+      "internal/sourcefetch/TestActualPinnedHomedirArchive",
+      "internal/sourcefetch/TestActualPublicGitHubPinnedSource",
+      "internal/verification/TestRealVerificationRecipeFixture",
+      "internal/verificationflow/TestRealVerificationFlowFixture"
+    ],
+    "missingDatabaseProof": []
+  },
+  "container": {
+    "version": 1,
+    "status": "passed",
+    "scope": "isolated production installer",
+    "autonomousE2E": false,
+    "workloadExecuted": false,
+    "network": "none",
+    "checks": [
+      "nonroot-traversal-wrong-boot-unknown-option-denied",
+      "initialization-and-reapply-preserve-consumed-workspace",
+      "changed-storage-bounds-denied",
+      "partial-state-and-symlink-denied-without-erasing-data"
+    ],
+    "cleanupComplete": true
+  },
+  "kubernetesPreflightReport": "/tmp/ai-sdlc-bootstrap-preflight-v1/report.json",
+  "admissionCLIComparedWith": "/tmp/ai-sdlc-closed-build-execution-v6/policy.json",
+  "imageBuild": "localhost/ai-sdlc-migrator:build-bootstrap-v1",
+  "fullReport": "/tmp/ai-sdlc-build-bootstrap-validation-v1/report.json"
+}

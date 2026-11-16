@@ -64,6 +64,13 @@
     "merge": {
       "type": "boolean",
       "description": "Explicit low-risk authenticated merge; requires verified publication and native strict protection."
+    },
+    "platform": {
+      "enum": [
+        "kind",
+        "konflux"
+      ],
+      "description": "kind creates an owned runtime cluster; konflux adds only a frozen runtime to an existing owned supply-chain cluster."
     }
   },
   "allOf": [
@@ -131,6 +138,42 @@
           "publication": {
             "const": true
           }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "platform"
+        ],
+        "properties": {
+          "platform": {
+            "const": "konflux"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "profile": {
+            "const": "maintenance"
+          },
+          "repository": {
+            "const": "os-santiago/saferus"
+          },
+          "environment": {
+            "const": "ai-sdlc-production"
+          },
+          "publication": {
+            "const": false
+          },
+          "merge": {
+            "const": false
+          }
+        },
+        "not": {
+          "required": [
+            "independentReview"
+          ]
         }
       }
     }

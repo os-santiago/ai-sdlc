@@ -56,7 +56,7 @@ func (w *fixturePublisher) CreatePullRequest(ctx context.Context, f publication.
 	return publication.PublishedPullRequest{Number: 42, HeadSHA: sha, Branch: p.Branch, URL: "https://github.com/os-santiago/homedir/pull/42"}, w.step(ctx, f, "pull-request")
 }
 
-func verifyPublicationFixture(t *testing.T, admin, verifier *store.DB, original verificationflow.PolicyLoader, config Configuration, p authority.Policy, key authority.Identity, identities map[string]authority.Identity) {
+func verifyPublicationFixture(t *testing.T, parent context.Context, admin, verifier *store.DB, original verificationflow.PolicyLoader, config Configuration, p authority.Policy, key authority.Identity, identities map[string]authority.Identity) {
 	t.Helper()
 	if identities["release-manager"].Validate(p) != nil || identities["relay"].Validate(p) != nil {
 		t.Fatal("private publication fixture identities")
@@ -65,7 +65,7 @@ func verifyPublicationFixture(t *testing.T, admin, verifier *store.DB, original 
 	if e != nil || u.Path != "/ai_sdlc_test" || u.Hostname() != "127.0.0.1" {
 		t.Fatal("disposable database required")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 90*time.Second)
 	defer cancel()
 	passwords := map[string]string{}
 	for _, key := range p.Keys {
