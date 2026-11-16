@@ -50,6 +50,27 @@ class ProvenanceTests(unittest.TestCase):
                 if case=='extra-argument':task['steps'][0]['arguments'].append('--extra=bad')
                 with self.assertRaises(ValueError):provenance.bind_statement(value,EXPECTED,IMAGE)
 
+    def test_saferus_source_destination_and_recipe_are_bound(self):
+        expected = dict(EXPECTED, IMAGE_URL='registry-service.kind-registry/ai-sdlc-fixtures/saferus',
+                        **{'CHAINS-GIT_URL':'https://github.com/os-santiago/saferus'})
+        value = statement()
+        value['subject'][0]['name'] = expected['IMAGE_URL']
+        task = value['predicate']['buildConfig']['tasks'][0]
+        task['results'] = [{'name':k,'type':'string','value':v} for k,v in expected.items()]
+        task['steps'][0]['arguments'] = ['--recipe=ai-sdlc.saferus-go-static/v1','--input=/artifacts/output',
+            '--output='+expected['IMAGE_URL']+':123456abcdef','--source-sha='+expected['CHAINS-GIT_COMMIT'],
+            '--definition-digest='+expected['DEFINITION_DIGEST'],'--run-uid=run-123','--timeout=8m']
+        value['predicate']['materials'][1]['uri'] = 'git+'+expected['CHAINS-GIT_URL']+'.git'
+        provenance.bind_statement(value, expected, IMAGE)
+        for mode in ('recipe','input','source','destination'):
+            changed = copy.deepcopy(value); trusted = dict(expected)
+            args = changed['predicate']['buildConfig']['tasks'][0]['steps'][0]['arguments']
+            if mode == 'recipe': args[0] = '--recipe=ai-sdlc.quarkus-jvm/v1'
+            if mode == 'input': args[1] = '--input=/artifacts/source/quarkus-app/target/quarkus-app'
+            if mode == 'source': trusted['CHAINS-GIT_URL'] = EXPECTED['CHAINS-GIT_URL']
+            if mode == 'destination': trusted['IMAGE_URL'] = EXPECTED['IMAGE_URL']
+            with self.assertRaises(ValueError): provenance.bind_statement(changed,trusted,IMAGE)
+
     @unittest.skipUnless(shutil.which('openssl'),'OpenSSL required for actual synthetic signature negatives')
     def test_valid_synthetic_signature_cannot_authorize_false_source_or_digest(self):
         # These are newly generated test keys, never the actual Chains private

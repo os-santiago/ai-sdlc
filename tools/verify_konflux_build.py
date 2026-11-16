@@ -10,7 +10,8 @@ import secrets
 import subprocess
 import time
 
-import konflux_build_fixture as fixture
+import konflux_build_fixture as homedir_fixture
+import saferus_build_fixture
 import konflux_fixture_guard as guard
 import network_probe
 import supply_chain_install
@@ -19,10 +20,14 @@ import supply_chain_install
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--cluster',default='ai-sdlc-konflux')
+    p.add_argument('--project',choices=['homedir','saferus'],default='homedir')
     p.add_argument('--publisher-image',required=True)
     p.add_argument('--publisher-archive',type=Path,help='Local OCI archive; required for localhost images')
     p.add_argument('--output',type=Path,required=True)
     args=p.parse_args()
+    fixture = homedir_fixture if args.project == "homedir" else saferus_build_fixture
+    build_name = "homedir-maven" if args.project == "homedir" else "saferus-go"
+    publish_name = args.project + "-publish"
     if not re.fullmatch(r'[a-z][a-z0-9-]{0,35}',args.cluster) or not re.fullmatch(r'(localhost/ai-sdlc-artifact-builder|quay.io/os-santiago/ai-sdlc)@sha256:[a-f0-9]{64}',args.publisher_image):
         raise ValueError('Exact isolated cluster and publisher image digest required')
     if args.publisher_image.startswith('localhost/') and not args.publisher_archive:raise ValueError('Local publisher requires an explicit archive for digest registration')
@@ -94,7 +99,7 @@ def main():
             identity=guard.writer_identity(run,tasks,pods,expected,allowed_secrets)
             if identity:return identity
             deadline.remaining();time.sleep(1)
-        raise ValueError('Original Maven Pod did not terminate within deadline')
+        raise ValueError('Original build Pod did not terminate within deadline')
     def probe_network():
         for role in ('build','control'):
             pod=network_probe.pod(namespace,'probe-'+role,fixture.INPUTS['builderImage'])
@@ -122,7 +127,8 @@ def main():
                     time.sleep(1)
                 else:raise ValueError('Network control failed for '+role+' '+host+':'+str(port)+' exit '+str(r.returncode))
         # DNS and HTTPS public access must still work under the build policy.
-        r=call(['exec','-n',namespace,'probe-build','--','/bin/bash','-c','getent ahostsv4 github.com >/dev/null && curl --fail --silent --show-error --max-time 10 https://repo.maven.apache.org/maven2/ >/dev/null && test ! -e /var/run/secrets/kubernetes.io/serviceaccount/token'],timeout=20)
+        public_url = 'https://repo.maven.apache.org/maven2/' if args.project == 'homedir' else 'https://github.com/'
+        r=call(['exec','-n',namespace,'probe-build','--','/bin/bash','-c','getent ahostsv4 github.com >/dev/null && curl --fail --silent --show-error --max-time 10 '+public_url+' >/dev/null && test ! -e /var/run/secrets/kubernetes.io/serviceaccount/token'],timeout=20)
         for role in ('build','control'):call(['delete','pod','probe-'+role,'-n',namespace,'--wait=true','--timeout=30s'])
         return {'deniedTargets':[{'host':h,'port':p} for h,p in targets],'positiveControls':True,'dnsAndPublicHTTPS':True,'serviceAccountTokenAbsent':True,'scope':'point-in-time-before-build'}
     try:
@@ -153,20 +159,20 @@ def main():
         pvc=create({'apiVersion':'v1','kind':'PersistentVolumeClaim','metadata':{'name':'artifacts','namespace':namespace},'spec':{'storageClassName':'','volumeName':pv,'accessModes':['ReadWriteOnce'],'resources':{'requests':{'storage':'4Gi'}}}})
         volume=create({'apiVersion':'v1','kind':'PersistentVolume','metadata':{'name':pv,'labels':{'ai-sdlc.fixture':token}},'spec':{'capacity':{'storage':'4Gi'},'accessModes':['ReadWriteOnce'],'persistentVolumeReclaimPolicy':'Retain','storageClassName':'','local':{'path':root+'/volume'},'claimRef':{'namespace':namespace,'name':'artifacts','uid':pvc['metadata']['uid']},'nodeAffinity':{'required':{'nodeSelectorTerms':[{'matchExpressions':[{'key':'kubernetes.io/hostname','operator':'In','values':[node]}]}]}}}});pv_uid=volume['metadata']['uid'];report['pvUID']=pv_uid;report['pvcUID']=pvc['metadata']['uid'];save()
         for name in ('build','publish'):create({'apiVersion':'v1','kind':'ServiceAccount','metadata':{'name':name,'namespace':namespace},'automountServiceAccountToken':False})
-        build=create(fixture.pipeline_run(namespace,'homedir-maven','build',fixture.build_pipeline(report['network']['deniedTargets'])));report['buildRunUID']=build['metadata']['uid'];save()
-        build=wait_run('homedir-maven',report['buildRunUID']);report['writer']=terminated_writer(build);collect_logs();save();print('Original Maven writer terminated successfully',flush=True)
+        build=create(fixture.pipeline_run(namespace,build_name,'build',fixture.build_pipeline(report['network']['deniedTargets'])));report['buildRunUID']=build['metadata']['uid'];save()
+        build=wait_run(build_name,report['buildRunUID']);report['writer']=terminated_writer(build);collect_logs();save();print('Original build writer terminated successfully',flush=True)
         secret=get('secret','internal-registry-client-auth','kind-registry')
         create({'apiVersion':'v1','kind':'Secret','metadata':{'name':'registry-auth','namespace':namespace},'type':'kubernetes.io/dockerconfigjson','data':{'.dockerconfigjson':secret['data']['.dockerconfigjson']}})
         call(['patch','serviceaccount','publish','-n',namespace,'--type=merge','-p',json.dumps({'secrets':[{'name':'registry-auth'}]})])
         get('configmap','trusted-ca')
-        output='registry-service.kind-registry/ai-sdlc-fixtures/homedir:'+token
+        output='registry-service.kind-registry/ai-sdlc-fixtures/'+args.project+':'+token
         definition=fixture.publish_pipeline(args.publisher_image,report['definitionDigest'],output)
-        publish=create(fixture.pipeline_run(namespace,'homedir-publish','publish',definition));report['publishRunUID']=publish['metadata']['uid'];save()
-        published=wait_run('homedir-publish',report['publishRunUID']);report['publisher']=terminated_writer(published,('registry-auth',));report['results']={x['name']:x['value'] for x in published['status']['results']};collect_logs();save()
+        publish=create(fixture.pipeline_run(namespace,publish_name,'publish',definition));report['publishRunUID']=publish['metadata']['uid'];save()
+        published=wait_run(publish_name,report['publishRunUID']);report['publisher']=terminated_writer(published,('registry-auth',));report['results']={x['name']:x['value'] for x in published['status']['results']};collect_logs();save()
         print('Image published; waiting for Tekton Chains',flush=True)
         until=time.monotonic()+180
         while time.monotonic()<until:
-            signed=get('pipelinerun','homedir-publish')
+            signed=get('pipelinerun',publish_name)
             if signed['metadata'].get('annotations',{}).get('chains.tekton.dev/signed')=='true':break
             time.sleep(2)
         else:raise ValueError('Chains did not report completed signing')
