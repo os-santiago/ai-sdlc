@@ -283,6 +283,7 @@ def main(argv=None):
     parser.add_argument('--repository')
     parser.add_argument('--environment')
     parser.add_argument('--profile', choices=['maintenance', 'shadow', 'candidate', 'verification'])
+    parser.add_argument('--independent-review', action='store_true', default=None, help='Enable isolated read-only review after behavior verification')
     parser.add_argument('--github-auth', choices=['none', 'gh-cli'], default='none')
     parser.add_argument('--refresh-github-credential', action='store_true')
     parser.add_argument('--codex-auth-file', type=Path, help='Explicit local Codex authentication source for the candidate sidecar Secret')
@@ -294,6 +295,10 @@ def main(argv=None):
     for key, value in defaults.items():
         if getattr(args, key) is None:
             setattr(args, key, value)
+    if args.independent_review and args.command in ('plan', 'local') and args.profile != 'verification':
+        raise ValueError('Independent review requires the verification profile')
+    if args.independent_review is not None and args.command not in ('plan', 'local', 'status', 'credentials', 'sandbox'):
+        raise ValueError('Independent review option requires an installation scope')
     if args.profile in ('shadow', 'candidate', 'verification') and args.command not in ('plan', 'local'):
         raise ValueError('--profile shadow/candidate/verification is valid only with plan or local')
     if (args.codex_auth_file is not None or args.refresh_model_credential) and (args.command != 'local' or args.profile not in ('candidate', 'verification')):
@@ -331,7 +336,7 @@ def main(argv=None):
     execution_values = None
     if args.profile in ('candidate', 'verification'):
         import candidate_install
-        execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images), verification=args.profile == "verification")
+        execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images), verification=args.profile == "verification", review=bool(args.independent_review))
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as preview:
         json.dump(execution_values or {}, preview); preview.flush()
         run(helm_args + ['-f', preview.name], stdout=subprocess.DEVNULL)
@@ -339,6 +344,7 @@ def main(argv=None):
         print(json.dumps({'cluster': args.cluster, 'namespace': NAMESPACE,
                           'chart': str(CHART.relative_to(ROOT)), 'mode': args.profile,
                           'images': image_lock(args.images), 'deliveryEnabled': False,
+                          'independentReviewEnabled': bool(args.independent_review),
                           'githubAuth': args.github_auth, 'repository': args.repository,
                           'environment': args.environment, 'configurationDigest': config_digest}, indent=2))
         return 0
@@ -437,6 +443,8 @@ def main(argv=None):
         import offline_runtime
         lock = image_lock(args.images)
         execution_values["candidate"]["credentialRevision"] = candidate_install.model_credentials(kubectl, cluster_uid, args.codex_auth_file, args.refresh_model_credential)
+        if args.independent_review:
+            candidate_install.review_credentials(kubectl, cluster_uid)
         offline_runtime.install(kubectl, provider, kind, args.cluster, cluster_uid, cache,
                                 lock['image']['repository'] + '@' + lock['components']['worker']['digest'])
         execution_values['candidate']['apiServerCIDRs'] = candidate_install.api_cidrs(kubectl)
@@ -467,6 +475,7 @@ def main(argv=None):
               'issueIntakeEnabled': args.profile in ('shadow', 'candidate', 'verification'),
               'candidateExecutionEnabled': args.profile in ('candidate', 'verification'),
               'independentVerificationEnabled': args.profile == 'verification',
+              'independentReviewEnabled': bool(args.independent_review),
               'networkPolicyVerification': network,
               'images': image_lock(args.images)}
     (state / 'installation.json').write_text(json.dumps(report, indent=2) + '\n')

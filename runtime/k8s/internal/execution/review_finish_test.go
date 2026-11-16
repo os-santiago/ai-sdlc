@@ -11,9 +11,20 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
 
-func TestReviewProofRequiresExactEvidenceAndCleanup(t *testing.T) {
+func TestReviewProofRequiresExactEvidenceAndCleanup(t *testing.T) { reviewProofFixture(t, false) }
+func TestInstalledReviewPrivilegesCompleteProof(t *testing.T)     { reviewProofFixture(t, true) }
+func reviewProofFixture(t *testing.T, installed bool) {
 	f, db, r := reviewJournalFixture(t)
 	ctx := context.Background()
+	if installed {
+		passwords := map[string]string{}
+		for role := range f.Material.Identities {
+			passwords[role] = strings.ReplaceAll(role, "-", "_") + strings.Repeat("q", 40)
+		}
+		if e := f.Admin.ProvisionRolesForOptions(ctx, passwords, "verification", true); e != nil {
+			t.Fatal(e)
+		}
+	}
 	c := claimReview(t, db, r)
 	var tree string
 	if f.Admin.Pool.QueryRow(`SELECT candidate_tree_sha256 FROM execution_candidates WHERE request_id=$1`, r.CandidateID).Scan(&tree) != nil {

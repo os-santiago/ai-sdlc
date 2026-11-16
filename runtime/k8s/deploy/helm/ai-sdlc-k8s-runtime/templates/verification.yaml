@@ -114,6 +114,10 @@ spec:
         {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: verifier
       annotations:
+        {{- if .Values.review.enabled }}
+        checksum/review: {{ .Values.review.configJSON | sha256sum }}
+        ai-sdlc.io/model-credential-revision: {{ .Values.candidate.credentialRevision | quote }}
+        {{- end }}
         checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
       serviceAccountName: ai-sdlc-verification-controller
@@ -146,8 +150,45 @@ spec:
             - {name: identity, mountPath: /etc/ai-sdlc/identity, readOnly: true}
             - {name: intake, mountPath: /etc/ai-sdlc/intake, readOnly: true}
             - {name: execution, mountPath: /etc/ai-sdlc/execution, readOnly: true}
+            {{- if .Values.review.enabled }}
+            - {name: review, mountPath: /etc/ai-sdlc/review, readOnly: true}
+            - {name: review-model-client, mountPath: /var/run/ai-sdlc/review-model, readOnly: true}
+            {{- end }}
             - {name: kubernetes, mountPath: /var/run/ai-sdlc/kubernetes, readOnly: true}
+        {{- if .Values.review.enabled }}
+        - name: model-gateway
+          image: "{{ .Values.image.repository }}@{{ .Values.components.worker.digest }}"
+          command: [python3, /opt/ai-sdlc/model/codex_gateway.py]
+          workingDir: /opt/ai-sdlc/model
+          env:
+            - {name: TMPDIR, value: /model-home/tmp}
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            - name: CODEX_WRAPPER_TOKEN
+              valueFrom: {secretKeyRef: {name: ai-sdlc-review-model-client, key: token}}
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 768Mi, ephemeral-storage: 256Mi}
+          volumeMounts:
+            - {name: model-auth, mountPath: /var/run/ai-sdlc/codex, readOnly: true}
+            - {name: model-home, mountPath: /model-home}
+        {{- end }}
       volumes:
+        {{- if .Values.review.enabled }}
+        - name: review
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-review}
+        - name: review-model-client
+          secret: {secretName: ai-sdlc-review-model-client, defaultMode: 0440}
+        - name: model-auth
+          secret: {secretName: ai-sdlc-codex-auth, defaultMode: 0440}
+        - name: model-home
+          emptyDir: {sizeLimit: 128Mi}
+        {{- end }}
         - name: authority
           configMap: {name: {{ .Values.authority.policyConfigMap }}}
         - name: identity

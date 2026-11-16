@@ -1,8 +1,9 @@
 # Independent review controller
 
 `internal/reviewflow.Runtime` consumes passed behavior verifications and its own
-queued reviews. It has no external claim or advance endpoint. This component is
-not yet wired into an installed profile and does not publish, merge or release.
+queued reviews. It has no external claim or advance endpoint. It is activated only by the explicit
+[independent-review installation option](independent-review-installation.md) and
+does not publish, merge or release.
 
 Preparation revalidates the signed candidate chain and current issue, reads the
 committed behavior proof, retrieves the exact source commit and reconstructs the

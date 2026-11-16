@@ -787,6 +787,23 @@
           "pattern": "^$|^sha256:[a-f0-9]{64}$"
         }
       }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "configJSON"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "configJSON": {
+          "type": "string",
+          "maxLength": 131072
+        }
+      }
     }
   },
   "required": [
