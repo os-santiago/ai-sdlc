@@ -1,7 +1,8 @@
 # Operational provenance boundary
 
 **Context retention, the inactive registry-verification library and a bounded
-verification journal are implemented; component wiring and installation remain work for
+verification journal and signed handoff library are implemented; component
+wiring and installation remain work for
 [#574](https://github.com/os-santiago/ai-sdlc/issues/574).**
 This does not activate the installed build controller or authorize promotion.
 The current [readiness report](../operations/saferus-e2e-readiness.md)
@@ -150,8 +151,38 @@ completion time. It grants no current promotion permission.
 build. Existing build provisioning and maintenance do not grant access to this
 journal. The verifier can append its proof, but cannot modify the stored command,
 configuration, expiry or accepted proof; other components cannot write it. These
-methods remain inactive: no new HTTP route, dispatcher, controller or installer
-option is introduced by the journal increment.
+methods remain inactive in the installation. The handoff library below uses
+them; no component route or installer option enables them yet.
+
+## Implemented fourth slice: signed handoff and bounded coordination
+
+[`provenanceflow`](../../runtime/k8s/internal/provenanceflow/) selects eligible
+completed builds without accepting a caller-selected build ID or artifact.
+Dispatch requires immutable cleanup evidence bound to both original Run UIDs,
+resource names, slot and completion timestamps. Missing, substituted or unknown
+cleanup prevents dispatch; physical storage remains consumed.
+
+Migration 0026 records one handoff per build, atomically with the build-controller's
+signed `verify-built` outbox message. The verifier inbox and queue also commit
+together. Redelivery uses a new relay transport nonce with the same signed command;
+reusing a transport nonce is rejected, while semantic duplicate delivery has no
+second queue effect. Current policy is reloaded after potentially blocking reads
+and writes before returning from the dispatch transaction.
+
+The inactive runtime coordinator expires old requests before loading current
+policy, obtains an exclusive claim, reads authenticated input, constructs the
+verifier, and revalidates input after that potentially blocking construction.
+It bounds registry work by the claim deadline. Verification or completion failure
+retires the attempt; a lost completion response is resolved from immutable history
+without repeating network verification. All results remain non-authorizing for
+release. Component wiring must preserve existing cleanup priority and prevent
+this queue from delaying containment in other verifier workloads.
+
+Real PostgreSQL tests exercise signed outbox/inbox delivery, idempotency, rollback,
+cleanup substitutions and revocation before/during the verifier call. Those tests
+explicitly use synthetic cleanup/proofs and a bounded fake verifier to isolate
+coordination; they do not demonstrate installed Kubernetes cleanup or an E2E.
+The cryptographic library's separate tests cover actual TLS and signature handling.
 
 ## Remaining integration before activation
 

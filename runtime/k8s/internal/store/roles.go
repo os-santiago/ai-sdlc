@@ -216,6 +216,9 @@ func (db *DB) ProvisionRolesForProvenance(ctx context.Context, passwords map[str
 			if build && component == "build-controller" {
 				statements = append(statements, buildPrivileges...)
 			}
+			if provenance && component == "build-controller" {
+				statements = append(statements, `GRANT SELECT ON provenance_handoffs TO aisdlc_build_controller`, `GRANT INSERT(build_id,command_id,payload_digest) ON provenance_handoffs TO aisdlc_build_controller`)
+			}
 			if provenance && component == "verifier" {
 				statements = append(statements, provenancePrivileges...)
 			}
