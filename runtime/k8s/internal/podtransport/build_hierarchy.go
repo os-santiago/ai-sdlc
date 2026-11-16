@@ -37,6 +37,13 @@ func (r *BuildResources) checkTask(raw []byte, phase, runUID string) (string, ma
 	if phase == "publish" {
 		expected["params"] = []any{map[string]any{"name": "run-uid", "value": runUID}}
 	}
+	// The PipelineRun controller creates a TaskRun before its TaskRun
+	// controller adds the release annotation. It is required at success,
+	// and any explicit value was already checked against the pinned version.
+	done, statusErr := succeededStatus(obj)
+	if statusErr != nil || (done && metadata["annotations"].(map[string]any)["pipeline.tekton.dev/release"] != tektonRelease) {
+		return "", nil, ErrBuildTransport
+	}
 	if !reflect.DeepEqual(obj["spec"], expected) {
 		return "", nil, ErrBuildTransport
 	}
@@ -123,7 +130,7 @@ func (r *BuildResources) checkChildMetadata(metadata map[string]any, phase, runU
 			return "", ErrBuildTransport
 		}
 	}
-	if annotations["pipeline.tekton.dev/release"] != tektonRelease {
+	if pod && annotations["pipeline.tekton.dev/release"] != tektonRelease {
 		return "", ErrBuildTransport
 	}
 	if value, exists := metadata["finalizers"]; exists {

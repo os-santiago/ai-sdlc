@@ -243,3 +243,28 @@ func TestBuildTaskAllowsOnlyTypedResultsDeletionObservation(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildTaskReleaseAnnotationMayArriveOnlyWhilePending(t *testing.T) {
+	r, _, _ := buildResourceFixture(t, func(_ *BuildResources, _ http.ResponseWriter, _ *http.Request) { t.Fatal("unexpected HTTP") })
+	task, pod := syntheticBuildChildren(r, "publish", fixtureConfigUID)
+	delete(task["metadata"].(map[string]any)["annotations"].(map[string]any), "pipeline.tekton.dev/release")
+	if _, _, e := r.checkTask(marshalObject(task), "publish", fixtureConfigUID); e != nil {
+		t.Fatal("initial TaskRun before controller annotation rejected")
+	}
+	task["status"] = map[string]any{"conditions": []any{map[string]any{"type": "Succeeded", "status": "True"}}}
+	if _, _, e := r.checkTask(marshalObject(task), "publish", fixtureConfigUID); e == nil {
+		t.Fatal("successful TaskRun without pinned release accepted")
+	}
+	task["metadata"].(map[string]any)["annotations"].(map[string]any)["pipeline.tekton.dev/release"] = tektonRelease
+	if _, _, e := r.checkTask(marshalObject(task), "publish", fixtureConfigUID); e != nil {
+		t.Fatal("original TaskRun after pinned annotation rejected")
+	}
+	task["metadata"].(map[string]any)["annotations"].(map[string]any)["pipeline.tekton.dev/release"] = "foreign"
+	if _, _, e := r.checkTask(marshalObject(task), "publish", fixtureConfigUID); e == nil {
+		t.Fatal("foreign controller release accepted")
+	}
+	delete(pod["metadata"].(map[string]any)["annotations"].(map[string]any), "pipeline.tekton.dev/release")
+	if _, _, _, e := r.checkOwnedBuildPod(marshalObject(pod), "publish", fixtureConfigUID, fixtureOtherUID); e == nil {
+		t.Fatal("Pod without pinned controller release accepted")
+	}
+}
