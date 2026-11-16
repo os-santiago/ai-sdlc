@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "scope": "inactive closed Saferus workload compiler and mandatory Pod envelope",
+  "autonomousE2E": false,
+  "liveWorkflowAdvanced": false,
+  "runtimeEnabled": false,
+  "codeCommit": "e230101d596e7639432a8198639f74cc6dd656f0",
+  "validation": {
+    "status": "passed",
+    "passedTests": 1364,
+    "passedPackages": 42,
+    "databaseProofComplete": true,
+    "reportSHA256": "e7e956c780d7c7dc358a02a608f2c075713f215a6dc2b76afbcd90f18a795506",
+    "note": "Full build/vet/Go/PostgreSQL suite observed the uncommitted source later committed as codeCommit; subsequent changes affect only fixture recovery/reporting."
+  },
+  "admission": {
+    "version": 1,
+    "status": "passed",
+    "scope": "nonexecuting synthetic Pod admission fixture",
+    "autonomousE2E": false,
+    "workloadExecuted": false,
+    "accepted": [
+      "build",
+      "publish",
+      "build-bound-ready-update",
+      "publish-bound-ready-update"
+    ],
+    "rejected": [
+      "build-image",
+      "build-argument",
+      "build-sidecar",
+      "build-secret",
+      "build-token",
+      "build-host",
+      "build-fsgroup",
+      "build-environment",
+      "build-grace",
+      "build-scheduler",
+      "build-runtimeclass",
+      "build-overshadow",
+      "build-limits",
+      "build-node",
+      "publish-image",
+      "publish-argument",
+      "publish-sidecar",
+      "publish-secret",
+      "publish-token",
+      "publish-host",
+      "publish-fsgroup",
+      "publish-environment",
+      "publish-grace",
+      "publish-scheduler",
+      "publish-runtimeclass",
+      "publish-overshadow",
+      "publish-limits",
+      "publish-node",
+      "build-ephemeral-update",
+      "publish-ephemeral-update",
+      "build-deadline-without-mutator",
+      "build-storage-without-mutator",
+      "publish-deadline-without-mutator",
+      "publish-storage-without-mutator"
+    ],
+    "cleanupComplete": true,
+    "preAdmissionDenials": [
+      "build-host",
+      "build-runtimeclass",
+      "publish-host",
+      "publish-runtimeclass"
+    ],
+    "namespaceUID": "28f96b85-60ce-46aa-bcb2-8dc7058b06bc",
+    "ownerNonce": "d471630e40acf5ad179d4e66",
+    "namespace": "ai-sdlc-builds",
+    "runUIDs": [
+      "54449f88-0928-40a0-92f4-60722bf51ed4",
+      "4bd7954f-97f2-4d3e-8bd0-b4bdc9698b8f"
+    ],
+    "podShapeObserved": true,
+    "expressionWarnings": [],
+    "ephemeralRBACScope": "temporary fixture-only grant for two original nonexecuting Pods",
+    "mandatoryPolicyVerified": true,
+    "taskUIDs": [
+      "9ba20e41-80a6-48e5-bae9-a45463ac8ce2",
+      "675b0b17-bd94-4094-a1e3-eddef4e40789"
+    ],
+    "guardedCleanupRetries": 1
+  },
+  "entrypointInitialization": {
+    "status": "passed",
+    "image": "ghcr.io/tektoncd/pipeline/entrypoint-bff0a22da108bc2f16c818c97641a296:v1.15.0@sha256:1ae5944a51f5c5f19e575de5abf268ea7a49a3a54bdad411cf27e3142af5f5c0",
+    "binaryBytes": 65903252,
+    "binTmpfsMiB": 96,
+    "memoryMiB": 256,
+    "uid": 1000,
+    "network": "none",
+    "capabilities": [],
+    "readOnlyRoot": true
+  },
+  "networkConformance": {
+    "egressDeny": true,
+    "selectiveEgress": true,
+    "ingressDeny": true,
+    "positiveControls": true,
+    "temporaryResourcesRemoved": true,
+    "status": "passed",
+    "observedAt": "2026-11-16T05:24:07Z",
+    "scope": "point-in-time policy conformance; no continuous isolation claim",
+    "image": "quay.io/os-santiago/ai-sdlc@sha256:2792487f2c00e00be147a0bc10b357d7501de4f8da1ff7af280a8da105fa2269",
+    "liveWorkflowAdvanced": false
+  },
+  "limitations": [
+    "Kubernetes1.36+ native mutating policy required; runtime1.35.8 not upgraded",
+    "No source workload executes in admission fixture",
+    "No independent provenance or release authorization",
+    "Operational controller, installed trust inventory and transport remain required",
+    "Canonical controllers/admins/applicable mutators are trusted; no continuous network isolation claim"
+  ]
+}

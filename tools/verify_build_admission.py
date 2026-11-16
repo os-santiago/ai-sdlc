@@ -53,6 +53,8 @@ def main():
         return json.loads(call(['create', '-f', '-', '-o', 'json'], value).stdout)
 
     def pods_stopped():
+        if any(n['metadata']['name'] == 'fixture-node' or n['metadata'].get('labels',{}).get('kubernetes.io/hostname') == 'fixture-node' for n in get('nodes',ns=None)['items']):
+            raise ValueError('Fixture node must remain absent by name and hostname')
         pods = get('pods')['items']
         for pod in pods:
             spec = pod['spec']; status = pod.get('status', {})
@@ -79,7 +81,7 @@ def main():
     try:
         if get('namespace', 'kube-system', None)['metadata']['uid'] != owner['clusterUID']:
             raise ValueError('Cluster UID changed')
-        if any(n['metadata'].get('labels', {}).get('kubernetes.io/hostname') == 'fixture-node' for n in get('nodes', ns=None)['items']):
+        if any(n['metadata']['name'] == 'fixture-node' or n['metadata'].get('labels', {}).get('kubernetes.io/hostname') == 'fixture-node' for n in get('nodes', ns=None)['items']):
             raise ValueError('Fixture node selector could schedule')
         if any(n['metadata']['name'] == namespace for n in get('namespaces', ns=None)['items']):
             raise ValueError('Refusing existing build namespace')
@@ -156,8 +158,15 @@ def main():
                     if label == 'limits': bad['spec']['containers'][1]['resources']['limits']['memory']='8Gi'
                     if label == 'node': bad['spec']['nodeName']='fixture-node'
                     dryrun(bad, False, phase + '-' + label)
+            # Production controller RBAC already denies ephemeral updates. A
+            # fixture-only grant for these two never-executed Pods reaches the
+            # independent admission rule, without broadening production rights.
+            create({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'Role','metadata':{'name':'ephemeral-negative-fixture','namespace':namespace},'rules':[{'apiGroups':[''],'resources':['pods/ephemeralcontainers'],'resourceNames':[p['metadata']['name'] for p in pods],'verbs':['update']}]})
+            create({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'RoleBinding','metadata':{'name':'ephemeral-negative-fixture','namespace':namespace},'subjects':[{'kind':'ServiceAccount','name':'tekton-pipelines-controller','namespace':'tekton-pipelines'}],'roleRef':{'apiGroup':'rbac.authorization.k8s.io','kind':'Role','name':'ephemeral-negative-fixture'}})
+            report['ephemeralRBACScope']='temporary fixture-only grant for two original nonexecuting Pods'
             for pod in pods:
                 name=pod['metadata']['name']; phase=pod['metadata']['labels']['ai-sdlc.role']
+                pods_stopped()
                 # Binding only to a proven absent node: no kubelet can execute this fixture.
                 call(['create','--raw','/api/v1/namespaces/'+namespace+'/pods/'+name+'/binding','-f','-'],
                      {'apiVersion':'v1','kind':'Binding','metadata':{'name':name,'namespace':namespace},'target':{'apiVersion':'v1','kind':'Node','name':'fixture-node'}})

@@ -20,8 +20,10 @@ The runtime must prove actual writer termination before publication, retain orig
 
 ## Validation scope
 
-`tools/verify_build_admission.py` uses an exclusive owned fixture namespace and synthetic PipelineRuns. Its node is proven absent and its PVC is never provisioned. It inspects actual Tekton Pods, performs server-side positive/negative admission requests, and tests READY updates after binding only to the absent node. No source workload executes. Cleanup uses original object UIDs. Host-namespace and missing-runtime-class negative controls can be rejected by native admission before the custom policy; the report identifies those cases separately.
+`tools/verify_build_admission.py` uses an exclusive owned fixture namespace and synthetic PipelineRuns. Its node is proven absent and its PVC is never provisioned. It inspects actual Tekton Pods, performs server-side positive/negative admission requests, and tests READY updates after binding only to the absent node. No source workload executes. A temporary namespaced RBAC grant limited to the two original fixture Pods lets the ephemeral-container negative control reach the VAP; production controller RBAC already denies that operation. Cleanup uses original object UIDs, records evidence before cleanup and retries a failed finalizer CAS only after re-reading ownership and state. Host-namespace and missing-runtime-class negative controls can be rejected by native admission before the custom policy; the report identifies those cases separately.
 
 The pinned entrypoint initializer also ran successfully under Podman with UID 1000, no network, no capabilities, read-only root, 256 MiB memory and a 96 MiB memory-backed executable volume. This proves helper initialization, not a complete build or E2E.
 
 Operational transport, installation reconciliation, independent provenance verification and promotion/deployment remain separate work. No eligible Saferus feature issue has been submitted by this compiler change.
+
+The final evidence is [recorded here](../evidence/2026-11-16-closed-saferus-build-compiler.json): 1,364 Go/PostgreSQL tests in 42 packages; four positive admission cases and 34 negatives, including four native pre-policy denials. Policy type checking reports no warnings. A fresh network conformance check passed using the installed kindnetd controller; it is a point-in-time result.
