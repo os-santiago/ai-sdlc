@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "sourceURL": "https://github.com/os-santiago/saferus",
+  "sourceSHA": "d5df3a8aa0a19b8f55dfc29c7bc13a10405a2aaa",
+  "builderImage": "docker.io/library/golang@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d",
+  "toolchain": "go1.27.4",
+  "baseImage": "scratch",
+  "recipe": "ai-sdlc.saferus-go-static/v1",
+  "volumeBytes": 4294967296,
+  "volumeInodes": 32768,
+  "buildMemory": "2Gi",
+  "buildCPU": "2",
+  "cosignImage": "quay.io/konflux-ci/task-runner@sha256:9f4151ff21f4c14b9151582c91a5542140bbbb6dca7861cd42081006840bec05",
+  "conformaImage": "quay.io/conforma/cli@sha256:78ae5239ca0a651c57fbdb36096616b229a376d9ab5691b15d7d46104fd8684c"
+}

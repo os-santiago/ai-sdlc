@@ -30,6 +30,19 @@ def policies(namespace):
                     'ingress':[],'egress':egress}})
     return result
 
+
+def network_gate_script(targets):
+    if not targets:
+        return ''
+    checks=[]
+    for target in targets:
+        host,port=target['host'],target['port']
+        import ipaddress
+        if ipaddress.ip_address(host).version!=4 or not isinstance(port,int) or not 1<=port<=65535:
+            raise ValueError('Invalid network gate target')
+        checks.append('count=0\nfor attempt in {1..20}; do\n  set +e\n  timeout 3 bash -c \'exec 3<>/dev/tcp/$1/$2\' probe HOST PORT\n  status=$?\n  set -e\n  if [ "$status" -eq 124 ]; then count=$((count+1)); elif [ "$status" -eq 0 ]; then count=0; else exit 1; fi\n  if [ "$count" -eq 2 ]; then break; fi\n  sleep 1\ndone\ntest "$count" -eq 2\n'.replace('HOST',host).replace('PORT',str(port)))
+    return ''.join(checks)
+
 def build_pipeline(targets=None):
     script='''#!/bin/bash
 set -euo pipefail
@@ -49,14 +62,7 @@ test "$(git rev-parse HEAD)" = SOURCE_SHA
 mvn -B -ntp -Dmaven.repo.local=/work/cache -DargLine=-Xmx3g -f quarkus-app/pom.xml verify
 '''.replace('SOURCE_URL',INPUTS['sourceURL']).replace('SOURCE_SHA',INPUTS['sourceSHA'])
     if targets:
-        checks=[]
-        for target in targets:
-            host,port=target['host'],target['port']
-            import ipaddress
-            if ipaddress.ip_address(host).version!=4 or not isinstance(port,int) or not 1<=port<=65535:
-                raise ValueError('Invalid network gate target')
-            checks.append('count=0\nfor attempt in {1..20}; do\n  set +e\n  timeout 3 bash -c \'exec 3<>/dev/tcp/$1/$2\' probe HOST PORT\n  status=$?\n  set -e\n  if [ "$status" -eq 124 ]; then count=$((count+1)); elif [ "$status" -eq 0 ]; then count=0; else exit 1; fi\n  if [ "$count" -eq 2 ]; then break; fi\n  sleep 1\ndone\ntest "$count" -eq 2\n'.replace('HOST',host).replace('PORT',str(port)))
-        script=script.replace('umask 022','umask 022\n'+''.join(checks))
+        script=script.replace('umask 022','umask 022\n'+network_gate_script(targets))
     return {'tasks':[{'name':'maven','taskSpec':{'volumes':[{'name':'artifacts','persistentVolumeClaim':{'claimName':'artifacts'}},
                  {'name':'tmp','emptyDir':{'medium':'Memory','sizeLimit':'512Mi'}}],
             'steps':[{'name':'verify','image':INPUTS['builderImage'],'script':script,

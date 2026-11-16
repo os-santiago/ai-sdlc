@@ -83,3 +83,21 @@ func TestRegistryTransportRejectsSchemePortAndUserInfo(t *testing.T) {
 		}
 	}
 }
+
+func TestRecipeCannotPublishIntoAnotherProject(t *testing.T) {
+	for _, row := range []struct {
+		recipe, output string
+		valid          bool
+	}{
+		{"ai-sdlc.saferus-go-static/v1", "registry-service.kind-registry/ai-sdlc-fixtures/saferus:run-1", true},
+		{"ai-sdlc.quarkus-jvm/v1", "registry-service.kind-registry/ai-sdlc-fixtures/homedir:run-1", true},
+		{"ai-sdlc.saferus-go-static/v1", "registry-service.kind-registry/ai-sdlc-fixtures/homedir:run-1", false},
+		{"ai-sdlc.quarkus-jvm/v1", "registry-service.kind-registry/ai-sdlc-fixtures/saferus:run-1", false},
+		{"unknown", "registry-service.kind-registry/ai-sdlc-fixtures/saferus:run-1", false},
+		{"ai-sdlc.saferus-go-static/v1", "external.invalid/saferus:run-1", false},
+	} {
+		if validRecipeOutput(row.recipe, row.output) != row.valid {
+			t.Fatal("recipe/destination mismatch")
+		}
+	}
+}
