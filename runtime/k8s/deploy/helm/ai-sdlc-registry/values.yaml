@@ -1,0 +1,6 @@
+# Private credentials are external Secrets, never Helm values/history.
+clusterUID: ""
+creationNonce: ""
+credentialRevision: ""
+image: quay.io/konflux-ci/zot@sha256:92cb058816f30d14d3b64d85f8ddd6c4c681fbf9263af04085cd520c0bc7db42
+storageSize: 2Gi
