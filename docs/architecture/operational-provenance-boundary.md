@@ -444,3 +444,45 @@ custody before any external effect, recover lost acknowledgements through exact
 UID/content checks, serialize configuration changes, recheck freeze and workload
 containment, and preserve restrictive ACLs after interruption. A successful
 compiler result alone grants no delivery or trust-approval authority.
+
+## Administrative registry change journal
+
+`tools/provenance_registry_state.py` records configuration and original-task
+restart intents independently of delivery workflow records. Configuration
+changes use the original UID/resourceVersion and exact before/after digests. A
+lost acknowledgement can reconcile the exact desired result without another
+write; conflicting data, replacement objects and rollback of a completed
+transition are rejected. The journal stores no credentials or configuration
+contents. Protected original/desired inputs remain the caller's responsibility.
+
+State updates use independent copies and become visible in memory only after
+file fsync, atomic rename and directory fsync succeed. Reusing the same object
+or a shared state dictionary after persistence failure cannot authorize an
+unrecorded effect.
+
+Restart intents bind the original Pod, containerd task, storage device/inode,
+projected configuration and restart count. Reconciliation accepts exactly one
+ready, running successor in the same Pod. At most two signal attempts can target
+the original task, separated by at least five seconds and fresh positive task
+observations. A successor is never signaled as a retry. Stopping tasks are
+observed without another signal; exhausted ambiguity remains incomplete.
+
+The caller must hold installation exclusion, bound the overall operation,
+validate current freeze and workload containment before every effect, and
+provide actual task/process observations rather than Pod readiness alone. The
+journal does not establish those authorities or install registry ACLs itself.
+
+The isolated real Kubernetes recovery exercise is:
+
+```bash
+python3 tools/validate_provenance_registry_journal.py --output /tmp/provenance-registry-journal
+```
+
+It injects lost replies after actual API updates and task signals, reloads
+durable inputs/intents, and verifies one actual write and signal per phase. It
+also interrupts before a signal, requires fresh observation before targeting the
+original task, rejects an actual Pod replacement, and tests stale API updates
+and revocation of a fixture ConfigMap fence. The fixture fence is not the
+operational runtime policy. Full native ACL/retained-signature validation and
+owned-resource cleanup remain required. No operational registry or workflow is
+changed, and this is not autonomous E2E evidence.
