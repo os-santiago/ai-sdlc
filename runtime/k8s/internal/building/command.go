@@ -46,7 +46,7 @@ func (c Command) ID() string { raw, _ := json.Marshal(c); return "build-" + auth
 
 func Verify(inner, outer authority.Policy, receipt authority.Receipt, raw []byte, now time.Time) (Command, error) {
 	var c Command
-	if len(raw) == 0 || len(raw) > 16384 || authority.DecodeStrict(raw, &c) != nil ||
+	if len(raw) == 0 || len(raw) > 16384 || authority.DecodeStrict(raw, &c) != nil || !canonicalCommandKeys(raw, c) ||
 		authority.ValidateLoopPolicies(inner, outer) != nil || inner.Freeze || outer.Freeze ||
 		c.Version != Version || c.Repository != outer.Repository || c.Environment != outer.Environment ||
 		c.Recipe != Recipe || !mergeID.MatchString(c.MergeID) || c.IssueNumber < 1 || c.IssueNumber > 2147483647 ||
@@ -71,4 +71,20 @@ func Verify(inner, outer authority.Policy, receipt authority.Receipt, raw []byte
 		return Command{}, ErrBuild
 	}
 	return c, nil
+}
+
+// The persistent selector reads JSON keys case-sensitively. Preserve signed
+// bytes, while rejecting aliases accepted by encoding/json's struct decoder.
+func canonicalCommandKeys(raw []byte, c Command) bool {
+	var actual, expected map[string]json.RawMessage
+	canonical, _ := json.Marshal(c)
+	if json.Unmarshal(raw, &actual) != nil || json.Unmarshal(canonical, &expected) != nil || len(actual) != len(expected) {
+		return false
+	}
+	for key := range actual {
+		if _, ok := expected[key]; !ok {
+			return false
+		}
+	}
+	return true
 }
