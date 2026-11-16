@@ -114,5 +114,86 @@
     "No independent provenance or release authorization",
     "Operational controller, installed trust inventory and transport remain required",
     "Canonical controllers/admins/applicable mutators are trusted; no continuous network isolation claim"
-  ]
+  ],
+  "postSuiteHardening": {
+    "commit": "c3ad31aa2c5ec27e699c72cd7cdfeadd2ccbe03d",
+    "changes": [
+      "Explicit JSON unicode apostrophe encoding in CEL literals with quote/backslash roundtrip test",
+      "Fresh random fixture-only dummy identity; exact historical synthetic fingerprint triaged"
+    ],
+    "focusedGoTests": "passed",
+    "localSecretScan": "passed",
+    "admission": {
+      "version": 1,
+      "status": "passed",
+      "scope": "nonexecuting synthetic Pod admission fixture",
+      "autonomousE2E": false,
+      "workloadExecuted": false,
+      "accepted": [
+        "build",
+        "publish",
+        "build-bound-ready-update",
+        "publish-bound-ready-update"
+      ],
+      "rejected": [
+        "build-image",
+        "build-argument",
+        "build-sidecar",
+        "build-secret",
+        "build-token",
+        "build-host",
+        "build-fsgroup",
+        "build-environment",
+        "build-grace",
+        "build-scheduler",
+        "build-runtimeclass",
+        "build-overshadow",
+        "build-limits",
+        "build-node",
+        "publish-image",
+        "publish-argument",
+        "publish-sidecar",
+        "publish-secret",
+        "publish-token",
+        "publish-host",
+        "publish-fsgroup",
+        "publish-environment",
+        "publish-grace",
+        "publish-scheduler",
+        "publish-runtimeclass",
+        "publish-overshadow",
+        "publish-limits",
+        "publish-node",
+        "build-ephemeral-update",
+        "publish-ephemeral-update",
+        "build-deadline-without-mutator",
+        "build-storage-without-mutator",
+        "publish-deadline-without-mutator",
+        "publish-storage-without-mutator"
+      ],
+      "cleanupComplete": true,
+      "preAdmissionDenials": [
+        "build-host",
+        "build-runtimeclass",
+        "publish-host",
+        "publish-runtimeclass"
+      ],
+      "namespaceUID": "55c87ef6-703b-436c-97a8-ed8da0f4c3d4",
+      "ownerNonce": "4f387b506e6e783e0bac542a",
+      "namespace": "ai-sdlc-builds",
+      "runUIDs": [
+        "6c051e49-4163-47fd-a6ef-81ff26642b9e",
+        "69331d17-e58d-460f-8998-e8147c163ab3"
+      ],
+      "podShapeObserved": true,
+      "expressionWarnings": [],
+      "ephemeralRBACScope": "temporary fixture-only grant for two original nonexecuting Pods",
+      "mandatoryPolicyVerified": true,
+      "taskUIDs": [
+        "fb88de07-dac4-408e-bd77-045323aa2e20",
+        "a4cc0999-b723-4408-84dc-a5bb2fbb6347"
+      ]
+    },
+    "fullSuiteBaseline": "1364 tests/42 packages before this literal-encoding change; full required CI reruns on final head"
+  }
 }
