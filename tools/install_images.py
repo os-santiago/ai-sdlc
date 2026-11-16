@@ -163,7 +163,10 @@ def main(argv=None):
         lock, evidence = resolve(GitHub(), args.run, args.revision, args.include_build)
         args.output.mkdir(parents=True, mode=0o700, exist_ok=False)
         (args.output / 'images.lock.json').write_text(json.dumps(lock, indent=2) + '\n')
-        (args.output / 'evidence.json').write_text(json.dumps(evidence, indent=2) + '\n')
+        evidence_json = json.dumps(evidence, indent=2) + '\n'
+        (args.output / 'evidence.json').write_text(evidence_json)
+        # Execution installation consumes this sibling of images.lock.json.
+        (args.output / 'images.evidence.json').write_text(evidence_json)
         if args.include_build:
             build = {'version': 'ai-sdlc.build-images/v1', 'revision': args.revision,
                      'publisherImage': REGISTRY+'@'+evidence['images']['artifact-builder']['digest'],

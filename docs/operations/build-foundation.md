@@ -17,7 +17,8 @@ python3 tools/install_images.py --include-build --run RUN_ID \
 The normal `images.lock.json` remains compatible with existing installations.
 `build-images.json` additionally records the exact published publisher image and
 controller digest; `evidence.json` binds artifact IDs, archive digests, workflow
-origin and source revision. Select those two values explicitly below. Do not use
+origin and source revision. The identical `images.evidence.json` sibling is consumed
+by execution installation without a manual rename. Select those two values explicitly below. Do not use
 illustrative or locally retagged image digests.
 
 ```sh

@@ -111,6 +111,27 @@ class ImageResolutionTests(unittest.TestCase):
                     api.get('fixture')
                 self.assertLess(time.monotonic() - started, 2)
 
+    def test_cli_output_is_consumable_by_execution_installer(self):
+        import candidate_install
+        identities = {name: {'component': name, 'digest': 'sha256:'+'b'*64,
+                            'repository': images.REGISTRY, 'revision': SHA,
+                            'platform': 'linux/amd64'}
+                      for name in images.ARTIFACT_COMPONENTS | {'artifact-builder','build-controller'}}
+        lock = {'image': {'repository': images.REGISTRY, 'tag': SHA},
+                'components': {key: {'digest': identities[name]['digest']} for key,name in images.COMPONENTS.items()},
+                'migrator': {'digest': identities['migrator']['digest']}}
+        evidence = {'revision': SHA, 'repository': images.REPOSITORY, 'images': identities}
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)/'publication'
+            with patch.object(images, 'resolve', return_value=(lock,evidence)):
+                self.assertEqual(images.main(['--include-build','--run',str(RUN),'--revision',SHA,'--output',str(output)]),0)
+            self.assertEqual((output/'evidence.json').read_bytes(),(output/'images.evidence.json').read_bytes())
+            actual = candidate_install.desired_values(Path(__file__).resolve().parents[1],output/'images.lock.json',lock,
+                                                     verification=True,review=True,publication=True,merge=True)
+            self.assertTrue(actual['merge']['enabled'])
+            self.assertEqual(actual['verifier']['digest'],identities['verifier']['digest'])
+            self.assertEqual(json.loads((output/'build-images.json').read_text())['controllerDigest'],identities['build-controller']['digest'])
+
     def test_resolves_exact_publication_into_installer_shape(self):
         responses = {'actions/runs/123': json.dumps(run()).encode()}
         catalog = {'total_count': 9, 'artifacts': []}
