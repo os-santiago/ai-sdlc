@@ -1,6 +1,12 @@
 package store
 
 var buildPrivileges = []string{
+	`GRANT SELECT ON build_cleanups TO aisdlc_build_controller`,
+	`GRANT INSERT(request_id,digest,proof) ON build_cleanups TO aisdlc_build_controller`,
+	`GRANT SELECT ON build_plans,build_observations,built_records TO aisdlc_build_controller`,
+	`GRANT INSERT(request_id,digest,plan) ON build_plans TO aisdlc_build_controller`,
+	`GRANT INSERT(request_id,kind,digest,observation) ON build_observations TO aisdlc_build_controller`,
+	`GRANT INSERT(request_id,digest,result) ON built_records TO aisdlc_build_controller`,
 	`GRANT SELECT ON build_requests,build_slots,build_effects,merged_records,merge_requests,published_records,publication_requests TO aisdlc_build_controller`,
 	`GRANT INSERT(id,merge_id,payload_digest,payload,receipt,inner_policy,outer_policy,expires_at) ON build_requests TO aisdlc_build_controller`,
 	`GRANT UPDATE(state,claim_token,claim_until,reason) ON build_requests TO aisdlc_build_controller`,
@@ -12,4 +18,8 @@ var buildPrivileges = []string{
 	`GRANT SELECT(repository,config_digest,watermark) ON intake_cursors TO aisdlc_build_controller`,
 	`GRANT SELECT(repository,issue_number,generation,config_digest,authority_revision,content_key,observed_at) ON intake_observations TO aisdlc_build_controller`,
 	`GRANT SELECT(uuid,status) ON work_items TO aisdlc_build_controller`,
+}
+
+var buildVerifierPrivileges = []string{
+	`GRANT SELECT ON build_requests,build_slots,build_effects,build_plans,build_observations,built_records TO aisdlc_verifier`,
 }

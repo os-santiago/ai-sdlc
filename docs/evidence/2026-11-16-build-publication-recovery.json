@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "date": "2026-11-16",
+  "scope": "inactive ordered build publication and recovery",
+  "autonomousE2E": false,
+  "operationalBuildEnabled": false,
+  "report": "/tmp/ai-sdlc-build-publication-validation-v3/report.json",
+  "sourceAtStart": {
+    "commit": "894233aaa2813c7cd6ffd2ebe8e884042464b934",
+    "dirty": true,
+    "gitLayout": "worktree"
+  },
+  "validation": {
+    "status": "passed",
+    "passedTests": 1344,
+    "passedPackages": 40,
+    "missingDatabaseProof": [],
+    "cleanupComplete": true,
+    "databaseDiagnostics": {
+      "status": "running",
+      "exitCode": 0,
+      "oomKilled": false,
+      "noSpaceReported": false,
+      "outOfMemoryReported": false,
+      "walMaxMB": 128,
+      "walMinMB": 32,
+      "checkpointSeconds": 30
+    }
+  },
+  "review": "Three P2 recovery/deadline findings corrected and independently re-reviewed; final CI required.",
+  "limits": [
+    "Kubernetes observations are synthetic.",
+    "No operational build, cryptographic provenance, promotion or deployment activated.",
+    "Earlier v2 lost PostgreSQL connectivity; root cause was not captured. V3 uses reduced WAL/checkpoint targets and sanitized diagnostics."
+  ]
+}
