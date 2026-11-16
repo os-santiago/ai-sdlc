@@ -38,6 +38,15 @@ func ValidateLoopPolicies(inner, outer Policy) error {
 	// Shared outer keys must match installation-owned inner keys. The builder
 	// exists only in outer policy; adding it must not invalidate active inner work.
 	// Keeping a rotated or foreign key in either mount fails closed.
+	owners := map[string]string{}
+	for _, policy := range []Policy{inner, outer} {
+		for _, key := range policy.Keys {
+			if owner, ok := owners[key.Value]; ok && owner != key.Role {
+				return denied
+			}
+			owners[key.Value] = key.Role
+		}
+	}
 	roles := map[string]bool{}
 	for id, key := range outer.Keys {
 		if key.Role != "build-controller" && inner.Keys[id] != key {

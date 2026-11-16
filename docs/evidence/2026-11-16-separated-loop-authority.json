@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "scope": "inactive-separated-outerloop-authority",
+  "date": "2026-11-16",
+  "implementationRevision": "62226eb41c26510f993d48d3a4c04c82d7666b69",
+  "goPostgreSQL": {
+    "passedTests": 1290,
+    "passedPackages": 40,
+    "missingDatabaseProof": [],
+    "sourceTreeDirtyDuringValidation": true
+  },
+  "installerPythonTests": 89,
+  "identityTestsAfterCompatibilityFix": 11,
+  "crossPolicyAliasNegativeRoles": [
+    "intake",
+    "admission-controller",
+    "orchestrator",
+    "worker"
+  ],
+  "realKubernetesIdentityUpgrade": {
+    "version": 1,
+    "scope": "isolated-identity-upgrade-fixture",
+    "status": "passed",
+    "workflowAdvanced": false,
+    "namespaceRemoved": true,
+    "oldIdentitiesPreserved": true,
+    "innerPolicyPreserved": true,
+    "interruptedUpgradeRecovered": true,
+    "newIdentityPreserved": true,
+    "reapplicationPreserved": true,
+    "migratorSecretUIDPreserved": true
+  },
+  "operationalBuildEnabled": false,
+  "autonomousE2E": false
+}

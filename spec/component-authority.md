@@ -186,6 +186,8 @@ before resource mutation. New images supply the additional identity.
 
 `Relay.PollLoops` is a single consumer. It selects the verification, transport
 and acknowledgement policy by the closed operation mapping, with no fallback.
+When both loops are configured, either freeze pauses all relay deliveries,
+including inner deliveries. This is intentionally a shared transport pause.
 The ordinary inner-only relay remains unchanged until outer enablement exists.
 
 This contract does **not** activate builds, promotions or deployments. The

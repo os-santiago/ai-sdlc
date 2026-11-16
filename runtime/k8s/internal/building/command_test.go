@@ -136,3 +136,20 @@ func TestBuildCommandRejectsAmbiguousAndUnknownFields(t *testing.T) {
 		}
 	}
 }
+
+func TestBuilderCannotAliasAnyInnerOnlyIdentity(t *testing.T) {
+	for _, role := range []string{"intake", "admission-controller", "orchestrator", "worker"} {
+		t.Run(role, func(t *testing.T) {
+			inner, outer, _, _, _ := fixture(t)
+			key := inner.Keys[role+"-1"]
+			key.Role = "build-controller"
+			outer.Keys["build-controller-1"] = key
+			if inner.Validate() != nil || outer.Validate() != nil {
+				t.Fatal("fixture must isolate cross-policy alias")
+			}
+			if authority.ValidateLoopPolicies(inner, outer) == nil {
+				t.Fatal("cross-policy role alias accepted")
+			}
+		})
+	}
+}
