@@ -95,6 +95,8 @@ def main():
             if len(data)>32*1024*1024 or 'sha256:'+hashlib.sha256(data).hexdigest()!=digest:raise ValueError('Fixture OCI content hash mismatch')
             return data
         root_doc=json.loads(blob(matches[0]));runtime_doc=json.loads(blob(runtime))
+        report['baselineDescriptors']={'referenceDigest':matches[0],'runtimeDigest':runtime,'reference':root_doc,'runtime':runtime_doc}
+        save()
         manifest_doc=root_doc;manifest_digest=matches[0]
         if runtime!=matches[0]:
             # Docker can retain a single-platform index as the image reference
