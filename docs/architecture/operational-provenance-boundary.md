@@ -330,6 +330,38 @@ trust, activates controllers, authorizes release or proves the issue-driven E2E.
 Installation must still provision the separate identity, apply the reviewed ACL,
 revalidate foundation trust and run equivalent installed-access checks.
 
+## Registry configuration recovery validation
+
+The existing local Konflux registry uses an `emptyDir`. Replacing its Pod can
+lose retained artifacts; a Deployment rollout is not a safe ACL upgrade strategy.
+A native probe of the pinned Zot image found that `SIGHUP` terminates its process.
+Do not infer hot-reload support from documentation for a different Zot version.
+
+The disposable native recovery exercise is:
+
+```bash
+python3 tools/validate_provenance_registry_recovery.py --output /tmp/provenance-registry-recovery
+```
+
+It starts without repository ACLs and without the verifier identity, using an
+existing `konflux` publisher credential. It seeds actual image/signature/DSSE
+objects, atomically replaces the projected configuration, restarts the same
+owned container with retained fixture storage, and proves the restrictive ACL
+before adding the reader credential. A second restart exercises the new
+credential. Both restarts preserve the publisher credential and endpoint. The
+full denial matrix and actual five-GET cryptographic verifier run afterward.
+The two-phase order prevents a dynamically reloaded htpasswd from introducing a
+reader with broad access before its ACL is enforced.
+
+This fixture uses a private directory for retained storage; it is removed with
+all generated custody at completion. Unlike the default validator's bounded
+tmpfs, its filesystem has no dedicated quota. It holds only the small synthetic
+payload. The report explicitly does not claim Kubernetes projected-volume
+convergence, same-Pod restart validation, Pod replacement recovery, live
+installation, durability across node loss or operational E2E. An installed
+upgrade must separately prove original Pod/container/volume custody and retained
+artifact access, and fail closed if those identities change.
+
 ## Declarative deployment boundary
 
 The Helm chart defines the dedicated process through `provenance.enabled`
