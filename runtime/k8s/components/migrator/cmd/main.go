@@ -21,6 +21,11 @@ func run() error {
 		return errors.New("select migrate or bootstrap-identities")
 	}
 	switch os.Args[1] {
+	case "build-admission", "prepare-build-slot":
+		if len(os.Args) != 2 {
+			return errors.New("unexpected build installation arguments")
+		}
+		return buildInstallation(os.Args[1], os.Stdin, os.Stdout)
 	case "validate-bootstrap":
 		if len(os.Args) != 2 {
 			return errors.New("unexpected bootstrap validation arguments")
