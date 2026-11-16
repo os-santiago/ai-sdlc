@@ -119,7 +119,7 @@ func RuntimeBoundary(next http.Handler) http.Handler {
 	}
 	observation := maintenanceBoundary(next)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.RawQuery == "" && (r.URL.Path == "/internal/admit-issue" || r.URL.Path == "/internal/plan-admission" || ((mode == "candidate" || mode == "verification") && r.URL.Path == "/internal/execute-work") || (mode == "verification" && r.URL.Path == "/internal/verify-artifact") || (bootstrap.PublicationEnabled() && r.URL.Path == "/internal/publish-candidate")) {
+		if r.Method == http.MethodPost && r.URL.RawQuery == "" && (r.URL.Path == "/internal/admit-issue" || r.URL.Path == "/internal/plan-admission" || ((mode == "candidate" || mode == "verification") && r.URL.Path == "/internal/execute-work") || (mode == "verification" && r.URL.Path == "/internal/verify-artifact") || (bootstrap.PublicationEnabled() && r.URL.Path == "/internal/publish-candidate") || (bootstrap.BuildEnabled() && r.URL.Path == "/internal/build-merged")) {
 			next.ServeHTTP(w, r)
 			return
 		}

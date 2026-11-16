@@ -43,10 +43,18 @@ func ValidateMode() error {
 	if merge == "true" && option != "true" {
 		return errors.New("merge requires verified publication")
 	}
+	build := os.Getenv("AI_SDLC_BUILD")
+	if build != "" && build != "false" && build != "true" {
+		return errors.New("invalid build option")
+	}
+	if build == "true" && merge != "true" {
+		return errors.New("build requires verified merge")
+	}
 	return nil
 }
 
 func MergeEnabled() bool { return ValidateMode() == nil && os.Getenv("AI_SDLC_MERGE") == "true" }
+func BuildEnabled() bool { return ValidateMode() == nil && os.Getenv("AI_SDLC_BUILD") == "true" }
 func CandidateAutonomy(p authority.Policy) bool {
 	if MergeEnabled() {
 		return project.Supported(p.Repository) && p.Autonomy == "auto-merge-low"
