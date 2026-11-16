@@ -215,6 +215,8 @@ class Configuration:
             key=build_foundation_state.identity(desired)
             intent=self.record['resources'].get(key)
             current=self.read('secret',name)
+            if current is None and name==getattr(self,'active_creation',None) and (intent is None or intent.get('uid') is None):
+                continue  # only the original in-process first POST; never restored from disk
             if (intent is None or current is None or current['metadata'].get('annotations',{}).get(build_foundation_state.ANNOTATION)!=intent['nonce']
                     or intent.get('uid') is not None and intent['uid']!=current['metadata']['uid']
                     or current['metadata'].get('deletionTimestamp')
@@ -248,6 +250,7 @@ class Configuration:
         candidate=copy.deepcopy(self.record)
         if name in candidate['privateSecrets'] and candidate['privateSecrets'][name]!=desired:
             raise ValueError('Prepared private credential changed; refusing rotation')
+        initial=name not in candidate['privateSecrets'] and build_foundation_state.identity(desired) not in candidate['resources']
         candidate['privateSecrets'][name]=desired
         self.save(candidate)  # Private material and intent precede POST.
         def get(obj):
@@ -255,7 +258,11 @@ class Configuration:
         def create(obj):
             self.guard()
             return json.loads(self.base_run(self.kubectl+['create','-f','-','-o','json'],input=json.dumps(obj),capture_output=True,timeout=20).stdout)
-        return build_foundation_state.Resources(self.path,self.record,get,create).ensure(desired)
+        if initial:self.active_creation=name
+        try:
+            return build_foundation_state.Resources(self.path,self.record,get,create).ensure(desired)
+        finally:
+            self.active_creation=None
 
     def resolve_secret_intents(self):
         self.check_secrets()

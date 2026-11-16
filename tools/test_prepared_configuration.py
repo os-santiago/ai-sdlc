@@ -171,7 +171,7 @@ class PreparedCustodyTests(unittest.TestCase):
         self.config=prepared.Configuration.__new__(prepared.Configuration)
         self.config.path=Path(self.directory.name)/'intent.json'
         self.config.record={'resources':{},'privateSecrets':{},'originalSecrets':{}}
-        self.config.guard=lambda **kwargs:None
+        self.config.guard=lambda **kwargs:self.config.check_secrets()
         self.config.kubectl=['fixture-kubectl']
         self.objects={};self.posts=0
         self.config.read=lambda kind,name,namespace='ai-sdlc-runtime':copy.deepcopy(self.objects.get(name))
@@ -198,6 +198,11 @@ class PreparedCustodyTests(unittest.TestCase):
         self.assertEqual(recovered,self.objects['ai-sdlc-model-client'])
         self.config.check_secrets()
         self.assertEqual(self.config.path.stat().st_mode&0o777,0o600)
+
+    def test_crash_before_post_does_not_restore_first_create_permission(self):
+        self.config.record['privateSecrets']['ai-sdlc-model-client']=self.desired
+        with self.assertRaises(ValueError):self.config.ensure_secret(self.desired)
+        self.assertEqual(self.posts,0)
 
     def test_lost_reply_is_resolved_even_when_credential_helper_reuses_existing(self):
         with self.assertRaises(OSError):self.config.ensure_secret(self.desired)
