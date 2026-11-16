@@ -59,9 +59,32 @@ func (c Configuration) Validate() error {
 	if authority.ValidateLoopPolicies(c.Inner, c.Outer) != nil || !workspacebundle.ValidDigest(c.ProfileSHA256) || !workspacebundle.ValidDigest(c.IntakeConfigSHA256) || c.IssueMaxAgeSeconds < 30 || c.IssueMaxAgeSeconds > 300 || len(c.Slots) < 1 || len(c.Slots) > 8 {
 		return ErrBuild
 	}
-	ids := map[string]bool{}
-	volumes := map[string]bool{}
-	for _, s := range c.Slots {
+	return c.Binding().Validate()
+}
+
+// ProfileDigest binds the reviewed recipe configuration and the exact custody
+// inventory/freshness limit. Changing a slot cannot reuse an old build command.
+// ProfileBinding is the exact public preimage of the signed configuration digest.
+// Field names and order preserve the original v1 digest encoding.
+type ProfileBinding struct {
+	Version            string
+	RecipeProfile      string
+	IssueMaxAgeSeconds int
+	Slots              []Slot
+}
+
+func (c Configuration) Binding() ProfileBinding {
+	return ProfileBinding{"ai-sdlc.build-profile/v1", c.ProfileSHA256, c.IssueMaxAgeSeconds, append([]Slot(nil), c.Slots...)}
+}
+func (b ProfileBinding) Digest() string       { raw, _ := json.Marshal(b); return authority.Digest(raw) }
+func (c Configuration) ProfileDigest() string { return c.Binding().Digest() }
+
+func (b ProfileBinding) Validate() error {
+	if b.Version != "ai-sdlc.build-profile/v1" || !workspacebundle.ValidDigest(b.RecipeProfile) || b.IssueMaxAgeSeconds < 30 || b.IssueMaxAgeSeconds > 300 || len(b.Slots) < 1 || len(b.Slots) > 8 {
+		return ErrBuild
+	}
+	ids, volumes := map[string]bool{}, map[string]bool{}
+	for _, s := range b.Slots {
 		if s.Validate() != nil || ids[s.ID()] || volumes[s.ClusterUID+"/"+s.PVCUID] || volumes[s.ClusterUID+"/"+s.PVUID] {
 			return ErrBuild
 		}
@@ -70,16 +93,4 @@ func (c Configuration) Validate() error {
 		volumes[s.ClusterUID+"/"+s.PVUID] = true
 	}
 	return nil
-}
-
-// ProfileDigest binds the reviewed recipe configuration and the exact custody
-// inventory/freshness limit. Changing a slot cannot reuse an old build command.
-func (c Configuration) ProfileDigest() string {
-	raw, _ := json.Marshal(struct {
-		Version            string
-		RecipeProfile      string
-		IssueMaxAgeSeconds int
-		Slots              []Slot
-	}{"ai-sdlc.build-profile/v1", c.ProfileSHA256, c.IssueMaxAgeSeconds, c.Slots})
-	return authority.Digest(raw)
 }

@@ -83,7 +83,7 @@ func ExecuteQueuedBuild(ctx context.Context, client *Client, journal *store.Buil
 		}
 		var effect store.BuildEffect
 		if phase == "build" {
-			effect, e = journal.BeginBuildEffect(ctx, claim, plan)
+			effect, e = journal.BeginBuildEffect(ctx, claim, plan, resources.compiled.Retained)
 		} else {
 			effect, e = journal.BeginPublishEffect(ctx, claim)
 		}

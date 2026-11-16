@@ -21,6 +21,7 @@ const ObservationMargin = time.Minute
 // Compiled contains exact bytes to journal before the owning transport sends
 // them. It also supplies the expected script to the separate admission profile.
 type Compiled struct {
+	Retained          RetainedContext
 	Plan              building.Plan
 	Build, Publish    []byte
 	BuildScriptBase64 string
@@ -55,6 +56,29 @@ func Compile(cfg building.Configuration, p Profile, signed authority.Receipt, pa
 	if !found || out.MayCreate("build", now) != nil {
 		return Compiled{}, ErrWorkload
 	}
+	compiled, e := compileDefinition(c, p, slot)
+	if e != nil {
+		return Compiled{}, e
+	}
+	retained := RetainedContext{Version: RetainedVersion, Compiler: CompilerVersion, Recipe: building.Recipe,
+		Profile: p, Configuration: cfg.Binding(), IntakeConfigSHA256: cfg.IntakeConfigSHA256,
+		Slot: slot, Build: compiled.Build, Publish: compiled.Publish}
+	raw, e := retained.Encode()
+	if e != nil {
+		return Compiled{}, e
+	}
+	compiled.Retained, e = DecodeRetained(raw)
+	if e != nil {
+		return Compiled{}, e
+	}
+	return compiled, nil
+}
+
+// compileDefinition is private pure reconstruction, never an authority issuer.
+// Historical validation uses it without obtaining an executable Compiled value.
+func compileDefinition(c building.Command, p Profile, slot building.Slot) (Compiled, error) {
+	var out Compiled
+	out.ExpiresAt = time.UnixMilli(c.ExpiresAt)
 	id := strings.TrimPrefix(c.ID(), "build-")[:32]
 	output := building.Registry + ":" + id
 	script := buildScript(p)

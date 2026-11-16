@@ -1,24 +1,32 @@
 # Operational provenance boundary
 
-**Proposed implementation contract for [#574](https://github.com/os-santiago/ai-sdlc/issues/574),
-not an installed capability.** The current [readiness report](../operations/saferus-e2e-readiness.md)
+**Context retention is implemented; independent operational verification remains
+proposed work for [#574](https://github.com/os-santiago/ai-sdlc/issues/574).**
+This does not activate the installed build controller or authorize promotion.
+The current [readiness report](../operations/saferus-e2e-readiness.md)
 separates tested foundation preparation from the unproven autonomous E2E.
 
-## Existing boundary and missing evidence
+## Authenticated historical boundary
 
 [`ReadBuiltRecord`](../../runtime/k8s/internal/store/built_records.go) requires the
 verifier database identity and validates historical signed command, plan, slot,
-ordered original observations and immutable result. It returns command, plan,
-terminations, result and recording time. Slot bytes are checked internally but
-not returned. Complete compiler profile and request bytes are not archived by
-[`BeginBuildEffect`](../../runtime/k8s/internal/store/build_effects.go): that
-transaction records the plan and effect intent, including their digests.
+ordered original observations, immutable compilation context and result. The
+context exposes the complete configuration preimage, selected slot, compiler
+profile and exact request bytes through that authenticated reader.
+
+[`BeginBuildEffect`](../../runtime/k8s/internal/store/build_effects.go) requires
+that context and reconstructs its closed requests under the original command/slot
+lock before atomically recording context, plan and effect intent. Migration 0024
+provides immutable, bounded storage; the build component may insert context only
+before any existing plan/effect, and the verifier has read-only access. Historical
+readback also requires retention to precede the original plan/create intent.
 
 [`Compile`](../../runtime/k8s/internal/buildworkload/compile.go) creates both
 requests, each bounded to 32 KiB. Its definition digest commits to an acyclic
 template containing the two requests with the literal `DEFINITION` placeholder,
 profile digest and slot digest. The final requests then contain that definition
-digest. A digest alone cannot reconstruct the original definition after cleanup.
+digest. The retained exact bytes now permit reconstruction after cleanup; a
+digest alone could not.
 
 The [isolated verifier](closed-build-provenance.md) can reconstruct it because
 its fixture retains profile, slot and request files. Operational verification
@@ -26,13 +34,12 @@ must not import that fixture directory or derive expected identities from the
 attestation being evaluated. Cleanup must remain able to delete original Tekton
 objects; retention belongs in the authenticated journal, not in live objects.
 
-## First implementation slice: immutable compilation context
+## Implemented first slice: immutable compilation context
 
-Extend the existing pre-effect transaction to retain a versioned, bounded context
+The pre-effect transaction retains a versioned, bounded context
 with the exact compiler profile, complete public configuration binding, selected
 slot, both compiled request byte sequences and the approved compiler/recipe
-identity. Persist it with the plan
-before any external create. Validation must bind it to the authenticated command,
+identity. It is persisted with the plan before any external create. Validation binds it to the authenticated command,
 plan, allocated slot and effect request digests. Do not add an arbitrary manifest
 input or a second execution path.
 
@@ -55,13 +62,18 @@ request bytes for hashing rather than reserializing them in another language.
 
 Expose the context through the verifier's authenticated historical reader, with
 read-only grants and immutable storage. Verification reconstructs the known
-acyclic template and checks every plan/definition/request digest. Use a separate
-historical validator: replaying `Compile` with the current clock would reject an
+acyclic template and checks every plan/definition/request digest. The separate
+`ValidateHistorical` method reconstructs the closed definition without a current
+clock or an executable return value: replaying `Compile` with the current clock
+would reject an
 expired command, while changing its clock to obtain execution authority would
 cross the historical/current-authority boundary. Historical validation must
 never issue a command, reserve a slot or call a transport.
 
-Old records without complete retained context remain explicitly unverifiable.
+Old records without complete retained context are explicitly unverifiable.
+The migration performs no backfill. Keep build activation and enabled-runtime
+upgrades behind their existing installation gates; this migration is not an
+approval to switch a live controller or downgrade it to a context-free writer.
 Do not backfill them from current cluster state, infer missing bytes from a
 mutable profile, or rebuild another artifact and label it the original result.
 
