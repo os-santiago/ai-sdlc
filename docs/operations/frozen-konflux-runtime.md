@@ -8,9 +8,9 @@ GitHub or model credentials and does not claim an autonomous E2E.
 
 ```bash
 ./install.sh supply-chain local --cluster ai-sdlc-konflux-reviewed --provider podman
-./install.sh plan --config examples/saferus.konflux-frozen.json
-./install.sh local --config examples/saferus.konflux-frozen.json
-./install.sh status --config examples/saferus.konflux-frozen.json
+./install.sh plan --config examples/saferus-konflux-frozen.local-install.json
+./install.sh local --config examples/saferus-konflux-frozen.local-install.json
+./install.sh status --config examples/saferus-konflux-frozen.local-install.json
 ```
 
 The supply-chain step creates the platform only when it is absent and unrecorded.

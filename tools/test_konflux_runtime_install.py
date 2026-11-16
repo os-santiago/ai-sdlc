@@ -110,7 +110,7 @@ class FrozenRuntimeTests(unittest.TestCase):
     def test_declarative_schema_and_parser_agree_on_frozen_scope(self):
         import install_config
         import jsonschema
-        fixture = json.loads((install.ROOT / 'examples/saferus.konflux-frozen.json').read_text())
+        fixture = json.loads((install.ROOT / 'examples/saferus-konflux-frozen.local-install.json').read_text())
         schema = json.loads((install.ROOT / 'spec/local-install.schema.json').read_text())
         path = self.state / 'config.json'
         path.write_text(json.dumps(fixture))

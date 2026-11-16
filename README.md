@@ -33,7 +33,7 @@ pins from a reviewed publication, use the [image upgrade procedure](docs/operati
 
 For an existing installer-owned Konflux cluster, use the
 [frozen runtime capability](docs/operations/frozen-konflux-runtime.md) and
-`examples/saferus.konflux-frozen.json`. It preserves the platform identity and
+`examples/saferus-konflux-frozen.local-install.json`. It preserves the platform identity and
 keeps Saferus delivery disabled while integration is validated.
 
 This first release installs **maintenance mode**, with delivery actions
