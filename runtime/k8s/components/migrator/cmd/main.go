@@ -21,6 +21,14 @@ func run() error {
 		return errors.New("select migrate or bootstrap-identities")
 	}
 	switch os.Args[1] {
+	case "compile-provenance-installation", "prepare-provenance-registry-custody":
+		if len(os.Args) != 2 {
+			return errors.New("unexpected provenance installation arguments")
+		}
+		if os.Args[1] == "compile-provenance-installation" {
+			return compileProvenanceInstallation(os.Stdin, os.Stdout)
+		}
+		return prepareProvenanceRegistryCustody(os.Stdin, os.Stdout)
 	case "compile-build-installation":
 		if len(os.Args) != 2 {
 			return errors.New("unexpected build configuration arguments")
