@@ -7,10 +7,12 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/building"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildworkload"
 )
 
 // BuiltRecord is historical evidence, not verified provenance or release authority.
 type BuiltRecord struct {
+	Context        buildworkload.RetainedContext
 	Command        building.Command
 	Plan           building.Plan
 	Build, Publish building.Termination
@@ -58,6 +60,16 @@ func (db *DB) readBuiltRecord(ctx context.Context, id, role string) (BuiltRecord
 	}
 	r.Plan, e = readBuildPlan(ctx, db.Pool, id)
 	if e != nil || r.Plan.Validate(r.Command, slot) != nil {
+		return BuiltRecord{}, ErrExecution
+	}
+	var contextRaw []byte
+	var contextDigest string
+	var contextAt time.Time
+	if db.Pool.QueryRowContext(ctx, `SELECT c.context,c.digest,c.recorded_at FROM build_contexts c JOIN build_effects e ON e.request_id=c.request_id AND e.kind='build' JOIN build_plans p ON p.request_id=c.request_id WHERE c.request_id=$1 AND c.recorded_at<=e.created_at AND c.recorded_at<=p.created_at`, id).Scan(&contextRaw, &contextDigest, &contextAt) != nil || authority.Digest(contextRaw) != contextDigest || contextAt.Before(time.UnixMilli(r.Command.IssuedAt)) || contextAt.After(r.RecordedAt) {
+		return BuiltRecord{}, ErrExecution
+	}
+	r.Context, e = buildworkload.DecodeRetained(contextRaw)
+	if e != nil || r.Context.Slot != slot || r.Context.ValidateHistorical(r.Command, r.Plan) != nil {
 		return BuiltRecord{}, ErrExecution
 	}
 	var at time.Time

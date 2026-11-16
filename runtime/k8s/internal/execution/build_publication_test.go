@@ -14,7 +14,7 @@ import (
 )
 
 func (b buildFixture) plan() building.Plan {
-	return building.Plan{Version: "ai-sdlc.build-plan/v1", BuildID: b.command.ID(), SourceSHA: b.command.SourceSHA, TreeSHA: b.command.TreeSHA, ProfileSHA256: b.command.ProfileSHA256, SlotDigest: b.cfg.Slots[0].Digest(), DefinitionSHA256: strings.Repeat("d", 64), BuildRequestSHA256: strings.Repeat("c", 64), PublishRequestSHA256: strings.Repeat("e", 64), PublisherImage: "quay.io/os-santiago/ai-sdlc@sha256:" + strings.Repeat("f", 64), Output: building.Registry + ":" + strings.TrimPrefix(b.command.ID(), "build-")[:32]}
+	return b.compiled.Plan
 }
 func buildClaim(t *testing.T, b buildFixture) store.BuildClaim {
 	t.Helper()
@@ -46,7 +46,7 @@ func buildObservation(b buildFixture, phase, uid string) building.Termination {
 func buildWriterDone(t *testing.T, b buildFixture, c store.BuildClaim) building.Termination {
 	t.Helper()
 	ctx := context.Background()
-	effect, e := b.journal.BeginBuildEffect(ctx, c, b.plan())
+	effect, e := b.journal.BeginBuildEffect(ctx, c, b.plan(), b.compiled.Retained)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -144,7 +144,7 @@ func TestBuildPublicationRejectsWriterSubstitutionAndIncompleteEvidence(t *testi
 			b := newBuildFixture(t)
 			ctx := context.Background()
 			c := buildClaim(t, b)
-			effect, e := b.journal.BeginBuildEffect(ctx, c, b.plan())
+			effect, e := b.journal.BeginBuildEffect(ctx, c, b.plan(), b.compiled.Retained)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -190,7 +190,7 @@ func TestBuildCleanupAfterRevocationNeverRenewsAuthority(t *testing.T) {
 			b := newBuildFixture(t)
 			ctx := context.Background()
 			c := buildClaim(t, b)
-			effect, e := b.journal.BeginBuildEffect(ctx, c, b.plan())
+			effect, e := b.journal.BeginBuildEffect(ctx, c, b.plan(), b.compiled.Retained)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -296,7 +296,7 @@ func TestBuildLostPostgresAcknowledgementsNeverAuthorizeReplay(t *testing.T) {
 				}
 			}
 			if phase == "build-uid" {
-				effect, e = b.journal.BeginBuildEffect(ctx, c, b.plan())
+				effect, e = b.journal.BeginBuildEffect(ctx, c, b.plan(), b.compiled.Retained)
 				if e != nil {
 					t.Fatal(e)
 				}
@@ -318,7 +318,7 @@ func TestBuildLostPostgresAcknowledgementsNeverAuthorizeReplay(t *testing.T) {
 					t.Fatal("uncertain claim exposed capability")
 				}
 			case "build-intent":
-				returned, err := j.BeginBuildEffect(ctx, c, b.plan())
+				returned, err := j.BeginBuildEffect(ctx, c, b.plan(), b.compiled.Retained)
 				if err == nil || returned.Token != "" {
 					t.Fatal("uncertain intention exposed capability")
 				}
@@ -340,6 +340,16 @@ func TestBuildLostPostgresAcknowledgementsNeverAuthorizeReplay(t *testing.T) {
 			case <-dropped:
 			default:
 				t.Fatal("actual COMMIT acknowledgement was not dropped")
+			}
+			if phase == "build-intent" {
+				for _, table := range []string{"build_contexts", "build_plans", "build_effects"} {
+					if b.f.Count(t, `SELECT count(*) FROM `+table) != 1 {
+						t.Fatal("lost ACK separated context from intent", table)
+					}
+				}
+				if _, e := b.journal.BeginBuildEffect(ctx, c, b.plan(), b.compiled.Retained); e == nil {
+					t.Fatal("lost ACK allowed create replay")
+				}
 			}
 			if phase == "finish" {
 				fact, e := b.journal.ReadOwnBuiltRecord(ctx, c.ID)
@@ -400,7 +410,7 @@ func TestBuildRecoveryTerminatesLiveClaimBeforeReturningIdentity(t *testing.T) {
 	if e = b.journal.CheckBuild(ctx, recovery); e == nil {
 		t.Fatal("recovery retained live authority")
 	}
-	if _, e = b.journal.BeginBuildEffect(ctx, recovery, b.plan()); e == nil {
+	if _, e = b.journal.BeginBuildEffect(ctx, recovery, b.plan(), b.compiled.Retained); e == nil {
 		t.Fatal("recovery adopted execution")
 	}
 	r, e := b.journal.ReadBuildCleanup(ctx, recovery)

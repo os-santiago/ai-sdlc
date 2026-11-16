@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/building"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildworkload"
 	"time"
 )
 
@@ -15,19 +17,30 @@ type BuildEffect struct {
 	Token, RequestDigest, Name, Kind string
 }
 
-func (j *BuildJournal) BeginBuildEffect(ctx context.Context, c BuildClaim, plan building.Plan) (BuildEffect, error) {
+func (j *BuildJournal) BeginBuildEffect(ctx context.Context, c BuildClaim, plan building.Plan, retained buildworkload.RetainedContext) (BuildEffect, error) {
 	if !buildIDPattern.MatchString(c.ID) {
+		return BuildEffect{}, ErrExecution
+	}
+	contextRaw, e := retained.Encode()
+	if e != nil {
+		return BuildEffect{}, ErrExecution
+	}
+	retained, e = buildworkload.DecodeRetained(contextRaw)
+	if e != nil {
 		return BuildEffect{}, ErrExecution
 	}
 	effect := BuildEffect{Claim: c, Token: NewID(), RequestDigest: plan.BuildRequestSHA256, Name: "ai-sdlc-build-" + c.ID[len("build-"):len("build-")+32], Kind: "build"}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	e := j.DB.WithTx(ctx, func(tx *sql.Tx) error {
+	e = j.DB.WithTx(ctx, func(tx *sql.Tx) error {
 		if j.lock(ctx, tx, c) != nil {
 			return ErrExecution
 		}
 		cmd, slot, e := j.buildContext(ctx, tx, c)
-		if e != nil || plan.Validate(cmd, slot) != nil {
+		if e != nil || plan.Validate(cmd, slot) != nil || retained.Slot != slot || retained.ValidateHistorical(cmd, plan) != nil {
+			return ErrExecution
+		}
+		if _, e = tx.ExecContext(ctx, `INSERT INTO build_contexts(request_id,digest,context) VALUES($1,$2,$3)`, c.ID, authority.Digest(contextRaw), contextRaw); e != nil {
 			return ErrExecution
 		}
 		raw, _ := json.Marshal(plan)

@@ -40,6 +40,8 @@ signed built-record journal, obtain its expected identities from that record and
 reviewed installation, and emit a separately authorized verification fact. That
 runtime integration and issue-to-test-production acceptance remain pending.
 
-The proposed [operational provenance boundary](operational-provenance-boundary.md)
-records the missing durable compilation context, independent trust and acceptance
-gates for that runtime integration. It does not activate a verifier.
+The [operational provenance boundary](operational-provenance-boundary.md)
+describes implemented immutable compilation-context retention and the remaining
+independent trust and acceptance gates. The retained-context reader rejects
+legacy incomplete records and never grants new execution or promotion authority.
+Operational signature verification remains pending.

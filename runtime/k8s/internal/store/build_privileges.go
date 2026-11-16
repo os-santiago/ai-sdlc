@@ -1,6 +1,8 @@
 package store
 
 var buildPrivileges = []string{
+	`GRANT SELECT ON build_contexts TO aisdlc_build_controller`,
+	`GRANT INSERT(request_id,digest,context) ON build_contexts TO aisdlc_build_controller`,
 	`GRANT SELECT ON build_cleanups TO aisdlc_build_controller`,
 	`GRANT INSERT(request_id,digest,proof) ON build_cleanups TO aisdlc_build_controller`,
 	`GRANT SELECT ON build_plans,build_observations,built_records TO aisdlc_build_controller`,
@@ -21,5 +23,6 @@ var buildPrivileges = []string{
 }
 
 var buildVerifierPrivileges = []string{
+	`GRANT SELECT ON build_contexts TO aisdlc_verifier`,
 	`GRANT SELECT ON build_requests,build_slots,build_effects,build_plans,build_observations,built_records TO aisdlc_verifier`,
 }

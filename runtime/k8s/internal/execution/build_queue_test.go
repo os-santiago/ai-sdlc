@@ -13,6 +13,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/building"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildworkload"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/delivery"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
@@ -126,6 +127,10 @@ func extendBuildQueueAuthority(t *testing.T, b *buildFixture) {
 		t.Fatal(e)
 	}
 	b.receipt, _ = json.Marshal(signed)
+	b.compiled, e = buildworkload.Compile(*b.cfg, b.compiled.Retained.Profile, signed, b.raw, b.cfg.Slots[0], time.Now())
+	if e != nil {
+		t.Fatal(e)
+	}
 }
 func TestBuildQueueSkipsUnusableBudgetAndRevision(t *testing.T) {
 	for _, change := range []string{"budget", "profile", "intake", "inner", "outer", "work-stopped", "issue-generation"} {
@@ -178,7 +183,7 @@ func TestBuildCreateReceiptSurvivesFreezeOnlyForCleanup(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	effect, e := b.journal.BeginBuildEffect(ctx, claim, b.plan())
+	effect, e := b.journal.BeginBuildEffect(ctx, claim, b.plan(), b.compiled.Retained)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -222,7 +227,7 @@ func TestBuildLateACKCannotInvalidateFinalCleanup(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			effect, e := b.journal.BeginBuildEffect(ctx, claim, b.plan())
+			effect, e := b.journal.BeginBuildEffect(ctx, claim, b.plan(), b.compiled.Retained)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -272,7 +277,7 @@ func TestBuildACKWaitingOnCleanupLockObservesCommittedClosure(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	effect, e := b.journal.BeginBuildEffect(ctx, claim, b.plan())
+	effect, e := b.journal.BeginBuildEffect(ctx, claim, b.plan(), b.compiled.Retained)
 	if e != nil {
 		t.Fatal(e)
 	}

@@ -51,7 +51,7 @@ func TestBuildLeadershipLossDuringPostKeepsQuarantineAndLateACK(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, e := b.journal.DB.WithBuildController(ctx, func(active context.Context) error {
-			effect, e := b.journal.BeginBuildEffect(active, claim, b.plan())
+			effect, e := b.journal.BeginBuildEffect(active, claim, b.plan(), b.compiled.Retained)
 			if e != nil {
 				return e
 			}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/building"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildworkload"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"net/url"
 	"os"
@@ -15,6 +16,7 @@ import (
 )
 
 type buildFixture struct {
+	compiled     buildworkload.Compiled
 	f            *lifecycleFixture
 	journal      *store.BuildJournal
 	cfg          *building.Configuration
@@ -101,16 +103,24 @@ func newBuildFixture(t *testing.T, actual ...buildFixtureSource) buildFixture {
 		t.Fatal("build projected unmerged source")
 	}
 	slot := building.Slot{ClusterUID: store.NewID(), NamespaceUID: store.NewID(), PVCUID: store.NewID(), PVUID: store.NewID(), NodeUID: store.NewID(), NodeBootID: store.NewID(), StorageIdentitySHA256: strings.Repeat("a", 64), Namespace: "ai-sdlc-builds", PVC: "build-slot-0", Node: "fixture-node", CapacityBytes: 4 << 30, InodeLimit: 32768}
-	cfg := &building.Configuration{Inner: f.Material.Policy, Outer: outer, ProfileSHA256: strings.Repeat("b", 64), IntakeConfigSHA256: f.Config.Digest(), IssueMaxAgeSeconds: 60, Slots: []building.Slot{slot}}
+	profile := buildworkload.Profile{Version: "ai-sdlc.saferus-build-profile/v1", ClusterUID: slot.ClusterUID, NamespaceUID: slot.NamespaceUID, PublisherImage: "quay.io/os-santiago/ai-sdlc@sha256:" + strings.Repeat("f", 64), Dependencies: map[string]buildworkload.Dependency{}, DeniedTargets: []buildworkload.DeniedTarget{{Host: "10.96.0.1", Port: 443}, {Host: "10.96.0.2", Port: 443}}}
+	for _, key := range buildworkload.DependencyKeys() {
+		profile.Dependencies[key] = buildworkload.Dependency{UID: store.NewID(), SpecSHA256: strings.Repeat("b", 64)}
+	}
+	cfg := &building.Configuration{Inner: f.Material.Policy, Outer: outer, ProfileSHA256: profile.Digest(), IntakeConfigSHA256: f.Config.Digest(), IssueMaxAgeSeconds: 60, Slots: []building.Slot{slot}}
 	now := time.Now()
-	c := building.Command{Version: building.Version, MergeID: mc.ID(), MergeRecordSHA256: input.Source.MergeRecordSHA256, Repository: mc.Repository, Environment: outer.Environment, IssueNumber: mc.IssueNumber, IssueRevision: input.IssueRevision, Generation: input.Generation, SourceSHA: input.Source.SourceSHA, TreeSHA: input.Source.TreeSHA, Recipe: building.Recipe, ProfileSHA256: cfg.ProfileDigest(), IntakeConfigSHA256: cfg.IntakeConfigSHA256, InnerPolicyRevision: cfg.Inner.Revision(), OuterPolicyRevision: cfg.Outer.Revision(), IssuedAt: now.UnixMilli(), ExpiresAt: now.Add(10 * time.Minute).UnixMilli()}
+	c := building.Command{Version: building.Version, MergeID: mc.ID(), MergeRecordSHA256: input.Source.MergeRecordSHA256, Repository: mc.Repository, Environment: outer.Environment, IssueNumber: mc.IssueNumber, IssueRevision: input.IssueRevision, Generation: input.Generation, SourceSHA: input.Source.SourceSHA, TreeSHA: input.Source.TreeSHA, Recipe: building.Recipe, ProfileSHA256: cfg.ProfileDigest(), IntakeConfigSHA256: cfg.IntakeConfigSHA256, InnerPolicyRevision: cfg.Inner.Revision(), OuterPolicyRevision: cfg.Outer.Revision(), IssuedAt: now.UnixMilli(), ExpiresAt: now.Add(19 * time.Minute).UnixMilli()}
 	raw, _ := json.Marshal(c)
 	signed, e := f.Material.Identities["release-manager"].Seal(outer, c.ID(), "build-merged", raw)
 	if e != nil {
 		t.Fatal(e)
 	}
 	receipt, _ := json.Marshal(signed)
-	return buildFixture{f, store.NewBuildJournal(db, func() (building.Configuration, error) { return *cfg, nil }), cfg, c, raw, receipt, passwords}
+	compiled, e := buildworkload.Compile(*cfg, profile, signed, raw, slot, now)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return buildFixture{compiled, f, store.NewBuildJournal(db, func() (building.Configuration, error) { return *cfg, nil }), cfg, c, raw, receipt, passwords}
 }
 func TestBuildJournalOwnIdentityCurrentMergeAndOneClaim(t *testing.T) {
 	b := newBuildFixture(t)
@@ -147,11 +157,11 @@ func TestBuildJournalOwnIdentityCurrentMergeAndOneClaim(t *testing.T) {
 	if e := b.journal.CheckBuild(ctx, winner); e != nil {
 		t.Fatal("loser stopped winning claim", e)
 	}
-	effect, e := b.journal.BeginBuildEffect(ctx, winner, b.plan())
+	effect, e := b.journal.BeginBuildEffect(ctx, winner, b.plan(), b.compiled.Retained)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, e = b.journal.BeginBuildEffect(ctx, winner, b.plan()); e == nil {
+	if _, e = b.journal.BeginBuildEffect(ctx, winner, b.plan(), b.compiled.Retained); e == nil {
 		t.Fatal("replayed create intent")
 	}
 	uid := store.NewID()
@@ -215,7 +225,7 @@ func TestBuildJournalRejectsChangedCurrentAuthority(t *testing.T) {
 			if b.journal.CheckBuild(ctx, c) == nil {
 				t.Fatal("stale build authority remained live")
 			}
-			if _, e = b.journal.BeginBuildEffect(ctx, c, b.plan()); e == nil {
+			if _, e = b.journal.BeginBuildEffect(ctx, c, b.plan(), b.compiled.Retained); e == nil {
 				t.Fatal("revoked authority began external effect")
 			}
 		})
@@ -231,7 +241,7 @@ func TestBuildUnknownCreateQuarantinesMergeAndPhysicalSlot(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, e = b.journal.BeginBuildEffect(ctx, c, b.plan()); e != nil {
+	if _, e = b.journal.BeginBuildEffect(ctx, c, b.plan(), b.compiled.Retained); e != nil {
 		t.Fatal(e)
 	}
 	if e = b.journal.StopBuild(ctx, c, "uncertain"); e != nil {
@@ -270,7 +280,7 @@ func TestBuildPhysicalSlotCannotBeReintroducedWithNewKubernetesIDs(t *testing.T)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, e = b.journal.BeginBuildEffect(ctx, c, b.plan()); e != nil {
+	if _, e = b.journal.BeginBuildEffect(ctx, c, b.plan(), b.compiled.Retained); e != nil {
 		t.Fatal(e)
 	}
 	if e = b.journal.StopBuild(ctx, c, "uncertain"); e != nil {
