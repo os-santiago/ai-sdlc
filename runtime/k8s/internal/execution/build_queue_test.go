@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -322,5 +323,27 @@ func TestBuildACKWaitingOnCleanupLockObservesCommittedClosure(t *testing.T) {
 	got, e := b.journal.ReadBuildCleanup(ctx, claim)
 	if e != nil || !got.UnknownCreate || len(got.Resources) != 0 {
 		t.Fatal("immutable cleanup resource set changed", e)
+	}
+}
+
+func TestBuildInboxRejectsSignedNoncanonicalFieldNames(t *testing.T) {
+	b := newBuildFixture(t)
+	extendBuildQueueAuthority(t, &b)
+	raw := bytes.Replace(b.raw, []byte(`"profileSHA256"`), []byte(`"ProfileSHA256"`), 1)
+	signed, e := b.f.Material.Identities["release-manager"].Seal(b.cfg.Outer, b.command.ID(), "build-merged", raw)
+	if e != nil {
+		t.Fatal(e)
+	}
+	carried, e := b.f.Material.Identities["relay"].Carry(b.cfg.Outer, signed, http.MethodPost, "/internal/build-merged", time.Now())
+	if e != nil {
+		t.Fatal(e)
+	}
+	in := delivery.Inbox{DB: b.journal.DB, Target: "build-controller"}
+	_, _, e = in.Accept(context.Background(), b.cfg.Outer, delivery.Envelope{Receipt: signed, Transport: carried, Payload: raw}, "build-merged", http.MethodPost, "/internal/build-merged", time.Now(), buildflow.InboxEffect(b.journal))
+	if e == nil {
+		t.Fatal("accepted a signed command omitted by the queue selector")
+	}
+	if b.f.Count(t, `SELECT count(*) FROM build_requests`) != 0 {
+		t.Fatal("unselectable request persisted")
 	}
 }

@@ -22,6 +22,15 @@ def validate_execution(stdout, report):
         raise ValueError('Actual journal-backed test and durable built record required')
 
 
+def runner_identity(provider):
+    # Docker rootful must write as the host user. Rootless Podman also needs
+    # keep-id so the selected in-container UID maps to that same host user.
+    args = ['--user', str(os.getuid()) + ':' + str(os.getgid())]
+    if provider == 'podman' and os.getuid() != 0:
+        args += ['--userns=keep-id']
+    return args
+
+
 def execute(deadline, provider, node_id, binary, payload, profile, output, copy_back):
     lock = json.loads((Path(__file__).parent/'runtime-validation.lock.json').read_text())
     nonce = secrets.token_hex(12)
@@ -56,7 +65,7 @@ def execute(deadline, provider, node_id, binary, payload, profile, output, copy_
                 if time.monotonic()>until:raise ValueError('Disposable journal database not ready')
                 time.sleep(.5)
             runner=call(['create','--name','ai-sdlc-journal-runner-'+nonce,'--label',label+nonce,
-                         '--network','container:'+node_id,'--security-opt','label=disable','--user','0',
+                         '--network','container:'+node_id,'--security-opt','label=disable',*runner_identity(provider),
                          '--env','AI_SDLC_TEST_DATABASE_URL','--env','AI_SDLC_JOURNAL_BUILD_FIXTURE',
                          '-v',str(binary.resolve())+':/journal-test:ro','-v',str(private)+':/fixture/private.json:ro',
                          '-v',str(evidence)+':/evidence',lock['go'],'/journal-test','-test.run','^TestRealJournalBackedClosedBuild$','-test.v']).stdout.strip()
