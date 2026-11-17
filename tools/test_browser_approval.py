@@ -111,6 +111,28 @@ class ApprovalHistory(unittest.TestCase):
 
 
 class BrowserRenewal(unittest.TestCase):
+    def test_new_browser_binding_preserves_profile_and_is_exact_after_capture(self):
+        original = {'version': 'ai-sdlc.browser-installation/v1', 'profile': {'original': 'profile'},
+            'profileSHA256': 'a'*64, 'targetSHA256': 'b'*64}
+        item = object.__new__(renewal.ApprovalPreflight)
+        item.original = {'sources': {'browser-original-profile': original, 'other': {'fixed': True}}}
+        item.capture_browser, item.renewed_browser = True, None
+        changed = dict(original, targetSHA256='c'*64)
+        item.bind_source('browser-original-profile', changed)
+        self.assertEqual(item.renewed_browser, changed)
+        self.assertEqual(item.original['sources']['browser-original-profile'], original)
+        for bad in (original, dict(changed, profile={'other': True}), dict(changed, profileSHA256='d'*64),
+                    dict(changed, targetSHA256='d'*64)):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                item.bind_source('browser-original-profile', bad)
+        with self.assertRaises(ValueError):
+            item.bind_source('other', {'fixed': False})
+        item.original['sources']['browser-original-profile'] = changed
+        item.capture_browser = False
+        item.bind_source('browser-original-profile', changed)
+        with self.assertRaises(ValueError):
+            item.bind_source('browser-original-profile', original)
+
     def test_actual_ten_consumer_chart_preserves_images_profiles_and_intake_last(self):
         source, render, compiler, _, _ = test_review_feedback_upgrade.FeedbackTargets().source()
         now = time.time()
@@ -170,7 +192,8 @@ class CurrentApprovalSource(unittest.TestCase):
             state = Path(directory)
             original = {'completed': 'active', 'mode': 'browser-evidence',
                 'migrationVerified': True, 'installationReports': [{'original': True}],
-                'backup': {'phase': 'verified', 'restore': {'state': 'removed'}}}
+                'backup': {'phase': 'verified', 'restore': {'state': 'removed'}},
+                'browserCompiled': {'original': 'binding'}}
             original_hash = bootstrap.digest(original)
             path = state / 'browser-runtime-upgrade.json'
             path.write_text(json.dumps(original))
@@ -184,6 +207,7 @@ class CurrentApprovalSource(unittest.TestCase):
                 pending = operation()
                 pending['parentSHA256'] = original_hash
                 pending['targets'] = {'active': {'renewed': 'render'}}
+                pending['browserCompiled'] = {'renewed': 'binding'}
                 journal.save(0, pending)
                 with self.assertRaises(ValueError):
                     source.custody()
@@ -197,6 +221,7 @@ class CurrentApprovalSource(unittest.TestCase):
                 installed = history.CurrentSource(SimpleNamespace(state_dir=state))
                 self.assertEqual(installed.describe('active'), {'renewed': 'render'})
                 self.assertEqual(installed.current_report, complete['installationReports'][-1])
+                self.assertEqual(installed.browser_compiled, {'renewed': 'binding'})
                 self.assertNotEqual(installed.digest(), original_hash)
                 original['unexpected'] = True
                 path.write_text(json.dumps(original))

@@ -189,6 +189,10 @@ class CurrentSource:
             raise ValueError('Original browser source report unavailable')
         return copy.deepcopy(reports[-1])
 
+    @property
+    def browser_compiled(self):
+        return copy.deepcopy((self.prefix[-1] if self.prefix else self.record)['browserCompiled'])
+
     def describe(self, phase):
         if phase != 'active':
             raise ValueError('Only the completed browser source is selectable')

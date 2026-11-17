@@ -233,7 +233,7 @@ class ReviewFeedbackUpgrade(BrowserUpgrade):
             'approvedTrustSHA256': bootstrap.digest(self.approved_trust), 'targets': targets,
             'sourceProof': proof['data'], 'sourceCompatibility': proof, 'sourceRoleIdentities': roles,
             'resourceUIDs': copy.deepcopy(self.source_browser.record['resourceUIDs']),
-            'browserCompiled': copy.deepcopy(self.source_browser.record['browserCompiled']),
+            'browserCompiled': self.source_browser.browser_compiled,
             'pause': None, 'backup': None, 'recoveryPause': None, 'migration': {}, 'migrationVerified': False,
             'installationSource': files.bounded_json(self.config.state_dir / 'installation.json', 2*1024*1024),
             'installationReports': []})

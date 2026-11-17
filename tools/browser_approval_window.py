@@ -28,6 +28,29 @@ from upgrade_fence_client import Fence
 PHASES = ('ready', 'staged', 'warming', 'armed', 'active')
 
 
+class ApprovalPreflight(BrowserPreflight):
+    """Recompile only the target-date binding; the installed profile stays fixed."""
+    def __init__(self, upgrade, *, capture_browser=False):
+        super().__init__(upgrade)
+        self.capture_browser = capture_browser
+        self.renewed_browser = None
+
+    def bind_source(self, name, value):
+        if name != 'browser-original-profile' or not self.capture_browser:
+            return super().bind_source(name, value)
+        original = self.original['sources'][name]
+        # browser_profile_install has already validated the real compiler's
+        # closed output against the unchanged profile and new reviewed target.
+        fields = {'version', 'profile', 'profileSHA256', 'targetSHA256'}
+        if (not isinstance(value, dict) or set(value) != fields
+                or {k:v for k,v in value.items() if k != 'targetSHA256'}
+                   != {k:v for k,v in original.items() if k != 'targetSHA256'}
+                or value['targetSHA256'] == original['targetSHA256']
+                or self.renewed_browser is not None and self.renewed_browser != value):
+            raise ValueError('Browser renewal changed the original profile or target binding')
+        self.renewed_browser = copy.deepcopy(value)
+
+
 class BrowserApproval(ReviewFeedbackUpgrade):
     """Reuse real containment/backup/Helm operations, never the old intent."""
     def __init__(self, config, run=None, revision=None, trust_path=None, target_path=None):
@@ -173,14 +196,17 @@ class BrowserApproval(ReviewFeedbackUpgrade):
         proof = compatibility.Compatibility(self.database()).source(self.catalog)
         roles = self.original_database_authority(proof['data'])
         # Real target validation before the first durable operation intent.
-        preview = {'targets': targets, 'browserCompiled': self.source_browser.record['browserCompiled']}
+        preview = {'targets': targets, 'browserCompiled': self.source_browser.browser_compiled}
         self.record = preview
         try:
             # The preflight guard must still observe the untouched source.
-            preflight = BrowserPreflight(self)
+            preflight = ApprovalPreflight(self, capture_browser=True)
         finally:
             self.record = None
         preflight.preflight()
+        if preflight.renewed_browser is None:
+            raise ValueError('Actual browser compilation for the new target is required')
+        preview['browserCompiled'] = preflight.renewed_browser
         self.observe('source')
         now, nonce = time.time(), secrets.token_hex(16)
         self.source_browser.allowed_nonce = nonce
