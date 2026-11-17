@@ -244,6 +244,9 @@ func (db *DB) ProvisionRolesForDeployment(ctx context.Context, passwords map[str
 			if promotion && component == "release-manager" {
 				statements = append(statements, promotionPrivileges...)
 			}
+			if deployment && component == "release-manager" {
+				statements = append(statements, `GRANT SELECT ON deployment_handoffs TO aisdlc_release_manager`, `GRANT INSERT(promotion_id,command_id,payload_digest) ON deployment_handoffs TO aisdlc_release_manager`)
+			}
 			if deployment && component == "deployer" {
 				statements = append(statements, deploymentPrivileges...)
 			}

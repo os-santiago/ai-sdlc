@@ -15,11 +15,12 @@ var deploymentID = regexp.MustCompile(`^deploy-[a-f0-9]{64}$`)
 
 type DeploymentJournal struct {
 	*DB
-	load func() (releasing.Configuration, error)
+	load   func() (releasing.Configuration, error)
+	target func() (releasing.Target, error)
 }
 
 func NewDeploymentJournal(db *DB, load func() (releasing.Configuration, error)) *DeploymentJournal {
-	return &DeploymentJournal{db, load}
+	return &DeploymentJournal{DB: db, load: load}
 }
 
 type DeploymentInput struct {
@@ -171,14 +172,29 @@ func (j *DeploymentJournal) check(ctx context.Context, tx *sql.Tx, c DeploymentC
 	}
 	return cfg, r, e
 }
+
+// The independent installed target is sufficient only for containment already
+// authorized by the original durable command and acknowledged advance.
+func NewDeploymentJournalWithTarget(db *DB, load func() (releasing.Configuration, error), target func() (releasing.Target, error)) *DeploymentJournal {
+	return &DeploymentJournal{DB: db, load: load, target: target}
+}
 func (j *DeploymentJournal) containmentCurrent(ctx context.Context, original releasing.Configuration, c deployment.Command) error {
-	current, e := j.configuration()
+	var target releasing.Target
+	var e error
+	if j.target != nil {
+		target, e = j.target()
+	} else {
+		var cfg releasing.Configuration
+		cfg, e = j.configuration()
+		target = cfg.Target
+	}
 	now := time.Now()
-	if e != nil || ctx.Err() != nil || current.Target.Digest() != original.Target.Digest() || current.Target.Validate(now) != nil || c.ExpiresAt <= now.UnixMilli() {
+	if e != nil || ctx.Err() != nil || target.Digest() != original.Target.Digest() || target.Validate(now) != nil || c.ExpiresAt <= now.UnixMilli() {
 		return ErrExecution
 	}
 	return nil
 }
+
 func (j *DeploymentJournal) ClaimDeployment(ctx context.Context, id string) (DeploymentClaim, error) {
 	c := DeploymentClaim{ID: id, Token: NewID()}
 	if !deploymentID.MatchString(id) {
