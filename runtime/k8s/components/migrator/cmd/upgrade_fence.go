@@ -120,6 +120,17 @@ func holdSelectedUpgradeFence(ctx context.Context, input io.ReadCloser, output i
 		}
 		return denied
 	})
+	if errors.Is(err, store.ErrUpgradeFenceHistory) && expiry == 0 && ctx.Err() == nil {
+		// No authority was acquired by the client. Do not expose SQL, table
+		// names or private input, and never relabel transport/query failures.
+		_ = json.NewEncoder(output).Encode(struct {
+			Version             string `json:"version"`
+			State               string `json:"state"`
+			Reason              string `json:"reason"`
+			WorkflowRowsWritten bool   `json:"workflowRowsWritten"`
+			UpgradeAuthorized   bool   `json:"upgradeAuthorized"`
+		}{Version: version, State: "rejected", Reason: "history"})
+	}
 	if err != nil || !released {
 		return denied
 	}

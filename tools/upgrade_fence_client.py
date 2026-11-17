@@ -15,6 +15,10 @@ import installer_process
 LABEL = 'ai-sdlc.upgrade-fence'
 
 
+class HistoryRejected(ValueError):
+    """The compiled helper observed a false history predicate, not an I/O error."""
+
+
 class Fence:
     def __init__(self, provider, image, connection, port, source_catalog, *, expires_at, contained_review=False):
         if type(contained_review) is not bool:
@@ -77,6 +81,12 @@ class Fence:
         line, self.buffer = self.buffer.split(b'\n', 1)
         if self.buffer: raise ValueError('Unsolicited fence response')
         value = decode(line)
+        if (state == 'held' and self.nonce is None and isinstance(value, dict)
+                and set(value) == {'version','state','reason','workflowRowsWritten','upgradeAuthorized'}
+                and value['version'] == self.protocol and value['state'] == 'rejected'
+                and value['reason'] == 'history' and value['workflowRowsWritten'] is False
+                and value['upgradeAuthorized'] is False):
+            raise HistoryRejected('Compiled administrative history predicate rejected')
         if (not isinstance(value, dict) or set(value) != {'version','state','nonce','expiresAt','workflowRowsWritten','upgradeAuthorized'}
                 or value['version'] != self.protocol or value['state'] != state
                 or value['workflowRowsWritten'] is not False or value['upgradeAuthorized'] is not False
@@ -143,7 +153,9 @@ class Fence:
             if result.returncode or self.owned() is not None: raise ValueError('Original fence container cleanup incomplete')
 
     def __enter__(self):
-        args=[self.provider,'run','--rm','--name',self.name,'-i','--label',LABEL+'='+self.owner,
+        # Keep the stopped container until CID/label-bound cleanup. Automatic
+        # removal can race ps -> inspect and hide an explicit denial response.
+        args=[self.provider,'run','--name',self.name,'-i','--label',LABEL+'='+self.owner,
               '--network','host','--read-only','--cap-drop=ALL','--security-opt=no-new-privileges',
               '--memory=256m','--cpus=1','--log-driver=none',self.image,self.operation]
         try:

@@ -33,10 +33,21 @@
   "reviewerFenceReleasedWriters": true,
   "preCandidateFenceRejectedReviewHistory": true,
   "reviewerFenceRejectedPendingExecutionEffect": true,
-  "reviewerFenceImage": "quay.io/os-santiago/ai-sdlc@sha256:733f8744ddefd8e6423588db0f9fd1159ddd8fee64f2249d541bf1a04a7422e7",
+  "reviewerFenceImage": "quay.io/os-santiago/ai-sdlc@sha256:8807e4dfc8c228b0a1804d68337b17fcb24c53cdf90f694658baeccea5674b9c",
   "reviewerFenceImageOrigin": "locally built candidate helper; not published or installed",
   "installedRuntimeValidated": false,
   "autonomousEndToEndValidated": false,
   "cleanupComplete": true,
-  "workflowEvidence": false
+  "workflowEvidence": false,
+  "fenceRejectionEvidence": "exact compiled rejected/history frame; startup, transport, protocol and timeout failures propagate",
+  "fixtureSource": {
+    "commit": "347afb70b0c45534dbd5650a9713b41a968e1bff",
+    "dirty": true,
+    "note": "347afb7 plus the history-rejection and explicit container-cleanup changes subsequently committed together"
+  },
+  "priorSignalRuns": {
+    "v1": "failed; retained as failed",
+    "v2": "failed; auto-remove raced ps/inspect during cleanup",
+    "v3": "passed after removing auto-remove; explicit CID/label cleanup retained"
+  }
 }

@@ -9,7 +9,7 @@ from reviewer_image_upgrade import ReviewerImageUpgrade
 from runtime_upgrade_backup import Restore
 from diagnostic_upgrade_data import Compatibility
 import upgrade_backup_data as data
-from upgrade_fence_client import Fence
+from upgrade_fence_client import Fence, HistoryRejected
 
 
 def exercise(database, provider, image, directory, catalog, plan_id, report, save,
@@ -93,10 +93,13 @@ INSERT INTO review_model_calls(run_id,sequence,token,pod_uid,request_digest,inpu
         restore.close()
     item.retained()
     if fence_image is not None:
+        with Fence(provider, fence_image, connection, port, catalog,
+                   expires_at=time.time()+90, contained_review=True) as fence:
+            fence.check()
         try:
             with Fence(provider, fence_image, connection, port, catalog, expires_at=time.time()+90):
                 raise AssertionError('Pre-candidate fence accepted captured-review history')
-        except ValueError:
+        except HistoryRejected:
             pass
         # The identical SQL must fail without exclusion, and succeed only by
         # catching PostgreSQL lock_not_available while the real fence is held.
@@ -122,11 +125,14 @@ INSERT INTO review_model_calls(run_id,sequence,token,pod_uid,request_digest,inpu
                 with Fence(provider, fence_image, connection, port, catalog,
                            expires_at=time.time()+90, contained_review=True):
                     raise AssertionError('Pending execution effect admitted by reviewer fence')
-            except ValueError:
+            except HistoryRejected:
                 pass
         finally:
             database.sql(f"DELETE FROM execution_effects WHERE token='{pending}';")
         item.retained()
+        with Fence(provider, fence_image, connection, port, catalog,
+                   expires_at=time.time()+90, contained_review=True) as fence:
+            fence.check()
         report.update(reviewerFenceAcquiredCheckedReleased=True,
             reviewerFenceExcludedWriters=True, reviewerFenceReleasedWriters=True,
             preCandidateFenceRejectedReviewHistory=True,
