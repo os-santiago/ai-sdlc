@@ -162,6 +162,8 @@ def main(argv=None):
             if not re.fullmatch(r'quay.io/os-santiago/ai-sdlc@sha256:[a-f0-9]{64}',image):raise ValueError('Original pinned probe-capable worker image required')
             nonce=secrets.token_hex(24);foreign='ai-sdlc-net-'+nonce[:12];allowed='release-net-'+nonce[:12]
             created=[];pod_intents={}
+            report['fixture']={'nonce':nonce,'namespace':foreign,'runtimePod':allowed,'resources':[]}
+            save()
             controllers=json.loads(call(['get','deployments','-n',platform.NAMESPACE,'-o','json']).stdout)['items']
             paused={obj['metadata']['name']:obj['metadata']['uid'] for obj in controllers}
             policies=[network,get('networkpolicy','ai-sdlc-deployer-console','ai-sdlc-production')]
@@ -201,10 +203,13 @@ def main(argv=None):
                 # cleanup; there is no second create or adoption as connectivity proof.
                 created.append((kind,meta['name'],namespace,None))
                 if kind=='Pod':pod_intents[(namespace,meta['name'])]=value
+                intent={'kind':kind,'name':meta['name'],'namespace':namespace,'uid':None}
+                report['fixture']['resources'].append(intent);save()
                 result=call(['create','-f','-','-o','json'],value,check=False)
                 actual=json.loads(result.stdout) if result.returncode==0 else get(kind,meta['name'],namespace)
                 if actual and actual['metadata'].get('annotations',{}).get('ai-sdlc.io/network-probe-nonce')==nonce:
                     created[-1]=(kind,meta['name'],namespace,actual['metadata']['uid'])
+                    intent['uid']=actual['metadata']['uid'];save()
                 if result.returncode or created[-1][3] is None:raise ValueError('Probe creation was not acknowledged')
                 return actual
             def probe(namespace,name,host,tls):
