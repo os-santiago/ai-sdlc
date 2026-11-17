@@ -4,10 +4,24 @@ import (
 	"context"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestBootstrapTableInventoryIsStrictlyOrdered(t *testing.T) {
+	// The SQL observation uses ORDER BY relname; keep the reviewed inventory
+	// in the same order and reject duplicates before any database is needed.
+	if !slices.IsSorted(bootstrapTables) {
+		t.Fatal("bootstrap table inventory must be sorted")
+	}
+	for i := 1; i < len(bootstrapTables); i++ {
+		if bootstrapTables[i-1] == bootstrapTables[i] {
+			t.Fatal("bootstrap table inventory must not contain duplicates")
+		}
+	}
+}
 
 // A new database per case prevents existing integration-test history from
 // masking positive controls. These operations affect disposable fixtures only.
