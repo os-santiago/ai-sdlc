@@ -57,8 +57,16 @@ func ValidateMode() error {
 	if provenance == "true" && build != "true" {
 		return errors.New("provenance requires verified build")
 	}
+	release := os.Getenv("AI_SDLC_RELEASE")
+	if release != "" && release != "false" && release != "true" {
+		return errors.New("invalid release option")
+	}
+	if release == "true" && provenance != "true" {
+		return errors.New("release requires verified provenance")
+	}
 	return nil
 }
+func ReleaseEnabled() bool { return ValidateMode() == nil && os.Getenv("AI_SDLC_RELEASE") == "true" }
 
 func ProvenanceEnabled() bool {
 	return ValidateMode() == nil && os.Getenv("AI_SDLC_PROVENANCE") == "true"

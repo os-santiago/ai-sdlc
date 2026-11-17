@@ -81,6 +81,23 @@ class ImageResolutionTests(unittest.TestCase):
             else:changed['artifacts'][-1]['workflow_run']['head_sha']='f'*40
             with self.assertRaises(ValueError):images.select_artifacts(changed,RUN,SHA,include_build=True)
 
+    def test_release_images_are_explicit_complete_and_do_not_change_old_catalogs(self):
+        catalog={'total_count':12,'artifacts':[archive(c)[1] for c in sorted(images.ARTIFACT_COMPONENTS)]}
+        for index,component in enumerate(('artifact-builder','build-controller'),100):
+            catalog['artifacts'].append(dict(archive('worker')[1],id=index,name='supply-chain-image-'+component))
+        catalog['artifacts'].append(dict(archive('worker')[1],id=102,name='release-image-deployer'))
+        self.assertEqual(set(images.select_artifacts(catalog,RUN,SHA,True,True)),images.ARTIFACT_COMPONENTS|{'artifact-builder','build-controller','deployer'})
+        self.assertEqual(len(images.select_artifacts(catalog,RUN,SHA,True)),11)
+        self.assertEqual(len(images.select_artifacts(catalog,RUN,SHA)),9)
+        with self.assertRaises(ValueError):images.select_artifacts(catalog,RUN,SHA,False,True)
+        for fault in ('missing','class','expired','revision'):
+            value=copy.deepcopy(catalog)
+            if fault=='missing':value['artifacts'].pop();value['total_count']-=1
+            elif fault=='class':value['artifacts'][-1]['name']='image-deployer'
+            elif fault=='expired':value['artifacts'][-1]['expired']=True
+            else:value['artifacts'][-1]['workflow_run']['head_sha']='f'*40
+            with self.assertRaises(ValueError):images.select_artifacts(value,RUN,SHA,True,True)
+
     def test_rejects_tampering_wrong_source_and_archive_paths(self):
         cases = [{'changes': {'revision': 'c' * 40}}, {'changes': {'repository': 'other/image'}},
                  {'changes': {'platform': 'linux/arm64'}}, {'changes': {'digest': 'mutable:tag'}},
@@ -116,7 +133,7 @@ class ImageResolutionTests(unittest.TestCase):
         identities = {name: {'component': name, 'digest': 'sha256:'+'b'*64,
                             'repository': images.REGISTRY, 'revision': SHA,
                             'platform': 'linux/amd64'}
-                      for name in images.ARTIFACT_COMPONENTS | {'artifact-builder','build-controller'}}
+                      for name in images.ARTIFACT_COMPONENTS | {'artifact-builder','build-controller','deployer'}}
         lock = {'image': {'repository': images.REGISTRY, 'tag': SHA},
                 'components': {key: {'digest': identities[name]['digest']} for key,name in images.COMPONENTS.items()},
                 'migrator': {'digest': identities['migrator']['digest']}}
@@ -124,7 +141,8 @@ class ImageResolutionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)/'publication'
             with patch.object(images, 'resolve', return_value=(lock,evidence)):
-                self.assertEqual(images.main(['--include-build','--run',str(RUN),'--revision',SHA,'--output',str(output)]),0)
+                self.assertEqual(images.main(['--include-build','--include-release','--run',str(RUN),'--revision',SHA,'--output',str(output)]),0)
+            self.assertEqual(json.loads((output/'release-images.json').read_text()),{'version':'ai-sdlc.release-images/v1','revision':SHA,'deployerDigest':identities['deployer']['digest']})
             self.assertEqual((output/'evidence.json').read_bytes(),(output/'images.evidence.json').read_bytes())
             actual = candidate_install.desired_values(Path(__file__).resolve().parents[1],output/'images.lock.json',lock,
                                                      verification=True,review=True,publication=True,merge=True)

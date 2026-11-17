@@ -21,7 +21,7 @@ jobs:
           "$RUNNER_TEMP/console-fixture-venv/bin/pip" install -r tools/quality-requirements.txt
           echo "$RUNNER_TEMP/console-fixture-venv/bin" >> "$GITHUB_PATH"
       - name: Validate actual conditional deployment and owned rollback in disposable kind
-        run: python3 tools/verify_console_deployment.py --provider docker --output "$RUNNER_TEMP/console-deployment"
+        run: python3 tools/verify_console_deployment.py --provider docker --installed-deployer --output "$RUNNER_TEMP/console-deployment"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:

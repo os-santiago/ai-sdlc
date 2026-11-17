@@ -897,6 +897,28 @@
           "pattern": "^$|^[a-f0-9]{64}$"
         }
       }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "digest",
+        "targetJSON"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^$|^sha256:[a-f0-9]{64}$"
+        },
+        "targetJSON": {
+          "type": "string",
+          "maxLength": 98304
+        }
+      }
     }
   },
   "required": [

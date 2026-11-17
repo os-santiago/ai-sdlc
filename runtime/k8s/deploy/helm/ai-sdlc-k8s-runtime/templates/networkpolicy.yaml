@@ -11,6 +11,9 @@ spec:
     {{- if .Values.build.enabled }}
     matchExpressions:
       - {key: app.kubernetes.io/component, operator: NotIn, values: [build-controller]}
+      {{- if .Values.release.enabled }}
+      - {key: app.kubernetes.io/component, operator: NotIn, values: [deployer]}
+      {{- end }}
       {{- if .Values.provenance.enabled }}
       - {key: app.kubernetes.io/component, operator: NotIn, values: [provenance-verifier]}
       {{- end }}
@@ -49,6 +52,9 @@ spec:
       ports:
         {{- if .Values.provenance.enabled }}
         - {protocol: TCP, port: 8089}
+        {{- if .Values.release.enabled }}
+        - {protocol: TCP, port: 8090}
+        {{- end }}
         {{- end }}
         - {protocol: TCP, port: 5432}
         {{- if .Values.build.enabled }}

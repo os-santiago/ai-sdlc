@@ -83,6 +83,10 @@ spec:
             capabilities: {drop: [ALL]}
             readOnlyRootFilesystem: true
           volumeMounts:
+            {{- if and (eq $key "releaseManager") $.Values.release.enabled }}
+            - {name: release-target, mountPath: /etc/ai-sdlc/release, readOnly: true}
+            - {name: release-trust, mountPath: /etc/ai-sdlc/provenance, readOnly: true}
+            {{- end }}
             {{- if and $.Values.build.enabled (has $key (list "releaseManager" "relay")) }}
             - {name: build-config, mountPath: /etc/ai-sdlc/build, readOnly: true}
             - {name: outer-policy, mountPath: /etc/ai-sdlc/outer-policy, readOnly: true}
@@ -136,6 +140,12 @@ spec:
             - {name: model-home, mountPath: /model-home}
         {{- end }}
       volumes:
+        {{- if and (eq $key "releaseManager") $.Values.release.enabled }}
+        - name: release-target
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-release-target}
+        - name: release-trust
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-provenance-trust}
+        {{- end }}
         {{- if and $.Values.build.enabled (has $key (list "releaseManager" "relay")) }}
         - name: build-config
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-build}

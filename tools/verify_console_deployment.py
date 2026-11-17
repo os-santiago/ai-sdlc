@@ -18,6 +18,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--provider',choices=('podman','docker'),default='podman')
     p.add_argument('--output',type=Path,required=True)
+    p.add_argument('--installed-deployer',action='store_true',help='Use rendered opt-in deployer RBAC and an actual restricted ServiceAccount token')
     args=p.parse_args();args.output.mkdir(parents=True,mode=0o700,exist_ok=False)
     out=args.output.resolve();nonce=secrets.token_hex(8);cluster='ai-sdlc-console-'+nonce[:10]
     label='ai-sdlc.console-fixture';node=cluster+'-control-plane';cid=None;image_id=None
@@ -124,7 +125,40 @@ def main():
         now=int(time.time()*1000)
         target={'version':'ai-sdlc.saferus-release-target/v1','scope':'kind-test-production','repository':'os-santiago/saferus','environment':ns,'clusterUID':get('namespace','kube-system')['metadata']['uid'],'namespaceUID':namespace['metadata']['uid'],'namespace':ns,'deployment':name,'deploymentUID':deployment['metadata']['uid'],'container':'console','deploymentSpecSHA256':'0'*64,'service':name,'serviceUID':service['metadata']['uid'],'serviceSpecSHA256':'0'*64,'pullSecret':'ai-sdlc-release-reader','pullSecretUID':pull['metadata']['uid'],'tlsSecretUID':tls_secret['metadata']['uid'],'tlsCA':(out/'ca.crt').read_text(),'tlsHostname':name,'baselineImage':baseline,'baselineRuntimeDigest':runtime,'rolloutSeconds':300,'smokeSeconds':30,'approvedAt':now-1000,'expiresAt':now+3600000}
         private={'Client':{'APIServer':'https://127.0.0.1:6443','CA':cluster_cfg['certificate-authority-data'],'ClientCertificate':user['client-certificate-data'],'ClientKey':user['client-key-data']},'Target':target,'Report':'/evidence/console-runtime-report.json'}
-        private_path=out/'fixture-private.json';private_path.write_text(json.dumps(private));private_path.chmod(0o600)
+        if args.installed_deployer:
+            stage('rendered-deployer-install-and-actual-rbac')
+            create({'apiVersion':'v1','kind':'Namespace','metadata':{'name':'ai-sdlc-runtime'}})
+            inner={'repository':'os-santiago/saferus','environment':ns,'autonomy':'auto-merge-low','freeze':True}
+            outer=dict(inner,autonomy='auto-deploy')
+            build={'version':'ai-sdlc.build-installation/v1','inner':inner,'outer':outer,'profile':{'clusterUID':target['clusterUID'],'namespaceUID':'fixture-builds','publisherImage':'quay.io/os-santiago/ai-sdlc@sha256:'+'b'*64,'deniedTargets':[{'host':'10.96.0.1','port':443}]}}
+            trust={'version':'ai-sdlc.saferus-provenance/v1','scope':'kind-test-production','repository':inner['repository'],'environment':ns,'clusterUID':target['clusterUID'],'buildNamespaceUID':'fixture-builds','publisherImage':build['profile']['publisherImage'],'verifierImage':'quay.io/os-santiago/ai-sdlc@sha256:'+'a'*64,'registryCA':'fixture','signerPublicKey':'fixture'}
+            values={'runtime':{'mode':'verification','paused':True},'authority':{'policyJSON':json.dumps(inner)},
+                'verifier':{'digest':'sha256:'+'a'*64},'review':{'enabled':True,'configJSON':'{}'},'publication':{'enabled':True},'merge':{'enabled':True,'configJSON':'{}'},
+                'build':{'enabled':True,'digest':'sha256:'+'b'*64,'configJSON':json.dumps(build),'outerPolicyJSON':json.dumps(outer)},
+                'provenance':{'enabled':True,'trustJSON':json.dumps(trust),'registryCredentialSecret':'ai-sdlc-provenance-registry','credentialRevision':'c'*64},
+                'candidate':{'apiServerCIDRs':['10.96.0.1/32']},'release':{'enabled':True,'digest':'sha256:'+'d'*64,'targetJSON':json.dumps(target)}}
+            # Only the release template is installed in this synthetic fixture.
+            # No delivery producer, DB or issue lifecycle is started.
+            values_path=out/'release-values.json';values_path.write_text(json.dumps(values))
+            rendered=run([tools['helm'],'template','ai-sdlc',install.CHART,'-n','ai-sdlc-runtime','-f',install.LOCAL/'values.yaml','-f',values_path,'--show-only','templates/release.yaml'])
+            for obj in yaml.safe_load_all(rendered):
+                if obj:create(obj)
+            token=run(kubectl+['create','token','ai-sdlc-deployer','-n','ai-sdlc-runtime','--duration=10m']).decode().strip()
+            restricted=json.loads(json.dumps(cfg));restricted['users'][0]['user']={'token':token}
+            restricted_path=out/'deployer-kubeconfig';restricted_path.write_text(yaml.safe_dump(restricted));restricted_path.chmod(0o600)
+            permission=[tools['kubectl'],'--kubeconfig',restricted_path,'--request-timeout=10s','auth','can-i']
+            checks=[('get','namespaces/kube-system',None,True),('get','deployments/saferus-console',ns,True),('patch','deployments/saferus-console',ns,True),
+                ('get','secrets/ai-sdlc-release-reader',ns,True),('get','secrets/saferus-console-tls',ns,True),('list','pods',ns,True),
+                ('create','pods',ns,False),('patch','deployments/foreign',ns,False),('delete','deployments/saferus-console',ns,False),
+                ('list','secrets',ns,False),('get','secrets/foreign',ns,False),('get','secrets/ai-sdlc-identity-worker','ai-sdlc-runtime',False)]
+            for verb,resource,scope,allowed in checks:
+                result=subprocess.run([str(x) for x in permission+[verb,resource,*(['-n',scope] if scope else [])]],capture_output=True,env=env,timeout=min(20,deadline-time.monotonic()))
+                if (result.returncode,result.stdout.strip())!=((0,b'yes') if allowed else (1,b'no')):raise ValueError('Actual deployer RBAC differs from closed permissions')
+            observed=get('deployment','ai-sdlc-deployer','ai-sdlc-runtime')
+            if observed['spec']['replicas']!=0:raise ValueError('Fixture accidentally started delivery producer')
+            private['Client']={'APIServer':'https://127.0.0.1:6443','CA':cluster_cfg['certificate-authority-data'],'BearerToken':token}
+            report['installedDeployer']={'renderedResourcesAccepted':True,'paused':True,'permissionChecks':len(checks),'actualServiceAccount':True,'networkIsolationValidated':False}
+        private_path=out/'fixture-private.json' ;private_path.write_text(json.dumps(private));private_path.chmod(0o600)
         stage('actual-api-failed-candidate-owned-rollback-and-service-tls')
         result=run([args.provider,'run','--rm','--name',names[1],'--label',label+'='+nonce,'--network','container:'+cid,
             '-v',str(install.ROOT/'runtime/k8s')+':/src:ro,z','-v',str(out)+':/evidence:z',

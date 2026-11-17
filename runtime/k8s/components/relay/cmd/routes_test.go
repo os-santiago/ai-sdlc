@@ -37,6 +37,38 @@ func TestProvenanceRelayRequiresExactlyEnabledRoutes(t *testing.T) {
 	}
 	routes["promote-artifact"] = "http://release-manager/internal/promote-artifact"
 	if _, e := reviewedRoutes(encode()); e == nil {
-		t.Fatal("unimplemented downstream route accepted")
+		t.Fatal("disabled downstream route accepted")
+	}
+}
+
+func TestReleaseRelayRequiresCompleteNineRouteCatalog(t *testing.T) {
+	for k, v := range map[string]string{"AI_SDLC_RUNTIME_MODE": "verification", "AI_SDLC_INDEPENDENT_REVIEW": "true", "AI_SDLC_PUBLICATION": "true", "AI_SDLC_MERGE": "true", "AI_SDLC_BUILD": "true", "AI_SDLC_PROVENANCE": "true", "AI_SDLC_RELEASE": "true"} {
+		t.Setenv(k, v)
+	}
+	routes := map[string]string{}
+	for _, op := range []string{"admit-issue", "plan-admission", "execute-work", "verify-artifact", "publish-candidate", "build-merged", "verify-built", "promote-artifact", "deploy-release"} {
+		routes[op] = "http://component/internal/" + op
+	}
+	encode := func() string { raw, _ := json.Marshal(routes); return string(raw) }
+	if actual, e := reviewedRoutes(encode()); e != nil || len(actual) != 9 {
+		t.Fatal("complete release routes denied", e)
+	}
+	for op, value := range routes {
+		delete(routes, op)
+		if _, e := reviewedRoutes(encode()); e == nil {
+			t.Fatal("missing route accepted", op)
+		}
+		routes[op] = value
+	}
+	routes["record-deployment"] = "http://component/internal/record-deployment"
+	if _, e := reviewedRoutes(encode()); e == nil {
+		t.Fatal("unimplemented completion route accepted")
+	}
+	delete(routes, "record-deployment")
+	for _, flag := range []string{"", "false", "invalid"} {
+		t.Setenv("AI_SDLC_RELEASE", flag)
+		if _, e := reviewedRoutes(encode()); e == nil {
+			t.Fatal("disabled release routes accepted", flag)
+		}
 	}
 }

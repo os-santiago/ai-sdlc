@@ -132,3 +132,10 @@ provenance:
   trustJSON: ""
   registryCredentialSecret: ai-sdlc-provenance-registry
   credentialRevision: ""
+
+# Explicit reviewed console target. Installing this capability does not unpause
+# runtime replicas or remove either policy freeze.
+release:
+  enabled: false
+  digest: ""
+  targetJSON: ""

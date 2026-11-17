@@ -102,6 +102,9 @@ class Preparation:
         self.templates = {d['metadata']['name']:d['spec']['template'] for d in documents if d.get('kind')=='Deployment'}
         allowed={'ai-sdlc-'+x for x in ('intake','admission-controller','orchestrator','worker','release-manager','relay',
             'verifier','build-controller','provenance-verifier')}
+        config=next((d.get('data',{}) for d in documents if d.get('kind')=='ConfigMap' and d['metadata']['name']=='ai-sdlc-config'),{})
+        if config.get('AI_SDLC_RELEASE')=='true':allowed.add('ai-sdlc-deployer')
+        elif config.get('AI_SDLC_RELEASE') not in (None,'false'):raise ValueError('Unknown prepared release capability')
         if set(self.templates)!=allowed or any(
                 d.get('spec',{}).get('replicas')!=0 for d in documents if d.get('kind')=='Deployment'):
             raise ValueError('Prepared configuration must exclude its closed producer inventory')

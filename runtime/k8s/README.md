@@ -197,7 +197,7 @@ helm template deploy/helm/ai-sdlc-k8s-runtime \
 ```
 
 `make render-k8s`, `make render-openshift` and `make helm-lint` wrap the
-above. `make containers` builds all eight images locally with Podman. The
+above. `make containers` builds all twelve project images locally with Podman. The
 `model-mailbox` image is a hidden prerequisite, tested in disposable Pods; the
 installer does not activate it. See the [transport boundary](../../docs/security/offline-model-mailbox.md).
 

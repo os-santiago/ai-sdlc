@@ -1,0 +1,12 @@
+FROM docker.io/library/golang@sha256:ea30e25680a5470bac02b08bb0e0a735fb75bd0ab7d431b9b95ee0abef362586 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY internal ./internal
+COPY components/deployer ./components/deployer
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/component ./components/deployer/cmd
+
+FROM gcr.io/distroless/static-debian12@sha256:52dcfbabb7457ea47c82f6e13af8c8a4a1d9f7b0145142b3ecab20f2b888411d
+COPY --from=build /out/component /component
+USER 1000:1000
+ENTRYPOINT ["/component"]

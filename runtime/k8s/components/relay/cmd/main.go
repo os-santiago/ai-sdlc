@@ -82,6 +82,9 @@ func reviewedRoutes(raw string) (map[string]string, error) {
 	if bootstrap.ProvenanceEnabled() {
 		required = append(required, "verify-built")
 	}
+	if bootstrap.ReleaseEnabled() {
+		required = append(required, "promote-artifact", "deploy-release")
+	}
 	var routes map[string]string
 	if authority.DecodeStrict([]byte(raw), &routes) != nil || len(routes) != len(required) {
 		return nil, errors.New("relay requires exactly its reviewed routes")
