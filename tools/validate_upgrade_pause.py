@@ -40,6 +40,7 @@ def main(argv=None):
     parser.add_argument('--provider',choices=('podman','docker'),default='podman')
     parser.add_argument('--run',type=int,required=True);parser.add_argument('--revision',required=True)
     parser.add_argument('--output',type=Path,required=True)
+    parser.add_argument('--exercise-transition',action='store_true')
     args=parser.parse_args(argv)
     # An explicit test name excludes all managed E2E/production installations.
     if not args.cluster.startswith('ai-sdlc-') or not args.cluster.endswith('-test'):
@@ -109,6 +110,14 @@ def main(argv=None):
             chart=Path(directory);(chart/'templates').mkdir()
             (chart/'Chart.yaml').write_text('apiVersion: v2\nname: pause-fixture\nversion: 0.1.0\n')
             (chart/'values.yaml').write_text('replicas: 1\n')
+            if args.exercise_transition:
+                (chart/'values.yaml').write_text('replicas: 1\nintake: 0\nfrozen: true\n')
+                (chart/'templates/policy.yaml').write_text('''apiVersion: v1
+kind: ConfigMap
+metadata: {name: phase-policy}
+data:
+  frozen: {{ .Values.frozen | quote }}
+''')
             (chart/'templates/producer.yaml').write_text('''apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -134,6 +143,9 @@ spec:
             runAsUser: 65534
             seccompProfile: {type: RuntimeDefault}
 ''')
+            if args.exercise_transition:
+                producer=(chart/'templates/producer.yaml').read_text()
+                (chart/'templates/intake.yaml').write_text(producer.replace('name: producer','name: intake').replace('.Values.replicas','.Values.intake').replace('app: pause-fixture','app: intake-fixture'))
             report['stage']='helm-install';write_report();guard_namespace()
             command(helm+['install','pause-fixture',chart,'-n',namespace,'--wait','--timeout','60s'],timeout=65)
             original=json.loads(command(kube+['get','deployment','producer','-n',namespace,'-o','json']).stdout)
@@ -181,6 +193,12 @@ spec:
                 raise ValueError('Released database remained fenced')
             report.update(status='passed',sourceMigrationCount=33,writerBlocked=True,historyUnchanged=True,
                 producerUIDRetained=True,originalPodAbsent=True,fenceReleased=True,workflowRowsWrittenByPause=False)
+            if args.exercise_transition:
+                from diagnostic_upgrade_fixture import exercise
+                report['stage']='diagnostic-phase-fixture';write_report()
+                exercise(chart=chart,kube=kube,helm=helm,namespace=namespace,guard=guard_namespace,
+                    command=command,provider=provider,image=image,connection=connection,port=port,
+                    catalog=catalog[:-1],sql=sql,snapshot=snapshot,report=report,save=write_report)
     except Exception as error:
         report.update(status='failed',errorType=type(error).__name__)
         raise

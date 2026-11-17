@@ -3,6 +3,8 @@ import json
 import os
 import re
 import secrets
+import math
+import time
 from urllib.parse import urlsplit
 
 import install
@@ -12,7 +14,7 @@ LABEL='ai-sdlc.upgrade-migrator'
 
 
 class Migrator:
-    def __init__(self,provider,image,connection,port,passwords,record,save):
+    def __init__(self,provider,image,connection,port,passwords,record,save,*,expires_at=None,guard=lambda:None):
         parsed=urlsplit(connection)
         if (provider not in ('podman','docker') or not re.fullmatch(r'quay\.io/os-santiago/ai-sdlc@sha256:[a-f0-9]{64}',image)
                 or parsed.scheme!='postgresql' or parsed.hostname!='127.0.0.1' or parsed.port!=port
@@ -26,10 +28,23 @@ class Migrator:
         self.provider,self.image,self.connection=provider,image,connection
         self.material=json.dumps(passwords).encode();self.record,self.save=record,save
         self.owner=secrets.token_hex(24);self.name='ai-sdlc-upgrade-migrator-'+self.owner;self.cid=None
+        if expires_at is not None and (type(expires_at) not in (int,float) or not math.isfinite(expires_at)):
+            raise ValueError('Finite original migration window required')
+        self.expires_at=min(time.time()+120,expires_at if expires_at is not None else time.time()+120)
+        self.monotonic_deadline=time.monotonic()+max(0,self.expires_at-time.time())
+        self.guard=guard
 
-    def identity(self):
+    def live(self):
+        if time.time()>=self.expires_at or time.monotonic()>=self.monotonic_deadline:
+            raise ValueError('Original migration window expired')
+
+    def command(self,argv,*,timeout=30,**kwargs):
+        self.live()
+        return capture(argv,timeout=min(timeout,self.expires_at-time.time(),self.monotonic_deadline-time.monotonic()),monitor=self.live,**kwargs)
+
+    def identity(self,*,cleanup=False):
         if self.cid is None:raise ValueError('Original migration container acknowledgement missing')
-        values=json.loads(capture([self.provider,'container','inspect',self.cid]))
+        values=json.loads((capture if cleanup else self.command)([self.provider,'container','inspect',self.cid]))
         if (not isinstance(values,list) or len(values)!=1 or values[0].get('Id')!=self.cid
                 or values[0].get('Config',{}).get('Labels',{}).get(LABEL)!=self.owner
                 or values[0].get('HostConfig',{}).get('NetworkMode')!='host'
@@ -41,6 +56,7 @@ class Migrator:
     def run(self):
         if any(key in self.record for key in ('state','nonce','name','containerID','cleanup')) or self.cid is not None:
             raise ValueError('Original migration intent cannot be replayed')
+        self.guard();self.live()
         self.record.update(nonce=self.owner,name=self.name,image=self.image,state='creating')
         self.save(self.record)
         env=dict(os.environ,DATABASE_URL=self.connection)
@@ -50,16 +66,18 @@ class Migrator:
               '--env','AI_SDLC_RUNTIME_MODE=verification']
         for key in ('AI_SDLC_RELEASE','AI_SDLC_PROVENANCE','AI_SDLC_BUILD','AI_SDLC_MERGE','AI_SDLC_PUBLICATION','AI_SDLC_INDEPENDENT_REVIEW'):
             argv+=['--env',key+'=true']
-        raw=capture(argv+[self.image,'migrate'],env=env)
+        self.guard();self.live()
+        raw=self.command(argv+[self.image,'migrate'],env=env)
         if not re.fullmatch(b'[a-f0-9]{64}\n?',raw):raise ValueError('Original migrator create acknowledgement unavailable')
         self.cid=raw.decode().strip();self.record.update(containerID=self.cid,state='created');self.save(self.record)
         before=self.identity()
         if before.get('State',{}).get('Status')!='created' or before['State'].get('Running'):
             raise ValueError('Original migrator was already started')
+        self.guard();self.live()
         self.record['state']='starting';self.save(self.record)
         # DB URI is inherited by name, never embedded in argv. The original
         # component role document travels only through its bounded private stdin.
-        capture([self.provider,'start','--attach','--interactive',self.cid],input=self.material,timeout=120)
+        self.command([self.provider,'start','--attach','--interactive',self.cid],input=self.material,timeout=120)
         after=self.identity()['State']
         if after.get('Status')!='exited' or after.get('Running') or after.get('ExitCode')!=0:
             raise ValueError('Original migrator completion unavailable')
@@ -70,7 +88,7 @@ class Migrator:
         if self.cid is None:
             self.record['cleanup']='uncertain-no-original-ID';self.save(self.record)
             raise ValueError('Preserve original migration creation intent')
-        self.identity();capture([self.provider,'rm','-f',self.cid])
+        self.identity(cleanup=True);capture([self.provider,'rm','-f',self.cid])
         if capture([self.provider,'ps','-aq','--filter','id='+self.cid]).strip():
             raise ValueError('Original migration container cleanup incomplete')
         self.record['cleanup']='removed';self.save(self.record)
