@@ -6,6 +6,7 @@ an owned tmpfs database are mutated. Production Pause identity checks are covere
 separately; this fixture exercises its shared fence transport and pause sequence.
 """
 import argparse
+import faulthandler
 import hashlib
 import json
 import os
@@ -62,6 +63,7 @@ def main(argv=None):
     def sql(value,check=True):
         return command([provider,'exec','-i',cid,'psql','-X','-q','-A','-t','-v','ON_ERROR_STOP=1','-v','VERBOSITY=sqlstate','-U','ai_sdlc','-d','ai_sdlc'],input=value,check=check)
     write_report()
+    stack_file=None
     try:
         report['stage']='publication';write_report()
         _,publication=install_images.resolve(install_images.GitHub(),args.run,args.revision,include_build=True,include_release=True)
@@ -150,14 +152,29 @@ spec:
             def save(value):(args.output/'pause-intent.json').write_text(json.dumps(value,indent=2)+'\n')
             connection=f'postgresql://ai_sdlc:{password}@127.0.0.1:{port}/ai_sdlc?sslmode=disable'
             report['stage']='fenced-pause';write_report()
+            stack_file=(args.output/'wait-stack.log').open('x')
+            faulthandler.dump_traceback_later(15,repeat=True,file=stack_file)
             with Fence(provider,image,connection,port,catalog[:-1],expires_at=record['expiresAt']) as fence:
+                report['trace']=[]
+                def trace(name,function):
+                    def invoke(*args,**kwargs):
+                        def event(state):
+                            report['trace'].append({'operation':name,'state':state,'at':round(time.time(),3)})
+                            report['trace']=report['trace'][-128:]
+                        event('started')
+                        try:result=function(*args,**kwargs)
+                        except Exception:event('failed');raise
+                        event('completed');return result
+                    return invoke
+                for name in ('write','read','check','command','release'):
+                    setattr(fence,name,trace(name,getattr(fence,name)))
                 writer=f"SET lock_timeout='300ms';INSERT INTO outbox(id,aggregate_type,aggregate_id,event_type,payload,correlation_id) VALUES('{uuid.uuid4()}','fixture','blocked','fixture','{{}}','fixture');"
                 blocked=sql(writer,check=False)
                 if blocked.returncode==0 or '55P03' not in blocked.stderr:raise ValueError('Fixture writer was not blocked by the original fence')
                 def apply():
                     guard_namespace()
                     fence.command(helm+['upgrade','pause-fixture',chart,'-n',namespace,'--set','replicas=0','--timeout','30s'],timeout=35)
-                runtime_upgrade_pause.pause_once(record,fence,lambda:observe(1),lambda:observe(0),apply,save)
+                runtime_upgrade_pause.pause_once(record,fence,trace('source',lambda:observe(1)),trace('target',lambda:observe(0)),apply,save)
             observe(0)
             if sql(snapshot).stdout!=before:raise ValueError('Original fixture history changed during pause')
             if sql("INSERT INTO outbox(id,aggregate_type,aggregate_id,event_type,payload,correlation_id) VALUES('"+str(uuid.uuid4())+"','fixture','after','fixture','{}','fixture');",check=False).returncode:
@@ -168,6 +185,8 @@ spec:
         report.update(status='failed',errorType=type(error).__name__)
         raise
     finally:
+        faulthandler.cancel_dump_traceback_later()
+        if stack_file is not None:stack_file.close()
         if nsuid is None and 'namespace' in report['creationAttempts']:
             report['cleanup'].append({'kind':'namespace','status':'uncertain-no-original-UID'});report['status']='failed'
         if cid is None and 'database' in report['creationAttempts']:
@@ -187,7 +206,7 @@ spec:
                 report['cleanup'].append({'kind':'database','status':'removed'})
             except Exception:report['cleanup'].append({'kind':'database','status':'failed'});report['status']='failed'
         write_report()
-    print(json.dumps(report,indent=2))
+    print(json.dumps({'status':report['status'],'report':str(args.output/'report.json'),'cleanup':report['cleanup']},indent=2))
     return 0 if report['status']=='passed' else 1
 
 if __name__=='__main__':
