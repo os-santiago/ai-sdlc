@@ -1,4 +1,5 @@
 """Post-diagnostic history retention on an explicitly disposable database only."""
+import json
 import secrets
 import uuid
 
@@ -52,9 +53,16 @@ def exercise(database, provider, image, directory, catalog, plan_id, first_work,
         'CREATE RULE unexpected_insert AS ON INSERT TO execution_failures DO ALSO NOTIFY unexpected_diagnostic;',
         'CREATE TABLE unexpected_diagnostic_child () INHERITS (execution_failures);',
     ):
+        # Execute DDL outside the rejection oracle: a failed mutation is not
+        # evidence that the descriptor rejected a successfully changed table.
+        observed = database.sql('BEGIN;' + mutation + diagnostic_schema.QUERY + 'ROLLBACK;')
+        if json.loads(observed) == diagnostic_schema.EXPECTED:
+            raise ValueError('Diagnostic mutation did not change the descriptor')
         class TransactionalControl:
             def sql(self, statement):
-                return database.sql('BEGIN;' + mutation + statement + 'ROLLBACK;')
+                if statement != diagnostic_schema.QUERY:
+                    raise AssertionError('Unexpected diagnostic descriptor query')
+                return observed
         try:
             diagnostic_schema.verify(TransactionalControl())
         except ValueError:
