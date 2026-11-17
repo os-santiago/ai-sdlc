@@ -46,6 +46,15 @@ class FenceClientTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.read(self.fixture(),json.dumps(self.response(version='ai-sdlc.reviewer-upgrade-fence/v1')).encode()+b'\n')
         with self.assertRaises(ValueError):Fence('podman',IMAGE,URI,19001,[],expires_at=time.time()+60,contained_review='true')
 
+    def test_browser_protocol_is_distinct_and_no_fallback(self):
+        fence=Fence('podman',IMAGE,URI,19001,[],expires_at=time.time()+60,browser_deployment=True)
+        self.assertEqual(fence.operation,'hold-browser-upgrade-fence')
+        for version in ('ai-sdlc.upgrade-fence/v1','ai-sdlc.reviewer-upgrade-fence/v1'):
+            with self.assertRaises(ValueError):self.read(fence,json.dumps(self.response(version=version)).encode()+b'\n')
+        self.read(fence,json.dumps(self.response(version='ai-sdlc.browser-upgrade-fence/v1')).encode()+b'\n')
+        for flags in ({'browser_deployment':'true'},{'browser_deployment':True,'contained_review':True}):
+            with self.assertRaises(ValueError):Fence('podman',IMAGE,URI,19001,[],expires_at=time.time()+60,**flags)
+
     def test_only_exact_initial_compiled_history_rejection_has_specific_type(self):
         rejected={'version':'ai-sdlc.upgrade-fence/v1','state':'rejected','reason':'history',
                   'workflowRowsWritten':False,'upgradeAuthorized':False}

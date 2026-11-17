@@ -37,6 +37,7 @@ class MigratorTests(unittest.TestCase):
         for fault in ('missing', 'id', 'owner', 'network', 'command', 'image'):
             with self.subTest(fault=fault):
                 item = self.helper()
+                if fault == 'missing':item.record.update(state='creating',nonce=item.owner)
                 item.cid = 'b' * 64 if fault != 'missing' else None
                 obj = self.identity(item)
                 if fault == 'id': obj['Id'] = 'c' * 64
@@ -50,6 +51,17 @@ class MigratorTests(unittest.TestCase):
                                          for call in execute.call_args_list))
                 self.assertIsNone(item.material)
                 self.assertIsNone(item.connection)
+
+    def test_failed_initial_guard_does_not_consume_migration_intent(self):
+        item=self.helper();item.guard=Mock(side_effect=ValueError('transient original-scope read failure'))
+        with patch.object(migration,'capture') as execute:
+            with self.assertRaises(ValueError):item.run()
+            item.close()
+            execute.assert_not_called()
+        self.assertEqual(item.record,{})
+        item.save.assert_not_called()
+        self.assertIsNone(item.material)
+        self.assertIsNone(item.connection)
 
     def test_ambiguous_create_preserves_intent_and_never_starts_or_adopts_by_name(self):
         item = self.helper()

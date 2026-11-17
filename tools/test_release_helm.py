@@ -1,5 +1,6 @@
 """Rendered opt-in release boundaries; no cluster/E2E claims."""
 import copy
+import hashlib
 import json
 import unittest
 import yaml
@@ -10,13 +11,16 @@ class ReleaseChartTests(unittest.TestCase):
     def values(self):
         values=ChartTests().build_values()
         build=json.loads(values['build']['configJSON'])
-        build['profile'].update(clusterUID='cluster',namespaceUID='builds',publisherImage='quay.io/os-santiago/ai-sdlc@sha256:'+'c'*64)
+        build['profile'].update(clusterUID='11111111-1111-1111-1111-111111111111',namespaceUID='builds',publisherImage='quay.io/os-santiago/ai-sdlc@sha256:'+'c'*64)
         values['build']['configJSON']=json.dumps(build)
         values['candidate']={'apiServerCIDRs':['10.96.0.1/32','172.18.0.2/32']}
-        trust={'version':'ai-sdlc.saferus-provenance/v1','scope':'kind-test-production','repository':'os-santiago/saferus','environment':'ai-sdlc-production','clusterUID':'cluster','buildNamespaceUID':'builds','publisherImage':build['profile']['publisherImage'],'verifierImage':'quay.io/os-santiago/ai-sdlc@sha256:'+'a'*64,'registryCA':'fixture-ca','signerPublicKey':'fixture-key'}
+        trust={'version':'ai-sdlc.saferus-provenance/v1','scope':'kind-test-production','repository':'os-santiago/saferus','environment':'ai-sdlc-production','clusterUID':'11111111-1111-1111-1111-111111111111','buildNamespaceUID':'builds','publisherImage':build['profile']['publisherImage'],'verifierImage':'quay.io/os-santiago/ai-sdlc@sha256:'+'a'*64,'registryCA':'fixture-ca','signerPublicKey':'fixture-key'}
         values['provenance']={'enabled':True,'trustJSON':json.dumps(trust),'registryCredentialSecret':'ai-sdlc-provenance-registry','credentialRevision':'d'*64}
-        target={'version':'ai-sdlc.saferus-release-target/v1','scope':'kind-test-production','repository':'os-santiago/saferus','environment':'ai-sdlc-production','clusterUID':'cluster','namespace':'ai-sdlc-production','namespaceUID':'namespace','deployment':'saferus-console','deploymentUID':'deployment','container':'console','service':'saferus-console','serviceUID':'service','pullSecret':'ai-sdlc-release-reader','pullSecretUID':'pull','tlsSecretUID':'tls','tlsCA':'fixture-ca','tlsHostname':'saferus-console','deploymentSpecSHA256':'e'*64,'serviceSpecSHA256':'f'*64,'baselineRuntimeDigest':'sha256:'+'7'*64}
+        target={'version':'ai-sdlc.saferus-release-target/v1','scope':'kind-test-production','repository':'os-santiago/saferus','environment':'ai-sdlc-production','clusterUID':'11111111-1111-1111-1111-111111111111','namespace':'ai-sdlc-production','namespaceUID':'namespace','deployment':'saferus-console','deploymentUID':'deployment','container':'console','service':'saferus-console','serviceUID':'service','pullSecret':'ai-sdlc-release-reader','pullSecretUID':'pull','tlsSecretUID':'tls','tlsCA':'fixture-ca','tlsHostname':'saferus-console','deploymentSpecSHA256':'e'*64,'serviceSpecSHA256':'f'*64,'baselineRuntimeDigest':'sha256:'+'7'*64}
         values['release']={'enabled':True,'digest':'sha256:'+'9'*64,'targetJSON':json.dumps(target)}
+        profile={'nodeName':'fixture-node','nodeUID':'99999999-1111-1111-1111-111111111111','version':'ai-sdlc.saferus-browser-profile/v1','clusterUID':target['clusterUID'],'image':'quay.io/os-santiago/ai-sdlc@sha256:'+'a'*64,'runtimeDigest':'sha256:'+'b'*64,'caSHA256':hashlib.sha256(target['tlsCA'].encode()).hexdigest(),'runtimeConfigurationSHA256':'c'*64,'baselineExpectation':'baseline-seconds','candidateExpectation':'readable-duration'}
+        for index,key in enumerate(('namespaceUID','runtimeClassUID','caConfigMapUID','denyPolicyUID','egressPolicyUID','consoleIngressPolicyUID'),2):profile[key]=f'{index:08d}-1111-1111-1111-111111111111'
+        values['release']['browserProfileJSON']=json.dumps(profile)
         return values
 
     def render(self,values,*args):
@@ -63,7 +67,7 @@ class ReleaseChartTests(unittest.TestCase):
         for name in ('ai-sdlc-release-manager','ai-sdlc-provenance-verifier'):
             item=next(d for d in docs if d['kind']=='Deployment' and d['metadata']['name']==name)
             mounts={v['mountPath'] for v in item['spec']['template']['spec']['containers'][0]['volumeMounts']}
-            self.assertTrue({'/etc/ai-sdlc/release','/etc/ai-sdlc/provenance','/etc/ai-sdlc/build','/etc/ai-sdlc/outer-policy'}<=mounts)
+            self.assertTrue({'/etc/ai-sdlc/browser','/etc/ai-sdlc/release','/etc/ai-sdlc/provenance','/etc/ai-sdlc/build','/etc/ai-sdlc/outer-policy'}<=mounts)
 
     def test_release_network_policy_is_restricted_and_mandatory(self):
         for shared in ('true','false'):

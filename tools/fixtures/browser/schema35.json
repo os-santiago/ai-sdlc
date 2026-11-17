@@ -1,0 +1,825 @@
+{
+  "deployment_browser_cleanups": {
+    "columnACLs": [
+      [
+        "id",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "pod_uid",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "recorded_at",
+        null
+      ]
+    ],
+    "columns": [
+      [
+        "id",
+        "text",
+        true,
+        null
+      ],
+      [
+        "pod_uid",
+        "uuid",
+        true,
+        null
+      ],
+      [
+        "recorded_at",
+        "timestamp with time zone",
+        true,
+        "clock_timestamp()"
+      ]
+    ],
+    "constraints": [
+      [
+        "f",
+        "FOREIGN KEY (id) REFERENCES deployment_browser_pods(id)",
+        true,
+        false
+      ],
+      [
+        "p",
+        "PRIMARY KEY (id)",
+        true,
+        false
+      ]
+    ],
+    "disabledTriggers": 0,
+    "droppedColumns": 0,
+    "forceRls": true,
+    "generatedColumns": 0,
+    "indexes": [
+      [
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    ],
+    "inheritanceLinks": 0,
+    "internalTriggers": 2,
+    "kind": "r",
+    "owner": "ai_sdlc",
+    "persistence": "p",
+    "policies": [
+      [
+        "browser_cleanup_insert",
+        "a",
+        true,
+        [
+          "0"
+        ],
+        null,
+        "((CURRENT_USER = 'aisdlc_deployer'::name) AND (EXISTS ( SELECT 1\n   FROM (deployment_browser_pods p\n     JOIN deployment_browser_intents i ON ((i.id = p.id)))\n  WHERE ((p.id = deployment_browser_cleanups.id) AND (NOT p.not_sent) AND (p.pod_uid = deployment_browser_cleanups.pod_uid) AND (i.expires_at <= clock_timestamp())))))"
+      ],
+      [
+        "browser_cleanup_read",
+        "r",
+        true,
+        [
+          "0"
+        ],
+        "(CURRENT_USER = ANY (ARRAY['aisdlc_deployer'::name, 'aisdlc_release_manager'::name, 'aisdlc_orchestrator'::name]))",
+        null
+      ]
+    ],
+    "relationACL": [
+      "ai_sdlc=arwdDxtm/ai_sdlc",
+      "aisdlc_deployer=r/ai_sdlc",
+      "aisdlc_orchestrator=r/ai_sdlc",
+      "aisdlc_release_manager=r/ai_sdlc"
+    ],
+    "rls": true,
+    "rules": 0,
+    "typeACLs": [
+      [
+        "_deployment_browser_cleanups",
+        "ai_sdlc",
+        null
+      ],
+      [
+        "deployment_browser_cleanups",
+        "ai_sdlc",
+        null
+      ]
+    ],
+    "userTriggers": 0
+  },
+  "deployment_browser_evidence": {
+    "columnACLs": [
+      [
+        "digest",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "evidence",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "id",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "recorded_at",
+        null
+      ]
+    ],
+    "columns": [
+      [
+        "id",
+        "text",
+        true,
+        null
+      ],
+      [
+        "evidence",
+        "bytea",
+        true,
+        null
+      ],
+      [
+        "digest",
+        "text",
+        true,
+        null
+      ],
+      [
+        "recorded_at",
+        "timestamp with time zone",
+        true,
+        "clock_timestamp()"
+      ]
+    ],
+    "constraints": [
+      [
+        "c",
+        "CHECK (((octet_length(evidence) >= 1) AND (octet_length(evidence) <= 8192)))",
+        true,
+        false
+      ],
+      [
+        "c",
+        "CHECK ((digest ~ '^[a-f0-9]{64}$'::text))",
+        true,
+        false
+      ],
+      [
+        "f",
+        "FOREIGN KEY (id) REFERENCES deployment_browser_pods(id)",
+        true,
+        false
+      ],
+      [
+        "p",
+        "PRIMARY KEY (id)",
+        true,
+        false
+      ]
+    ],
+    "disabledTriggers": 0,
+    "droppedColumns": 0,
+    "forceRls": true,
+    "generatedColumns": 0,
+    "indexes": [
+      [
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    ],
+    "inheritanceLinks": 0,
+    "internalTriggers": 2,
+    "kind": "r",
+    "owner": "ai_sdlc",
+    "persistence": "p",
+    "policies": [
+      [
+        "browser_insert",
+        "a",
+        true,
+        [
+          "0"
+        ],
+        null,
+        "((CURRENT_USER = 'aisdlc_deployer'::name) AND (EXISTS ( SELECT 1\n   FROM (deployment_browser_intents i\n     JOIN deployment_requests q ON ((q.id = i.deployment_id)))\n  WHERE ((i.id = deployment_browser_evidence.id) AND (EXISTS ( SELECT 1\n           FROM deployment_browser_pods p\n          WHERE ((p.id = i.id) AND (NOT p.not_sent)))) AND (q.claim_token = i.claim_token) AND (q.state = 'claimed'::text) AND (i.expires_at > clock_timestamp())))))"
+      ],
+      [
+        "browser_read",
+        "r",
+        true,
+        [
+          "0"
+        ],
+        "(CURRENT_USER = ANY (ARRAY['aisdlc_deployer'::name, 'aisdlc_release_manager'::name, 'aisdlc_orchestrator'::name]))",
+        null
+      ]
+    ],
+    "relationACL": [
+      "ai_sdlc=arwdDxtm/ai_sdlc",
+      "aisdlc_deployer=r/ai_sdlc",
+      "aisdlc_orchestrator=r/ai_sdlc",
+      "aisdlc_release_manager=r/ai_sdlc"
+    ],
+    "rls": true,
+    "rules": 0,
+    "typeACLs": [
+      [
+        "_deployment_browser_evidence",
+        "ai_sdlc",
+        null
+      ],
+      [
+        "deployment_browser_evidence",
+        "ai_sdlc",
+        null
+      ]
+    ],
+    "userTriggers": 0
+  },
+  "deployment_browser_intents": {
+    "columnACLs": [
+      [
+        "attempt_nonce",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "claim_token",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "created_at",
+        null
+      ],
+      [
+        "deployment_id",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "expires_at",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "id",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "phase",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "pod_digest",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "profile_digest",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "request",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "request_digest",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "rollout",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "snapshot",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ]
+    ],
+    "columns": [
+      [
+        "id",
+        "text",
+        true,
+        null
+      ],
+      [
+        "deployment_id",
+        "text",
+        true,
+        null
+      ],
+      [
+        "phase",
+        "text",
+        true,
+        null
+      ],
+      [
+        "claim_token",
+        "uuid",
+        true,
+        null
+      ],
+      [
+        "request",
+        "bytea",
+        true,
+        null
+      ],
+      [
+        "request_digest",
+        "text",
+        true,
+        null
+      ],
+      [
+        "snapshot",
+        "bytea",
+        true,
+        null
+      ],
+      [
+        "rollout",
+        "bytea",
+        true,
+        null
+      ],
+      [
+        "profile_digest",
+        "text",
+        true,
+        null
+      ],
+      [
+        "pod_digest",
+        "text",
+        true,
+        null
+      ],
+      [
+        "attempt_nonce",
+        "text",
+        true,
+        null
+      ],
+      [
+        "expires_at",
+        "timestamp with time zone",
+        true,
+        null
+      ],
+      [
+        "created_at",
+        "timestamp with time zone",
+        true,
+        "clock_timestamp()"
+      ]
+    ],
+    "constraints": [
+      [
+        "c",
+        "CHECK (((expires_at > created_at) AND (expires_at <= (created_at + '00:00:30'::interval))))",
+        true,
+        false
+      ],
+      [
+        "c",
+        "CHECK (((octet_length(request) >= 1) AND (octet_length(request) <= 4096)))",
+        true,
+        false
+      ],
+      [
+        "c",
+        "CHECK (((octet_length(rollout) >= 1) AND (octet_length(rollout) <= 4096)))",
+        true,
+        false
+      ],
+      [
+        "c",
+        "CHECK (((octet_length(snapshot) >= 1) AND (octet_length(snapshot) <= 4096)))",
+        true,
+        false
+      ],
+      [
+        "c",
+        "CHECK ((attempt_nonce ~ '^[a-f0-9]{64}$'::text))",
+        true,
+        false
+      ],
+      [
+        "c",
+        "CHECK ((id ~ '^browser-[a-f0-9]{64}$'::text))",
+        true,
+        false
+      ],
+      [
+        "c",
+        "CHECK ((phase = ANY (ARRAY['baseline'::text, 'advance'::text, 'rollback'::text])))",
+        true,
+        false
+      ],
+      [
+        "c",
+        "CHECK ((pod_digest ~ '^[a-f0-9]{64}$'::text))",
+        true,
+        false
+      ],
+      [
+        "c",
+        "CHECK ((profile_digest ~ '^[a-f0-9]{64}$'::text))",
+        true,
+        false
+      ],
+      [
+        "c",
+        "CHECK ((request_digest ~ '^[a-f0-9]{64}$'::text))",
+        true,
+        false
+      ],
+      [
+        "f",
+        "FOREIGN KEY (deployment_id) REFERENCES deployment_requests(id)",
+        true,
+        false
+      ],
+      [
+        "p",
+        "PRIMARY KEY (id)",
+        true,
+        false
+      ],
+      [
+        "u",
+        "UNIQUE (deployment_id, phase)",
+        true,
+        false
+      ]
+    ],
+    "disabledTriggers": 0,
+    "droppedColumns": 0,
+    "forceRls": true,
+    "generatedColumns": 0,
+    "indexes": [
+      [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      [
+        true,
+        true,
+        true,
+        true,
+        false
+      ]
+    ],
+    "inheritanceLinks": 0,
+    "internalTriggers": 4,
+    "kind": "r",
+    "owner": "ai_sdlc",
+    "persistence": "p",
+    "policies": [
+      [
+        "browser_insert",
+        "a",
+        true,
+        [
+          "0"
+        ],
+        null,
+        "((CURRENT_USER = 'aisdlc_deployer'::name) AND (EXISTS ( SELECT 1\n   FROM deployment_requests q\n  WHERE ((q.id = deployment_browser_intents.deployment_id) AND (q.claim_token = deployment_browser_intents.claim_token) AND (q.state = 'claimed'::text) AND (q.expires_at >= deployment_browser_intents.expires_at)))))"
+      ],
+      [
+        "browser_read",
+        "r",
+        true,
+        [
+          "0"
+        ],
+        "(CURRENT_USER = ANY (ARRAY['aisdlc_deployer'::name, 'aisdlc_release_manager'::name, 'aisdlc_orchestrator'::name]))",
+        null
+      ]
+    ],
+    "relationACL": [
+      "ai_sdlc=arwdDxtm/ai_sdlc",
+      "aisdlc_deployer=r/ai_sdlc",
+      "aisdlc_orchestrator=r/ai_sdlc",
+      "aisdlc_release_manager=r/ai_sdlc"
+    ],
+    "rls": true,
+    "rules": 0,
+    "typeACLs": [
+      [
+        "_deployment_browser_intents",
+        "ai_sdlc",
+        null
+      ],
+      [
+        "deployment_browser_intents",
+        "ai_sdlc",
+        null
+      ]
+    ],
+    "userTriggers": 0
+  },
+  "deployment_browser_pods": {
+    "columnACLs": [
+      [
+        "id",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "not_sent",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "pod_uid",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "recorded_at",
+        null
+      ]
+    ],
+    "columns": [
+      [
+        "id",
+        "text",
+        true,
+        null
+      ],
+      [
+        "pod_uid",
+        "uuid",
+        false,
+        null
+      ],
+      [
+        "not_sent",
+        "boolean",
+        true,
+        "false"
+      ],
+      [
+        "recorded_at",
+        "timestamp with time zone",
+        true,
+        "clock_timestamp()"
+      ]
+    ],
+    "constraints": [
+      [
+        "c",
+        "CHECK (((not_sent AND (pod_uid IS NULL)) OR ((NOT not_sent) AND (pod_uid IS NOT NULL))))",
+        true,
+        false
+      ],
+      [
+        "f",
+        "FOREIGN KEY (id) REFERENCES deployment_browser_sends(id)",
+        true,
+        false
+      ],
+      [
+        "p",
+        "PRIMARY KEY (id)",
+        true,
+        false
+      ],
+      [
+        "u",
+        "UNIQUE (pod_uid)",
+        true,
+        false
+      ]
+    ],
+    "disabledTriggers": 0,
+    "droppedColumns": 0,
+    "forceRls": true,
+    "generatedColumns": 0,
+    "indexes": [
+      [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      [
+        true,
+        true,
+        true,
+        true,
+        false
+      ]
+    ],
+    "inheritanceLinks": 0,
+    "internalTriggers": 6,
+    "kind": "r",
+    "owner": "ai_sdlc",
+    "persistence": "p",
+    "policies": [
+      [
+        "browser_insert",
+        "a",
+        true,
+        [
+          "0"
+        ],
+        null,
+        "((CURRENT_USER = 'aisdlc_deployer'::name) AND (EXISTS ( SELECT 1\n   FROM (deployment_browser_intents i\n     JOIN deployment_requests q ON ((q.id = i.deployment_id)))\n  WHERE ((i.id = deployment_browser_pods.id) AND (q.claim_token = i.claim_token) AND (q.state = 'claimed'::text) AND ((deployment_browser_pods.not_sent AND (q.expires_at > clock_timestamp())) OR ((NOT deployment_browser_pods.not_sent) AND (i.expires_at > clock_timestamp())))))))"
+      ],
+      [
+        "browser_read",
+        "r",
+        true,
+        [
+          "0"
+        ],
+        "(CURRENT_USER = ANY (ARRAY['aisdlc_deployer'::name, 'aisdlc_release_manager'::name, 'aisdlc_orchestrator'::name]))",
+        null
+      ]
+    ],
+    "relationACL": [
+      "ai_sdlc=arwdDxtm/ai_sdlc",
+      "aisdlc_deployer=r/ai_sdlc",
+      "aisdlc_orchestrator=r/ai_sdlc",
+      "aisdlc_release_manager=r/ai_sdlc"
+    ],
+    "rls": true,
+    "rules": 0,
+    "typeACLs": [
+      [
+        "_deployment_browser_pods",
+        "ai_sdlc",
+        null
+      ],
+      [
+        "deployment_browser_pods",
+        "ai_sdlc",
+        null
+      ]
+    ],
+    "userTriggers": 0
+  },
+  "deployment_browser_sends": {
+    "columnACLs": [
+      [
+        "claim_token",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
+        "created_at",
+        null
+      ],
+      [
+        "id",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ]
+    ],
+    "columns": [
+      [
+        "id",
+        "text",
+        true,
+        null
+      ],
+      [
+        "claim_token",
+        "uuid",
+        true,
+        null
+      ],
+      [
+        "created_at",
+        "timestamp with time zone",
+        true,
+        "clock_timestamp()"
+      ]
+    ],
+    "constraints": [
+      [
+        "f",
+        "FOREIGN KEY (id) REFERENCES deployment_browser_intents(id)",
+        true,
+        false
+      ],
+      [
+        "p",
+        "PRIMARY KEY (id)",
+        true,
+        false
+      ]
+    ],
+    "disabledTriggers": 0,
+    "droppedColumns": 0,
+    "forceRls": true,
+    "generatedColumns": 0,
+    "indexes": [
+      [
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    ],
+    "inheritanceLinks": 0,
+    "internalTriggers": 4,
+    "kind": "r",
+    "owner": "ai_sdlc",
+    "persistence": "p",
+    "policies": [
+      [
+        "browser_insert",
+        "a",
+        true,
+        [
+          "0"
+        ],
+        null,
+        "((CURRENT_USER = 'aisdlc_deployer'::name) AND (EXISTS ( SELECT 1\n   FROM (deployment_browser_intents i\n     JOIN deployment_requests q ON ((q.id = i.deployment_id)))\n  WHERE ((i.id = deployment_browser_sends.id) AND (i.claim_token = deployment_browser_sends.claim_token) AND (q.claim_token = i.claim_token) AND (q.state = 'claimed'::text) AND (i.expires_at > clock_timestamp())))))"
+      ],
+      [
+        "browser_read",
+        "r",
+        true,
+        [
+          "0"
+        ],
+        "(CURRENT_USER = ANY (ARRAY['aisdlc_deployer'::name, 'aisdlc_release_manager'::name, 'aisdlc_orchestrator'::name]))",
+        null
+      ]
+    ],
+    "relationACL": [
+      "ai_sdlc=arwdDxtm/ai_sdlc",
+      "aisdlc_deployer=r/ai_sdlc",
+      "aisdlc_orchestrator=r/ai_sdlc",
+      "aisdlc_release_manager=r/ai_sdlc"
+    ],
+    "rls": true,
+    "rules": 0,
+    "typeACLs": [
+      [
+        "_deployment_browser_sends",
+        "ai_sdlc",
+        null
+      ],
+      [
+        "deployment_browser_sends",
+        "ai_sdlc",
+        null
+      ]
+    ],
+    "userTriggers": 0
+  }
+}

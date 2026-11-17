@@ -21,6 +21,11 @@ func run() error {
 		return errors.New("select migrate or bootstrap-identities")
 	}
 	switch os.Args[1] {
+	case "hold-browser-upgrade-fence":
+		if len(os.Args) != 2 {
+			return errors.New("unexpected browser upgrade fence arguments")
+		}
+		return holdBrowserUpgradeFence(os.Stdin, os.Stdout)
 	case "hold-reviewer-upgrade-fence":
 		if len(os.Args) != 2 {
 			return errors.New("unexpected reviewer upgrade fence arguments")
@@ -50,6 +55,11 @@ func run() error {
 			return errors.New("unexpected release observation arguments")
 		}
 		return describeReleaseSpecs(os.Stdin, os.Stdout)
+	case "compile-browser-installation":
+		if len(os.Args) != 2 {
+			return errors.New("unexpected browser installation arguments")
+		}
+		return compileBrowserInstallation(os.Stdin, os.Stdout)
 	case "compile-release-installation":
 		if len(os.Args) != 2 {
 			return errors.New("unexpected release installation arguments")

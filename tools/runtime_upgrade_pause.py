@@ -197,7 +197,7 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command',choices=('pause','status','backup','backup-status','diagnostic','diagnostic-status','recover-original',
         'tool-budget','tool-budget-status','recover-tool-budget','reapprove','reapprove-status',
-        'reviewer-image','reviewer-image-status'));parser.add_argument('--cluster',required=True)
+        'reviewer-image','reviewer-image-status','browser','browser-status'));parser.add_argument('--cluster',required=True)
     parser.add_argument('--provider',choices=('auto','podman','docker'),default='auto')
     parser.add_argument('--provenance-trust',type=Path)
     parser.add_argument('--release-target',type=Path)
@@ -207,6 +207,9 @@ def main(argv=None):
     if args.command == 'reapprove':
         if args.provenance_trust is None or args.release_target is None:
             raise ValueError('Reapproval requires both separately reviewed documents')
+    elif args.command in ('browser','browser-status'):
+        if args.release_target is not None or args.command=='browser' and args.provenance_trust is None:
+            raise ValueError('Browser upgrade requires reviewed verifier trust and preserves the release target')
     elif args.provenance_trust is not None or args.release_target is not None:
         raise ValueError('Approval files are accepted only by explicit reapprove')
     if not re.fullmatch('[a-z][a-z0-9-]{0,35}',args.cluster):raise ValueError('Selected original local cluster required')
@@ -221,7 +224,14 @@ def main(argv=None):
         plan=None
         if args.command=='pause':
             plan=install_upgrade.plan(install_upgrade.Source(install.ROOT),install_images.GitHub(),args.source_run,args.source_revision,args.target_run,args.target_revision)
-        if args.command in ('reviewer-image','reviewer-image-status'):
+        if args.command in ('browser','browser-status'):
+            if args.source_run is not None or args.source_revision is not None:
+                raise ValueError('Browser upgrade preserves the original recorded reviewer source')
+            from browser_runtime_upgrade import BrowserUpgrade
+            upgrade=BrowserUpgrade(config,args.target_run,args.target_revision,args.provenance_trust)
+            try:result=upgrade.run() if args.command=='browser' else upgrade.status()
+            finally:upgrade.close()
+        elif args.command in ('reviewer-image','reviewer-image-status'):
             if args.source_run is not None or args.source_revision is not None:
                 raise ValueError('Reviewer update preserves the original recorded source')
             from reviewer_image_upgrade import ReviewerImageUpgrade

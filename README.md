@@ -8,8 +8,8 @@ responsibilities, authority boundaries and the remaining E2E graduation gates.
 For the current local demonstration, see [Saferus E2E readiness](docs/operations/saferus-e2e-readiness.md): verified preparation and remaining autonomous-delivery gates.
 
 The [browser verifier component](docs/operations/browser-verifier.md) adds real
-desktop/mobile conformance tests. Its integration into autonomous deployment
-health remains a separate gate.
+desktop/mobile conformance tests. Deployment health requires its bounded evidence
+chain as well as HTTP/TLS checks; a component test is not autonomous E2E proof.
 
 ## Install locally with kind and Helm
 
@@ -52,7 +52,10 @@ same test environment without renewing workflow requests or failed attempts.
 After an expired, contained review failure, `runtime-upgrade reviewer-image`
 can [replace only the reviewer image](docs/operations/reviewer-image-upgrade.md)
 while retaining the candidate, verification and failed-review history.
-See the same procedure for scope, prerequisites and recovery limits.
+See the same procedure for scope, prerequisites and recovery limits. The next
+closed transition, `runtime-upgrade browser`, installs schema-35 browser evidence
+through a separate backup, migration and activation journal. See its
+[scope and reviewed trust input](docs/operations/browser-verifier.md#existing-installation-transition).
 
 For an existing installer-owned Konflux cluster, use the
 [frozen runtime capability](docs/operations/frozen-konflux-runtime.md) and

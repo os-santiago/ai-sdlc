@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/browsercheck"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/delivery"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/deployment"
@@ -124,7 +125,7 @@ func (d *deploymentTransportFixture) VerifyHealth(ctx context.Context, s releasi
 }
 func deploymentRuntime(f deploymentFixture, t *testing.T, mode string) (deploymentflow.Runtime, *deploymentTransportFixture) {
 	transport := &deploymentTransportFixture{f: f, t: t, mode: mode, current: f.before()}
-	r := deploymentflow.Runtime{DB: f.j.DB, Load: func() (releasing.Configuration, error) { return *f.p.cfg, nil }, Target: func() (releasing.Target, error) { return f.p.cfg.Target, nil }, Transport: func(releasing.Target) (deploymentflow.Transport, error) { return transport, nil }}
+	r := deploymentflow.Runtime{DB: f.j.DB, Load: func() (releasing.Configuration, error) { return *f.p.cfg, nil }, Target: func() (releasing.Target, error) { return f.p.cfg.Target, nil }, Browser: func() (browsercheck.Profile, error) { return f.p.cfg.Browser, nil }, CleanupTarget: func() (releasing.Target, error) { return f.p.cfg.Target, nil }, Cleaner: func() (deploymentflow.BrowserCleaner, error) { return transport, nil }, Transport: func(releasing.Target) (deploymentflow.Transport, error) { return transport, nil }}
 	return r, transport
 }
 func TestDeploymentSignedHandoffInboxAndRuntime(t *testing.T) {
@@ -401,7 +402,7 @@ func TestDeploymentMountedTargetSurvivesOnlyAdvancePolicyWithdrawal(t *testing.T
 		return path
 	}
 	build := buildflow.Installed{Version: "ai-sdlc.build-installation/v1", Inner: cfg.Provenance.Build.Inner, Outer: cfg.Provenance.Build.Outer, Profile: f.p.built.Context.Profile, Slots: cfg.Provenance.Build.Slots, IntakeConfigSHA256: cfg.Provenance.Build.IntakeConfigSHA256, IssueMaxAgeSeconds: cfg.Provenance.Build.IssueMaxAgeSeconds}
-	mounts := releaseflow.Mounts{Build: write("build.json", build), Inner: write("inner.json", build.Inner), Outer: write("outer.json", build.Outer), Trust: write("trust.json", cfg.Provenance.Trust), Target: write("target.json", cfg.Target), Identity: write("identity.json", f.p.b.f.Material.Identities["deployer"]), VerifierImage: cfg.Provenance.Trust.VerifierImage}
+	mounts := releaseflow.Mounts{Build: write("build.json", build), Inner: write("inner.json", build.Inner), Outer: write("outer.json", build.Outer), Trust: write("trust.json", cfg.Provenance.Trust), Target: write("target.json", cfg.Target), Browser: write("browser.json", cfg.Browser), Identity: write("identity.json", f.p.b.f.Material.Identities["deployer"]), VerifierImage: cfg.Provenance.Trust.VerifierImage}
 	loaded, key, e := mounts.Load("deployer")
 	if e != nil || key.Role != "deployer" || deployment.ConfigurationDigest(loaded) != deployment.ConfigurationDigest(cfg) {
 		t.Fatal("installed positive", e)
@@ -411,6 +412,10 @@ func TestDeploymentMountedTargetSurvivesOnlyAdvancePolicyWithdrawal(t *testing.T
 	write("outer.json", frozen)
 	if _, _, e = mounts.Load("deployer"); e == nil {
 		t.Fatal("stale advance snapshot accepted")
+	}
+	identity, e := mounts.LoadTargetIdentity()
+	if e != nil || identity.Digest() != cfg.Target.Digest() {
+		t.Fatal("cleanup identity incorrectly requires advance policy", e)
 	}
 	target, e := mounts.LoadTarget()
 	if e != nil || target.Digest() != cfg.Target.Digest() {
@@ -437,5 +442,25 @@ func TestDeploymentMountedTargetSurvivesOnlyAdvancePolicyWithdrawal(t *testing.T
 				t.Fatal("cached/invalid target accepted")
 			}
 		})
+	}
+}
+
+func TestBrowserCleanupTargetIdentityDoesNotRenewExpiredAppApproval(t *testing.T) {
+	f := newDeploymentFixture(t)
+	target := f.p.cfg.Target
+	target.ApprovedAt = time.Now().Add(-time.Hour).UnixMilli()
+	target.ExpiresAt = time.Now().Add(-time.Minute).UnixMilli()
+	raw, _ := json.Marshal(target)
+	path := filepath.Join(t.TempDir(), "target.json")
+	if os.WriteFile(path, raw, 0600) != nil {
+		t.Fatal("target fixture")
+	}
+	mounts := releaseflow.Mounts{Target: path}
+	if _, e := mounts.LoadTarget(); e == nil {
+		t.Fatal("expired target regained application authority")
+	}
+	identity, e := mounts.LoadTargetIdentity()
+	if e != nil || identity.Digest() != target.Digest() {
+		t.Fatal("original cleanup identity unavailable after approval expiry", e)
 	}
 }

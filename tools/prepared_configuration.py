@@ -331,7 +331,7 @@ def install_prepared(args,state,binaries,provider,execution_values):
     lock=install.image_lock(args.images)
     bundle,foundation=derive_bundle(args.build_bundle,lock,args.build_images,state)
     approved=build_foundation_install.bounded_json(args.provenance_trust)
-    release=release_runtime_install.inputs(args.release_target,args.release_images,lock) if getattr(args,'release_target',None) is not None else None
+    release=release_runtime_install.inputs(args.release_target,args.release_images,lock,getattr(args,'browser_profile',None)) if getattr(args,'release_target',None) is not None else None
     chart_digest=hashlib.sha256()
     for path in sorted(install.CHART.rglob('*')):
         if path.is_symlink():raise ValueError('Reviewed chart cannot contain symbolic links')

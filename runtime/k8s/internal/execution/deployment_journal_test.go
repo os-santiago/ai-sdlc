@@ -58,6 +58,12 @@ func newDeploymentFixture(t *testing.T) deploymentFixture {
 }
 func (f deploymentFixture) claim(t *testing.T) store.DeploymentClaim {
 	t.Helper()
+	c := f.rawClaim(t)
+	f.ensureBaseline(t, c, f.before())
+	return c
+}
+func (f deploymentFixture) rawClaim(t *testing.T) store.DeploymentClaim {
+	t.Helper()
 	ctx := context.Background()
 	if e := f.j.QueueDeployment(ctx, f.payload, f.receipt); e != nil {
 		t.Fatal("queue", e)
@@ -73,6 +79,9 @@ func (f deploymentFixture) before() releasing.Snapshot {
 }
 func (f deploymentFixture) effect(t *testing.T, c store.DeploymentClaim, before releasing.Snapshot, rollback bool) releasing.Receipt {
 	t.Helper()
+	if !rollback {
+		f.ensureBaseline(t, c, before)
+	}
 	ctx := context.Background()
 	if e := f.j.BeginDeploymentEffect(ctx, c, before, rollback); e != nil {
 		t.Fatal("intent", e)
@@ -152,7 +161,7 @@ func TestDeploymentJournalExclusiveIntentSendAndCompletion(t *testing.T) {
 	if e != nil || got != r {
 		t.Fatal("read ack", e)
 	}
-	if e = f.j.FinishDeployment(ctx, c, f.health(r), false); e != nil {
+	if e = f.j.FinishDeployment(ctx, c, f.attestedHealth(t, c, r), false); e != nil {
 		t.Fatal("finish", e)
 	}
 	if f.p.b.f.Count(t, `SELECT count(*) FROM deployment_requests WHERE state='deployed'`) != 1 {
@@ -205,7 +214,7 @@ func TestDeploymentJournalRollbackRequiresOwnedAckAndSurvivesFreeze(t *testing.T
 	if e := f.j.RecordDeploymentReceipt(ctx, c, rollback); e != nil {
 		t.Fatal(e)
 	}
-	if e := f.j.FinishDeployment(ctx, c, f.health(rollback), true); e != nil {
+	if e := f.j.FinishDeployment(ctx, c, f.attestedHealth(t, c, rollback), true); e != nil {
 		t.Fatal("bounded containment", e)
 	}
 	if f.p.b.f.Count(t, `SELECT count(*) FROM deployment_requests WHERE state='rolled-back'`) != 1 {
@@ -293,7 +302,7 @@ func TestDeploymentJournalRejectsForeignAuthorityAndHealth(t *testing.T) {
 				if e := f.j.RecordDeploymentReceipt(ctx, c, r); e != nil {
 					t.Fatal(e)
 				}
-				h := f.health(r)
+				h := f.attestedHealth(t, c, r)
 				h.Rollout.ServiceUID = store.NewID()
 				if f.j.FinishDeployment(ctx, c, h, false) == nil {
 					t.Fatal("foreign endpoint")
@@ -418,6 +427,7 @@ func TestDeploymentJournalRevocationDuringBlockedHistory(t *testing.T) {
 				}
 			} else if phase != "queue" {
 				c = f.claim(t)
+				before = f.before()
 			}
 			if phase == "send" {
 				if e := f.j.BeginDeploymentEffect(ctx, c, before, false); e != nil {
@@ -431,7 +441,7 @@ func TestDeploymentJournalRevocationDuringBlockedHistory(t *testing.T) {
 				if e := f.j.RecordDeploymentReceipt(ctx, c, r); e != nil {
 					t.Fatal(e)
 				}
-				health = f.health(r)
+				health = f.attestedHealth(t, c, r)
 				if phase == "rollback" {
 					before = r.After
 					before.ObservedAt = time.Now().UnixMilli()
@@ -528,7 +538,7 @@ func TestDeploymentJournalLostFactAndCompletionAcknowledgements(t *testing.T) {
 			if phase == "ack" {
 				e = fault.RecordDeploymentReceipt(ctx, c, r)
 			} else {
-				e = fault.FinishDeployment(ctx, c, f.health(r), false)
+				e = fault.FinishDeployment(ctx, c, f.attestedHealth(t, c, r), false)
 			}
 			if e == nil {
 				t.Fatal("COMMIT response loss accepted")
@@ -593,7 +603,7 @@ func TestDeploymentCommandPreservesSubmillisecondHistoryOrder(t *testing.T) {
 	}
 }
 
-// This waits for the actual 45-second freshness window; no fixture clock or
+// This waits for the actual browser smoke window; no fixture clock or
 // persisted timestamp is rewritten. An observed PostgreSQL lock delays INSERT.
 func TestDeploymentHealthExpiryWhileInsertWaits(t *testing.T) {
 	f := newDeploymentFixture(t)
@@ -603,8 +613,9 @@ func TestDeploymentHealthExpiryWhileInsertWaits(t *testing.T) {
 	if e := f.j.RecordDeploymentReceipt(ctx, claim, receipt); e != nil {
 		t.Fatal(e)
 	}
-	health := f.health(receipt)
-	time.Sleep(time.Until(time.UnixMilli(health.ObservedAt).Add(43500 * time.Millisecond)))
+	health := f.attestedHealth(t, claim, receipt)
+	expires := time.UnixMilli(health.Browser.Request.ExpiresAt)
+	time.Sleep(time.Until(expires.Add(-1500 * time.Millisecond)))
 	tx, e := f.p.b.f.Admin.Pool.BeginTx(ctx, nil)
 	if e != nil {
 		t.Fatal(e)
@@ -633,7 +644,7 @@ func TestDeploymentHealthExpiryWhileInsertWaits(t *testing.T) {
 	if !blocked {
 		t.Fatal("health INSERT did not observably wait")
 	}
-	time.Sleep(time.Until(time.UnixMilli(health.ObservedAt).Add(46 * time.Second)))
+	time.Sleep(time.Until(expires.Add(250 * time.Millisecond)))
 	if e = tx.Commit(); e != nil {
 		t.Fatal(e)
 	}
@@ -644,10 +655,15 @@ func TestDeploymentHealthExpiryWhileInsertWaits(t *testing.T) {
 	if e = f.p.b.f.Admin.Pool.QueryRow(`SELECT count(*) FROM deployment_health WHERE request_id=$1`, claim.ID).Scan(&count); e != nil || count != 0 {
 		t.Fatal("stale health survived transaction rollback", count, e)
 	}
-	if e = f.j.FinishDeployment(ctx, claim, f.health(receipt), false); e != nil {
-		t.Fatal("fresh health failed after original INSERT rolled back", e)
+	// The original one-use browser receipt cannot be renewed by a fresh HTTP
+	// observation or replayed browser Pod after the accepted window.
+	if e = f.j.FinishDeployment(ctx, claim, health, false); e == nil {
+		t.Fatal("expired health replay succeeded")
 	}
-	if _, e = f.j.ReadDeploymentRecord(ctx, claim); e != nil {
-		t.Fatal("completed record cannot be authenticated", e)
+	if _, e = f.j.ReadDeploymentRecord(ctx, claim); e == nil {
+		t.Fatal("expired completion became history")
+	}
+	if e = f.j.QuarantineDeployment(ctx, claim, "unhealthy"); e != nil {
+		t.Fatal("quarantine", e)
 	}
 }

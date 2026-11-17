@@ -85,6 +85,9 @@ class Migrator:
 
     def close(self):
         self.material=None;self.connection=None
+        # A failed preflight before the durable create intent has no resource
+        # to contain. Do not turn that read failure into an ambiguous CREATE.
+        if self.cid is None and not self.record:return
         if self.cid is None:
             self.record['cleanup']='uncertain-no-original-ID';self.save(self.record)
             raise ValueError('Preserve original migration creation intent')

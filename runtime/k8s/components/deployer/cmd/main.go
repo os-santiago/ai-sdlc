@@ -53,7 +53,7 @@ func run() error {
 	// Policy readiness does not cancel an in-flight original containment attempt.
 	// Liveness is independent; no restart loop is used to advance workflow state.
 	mounts := releaseflow.InstalledMounts(os.Getenv("AI_SDLC_PROVENANCE_VERIFIER_IMAGE"))
-	runtime := deploymentflow.Service{DB: db, Mounts: mounts, Transport: func(target releasing.Target) (deploymentflow.Transport, error) {
+	loadClient := func() (*podtransport.Client, error) {
 		token, e := bounded("/var/run/secrets/kubernetes.io/serviceaccount/token", 8192)
 		if e != nil {
 			return nil, e
@@ -63,6 +63,20 @@ func run() error {
 			return nil, e
 		}
 		client, e := podtransport.NewClient(podtransport.Config{APIServer: "https://kubernetes.default.svc:443", CA: ca, BearerToken: string(token)})
+		if e != nil {
+			return nil, e
+		}
+
+		return client, nil
+	}
+	runtime := deploymentflow.Service{DB: db, Mounts: mounts, Cleaner: func() (deploymentflow.BrowserCleaner, error) {
+		client, e := loadClient()
+		if e != nil {
+			return nil, e
+		}
+		return podtransport.NewBrowserCleanupClient(client)
+	}, Transport: func(target releasing.Target) (deploymentflow.Transport, error) {
+		client, e := loadClient()
 		if e != nil {
 			return nil, e
 		}

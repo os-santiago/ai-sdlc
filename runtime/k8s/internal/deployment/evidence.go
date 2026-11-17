@@ -1,7 +1,9 @@
 package deployment
 
 import (
+	"encoding/json"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/browsercheck"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/releasing"
 	"net"
 	"regexp"
@@ -53,6 +55,27 @@ func ValidateHealth(t releasing.Target, r releasing.Receipt, h releasing.Health,
 		if !digest.MatchString(v) {
 			return ErrDeployment
 		}
+	}
+	return nil
+}
+
+// ValidateBrowserHealth checks the observation's closed contract. Only the
+// store history reader authenticates intent/send, original Pod and cleanup.
+func ValidateBrowserHealth(p browsercheck.Profile, t releasing.Target, receipt releasing.Receipt, h releasing.Health) error {
+	raw, _ := json.Marshal(receipt.After)
+	e := h.Browser
+	runtime := t.BaselineRuntimeDigest
+	expectation := p.BaselineExpectation
+	if !receipt.Rollback {
+		parts := strings.Split(receipt.After.Image, "@")
+		if len(parts) != 2 {
+			return ErrDeployment
+		}
+		runtime = parts[1]
+		expectation = p.CandidateExpectation
+	}
+	if e.Validate(p, time.UnixMilli(h.ObservedAt)) != nil || e.Request.TargetSHA256 != t.Digest() || e.Request.SnapshotSHA256 != authority.Digest(raw) || e.Request.ImageDigest != runtime || e.Request.Expectation != expectation || h.StartedAt <= 0 || h.StartedAt > e.Request.IssuedAt || e.Request.ExpiresAt > h.StartedAt+browsercheck.MaxDuration.Milliseconds() || h.ObservedAt-h.StartedAt >= browsercheck.MaxDuration.Milliseconds() {
+		return ErrDeployment
 	}
 	return nil
 }

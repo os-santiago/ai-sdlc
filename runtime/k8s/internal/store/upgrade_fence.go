@@ -37,12 +37,21 @@ type UpgradeFence struct {
 // This reviewed bridge covers schemas 0033 and 0034, before any candidate or
 // downstream external delivery history. Additional schemas/states need their
 // own compatibility and recovery proof; no history is deleted to qualify.
+var browserUpgradeTables = []string{"deployment_browser_cleanups", "deployment_browser_evidence", "deployment_browser_intents", "deployment_browser_pods", "deployment_browser_sends"}
+
 func upgradeFenceTables(source []MigrationIdentity) ([]string, error) {
+	return selectedUpgradeFenceTables(source, false)
+}
+
+func selectedUpgradeFenceTables(source []MigrationIdentity, browser bool) ([]string, error) {
 	catalog, err := MigrationCatalog()
-	if err != nil || len(catalog) != 34 || catalog[32].Filename != "0033_production_completion.sql" || catalog[33].Filename != "0034_execution_failures.sql" || ValidateMigrationSource(source) != nil || (len(source) != 33 && len(source) != 34) {
+	if err != nil || len(catalog) != 35 || catalog[34].Filename != "0035_deployment_browser.sql" || catalog[32].Filename != "0033_production_completion.sql" || catalog[33].Filename != "0034_execution_failures.sql" || ValidateMigrationSource(source) != nil || (!browser && len(source) != 33 && len(source) != 34) || (browser && len(source) != 34 && len(source) != 35) {
 		return nil, ErrUpgradeFence
 	}
 	tables := slices.Clone(bootstrapTables)
+	if len(source) < 35 {
+		tables = slices.DeleteFunc(tables, func(s string) bool { return slices.Contains(browserUpgradeTables, s) })
+	}
 	if len(source) == 33 {
 		tables = slices.DeleteFunc(tables, func(s string) bool { return s == "execution_failures" })
 	}
@@ -136,7 +145,7 @@ func (f *UpgradeFence) inspectHistory(ctx context.Context) error {
 	allowed := map[string]bool{}
 	if f.reviewerHistory {
 		var safe bool
-		if len(f.source) != 34 || f.tx.QueryRowContext(ctx, reviewerUpgradeHistory).Scan(&safe) != nil {
+		if (len(f.source) != 34 && len(f.source) != 35) || f.tx.QueryRowContext(ctx, reviewerUpgradeHistory).Scan(&safe) != nil {
 			return ErrUpgradeFence
 		}
 		if !safe {
@@ -187,7 +196,7 @@ func (f *UpgradeFence) inspectHistory(ctx context.Context) error {
 // execution resources, then pause/confirm original producers before returning.
 // Never migrate, await workflow completion, or treat this as a drain receipt.
 func (db *DB) WithPreCandidateUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, pause func(context.Context, *UpgradeFence) error) error {
-	return db.withUpgradeFence(ctx, database, source, false, pause)
+	return db.withUpgradeFence(ctx, database, source, false, false, pause)
 }
 
 // WithContainedReviewUpgradeFence is a distinct administrative capability.
@@ -197,11 +206,18 @@ func (db *DB) WithContainedReviewUpgradeFence(ctx context.Context, database stri
 	if len(source) != 34 {
 		return ErrUpgradeFence
 	}
-	return db.withUpgradeFence(ctx, database, source, true, pause)
+	return db.withUpgradeFence(ctx, database, source, true, false, pause)
 }
 
-func (db *DB) withUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, reviewerHistory bool, pause func(context.Context, *UpgradeFence) error) error {
-	tables, err := upgradeFenceTables(source)
+// WithBrowserDeploymentUpgradeFence is the closed 0034 -> 0035 bridge.
+// It requires contained review history and every browser table empty; it never
+// grants migration/delivery permission or changes the legacy protocols.
+func (db *DB) WithBrowserDeploymentUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, pause func(context.Context, *UpgradeFence) error) error {
+	return db.withUpgradeFence(ctx, database, source, true, true, pause)
+}
+
+func (db *DB) withUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, reviewerHistory, browser bool, pause func(context.Context, *UpgradeFence) error) error {
+	tables, err := selectedUpgradeFenceTables(source, browser)
 	if err != nil || db == nil || db.Pool == nil || database == "" || len(database) > 63 || pause == nil {
 		return ErrUpgradeFence
 	}

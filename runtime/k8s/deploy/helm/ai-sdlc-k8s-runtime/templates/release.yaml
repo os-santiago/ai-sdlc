@@ -3,6 +3,7 @@
 {{- fail "release requires verified provenance, pinned deployer and installed API CIDRs" }}
 {{- end }}
 {{- $target := .Values.release.targetJSON | fromJson }}
+{{- $browser := .Values.release.browserProfileJSON | fromJson }}
 {{- $trust := .Values.provenance.trustJSON | fromJson }}
 {{- if or (ne $target.version "ai-sdlc.saferus-release-target/v1") (ne $target.scope "kind-test-production") (ne $target.repository "os-santiago/saferus") (ne $target.environment "ai-sdlc-production") (ne $target.namespace "ai-sdlc-production") (ne $target.clusterUID $trust.clusterUID) (ne $target.deployment "saferus-console") (ne $target.service "saferus-console") (ne $target.container "console") (ne $target.pullSecret "ai-sdlc-release-reader") (ne $target.tlsHostname "saferus-console") (not $target.deploymentUID) (not $target.namespaceUID) (not $target.serviceUID) (not $target.tlsSecretUID) (not $target.pullSecretUID) (not $target.tlsCA) (not (regexMatch "^[a-f0-9]{64}$" $target.deploymentSpecSHA256)) (not (regexMatch "^[a-f0-9]{64}$" $target.serviceSpecSHA256)) (not (regexMatch "^sha256:[a-f0-9]{64}$" $target.baselineRuntimeDigest)) }}
 {{- fail "release requires the independently approved closed Saferus target" }}
@@ -24,8 +25,10 @@ metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-deployer-identit
 rules:
   - apiGroups: [""]
     resources: [namespaces]
-    resourceNames: [kube-system, ai-sdlc-production]
+    resourceNames: [kube-system, ai-sdlc-production, ai-sdlc-browser]
     verbs: [get]
+  - {apiGroups: [""], resources: [nodes], resourceNames: [{{ $browser.nodeName | quote }}], verbs: [get]}
+  - {apiGroups: [node.k8s.io], resources: [runtimeclasses], resourceNames: [ai-sdlc-browser], verbs: [get]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -44,6 +47,7 @@ rules:
   - {apiGroups: [""], resources: [services], resourceNames: [saferus-console], verbs: [get]}
   - {apiGroups: [""], resources: [secrets], resourceNames: [ai-sdlc-release-reader, saferus-console-tls], verbs: [get]}
   - {apiGroups: [discovery.k8s.io], resources: [endpointslices], verbs: [list]}
+  - {apiGroups: [networking.k8s.io], resources: [networkpolicies], resourceNames: [ai-sdlc-browser-console], verbs: [get]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -74,6 +78,7 @@ spec:
         checksum/build: {{ .Values.build.configJSON | sha256sum }}
         checksum/trust: {{ .Values.provenance.trustJSON | sha256sum }}
         checksum/target: {{ .Values.release.targetJSON | sha256sum }}
+        checksum/browser: {{ .Values.release.browserProfileJSON | sha256sum }}
     spec:
       serviceAccountName: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-deployer
       automountServiceAccountToken: false
@@ -102,6 +107,7 @@ spec:
           volumeMounts:
             {{- if .Values.release.enabled }}
             - {name: release-target, mountPath: /etc/ai-sdlc/release, readOnly: true}
+            - {name: browser-profile, mountPath: /etc/ai-sdlc/browser, readOnly: true}
             {{- end }}
             - {name: build, mountPath: /etc/ai-sdlc/build, readOnly: true}
             - {name: authority, mountPath: /etc/ai-sdlc/authority, readOnly: true}
@@ -111,6 +117,8 @@ spec:
             - {name: kubernetes, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true}
       volumes:
         {{- if .Values.release.enabled }}
+        - name: browser-profile
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-browser-profile}
         - name: release-target
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-release-target}
         {{- end }}

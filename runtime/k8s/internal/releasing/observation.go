@@ -3,6 +3,7 @@ package releasing
 import (
 	"encoding/json"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/browsercheck"
 )
 
 // Snapshots and receipts are observations. Only authenticated journal readers
@@ -46,10 +47,12 @@ func (r Rollout) Digest() string { raw, _ := json.Marshal(r); return authority.D
 // Health contains only bounded response hashes and exact routing/workload
 // identities. Its origin must be authenticated by the deployment journal.
 type Health struct {
-	Version        string   `json:"version"`
-	Rollout        Rollout  `json:"rollout"`
-	ResponseSHA256 []string `json:"responseSHA256"`
-	ObservedAt     int64    `json:"observedAt"`
+	StartedAt      int64                 `json:"startedAt"`
+	Browser        browsercheck.Evidence `json:"browser"`
+	Version        string                `json:"version"`
+	Rollout        Rollout               `json:"rollout"`
+	ResponseSHA256 []string              `json:"responseSHA256"`
+	ObservedAt     int64                 `json:"observedAt"`
 }
 
 func (h Health) Digest() string { raw, _ := json.Marshal(h); return authority.Digest(raw) }

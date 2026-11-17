@@ -16,6 +16,18 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 OWNER_LABEL = 'ai-sdlc.io/validation-run'
 REQUIRED_TESTS = {
+    ("internal/execution", "TestBrowserKnownNoSendConsumesOnlyOriginalAttempt"),
+    ("internal/execution", "TestBrowserCompetingAttemptCannotAbortWinner"),
+    ("internal/execution", "TestBrowserACKAndNoSendHaveOneImmutableOutcome"),
+    ("internal/execution", "TestBrowserNoSendLostCommitAndAtomicFailure"),
+    ("internal/execution", "TestBrowserJournalOneUseClaimAndOriginalPod"),
+    ("internal/execution", "TestBrowserJournalCannotCommitEvidenceAfterOriginalDeadline"),
+    ("internal/execution", "TestBrowserJournalRequiredBeforeDeploymentAndTerminalHealth"),
+    ("internal/execution", "TestBrowserCleanupUsesFreshContainmentWithoutRenewingWorkflow"),
+    ("internal/execution", "TestBrowserCreateWithoutOriginalACKRemainsExplicitlyQuarantined"),
+
+    ("internal/store", "TestUpgradeFenceBrowserBridgePreservesContainedHistory"),
+    ("components/migrator/cmd", "TestUpgradeFenceBrowserProtocolDistinctAndTyped"),
     ('internal/store', 'TestUpgradeFenceConcurrentHeartbeatChecks'),
     ('internal/store', 'TestUpgradeFenceCheckQueueHonorsCancellation'),
     ('internal/store', 'TestUpgradeFencePreservesHistoryAndExcludesWriters'),

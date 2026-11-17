@@ -159,7 +159,12 @@ func TestUpgradeObservationDetectsPartialMigrationWithoutClaimingRollback(t *tes
 		t.Fatal("partial migration lost committed prefix or work")
 	}
 	var finalTableAbsent bool
-	if err = db.Pool.QueryRowContext(ctx, `SELECT to_regclass('public.execution_failures') IS NULL`).Scan(&finalTableAbsent); err != nil || !finalTableAbsent {
+	if err = db.Pool.QueryRowContext(ctx, `SELECT to_regclass('public.execution_failures') IS NOT NULL
+ AND to_regclass('public.deployment_browser_intents') IS NULL
+ AND to_regclass('public.deployment_browser_sends') IS NULL
+ AND to_regclass('public.deployment_browser_pods') IS NULL
+ AND to_regclass('public.deployment_browser_evidence') IS NULL
+ AND to_regclass('public.deployment_browser_cleanups') IS NULL`).Scan(&finalTableAbsent); err != nil || !finalTableAbsent {
 		t.Fatal("failed file DDL did not roll back", err)
 	}
 	if _, err = db.Pool.ExecContext(ctx, `DROP TRIGGER upgrade_failure ON public.schema_migrations; DROP FUNCTION public.reject_upgrade_record()`); err != nil {

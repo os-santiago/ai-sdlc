@@ -141,3 +141,4 @@ release:
   enabled: false
   digest: ""
   targetJSON: ""
+  browserProfileJSON: ""

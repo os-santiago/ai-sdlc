@@ -22,7 +22,7 @@ func completedDeployment(t *testing.T) (deploymentFixture, store.DeploymentClaim
 	if e := f.j.RecordDeploymentReceipt(ctx, c, r); e != nil {
 		t.Fatal(e)
 	}
-	if e := f.j.FinishDeployment(ctx, c, f.health(r), false); e != nil {
+	if e := f.j.FinishDeployment(ctx, c, f.attestedHealth(t, c, r), false); e != nil {
 		t.Fatal(e)
 	}
 	return f, c
@@ -156,7 +156,7 @@ func TestCompletionNeverTreatsRollbackAsRelease(t *testing.T) {
 	if e := f.j.RecordDeploymentReceipt(ctx, c, rollback); e != nil {
 		t.Fatal(e)
 	}
-	if e := f.j.FinishDeployment(ctx, c, f.health(rollback), true); e != nil {
+	if e := f.j.FinishDeployment(ctx, c, f.attestedHealth(t, c, rollback), true); e != nil {
 		t.Fatal(e)
 	}
 	if _, e := f.p.j.DB.ReadDeploymentForRelease(ctx, c.ID); e == nil {

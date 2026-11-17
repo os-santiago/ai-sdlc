@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/browsercheck"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/building"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildrecord"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildworkload"
@@ -132,7 +133,8 @@ func releaseFixture(t *testing.T) (Configuration, provenancerecord.Record, build
 	proof := provenance.Proof{Version: provenance.PolicyVersion, Scope: provenance.LocalScope, BuildRecordSHA256: b.Digest(), RetainedContextSHA256: authority.Digest(raw), TrustSHA256: trust.Digest(), VerifierImage: trust.VerifierImage, VerifierVersion: trust.VerifierVersion, ImageDigest: b.Result.ImageDigest, SignatureManifestDigest: "sha256:" + strings.Repeat("1", 64), SignatureBlobDigest: "sha256:" + strings.Repeat("2", 64), AttestationManifestDigest: "sha256:" + strings.Repeat("3", 64), AttestationBlobDigest: "sha256:" + strings.Repeat("4", 64), BuildObservationSHA256: b.Build.Digest(), PublishObservationSHA256: b.Publish.Digest(), Transparency: provenance.LocalTransparency}
 	r := provenancerecord.Record{Command: verify, Configuration: pc, Proof: proof, RecordedAt: now}
 	target := Target{Version: TargetVersion, Scope: provenance.LocalScope, Repository: trust.Repository, Environment: trust.Environment, ClusterUID: trust.ClusterUID, NamespaceUID: uid(200), Namespace: trust.Environment, Deployment: "saferus-console", DeploymentUID: uid(201), Container: "console", DeploymentSpecSHA256: strings.Repeat("5", 64), Service: "saferus-console", ServiceUID: uid(202), ServiceSpecSHA256: strings.Repeat("6", 64), PullSecret: "ai-sdlc-release-reader", PullSecretUID: uid(203), TLSSecretUID: uid(204), TLSCA: ca, TLSHostname: "saferus-console", BaselineImage: "localhost/saferus-console@sha256:" + strings.Repeat("7", 64), BaselineRuntimeDigest: "sha256:" + strings.Repeat("7", 64), RolloutSeconds: 300, SmokeSeconds: 30, ApprovedAt: now.Add(-time.Minute).UnixMilli(), ExpiresAt: now.Add(time.Hour).UnixMilli()}
-	return Configuration{Provenance: pc, Target: target}, r, b, m, now
+	browser := browsercheck.Profile{NodeName: "fixture-node", NodeUID: uid(206), Version: browsercheck.ProfileVersion, BaselineExpectation: "baseline-seconds", CandidateExpectation: "readable-duration", DenyPolicyUID: uid(203), EgressPolicyUID: uid(204), ConsoleIngressPolicyUID: uid(205), ClusterUID: target.ClusterUID, NamespaceUID: uid(200), RuntimeClassUID: uid(201), CAConfigMapUID: uid(202), Image: "quay.io/os-santiago/ai-sdlc@sha256:" + strings.Repeat("1", 64), RuntimeDigest: "sha256:" + strings.Repeat("1", 64), CASHA256: authority.Digest([]byte(target.TLSCA)), RuntimeConfigurationSHA256: strings.Repeat("2", 64)}
+	return Configuration{Provenance: pc, Target: target, Browser: browser}, r, b, m, now
 }
 func TestPromotionHasFreshFiniteAuthorityForExpiredHistory(t *testing.T) {
 	cfg, r, b, m, at := releaseFixture(t)

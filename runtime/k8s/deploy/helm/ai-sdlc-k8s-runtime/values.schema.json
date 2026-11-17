@@ -925,6 +925,9 @@
         "targetJSON": {
           "type": "string",
           "maxLength": 98304
+        },
+        "browserProfileJSON": {
+          "type": "string"
         }
       }
     }

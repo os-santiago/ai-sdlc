@@ -1,0 +1,53 @@
+# Infrastructure owned by the installer; the deployer can only read this scope.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-sdlc-browser
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: deny-all, namespace: ai-sdlc-browser}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: console-egress, namespace: ai-sdlc-browser}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/name: ai-sdlc-browser-verifier}}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ai-sdlc-production}}
+          podSelector: {matchLabels: {app: saferus-console}}
+      ports: [{protocol: TCP, port: 8443}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: ai-sdlc-browser-console, namespace: ai-sdlc-production}
+spec:
+  podSelector: {matchLabels: {app: saferus-console}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ai-sdlc-browser}}
+          podSelector: {matchLabels: {app.kubernetes.io/name: ai-sdlc-browser-verifier}}
+      ports: [{protocol: TCP, port: 8443}]
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata: {name: browser-capacity, namespace: ai-sdlc-browser}
+spec:
+  hard:
+    pods: "1"
+    requests.cpu: "100m"
+    requests.memory: 256Mi
+    limits.cpu: "2"
+    limits.memory: 1Gi
+    requests.ephemeral-storage: 16Mi
+    limits.ephemeral-storage: 16Mi

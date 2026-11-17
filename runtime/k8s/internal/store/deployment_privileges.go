@@ -1,6 +1,12 @@
 package store
 
 var deploymentPrivileges = []string{
+	`GRANT SELECT ON deployment_browser_intents,deployment_browser_sends,deployment_browser_pods,deployment_browser_evidence,deployment_browser_cleanups TO aisdlc_deployer`,
+	`GRANT INSERT(id,deployment_id,phase,claim_token,request,request_digest,snapshot,rollout,profile_digest,pod_digest,expires_at,attempt_nonce) ON deployment_browser_intents TO aisdlc_deployer`,
+	`GRANT INSERT(id,claim_token) ON deployment_browser_sends TO aisdlc_deployer`,
+	`GRANT INSERT(id,pod_uid,not_sent) ON deployment_browser_pods TO aisdlc_deployer`,
+	`GRANT INSERT(id,evidence,digest) ON deployment_browser_evidence TO aisdlc_deployer`,
+	`GRANT INSERT(id,pod_uid) ON deployment_browser_cleanups TO aisdlc_deployer`,
 	`GRANT SELECT ON deployment_requests,deployment_intents,deployment_sends,deployment_receipts,deployment_health TO aisdlc_deployer`,
 	`GRANT INSERT(id,promotion_id,payload_digest,payload,receipt,configuration,expires_at) ON deployment_requests TO aisdlc_deployer`,
 	`GRANT UPDATE(state,claim_token,reason) ON deployment_requests TO aisdlc_deployer`,

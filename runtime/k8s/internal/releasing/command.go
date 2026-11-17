@@ -3,6 +3,7 @@ package releasing
 import (
 	"encoding/json"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/browsercheck"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildrecord"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/provenance"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/provenancerecord"
@@ -19,10 +20,11 @@ var verificationID = regexp.MustCompile(`^verify-[a-f0-9]{64}$`)
 type Configuration struct {
 	Provenance provenance.Configuration
 	Target     Target
+	Browser    browsercheck.Profile
 }
 
 func (c Configuration) Validate(now time.Time) error {
-	if c.Provenance.Validate(now) != nil || c.Target.Validate(now) != nil || c.Target.ClusterUID != c.Provenance.Trust.ClusterUID || c.Target.Repository != c.Provenance.Build.Outer.Repository || c.Target.Environment != c.Provenance.Build.Outer.Environment {
+	if c.Provenance.Validate(now) != nil || c.Target.Validate(now) != nil || c.Browser.Validate() != nil || c.Browser.ClusterUID != c.Target.ClusterUID || c.Browser.CASHA256 != authority.Digest([]byte(c.Target.TLSCA)) || c.Target.ClusterUID != c.Provenance.Trust.ClusterUID || c.Target.Repository != c.Provenance.Build.Outer.Repository || c.Target.Environment != c.Provenance.Build.Outer.Environment {
 		return ErrRelease
 	}
 	return nil

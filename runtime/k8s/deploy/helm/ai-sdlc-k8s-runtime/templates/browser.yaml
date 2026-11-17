@@ -1,0 +1,35 @@
+{{- if .Values.release.enabled }}
+{{- $profile := .Values.release.browserProfileJSON | fromJson }}
+{{- $target := .Values.release.targetJSON | fromJson }}
+{{- if or (not (regexMatch "^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$" $profile.nodeName)) (ne $profile.version "ai-sdlc.saferus-browser-profile/v1") (ne $profile.clusterUID $target.clusterUID) (not (regexMatch "^quay.io/os-santiago/ai-sdlc@sha256:[a-f0-9]{64}$" $profile.image)) (not (regexMatch "^sha256:[a-f0-9]{64}$" $profile.runtimeDigest)) (ne $profile.caSHA256 (sha256sum $target.tlsCA)) (not (regexMatch "^[a-f0-9]{64}$" $profile.runtimeConfigurationSHA256)) (not (has $profile.baselineExpectation (list "baseline-seconds" "readable-duration"))) (not (has $profile.candidateExpectation (list "baseline-seconds" "readable-duration"))) }}
+{{- fail "release requires an installed browser profile bound to its exact cluster, CA, runtime and immutable image" }}
+{{- end }}
+{{- range $field := list "nodeUID" "clusterUID" "namespaceUID" "runtimeClassUID" "caConfigMapUID" "denyPolicyUID" "egressPolicyUID" "consoleIngressPolicyUID" }}
+{{- if not (regexMatch "^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$" (index $profile $field)) }}
+{{- fail "browser profile requires original Kubernetes UIDs" }}
+{{- end }}
+{{- end }}
+# Browser namespace, runtime class, CA and network policies are prepared and
+# bound by the administrative installer. Helm cannot adopt or replace them.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-browser-profile, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+data:
+  profile.json: {{ .Values.release.browserProfileJSON | quote }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-browser-verification, namespace: ai-sdlc-browser}
+rules:
+  - {apiGroups: [""], resources: [pods], verbs: [get, list, create, delete]}
+  - {apiGroups: [""], resources: [pods/log], verbs: [get]}
+  - {apiGroups: [""], resources: [configmaps], resourceNames: [approved-console-ca], verbs: [get]}
+  - {apiGroups: [networking.k8s.io], resources: [networkpolicies], verbs: [list]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-browser-verification, namespace: ai-sdlc-browser}
+subjects:
+  - {kind: ServiceAccount, name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-deployer, namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-browser-verification}
+{{- end }}
