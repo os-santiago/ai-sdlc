@@ -58,6 +58,9 @@ through a separate backup, migration and activation journal. See its
 [scope and reviewed trust input](docs/operations/browser-verifier.md#existing-installation-transition).
 From that completed installation, `runtime-upgrade review-feedback` provides the
 separate [schema-35-to-36 feedback transition](docs/operations/review-feedback-upgrade.md).
+If its approval documents have expired, use the explicit
+[browser approval renewal](docs/operations/browser-approval-window.md) before
+starting that transition; existing workflow deadlines remain unchanged.
 It preserves failed review history and installs future rejection feedback;
 autonomous repair remains a separate capability.
 
