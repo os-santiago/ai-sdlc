@@ -64,7 +64,8 @@ class FenceClientTests(unittest.TestCase):
             def live():
                 if pidfile.exists():raise ValueError('lost original backend')
             fence.live=live
-            script="import subprocess,sys,time; p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);open(sys.argv[1],'w').write(str(p.pid));time.sleep(60)"
+            # Publish only a complete PID: cancellation must not race file creation.
+            script="import os,subprocess,sys,time; from pathlib import Path; p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);Path(sys.argv[1]+'.tmp').write_text(str(p.pid));os.replace(sys.argv[1]+'.tmp',sys.argv[1]);time.sleep(60)"
             with self.assertRaises(ValueError):fence.command([sys.executable,'-c',script,str(pidfile)])
             pid=int(pidfile.read_text())
             for _ in range(100):
