@@ -16,6 +16,8 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 OWNER_LABEL = 'ai-sdlc.io/validation-run'
 REQUIRED_TESTS = {
+    ('internal/store', 'TestUpgradeFenceConcurrentHeartbeatChecks'),
+    ('internal/store', 'TestUpgradeFenceCheckQueueHonorsCancellation'),
     ('internal/store', 'TestUpgradeFencePreservesHistoryAndExcludesWriters'),
     ('internal/store', 'TestUpgradeFenceRejectsActivityUntilOriginalCleanupCompletes'),
     ('internal/store', 'TestUpgradeFenceExcludesReplicaAndMigrator'),
