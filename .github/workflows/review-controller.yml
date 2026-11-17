@@ -1,10 +1,10 @@
 name: review-controller
 on:
   pull_request:
-    paths: ['runtime/k8s/**', 'tools/verify_review_flow.py', 'tools/verify_review_repair_composition.py', 'tools/verify_verification_flow.py', 'tools/verify_candidate_runtime.py', 'tools/prepare_verification_fixture.py', 'tools/fixtures/**', '.github/workflows/review-controller.yml']
+    paths: ['runtime/k8s/**', 'tools/verify_review_flow.py', 'tools/verify_review_repair_composition.py', 'tools/test_verify_review_repair_composition.py', 'tools/verify_verification_flow.py', 'tools/verify_candidate_runtime.py', 'tools/prepare_verification_fixture.py', 'tools/fixtures/**', '.github/workflows/review-controller.yml']
   push:
     branches: [main]
-    paths: ['runtime/k8s/**', 'tools/verify_review_flow.py', 'tools/verify_review_repair_composition.py', 'tools/verify_verification_flow.py', 'tools/verify_candidate_runtime.py', 'tools/prepare_verification_fixture.py', 'tools/fixtures/**', '.github/workflows/review-controller.yml']
+    paths: ['runtime/k8s/**', 'tools/verify_review_flow.py', 'tools/verify_review_repair_composition.py', 'tools/test_verify_review_repair_composition.py', 'tools/verify_verification_flow.py', 'tools/verify_candidate_runtime.py', 'tools/prepare_verification_fixture.py', 'tools/fixtures/**', '.github/workflows/review-controller.yml']
 permissions:
   contents: read
 jobs:
@@ -62,6 +62,8 @@ jobs:
         run: |
           CGO_ENABLED=0 go test -c ./internal/execution -o "$RUNNER_TEMP/execution.test"
           CGO_ENABLED=0 go test -c ./internal/reviewflow -o "$RUNNER_TEMP/review.test"
+      - name: Verify fixture namespace custody
+        run: PYTHONPATH=tools python3 -m unittest test_verify_review_repair_composition
       - name: Verify candidate, behavior and independent review composition
         env:
           AI_SDLC_TEST_SOURCE_TOKEN: ${{ github.token }}

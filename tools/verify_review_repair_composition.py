@@ -10,6 +10,7 @@ from contextlib import contextmanager, ExitStack
 import hashlib
 import json
 import os
+import secrets
 from pathlib import Path
 import subprocess
 import tempfile
@@ -24,17 +25,32 @@ from verify_workspace_bundle import source_bundle, wire
 def controller(kubectl, base, name, execute):
     namespace = 'ai-sdlc-' + name
     uid = None
-    def command(args, value=None, timeout=65):
+    nonce = secrets.token_hex(16)
+    def raw_command(args, value=None, timeout=65):
         result = subprocess.run(kubectl + args, input=wire(value) if isinstance(value, dict) else value,
                                 capture_output=True, timeout=timeout)
         if result.returncode:
             raise ValueError('Owned repair composition Kubernetes operation failed')
         return result.stdout
+    def guard():
+        observed = json.loads(raw_command(['get', 'namespace', namespace, '-o', 'json']))
+        metadata = observed.get('metadata', {})
+        if (metadata.get('uid') != uid or metadata.get('deletionTimestamp')
+                or metadata.get('labels', {}).get('ai-sdlc.io/repair-fixture') != nonce):
+            raise ValueError('Original repair fixture namespace changed')
+    def command(args, value=None, timeout=65):
+        if uid:
+            guard()
+        result = raw_command(args, value, timeout)
+        if uid:
+            guard()
+        return result
     try:
         created = json.loads(command(['create', '-f', '-', '-o', 'json'], {
             'apiVersion': 'v1', 'kind': 'Namespace', 'metadata': {'name': namespace,
-                'labels': {'pod-security.kubernetes.io/enforce': 'restricted'}}}))
+                'labels': {'pod-security.kubernetes.io/enforce': 'restricted', 'ai-sdlc.io/repair-fixture': nonce}}}))
         uid = created['metadata']['uid']
+        guard()
         rules = [
             {'apiGroups': [''], 'resources': ['pods', 'configmaps'], 'verbs': ['get', 'create', 'delete']},
             {'apiGroups': ['networking.k8s.io'], 'resources': ['networkpolicies'], 'verbs': ['list']},
@@ -48,14 +64,16 @@ def controller(kubectl, base, name, execute):
              'roleRef': {'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'Role', 'name': name},
              'subjects': [{'kind': 'ServiceAccount', 'name': name, 'namespace': namespace}]}]})
         token = command(['create', 'token', name, '-n', namespace, '--duration=10m']).decode().strip()
+        guard()
         yield dict(APIServer=base['APIServer'], CA=base['CA'], BearerToken=token)
+        guard()
         for kind in ('pods', 'configmaps'):
             observed = json.loads(command(['get', kind, '-n', namespace, '-o', 'json']))['items']
             if any(item['metadata']['name'] != 'kube-root-ca.crt' for item in observed):
                 raise ValueError('Repair composition controller resources were not retired')
     finally:
         if uid:
-            cleanup_namespace(command, namespace, uid)
+            cleanup_namespace(raw_command, namespace, uid)
 
 
 def verify(kubectl, worker, mailbox, binary, verifier_image, repository, source_sha, candidate_directory):
