@@ -26,7 +26,7 @@ for(const maxSteps of [16,24]) {
  const child=spawn('/usr/local/bin/scc',['chat','-yq','--prompt-file',path.join(state,'prompt.txt'),'--no-commit','--summary-file',path.join(state,'summary.json'),'--max-seconds','60','--max-steps',String(maxSteps)],{cwd:repo,env});
  let output='', exceeded=false;const collect=d=>{if(Buffer.byteLength(output)+d.length>262144){exceeded=true;child.kill('SIGKILL');}else output+=d;};child.stdout.on('data',collect);child.stderr.on('data',collect);
  const timer=setTimeout(()=>child.kill('SIGKILL'),75000);
- const exitCode=await new Promise(r=>child.on('exit',r));clearTimeout(timer);await new Promise(r=>server.close(r));
+ const exitCode=await new Promise(r=>child.on('close',r));clearTimeout(timer);await new Promise(r=>server.close(r));
  const summary=JSON.parse(fs.readFileSync(path.join(state,'summary.json'),'utf8'));
  results.push({maxSteps,exitCode,modelCalls:requests,inputBytes,outputBytes,outputBoundExceeded:exceeded,toolCalls:summary.tool_calls_total,exitReason:summary.exit_reason,budgetMarkerSteps:output.includes('SC_BUDGET_EXCEEDED steps'),candidateFileExists:fs.existsSync(path.join(repo,'result.txt')),candidateContentMatches:fs.existsSync(path.join(repo,'result.txt'))&&fs.readFileSync(path.join(repo,'result.txt'),'utf8')==='validated fixture\n'});fs.rmSync(root,{recursive:true,force:true});
 }
