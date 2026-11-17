@@ -16,6 +16,7 @@ EXPECTED = {
     'policies': [['execution_failure_worker', '*', True, ['0'],
         "(CURRENT_USER = 'aisdlc_worker'::name)", "(CURRENT_USER = 'aisdlc_worker'::name)"]],
     'userTriggers': 0, 'internalTriggers': 2, 'disabledTriggers': 0, 'droppedColumns': 0,
+    'rules': 0, 'inheritanceLinks': 0,
     'indexes': [[True, True, True, True, True]],
 }
 
@@ -28,6 +29,8 @@ QUERY = """SELECT json_build_object(
 'internalTriggers',(SELECT count(*) FROM pg_trigger t WHERE t.tgrelid=c.oid AND t.tgisinternal),
 'disabledTriggers',(SELECT count(*) FROM pg_trigger t WHERE t.tgrelid=c.oid AND t.tgenabled<>'O'),
 'droppedColumns',(SELECT count(*) FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND a.attisdropped),
+'rules',(SELECT count(*) FROM pg_rewrite r WHERE r.ev_class=c.oid),
+'inheritanceLinks',(SELECT count(*) FROM pg_inherits i WHERE i.inhrelid=c.oid OR i.inhparent=c.oid),
 'indexes',(SELECT json_agg(json_build_array(i.indisvalid,i.indisready,i.indislive,i.indisunique,i.indisprimary) ORDER BY i.indexrelid) FROM pg_index i WHERE i.indrelid=c.oid)
 ) FROM pg_class c WHERE c.oid=to_regclass('public.execution_failures');"""
 

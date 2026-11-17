@@ -49,6 +49,8 @@ def exercise(database, provider, image, directory, catalog, plan_id, first_work,
         'ALTER POLICY execution_failure_worker ON execution_failures USING (true) WITH CHECK (true);',
         'ALTER TABLE execution_failures DROP CONSTRAINT execution_failures_exit_code_check;',
         'ALTER TABLE execution_failures DISABLE TRIGGER ALL;',
+        'CREATE RULE unexpected_insert AS ON INSERT TO execution_failures DO ALSO NOTIFY unexpected_diagnostic;',
+        'CREATE TABLE unexpected_diagnostic_child () INHERITS (execution_failures);',
     ):
         class TransactionalControl:
             def sql(self, statement):
@@ -75,6 +77,7 @@ def exercise(database, provider, image, directory, catalog, plan_id, first_work,
     report.update(toolBudgetFailedAttemptsRetained=True, toolBudgetDiagnosticRetained=True,
         toolBudgetHistoryRestorationVerified=True, changedDiagnosticRejected=True,
         changedDiagnosticSchemaAndRLSRejected=True,
+        changedDiagnosticRulesAndInheritanceRejected=True,
         diagnosticTableEmpty=False,
         toolBudgetFixtureScope='isolated PostgreSQL retention/restore; no installed CLI or E2E proof')
     save()
