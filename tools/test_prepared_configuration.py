@@ -50,6 +50,70 @@ class PreparedResourceTests(unittest.TestCase):
             inventory=lambda kinds:[obj for obj in self.objects.values() if obj['kind'] in kinds.split(',') and obj['metadata'].get('namespace')=='ai-sdlc-runtime'])
         self.description={'documents':self.documents,'externalRuntime':{}}
 
+    def test_one_inventory_replaces_only_reads_inside_its_scope(self):
+        calls=[];reads=[];original=self.api.inventory
+        self.api.inventory=lambda kinds:(calls.append(kinds) or copy.deepcopy(original(kinds)))
+        self.api.read=lambda kind,name,ns:(reads.append((kind,name,ns)) or self.objects.get((kind,name,ns)))
+        first=prepared_resources.observe(self.api,self.description)
+        self.assertEqual(len(calls),1)
+        self.assertTrue(reads)
+        self.assertFalse(any(kind in prepared_resources.RUNTIME_VERSIONS and ns=='ai-sdlc-runtime' for kind,name,ns in reads))
+        for kind,name,ns in reads:
+            self.assertIn(prepared_resources.key(self.objects[(kind,name,ns)]),first)
+        # The next call must fetch a new inventory and detect replacement.
+        identity=next(k for k in self.objects if k[0]=='ConfigMap' and k[2]=='ai-sdlc-runtime')
+        self.objects[identity]['metadata']['uid']=str(uuid.uuid4())
+        with self.assertRaises(ValueError):prepared_resources.observe(self.api,self.description,first)
+        self.assertEqual(len(calls),2)
+
+    def test_inventory_missing_resource_never_falls_back_to_get(self):
+        original=self.api.inventory
+        self.api.inventory=lambda kinds:original(kinds)[1:]
+        def forbidden(*args):raise AssertionError('Missing LIST object mixed with later GET')
+        self.api.read=forbidden
+        with self.assertRaises(ValueError):prepared_resources.observe(self.api,self.description)
+
+    def test_inventory_rejects_duplicate_malformed_and_wrong_scope(self):
+        original=self.api.inventory
+        values=copy.deepcopy(original(','.join(prepared_resources.RUNTIME_VERSIONS)))
+        for fault in ('duplicate','version-duplicate','version','namespace','missing-namespace','missing-name','name-type','kind','uid','deleting','metadata','object','not-list'):
+            with self.subTest(fault=fault):
+                items=copy.deepcopy(values);item=items[0]
+                if fault=='duplicate':items.append(copy.deepcopy(item))
+                elif fault=='version-duplicate':
+                    other=copy.deepcopy(item);other['apiVersion']='foreign/v9';items.append(other)
+                elif fault=='version':item['apiVersion']='foreign/v9'
+                elif fault=='namespace':item['metadata']['namespace']='foreign'
+                elif fault=='missing-namespace':item['metadata'].pop('namespace')
+                elif fault=='missing-name':item['metadata'].pop('name')
+                elif fault=='name-type':item['metadata']['name']=[]
+                elif fault=='kind':item['kind']='Secret'
+                elif fault=='uid':item['metadata']['uid']='invalid'
+                elif fault=='deleting':item['metadata']['deletionTimestamp']='2026-11-17T00:00:00Z'
+                elif fault=='metadata':item['metadata']=[]
+                elif fault=='object':items[0]=None
+                elif fault=='not-list':items={}
+                self.api.inventory=lambda kinds,items=items:items
+                with self.assertRaises(ValueError):prepared_resources.observe(self.api,self.description)
+
+    def test_listed_objects_keep_all_helm_identity_and_content_guards(self):
+        baseline=prepared_resources.observe(self.api,self.description)
+        identity=next(k for k in self.objects if k[0]=='ConfigMap' and k[2]=='ai-sdlc-runtime')
+        original=copy.deepcopy(self.objects[identity])
+        for fault in ('uid','owner','release','namespace','label','content','deleting'):
+            with self.subTest(fault=fault):
+                item=copy.deepcopy(original);self.objects[identity]=item
+                if fault=='uid':item['metadata']['uid']=str(uuid.uuid4())
+                elif fault=='owner':item['metadata']['ownerReferences']=[{'uid':str(uuid.uuid4())}]
+                elif fault=='release':item['metadata']['annotations']['meta.helm.sh/release-name']='foreign'
+                elif fault=='namespace':item['metadata']['annotations']['meta.helm.sh/release-namespace']='foreign'
+                elif fault=='label':item['metadata']['labels']['app.kubernetes.io/managed-by']='foreign'
+                elif fault=='content':item.setdefault('data',{})['unexpected']='value'
+                elif fault=='deleting':item['metadata']['deletionTimestamp']='2026-11-17T00:00:00Z'
+                with self.assertRaises(ValueError):prepared_resources.observe(self.api,self.description,baseline)
+        self.objects[identity]=original
+        self.assertEqual(prepared_resources.observe(self.api,self.description,baseline),baseline)
+
     def test_complete_render_then_missing_security_or_partial_helm_rejected(self):
         baseline=prepared_resources.observe(self.api,self.description)
         self.assertGreater(len(baseline),30)

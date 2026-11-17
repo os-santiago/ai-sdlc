@@ -214,3 +214,12 @@ migration history, rolls schema 35 back to 34, renews an expired operation, or
 repeats an uncertain migration/Helm send. Unknown outcomes retain their original
 records and require observation and containment. `browser-status` reports only a
 complete recorded phase; it is not proof that the software delivery E2E passed.
+
+Prepared-resource observation uses the complete runtime inventory returned by
+its existing LIST calls for those same namespaced objects. It validates the
+closed API versions, names, UIDs and namespace, rejects duplicates or missing
+objects, and retains the same Helm ownership, annotation and content checks.
+External resources still require their individual reads. This reuse lasts for
+one observation only; the next call obtains a new inventory. Multiple Kubernetes
+LIST operations are not an atomic snapshot. Secret/foundation observations,
+pre-effect checks, fences and original deadlines remain separate requirements.
