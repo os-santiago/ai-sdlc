@@ -16,7 +16,9 @@ from urllib.parse import urlsplit, urlunsplit
 
 
 @contextmanager
-def original_database(run,kubectl,uri,pod_uid):
+def original_database(run,kubectl,uri,pod_uid,*,timeout_seconds=120):
+    if type(timeout_seconds) is not int or timeout_seconds not in (120,240):
+        raise ValueError('Unsupported administrative forwarding lifetime')
     try:
         parsed=urlsplit(uri)
         valid=(parsed.scheme=='postgresql' and parsed.port==5432 and parsed.hostname is not None
@@ -39,7 +41,7 @@ def original_database(run,kubectl,uri,pod_uid):
     # disappears. Reserve 15s announcement + 2*10s identity reads + 30s inspector
     # + up to 40s component cleanup, with margin before the final liveness check.
     # Neither argv nor output contains a database credential.
-    process=subprocess.Popen([timeout,'--kill-after=5s','120s',*kubectl,'port-forward',
+    process=subprocess.Popen([timeout,'--kill-after=5s',str(timeout_seconds)+'s',*kubectl,'port-forward',
         '-n','ai-sdlc-runtime','pod/ai-sdlc-postgres-0',':5432','--address','127.0.0.1'],
         stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,bufsize=0)
     try:
