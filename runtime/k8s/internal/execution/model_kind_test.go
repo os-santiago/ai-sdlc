@@ -138,6 +138,9 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 		}
 		n := calls.Add(1)
 		message := map[string]any{"role": "assistant", "content": "Created the isolated conformance fixture file."}
+		if strings.HasPrefix(input.Scenario, "no-change") {
+			message["content"] = "[VERDICT: NO_CHANGES] No workspace changes were made in this nonzero-exit fixture."
+		}
 		reason := "stop"
 		if input.Scenario == "provider-failure" {
 			w.WriteHeader(503)
@@ -194,7 +197,8 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 		if strings.HasPrefix(input.Scenario, "no-change") {
 			expectedCalls = calls.Load()
 			if expectedCalls < 1 || expectedCalls > 4 || f.Count(t, `SELECT count(*) FROM model_calls WHERE state='completed' AND response_handed_off_at IS NOT NULL`) != int(expectedCalls) {
-				t.Fatal("no-change exchange exceeded budget or left uncertain calls")
+				code, recorded := WorkerFailureDiagnostic(err)
+				t.Fatal("no-change exchange exceeded budget or left uncertain calls", "calls", expectedCalls, "handedOff", f.Count(t, `SELECT count(*) FROM model_calls WHERE state='completed' AND response_handed_off_at IS NOT NULL`), "stage", DiagnosticStage(err), "exit", code, "recorded", recorded)
 			}
 			var failure ControllerError
 			if !errors.As(err, &failure) || failure.Stage != "worker-exit" {
@@ -207,7 +211,7 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 				expectedCount = 1
 			}
 			if code != 10 || recorded != expectedRecorded || f.Count(t, `SELECT count(*) FROM execution_failures f JOIN execution_lifecycles l ON l.request_id=f.request_id WHERE f.pod_uid=l.pod_uid AND f.exit_code=10 AND l.cleanup_state='complete'`) != expectedCount {
-				t.Fatal("original nonzero exit did not survive containment cleanup")
+				t.Fatal("original nonzero exit did not survive containment cleanup", "code", code, "recorded", recorded, "failures", f.Count(t, `SELECT count(*) FROM execution_failures`), "cleanupComplete", f.Count(t, `SELECT count(*) FROM execution_lifecycles WHERE cleanup_state='complete'`))
 			}
 			if f.Count(t, `SELECT count(*) FROM execution_lifecycles WHERE cleanup_state='complete'`) != 1 {
 				t.Fatal("diagnostic persistence prevented containment cleanup")
