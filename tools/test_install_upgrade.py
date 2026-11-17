@@ -133,6 +133,18 @@ class UpgradePlanTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.source.catalog('main')
 
+    def test_legacy_grafts_cannot_fabricate_published_ancestry(self):
+        tree = self.git('rev-parse', self.after+'^{tree}')
+        unrelated = self.git('commit-tree', tree, '-m', 'unrelated source history')
+        self.assertEqual(self.source.catalog(unrelated), self.source.catalog(self.after))
+        with self.assertRaises(ValueError):
+            self.plan(unrelated, self.after)
+        # A legacy graft changes parent traversal even with replace refs off.
+        # The exact source commit remains unrelated and must still be rejected.
+        (self.root/'.git/info/grafts').write_text(self.after+' '+unrelated+'\n')
+        with self.assertRaises(ValueError):
+            self.plan(unrelated, self.after)
+
     def test_reject_symlink_and_noncanonical_paths(self):
         (self.files/'0003_link.sql').symlink_to('0001_initial.sql')
         with self.assertRaises(ValueError):

@@ -43,7 +43,7 @@ Run it from a checkout containing both exact commits. Missing Git objects fail;
 the planner does not fetch or change the checkout. Git, Python 3 on Linux and
 an authenticated `gh` CLI are required. It resolves all twelve image identities
 through the existing publication verifier, then reads migration SQL directly
-from immutable Git objects with replacement refs disabled. Modified working
+from immutable Git objects with replacement refs and legacy grafts disabled. Modified working
 files cannot alter the plan. Source must be an ancestor of target, or the same
 commit. Removed or edited migrations, or new files inserted before the original
 ordered prefix, reject the plan. Symlinks, nested paths, oversized SQL and
