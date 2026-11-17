@@ -428,7 +428,11 @@ candidate configuration value must reproduce the original active render exactly.
 The source must be the complete recorded diagnostic activation, on catalog 34,
 with contained failed work, stopped execution requests and no pending
 authenticated deliveries. A database write fence protects the pause. The
-installer rechecks the full source data and role identities while that fence is
+source's unchanged schema, roles, ACLs and original migration records must match
+the prior diagnostic proof. The additive diagnostic table must also retain its
+reviewed columns, constraints, indexes, triggers and exact enabled/forced row
+security policy. Existing authority drift is rejected rather than adopted.
+The installer rechecks the full source data and role identities while that fence is
 held, before persisting a Helm intent or sending a change. It then creates a new
 private backup, restores it into an isolated PostgreSQL container, compares it
 and confirms cleanup. Existing failed attempts and diagnostic rows are retained.

@@ -10,6 +10,7 @@ import build_foundation_install as files
 import build_runtime_install
 from diagnostic_runtime_upgrade import Upgrade, OriginalReleasePreflight, advance
 from diagnostic_upgrade_data import Compatibility
+import diagnostic_schema
 import initial_activation
 import install_images
 import konflux_runtime_install as platform
@@ -105,6 +106,16 @@ class ToolBudgetUpgrade(Upgrade):
             self.config.provider, self.helper, 'compile-build-installation', request)
         return tool_budget_targets.targets(self.parent.describe('active'), self.config.render, compile_build, original=original)
 
+    def original_database_authority(self):
+        compatibility = Compatibility(self.database())
+        original = self.parent.record['sourceProof']
+        for field in ('schema', 'roles', 'permissions', 'tracking'):
+            if getattr(compatibility, field)() != original[field]:
+                raise ValueError('Original diagnostic database authority changed before tool-budget update')
+        compatibility.diagnostic_privileges()
+        diagnostic_schema.verify(self.database())
+        return original['roles']
+
     def begin(self):
         if self.record is not None:
             return
@@ -114,7 +125,7 @@ class ToolBudgetUpgrade(Upgrade):
             if set(prepared_resources.documents(description['documents'])) != set(self.pause.record['resourceUIDs']):
                 raise ValueError('Tool budget cannot add or remove resources')
         proof = self.snapshot()
-        role_identities = Compatibility(self.database()).roles()
+        role_identities = self.original_database_authority()
         self.observe('source')
         now = time.time()
         self.save({'version': VERSION, 'nonce': secrets.token_hex(16), 'parentSHA256': self.parent_hash,

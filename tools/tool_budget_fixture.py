@@ -3,6 +3,7 @@ import secrets
 import uuid
 
 from diagnostic_upgrade_data import Compatibility
+import diagnostic_schema
 from runtime_upgrade_backup import Restore
 from tool_budget_upgrade import ToolBudgetUpgrade
 import upgrade_backup_data as data
@@ -41,6 +42,25 @@ def exercise(database, provider, image, directory, catalog, plan_id, first_work,
     finally:
         restore.close()
     upgrade.retained()
+    diagnostic_schema.verify(database)
+    for mutation in (
+        'ALTER TABLE execution_failures DISABLE ROW LEVEL SECURITY;',
+        'ALTER TABLE execution_failures NO FORCE ROW LEVEL SECURITY;',
+        'ALTER POLICY execution_failure_worker ON execution_failures USING (true) WITH CHECK (true);',
+        'ALTER TABLE execution_failures DROP CONSTRAINT execution_failures_exit_code_check;',
+        'ALTER TABLE execution_failures DISABLE TRIGGER ALL;',
+    ):
+        class TransactionalControl:
+            def sql(self, statement):
+                return database.sql('BEGIN;' + mutation + statement + 'ROLLBACK;')
+        try:
+            diagnostic_schema.verify(TransactionalControl())
+        except ValueError:
+            pass
+        else:
+            raise ValueError('Changed diagnostic schema or row security was accepted')
+        diagnostic_schema.verify(database)
+    upgrade.retained()
     try:
         database.sql('UPDATE execution_failures SET exit_code=23;')
         try:
@@ -54,6 +74,7 @@ def exercise(database, provider, image, directory, catalog, plan_id, first_work,
     upgrade.retained()
     report.update(toolBudgetFailedAttemptsRetained=True, toolBudgetDiagnosticRetained=True,
         toolBudgetHistoryRestorationVerified=True, changedDiagnosticRejected=True,
+        changedDiagnosticSchemaAndRLSRejected=True,
         diagnosticTableEmpty=False,
         toolBudgetFixtureScope='isolated PostgreSQL retention/restore; no installed CLI or E2E proof')
     save()

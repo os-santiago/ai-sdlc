@@ -2,6 +2,7 @@
 import copy
 import json
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -91,6 +92,18 @@ class OrderingTests(unittest.TestCase):
         with patch.object(tool_budget_upgrade, 'Compatibility') as compatibility:
             compatibility.return_value.roles.return_value = 'different-identities'
             with self.assertRaises(ValueError): item.retained()
+
+    def test_preexisting_database_authority_drift_is_not_adopted_as_new_source(self):
+        fields = ('schema', 'roles', 'permissions', 'tracking')
+        for changed in fields:
+            item = self.item()
+            item.parent = SimpleNamespace(record={'sourceProof': dict.fromkeys(fields, 'original')})
+            with patch.object(tool_budget_upgrade, 'Compatibility') as compatibility:
+                for field in fields:
+                    getattr(compatibility.return_value, field).return_value = 'drift' if field == changed else 'original'
+                with self.subTest(field=changed), self.assertRaises(ValueError): item.original_database_authority()
+            item.save.assert_not_called()
+            item.apply.assert_not_called()
 
     def test_incomplete_pause_never_replays(self):
         for state in ('planned', 'pausing', 'paused'):
