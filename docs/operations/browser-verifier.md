@@ -4,12 +4,12 @@ The browser verifier runs a fixed Saferus console check in a non-root container.
 It exercises desktop and mobile layouts, normal certificate validation and the
 console's demo API. A health endpoint alone cannot establish these UI behaviors.
 
-This increment supplies the component, its separate gVisor runtime and isolated
-conformance tests. **It does not yet authorize or complete deployment health.**
-The deployer-owned Job, durable journal and installed promotion/rollback gates
-remain tracked in [issue #629](https://github.com/os-santiago/ai-sdlc/issues/629).
-Neither a manually invoked browser nor a synthetic fixture is autonomous E2E
-evidence. The migration catalog remains at 34.
+The deployment controller owns the bounded browser Pod and its durable evidence
+through schema 35. Existing schema-34 installations must complete the explicit
+upgrade below before using this gate. Publication, a manually invoked browser,
+and synthetic fixtures do not establish an autonomous E2E result. Installation
+and demonstration remain tracked in
+[issue #629](https://github.com/os-santiago/ai-sdlc/issues/629).
 
 ## Closed execution contract
 
@@ -128,6 +128,21 @@ scenario cancels the original attempt after the Pod ACK, expires the smoke and
 checks resource-only recovery without late health. Its business API is synthetic
 and it does not write deployment journal evidence;
 it is not autonomous E2E or vault-cryptography proof.
+
+On a fresh, owned fixture cluster, `verify_browser_transport.py --platform-helper
+<immutable-migrator-image>` exercises the actual browser platform installer before
+those same checks. Its report identifies the helper and source hashes, retains
+the installation journal hash and cleans up only acknowledged original resources.
+This validates browser infrastructure, not the full runtime-upgrade command.
+
+`tools/browser_upgrade_fixture.py --source-run <successful-main-run>
+--source-revision <sha> --target-image <immutable-local-migrator>
+--output <new-private-directory>` exercises the actual schema-34/35 migration,
+maintenance fence, backup restoration and compatibility verifier against owned
+disposable PostgreSQL. It checks original credentials, retained history and
+negative controls for schema, permissions and outstanding review effects. The
+explicit local target is fixture evidence and cannot authorize an installed
+upgrade. Keep its private backups outside the repository.
 
 ## Existing installation transition
 

@@ -36,6 +36,26 @@ class BrowserImage(unittest.TestCase):
             with self.assertRaises(ValueError): browser_image.verify(reference, runtime, lambda digest, _: blobs[digest])
         with self.assertRaises(ValueError): browser_image.verify(index, manifest, lambda digest, _: blobs[digest]+b' ')
 
+    def test_published_index_allows_only_bound_nonrunnable_attestation(self):
+        blobs, add, _, manifest = self.graph()
+        image = {'digest': manifest, 'size': len(blobs[manifest]), 'platform': {'os': 'linux', 'architecture': 'amd64'}}
+        attestation = dict(add({'schemaVersion': 2, 'layers': []}),
+            mediaType='application/vnd.oci.image.manifest.v1+json',
+            platform={'os': 'unknown', 'architecture': 'unknown'},
+            annotations={'vnd.docker.reference.type': 'attestation-manifest', 'vnd.docker.reference.digest': manifest})
+        for entries in ([image, attestation], [attestation, image]):
+            index = add({'schemaVersion': 2, 'manifests': entries})['digest']
+            self.assertEqual(browser_image.verify(index, manifest, lambda d, _: blobs[d])['manifestDigest'], manifest)
+        for changed in (dict(attestation, platform={'os': 'linux', 'architecture': 'arm64'}),
+                        dict(attestation, annotations={'vnd.docker.reference.type': 'attestation-manifest', 'vnd.docker.reference.digest': 'sha256:'+'a'*64}),
+                        dict(attestation, size=131073), dict(attestation, annotations={}),
+                        dict(attestation, platform={'os': 'unknown', 'architecture': 'amd64'})):
+            index = add({'schemaVersion': 2, 'manifests': [image, changed]})['digest']
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                browser_image.verify(index, manifest, lambda d, _: blobs[d])
+        index = add({'schemaVersion': 2, 'manifests': [image, image]})['digest']
+        with self.assertRaises(ValueError): browser_image.verify(index, manifest, lambda d, _: blobs[d])
+
     def test_scope_replacement_prevents_effect_and_invalidates_observation(self):
         namespace = 'fixture'
         for changed in ('namespace', 'cluster', 'deletion', 'label'):

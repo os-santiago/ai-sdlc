@@ -57,6 +57,20 @@ jobs:
           subprocess.run(['docker','run','--rm','-e','CGO_ENABLED=0','-v',str(pathlib.Path.cwd())+':/src:ro','-v',str(work)+':/out','-w','/src/runtime/k8s',go,'go','test','-c','-o','/out/browser-transport.test','./internal/podtransport'],check=True,timeout=300)
           subprocess.run([sys.executable,'tools/verify_browser_transport.py','--helm',tools['helm'],'--provider','docker','--kubectl',tools['kubectl'],'--kubeconfig',str(root/'kubeconfig'),'--cluster','ai-sdlc-browser-ci','--cluster-uid',uid,'--image',image,'--binary',str(work/'browser-transport.test'),'--output',str(work/'evidence')],check=True,timeout=450)
           PY
+      - name: Bound public scenario logs
+        if: always()
+        run: |
+          python3 - <<'PYTHON'
+          import os, pathlib
+          root=pathlib.Path(os.environ['RUNNER_TEMP'],'browser-transport','evidence')
+          public=root/'bounded-logs'
+          public.mkdir(parents=True,exist_ok=True)
+          for name in ('baseline','readable','wrong-ttl','cleanup-only'):
+              source=root/(name+'.log')
+              if source.is_file():
+                  with source.open('rb') as stream:
+                      (public/source.name).write_bytes(stream.read(65536))
+          PYTHON
       - name: Retain bounded component evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -69,5 +83,6 @@ jobs:
             ${{ runner.temp }}/browser-transport/evidence/readable.json
             ${{ runner.temp }}/browser-transport/evidence/wrong-ttl.json
             ${{ runner.temp }}/browser-transport/evidence/cleanup-only.json
+            ${{ runner.temp }}/browser-transport/evidence/bounded-logs/*.log
           if-no-files-found: warn
           retention-days: 14

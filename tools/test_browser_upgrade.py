@@ -31,6 +31,29 @@ class TrustTests(unittest.TestCase):
 
 
 class EffectGuards(unittest.TestCase):
+    def test_paused_inventory_cannot_adopt_producers_or_new_generations(self):
+        desired=[{'apiVersion':'apps/v1','kind':'Deployment','metadata':{'name':'component-'+str(i),'namespace':'ai-sdlc-runtime'},
+            'spec':{'replicas':0,'template':{'metadata':{'labels':{}},'spec':{'containers':[{'name':'component','image':'fixed'}]}}}} for i in range(10)]
+        actual=copy.deepcopy(desired);ids={}
+        for i,obj in enumerate(actual):
+            obj['metadata'].update(uid='00000000-0000-4000-8000-'+str(i).zfill(12),generation=2)
+            ids[prepared_resources.key(obj)]=obj['metadata']['uid']
+        pod={'apiVersion':'v1','kind':'Pod','metadata':{'name':'database','uid':'00000000-0000-4000-8000-111111111111'}}
+        objects=actual+[pod];description={'documents':desired}
+        check=lambda values,previous=None:browser_runtime_upgrade.paused_inventory(values,description,ids,pod['metadata']['uid'],previous)
+        original=check(objects);self.assertEqual(check(objects,original),original)
+        for change in ('replicas','uid','generation','template','pod','extra','status','deleting'):
+            changed=copy.deepcopy(objects)
+            if change=='replicas':changed[0]['spec']['replicas']=1
+            elif change=='uid':changed[0]['metadata']['uid']='00000000-0000-4000-8000-222222222222'
+            elif change=='generation':changed[0]['metadata']['generation']=3
+            elif change=='template':changed[0]['spec']['template']['spec']['containers'][0]['image']='other'
+            elif change=='pod':changed.append(copy.deepcopy(pod))
+            elif change=='extra':changed.append({'apiVersion':'v1','kind':'Secret','metadata':{'name':'unexpected'}})
+            elif change=='status':changed[0]['status']={'replicas':1}
+            elif change=='deleting':changed[0]['metadata']['deletionTimestamp']='2026-11-17T12:00:00Z'
+            with self.subTest(change=change),self.assertRaises(ValueError):check(changed,original)
+
     def item(self):
         item=object.__new__(browser_runtime_upgrade.BrowserUpgrade)
         obj={'apiVersion':'v1','kind':'ConfigMap','metadata':{'name':'ai-sdlc-browser-profile','namespace':'ai-sdlc-runtime'},'data':{'profile.json':'{}'}}

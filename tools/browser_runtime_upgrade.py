@@ -33,6 +33,25 @@ VERSION='ai-sdlc.browser-runtime-upgrade/v1'
 PHASES=('migrated','staged','warming','armed','active')
 
 
+def paused_inventory(objects,description,identities,database_uid,previous=None):
+    desired={key:obj for key,obj in prepared_resources.documents(description['documents']).items() if obj['kind']=='Deployment'}
+    deployments={prepared_resources.key(obj):obj for obj in objects if obj['kind']=='Deployment'}
+    pods=[obj for obj in objects if obj['kind']=='Pod']
+    if (len(desired)!=10 or set(deployments)!=set(desired) or len(objects)!=len(deployments)+len(pods)
+            or len(pods)!=1 or bootstrap.Preparation.identity(pods[0])!=database_uid):
+        raise ValueError('Original paused producer inventory changed')
+    generations={}
+    for key,obj in deployments.items():
+        generation=obj['metadata'].get('generation')
+        if (bootstrap.Preparation.identity(obj)!=identities[key] or type(generation) is not int or generation<1
+                or obj['spec'].get('replicas')!=0 or prepared_resources.content(obj)!=prepared_resources.content(desired[key])
+                or any(obj.get('status',{}).get(k,0)!=0 for k in ('replicas','readyReplicas','availableReplicas','updatedReplicas'))):
+            raise ValueError('Original paused producer changed')
+        generations[key]=generation
+    if previous is not None and previous!=generations:raise ValueError('Original paused producer generation changed')
+    return generations
+
+
 class BrowserPreflight(ApprovedReleasePreflight):
     def __init__(self,upgrade):
         super().__init__(upgrade,upgrade.record['targets']['active'])
@@ -203,11 +222,23 @@ class BrowserUpgrade(ReviewerImageUpgrade):
 
     def prepare(self):
         self.deadline();self.observe('ready');self.retained()
+        self.browser_generations=None
+        def infrastructure_guard():
+            # Full installation checks bracket this infrastructure-only step.
+            # Each nested read/effect retains custody and checks quiescence in
+            # one API inventory, rather than re-reading every Helm object.
+            self.deadline();self.unchanged()
+            self.browser_generations=paused_inventory(self.config.inventory('Deployment,Pod'),
+                self.record['targets']['paused'],self.record['resourceUIDs'],
+                self.pause.record['sourceObserved']['resources']['pod'],self.browser_generations)
+            self.deadline()
+        infrastructure_guard()
         target=json.loads(self.record['targets']['source']['values']['release']['targetJSON'])
         infrastructure=browser_platform_install.Platform(self.config,target,
             install_images.REGISTRY+'@'+self.selection['images']['browser-verifier']['digest'],self.helper,
-            lambda:self.observe('ready'),self.record['expiresAt'])
+            infrastructure_guard,self.record['expiresAt'])
         profile=infrastructure.run()
+        self.deadline();self.observe('ready');self.retained()
         compile_build=lambda request:build_runtime_install.component_call(self.config.provider,self.helper,'compile-build-installation',request)
         targets=browser_upgrade_targets.targets(self.record['targets']['source'],self.selection,profile,self.approved_trust,self.source_render,self.config.render,compile_build)
         if targets['paused']!=self.record['targets']['paused']:raise ValueError('Original pause changed during browser preparation')

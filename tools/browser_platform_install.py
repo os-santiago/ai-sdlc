@@ -102,9 +102,17 @@ class Platform:
             self.record={'version':VERSION,'identity':self.identity,'resources':{},'runtime':None,'compiled':None};self.save()
         runtime=self.runtime()
         cid=self.node()
-        if self.record.get('image') is None:
+        def image_present():
+            if self.node()!=cid:raise ValueError('Original image node changed')
+            raw=bounded_output([self.config.provider,'exec',cid,'ctr','-n','k8s.io','images','ls','name=='+self.image],128*1024).decode()
+            rows=[line.split() for line in raw.splitlines() if line.split() and line.split()[0]==self.image]
+            if rows and (len(rows)!=1 or len(rows[0])<3 or rows[0][2]!=self.image.split('@')[1]):
+                raise ValueError('Cached browser image reference points to foreign content')
+            return bool(rows)
+        if not image_present():
             # Pulling immutable public content grants no workflow capability.
             self.effect([self.config.provider,'exec',cid,'ctr','-n','k8s.io','images','pull','--platform','linux/amd64',self.image],capture_output=True,timeout=180)
+        if not image_present():raise ValueError('Original browser image reference unavailable')
         def blob(digest,limit):
             if self.node()!=cid:raise ValueError('Original image node changed')
             result=bounded_output([self.config.provider,'exec',cid,'ctr','-n','k8s.io','content','get',digest],limit)
@@ -123,7 +131,10 @@ class Platform:
             'runtimeClassUID':runtime['runtimeClassUID'],'caConfigMapUID':ca['metadata']['uid'],
             'denyPolicyUID':objects['deny-all']['metadata']['uid'],'egressPolicyUID':objects['console-egress']['metadata']['uid'],
             'consoleIngressPolicyUID':objects['ai-sdlc-browser-console']['metadata']['uid'],
-            'image':self.image,'runtimeDigest':graph['manifestDigest'],'caSHA256':hashlib.sha256(self.target['tlsCA'].encode()).hexdigest(),
+            # This owned containerd image record targets the published root
+            # digest (which may be an index), also reported by CRI as imageID.
+            # The hash-checked graph separately binds its unique amd64 child.
+            'image':self.image,'runtimeDigest':graph['referenceDigest'],'caSHA256':hashlib.sha256(self.target['tlsCA'].encode()).hexdigest(),
             'runtimeConfigurationSHA256':runtime['configurationSHA256'],'baselineExpectation':'baseline-seconds','candidateExpectation':'readable-duration'}
         lock={'image':{'repository':install_images.REGISTRY},'migrator':{'digest':self.helper.split('@')[1]}}
         browser_profile_install.configure(self.config.base_run,self.config.kubectl,self.config.provider,lock,profile,self.target,self)
