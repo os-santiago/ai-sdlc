@@ -40,6 +40,27 @@ def archive(component, *, changes=None, filename=None, extra=False, raw=None):
 
 
 class ImageResolutionTests(unittest.TestCase):
+    def test_browser_publication_is_opt_in_and_preserves_original_twelve(self):
+        catalog={'total_count':13,'artifacts':[archive(c)[1] for c in sorted(images.ARTIFACT_COMPONENTS)]}
+        for index, component in enumerate(('artifact-builder','build-controller'),100):
+            catalog['artifacts'].append(dict(archive('worker')[1],id=index,name='supply-chain-image-'+component))
+        catalog['artifacts'].append(dict(archive('worker')[1],id=102,name='release-image-deployer'))
+        catalog['artifacts'].append(dict(archive('worker')[1],id=103,name='browser-image-browser-verifier'))
+        original=images.select_artifacts(catalog,RUN,SHA,True,True)
+        self.assertEqual(set(original),images.ARTIFACT_COMPONENTS|{'artifact-builder','build-controller','deployer'})
+        selected=images.select_artifacts(catalog,RUN,SHA,True,True,True)
+        self.assertEqual(set(selected),set(original)|{'browser-verifier'})
+        self.assertEqual({key:selected[key] for key in original},original)
+        with self.assertRaises(ValueError):images.select_artifacts(catalog,RUN,SHA,True,False,True)
+        for fault in ('missing','class','expired','revision','duplicate'):
+            value=copy.deepcopy(catalog)
+            if fault=='missing':value['artifacts'].pop();value['total_count']-=1
+            elif fault=='class':value['artifacts'][-1]['name']='image-browser-verifier'
+            elif fault=='expired':value['artifacts'][-1]['expired']=True
+            elif fault=='revision':value['artifacts'][-1]['workflow_run']['head_sha']='f'*40
+            else:value['artifacts'].append(dict(value['artifacts'][-1],id=104));value['total_count']+=1
+            with self.subTest(fault=fault),self.assertRaises(ValueError):images.select_artifacts(value,RUN,SHA,True,True,True)
+
     def test_rejects_unreviewed_or_failed_run_before_artifacts(self):
         cases = [{'event': 'pull_request'}, {'head_branch': 'build/unreviewed'}, {'head_sha': 'c' * 40},
                  {'conclusion': 'failure'}, {'status': 'in_progress'}, {'path': '.github/workflows/other.yml'},

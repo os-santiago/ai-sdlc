@@ -1,0 +1,93 @@
+{
+  "scope": "synthetic-browser-component",
+  "autonomousE2E": false,
+  "realSaferusAPI": false,
+  "image": "localhost/ai-sdlc-browser-verifier@sha256:b352a05c30926dcaa293837fa2696a4685e84ea16d33048408f9e240cc6458b3",
+  "scenarios": [
+    {
+      "mode": "baseline",
+      "ca": "ca",
+      "expectedPass": true,
+      "observedPass": true,
+      "elapsedSeconds": 6.565,
+      "boundary": null
+    },
+    {
+      "mode": "readable",
+      "ca": "ca",
+      "expectedPass": true,
+      "observedPass": true,
+      "elapsedSeconds": 6.574,
+      "boundary": null
+    },
+    {
+      "mode": "wrong-ttl",
+      "ca": "ca",
+      "expectedPass": false,
+      "observedPass": false,
+      "elapsedSeconds": 11.418,
+      "boundary": "interface-result"
+    },
+    {
+      "mode": "api-failure",
+      "ca": "ca",
+      "expectedPass": false,
+      "observedPass": false,
+      "elapsedSeconds": 5.486,
+      "boundary": "api-response"
+    },
+    {
+      "mode": "extra-response",
+      "ca": "ca",
+      "expectedPass": false,
+      "observedPass": false,
+      "elapsedSeconds": 5.493,
+      "boundary": "api-response"
+    },
+    {
+      "mode": "external-request",
+      "ca": "ca",
+      "expectedPass": false,
+      "observedPass": false,
+      "elapsedSeconds": 6.556,
+      "boundary": "network-summary"
+    },
+    {
+      "mode": "baseline",
+      "ca": "wrong-ca",
+      "expectedPass": false,
+      "observedPass": false,
+      "elapsedSeconds": 5.494,
+      "boundary": "navigation"
+    }
+  ],
+  "cleanupComplete": true,
+  "networkPolicyValidated": {
+    "runtimeClass": "ai-sdlc-browser",
+    "ingress": true,
+    "egress": true,
+    "originalLiveEndpoint": true
+  },
+  "status": "passed",
+  "observedAtUTC": "2026-11-17T09:55:50Z",
+  "sourceScope": "Local working tree; source hashes below bind browser recipe and tested fixtures. CI repeats the committed source.",
+  "sourceSHA256": {
+    "runtime/k8s/components/browser-verifier/browser.py": "3f001545134c1d5955459b33a312a8af75f98f43fd195dc432bc3fd5ef8b7648",
+    "runtime/k8s/components/browser-verifier/Containerfile": "ffc5760a0564cc1c2b78b255c62a03fd37c256cc1d876b719a9280e8760b0f09",
+    "runtime/k8s/components/browser-verifier/requirements.lock": "6e1bb8865724ee2029dea19a04e3fee58fd50b0f7cffa73882465bbe1122639c",
+    "tools/verify_browser_component.py": "006475e5bcd55cd6989493bb4ebba3d5014e8594f3fb76e1b0b440a7bbd0beae",
+    "tools/fixtures/browser/server.py": "05e4827212e713ac94ce51f8a73bc165fa73c1e30a8eac8a68eaecc5ac936131"
+  },
+  "liveBaseline": {
+    "scope": "administrative Podman browser through approved port-forward",
+    "status": "passed",
+    "normalTLS": true,
+    "desktopAndMobile": true,
+    "realDemoAPI": true,
+    "applicationDeploymentUnchanged": true,
+    "elapsedSeconds": 2.208,
+    "podmanSeccompAllowsChrootForFirefoxSandbox": true,
+    "networkPolicyValidated": false,
+    "autonomousE2E": false
+  }
+}
