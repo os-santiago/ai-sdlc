@@ -28,6 +28,10 @@ The publication supplies an authenticated administrative helper. Installed
 component images, schema, keys, budgets, browser profile and Kubernetes resource
 identities remain fixed. Source observation permits expired approval documents
 only for containment; it does not assert runtime readiness. The operation
+recompiles the browser installation proof against the new release target digest,
+requiring the original profile and profile digest to remain identical. This new
+proof belongs only to the new approval operation; historical proofs stay fixed.
+The operation
 checks residual execution, acquires the database fence, captures current
 history, pauses the ten consumers, exports and restores a private backup in
 isolation, and stages the new dates. Intake resumes last after actual readiness

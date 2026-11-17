@@ -117,6 +117,7 @@ class BrowserRenewal(unittest.TestCase):
         item = object.__new__(renewal.ApprovalPreflight)
         item.original = {'sources': {'browser-original-profile': original, 'other': {'fixed': True}}}
         item.capture_browser, item.renewed_browser = True, None
+        item.expected_target_digest = 'c'*64
         changed = dict(original, targetSHA256='c'*64)
         item.bind_source('browser-original-profile', changed)
         self.assertEqual(item.renewed_browser, changed)

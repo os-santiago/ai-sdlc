@@ -1,6 +1,7 @@
 """A new finite administrative approval above a completed browser35 source."""
 import copy
 import json
+import re
 import secrets
 import time
 
@@ -34,6 +35,29 @@ class ApprovalPreflight(BrowserPreflight):
         super().__init__(upgrade)
         self.capture_browser = capture_browser
         self.renewed_browser = None
+        self.expected_target_digest = None
+
+    def preflight(self):
+        if self.capture_browser:
+            self.guard()
+            values = self.original['target']['values']
+            target = json.loads(values['release']['targetJSON'])
+            deployment = self.config.read('deployment', target['deployment'], target['namespace'])
+            service = self.config.read('service', target['service'], target['namespace'])
+            self.guard()
+            compiled = build_runtime_install.component_call(self.config.provider, self.upgrade.helper,
+                'compile-release-installation', {'target': target,
+                    'trust': json.loads(values['provenance']['trustJSON']),
+                    'deployment': deployment, 'service': service})
+            if (set(compiled) != {'version', 'target', 'targetSHA256', 'trustSHA256'}
+                    or compiled['version'] != 'ai-sdlc.release-installation/v1'
+                    or compiled['target'] != target
+                    or not all(isinstance(compiled[k], str) and re.fullmatch('[a-f0-9]{64}', compiled[k])
+                               for k in ('targetSHA256', 'trustSHA256'))):
+                raise ValueError('New reviewed release target compilation changed input')
+            self.expected_target_digest = compiled['targetSHA256']
+            self.guard()
+        return super().preflight()
 
     def bind_source(self, name, value):
         if name != 'browser-original-profile' or not self.capture_browser:
@@ -46,6 +70,7 @@ class ApprovalPreflight(BrowserPreflight):
                 or {k:v for k,v in value.items() if k != 'targetSHA256'}
                    != {k:v for k,v in original.items() if k != 'targetSHA256'}
                 or value['targetSHA256'] == original['targetSHA256']
+                or self.expected_target_digest is None or value['targetSHA256'] != self.expected_target_digest
                 or self.renewed_browser is not None and self.renewed_browser != value):
             raise ValueError('Browser renewal changed the original profile or target binding')
         self.renewed_browser = copy.deepcopy(value)
