@@ -21,6 +21,20 @@ func run() error {
 		return errors.New("select migrate or bootstrap-identities")
 	}
 	switch os.Args[1] {
+	case "describe-migrations":
+		if len(os.Args) != 2 {
+			return errors.New("unexpected migration catalog arguments")
+		}
+		catalog, err := store.MigrationCatalog()
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(catalog)
+	case "inspect-upgrade-migrations":
+		if len(os.Args) != 2 {
+			return errors.New("unexpected upgrade observation arguments")
+		}
+		return inspectUpgradeMigrations(os.Stdin, os.Stdout)
 	case "describe-release-specs":
 		if len(os.Args) != 2 {
 			return errors.New("unexpected release observation arguments")
