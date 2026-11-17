@@ -39,7 +39,22 @@ func candidateFixture(t *testing.T, configure ...func(*fixture)) (*lifecycleFixt
 	if err != nil {
 		t.Fatal(err)
 	}
-	bundle.Files = append(bundle.Files, workspacebundle.File{Path: "candidate-fixture.txt", Mode: 0644, Data: []byte("unvalidated\n")})
+	if f.candidateChanges == nil {
+		bundle.Files = append(bundle.Files, workspacebundle.File{Path: "candidate-fixture.txt", Mode: 0644, Data: []byte("unvalidated\n")})
+	} else {
+		for name, content := range f.candidateChanges {
+			found := false
+			for i := range bundle.Files {
+				if bundle.Files[i].Path == name {
+					bundle.Files[i].Data = []byte(content)
+					found = true
+				}
+			}
+			if !found {
+				bundle.Files = append(bundle.Files, workspacebundle.File{Path: name, Mode: 0644, Data: []byte(content)})
+			}
+		}
+	}
 	raw, err := workspacebundle.Encode(bundle)
 	if err != nil {
 		t.Fatal(err)

@@ -13,6 +13,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
 // RepairFixtureForTest bridges external-package flow tests to the existing
@@ -47,6 +48,24 @@ func NewKubeRepairFixtureForTest(t *testing.T, placement Placement, adev []byte)
 		f.placementOverride = &placement
 	})
 }
+
+// NewKubeRepairCompositionForTest creates only a synthetic captured predecessor.
+// Both behavior verifications and both independent reviews run real controllers.
+func NewKubeRepairCompositionForTest(t *testing.T, placement Placement, adev []byte, source workspacebundle.Bundle, changes map[string]string) RepairFixtureForTest {
+	t.Helper()
+	f, verifier, _ := verificationClaimFixture(t, func(f *fixture) {
+		f.adevOverride = append([]byte(nil), adev...)
+		f.profileSeconds = 600
+		f.profileModel = "codex-cli"
+		f.maxRepairs = 1
+		f.placementOverride = &placement
+		f.sourceOverride = &source
+		f.candidateChanges = changes
+		f.command.ExpiresAt = time.Now().Add(10 * time.Minute).UnixMilli()
+	})
+	return exportRepairFixture(t, f, verifier, store.ReviewRun{})
+}
+
 func newRepairFixtureForTest(t *testing.T, enabled bool, ttl []time.Duration, setup func(*fixture)) RepairFixtureForTest {
 	t.Helper()
 	f, verifier, r, c, summary := reviewFeedbackFixtureConfigured(t, []func(*fixture){func(f *fixture) {
@@ -63,6 +82,10 @@ func newRepairFixtureForTest(t *testing.T, enabled bool, ttl []time.Duration, se
 	if err := verifier.RejectReviewWithFeedback(context.Background(), c, summary); err != nil {
 		t.Fatal(err)
 	}
+	return exportRepairFixture(t, f, verifier, r)
+}
+func exportRepairFixture(t *testing.T, f *lifecycleFixture, verifier *store.DB, r store.ReviewRun) RepairFixtureForTest {
+	t.Helper()
 	u, e := url.Parse(os.Getenv("AI_SDLC_TEST_DATABASE_URL"))
 	if e != nil {
 		t.Fatal(e)

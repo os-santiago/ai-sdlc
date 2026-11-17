@@ -1,10 +1,10 @@
 name: review-controller
 on:
   pull_request:
-    paths: ['runtime/k8s/**', 'tools/verify_review_flow.py', 'tools/verify_verification_flow.py', 'tools/verify_candidate_runtime.py', 'tools/prepare_verification_fixture.py', 'tools/fixtures/**', '.github/workflows/review-controller.yml']
+    paths: ['runtime/k8s/**', 'tools/verify_review_flow.py', 'tools/verify_review_repair_composition.py', 'tools/verify_verification_flow.py', 'tools/verify_candidate_runtime.py', 'tools/prepare_verification_fixture.py', 'tools/fixtures/**', '.github/workflows/review-controller.yml']
   push:
     branches: [main]
-    paths: ['runtime/k8s/**', 'tools/verify_review_flow.py', 'tools/verify_verification_flow.py', 'tools/verify_candidate_runtime.py', 'tools/prepare_verification_fixture.py', 'tools/fixtures/**', '.github/workflows/review-controller.yml']
+    paths: ['runtime/k8s/**', 'tools/verify_review_flow.py', 'tools/verify_review_repair_composition.py', 'tools/verify_verification_flow.py', 'tools/verify_candidate_runtime.py', 'tools/prepare_verification_fixture.py', 'tools/fixtures/**', '.github/workflows/review-controller.yml']
 permissions:
   contents: read
 jobs:
@@ -73,6 +73,7 @@ jobs:
           from fixture_images import register_digest
           from prepare_verification_fixture import prepare
           from verify_review_flow import verify
+          from verify_review_repair_composition import verify as verify_repair
           root = pathlib.Path(os.environ['RUNNER_TEMP'])
           tools = json.loads((root / 'install-tools.json').read_text())
           candidate = prepare(root / 'homedir-source', root / 'review-candidate')
@@ -86,6 +87,11 @@ jobs:
                               '0622cdaeb59a11a27bd5f3d7e18183c401a5e412', candidate, scenario)
               (root / f'review-controller-{scenario}-report.json').write_text(json.dumps(report, indent=2))
               print(json.dumps(report), flush=True)
+          os.environ.pop('AI_SDLC_PUBLICATION_FIXTURE', None)
+          report = verify_repair(kubectl, worker, mailbox, root / 'execution.test', worker,
+                                 root / 'homedir-source', '0622cdaeb59a11a27bd5f3d7e18183c401a5e412', candidate)
+          (root / 'repair-composition-report.json').write_text(json.dumps(report, indent=2))
+          print(json.dumps(report), flush=True)
           PY
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
@@ -94,4 +100,5 @@ jobs:
           path: |
             ${{ runner.temp }}/review-controller-*-report.json
             ${{ runner.temp }}/publication-controller-report.json
+            ${{ runner.temp }}/repair-composition-report.json
           retention-days: 14

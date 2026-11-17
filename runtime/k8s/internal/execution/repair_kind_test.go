@@ -14,34 +14,135 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/execution"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repairflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/reviewflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
-// The predecessor issue/source/behavior/review are synthetic journal fixtures.
-// The child uses the real signed flow, PostgreSQL roles, SCC, gVisor and helpers.
-// This proves the repair controller boundary, never autonomous application E2E.
-func TestRealConnectedRepairControllerFixture(t *testing.T) {
+// The controller fixture seeds predecessor history. The composition fixture
+// uses a synthetic captured predecessor but actual behavior and review twice.
+// Both use synthetic model replies and never establish application E2E.
+func TestRealConnectedRepairControllerFixture(t *testing.T)  { runRepairKind(t, false) }
+func TestRealConnectedRepairCompositionFixture(t *testing.T) { runRepairKind(t, true) }
+func runRepairKind(t *testing.T, composition bool) {
 	path := os.Getenv("AI_SDLC_CANDIDATE_FIXTURE")
 	if path == "" {
 		t.Skip("explicit isolated repair Kubernetes fixture required")
 	}
 	var in struct {
-		Config               podtransport.Config
-		Runtime              execution.RuntimeConfig
-		ReportFile, Scenario string
+		Config                           podtransport.Config
+		Runtime                          execution.RuntimeConfig
+		ReportFile, Scenario             string
+		SourceFile                       string
+		Changes                          map[string]string
+		VerificationConfig, ReviewConfig podtransport.Config
+		VerificationImage                string
 	}
 	raw, e := os.ReadFile(path)
-	if e != nil || len(raw) > 256*1024 || json.Unmarshal(raw, &in) != nil || in.Scenario != "repair" {
+	if e != nil || len(raw) > 256*1024 || json.Unmarshal(raw, &in) != nil || (in.Scenario != "repair" && in.Scenario != "repair-composition") {
 		t.Fatal("private repair fixture input")
 	}
-	f := execution.NewKubeRepairFixtureForTest(t, in.Runtime.Placement, []byte(in.Runtime.ADev))
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+	var f execution.RepairFixtureForTest
+	var reviewConfig reviewflow.Configuration
+	var reviewCalls atomic.Int32
+	var reviewedRepair atomic.Bool
+	readPath, writePath, writeContent := "candidate-fixture.txt", "repair-fixture.txt", "repaired\n"
+	if composition {
+		readPath = "tests/js/utils-locale-fallback.test.js"
+		writePath = readPath
+		writeContent = in.Changes[readPath] + "\ntest('Bounded repair regression: missing document locale uses browser locale', () => {\n  for (const lang of [null, undefined]) {\n    assert.equal(load(lang, 'es-CL').formatDate(raw), date.toLocaleDateString('es-CL', defaults));\n  }\n});\n"
+		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "Bearer "+strings.Repeat("x", 48) {
+				w.WriteHeader(401)
+				return
+			}
+			if r.Method == "GET" && r.URL.Path == "/readyz" {
+				io.WriteString(w, `{"ready":true}`)
+				return
+			}
+			b, err := io.ReadAll(io.LimitReader(r.Body, 131073))
+			if err != nil || len(b) > 131072 || !json.Valid(b) {
+				w.WriteHeader(400)
+				return
+			}
+			if strings.Contains(string(b), "Bounded repair regression") {
+				reviewedRepair.Store(true)
+			}
+			n := reviewCalls.Add(1)
+			message := map[string]any{"role": "assistant", "content": "Inspected the repaired regression test.\nVERDICT: approve"}
+			if n == 2 {
+				message["content"] = "Add a boundary regression test.\nVERDICT: request_changes"
+			}
+			finish := "stop"
+			if n == 1 || n == 3 {
+				args, _ := json.Marshal(map[string]string{"path": readPath})
+				message["content"] = nil
+				message["tool_calls"] = []any{map[string]any{"id": "repair-review", "type": "function", "function": map[string]string{"name": "read_file", "arguments": string(args)}}}
+				finish = "tool_calls"
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"model": "codex-cli", "choices": []any{map[string]any{"index": 0, "finish_reason": finish, "message": message}}})
+		}))
+		defer provider.Close()
+		adev := []byte(in.Runtime.ADev)
+		profile, _ := json.Marshal(map[string]any{"version": "ai-sdlc.reviewer-profile/v1", "model": "codex-cli", "maxSteps": 4, "maxSeconds": 120, "maxTokens": 2048, "aDevSHA256": authority.Digest(adev)})
+		reviewConfig = reviewflow.Configuration{Namespace: "ai-sdlc-reviewers", WorkerImage: in.Runtime.Placement.WorkerImage, MailboxImage: in.Runtime.Placement.MailboxImage, Profile: profile, ADev: adev, Model: modelbroker.ProviderConfig{Endpoint: provider.URL + "/v1/chat/completions", BearerToken: strings.Repeat("x", 48), AllowLoopbackHTTP: true}}
+		sourceRaw, err := os.ReadFile(in.SourceFile)
+		if err != nil || len(sourceRaw) > workspacebundle.MaxWireBytes {
+			t.Fatal("pinned source input")
+		}
+		source, err := workspacebundle.Decode(sourceRaw)
+		if err != nil {
+			t.Fatal("source bundle", err)
+		}
+		f = execution.NewKubeRepairCompositionForTest(t, in.Runtime.Placement, adev, source, in.Changes)
+		passwords := map[string]string{}
+		for role := range f.Identities {
+			passwords[role] = strings.ReplaceAll(role, "-", "_") + strings.Repeat("q", 40)
+		}
+		if err = f.Admin.ProvisionRolesForCapabilities(context.Background(), passwords, "verification", true, true); err != nil {
+			t.Fatal("publication fixture roles", err)
+		}
+	} else {
+		f = execution.NewKubeRepairFixtureForTest(t, in.Runtime.Placement, []byte(in.Runtime.ADev))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 420*time.Second)
 	defer cancel()
 	var original string
 	if e = f.Admin.Pool.QueryRow(`SELECT row_to_json(b)::text FROM model_budgets b`).Scan(&original); e != nil {
 		t.Fatal(e)
+	}
+	if composition {
+		policy := func() (authority.Policy, intake.Config, string, error) {
+			return f.Policy, f.Config, f.Command.ProfileSHA256, nil
+		}
+		verifierClient, err := podtransport.NewClient(in.VerificationConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state, err := (verificationflow.Runtime{DB: f.Verifier, Load: policy, Client: verifierClient, Image: in.VerificationImage}).PollOnce(ctx); err != nil || state != "behavior-verified" {
+			t.Fatal("actual predecessor behavior", state, err)
+		}
+		reviewClient, err := podtransport.NewClient(in.ReviewConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state, err := (reviewflow.Runtime{DB: f.Verifier, Policy: policy, Load: func(context.Context) (reviewflow.Configuration, error) { return reviewConfig, nil }, Client: reviewClient}).PollOnce(ctx); err == nil || state != "stopped" {
+			t.Fatal("actual predecessor rejection", state, err)
+		}
+		var reviewID, state, reason, cleanup string
+		if err := f.Admin.Pool.QueryRow(`SELECT id,state,reason,cleanup_state FROM review_runs WHERE candidate_id=$1`, f.Command.ID()).Scan(&reviewID, &state, &reason, &cleanup); err != nil || state != "failed" || reason != "request-changes" || cleanup != "complete" || reviewCalls.Load() != 2 {
+			t.Fatal("actual rejection journal", state, reason, cleanup, err)
+		}
+		f.Review, err = f.Verifier.ReadReview(ctx, reviewID)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	if sent, e := repairflow.Handoff(ctx, f.Verifier, repairLoad(f, "verifier")); e != nil || !sent {
 		t.Fatal("repair handoff", sent, e)
@@ -73,15 +174,17 @@ func TestRealConnectedRepairControllerFixture(t *testing.T) {
 		if strings.Contains(string(b), "Add a boundary regression test.") {
 			feedbackSeen.Store(true)
 		}
-		if strings.Contains(string(b), "unvalidated") {
+		if strings.Contains(string(b), "unvalidated") || (composition && strings.Contains(string(b), "utils-locale-fallback")) {
 			parentSeen.Store(true)
 		}
 		message := map[string]any{"role": "assistant", "content": "Repair fixture complete."}
 		finish := "stop"
 		if n < 3 {
-			name, args := "read_file", `{"path":"candidate-fixture.txt"}`
+			argsRaw, _ := json.Marshal(map[string]string{"path": readPath})
+			name, args := "read_file", string(argsRaw)
 			if n == 2 {
-				name, args = "write_file", `{"path":"repair-fixture.txt","content":"repaired\n"}`
+				argsRaw, _ = json.Marshal(map[string]string{"path": writePath, "content": writeContent})
+				name, args = "write_file", string(argsRaw)
 			}
 			message["content"] = nil
 			message["tool_calls"] = []any{map[string]any{"id": "repair-fixture", "type": "function", "function": map[string]string{"name": name, "arguments": args}}}
@@ -113,7 +216,53 @@ func TestRealConnectedRepairControllerFixture(t *testing.T) {
 	if e = f.Admin.Pool.QueryRow(`SELECT r.state,r.stop_reason,l.cleanup_state FROM execution_requests r JOIN execution_lifecycles l ON l.request_id=r.id WHERE r.id=$1`, child).Scan(&state, &reason, &cleanup); e != nil || state != "stopped" || reason != "candidate-captured" || cleanup != "complete" {
 		t.Fatal("child not retired", state, reason, cleanup, e)
 	}
-	report, _ := json.Marshal(map[string]any{"scope": "isolated-connected-repair-controller", "syntheticParentHistory": true, "syntheticSource": true, "syntheticModel": true, "realPostgres": true, "realKubernetes": true, "realSCC": true, "signedRepairHandoff": true, "signedOrchestratorInbox": true, "signedChildInbox": true, "parentBudgetUnchanged": true, "privateFeedbackConsumed": true, "rejectedTreeImported": true, "cumulativeChanges": record.Changes, "childModelCalls": record.ModelCalls, "candidateDeltaSHA256": record.DeltaSHA256, "assignmentSHA256": authority.Digest(prepared.Assignment()), "childCleanupComplete": true, "autonomousE2E": false})
+	publicationQueued := false
+	if composition {
+		policy := func() (authority.Policy, intake.Config, string, error) {
+			return f.Policy, f.Config, f.Command.ProfileSHA256, nil
+		}
+		if sent, err := execution.HandoffCandidate(ctx, f.Worker, func() (authority.Policy, authority.Identity, intake.Config, string, error) {
+			return f.Policy, f.Identities["worker"], f.Config, f.Command.ProfileSHA256, nil
+		}); err != nil || !sent {
+			t.Fatal("child verification handoff", sent, err)
+		}
+		if _, err := relayRepair(t, f, "verify-artifact", nil); err != nil {
+			t.Fatal("child verification inbox", err)
+		}
+		verifierClient, err := podtransport.NewClient(in.VerificationConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state, err := (verificationflow.Runtime{DB: f.Verifier, Load: policy, Client: verifierClient, Image: in.VerificationImage}).PollOnce(ctx); err != nil || state != "behavior-verified" {
+			t.Fatal("actual repaired behavior", state, err)
+		}
+		reviewClient, err := podtransport.NewClient(in.ReviewConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state, err := (reviewflow.Runtime{DB: f.Verifier, Policy: policy, Load: func(context.Context) (reviewflow.Configuration, error) { return reviewConfig, nil }, Client: reviewClient}).PollOnce(ctx); err != nil || state != "review-passed" {
+			t.Fatal("actual repaired review", state, err)
+		}
+		if reviewCalls.Load() != 4 || !reviewedRepair.Load() {
+			t.Fatal("independent reviewer did not read repaired tree", reviewCalls.Load(), reviewedRepair.Load())
+		}
+		expected := func() (publicationflow.ReviewPolicy, error) {
+			return publicationflow.ReviewPolicy{Profile: authority.Digest(reviewConfig.Profile), Configuration: reviewConfig.Digest()}, nil
+		}
+		identity := func() (authority.Policy, authority.Identity, error) { return f.Policy, f.Identities["verifier"], nil }
+		if sent, err := publicationflow.Handoff(ctx, f.Verifier, policy, expected, identity); err != nil || !sent {
+			t.Fatal("normal publication handoff", sent, err)
+		}
+		if sent, err := publicationflow.Handoff(ctx, f.Verifier, policy, expected, identity); err != nil || sent {
+			t.Fatal("duplicate publication handoff", sent, err)
+		}
+		var count int
+		if err := f.Admin.Pool.QueryRow(`SELECT count(*) FROM authorized_outbox WHERE operation='publish-candidate'`).Scan(&count); err != nil || count != 1 {
+			t.Fatal("publication outbox", count, err)
+		}
+		publicationQueued = true
+	}
+	report, _ := json.Marshal(map[string]any{"scope": "isolated-connected-repair-controller", "syntheticParentHistory": true, "syntheticInitialCandidate": true, "realInitialRejection": composition, "syntheticSource": !composition, "syntheticModel": true, "realPostgres": true, "realKubernetes": true, "realSCC": true, "signedRepairHandoff": true, "signedOrchestratorInbox": true, "signedChildInbox": true, "parentBudgetUnchanged": true, "privateFeedbackConsumed": true, "rejectedTreeImported": true, "cumulativeChanges": record.Changes, "childModelCalls": record.ModelCalls, "candidateDeltaSHA256": record.DeltaSHA256, "assignmentSHA256": authority.Digest(prepared.Assignment()), "childCleanupComplete": true, "autonomousE2E": false, "realChildBehaviorAndReview": composition, "independentReviewCalls": reviewCalls.Load(), "normalPublicationHandoff": publicationQueued, "forgeWrites": false})
 	if e = os.WriteFile(in.ReportFile, report, 0600); e != nil {
 		t.Fatal("report")
 	}

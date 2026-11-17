@@ -30,6 +30,9 @@ func verificationClaimFixture(t *testing.T, configure ...func(*fixture)) (*lifec
 		}
 		f.command.AuthorityRevision = f.Material.Policy.Revision()
 		snapshot := f.Snapshot(1, true)
+		if f.sourceOverride != nil {
+			snapshot.BaseSHA = f.sourceOverride.SourceSHA
+		}
 		marker := verification.RecipeMarker
 		if f.Material.Policy.Repository == "os-santiago/saferus" {
 			marker = verification.LifetimeMarker

@@ -16,6 +16,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/testsupport"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
 type fixture struct {
@@ -28,6 +29,8 @@ type fixture struct {
 	profileModel      string
 	placementOverride *Placement
 	adevOverride      []byte
+	sourceOverride    *workspacebundle.Bundle
+	candidateChanges  map[string]string
 }
 
 func newFixture(t *testing.T, configure ...func(*fixture)) *fixture {

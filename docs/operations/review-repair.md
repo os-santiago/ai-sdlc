@@ -66,3 +66,29 @@ executes the child with actual SCC, Kubernetes and PostgreSQL. It checks importe
 parent content, private feedback, remaining calls, cumulative capture, unchanged
 parent budget and resource removal. It is not a demonstration of a fresh live
 issue reaching production.
+
+The broader composition fixture runs the predecessor's behavior verification and
+SCC `request_changes`, derives the child through signed inboxes, runs actual SCC
+repair, verifies the cumulative candidate, obtains a new independent SCC approval
+and emits exactly one normal publication handoff. It retains synthetic initial
+generation history and deterministic model replies; it makes no forge writes.
+The `review-kind` quality check runs this fixture and retains its report.
+
+```bash
+python3 tools/verify_review_repair_composition.py \
+  --kubectl /path/to/kubectl --kubeconfig /private/disposable-kubeconfig \
+  --worker-image REGISTRY/IMAGE@sha256:DIGEST \
+  --mailbox-image REGISTRY/IMAGE@sha256:DIGEST \
+  --verifier-image REGISTRY/IMAGE@sha256:DIGEST \
+  --test-binary /path/to/execution.test --repository /path/to/homedir \
+  --source-sha 0622cdaeb59a11a27bd5f3d7e18183c401a5e412 \
+  --candidate-directory /private/prepared-locale-candidate \
+  --report /private/repair-composition-report.json
+```
+
+The disposable database requirement is the same. All three namespaces
+`ai-sdlc-executors`, `ai-sdlc-verifiers` and `ai-sdlc-reviewers` must be absent.
+Prepare candidate files with `tools/prepare_verification_fixture.py` as the CI
+workflow does. The report binds the binary hash, source commit, runtime revision,
+image digests and whether the runtime checkout was dirty. Prefer a clean frozen
+checkout when collecting release evidence.

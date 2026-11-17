@@ -54,6 +54,13 @@ func (f *preparationFixture) source(ctx context.Context, repository, sha string)
 	if ctx.Err() != nil || repository != f.command.Repository || sha != f.command.SourceSHA {
 		return workspacebundle.Bundle{}, ErrAuthority
 	}
+	if f.sourceOverride != nil {
+		raw, err := workspacebundle.Encode(*f.sourceOverride)
+		if err != nil {
+			return workspacebundle.Bundle{}, err
+		}
+		return workspacebundle.Decode(raw)
+	}
 	return workspacebundle.Bundle{Version: workspacebundle.Version, SourceSHA: sha, Files: []workspacebundle.File{{Path: "README.md", Mode: 0644, Data: []byte("fixture source\n")}}}, nil
 }
 func TestPreparationDerivesImmutableInputsFromDurableProof(t *testing.T) {
