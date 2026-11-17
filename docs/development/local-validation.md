@@ -50,11 +50,11 @@ does not uniquely identify uncommitted bytes; validate a clean reviewed commit
 for release evidence. Keep these developer reports out of source control.
 
 ```bash
-python3 tools/validate_runtime.py --provider podman --timeout 900 --output /tmp/my-new-validation
+python3 tools/validate_runtime.py --provider podman --timeout 1800 --output /tmp/my-new-validation
 ```
 
 The output directory must not already exist. The overall work deadline defaults
-to 900 seconds and accepts 60–3600. Cleanup has a separate bounded window. A
+to 1800 seconds and accepts 60–3600. Cleanup has a separate bounded window. A
 failed command exits nonzero, records attempted stages and removes only objects
 whose ownership label matches the run, by observed container ID. Cleanup errors
 also make the result fail and identify remaining names for inspection.
@@ -79,3 +79,5 @@ for the separate Linux/Podman native registry test. It verifies the committed
 pull-only ACL, actual TLS/signatures and bounded Go verifier against disposable
 Zot with synthetic history. See the [scope and cleanup contract](../architecture/operational-provenance-boundary.md#native-registry-access-conformance).
 It does not install trust or activate the operational pipeline.
+
+The full PostgreSQL suite has a 20-minute per-package ceiling and a 25-minute test-stage ceiling, both constrained by the overall deadline. This accommodates the serial journal fault tests on hosted runners; it does not retry or skip failed tests.

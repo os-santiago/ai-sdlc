@@ -16,6 +16,7 @@ var ErrBootstrapInspection = errors.New("initial installation requires an empty,
 var bootstrapTables = []string{
 	"admission_heads", "admissions", "attempts", "authorized_inbox", "authorized_nonces", "authorized_outbox",
 	"build_cleanups", "build_contexts", "build_effects", "build_handoffs", "build_observations", "build_plans", "build_requests", "build_slots", "built_records",
+	"deployment_health", "deployment_intents", "deployment_receipts", "deployment_requests", "deployment_sends",
 	"execution_candidates", "execution_effects", "execution_lifecycles", "execution_models", "execution_requests",
 	"intake_cursors", "intake_heads", "intake_observations", "intake_revisions",
 	"managed_component_roles", "merge_effects", "merge_requests", "merged_records", "model_allocations", "model_budgets", "model_calls",

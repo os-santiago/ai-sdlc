@@ -2,10 +2,10 @@ package podtransport
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/building"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/deployment"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/releasing"
 	"net/http"
 	"regexp"
@@ -30,25 +30,9 @@ func consoleImage(s string) bool {
 	return strings.HasPrefix(s, building.Registry+"@sha256:") && len(s) == len(building.Registry+"@sha256:")+64 && hex64.MatchString(strings.TrimPrefix(s, building.Registry+"@sha256:"))
 }
 
-// ConsolePatch compiles only tests and a single image replacement. All objects,
-// paths and operation choices are compiled, never copied from issue contents.
+// ConsolePatch delegates to the exact compiler shared with durable admission.
 func ConsolePatch(t releasing.Target, before ConsoleSnapshot, image string) ([]byte, error) {
-	if t.Validate(time.Now()) != nil || before.DeploymentUID != t.DeploymentUID || before.TargetSHA256 != t.Digest() || !consoleRV.MatchString(before.ResourceVersion) || before.Generation < 1 || before.Image == image || (!consoleImage(image) && image != t.BaselineImage) {
-		return nil, ErrTransport
-	}
-	patch := []map[string]any{
-		{"op": "test", "path": "/metadata/uid", "value": before.DeploymentUID},
-		{"op": "test", "path": "/metadata/resourceVersion", "value": before.ResourceVersion},
-		{"op": "test", "path": "/metadata/generation", "value": before.Generation},
-		{"op": "test", "path": "/spec/template/spec/containers/0/name", "value": "console"},
-		{"op": "test", "path": "/spec/template/spec/containers/0/image", "value": before.Image},
-		{"op": "replace", "path": "/spec/template/spec/containers/0/image", "value": image},
-	}
-	raw, e := json.Marshal(patch)
-	if e != nil {
-		return nil, ErrTransport
-	}
-	return raw, nil
+	return deployment.CompilePatch(t, before, image, time.Now())
 }
 
 // ConsoleEffects allows one advance and one containment attempt per instance.

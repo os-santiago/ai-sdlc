@@ -16,6 +16,15 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 OWNER_LABEL = 'ai-sdlc.io/validation-run'
 REQUIRED_TESTS = {
+    ('internal/execution', 'TestDeploymentJournalExclusiveIntentSendAndCompletion'),
+    ('internal/execution', 'TestDeploymentJournalRollbackRequiresOwnedAckAndSurvivesFreeze'),
+    ('internal/execution', 'TestDeploymentJournalUncertainSendCannotBeRepeatedOrAdopted'),
+    ('internal/execution', 'TestDeploymentJournalRejectsForeignAuthorityAndHealth'),
+    ('internal/execution', 'TestDeploymentCommandBindsHistoryAndCannotExtendPlan'),
+    ('internal/execution', 'TestDeploymentJournalRevocationDuringBlockedHistory'),
+    ('internal/execution', 'TestDeploymentJournalLostFactAndCompletionAcknowledgements'),
+    ('internal/execution', 'TestDeploymentCommandPreservesSubmillisecondHistoryOrder'),
+    ('internal/execution', 'TestDeploymentHealthExpiryWhileInsertWaits'),
     ('internal/store', 'TestConcurrentFreshMigrations'),
     ('internal/intake', 'TestDurableDedupeAndWithdrawal'),
     ('internal/execution', 'TestSignedExecutionDuplicateDeliveryAndSingleClaim'),
@@ -223,7 +232,7 @@ class Run:
             self.stage('git-trust', ['exec', runner, 'git', 'config', '--global', '--add', 'safe.directory', str(self.root)], 10)
             self.stage('build', ['exec', runner, 'go', 'build', './...'])
             self.stage('vet', ['exec', runner, 'go', 'vet', './...'])
-            self.stage('test', ['exec', runner, 'go', 'test', '-json', '-count=1', '-p', '1', './...'])
+            self.stage('test', ['exec', runner, 'go', 'test', '-json', '-count=1', '-timeout=20m', '-p', '1', './...'], 1500)
             evidence = test_evidence(self.output / 'test.log')
             self.report['tests'] = evidence
             if evidence['missingDatabaseProof']:
@@ -247,7 +256,7 @@ class Run:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--provider', choices=['auto', 'podman', 'docker'], default='auto')
-    parser.add_argument('--timeout', type=int, default=900, help='Overall work deadline, 60–3600 seconds')
+    parser.add_argument('--timeout', type=int, default=1800, help='Overall work deadline, 60–3600 seconds')
     parser.add_argument('--output', type=Path, help='New private directory for logs and report')
     args = parser.parse_args(argv)
     if not 60 <= args.timeout <= 3600:

@@ -39,7 +39,7 @@ func (db *DB) readBuiltRecord(ctx context.Context, id, role string) (BuiltRecord
 }
 func readBuiltRecord(ctx context.Context, q Querier, id, role string) (BuiltRecord, error) {
 	var r BuiltRecord
-	if !buildIDPattern.MatchString(id) || (role != "verifier" && role != "build-controller" && role != "release-manager") || AssertComponent(ctx, q, role) != nil {
+	if !buildIDPattern.MatchString(id) || (role != "verifier" && role != "build-controller" && role != "release-manager" && role != "deployer") || AssertComponent(ctx, q, role) != nil {
 		return r, ErrExecution
 	}
 	var payload, receipt, inner, outer, raw, slotRaw []byte

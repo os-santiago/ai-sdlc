@@ -82,6 +82,14 @@ func (db *DB) ProvisionRolesForProvenance(ctx context.Context, passwords map[str
 
 // Promotion remains inactive unless separately selected by reviewed installation.
 func (db *DB) ProvisionRolesForPromotion(ctx context.Context, passwords map[string]string, mode string, review, publication, merge, build, provenance, promotion bool) error {
+	return db.ProvisionRolesForDeployment(ctx, passwords, mode, review, publication, merge, build, provenance, promotion, false)
+}
+
+// Deployment grants require their own explicit reviewed installation option.
+func (db *DB) ProvisionRolesForDeployment(ctx context.Context, passwords map[string]string, mode string, review, publication, merge, build, provenance, promotion, deployment bool) error {
+	if deployment && !promotion {
+		return errors.New("deployment requires verified promotion capability")
+	}
 	if promotion && !provenance {
 		return errors.New("promotion requires verified provenance capability")
 	}
@@ -235,6 +243,9 @@ func (db *DB) ProvisionRolesForPromotion(ctx context.Context, passwords map[stri
 			}
 			if promotion && component == "release-manager" {
 				statements = append(statements, promotionPrivileges...)
+			}
+			if deployment && component == "deployer" {
+				statements = append(statements, deploymentPrivileges...)
 			}
 			// REVOKE table privileges alone does not remove column grants.
 			for _, revoke := range columnRevocations {
