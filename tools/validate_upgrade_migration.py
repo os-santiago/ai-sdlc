@@ -30,6 +30,7 @@ def main(argv=None):
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--exercise-tool-budget-history',action='store_true')
     parser.add_argument('--exercise-reviewer-history',action='store_true')
+    parser.add_argument('--reviewer-fence-image')
     args=parser.parse_args(argv);args.output.mkdir(mode=0o700,parents=True,exist_ok=False)
     owner=secrets.token_hex(16);name='ai-sdlc-migration-'+owner;cid=None;restorer=None;attempted=False
     report={'version':1,'status':'running','owner':owner,'databaseContainer':name,'cleanup':[],
@@ -164,7 +165,8 @@ def main(argv=None):
         if args.exercise_reviewer_history:
             from reviewer_upgrade_fixture import exercise
             exercise(database,args.provider,PG,args.output/'private-reviewer-backup',
-                     plan['target']['migrations'],plan_id,report,save)
+                     plan['target']['migrations'],plan_id,report,save,
+                     fence_image=args.reviewer_fence_image,connection=connection,port=port)
     except Exception as error:report.update(status='failed',errorType=type(error).__name__);raise
     finally:
         if restorer is not None:

@@ -2,15 +2,18 @@
 import json
 import secrets
 import uuid
+import time
 
 import reviewer_upgrade_history
 from reviewer_image_upgrade import ReviewerImageUpgrade
 from runtime_upgrade_backup import Restore
 from diagnostic_upgrade_data import Compatibility
 import upgrade_backup_data as data
+from upgrade_fence_client import Fence
 
 
-def exercise(database, provider, image, directory, catalog, plan_id, report, save):
+def exercise(database, provider, image, directory, catalog, plan_id, report, save,
+             *, fence_image=None, connection=None, port=None):
     # The caller already owns an isolated PostgreSQL CID and its migration
     # fixture. These seeds and negative mutations never target an installation.
     database.sql("UPDATE execution_requests SET expires_at=clock_timestamp()-interval '1 hour';"
@@ -61,13 +64,14 @@ INSERT INTO review_model_calls(run_id,sequence,token,pod_uid,request_digest,inpu
         ("UPDATE verification_requests SET expires_at=clock_timestamp()+interval '1 hour';", 'live verification authority'),
         (f"INSERT INTO publication_handoffs(review_id,command_id,payload_digest) VALUES('{review}','publication-{digest}','{digest}');", 'downstream publication intent'),
         (f"INSERT INTO authorized_outbox(producer,event_id,target,operation,receipt,payload) VALUES('worker','fixture-{digest}','orchestrator','fixture','{{}}',decode('00','hex'));", 'pending authenticated delivery'),
+        (f"INSERT INTO review_effects(run_id,kind,token,resource_name) VALUES('{review}','export','{str(uuid.uuid4())}','review-fixture');", 'unacknowledged review effect'),
+        (f"INSERT INTO verification_effects(request_id,kind,token,resource_name) VALUES('{verification}','tests','{str(uuid.uuid4())}','verify-{digest[:32]}-tests');", 'unacknowledged verification effect'),
     )
     rejected = []
     for mutation, name in controls:
         # Mutation executes successfully before evaluating the read-only oracle;
         # SQL constraint errors cannot masquerade as rejection by the guard.
-        sql = reviewer_upgrade_history.QUERY.format(downstream=''.join(
-            ' OR EXISTS(SELECT 1 FROM '+table+')' for table in reviewer_upgrade_history.DOWNSTREAM))
+        sql = reviewer_upgrade_history.QUERY
         result = database.sql('BEGIN;' + mutation + sql + 'ROLLBACK;')
         if result != 'f\n':
             raise ValueError('Reviewer history control was not rejected: ' + name)
@@ -88,6 +92,47 @@ INSERT INTO review_model_calls(run_id,sequence,token,pod_uid,request_digest,inpu
     finally:
         restore.close()
     item.retained()
+    if fence_image is not None:
+        try:
+            with Fence(provider, fence_image, connection, port, catalog, expires_at=time.time()+90):
+                raise AssertionError('Pre-candidate fence accepted captured-review history')
+        except ValueError:
+            pass
+        # The identical SQL must fail without exclusion, and succeed only by
+        # catching PostgreSQL lock_not_available while the real fence is held.
+        writer = "SET lock_timeout='150ms'; DO $$ BEGIN UPDATE work_items SET status=status; RAISE EXCEPTION 'writer was not excluded'; EXCEPTION WHEN lock_not_available THEN NULL; END $$;"
+        try:
+            database.sql(writer)
+        except ValueError:
+            pass
+        else:
+            raise ValueError('Unfenced writer control did not execute')
+        with Fence(provider, fence_image, connection, port, catalog,
+                   expires_at=time.time()+90, contained_review=True) as fence:
+            fence.check()
+            database.sql(writer)
+            item.retained()
+            fence.check()
+        database.sql('UPDATE work_items SET status=status;')
+        item.retained()
+        pending = str(uuid.uuid4())
+        try:
+            database.sql(f"INSERT INTO execution_effects(request_id,kind,token) VALUES('{request}','export','{pending}');")
+            try:
+                with Fence(provider, fence_image, connection, port, catalog,
+                           expires_at=time.time()+90, contained_review=True):
+                    raise AssertionError('Pending execution effect admitted by reviewer fence')
+            except ValueError:
+                pass
+        finally:
+            database.sql(f"DELETE FROM execution_effects WHERE token='{pending}';")
+        item.retained()
+        report.update(reviewerFenceAcquiredCheckedReleased=True,
+            reviewerFenceExcludedWriters=True, reviewerFenceReleasedWriters=True,
+            preCandidateFenceRejectedReviewHistory=True,
+            reviewerFenceRejectedPendingExecutionEffect=True,
+            reviewerFenceImage=fence_image,
+            reviewerFenceImageOrigin='locally built candidate helper; not published or installed')
     report.update(reviewerHistoryRestored=True, failedReviewRetained=True,
         passedVerificationRetained=True, capturedCandidateRetained=True,
         reviewerHistoryNegativeControls=rejected,

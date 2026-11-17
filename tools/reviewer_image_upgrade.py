@@ -19,6 +19,7 @@ import prepared_resources
 import reviewer_upgrade_history
 import reviewer_upgrade_targets
 import upgrade_backup_data as data
+from upgrade_fence_client import Fence
 
 VERSION = 'ai-sdlc.reviewer-image-upgrade/v1'
 
@@ -36,6 +37,7 @@ def publication(source, api, run, revision, catalog, previous):
         raise ValueError('Published worker must pin one immutable SCC revision')
     return {'revision': revision, 'run': run, 'publication': selected['runURL'],
             'workerImage': install_images.REGISTRY + '@' + selected['images']['worker']['digest'],
+            'migratorImage': install_images.REGISTRY + '@' + selected['images']['migrator']['digest'],
             'sccRevision': pins[0], 'uniformTargetPublication': False}
 
 
@@ -67,6 +69,13 @@ class ReviewerImageUpgrade(ApprovalWindow):
             previous = self.parent.record['selection']['selected']['worker']['revision']
             self.selection = publication(install_upgrade.Source(install.ROOT), install_images.GitHub(),
                                          run, revision, self.catalog, previous)
+        selected = self.record['selection'] if self.record else self.selection
+        if selected is not None:
+            self.helper = selected['migratorImage']
+
+    def fence(self, connection, port):
+        return Fence(self.config.provider, self.helper, connection, port, self.catalog,
+                     expires_at=self.record['expiresAt'], contained_review=True)
 
     def custody(self):
         self.source_approval.custody()

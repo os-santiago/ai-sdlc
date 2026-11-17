@@ -38,6 +38,14 @@ class FenceClientTests(unittest.TestCase):
                 value[fault]=('b'*8+NONCE[8:]) if fault=='nonce' else value[fault]+1
                 with self.assertRaises(ValueError):self.read(fence,json.dumps(value).encode()+b'\n')
 
+    def test_contained_review_protocol_is_explicit_and_cannot_accept_legacy_ack(self):
+        fence=Fence('podman',IMAGE,URI,19001,[],expires_at=time.time()+60,contained_review=True)
+        self.assertEqual(fence.operation,'hold-reviewer-upgrade-fence')
+        with self.assertRaises(ValueError):self.read(fence,json.dumps(self.response()).encode()+b'\n')
+        self.read(fence,json.dumps(self.response(version='ai-sdlc.reviewer-upgrade-fence/v1')).encode()+b'\n')
+        with self.assertRaises(ValueError):self.read(self.fixture(),json.dumps(self.response(version='ai-sdlc.reviewer-upgrade-fence/v1')).encode()+b'\n')
+        with self.assertRaises(ValueError):Fence('podman',IMAGE,URI,19001,[],expires_at=time.time()+60,contained_review='true')
+
     def test_rejects_authority_malformed_duplicate_extra_and_oversized_frames(self):
         values=[self.response(upgradeAuthorized=True),self.response(workflowRowsWritten=True),
                 self.response(nonce='-'*36),self.response(expiresAt=True),self.response(extra=True)]

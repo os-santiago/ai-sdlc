@@ -25,6 +25,13 @@ review. Pending authenticated delivery, model handoff, unbound running work or a
 publication and later-stage history prevents the operation. The installer reads
 these records; it never completes, retries, deletes or renews them.
 
+The migrator selected from that same target publication must support the separate
+`hold-reviewer-upgrade-fence` protocol. Its SQL history predicate is shared with
+the installer. The original pre-candidate fence remains unchanged and rejects
+this history. Unacknowledged execution effects are rejected; review/verification
+effects require either an acknowledgement or an explicit original `not_sent_at`
+fact. Cleanup alone never proves an operation was not sent.
+
 Before changing Kubernetes resources, the installer authenticates the publication,
 pulls the immutable image, checks original installation custody, and captures the
 history under database write exclusion. It pauses producers, creates a new private
@@ -49,5 +56,9 @@ a disposable PostgreSQL database containing a captured candidate, passed
 verification and failed review, negative controls for active authority and
 downstream work, and a real backup restoration. An installed CLI run and a later
 autonomous issue remain separate evidence requirements.
+Supply `--reviewer-fence-image` with the immutable candidate migrator to exercise
+actual acquisition, checks, writer exclusion, release, rejection by the legacy
+protocol and rejection of an unacknowledged execution effect. This fixture uses
+the candidate helper locally; it does not publish or apply an installation.
 The [retention fixture result](../evidence/2026-11-17-reviewer-history.json)
 records the observed restoration and rejected negative controls.

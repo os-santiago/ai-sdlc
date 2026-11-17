@@ -16,7 +16,11 @@ LABEL = 'ai-sdlc.upgrade-fence'
 
 
 class Fence:
-    def __init__(self, provider, image, connection, port, source_catalog, *, expires_at):
+    def __init__(self, provider, image, connection, port, source_catalog, *, expires_at, contained_review=False):
+        if type(contained_review) is not bool:
+            raise ValueError('Explicit administrative history protocol required')
+        self.protocol = 'ai-sdlc.reviewer-upgrade-fence/v1' if contained_review else 'ai-sdlc.upgrade-fence/v1'
+        self.operation = 'hold-reviewer-upgrade-fence' if contained_review else 'hold-upgrade-fence'
         if type(expires_at) not in (int,float) or not math.isfinite(expires_at): raise ValueError('Finite original pause deadline required')
         parsed = urlsplit(connection)
         if (provider not in ('podman', 'docker') or not re.fullmatch(r'quay\.io/os-santiago/ai-sdlc@sha256:[a-f0-9]{64}', image)
@@ -74,7 +78,7 @@ class Fence:
         if self.buffer: raise ValueError('Unsolicited fence response')
         value = decode(line)
         if (not isinstance(value, dict) or set(value) != {'version','state','nonce','expiresAt','workflowRowsWritten','upgradeAuthorized'}
-                or value['version'] != 'ai-sdlc.upgrade-fence/v1' or value['state'] != state
+                or value['version'] != self.protocol or value['state'] != state
                 or value['workflowRowsWritten'] is not False or value['upgradeAuthorized'] is not False
                 or not isinstance(value['nonce'],str) or not re.fullmatch('[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}',value['nonce'])
                 or type(value['expiresAt']) is not int):
@@ -141,7 +145,7 @@ class Fence:
     def __enter__(self):
         args=[self.provider,'run','--rm','--name',self.name,'-i','--label',LABEL+'='+self.owner,
               '--network','host','--read-only','--cap-drop=ALL','--security-opt=no-new-privileges',
-              '--memory=256m','--cpus=1','--log-driver=none',self.image,'hold-upgrade-fence']
+              '--memory=256m','--cpus=1','--log-driver=none',self.image,self.operation]
         try:
             self.process=subprocess.Popen(args,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,bufsize=0)
             os.set_blocking(self.process.stdin.fileno(),False)

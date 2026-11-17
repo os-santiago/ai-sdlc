@@ -92,7 +92,7 @@ class ReviewerOrdering(unittest.TestCase):
     def test_publication_cannot_change_schema_or_use_floating_scc(self):
         source = Mock()
         source.catalog.return_value = [{'filename': 'original'}]
-        selected = {'runURL': 'authenticated-publication', 'images': {'worker': {'digest': 'sha256:'+'c'*64}}}
+        selected = {'runURL': 'authenticated-publication', 'images': {'worker': {'digest': 'sha256:'+'c'*64}, 'migrator': {'digest': 'sha256:'+'d'*64}}}
         with patch.object(reviewer_image_upgrade.install_images, 'resolve', return_value=({}, selected)):
             with self.assertRaises(ValueError):
                 reviewer_image_upgrade.publication(source, Mock(), 42, 'a'*40, [], 'b'*40)

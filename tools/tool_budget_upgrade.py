@@ -176,8 +176,7 @@ class ToolBudgetUpgrade(Upgrade):
         intent = {'phase': 'planned', 'expiresAt': self.record['expiresAt']}
         with bootstrap_database_forward.original_database(self.config.base_run, self.config.kubectl,
                 connection, observed['resources']['pod'], timeout_seconds=240) as (forwarded, port):
-            with Fence(self.config.provider, self.helper, forwarded, port, self.catalog,
-                       expires_at=self.record['expiresAt']) as fence:
+            with self.fence(forwarded, port) as fence:
                 database = data.Database(fence.command, self.database().prefix)
                 if first_pause:
                     captured = self.capture_first_pause(database)
@@ -204,8 +203,7 @@ class ToolBudgetUpgrade(Upgrade):
         observed, connection = self.observe('paused')
         with bootstrap_database_forward.original_database(self.config.base_run, self.config.kubectl,
                 connection, observed['resources']['pod'], timeout_seconds=240) as (forwarded, port):
-            with Fence(self.config.provider, self.helper, forwarded, port, self.catalog,
-                       expires_at=self.record['expiresAt']) as fence:
+            with self.fence(forwarded, port) as fence:
                 self.observe('paused')
                 database = data.Database(fence.command, self.database().prefix)
                 self.retained(database)
@@ -215,6 +213,10 @@ class ToolBudgetUpgrade(Upgrade):
                 fence.check()
         self.observe('paused')
         return result
+
+    def fence(self, connection, port):
+        return Fence(self.config.provider, self.helper, connection, port, self.catalog,
+                     expires_at=self.record['expiresAt'])
 
     def backup(self):
         self.deadline()
