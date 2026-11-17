@@ -1,5 +1,7 @@
 import json
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -9,6 +11,69 @@ import install
 
 
 class CandidateInstallTests(unittest.TestCase):
+    def test_existing_tool_budget_gate_precedes_runtime_effects(self):
+        class PassedBudgetGate(Exception):
+            pass
+        lock_path = install.LOCAL / 'images.lock.json'
+        desired = candidate_install.desired_values(install.ROOT, lock_path, install.image_lock(lock_path))
+        original = json.loads(desired['candidate']['configJSON'])
+        old = json.loads(json.dumps(original))
+        old['profile']['maxSteps'] = 16
+        malformed = [None, '{', [], {'profile': {'maxSteps': 24}},
+                     dict(original, profile=dict(original['profile'], maxSteps=True))]
+        cases = [('new', None, True), ('same', json.dumps(original), True),
+                 ('changed', json.dumps(old), False), ('api-error', None, False),
+                 ('api-timeout', None, False), ('api-oversize', None, False)]
+        cases += [('malformed-' + str(n), json.dumps(value) if value != '{' else value, False)
+                  for n, value in enumerate(malformed)]
+        cases.append(('duplicate', json.dumps(original).replace('"maxSteps": 24', '"maxSteps": 16, "maxSteps": 24'), False))
+        for profile in ('candidate', 'verification'):
+            for label, config, allowed in cases:
+                with self.subTest(profile=profile, case=label), tempfile.TemporaryDirectory() as directory:
+                    state = Path(directory) / 'ai-sdlc' / 'budget-fixture'
+                    state.mkdir(parents=True)
+                    (state / 'ownership.json').write_text(json.dumps({'cluster': 'budget-fixture', 'provider': 'podman', 'clusterUID': 'fixture-uid'}))
+                    commands = []
+                    def run(command, **kwargs):
+                        argv = [str(value) for value in command]
+                        commands.append(argv)
+                        if argv[:3] == ['kind', 'get', 'clusters']:
+                            return subprocess.CompletedProcess(argv, 0, 'budget-fixture\n')
+                        if argv[:3] == ['kind', 'export', 'kubeconfig']:
+                            (state / 'kubeconfig').write_text('fixture only\n')
+                        if 'kube-system' in argv and 'get' in argv:
+                            return subprocess.CompletedProcess(argv, 0, 'fixture-uid')
+                        if 'ai-sdlc-execution' in argv:
+                            self.assertIn('--ignore-not-found', argv)
+                            self.assertIn('--request-timeout=10s', argv)
+                            self.assertEqual(kwargs['timeout'], 15)
+                            if label == 'api-error':
+                                raise subprocess.CalledProcessError(1, argv)
+                            if label == 'api-timeout':
+                                raise subprocess.TimeoutExpired(argv, 15)
+                            if label == 'api-oversize':
+                                return subprocess.CompletedProcess(argv, 0, 'x' * 1048577)
+                            raw = '' if label == 'new' else json.dumps({'data': {'config.json': config}})
+                            return subprocess.CompletedProcess(argv, 0, raw)
+                        if argv[0] == 'kubectl' and 'wait' in argv:
+                            raise PassedBudgetGate()
+                        self.assertFalse(argv[0] == 'kubectl' and any(v in argv for v in ('apply', 'create', 'patch', 'delete')))
+                        self.assertFalse(argv[0] == 'helm' and 'upgrade' in argv)
+                        return subprocess.CompletedProcess(argv, 0, '')
+                    with patch.dict(os.environ, XDG_STATE_HOME=directory), \
+                         patch.object(install, 'tools', return_value={name: name for name in ('helm', 'kind', 'kubectl')}), \
+                         patch.object(install.shutil, 'which', return_value='/fixture/provider'), \
+                         patch.object(install, 'host_prerequisites'), patch.object(install, 'run', side_effect=run), \
+                         patch.object(install, 'configure_identities') as identities, \
+                         patch.object(candidate_install, 'model_credentials') as credentials:
+                        expected = (PassedBudgetGate if allowed else subprocess.CalledProcessError if label == 'api-error'
+                                    else subprocess.TimeoutExpired if label == 'api-timeout' else ValueError)
+                        with self.assertRaises(expected):
+                            install.main(['local', '--cluster', 'budget-fixture', '--provider', 'podman', '--profile', profile])
+                        identities.assert_not_called()
+                        credentials.assert_not_called()
+                    self.assertTrue(any('ai-sdlc-execution' in argv for argv in commands))
+
     def test_reviewed_identity_pair_and_bounded_profile(self):
         lock_path = install.LOCAL / 'images.lock.json'
         lock = install.image_lock(lock_path)
