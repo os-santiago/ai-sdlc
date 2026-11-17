@@ -293,6 +293,30 @@ def main(argv=None):
         return install_platform(args, lock, source_digest, stack)
 
 
+def wait_cert_manager_api(kubectl, deadline, seconds=180):
+    """Exercise current admission/TLS without persisting probe resources."""
+    probe = {'apiVersion': 'cert-manager.io/v1', 'kind': 'Issuer',
+        'metadata': {'generateName': 'ai-sdlc-api-readiness-', 'namespace': 'cert-manager'},
+        'spec': {'selfSigned': {}}}
+    until = min(deadline.end, time.monotonic() + seconds)
+    while time.monotonic() < until:
+        remaining = min(15, until - time.monotonic())
+        if remaining <= 0:
+            break
+        try:
+            result = deadline.run(kubectl + ['create', '--dry-run=server', '-f', '-', '-o', 'name',
+                '--request-timeout=' + str(max(1, int(remaining))) + 's'],
+                input=json.dumps(probe), capture_output=True, check=False, limit=remaining)
+            if result.returncode == 0:
+                return
+        except subprocess.TimeoutExpired:
+            # A slow admission request is still not ready; no persisted effect
+            # exists to replay, and the original overall deadline stays fixed.
+            pass
+        time.sleep(max(0, min(1, until - time.monotonic())))
+    raise ValueError('cert-manager API admission is not ready before the deadline; owned state is retained')
+
+
 def install_platform(args, lock, source_digest, stack):
     import install
     import konflux_runtime_install as platform
@@ -379,6 +403,7 @@ def install_platform(args, lock, source_digest, stack):
 
     apply('cert-manager')
     wait(['--for=condition=Available','deployment','-l','app.kubernetes.io/instance=cert-manager','-n','cert-manager'],180)
+    wait_cert_manager_api(kubectl, deadline)
     apply('prometheus-operator-crds')
     apply('trust-manager')
     wait(['--for=condition=Available','deployment/trust-manager','-n','cert-manager'],180)
