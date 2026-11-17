@@ -9,7 +9,6 @@ import json
 import os
 from pathlib import Path
 import re
-import resource
 import stat
 import subprocess
 import tempfile
@@ -130,12 +129,7 @@ class Preparation:
         observation=self.guard();node_id=observation['nodeID']
         def read(digest,limit):
             # An owned node and hash-selected blob; no shell or image importer.
-            with tempfile.TemporaryFile() as output:
-                result=subprocess.run([self.provider,'exec',node_id,'ctr','-n','k8s.io','content','get',digest],stdout=output,stderr=subprocess.DEVNULL,timeout=20,check=False,preexec_fn=lambda:resource.setrlimit(resource.RLIMIT_FSIZE,(limit+1,limit+1)))
-                if result.returncode:raise ValueError('Original baseline OCI content unavailable')
-                output.seek(0);raw=output.read(limit+1)
-                if len(raw)>limit:raise ValueError('Original baseline OCI blob exceeded descriptor bound')
-                return raw
+            return release_target_oci.bounded_output([self.provider,'exec',node_id,'ctr','-n','k8s.io','content','get',digest],limit)
         return release_target_oci.verify(reference,runtime,read)
 
     def describe(self,deployment,service):
