@@ -1,10 +1,9 @@
 # Independent reviewer workload
 
 The fixed SCC launcher supports `ai-sdlc.reviewer-profile/v1` as a separate,
-bounded workload profile. It is a component prerequisite, not an activated
-autonomous review controller. The candidate runtime still accepts only generation
-profiles. No runtime route, model budget, publication grant or Helm deployment is
-added by this change.
+bounded workload profile. This document covers the workload boundary; the
+[independent controller](independent-review-controller.md) binds its result to
+workflow authority. The candidate runtime accepts only generation profiles.
 
 The reviewer starts a fresh SCC conversation with the A-Dev policy, issue criteria
 and an immutable source/tree assignment. Its source mount is read-only. Its home,
@@ -16,8 +15,9 @@ runtime. The original source tree is checked before and after execution.
 The reviewed SCC configuration selects only the reviewer role and expected model,
 disables rework, blocks shell commands and Git mutations, and automatically permits
 four inspection tools. It does not use SCC's blanket `-y` approval. Source-owned
-configuration and SCC output remain untrusted; a future broker must independently
-reject every proposed tool outside the four-tool allowlist before handoff.
+configuration and SCC output remain untrusted; the
+[model guard](review-model-guard.md) independently rejects proposed tools outside
+the four-tool allowlist before handoff.
 
 ## Result contract
 
@@ -34,7 +34,14 @@ verdicts are valid observations; `request_changes` must never authorize publishi
 Unknown telemetry does not grant authority. The summary reader rejects symlinks,
 FIFOs, non-regular files and oversized content.
 
-Even a valid summary is **advisory**. The remaining controller must bind it to
+The pinned SCC may use one final model call after exactly eight inspection tools,
+with `tools=[]` and `tool_choice=none`. This consumes the existing call, time and
+token budgets; it grants no ninth tool. Additional tools, ambiguous markers
+(including `VERDICT = ...`), missing verdicts and exhausted budgets fail closed.
+An explicit `request_changes` remains exit 10 even when its explanation says
+that the implementation is blocked or not actionable; it remains a rejection.
+
+Even a valid summary is **advisory**. The controller must bind it to
 the exact candidate delta/tree, independent behavior proof, reviewer profile,
 current signed authority, exclusive durable claim and trusted model-call ledger.
 It must compare the complete final model response against the summary, reject
@@ -63,3 +70,11 @@ the summary. Every scenario requires the original source to remain unchanged.
 The fixture uses real SCC/Kubernetes and synthetic model replies, creates its own
 namespace and removes it by UID. It does not ingest or advance a live issue,
 publish a PR or establish end-to-end completion. Installer CI runs the same cases.
+
+Also run `budget-approve`, `budget-request_changes` and `budget-extra-tool`.
+These exercise eight real reads followed by a tool-free third model request.
+The accepted cases compare broker observations with the summary and unchanged
+source. The extra-tool case must exit 22 after eight tools and produce no strict
+review result; it does not claim a successful source export. CI runs all seven
+scenarios. The [measured component result](../evidence/2026-11-17-reviewer-finalization.json)
+uses the exact merged SCC pin, real kind/gVisor workloads and synthetic replies.
