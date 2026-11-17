@@ -98,3 +98,57 @@ func TestUpgradeFenceFeedbackBridgePreservesContainedHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestUpgradeFenceFeedbackRetainsBlockedCandidateOnly(t *testing.T) {
+	for _, count := range []int{35, 36} {
+		db, name, source := upgradeFenceFixture(t, count)
+		ctx := context.Background()
+		if _, err := db.Pool.Exec(browserBridgeHistory + `UPDATE work_items SET status='blocked' WHERE id='contained-review';`); err != nil {
+			t.Fatal(err)
+		}
+		before := upgradeHistory(t, db)
+		if err := db.WithReviewFeedbackUpgradeFence(ctx, name, source, func(ctx context.Context, f *UpgradeFence) error { return f.Check(ctx) }); err != nil || upgradeHistory(t, db) != before {
+			t.Fatal("contained blocked candidate changed or rejected", err)
+		}
+		var legacy bool
+		if err := db.Pool.QueryRow(reviewerUpgradeHistory).Scan(&legacy); err != nil || legacy {
+			t.Fatal("historical reviewer predicate widened", err)
+		}
+		if count == 35 {
+			if err := db.WithBrowserDeploymentUpgradeFence(ctx, name, source, func(context.Context, *UpgradeFence) error {
+				t.Fatal("legacy browser adopted blocked history")
+				return nil
+			}); !errors.Is(err, ErrUpgradeFenceHistory) {
+				t.Fatal("legacy browser boundary changed", err)
+			}
+		}
+		for _, change := range []string{
+			`UPDATE work_items SET status='blocked' WHERE id='ready'`,
+			`UPDATE review_runs SET cleanup_state='uncertain'`,
+			`UPDATE review_runs SET expires_at=clock_timestamp()+interval '1 hour'`,
+			`INSERT INTO review_effects(run_id,kind,token,resource_name) SELECT id,'export',gen_random_uuid(),'unacknowledged' FROM review_runs`,
+		} {
+			// Owned rollback-only fixture observations exercise the exact predicate;
+			// SQL or JSON errors are never counted as a successful denial.
+			tx, err := db.Pool.BeginTx(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = tx.Exec(change); err != nil {
+				tx.Rollback()
+				t.Fatal(err)
+			}
+			var safe bool
+			if err = tx.QueryRow(reviewFeedbackUpgradeHistory).Scan(&safe); err != nil || safe {
+				tx.Rollback()
+				t.Fatal("unsafe blocked history accepted", change, err)
+			}
+			if err = tx.Rollback(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if upgradeHistory(t, db) != before {
+			t.Fatal("negative controls changed retained history")
+		}
+	}
+}

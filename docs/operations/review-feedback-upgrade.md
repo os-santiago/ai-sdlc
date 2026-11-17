@@ -37,6 +37,9 @@ memberships, settings and migration timestamps to the original proven schema-35
 snapshot. Legitimate expired review history may have accumulated since that
 snapshot; the first write fence captures it, permitting only already-bound intake
 polling changes between the preliminary observation and that fence.
+The new fence also retains `blocked` work only when its complete candidate and
+expired, cleaned failed-review chain exists. A blocked item without that evidence
+is rejected. The earlier reviewer/browser predicates remain unchanged.
 
 The installer pauses all ten Deployments under the database write fence, exports
 and restores a private backup, then invokes the published migrator once. The new

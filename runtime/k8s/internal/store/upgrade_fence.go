@@ -20,6 +20,9 @@ var ErrUpgradeFenceHistory = fmt.Errorf("%w: history predicate rejected", ErrUpg
 //go:embed reviewer_upgrade_history.sql
 var reviewerUpgradeHistory string
 
+//go:embed review_feedback_upgrade_history.sql
+var reviewFeedbackUpgradeHistory string
+
 // UpgradeFence exists only during its original bounded transaction. It grants
 // no delivery, migration or rollback authority. Call Check immediately before
 // and after each original-identity-bound administrative Kubernetes operation.
@@ -32,6 +35,7 @@ type UpgradeFence struct {
 	source          []MigrationIdentity
 	deadline        time.Time
 	reviewerHistory bool
+	feedbackHistory bool
 }
 
 // This reviewed bridge covers schemas 0033 and 0034, before any candidate or
@@ -156,7 +160,11 @@ func (f *UpgradeFence) inspectHistory(ctx context.Context) error {
 	allowed := map[string]bool{}
 	if f.reviewerHistory {
 		var safe bool
-		if (len(f.source) != 34 && len(f.source) != 35 && len(f.source) != 36) || f.tx.QueryRowContext(ctx, reviewerUpgradeHistory).Scan(&safe) != nil {
+		query := reviewerUpgradeHistory
+		if f.feedbackHistory {
+			query = reviewFeedbackUpgradeHistory
+		}
+		if (len(f.source) != 34 && len(f.source) != 35 && len(f.source) != 36) || f.tx.QueryRowContext(ctx, query).Scan(&safe) != nil {
 			return ErrUpgradeFence
 		}
 		if !safe {
@@ -279,7 +287,7 @@ func (db *DB) withScopedUpgradeFence(ctx context.Context, database string, sourc
 		return ErrUpgradeFence
 	}
 	deadline, _ := active.Deadline()
-	fence := &UpgradeFence{checkPermit: make(chan struct{}, 1), tx: tx, tables: tables, relationIDs: ids, database: database, source: slices.Clone(source), deadline: deadline, reviewerHistory: reviewerHistory}
+	fence := &UpgradeFence{checkPermit: make(chan struct{}, 1), tx: tx, tables: tables, relationIDs: ids, database: database, source: slices.Clone(source), deadline: deadline, reviewerHistory: reviewerHistory, feedbackHistory: feedback}
 	if fence.Check(acquire) != nil {
 		return ErrUpgradeFence
 	}

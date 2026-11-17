@@ -1,18 +1,21 @@
 """Preserve schema35 history/authority while adding private review feedback."""
 import json
+from pathlib import Path
 
 from diagnostic_upgrade_data import Compatibility as Previous, ACL_QUERY, digest
-import reviewer_upgrade_history
 import review_feedback_schema
 
 TABLES = ('review_feedback',)
 MIGRATION = '0036_review_feedback.sql'
 ACL = ACL_QUERY.replace('execution_failures', 'review_feedback')
+HISTORY = (Path(__file__).resolve().parents[1] /
+           'runtime/k8s/internal/store/review_feedback_upgrade_history.sql').read_text()
 
 
 class Compatibility(Previous):
     def quiet(self):
-        reviewer_upgrade_history.quiet(self.database)
+        if self.database.sql(HISTORY) != 't\n':
+            raise ValueError('Feedback update requires expired, cleaned failed candidate history and no downstream work')
         for name in ('cleanups', 'evidence', 'intents', 'pods', 'sends'):
             if self.database.sql('SELECT count(*) FROM deployment_browser_' + name + ';') != '0\n':
                 raise ValueError('Browser history prevents feedback maintenance')

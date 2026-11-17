@@ -86,6 +86,10 @@ def main(argv=None):
         report['stage']='source-migration';save()
         migrate(install_images.REGISTRY+'@'+publication['images']['migrator']['digest'])
         database.sql((install.ROOT/'runtime/k8s/internal/store/testdata/browser_upgrade_history.sql').read_text())
+        # This is a synthetic, fully expired candidate/review chain in the owned
+        # database. The runtime may mark such a prior issue revision blocked;
+        # preserve it rather than requiring a workflow-state rewrite.
+        database.sql("UPDATE work_items SET status='blocked' WHERE id='contained-review';")
         database.sql("INSERT INTO execution_failures(request_id,pod_uid,container_id,exit_code) SELECT request_id,pod_uid,'containerd://'||repeat('a',64),22 FROM execution_lifecycles;")
         compatibility=Compatibility(database);original=compatibility.source(before)
         def fenced(catalog):
@@ -107,7 +111,7 @@ def main(argv=None):
         try:
             try:compatibility.source(before)
             except ValueError as error:
-                if str(error)!='Reviewer update requires expired, cleaned failed review history and no downstream work':raise
+                if str(error)!='Feedback update requires expired, cleaned failed candidate history and no downstream work':raise
                 report['controls'].append('legacy-deployed-source-rejected-before-migration')
             else:raise ValueError('Legacy deployment accepted by source gate')
             try:
