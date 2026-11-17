@@ -23,13 +23,54 @@ def exercise(database, provider, image, directory, catalog, plan_id, first_work,
         if index:
             database.sql(f"INSERT INTO execution_failures(request_id,pod_uid,container_id,exit_code) VALUES('{request}','{pod}','containerd://{digest}',22);")
     upgrade = object.__new__(ToolBudgetUpgrade)
+    intake_key, intake_authority = 'a' * 64, 'b' * 64
+    payload = json.dumps({'authorityRevision': intake_authority}).encode().hex()
+    database.sql(f"INSERT INTO intake_revisions(repository,issue_number,revision,generation,config_digest,event_id,payload) VALUES('fixture/app',1,'fixture',1,'{intake_key}','fixture-intake',decode('{payload}','hex'));"
+        f"INSERT INTO intake_heads(repository,issue_number,content_key,generation) VALUES('fixture/app',1,'{intake_key}',1);"
+        f"INSERT INTO intake_cursors(repository,config_digest,watermark,next_poll) VALUES('fixture/app','{intake_key}','2026-01-01','2026-01-01');"
+        f"INSERT INTO intake_observations(repository,issue_number,generation,config_digest,authority_revision,content_key,observed_at) VALUES('fixture/app',1,1,'{intake_key}','{intake_authority}','{intake_key}','2026-01-01');")
     upgrade.catalog = catalog
     upgrade.database = lambda: database
     upgrade.parent = SimpleNamespace(record={'sourceProof': original_authority})
-    upgrade.record = {'sourceProof': upgrade.snapshot(), 'sourceRoleIdentities': Compatibility(database).roles()}
+    upgrade.record = {'sourceProof': upgrade.snapshot(), 'sourceRoleIdentities': Compatibility(database).roles(),
+                      'completed': 'source', 'pause': None, 'backup': None, 'transition': None, 'recoveryPause': None}
     proof = upgrade.record['sourceProof']
     if proof['work_items']['rows'] != 2 or proof['execution_failures']['rows'] != 1:
         raise ValueError('Expected two failed fixture attempts and one diagnostic')
+    database.sql("UPDATE intake_cursors SET watermark='2026-01-02',next_poll='2026-01-02';"
+                 "UPDATE intake_observations SET observed_at='2026-01-02';")
+    for table, column, original in (
+        ('intake_cursors', 'config_digest', intake_key),
+        ('intake_observations', 'authority_revision', intake_authority),
+        ('intake_observations', 'content_key', intake_key),
+    ):
+        try:
+            database.sql(f"UPDATE {table} SET {column}='{'f' * 64}';")
+            try:
+                upgrade.capture_first_pause(database)
+            except ValueError as error:
+                if str(error) != 'Polling identities differ from original retained issue history':
+                    raise
+            else:
+                raise ValueError('Foreign polling identity was accepted')
+        finally:
+            database.sql(f"UPDATE {table} SET {column}='{original}';")
+    captured = upgrade.capture_first_pause(database)
+    if captured == proof or upgrade.record['sourceProof'] != proof:
+        raise ValueError('Polling must change only the new capture, not the preliminary evidence')
+    upgrade.record['fencedSourceProof'] = captured
+    proof = captured
+    try:
+        database.sql("UPDATE intake_observations SET observed_at='2026-01-03';")
+        try:
+            upgrade.retained()
+        except ValueError:
+            pass
+        else:
+            raise ValueError('Polling drift was allowed after the complete capture')
+    finally:
+        database.sql("UPDATE intake_observations SET observed_at='2026-01-02';")
+    upgrade.retained()
     artifacts, captured = database.export()
     if captured != proof:
         raise ValueError('Post-diagnostic export changed retained history')
@@ -120,6 +161,8 @@ def exercise(database, provider, image, directory, catalog, plan_id, first_work,
         changedDiagnosticDurabilityRejected=True,
         changedDiagnosticACLsRejected=True,
         changedOriginalMembershipAndRoleSettingsRejected=True,
+        prePausePollingCaptured=True, postCapturePollingDriftRejected=True,
+        changedPollingIdentitiesRejected=True,
         diagnosticTableEmpty=False,
         toolBudgetFixtureScope='isolated PostgreSQL retention/restore; no installed CLI or E2E proof')
     save()

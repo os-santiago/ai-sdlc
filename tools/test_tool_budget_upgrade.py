@@ -12,6 +12,7 @@ import initial_activation
 import install
 import tool_budget_targets
 import tool_budget_upgrade
+import tool_budget_capture
 import test_diagnostic_upgrade
 import test_initial_activation
 
@@ -135,7 +136,7 @@ class OrderingTests(unittest.TestCase):
         item.config = Mock()
         item.helper, item.catalog = 'fixture-image', []
         item.observe.return_value = ({'resources': {'pod': 'original'}}, 'private')
-        item.retained = Mock(side_effect=[None, ValueError('work arrived before write exclusion')])
+        item.capture_first_pause = Mock(side_effect=ValueError('work arrived before write exclusion'))
         with patch.object(tool_budget_upgrade.bootstrap_database_forward, 'original_database') as forward, \
              patch.object(tool_budget_upgrade, 'Fence'), patch.object(tool_budget_upgrade.data, 'Database'):
             forward.return_value.__enter__.return_value = ('private-forwarded', 12345)
@@ -143,6 +144,39 @@ class OrderingTests(unittest.TestCase):
         item.save.assert_not_called()
         item.apply.assert_not_called()
         self.assertIsNone(item.record['pause'])
+
+    def test_polling_capture_never_changes_preliminary_proof_or_deadline(self):
+        item = self.item()
+        original = {'intake_cursors': {'rows': 1, 'sha256': 'old'},
+                    'intake_observations': {'rows': 1, 'sha256': 'old'},
+                    'work_items': {'rows': 2, 'sha256': 'same'}}
+        item.record['sourceProof'] = copy.deepcopy(original)
+        before = copy.deepcopy(item.record)
+        current = copy.deepcopy(original)
+        current['intake_cursors']['sha256'] = current['intake_observations']['sha256'] = 'new'
+        item.snapshot = Mock(return_value=current)
+        item.original_database_authority = Mock()
+        database = Mock(); database.sql.return_value = 't\n'
+        self.assertEqual(item.capture_first_pause(database), current)
+        self.assertEqual(item.record, before)
+        item.original_database_authority.assert_called_once_with(current, database)
+        for key in ('pause', 'transition', 'backup', 'recoveryPause', 'fencedSourceProof'):
+            item.record[key] = {'started': True}
+            with self.subTest(key=key), self.assertRaises(ValueError): item.capture_first_pause(database)
+            item.record = copy.deepcopy(before)
+        for fault in ('work_items', 'rows', 'binding'):
+            changed = copy.deepcopy(current)
+            if fault == 'work_items': changed['work_items']['sha256'] = 'changed'
+            elif fault == 'rows': changed['intake_cursors']['rows'] = 2
+            else: database.sql.return_value = 'f\n'
+            with self.subTest(fault=fault), self.assertRaises(ValueError):
+                tool_budget_capture.validate(original, changed, database)
+
+    def test_after_fence_polling_changes_are_rejected(self):
+        item = self.item()
+        item.record['fencedSourceProof'] = {'intake_observations': {'rows': 1, 'sha256': 'fixed'}}
+        item.snapshot = Mock(return_value={'intake_observations': {'rows': 1, 'sha256': 'changed'}})
+        with self.assertRaises(ValueError): item.retained()
 
     def test_incomplete_backup_never_restores_or_overwrites(self):
         item = self.item()

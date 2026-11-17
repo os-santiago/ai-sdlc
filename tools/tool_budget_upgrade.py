@@ -19,6 +19,7 @@ import prepared_resources
 from runtime_upgrade_backup import Restore
 from runtime_upgrade_pause import pause_once
 import tool_budget_targets
+import tool_budget_capture
 import upgrade_backup_data as data
 from upgrade_fence_client import Fence
 
@@ -97,27 +98,41 @@ class ToolBudgetUpgrade(Upgrade):
 
     def retained(self, database=None):
         database = database or self.database()
-        if (self.snapshot(database) != self.record['sourceProof']
+        if (self.snapshot(database) != self.retained_proof()
                 or Compatibility(database).roles() != self.record['sourceRoleIdentities']):
             raise ValueError('Original history, schema or roles changed during tool-budget update')
+
+    def retained_proof(self):
+        return self.record.get('fencedSourceProof', self.record['sourceProof'])
+
+    def capture_first_pause(self, database):
+        if (self.record['completed'] != 'source' or self.record.get('pause') is not None
+                or self.record.get('backup') is not None or self.record.get('transition') is not None
+                or self.record.get('recoveryPause') is not None or self.record.get('fencedSourceProof') is not None):
+            raise ValueError('Only the untouched first pause can capture current polling history')
+        current = self.snapshot(database)
+        tool_budget_capture.validate(self.record['sourceProof'], current, database)
+        self.original_database_authority(current, database)
+        return current
 
     def compile_targets(self, *, original=False):
         compile_build = lambda request: build_runtime_install.component_call(
             self.config.provider, self.helper, 'compile-build-installation', request)
         return tool_budget_targets.targets(self.parent.describe('active'), self.config.render, compile_build, original=original)
 
-    def original_database_authority(self, proof=None):
-        compatibility = Compatibility(self.database())
+    def original_database_authority(self, proof=None, database=None):
+        database = database or self.database()
+        compatibility = Compatibility(database)
         original = self.parent.record['sourceProof']
         for field in ('schema', 'roles', 'permissions', 'tracking'):
             if getattr(compatibility, field)() != original[field]:
                 raise ValueError('Original diagnostic database authority changed before tool-budget update')
-        current = proof if proof is not None else self.snapshot()
+        current = proof if proof is not None else self.snapshot(database)
         for field in ('@membership', '@role-settings'):
             if current[field] != original['data'][field]:
                 raise ValueError('Original role membership or settings changed before tool-budget update')
         compatibility.diagnostic_privileges()
-        diagnostic_schema.verify(self.database())
+        diagnostic_schema.verify(database)
         return original['roles']
 
     def begin(self):
@@ -152,15 +167,27 @@ class ToolBudgetUpgrade(Upgrade):
             return
         phase = self.record['completed']
         observed, connection = self.observe(phase)
-        self.retained()
+        first_pause = not recovery and phase == 'source'
+        if not first_pause:
+            self.retained()
         intent = {'phase': 'planned', 'expiresAt': self.record['expiresAt']}
         with bootstrap_database_forward.original_database(self.config.base_run, self.config.kubectl,
                 connection, observed['resources']['pod'], timeout_seconds=240) as (forwarded, port):
             with Fence(self.config.provider, self.helper, forwarded, port, self.catalog,
                        expires_at=self.record['expiresAt']) as fence:
-                self.retained(data.Database(fence.command, self.database().prefix))
+                database = data.Database(fence.command, self.database().prefix)
+                if first_pause:
+                    captured = self.capture_first_pause(database)
+                else:
+                    self.retained(database)
                 intent['fence'] = {'nonce': fence.nonce, 'expiresAt': fence.expiry, 'containerID': fence.container_id}
+                fence.check()
                 self.record[key] = intent
+                if first_pause:
+                    # Keep the preliminary observation intact. This full proof
+                    # and the first pause intent share one durable save, under
+                    # the same fence, nonce and original operation deadline.
+                    self.record['fencedSourceProof'] = captured
                 self.save(self.record)
                 pause_once(intent, fence, lambda: self.observe(phase), lambda: self.observe('paused'),
                     lambda: self.apply('paused', fence.command), lambda value: self.save(self.record))
@@ -204,13 +231,13 @@ class ToolBudgetUpgrade(Upgrade):
         containers = objects[0]['spec']['template']['spec']['containers']
         if len(containers) != 1 or containers[0]['name'] != 'postgres':
             raise ValueError('Original PostgreSQL container required')
-        backup = {'phase': 'capturing', 'archives': {}, 'retainedData': self.record['sourceProof']}
+        backup = {'phase': 'capturing', 'archives': {}, 'retainedData': self.retained_proof()}
         self.record['backup'] = backup
         self.save(self.record)
         self.directory.mkdir(mode=0o700)
         def export(database):
             artifacts, proof = database.export()
-            if proof != self.record['sourceProof']:
+            if proof != self.retained_proof():
                 raise ValueError('Original exported tool-budget source changed')
             backup['archives'] = data.write_archives(self.directory, artifacts)
             self.save(self.record)

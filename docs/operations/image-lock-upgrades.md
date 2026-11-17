@@ -432,8 +432,18 @@ source's unchanged schema, roles, ACLs and original migration records must match
 the prior diagnostic proof. The additive diagnostic table must also retain its
 reviewed columns, constraints, indexes, triggers and exact enabled/forced row
 security policy. Existing authority drift is rejected rather than adopted.
-The installer rechecks the full source data and role identities while that fence is
-held, before persisting a Helm intent or sending a change. It then creates a new
+The initial full snapshot is a preserved preliminary observation: the active
+poller can still refresh its cursor and per-issue observation. Immediately before
+the first pause, under the write fence, all other table hashes and both polling
+table cardinalities must match. Polling identities must match the unchanged
+issue heads and revision payloads. Only then is a separate `fencedSourceProof`
+saved together with the first pause intent. The original snapshot, nonce and
+deadline remain unchanged. This capture is unavailable after any pause, backup,
+recovery or Helm transition intent. Every subsequent comparison includes the
+complete polling tables without exceptions.
+
+The installer rechecks original database authority while that fence is held,
+before persisting a Helm intent or sending a change. It then creates a new
 private backup, restores it into an isolated PostgreSQL container, compares it
 and confirms cleanup. Existing failed attempts and diagnostic rows are retained.
 This operation performs no SQL migration, workflow retry or application delivery.
