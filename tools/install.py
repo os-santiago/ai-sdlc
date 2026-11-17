@@ -547,11 +547,14 @@ def _main(argv, stack):
         marker.write_text(json.dumps({'cluster': args.cluster, 'provider': provider, 'clusterUID': cluster_uid}) + '\n')
     elif args.platform == 'konflux':
         konflux_runtime_install.verify_cluster(run, kubectl, state, args.cluster, provider, cluster_uid)
+    else:
+        check_ownership(marker, args.cluster, provider, cluster_uid)
+    if args.command == 'local' and execution_values is not None:
+        candidate_install.require_unchanged_tool_budget(kubectl, execution_values)
+    if not created and args.platform == 'konflux':
         konflux_runtime_install.namespace(run, kubectl, state, cluster_uid, create=args.command == 'local')
         if args.command != 'status':
             konflux_runtime_install.require_frozen(run, kubectl)
-    else:
-        check_ownership(marker, args.cluster, provider, cluster_uid)
     if args.command == 'status':
         run(kubectl + ['get', 'deployments,statefulsets,pods,pvc', '-n', NAMESPACE])
         config = read_resource(kubectl, 'configmap', 'ai-sdlc-config')

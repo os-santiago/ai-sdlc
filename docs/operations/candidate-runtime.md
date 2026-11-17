@@ -177,4 +177,8 @@ from those observations, not a budget dimension retained by the controller.
 This default applies to newly configured installations. Existing installations
 must use a reviewed configuration transition that preserves their history and
 original authority. An image-only diagnostic upgrade does not authorize changing
-the executor profile or replaying a failed execution.
+the executor profile or replaying a failed execution. Ordinary candidate or
+verification reconciliation reads the installed execution configuration first
+and rejects a different tool budget before changing runtime resources or
+credentials. Missing configuration permits first-time setup; an API error,
+malformed configuration or duplicate JSON field does not count as absence.
