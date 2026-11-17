@@ -29,14 +29,14 @@ FROM docker.io/library/node:22-alpine AS sccbuild
 RUN apk add --no-cache git
 # Engine source pin (issue #356): immutable ref — full commit SHA or
 # semver tag — baked into the image. The reviewed default is SCC main
-# 2026-11-15 (diff parser, MCP closure and dependency fixes). A contract
+# 2026-11-17 (bounded reviewer verdict finalization and ambiguity controls). A contract
 # field does not rewrite an already-published image: pass its resolved
 # source pin explicitly when building a matching worker:
 #   podman build --build-arg SCC_ENGINE_PIN=<resolved engine.pin> ...
 # (`make containers SCC_ENGINE_PIN=<pin>` — see runtime/k8s/README.md).
 # init+fetch+checkout instead of `git clone --branch`: a bare SHA is a
 # valid fetch target but not a clone-able branch/tag name.
-ARG SCC_ENGINE_PIN=47bea847d325e06521f110a6edc326dbd4dd508d
+ARG SCC_ENGINE_PIN=b1a8d98cd0288a0b401ea73db509a9759fa9e645
 # Fail closed on anything but an immutable ref — the same check
 # this image build enforces. A mutable ref
 # (main, HEAD, …) would bake whatever lands upstream next into a

@@ -207,8 +207,9 @@ The worker image builds `scc` from `os-santiago/sc-agent-cli` at
 image-build time, pinned to an immutable ref via the `SCC_ENGINE_PIN`
 build arg (`components/worker/Containerfile`) — a 40-char commit SHA or
 semver tag; anything else fails the build closed. The reviewed default is
-`47bea847d325e06521f110a6edc326dbd4dd508d`, including bounded diff application,
-MCP input-pipe failure isolation and patched development tooling.
+`b1a8d98cd0288a0b401ea73db509a9759fa9e645`, including bounded diff application,
+MCP input-pipe failure isolation, patched development tooling and bounded
+reviewer verdict finalization after the inspection-tool limit.
 The source revision is baked into the worker; changing a contract field cannot
 modify a published image. For a contract declaring a different `engine.pin`,
 pass its resolved value explicitly when building:

@@ -249,7 +249,7 @@ jobs:
           kubectl = [tools['kubectl'], '--kubeconfig', str(pathlib.Path.home() / '.local/state/ai-sdlc/ai-sdlc/kubeconfig')]
           worker = register_digest('docker', 'ai-sdlc-control-plane', 'localhost/ai-sdlc-worker:conformance')
           mailbox = register_digest('docker', 'ai-sdlc-control-plane', 'localhost/ai-sdlc-model-mailbox:conformance')
-          for scenario in ('approve', 'request_changes', 'implicit', 'mutation'):
+          for scenario in ('approve', 'request_changes', 'implicit', 'mutation', 'budget-approve', 'budget-request_changes', 'budget-extra-tool'):
               report = verify(kubectl, root / 'pod-transport.test', worker, mailbox, scenario)
               (root / f'reviewer-{scenario}-report.json').write_text(json.dumps(report, indent=2))
               print(json.dumps(report), flush=True)
