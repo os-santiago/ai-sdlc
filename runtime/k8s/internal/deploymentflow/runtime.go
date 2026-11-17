@@ -43,9 +43,24 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if r.DB == nil || r.Load == nil || r.Target == nil || r.Transport == nil {
 		return "", ErrFlow
 	}
+	state := "deployment-idle"
+	acquired, e := r.DB.WithDeploymentController(ctx, func(active context.Context) error { var err error; state, err = r.pollExclusive(active); return err })
+	if !acquired && e == nil {
+		return "deployment-other-replica", nil
+	}
+	return state, e
+}
+func (r Runtime) pollExclusive(ctx context.Context) (string, error) {
 	j := r.journal()
 	if e := j.ExpireDeployments(ctx); e != nil {
 		return "deployment-expiration", e
+	}
+	recovery, e := j.NextDeploymentRecovery(ctx)
+	if e != nil {
+		return "deployment-recovery-selection", e
+	}
+	if recovery.ID != "" {
+		return r.recover(ctx, j, recovery)
 	}
 	id, e := j.NextDeployment(ctx)
 	if e != nil {
@@ -155,7 +170,10 @@ func (r Runtime) contain(ctx context.Context, j *store.DeploymentJournal, c stor
 		stop("uncertain")
 		return "deployment-containment-acknowledgement", ErrFlow
 	}
-	if _, e = t.WaitReady(ctx, rolled.After); e != nil {
+	return r.finishContainment(ctx, j, c, t, rolled, stop)
+}
+func (r Runtime) finishContainment(ctx context.Context, j *store.DeploymentJournal, c store.DeploymentClaim, t Transport, rolled releasing.Receipt, stop func(string)) (string, error) {
+	if _, e := t.WaitReady(ctx, rolled.After); e != nil {
 		stop("unhealthy")
 		return "deployment-containment-readiness", ErrFlow
 	}

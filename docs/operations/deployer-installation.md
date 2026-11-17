@@ -9,8 +9,8 @@ a finite approval window. The runtime changes only the console image through a
 conditional JSON Patch and checks readiness and the HTTPS application contract.
 
 This is an installation increment. It does not activate intake, demonstrate an
-autonomous issue-to-production cycle, implement restart recovery, or create a
-GitHub release. Keep the prepared installation paused until those gates pass.
+autonomous issue-to-production cycle, create a
+GitHub release. Keep the prepared installation paused until those gates pass. [Deployment recovery](deployment-recovery.md) describes the conservative restart path and its validation limits.
 
 ## Inputs and installation
 
