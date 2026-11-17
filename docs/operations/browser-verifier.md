@@ -204,7 +204,8 @@ file removal share one separate 90-second containment budget. Recovery checks th
 original node container ID, cluster label and exact before/desired configuration;
 it cannot adopt foreign changes or resume installation after expiry. Transport
 fixtures similarly reserve one 180-second cleanup window after their 420-second
-execution limit, retaining all original-resource identity checks.
+execution limit, retaining all original-resource identity checks. The CI caller
+uses the shared 630-second upper bound, including a 30-second shutdown margin.
 
 The transition preserves every old row, role identity and privilege. It adds
 browser evidence capabilities and updates all database consumers; isolated

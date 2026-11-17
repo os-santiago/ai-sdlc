@@ -402,6 +402,20 @@
       "containerdActive": true,
       "stageRemoved": true,
       "runtimeClassAbsent": true
+    },
+    "fixtureCallerIntegration": {
+      "status": "passed",
+      "workSeconds": 420,
+      "cleanupSeconds": 180,
+      "callerTimeoutSeconds": 630,
+      "boundedScope": "Fixture CI subprocess only; product smoke remains30seconds",
+      "tests": 30,
+      "logSHA256": "a2ed7260b541af26d8045358bd855071d0593a09640c65e44548766aa5240247",
+      "checks": [
+        "real cleanup command after work expiry",
+        "AST verifies actual CI transport caller consumes shared timeout",
+        "cleanup deadline cannot renew"
+      ]
     }
   }
 }
