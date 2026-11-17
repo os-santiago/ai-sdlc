@@ -45,6 +45,9 @@ restore-verified backup and reactivation. Provider quotas remain unchanged.
 After that update completes, `runtime-upgrade reapprove` can install separately
 reviewed [finite approval windows](docs/operations/approval-window.md) for the
 same test environment without renewing workflow requests or failed attempts.
+After an expired, contained review failure, `runtime-upgrade reviewer-image`
+can [replace only the reviewer image](docs/operations/reviewer-image-upgrade.md)
+while retaining the candidate, verification and failed-review history.
 See the same procedure for scope, prerequisites and recovery limits.
 
 For an existing installer-owned Konflux cluster, use the

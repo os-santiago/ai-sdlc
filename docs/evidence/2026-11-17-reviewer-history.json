@@ -1,0 +1,33 @@
+{
+  "status": "passed",
+  "scope": "published migrator compatibility on disposable PostgreSQL",
+  "sourcePublication": "https://github.com/os-santiago/ai-sdlc/actions/runs/43996163836",
+  "targetPublication": "https://github.com/os-santiago/ai-sdlc/actions/runs/44023927221",
+  "sourceMigrations": 33,
+  "targetMigrations": 34,
+  "reviewerHistoryRestored": true,
+  "failedReviewRetained": true,
+  "passedVerificationRetained": true,
+  "capturedCandidateRetained": true,
+  "reviewerHistoryNegativeControls": [
+    "queued work",
+    "live execution authority",
+    "live execution claim",
+    "pending executor cleanup",
+    "active model budget",
+    "uncertain review cleanup",
+    "live review claim",
+    "active review",
+    "pending model handoff",
+    "missing verification handoff",
+    "foreign review binding",
+    "live verification authority",
+    "downstream publication intent",
+    "pending authenticated delivery"
+  ],
+  "reviewerHistoryScope": "disposable PostgreSQL; no workflow retry or installed update",
+  "installedRuntimeValidated": false,
+  "autonomousEndToEndValidated": false,
+  "cleanupComplete": true,
+  "workflowEvidence": false
+}
