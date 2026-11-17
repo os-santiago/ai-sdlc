@@ -30,7 +30,11 @@ class Source:
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
             raise ValueError('Source inspection deadline exceeded')
-        env = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1', GIT_NO_LAZY_FETCH='1', GIT_TERMINAL_PROMPT='0')
+        # -C does not override inherited GIT_DIR, object/index locations or
+        # injected Git configuration. Keep publication authentication in the
+        # parent process; isolate only this immutable-object reader.
+        env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+        env.update(GIT_NO_REPLACE_OBJECTS='1', GIT_NO_LAZY_FETCH='1', GIT_TERMINAL_PROMPT='0')
         with tempfile.TemporaryFile() as output:
             result = subprocess.run(['git', '--no-replace-objects', '-C', str(self.root), *args],
                                     stdout=output, stderr=subprocess.DEVNULL, env=env,

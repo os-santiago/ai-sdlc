@@ -2,6 +2,7 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -29,7 +30,8 @@ class UpgradePlanTests(unittest.TestCase):
         self.source = upgrade.Source(self.root)
 
     def git(self, *args):
-        return subprocess.check_output(['git', '-C', str(self.root), *args], stderr=subprocess.DEVNULL).decode().strip()
+        env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+        return subprocess.check_output(['git', '-C', str(self.root), *args], stderr=subprocess.DEVNULL, env=env).decode().strip()
 
     def write(self, name, content):
         (self.files/name).write_text(content)
@@ -73,6 +75,41 @@ class UpgradePlanTests(unittest.TestCase):
         self.assertFalse(result['upgradeAuthorized'])
         self.assertFalse(result['workflowEvidence'])
         self.assertIn('installed-source-identity', result['unverifiedGates'])
+
+    def test_inherited_git_locations_cannot_read_or_modify_foreign_repository(self):
+        foreign_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(foreign_tmp.cleanup)
+        foreign = Path(foreign_tmp.name)
+        original_root = self.root
+        try:
+            self.root = foreign
+            self.git('init', '-q')
+            self.git('config', 'user.name', 'Foreign fixture')
+            self.git('config', 'user.email', 'foreign@example.invalid')
+            (foreign/'sentinel').write_text('must remain unchanged\n')
+            foreign_head = self.commit()
+            index_before = (foreign/'.git/index').read_bytes()
+            config_before = (foreign/'.git/config').read_bytes()
+        finally:
+            self.root = original_root
+        expected = self.source.catalog(self.before)
+        hostile = {'GIT_DIR': str(foreign/'.git'), 'GIT_COMMON_DIR': str(foreign/'.git'),
+                   'GIT_WORK_TREE': str(foreign), 'GIT_INDEX_FILE': str(foreign/'.git/index'),
+                   'GIT_OBJECT_DIRECTORY': str(foreign/'.git/objects'),
+                   'GIT_ALTERNATE_OBJECT_DIRECTORIES': str(foreign/'.git/objects')}
+        with patch.dict(os.environ, hostile):
+            self.assertEqual(self.source.catalog(self.before), expected)
+            self.git('init', '-q')
+            self.write('0003_local.sql', 'SELECT 1;\n')
+            self.commit()
+        self.assertEqual((foreign/'.git/index').read_bytes(), index_before)
+        self.assertEqual((foreign/'.git/config').read_bytes(), config_before)
+        try:
+            self.root = foreign
+            self.assertEqual(self.git('rev-parse', 'HEAD'), foreign_head)
+            self.assertEqual(self.git('status', '--porcelain'), '')
+        finally:
+            self.root = original_root
 
     def test_reject_changed_removed_or_inserted_prefix(self):
         before = self.source.catalog(self.before)
