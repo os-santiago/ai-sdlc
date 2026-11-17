@@ -122,7 +122,7 @@ func (j *DeploymentJournal) FinishDeployment(ctx context.Context, c DeploymentCl
 		}
 		kind := effectKind(rollback)
 		receipt, e := readDeploymentReceipt(ctx, tx, c, kind, cfg, r)
-		if e != nil || deployment.ValidateHealth(cfg.Target, receipt, h, time.Now()) != nil {
+		if e != nil || deployment.ValidateHealth(cfg.Target, receipt, h, time.Now()) != nil || validateDeploymentBrowser(ctx, tx, c, cfg, r, receipt, h, time.Now()) != nil {
 			return ErrExecution
 		}
 		if !rollback {
@@ -136,7 +136,7 @@ func (j *DeploymentJournal) FinishDeployment(ctx context.Context, c DeploymentCl
 		if e = tx.QueryRowContext(ctx, `INSERT INTO deployment_health(request_id,kind,digest,health)VALUES($1,$2,$3,$4) RETURNING recorded_at`, c.ID, kind, authority.Digest(raw), raw).Scan(&recordedAt); e != nil {
 			return ErrExecution
 		}
-		if deployment.ValidateHealth(cfg.Target, receipt, h, recordedAt) != nil {
+		if deployment.ValidateHealth(cfg.Target, receipt, h, recordedAt) != nil || validateDeploymentBrowser(ctx, tx, c, cfg, r, receipt, h, recordedAt) != nil {
 			return ErrExecution
 		}
 		if _, _, e = j.check(ctx, tx, c, rollback); e != nil {
@@ -159,7 +159,7 @@ func (j *DeploymentJournal) FinishDeployment(ctx context.Context, c DeploymentCl
 		} else {
 			e = j.stillCurrent(ctx, r)
 		}
-		if e != nil || deployment.ValidateHealth(cfg.Target, receipt, h, time.Now()) != nil {
+		if e != nil || deployment.ValidateHealth(cfg.Target, receipt, h, time.Now()) != nil || validateDeploymentBrowser(ctx, tx, c, cfg, r, receipt, h, time.Now()) != nil {
 			return ErrExecution
 		}
 		return nil
@@ -219,7 +219,7 @@ func readDeploymentRecord(ctx context.Context, q Querier, c DeploymentClaim, rol
 	}
 	receipt, e := readDeploymentReceipt(ctx, q, c, kind, cfg, input)
 	var health releasing.Health
-	if e != nil || authority.DecodeStrict(raw, &health) != nil || deployment.ValidateHealth(cfg.Target, receipt, health, at) != nil {
+	if e != nil || authority.DecodeStrict(raw, &health) != nil || deployment.ValidateHealth(cfg.Target, receipt, health, at) != nil || validateDeploymentBrowser(ctx, q, c, cfg, input, receipt, health, at) != nil {
 		return DeploymentRecord{}, ErrExecution
 	}
 	return DeploymentRecord{Command: input.Command, Configuration: cfg, Plan: input.Promotion.Plan, Receipt: receipt, Health: health, Outcome: state, RecordedAt: at}, nil

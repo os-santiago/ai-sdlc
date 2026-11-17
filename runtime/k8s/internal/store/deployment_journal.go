@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/browsercheck"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/deployment"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/releasing"
 	"regexp"
@@ -15,8 +16,10 @@ var deploymentID = regexp.MustCompile(`^deploy-[a-f0-9]{64}$`)
 
 type DeploymentJournal struct {
 	*DB
-	load   func() (releasing.Configuration, error)
-	target func() (releasing.Target, error)
+	load          func() (releasing.Configuration, error)
+	target        func() (releasing.Target, error)
+	cleanupTarget func() (releasing.Target, error)
+	browser       func() (browsercheck.Profile, error)
 }
 
 func NewDeploymentJournal(db *DB, load func() (releasing.Configuration, error)) *DeploymentJournal {
@@ -175,9 +178,15 @@ func (j *DeploymentJournal) check(ctx context.Context, tx *sql.Tx, c DeploymentC
 
 // The independent installed target is sufficient only for containment already
 // authorized by the original durable command and acknowledged advance.
-func NewDeploymentJournalWithTarget(db *DB, load func() (releasing.Configuration, error), target func() (releasing.Target, error)) *DeploymentJournal {
-	return &DeploymentJournal{DB: db, load: load, target: target}
+func NewDeploymentJournalWithTarget(db *DB, load func() (releasing.Configuration, error), target func() (releasing.Target, error), browser func() (browsercheck.Profile, error)) *DeploymentJournal {
+	return &DeploymentJournal{DB: db, load: load, target: target, browser: browser}
 }
+func NewDeploymentJournalWithCleanupIdentity(db *DB, load func() (releasing.Configuration, error), target func() (releasing.Target, error), browser func() (browsercheck.Profile, error), cleanupTarget func() (releasing.Target, error)) *DeploymentJournal {
+	j := NewDeploymentJournalWithTarget(db, load, target, browser)
+	j.cleanupTarget = cleanupTarget
+	return j
+}
+
 func (j *DeploymentJournal) containmentCurrent(ctx context.Context, original releasing.Configuration, c deployment.Command) error {
 	var target releasing.Target
 	var e error
@@ -190,6 +199,17 @@ func (j *DeploymentJournal) containmentCurrent(ctx context.Context, original rel
 	}
 	now := time.Now()
 	if e != nil || ctx.Err() != nil || target.Digest() != original.Target.Digest() || target.Validate(now) != nil || c.ExpiresAt <= now.UnixMilli() {
+		return ErrExecution
+	}
+	var profile browsercheck.Profile
+	if j.browser != nil {
+		profile, e = j.browser()
+	} else {
+		var cfg releasing.Configuration
+		cfg, e = j.configuration()
+		profile = cfg.Browser
+	}
+	if e != nil || profile.Validate() != nil || profile.Digest() != original.Browser.Digest() || ctx.Err() != nil {
 		return ErrExecution
 	}
 	return nil
@@ -248,6 +268,9 @@ func (j *DeploymentJournal) expectedEffect(ctx context.Context, q Querier, c Dep
 	}
 	image := r.Promotion.Plan.Image
 	if !rollback {
+		if validateBrowserBaseline(ctx, q, c, cfg, r, before, time.Now()) != nil {
+			return "", ErrExecution
+		}
 		if before.Image != cfg.Target.BaselineImage || c.Until.Sub(time.Now()) < releasing.MinimumEffectBudget {
 			return "", ErrExecution
 		}

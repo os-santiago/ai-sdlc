@@ -10,6 +10,7 @@ import re
 import secrets
 import subprocess
 import time
+import uuid
 import yaml
 import install
 
@@ -156,6 +157,17 @@ def main():
                 'build':{'enabled':True,'digest':'sha256:'+'b'*64,'configJSON':json.dumps(build),'outerPolicyJSON':json.dumps(outer)},
                 'provenance':{'enabled':True,'trustJSON':json.dumps(trust),'registryCredentialSecret':'ai-sdlc-provenance-registry','credentialRevision':'c'*64},
                 'candidate':{'apiServerCIDRs':['10.96.0.1/32']},'release':{'enabled':True,'digest':'sha256:'+'d'*64,'targetJSON':json.dumps(target)}}
+            # This fixture tests console rollback/RBAC, not browser execution.
+            # Public placeholders satisfy the mandatory chart shape; they are
+            # never authenticated by a journal or claimed as browser evidence.
+            browser={'version':'ai-sdlc.saferus-browser-profile/v1','clusterUID':target['clusterUID'],
+                'nodeName':node,'nodeUID':get('node',node)['metadata']['uid'],
+                'image':'quay.io/os-santiago/ai-sdlc@sha256:'+'a'*64,'runtimeDigest':'sha256:'+'a'*64,
+                'caSHA256':hashlib.sha256(target['tlsCA'].encode()).hexdigest(),'runtimeConfigurationSHA256':'b'*64,
+                'baselineExpectation':'baseline-seconds','candidateExpectation':'readable-duration'}
+            for field in ('namespaceUID','runtimeClassUID','caConfigMapUID','denyPolicyUID','egressPolicyUID','consoleIngressPolicyUID'):
+                browser[field]=str(uuid.uuid4())
+            values['release']['browserProfileJSON']=json.dumps(browser)
             # Only the release template is installed in this synthetic fixture.
             # No delivery producer, DB or issue lifecycle is started.
             values_path=out/'release-values.json';values_path.write_text(json.dumps(values))

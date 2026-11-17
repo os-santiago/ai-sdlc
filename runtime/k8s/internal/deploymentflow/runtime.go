@@ -2,6 +2,7 @@ package deploymentflow
 
 import (
 	"context"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/browsercheck"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/releasing"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
@@ -15,6 +16,7 @@ type Transport interface {
 	Rollback(context.Context, releasing.Receipt, releasing.Snapshot, podtransport.ConsoleEffectGate) (releasing.Receipt, error)
 	WaitReady(context.Context, releasing.Snapshot) (releasing.Rollout, error)
 	VerifyHealth(context.Context, releasing.Snapshot) (releasing.Health, error)
+	VerifyBrowser(context.Context, browsercheck.Profile, browsercheck.Request, releasing.Snapshot, releasing.Rollout, browsercheck.Gate) (releasing.Rollout, browsercheck.Evidence, error)
 }
 type ConsoleTransport struct {
 	*podtransport.ConsoleDeployment
@@ -27,20 +29,26 @@ func (t ConsoleTransport) Rollback(ctx context.Context, r releasing.Receipt, bef
 	return (&podtransport.ConsoleEffects{Deployment: t.ConsoleDeployment, Gate: g}).Rollback(ctx, r, before)
 }
 
+type BrowserCleaner interface {
+	CleanupBrowser(context.Context, browsercheck.Profile, browsercheck.Request, releasing.Rollout, string, browsercheck.CleanupGate) error
+}
 type Runtime struct {
-	DB   *store.DB
-	Load func() (releasing.Configuration, error)
+	CleanupTarget func() (releasing.Target, error)
+	Cleaner       func() (BrowserCleaner, error)
+	DB            *store.DB
+	Load          func() (releasing.Configuration, error)
 	// Target loads the independent installed destination even if current advance
 	// policies/trust are unavailable. It cannot choose or renew an original target.
 	Target    func() (releasing.Target, error)
+	Browser   func() (browsercheck.Profile, error)
 	Transport func(releasing.Target) (Transport, error)
 }
 
 func (r Runtime) journal() *store.DeploymentJournal {
-	return store.NewDeploymentJournalWithTarget(r.DB, r.Load, r.Target)
+	return store.NewDeploymentJournalWithCleanupIdentity(r.DB, r.Load, r.Target, r.Browser, r.CleanupTarget)
 }
 func (r Runtime) PollOnce(ctx context.Context) (string, error) {
-	if r.DB == nil || r.Load == nil || r.Target == nil || r.Transport == nil {
+	if r.DB == nil || r.Load == nil || r.Target == nil || r.Browser == nil || r.Transport == nil || r.CleanupTarget == nil || r.Cleaner == nil {
 		return "", ErrFlow
 	}
 	state := "deployment-idle"
@@ -54,6 +62,24 @@ func (r Runtime) pollExclusive(ctx context.Context) (string, error) {
 	j := r.journal()
 	if e := j.ExpireDeployments(ctx); e != nil {
 		return "deployment-expiration", e
+	}
+	cleanup, e := j.NextBrowserCleanup(ctx)
+	if e != nil {
+		return "browser-cleanup-selection", ErrFlow
+	}
+	if cleanup.Request.RequestID != "" {
+		return r.cleanupBrowser(ctx, j, cleanup)
+	}
+	pending, e := j.PendingBrowserCleanup(ctx)
+	if e != nil {
+		return "browser-cleanup-selection", ErrFlow
+	}
+	if pending {
+		uncertain, e := j.UnacknowledgedBrowserCreate(ctx)
+		if e != nil || uncertain {
+			return "browser-create-unacknowledged", ErrFlow
+		}
+		return "browser-cleanup-pending", nil
 	}
 	recovery, e := j.NextDeploymentRecovery(ctx)
 	if e != nil {
@@ -97,12 +123,13 @@ func (r Runtime) pollExclusive(ctx context.Context) (string, error) {
 		stop("rejected")
 		return "deployment-baseline", ErrFlow
 	}
-	if _, e = transport.VerifyHealth(attempt, before); e != nil {
+	if _, e = r.verifyHealth(attempt, j, claim, cfg, transport, before, "baseline"); e != nil {
 		stop("unhealthy")
 		return "deployment-baseline-health", ErrFlow
 	}
-	before, e = transport.Observe(attempt)
-	if e != nil || before.Image != cfg.Target.BaselineImage {
+	current, e := transport.Observe(attempt)
+	current.ObservedAt = before.ObservedAt
+	if e != nil || current != before {
 		stop("rejected")
 		return "deployment-baseline-changed", ErrFlow
 	}
@@ -123,7 +150,7 @@ func (r Runtime) pollExclusive(ctx context.Context) (string, error) {
 	}
 	if _, e = transport.WaitReady(attempt, applied.After); e == nil {
 		var h releasing.Health
-		h, e = transport.VerifyHealth(attempt, applied.After)
+		h, e = r.verifyHealth(attempt, j, claim, cfg, transport, applied.After, "advance")
 		if e == nil {
 			e = j.FinishDeployment(attempt, claim, h, false)
 			if e == nil {
@@ -177,7 +204,12 @@ func (r Runtime) finishContainment(ctx context.Context, j *store.DeploymentJourn
 		stop("unhealthy")
 		return "deployment-containment-readiness", ErrFlow
 	}
-	health, e := t.VerifyHealth(ctx, rolled.After)
+	cfg, _, e := j.ReadDeploymentContainmentInput(ctx, c)
+	if e != nil {
+		stop("revoked")
+		return "deployment-containment-authority", ErrFlow
+	}
+	health, e := r.verifyHealth(ctx, j, c, cfg, t, rolled.After, "rollback")
 	if e != nil {
 		stop("unhealthy")
 		return "deployment-containment-health", ErrFlow

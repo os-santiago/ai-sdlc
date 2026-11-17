@@ -14,7 +14,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
 
-func upgradeProtocolFixture(t *testing.T) (*store.DB, string, string, []store.MigrationIdentity) {
+func upgradeProtocolFixture(t *testing.T, schema ...int) (*store.DB, string, string, []store.MigrationIdentity) {
 	t.Helper()
 	ctx := context.Background()
 	connection := os.Getenv("AI_SDLC_TEST_DATABASE_URL")
@@ -56,6 +56,24 @@ func upgradeProtocolFixture(t *testing.T) (*store.DB, string, string, []store.Mi
 	source, err := store.MigrationCatalog()
 	if err != nil {
 		t.Fatal(err)
+	}
+	count := 34
+	if len(schema) > 0 {
+		count = schema[0]
+	}
+	if count != 34 && count != 35 {
+		t.Fatal("unsupported fixture schema")
+	}
+	// Legacy fixtures remain explicitly schema 0034 after the compiler adds 0035.
+	if len(source) != 35 {
+		t.Fatal("fixture catalog changed")
+	}
+	if count == 34 {
+		if _, err = db.Pool.ExecContext(ctx, `DROP TABLE public.deployment_browser_cleanups,public.deployment_browser_evidence,public.deployment_browser_pods,public.deployment_browser_sends,public.deployment_browser_intents;
+ DELETE FROM public.schema_migrations WHERE filename='0035_deployment_browser.sql'`); err != nil {
+			t.Fatal(err)
+		}
+		source = source[:34]
 	}
 	return db, name, u.String(), source
 }
@@ -239,6 +257,82 @@ func TestUpgradeFenceProtocolRejectsPrivateMalformedFrames(t *testing.T) {
 		err := holdUpgradeFence(io.NopCloser(strings.NewReader(frame+"\n")), output)
 		if err == nil || err.Error() != "runtime upgrade fence denied" || output.Len() != 0 {
 			t.Fatal("malformed frame leaked credentials or emitted custody")
+		}
+	}
+}
+
+func TestUpgradeFenceBrowserProtocolDistinctAndTyped(t *testing.T) {
+	for _, count := range []int{34, 35} {
+		db, name, connection, catalog := upgradeProtocolFixture(t, count)
+		seed, err := os.ReadFile("../../../internal/store/testdata/browser_upgrade_history.sql")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = db.Pool.Exec(string(seed)); err != nil {
+			t.Fatal(err)
+		}
+		for _, bad := range []bool{false, true, false} {
+			if bad {
+				if _, err = db.Pool.Exec(`INSERT INTO release_gates(repository,pull_request,state,correlation_id) VALUES('fixture/app',1,'blocked','fixture')`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			input, send := io.Pipe()
+			receive, output := io.Pipe()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			done := make(chan error, 1)
+			go func() { done <- holdSelectedUpgradeFence(ctx, input, output, browserFence) }()
+			encoder := json.NewEncoder(send)
+			decoder := json.NewDecoder(receive)
+			if err = encoder.Encode(map[string]any{"databaseURL": connection, "database": name, "sourceCatalog": catalog}); err != nil {
+				t.Fatal(err)
+			}
+			var first map[string]any
+			if err = decoder.Decode(&first); err != nil {
+				t.Fatal(err)
+			}
+			if first["version"] != "ai-sdlc.browser-upgrade-fence/v1" || first["workflowRowsWritten"] != false || first["upgradeAuthorized"] != false {
+				t.Fatal("protocol authority mismatch")
+			}
+			if bad {
+				if first["state"] != "rejected" || first["reason"] != "history" || len(first) != 5 {
+					t.Fatal("history rejection missing")
+				}
+				if err = <-done; err == nil {
+					t.Fatal("denied history returned success")
+				}
+			} else {
+				if first["state"] != "held" {
+					t.Fatal("browser bridge not held")
+				}
+				for _, operation := range []string{"check", "release"} {
+					if err = encoder.Encode(map[string]any{"operation": operation, "nonce": first["nonce"]}); err != nil {
+						t.Fatal(err)
+					}
+					var next map[string]any
+					if err = decoder.Decode(&next); err != nil {
+						t.Fatal(err)
+					}
+					state := "held"
+					if operation == "release" {
+						state = "released"
+					}
+					if next["state"] != state || next["nonce"] != first["nonce"] || next["expiresAt"] != first["expiresAt"] {
+						t.Fatal("original fence changed")
+					}
+				}
+				if err = <-done; err != nil {
+					t.Fatal(err)
+				}
+			}
+			cancel()
+			send.Close()
+			receive.Close()
+			if bad {
+				if _, err = db.Pool.Exec(`DELETE FROM release_gates`); err != nil {
+					t.Fatal(err)
+				}
+			}
 		}
 	}
 }

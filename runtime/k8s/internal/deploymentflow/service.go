@@ -15,6 +15,7 @@ type Service struct {
 	DB        *store.DB
 	Mounts    releaseflow.Mounts
 	Transport func(releasing.Target) (Transport, error)
+	Cleaner   func() (BrowserCleaner, error)
 }
 
 func (s Service) Load() (releasing.Configuration, error) {
@@ -39,8 +40,8 @@ func (s Service) Ready(ctx context.Context) error {
 }
 func (s Service) Handler() http.Handler {
 	inbox := delivery.Inbox{DB: s.DB, Target: "deployer"}
-	return inbox.Handler(s.Identity, "deploy-release", "/internal/deploy-release", InboxEffect(store.NewDeploymentJournalWithTarget(s.DB, s.Load, s.Mounts.LoadTarget)))
+	return inbox.Handler(s.Identity, "deploy-release", "/internal/deploy-release", InboxEffect(store.NewDeploymentJournalWithTarget(s.DB, s.Load, s.Mounts.LoadTarget, s.Mounts.LoadBrowser)))
 }
 func (s Service) PollOnce(ctx context.Context) (string, error) {
-	return (Runtime{DB: s.DB, Load: s.Load, Target: s.Mounts.LoadTarget, Transport: s.Transport}).PollOnce(ctx)
+	return (Runtime{DB: s.DB, Load: s.Load, Target: s.Mounts.LoadTarget, Browser: s.Mounts.LoadBrowser, Transport: s.Transport, Cleaner: s.Cleaner, CleanupTarget: s.Mounts.LoadTargetIdentity}).PollOnce(ctx)
 }

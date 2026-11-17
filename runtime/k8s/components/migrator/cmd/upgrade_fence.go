@@ -22,16 +22,30 @@ func holdUpgradeFence(input io.ReadCloser, output io.WriteCloser) error {
 }
 
 func holdUpgradeFenceContext(ctx context.Context, input io.ReadCloser, output io.WriteCloser) error {
-	return holdSelectedUpgradeFence(ctx, input, output, false)
+	return holdSelectedUpgradeFence(ctx, input, output, legacyFence)
 }
 
 func holdReviewerUpgradeFence(input io.ReadCloser, output io.WriteCloser) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 125*time.Second)
 	defer cancel()
-	return holdSelectedUpgradeFence(ctx, input, output, true)
+	return holdSelectedUpgradeFence(ctx, input, output, reviewerFence)
 }
 
-func holdSelectedUpgradeFence(ctx context.Context, input io.ReadCloser, output io.WriteCloser, reviewerHistory bool) error {
+type fenceSelection uint8
+
+const (
+	legacyFence fenceSelection = iota
+	reviewerFence
+	browserFence
+)
+
+func holdBrowserUpgradeFence(input io.ReadCloser, output io.WriteCloser) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 125*time.Second)
+	defer cancel()
+	return holdSelectedUpgradeFence(ctx, input, output, browserFence)
+}
+
+func holdSelectedUpgradeFence(ctx context.Context, input io.ReadCloser, output io.WriteCloser, selection fenceSelection) error {
 	denied := errors.New("runtime upgrade fence denied")
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -70,9 +84,14 @@ func holdSelectedUpgradeFence(ctx context.Context, input io.ReadCloser, output i
 	released := false
 	version := "ai-sdlc.upgrade-fence/v1"
 	hold := db.WithPreCandidateUpgradeFence
-	if reviewerHistory {
+	if selection == browserFence {
+		version = "ai-sdlc.browser-upgrade-fence/v1"
+		hold = db.WithBrowserDeploymentUpgradeFence
+	} else if selection == reviewerFence {
 		version = "ai-sdlc.reviewer-upgrade-fence/v1"
 		hold = db.WithContainedReviewUpgradeFence
+	} else if selection != legacyFence {
+		return denied
 	}
 	emit := func(state string) error {
 		return json.NewEncoder(output).Encode(response{Version: version, State: state, Nonce: nonce, ExpiresAt: expiry})

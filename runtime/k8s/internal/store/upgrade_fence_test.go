@@ -9,9 +9,18 @@ import (
 	"time"
 )
 
+func upgradeFenceFixture(t *testing.T, count int) (*DB, string, []MigrationIdentity) {
+	t.Helper()
+	catalog, err := MigrationCatalog()
+	if err != nil || count > len(catalog) {
+		t.Fatal("invalid fixture catalog", err)
+	}
+	return upgradeFixture(t, len(catalog)-count)
+}
+
 func TestUpgradeFencePreservesHistoryAndExcludesWriters(t *testing.T) {
-	for _, omitted := range []int{1, 0} {
-		db, name, source := upgradeFixture(t, omitted)
+	for _, sourceCount := range []int{33, 34} {
+		db, name, source := upgradeFenceFixture(t, sourceCount)
 		ctx := context.Background()
 		before := upgradeHistory(t, db)
 		var retained *UpgradeFence
@@ -63,7 +72,7 @@ func fenceRequest(t *testing.T, db *DB) (string, string, string) {
 }
 
 func TestUpgradeFenceRejectsActivityUntilOriginalCleanupCompletes(t *testing.T) {
-	db, name, source := upgradeFixture(t, 1)
+	db, name, source := upgradeFenceFixture(t, 33)
 	ctx := context.Background()
 	id, work, token := fenceRequest(t, db)
 	calls := 0
@@ -133,7 +142,7 @@ func TestUpgradeFenceRejectsActivityUntilOriginalCleanupCompletes(t *testing.T) 
 }
 
 func TestUpgradeFenceExcludesReplicaAndMigrator(t *testing.T) {
-	db, name, source := upgradeFixture(t, 1)
+	db, name, source := upgradeFenceFixture(t, 33)
 	ctx := context.Background()
 	before := upgradeHistory(t, db)
 	err := db.WithPreCandidateUpgradeFence(ctx, name, source, func(ctx context.Context, f *UpgradeFence) error {
@@ -154,7 +163,7 @@ func TestUpgradeFenceExcludesReplicaAndMigrator(t *testing.T) {
 
 func TestUpgradeFenceCancelsAfterBackendLossAndDeadline(t *testing.T) {
 	for _, kill := range []bool{true, false} {
-		db, name, source := upgradeFixture(t, 1)
+		db, name, source := upgradeFenceFixture(t, 33)
 		ctx := context.Background()
 		before := upgradeHistory(t, db)
 		run, stop := context.WithTimeout(ctx, 2*time.Second)
@@ -188,7 +197,7 @@ func TestUpgradeFenceCancelsAfterBackendLossAndDeadline(t *testing.T) {
 }
 
 func TestUpgradeFenceSeesCommittedClaimAfterLockWait(t *testing.T) {
-	db, name, source := upgradeFixture(t, 1)
+	db, name, source := upgradeFenceFixture(t, 33)
 	ctx := context.Background()
 	holder, err := db.Pool.BeginTx(ctx, nil)
 	if err != nil {
@@ -239,7 +248,7 @@ func TestUpgradeFenceSeesCommittedClaimAfterLockWait(t *testing.T) {
 }
 
 func TestUpgradeFenceRejectsUnknownSchemaAndSourceWithoutEffects(t *testing.T) {
-	db, name, source := upgradeFixture(t, 1)
+	db, name, source := upgradeFenceFixture(t, 33)
 	ctx := context.Background()
 	before := upgradeHistory(t, db)
 	callback := func(context.Context, *UpgradeFence) error {
@@ -264,7 +273,7 @@ func TestUpgradeFenceRejectsUnknownSchemaAndSourceWithoutEffects(t *testing.T) {
 }
 
 func TestUpgradeFenceRejectsWrongDatabaseBeforeTableLocks(t *testing.T) {
-	db, name, source := upgradeFixture(t, 1)
+	db, name, source := upgradeFenceFixture(t, 33)
 	ctx := context.Background()
 	holder, err := db.Pool.BeginTx(ctx, nil)
 	if err != nil {
@@ -282,7 +291,7 @@ func TestUpgradeFenceRejectsWrongDatabaseBeforeTableLocks(t *testing.T) {
 }
 
 func TestUpgradeFenceConcurrentHeartbeatChecks(t *testing.T) {
-	db, name, source := upgradeFixture(t, 1)
+	db, name, source := upgradeFenceFixture(t, 33)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	err := db.WithPreCandidateUpgradeFence(ctx, name, source, func(active context.Context, fence *UpgradeFence) error {
@@ -317,7 +326,7 @@ func TestUpgradeFenceConcurrentHeartbeatChecks(t *testing.T) {
 }
 
 func TestUpgradeFenceCheckQueueHonorsCancellation(t *testing.T) {
-	db, name, source := upgradeFixture(t, 1)
+	db, name, source := upgradeFenceFixture(t, 33)
 	err := db.WithPreCandidateUpgradeFence(context.Background(), name, source, func(active context.Context, fence *UpgradeFence) error {
 		// Hold the operation permit to model another in-flight observation. A
 		// cancelled caller must not wait for it or make a new database query.

@@ -31,11 +31,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', kind)
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
+        self.send_header('Content-Security-Policy', "default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Referrer-Policy', 'no-referrer')
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path == '/':
+        if self.path == '/health/live':
+            self.reply(204, 'text/plain', b'')
+        elif self.path == '/':
             self.reply(200, 'text/html', html)
         elif self.path == '/static/app.js':
             self.reply(200, 'application/javascript', script.encode())

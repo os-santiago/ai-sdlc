@@ -26,7 +26,7 @@ type Record struct {
 
 func (r Record) Digest() string { raw, _ := json.Marshal(r); return authority.Digest(raw) }
 func (r Record) Validate(p promotionrecord.Record, v provenancerecord.Record, b buildrecord.Record) error {
-	if r.Outcome != "deployed" || r.Receipt.Rollback || r.Plan.Digest() != p.Plan.Digest() || r.Command.BindRecords(r.Configuration, p, v, b, time.UnixMilli(r.Command.IssuedAt)) != nil || r.RecordedAt.Before(p.RecordedAt) || r.RecordedAt.Before(time.UnixMilli(r.Command.IssuedAt)) || !r.RecordedAt.Before(time.UnixMilli(r.Command.ExpiresAt)) || deployment.ValidateHealth(r.Configuration.Target, r.Receipt, r.Health, r.RecordedAt) != nil {
+	if r.Outcome != "deployed" || r.Receipt.Rollback || r.Plan.Digest() != p.Plan.Digest() || r.Command.BindRecords(r.Configuration, p, v, b, time.UnixMilli(r.Command.IssuedAt)) != nil || r.RecordedAt.Before(p.RecordedAt) || r.RecordedAt.Before(time.UnixMilli(r.Command.IssuedAt)) || !r.RecordedAt.Before(time.UnixMilli(r.Command.ExpiresAt)) || deployment.ValidateHealth(r.Configuration.Target, r.Receipt, r.Health, r.RecordedAt) != nil || deployment.ValidateBrowserHealth(r.Configuration.Browser, r.Configuration.Target, r.Receipt, r.Health) != nil {
 		return deployment.ErrDeployment
 	}
 	raw, e := deployment.CompilePatch(r.Configuration.Target, r.Receipt.Before, r.Plan.Image, time.UnixMilli(r.Receipt.Before.ObservedAt))

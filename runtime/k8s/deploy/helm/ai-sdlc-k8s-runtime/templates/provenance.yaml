@@ -51,6 +51,7 @@ spec:
         checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
         checksum/build: {{ .Values.build.configJSON | sha256sum }}
         checksum/trust: {{ .Values.provenance.trustJSON | sha256sum }}
+        checksum/browser: {{ .Values.release.browserProfileJSON | sha256sum }}
         ai-sdlc.io/registry-credential-revision: {{ .Values.provenance.credentialRevision | quote }}
     spec:
       serviceAccountName: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-provenance-verifier
@@ -81,6 +82,7 @@ spec:
           volumeMounts:
             {{- if .Values.release.enabled }}
             - {name: release-target, mountPath: /etc/ai-sdlc/release, readOnly: true}
+            - {name: browser-profile, mountPath: /etc/ai-sdlc/browser, readOnly: true}
             {{- end }}
             - {name: build, mountPath: /etc/ai-sdlc/build, readOnly: true}
             - {name: authority, mountPath: /etc/ai-sdlc/authority, readOnly: true}
@@ -90,6 +92,8 @@ spec:
             - {name: registry, mountPath: /var/run/ai-sdlc/provenance-registry, readOnly: true}
       volumes:
         {{- if .Values.release.enabled }}
+        - name: browser-profile
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-browser-profile}
         - name: release-target
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-release-target}
         {{- end }}

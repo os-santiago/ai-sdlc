@@ -74,3 +74,83 @@ Publication resolution requires explicit `--include-browser --include-release
 --include-build`; consumers requesting the original twelve images continue to
 select exactly those twelve. Publication identity alone grants no deployment
 authority.
+
+## Deployment health contract
+
+The deployment controller now requires both its HTTP/TLS smoke and the fixed
+browser recipe before accepting deployment health. The two checks, original-Pod
+deletion and evidence recording share the existing 30-second smoke window.
+Baseline verification precedes the one-use deployment send; advance and rollback
+verification bind to their own acknowledged deployment receipt. PostgreSQL
+migration `0035_deployment_browser.sql` stores immutable intent, send, original
+Pod UID, evidence and a separate cleanup fact in five append-only tables.
+Release and production readers authenticate the evidence chain.
+HTTP-only or caller-constructed browser observations cannot complete a deployment.
+
+The installed public profile binds the browser image and runtime digest, original
+node name/UID, gVisor RuntimeClass/configuration, namespace, public CA ConfigMap,
+and network-policy UIDs. A Pod is bound to that prepared node; a replaced or
+cordoned node is rejected. The workload has no GitHub/model/vault credential,
+service-account token, external URL or script input. A lost create acknowledgement
+cannot be recovered by adopting a Pod later found under the same name.
+
+Cleanup may outlive the smoke sub-context only for containment of the acknowledged
+Pod. It inherits the original controller/claim context and ends at the earlier of
+ten seconds or the original claim expiry. Cancellation of that authority prevents
+new cleanup requests under that attempt. A later controller poll may obtain a
+new, ten-second resource-containment authorization for an expired browser request
+whose original Pod UID was acknowledged. That path exposes only cleanup: it
+rechecks the original cluster/namespace and Pod UID, records absence, and cannot
+create a Pod, patch the application, retry verification or emit health. An unknown
+create outcome remains quarantined. A lost DELETE reply is resolved only by
+original-scope absence, without replaying DELETE. Cleanup after the smoke deadline
+never produces success.
+
+Prepared installations provide `--browser-profile <public-profile.json>` together
+with the approved release target and image selection. The offline migrator command
+`compile-browser-installation` validates public scope observations with the same
+validator used by the running adapter. The installer does not turn an arbitrary
+profile into approval, adopt existing resources, or infer a new target from it.
+Infrastructure manifests are in `runtime/k8s/deploy/local/browser-platform/`;
+Helm grants the deployer Pod/log access only in that dedicated namespace and
+read-only access to the bound node, class, CA and policies.
+
+The existing schema-34 installation requires a separately validated migration and
+activation transition before consuming this capability. Do not apply schema-35
+images through the reviewer-only image upgrade, or reinterpret old HTTP receipts
+as browser evidence.
+
+The `verify_browser_transport.py` fixture checks the actual Kubernetes API,
+Firefox/gVisor, normal TLS, original-Pod cleanup and unchanged console Deployment.
+It uses the rendered deployer ServiceAccount and checks 19 allowed/denied API
+permissions, including denial of exec, secrets and policy writes. Its fourth
+scenario cancels the original attempt after the Pod ACK, expires the smoke and
+checks resource-only recovery without late health. Its business API is synthetic
+and it does not write deployment journal evidence;
+it is not autonomous E2E or vault-cryptography proof.
+
+## Existing installation transition
+
+For the closed schema-34 installation with a completed reviewer-image upgrade,
+`./install.sh runtime-upgrade browser` selects a successful immutable main
+publication containing all thirteen image identities. Supply `--cluster`,
+`--provider`, `--target-run`, `--target-revision` and `--provenance-trust`. The public
+trust document must be independently reviewed and change only `verifierImage` to
+the selected publication. Existing keys, CA, publisher, scope and expiry remain
+identical. Publication or compilation alone does not approve that document.
+
+The operation has its own journal and finite deadline. It validates the original
+chart from immutable Git objects, excludes workflow writes, pauses original
+producers, captures and restores a backup, prepares the browser infrastructure,
+applies migration 35 and activates the new consumers with intake last. The
+separate browser fence admits only schemas 34/35, fully contained failed-review
+history and empty browser tables. Both legacy fences retain their earlier schema
+and history boundaries.
+
+The transition preserves every old row, role identity and privilege. It adds
+browser evidence capabilities and updates all database consumers; isolated
+publisher/worker/mailbox job pins and budgets remain unchanged. It never deletes
+migration history, rolls schema 35 back to 34, renews an expired operation, or
+repeats an uncertain migration/Helm send. Unknown outcomes retain their original
+records and require observation and containment. `browser-status` reports only a
+complete recorded phase; it is not proof that the software delivery E2E passed.

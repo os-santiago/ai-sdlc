@@ -119,7 +119,7 @@ class Activation:
             json.dump(trust,f);f.flush()
             result=provenance_runtime_install.configure(self.config.base_run,self.config.kubectl,self.config.provider,self.state,lock,bundle,Path(f.name),values['verifier']['digest'],self)
         if result!=values['provenance']:raise ValueError('Original provenance installation changed')
-        approved={'target':json.loads(values['release']['targetJSON']),'images':{'deployerDigest':values['release']['digest']}}
+        approved={'target':json.loads(values['release']['targetJSON']),'images':{'deployerDigest':values['release']['digest']},'browser':json.loads(values['release']['browserProfileJSON'])}
         result=release_runtime_install.configure(self.config.base_run,self.config.kubectl,self.config.provider,lock,approved,trust,self)
         if result!=values['release']:raise ValueError('Original release target changed')
         self.guard()

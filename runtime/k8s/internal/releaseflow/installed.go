@@ -2,6 +2,7 @@ package releaseflow
 
 import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/browsercheck"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/buildflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/provenance"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/releasing"
@@ -11,10 +12,10 @@ import (
 )
 
 // Mounts are reviewed installation inputs. No request chooses paths or targets.
-type Mounts struct{ Build, Inner, Outer, Trust, Target, Identity, VerifierImage string }
+type Mounts struct{ Build, Inner, Outer, Trust, Target, Browser, Identity, VerifierImage string }
 
 func InstalledMounts(verifierImage string) Mounts {
-	return Mounts{Build: "/etc/ai-sdlc/build/config.json", Inner: "/etc/ai-sdlc/authority/policy.json", Outer: "/etc/ai-sdlc/outer-policy/policy.json", Trust: "/etc/ai-sdlc/provenance/trust.json", Target: "/etc/ai-sdlc/release/target.json", Identity: "/etc/ai-sdlc/identity/identity.json", VerifierImage: verifierImage}
+	return Mounts{Build: "/etc/ai-sdlc/build/config.json", Inner: "/etc/ai-sdlc/authority/policy.json", Outer: "/etc/ai-sdlc/outer-policy/policy.json", Trust: "/etc/ai-sdlc/provenance/trust.json", Target: "/etc/ai-sdlc/release/target.json", Browser: "/etc/ai-sdlc/browser/profile.json", Identity: "/etc/ai-sdlc/identity/identity.json", VerifierImage: verifierImage}
 }
 func readMounted(path string, limit int64) ([]byte, error) {
 	if path == "" {
@@ -36,12 +37,30 @@ func readMounted(path string, limit int64) ([]byte, error) {
 // may combine it with an original acknowledged effect for bounded containment.
 // Missing/replaced/expired destination never selects cached or request input.
 func (m Mounts) LoadTarget() (releasing.Target, error) {
-	var target releasing.Target
-	raw, e := readMounted(m.Target, 96*1024)
-	if e != nil || authority.DecodeStrict(raw, &target) != nil || target.Validate(time.Now()) != nil {
+	target, e := m.LoadTargetIdentity()
+	if e != nil || target.Validate(time.Now()) != nil {
 		return releasing.Target{}, ErrFlow
 	}
 	return target, nil
+}
+
+// LoadTargetIdentity permits only comparison with archived target identity for
+// resource cleanup. It does not approve a new application or health operation.
+func (m Mounts) LoadTargetIdentity() (releasing.Target, error) {
+	var target releasing.Target
+	raw, e := readMounted(m.Target, 96*1024)
+	if e != nil || authority.DecodeStrict(raw, &target) != nil || target.Validate(time.UnixMilli(target.ApprovedAt)) != nil {
+		return releasing.Target{}, ErrFlow
+	}
+	return target, nil
+}
+func (m Mounts) LoadBrowser() (browsercheck.Profile, error) {
+	var profile browsercheck.Profile
+	raw, e := readMounted(m.Browser, 8192)
+	if e != nil || authority.DecodeStrict(raw, &profile) != nil || profile.Validate() != nil {
+		return browsercheck.Profile{}, ErrFlow
+	}
+	return profile, nil
 }
 func (m Mounts) Load(role string) (releasing.Configuration, authority.Identity, error) {
 	var cfg releasing.Configuration
@@ -65,7 +84,11 @@ func (m Mounts) Load(role string) (releasing.Configuration, authority.Identity, 
 	if e != nil {
 		return cfg, key, e
 	}
-	cfg = releasing.Configuration{Provenance: provenance.Configuration{Build: installed.Configuration(), Trust: trust}, Target: target}
+	browser, e := m.LoadBrowser()
+	if e != nil {
+		return cfg, key, e
+	}
+	cfg = releasing.Configuration{Provenance: provenance.Configuration{Build: installed.Configuration(), Trust: trust}, Target: target, Browser: browser}
 	if cfg.Validate(time.Now()) != nil {
 		return releasing.Configuration{}, key, ErrFlow
 	}

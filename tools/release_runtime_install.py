@@ -6,18 +6,21 @@ approved. This module cannot create/adopt an application or approve observations
 import json
 import re
 
+import browser_profile_install
 import bootstrap_prepare
 import build_foundation_install
 import build_runtime_install
 
 
-def inputs(target_path,images_path,lock):
+def inputs(target_path,images_path,lock,browser_path=None):
     target=build_foundation_install.bounded_json(target_path,128*1024)
     images=build_foundation_install.bounded_json(images_path,4096)
     if (set(images)!={'version','revision','deployerDigest'} or images['version']!='ai-sdlc.release-images/v1'
             or images['revision']!=lock['image']['tag'] or not re.fullmatch(r'sha256:[a-f0-9]{64}',images['deployerDigest'])):
         raise ValueError('Release image must come from the selected runtime publication')
-    return {'target':target,'images':images}
+    if browser_path is None:raise ValueError('Explicit installed browser profile required')
+    profile=build_foundation_install.bounded_json(browser_path,8192)
+    return {'target':target,'images':images,'browser':profile}
 
 
 def configure(run,kubectl,provider,lock,approved,trust,configuration):
@@ -56,4 +59,5 @@ def configure(run,kubectl,provider,lock,approved,trust,configuration):
             or not re.fullmatch('[a-f0-9]{64}',compiled['trustSHA256'])):
         raise ValueError('Release compiler changed approved input')
     configuration.bind_source('release-original-identities',identities)
-    return {'enabled':True,'digest':approved['images']['deployerDigest'],'targetJSON':json.dumps(target,sort_keys=True)}
+    browser=browser_profile_install.configure(run,kubectl,provider,lock,approved['browser'],target,configuration)
+    return {'enabled':True,'digest':approved['images']['deployerDigest'],'targetJSON':json.dumps(target,sort_keys=True),'browserProfileJSON':browser}

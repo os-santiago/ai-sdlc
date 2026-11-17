@@ -3,6 +3,8 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/browsercheck"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/releasing"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"net/url"
@@ -37,7 +39,8 @@ func newPromotionFixture(t *testing.T) promotionFixture {
 		t.Fatal(e)
 	}
 	target := releasing.Target{Version: releasing.TargetVersion, Scope: "kind-test-production", Repository: p.cfg.Trust.Repository, Environment: p.cfg.Trust.Environment, ClusterUID: p.cfg.Trust.ClusterUID, NamespaceUID: store.NewID(), Namespace: p.cfg.Trust.Environment, Deployment: "saferus-console", DeploymentUID: store.NewID(), Container: "console", DeploymentSpecSHA256: strings.Repeat("5", 64), Service: "saferus-console", ServiceUID: store.NewID(), ServiceSpecSHA256: strings.Repeat("6", 64), PullSecret: "ai-sdlc-release-reader", PullSecretUID: store.NewID(), TLSSecretUID: store.NewID(), TLSCA: p.cfg.Trust.RegistryCA, TLSHostname: "saferus-console", BaselineImage: "localhost/saferus-console@sha256:" + strings.Repeat("7", 64), BaselineRuntimeDigest: "sha256:" + strings.Repeat("7", 64), RolloutSeconds: 300, SmokeSeconds: 30, ApprovedAt: time.Now().Add(-time.Minute).UnixMilli(), ExpiresAt: time.Now().Add(30 * time.Minute).UnixMilli()}
-	cfg := &releasing.Configuration{Provenance: *p.cfg, Target: target}
+	browser := browsercheck.Profile{NodeName: "fixture-node", NodeUID: store.NewID(), Version: browsercheck.ProfileVersion, BaselineExpectation: "baseline-seconds", CandidateExpectation: "readable-duration", DenyPolicyUID: store.NewID(), EgressPolicyUID: store.NewID(), ConsoleIngressPolicyUID: store.NewID(), ClusterUID: target.ClusterUID, NamespaceUID: store.NewID(), RuntimeClassUID: store.NewID(), CAConfigMapUID: store.NewID(), Image: "quay.io/os-santiago/ai-sdlc@sha256:" + strings.Repeat("1", 64), RuntimeDigest: "sha256:" + strings.Repeat("1", 64), CASHA256: authority.Digest([]byte(target.TLSCA)), RuntimeConfigurationSHA256: strings.Repeat("2", 64)}
+	cfg := &releasing.Configuration{Provenance: *p.cfg, Target: target, Browser: browser}
 	c, e := releasing.NewCommand(*cfg, record, p.record, time.Now())
 	if e != nil {
 		t.Fatal(e)

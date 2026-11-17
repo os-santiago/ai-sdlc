@@ -29,6 +29,9 @@ spec:
         checksum/merge-policy: {{ $.Values.merge.configJSON | sha256sum }}
         {{- end }}
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
+        {{- if and (eq $key "releaseManager") $.Values.release.enabled }}
+        checksum/browser: {{ $.Values.release.browserProfileJSON | sha256sum }}
+        {{- end }}
         {{- if and (eq $key "worker") (has $.Values.runtime.mode (list "candidate" "verification")) }}
         ai-sdlc.io/model-credential-revision: {{ $.Values.candidate.credentialRevision | quote }}
         {{- end }}
@@ -88,6 +91,7 @@ spec:
             {{- end }}
             {{- if and (eq $key "releaseManager") $.Values.release.enabled }}
             - {name: release-target, mountPath: /etc/ai-sdlc/release, readOnly: true}
+            - {name: browser-profile, mountPath: /etc/ai-sdlc/browser, readOnly: true}
             - {name: release-trust, mountPath: /etc/ai-sdlc/provenance, readOnly: true}
             {{- end }}
             {{- if and $.Values.build.enabled (has $key (list "releaseManager" "relay")) }}
@@ -148,6 +152,8 @@ spec:
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-outer-policy}
         {{- end }}
         {{- if and (eq $key "releaseManager") $.Values.release.enabled }}
+        - name: browser-profile
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-browser-profile}
         - name: release-target
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-release-target}
         - name: release-trust
