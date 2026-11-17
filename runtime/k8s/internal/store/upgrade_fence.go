@@ -45,10 +45,11 @@ func upgradeFenceTables(source []MigrationIdentity) ([]string, error) {
 
 func selectedUpgradeFenceTables(source []MigrationIdentity, browser bool) ([]string, error) {
 	catalog, err := MigrationCatalog()
-	if err != nil || len(catalog) != 35 || catalog[34].Filename != "0035_deployment_browser.sql" || catalog[32].Filename != "0033_production_completion.sql" || catalog[33].Filename != "0034_execution_failures.sql" || ValidateMigrationSource(source) != nil || (!browser && len(source) != 33 && len(source) != 34) || (browser && len(source) != 34 && len(source) != 35) {
+	if err != nil || len(catalog) != 36 || catalog[35].Filename != "0036_review_feedback.sql" || catalog[34].Filename != "0035_deployment_browser.sql" || catalog[32].Filename != "0033_production_completion.sql" || catalog[33].Filename != "0034_execution_failures.sql" || ValidateMigrationSource(source) != nil || (!browser && len(source) != 33 && len(source) != 34) || (browser && len(source) != 34 && len(source) != 35) {
 		return nil, ErrUpgradeFence
 	}
-	tables := slices.Clone(bootstrapTables)
+	// Historical bridges never admit the new feedback schema or its rows.
+	tables := slices.DeleteFunc(slices.Clone(bootstrapTables), func(s string) bool { return s == "review_feedback" })
 	if len(source) < 35 {
 		tables = slices.DeleteFunc(tables, func(s string) bool { return slices.Contains(browserUpgradeTables, s) })
 	}

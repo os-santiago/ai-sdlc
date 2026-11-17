@@ -13,18 +13,12 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
 
-const reviewObservationVersion = "ai-sdlc.review-observation/v1"
+const reviewObservationVersion = reviewresult.ObservationVersion
 
 var reviewToolID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
-// ReviewObservation is derived from the exact provider response BEFORE mailbox
-// delivery. It retains no source, arguments or model prose. SCC cannot supply it.
-type ReviewObservation struct {
-	Version     string         `json:"version"`
-	Tools       map[string]int `json:"tools"`
-	Verdict     string         `json:"verdict"`
-	FinalSHA256 string         `json:"finalSHA256"`
-}
+// ReviewObservation contains controller-derived facts, never source arguments.
+type ReviewObservation = reviewresult.Observation
 
 func reviewPath(value string, glob, root bool) bool {
 	if value == "." {
@@ -190,42 +184,20 @@ func MatchReviewSummary(summary reviewresult.Result, evidence []store.ReviewMode
 	if len(evidence) < 2 || len(evidence) > 8 || summary.Iterations != len(evidence) {
 		return ErrRejected
 	}
-	total := 0
+	observations := make([]reviewresult.Observation, 0, len(evidence))
 	for i, item := range evidence {
-		var o ReviewObservation
-		if item.Sequence != i+1 || item.InputBytes < 1 || item.OutputBytes < 1 || !reviewDigest(item.RequestDigest) || !reviewDigest(item.ResponseDigest) || authority.DecodeStrict(item.Observation, &o) != nil || o.Version != reviewObservationVersion || o.Tools == nil {
+		var o reviewresult.Observation
+		if item.Sequence != i+1 || item.InputBytes < 1 || item.OutputBytes < 1 || !reviewDigest(item.RequestDigest) || !reviewDigest(item.ResponseDigest) || authority.DecodeStrict(item.Observation, &o) != nil {
 			return ErrRejected
 		}
-		if i == len(evidence)-1 {
-			if len(o.Tools) != 0 || o.Verdict != summary.Verdict || o.FinalSHA256 != authority.Digest([]byte(summary.FinalMessage)) {
-				return ErrRejected
-			}
-		} else {
-			if o.Verdict != "" || o.FinalSHA256 != "" || len(o.Tools) == 0 {
-				return ErrRejected
-			}
-			count := 0
-			for name, n := range o.Tools {
-				if name != "read_file" && name != "list_dir" && name != "search_text" && name != "code_query" {
-					return ErrRejected
-				}
-				if n < 1 || n > 4 {
-					return ErrRejected
-				}
-				count += n
-			}
-			if count > 4 {
-				return ErrRejected
-			}
-			total += count
-		}
+		observations = append(observations, o)
 	}
-	verdict, err := reviewresult.Verdict(summary.FinalMessage)
-	if err != nil || verdict != summary.Verdict || total != summary.ReadCalls {
+	if reviewresult.MatchObservations(summary, observations) != nil {
 		return ErrRejected
 	}
 	return nil
 }
+
 func reviewDigest(v string) bool {
 	if len(v) != 64 {
 		return false

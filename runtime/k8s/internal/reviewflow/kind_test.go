@@ -88,7 +88,7 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 		t.Fatal("fixture database")
 	}
 	defer admin.Close()
-	if _, e = admin.Pool.Exec(`GRANT SELECT ON execution_requests TO aisdlc_verifier; GRANT SELECT,INSERT,UPDATE ON review_runs,review_effects,review_model_calls TO aisdlc_verifier`); e != nil {
+	if _, e = admin.Pool.Exec(`GRANT SELECT ON execution_requests TO aisdlc_verifier; GRANT SELECT,INSERT,UPDATE ON review_runs,review_effects,review_model_calls TO aisdlc_verifier; GRANT SELECT ON review_feedback TO aisdlc_verifier; GRANT INSERT(review_id,decision,digest) ON review_feedback TO aisdlc_verifier`); e != nil {
 		t.Fatal("disposable review grants")
 	}
 	u.User = url.UserPassword("aisdlc_verifier", "verifier"+strings.Repeat("q", 40))
@@ -327,6 +327,18 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 		if control.Scenario != "request_changes" && control.Scenario != "real-model" && (handed != 0 || calls.Load() != expectedCalls) {
 			t.Fatal("unsafe response reached SCC")
 		}
+	}
+	if reason == "request-changes" {
+		var reviewID string
+		if db.Pool.QueryRow(`SELECT id FROM review_runs WHERE verification_id=$1`, id).Scan(&reviewID) != nil {
+			t.Fatal("feedback review identity")
+		}
+		record, err := db.ReadReviewFeedback(ctx, reviewID)
+		if err != nil || record.Decision.Verdict != "request_changes" || record.Decision.VerificationID != id || record.Decision.FinalMessage == "" || record.Decision.ModelEvidenceSHA256 == "" {
+			t.Fatal("durable private rejection feedback", err)
+		}
+		// Never print private model prose into the public fixture report.
+		t.Log("authenticated rejection feedback retained; no repair or publication authority")
 	}
 	before := calls.Load()
 	gatewayReady.Store(false)
