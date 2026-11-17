@@ -18,19 +18,22 @@ func TestUpgradeFenceFeedbackPlannerBlockedHistory(t *testing.T) {
 		if _, err := db.Pool.Exec(browserBridgeHistory); err != nil {
 			t.Fatal(err)
 		}
-		passwords := map[string]string{}
-		for component := range componentTables {
-			passwords[component] = strings.ReplaceAll(NewID(), "-", "") + strings.ReplaceAll(component, "-", "_")
-		}
-		if err := db.ProvisionRoles(ctx, passwords); err != nil {
-			t.Fatal("owned fixture roles", err)
+		// This is a historical schema-35 fixture, not a current installation.
+		// Grant only the original planner operation's tables to its real,
+		// non-elevated identity; the current provisioner requires schema 37.
+		password := strings.ReplaceAll(NewID(), "-", "")
+		if _, err := db.Pool.ExecContext(ctx, `CREATE ROLE aisdlc_orchestrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS NOREPLICATION PASSWORD '`+password+`';
+ GRANT USAGE ON SCHEMA public TO aisdlc_orchestrator;
+ GRANT SELECT ON plans, work_items TO aisdlc_orchestrator;
+ GRANT UPDATE(status,updated_at) ON work_items TO aisdlc_orchestrator`); err != nil {
+			t.Fatal("owned historical planner role", err)
 		}
 		u, err := url.Parse(os.Getenv("AI_SDLC_TEST_DATABASE_URL"))
 		if err != nil {
 			t.Fatal("fixture connection")
 		}
 		u.Path = "/" + name
-		u.User = url.UserPassword("aisdlc_orchestrator", passwords["orchestrator"])
+		u.User = url.UserPassword("aisdlc_orchestrator", password)
 		query := u.Query()
 		for _, key := range []string{"dbname", "database", "search_path"} {
 			query.Del(key)
@@ -58,13 +61,30 @@ func TestUpgradeFenceFeedbackPlannerBlockedHistory(t *testing.T) {
 		}
 		for _, count := range []int{35, 36} {
 			if count == 36 {
-				if err = db.Migrate(ctx); err != nil {
-					t.Fatal(err)
+				catalog, catalogErr := MigrationCatalog()
+				if catalogErr != nil || len(catalog) < count {
+					t.Fatal("historical feedback catalog", catalogErr)
 				}
-				source, err = MigrationCatalog()
+				item := catalog[count-1]
+				raw, readErr := migrationsFS.ReadFile("migrations/" + item.Filename)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				migration, beginErr := db.Pool.BeginTx(ctx, nil)
+				if beginErr != nil {
+					t.Fatal(beginErr)
+				}
+				if _, err = migration.ExecContext(ctx, string(raw)); err == nil {
+					_, err = migration.ExecContext(ctx, `INSERT INTO public.schema_migrations(filename) VALUES($1)`, item.Filename)
+				}
 				if err != nil {
+					migration.Rollback()
 					t.Fatal(err)
 				}
+				if err = migration.Commit(); err != nil {
+					t.Fatal(err)
+				}
+				source = catalog[:count]
 			}
 			before := upgradeHistory(t, db)
 			if err = db.WithReviewFeedbackUpgradeFence(ctx, name, source, func(ctx context.Context, f *UpgradeFence) error { return f.Check(ctx) }); err != nil {
