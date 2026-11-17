@@ -305,3 +305,33 @@ upgrade must revalidate the current source against that proof. Neither command
 migrates or restores into the installed database, reactivates producers, grants
 rollback authority or validates autonomous delivery. This bounded local backup
 is not a replacement for an enterprise retention or disaster-recovery service.
+
+## Validate the diagnostic migration on a disposable database
+
+Before implementing an installed-runtime transition, validate the published
+33-to-34 diagnostic migration against the previous published migrator:
+
+```bash
+python3 tools/validate_upgrade_migration.py --provider podman \
+  --source-run SOURCE_RUN_ID --source-revision FULL_SOURCE_COMMIT_SHA \
+  --target-run TARGET_RUN_ID --target-revision FULL_TARGET_COMMIT_SHA \
+  --output NEW_PRIVATE_EVIDENCE_DIRECTORY
+```
+
+This harness authenticates both publications, initializes an owned ephemeral
+PostgreSQL database with the source migrator, retains fixture work and outbox
+history, restores its backup into a separate database, and runs the target
+migrator. It compares the original rows, migration tracker, schema definitions,
+role identities and semantic ACL inventory. ACL ordering is ignored; owners,
+grantors, grantees, privilege types and grant options are retained. All original
+component credentials must authenticate with SCRAM, and an incorrect password
+must fail. Negative controls verify detection of changed ACLs and role authority.
+Only the worker receives the reviewed diagnostic privileges.
+
+Each migrator uses a persisted creation intent and original container ID before
+starting SQL. Component credentials travel through bounded private stdin; the
+database URL is inherited by environment name. Missing acknowledgements and
+incomplete intents cannot trigger an automatic replay or adoption by name.
+The sanitized report distinguishes this disposable compatibility proof from
+installed-runtime validation and autonomous E2E delivery. No production CLI,
+runtime migration, restart or rollback authority is provided by this harness.

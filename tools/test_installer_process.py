@@ -41,6 +41,23 @@ class ProcessTests(unittest.TestCase):
             with self.assertRaises(ValueError):process.capture(['must-not-run'],monitor=stopped)
             start.assert_not_called()
 
+    def test_private_input_is_bounded_and_sent_without_argv(self):
+        payload=b'x'*16384
+        script="import hashlib,sys;print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())"
+        import hashlib
+        self.assertEqual(process.capture([sys.executable,'-c',script],input=payload).strip(),hashlib.sha256(payload).hexdigest().encode())
+        with patch.object(process.subprocess,'Popen') as start:
+            with self.assertRaises(ValueError):process.capture(['must-not-run'],input=payload+b'x')
+            start.assert_not_called()
+
+    def test_unread_input_and_early_stdout_close_respect_original_budget(self):
+        for script in ('import time;time.sleep(60)','import os,time;os.close(1);time.sleep(60)'):
+            with self.subTest(script=script):
+                started=time.monotonic()
+                with self.assertRaises(ValueError):process.capture([sys.executable,'-c',script],input=b'x'*16384,timeout=.1)
+                self.assertLess(time.monotonic()-started,2)
+        self.assertEqual(process.capture([sys.executable,'-c','import os,sys;os.close(1);sys.stdin.buffer.read()'],input=b'x'*16384),b'')
+
     def test_original_session_leader_remains_reserved_until_cleanup(self):
         original=os.killpg;calls=[]
         def kill(pid,signal):
