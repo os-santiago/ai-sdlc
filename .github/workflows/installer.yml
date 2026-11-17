@@ -95,7 +95,7 @@ jobs:
           k = [tools['kubectl'], '--kubeconfig', str(state / 'kubeconfig'), '--context', 'kind-ai-sdlc', '--request-timeout=10s']
           cluster = json.loads(subprocess.check_output(k + ['get', 'namespace', 'kube-system', '-o', 'json'], timeout=15))['metadata']['uid']
           images = json.loads(pathlib.Path('runtime/k8s/deploy/local/images.lock.json').read_text())
-          subprocess.run([sys.executable, 'tools/validate_feedback_browser_guard.py', 'tools/test_feedback_browser_guard.py', '--kubectl', tools['kubectl'],
+          subprocess.run([sys.executable, 'tools/validate_feedback_browser_guard.py', '--kubectl', tools['kubectl'],
                           '--kubeconfig', str(state / 'kubeconfig'), '--context', 'kind-ai-sdlc', '--cluster-uid', cluster,
                           '--image', images['image']['repository'] + '@' + images['components']['worker']['digest'],
                           '--output', str(pathlib.Path(os.environ['RUNNER_TEMP'], 'feedback-browser-guard'))], check=True, timeout=300)
