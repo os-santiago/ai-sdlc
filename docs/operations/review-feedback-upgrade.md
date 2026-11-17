@@ -95,6 +95,13 @@ then proves the new fence preserves the result in both schemas while the earlier
 protocols still reject it. The general suite skips this separately gated fixture
 instead of adopting another test database's existing roles.
 
+`tools/validate_feedback_browser_guard.py --help` provides the isolated kind
+negative controls, also run by installer CI. It requires an explicit cluster UID,
+creates `ai-sdlc-browser` only when absent, and checks empty versus residual
+Pods/Jobs/CronJobs and namespace replacement. Pods stay scheduling-gated; Jobs and
+CronJobs stay suspended. Namespace cleanup uses the original UID precondition.
+This is a residual-work guard test, not a complete upgrade or readiness proof.
+
 For the migration composition above, the target is a local test image, not publication
 approval. The fixture creates and removes its own PostgreSQL containers; it never
 targets an installed runtime. Its success does not prove the complete Kubernetes
