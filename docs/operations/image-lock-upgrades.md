@@ -226,3 +226,41 @@ SLSA level and does not replace that gate.
 The helper does not enable AI-SDLC execution, modify issue eligibility, dispatch
 work, create releases or advance business state. Installation readiness and a
 successful shadow upgrade remain separate from issue-to-production delivery.
+
+## Pause an original pre-candidate runtime
+
+`./install.sh runtime-upgrade pause` is a bounded administrative operation for a
+complete initial activation whose retained history has not reached candidate
+creation. Select the original cluster and exact successful publications:
+
+```bash
+./install.sh runtime-upgrade pause --cluster ORIGINAL_CLUSTER --provider podman \
+  --source-run SOURCE_RUN_ID --source-revision FULL_SOURCE_COMMIT_SHA \
+  --target-run TARGET_RUN_ID --target-revision FULL_TARGET_COMMIT_SHA
+./install.sh runtime-upgrade status --cluster ORIGINAL_CLUSTER --provider podman
+```
+
+The target publication must include `describe-migrations` and
+`hold-upgrade-fence`. Its migrator acts only as an administrative helper; this
+command keeps the original installed component images and does not migrate the
+database. The current helper supports source catalogs 33 and 34 only. It rejects
+candidate/downstream history, live execution claims, incomplete cleanup,
+unacknowledged execution effects and active model calls or budgets.
+
+The installer verifies the original activation, resource UIDs, database Pod,
+private credential custody and unchanged chart. With the original database
+session holding bounded write exclusion, it freezes both policies, pauses issue
+intake and scales the original producer Deployments to zero through Helm. It
+retains the original policy expiry and authority. Completion requires the
+original producer Pods and execution resources to be absent, the fence release
+to be acknowledged, helper cleanup to finish and the paused installation to be
+observed again. No workflow rows or delivery-stage receipts are created.
+
+A separate private `runtime-upgrade-pause.json` records intent before the Helm
+send. A lost response or partial operation stays incomplete; invoking the command
+again does not replay an uncertain send. Preserve that record and original
+installation for reviewed recovery. After a completed pause, invoking `pause`
+again only reobserves the result and repairs its installation snapshot if needed.
+`status` is read-only. This operation does not provide resume, migration,
+backup/restore, rollback or an end-to-end delivery result. Those gates remain
+required before installing new runtime images.
