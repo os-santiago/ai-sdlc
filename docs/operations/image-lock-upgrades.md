@@ -322,10 +322,13 @@ This harness authenticates both publications, initializes an owned ephemeral
 PostgreSQL database with the source migrator, retains fixture work and outbox
 history, restores its backup into a separate database, and runs the target
 migrator. It compares the original rows, migration tracker, schema definitions,
-role identities and semantic ACL inventory. ACL ordering is ignored; owners,
-grantors, grantees, privilege types and grant options are retained. All original
+role identities and semantic ACL inventory, including types, default privileges,
+tablespaces, languages, foreign objects, large objects and parameter ACLs. ACL
+ordering is ignored; owners, grantors, grantees, privilege types, grant options
+and the distinction between default and explicit ACLs are retained. All original
 component credentials must authenticate with SCRAM, and an incorrect password
-must fail. Negative controls verify detection of changed ACLs and role authority.
+must fail. Negative controls verify detection of changed table, type and default ACLs,
+and changed role authority.
 Only the worker receives the reviewed diagnostic privileges.
 
 Each migrator uses a persisted creation intent and original container ID before

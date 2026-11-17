@@ -75,15 +75,24 @@ def main(argv=None):
         def original_schema():return capture(prefix+['pg_dump','--schema-only','--create','--no-password',
             '--restrict-key=aiSdlcSchemaComparisonOnly','--no-privileges','--exclude-table=public.execution_failures','-U','ai_sdlc','-d','ai_sdlc'])
         schema=original_schema()
-        def permissions():
-            return database.sql("""WITH objects AS (
+        def permissions(before=''):
+            query="""WITH objects AS (
 SELECT 'schema' kind,n.nspname object,n.nspowner owner,n.nspacl acl,'n' objtype FROM pg_namespace n WHERE n.nspname='public'
 UNION ALL SELECT 'relation',n.nspname||'.'||c.relname,c.relowner,c.relacl,CASE WHEN c.relkind='S' THEN 's' ELSE 'r' END FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN('r','p','v','m','S','f') AND c.relname<>'execution_failures'
 UNION ALL SELECT 'column',n.nspname||'.'||c.relname||'.'||a.attname,c.relowner,coalesce(a.attacl,'{}'::aclitem[]),NULL FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN('r','p','v','m','f') AND c.relname<>'execution_failures' AND a.attnum>0 AND NOT a.attisdropped
 UNION ALL SELECT 'function',p.oid::regprocedure::text,p.proowner,p.proacl,'f' FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public'
 UNION ALL SELECT 'database',d.datname,d.datdba,d.datacl,'d' FROM pg_database d WHERE d.datname=current_database()
-), entries AS (SELECT o.kind,o.object,own.rolname owner,g.rolname grantor,coalesce(r.rolname,'PUBLIC') grantee,a.privilege_type,a.is_grantable FROM objects o JOIN pg_roles own ON own.oid=o.owner LEFT JOIN LATERAL aclexplode(CASE WHEN cardinality(o.acl)=0 THEN NULL::aclitem[] ELSE coalesce(o.acl,acldefault(o.objtype::"char",o.owner)) END) a ON true LEFT JOIN pg_roles g ON g.oid=a.grantor LEFT JOIN pg_roles r ON r.oid=a.grantee)
-SELECT jsonb_build_object('entries',count(*),'sha256',encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(e) ORDER BY to_jsonb(e)::text)::text,'[]'),'UTF8')),'hex')) FROM entries e;""")
+UNION ALL SELECT 'default',r.rolname||':'||coalesce(n.nspname,'@global')||':'||d.defaclobjtype::text,d.defaclrole,d.defaclacl,NULL FROM pg_default_acl d JOIN pg_roles r ON r.oid=d.defaclrole LEFT JOIN pg_namespace n ON n.oid=d.defaclnamespace
+UNION ALL SELECT 'type',n.nspname||'.'||t.typname,t.typowner,t.typacl,'T' FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='public' AND t.oid NOT IN (SELECT c.reltype FROM pg_class c WHERE c.oid=to_regclass('public.execution_failures') UNION SELECT u.typarray FROM pg_class c JOIN pg_type u ON u.oid=c.reltype WHERE c.oid=to_regclass('public.execution_failures'))
+UNION ALL SELECT 'tablespace',t.spcname,t.spcowner,t.spcacl,'t' FROM pg_tablespace t
+UNION ALL SELECT 'language',l.lanname,l.lanowner,l.lanacl,'l' FROM pg_language l
+UNION ALL SELECT 'foreign-data-wrapper',f.fdwname,f.fdwowner,f.fdwacl,'F' FROM pg_foreign_data_wrapper f
+UNION ALL SELECT 'foreign-server',f.srvname,f.srvowner,f.srvacl,'S' FROM pg_foreign_server f
+UNION ALL SELECT 'large-object',l.oid::text,l.lomowner,l.lomacl,'L' FROM pg_largeobject_metadata l
+UNION ALL SELECT 'parameter',p.parname,NULL::oid,p.paracl,NULL FROM pg_parameter_acl p
+), entries AS (SELECT o.kind,o.object,own.rolname owner,o.acl IS NULL default_acl,g.rolname grantor,coalesce(r.rolname,'PUBLIC') grantee,a.privilege_type,a.is_grantable FROM objects o LEFT JOIN pg_roles own ON own.oid=o.owner LEFT JOIN LATERAL aclexplode(CASE WHEN cardinality(o.acl)=0 THEN NULL::aclitem[] ELSE o.acl END) a ON true LEFT JOIN pg_roles g ON g.oid=a.grantor LEFT JOIN pg_roles r ON r.oid=a.grantee)
+SELECT jsonb_build_object('entries',count(*),'sha256',encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(e) ORDER BY to_jsonb(e)::text)::text,'[]'),'UTF8')),'hex')) FROM entries e;"""
+            return database.sql('BEGIN;'+before+query+'ROLLBACK;')
         report['stage']='original-permission-inventory';save()
         grants=permissions()
         report['stage']='original-role-inventory';save()
@@ -142,6 +151,14 @@ SELECT jsonb_build_object('entries',count(*),'sha256',encode(sha256(convert_to(c
         finally:database.sql('REVOKE SELECT ON plans FROM PUBLIC;')
         if permissions()!=grants:raise ValueError('ACL control failed to restore fixture')
         try:
+            database.sql('ALTER DEFAULT PRIVILEGES FOR ROLE ai_sdlc IN SCHEMA public GRANT SELECT ON TABLES TO aisdlc_verifier;')
+            if permissions()==grants:raise ValueError('ACL comparator missed changed default privileges')
+        finally:database.sql('ALTER DEFAULT PRIVILEGES FOR ROLE ai_sdlc IN SCHEMA public REVOKE SELECT ON TABLES FROM aisdlc_verifier;')
+        if permissions()!=grants:raise ValueError('Default ACL control failed to restore fixture')
+        if permissions('GRANT USAGE ON TYPE plans TO aisdlc_verifier;')==grants:
+            raise ValueError('ACL comparator missed changed type privileges')
+        if permissions()!=grants:raise ValueError('Type ACL control failed to roll back fixture')
+        try:
             database.sql('ALTER ROLE aisdlc_worker CREATEDB;')
             if database.sql("SELECT to_jsonb(r)-'rolpassword' FROM pg_authid r ORDER BY rolname;")==role_attributes:
                 raise ValueError('Role comparator missed added authority')
@@ -160,7 +177,7 @@ SELECT jsonb_build_object('entries',count(*),'sha256',encode(sha256(convert_to(c
         report.update(status='passed',sourceMigrations=33,targetMigrations=34,originalRowsUnchanged=True,
             originalSchemaAndPrivilegesUnchanged=True,originalTrackingUnchanged=True,originalCredentialsAuthenticate=True,
             diagnosticTableEmpty=True,diagnosticPrivilegesBounded=True,unrelatedDiagnosticRolesDenied=True,
-            changedACLDetected=True,changedRoleCapabilityDetected=True,wrongPasswordRejected=True,
+            changedACLDetected=True,changedDefaultACLDetected=True,changedTypeACLDetected=True,changedRoleCapabilityDetected=True,wrongPasswordRejected=True,
             upgradeAuthorized=False,rollbackAuthorized=False)
     except Exception as error:report.update(status='failed',errorType=type(error).__name__);raise
     finally:
