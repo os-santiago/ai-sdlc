@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -277,5 +278,68 @@ func TestUpgradeFenceRejectsWrongDatabaseBeforeTableLocks(t *testing.T) {
 	err = db.WithPreCandidateUpgradeFence(ctx, name+"_wrong", source, func(context.Context, *UpgradeFence) error { t.Fatal("wrong database entered callback"); return nil })
 	if !errors.Is(err, ErrUpgradeFence) || time.Since(started) > 750*time.Millisecond {
 		t.Fatal("wrong database waited on an administrative lock", err)
+	}
+}
+
+func TestUpgradeFenceConcurrentHeartbeatChecks(t *testing.T) {
+	db, name, source := upgradeFixture(t, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := db.WithPreCandidateUpgradeFence(ctx, name, source, func(active context.Context, fence *UpgradeFence) error {
+		var group sync.WaitGroup
+		failures := make(chan error, 8)
+		start := make(chan struct{})
+		for n := 0; n < 8; n++ {
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				<-start
+				for i := 0; i < 100; i++ {
+					if err := fence.Check(active); err != nil {
+						failures <- err
+						return
+					}
+					time.Sleep(3 * time.Millisecond)
+				}
+			}()
+		}
+		close(start)
+		group.Wait()
+		close(failures)
+		for err := range failures {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal("concurrent checks lost the original administrative fence", err)
+	}
+}
+
+func TestUpgradeFenceCheckQueueHonorsCancellation(t *testing.T) {
+	db, name, source := upgradeFixture(t, 1)
+	err := db.WithPreCandidateUpgradeFence(context.Background(), name, source, func(active context.Context, fence *UpgradeFence) error {
+		// Hold the operation permit to model another in-flight observation. A
+		// cancelled caller must not wait for it or make a new database query.
+		fence.checkPermit <- struct{}{}
+		queued, cancel := context.WithCancel(active)
+		cancel()
+		done := make(chan error, 1)
+		go func() { done <- fence.Check(queued) }()
+		select {
+		case err := <-done:
+			if !errors.Is(err, ErrUpgradeFence) {
+				<-fence.checkPermit
+				return errors.New("cancelled queued check did not fail closed")
+			}
+		case <-time.After(500 * time.Millisecond):
+			<-fence.checkPermit
+			return errors.New("cancelled queued check waited for the original permit")
+		}
+		<-fence.checkPermit
+		return fence.Check(active)
+	})
+	if err != nil {
+		t.Fatal("check cancellation damaged the original fence", err)
 	}
 }

@@ -94,6 +94,18 @@ func TestUpgradeFenceProtocolChecksAndReleaseDoNotAdvanceWork(t *testing.T) {
 			}
 			switch scenario {
 			case "release":
+				// Repeated protocol checks overlap the 250ms heartbeat while
+				// retaining the same nonce and original deadline.
+				for n := 0; n < 200; n++ {
+					if err := encoder.Encode(map[string]string{"operation": "check", "nonce": nonce}); err != nil {
+						t.Fatal("repeated check send failed", err)
+					}
+					var next map[string]any
+					if err := decoder.Decode(&next); err != nil || next["state"] != "held" || next["expiresAt"] != first["expiresAt"] || next["nonce"] != nonce {
+						t.Fatal("repeated check lost the original fence", err)
+					}
+					time.Sleep(3 * time.Millisecond)
+				}
 				if err := encoder.Encode(map[string]string{"operation": "release", "nonce": nonce}); err != nil {
 					t.Fatal(err)
 				}
