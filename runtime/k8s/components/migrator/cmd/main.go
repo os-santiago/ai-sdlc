@@ -21,6 +21,11 @@ func run() error {
 		return errors.New("select migrate or bootstrap-identities")
 	}
 	switch os.Args[1] {
+	case "hold-upgrade-fence":
+		if len(os.Args) != 2 {
+			return errors.New("unexpected upgrade fence arguments")
+		}
+		return holdUpgradeFence(os.Stdin, os.Stdout)
 	case "describe-migrations":
 		if len(os.Args) != 2 {
 			return errors.New("unexpected migration catalog arguments")

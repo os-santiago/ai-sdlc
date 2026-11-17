@@ -1,0 +1,196 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/url"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+)
+
+func upgradeProtocolFixture(t *testing.T) (*store.DB, string, string, []store.MigrationIdentity) {
+	t.Helper()
+	ctx := context.Background()
+	connection := os.Getenv("AI_SDLC_TEST_DATABASE_URL")
+	if connection == "" {
+		t.Skip("requires disposable PostgreSQL")
+	}
+	base, err := store.Open(ctx, connection)
+	if err != nil {
+		t.Fatal("fixture unavailable")
+	}
+	t.Cleanup(func() { _ = base.Close() })
+	name := "upgrade_protocol_" + strings.ReplaceAll(store.NewID(), "-", "")
+	if _, err = base.Pool.ExecContext(ctx, "CREATE DATABASE "+name); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = base.Pool.ExecContext(ctx, "DROP DATABASE "+name+" WITH (FORCE)") })
+	u, err := url.Parse(connection)
+	if err != nil {
+		t.Fatal("fixture connection invalid")
+	}
+	u.Path = "/" + name
+	q := u.Query()
+	q.Del("dbname")
+	q.Del("database")
+	q.Del("search_path")
+	u.RawQuery = q.Encode()
+	db, err := store.Open(ctx, u.String())
+	if err != nil {
+		t.Fatal("isolated fixture unavailable")
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var actual string
+	if err = db.Pool.QueryRowContext(ctx, `SELECT current_database()`).Scan(&actual); err != nil || actual != name {
+		t.Fatal("fixture database identity changed")
+	}
+	if err = db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.MigrationCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return db, name, u.String(), source
+}
+
+func TestUpgradeFenceProtocolChecksAndReleaseDoNotAdvanceWork(t *testing.T) {
+	for _, scenario := range []string{"release", "wrong-nonce", "closed-input", "backend-loss"} {
+		t.Run(scenario, func(t *testing.T) {
+			db, name, connection, catalog := upgradeProtocolFixture(t)
+			input, send := io.Pipe()
+			receive, output := io.Pipe()
+			defer send.Close()
+			defer receive.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- holdUpgradeFenceContext(ctx, input, output) }()
+			encoder := json.NewEncoder(send)
+			decoder := json.NewDecoder(receive)
+			if err := encoder.Encode(map[string]any{"databaseURL": connection, "database": name, "sourceCatalog": catalog}); err != nil {
+				t.Fatal("initial frame failed")
+			}
+			var first map[string]any
+			if err := decoder.Decode(&first); err != nil || first["state"] != "held" || first["workflowRowsWritten"] != false || first["upgradeAuthorized"] != false {
+				t.Fatal("fence protocol did not acquire only exclusion", err)
+			}
+			nonce, ok := first["nonce"].(string)
+			if !ok || len(nonce) != 36 {
+				t.Fatal("original nonce unavailable")
+			}
+			if err := encoder.Encode(map[string]string{"operation": "check", "nonce": nonce}); err != nil {
+				t.Fatal(err)
+			}
+			var checked map[string]any
+			if err := decoder.Decode(&checked); err != nil || checked["expiresAt"] != first["expiresAt"] || checked["nonce"] != nonce || checked["state"] != "held" {
+				t.Fatal("check changed original fence", err)
+			}
+			switch scenario {
+			case "release":
+				if err := encoder.Encode(map[string]string{"operation": "release", "nonce": nonce}); err != nil {
+					t.Fatal(err)
+				}
+				var released map[string]any
+				if err := decoder.Decode(&released); err != nil || released["state"] != "released" || released["upgradeAuthorized"] != false {
+					t.Fatal("release acknowledgement missing", err)
+				}
+			case "wrong-nonce":
+				_ = encoder.Encode(map[string]string{"operation": "release", "nonce": store.NewID()})
+			case "closed-input":
+				_ = send.Close()
+			case "backend-loss":
+				var killed bool
+				if err := db.Pool.QueryRowContext(ctx, `SELECT pg_terminate_backend(pid) FROM pg_locks WHERE locktype='advisory' AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=0 AND objid=73421019 AND granted AND pid<>pg_backend_pid()`).Scan(&killed); err != nil || !killed {
+					t.Fatal("original fixture backend was not terminated", err)
+				}
+			}
+			select {
+			case err := <-done:
+				if (scenario == "release") != (err == nil) {
+					t.Fatal("unexpected protocol completion", err)
+				}
+			case <-ctx.Done():
+				t.Fatal("protocol did not finish")
+			}
+			// A normal writer becomes possible only after this original session ends.
+			if _, err := db.Pool.ExecContext(ctx, `INSERT INTO public.outbox(id,aggregate_type,aggregate_id,event_type,payload,correlation_id) VALUES($1,'fixture','after','fixture','{}','fixture')`, store.NewID()); err != nil {
+				t.Fatal("protocol leaked write exclusion", err)
+			}
+			var count int
+			if err := db.Pool.QueryRowContext(ctx, `SELECT count(*) FROM public.work_items`).Scan(&count); err != nil || count != 0 {
+				t.Fatal("administrative protocol advanced delivery", err)
+			}
+		})
+	}
+}
+
+func TestUpgradeFenceProtocolDeadlineClosesBlockedOutput(t *testing.T) {
+	db, name, connection, catalog := upgradeProtocolFixture(t)
+	input, send := io.Pipe()
+	receive, output := io.Pipe()
+	defer send.Close()
+	defer receive.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- holdUpgradeFenceContext(ctx, input, output) }()
+	if err := json.NewEncoder(send).Encode(map[string]any{"databaseURL": connection, "database": name, "sourceCatalog": catalog}); err != nil {
+		t.Fatal("initial frame failed")
+	}
+	// Confirm the actual maintenance session acquired its lock before relying
+	// on the timeout as a blocked-output test.
+	observedDeadline := time.Now().Add(time.Second)
+	for {
+		var held bool
+		if err := db.Pool.QueryRowContext(context.Background(), `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=0 AND objid=73421019 AND granted)`).Scan(&held); err != nil {
+			t.Fatal(err)
+		}
+		if held {
+			break
+		}
+		if time.Now().After(observedDeadline) {
+			t.Fatal("protocol never acquired original maintenance lock")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// Do not consume held output. Deadline must close streams and release locks.
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("blocked stream was accepted")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("blocked stream retained the maintenance session")
+	}
+	probe, stop := context.WithTimeout(context.Background(), time.Second)
+	defer stop()
+	if _, err := db.Pool.ExecContext(probe, `INSERT INTO public.outbox(id,aggregate_type,aggregate_id,event_type,payload,correlation_id) VALUES($1,'fixture','after','fixture','{}','fixture')`, store.NewID()); err != nil {
+		t.Fatal("timed out protocol leaked locks", err)
+	}
+}
+
+type closedFenceBuffer struct{ bytes.Buffer }
+
+func (b *closedFenceBuffer) Close() error { return nil }
+
+func TestUpgradeFenceProtocolRejectsPrivateMalformedFrames(t *testing.T) {
+	catalog, err := store.MigrationCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]any{"database": "ai_sdlc", "databaseURL": "postgres://private-sentinel:secret-sentinel@[invalid", "sourceCatalog": catalog})
+	for _, frame := range []string{`{}`, `null`, string(raw), strings.Replace(string(raw), `"database":`, `"Database":`, 1), `{"unknown":"private-sentinel",` + string(raw)[1:], `{"database":"duplicate-private-sentinel",` + string(raw)[1:], strings.Repeat(" ", 131073)} {
+		output := &closedFenceBuffer{}
+		err := holdUpgradeFence(io.NopCloser(strings.NewReader(frame+"\n")), output)
+		if err == nil || err.Error() != "runtime upgrade fence denied" || output.Len() != 0 {
+			t.Fatal("malformed frame leaked credentials or emitted custody")
+		}
+	}
+}

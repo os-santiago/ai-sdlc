@@ -16,6 +16,15 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 OWNER_LABEL = 'ai-sdlc.io/validation-run'
 REQUIRED_TESTS = {
+    ('internal/store', 'TestUpgradeFencePreservesHistoryAndExcludesWriters'),
+    ('internal/store', 'TestUpgradeFenceRejectsActivityUntilOriginalCleanupCompletes'),
+    ('internal/store', 'TestUpgradeFenceExcludesReplicaAndMigrator'),
+    ('internal/store', 'TestUpgradeFenceCancelsAfterBackendLossAndDeadline'),
+    ('internal/store', 'TestUpgradeFenceSeesCommittedClaimAfterLockWait'),
+    ('internal/store', 'TestUpgradeFenceRejectsUnknownSchemaAndSourceWithoutEffects'),
+    ('internal/store', 'TestUpgradeFenceRejectsWrongDatabaseBeforeTableLocks'),
+    ('components/migrator/cmd', 'TestUpgradeFenceProtocolChecksAndReleaseDoNotAdvanceWork'),
+    ('components/migrator/cmd', 'TestUpgradeFenceProtocolDeadlineClosesBlockedOutput'),
     ('internal/store', 'TestUpgradeObservationRejectsTrackerReplacementDuringWait'),
     ('components/migrator/cmd', 'TestUpgradeProtocolAgainstRealDatabase'),
     ('internal/store', 'TestUpgradeObservationPreservesPendingAndCompletedHistory'),
