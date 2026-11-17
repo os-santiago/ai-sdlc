@@ -177,7 +177,7 @@ tests skip; that result is not full database validation. Build local images with
 `make containers` from `runtime/k8s`. Runtime details are in
 [runtime/k8s/README.md](runtime/k8s/README.md).
 
-For the opt-in Saferus outerloop, see [paused deployer installation](docs/operations/deployer-installation.md). The [target preparation command](docs/operations/release-target-preparation.md) binds the original application and pull credential through the same installer. The deployer adds a dedicated container and scoped Kubernetes permissions; activation, recovery and autonomous E2E validation remain separate gates.
+For the opt-in Saferus outerloop, see [paused deployer installation](docs/operations/deployer-installation.md). The [target preparation command](docs/operations/release-target-preparation.md) binds the original application and pull credential through the same installer. The deployer adds a dedicated container and scoped Kubernetes permissions; [finite initial activation](docs/operations/initial-runtime-activation.md) enables intake only after downstream readiness. Recovery and autonomous E2E validation remain separate gates.
 
 ## Scope
 
