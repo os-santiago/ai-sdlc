@@ -53,10 +53,15 @@ class ToolBudgetUpgrade(Upgrade):
         platform.write_record(self.path, record)
         self.record = record
 
-    def unchanged(self):
+    def custody(self):
         self.parent.unchanged()
         if bootstrap.digest(files.bounded_json(self.parent.path, 32 * 1024 * 1024)) != self.parent_hash:
             raise ValueError('Original diagnostic activation changed')
+        if self.record and (self.record.get('backup') or {}).get('phase') == 'verified':
+            data.verify_archives(self.directory, self.record['backup']['archives'])
+
+    def unchanged(self):
+        self.custody()
         installed = files.bounded_json(self.config.state_dir / 'installation.json', 2 * 1024 * 1024)
         if self.record is None:
             if (installed.get('upgradeTransitionSHA256') != self.parent_hash
@@ -65,8 +70,6 @@ class ToolBudgetUpgrade(Upgrade):
                 raise ValueError('Original active installation snapshot required')
         elif installed not in [self.record['installationSource']] + self.record.get('installationReports', []):
             raise ValueError('Original installation snapshot changed during tool-budget update')
-        if self.record and (self.record.get('backup') or {}).get('phase') == 'verified':
-            data.verify_archives(self.directory, self.record['backup']['archives'])
 
     def describe(self, phase):
         if phase == 'ready':

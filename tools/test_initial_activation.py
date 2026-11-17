@@ -74,6 +74,14 @@ class ActivationTests(unittest.TestCase):
             if phase!='warming':
                 fixture.lists['pods'][-1]['status']['containerStatuses'][0]['ready']=False
                 with self.assertRaises(ValueError):fixture.p.observe()
+                if phase=='active':
+                    fixture.p.use_expired_source_render(docs)
+                    fixture.p.observe()  # Administrative source observation only.
+                    fixture.lists['pods'][-1]['status']['phase']='Pending'
+                    with self.assertRaises(ValueError):fixture.p.observe()
+                    fixture.lists['pods'][-1]['status']['phase']='Running'
+                    fixture.p.use_activation_render(docs,'active')
+                    with self.assertRaises(ValueError):fixture.p.observe()
 
     def test_rendered_activation_is_closed_and_last_effect_only_intake(self):
         source=source_values();original=copy.deepcopy(source);renders={}

@@ -70,7 +70,11 @@ class FenceClientTests(unittest.TestCase):
             pid=int(pidfile.read_text())
             for _ in range(100):
                 stat=Path('/proc')/str(pid)/'stat'
-                if not stat.exists() or stat.read_text().split()[2]=='Z':break
+                try:
+                    if stat.read_text().split()[2]=='Z':break
+                except (FileNotFoundError, ProcessLookupError):
+                    # The kernel can reap the killed child during this read.
+                    break
                 time.sleep(.01)
             else:self.fail('Owned command descendant survived cancellation')
 

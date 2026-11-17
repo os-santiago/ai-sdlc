@@ -196,11 +196,18 @@ class Pause:
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command',choices=('pause','status','backup','backup-status','diagnostic','diagnostic-status','recover-original',
-        'tool-budget','tool-budget-status','recover-tool-budget'));parser.add_argument('--cluster',required=True)
+        'tool-budget','tool-budget-status','recover-tool-budget','reapprove','reapprove-status'));parser.add_argument('--cluster',required=True)
     parser.add_argument('--provider',choices=('auto','podman','docker'),default='auto')
+    parser.add_argument('--provenance-trust',type=Path)
+    parser.add_argument('--release-target',type=Path)
     for name in ('source','target'):
         parser.add_argument('--'+name+'-run',type=int);parser.add_argument('--'+name+'-revision')
     args=parser.parse_args(argv)
+    if args.command == 'reapprove':
+        if args.provenance_trust is None or args.release_target is None:
+            raise ValueError('Reapproval requires both separately reviewed documents')
+    elif args.provenance_trust is not None or args.release_target is not None:
+        raise ValueError('Approval files are accepted only by explicit reapprove')
     if not re.fullmatch('[a-z][a-z0-9-]{0,35}',args.cluster):raise ValueError('Selected original local cluster required')
     state=Path(os.environ.get('XDG_STATE_HOME',Path.home()/'.local/state'))/'ai-sdlc'/args.cluster
     release_target_install.private_directory(state)
@@ -213,7 +220,13 @@ def main(argv=None):
         plan=None
         if args.command=='pause':
             plan=install_upgrade.plan(install_upgrade.Source(install.ROOT),install_images.GitHub(),args.source_run,args.source_revision,args.target_run,args.target_revision)
-        if args.command in ('tool-budget','tool-budget-status','recover-tool-budget'):
+        if args.command in ('reapprove','reapprove-status'):
+            if any(getattr(args,name+'_'+field) is not None for name in ('source','target') for field in ('run','revision')):
+                raise ValueError('Reapproval preserves the original recorded component selection')
+            from approval_window import ApprovalWindow
+            upgrade=ApprovalWindow(config,args.provenance_trust,args.release_target)
+            result=upgrade.run() if args.command=='reapprove' else upgrade.status()
+        elif args.command in ('tool-budget','tool-budget-status','recover-tool-budget'):
             if any(getattr(args,name+'_'+field) is not None for name in ('source','target') for field in ('run','revision')):
                 raise ValueError('Tool-budget transition uses only the original recorded diagnostic source')
             from tool_budget_upgrade import ToolBudgetUpgrade

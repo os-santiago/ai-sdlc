@@ -410,6 +410,10 @@ environments before claiming success.
 
 ## Apply the reviewed generator tool budget
 
+For an already completed tool-budget transition whose test-environment approvals
+need a new finite window, use the separate [explicit reapproval procedure](approval-window.md).
+It cannot renew an incomplete upgrade or an existing workflow request.
+
 An installation that completed the diagnostic bridge can adopt the calibrated
 generator profile through the same entrypoint:
 
