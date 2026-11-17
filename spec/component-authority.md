@@ -29,6 +29,7 @@ missing top-level fields and an implicit or null freeze value.
 | verifier | release-manager | promote-artifact / ArtifactProvenanceVerified | auto-deploy |
 | release-manager | deployer | deploy-release / ReleaseReady | auto-deploy |
 | deployer | release-manager | record-deployment / DeploymentVerified | auto-deploy |
+| release-manager | orchestrator | record-production / ProductionCompleted | auto-deploy |
 
 Policies can raise these floors, never lower them. `shadow` can record internal
 observations and admission decisions, but cannot execute changes or mutate the

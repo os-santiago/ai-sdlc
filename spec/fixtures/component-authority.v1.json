@@ -133,6 +133,13 @@
       "operation": "promote-artifact",
       "minimumLevel": "auto-deploy",
       "eventType": "ArtifactProvenanceVerified"
+    },
+    {
+      "caller": "release-manager",
+      "target": "orchestrator",
+      "operation": "record-production",
+      "minimumLevel": "auto-deploy",
+      "eventType": "ProductionCompleted"
     }
   ]
 }

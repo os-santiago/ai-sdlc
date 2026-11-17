@@ -50,7 +50,7 @@ func signedEffect(component *bootstrap.Component, config intake.Config) delivery
 		}
 		// Preserve older plans as evidence but never leave a superseded item
 		// eligible for later execution. Shadow has no running generated Jobs.
-		if _, err := tx.ExecContext(ctx, `UPDATE work_items SET status='blocked',updated_at=now() FROM plans WHERE work_items.plan_id=plans.id AND plans.repository=$1 AND work_items.issue_numbers @> $2::jsonb AND work_items.status NOT IN ('completed','failed')`, snapshot.Repository, "["+strconv.Itoa(snapshot.Issue.Number)+"]"); err != nil {
+		if err := store.BlockSupersededIssue(ctx, tx, snapshot.Repository, snapshot.Issue.Number); err != nil {
 			return nil, err
 		}
 		if admission.Decision != "accepted" {

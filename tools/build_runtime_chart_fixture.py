@@ -13,8 +13,8 @@ def verify(call, tools, root, observe, bootstrap, profile, slot, output):
                  keys={key:value for key,value in policy['keys'].items() if value['role']!='build-controller'},
                  grants=[g for g in policy['grants'] if g['operation'] in ('admit-issue','plan-admission','execute-work','verify-artifact','publish-candidate','merge-publication')])
     outer = dict(policy, autonomy='auto-deploy', freeze=True,
-                 keys={key:value for key,value in policy['keys'].items() if value['role'] in ('release-manager','build-controller','verifier','deployer','relay')},
-                 grants=[g for g in policy['grants'] if g['operation'] in ('build-merged','verify-built','promote-artifact','deploy-release','record-deployment')])
+                 keys={key:value for key,value in policy['keys'].items() if value['role'] in ('release-manager','build-controller','verifier','deployer','relay','orchestrator')},
+                 grants=[g for g in policy['grants'] if g['operation'] in ('build-merged','verify-built','promote-artifact','deploy-release','record-deployment','record-production')])
     intake={'version':1,'repository':'os-santiago/saferus','baseBranch':'main','triggerLabel':'ai-sdlc:shadow','authorizedActorIDs':[1],'pollSeconds':30,'maxPages':100}
     compiled=observe('compile-build-installation',{'inner':inner,'outer':outer,'profile':profile,'slots':[slot],'intake':intake,'issueMaxAgeSeconds':60})
     if compiled.get('inner')!=inner or compiled.get('outer')!=outer or compiled.get('profile')!=profile:

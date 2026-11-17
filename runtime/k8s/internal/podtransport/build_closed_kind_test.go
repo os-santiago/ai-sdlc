@@ -220,7 +220,7 @@ func closedFixtureAuthority(t *testing.T, p buildworkload.Profile, slot building
 			inner.Keys[id] = k
 		}
 		switch k.Role {
-		case "release-manager", "build-controller", "verifier", "deployer", "relay":
+		case "release-manager", "build-controller", "verifier", "deployer", "relay", "orchestrator":
 			outer.Keys[id] = k
 		}
 	}

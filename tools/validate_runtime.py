@@ -16,6 +16,12 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 OWNER_LABEL = 'ai-sdlc.io/validation-run'
 REQUIRED_TESTS = {
+    ('internal/execution', 'TestTerminalSignedHTTPBoundaries'),
+    ('internal/execution', 'TestProductionCompletionAuthenticatesFullHistoryAndOriginalWork'),
+    ('internal/execution', 'TestProductionCompletionRejectsIncompleteTamperedOrForeignFacts'),
+    ('internal/execution', 'TestProductionCompletionHandoffLostCommitAndAtomicFailure'),
+    ('internal/execution', 'TestProductionCompletionConsumerLostCommitACKIsIdempotent'),
+    ('internal/execution', 'TestProductionCompletionConcurrentPlannerWithdrawalPreservesFact'),
     ('internal/execution', 'TestTerminalJournalOrderedEffectsAndClosureFact'),
     ('internal/execution', 'TestTerminalJournalRejectsUnacknowledgedAndTamperedEffects'),
     ('internal/execution', 'TestTerminalJournalLostCommitACKConservativeRecovery'),

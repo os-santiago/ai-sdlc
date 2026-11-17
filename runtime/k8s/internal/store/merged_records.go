@@ -24,7 +24,7 @@ func (db *DB) ReadMergedRecord(ctx context.Context, id string) (MergedRecord, er
 
 func readMergedRecord(ctx context.Context, q Querier, id, role string) (MergedRecord, error) {
 	var r MergedRecord
-	if (role != "release-manager" && role != "build-controller" && role != "verifier" && role != "deployer") || !mergeIDPattern.MatchString(id) || AssertComponent(ctx, q, role) != nil {
+	if (role != "release-manager" && role != "build-controller" && role != "verifier" && role != "deployer" && role != "orchestrator") || !mergeIDPattern.MatchString(id) || AssertComponent(ctx, q, role) != nil {
 		return r, ErrExecution
 	}
 	e := q.QueryRowContext(ctx, `SELECT f.merge_id,f.payload_digest,f.payload,f.receipt,f.gate,f.policy,f.proof_digest,f.proof,f.effect_digest,f.effect,f.merged_at,f.authority_expires_at FROM merged_records f JOIN merge_requests r ON r.id=f.merge_id WHERE f.merge_id=$1 AND r.state='merged' AND r.payload_digest=f.payload_digest AND r.payload=f.payload AND r.receipt=f.receipt AND r.gate=f.gate AND r.policy=f.policy AND r.proof=f.proof AND r.expires_at=f.authority_expires_at AND f.merged_at>=r.created_at AND f.merged_at<=clock_timestamp()`, id).Scan(&r.MergeID, &r.PayloadDigest, &r.Payload, &r.Receipt, &r.Gate, &r.Policy, &r.ProofDigest, &r.Proof, &r.EffectDigest, &r.Effect, &r.MergedAt, &r.AuthorityExpiresAt)

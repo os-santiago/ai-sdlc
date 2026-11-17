@@ -15,6 +15,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergewriter"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/productionflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publication"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationflow"
@@ -22,6 +23,8 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/releasing"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/reviewflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/terminalflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/terminalwriter"
 	"log"
 	"net/http"
 	"os"
@@ -37,8 +40,8 @@ func main() {
 	metadata := service.Metadata{Name: "release-manager", Responsibility: "publish independently verified proposals under explicit authority", Consumes: []string{"publish-candidate"}, Produces: []string{"ai-sdlc.publication-proof/v1"}}
 	if bootstrap.ReleaseEnabled() {
 		metadata.Responsibility = "publish reviewed proposals and promote verified artifacts under finite authority"
-		metadata.Consumes = append(metadata.Consumes, "promote-artifact")
-		metadata.Produces = append(metadata.Produces, "deploy-release")
+		metadata.Consumes = append(metadata.Consumes, "promote-artifact", "record-deployment")
+		metadata.Produces = append(metadata.Produces, "deploy-release", "record-production")
 	}
 	if !bootstrap.PublicationEnabled() {
 		if e = service.RunWithReadiness(metadata, c.Ready); e != nil {
@@ -126,8 +129,19 @@ func main() {
 		}
 		return cfg.Provenance.Build.Outer, key, nil
 	}
+	productionIdentity := func() (authority.Policy, authority.Identity, error) {
+		p, k, e := c.Authority()
+		if e != nil || !bootstrap.ReleaseEnabled() {
+			return authority.Policy{}, authority.Identity{}, productionflow.ErrFlow
+		}
+		return productionflow.LoadOuter(p, k, "/etc/ai-sdlc/outer-policy/policy.json", "release-manager")
+	}
+	terminalJournal := store.NewTerminalJournal(c.DB, loadRelease)
 	ready := func(ctx context.Context) error {
 		if bootstrap.ReleaseEnabled() {
+			if _, _, e := productionIdentity(); e != nil {
+				return e
+			}
 			if _, e := loadRelease(); e != nil {
 				return e
 			}
@@ -211,6 +225,29 @@ func main() {
 		defer stopMerge()
 	}
 	if bootstrap.ReleaseEnabled() {
+		stopTerminal := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
+			value, e := credential()
+			if e != nil {
+				log.Print("terminal credential unavailable")
+				return
+			}
+			w, e := terminalwriter.New(value)
+			if e != nil {
+				log.Print("terminal writer unavailable")
+				return
+			}
+			controller := terminalflow.Controller{Journal: terminalJournal, Writer: w}
+			if _, e = controller.RunOne(ctx); e != nil {
+				log.Print("terminal reconciliation stopped safely")
+			}
+		})
+		defer stopTerminal()
+		stopProduction := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
+			if _, e := productionflow.DispatchCompleted(ctx, c.DB, productionIdentity); e != nil {
+				log.Print("production fact dispatch stopped safely")
+			}
+		})
+		defer stopProduction()
 		stopRelease := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
 			state, e := (releaseflow.Runtime{DB: c.DB, Load: loadRelease}).PollOnce(ctx)
 			if e != nil {
@@ -230,6 +267,7 @@ func main() {
 	e = service.RunWithReadiness(metadata, ready, func(mux *http.ServeMux) {
 		inbox := delivery.Inbox{DB: c.DB, Target: "release-manager"}
 		if bootstrap.ReleaseEnabled() {
+			mux.Handle("POST /internal/record-deployment", inbox.Handler(releaseIdentity, "record-deployment", "/internal/record-deployment", terminalflow.InboxEffect(terminalJournal)))
 			mux.Handle("POST /internal/promote-artifact", inbox.Handler(releaseIdentity, "promote-artifact", "/internal/promote-artifact", releaseflow.InboxEffect(store.NewPromotionJournal(c.DB, loadRelease))))
 		}
 		mux.Handle("POST /internal/publish-candidate", inbox.Handler(c.Authority, "publish-candidate", "/internal/publish-candidate", publicationflow.Effect(func() (authority.Policy, error) { p, _, e := c.Authority(); return p, e })))

@@ -20,7 +20,7 @@ func deploymentArchived(ctx context.Context, q Querier, c DeploymentClaim) (rele
 func deploymentArchivedRole(ctx context.Context, q Querier, c DeploymentClaim, role string) (releasing.Configuration, DeploymentInput, error) {
 	var cfg releasing.Configuration
 	var r DeploymentInput
-	if (role != "deployer" && role != "release-manager") || !deploymentID.MatchString(c.ID) || !lifecycleUUID.MatchString(c.Token) || AssertComponent(ctx, q, role) != nil {
+	if (role != "deployer" && role != "release-manager" && role != "orchestrator") || !deploymentID.MatchString(c.ID) || !lifecycleUUID.MatchString(c.Token) || AssertComponent(ctx, q, role) != nil {
 		return cfg, r, ErrExecution
 	}
 	var raw, signed, config []byte

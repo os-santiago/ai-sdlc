@@ -6,7 +6,7 @@ import "errors"
 // cannot select a policy. Unknown operations are never treated as outerloop.
 func OuterOperation(operation string) bool {
 	switch operation {
-	case "build-merged", "verify-built", "promote-artifact", "deploy-release", "record-deployment":
+	case "build-merged", "verify-built", "promote-artifact", "deploy-release", "record-deployment", "record-production":
 		return true
 	}
 	return false
@@ -53,7 +53,7 @@ func ValidateLoopPolicies(inner, outer Policy) error {
 			return denied
 		}
 		switch key.Role {
-		case "release-manager", "build-controller", "verifier", "deployer", "relay":
+		case "release-manager", "build-controller", "verifier", "deployer", "relay", "orchestrator":
 			roles[key.Role] = true
 		default:
 			return denied

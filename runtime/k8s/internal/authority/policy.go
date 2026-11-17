@@ -62,6 +62,7 @@ var operations = map[string][2]string{
 	"record-release":    {"release-manager", "orchestrator"},
 	"deploy-release":    {"release-manager", "deployer"},
 	"record-deployment": {"deployer", "release-manager"},
+	"record-production": {"release-manager", "orchestrator"},
 }
 
 // A reviewed policy may tighten these floors, never lower them. Risk, checks
@@ -73,6 +74,7 @@ var floors = map[string]string{
 	"record-release": "auto-pr", "deploy-release": "auto-deploy",
 	"merge-publication": "auto-merge-low",
 	"record-deployment": "auto-deploy",
+	"record-production": "auto-deploy",
 	"build-merged":      "auto-deploy", "verify-built": "auto-deploy", "promote-artifact": "auto-deploy",
 }
 var eventTypes = map[string]string{
@@ -82,6 +84,7 @@ var eventTypes = map[string]string{
 	"record-release": "ReleaseGateDecided", "deploy-release": "ReleaseReady",
 	"merge-publication": "PublicationMergeRequested",
 	"record-deployment": "DeploymentVerified",
+	"record-production": "ProductionCompleted",
 	"build-merged":      "MergedBuildRequested", "verify-built": "ArtifactBuildCompleted", "promote-artifact": "ArtifactProvenanceVerified",
 }
 

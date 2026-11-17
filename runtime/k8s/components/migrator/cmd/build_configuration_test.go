@@ -30,7 +30,7 @@ func installedFixture(t *testing.T) buildflow.Installed {
 			inner.Keys[id] = k
 		}
 		switch k.Role {
-		case "build-controller", "release-manager", "verifier", "deployer", "relay":
+		case "build-controller", "release-manager", "verifier", "deployer", "relay", "orchestrator":
 			outer.Keys[id] = k
 		}
 	}

@@ -18,7 +18,7 @@ func (db *DB) ReadProvenanceRecord(ctx context.Context, id string) (ProvenanceRe
 }
 func readProvenanceRecord(ctx context.Context, q Querier, id, role string) (ProvenanceRecord, error) {
 	var r ProvenanceRecord
-	if !provenanceID.MatchString(id) || (role != "verifier" && role != "release-manager" && role != "deployer") || AssertComponent(ctx, q, role) != nil {
+	if !provenanceID.MatchString(id) || (role != "verifier" && role != "release-manager" && role != "deployer" && role != "orchestrator") || AssertComponent(ctx, q, role) != nil {
 		return r, ErrExecution
 	}
 	var raw, signed, config, proof []byte

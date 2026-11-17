@@ -65,7 +65,7 @@ func recordAndAuthorityFixture(t *testing.T, image string) (buildrecord.Record, 
 			inner.Keys[id] = key
 		}
 		switch key.Role {
-		case "release-manager", "build-controller", "verifier", "deployer", "relay":
+		case "release-manager", "build-controller", "verifier", "deployer", "relay", "orchestrator":
 			outer.Keys[id] = key
 		}
 	}

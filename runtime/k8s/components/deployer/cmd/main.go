@@ -5,6 +5,8 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/completionflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/deploymentflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
@@ -70,6 +72,12 @@ func run() error {
 		}
 		return deploymentflow.ConsoleTransport{ConsoleDeployment: adapter}, nil
 	}}
+	stopCompletion := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
+		if _, e := completionflow.DispatchDeployed(ctx, db, func() (releasing.Configuration, authority.Identity, error) { return mounts.Load("deployer") }); e != nil {
+			log.Print("deployment completion dispatch stopped safely")
+		}
+	})
+	defer stopCompletion()
 	stop := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
 		state, e := runtime.PollOnce(ctx)
 		if e != nil {
@@ -79,7 +87,7 @@ func run() error {
 		}
 	})
 	defer stop()
-	return service.RunWithReadiness(service.Metadata{Name: "deployer", Responsibility: "apply the approved console image under original finite authority", Consumes: []string{"deploy-release"}, Produces: []string{"ai-sdlc.saferus-health/v1"}}, runtime.Ready, func(mux *http.ServeMux) { mux.Handle("POST /internal/deploy-release", runtime.Handler()) })
+	return service.RunWithReadiness(service.Metadata{Name: "deployer", Responsibility: "apply the approved console image under original finite authority", Consumes: []string{"deploy-release"}, Produces: []string{"ai-sdlc.saferus-health/v1", "record-deployment"}}, runtime.Ready, func(mux *http.ServeMux) { mux.Handle("POST /internal/deploy-release", runtime.Handler()) })
 }
 func main() {
 	if e := run(); e != nil {
