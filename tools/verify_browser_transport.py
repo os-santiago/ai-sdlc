@@ -159,7 +159,7 @@ def main():
                 report['rbac']=browser_fixture_rbac.verify(args.kubectl,args.kubeconfig,out,token,node)
                 client=browser_fixture_client.Client(args,node,cid,nonce,out,run,guard,create,get,report['testBinarySHA256'])
                 client.prepare()
-                report['client']={'image':client.image,'networkOrigin':'Pod with rendered deployer policies and ServiceAccount','privateInput':'scoped Secret, no ambient token mount'}
+                report['client']={'image':client.image,'imageBinding':client.binding,'networkOrigin':'Pod with rendered deployer policies and ServiceAccount','privateInput':'scoped Secret, no ambient token mount'}
             private={'Client':{'APIServer':'https://'+api+':443','CA':cluster_cfg['certificate-authority-data'],'BearerToken':token},'Target':target,'Profile':profile,'Report':'/evidence/result.json','Accept':accept,'CleanupOnly':mode=='cleanup-only'}
             private_path=out/'private.json';private_path.write_text(json.dumps(private));private_path.chmod(0o600)
             guard()

@@ -7,10 +7,26 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from browser_fixture_client import Client,pod_custody
+from browser_fixture_client import Client,pod_custody,host_image_binding
 
 
 class ClientCustody(unittest.TestCase):
+    def test_host_storage_identity_has_one_explicit_oci_binding(self):
+        graph={'referenceDigest':'sha256:'+'a'*64,'manifestDigest':'sha256:'+'b'*64,'configurationDigest':'sha256:'+'c'*64}
+        index='application/vnd.oci.image.index.v1+json';manifest='application/vnd.oci.image.manifest.v1+json'
+        legacy={'Id':graph['configurationDigest']}
+        indexed={'Id':graph['referenceDigest'],'Descriptor':{'digest':graph['referenceDigest'],'mediaType':index}}
+        single={'Id':graph['manifestDigest'],'Descriptor':{'digest':graph['manifestDigest'],'mediaType':manifest}}
+        for image,kind in ((legacy,'configuration'),(indexed,'index'),(single,'manifest')):
+            self.assertEqual(host_image_binding(image,graph)['hostIdentityKind'],kind)
+        for image in ({'Id':graph['referenceDigest']},
+                      {'Id':graph['configurationDigest'],'Descriptor':{'digest':graph['configurationDigest'],'mediaType':index}},
+                      {'Id':graph['configurationDigest'],'Descriptor':{'digest':graph['configurationDigest'],'mediaType':manifest}},
+                      {'Id':graph['referenceDigest'],'Descriptor':{'digest':graph['manifestDigest'],'mediaType':index}},
+                      {'Id':graph['referenceDigest'],'Descriptor':{'digest':graph['referenceDigest'],'mediaType':'unknown'}},
+                      {'Id':'unbound'}):
+            with self.subTest(image=image),self.assertRaises(ValueError):host_image_binding(image,graph)
+
     def test_changed_binary_prevents_build(self):
         with tempfile.TemporaryDirectory() as folder:
             out=Path(folder);binary=out/'input';binary.write_bytes(b'changed')

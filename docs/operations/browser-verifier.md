@@ -132,7 +132,12 @@ permissions, including denial of exec, secrets and policy writes. Its test clien
 runs in a restricted Pod under the rendered deployer NetworkPolicies, using an
 immutable image built from the exact test binary. A scoped Secret supplies the
 explicit API credential; no ambient token is mounted. The fixture checks original
-Pod/Secret custody before execution and around result collection. Its fourth
+Pod/Secret custody before execution and around result collection.
+Image verification binds the exported metadata to the host's explicit identity:
+configuration digest for legacy Docker/Podman, or the typed manifest/index
+descriptor returned by Docker's containerd image store. Hash verification remains
+required for every metadata object after import.
+Its fourth
 scenario cancels the original attempt after the Pod ACK, expires the smoke and
 checks resource-only recovery without late health. Its business API is synthetic
 and it does not write deployment journal evidence;

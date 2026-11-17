@@ -3,6 +3,7 @@ import base64
 import copy
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import time
@@ -11,6 +12,25 @@ import fixture_images
 import browser_image
 import bootstrap_prepare
 from release_target_oci import bounded_output
+
+
+def host_image_binding(image,graph):
+    identity=image['Id'] if image['Id'].startswith('sha256:') else 'sha256:'+image['Id']
+    if not re.fullmatch('sha256:[a-f0-9]{64}',identity):raise ValueError('Invalid original fixture image identity')
+    descriptor=image.get('Descriptor')
+    if descriptor is None:
+        kind='configuration';expected=graph['configurationDigest']
+    else:
+        if not isinstance(descriptor,dict) or descriptor.get('digest')!=identity:
+            raise ValueError('Original fixture image descriptor differs')
+        media=descriptor.get('mediaType')
+        if media in ('application/vnd.oci.image.index.v1+json','application/vnd.docker.distribution.manifest.list.v2+json'):
+            kind='index';expected=graph['referenceDigest']
+        elif media in ('application/vnd.oci.image.manifest.v1+json','application/vnd.docker.distribution.manifest.v2+json'):
+            kind='manifest';expected=graph['manifestDigest']
+        else:raise ValueError('Unknown original fixture image descriptor')
+    if identity!=expected:raise ValueError('Imported fixture image is not the original image identity')
+    return {'hostIdentityKind':kind,'hostDigest':identity,'metadataHashesVerified':True,**graph}
 
 
 def secret_custody(current,original):
@@ -67,9 +87,15 @@ class Client:
             raw=bounded_output([self.args.provider,'exec',self.cid,'ctr','-n','k8s.io','content','get',digest],limit)
             self.node_guard();return raw
         graph=browser_image.verify(self.image.split('@')[-1],self.image.split('@')[-1],blob)
-        host_digest=self.image_id if self.image_id.startswith('sha256:') else 'sha256:'+self.image_id
-        if graph['configurationDigest']!=host_digest or hashlib.sha256((context/'transport.test').read_bytes()).hexdigest()!=self.binary_sha256:
-            raise ValueError('Imported fixture image is not the original binary/configuration')
+        # Legacy Docker/Podman IDs identify config; Docker's containerd store
+        # exposes a typed root Descriptor instead. Bind exactly that type.
+        descriptor=image.get('Descriptor')
+        public_descriptor={key:descriptor.get(key) for key in ('digest','mediaType','size')} if isinstance(descriptor,dict) else None
+        (self.out/'image-identity.json').write_text(json.dumps({'hostImageID':self.image_id,'hostDescriptor':public_descriptor,
+            'imported':graph,'binarySHA256':self.binary_sha256},indent=2)+'\n')
+        self.binding=host_image_binding(image,graph)
+        if hashlib.sha256((context/'transport.test').read_bytes()).hexdigest()!=self.binary_sha256:
+            raise ValueError('Fixture test binary changed during image build')
 
     def execute(self,kubectl,namespace,prefix,mode,private):
         self.node_guard()

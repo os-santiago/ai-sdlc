@@ -79,6 +79,7 @@ jobs:
           path: |
             ${{ runner.temp }}/browser-report.json
             ${{ runner.temp }}/browser-transport/evidence/report.json
+            ${{ runner.temp }}/browser-transport/evidence/image-identity.json
             ${{ runner.temp }}/browser-transport/evidence/baseline.json
             ${{ runner.temp }}/browser-transport/evidence/readable.json
             ${{ runner.temp }}/browser-transport/evidence/wrong-ttl.json
