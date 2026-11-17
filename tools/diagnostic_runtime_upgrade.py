@@ -28,7 +28,7 @@ VERSION = 'ai-sdlc.diagnostic-runtime-upgrade/v1'
 PHASES = ('migrated', 'staged', 'warming', 'armed', 'active')
 
 
-def advance(record, phase, observe, apply, save):
+def advance(record, phase, observe, apply, save, phases=PHASES):
     """A lost Helm acknowledgement permits observation, never a repeated send."""
     if time.time() >= record['expiresAt']:
         raise ValueError('Original upgrade window expired')
@@ -38,7 +38,7 @@ def advance(record, phase, observe, apply, save):
             raise ValueError('Original upgrade transition differs')
         observe(phase)
     else:
-        if record['completed'] != PHASES[PHASES.index(phase) - 1]:
+        if phase not in phases[1:] or record['completed'] != phases[phases.index(phase) - 1]:
             raise ValueError('Original upgrade phase order changed')
         observe(record['completed'])
         record['transition'] = {'from': record['completed'], 'to': phase}

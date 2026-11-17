@@ -28,6 +28,7 @@ def main(argv=None):
     for name in ('source','target'):
         parser.add_argument('--'+name+'-run',type=int,required=True);parser.add_argument('--'+name+'-revision',required=True)
     parser.add_argument('--output',type=Path,required=True)
+    parser.add_argument('--exercise-tool-budget-history',action='store_true')
     args=parser.parse_args(argv);args.output.mkdir(mode=0o700,parents=True,exist_ok=False)
     owner=secrets.token_hex(16);name='ai-sdlc-migration-'+owner;cid=None;restorer=None;attempted=False
     report={'version':1,'status':'running','owner':owner,'databaseContainer':name,'cleanup':[],
@@ -155,6 +156,10 @@ def main(argv=None):
             changedACLDetected=True,changedDefaultACLDetected=True,changedTypeACLDetected=True,changedRoleCapabilityDetected=True,wrongPasswordRejected=True,
             queuedWorkRejected=True,pendingDeliveryRejected=True,
             upgradeAuthorized=False,rollbackAuthorized=False)
+        if args.exercise_tool_budget_history:
+            from tool_budget_fixture import exercise
+            exercise(database,args.provider,PG,args.output/'private-tool-budget-backup',
+                     plan['target']['migrations'],plan_id,work,report,save)
     except Exception as error:report.update(status='failed',errorType=type(error).__name__);raise
     finally:
         if restorer is not None:

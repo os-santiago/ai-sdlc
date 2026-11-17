@@ -41,6 +41,7 @@ def main(argv=None):
     parser.add_argument('--run',type=int,required=True);parser.add_argument('--revision',required=True)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--exercise-transition',action='store_true')
+    parser.add_argument('--exercise-tool-budget-transition',action='store_true')
     args=parser.parse_args(argv)
     # An explicit test name excludes all managed E2E/production installations.
     if not args.cluster.startswith('ai-sdlc-') or not args.cluster.endswith('-test'):
@@ -72,6 +73,7 @@ def main(argv=None):
         catalog=build_runtime_install.component_call(provider,image,'describe-migrations',{})
         source=install_upgrade.Source(install.ROOT)
         if catalog!=source.catalog(args.revision) or len(catalog)!=34:raise ValueError('Unexpected published migration catalog')
+        fixture_catalog=catalog if args.exercise_tool_budget_transition else catalog[:-1]
         report.update(publication=publication['runURL'],migratorImage=image,source=command(['git','rev-parse','HEAD']).stdout.strip(),
                       dirty=bool(command(['git','status','--porcelain']).stdout))
         password=secrets.token_urlsafe(36)
@@ -92,7 +94,7 @@ def main(argv=None):
         else:raise ValueError('Disposable database did not become ready')
         report['stage']='schema';write_report()
         sql('CREATE TABLE public.schema_migrations(filename text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now());')
-        for migration in catalog[:-1]:
+        for migration in fixture_catalog:
             raw=source.git('show',args.revision+':'+install_upgrade.MIGRATIONS+migration['filename'])
             if hashlib.sha256(raw).hexdigest()!=migration['sha256']:raise ValueError('Original fixture migration changed')
             sql('BEGIN;\n'+raw.decode()+"\nINSERT INTO public.schema_migrations(filename) VALUES('"+migration['filename']+"');COMMIT;")
@@ -110,13 +112,14 @@ def main(argv=None):
             chart=Path(directory);(chart/'templates').mkdir()
             (chart/'Chart.yaml').write_text('apiVersion: v2\nname: pause-fixture\nversion: 0.1.0\n')
             (chart/'values.yaml').write_text('replicas: 1\n')
-            if args.exercise_transition:
-                (chart/'values.yaml').write_text('replicas: 1\nintake: 0\nfrozen: true\n')
+            if args.exercise_transition or args.exercise_tool_budget_transition:
+                (chart/'values.yaml').write_text('replicas: 1\nintake: 0\nfrozen: true\ntoolSteps: 16\n')
                 (chart/'templates/policy.yaml').write_text('''apiVersion: v1
 kind: ConfigMap
 metadata: {name: phase-policy}
 data:
   frozen: {{ .Values.frozen | quote }}
+  toolSteps: {{ .Values.toolSteps | quote }}
 ''')
             (chart/'templates/producer.yaml').write_text('''apiVersion: apps/v1
 kind: Deployment
@@ -143,7 +146,7 @@ spec:
             runAsUser: 65534
             seccompProfile: {type: RuntimeDefault}
 ''')
-            if args.exercise_transition:
+            if args.exercise_transition or args.exercise_tool_budget_transition:
                 producer=(chart/'templates/producer.yaml').read_text()
                 (chart/'templates/intake.yaml').write_text(producer.replace('name: producer','name: intake').replace('.Values.replicas','.Values.intake').replace('app: pause-fixture','app: intake-fixture'))
             report['stage']='helm-install';write_report();guard_namespace()
@@ -166,7 +169,7 @@ spec:
             report['stage']='fenced-pause';write_report()
             stack_file=(args.output/'wait-stack.log').open('x')
             faulthandler.dump_traceback_later(15,repeat=True,file=stack_file)
-            with Fence(provider,image,connection,port,catalog[:-1],expires_at=record['expiresAt']) as fence:
+            with Fence(provider,image,connection,port,fixture_catalog,expires_at=record['expiresAt']) as fence:
                 report['trace']=[]
                 def trace(name,function):
                     def invoke(*args,**kwargs):
@@ -191,14 +194,15 @@ spec:
             if sql(snapshot).stdout!=before:raise ValueError('Original fixture history changed during pause')
             if sql("INSERT INTO outbox(id,aggregate_type,aggregate_id,event_type,payload,correlation_id) VALUES('"+str(uuid.uuid4())+"','fixture','after','fixture','{}','fixture');",check=False).returncode:
                 raise ValueError('Released database remained fenced')
-            report.update(status='passed',sourceMigrationCount=33,writerBlocked=True,historyUnchanged=True,
+            report.update(status='passed',sourceMigrationCount=len(fixture_catalog),writerBlocked=True,historyUnchanged=True,
                 producerUIDRetained=True,originalPodAbsent=True,fenceReleased=True,workflowRowsWrittenByPause=False)
-            if args.exercise_transition:
+            if args.exercise_transition or args.exercise_tool_budget_transition:
                 from diagnostic_upgrade_fixture import exercise
                 report['stage']='diagnostic-phase-fixture';write_report()
                 exercise(chart=chart,kube=kube,helm=helm,namespace=namespace,guard=guard_namespace,
                     command=command,provider=provider,image=image,connection=connection,port=port,
-                    catalog=catalog[:-1],sql=sql,snapshot=snapshot,report=report,save=write_report)
+                    catalog=fixture_catalog,sql=sql,snapshot=snapshot,report=report,save=write_report,
+                    tool_budget=args.exercise_tool_budget_transition)
     except Exception as error:
         report.update(status='failed',errorType=type(error).__name__)
         raise
