@@ -116,7 +116,7 @@ class ActivationTests(unittest.TestCase):
     def test_lost_final_response_only_observes_target_no_empty_or_replay(self):
         a=self.fixture();a.resolve();a.observe.assert_called_once_with('active')
         self.assertEqual(a.record['completed'],'active');self.assertIsNone(a.record['transition']);a.save.assert_called_once()
-        a.begin=Mock();a.apply=Mock();a.activate();a.apply.assert_not_called()
+        a.begin=Mock();a.apply=Mock();a.publish_report=Mock();a.activate();a.apply.assert_not_called();a.publish_report.assert_called_once()
         for call in a.observe.call_args_list:self.assertFalse(call.kwargs.get('empty',False))
 
     def test_partial_or_expired_transition_never_reaches_helm(self):

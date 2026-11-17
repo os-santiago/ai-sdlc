@@ -66,3 +66,21 @@ and read-only status. The actual managed installation rejects activation before
 its release capability is installed, without creating an activation intent.
 Positive managed startup, network enforcement and an issue-driven E2E must be
 validated separately on the published revision.
+
+## Installation readiness report
+
+The prepared installer records `namespace: ai-sdlc-runtime` and
+`installationReady: false`. After the complete `active` phase is freshly observed,
+activation writes an `installation.json` snapshot containing the original cluster
+and namespace UIDs, exact image pins, custody digests and observation timestamp.
+Only that complete active observation sets `installationReady: true`, allowing
+Saferus's existing-environment verifier to recognize the activated installation.
+
+This report is a compatibility snapshot, not delivery authority or proof of an
+issue reaching production. `prepared-configuration.json`, `initial-activation.json`
+and the original runtime capability retain their custody semantics. If the final
+report write fails or loses its acknowledgement, repeating `activate` can repair
+only that snapshot after observing the existing active state; it neither replays
+Helm nor renews the activation deadline. `status` never writes or repairs reports.
+A paused, partially active, replaced or unready installation cannot publish a
+successful readiness snapshot.

@@ -388,6 +388,7 @@ def install_prepared(args,state,binaries,provider,execution_values):
         raise ValueError('Release target changed during prepared installation')
     config.finish()
     report={'cluster':args.cluster,'platform':'konflux','mode':'verification','configuration':'prepared-paused',
+        'namespace':platform.NAMESPACE,'installationReady':False,
         'configurationReady':True,'runtimeReadinessValidated':False,'runtimePaused':True,'innerFrozen':True,'outerFrozen':True,
         'deliveryEnabled':False,'issueIntakeEnabled':False,'liveWorkflowAdvanced':False,
         'capabilitiesConfigured':['verification','review','publication','merge','build','provenance']+(['release'] if release else []),
