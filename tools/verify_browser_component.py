@@ -12,13 +12,35 @@ import tempfile
 import time
 
 from network_probe import cleanup_namespace
+import browser_image
+from release_target_oci import bounded_output
 
 
-def verify(kubectl, image, cluster_uid):
+def guarded_call(raw_call, namespace, uid, cluster_uid, args, value=None):
+    def guard():
+        cluster = json.loads(raw_call(['get', 'namespace', 'kube-system', '-o', 'json']))['metadata']
+        current = json.loads(raw_call(['get', 'namespace', namespace, '-o', 'json']))['metadata']
+        if (cluster['uid'] != cluster_uid or cluster.get('deletionTimestamp')
+                or current['uid'] != uid or current.get('deletionTimestamp')
+                or current.get('labels', {}).get('ai-sdlc.browser-fixture') != namespace):
+            raise ValueError('Original browser fixture scope changed')
+    if uid:
+        guard()
+    result = raw_call(args, value)
+    if uid:
+        guard()
+    return result
+
+
+def verify(kubectl, image, cluster_uid, provider='podman'):
+    if provider not in ('podman', 'docker'):
+        raise ValueError('Supported node provider required')
+    namespace = 'ai-sdlc-browser-check-'+secrets.token_hex(6)
+    uid = None
     if not re.fullmatch(r'(localhost/ai-sdlc-browser-verifier|quay.io/os-santiago/ai-sdlc)@sha256:[a-f0-9]{64}', image):
         raise ValueError('immutable browser image required')
     deadline = time.monotonic() + 360
-    def call(args, value=None):
+    def raw_call(args, value=None):
         remaining = min(70, deadline-time.monotonic())
         if remaining <= 0:
             raise ValueError('fixture deadline')
@@ -27,14 +49,27 @@ def verify(kubectl, image, cluster_uid):
         if result.returncode:
             raise ValueError('browser fixture Kubernetes operation failed')
         return result.stdout
+    def call(args, value=None):
+        return guarded_call(raw_call, namespace, uid, cluster_uid, args, value)
     def get(kind, name, namespace=None):
         return json.loads(call(['get', kind, name, *(['-n', namespace] if namespace else []), '-o', 'json']))
     def create(obj):
         return json.loads(call(['create', '-f', '-', '-o', 'json'], obj))
     if get('namespace', 'kube-system')['metadata']['uid'] != cluster_uid:
         raise ValueError('fixture cluster ownership differs')
-    namespace = 'ai-sdlc-browser-check-'+secrets.token_hex(6)
-    uid = None
+    nodes = json.loads(call(['get', 'nodes', '-o', 'json']))['items']
+    if len(nodes) != 1:
+        raise ValueError('Single owned fixture node required')
+    node = nodes[0]['metadata']['name']
+    metadata = json.loads(subprocess.check_output([provider, 'inspect', node], timeout=10))[0]
+    if metadata.get('Config', {}).get('Labels', {}).get('io.x-k8s.kind.cluster') != node.removesuffix('-control-plane'):
+        raise ValueError('Fixture node ownership differs')
+    node_id = metadata['Id']
+    def read_image(digest, limit):
+        current = json.loads(subprocess.check_output([provider, 'inspect', node], timeout=10))[0]
+        if current['Id'] != node_id:
+            raise ValueError('Fixture node replaced')
+        return bounded_output([provider, 'exec', node_id, 'ctr', '-n', 'k8s.io', 'content', 'get', digest], limit)
     report = {'scope': 'synthetic-browser-component', 'autonomousE2E': False,
               'realSaferusAPI': False, 'image': image, 'scenarios': [], 'cleanupComplete': False}
     security = {'runAsNonRoot': True, 'runAsUser': 1001, 'runAsGroup': 1001,
@@ -55,7 +90,8 @@ def verify(kubectl, image, cluster_uid):
                                        'limits': {'cpu': '2', 'memory': '1Gi'}}}]}}
     try:
         uid = create({'apiVersion': 'v1', 'kind': 'Namespace', 'metadata': {'name': namespace,
-                      'labels': {'pod-security.kubernetes.io/enforce': 'restricted'}}})['metadata']['uid']
+                      'labels': {'pod-security.kubernetes.io/enforce': 'restricted',
+                                 'ai-sdlc.browser-fixture': namespace}}})['metadata']['uid']
         create({'apiVersion': 'networking.k8s.io/v1', 'kind': 'NetworkPolicy',
                 'metadata': {'name': 'deny-all', 'namespace': namespace},
                 'spec': {'podSelector': {}, 'policyTypes': ['Ingress', 'Egress']}})
@@ -143,8 +179,10 @@ def verify(kubectl, image, cluster_uid):
                 raise ValueError('browser did not terminate')
             result = json.loads(call(['logs', browser_name, '-n', namespace, '--limit-bytes=4097']))
             status = observed['status']['containerStatuses'][0]
-            if status['imageID'].split('@')[-1] != image.split('@')[1]:
-                raise ValueError('browser runtime image differs')
+            binding = browser_image.verify(image.split('@')[1], status['imageID'].split('@')[-1], read_image)
+            if 'imageBinding' in report and report['imageBinding'] != binding:
+                raise ValueError('Browser runtime image binding changed')
+            report['imageBinding'] = binding
             passed = observed['status']['phase'] == 'Succeeded' and status['state']['terminated']['exitCode'] == 0 and result['status'] == 'passed'
             if passed != success or (success and result.get('requestSHA256') != hashlib.sha256(raw.encode()).hexdigest()):
                 raise ValueError('browser contract outcome differs: '+mode+'/'+ca+'/'+str(result.get('boundary')))
@@ -199,7 +237,7 @@ sys.exit(2)
         if uid:
             # Cleanup has its own finite scope and the original namespace UID.
             deadline = time.monotonic()+75
-            cleanup_namespace(call, namespace, uid)
+            cleanup_namespace(raw_call, namespace, uid)
             report['cleanupComplete'] = True
     return report
 
@@ -208,8 +246,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('kubectl', 'kubeconfig', 'image', 'cluster-uid', 'report'):
         parser.add_argument('--'+name, required=True)
+    parser.add_argument('--provider', choices=('podman', 'docker'), default='podman')
     args = parser.parse_args()
-    report = verify([args.kubectl, '--kubeconfig', args.kubeconfig, '--request-timeout=10s'], args.image, args.cluster_uid)
+    report = verify([args.kubectl, '--kubeconfig', args.kubeconfig, '--request-timeout=10s'], args.image, args.cluster_uid, args.provider)
     Path(args.report).write_text(json.dumps(report, indent=2)+'\n')
     print(json.dumps(report))
 

@@ -51,7 +51,7 @@ jobs:
           with pathlib.Path(os.environ['RUNNER_TEMP'],'browser.oci').open('rb') as stream:
               subprocess.run(['docker','exec','-i','ai-sdlc-browser-ci-control-plane','ctr','-n','k8s.io','images','import','--local','--digests','-'],stdin=stream,check=True,timeout=180)
           image=fixture_images.register_digest('docker','ai-sdlc-browser-ci-control-plane','localhost/ai-sdlc-browser-verifier:conformance')
-          subprocess.run([sys.executable,'tools/verify_browser_component.py','--kubectl',tools['kubectl'],'--kubeconfig',str(root/'kubeconfig'),'--cluster-uid',uid,'--image',image,'--report',str(pathlib.Path(os.environ['RUNNER_TEMP'],'browser-report.json'))],check=True,timeout=450)
+          subprocess.run([sys.executable,'tools/verify_browser_component.py','--provider','docker','--kubectl',tools['kubectl'],'--kubeconfig',str(root/'kubeconfig'),'--cluster-uid',uid,'--image',image,'--report',str(pathlib.Path(os.environ['RUNNER_TEMP'],'browser-report.json'))],check=True,timeout=450)
           PY
       - name: Retain bounded component evidence
         if: always()
