@@ -141,3 +141,44 @@ UID-bound resource cleanup. This is synthetic work and authority; a pass does no
 prove live issue intake, independent verification, PR publication or production.
 The first real-controller observation used five model calls and removed all its
 resources. It does not establish the cause of the separate Homedir #1581 failure.
+
+### Tool steps and provider calls are different budgets
+
+The installed generator profile uses 24 SCC tool steps, 600 seconds and 4,096
+requested output tokens per response. Its separate durable model allocation
+still permits at most 16 calls, 2 MiB cumulative input, 4 MiB cumulative response
+reservations and 256 KiB per response. Increasing tool steps does not increase
+these provider limits. The independent reviewer retains its existing profile.
+
+SCC counts individual tools, including tools in the same response, and checks its
+step limit between batches. A 16-step run can therefore stop after six model
+responses containing 18 tool calls. This is a cooperative execution budget,
+not a strict per-operation security quota. Exit 22 remains a failure; partial
+workspace changes cannot be promoted as a successful candidate.
+
+The offline regression runs the actual SCC process from an immutable executor
+image against a deterministic loopback provider, with no credentials or external
+network. It requires exit 22 with 16 steps and successful fixture completion with
+24 steps, checks separate call/byte bounds, and confirms container cleanup:
+
+```bash
+python3 tools/verify_executor_tool_budget.py --provider podman \
+  --image quay.io/os-santiago/ai-sdlc@sha256:EXECUTOR_DIGEST
+```
+
+Installer CI runs this check on its built executor. The
+[measured result](../evidence/2026-11-17-scc-tool-budget.json) reproduces the budget
+mechanism, not Saferus delivery or real-model success under the new profile.
+An actual Saferus attempt retained exit 22 after six HTTP 200 completions, before
+candidate creation. Its original 600-second bound was not reached and its fixed
+environment supplied no total-token limit; tool-budget exhaustion is inferred
+from those observations, not a budget dimension retained by the controller.
+
+This default applies to newly configured installations. Existing installations
+must use a reviewed configuration transition that preserves their history and
+original authority. An image-only diagnostic upgrade does not authorize changing
+the executor profile or replaying a failed execution. Ordinary candidate or
+verification reconciliation reads the installed execution configuration first
+and rejects a different tool budget before changing runtime resources or
+credentials. Missing configuration permits first-time setup; an API error,
+malformed configuration or duplicate JSON field does not count as absence.

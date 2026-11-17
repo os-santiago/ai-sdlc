@@ -7,6 +7,39 @@ import re
 import secrets
 
 
+def require_unchanged_tool_budget(kubectl, desired):
+    """Ordinary reconciliation cannot silently change an installed SCC budget."""
+    import install
+    result = install.run(kubectl + ['--request-timeout=10s', 'get', 'configmap', 'ai-sdlc-execution',
+        '-n', install.NAMESPACE, '--ignore-not-found', '-o', 'json'], capture_output=True, timeout=15)
+    if not result.stdout.strip():
+        return  # First candidate configuration, including maintenance promotion.
+    def unique_object(pairs):
+        result = dict(pairs)
+        if len(result) != len(pairs):
+            raise ValueError('Duplicate installed execution configuration field')
+        return result
+    try:
+        if len(result.stdout.encode()) > 1048576:
+            raise ValueError()
+        installed = json.loads(result.stdout, object_pairs_hook=unique_object)
+        raw = installed['data']['config.json']
+        if not isinstance(raw, str) or len(raw.encode()) > 262144:
+            raise ValueError()
+        config = json.loads(raw, object_pairs_hook=unique_object)
+        profile = config['profile']
+        steps = profile['maxSteps']
+        if (config['version'] != 'ai-sdlc.candidate-runtime/v1'
+                or profile['version'] != 'ai-sdlc.executor-profile/v1'
+                or type(steps) is not int or not 1 <= steps <= 32):
+            raise ValueError()
+    except (KeyError, TypeError, ValueError):
+        raise ValueError('Installed execution configuration is malformed; preserve it for review') from None
+    expected = json.loads(desired['candidate']['configJSON'])['profile']['maxSteps']
+    if steps != expected:
+        raise ValueError('Installed SCC tool budget differs; use a reviewed runtime transition before reconciliation')
+
+
 def desired_values(root, image_lock_path, lock, verification=False, review=False, publication=False, merge=False):
     if merge and not publication:
         raise ValueError('Merge requires verified publication')
@@ -32,7 +65,8 @@ def desired_values(root, image_lock_path, lock, verification=False, review=False
             raise ValueError('Invalid execution image publication identity')
     adev = (root / 'runtime/k8s/deploy/helm/ai-sdlc-k8s-runtime/files/adev-profile.yaml').read_text()
     profile = {'version': 'ai-sdlc.executor-profile/v1', 'model': 'codex-cli',
-               'maxSteps': 16, 'maxSeconds': 600, 'maxTokens': 4096,
+               # SCC counts tools, including parallel calls, not model turns.
+               'maxSteps': 24, 'maxSeconds': 600, 'maxTokens': 4096,
                'aDevSHA256': hashlib.sha256(adev.encode()).hexdigest()}
     config = {'version': 'ai-sdlc.candidate-runtime/v1', 'profile': profile, 'aDev': adev,
               'placement': {'Namespace': 'ai-sdlc-executors',
