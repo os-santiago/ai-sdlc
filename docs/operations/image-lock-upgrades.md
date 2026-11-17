@@ -28,6 +28,47 @@ Review the generated lock and evidence in a focused PR, retaining the workflow
 URL and source revision. Commit the reviewed lock to
 `runtime/k8s/deploy/local/images.lock.json` and its public publication record.
 
+## Plan a transition before changing an installation
+
+The single entrypoint can compare two explicit, successful `containers` push
+publications on `main` without accessing the cluster:
+
+```bash
+./install.sh upgrade-plan \
+  --source-run SOURCE_RUN_ID --source-revision FULL_SOURCE_COMMIT_SHA \
+  --target-run TARGET_RUN_ID --target-revision FULL_TARGET_COMMIT_SHA
+```
+
+Run it from a checkout containing both exact commits. Missing Git objects fail;
+the planner does not fetch or change the checkout. Git, Python 3 on Linux and
+an authenticated `gh` CLI are required. It resolves all twelve image identities
+through the existing publication verifier, then reads migration SQL directly
+from immutable Git objects with replacement refs disabled. Modified working
+files cannot alter the plan. Source must be an ancestor of target, or the same
+commit. Removed or edited migrations, or new files inserted before the original
+ordered prefix, reject the plan. Symlinks, nested paths, oversized SQL and
+noncanonical migration names also reject.
+
+The JSON report lists both revisions, publication URLs, image identities,
+changed components, and pending migration filenames and SHA-256 values.
+`pendingMigrations` means absent from the **source code catalog**, not observed
+absent from a database. Identical catalogs produce an empty list; that does not
+prove an installation is current. The planner never runs migrations, reads
+cluster credentials, scales controllers, changes policies or advances delivery work.
+
+This is the first preflight gate for [runtime upgrades (#441)](https://github.com/os-santiago/ai-sdlc/issues/441),
+not an upgrade command. `upgradeAuthorized` and `rollbackAuthorized` remain
+false. `unverifiedGates` records the remaining installation identity, database,
+configuration/consumer compatibility, draining/containment, restored backup,
+artifact trust and rollout/recovery checks. Filename/hash continuity cannot
+prove that an appended SQL file is nondestructive or reversible. Existing
+`schema_migrations` rows attest filenames only, not hashes of historical SQL or
+current schema integrity. Publication identity is not a provenance attestation.
+
+An active installation with history must retain that history and use a validated
+upgrade procedure. Do not substitute the empty-bootstrap preparation or
+initial activation commands for that procedure.
+
 ## Apply and verify the desired state
 
 Keep the installation's existing repository, environment and profile. For the
