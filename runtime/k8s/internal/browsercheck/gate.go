@@ -11,8 +11,9 @@ import (
 type Gate interface {
 	CleanupDeadline() time.Time
 	CleanupContext() context.Context
-	BeforeCreate(context.Context, string) error
-	AcknowledgePod(context.Context, string, string) error
+	BeforeCreate(context.Context, string, string) error
+	AbortBeforeSend(context.Context, string, string) error
+	AcknowledgePod(context.Context, string, string, string) error
 	RecordEvidence(context.Context, Evidence) error
 }
 

@@ -106,8 +106,8 @@ func (g BrowserGate) check(ctx context.Context, tx *sql.Tx) (releasing.Configura
 	}
 	return cfg, nil
 }
-func (g BrowserGate) BeforeCreate(ctx context.Context, podDigest string) error {
-	if g.Journal == nil || g.Journal.DB == nil || !workspacebundle.ValidDigest(podDigest) {
+func (g BrowserGate) BeforeCreate(ctx context.Context, podDigest, attempt string) error {
+	if g.Journal == nil || g.Journal.DB == nil || !workspacebundle.ValidDigest(podDigest) || !workspacebundle.ValidDigest(attempt) {
 		return ErrExecution
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -120,7 +120,7 @@ func (g BrowserGate) BeforeCreate(ctx context.Context, podDigest string) error {
 		raw, _ := json.Marshal(g.Request)
 		snapshot, _ := json.Marshal(g.Snapshot)
 		rollout, _ := json.Marshal(g.Rollout)
-		_, e = tx.ExecContext(ctx, `INSERT INTO deployment_browser_intents(id,deployment_id,phase,claim_token,request,request_digest,snapshot,rollout,profile_digest,pod_digest,expires_at)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, g.Request.RequestID, g.Claim.ID, g.Phase, g.Claim.Token, raw, g.Request.Digest(), snapshot, rollout, cfg.Browser.Digest(), podDigest, time.UnixMilli(g.Request.ExpiresAt))
+		_, e = tx.ExecContext(ctx, `INSERT INTO deployment_browser_intents(id,deployment_id,phase,claim_token,request,request_digest,snapshot,rollout,profile_digest,pod_digest,expires_at,attempt_nonce)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, g.Request.RequestID, g.Claim.ID, g.Phase, g.Claim.Token, raw, g.Request.Digest(), snapshot, rollout, cfg.Browser.Digest(), podDigest, time.UnixMilli(g.Request.ExpiresAt), attempt)
 		return e
 	})
 	if e != nil {
@@ -157,8 +157,8 @@ func (g BrowserGate) readIntent(ctx context.Context, q Querier, podDigest string
 	}
 	return created, nil
 }
-func (g BrowserGate) AcknowledgePod(ctx context.Context, id, podUID string) error {
-	if g.Journal == nil || g.Journal.DB == nil || id != g.Request.RequestID || !lifecycleUUID.MatchString(podUID) {
+func (g BrowserGate) AcknowledgePod(ctx context.Context, id, podUID, attempt string) error {
+	if g.Journal == nil || g.Journal.DB == nil || id != g.Request.RequestID || !lifecycleUUID.MatchString(podUID) || !workspacebundle.ValidDigest(attempt) {
 		return ErrExecution
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -169,7 +169,7 @@ func (g BrowserGate) AcknowledgePod(ctx context.Context, id, podUID string) erro
 			return e
 		}
 		var sent time.Time
-		if tx.QueryRowContext(ctx, `SELECT created_at FROM deployment_browser_sends WHERE id=$1 AND claim_token=$2`, id, g.Claim.Token).Scan(&sent) != nil || sent.Before(created) || !sent.Before(time.UnixMilli(g.Request.ExpiresAt)) || time.Now().UnixMilli() >= g.Request.ExpiresAt {
+		if tx.QueryRowContext(ctx, `SELECT s.created_at FROM deployment_browser_sends s JOIN deployment_browser_intents i ON i.id=s.id WHERE s.id=$1 AND s.claim_token=$2 AND i.attempt_nonce=$3`, id, g.Claim.Token, attempt).Scan(&sent) != nil || sent.Before(created) || !sent.Before(time.UnixMilli(g.Request.ExpiresAt)) || time.Now().UnixMilli() >= g.Request.ExpiresAt {
 			return ErrExecution
 		}
 		_, e = tx.ExecContext(ctx, `INSERT INTO deployment_browser_pods(id,pod_uid)VALUES($1,$2)`, id, podUID)
@@ -192,7 +192,7 @@ func (g BrowserGate) RecordEvidence(ctx context.Context, evidence browsercheck.E
 		}
 		var podUID string
 		var ack time.Time
-		if tx.QueryRowContext(ctx, `SELECT pod_uid::text,recorded_at FROM deployment_browser_pods WHERE id=$1`, g.Request.RequestID).Scan(&podUID, &ack) != nil || evidence.PodUID != podUID || evidence.Request != g.Request || evidence.Validate(cfg.Browser, time.Now()) != nil || evidence.DeletedAt < ack.UnixMilli() {
+		if tx.QueryRowContext(ctx, `SELECT pod_uid::text,recorded_at FROM deployment_browser_pods WHERE id=$1 AND NOT not_sent`, g.Request.RequestID).Scan(&podUID, &ack) != nil || evidence.PodUID != podUID || evidence.Request != g.Request || evidence.Validate(cfg.Browser, time.Now()) != nil || evidence.DeletedAt < ack.UnixMilli() {
 			return ErrExecution
 		}
 		raw, _ := json.Marshal(evidence)

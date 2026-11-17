@@ -23,11 +23,11 @@ func browserJournalFixture(t *testing.T, duration time.Duration) (deploymentFixt
 	}
 	gate := store.BrowserGate{Journal: f.j, Claim: claim, Phase: "baseline", Snapshot: snapshot, Rollout: route, Request: request}
 	ctx := context.Background()
-	if e = gate.BeforeCreate(ctx, strings.Repeat("a", 64)); e != nil {
+	if e = gate.BeforeCreate(ctx, strings.Repeat("a", 64), strings.Repeat("e", 64)); e != nil {
 		t.Fatal("browser intent/send", e)
 	}
 	pod := store.NewID()
-	if e = gate.AcknowledgePod(ctx, request.RequestID, pod); e != nil {
+	if e = gate.AcknowledgePod(ctx, request.RequestID, pod, strings.Repeat("e", 64)); e != nil {
 		t.Fatal("browser Pod ACK", e)
 	}
 	now := time.Now().UnixMilli()
@@ -38,10 +38,10 @@ func browserJournalFixture(t *testing.T, duration time.Duration) (deploymentFixt
 func TestBrowserJournalOneUseClaimAndOriginalPod(t *testing.T) {
 	f, g, evidence := browserJournalFixture(t, 25*time.Second)
 	ctx := context.Background()
-	if g.BeforeCreate(ctx, strings.Repeat("a", 64)) == nil {
+	if g.BeforeCreate(ctx, strings.Repeat("a", 64), strings.Repeat("e", 64)) == nil {
 		t.Fatal("replayed browser creation")
 	}
-	if g.AcknowledgePod(ctx, g.Request.RequestID, store.NewID()) == nil {
+	if g.AcknowledgePod(ctx, g.Request.RequestID, store.NewID(), strings.Repeat("e", 64)) == nil {
 		t.Fatal("adopted replacement Pod")
 	}
 	foreign := evidence
@@ -232,7 +232,7 @@ func TestBrowserCreateWithoutOriginalACKRemainsExplicitlyQuarantined(t *testing.
 		t.Fatal(e)
 	}
 	g := store.BrowserGate{Journal: f.j, Claim: c, Phase: "baseline", Snapshot: snapshot, Rollout: route, Request: request}
-	if e = g.BeforeCreate(context.Background(), strings.Repeat("a", 64)); e != nil {
+	if e = g.BeforeCreate(context.Background(), strings.Repeat("a", 64), strings.Repeat("e", 64)); e != nil {
 		t.Fatal(e)
 	}
 	runtime, transport := deploymentRuntime(f, t, "success")

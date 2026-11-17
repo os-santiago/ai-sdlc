@@ -22,7 +22,7 @@ func (t ConsoleTransport) VerifyBrowser(ctx context.Context, profile browserchec
 func (r Runtime) verifyHealth(ctx context.Context, j *store.DeploymentJournal, c store.DeploymentClaim, cfg releasing.Configuration, t Transport, snapshot releasing.Snapshot, phase string) (releasing.Health, error) {
 	parent := ctx
 	started := time.Now()
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Target.SmokeSeconds)*time.Second)
+	ctx, cancel := context.WithDeadline(ctx, started.Add(time.Duration(cfg.Target.SmokeSeconds)*time.Second))
 	defer cancel()
 	health, e := t.VerifyHealth(ctx, snapshot)
 	if e != nil {

@@ -1,9 +1,9 @@
 {
-  "observedAtUTC": "2026-11-17T12:54:39.978841+00:00",
+  "observedAtUTC": "2026-11-17T14:03:36.183154+00:00",
   "scope": "browser deployment components and administrative fixtures",
   "autonomousE2E": false,
   "installedSchema35Validated": false,
-  "sourceScope": "Local working tree; fixture/binary hashes bind actual executions. Platformv9 uses an in-cluster client under rendered deployer policies and typed host image identity. Exact PR head still requires CI.",
+  "sourceScope": "Local working tree with review corrections; actual fixture/binary hashes bind executions. Platformv10 uses the in-cluster client, new no-send gate and cold runtime install. Exact final-head CI remains required.",
   "platform": {
     "scope": "real-kubernetes-browser-transport",
     "autonomousE2E": false,
@@ -12,7 +12,7 @@
     "scenarios": [
       {
         "autonomousE2E": false,
-        "browserEvidenceSHA256": "91a72b5b531760a8704688a3d8b5c32ba8b25725cd884675d47541b3abf755e5",
+        "browserEvidenceSHA256": "843f87a86ffc7e71385b16a8936d64888f3dcc23d1f5b55f95801f4fe5383279",
         "cleanupOnly": false,
         "createCount": 1,
         "desktopMobileValidated": true,
@@ -23,7 +23,7 @@
         "originalPodAckCount": 1,
         "originalPodDeleted": true,
         "recordCount": 1,
-        "remainingSmokeMilliseconds": 23441,
+        "remainingSmokeMilliseconds": 20258,
         "runtimeDigest": "sha256:94edf13407285960e0b0aedc6b38cdb65a1e30eccc9df556f0f31d41a467a370",
         "scope": "real-kubernetes-browser-transport",
         "status": "passed",
@@ -31,7 +31,7 @@
       },
       {
         "autonomousE2E": false,
-        "browserEvidenceSHA256": "d50772a6e2c189d689fa830f432f0f4eb362b643c9c491fb974b5408aa0b9149",
+        "browserEvidenceSHA256": "9f27fb759284b0e6dc9792b6611ff8842bc43bc0e3264f50bf78a60a10e18226",
         "cleanupOnly": false,
         "createCount": 1,
         "desktopMobileValidated": true,
@@ -42,7 +42,7 @@
         "originalPodAckCount": 1,
         "originalPodDeleted": true,
         "recordCount": 1,
-        "remainingSmokeMilliseconds": 22751,
+        "remainingSmokeMilliseconds": 22732,
         "runtimeDigest": "sha256:94edf13407285960e0b0aedc6b38cdb65a1e30eccc9df556f0f31d41a467a370",
         "scope": "real-kubernetes-browser-transport",
         "status": "passed",
@@ -60,7 +60,7 @@
         "originalPodAckCount": 1,
         "originalPodDeleted": true,
         "recordCount": 0,
-        "remainingSmokeMilliseconds": 17807,
+        "remainingSmokeMilliseconds": 17826,
         "runtimeDigest": "sha256:94edf13407285960e0b0aedc6b38cdb65a1e30eccc9df556f0f31d41a467a370",
         "scope": "real-kubernetes-browser-transport",
         "status": "passed",
@@ -78,7 +78,7 @@
         "originalPodAckCount": 1,
         "originalPodDeleted": true,
         "recordCount": 0,
-        "remainingSmokeMilliseconds": 25705,
+        "remainingSmokeMilliseconds": 25700,
         "runtimeDigest": "sha256:94edf13407285960e0b0aedc6b38cdb65a1e30eccc9df556f0f31d41a467a370",
         "scope": "real-kubernetes-browser-transport",
         "status": "passed",
@@ -88,36 +88,36 @@
     "cleanup": [
       {
         "kind": "ClusterRoleBinding",
-        "name": "browser-ee74f16c54-deployer-identity",
-        "uid": "b55c03e9-0262-404f-94db-c4adfc96ae51",
+        "name": "browser-700d09948d-deployer-identity",
+        "uid": "d3129921-7b2a-495d-9999-836c3e39bd60",
         "status": "removed"
       },
       {
         "kind": "ClusterRole",
-        "name": "browser-ee74f16c54-deployer-identity",
-        "uid": "f7a7c09d-a598-43cf-aff7-ea412e95f0da",
+        "name": "browser-700d09948d-deployer-identity",
+        "uid": "3622bb20-2683-43f2-9c53-4b31b3314d1e",
         "status": "removed"
       },
       {
         "kind": "RuntimeClass",
         "name": "ai-sdlc-browser",
-        "uid": "f70a2bfa-c311-43fe-95cc-292925f1457a",
+        "uid": "4e30c4c1-2674-424b-8533-584b10b297e5",
         "status": "removed"
       },
       {
         "namespace": "ai-sdlc-browser",
         "status": "removed",
-        "uid": "3b36554f-62c0-455b-821a-a9c1fcd0ae37"
+        "uid": "59c7dd52-0247-43f3-a4d6-0aedd85205e8"
       },
       {
-        "namespace": "ai-sdlc-browser-client-ee74f16c54",
+        "namespace": "ai-sdlc-browser-client-700d09948d",
         "status": "removed",
-        "uid": "67014aca-5e83-486f-9720-e986dd5fc954"
+        "uid": "96ce4851-c728-404e-a4d5-07a637e9e28d"
       },
       {
         "namespace": "ai-sdlc-production",
         "status": "removed",
-        "uid": "0fdd684f-34e5-45e6-ba73-bd3211a3d392"
+        "uid": "6b5698ae-7e2d-43a2-b8a3-90bfebb5acf7"
       },
       {
         "kind": "fixture-host-image",
@@ -125,17 +125,17 @@
         "nodeImageCacheRetained": true
       }
     ],
-    "testBinarySHA256": "720f7af2e3a84a9c21342b3345f99c7bf5235b7fdfe0f1f544f8cabf713fa0a6",
-    "fixtureSourceSHA256": "b8c526cbb2a7224c9a3006d5402ee8d7596b058c1fce45bbb3ffce03af1037f4",
+    "testBinarySHA256": "66e3ae5ef64e1bcf21fe938012ead94c3254070fc88d09e24064bb612b3b30ba",
+    "fixtureSourceSHA256": "de976a3bfce0a6c71c27ee550cd606cffda7c7364f0daf9c9a2580cee19c2726",
     "runtime": {
       "nodeName": "ai-sdlc-browser-upgrade-test-control-plane",
       "nodeUID": "fdf8f249-3d01-4a4f-bd48-4e2428705f57",
       "runtimeClass": "ai-sdlc-browser",
-      "runtimeClassUID": "f70a2bfa-c311-43fe-95cc-292925f1457a",
+      "runtimeClassUID": "4e30c4c1-2674-424b-8533-584b10b297e5",
       "clusterUID": "7856b8be-cef5-4b7f-90ca-948a867ddc22",
       "configurationSHA256": "4d3afdda6521e34ff32585f0d87144fc20020de11a29c420465e4338a84e2971",
       "network": "sandbox",
-      "nodeConfigurationBeforeSHA256": "66b6955d64f6c267fa5f969374df182a30c0f1d334ca208e5c33ea19b82be4af",
+      "nodeConfigurationBeforeSHA256": "78fbecc9e0c4933dc8a75b3b62252c63398cc556cc37ae6b0fd99d95a38f2b94",
       "nodeConfigurationAfterSHA256": "66b6955d64f6c267fa5f969374df182a30c0f1d334ca208e5c33ea19b82be4af",
       "offlineRuntimeUnchanged": true,
       "networkPolicyValidated": false,
@@ -143,11 +143,11 @@
     },
     "platformInstallation": {
       "actualInstaller": true,
-      "journalSHA256": "5db16758f2a1673a4d1ccef69dfbb3c446e5e9c6347c89953126e82f38a594ea",
-      "helperImage": "quay.io/os-santiago/ai-sdlc@sha256:d137d508e08f90f4502035ca84eff390fd0e3cad4d034c105c42b194e084db0c",
+      "journalSHA256": "9c46e5cca031ee58a501ebdbb06fbdef4fdb3b3b7398c15c00ac5d9a2ba71ae8",
+      "helperImage": "quay.io/os-santiago/ai-sdlc@sha256:2194d25cbedf0f95d6683c8ace1d56010d9a3bd6113992d4d92d37185705d6cc",
       "sourceFilesSHA256": {
         "browser_platform_install.py": "6cf95205f6691ee9ed3f3882ca29e7b17eceabd789a5f81b17cdeaa44317c091",
-        "browser_runtime.py": "9da706ea0a908aa8c55d15d31346add2c844ad4d948bcec32dd6186d3179c3e8",
+        "browser_runtime.py": "bcd0940db6989b2aa048a61c78210a135855a7d6c4a0c49cd14af85023cb3281",
         "browser_profile_install.py": "2eb1e48cfc074ac166c79a560540015bef79e4092c085019eb6fcd9b17a5cae7"
       },
       "scope": "browser infrastructure only; not the full runtime-upgrade CLI"
@@ -160,15 +160,15 @@
       "credentialsAndPolicyWritesDenied": true
     },
     "client": {
-      "image": "localhost/ai-sdlc-browser-transport@sha256:d736b46dccaafd6c1d69af0c5ade6ebc3027d712397ccf85672d42f33a74a832",
+      "image": "localhost/ai-sdlc-browser-transport@sha256:69d9c8ef86021abadb33d411fbcff6b86fb8ee5ede59400c5a3539c3311312e1",
       "imageBinding": {
         "hostIdentityKind": "configuration",
-        "hostDigest": "sha256:6ced0c5424938f78e55448ee4e0b3c4c4069b960edc4165f47c893c42c9bb679",
+        "hostDigest": "sha256:03315ec2ca1b08c61fba936447880c3c023c708ed85f85074e8871e857468f41",
         "metadataHashesVerified": true,
-        "referenceDigest": "sha256:d736b46dccaafd6c1d69af0c5ade6ebc3027d712397ccf85672d42f33a74a832",
-        "runtimeDigest": "sha256:d736b46dccaafd6c1d69af0c5ade6ebc3027d712397ccf85672d42f33a74a832",
-        "manifestDigest": "sha256:d736b46dccaafd6c1d69af0c5ade6ebc3027d712397ccf85672d42f33a74a832",
-        "configurationDigest": "sha256:6ced0c5424938f78e55448ee4e0b3c4c4069b960edc4165f47c893c42c9bb679"
+        "referenceDigest": "sha256:69d9c8ef86021abadb33d411fbcff6b86fb8ee5ede59400c5a3539c3311312e1",
+        "runtimeDigest": "sha256:69d9c8ef86021abadb33d411fbcff6b86fb8ee5ede59400c5a3539c3311312e1",
+        "manifestDigest": "sha256:69d9c8ef86021abadb33d411fbcff6b86fb8ee5ede59400c5a3539c3311312e1",
+        "configurationDigest": "sha256:03315ec2ca1b08c61fba936447880c3c023c708ed85f85074e8871e857468f41"
       },
       "networkOrigin": "Pod with rendered deployer policies and ServiceAccount",
       "privateInput": "scoped Secret, no ambient token mount"
@@ -178,9 +178,11 @@
     "status": "passed",
     "sourceRevision": "f5fb014a98d91ca3b4e38f35e99318691bab5813",
     "sourcePublication": "https://github.com/os-santiago/ai-sdlc/actions/runs/44075602540",
-    "targetImage": "quay.io/os-santiago/ai-sdlc@sha256:d137d508e08f90f4502035ca84eff390fd0e3cad4d034c105c42b194e084db0c",
+    "targetImage": "quay.io/os-santiago/ai-sdlc@sha256:2194d25cbedf0f95d6683c8ace1d56010d9a3bd6113992d4d92d37185705d6cc",
     "targetOrigin": "explicit local fixture image; not publication approval",
     "negativeControls": [
+      "legacy-deployed-source-rejected-before-migration",
+      "legacy-deployed-fence-typed-rejection",
       "unacknowledged-review-effect-typed-rejection",
       "deployment_browser_cleanups-rls",
       "deployment_browser_cleanups-acl",
@@ -214,9 +216,10 @@
         "status": "removed"
       }
     ],
-    "reportSHA256": "974b4b493f455bdb1364192301749f0f1055177a913c8176b547ab8055edb009",
+    "reportSHA256": "f4bfcb6716de349d121baf6672ae88b8d22e8005bd5598c7dc96294df83fae3f",
     "sourceRestoreState": "removed",
-    "targetRestoreState": "removed"
+    "targetRestoreState": "removed",
+    "legacyDeploymentFixture": "synthetic denial marker only; upstream FK bypassed during seed, normal checks restored before observations"
   },
   "runnerIdentity": {
     "scope": "private fixture input ownership",
@@ -274,6 +277,11 @@
       "boundary": "Docker containerd image ID was incorrectly assumed to be configuration digest; rejected before client Pod. Corrected by explicit descriptor type with exact digest binding, validated by actual Docker export and kind import.",
       "cleanup": "complete; public node image cache retained",
       "workflowEvidence": false
+    },
+    {
+      "fixture": "browser-review-pg-v1",
+      "boundary": "All53 selected tests passed but required migrator protocol package omitted by private focal wrapper; corrected filter and57tests across4packages passed in v3.",
+      "workflowEvidence": false
     }
   ],
   "connectionConvergence": {
@@ -318,7 +326,7 @@
     "helperSHA256": {
       "tools/browser_fixture_client.py": "4d5d8a461cb166c8a549a922091138bcc4ab1c372d6903e8d8fc90c3df72dc5c",
       "tools/browser_fixture_rbac.py": "dbb4d573c9564d5cc9ded1afae1e066584e1f5d605f0af6f08cd387a723d9411",
-      "tools/verify_browser_transport.py": "b8c526cbb2a7224c9a3006d5402ee8d7596b058c1fce45bbb3ffce03af1037f4"
+      "tools/verify_browser_transport.py": "de976a3bfce0a6c71c27ee550cd606cffda7c7364f0daf9c9a2580cee19c2726"
     }
   },
   "dockerImageIdentity": {
@@ -353,6 +361,47 @@
       "nodeID": "743ca1ff6a100f891394bad4bc0392bf2bd9afec6b6b359c9a5ac7b3e00e480a",
       "originalGraphRetained": true,
       "publicNodeImageCacheRetained": true
+    }
+  },
+  "reviewCorrections": {
+    "scope": "Focused real PostgreSQL and browser transport regression, not complete suite or live workflow",
+    "status": "passed",
+    "tests": {
+      "passedTests": 57,
+      "passedPackages": 4,
+      "skippedTests": [],
+      "missingDatabaseProof": []
+    },
+    "cleanup": [
+      {
+        "container": "ai-sdlc-validation-bbe4909ae6a64c11aa56c6c29ea73d77-go",
+        "status": "removed"
+      },
+      {
+        "container": "ai-sdlc-validation-bbe4909ae6a64c11aa56c6c29ea73d77-db",
+        "status": "removed"
+      }
+    ],
+    "reportSHA256": "b5849f8161138f2d0a2d3375f81af96d1d6d12251c5bb7a486ae7bf140b23e0b",
+    "metadataSHA256": "fa0e070320ae44765d34c0a852eaaf38e6b4a895ef9b637ec245370d13f74ce0",
+    "pythonSuite": {
+      "executed": 460,
+      "skipped": 9,
+      "status": "passed",
+      "logSHA256": "2989d38af25954b9615a918efa38d761e5a64b7934d28672a4ceed50622c5760"
+    },
+    "actualRuntimeExpiryRecovery": {
+      "scope": "Actual owned kind node restoration after injected restart timeout and real expiry; no production or workflow actions",
+      "status": "passed",
+      "clusterUID": "7856b8be-cef5-4b7f-90ca-948a867ddc22",
+      "nodeUID": "fdf8f249-3d01-4a4f-bd48-4e2428705f57",
+      "beforeSHA256": "78fbecc9e0c4933dc8a75b3b62252c63398cc556cc37ae6b0fd99d95a38f2b94",
+      "actualOriginalDeadlineExpired": true,
+      "actualContainerdRestarts": 2,
+      "originalConfigurationRestored": true,
+      "containerdActive": true,
+      "stageRemoved": true,
+      "runtimeClassAbsent": true
     }
   }
 }

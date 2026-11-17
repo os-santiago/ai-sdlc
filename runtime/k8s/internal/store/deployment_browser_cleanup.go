@@ -35,7 +35,7 @@ func readBrowserCleanup(ctx context.Context, q Querier, id string) (BrowserClean
 	}
 	var request, snapshot, rollout []byte
 	var ack, sent time.Time
-	e := q.QueryRowContext(ctx, `SELECT d.id,i.claim_token::text,d.expires_at,i.phase,i.request,i.snapshot,i.rollout,p.pod_uid::text,p.recorded_at,s.created_at FROM deployment_browser_intents i JOIN deployment_requests d ON d.id=i.deployment_id AND d.claim_token=i.claim_token JOIN deployment_browser_sends s ON s.id=i.id AND s.claim_token=i.claim_token JOIN deployment_browser_pods p ON p.id=i.id WHERE i.id=$1 AND i.expires_at<=clock_timestamp() AND NOT EXISTS(SELECT 1 FROM deployment_browser_evidence e WHERE e.id=i.id) AND NOT EXISTS(SELECT 1 FROM deployment_browser_cleanups c WHERE c.id=i.id)`, id).Scan(&c.Claim.ID, &c.Claim.Token, &c.Claim.Until, &c.Phase, &request, &snapshot, &rollout, &c.PodUID, &ack, &sent)
+	e := q.QueryRowContext(ctx, `SELECT d.id,i.claim_token::text,d.expires_at,i.phase,i.request,i.snapshot,i.rollout,p.pod_uid::text,p.recorded_at,s.created_at FROM deployment_browser_intents i JOIN deployment_requests d ON d.id=i.deployment_id AND d.claim_token=i.claim_token JOIN deployment_browser_sends s ON s.id=i.id AND s.claim_token=i.claim_token JOIN deployment_browser_pods p ON p.id=i.id AND NOT p.not_sent WHERE i.id=$1 AND i.expires_at<=clock_timestamp() AND NOT EXISTS(SELECT 1 FROM deployment_browser_evidence e WHERE e.id=i.id) AND NOT EXISTS(SELECT 1 FROM deployment_browser_cleanups c WHERE c.id=i.id)`, id).Scan(&c.Claim.ID, &c.Claim.Token, &c.Claim.Until, &c.Phase, &request, &snapshot, &rollout, &c.PodUID, &ack, &sent)
 	if e != nil || authority.DecodeStrict(request, &c.Request) != nil || authority.DecodeStrict(snapshot, &c.Snapshot) != nil || authority.DecodeStrict(rollout, &c.Rollout) != nil || c.Request.RequestID != id || id != browserRequestID(c.Claim, c.Phase) || !lifecycleUUID.MatchString(c.PodUID) {
 		return BrowserCleanup{}, ErrExecution
 	}
@@ -73,7 +73,7 @@ func (j *DeploymentJournal) NextBrowserCleanup(ctx context.Context) (BrowserClea
 		return BrowserCleanup{}, ErrExecution
 	}
 	var id string
-	e := j.Pool.QueryRowContext(ctx, `SELECT i.id FROM deployment_browser_intents i JOIN deployment_browser_pods p ON p.id=i.id WHERE i.expires_at<=clock_timestamp() AND NOT EXISTS(SELECT 1 FROM deployment_browser_evidence e WHERE e.id=i.id) AND NOT EXISTS(SELECT 1 FROM deployment_browser_cleanups c WHERE c.id=i.id) ORDER BY i.created_at,i.id LIMIT 1`).Scan(&id)
+	e := j.Pool.QueryRowContext(ctx, `SELECT i.id FROM deployment_browser_intents i JOIN deployment_browser_pods p ON p.id=i.id AND NOT p.not_sent WHERE i.expires_at<=clock_timestamp() AND NOT EXISTS(SELECT 1 FROM deployment_browser_evidence e WHERE e.id=i.id) AND NOT EXISTS(SELECT 1 FROM deployment_browser_cleanups c WHERE c.id=i.id) ORDER BY i.created_at,i.id LIMIT 1`).Scan(&id)
 	if e == sql.ErrNoRows {
 		return BrowserCleanup{}, nil
 	}
@@ -167,7 +167,7 @@ func (j *DeploymentJournal) PendingBrowserCleanup(ctx context.Context) (bool, er
 		return false, ErrExecution
 	}
 	var pending bool
-	e := j.Pool.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM deployment_browser_intents i JOIN deployment_browser_sends s ON s.id=i.id WHERE NOT EXISTS(SELECT 1 FROM deployment_browser_evidence e WHERE e.id=i.id) AND NOT EXISTS(SELECT 1 FROM deployment_browser_cleanups c WHERE c.id=i.id))`).Scan(&pending)
+	e := j.Pool.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM deployment_browser_intents i JOIN deployment_browser_sends s ON s.id=i.id WHERE NOT EXISTS(SELECT 1 FROM deployment_browser_pods p WHERE p.id=i.id AND p.not_sent) AND NOT EXISTS(SELECT 1 FROM deployment_browser_evidence e WHERE e.id=i.id) AND NOT EXISTS(SELECT 1 FROM deployment_browser_cleanups c WHERE c.id=i.id))`).Scan(&pending)
 	return pending, e
 }
 

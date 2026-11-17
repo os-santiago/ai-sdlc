@@ -8,6 +8,7 @@ import time
 import math
 
 import offline_runtime
+from browser_runtime_recovery import Recovery
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFESTS = ROOT / 'runtime/k8s/deploy/local/browser-runtime'
@@ -112,21 +113,20 @@ def install(kubectl, provider, cluster, cluster_uid, *, bind_existing_configurat
         run(['tee', SHIM_CONFIG], shim)
     if desired != before:
         stage = offline_runtime.NODE_CONFIG+'.browser-'+secrets.token_hex(8)
+        recovery=Recovery(provider,node,cid,cluster,stage,before,desired)
         try:
             run(['tee', stage], desired)
             run(['containerd', '--config', stage, 'config', 'dump'])
             if read(offline_runtime.NODE_CONFIG) != before:
                 raise ValueError('Containerd configuration changed concurrently')
-            run(['mv', '-T', stage, offline_runtime.NODE_CONFIG])
             try:
-                run(['systemctl', 'restart', 'containerd'], timeout=60)
-            except subprocess.SubprocessError:
-                run(['tee', stage], before)
                 run(['mv', '-T', stage, offline_runtime.NODE_CONFIG])
                 run(['systemctl', 'restart', 'containerd'], timeout=60)
+            except (subprocess.SubprocessError,ValueError):
+                recovery.restore()
                 raise ValueError('Browser runtime restart failed; original config restored')
         finally:
-            run(['rm', '-f', '--', stage])
+            recovery.cleanup()
     command(kubectl+['wait', '--for=condition=Ready', 'node', node, '--timeout=60s'], timeout=70)
     if not existing:
         obj = json.loads((MANIFESTS/'runtimeclass.json').read_text())

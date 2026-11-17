@@ -84,6 +84,13 @@ Baseline verification precedes the one-use deployment send; advance and rollback
 verification bind to their own acknowledged deployment receipt. PostgreSQL
 migration `0035_deployment_browser.sql` stores immutable intent, send, original
 Pod UID, evidence and a separate cleanup fact in five append-only tables.
+The Pod outcome is exclusive: either its original UID or a known `not_sent`
+result. A random attempt nonce binds the durable send to one transport invocation;
+a competing caller cannot abort or acknowledge it. Only failure before entering
+the HTTP POST may record `not_sent`. This consumes the attempt without fabricating
+health, while allowing later deployments to proceed. After POST starts, every
+uncertain result remains quarantined. A lost database commit acknowledgement is
+resolved only by observing the immutable outcome; CREATE is never replayed.
 Release and production readers authenticate the evidence chain.
 HTTP-only or caller-constructed browser observations cannot complete a deployment.
 After Kubernetes reports the original route ready, the first `/health/live` GET
@@ -155,7 +162,12 @@ This validates browser infrastructure, not the full runtime-upgrade command.
 maintenance fence, backup restoration and compatibility verifier against owned
 disposable PostgreSQL. It checks original credentials, retained history and
 negative controls for schema, permissions and outstanding review effects. The
-explicit local target is fixture evidence and cannot authorize an installed
+source and administrative fence also reject a synthetic deployed marker before
+migration. This presence-denial fixture does not claim a valid prior deployment.
+The bridge accepts no existing publication, deployment or production history;
+it cannot strand a previously deployed HTTP-only receipt during activation,
+because that installation is rejected before migration. Such histories need a
+separate reviewed upgrade path. The explicit local target is fixture evidence and cannot authorize an installed
 upgrade. Keep its private backups outside the repository.
 
 The [dated deployment-component evidence](../evidence/2026-11-17-browser-deployment.json)
@@ -186,6 +198,13 @@ custody, namespace/node identity and the paused producer inventory. This avoids
 re-reading every Helm object for each public observation. A changed producer,
 generation or unexpected runtime Pod stops preparation; any other installation
 drift detected by the final full check prevents compilation and migration.
+
+If containerd configuration replacement or restart fails, restoration and temporary
+file removal share one separate 90-second containment budget. Recovery checks the
+original node container ID, cluster label and exact before/desired configuration;
+it cannot adopt foreign changes or resume installation after expiry. Transport
+fixtures similarly reserve one 180-second cleanup window after their 420-second
+execution limit, retaining all original-resource identity checks.
 
 The transition preserves every old row, role identity and privilege. It adds
 browser evidence capabilities and updates all database consumers; isolated

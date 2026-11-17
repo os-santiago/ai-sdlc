@@ -20,18 +20,20 @@ import (
 )
 
 type browserGateFixture struct {
-	sent, ack, record int
-	mode              string
-	until             time.Time
-	parent            context.Context
-	originalUID       string
-	onACK             func()
-	onBefore          func()
+	sent, ack, record, aborted int
+	attempt, podDigest         string
+	mode                       string
+	until                      time.Time
+	parent                     context.Context
+	originalUID                string
+	onACK                      func()
+	onBefore                   func()
 }
 
 func (g *browserGateFixture) CleanupDeadline() time.Time      { return g.until }
 func (g *browserGateFixture) CleanupContext() context.Context { return g.parent }
-func (g *browserGateFixture) BeforeCreate(context.Context, string) error {
+func (g *browserGateFixture) BeforeCreate(_ context.Context, podDigest, attempt string) error {
+	g.podDigest, g.attempt = podDigest, attempt
 	g.sent++
 	if g.onBefore != nil {
 		g.onBefore()
@@ -41,7 +43,10 @@ func (g *browserGateFixture) BeforeCreate(context.Context, string) error {
 	}
 	return nil
 }
-func (g *browserGateFixture) AcknowledgePod(_ context.Context, _ string, uid string) error {
+func (g *browserGateFixture) AcknowledgePod(_ context.Context, _ string, uid, attempt string) error {
+	if attempt != g.attempt || len(attempt) != 64 {
+		return browsercheck.ErrBrowser
+	}
 	g.originalUID = uid
 	if g.onACK != nil {
 		g.onACK()
@@ -50,6 +55,13 @@ func (g *browserGateFixture) AcknowledgePod(_ context.Context, _ string, uid str
 	if g.mode == "ack-denied" {
 		return browsercheck.ErrBrowser
 	}
+	return nil
+}
+func (g *browserGateFixture) AbortBeforeSend(ctx context.Context, podDigest, attempt string) error {
+	if ctx.Err() != nil || podDigest != g.podDigest || attempt != g.attempt || len(attempt) != 64 {
+		return browsercheck.ErrBrowser
+	}
+	g.aborted++
 	return nil
 }
 func (g *browserGateFixture) RecordEvidence(context.Context, browsercheck.Evidence) error {
@@ -248,6 +260,13 @@ func TestBrowserTransportOriginalIdentityAndFailClosedCleanup(t *testing.T) {
 				gate.until = time.Now().Add(5 * time.Second)
 			}
 			_, evidence, e := b.Verify(context.Background(), snapshot, route, gate)
+			wantAbort := 0
+			if mode == "gate-denied" || mode == "scope-during-gate" {
+				wantAbort = 1
+			}
+			if gate.aborted != wantAbort {
+				t.Fatalf("no-send boundary: mode=%s aborts=%d want=%d", mode, gate.aborted, wantAbort)
+			}
 			if mode == "success" {
 				if e != nil || evidence.Validate(profile, time.Now()) != nil || creates != 1 || deletes != 1 || gate.sent != 1 || gate.ack != 1 || gate.record != 1 {
 					t.Fatalf("success lifecycle: err=%v create=%d delete=%d gate=%+v", e, creates, deletes, gate)

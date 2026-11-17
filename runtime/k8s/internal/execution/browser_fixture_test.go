@@ -14,11 +14,11 @@ import (
 // API identity, network policy and cleanup are separate Kubernetes fixtures.
 func syntheticBrowser(ctx context.Context, p browsercheck.Profile, r browsercheck.Request, g browsercheck.Gate) (browsercheck.Evidence, error) {
 	var evidence browsercheck.Evidence
-	if e := g.BeforeCreate(ctx, strings.Repeat("a", 64)); e != nil {
+	if e := g.BeforeCreate(ctx, strings.Repeat("a", 64), strings.Repeat("e", 64)); e != nil {
 		return evidence, e
 	}
 	pod := store.NewID()
-	if e := g.AcknowledgePod(ctx, r.RequestID, pod); e != nil {
+	if e := g.AcknowledgePod(ctx, r.RequestID, pod, strings.Repeat("e", 64)); e != nil {
 		return evidence, e
 	}
 	now := time.Now().UnixMilli()

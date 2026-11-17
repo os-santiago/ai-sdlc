@@ -2,6 +2,8 @@ package podtransport
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -129,10 +131,27 @@ func (b *BrowserResources) Verify(ctx context.Context, snapshot ConsoleSnapshot,
 	if e != nil || !ready || !sameBrowserRoute(before, route) || b.scope(ctx) != nil || b.empty(ctx) != nil {
 		return ConsoleRollout{}, evidence, ErrTransport
 	}
-	if gate.BeforeCreate(ctx, BrowserPodDigest(b.pod)) != nil || b.scope(ctx) != nil || b.empty(ctx) != nil {
+	var nonce [32]byte
+	if _, e := rand.Read(nonce[:]); e != nil {
+		return ConsoleRollout{}, evidence, ErrTransport
+	}
+	attempt := hex.EncodeToString(nonce[:])
+	podDigest := BrowserPodDigest(b.pod)
+	postStarted := false
+	defer func() {
+		if !postStarted {
+			abortCtx, stop := context.WithDeadline(cleanupParent, minDeadline(time.Now().Add(browsercheck.CleanupBudget), cleanupUntil))
+			defer stop()
+			_ = gate.AbortBeforeSend(abortCtx, podDigest, attempt)
+		}
+	}()
+	if gate.BeforeCreate(ctx, podDigest, attempt) != nil || b.scope(ctx) != nil || b.empty(ctx) != nil {
 		return ConsoleRollout{}, evidence, ErrTransport
 	}
 	body, _ := json.Marshal(b.pod)
+	// Once control enters the HTTP send, any error is potentially ambiguous.
+	// Only the path demonstrably before this boundary can record not-sent.
+	postStarted = true
 	raw, status, e := b.resources.request(ctx, http.MethodPost, "pods", "", body, false)
 	var created core.Pod
 	if e != nil || status != 201 || authority.DecodeStrict(raw, &created) != nil || !exactMetadata(created.ObjectMeta, b.pod.ObjectMeta, "") {
@@ -153,7 +172,7 @@ func (b *BrowserResources) Verify(ctx context.Context, snapshot ConsoleSnapshot,
 			_ = b.cleanup(cleanupCtx, uid, cleanupCheck)
 		}
 	}()
-	if !exactBrowserPod(created, b.pod, uid) || gate.AcknowledgePod(ctx, b.request.RequestID, uid) != nil {
+	if !exactBrowserPod(created, b.pod, uid) || gate.AcknowledgePod(ctx, b.request.RequestID, uid, attempt) != nil {
 		return ConsoleRollout{}, evidence, ErrTransport
 	}
 	var terminated core.ContainerStateTerminated

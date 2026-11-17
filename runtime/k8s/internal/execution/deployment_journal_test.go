@@ -603,7 +603,7 @@ func TestDeploymentCommandPreservesSubmillisecondHistoryOrder(t *testing.T) {
 	}
 }
 
-// This waits for the actual 45-second freshness window; no fixture clock or
+// This waits for the actual browser smoke window; no fixture clock or
 // persisted timestamp is rewritten. An observed PostgreSQL lock delays INSERT.
 func TestDeploymentHealthExpiryWhileInsertWaits(t *testing.T) {
 	f := newDeploymentFixture(t)
@@ -614,7 +614,8 @@ func TestDeploymentHealthExpiryWhileInsertWaits(t *testing.T) {
 		t.Fatal(e)
 	}
 	health := f.attestedHealth(t, claim, receipt)
-	time.Sleep(time.Until(time.UnixMilli(health.ObservedAt).Add(43500 * time.Millisecond)))
+	expires := time.UnixMilli(health.Browser.Request.ExpiresAt)
+	time.Sleep(time.Until(expires.Add(-1500 * time.Millisecond)))
 	tx, e := f.p.b.f.Admin.Pool.BeginTx(ctx, nil)
 	if e != nil {
 		t.Fatal(e)
@@ -643,7 +644,7 @@ func TestDeploymentHealthExpiryWhileInsertWaits(t *testing.T) {
 	if !blocked {
 		t.Fatal("health INSERT did not observably wait")
 	}
-	time.Sleep(time.Until(time.UnixMilli(health.ObservedAt).Add(46 * time.Second)))
+	time.Sleep(time.Until(expires.Add(250 * time.Millisecond)))
 	if e = tx.Commit(); e != nil {
 		t.Fatal(e)
 	}

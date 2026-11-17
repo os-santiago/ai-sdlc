@@ -43,7 +43,7 @@ func readBrowserRecord(ctx context.Context, q Querier, c DeploymentClaim, phase 
 	var requestHash, profileHash, podHash, podUID, evidenceHash string
 	var created, sent, ack, expiry time.Time
 	id := browserRequestID(c, phase)
-	e := q.QueryRowContext(ctx, `SELECT i.request,i.request_digest,i.snapshot,i.rollout,i.profile_digest,i.pod_digest,i.created_at,i.expires_at,s.created_at,p.pod_uid::text,p.recorded_at,e.evidence,e.digest,e.recorded_at FROM deployment_browser_intents i JOIN deployment_browser_sends s ON s.id=i.id AND s.claim_token=i.claim_token JOIN deployment_browser_pods p ON p.id=i.id JOIN deployment_browser_evidence e ON e.id=i.id WHERE i.id=$1 AND i.deployment_id=$2 AND i.phase=$3 AND i.claim_token=$4 AND e.recorded_at<=clock_timestamp()`, id, c.ID, phase, c.Token).Scan(&requestRaw, &requestHash, &snapshotRaw, &rolloutRaw, &profileHash, &podHash, &created, &expiry, &sent, &podUID, &ack, &evidenceRaw, &evidenceHash, &record.RecordedAt)
+	e := q.QueryRowContext(ctx, `SELECT i.request,i.request_digest,i.snapshot,i.rollout,i.profile_digest,i.pod_digest,i.created_at,i.expires_at,s.created_at,p.pod_uid::text,p.recorded_at,e.evidence,e.digest,e.recorded_at FROM deployment_browser_intents i JOIN deployment_browser_sends s ON s.id=i.id AND s.claim_token=i.claim_token JOIN deployment_browser_pods p ON p.id=i.id AND NOT p.not_sent JOIN deployment_browser_evidence e ON e.id=i.id WHERE i.id=$1 AND i.deployment_id=$2 AND i.phase=$3 AND i.claim_token=$4 AND e.recorded_at<=clock_timestamp()`, id, c.ID, phase, c.Token).Scan(&requestRaw, &requestHash, &snapshotRaw, &rolloutRaw, &profileHash, &podHash, &created, &expiry, &sent, &podUID, &ack, &evidenceRaw, &evidenceHash, &record.RecordedAt)
 	var request browsercheck.Request
 	if e != nil || authority.DecodeStrict(requestRaw, &request) != nil || authority.DecodeStrict(snapshotRaw, &record.Snapshot) != nil || authority.DecodeStrict(rolloutRaw, &record.Rollout) != nil || authority.DecodeStrict(evidenceRaw, &record.Evidence) != nil {
 		return browserRecord{}, ErrExecution
@@ -76,6 +76,9 @@ func validateDeploymentBrowser(ctx context.Context, q Querier, c DeploymentClaim
 	record, e := readBrowserRecord(ctx, q, c, effectKind(receipt.Rollback), cfg, input)
 	route := record.Rollout
 	route.ObservedAt = health.Rollout.ObservedAt
+	if at.UnixMilli() >= health.Browser.Request.ExpiresAt || at.UnixMilli() >= health.StartedAt+browsercheck.MaxDuration.Milliseconds() {
+		return ErrExecution
+	}
 	if e != nil || deployment.ValidateBrowserHealth(cfg.Browser, cfg.Target, receipt, health) != nil || record.Snapshot != receipt.After || record.Evidence.Digest() != health.Browser.Digest() || route != health.Rollout || record.RecordedAt.After(at) || record.RecordedAt.UnixMilli() > health.ObservedAt || health.StartedAt <= 0 || health.StartedAt > record.Rollout.ObservedAt || health.Browser.Request.IssuedAt < health.StartedAt || health.Browser.Request.ExpiresAt > health.StartedAt+browsercheck.MaxDuration.Milliseconds() || health.ObservedAt-health.StartedAt >= browsercheck.MaxDuration.Milliseconds() || health.ObservedAt < health.Browser.DeletedAt {
 		return ErrExecution
 	}

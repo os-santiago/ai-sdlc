@@ -79,7 +79,7 @@
           "0"
         ],
         null,
-        "((CURRENT_USER = 'aisdlc_deployer'::name) AND (EXISTS ( SELECT 1\n   FROM (deployment_browser_pods p\n     JOIN deployment_browser_intents i ON ((i.id = p.id)))\n  WHERE ((p.id = deployment_browser_cleanups.id) AND (p.pod_uid = deployment_browser_cleanups.pod_uid) AND (i.expires_at <= clock_timestamp())))))"
+        "((CURRENT_USER = 'aisdlc_deployer'::name) AND (EXISTS ( SELECT 1\n   FROM (deployment_browser_pods p\n     JOIN deployment_browser_intents i ON ((i.id = p.id)))\n  WHERE ((p.id = deployment_browser_cleanups.id) AND (NOT p.not_sent) AND (p.pod_uid = deployment_browser_cleanups.pod_uid) AND (i.expires_at <= clock_timestamp())))))"
       ],
       [
         "browser_cleanup_read",
@@ -218,7 +218,7 @@
           "0"
         ],
         null,
-        "((CURRENT_USER = 'aisdlc_deployer'::name) AND (EXISTS ( SELECT 1\n   FROM (deployment_browser_intents i\n     JOIN deployment_requests q ON ((q.id = i.deployment_id)))\n  WHERE ((i.id = deployment_browser_evidence.id) AND (q.claim_token = i.claim_token) AND (q.state = 'claimed'::text) AND (i.expires_at > clock_timestamp())))))"
+        "((CURRENT_USER = 'aisdlc_deployer'::name) AND (EXISTS ( SELECT 1\n   FROM (deployment_browser_intents i\n     JOIN deployment_requests q ON ((q.id = i.deployment_id)))\n  WHERE ((i.id = deployment_browser_evidence.id) AND (EXISTS ( SELECT 1\n           FROM deployment_browser_pods p\n          WHERE ((p.id = i.id) AND (NOT p.not_sent)))) AND (q.claim_token = i.claim_token) AND (q.state = 'claimed'::text) AND (i.expires_at > clock_timestamp())))))"
       ],
       [
         "browser_read",
@@ -255,6 +255,12 @@
   },
   "deployment_browser_intents": {
     "columnACLs": [
+      [
+        "attempt_nonce",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
       [
         "claim_token",
         [
@@ -388,6 +394,12 @@
         null
       ],
       [
+        "attempt_nonce",
+        "text",
+        true,
+        null
+      ],
+      [
         "expires_at",
         "timestamp with time zone",
         true,
@@ -422,6 +434,12 @@
       [
         "c",
         "CHECK (((octet_length(snapshot) >= 1) AND (octet_length(snapshot) <= 4096)))",
+        true,
+        false
+      ],
+      [
+        "c",
+        "CHECK ((attempt_nonce ~ '^[a-f0-9]{64}$'::text))",
         true,
         false
       ],
@@ -552,6 +570,12 @@
         ]
       ],
       [
+        "not_sent",
+        [
+          "aisdlc_deployer=a/ai_sdlc"
+        ]
+      ],
+      [
         "pod_uid",
         [
           "aisdlc_deployer=a/ai_sdlc"
@@ -572,8 +596,14 @@
       [
         "pod_uid",
         "uuid",
-        true,
+        false,
         null
+      ],
+      [
+        "not_sent",
+        "boolean",
+        true,
+        "false"
       ],
       [
         "recorded_at",
@@ -583,6 +613,12 @@
       ]
     ],
     "constraints": [
+      [
+        "c",
+        "CHECK (((not_sent AND (pod_uid IS NULL)) OR ((NOT not_sent) AND (pod_uid IS NOT NULL))))",
+        true,
+        false
+      ],
       [
         "f",
         "FOREIGN KEY (id) REFERENCES deployment_browser_sends(id)",
@@ -636,7 +672,7 @@
           "0"
         ],
         null,
-        "((CURRENT_USER = 'aisdlc_deployer'::name) AND (EXISTS ( SELECT 1\n   FROM (deployment_browser_intents i\n     JOIN deployment_requests q ON ((q.id = i.deployment_id)))\n  WHERE ((i.id = deployment_browser_pods.id) AND (q.claim_token = i.claim_token) AND (q.state = 'claimed'::text) AND (i.expires_at > clock_timestamp())))))"
+        "((CURRENT_USER = 'aisdlc_deployer'::name) AND (EXISTS ( SELECT 1\n   FROM (deployment_browser_intents i\n     JOIN deployment_requests q ON ((q.id = i.deployment_id)))\n  WHERE ((i.id = deployment_browser_pods.id) AND (q.claim_token = i.claim_token) AND (q.state = 'claimed'::text) AND ((deployment_browser_pods.not_sent AND (q.expires_at > clock_timestamp())) OR ((NOT deployment_browser_pods.not_sent) AND (i.expires_at > clock_timestamp())))))))"
       ],
       [
         "browser_read",

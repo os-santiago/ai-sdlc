@@ -19,6 +19,7 @@ import browser_platform_install
 import build_foundation_state
 from types import SimpleNamespace
 from release_target_oci import bounded_output
+from browser_fixture_budget import Budget
 
 
 def main():
@@ -35,14 +36,14 @@ def main():
     p.add_argument('--platform-helper',help='Exercise the real browser platform installer on an owned fresh fixture cluster')
     args=p.parse_args();root=Path(__file__).resolve().parents[1]
     out=args.output.resolve();out.mkdir(mode=0o700,parents=True,exist_ok=False)
-    nonce=secrets.token_hex(12);owner='ai-sdlc.browser-transport';owned={};cluster_owned=[];deadline=time.monotonic()+420;client=None
+    nonce=secrets.token_hex(12);owner='ai-sdlc.browser-transport';owned={};cluster_owned=[];budget=Budget();deadline=budget.deadline;client=None
     k=[str(args.kubectl),'--kubeconfig',str(args.kubeconfig),'--request-timeout=10s']
     report={'scope':'real-kubernetes-browser-transport','autonomousE2E':False,'syntheticBusinessAPI':True,'status':'running','scenarios':[],'cleanup':[]}
     report['testBinarySHA256']=hashlib.sha256(args.binary.read_bytes()).hexdigest()
     report['fixtureSourceSHA256']=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     def save(): (out/'report.json').write_text(json.dumps(report,indent=2)+'\n')
     def run(argv,data=None,limit=30):
-        result=subprocess.run([str(x) for x in argv],input=data,capture_output=True,timeout=max(.1,min(limit,deadline-time.monotonic())))
+        result=subprocess.run([str(x) for x in argv],input=data,capture_output=True,timeout=budget.timeout(limit))
         if result.returncode:raise ValueError('fixture operation failed: '+str(argv[0]))
         return result.stdout
     def rawget(kind,name,ns=None):return json.loads(run(k+['get',kind,name,*(['-n',ns] if ns else []),'-o','json']))
@@ -169,6 +170,7 @@ def main():
     except BaseException as exc:
         report['status']='failed';report['errorType']=type(exc).__name__;report['error']=str(exc) if isinstance(exc,ValueError) else 'fixture operation failed'
     finally:
+        budget.start_cleanup()
         for kind,name,uid in reversed(cluster_owned):
             try:
                 current=rawget(kind,name)

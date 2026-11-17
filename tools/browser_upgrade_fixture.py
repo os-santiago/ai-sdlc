@@ -95,6 +95,28 @@ def main(argv=None):
                 fence.check()
                 return fence.nonce
         report['sourceFence']=fenced(before);save()
+        # Deliberately synthetic outer-loop marker in this owned disposable DB.
+        # Replica mode bypasses only the upstream FK chain while seeding; it is
+        # reset before either real production reader runs. This is a denial
+        # fixture, never deployment evidence or a successful workflow history.
+        database.sql("SET session_replication_role=replica; INSERT INTO deployment_requests "
+            "(id,promotion_id,payload_digest,payload,receipt,configuration,expires_at,state,claim_token) "
+            "VALUES('deploy-'||repeat('d',64),'promotion-'||repeat('d',64),repeat('d',64),"
+            "decode('00','hex'),decode('00','hex'),decode('00','hex'),clock_timestamp()-interval '1 hour','deployed',gen_random_uuid()); "
+            "SET session_replication_role=origin;")
+        try:
+            try:compatibility.source(before)
+            except ValueError as error:
+                if str(error)!='Reviewer update requires expired, cleaned failed review history and no downstream work':raise
+                report['controls'].append('legacy-deployed-source-rejected-before-migration')
+            else:raise ValueError('Legacy deployment accepted by source gate')
+            try:
+                with Fence(args.provider,args.target_image,connection,port,before,expires_at=time.time()+90,browser_deployment=True):pass
+            except HistoryRejected:report['controls'].append('legacy-deployed-fence-typed-rejection')
+            else:raise ValueError('Legacy deployment accepted by browser fence')
+        finally:database.sql("DELETE FROM deployment_requests WHERE id='deploy-'||repeat('d',64);")
+        if compatibility.source(before)!=original:raise ValueError('Legacy negative fixture changed original history')
+        report['legacyDeploymentFixture']='synthetic denial marker only; upstream FK bypassed during seed, normal checks restored before observations'
         report['stage']='source-backup-restoration';save()
         artifacts,proof=database.export();directory=args.output/'private-backup';directory.mkdir(mode=0o700)
         manifest=data.write_archives(directory,artifacts);backup={'archives':manifest,'retainedData':proof}
