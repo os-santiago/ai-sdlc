@@ -16,6 +16,7 @@ from installer_process import capture
 import upgrade_backup_data as data
 from runtime_upgrade_backup import Restore
 from upgrade_migrator import Migrator
+from diagnostic_upgrade_data import Compatibility
 
 PG='docker.io/library/postgres@sha256:005c5c37db96c1e6652a79ea31f9886402fba81ac95dc2db897739121dd7f8f2'
 LABEL='ai-sdlc.upgrade-migration-fixture'
@@ -70,33 +71,10 @@ def main(argv=None):
         database.sql(f"INSERT INTO plans(id,repository,correlation_id) VALUES('{plan_id}','fixture/app','retained');"
             f"INSERT INTO work_items(plan_id,id,uuid,issue_numbers,acceptance_criteria,status) VALUES('{plan_id}','retained','{work}','[1]','[\"keep original history\"]','failed');"
             f"INSERT INTO outbox(id,aggregate_type,aggregate_id,event_type,payload,correlation_id) VALUES('{event}','fixture','retained','fixture','{{\"retain\":true}}','retained');")
-        before=database.snapshot()
-        original_tracking=database.sql("SELECT row_to_json(t)::text FROM (SELECT * FROM schema_migrations ORDER BY filename) t;")
-        def original_schema():return capture(prefix+['pg_dump','--schema-only','--create','--no-password',
-            '--restrict-key=aiSdlcSchemaComparisonOnly','--no-privileges','--exclude-table=public.execution_failures','-U','ai_sdlc','-d','ai_sdlc'])
-        schema=original_schema()
-        def permissions(before=''):
-            query="""WITH objects AS (
-SELECT 'schema' kind,n.nspname object,n.nspowner owner,n.nspacl acl,'n' objtype FROM pg_namespace n WHERE n.nspname='public'
-UNION ALL SELECT 'relation',n.nspname||'.'||c.relname,c.relowner,c.relacl,CASE WHEN c.relkind='S' THEN 's' ELSE 'r' END FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN('r','p','v','m','S','f') AND c.relname<>'execution_failures'
-UNION ALL SELECT 'column',n.nspname||'.'||c.relname||'.'||a.attname,c.relowner,coalesce(a.attacl,'{}'::aclitem[]),NULL FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN('r','p','v','m','f') AND c.relname<>'execution_failures' AND a.attnum>0 AND NOT a.attisdropped
-UNION ALL SELECT 'function',p.oid::regprocedure::text,p.proowner,p.proacl,'f' FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public'
-UNION ALL SELECT 'database',d.datname,d.datdba,d.datacl,'d' FROM pg_database d WHERE d.datname=current_database()
-UNION ALL SELECT 'default',r.rolname||':'||coalesce(n.nspname,'@global')||':'||d.defaclobjtype::text,d.defaclrole,d.defaclacl,NULL FROM pg_default_acl d JOIN pg_roles r ON r.oid=d.defaclrole LEFT JOIN pg_namespace n ON n.oid=d.defaclnamespace
-UNION ALL SELECT 'type',n.nspname||'.'||t.typname,t.typowner,t.typacl,'T' FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='public' AND t.oid NOT IN (SELECT c.reltype FROM pg_class c WHERE c.oid=to_regclass('public.execution_failures') UNION SELECT u.typarray FROM pg_class c JOIN pg_type u ON u.oid=c.reltype WHERE c.oid=to_regclass('public.execution_failures'))
-UNION ALL SELECT 'tablespace',t.spcname,t.spcowner,t.spcacl,'t' FROM pg_tablespace t
-UNION ALL SELECT 'language',l.lanname,l.lanowner,l.lanacl,'l' FROM pg_language l
-UNION ALL SELECT 'foreign-data-wrapper',f.fdwname,f.fdwowner,f.fdwacl,'F' FROM pg_foreign_data_wrapper f
-UNION ALL SELECT 'foreign-server',f.srvname,f.srvowner,f.srvacl,'S' FROM pg_foreign_server f
-UNION ALL SELECT 'large-object',l.oid::text,l.lomowner,l.lomacl,'L' FROM pg_largeobject_metadata l
-UNION ALL SELECT 'parameter',p.parname,NULL::oid,p.paracl,NULL FROM pg_parameter_acl p
-), entries AS (SELECT o.kind,o.object,own.rolname owner,o.acl IS NULL default_acl,g.rolname grantor,coalesce(r.rolname,'PUBLIC') grantee,a.privilege_type,a.is_grantable FROM objects o LEFT JOIN pg_roles own ON own.oid=o.owner LEFT JOIN LATERAL aclexplode(CASE WHEN cardinality(o.acl)=0 THEN NULL::aclitem[] ELSE o.acl END) a ON true LEFT JOIN pg_roles g ON g.oid=a.grantor LEFT JOIN pg_roles r ON r.oid=a.grantee)
-SELECT jsonb_build_object('entries',count(*),'sha256',encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(e) ORDER BY to_jsonb(e)::text)::text,'[]'),'UTF8')),'hex')) FROM entries e;"""
-            return database.sql('BEGIN;'+before+query+'ROLLBACK;')
-        report['stage']='original-permission-inventory';save()
-        grants=permissions()
-        report['stage']='original-role-inventory';save()
-        role_attributes=database.sql("SELECT to_jsonb(r)-'rolpassword' FROM pg_authid r ORDER BY rolname;")
+        compatibility=Compatibility(database)
+        original=compatibility.source(plan['source']['migrations'])
+        grants=original['permissions'];role_attributes=original['roles']
+        permissions=compatibility.permissions
         report['stage']='backup-restore';save()
         artifacts,proof=database.export();directory=args.output/'private-backup';directory.mkdir(mode=0o700)
         manifest=data.write_archives(directory,artifacts);restore_record={'archives':manifest,'retainedData':proof}
@@ -106,25 +84,7 @@ SELECT jsonb_build_object('entries',count(*),'sha256',encode(sha256(convert_to(c
         report['backupRestoredBeforeMigration']=True
         report['stage']='target-migration';save();migrate('target')
         report['stage']='retained-history-comparison';save()
-        after=database.snapshot()
-        expected=set(before)|{'execution_failures'}
-        if set(after)!=expected:raise ValueError('Unexpected table inventory after migration')
-        changed=[key for key in before if key not in ('@roles','@schema','schema_migrations') and before[key]!=after[key]]
-        if changed:report['unexpectedChangedProofs']=changed;raise ValueError('Original retained history or membership changed')
-        if after['execution_failures']['rows']!=0 or after['schema_migrations']['rows']!=34:
-            raise ValueError('Unexpected diagnostic migration state')
-        current_tracking=database.sql("SELECT row_to_json(t)::text FROM (SELECT * FROM schema_migrations WHERE filename<>'0034_execution_failures.sql' ORDER BY filename) t;")
-        if original_tracking!=current_tracking:raise ValueError('Original migration history changed')
-        report['stage']='original-schema-comparison';save()
-        compared=original_schema()
-        if compared!=schema:
-            for name,value in (('before-schema.sql',schema),('after-schema.sql',compared)):
-                fd=os.open(args.output/name,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-                with os.fdopen(fd,'wb') as stream:stream.write(value)
-            raise ValueError('Original schema or privileges changed outside the new diagnostic table')
-        if permissions()!=grants:raise ValueError('Original effective ACL inventory changed')
-        if database.sql("SELECT to_jsonb(r)-'rolpassword' FROM pg_authid r ORDER BY rolname;")!=role_attributes:
-            raise ValueError('Original role identities or capabilities changed')
+        report['compatibility']=compatibility.verify(original)
         report['stage']='original-credential-comparison';save()
         for component,password in dict(passwords,administrator=admin).items():
             role='ai_sdlc' if component=='administrator' else 'aisdlc_'+component.replace('-','_')
@@ -160,10 +120,10 @@ SELECT jsonb_build_object('entries',count(*),'sha256',encode(sha256(convert_to(c
         if permissions()!=grants:raise ValueError('Type ACL control failed to roll back fixture')
         try:
             database.sql('ALTER ROLE aisdlc_worker CREATEDB;')
-            if database.sql("SELECT to_jsonb(r)-'rolpassword' FROM pg_authid r ORDER BY rolname;")==role_attributes:
+            if compatibility.roles()==role_attributes:
                 raise ValueError('Role comparator missed added authority')
         finally:database.sql('ALTER ROLE aisdlc_worker NOCREATEDB;')
-        if database.sql("SELECT to_jsonb(r)-'rolpassword' FROM pg_authid r ORDER BY rolname;")!=role_attributes:
+        if compatibility.roles()!=role_attributes:
             raise ValueError('Role control failed to restore fixture')
         # A wrong password must fail on the same endpoint where the original
         # credential just succeeded. Neither is embedded in argv or reports.
@@ -174,10 +134,26 @@ SELECT jsonb_build_object('entries',count(*),'sha256',encode(sha256(convert_to(c
         else:raise ValueError('Fixture did not enforce original password')
         if capture(auth,env=dict(os.environ,PGPASSWORD=passwords['worker']))!=b'aisdlc_worker\n':
             raise ValueError('Original credential unavailable after negative control')
+        try:
+            database.sql("UPDATE work_items SET status='ready';")
+            try:compatibility.quiet()
+            except ValueError:pass
+            else:raise ValueError('Queued work was allowed to resume')
+        finally:database.sql("UPDATE work_items SET status='failed';")
+        queued='fixture-'+secrets.token_hex(16)
+        try:
+            database.sql("INSERT INTO authorized_outbox(producer,event_id,target,operation,receipt,payload) VALUES('worker','"+queued+"','orchestrator','fixture','{}',decode('00','hex'));")
+            try:compatibility.quiet()
+            except ValueError:pass
+            else:raise ValueError('Pending authenticated delivery was allowed to resume')
+        finally:database.sql("DELETE FROM authorized_outbox WHERE producer='worker' AND event_id='"+queued+"';")
+        compatibility.quiet()
+        compatibility.verify(original)
         report.update(status='passed',sourceMigrations=33,targetMigrations=34,originalRowsUnchanged=True,
             originalSchemaAndPrivilegesUnchanged=True,originalTrackingUnchanged=True,originalCredentialsAuthenticate=True,
             diagnosticTableEmpty=True,diagnosticPrivilegesBounded=True,unrelatedDiagnosticRolesDenied=True,
             changedACLDetected=True,changedDefaultACLDetected=True,changedTypeACLDetected=True,changedRoleCapabilityDetected=True,wrongPasswordRejected=True,
+            queuedWorkRejected=True,pendingDeliveryRejected=True,
             upgradeAuthorized=False,rollbackAuthorized=False)
     except Exception as error:report.update(status='failed',errorType=type(error).__name__);raise
     finally:

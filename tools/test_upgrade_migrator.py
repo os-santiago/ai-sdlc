@@ -2,6 +2,8 @@
 import copy
 import json
 import unittest
+import sys
+import time
 from unittest.mock import Mock, patch
 
 import install
@@ -92,6 +94,39 @@ class MigratorTests(unittest.TestCase):
         self.assertEqual(create[1]['env']['DATABASE_URL'], item.connection)
         self.assertEqual(start[1]['input'], item.material)
         self.assertNotIn(item.material.decode(), ' '.join(start[0]))
+
+    def test_expiration_during_custody_check_prevents_create_or_start(self):
+        for expire_on in (1, 2, 3):
+            with self.subTest(expire_on=expire_on):
+                item = self.helper()
+                observed = []
+                calls = []
+                def guard():
+                    observed.append(True)
+                    if len(observed) == expire_on: item.expires_at = time.time() - 1
+                def execute(argv, **kwargs):
+                    calls.append(argv)
+                    if 'create' in argv: return ('b' * 64).encode()
+                    if 'inspect' in argv: return json.dumps([self.identity(item)]).encode()
+                    if 'rm' in argv or 'ps' in argv: return b''
+                    self.fail('Migration started after expiry')
+                item.guard = guard
+                with patch.object(migration, 'capture', side_effect=execute):
+                    with self.assertRaises(ValueError): item.run()
+                    self.assertFalse(any('start' in argv for argv in calls))
+                    if expire_on < 3:
+                        self.assertFalse(any('create' in argv for argv in calls))
+                    else:
+                        item.close()  # Original CID cleanup remains available after expiry.
+                        self.assertEqual(item.record['cleanup'], 'removed')
+
+    def test_real_process_cannot_outlive_original_remaining_migration_window(self):
+        item = self.helper()
+        item.expires_at = time.time() + .1
+        started = time.monotonic()
+        with self.assertRaises(ValueError):
+            item.command([sys.executable, '-c', 'import time;time.sleep(60)'], timeout=120)
+        self.assertLess(time.monotonic() - started, 2)
 
 
 if __name__ == '__main__':

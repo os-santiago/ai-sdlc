@@ -37,8 +37,9 @@ its [preflight report](docs/operations/image-lock-upgrades.md#plan-a-transition-
 does not authorize upgrading an active installation. For an original pre-candidate
 runtime, `runtime-upgrade pause` preserves history while stopping producers;
 `runtime-upgrade backup` verifies a private copy by restoring it into an isolated
-database. See the same procedure for scope, recovery limits and remaining
-migration/reactivation gates.
+database. The bounded `runtime-upgrade diagnostic` transition applies the
+reviewed diagnostic migration and worker image selection, then opens intake last.
+See the same procedure for scope, prerequisites and recovery limits.
 
 For an existing installer-owned Konflux cluster, use the
 [frozen runtime capability](docs/operations/frozen-konflux-runtime.md) and
