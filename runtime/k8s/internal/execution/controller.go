@@ -250,7 +250,7 @@ func driveModel(ctx context.Context, session modelSession, authorize func(contex
 			code, exited, exitErr := session.WorkerExit(ctx)
 			if exitErr == nil && exited && ctx.Err() == nil {
 				if code != 0 {
-					return errWorkerNonzero
+					return nonzeroWorkerExit{code}
 				}
 				return nil
 			}

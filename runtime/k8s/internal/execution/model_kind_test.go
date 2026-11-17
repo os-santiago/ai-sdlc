@@ -139,7 +139,7 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 		n := calls.Add(1)
 		message := map[string]any{"role": "assistant", "content": "Created the isolated conformance fixture file."}
 		if strings.HasPrefix(input.Scenario, "no-change") {
-			message["content"] = "[VERDICT: NO_CHANGES] No workspace changes were made in this nonzero-exit fixture."
+			message["content"] = "[VERDICT: NO_CHANGES] No workspace changes are required in this nonzero-exit fixture."
 		}
 		reason := "stop"
 		if input.Scenario == "provider-failure" {

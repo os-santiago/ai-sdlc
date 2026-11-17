@@ -78,6 +78,16 @@ func TestControllerHandlesOriginalWorkerExitRace(t *testing.T) {
 		t.Fatal("original zero exit not observed")
 	}
 }
+
+func TestControllerPreservesNonzeroCodeAcrossMailboxExitRace(t *testing.T) {
+	for _, session := range []*driverSession{{exitAfter: 0, code: 10}, {exitAfter: 1, code: 10, readErr: podtransport.ErrWorkerExited}} {
+		err := driveModel(context.Background(), session, func(context.Context) error { return nil }, func(context.Context, modelmailbox.Envelope) error { t.Fatal("failure dispatched new work"); return nil })
+		var failed nonzeroWorkerExit
+		if !errors.Is(err, errWorkerNonzero) || !errors.As(err, &failed) || failed.code != 10 {
+			t.Fatal("original nonzero code lost")
+		}
+	}
+}
 func TestControllerStopsIdleOnRevocationAndCancellation(t *testing.T) {
 	s := &driverSession{exitAfter: -1}
 	proofs := 0

@@ -197,7 +197,7 @@ jobs:
               if fixture == 'lifecycle_model':
                   selected[selected.index('--test-binary') + 1] = str(pathlib.Path(os.environ['RUNNER_TEMP'], 'execution.test'))
               extra = [] if fixture in ('workload_resources', 'lifecycle_model') else ['--provider', 'docker', '--render-image', 'localhost/ai-sdlc-model-mailbox:conformance']
-              scenarios = ('success', 'three-turns', 'provider-failure', 'cancel-provider', 'no-change') if fixture == 'lifecycle_model' else ('success',)
+              scenarios = ('success', 'three-turns', 'provider-failure', 'cancel-provider', 'no-change', 'no-change-store-failure') if fixture == 'lifecycle_model' else ('success',)
               for scenario in scenarios:
                   scenario_args = ['--scenario', scenario] if fixture == 'lifecycle_model' else []
                   result = subprocess.run([sys.executable, f'tools/verify_{fixture}.py'] + selected + extra + scenario_args,
