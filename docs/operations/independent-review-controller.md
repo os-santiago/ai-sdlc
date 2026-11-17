@@ -62,10 +62,10 @@ Every repaired candidate must repeat behavior verification and independent
 review. Editing an issue or resetting a failed row is not a repair mechanism.
 
 Existing schema-34/35 upgrade fences keep their original boundaries and reject
-schema 36. This increment does not provide an online 35-to-36 installation bridge;
-do not use an ordinary Helm reconciliation to bypass that boundary. Validate the
-new controller on a fresh disposable schema-36 database before its separate
-reviewed installation transition.
+schema 36. The separate [review-feedback installation transition](review-feedback-upgrade.md)
+uses its own schema-35/36 fence and bounded journal. Do not use ordinary Helm
+reconciliation to bypass that boundary. Feedback retention does not grant repair
+authority or recover historical discarded explanations.
 
 Recovery uses only acknowledged UIDs. Unknown creates quarantine the run; cleanup
 attempts are bounded. Expired, rejected and completed reviews cannot be requeued

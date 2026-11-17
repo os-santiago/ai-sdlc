@@ -37,7 +37,14 @@ const (
 	legacyFence fenceSelection = iota
 	reviewerFence
 	browserFence
+	feedbackFence
 )
+
+func holdReviewFeedbackUpgradeFence(input io.ReadCloser, output io.WriteCloser) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 125*time.Second)
+	defer cancel()
+	return holdSelectedUpgradeFence(ctx, input, output, feedbackFence)
+}
 
 func holdBrowserUpgradeFence(input io.ReadCloser, output io.WriteCloser) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 125*time.Second)
@@ -84,7 +91,10 @@ func holdSelectedUpgradeFence(ctx context.Context, input io.ReadCloser, output i
 	released := false
 	version := "ai-sdlc.upgrade-fence/v1"
 	hold := db.WithPreCandidateUpgradeFence
-	if selection == browserFence {
+	if selection == feedbackFence {
+		version = "ai-sdlc.review-feedback-upgrade-fence/v1"
+		hold = db.WithReviewFeedbackUpgradeFence
+	} else if selection == browserFence {
 		version = "ai-sdlc.browser-upgrade-fence/v1"
 		hold = db.WithBrowserDeploymentUpgradeFence
 	} else if selection == reviewerFence {
