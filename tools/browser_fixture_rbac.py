@@ -5,15 +5,17 @@ import subprocess
 import yaml
 
 
-def install(run,kubectl,helm,root,out,namespace,prefix,target,profile,create):
+def install(run,kubectl,helm,root,out,namespace,prefix,target,profile,create,api_cidrs=None):
     inner={'repository':'os-santiago/saferus','environment':'ai-sdlc-production','autonomy':'auto-merge-low','freeze':True}
     outer=dict(inner,autonomy='auto-deploy')
     build={'version':'ai-sdlc.build-installation/v1','inner':inner,'outer':outer,'profile':{'clusterUID':target['clusterUID'],'namespaceUID':'fixture-builds','publisherImage':'quay.io/os-santiago/ai-sdlc@sha256:'+'b'*64,'deniedTargets':[{'host':'10.96.0.1','port':443}]}}
     trust={'version':'ai-sdlc.saferus-provenance/v1','scope':'kind-test-production','repository':inner['repository'],'environment':'ai-sdlc-production','clusterUID':target['clusterUID'],'buildNamespaceUID':'fixture-builds','publisherImage':build['profile']['publisherImage'],'verifierImage':'quay.io/os-santiago/ai-sdlc@sha256:'+'a'*64,'registryCA':'fixture','signerPublicKey':'fixture'}
     values={'fullnameOverride':prefix,'namespace':{'name':namespace},'runtime':{'mode':'verification','paused':True},'authority':{'policyJSON':json.dumps(inner)},'verifier':{'digest':'sha256:'+'a'*64},'review':{'enabled':True,'configJSON':'{}'},'publication':{'enabled':True},'merge':{'enabled':True,'configJSON':'{}'},'build':{'enabled':True,'digest':'sha256:'+'b'*64,'configJSON':json.dumps(build),'outerPolicyJSON':json.dumps(outer)},'provenance':{'enabled':True,'trustJSON':json.dumps(trust),'registryCredentialSecret':prefix+'-provenance-registry','credentialRevision':'c'*64},'candidate':{'apiServerCIDRs':['10.96.0.1/32']},'release':{'enabled':True,'digest':'sha256:'+'d'*64,'targetJSON':json.dumps(target),'browserProfileJSON':json.dumps(profile)}}
+    if api_cidrs is not None:values['candidate']['apiServerCIDRs']=api_cidrs
     path=out/'rbac-values.json';path.write_text(json.dumps(values))
     raw=run([helm,'template',prefix,root/'runtime/k8s/deploy/helm/ai-sdlc-k8s-runtime','-n',namespace,'-f',root/'runtime/k8s/deploy/local/values.yaml','-f',path,'--show-only','templates/release.yaml','--show-only','templates/browser.yaml'])
     permitted={'ServiceAccount','Role','RoleBinding','ClusterRole','ClusterRoleBinding'}
+    if api_cidrs is not None:permitted.add('NetworkPolicy')
     for obj in yaml.safe_load_all(raw):
         if obj and obj['kind'] in permitted:create(obj)
     return run(kubectl+['create','token',prefix+'-deployer','-n',namespace,'--duration=10m']).decode().strip()

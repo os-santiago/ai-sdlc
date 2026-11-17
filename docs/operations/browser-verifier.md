@@ -128,7 +128,11 @@ as browser evidence.
 The `verify_browser_transport.py` fixture checks the actual Kubernetes API,
 Firefox/gVisor, normal TLS, original-Pod cleanup and unchanged console Deployment.
 It uses the rendered deployer ServiceAccount and checks 19 allowed/denied API
-permissions, including denial of exec, secrets and policy writes. Its fourth
+permissions, including denial of exec, secrets and policy writes. Its test client
+runs in a restricted Pod under the rendered deployer NetworkPolicies, using an
+immutable image built from the exact test binary. A scoped Secret supplies the
+explicit API credential; no ambient token is mounted. The fixture checks original
+Pod/Secret custody before execution and around result collection. Its fourth
 scenario cancels the original attempt after the Pod ACK, expires the smoke and
 checks resource-only recovery without late health. Its business API is synthetic
 and it does not write deployment journal evidence;

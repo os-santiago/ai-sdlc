@@ -4,6 +4,7 @@ import argparse
 import base64
 import hashlib
 import json
+import ipaddress
 import os
 from pathlib import Path
 import secrets
@@ -13,6 +14,7 @@ import yaml
 import browser_runtime
 import browser_image
 import browser_fixture_rbac
+import browser_fixture_client
 import browser_platform_install
 import build_foundation_state
 from types import SimpleNamespace
@@ -33,7 +35,7 @@ def main():
     p.add_argument('--platform-helper',help='Exercise the real browser platform installer on an owned fresh fixture cluster')
     args=p.parse_args();root=Path(__file__).resolve().parents[1]
     out=args.output.resolve();out.mkdir(mode=0o700,parents=True,exist_ok=False)
-    nonce=secrets.token_hex(12);owner='ai-sdlc.browser-transport';owned={};cluster_owned=[];deadline=time.monotonic()+420
+    nonce=secrets.token_hex(12);owner='ai-sdlc.browser-transport';owned={};cluster_owned=[];deadline=time.monotonic()+420;client=None
     k=[str(args.kubectl),'--kubeconfig',str(args.kubeconfig),'--request-timeout=10s']
     report={'scope':'real-kubernetes-browser-transport','autonomousE2E':False,'syntheticBusinessAPI':True,'status':'running','scenarios':[],'cleanup':[]}
     report['testBinarySHA256']=hashlib.sha256(args.binary.read_bytes()).hexdigest()
@@ -146,18 +148,23 @@ def main():
                 guard()
             profile['baselineExpectation']=expectation
             if mode=='baseline':
-                token=browser_fixture_rbac.install(run,k,args.helm,root,out,client_namespace,'browser-'+nonce[:10],target,profile,create)
+                api=get('service','kubernetes','default')['spec']['clusterIP']
+                current_node=get('node',node)
+                node_ips=[x['address'] for x in current_node['status']['addresses'] if x['type']=='InternalIP']
+                if current_node['metadata']['uid']!=profile['nodeUID'] or len(node_ips)!=1 or any(ipaddress.ip_address(x).version!=4 for x in [api,*node_ips]):
+                    raise ValueError('Original fixture API and node IPv4 identity required')
+                api_cidrs=[x+'/32' for x in dict.fromkeys([api,*node_ips])]
+                prefix='browser-'+nonce[:10]
+                token=browser_fixture_rbac.install(run,k,args.helm,root,out,client_namespace,prefix,target,profile,create,api_cidrs)
                 report['rbac']=browser_fixture_rbac.verify(args.kubectl,args.kubeconfig,out,token,node)
-            private={'Client':{'APIServer':'https://127.0.0.1:6443','CA':cluster_cfg['certificate-authority-data'],'BearerToken':token},'Target':target,'Profile':profile,'Report':'/evidence/'+mode+'.json','Accept':accept,'CleanupOnly':mode=='cleanup-only'}
+                client=browser_fixture_client.Client(args,node,cid,nonce,out,run,guard,create,get,report['testBinarySHA256'])
+                client.prepare()
+                report['client']={'image':client.image,'networkOrigin':'Pod with rendered deployer policies and ServiceAccount','privateInput':'scoped Secret, no ambient token mount'}
+            private={'Client':{'APIServer':'https://'+api+':443','CA':cluster_cfg['certificate-authority-data'],'BearerToken':token},'Target':target,'Profile':profile,'Report':'/evidence/result.json','Accept':accept,'CleanupOnly':mode=='cleanup-only'}
             private_path=out/'private.json';private_path.write_text(json.dumps(private));private_path.chmod(0o600)
             guard()
-            # Private fixture inputs stay0600. With all capabilities dropped,
-            # container root cannot read a non-root runner's file; use that
-            # runner's UID/GID instead of broadening credential permissions.
-            result=subprocess.run([args.provider,'run','--rm','--user',str(os.getuid())+':'+str(os.getgid()),'--network','container:'+cid,'--cap-drop','ALL','--security-opt','no-new-privileges','-e','AI_SDLC_BROWSER_TRANSPORT_FIXTURE=/evidence/private.json','-v',str(args.binary.resolve())+':/test:ro,z','-v',str(out)+':/evidence:z',json.loads((root/'tools/runtime-validation.lock.json').read_text())['go'],'/test','-test.v','-test.timeout=45s','-test.run=^TestRealBrowserDeploymentTransport$'],capture_output=True,timeout=60)
-            (out/(mode+'.log')).write_bytes(result.stdout+result.stderr);guard()
-            if result.returncode:raise ValueError('real browser transport test failed: '+mode)
-            report['scenarios'].append(json.loads((out/(mode+'.json')).read_text()));save()
+            result=client.execute(k,client_namespace,prefix,mode,private);guard()
+            report['scenarios'].append(result);save()
         report['status']='passed'
     except BaseException as exc:
         report['status']='failed';report['errorType']=type(exc).__name__;report['error']=str(exc) if isinstance(exc,ValueError) else 'fixture operation failed'
@@ -182,6 +189,11 @@ def main():
                 run(k+['wait','--for=delete','namespace/'+ns,'--timeout=60s'],limit=65)
                 report['cleanup'].append({'namespace':ns,'status':'removed','uid':uid})
             except Exception:report['cleanup'].append({'namespace':ns,'status':'failed'});report['status']='failed'
+        if client is not None:
+            try:
+                removed=client.close()
+                if removed:report['cleanup'].append(removed)
+            except Exception:report['cleanup'].append({'kind':'fixture-host-image','status':'failed'});report['status']='failed'
         save()
     print(json.dumps(report));return 0 if report['status']=='passed' else 1
 

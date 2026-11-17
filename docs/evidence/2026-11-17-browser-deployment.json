@@ -1,9 +1,9 @@
 {
-  "observedAtUTC": "2026-11-17T12:12:32.156819+00:00",
+  "observedAtUTC": "2026-11-17T12:35:54.730606+00:00",
   "scope": "browser deployment components and administrative fixtures",
   "autonomousE2E": false,
   "installedSchema35Validated": false,
-  "sourceScope": "Local working tree; retained hashes identify actual fixture and binary. Exact PR head requires CI. Platform run predates the runner-UID correction, which has a separate ownership control.",
+  "sourceScope": "Local working tree; fixture/binary hashes bind actual executions. Platformv8 uses an in-cluster client under rendered deployer policies. Exact PR head still requires CI.",
   "platform": {
     "scope": "real-kubernetes-browser-transport",
     "autonomousE2E": false,
@@ -12,7 +12,7 @@
     "scenarios": [
       {
         "autonomousE2E": false,
-        "browserEvidenceSHA256": "854a0c5a8ce95116d42af0ccbcffc05004d822454b6a446e976fb64ab74bb654",
+        "browserEvidenceSHA256": "da5467b3f5384b6392b08da1ef16e59faa1e7a43c80f138b6bf69e45a73542f0",
         "cleanupOnly": false,
         "createCount": 1,
         "desktopMobileValidated": true,
@@ -23,7 +23,7 @@
         "originalPodAckCount": 1,
         "originalPodDeleted": true,
         "recordCount": 1,
-        "remainingSmokeMilliseconds": 23472,
+        "remainingSmokeMilliseconds": 22729,
         "runtimeDigest": "sha256:94edf13407285960e0b0aedc6b38cdb65a1e30eccc9df556f0f31d41a467a370",
         "scope": "real-kubernetes-browser-transport",
         "status": "passed",
@@ -31,7 +31,7 @@
       },
       {
         "autonomousE2E": false,
-        "browserEvidenceSHA256": "911287b881085e98c5418f36450f5a41f672b6ceba9664834144c6662b095400",
+        "browserEvidenceSHA256": "fa69ddcf7444ad3df6326201451f3fa1c0df8850b447c46c1e7cfd78f9242e52",
         "cleanupOnly": false,
         "createCount": 1,
         "desktopMobileValidated": true,
@@ -42,7 +42,7 @@
         "originalPodAckCount": 1,
         "originalPodDeleted": true,
         "recordCount": 1,
-        "remainingSmokeMilliseconds": 23328,
+        "remainingSmokeMilliseconds": 22730,
         "runtimeDigest": "sha256:94edf13407285960e0b0aedc6b38cdb65a1e30eccc9df556f0f31d41a467a370",
         "scope": "real-kubernetes-browser-transport",
         "status": "passed",
@@ -60,7 +60,7 @@
         "originalPodAckCount": 1,
         "originalPodDeleted": true,
         "recordCount": 0,
-        "remainingSmokeMilliseconds": 19247,
+        "remainingSmokeMilliseconds": 17816,
         "runtimeDigest": "sha256:94edf13407285960e0b0aedc6b38cdb65a1e30eccc9df556f0f31d41a467a370",
         "scope": "real-kubernetes-browser-transport",
         "status": "passed",
@@ -78,7 +78,7 @@
         "originalPodAckCount": 1,
         "originalPodDeleted": true,
         "recordCount": 0,
-        "remainingSmokeMilliseconds": 26471,
+        "remainingSmokeMilliseconds": 25716,
         "runtimeDigest": "sha256:94edf13407285960e0b0aedc6b38cdb65a1e30eccc9df556f0f31d41a467a370",
         "scope": "real-kubernetes-browser-transport",
         "status": "passed",
@@ -88,45 +88,50 @@
     "cleanup": [
       {
         "kind": "ClusterRoleBinding",
-        "name": "browser-734b42150a-deployer-identity",
-        "uid": "6c309d75-dfd0-4a34-bc2c-587cf33fef46",
+        "name": "browser-1a16cd9dc7-deployer-identity",
+        "uid": "a84e9498-d026-4b46-b7a1-e5ea4b415a22",
         "status": "removed"
       },
       {
         "kind": "ClusterRole",
-        "name": "browser-734b42150a-deployer-identity",
-        "uid": "5a5dd347-18c5-44ba-b3bf-873d985453cd",
+        "name": "browser-1a16cd9dc7-deployer-identity",
+        "uid": "c0af6f1d-255f-4801-9b15-2ffa9fe07e96",
         "status": "removed"
       },
       {
         "kind": "RuntimeClass",
         "name": "ai-sdlc-browser",
-        "uid": "5e45d6da-1401-4915-be55-597bfd6b77ca",
+        "uid": "f46f20d1-6102-4c72-bd50-933582a6e014",
         "status": "removed"
       },
       {
         "namespace": "ai-sdlc-browser",
         "status": "removed",
-        "uid": "6b307036-bb11-4e78-b912-8f80f4565cfc"
+        "uid": "2726732d-8b68-4d2e-ae47-7066b4de2456"
       },
       {
-        "namespace": "ai-sdlc-browser-client-734b42150a",
+        "namespace": "ai-sdlc-browser-client-1a16cd9dc7",
         "status": "removed",
-        "uid": "f827a58c-74f7-4c35-8e82-e9bc7a6f0dc9"
+        "uid": "74e3ebd1-351d-4b3a-a5d0-54a3d044a60a"
       },
       {
         "namespace": "ai-sdlc-production",
         "status": "removed",
-        "uid": "59baa9ca-9ad9-4377-b468-ce24e2a5f448"
+        "uid": "06e2a4de-1721-4ee3-8639-fbdfed25154a"
+      },
+      {
+        "kind": "fixture-host-image",
+        "status": "removed",
+        "nodeImageCacheRetained": true
       }
     ],
-    "testBinarySHA256": "175711992741c2bd0ec1d96f4c0ce95fb11d5f264731a86d6befa9f05eccaf57",
-    "fixtureSourceSHA256": "d457bd7d907fb5c0df06d4f4415175489a10ab942594d2a89188f547a89d1335",
+    "testBinarySHA256": "720f7af2e3a84a9c21342b3345f99c7bf5235b7fdfe0f1f544f8cabf713fa0a6",
+    "fixtureSourceSHA256": "6d68429ea9bd2e9c23e095921783589f81e257eaf3b293e7725e1fdc49314c48",
     "runtime": {
       "nodeName": "ai-sdlc-browser-upgrade-test-control-plane",
       "nodeUID": "fdf8f249-3d01-4a4f-bd48-4e2428705f57",
       "runtimeClass": "ai-sdlc-browser",
-      "runtimeClassUID": "5e45d6da-1401-4915-be55-597bfd6b77ca",
+      "runtimeClassUID": "f46f20d1-6102-4c72-bd50-933582a6e014",
       "clusterUID": "7856b8be-cef5-4b7f-90ca-948a867ddc22",
       "configurationSHA256": "4d3afdda6521e34ff32585f0d87144fc20020de11a29c420465e4338a84e2971",
       "network": "sandbox",
@@ -138,7 +143,7 @@
     },
     "platformInstallation": {
       "actualInstaller": true,
-      "journalSHA256": "7c4b93c93c0f3b726610c088d96ae33b7f965007a4e0783525eea017870e9e1b",
+      "journalSHA256": "d545ecfa41275de366ef00dd17dae0e3599e769de87aff24b79f9e044433a716",
       "helperImage": "quay.io/os-santiago/ai-sdlc@sha256:d137d508e08f90f4502035ca84eff390fd0e3cad4d034c105c42b194e084db0c",
       "sourceFilesSHA256": {
         "browser_platform_install.py": "6cf95205f6691ee9ed3f3882ca29e7b17eceabd789a5f81b17cdeaa44317c091",
@@ -153,6 +158,11 @@
       "createDeleteScope": "ai-sdlc-browser",
       "arbitraryExecDenied": true,
       "credentialsAndPolicyWritesDenied": true
+    },
+    "client": {
+      "image": "localhost/ai-sdlc-browser-transport@sha256:a8dff8d9cacc28a6521301f5d4ddafb8d0b868cc562ba6981f022e5c3b6a9b6c",
+      "networkOrigin": "Pod with rendered deployer policies and ServiceAccount",
+      "privateInput": "scoped Secret, no ambient token mount"
     }
   },
   "migrationCompatibility": {
@@ -243,6 +253,12 @@
       "fixture": "GitHub CI run44079209772",
       "boundary": "private fixture input unreadable to capability-dropped root; reproduced against0600 runner-owned file; corrected to matching UID/GID",
       "workflowEvidence": false
+    },
+    {
+      "fixture": "GitHub CI run44081087473",
+      "boundary": "node-origin test client failed initial TCP connection after3.086seconds; test now uses a restricted Pod under the rendered deployer network policies",
+      "cleanup": "complete",
+      "workflowEvidence": false
     }
   ],
   "connectionConvergence": {
@@ -278,5 +294,16 @@
     ],
     "reportSHA256": "161b980380b0a4d9f502f35bfdbae48e2c6a8dc998e6affbdf7eeb30a8344d37",
     "scope": "Precedes later test diagnostics and TCP convergence change; their focused real validations are recorded separately."
+  },
+  "inClusterClientCustody": {
+    "testsPassed": 16,
+    "binaryConfigurationAndOCIHashBound": true,
+    "originalSecretAndPodBeforeAndAfterLogs": true,
+    "noResultPersistedAfterReplacement": true,
+    "helperSHA256": {
+      "tools/browser_fixture_client.py": "79b24c1b3d79c907a8f7a588ad18e75d3dd99b68a01722976d26a46b1a7b9364",
+      "tools/browser_fixture_rbac.py": "dbb4d573c9564d5cc9ded1afae1e066584e1f5d605f0af6f08cd387a723d9411",
+      "tools/verify_browser_transport.py": "6d68429ea9bd2e9c23e095921783589f81e257eaf3b293e7725e1fdc49314c48"
+    }
   }
 }
