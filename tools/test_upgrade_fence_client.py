@@ -49,7 +49,7 @@ class FenceClientTests(unittest.TestCase):
                 with self.assertRaises((ValueError,json.JSONDecodeError)):self.read(self.fixture(),raw)
 
     def test_fence_loss_terminates_actual_owned_command(self):
-        fence=self.fixture();fence.check=Mock();fence.live=Mock(side_effect=ValueError('lost original backend'))
+        fence=self.fixture();fence.check=Mock();fence.live=Mock(side_effect=[None,ValueError('lost original backend')])
         actual=subprocess.Popen;children=[]
         def start(*args,**kwargs):
             child=actual(*args,**kwargs);children.append(child);return child
@@ -80,7 +80,7 @@ class FenceClientTests(unittest.TestCase):
             status=os.waitid(os.P_PID,pid,os.WEXITED|os.WNOHANG|os.WNOWAIT)
             self.assertIsNotNone(status);observed.append(pid)
             kill(pid,sig)
-        with patch('upgrade_fence_client.os.killpg',side_effect=reserved):
+        with patch('installer_process.os.killpg',side_effect=reserved):
             self.assertEqual(fence.command([sys.executable,'-c',"print('ok')"]),b'ok\n')
         self.assertEqual(len(observed),1)
 

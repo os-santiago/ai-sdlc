@@ -5,13 +5,12 @@ import os
 import re
 import secrets
 import selectors
-import signal
 import subprocess
-import tempfile
 import time
 from urllib.parse import urlsplit
 
 from install_images import decode
+import installer_process
 
 LABEL = 'ai-sdlc.upgrade-fence'
 
@@ -103,31 +102,9 @@ class Fence:
     def command(self, args, *, timeout=30):
         """Cancel an owned external command when the original fence disappears."""
         self.check()
-        deadline = min(self.deadline, time.monotonic()+timeout)
-        with tempfile.TemporaryFile() as output:
-            process = subprocess.Popen([str(x) for x in args], stdout=output, stderr=subprocess.DEVNULL, start_new_session=True)
-            try:
-                while True:
-                    # Reserve the session leader PID until group cleanup.
-                    status=os.waitid(os.P_PID,process.pid,os.WEXITED|os.WNOHANG|os.WNOWAIT)
-                    if status is not None:break
-                    self.live()
-                    if time.monotonic() >= deadline: raise ValueError('Pause operation exceeded its original budget')
-                    if output.tell() > 4*1024*1024: raise ValueError('Pause operation output exceeded bound')
-                    time.sleep(.05)
-                if status.si_code!=os.CLD_EXITED or status.si_status!=0:
-                    raise ValueError('Original pause operation failed')
-                self.check()
-                output.seek(0)
-                raw=output.read(4*1024*1024+1)
-                if len(raw)>4*1024*1024: raise ValueError('Pause operation output exceeded bound')
-                return raw
-            finally:
-                # This operation owns a fresh session. Descendants must not
-                # retain effect authority after the supervised command stops.
-                try: os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError: pass
-                process.wait(timeout=3)
+        raw=installer_process.capture(args,timeout=self.remaining(timeout),monitor=self.live)
+        self.check()
+        return raw
 
     def owned(self):
         result = subprocess.run([self.provider,'ps','-aq','--filter','name=^'+self.name+'$'],
