@@ -17,7 +17,13 @@ class CandidateInstallTests(unittest.TestCase):
         self.assertEqual(config['placement']['Namespace'], 'ai-sdlc-executors')
         self.assertTrue(config['placement']['WorkerImage'].endswith(lock['components']['worker']['digest']))
         self.assertEqual(config['profile']['model'], 'codex-cli')
+        self.assertEqual(config['profile']['maxSteps'], 24)
+        self.assertEqual(config['profile']['maxSeconds'], 600)
+        self.assertEqual(config['profile']['maxTokens'], 4096)
         self.assertEqual(config['model']['Limits']['Calls'], 16)
+        self.assertEqual(config['model']['Limits']['InputBytes'], 2097152)
+        self.assertEqual(config['model']['Limits']['OutputBytes'], 4194304)
+        self.assertEqual(config['model']['ResponseLimit'], 262144)
         for forbidden in ('token', 'password', 'credential', 'command', 'shell'):
             self.assertNotIn('"' + forbidden + '"', values['candidate']['configJSON'])
 

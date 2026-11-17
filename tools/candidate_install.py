@@ -32,7 +32,8 @@ def desired_values(root, image_lock_path, lock, verification=False, review=False
             raise ValueError('Invalid execution image publication identity')
     adev = (root / 'runtime/k8s/deploy/helm/ai-sdlc-k8s-runtime/files/adev-profile.yaml').read_text()
     profile = {'version': 'ai-sdlc.executor-profile/v1', 'model': 'codex-cli',
-               'maxSteps': 16, 'maxSeconds': 600, 'maxTokens': 4096,
+               # SCC counts tools, including parallel calls, not model turns.
+               'maxSteps': 24, 'maxSeconds': 600, 'maxTokens': 4096,
                'aDevSHA256': hashlib.sha256(adev.encode()).hexdigest()}
     config = {'version': 'ai-sdlc.candidate-runtime/v1', 'profile': profile, 'aDev': adev,
               'placement': {'Namespace': 'ai-sdlc-executors',

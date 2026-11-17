@@ -1,0 +1,38 @@
+{
+  "status": "passed",
+  "scope": "isolated actual published SCC process with deterministic mock provider",
+  "liveWorkflowInvoked": false,
+  "results": [
+    {
+      "maxSteps": 16,
+      "exitCode": 22,
+      "modelCalls": 6,
+      "inputBytes": 231131,
+      "outputBytes": 3638,
+      "outputBoundExceeded": false,
+      "toolCalls": 18,
+      "exitReason": "budget_exceeded",
+      "budgetMarkerSteps": true,
+      "candidateFileExists": false,
+      "candidateContentMatches": false
+    },
+    {
+      "maxSteps": 24,
+      "exitCode": 0,
+      "modelCalls": 8,
+      "inputBytes": 316051,
+      "outputBytes": 4349,
+      "outputBoundExceeded": false,
+      "toolCalls": 19,
+      "exitReason": "success",
+      "budgetMarkerSteps": false,
+      "candidateFileExists": true,
+      "candidateContentMatches": true
+    }
+  ],
+  "executorImage": "quay.io/os-santiago/ai-sdlc@sha256:863f1c55c3e399301cd34cd32d3acf1d8bdfa098cc661737dff8ff43a992b811",
+  "cleanupComplete": true,
+  "realModelUsed": false,
+  "workflowEvidence": false,
+  "autonomousEndToEndValidated": false
+}
