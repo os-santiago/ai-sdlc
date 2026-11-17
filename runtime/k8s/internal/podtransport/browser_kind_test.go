@@ -127,7 +127,10 @@ func TestRealBrowserDeploymentTransport(t *testing.T) {
 		Accept      bool
 		CleanupOnly bool
 	}
-	if e != nil || len(raw) > 256*1024 || authority.DecodeStrict(raw, &input) != nil || input.Report == "" {
+	if e != nil {
+		t.Fatal("fixture input unreadable")
+	}
+	if len(raw) > 256*1024 || authority.DecodeStrict(raw, &input) != nil || input.Report == "" {
 		t.Fatal("invalid fixture input")
 	}
 	started := time.Now()

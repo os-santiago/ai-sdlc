@@ -90,6 +90,7 @@ def main():
         service=create({'apiVersion':'v1','kind':'Service','metadata':{'name':name,'namespace':ns},'spec':{'selector':{'app':name},'ports':[{'name':'https','port':8443,'targetPort':'https'}]}})
         deployment=create({'apiVersion':'apps/v1','kind':'Deployment','metadata':{'name':name,'namespace':ns},'spec':{'replicas':1,'strategy':{'type':'Recreate'},'selector':{'matchLabels':{'app':name}},'template':{'metadata':{'labels':{'app':name}},'spec':{
             'serviceAccountName':'saferus-client','automountServiceAccountToken':False,'imagePullSecrets':[{'name':'ai-sdlc-release-reader'}],
+            'terminationGracePeriodSeconds':1,
             'securityContext':{'runAsNonRoot':True,'runAsUser':1000,'runAsGroup':1000,'fsGroup':1000,'seccompProfile':{'type':'RuntimeDefault'}},
             'containers':[{'name':'console','image':aliases['console'],'imagePullPolicy':'IfNotPresent','command':['python','/fixture/server.py','baseline'],'ports':[{'name':'https','containerPort':8443}],
                 'securityContext':{'readOnlyRootFilesystem':True,'allowPrivilegeEscalation':False,'capabilities':{'drop':['ALL']}},'resources':{'requests':{'cpu':'20m','memory':'64Mi'},'limits':{'cpu':'250m','memory':'256Mi'}},
@@ -117,7 +118,7 @@ def main():
             if len(pods)!=1:raise ValueError('ambiguous fixture console Pod')
             image_id=pods[0]['status']['containerStatuses'][0]['imageID']
             browser_image.verify(digest,image_id.split('@')[-1],blob)
-            if not args.platform_helper or mode!='baseline':profile['runtimeDigest']=image_id.split('@')[-1]
+            if not args.platform_helper:profile['runtimeDigest']=image_id.split('@')[-1]
             now=int(time.time()*1000)
             target={'version':'ai-sdlc.saferus-release-target/v1','scope':'kind-test-production','repository':'os-santiago/saferus','environment':ns,'clusterUID':args.cluster_uid,'namespaceUID':owned[ns],'namespace':ns,'deployment':name,'deploymentUID':deployment['metadata']['uid'],'container':'console','deploymentSpecSHA256':'0'*64,'service':name,'serviceUID':service['metadata']['uid'],'serviceSpecSHA256':'0'*64,'pullSecret':'ai-sdlc-release-reader','pullSecretUID':pull['metadata']['uid'],'tlsSecretUID':tls['metadata']['uid'],'tlsCA':(out/'ca.crt').read_text(),'tlsHostname':name,'baselineImage':aliases['console'],'baselineRuntimeDigest':image_id.split('@')[-1],'rolloutSeconds':300,'smokeSeconds':30,'approvedAt':now-1000,'expiresAt':now+600000}
             if args.platform_helper and mode=='baseline':
@@ -150,7 +151,10 @@ def main():
             private={'Client':{'APIServer':'https://127.0.0.1:6443','CA':cluster_cfg['certificate-authority-data'],'BearerToken':token},'Target':target,'Profile':profile,'Report':'/evidence/'+mode+'.json','Accept':accept,'CleanupOnly':mode=='cleanup-only'}
             private_path=out/'private.json';private_path.write_text(json.dumps(private));private_path.chmod(0o600)
             guard()
-            result=subprocess.run([args.provider,'run','--rm','--network','container:'+cid,'--cap-drop','ALL','--security-opt','no-new-privileges','-e','AI_SDLC_BROWSER_TRANSPORT_FIXTURE=/evidence/private.json','-v',str(args.binary.resolve())+':/test:ro,z','-v',str(out)+':/evidence:z',json.loads((root/'tools/runtime-validation.lock.json').read_text())['go'],'/test','-test.v','-test.timeout=45s','-test.run=^TestRealBrowserDeploymentTransport$'],capture_output=True,timeout=60)
+            # Private fixture inputs stay0600. With all capabilities dropped,
+            # container root cannot read a non-root runner's file; use that
+            # runner's UID/GID instead of broadening credential permissions.
+            result=subprocess.run([args.provider,'run','--rm','--user',str(os.getuid())+':'+str(os.getgid()),'--network','container:'+cid,'--cap-drop','ALL','--security-opt','no-new-privileges','-e','AI_SDLC_BROWSER_TRANSPORT_FIXTURE=/evidence/private.json','-v',str(args.binary.resolve())+':/test:ro,z','-v',str(out)+':/evidence:z',json.loads((root/'tools/runtime-validation.lock.json').read_text())['go'],'/test','-test.v','-test.timeout=45s','-test.run=^TestRealBrowserDeploymentTransport$'],capture_output=True,timeout=60)
             (out/(mode+'.log')).write_bytes(result.stdout+result.stderr);guard()
             if result.returncode:raise ValueError('real browser transport test failed: '+mode)
             report['scenarios'].append(json.loads((out/(mode+'.json')).read_text()));save()

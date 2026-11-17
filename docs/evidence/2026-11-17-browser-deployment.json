@@ -1,0 +1,282 @@
+{
+  "observedAtUTC": "2026-11-17T12:12:32.156819+00:00",
+  "scope": "browser deployment components and administrative fixtures",
+  "autonomousE2E": false,
+  "installedSchema35Validated": false,
+  "sourceScope": "Local working tree; retained hashes identify actual fixture and binary. Exact PR head requires CI. Platform run predates the runner-UID correction, which has a separate ownership control.",
+  "platform": {
+    "scope": "real-kubernetes-browser-transport",
+    "autonomousE2E": false,
+    "syntheticBusinessAPI": true,
+    "status": "passed",
+    "scenarios": [
+      {
+        "autonomousE2E": false,
+        "browserEvidenceSHA256": "854a0c5a8ce95116d42af0ccbcffc05004d822454b6a446e976fb64ab74bb654",
+        "cleanupOnly": false,
+        "createCount": 1,
+        "desktopMobileValidated": true,
+        "expectedAccept": true,
+        "lateHealthRejected": false,
+        "normalTLS": true,
+        "originalDeploymentUnchanged": true,
+        "originalPodAckCount": 1,
+        "originalPodDeleted": true,
+        "recordCount": 1,
+        "remainingSmokeMilliseconds": 23472,
+        "runtimeDigest": "sha256:94edf13407285960e0b0aedc6b38cdb65a1e30eccc9df556f0f31d41a467a370",
+        "scope": "real-kubernetes-browser-transport",
+        "status": "passed",
+        "syntheticBusinessAPI": true
+      },
+      {
+        "autonomousE2E": false,
+        "browserEvidenceSHA256": "911287b881085e98c5418f36450f5a41f672b6ceba9664834144c6662b095400",
+        "cleanupOnly": false,
+        "createCount": 1,
+        "desktopMobileValidated": true,
+        "expectedAccept": true,
+        "lateHealthRejected": false,
+        "normalTLS": true,
+        "originalDeploymentUnchanged": true,
+        "originalPodAckCount": 1,
+        "originalPodDeleted": true,
+        "recordCount": 1,
+        "remainingSmokeMilliseconds": 23328,
+        "runtimeDigest": "sha256:94edf13407285960e0b0aedc6b38cdb65a1e30eccc9df556f0f31d41a467a370",
+        "scope": "real-kubernetes-browser-transport",
+        "status": "passed",
+        "syntheticBusinessAPI": true
+      },
+      {
+        "autonomousE2E": false,
+        "cleanupOnly": false,
+        "createCount": 1,
+        "desktopMobileValidated": false,
+        "expectedAccept": false,
+        "lateHealthRejected": false,
+        "normalTLS": true,
+        "originalDeploymentUnchanged": true,
+        "originalPodAckCount": 1,
+        "originalPodDeleted": true,
+        "recordCount": 0,
+        "remainingSmokeMilliseconds": 19247,
+        "runtimeDigest": "sha256:94edf13407285960e0b0aedc6b38cdb65a1e30eccc9df556f0f31d41a467a370",
+        "scope": "real-kubernetes-browser-transport",
+        "status": "passed",
+        "syntheticBusinessAPI": true
+      },
+      {
+        "autonomousE2E": false,
+        "cleanupOnly": true,
+        "createCount": 1,
+        "desktopMobileValidated": false,
+        "expectedAccept": false,
+        "lateHealthRejected": true,
+        "normalTLS": true,
+        "originalDeploymentUnchanged": true,
+        "originalPodAckCount": 1,
+        "originalPodDeleted": true,
+        "recordCount": 0,
+        "remainingSmokeMilliseconds": 26471,
+        "runtimeDigest": "sha256:94edf13407285960e0b0aedc6b38cdb65a1e30eccc9df556f0f31d41a467a370",
+        "scope": "real-kubernetes-browser-transport",
+        "status": "passed",
+        "syntheticBusinessAPI": true
+      }
+    ],
+    "cleanup": [
+      {
+        "kind": "ClusterRoleBinding",
+        "name": "browser-734b42150a-deployer-identity",
+        "uid": "6c309d75-dfd0-4a34-bc2c-587cf33fef46",
+        "status": "removed"
+      },
+      {
+        "kind": "ClusterRole",
+        "name": "browser-734b42150a-deployer-identity",
+        "uid": "5a5dd347-18c5-44ba-b3bf-873d985453cd",
+        "status": "removed"
+      },
+      {
+        "kind": "RuntimeClass",
+        "name": "ai-sdlc-browser",
+        "uid": "5e45d6da-1401-4915-be55-597bfd6b77ca",
+        "status": "removed"
+      },
+      {
+        "namespace": "ai-sdlc-browser",
+        "status": "removed",
+        "uid": "6b307036-bb11-4e78-b912-8f80f4565cfc"
+      },
+      {
+        "namespace": "ai-sdlc-browser-client-734b42150a",
+        "status": "removed",
+        "uid": "f827a58c-74f7-4c35-8e82-e9bc7a6f0dc9"
+      },
+      {
+        "namespace": "ai-sdlc-production",
+        "status": "removed",
+        "uid": "59baa9ca-9ad9-4377-b468-ce24e2a5f448"
+      }
+    ],
+    "testBinarySHA256": "175711992741c2bd0ec1d96f4c0ce95fb11d5f264731a86d6befa9f05eccaf57",
+    "fixtureSourceSHA256": "d457bd7d907fb5c0df06d4f4415175489a10ab942594d2a89188f547a89d1335",
+    "runtime": {
+      "nodeName": "ai-sdlc-browser-upgrade-test-control-plane",
+      "nodeUID": "fdf8f249-3d01-4a4f-bd48-4e2428705f57",
+      "runtimeClass": "ai-sdlc-browser",
+      "runtimeClassUID": "5e45d6da-1401-4915-be55-597bfd6b77ca",
+      "clusterUID": "7856b8be-cef5-4b7f-90ca-948a867ddc22",
+      "configurationSHA256": "4d3afdda6521e34ff32585f0d87144fc20020de11a29c420465e4338a84e2971",
+      "network": "sandbox",
+      "nodeConfigurationBeforeSHA256": "66b6955d64f6c267fa5f969374df182a30c0f1d334ca208e5c33ea19b82be4af",
+      "nodeConfigurationAfterSHA256": "66b6955d64f6c267fa5f969374df182a30c0f1d334ca208e5c33ea19b82be4af",
+      "offlineRuntimeUnchanged": true,
+      "networkPolicyValidated": false,
+      "autonomousE2E": false
+    },
+    "platformInstallation": {
+      "actualInstaller": true,
+      "journalSHA256": "7c4b93c93c0f3b726610c088d96ae33b7f965007a4e0783525eea017870e9e1b",
+      "helperImage": "quay.io/os-santiago/ai-sdlc@sha256:d137d508e08f90f4502035ca84eff390fd0e3cad4d034c105c42b194e084db0c",
+      "sourceFilesSHA256": {
+        "browser_platform_install.py": "6cf95205f6691ee9ed3f3882ca29e7b17eceabd789a5f81b17cdeaa44317c091",
+        "browser_runtime.py": "9da706ea0a908aa8c55d15d31346add2c844ad4d948bcec32dd6186d3179c3e8",
+        "browser_profile_install.py": "2eb1e48cfc074ac166c79a560540015bef79e4092c085019eb6fcd9b17a5cae7"
+      },
+      "scope": "browser infrastructure only; not the full runtime-upgrade CLI"
+    },
+    "rbac": {
+      "actualServiceAccount": true,
+      "permissionChecks": 19,
+      "createDeleteScope": "ai-sdlc-browser",
+      "arbitraryExecDenied": true,
+      "credentialsAndPolicyWritesDenied": true
+    }
+  },
+  "migrationCompatibility": {
+    "status": "passed",
+    "sourceRevision": "f5fb014a98d91ca3b4e38f35e99318691bab5813",
+    "sourcePublication": "https://github.com/os-santiago/ai-sdlc/actions/runs/44075602540",
+    "targetImage": "quay.io/os-santiago/ai-sdlc@sha256:d137d508e08f90f4502035ca84eff390fd0e3cad4d034c105c42b194e084db0c",
+    "targetOrigin": "explicit local fixture image; not publication approval",
+    "negativeControls": [
+      "unacknowledged-review-effect-typed-rejection",
+      "deployment_browser_cleanups-rls",
+      "deployment_browser_cleanups-acl",
+      "deployment_browser_evidence-rls",
+      "deployment_browser_evidence-acl",
+      "deployment_browser_intents-rls",
+      "deployment_browser_intents-acl",
+      "deployment_browser_pods-rls",
+      "deployment_browser_pods-acl",
+      "deployment_browser_sends-rls",
+      "deployment_browser_sends-acl",
+      "original-diagnostic-row-drift",
+      "original-table-acl",
+      "original-role-capability"
+    ],
+    "compatibility": {
+      "browserTablesEmpty": true,
+      "catalogSize": 35,
+      "originalRolesUnchanged": true,
+      "originalRowsUnchanged": true,
+      "originalSchemaAndPrivilegesUnchanged": true,
+      "originalTrackingUnchanged": true,
+      "workflowEvidence": false
+    },
+    "backupRestoredBeforeMigration": true,
+    "originalCredentialsAuthenticate": true,
+    "targetRestorationMetadataVerified": true,
+    "cleanup": [
+      {
+        "kind": "database",
+        "status": "removed"
+      }
+    ],
+    "reportSHA256": "974b4b493f455bdb1364192301749f0f1055177a913c8176b547ab8055edb009",
+    "sourceRestoreState": "removed",
+    "targetRestoreState": "removed"
+  },
+  "runnerIdentity": {
+    "scope": "private fixture input ownership",
+    "network": "none",
+    "realGitHubCredential": false,
+    "controls": [
+      {
+        "containerUser": "0:0",
+        "inputRead": false,
+        "passed": true
+      },
+      {
+        "containerUser": "1001:1001",
+        "inputRead": true,
+        "passed": true
+      }
+    ],
+    "status": "passed",
+    "fileMode": "0o600"
+  },
+  "previousFailures": [
+    {
+      "fixture": "platform-v1",
+      "boundary": "published index also contains a bound attestation descriptor",
+      "effects": false
+    },
+    {
+      "fixture": "platform-v2",
+      "boundary": "profile expected child manifest while CRI reported immutable root index",
+      "cleanup": "complete"
+    },
+    {
+      "fixture": "platform-v3",
+      "boundary": "HTTP health before browser; no further cause captured",
+      "cleanup": "complete"
+    },
+    {
+      "fixture": "platform-v4",
+      "boundary": "initial HTTP live GET failed TCP connect after original Kubernetes route was ready",
+      "cleanup": "complete"
+    },
+    {
+      "fixture": "GitHub CI run44079209772",
+      "boundary": "private fixture input unreadable to capability-dropped root; reproduced against0600 runner-owned file; corrected to matching UID/GID",
+      "workflowEvidence": false
+    }
+  ],
+  "connectionConvergence": {
+    "initialGetOnly": true,
+    "maximumAttempts": 8,
+    "intervalMilliseconds": 250,
+    "originalDeadlineRetained": true,
+    "routeRechecked": true,
+    "postTLSResponseAndReadRetries": false,
+    "negativeAndPositiveScenarios": 14,
+    "sourceSHA256": "caf75512125f22db8e42f7e33147d65fd8918d19f014d4955e2f1b97b0d881a1"
+  },
+  "fullPostgreSQLSuite": {
+    "status": "passed",
+    "source": {
+      "commit": "4eeee1cae193e3fa67fb7bf9aef2be60e2448697",
+      "dirty": true,
+      "gitLayout": "worktree"
+    },
+    "passedTests": 2248,
+    "passedPackages": 52,
+    "optionalExternalFixtureSkips": 31,
+    "missingDatabaseProof": [],
+    "cleanup": [
+      {
+        "container": "ai-sdlc-validation-fb33d1f1ef0745259e64099cab1a966d-go",
+        "status": "removed"
+      },
+      {
+        "container": "ai-sdlc-validation-fb33d1f1ef0745259e64099cab1a966d-db",
+        "status": "removed"
+      }
+    ],
+    "reportSHA256": "161b980380b0a4d9f502f35bfdbae48e2c6a8dc998e6affbdf7eeb30a8344d37",
+    "scope": "Precedes later test diagnostics and TCP convergence change; their focused real validations are recorded separately."
+  }
+}

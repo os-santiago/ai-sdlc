@@ -86,6 +86,11 @@ migration `0035_deployment_browser.sql` stores immutable intent, send, original
 Pod UID, evidence and a separate cleanup fact in five append-only tables.
 Release and production readers authenticate the evidence chain.
 HTTP-only or caller-constructed browser observations cannot complete a deployment.
+After Kubernetes reports the original route ready, the first `/health/live` GET
+can wait for Service routing to converge: at most eight failed TCP connection
+attempts, 250 ms apart, with the same route revalidated before each additional
+attempt. The original smoke deadline remains unchanged. TLS errors, HTTP
+responses, body reads and POST requests are never retried by this wait.
 
 The installed public profile binds the browser image and runtime digest, original
 node name/UID, gVisor RuntimeClass/configuration, namespace, public CA ConfigMap,
@@ -144,6 +149,10 @@ negative controls for schema, permissions and outstanding review effects. The
 explicit local target is fixture evidence and cannot authorize an installed
 upgrade. Keep its private backups outside the repository.
 
+The [dated deployment-component evidence](../evidence/2026-11-17-browser-deployment.json)
+records actual platform/browser, PostgreSQL restoration, negative-control and
+runner-ownership results, including earlier failures and the limits of each proof.
+
 ## Existing installation transition
 
 For the closed schema-34 installation with a completed reviewer-image upgrade,
@@ -161,6 +170,13 @@ applies migration 35 and activates the new consumers with intake last. The
 separate browser fence admits only schemas 34/35, fully contained failed-review
 history and empty browser tables. Both legacy fences retain their earlier schema
 and history boundaries.
+
+Full installation and retained-history checks bracket browser infrastructure
+preparation. Each nested infrastructure effect checks the original deadline,
+custody, namespace/node identity and the paused producer inventory. This avoids
+re-reading every Helm object for each public observation. A changed producer,
+generation or unexpected runtime Pod stops preparation; any other installation
+drift detected by the final full check prevents compilation and migration.
 
 The transition preserves every old row, role identity and privilege. It adds
 browser evidence capabilities and updates all database consumers; isolated
