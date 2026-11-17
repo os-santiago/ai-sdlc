@@ -101,6 +101,7 @@ class Preparation:
         self.configured_maps = None
         self.activation_phase = None
         self.activation_replicas = None
+        self.expired_source = False
 
     def use_configured_render(self, documents):
         """Explicit initial configuration observer; ordinary prepare stays strict.
@@ -109,6 +110,7 @@ class Preparation:
         never templates learned from the running controllers.
         """
         self.activation_phase=None
+        self.expired_source=False
         self._configured_render(documents)
 
     def use_activation_render(self, documents, phase):
@@ -120,7 +122,18 @@ class Preparation:
         if phase not in ('warming','armed','active'):
             raise ValueError('Unknown initial activation phase')
         self.activation_phase=phase
+        self.expired_source=False
         self._configured_render(documents)
+
+    def use_expired_source_render(self, documents):
+        """Administrative suspension only; this never establishes readiness.
+
+        The approval-window installer binds this render to an original completed
+        installation and separately checks that its approval has expired. All
+        producer identity, inventory, Running-state and template checks remain.
+        """
+        self.use_activation_render(documents, 'active')
+        self.expired_source = True
 
     def _configured_render(self, documents):
         self.templates = {d['metadata']['name']:d['spec']['template'] for d in documents if d.get('kind')=='Deployment'}
@@ -322,7 +335,7 @@ class Preparation:
                 statuses=current.get('status',{}).get('containerStatuses',[])
                 if (current['metadata'].get('deletionTimestamp') or current.get('status',{}).get('phase')!='Running'
                         or len(statuses)!=len(current['spec']['containers']) or any('running' not in s.get('state',{}) for s in statuses)
-                        or self.activation_phase!='warming' and not all(s.get('ready') is True for s in statuses)):
+                        or self.activation_phase!='warming' and not self.expired_source and not all(s.get('ready') is True for s in statuses)):
                     raise ValueError('Initial activation producer health has not converged')
         if self.activation_phase and producer_counts!=self.activation_replicas:
             raise ValueError('Initial activation producer Pod count differs')

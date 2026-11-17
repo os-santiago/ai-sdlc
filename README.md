@@ -42,6 +42,9 @@ reviewed diagnostic migration and worker image selection, then opens intake last
 For an installation on that diagnostic bridge, `runtime-upgrade tool-budget`
 performs the reviewed 16-to-24 tool-step adjustment, including pause, a new
 restore-verified backup and reactivation. Provider quotas remain unchanged.
+After that update completes, `runtime-upgrade reapprove` can install separately
+reviewed [finite approval windows](docs/operations/approval-window.md) for the
+same test environment without renewing workflow requests or failed attempts.
 See the same procedure for scope, prerequisites and recovery limits.
 
 For an existing installer-owned Konflux cluster, use the
