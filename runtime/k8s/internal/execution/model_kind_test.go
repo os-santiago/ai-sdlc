@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -76,6 +77,8 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 	_, err = f.Admin.Pool.Exec(`GRANT SELECT,INSERT ON execution_lifecycles,execution_effects,execution_models,execution_candidates,model_budgets,model_allocations,model_calls TO aisdlc_worker;
  GRANT UPDATE(phase,config_uid,pod_uid,updated_at,cleanup_state) ON execution_lifecycles TO aisdlc_worker;
  GRANT UPDATE(result,completed_at) ON execution_effects TO aisdlc_worker;
+ GRANT SELECT ON execution_failures TO aisdlc_worker;
+ GRANT INSERT(request_id,pod_uid,container_id,exit_code) ON execution_failures TO aisdlc_worker;
  GRANT UPDATE(status,updated_at) ON work_items TO aisdlc_worker;
  GRANT UPDATE(reserved_calls,reserved_input_bytes,reserved_output_bytes,state,stop_reason) ON model_budgets TO aisdlc_worker;
  GRANT UPDATE(reserved_calls,reserved_input_bytes,reserved_output_bytes) ON model_allocations TO aisdlc_worker;
@@ -135,6 +138,9 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 		}
 		n := calls.Add(1)
 		message := map[string]any{"role": "assistant", "content": "Created the isolated conformance fixture file."}
+		if strings.HasPrefix(input.Scenario, "no-change") {
+			message["content"] = "[VERDICT: NO_CHANGES] No workspace changes are required in this nonzero-exit fixture."
+		}
 		reason := "stop"
 		if input.Scenario == "provider-failure" {
 			w.WriteHeader(503)
@@ -145,14 +151,14 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 			w.WriteHeader(503)
 			return
 		}
-		if n == 1 && input.Scenario != "no-change" {
+		if n == 1 && !strings.HasPrefix(input.Scenario, "no-change") {
 			args, _ := json.Marshal(map[string]string{"path": "AI_SDLC_EXECUTOR_FIXTURE.txt", "content": "Created by the isolated SCC executor conformance fixture.\n"})
 			message = map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{map[string]any{"id": "lifecycle-fixture", "type": "function", "function": map[string]any{"name": "write_file", "arguments": string(args)}}}}
 			reason = "tool_calls"
 		}
-		if (input.Scenario == "three-turns" && n == 2) || (input.Scenario == "no-change" && n == 1) {
+		if (input.Scenario == "three-turns" && n == 2) || (strings.HasPrefix(input.Scenario, "no-change") && n == 1) {
 			path := "AI_SDLC_EXECUTOR_FIXTURE.txt"
-			if input.Scenario == "no-change" {
+			if strings.HasPrefix(input.Scenario, "no-change") {
 				path = "README.md"
 			}
 			args, _ := json.Marshal(map[string]string{"path": path})
@@ -175,28 +181,47 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 	if input.Scenario == "real-model" {
 		limits = store.ModelLimits{Calls: 8, InputBytes: 1024 * 1024, OutputBytes: 512 * 1024}
 	}
+	if input.Scenario == "no-change-store-failure" {
+		if _, e := f.Admin.Pool.Exec(`REVOKE INSERT(request_id,pod_uid,container_id,exit_code) ON execution_failures FROM aisdlc_worker`); e != nil {
+			t.Fatal(e)
+		}
+	}
 	captured, err := RunController(ctx, f.db, loader, prepared, client, provider, func(context.Context) (ModelPolicy, error) {
 		return ModelPolicy{Limits: limits, ResponseLimit: 32 * 1024}, nil
 	})
-	if input.Scenario == "provider-failure" || input.Scenario == "cancel-provider" || input.Scenario == "no-change" {
+	if input.Scenario == "provider-failure" || input.Scenario == "cancel-provider" || strings.HasPrefix(input.Scenario, "no-change") {
 		if err == nil || captured.RequestID != "" || f.Count(t, `SELECT count(*) FROM execution_candidates`) != 0 || f.Count(t, `SELECT count(*) FROM execution_requests WHERE state='stopped'`) != 1 {
 			t.Fatal("failed controller retained authority/candidate", err)
 		}
 		expectedCalls := int32(1)
-		if input.Scenario == "no-change" {
+		if strings.HasPrefix(input.Scenario, "no-change") {
 			expectedCalls = calls.Load()
 			if expectedCalls < 1 || expectedCalls > 4 || f.Count(t, `SELECT count(*) FROM model_calls WHERE state='completed' AND response_handed_off_at IS NOT NULL`) != int(expectedCalls) {
-				t.Fatal("no-change exchange exceeded budget or left uncertain calls")
+				code, recorded := WorkerFailureDiagnostic(err)
+				t.Fatal("no-change exchange exceeded budget or left uncertain calls", "calls", expectedCalls, "handedOff", f.Count(t, `SELECT count(*) FROM model_calls WHERE state='completed' AND response_handed_off_at IS NOT NULL`), "stage", DiagnosticStage(err), "exit", code, "recorded", recorded)
 			}
-			failure, ok := err.(ControllerError)
-			if !ok || failure.Stage != "worker-exit" {
+			var failure ControllerError
+			if !errors.As(err, &failure) || failure.Stage != "worker-exit" {
 				t.Fatal("unexpected no-change rejection", err)
+			}
+			code, recorded := WorkerFailureDiagnostic(err)
+			expectedRecorded := input.Scenario != "no-change-store-failure"
+			expectedCount := 0
+			if expectedRecorded {
+				expectedCount = 1
+			}
+			if code != 10 || recorded != expectedRecorded || f.Count(t, `SELECT count(*) FROM execution_failures f JOIN execution_lifecycles l ON l.request_id=f.request_id WHERE f.pod_uid=l.pod_uid AND f.exit_code=10 AND l.cleanup_state='complete'`) != expectedCount {
+				t.Fatal("original nonzero exit did not survive containment cleanup", "code", code, "recorded", recorded, "failures", f.Count(t, `SELECT count(*) FROM execution_failures`), "cleanupComplete", f.Count(t, `SELECT count(*) FROM execution_lifecycles WHERE cleanup_state='complete'`))
+			}
+			if f.Count(t, `SELECT count(*) FROM execution_lifecycles WHERE cleanup_state='complete'`) != 1 {
+				t.Fatal("diagnostic persistence prevented containment cleanup")
 			}
 		}
 		if calls.Load() != expectedCalls {
 			t.Fatal("unexpected failed scenario calls", calls.Load())
 		}
-		result, _ := json.Marshal(map[string]any{"scope": "isolated-composed-component-fixture", "scenario": input.Scenario, "syntheticAuthority": true, "syntheticModelReplies": true, "liveWorkflowAdvanced": false, "controller": "RunController", "candidateCaptured": false, "candidateValidated": false, "diagnosticStage": DiagnosticStage(err), "claimStopped": true, "modelCalls": calls.Load(), "workerNonzeroExitObserved": input.Scenario == "no-change"})
+		code, recorded := WorkerFailureDiagnostic(err)
+		result, _ := json.Marshal(map[string]any{"scope": "isolated-composed-component-fixture", "scenario": input.Scenario, "syntheticAuthority": true, "syntheticModelReplies": true, "liveWorkflowAdvanced": false, "controller": "RunController", "candidateCaptured": false, "candidateValidated": false, "diagnosticStage": DiagnosticStage(err), "claimStopped": true, "modelCalls": calls.Load(), "workerNonzeroExitObserved": strings.HasPrefix(input.Scenario, "no-change"), "workerExitCode": code, "failureRecorded": recorded})
 		writePrivate(input.ReportFile, result)
 		return
 	}

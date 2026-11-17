@@ -20,7 +20,7 @@ from verify_workspace_bundle import identities, source_bundle, wire
 
 
 def verify(kubectl, worker_image, mailbox_image, test_binary, bundle, scenario="success", model_connection=None):
-    if scenario not in ("success", "three-turns", "provider-failure", "cancel-provider", "no-change", "real-model"):
+    if scenario not in ("success", "three-turns", "provider-failure", "cancel-provider", "no-change", "no-change-store-failure", "real-model"):
         raise ValueError("Unknown controller scenario")
     if scenario == "real-model":
         if not isinstance(model_connection, dict) or set(model_connection) != {"Endpoint", "Token"}:
@@ -117,11 +117,13 @@ def verify(kubectl, worker_image, mailbox_image, test_binary, bundle, scenario="
             for kind, name in (("pod", planned["pod"]), ("configmap", planned["config"])):
                 if command(["-n", namespace, "get", kind, name, "--ignore-not-found", "-o", "json"]).strip():
                     raise ValueError("Controller did not retire its acknowledged resources")
-            if scenario in ("provider-failure", "cancel-provider", "no-change"):
-                if result.get("claimStopped") is not True or result.get("candidateCaptured") is not False or result.get("modelCalls") not in (range(1, 5) if scenario == "no-change" else (1,)) or output.exists() or delta_file.exists():
+            if scenario in ("provider-failure", "cancel-provider", "no-change", "no-change-store-failure"):
+                if result.get("claimStopped") is not True or result.get("candidateCaptured") is not False or result.get("modelCalls") not in (range(1, 5) if scenario.startswith("no-change") else (1,)) or output.exists() or delta_file.exists():
                     raise ValueError("Failed controller exposed candidate or retained authority")
-                if scenario == "no-change" and result.get("workerNonzeroExitObserved") is not True:
+                if scenario.startswith("no-change") and result.get("workerNonzeroExitObserved") is not True:
                     raise ValueError("No-change scenario did not observe the original worker rejection")
+                if scenario.startswith("no-change") and (result.get("workerExitCode") != 10 or result.get("failureRecorded") is not (scenario == "no-change")):
+                    raise ValueError("Original nonzero exit was not durably retained before cleanup")
                 result.update(resourcesConfirmedRemoved=True)
             else:
                 with output.open('rb') as stream:
@@ -168,7 +170,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('kubectl','kubeconfig','worker-image','mailbox-image','test-binary','source-repository','source-sha'):
         parser.add_argument('--'+name, required=True)
-    parser.add_argument("--scenario", choices=("success", "three-turns", "provider-failure", "cancel-provider", "no-change"), default="success")
+    parser.add_argument("--scenario", choices=("success", "three-turns", "provider-failure", "cancel-provider", "no-change", "no-change-store-failure"), default="success")
     args = parser.parse_args()
     print(json.dumps(verify([args.kubectl,'--kubeconfig',args.kubeconfig], args.worker_image, args.mailbox_image,
         args.test_binary, source_bundle(Path(args.source_repository),args.source_sha), args.scenario), indent=2))

@@ -35,6 +35,19 @@ func (s *Session) WorkerExit(ctx context.Context) (code int32, exited bool, err 
 	return *observed.workerExitCode, true, nil
 }
 
+// WorkerFailure is an observation of the original non-restarted container only.
+// It never invokes a helper, exports workspace data or authorizes another run.
+func (s *Session) WorkerFailure(ctx context.Context) (podUID, containerID string, code int32, err error) {
+	if s == nil {
+		return "", "", 0, ErrTransport
+	}
+	o, err := s.inspect(ctx, true)
+	if err != nil || o.workerExitCode == nil || *o.workerExitCode < 1 || *o.workerExitCode > 255 || o.workerTerminalID != o.instances["worker"].ID {
+		return "", "", 0, ErrTransport
+	}
+	return s.identity.PodUID, o.instances["worker"].ID, *o.workerExitCode, nil
+}
+
 // ImportSource accepts only the exact source/tree bound by the assignment.
 // It does not renew execution authority or authorize a later start. An uncertain
 // import must be reconciled by a durable controller, never automatically retried.
