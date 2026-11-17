@@ -72,6 +72,54 @@ of previously executed SQL. Downgrading images does not reverse a database
 migration. Recovery needs a reviewed compatible image/schema combination and
 a tested backup, not an assumed automatic Helm rollback.
 
+## Observe migration tracking without changing history
+
+The migrator exposes two administrative observation operations:
+
+- `describe-migrations` emits the ordered filename/SHA-256 catalog compiled into
+  that exact binary. It has no database dependency.
+- `inspect-upgrade-migrations` accepts one private JSON document on stdin with
+  exactly `databaseURL`, `database`, and `sourceCatalog`. The source catalog must
+  be the unchanged prefix of the binary's embedded target catalog. Independently
+  bind it to the reviewed original source/publication before observation; a
+  caller-supplied catalog alone is not source evidence. Older binaries without
+  the descriptor require catalog extraction from their exact reviewed Git
+  objects; do not claim that those binaries emitted it.
+
+The second operation takes a bounded read-only snapshot of a primary database
+using the existing administrative identity. It checks the database name and
+unfiltered reader authority, holds an access-share lock on the regular tracking
+relation, and compares recorded filenames with the expected prefix. It permits
+existing work without reading or changing delivery payloads. No migration,
+role provisioning, retry, drain, schema repair or delivery transition occurs.
+Do not put the connection in command-line arguments or logs. The installation
+must independently bind this connection to its original database resources.
+
+Reports use `ai-sdlc.upgrade-migration-observation/v1` and distinguish:
+
+| State | Observation |
+| --- | --- |
+| `source-recorded` | Recorded filenames exactly match the supplied source prefix. |
+| `partial-migration-recorded` | A strict intermediate prefix is recorded. Earlier files may have committed before a later failure. |
+| `target-recorded` | Recorded filenames match the full embedded target catalog. |
+
+Missing, extra, renamed or out-of-order tracking entries reject. A source equal
+to target yields `source-recorded` with no remaining migrations. None of these
+states proves installed image identity, readiness, historical SQL hashes, schema
+integrity or compatible consumers. The report explicitly marks schema/hash
+verification, producer exclusion, upgrade/rollback authorization and workflow
+evidence false. Concurrent producers are not excluded by a read-only snapshot;
+an observation cannot authorize a later migration.
+
+The regression matrix applies real N-1 to N migrations in disposable PostgreSQL
+with original pending/completed work and outbox contents retained. An injected
+failure in the second pending file proves that the first committed migration
+remains recorded while the failed file's DDL and tracking insert roll back.
+This tests per-file recovery behavior, not a live installation upgrade. Runtime
+owned draining, verified backup restoration, bounded rollout and compatible
+rollback still require their own implementation and real validation under
+[issue #441](https://github.com/os-santiago/ai-sdlc/issues/441).
+
 ## Trust and evidence limits
 
 This resolver trusts the authenticated GitHub API and the reviewed main-branch

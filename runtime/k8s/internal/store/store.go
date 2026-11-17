@@ -73,7 +73,8 @@ func (db *DB) Close() error {
 }
 
 // Migrate applies every embedded migrations/*.sql file, in filename order,
-// inside a single transaction tracked by a schema_migrations table. It is
+// with one transaction per file, tracked by schema_migrations. Earlier files
+// remain committed if a later file fails; this is not a global rollback. It is
 // safe to call on every component startup: already-applied files are
 // skipped, and CREATE TABLE IF NOT EXISTS statements make each file
 // idempotent even without the tracking table.
