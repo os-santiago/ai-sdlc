@@ -8,8 +8,11 @@ from upgrade_fence_client import Fence
 
 
 def exercise(*, chart, kube, helm, namespace, guard, command, provider, image,
-             connection, port, catalog, sql, snapshot, report, save):
+             connection, port, catalog, sql, snapshot, report, save, tool_budget=False):
     before = sql(snapshot).stdout
+    origin = 'ready' if tool_budget else 'migrated'
+    phases = (origin, 'staged', 'warming', 'armed', 'active')
+    selected_steps = 24
     objects = json.loads(command(kube + ['get', 'deployments', '-n', namespace, '-o', 'json']).stdout)['items']
     identities = {obj['metadata']['name']: obj['metadata']['uid'] for obj in objects}
     if set(identities) != {'producer', 'intake'}:
@@ -18,7 +21,7 @@ def exercise(*, chart, kube, helm, namespace, guard, command, provider, image,
               'armed': (1, 0, False), 'active': (1, 1, False)}
     def observe(phase):
         guard()
-        phase = 'source' if phase == 'migrated' else phase
+        phase = 'source' if phase == origin else phase
         producer, intake, frozen = counts[phase]
         expected = {'producer': producer, 'intake': intake}
         deployments = json.loads(command(kube + ['get', 'deployments', '-n', namespace, '-o', 'json']).stdout)['items']
@@ -36,44 +39,51 @@ def exercise(*, chart, kube, helm, namespace, guard, command, provider, image,
         policy = json.loads(command(kube + ['get', 'configmap', 'phase-policy', '-n', namespace, '-o', 'json']).stdout)
         if policy['data']['frozen'] != str(frozen).lower():
             raise ValueError('Fixture freeze differs from intended phase')
+        if tool_budget and policy['data']['toolSteps'] != str(16 if phase == 'source' else selected_steps):
+            raise ValueError('Fixture tool-step target differs')
     sends = []
     def apply(phase, execute=None):
         guard()
         producer, intake, frozen = counts[phase]
         argv = helm + ['upgrade', 'pause-fixture', chart, '-n', namespace, '--set', 'replicas=' + str(producer),
                       '--set', 'intake=' + str(intake), '--set', 'frozen=' + str(frozen).lower(), '--wait', '--timeout', '30s']
+        if tool_budget:
+            argv += ['--set', 'toolSteps=' + str(16 if phase == 'source' else selected_steps)]
         (execute or (lambda args, **kw: command(args, **kw)))(argv, timeout=35)
         sends.append(phase)
-    record = {'completed': 'migrated', 'transition': None, 'expiresAt': time.time() + 180}
+    record = {'completed': origin, 'transition': None, 'expiresAt': time.time() + 180}
     def persist(value):
         report['transitionFixtureIntent'] = value.copy()
         save()
-    advance(record, 'staged', observe, apply, persist)
+    advance(record, 'staged', observe, apply, persist, phases=phases)
     def lost(phase):
         apply(phase)
         raise OSError('Simulated acknowledgement loss after actual Helm convergence')
     try:
-        advance(record, 'warming', observe, lost, persist)
+        advance(record, 'warming', observe, lost, persist, phases=phases)
     except OSError:
         pass
     else:
         raise ValueError('Expected acknowledgement-loss boundary was not exercised')
     if record['completed'] != 'staged' or record['transition']['to'] != 'warming':
         raise ValueError('Original incomplete transition intent was not retained')
-    advance(record, 'warming', observe, apply, persist)
+    advance(record, 'warming', observe, apply, persist, phases=phases)
     if sends.count('warming') != 1:
         raise ValueError('Acknowledgement loss replayed Helm')
-    advance(record, 'armed', observe, apply, persist)
+    advance(record, 'armed', observe, apply, persist, phases=phases)
     recovery = {'phase': 'planned', 'expiresAt': time.time() + 120}
     with Fence(provider, image, connection, port, catalog, expires_at=recovery['expiresAt']) as fence:
         pause_once(recovery, fence, lambda: observe('armed'), lambda: observe('source'),
                    lambda: apply('source', fence.command), lambda value: save())
     observe('source')
-    record = {'completed': 'migrated', 'transition': None, 'expiresAt': time.time() + 180}
+    selected_steps = 16
+    record = {'completed': origin, 'transition': None, 'expiresAt': time.time() + 180}
     for phase in ('staged', 'warming', 'armed', 'active'):
-        advance(record, phase, observe, apply, persist)
+        advance(record, phase, observe, apply, persist, phases=phases)
     if sends[-1] != 'active' or sends.count('active') != 1 or sql(snapshot).stdout != before:
         raise ValueError('Fixture activation order or retained history changed')
+    if tool_budget:
+        report.update(toolBudgetPhaseOrderVerified=True, originalToolBudgetRecovered=True)
     report.update(phaseSequenceVerified=True, lostHelmAcknowledgementNotReplayed=True,
                   originalRecoveryPauseVerified=True, recoveryFenceReleased=True,
                   originalControllerUIDsRetained=True, intakeOpenedLast=True,

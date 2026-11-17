@@ -39,6 +39,9 @@ runtime, `runtime-upgrade pause` preserves history while stopping producers;
 `runtime-upgrade backup` verifies a private copy by restoring it into an isolated
 database. The bounded `runtime-upgrade diagnostic` transition applies the
 reviewed diagnostic migration and worker image selection, then opens intake last.
+For an installation on that diagnostic bridge, `runtime-upgrade tool-budget`
+performs the reviewed 16-to-24 tool-step adjustment, including pause, a new
+restore-verified backup and reactivation. Provider quotas remain unchanged.
 See the same procedure for scope, prerequisites and recovery limits.
 
 For an existing installer-owned Konflux cluster, use the

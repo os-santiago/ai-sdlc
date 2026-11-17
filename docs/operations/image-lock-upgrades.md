@@ -407,3 +407,75 @@ intake ordering. Combine that result with the published PostgreSQL migration
 harness and exact chart-render checks. These fixtures do not prove the installed
 CLI or autonomous issue-to-production delivery; verify those in their respective
 environments before claiming success.
+
+## Apply the reviewed generator tool budget
+
+An installation that completed the diagnostic bridge can adopt the calibrated
+generator profile through the same entrypoint:
+
+```bash
+./install.sh runtime-upgrade tool-budget --cluster ORIGINAL_CLUSTER --provider podman
+./install.sh runtime-upgrade tool-budget-status --cluster ORIGINAL_CLUSTER --provider podman
+```
+
+This closed transition changes only the generator's SCC tool-step limit from 16
+to 24. It preserves 16 provider calls, 600 seconds, 4,096 requested output tokens per
+response, every byte quota, reviewer profile, image, placement, credential and
+original trust expiry. The chart derives new configuration checksums for its
+controllers; no checksum is ignored during observation. Restoring the single
+candidate configuration value must reproduce the original active render exactly.
+
+The source must be the complete recorded diagnostic activation, on catalog 34,
+with contained failed work, stopped execution requests and no pending
+authenticated deliveries. A database write fence protects the pause. The
+source's unchanged schema, roles, ACLs and original migration records must match
+the prior diagnostic proof. The additive diagnostic table must also retain its
+reviewed columns, constraints, indexes, triggers and exact enabled/forced row
+security policy. Existing authority drift is rejected rather than adopted.
+The initial full snapshot is a preserved preliminary observation: the active
+poller can still refresh its cursor and per-issue observation. Immediately before
+the first pause, under the write fence, all other table hashes and both polling
+table cardinalities must match. Polling identities must match the unchanged
+issue heads and revision payloads. Only then is a separate `fencedSourceProof`
+saved together with the first pause intent. The original snapshot, nonce and
+deadline remain unchanged. This capture is unavailable after any pause, backup,
+recovery or Helm transition intent. Every subsequent comparison includes the
+complete polling tables without exceptions.
+
+The installer rechecks original database authority while that fence is held,
+before persisting a Helm intent or sending a change. It then creates a new
+private backup, restores it into an isolated PostgreSQL container, compares it
+and confirms cleanup. Existing failed attempts and diagnostic rows are retained.
+This operation performs no SQL migration, workflow retry or application delivery.
+
+After backup verification, the installer stages the profile with producers
+stopped, starts downstream controllers with frozen policies, checks original
+release prerequisites and retained data, then opens intake last. Work requested
+afterward must enter through issues and satisfy the original authority policies.
+The operation has its own bounded administrative deadline; it does not renew
+the source trust or any execution allocation.
+
+`tool-budget-upgrade.json` and `tool-budget-backup/` are separate from the
+original diagnostic, pause and backup records. Partial backup or pause outcomes
+are not overwritten or replayed. A missing Helm acknowledgement permits observing
+an already-converged target, never sending the same uncertain transition again.
+The status command only observes. Preserve these records when a command stops.
+
+For a completed observed phase with unchanged retained history and resolved
+helper cleanup, recover only the original 16-tool profile with:
+
+```bash
+./install.sh runtime-upgrade recover-tool-budget --cluster ORIGINAL_CLUSTER --provider podman
+```
+
+Recovery uses the original write fence, identities and intake-last sequence.
+It does not restore over the database, remove diagnostics or revert software
+delivery. New work, changed history, expired trust or an unresolved partial
+Kubernetes state require a separately reviewed recovery procedure.
+
+The disposable migration harness accepts `--exercise-tool-budget-history` to
+test restoration of two failed attempts and a retained exit 22 diagnostic.
+The disposable Helm harness accepts `--exercise-tool-budget-transition` to test
+the new phase ordering, lost acknowledgements and original-profile recovery on
+catalog 34. These are isolated component proofs; they do not establish that the
+installed CLI or autonomous delivery has succeeded.
