@@ -12,13 +12,49 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import install
 import supply_chain_install as supply
 
 
 class SupplyChainTests(unittest.TestCase):
+    def test_cert_manager_gate_retries_current_server_dry_run_without_persistence(self):
+        deadline = supply.Deadline(10)
+        deadline.run = Mock(side_effect=[SimpleNamespace(returncode=1), SimpleNamespace(returncode=0)])
+        with patch.object(supply.time, 'sleep'):
+            supply.wait_cert_manager_api(['kubectl'], deadline)
+        self.assertEqual(deadline.run.call_count, 2)
+        for call in deadline.run.call_args_list:
+            self.assertIn('--dry-run=server', call.args[0])
+            self.assertEqual(call.args[0][1], 'create')
+            probe = json.loads(call.kwargs['input'])
+            self.assertEqual(probe['kind'], 'Issuer')
+            self.assertEqual(probe['metadata']['namespace'], 'cert-manager')
+            self.assertEqual(probe['spec'], {'selfSigned': {}})
+            self.assertLessEqual(call.kwargs['limit'], 15)
+
+    def test_cert_manager_gate_cannot_outlive_install_deadline(self):
+        deadline = supply.Deadline(10)
+        deadline.end = 100.1
+        deadline.run = Mock(return_value=SimpleNamespace(returncode=1))
+        with patch.object(supply.time, 'monotonic', side_effect=[100, 100, 100, 100.1, 100.1]), \
+             patch.object(supply.time, 'sleep'), self.assertRaisesRegex(ValueError, 'admission is not ready'):
+            supply.wait_cert_manager_api(['kubectl'], deadline)
+        self.assertEqual(deadline.run.call_count, 1)
+        self.assertLess(deadline.run.call_args.kwargs['limit'], 1)
+
+    def test_cert_manager_gate_retries_request_timeout_but_not_process_faults(self):
+        deadline = supply.Deadline(10)
+        deadline.run = Mock(side_effect=[subprocess.TimeoutExpired('kubectl', 1), SimpleNamespace(returncode=0)])
+        with patch.object(supply.time, 'sleep'):
+            supply.wait_cert_manager_api(['kubectl'], deadline)
+        self.assertEqual(deadline.run.call_count, 2)
+        deadline.run = Mock(side_effect=FileNotFoundError('kubectl'))
+        with self.assertRaises(FileNotFoundError):
+            supply.wait_cert_manager_api(['kubectl'], deadline)
+        self.assertEqual(deadline.run.call_count, 1)
+
     def test_deadline_accepts_network_runner_text_contract(self):
         result = supply.Deadline(2).run([sys.executable,'-c','print("probe:allowed")'],
                                        text=True,check=False,capture_output=True,limit=1)

@@ -52,6 +52,12 @@ Reviewed desired state lives in Git:
 The reviewed dependency order is cert-manager, monitoring CRDs, trust-manager,
 Tekton Operator/configuration, Tekton Chains signing setup and admission policy.
 Dependencies are rendered from the pinned source and verified before applying.
+After cert-manager Deployments become available, the installer checks current
+API admission with a server-side dry run of an Issuer. This exercises webhook
+TLS trust without persisting a probe or issuing a certificate. The check is
+bounded by 180 seconds and the remaining installation deadline; dependent
+resources are not applied until it succeeds. A previous startup Job's success
+does not substitute for the current admission check on reapplication.
 The operator owns Dex, its certificate issuer and the internal registry. No
 legacy Dex bootstrap or GitOps controller is needed.
 
