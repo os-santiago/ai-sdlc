@@ -21,9 +21,9 @@ class InstallerBoundaryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'committed minimum'):
                 installer.host_prerequisites(proc_root=root)
             command.assert_not_called()
-            (root / 'max_user_instances').write_text('1024')
+            (root / 'max_user_instances').write_text('2048')
             self.assertEqual(installer.host_prerequisites(True, root),
-                             {'max_user_instances': 1024, 'max_user_watches': 1048576})
+                             {'max_user_instances': 2048, 'max_user_watches': 1048576})
             command.assert_not_called()
 
     def test_host_changes_require_root_and_verified_readback(self):
@@ -40,11 +40,11 @@ class InstallerBoundaryTests(unittest.TestCase):
                     installer.host_prerequisites(True, root)
                 command.reset_mock()
                 def apply(args, **kwargs):
-                    self.assertEqual(args, ['sysctl', '-w', 'fs.inotify.max_user_instances=512'])
-                    (root / 'max_user_instances').write_text('512')
+                    self.assertEqual(args, ['sysctl', '-w', 'fs.inotify.max_user_instances=1024'])
+                    (root / 'max_user_instances').write_text('1024')
                 command.side_effect = apply
                 self.assertEqual(installer.host_prerequisites(True, root),
-                                 {'max_user_instances': 512, 'max_user_watches': 1048576})
+                                 {'max_user_instances': 1024, 'max_user_watches': 1048576})
                 self.assertEqual(command.call_count, 1)
 
     def test_standalone_bootstrap_ref_mismatch_preserves_cached_checkout(self):

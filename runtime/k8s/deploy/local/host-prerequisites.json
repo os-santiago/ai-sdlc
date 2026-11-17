@@ -1,7 +1,7 @@
 {
   "version": 1,
   "inotify": {
-    "max_user_instances": 512,
+    "max_user_instances": 1024,
     "max_user_watches": 524288
   }
 }
