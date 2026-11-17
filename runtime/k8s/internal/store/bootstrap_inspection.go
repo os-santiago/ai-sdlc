@@ -17,15 +17,15 @@ var bootstrapTables = []string{
 	"admission_heads", "admissions", "attempts", "authorized_inbox", "authorized_nonces", "authorized_outbox",
 	"build_cleanups", "build_contexts", "build_effects", "build_handoffs", "build_observations", "build_plans", "build_requests", "build_slots", "built_records",
 	"completion_handoffs",
-	"production_handoffs", "production_records",
-	"terminal_requests", "terminal_intents", "terminal_sends", "terminal_receipts",
 	"deployment_handoffs", "deployment_health", "deployment_intents", "deployment_receipts", "deployment_requests", "deployment_sends",
 	"execution_candidates", "execution_effects", "execution_lifecycles", "execution_models", "execution_requests",
 	"intake_cursors", "intake_heads", "intake_observations", "intake_revisions",
 	"managed_component_roles", "merge_effects", "merge_requests", "merged_records", "model_allocations", "model_budgets", "model_calls",
-	"outbox", "planning_heads", "plans", "promotion_handoffs", "promotion_records", "promotion_requests", "provenance_handoffs", "provenance_records", "provenance_requests",
+	"outbox", "planning_heads", "plans", "production_handoffs", "production_records", "promotion_handoffs", "promotion_records", "promotion_requests", "provenance_handoffs", "provenance_records", "provenance_requests",
 	"publication_effects", "publication_handoffs", "publication_requests", "published_records", "release_gates",
-	"review_effects", "review_model_calls", "review_runs", "schema_migrations", "verification_effects", "verification_handoffs", "verification_requests", "work_items",
+	"review_effects", "review_model_calls", "review_runs", "schema_migrations",
+	"terminal_intents", "terminal_receipts", "terminal_requests", "terminal_sends",
+	"verification_effects", "verification_handoffs", "verification_requests", "work_items",
 }
 
 // InspectEmptyBootstrap observes one snapshot without changing schema, roles or
