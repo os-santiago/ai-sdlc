@@ -120,6 +120,58 @@ owned draining, verified backup restoration, bounded rollout and compatible
 rollback still require their own implementation and real validation under
 [issue #441](https://github.com/os-santiago/ai-sdlc/issues/441).
 
+## Hold database write exclusion during an administrative pause
+
+The migrator's `hold-upgrade-fence` operation is an installation-only streaming
+protocol. It is not a workflow endpoint, an upgrade executor or a Kubernetes
+drain receipt. The supported initial profile is explicit: source schema 0033 or
+0034, preserved work before candidate production, no downstream delivery history,
+no claimed execution, unacknowledged executor effect, active model budget/call or
+incomplete cleanup. A stopped execution with an uncertain failure reason and
+confirmed cleanup can remain in history. Queued work, admissions and completed
+records in the supported aggregates are retained. Unsupported histories reject
+without deleting or resetting them; broader support requires additional proof.
+
+The original primary database and administrative role are checked **before** any
+lock. One bounded transaction takes the same advisory lock as `Migrate`, then
+SHARE locks on every table in the reviewed source inventory. A fresh READ
+COMMITTED inspection follows all locks. This is an administrative read/write
+transaction that changes no workflow rows, not a read-only observation. A busy
+or unsupported history causes immediate release so the original controllers can
+continue reconciliation. Never wait for cleanup while holding its write locks.
+
+Send exactly one private JSON line containing `databaseURL`, `database` and the
+publication-bound `sourceCatalog`. The connection must be bound independently
+to the installation's original database resources and never placed in arguments
+or logs. The initial JSON response has version `ai-sdlc.upgrade-fence/v1`, state
+`held`, an original `nonce`, and `expiresAt` in Unix milliseconds. Subsequent
+lines contain exactly `operation` (`check` or `release`) and that same `nonce`.
+Checks do not extend the original deadline. There are at most 256 commands, a
+120-second database fence and a 125-second total protocol deadline. EOF, malformed
+frames, wrong nonce, deadline, blocked output or lost database custody aborts the
+session. No automatic reacquisition occurs. `released` is emitted only after the
+original transaction's rollback acknowledges releasing its locks.
+
+While the original session remains held, an installer must independently:
+
+1. Validate its exact source configuration and original Kubernetes identities.
+2. Confirm the absence of execution/cleanup resources; SQL exclusion alone does
+   not attest Kubernetes containment.
+3. Bracket each pause operation with a successful `check`, using its original
+   finite transition deadline and aborting on lost custody.
+4. Observe disappearance of the original producer Pods and execution resources.
+   Zero desired replicas or a failed readiness check is insufficient.
+5. Release the original fence only after that observation. Never start migration
+   Jobs while the fence is held, and never infer that a failed/ambiguous pause
+   succeeded. Preserve the transition for explicit reconciliation.
+
+The protocol always reports `workflowRowsWritten=false` and
+`upgradeAuthorized=false`. It does not validate a backup, artifact trust,
+configuration compatibility or rollout recovery. Its real PostgreSQL regression
+suite proves writer/migrator/replica exclusion, preserved rows, fresh state after
+lock waits, backend-loss cancellation and bounded private I/O. Kubernetes pause
+integration and the remaining upgrade gates are still required before live use.
+
 ## Trust and evidence limits
 
 This resolver trusts the authenticated GitHub API and the reviewed main-branch
