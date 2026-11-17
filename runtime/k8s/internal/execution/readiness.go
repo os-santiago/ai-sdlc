@@ -3,6 +3,7 @@ package execution
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -25,6 +26,12 @@ func readiness(ctx context.Context, db *store.DB, p authority.Policy, config int
 }
 
 func verifiedSnapshot(ctx context.Context, db *store.DB, p authority.Policy, config intake.Config, c Command) (intake.Snapshot, error) {
+	if c.Repair != nil {
+		if _, _, err := repairPreparation(ctx, db, p, c); err != nil {
+			return intake.Snapshot{}, ErrAuthority
+		}
+		return verifiedSnapshotStatus(ctx, db, p, config, c, "running")
+	}
 	return verifiedSnapshotStatus(ctx, db, p, config, c, "ready")
 }
 func verifiedSnapshotStatus(ctx context.Context, db *store.DB, p authority.Policy, config intake.Config, c Command, expectedStatus string) (intake.Snapshot, error) {
@@ -69,6 +76,17 @@ func CandidateSnapshot(ctx context.Context, db *store.DB, p authority.Policy, co
 	return validateSnapshotEvidence(p, config, c, "running", e)
 }
 
+func CandidateSnapshotTx(ctx context.Context, tx *sql.Tx, p authority.Policy, config intake.Config, c Command) (intake.Snapshot, error) {
+	if config.Validate(p.Repository) != nil {
+		return intake.Snapshot{}, ErrAuthority
+	}
+	e, err := store.ReadVerificationEvidenceTx(ctx, tx, c.WorkItemID, c.Repository, c.IssueNumber, min(2*config.PollSeconds, 300))
+	if err != nil {
+		return intake.Snapshot{}, err
+	}
+	return validateSnapshotEvidence(p, config, c, "running", e)
+}
+
 // PublicationSnapshot uses the same current low-risk issue checks under the
 // separate release-manager identity. It cannot advance generation or review.
 func PublicationSnapshot(ctx context.Context, db *store.DB, p authority.Policy, config intake.Config, c Command) (intake.Snapshot, error) {
@@ -77,6 +95,19 @@ func PublicationSnapshot(ctx context.Context, db *store.DB, p authority.Policy, 
 	}
 	age := min(2*config.PollSeconds, 300)
 	e, err := db.ReadPublicationEvidence(ctx, c.WorkItemID, c.Repository, c.IssueNumber, age)
+	if err != nil {
+		return intake.Snapshot{}, err
+	}
+	return validateSnapshotEvidence(p, config, c, "running", e)
+}
+
+// RepairSnapshot uses the orchestrator identity and the same bounded current
+// issue proof as generation. A repair never makes failed or superseded work ready.
+func RepairSnapshot(ctx context.Context, tx *sql.Tx, p authority.Policy, config intake.Config, c Command) (intake.Snapshot, error) {
+	if config.Validate(p.Repository) != nil {
+		return intake.Snapshot{}, ErrAuthority
+	}
+	e, err := store.ReadRepairEvidence(ctx, tx, c.WorkItemID, c.Repository, c.IssueNumber, min(2*config.PollSeconds, 300))
 	if err != nil {
 		return intake.Snapshot{}, err
 	}

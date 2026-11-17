@@ -2,6 +2,7 @@ package verificationflow
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -18,15 +19,24 @@ type PolicyLoader func() (authority.Policy, intake.Config, string, error)
 // CurrentProof is evidence for the next bounded step, never a reusable lease.
 // Callers repeat it before each effect and before persisting acceptance.
 func CurrentProof(ctx context.Context, db *store.DB, load PolicyLoader, id string) (verification.Command, store.VerificationCandidate, intake.Snapshot, error) {
-	return currentProof(ctx, db, load, id, false)
+	return currentProof(ctx, db, load, id, false, nil)
+}
+
+// CurrentProofTx uses the caller's verifier connection for every final read.
+// It avoids waiting on a second pool connection while holding a handoff Tx.
+func CurrentProofTx(ctx context.Context, db *store.DB, tx *sql.Tx, load PolicyLoader, id string) (verification.Command, store.VerificationCandidate, intake.Snapshot, error) {
+	if tx == nil {
+		return verification.Command{}, store.VerificationCandidate{}, intake.Snapshot{}, verification.ErrVerification
+	}
+	return currentProof(ctx, db, load, id, false, tx)
 }
 
 // CurrentPublicationProof repeats the entire signed chain using read-only
 // release-manager projections. No verifier or generator identity is borrowed.
 func CurrentPublicationProof(ctx context.Context, db *store.DB, load PolicyLoader, id string) (verification.Command, store.VerificationCandidate, intake.Snapshot, error) {
-	return currentProof(ctx, db, load, id, true)
+	return currentProof(ctx, db, load, id, true, nil)
 }
-func currentProof(ctx context.Context, db *store.DB, load PolicyLoader, id string, publication bool) (verification.Command, store.VerificationCandidate, intake.Snapshot, error) {
+func currentProof(ctx context.Context, db *store.DB, load PolicyLoader, id string, publication bool, tx *sql.Tx) (verification.Command, store.VerificationCandidate, intake.Snapshot, error) {
 	reject := func() (verification.Command, store.VerificationCandidate, intake.Snapshot, error) {
 		return verification.Command{}, store.VerificationCandidate{}, intake.Snapshot{}, verification.ErrVerification
 	}
@@ -40,6 +50,17 @@ func currentProof(ctx context.Context, db *store.DB, load PolicyLoader, id strin
 		readVerification = db.ReadPublicationVerification
 		readCandidate = db.ReadPublicationCandidate
 		readSnapshot = execution.PublicationSnapshot
+	}
+	if tx != nil {
+		readVerification = func(ctx context.Context, id string) (store.VerificationRequest, error) {
+			return store.ReadVerificationTx(ctx, tx, id)
+		}
+		readCandidate = func(ctx context.Context, id string) (store.VerificationCandidate, error) {
+			return store.ReadVerificationCandidateTx(ctx, tx, id)
+		}
+		readSnapshot = func(ctx context.Context, _ *store.DB, p authority.Policy, cfg intake.Config, c execution.Command) (intake.Snapshot, error) {
+			return execution.CandidateSnapshotTx(ctx, tx, p, cfg, c)
+		}
 	}
 	r, err := readVerification(ctx, id)
 	if err != nil {

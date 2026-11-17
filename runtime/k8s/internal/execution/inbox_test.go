@@ -23,6 +23,7 @@ type fixture struct {
 	db               *store.DB
 	command          Command
 	buildFixtureTree string
+	maxRepairs       int
 }
 
 func newFixture(t *testing.T, configure ...func(*fixture)) *fixture {

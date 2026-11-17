@@ -140,6 +140,20 @@
       "operation": "record-production",
       "minimumLevel": "auto-deploy",
       "eventType": "ProductionCompleted"
+    },
+    {
+      "caller": "verifier",
+      "target": "orchestrator",
+      "operation": "repair-candidate",
+      "minimumLevel": "auto-pr",
+      "eventType": "CandidateRepairRequested"
+    },
+    {
+      "caller": "verifier",
+      "target": "orchestrator",
+      "operation": "stop-rejected-work",
+      "minimumLevel": "auto-pr",
+      "eventType": "RejectedWorkStopped"
     }
   ]
 }

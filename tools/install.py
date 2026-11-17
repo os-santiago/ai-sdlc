@@ -191,11 +191,14 @@ def identity_material(provider, image, repository, environment):
     return json.loads(result.stdout)
 
 
-def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False, verification=False, publication=False, merge=False, require_build=False, build=False, installer=None):
+def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False, verification=False, publication=False, merge=False, require_build=False, build=False, installer=None, review=False):
     api = installer or SimpleNamespace(owned_secret=owned_secret, read_resource=read_resource,
         create_owned_secret=create_owned_secret, run=run)
     if build and (not merge or repository != 'os-santiago/saferus' or environment != 'ai-sdlc-production'):
         raise ValueError('Build requires reviewed Saferus merge and test production')
+    review = review or publication
+    if review and not verification:
+        raise ValueError("Independent review requires verification")
     require_build = require_build or build
     if merge and not publication:
         raise ValueError('Merge requires verified publication')
@@ -273,7 +276,7 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
         # Candidate authority is restricted to intake, planning and execution.
         if candidate:
             material['policy']['grants'] = [g for g in reviewed_grants
-                if g['operation'] in ('admit-issue', 'plan-admission', 'execute-work') or (verification and g['operation'] == 'verify-artifact') or (publication and g['operation'] == 'publish-candidate') or (merge and g['operation'] == 'merge-publication')]
+                if g['operation'] in ('admit-issue', 'plan-admission', 'execute-work') or (verification and g['operation'] == 'verify-artifact') or (review and g['operation'] in ('repair-candidate', 'stop-rejected-work')) or (publication and g['operation'] == 'publish-candidate') or (merge and g['operation'] == 'merge-publication')]
     current_passwords = api.owned_secret(kubectl, 'ai-sdlc-database-roles', cluster_uid)
     if current_passwords is not None:
         if set(current_passwords) != {'passwords.json'}:
@@ -405,6 +408,7 @@ def _main(argv, stack):
     parser.add_argument('--merge', action='store_true', default=None, help='Enable low-risk reviewed-repository merge after authenticated required checks')
     parser.add_argument('--publication', action='store_true', default=None, help='Enable signed verified reviewed-repository PR publication; requires independent review')
     parser.add_argument('--independent-review', action='store_true', default=None, help='Enable isolated read-only review after behavior verification')
+    parser.add_argument('--review-repair', action='store_true', default=None, help='Permit one repair using the original remaining generation budget; requires independent review')
     parser.add_argument('--github-auth', choices=['none', 'gh-cli'], default='none')
     parser.add_argument('--refresh-github-credential', action='store_true')
     parser.add_argument('--codex-auth-file', type=Path, help='Explicit local Codex authentication source for the candidate sidecar Secret')
@@ -441,6 +445,10 @@ def _main(argv, stack):
         raise ValueError('Publication requires a reviewed repository, verification and independent review')
     if args.publication is not None and args.command not in ('plan', 'local', 'status', 'credentials', 'sandbox'):
         raise ValueError('Publication option requires an installation scope')
+    if args.review_repair and not args.independent_review:
+        raise ValueError('Review repair requires independent review')
+    if args.review_repair is not None and args.command not in ('plan', 'local', 'status', 'credentials', 'sandbox'):
+        raise ValueError('--review-repair requires an installation scope')
     if args.independent_review and args.command in ('plan', 'local') and args.profile != 'verification':
         raise ValueError('Independent review requires the verification profile')
     if args.independent_review is not None and args.command not in ('plan', 'local', 'status', 'credentials', 'sandbox'):
@@ -483,7 +491,7 @@ def _main(argv, stack):
     execution_values = None
     if args.profile in ('candidate', 'verification'):
         import candidate_install
-        execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images), verification=args.profile == "verification", review=bool(args.independent_review), publication=bool(args.publication), merge=bool(args.merge))
+        execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images), verification=args.profile == "verification", review=bool(args.independent_review), publication=bool(args.publication), merge=bool(args.merge), repair=bool(args.review_repair))
     # The prepared transition renders the original complete state first and its
     # complete target after native policy reconciliation. Its partial selection
     # cannot satisfy the chart's mandatory installed merge-policy input yet.
@@ -617,7 +625,7 @@ def _main(argv, stack):
         execution_values['merge']['configJSON'] = json.dumps(native_policy, sort_keys=True)
     public_values = configure_identities(kubectl, provider, image_lock(args.images),
                                          cluster_uid, args.repository, args.environment,
-                                         freeze=args.profile == 'maintenance', candidate=args.profile in ('candidate', 'verification'), verification=args.profile == 'verification', publication=bool(args.publication), merge=bool(args.merge), build=build_bundle is not None)
+                                         freeze=args.profile == 'maintenance', candidate=args.profile in ('candidate', 'verification'), verification=args.profile == 'verification', publication=bool(args.publication), merge=bool(args.merge), build=build_bundle is not None, review=bool(args.independent_review))
     if intake_values is not None:
         public_values['intake'] = intake_values
     if args.profile in ('candidate', 'verification'):

@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/normalizedevent"
@@ -32,8 +33,8 @@ type PreparationLoader func(context.Context) (PreparationInputs, error)
 // A controller must first persist lifecycle ownership and revalidate at each
 // external-effect boundary. Accessors return copies, never internal buffers.
 type Prepared struct {
-	assignment, source, profile, adev []byte
-	claim                             store.ExecutionClaim
+	assignment, source, originalSource, profile, adev []byte
+	claim                                             store.ExecutionClaim
 }
 
 func (p Prepared) Assignment() []byte          { return append([]byte(nil), p.assignment...) }
@@ -114,6 +115,12 @@ func preparationProofStatus(ctx context.Context, db *store.DB, load PreparationL
 	if err != nil || checkInputs(in, c) != nil {
 		return fail()
 	}
+	if c.Repair != nil {
+		if repairInputs(ctx, db, in, c) != nil {
+			return fail()
+		}
+		status = "running"
+	}
 	snapshot, err := verifiedSnapshotStatus(ctx, db, in.Policy, in.Intake, c, status)
 	if err != nil {
 		return fail()
@@ -165,6 +172,16 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 		Repository: c.Repository, SourceSHA: c.SourceSHA, TreeSHA256: c.ProfileSHA256, ProfileSHA256: c.ProfileSHA256,
 		AuthorityRevision: c.AuthorityRevision, IssueNumbers: []int{c.IssueNumber}, Title: snapshot.Issue.Title, Body: snapshot.Issue.Body,
 		AcceptanceCriteria: normalizedevent.ExtractAcceptanceCriteria(snapshot.Issue.Body), ExpiresAt: c.ExpiresAt}
+	var parent store.VerificationCandidate
+	if c.Repair != nil {
+		a, p, e := repairPreparation(ctx, db, in.Policy, c)
+		if e != nil {
+			return Prepared{}, ErrAuthority
+		}
+		assignment.Repair = &a
+		assignment.TreeSHA256 = a.Reference.ParentTreeSHA256
+		parent = p
+	}
 	// Reject unsupported issue shape before any network acquisition. The temporary
 	// tree placeholder is replaced by the verified source identity below.
 	initial, _ := json.Marshal(assignment)
@@ -175,12 +192,30 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 	if err != nil || bundle.SourceSHA != c.SourceSHA || bundle.Validate() != nil || ctx.Err() != nil {
 		return Prepared{}, ErrAuthority
 	}
+	originalSource, err := workspacebundle.Encode(bundle)
+	if err != nil {
+		return Prepared{}, ErrAuthority
+	}
+	if c.Repair != nil {
+		originalTree, e := bundle.TreeDigest()
+		if e != nil || originalTree != c.Repair.OriginalTreeSHA256 {
+			return Prepared{}, ErrAuthority
+		}
+		delta, e := candidate.Decode(parent.Delta)
+		if e != nil || workspacebundle.Digest(parent.Delta) != parent.Record.DeltaSHA256 {
+			return Prepared{}, ErrAuthority
+		}
+		bundle, e = candidate.Apply(bundle, delta)
+		if e != nil {
+			return Prepared{}, ErrAuthority
+		}
+	}
 	source, err := workspacebundle.Encode(bundle)
 	if err != nil {
 		return Prepared{}, ErrAuthority
 	}
 	assignment.TreeSHA256, err = bundle.TreeDigest()
-	if err != nil {
+	if err != nil || (c.Repair != nil && assignment.TreeSHA256 != c.Repair.ParentTreeSHA256) {
 		return Prepared{}, ErrAuthority
 	}
 	raw, err := json.Marshal(assignment)
@@ -194,5 +229,5 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 	if _, err = executor.ParseAssignment(raw, workspacebundle.Digest(raw), time.Now()); err != nil || ctx.Err() != nil {
 		return Prepared{}, ErrAuthority
 	}
-	return Prepared{assignment: raw, source: source, profile: in.Profile, adev: in.ADev, claim: claim}, nil
+	return Prepared{assignment: raw, source: source, originalSource: originalSource, profile: in.Profile, adev: in.ADev, claim: claim}, nil
 }

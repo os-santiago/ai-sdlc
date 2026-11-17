@@ -17,6 +17,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repairflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/reviewflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
@@ -132,6 +133,23 @@ func main() {
 					current, e := loadReview(ctx)
 					return publicationflow.ReviewPolicy{Profile: authority.Digest(current.Profile), Configuration: current.Digest()}, e
 				}, c.Authority)
+			}
+		}
+		if reviewEnabled {
+			publish := handoff
+			loadRepair := repairflow.InstalledLoader(c.Authority, os.Getenv("AI_SDLC_EXECUTION_CONFIG_PATH"), os.Getenv("AI_SDLC_INTAKE_CONFIG_PATH"), "/etc/ai-sdlc/review/config.json")
+			handoff = func(ctx context.Context) (bool, error) {
+				// A repair failure cannot starve approved publication, and neither
+				// handoff runs before the existing cleanup reconcilers.
+				repaired, repairErr := repairflow.Handoff(ctx, c.DB, loadRepair)
+				if publish == nil {
+					return repaired, repairErr
+				}
+				published, publishErr := publish(ctx)
+				if repairErr != nil {
+					log.Print("repair handoff stopped safely")
+				}
+				return repaired || published, publishErr
 			}
 		}
 		reconcileQueues(ctx, reviewPoll, r.PollOnce, handoff)

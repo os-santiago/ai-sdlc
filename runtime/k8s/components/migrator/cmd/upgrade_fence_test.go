@@ -72,12 +72,13 @@ func upgradeProtocolFixture(t *testing.T, schema ...int) (*store.DB, string, str
 	if _, err = db.Pool.ExecContext(ctx, `DROP POLICY repair_worker_feedback_reader ON public.review_feedback;
  ALTER TABLE public.execution_requests DROP CONSTRAINT execution_requests_stop_reason_check;
  ALTER TABLE public.execution_requests ADD CONSTRAINT execution_requests_stop_reason_check CHECK(stop_reason IN ('','aborted','expired','authority-revoked','uncertain'));
- DROP TABLE public.repair_model_budgets,public.execution_repairs,public.review_repair_handoffs;
+ DROP TABLE public.review_repair_stops,public.repair_model_budgets,public.execution_repairs,public.review_repair_handoffs;
+ DROP POLICY repair_capacity_reader ON public.model_calls;
  DROP FUNCTION public.lock_repair_parent_budget(uuid);
  DELETE FROM public.schema_migrations WHERE filename='0037_review_repair.sql'`); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"execution_requests", "execution_lifecycles", "execution_models", "execution_candidates", "model_allocations", "model_budgets", "verification_requests", "review_runs", "review_effects", "review_model_calls", "review_feedback"} {
+	for _, table := range []string{"execution_requests", "execution_lifecycles", "execution_models", "execution_candidates", "model_allocations", "model_budgets", "verification_requests", "review_runs", "review_effects", "review_model_calls", "review_feedback", "intake_heads", "intake_revisions", "intake_cursors", "intake_observations", "admission_heads", "admissions", "publication_handoffs"} {
 		if _, err = db.Pool.ExecContext(ctx, "DROP POLICY repair_orchestrator_reader ON public."+table); err != nil {
 			t.Fatal(err)
 		}

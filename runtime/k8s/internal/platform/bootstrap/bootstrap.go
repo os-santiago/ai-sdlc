@@ -145,7 +145,7 @@ func (c *Component) Authority() (authority.Policy, authority.Identity, error) {
 			return authority.Policy{}, authority.Identity{}, errors.New("candidate authority ceiling does not match installed capabilities")
 		}
 		for _, grant := range p.Grants {
-			if grant.Operation != "admit-issue" && grant.Operation != "plan-admission" && grant.Operation != "execute-work" && !(os.Getenv("AI_SDLC_RUNTIME_MODE") == "verification" && grant.Operation == "verify-artifact") && !(PublicationEnabled() && grant.Operation == "publish-candidate") && !(MergeEnabled() && grant.Operation == "merge-publication") {
+			if grant.Operation != "admit-issue" && grant.Operation != "plan-admission" && grant.Operation != "execute-work" && !(os.Getenv("AI_SDLC_RUNTIME_MODE") == "verification" && grant.Operation == "verify-artifact") && !(os.Getenv("AI_SDLC_RUNTIME_MODE") == "verification" && os.Getenv("AI_SDLC_INDEPENDENT_REVIEW") == "true" && (grant.Operation == "repair-candidate" || grant.Operation == "stop-rejected-work")) && !(PublicationEnabled() && grant.Operation == "publish-candidate") && !(MergeEnabled() && grant.Operation == "merge-publication") {
 				return authority.Policy{}, authority.Identity{}, errors.New("candidate mode denies downstream authority")
 			}
 		}

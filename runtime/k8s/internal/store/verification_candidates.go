@@ -19,6 +19,13 @@ func (db *DB) ReadVerificationCandidate(ctx context.Context, id string) (Verific
 	return db.readCandidate(ctx, id, "verifier")
 }
 
+func ReadVerificationCandidateTx(ctx context.Context, tx *sql.Tx, id string) (VerificationCandidate, error) {
+	if tx == nil || AssertComponent(ctx, tx, "verifier") != nil {
+		return VerificationCandidate{}, ErrExecution
+	}
+	return readCandidate(ctx, tx, id)
+}
+
 // ReadPublicationCandidate exposes immutable generation evidence, never writes.
 func (db *DB) ReadPublicationCandidate(ctx context.Context, id string) (VerificationCandidate, error) {
 	return db.readCandidate(ctx, id, "release-manager")
@@ -28,14 +35,27 @@ func (db *DB) ReadPublicationCandidate(ctx context.Context, id string) (Verifica
 func (db *DB) ReadCapturedCandidate(ctx context.Context, id string) (VerificationCandidate, error) {
 	return db.readCandidate(ctx, id, "worker")
 }
+
+// ReadRepairCandidate authenticates immutable captured history in the same
+// transaction that reserves a single child allowance.
+func ReadRepairCandidate(ctx context.Context, tx *sql.Tx, id string) (VerificationCandidate, error) {
+	if tx == nil || AssertComponent(ctx, tx, "orchestrator") != nil {
+		return VerificationCandidate{}, ErrExecution
+	}
+	return readCandidate(ctx, tx, id)
+}
 func (db *DB) readCandidate(ctx context.Context, id, component string) (VerificationCandidate, error) {
-	var result VerificationCandidate
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	if err := AssertComponent(ctx, db.Pool, component); err != nil {
-		return result, identityObservationError(err)
+		return VerificationCandidate{}, identityObservationError(err)
 	}
-	err := db.Pool.QueryRowContext(ctx, `SELECT c.request_id,c.allocation_id,c.pod_uid,c.source_sha,c.source_tree_sha256,c.candidate_tree_sha256,c.export_sha256,c.export_bytes,c.delta_sha256,c.delta,c.changes,c.model_calls,c.created_at,r.work_item_uuid,r.repository,r.payload,r.receipt
+	return readCandidate(ctx, db.Pool, id)
+}
+
+func readCandidate(ctx context.Context, q Querier, id string) (VerificationCandidate, error) {
+	var result VerificationCandidate
+	err := q.QueryRowContext(ctx, `SELECT c.request_id,c.allocation_id,c.pod_uid,c.source_sha,c.source_tree_sha256,c.candidate_tree_sha256,c.export_sha256,c.export_bytes,c.delta_sha256,c.delta,c.changes,c.model_calls,c.created_at,r.work_item_uuid,r.repository,r.payload,r.receipt
  FROM execution_candidates c JOIN execution_requests r ON r.id=c.request_id
  JOIN execution_lifecycles l ON l.request_id=c.request_id
  JOIN execution_models m ON m.request_id=c.request_id AND m.allocation_id=c.allocation_id

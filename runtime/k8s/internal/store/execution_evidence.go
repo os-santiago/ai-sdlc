@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
@@ -24,20 +25,40 @@ func (db *DB) ReadExecutionEvidence(ctx context.Context, work, repository string
 func (db *DB) ReadVerificationEvidence(ctx context.Context, work, repository string, issue, maximumAgeSeconds int) (ExecutionEvidence, error) {
 	return db.readExecutionEvidence(ctx, "verifier", work, repository, issue, maximumAgeSeconds)
 }
+
+func ReadVerificationEvidenceTx(ctx context.Context, tx *sql.Tx, work, repository string, issue, maximumAgeSeconds int) (ExecutionEvidence, error) {
+	if tx == nil || AssertComponent(ctx, tx, "verifier") != nil {
+		return ExecutionEvidence{}, ErrExecution
+	}
+	return readExecutionEvidence(ctx, tx, work, repository, issue, maximumAgeSeconds)
+}
 func (db *DB) ReadPublicationEvidence(ctx context.Context, work, repository string, issue, maximumAgeSeconds int) (ExecutionEvidence, error) {
 	return db.readExecutionEvidence(ctx, "release-manager", work, repository, issue, maximumAgeSeconds)
+}
+
+// ReadRepairEvidence observes current issue eligibility inside the orchestrator's
+// derivation transaction, after acquiring the parent budget and work locks.
+func ReadRepairEvidence(ctx context.Context, tx *sql.Tx, work, repository string, issue, maximumAgeSeconds int) (ExecutionEvidence, error) {
+	if tx == nil || AssertComponent(ctx, tx, "orchestrator") != nil {
+		return ExecutionEvidence{}, ErrExecution
+	}
+	return readExecutionEvidence(ctx, tx, work, repository, issue, maximumAgeSeconds)
 }
 func (db *DB) readExecutionEvidence(ctx context.Context, component, work, repository string, issue, maximumAgeSeconds int) (ExecutionEvidence, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	if err := AssertComponent(ctx, db.Pool, component); err != nil {
+		return ExecutionEvidence{}, identityObservationError(err)
+	}
+	return readExecutionEvidence(ctx, db.Pool, work, repository, issue, maximumAgeSeconds)
+}
+
+func readExecutionEvidence(ctx context.Context, q Querier, work, repository string, issue, maximumAgeSeconds int) (ExecutionEvidence, error) {
 	var e ExecutionEvidence
 	if maximumAgeSeconds < 30 || maximumAgeSeconds > 300 {
 		return e, ErrExecution
 	}
-	if err := AssertComponent(ctx, db.Pool, component); err != nil {
-		return e, identityObservationError(err)
-	}
-	err := db.Pool.QueryRowContext(ctx, `SELECT
+	err := q.QueryRowContext(ctx, `SELECT
         p.correlation_id,w.status,w.issue_numbers,w.acceptance_criteria,w.depends_on,
         ih.generation,ih.content_key,ir.event_id,ir.revision,ir.config_digest,ir.payload,io.authority_revision,
         ah.generation,ah.event_id,ah.payload,ph.generation,ph.event_id,ph.payload,

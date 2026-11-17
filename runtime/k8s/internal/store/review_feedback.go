@@ -146,19 +146,35 @@ func (db *DB) ReadReviewFeedback(ctx context.Context, id string) (ReviewFeedback
 		if AssertComponent(ctx, tx, "verifier") != nil {
 			return ErrExecution
 		}
-		var raw []byte
-		if tx.QueryRowContext(ctx, `SELECT f.decision,f.digest,f.recorded_at FROM review_feedback f JOIN review_runs r ON r.id=f.review_id WHERE f.review_id=$1 AND r.state='failed' AND r.reason='request-changes' AND r.cleanup_state='complete'`, id).Scan(&raw, &result.Digest, &result.RecordedAt) != nil || len(raw) < 1 || len(raw) > 32768 || authority.Digest(raw) != result.Digest || authority.DecodeStrict(raw, &result.Decision) != nil {
-			return ErrExecution
-		}
-		f := result.Decision
-		expected, earliest, expires, err := reviewFeedbackEvidence(ctx, tx, id, reviewresult.Result{Verdict: f.Verdict, FinalMessage: f.FinalMessage, Iterations: f.Iterations, ReadCalls: f.ReadCalls})
-		canonical, _ := json.Marshal(expected)
-		if err != nil || !bytes.Equal(canonical, raw) || result.RecordedAt.Before(earliest) || !result.RecordedAt.Before(expires) || result.RecordedAt.After(time.Now()) {
-			return ErrExecution
-		}
-		return nil
+		var err error
+		result, err = readReviewFeedback(ctx, tx, id)
+		return err
 	})
 	if err != nil {
+		return ReviewFeedbackRecord{}, ErrExecution
+	}
+	return result, nil
+}
+
+// ReadRepairFeedback repeats the complete historical proof inside the
+// orchestrator's derivation transaction. It grants no review mutation right.
+func ReadRepairFeedback(ctx context.Context, tx *sql.Tx, id string) (ReviewFeedbackRecord, error) {
+	if tx == nil || AssertComponent(ctx, tx, "orchestrator") != nil {
+		return ReviewFeedbackRecord{}, ErrExecution
+	}
+	return readReviewFeedback(ctx, tx, id)
+}
+
+func readReviewFeedback(ctx context.Context, q Querier, id string) (ReviewFeedbackRecord, error) {
+	var result ReviewFeedbackRecord
+	var raw []byte
+	if q.QueryRowContext(ctx, `SELECT f.decision,f.digest,f.recorded_at FROM review_feedback f JOIN review_runs r ON r.id=f.review_id WHERE f.review_id=$1 AND r.state='failed' AND r.reason='request-changes' AND r.cleanup_state='complete'`, id).Scan(&raw, &result.Digest, &result.RecordedAt) != nil || len(raw) < 1 || len(raw) > 32768 || authority.Digest(raw) != result.Digest || authority.DecodeStrict(raw, &result.Decision) != nil {
+		return ReviewFeedbackRecord{}, ErrExecution
+	}
+	f := result.Decision
+	expected, earliest, expires, err := reviewFeedbackEvidence(ctx, q, id, reviewresult.Result{Verdict: f.Verdict, FinalMessage: f.FinalMessage, Iterations: f.Iterations, ReadCalls: f.ReadCalls})
+	canonical, _ := json.Marshal(expected)
+	if err != nil || !bytes.Equal(canonical, raw) || result.RecordedAt.Before(earliest) || !result.RecordedAt.Before(expires) || result.RecordedAt.After(time.Now()) {
 		return ReviewFeedbackRecord{}, ErrExecution
 	}
 	return result, nil

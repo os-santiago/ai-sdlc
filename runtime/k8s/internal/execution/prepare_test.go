@@ -24,7 +24,7 @@ func newPreparationFixture(t *testing.T, configure ...func(*fixture)) *preparati
 	t.Helper()
 	f := newFixture(t, configure...)
 	adev := []byte("reviewed-fixture: use bounded deterministic validation\n")
-	profile, _ := json.Marshal(executor.Profile{Version: executor.ProfileVersion, Model: "fixture", MaxSteps: 4, MaxSeconds: 30, MaxTokens: 1024, ADevSHA256: workspacebundle.Digest(adev)})
+	profile, _ := json.Marshal(executor.Profile{Version: executor.ProfileVersion, Model: "fixture", MaxSteps: 4, MaxSeconds: 30, MaxTokens: 1024, MaxRepairs: f.maxRepairs, ADevSHA256: workspacebundle.Digest(adev)})
 	f.command.ProfileSHA256 = workspacebundle.Digest(profile)
 	if _, err := f.accept(f.envelope(t, f.command)); err != nil {
 		t.Fatal(err)

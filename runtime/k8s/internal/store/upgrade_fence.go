@@ -38,7 +38,7 @@ type UpgradeFence struct {
 // downstream external delivery history. Additional schemas/states need their
 // own compatibility and recovery proof; no history is deleted to qualify.
 var browserUpgradeTables = []string{"deployment_browser_cleanups", "deployment_browser_evidence", "deployment_browser_intents", "deployment_browser_pods", "deployment_browser_sends"}
-var repairUpgradeTables = []string{"execution_repairs", "repair_model_budgets", "review_repair_handoffs"}
+var repairUpgradeTables = []string{"execution_repairs", "repair_model_budgets", "review_repair_handoffs", "review_repair_stops"}
 
 func upgradeFenceTables(source []MigrationIdentity) ([]string, error) {
 	return selectedUpgradeFenceTables(source, false)

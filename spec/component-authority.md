@@ -21,6 +21,8 @@ missing top-level fields and an implicit or null freeze value.
 | orchestrator | worker | execute-work / WorkItemReady | auto-pr |
 | worker | orchestrator | record-attempt / ImplementationAttemptDecided | auto-pr |
 | worker | verifier | verify-artifact / CandidateProduced | auto-pr |
+| verifier | orchestrator | repair-candidate / CandidateRepairRequested | auto-pr |
+| verifier | orchestrator | stop-rejected-work / RejectedWorkStopped | auto-pr |
 | verifier | release-manager | publish-candidate / CandidateVerified | auto-pr |
 | release-manager | release-manager | merge-publication / PublicationMergeRequested | auto-merge-low |
 | release-manager | orchestrator | record-release / ReleaseGateDecided | auto-pr |

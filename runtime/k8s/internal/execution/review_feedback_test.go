@@ -14,8 +14,12 @@ import (
 )
 
 func reviewFeedbackFixture(t *testing.T, ttl ...time.Duration) (*lifecycleFixture, *store.DB, store.ReviewRun, store.ReviewClaim, reviewresult.Result) {
+	return reviewFeedbackFixtureConfigured(t, nil, ttl...)
+}
+
+func reviewFeedbackFixtureConfigured(t *testing.T, configure []func(*fixture), ttl ...time.Duration) (*lifecycleFixture, *store.DB, store.ReviewRun, store.ReviewClaim, reviewresult.Result) {
 	t.Helper()
-	f, db, r := reviewJournalFixture(t)
+	f, db, r := reviewJournalFixtureConfigured(t, nil, configure)
 	ctx := context.Background()
 	{
 		passwords := map[string]string{}

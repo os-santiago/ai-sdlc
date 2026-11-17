@@ -18,6 +18,19 @@ CREATE TABLE review_repair_handoffs (
 );
 CREATE UNIQUE INDEX review_repair_one_handoff ON review_repair_handoffs(work_item_uuid) WHERE outcome='forwarded';
 
+CREATE TABLE review_repair_stops (
+ review_id text PRIMARY KEY REFERENCES review_repair_handoffs(review_id),
+ work_item_uuid uuid NOT NULL REFERENCES work_items(uuid),
+ payload bytea NOT NULL CHECK(octet_length(payload) BETWEEN 1 AND 4096),
+ payload_digest text NOT NULL CHECK(payload_digest ~ '^[a-f0-9]{64}$'),
+ created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+ALTER TABLE review_repair_stops ENABLE ROW LEVEL SECURITY;
+ALTER TABLE review_repair_stops FORCE ROW LEVEL SECURITY;
+CREATE POLICY repair_stop_reader ON review_repair_stops FOR SELECT USING(current_user IN ('aisdlc_verifier','aisdlc_orchestrator'));
+CREATE POLICY repair_stop_writer ON review_repair_stops FOR INSERT WITH CHECK(current_user='aisdlc_verifier');
+REVOKE ALL ON review_repair_stops FROM PUBLIC;
+
 CREATE TABLE execution_repairs (
     work_item_uuid uuid PRIMARY KEY REFERENCES model_budgets(work_item_uuid),
     parent_review_id text NOT NULL UNIQUE REFERENCES review_repair_handoffs(review_id),
@@ -87,6 +100,9 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Repair parent budget unavailable' USING ERRCODE='55000';
     END IF;
+    -- Terminal containment takes the same parent -> child -> work order as
+    -- model reservation. This helper still cannot update any ledger row.
+    PERFORM work_item_uuid FROM public.repair_model_budgets WHERE work_item_uuid=parent_work FOR UPDATE;
 END;
 $$;
 REVOKE ALL ON FUNCTION public.lock_repair_parent_budget(uuid) FROM PUBLIC;
@@ -104,5 +120,13 @@ CREATE POLICY repair_orchestrator_reader ON review_runs FOR SELECT USING(current
 CREATE POLICY repair_orchestrator_reader ON review_effects FOR SELECT USING(current_user='aisdlc_orchestrator');
 CREATE POLICY repair_orchestrator_reader ON review_model_calls FOR SELECT USING(current_user='aisdlc_orchestrator');
 CREATE POLICY repair_orchestrator_reader ON review_feedback FOR SELECT USING(current_user='aisdlc_orchestrator');
+CREATE POLICY repair_orchestrator_reader ON intake_heads FOR SELECT USING(current_user='aisdlc_orchestrator');
+CREATE POLICY repair_orchestrator_reader ON intake_revisions FOR SELECT USING(current_user='aisdlc_orchestrator');
+CREATE POLICY repair_orchestrator_reader ON intake_cursors FOR SELECT USING(current_user='aisdlc_orchestrator');
+CREATE POLICY repair_orchestrator_reader ON intake_observations FOR SELECT USING(current_user='aisdlc_orchestrator');
+CREATE POLICY repair_orchestrator_reader ON admission_heads FOR SELECT USING(current_user='aisdlc_orchestrator');
+CREATE POLICY repair_orchestrator_reader ON admissions FOR SELECT USING(current_user='aisdlc_orchestrator');
+CREATE POLICY repair_orchestrator_reader ON publication_handoffs FOR SELECT USING(current_user='aisdlc_orchestrator');
+CREATE POLICY repair_capacity_reader ON model_calls FOR SELECT USING(current_user IN ('aisdlc_orchestrator','aisdlc_verifier'));
 CREATE POLICY repair_worker_feedback_reader ON review_feedback FOR SELECT USING(current_user='aisdlc_worker'
     AND EXISTS(SELECT 1 FROM public.execution_repairs r WHERE r.parent_review_id=review_id));

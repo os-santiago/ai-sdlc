@@ -35,18 +35,35 @@ func (db *DB) ReadVerification(ctx context.Context, id string) (VerificationRequ
 	return db.readVerification(ctx, id, "verifier")
 }
 
+func ReadVerificationTx(ctx context.Context, tx *sql.Tx, id string) (VerificationRequest, error) {
+	if tx == nil || AssertComponent(ctx, tx, "verifier") != nil {
+		return VerificationRequest{}, ErrExecution
+	}
+	return readVerification(ctx, tx, id)
+}
+
 // ReadPublicationVerification is a read-only release-manager projection.
 func (db *DB) ReadPublicationVerification(ctx context.Context, id string) (VerificationRequest, error) {
 	return db.readVerification(ctx, id, "release-manager")
 }
+
+func ReadRepairVerification(ctx context.Context, tx *sql.Tx, id string) (VerificationRequest, error) {
+	if tx == nil || AssertComponent(ctx, tx, "orchestrator") != nil {
+		return VerificationRequest{}, ErrExecution
+	}
+	return readVerification(ctx, tx, id)
+}
 func (db *DB) readVerification(ctx context.Context, id, component string) (VerificationRequest, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	var r VerificationRequest
 	if err := AssertComponent(ctx, db.Pool, component); err != nil {
-		return r, identityObservationError(err)
+		return VerificationRequest{}, identityObservationError(err)
 	}
-	err := db.Pool.QueryRowContext(ctx, `SELECT id,candidate_id,payload_digest,payload,receipt,expires_at FROM verification_requests WHERE id=$1`, id).Scan(&r.ID, &r.CandidateID, &r.PayloadDigest, &r.Payload, &r.Receipt, &r.ExpiresAt)
+	return readVerification(ctx, db.Pool, id)
+}
+func readVerification(ctx context.Context, q Querier, id string) (VerificationRequest, error) {
+	var r VerificationRequest
+	err := q.QueryRowContext(ctx, `SELECT id,candidate_id,payload_digest,payload,receipt,expires_at FROM verification_requests WHERE id=$1`, id).Scan(&r.ID, &r.CandidateID, &r.PayloadDigest, &r.Payload, &r.Receipt, &r.ExpiresAt)
 	if err != nil {
 		return VerificationRequest{}, observationError(err)
 	}

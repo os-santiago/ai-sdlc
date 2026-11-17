@@ -40,7 +40,9 @@ def require_unchanged_tool_budget(kubectl, desired):
         raise ValueError('Installed SCC tool budget differs; use a reviewed runtime transition before reconciliation')
 
 
-def desired_values(root, image_lock_path, lock, verification=False, review=False, publication=False, merge=False):
+def desired_values(root, image_lock_path, lock, verification=False, review=False, publication=False, merge=False, repair=False):
+    if type(repair) is not bool or (repair and not review):
+        raise ValueError("Review repair requires explicit independent review")
     if merge and not publication:
         raise ValueError('Merge requires verified publication')
     if publication and (not review or not verification):
@@ -89,6 +91,9 @@ def desired_values(root, image_lock_path, lock, verification=False, review=False
                          'aDev': adev, 'workerImage': config['placement']['WorkerImage'],
                          'mailboxImage': config['placement']['MailboxImage']}
         result['review'] = {'enabled': True, 'configJSON': json.dumps(review_config, sort_keys=True)}
+    if repair:
+        config['profile']['maxRepairs'] = 1
+        result['candidate']['configJSON'] = json.dumps(config, sort_keys=True)
     if publication:
         result['publication'] = {'enabled': True}
     if merge:
