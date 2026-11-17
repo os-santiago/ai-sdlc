@@ -209,6 +209,9 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 			if code != 10 || recorded != expectedRecorded || f.Count(t, `SELECT count(*) FROM execution_failures f JOIN execution_lifecycles l ON l.request_id=f.request_id WHERE f.pod_uid=l.pod_uid AND f.exit_code=10 AND l.cleanup_state='complete'`) != expectedCount {
 				t.Fatal("original nonzero exit did not survive containment cleanup")
 			}
+			if f.Count(t, `SELECT count(*) FROM execution_lifecycles WHERE cleanup_state='complete'`) != 1 {
+				t.Fatal("diagnostic persistence prevented containment cleanup")
+			}
 		}
 		if calls.Load() != expectedCalls {
 			t.Fatal("unexpected failed scenario calls", calls.Load())

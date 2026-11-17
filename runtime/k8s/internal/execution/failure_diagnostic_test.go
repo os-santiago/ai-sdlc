@@ -70,7 +70,7 @@ func TestExecutionFailureObservationIsImmutableAndNotAuthority(t *testing.T) {
 		if _, e := tx.Exec(`SET LOCAL ROLE aisdlc_intake`); e != nil {
 			return e
 		}
-		_, e := tx.Exec(`INSERT INTO execution_failures(request_id,pod_uid,container_id,exit_code) VALUES($1,$2,$3,10)`, l.durable.Claim.ID, pod, container)
+		_, e := tx.Exec(`INSERT INTO execution_failures(request_id,pod_uid,container_id,exit_code) SELECT $1::text,$2::uuid,$3::text,10 WHERE false`, l.durable.Claim.ID, pod, container)
 		return e
 	}); err == nil {
 		t.Fatal("foreign component inserted a diagnostic")
