@@ -64,10 +64,15 @@ func upgradeProtocolFixture(t *testing.T, schema ...int) (*store.DB, string, str
 	if count != 34 && count != 35 {
 		t.Fatal("unsupported fixture schema")
 	}
-	// Legacy fixtures remain explicitly schema 0034 after the compiler adds 0035.
-	if len(source) != 35 {
+	// These owned disposable fixtures exercise only the historical 34/35 bridge.
+	// Remove the later schema here, never from an operational database.
+	if len(source) != 36 || source[35].Filename != "0036_review_feedback.sql" {
 		t.Fatal("fixture catalog changed")
 	}
+	if _, err = db.Pool.ExecContext(ctx, `DROP TABLE public.review_feedback; DELETE FROM public.schema_migrations WHERE filename='0036_review_feedback.sql'`); err != nil {
+		t.Fatal(err)
+	}
+	source = source[:35]
 	if count == 34 {
 		if _, err = db.Pool.ExecContext(ctx, `DROP TABLE public.deployment_browser_cleanups,public.deployment_browser_evidence,public.deployment_browser_pods,public.deployment_browser_sends,public.deployment_browser_intents;
  DELETE FROM public.schema_migrations WHERE filename='0035_deployment_browser.sql'`); err != nil {

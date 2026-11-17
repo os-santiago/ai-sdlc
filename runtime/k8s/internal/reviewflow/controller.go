@@ -225,7 +225,7 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 		return proof, ControllerError{Stage: stage}
 	}
 	if summary.Result().Verdict != "approve" {
-		if db.StopReview(ctx, claim, "request-changes") != nil {
+		if db.RejectReviewWithFeedback(ctx, claim, summary.Result()) != nil {
 			return proof, ControllerError{Stage: "rejection-commit"}
 		}
 		return proof, ControllerError{Stage: "request-changes"}

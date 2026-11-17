@@ -16,6 +16,13 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 OWNER_LABEL = 'ai-sdlc.io/validation-run'
 REQUIRED_TESTS = {
+    ("internal/execution", "TestReviewFeedbackExactPrivateHistoricalRecord"),
+    ("internal/execution", "TestReviewFeedbackRejectsMismatchAndMissingCleanup"),
+    ("internal/execution", "TestReviewFeedbackLostCommitAndInsertDenial"),
+    ("internal/execution", "TestReviewFeedbackExpiryDuringInsertRollsBackDecision"),
+    ("internal/execution", "TestReviewFeedbackHistoricalReaderDoesNotRenewExpiry"),
+    ("internal/execution", "TestReviewFeedbackHistoricalReaderRejectsSubstitution"),
+
     ("internal/execution", "TestBrowserKnownNoSendConsumesOnlyOriginalAttempt"),
     ("internal/execution", "TestBrowserCompetingAttemptCannotAbortWinner"),
     ("internal/execution", "TestBrowserACKAndNoSendHaveOneImmutableOutcome"),

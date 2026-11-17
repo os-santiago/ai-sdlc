@@ -139,6 +139,9 @@ func TestUpgradeObservationDetectsPartialMigrationWithoutClaimingRollback(t *tes
 	before := upgradeHistory(t, db)
 	catalog, _ := MigrationCatalog()
 	last := catalog[len(catalog)-1].Filename
+	if last != "0036_review_feedback.sql" {
+		t.Fatal("Update the explicit final-file rollback assertions for the new migration")
+	}
 	// First pending file commits; fail recording the second file so its DDL and
 	// tracker insert roll back together. The first file must remain recorded.
 	statement := `CREATE FUNCTION public.reject_upgrade_record() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN
@@ -160,11 +163,12 @@ func TestUpgradeObservationDetectsPartialMigrationWithoutClaimingRollback(t *tes
 	}
 	var finalTableAbsent bool
 	if err = db.Pool.QueryRowContext(ctx, `SELECT to_regclass('public.execution_failures') IS NOT NULL
- AND to_regclass('public.deployment_browser_intents') IS NULL
- AND to_regclass('public.deployment_browser_sends') IS NULL
- AND to_regclass('public.deployment_browser_pods') IS NULL
- AND to_regclass('public.deployment_browser_evidence') IS NULL
- AND to_regclass('public.deployment_browser_cleanups') IS NULL`).Scan(&finalTableAbsent); err != nil || !finalTableAbsent {
+ AND to_regclass('public.deployment_browser_intents') IS NOT NULL
+ AND to_regclass('public.deployment_browser_sends') IS NOT NULL
+ AND to_regclass('public.deployment_browser_pods') IS NOT NULL
+ AND to_regclass('public.deployment_browser_evidence') IS NOT NULL
+ AND to_regclass('public.deployment_browser_cleanups') IS NOT NULL
+ AND to_regclass('public.review_feedback') IS NULL`).Scan(&finalTableAbsent); err != nil || !finalTableAbsent {
 		t.Fatal("failed file DDL did not roll back", err)
 	}
 	if _, err = db.Pool.ExecContext(ctx, `DROP TRIGGER upgrade_failure ON public.schema_migrations; DROP FUNCTION public.reject_upgrade_record()`); err != nil {

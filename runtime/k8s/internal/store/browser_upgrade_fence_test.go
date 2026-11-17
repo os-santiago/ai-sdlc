@@ -17,10 +17,10 @@ func TestUpgradeFenceBrowserBridgeClosedSchemas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, n := range []int{33, 34, 35} {
+	for _, n := range []int{33, 34, 35, 36} {
 		_, legacy := upgradeFenceTables(catalog[:n])
 		_, browser := selectedUpgradeFenceTables(catalog[:n], true)
-		if (legacy == nil) != (n < 35) || (browser == nil) != (n >= 34) {
+		if (legacy == nil) != (n == 33 || n == 34) || (browser == nil) != (n == 34 || n == 35) {
 			t.Fatal("schema authority crossed", n)
 		}
 	}

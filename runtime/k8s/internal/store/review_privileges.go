@@ -3,6 +3,8 @@ package store
 // Column grants prevent the reviewer from rewriting queued source bindings or
 // existing model request identities. Generation and publication remain separate.
 var reviewPrivileges = []string{
+	`GRANT SELECT ON review_feedback TO aisdlc_verifier`,
+	`GRANT INSERT(review_id,decision,digest) ON review_feedback TO aisdlc_verifier`,
 	`GRANT SELECT ON review_runs,review_effects,review_model_calls TO aisdlc_verifier`,
 	`GRANT INSERT(id,verification_id,candidate_id,work_item_uuid,behavior_digest,profile_digest,configuration_digest,assignment_digest,expires_at) ON review_runs TO aisdlc_verifier`,
 	`GRANT UPDATE(state,claim_token,claim_until,reason,cleanup_state,cleanup_attempts,cleanup_next_at,reserved_calls,reserved_input_bytes,proof) ON review_runs TO aisdlc_verifier`,

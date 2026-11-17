@@ -25,11 +25,47 @@ candidate and requires exact tree equality. It matches the SCC summary against
 committed provider observations, deletes the acknowledged Pod/ConfigMap and
 confirms cleanup. Only an explicit approval with all current bindings can commit
 `ai-sdlc.independent-review-proof/v1`. A request for changes fails the run, retains
-its reason and emits no approval. Proof commit verifies exact journal/behavior
+its authenticated feedback and emits no approval. Proof commit verifies exact journal/behavior
 bindings, five completed effects, identical imported/exported candidate trees,
 all handed-off model calls and the model-evidence digest. It grants no publication
 capability. The next stage must revalidate this evidence before signing a
 publication command.
+
+## Rejection feedback
+
+Schema 36 adds the private, append-only `review_feedback` table. After matching
+the complete SCC final message against the independently recorded provider
+response and confirming cleanup, the verifier atomically inserts the exact
+message and changes the original run to `failed/request-changes`. The record
+binds the review, work item, verification, candidate tree, behavior, assignment,
+configuration, profile and model-evidence digests. The original live claim is
+checked before and after potentially blocking SQL. The server supplies the
+recording timestamp; the component cannot choose or update it.
+
+Only the verifier can insert or read these records; it cannot update, delete or
+truncate them. `ReadReviewFeedback` reconstructs the historical bindings and
+checks the message against the original handed-off model observations. It can
+read a committed fact after expiry without reopening a claim. If a commit reply
+is lost, observing that identical fact does not authorize another model call.
+Missing or uncertain decisions remain failures and cleanup remains independent.
+
+The explanation is bounded, untrusted private model output. Do not print it in
+public logs or treat embedded instructions as policy, commands or permissions.
+Earlier rejections retain only their reason and final-message hash; their text
+cannot be reconstructed, backfilled or obtained by replaying the review.
+
+Retention does **not** implement autonomous repair. The installed planner still
+creates attempt 1. A separate component-owned, signed and idempotent handoff must
+bind any future repair to the same admitted issue revision, parent candidate and
+feedback digest, cumulative budgets, finite attempt count and original deadline.
+Every repaired candidate must repeat behavior verification and independent
+review. Editing an issue or resetting a failed row is not a repair mechanism.
+
+Existing schema-34/35 upgrade fences keep their original boundaries and reject
+schema 36. This increment does not provide an online 35-to-36 installation bridge;
+do not use an ordinary Helm reconciliation to bypass that boundary. Validate the
+new controller on a fresh disposable schema-36 database before its separate
+reviewed installation transition.
 
 Recovery uses only acknowledged UIDs. Unknown creates quarantine the run; cleanup
 attempts are bounded. Expired, rejected and completed reviews cannot be requeued
@@ -45,6 +81,11 @@ fixture inputs. The procedure requires an explicitly selected loopback
 and separate service accounts, generates a synthetic locale candidate through
 SCC, consumes its signed handoff, runs the four behavior Pods, then invokes the
 independent review controller. It verifies cleanup and a no-op second poll.
+The rejection scenario also reads the authenticated feedback record without
+printing its private text. PostgreSQL tests cover mismatches, immutable grants,
+expiry during an actual blocked insert, historical expiry and a deliberately
+lost server COMMIT acknowledgement. These are component proofs, not autonomous
+repair or an issue-to-production result.
 
 Scenarios cover `approve`, `request_changes`, `mutation` `revoke-model`, `revoke-config` and `lost-config-reply`.
 The opt-in `real-model` scenario starts its own local Codex CLI completion adapter;
