@@ -21,6 +21,11 @@ following the [kind inotify guidance](https://kind.sigs.k8s.io/docs/user/known-i
 It preserves higher limits, verifies the result, and affects only the current
 boot. Use your host configuration manager for persistence across reboots.
 `./install.sh host` only checks; the installer never invokes sudo itself.
+The instance minimum is 1024. Concurrent kind clusters share the host's user
+quota: an exhausted quota can prevent kube-proxy from starting and leave DNS or
+webhooks timing out even when the open-file descriptor limit is high. This is a
+minimum, not a guarantee for an arbitrary number of clusters; monitor host usage
+and manage additional capacity explicitly when needed.
 
 ```bash
 git clone https://github.com/os-santiago/ai-sdlc.git
