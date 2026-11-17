@@ -186,6 +186,36 @@ class Activation:
                 time.sleep(2)
         self.record['completed']=phase;self.record['transition']=None;self.save()
 
+    def publish_report(self):
+        """Compatibility snapshot only; original custody remains authoritative."""
+        if self.record.get('completed')!='active' or self.record.get('transition'):
+            raise ValueError('Only completely active runtime can publish readiness')
+        observed=self.observe('active') # current Ready replicas; never require empty workflow state
+        original=self.original['target'];description=self.describe('active')
+        if (description['images']!=original['images'] or any(observed.get(key)!=original['observed'].get(key)
+                for key in ('clusterUID','namespaceUID'))):
+            raise ValueError('Original installation identity changed before readiness report')
+        values=original['values'];inner=json.loads(values['authority']['policyJSON'])
+        build=json.loads(values['build']['configJSON'])
+        repository=original['images']['image']['repository']
+        prior=files.bounded_json(self.state/'installation.json',2*1024*1024)
+        if (prior.get('cluster')!=self.config.cluster or prior.get('platform')!='konflux'
+                or prior.get('repository')!=inner['repository'] or prior.get('environment')!=inner['environment']
+                or prior.get('images')!=description['images'] or prior.get('namespace') not in (None,platform.NAMESPACE)
+                or prior.get('configuration') not in ('prepared-paused','active')
+                or prior.get('configuration')=='active' and prior.get('preparedSHA256')!=self.original_hash):
+            raise ValueError('Original installation report scope changed')
+        report={'cluster':self.config.cluster,'provider':self.config.provider,'platform':'konflux','mode':'verification',
+            'namespace':platform.NAMESPACE,'clusterUID':observed['clusterUID'],'namespaceUID':observed['namespaceUID'],
+            'configuration':'active','configurationReady':True,'installationReady':True,
+            'runtimeReadinessValidated':True,'runtimePaused':False,'innerFrozen':False,'outerFrozen':False,
+            'deliveryEnabled':True,'issueIntakeEnabled':True,'repository':inner['repository'],'environment':inner['environment'],
+            'images':original['images'],'deployerImage':repository+'@'+values['release']['digest'],
+            'buildControllerImage':repository+'@'+values['build']['digest'],'publisherImage':build['profile']['publisherImage'],
+            'preparedSHA256':self.original_hash,'activationSHA256':bootstrap.digest(self.record),
+            'observedAt':int(time.time()*1000),'workflowEvidence':False,'autonomousEndToEndValidated':False}
+        platform.write_record(self.state/'installation.json',report)
+
     def activate(self,read_only=False):
         if read_only:
             if self.record is None or self.record.get('transition'):raise ValueError('Status requires a complete recorded activation phase')
@@ -193,6 +223,7 @@ class Activation:
         else:
             self.begin();self.resolve()
             for phase in PHASES[PHASES.index(self.record['completed'])+1:]:self.apply(phase)
+            self.publish_report()
         return {'version':VERSION,'phase':self.record['completed'],'issueIntakeEnabled':self.record['completed']=='active',
             'workflowEvidence':False,'autonomousEndToEndValidated':False}
 
