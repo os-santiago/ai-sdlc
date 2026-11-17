@@ -159,7 +159,7 @@ def main(argv=None):
         if args.exercise_tool_budget_history:
             from tool_budget_fixture import exercise
             exercise(database,args.provider,PG,args.output/'private-tool-budget-backup',
-                     plan['target']['migrations'],plan_id,work,report,save)
+                     plan['target']['migrations'],plan_id,work,report,save,original)
     except Exception as error:report.update(status='failed',errorType=type(error).__name__);raise
     finally:
         if restorer is not None:

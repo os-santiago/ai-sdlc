@@ -4,7 +4,7 @@ import json
 # Bound to the pinned PostgreSQL release and the reviewed additive DDL, not a
 # fingerprint accepted from the installation that is about to be changed.
 EXPECTED = {
-    'owner': 'ai_sdlc', 'kind': 'r', 'rls': True, 'forceRls': True,
+    'owner': 'ai_sdlc', 'kind': 'r', 'persistence': 'p', 'rls': True, 'forceRls': True,
     'columns': [['request_id', 'text', True, None], ['pod_uid', 'uuid', True, None],
         ['container_id', 'text', True, None], ['exit_code', 'integer', True, None],
         ['observed_at', 'timestamp with time zone', True, 'clock_timestamp()']],
@@ -17,11 +17,17 @@ EXPECTED = {
         "(CURRENT_USER = 'aisdlc_worker'::name)", "(CURRENT_USER = 'aisdlc_worker'::name)"]],
     'userTriggers': 0, 'internalTriggers': 2, 'disabledTriggers': 0, 'droppedColumns': 0,
     'rules': 0, 'inheritanceLinks': 0,
+    'relationACL': ['ai_sdlc=arwdDxtm/ai_sdlc', 'aisdlc_worker=r/ai_sdlc'],
+    'columnACLs': [['container_id', ['aisdlc_worker=a/ai_sdlc']],
+        ['exit_code', ['aisdlc_worker=a/ai_sdlc']], ['observed_at', None],
+        ['pod_uid', ['aisdlc_worker=a/ai_sdlc']], ['request_id', ['aisdlc_worker=a/ai_sdlc']]],
+    'typeACLs': [['_execution_failures', 'ai_sdlc', None], ['execution_failures', 'ai_sdlc', None]],
+    'generatedColumns': 0,
     'indexes': [[True, True, True, True, True]],
 }
 
 QUERY = """SELECT json_build_object(
-'owner',pg_get_userbyid(c.relowner),'kind',c.relkind,'rls',c.relrowsecurity,'forceRls',c.relforcerowsecurity,
+'owner',pg_get_userbyid(c.relowner),'kind',c.relkind,'persistence',c.relpersistence,'rls',c.relrowsecurity,'forceRls',c.relforcerowsecurity,
 'columns',(SELECT json_agg(json_build_array(a.attname,format_type(a.atttypid,a.atttypmod),a.attnotnull,pg_get_expr(d.adbin,d.adrelid)) ORDER BY a.attnum) FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped),
 'constraints',(SELECT json_agg(json_build_array(con.contype,pg_get_constraintdef(con.oid),con.convalidated,con.condeferrable) ORDER BY con.contype,pg_get_constraintdef(con.oid) COLLATE "C") FROM pg_constraint con WHERE con.conrelid=c.oid),
 'policies',(SELECT json_agg(json_build_array(pol.polname,pol.polcmd,pol.polpermissive,pol.polroles,pg_get_expr(pol.polqual,pol.polrelid),pg_get_expr(pol.polwithcheck,pol.polrelid)) ORDER BY pol.polname COLLATE "C") FROM pg_policy pol WHERE pol.polrelid=c.oid),
@@ -31,6 +37,10 @@ QUERY = """SELECT json_build_object(
 'droppedColumns',(SELECT count(*) FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND a.attisdropped),
 'rules',(SELECT count(*) FROM pg_rewrite r WHERE r.ev_class=c.oid),
 'inheritanceLinks',(SELECT count(*) FROM pg_inherits i WHERE i.inhrelid=c.oid OR i.inhparent=c.oid),
+'relationACL',(SELECT json_agg(x.acl::text ORDER BY x.acl::text COLLATE "C") FROM unnest(c.relacl) x(acl)),
+'columnACLs',(SELECT json_agg(json_build_array(a.attname,(SELECT json_agg(x.acl::text ORDER BY x.acl::text COLLATE "C") FROM unnest(a.attacl) x(acl))) ORDER BY a.attname COLLATE "C") FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped),
+'typeACLs',(SELECT json_agg(json_build_array(t.typname,pg_get_userbyid(t.typowner),(SELECT json_agg(x.acl::text ORDER BY x.acl::text COLLATE "C") FROM unnest(t.typacl) x(acl))) ORDER BY t.typname COLLATE "C") FROM pg_type t WHERE t.oid=c.reltype OR t.oid=(SELECT u.typarray FROM pg_type u WHERE u.oid=c.reltype)),
+'generatedColumns',(SELECT count(*) FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped AND (a.attidentity<>'' OR a.attgenerated<>'')),
 'indexes',(SELECT json_agg(json_build_array(i.indisvalid,i.indisready,i.indislive,i.indisunique,i.indisprimary) ORDER BY i.indexrelid) FROM pg_index i WHERE i.indrelid=c.oid)
 ) FROM pg_class c WHERE c.oid=to_regclass('public.execution_failures');"""
 

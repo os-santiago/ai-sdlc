@@ -2,6 +2,7 @@
 import json
 import secrets
 import uuid
+from types import SimpleNamespace
 
 from diagnostic_upgrade_data import Compatibility
 import diagnostic_schema
@@ -10,7 +11,7 @@ from tool_budget_upgrade import ToolBudgetUpgrade
 import upgrade_backup_data as data
 
 
-def exercise(database, provider, image, directory, catalog, plan_id, first_work, report, save):
+def exercise(database, provider, image, directory, catalog, plan_id, first_work, report, save, original_authority):
     """Called only after the published-migration fixture owns its PostgreSQL CID."""
     work = str(uuid.uuid4())
     database.sql(f"INSERT INTO work_items(plan_id,id,uuid,issue_numbers,acceptance_criteria,status) VALUES('{plan_id}','retained-2','{work}','[1]','[\"keep diagnostic history\"]','failed');")
@@ -24,6 +25,7 @@ def exercise(database, provider, image, directory, catalog, plan_id, first_work,
     upgrade = object.__new__(ToolBudgetUpgrade)
     upgrade.catalog = catalog
     upgrade.database = lambda: database
+    upgrade.parent = SimpleNamespace(record={'sourceProof': original_authority})
     upgrade.record = {'sourceProof': upgrade.snapshot(), 'sourceRoleIdentities': Compatibility(database).roles()}
     proof = upgrade.record['sourceProof']
     if proof['work_items']['rows'] != 2 or proof['execution_failures']['rows'] != 1:
@@ -52,6 +54,13 @@ def exercise(database, provider, image, directory, catalog, plan_id, first_work,
         'ALTER TABLE execution_failures DISABLE TRIGGER ALL;',
         'CREATE RULE unexpected_insert AS ON INSERT TO execution_failures DO ALSO NOTIFY unexpected_diagnostic;',
         'CREATE TABLE unexpected_diagnostic_child () INHERITS (execution_failures);',
+        'ALTER TABLE execution_failures SET UNLOGGED;',
+        'GRANT TRUNCATE ON execution_failures TO aisdlc_worker;',
+        'GRANT TRIGGER ON execution_failures TO aisdlc_worker;',
+        'GRANT INSERT(observed_at) ON execution_failures TO aisdlc_worker;',
+        'GRANT SELECT ON execution_failures TO aisdlc_worker WITH GRANT OPTION;',
+        'REVOKE USAGE ON TYPE execution_failures FROM PUBLIC;',
+        'ALTER TABLE execution_failures ALTER COLUMN exit_code ADD GENERATED ALWAYS AS IDENTITY;',
     ):
         # Execute DDL outside the rejection oracle: a failed mutation is not
         # evidence that the descriptor rejected a successfully changed table.
@@ -82,10 +91,35 @@ def exercise(database, provider, image, directory, catalog, plan_id, first_work,
     finally:
         database.sql('UPDATE execution_failures SET exit_code=22;')
     upgrade.retained()
+    upgrade.original_database_authority()
+    for field, mutation, restore_sql in (
+        ('@membership', 'GRANT aisdlc_verifier TO aisdlc_worker;',
+         'REVOKE aisdlc_verifier FROM aisdlc_worker;'),
+        ('@role-settings', "ALTER ROLE aisdlc_worker SET statement_timeout='7s';",
+         'ALTER ROLE aisdlc_worker RESET statement_timeout;'),
+    ):
+        try:
+            database.sql(mutation)
+            changed = upgrade.snapshot()
+            if changed[field] == original_authority['data'][field]:
+                raise ValueError('Authority mutation did not change the expected field')
+            try:
+                upgrade.original_database_authority(changed)
+            except ValueError:
+                pass
+            else:
+                raise ValueError('Changed original membership or settings were adopted')
+        finally:
+            database.sql(restore_sql)
+        upgrade.original_database_authority()
+        upgrade.retained()
     report.update(toolBudgetFailedAttemptsRetained=True, toolBudgetDiagnosticRetained=True,
         toolBudgetHistoryRestorationVerified=True, changedDiagnosticRejected=True,
         changedDiagnosticSchemaAndRLSRejected=True,
         changedDiagnosticRulesAndInheritanceRejected=True,
+        changedDiagnosticDurabilityRejected=True,
+        changedDiagnosticACLsRejected=True,
+        changedOriginalMembershipAndRoleSettingsRejected=True,
         diagnosticTableEmpty=False,
         toolBudgetFixtureScope='isolated PostgreSQL retention/restore; no installed CLI or E2E proof')
     save()

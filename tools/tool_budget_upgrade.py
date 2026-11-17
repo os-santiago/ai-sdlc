@@ -106,12 +106,16 @@ class ToolBudgetUpgrade(Upgrade):
             self.config.provider, self.helper, 'compile-build-installation', request)
         return tool_budget_targets.targets(self.parent.describe('active'), self.config.render, compile_build, original=original)
 
-    def original_database_authority(self):
+    def original_database_authority(self, proof=None):
         compatibility = Compatibility(self.database())
         original = self.parent.record['sourceProof']
         for field in ('schema', 'roles', 'permissions', 'tracking'):
             if getattr(compatibility, field)() != original[field]:
                 raise ValueError('Original diagnostic database authority changed before tool-budget update')
+        current = proof if proof is not None else self.snapshot()
+        for field in ('@membership', '@role-settings'):
+            if current[field] != original['data'][field]:
+                raise ValueError('Original role membership or settings changed before tool-budget update')
         compatibility.diagnostic_privileges()
         diagnostic_schema.verify(self.database())
         return original['roles']
@@ -125,7 +129,7 @@ class ToolBudgetUpgrade(Upgrade):
             if set(prepared_resources.documents(description['documents'])) != set(self.pause.record['resourceUIDs']):
                 raise ValueError('Tool budget cannot add or remove resources')
         proof = self.snapshot()
-        role_identities = self.original_database_authority()
+        role_identities = self.original_database_authority(proof)
         self.observe('source')
         now = time.time()
         self.save({'version': VERSION, 'nonce': secrets.token_hex(16), 'parentSHA256': self.parent_hash,

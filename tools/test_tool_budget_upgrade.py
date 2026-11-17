@@ -105,6 +105,22 @@ class OrderingTests(unittest.TestCase):
             item.save.assert_not_called()
             item.apply.assert_not_called()
 
+    def test_preexisting_membership_and_role_settings_drift_prevents_effects(self):
+        fields = ('schema', 'roles', 'permissions', 'tracking')
+        original = {**dict.fromkeys(fields, 'original'),
+                    'data': {'@membership': 'members', '@role-settings': 'settings'}}
+        for changed in ('@membership', '@role-settings'):
+            item = self.item()
+            item.parent = SimpleNamespace(record={'sourceProof': original})
+            proof = dict(original['data'], **{changed: 'changed'})
+            with patch.object(tool_budget_upgrade, 'Compatibility') as compatibility:
+                for field in fields:
+                    getattr(compatibility.return_value, field).return_value = 'original'
+                with self.subTest(field=changed), self.assertRaises(ValueError):
+                    item.original_database_authority(proof)
+            item.save.assert_not_called()
+            item.apply.assert_not_called()
+
     def test_incomplete_pause_never_replays(self):
         for state in ('planned', 'pausing', 'paused'):
             item = self.item()
