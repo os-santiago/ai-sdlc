@@ -19,7 +19,8 @@ from verify_workspace_bundle import wire
 
 
 def verify(kubectl, binary, worker, mailbox, scenario):
-    if scenario not in ('approve', 'request_changes', 'implicit', 'mutation'):
+    if scenario not in ('approve', 'request_changes', 'implicit', 'mutation',
+                        'budget-approve', 'budget-request_changes', 'budget-extra-tool'):
         raise ValueError('Unsupported reviewer fixture')
     config = TransportFixture(kubectl, binary, False).config
     namespace, uid = 'ai-sdlc-reviewcheck-' + secrets.token_hex(6), None
@@ -45,7 +46,8 @@ def verify(kubectl, binary, worker, mailbox, scenario):
         adev = Path(__file__).resolve().parents[1].joinpath(
             'runtime/k8s/deploy/helm/ai-sdlc-k8s-runtime/files/adev-profile.yaml').read_bytes()
         profile = wire({'version': 'ai-sdlc.reviewer-profile/v1', 'model': 'fixture-model',
-                        'maxSteps': 4, 'maxSeconds': 90, 'maxTokens': 2048,
+                        'maxSteps': 8 if scenario.startswith('budget-') else 4,
+                        'maxSeconds': 90, 'maxTokens': 2048,
                         'aDevSHA256': hashlib.sha256(adev).hexdigest()})
         assignment = wire({'version': 'ai-sdlc.executor-assignment/v1', 'workItemId': str(uuid.uuid4()),
                           'attempt': 1, 'repository': 'fixture/product', 'sourceSHA': bundle['sourceSHA'],
@@ -86,7 +88,8 @@ def main():
     for name in ('kubectl', 'kubeconfig', 'worker-image', 'mailbox-image'):
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--test-binary', type=Path, required=True)
-    parser.add_argument('--scenario', choices=('approve', 'request_changes', 'implicit', 'mutation'), default='approve')
+    parser.add_argument('--scenario', choices=('approve', 'request_changes', 'implicit', 'mutation',
+                        'budget-approve', 'budget-request_changes', 'budget-extra-tool'), default='approve')
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
     report = verify([args.kubectl, '--kubeconfig', args.kubeconfig], args.test_binary,
