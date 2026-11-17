@@ -18,6 +18,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--provider',choices=('podman','docker'),default='podman')
     p.add_argument('--output',type=Path,required=True)
+    p.add_argument('--prepare-release-target',action='store_true',help='Exercise actual original baseline patch and exact lost-ACK recovery without changing its image')
     p.add_argument('--installed-deployer',action='store_true',help='Use rendered opt-in deployer RBAC and an actual restricted ServiceAccount token')
     args=p.parse_args();args.output.mkdir(parents=True,mode=0o700,exist_ok=False)
     out=args.output.resolve();nonce=secrets.token_hex(8);cluster='ai-sdlc-console-'+nonce[:10]
@@ -78,7 +79,7 @@ def main():
         tls_secret=create({'apiVersion':'v1','kind':'Secret','metadata':{'name':'saferus-console-tls','namespace':ns},'type':'kubernetes.io/tls','data':{key:base64.b64encode((out/key).read_bytes()).decode() for key in ('tls.crt','tls.key')}})
         service=create({'apiVersion':'v1','kind':'Service','metadata':{'name':name,'namespace':ns},'spec':{'selector':{'app':name},'ports':[{'name':'https','port':8443,'targetPort':'https'}]}})
         deployment=create({'apiVersion':'apps/v1','kind':'Deployment','metadata':{'name':name,'namespace':ns},'spec':{'replicas':1,'selector':{'matchLabels':{'app':name}},'template':{'metadata':{'labels':{'app':name}},'spec':{
-            'serviceAccountName':'saferus-client','automountServiceAccountToken':False,'imagePullSecrets':[{'name':'ai-sdlc-release-reader'}],
+            'serviceAccountName':'saferus-client','automountServiceAccountToken':False,**({} if args.prepare_release_target else {'imagePullSecrets':[{'name':'ai-sdlc-release-reader'}]}),
             'securityContext':{'runAsNonRoot':True,'runAsUser':1000,'runAsGroup':1000,'fsGroup':1000,'seccompProfile':{'type':'RuntimeDefault'}},
             'containers':[{'name':'console','image':baseline,'imagePullPolicy':'IfNotPresent','ports':[{'name':'https','containerPort':8443}],
                 'securityContext':{'readOnlyRootFilesystem':True,'allowPrivilegeEscalation':False,'capabilities':{'drop':['ALL']}},
@@ -121,6 +122,24 @@ def main():
         for layer in manifest['layers']:
             if len(blob(layer['digest']))!=layer['size']:raise ValueError('Fixture layer size differs')
         report['baselineBinding']={'referenceDescriptor':matches[0],'manifestDigest':manifest_digest,'runtimeDescriptor':runtime,'configuration':config['digest'],'allContentHashesVerified':True}
+        if args.prepare_release_target:
+            import release_target_resources
+            stage('actual-baseline-reader-reference-and-lost-ack-recovery')
+            original=get('deployment',name,ns);state={};effects=[]
+            def read_original():return get('deployment',name,ns)
+            def send_once(patch):
+                effects.append(True)
+                run(kubectl+['patch','deployment',name,'-n',ns,'--type=json','--patch-file=/dev/stdin','-o','json'],data=json.dumps(patch).encode())
+                raise TimeoutError('Injected lost administrative PATCH response')
+            operation=release_target_resources.Patch(out/'preparation-private.json',state,lambda:None,read_original,send_once)
+            try:operation.apply(original)
+            except TimeoutError:pass
+            else:raise ValueError('Fixture failed to inject lost response')
+            operation.apply(original)
+            run(kubectl+['rollout','status','deployment/'+name,'-n',ns,'--timeout=120s'],limit=140)
+            prepared=operation.apply(original)
+            if len(effects)!=1 or prepared['spec']['template']['spec']['containers'][0]['image']!=baseline:raise ValueError('Administrative preparation replayed or changed image')
+            report['targetPreparation']={'actualConditionalPatch':True,'injectedLostResponse':True,'patchCount':len(effects),'imageUnchanged':True,'guardScope':'isolated-fixture-only'}
         cfg=yaml.safe_load((out/'kubeconfig').read_text());user=cfg['users'][0]['user'];cluster_cfg=cfg['clusters'][0]['cluster']
         now=int(time.time()*1000)
         target={'version':'ai-sdlc.saferus-release-target/v1','scope':'kind-test-production','repository':'os-santiago/saferus','environment':ns,'clusterUID':get('namespace','kube-system')['metadata']['uid'],'namespaceUID':namespace['metadata']['uid'],'namespace':ns,'deployment':name,'deploymentUID':deployment['metadata']['uid'],'container':'console','deploymentSpecSHA256':'0'*64,'service':name,'serviceUID':service['metadata']['uid'],'serviceSpecSHA256':'0'*64,'pullSecret':'ai-sdlc-release-reader','pullSecretUID':pull['metadata']['uid'],'tlsSecretUID':tls_secret['metadata']['uid'],'tlsCA':(out/'ca.crt').read_text(),'tlsHostname':name,'baselineImage':baseline,'baselineRuntimeDigest':runtime,'rolloutSeconds':300,'smokeSeconds':30,'approvedAt':now-1000,'expiresAt':now+3600000}

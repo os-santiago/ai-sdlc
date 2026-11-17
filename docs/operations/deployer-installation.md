@@ -14,7 +14,8 @@ GitHub release. Keep the prepared installation paused until those gates pass. [D
 
 ## Inputs and installation
 
-First prepare the baseline application, its original TLS material and its
+First prepare the baseline application and its original TLS material. Use the
+[single-entry target preparation](release-target-preparation.md) to bind its
 immutable `ai-sdlc-release-reader` pull Secret. The Deployment must reference
 exactly that pull Secret. Independently review the target document; the
 installer cannot approve observations or create/adopt an application. Verify

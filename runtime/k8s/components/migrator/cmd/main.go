@@ -21,6 +21,11 @@ func run() error {
 		return errors.New("select migrate or bootstrap-identities")
 	}
 	switch os.Args[1] {
+	case "describe-release-specs":
+		if len(os.Args) != 2 {
+			return errors.New("unexpected release observation arguments")
+		}
+		return describeReleaseSpecs(os.Stdin, os.Stdout)
 	case "compile-release-installation":
 		if len(os.Args) != 2 {
 			return errors.New("unexpected release installation arguments")
