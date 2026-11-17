@@ -13,17 +13,20 @@ func TestConcurrentFreshMigrations(t *testing.T) {
 	db := testDB(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	schema := "startup_" + strings.ReplaceAll(NewID(), "-", "")
-	if _, err := db.Pool.ExecContext(ctx, "CREATE SCHEMA "+schema); err != nil {
+	database := "startup_" + strings.ReplaceAll(NewID(), "-", "")
+	if _, err := db.Pool.ExecContext(ctx, "CREATE DATABASE "+database); err != nil {
 		t.Fatal(err)
 	}
-	defer db.Pool.ExecContext(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
+	defer db.Pool.ExecContext(context.Background(), "DROP DATABASE "+database+" WITH (FORCE)")
 	u, err := url.Parse(os.Getenv("AI_SDLC_TEST_DATABASE_URL"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	q := u.Query()
-	q.Set("search_path", schema)
+	q.Del("search_path")
+	q.Del("dbname")
+	q.Del("database")
+	u.Path = "/" + database
 	u.RawQuery = q.Encode()
 	results := make(chan error, 5)
 	for i := 0; i < 5; i++ {
@@ -40,6 +43,36 @@ func TestConcurrentFreshMigrations(t *testing.T) {
 		if err := <-results; err != nil {
 			t.Errorf("concurrent startup: %v", err)
 		}
+	}
+}
+
+func TestMigrateRejectsForeignSchemaBeforeEffects(t *testing.T) {
+	db := testDB(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	schema := "migration_scope_" + strings.ReplaceAll(NewID(), "-", "")
+	if _, err := db.Pool.ExecContext(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Pool.ExecContext(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
+	u, err := url.Parse(os.Getenv("AI_SDLC_TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	q.Set("search_path", schema+",public")
+	u.RawQuery = q.Encode()
+	other, err := Open(ctx, u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if err := other.Migrate(ctx); err == nil || err.Error() != "runtime migrations require the dedicated public schema" {
+		t.Fatal("foreign schema migration did not fail closed", err)
+	}
+	var count int
+	if err := db.Pool.QueryRowContext(ctx, `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1`, schema).Scan(&count); err != nil || count != 0 {
+		t.Fatal("foreign schema gained migration objects", err)
 	}
 }
 

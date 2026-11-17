@@ -17,6 +17,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
@@ -84,6 +85,10 @@ func (db *DB) Migrate(ctx context.Context) error {
 		return fmt.Errorf("migration connection: %w", err)
 	}
 	defer conn.Close()
+	var schema string
+	if err := conn.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil || schema != "public" {
+		return errors.New("runtime migrations require the dedicated public schema")
+	}
 	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(73421019)`); err != nil {
 		return fmt.Errorf("migration lock: %w", err)
 	}

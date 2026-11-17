@@ -17,7 +17,7 @@ import (
 func candidateFixture(t *testing.T, configure ...func(*fixture)) (*lifecycleFixture, *Lifecycle, store.ModelScope, []byte) {
 	t.Helper()
 	f, l, load, pod := modelLifecycleFixture(t, configure...)
-	if _, err := f.Admin.Pool.Exec(`GRANT INSERT ON execution_candidates TO aisdlc_worker; GRANT SELECT ON model_calls TO aisdlc_worker; GRANT UPDATE(state,stop_reason) ON model_budgets TO aisdlc_worker`); err != nil {
+	if _, err := f.Admin.Pool.Exec(`GRANT INSERT ON execution_candidates TO aisdlc_worker; GRANT SELECT ON model_calls TO aisdlc_worker; GRANT UPDATE(state,stop_reason) ON model_budgets TO aisdlc_worker; GRANT UPDATE(reserved_calls) ON model_allocations TO aisdlc_worker`); err != nil {
 		t.Fatal(err)
 	}
 	scope, err := l.ActivateModel(context.Background(), load)

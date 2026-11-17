@@ -111,7 +111,20 @@ func (l *Lifecycle) ActivateModel(ctx context.Context, load ModelPolicyLoader) (
 	digest := workspacebundle.Digest(raw)
 	b := store.ModelBudget{WorkItem: a.WorkItemID, Repository: a.Repository, SourceSHA: a.SourceSHA, PolicyDigest: a.ProfileSHA256, Model: p.Model, Limits: policy.Limits, ExpiresAt: l.durable.Claim.Until}
 	allocation := store.ModelAllocation{ID: store.NewID(), WorkItem: a.WorkItemID, PodUID: pod, Attempt: a.Attempt, Limits: policy.Limits, ResponseLimit: policy.ResponseLimit, ExpiresAt: l.durable.Claim.Until}
-	scope, err = l.db.ActivateLifecycleModel(ctx, l.durable, b, allocation, digest)
+	if a.Repair != nil {
+		b, allocation, err = l.db.RepairModelReservation(ctx, l.durable.Claim.ID, digest)
+		if err != nil || b.WorkItem != a.WorkItemID || b.Repository != a.Repository || b.SourceSHA != a.SourceSHA || b.PolicyDigest != a.ProfileSHA256 || b.Model != p.Model ||
+			b.Limits.Calls != a.Repair.RemainingCalls || b.Limits.Calls > policy.Limits.Calls || b.Limits.InputBytes > policy.Limits.InputBytes || b.Limits.OutputBytes > policy.Limits.OutputBytes || allocation.ResponseLimit != policy.ResponseLimit {
+			return store.ModelScope{}, ErrAuthority
+		}
+		if l.durable.Claim.Until.Before(b.ExpiresAt) {
+			b.ExpiresAt = l.durable.Claim.Until
+		}
+		allocation.PodUID, allocation.ExpiresAt = pod, b.ExpiresAt
+		scope, err = l.db.ActivateRepairLifecycleModel(ctx, l.durable, b, allocation, digest)
+	} else {
+		scope, err = l.db.ActivateLifecycleModel(ctx, l.durable, b, allocation, digest)
+	}
 	if err != nil {
 		return store.ModelScope{}, ErrAuthority
 	}

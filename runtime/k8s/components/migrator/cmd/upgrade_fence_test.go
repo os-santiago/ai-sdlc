@@ -66,8 +66,19 @@ func upgradeProtocolFixture(t *testing.T, schema ...int) (*store.DB, string, str
 	}
 	// These owned disposable fixtures exercise only the historical 34/35 bridge.
 	// Remove the later schema here, never from an operational database.
-	if len(source) != 36 || source[35].Filename != "0036_review_feedback.sql" {
+	if len(source) != 37 || source[35].Filename != "0036_review_feedback.sql" || source[36].Filename != "0037_review_repair.sql" {
 		t.Fatal("fixture catalog changed")
+	}
+	if _, err = db.Pool.ExecContext(ctx, `DROP POLICY repair_worker_feedback_reader ON public.review_feedback;
+ DROP TABLE public.repair_model_budgets,public.execution_repairs,public.review_repair_handoffs;
+ DROP FUNCTION public.lock_repair_parent_budget(uuid);
+ DELETE FROM public.schema_migrations WHERE filename='0037_review_repair.sql'`); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"execution_requests", "execution_lifecycles", "execution_models", "execution_candidates", "model_allocations", "model_budgets", "verification_requests", "review_runs", "review_effects", "review_model_calls", "review_feedback"} {
+		if _, err = db.Pool.ExecContext(ctx, "DROP POLICY repair_orchestrator_reader ON public."+table); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err = db.Pool.ExecContext(ctx, `DROP TABLE public.review_feedback; DELETE FROM public.schema_migrations WHERE filename='0036_review_feedback.sql'`); err != nil {
 		t.Fatal(err)

@@ -38,6 +38,7 @@ type UpgradeFence struct {
 // downstream external delivery history. Additional schemas/states need their
 // own compatibility and recovery proof; no history is deleted to qualify.
 var browserUpgradeTables = []string{"deployment_browser_cleanups", "deployment_browser_evidence", "deployment_browser_intents", "deployment_browser_pods", "deployment_browser_sends"}
+var repairUpgradeTables = []string{"execution_repairs", "repair_model_budgets", "review_repair_handoffs"}
 
 func upgradeFenceTables(source []MigrationIdentity) ([]string, error) {
 	return selectedUpgradeFenceTables(source, false)
@@ -45,11 +46,12 @@ func upgradeFenceTables(source []MigrationIdentity) ([]string, error) {
 
 func selectedUpgradeFenceTables(source []MigrationIdentity, browser bool) ([]string, error) {
 	catalog, err := MigrationCatalog()
-	if err != nil || len(catalog) != 36 || catalog[35].Filename != "0036_review_feedback.sql" || catalog[34].Filename != "0035_deployment_browser.sql" || catalog[32].Filename != "0033_production_completion.sql" || catalog[33].Filename != "0034_execution_failures.sql" || ValidateMigrationSource(source) != nil || (!browser && len(source) != 33 && len(source) != 34) || (browser && len(source) != 34 && len(source) != 35) {
+	if err != nil || len(catalog) != 37 || catalog[36].Filename != "0037_review_repair.sql" || catalog[35].Filename != "0036_review_feedback.sql" || catalog[34].Filename != "0035_deployment_browser.sql" || catalog[32].Filename != "0033_production_completion.sql" || catalog[33].Filename != "0034_execution_failures.sql" || ValidateMigrationSource(source) != nil || (!browser && len(source) != 33 && len(source) != 34) || (browser && len(source) != 34 && len(source) != 35) {
 		return nil, ErrUpgradeFence
 	}
-	// Historical bridges never admit the new feedback schema or its rows.
-	tables := slices.DeleteFunc(slices.Clone(bootstrapTables), func(s string) bool { return s == "review_feedback" })
+	// Historical bridges retain their exact source schemas; neither feedback
+	// nor repair history may be admitted by a newer embedded catalog.
+	tables := slices.DeleteFunc(slices.Clone(bootstrapTables), func(s string) bool { return s == "review_feedback" || slices.Contains(repairUpgradeTables, s) })
 	if len(source) < 35 {
 		tables = slices.DeleteFunc(tables, func(s string) bool { return slices.Contains(browserUpgradeTables, s) })
 	}

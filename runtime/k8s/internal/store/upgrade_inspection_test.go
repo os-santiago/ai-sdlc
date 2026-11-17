@@ -139,7 +139,7 @@ func TestUpgradeObservationDetectsPartialMigrationWithoutClaimingRollback(t *tes
 	before := upgradeHistory(t, db)
 	catalog, _ := MigrationCatalog()
 	last := catalog[len(catalog)-1].Filename
-	if last != "0036_review_feedback.sql" {
+	if last != "0037_review_repair.sql" {
 		t.Fatal("Update the explicit final-file rollback assertions for the new migration")
 	}
 	// First pending file commits; fail recording the second file so its DDL and
@@ -168,7 +168,9 @@ func TestUpgradeObservationDetectsPartialMigrationWithoutClaimingRollback(t *tes
  AND to_regclass('public.deployment_browser_pods') IS NOT NULL
  AND to_regclass('public.deployment_browser_evidence') IS NOT NULL
  AND to_regclass('public.deployment_browser_cleanups') IS NOT NULL
- AND to_regclass('public.review_feedback') IS NULL`).Scan(&finalTableAbsent); err != nil || !finalTableAbsent {
+ AND to_regclass('public.review_feedback') IS NOT NULL
+ AND to_regclass('public.review_repair_handoffs') IS NULL
+ AND to_regprocedure('public.lock_repair_parent_budget(uuid)') IS NULL`).Scan(&finalTableAbsent); err != nil || !finalTableAbsent {
 		t.Fatal("failed file DDL did not roll back", err)
 	}
 	if _, err = db.Pool.ExecContext(ctx, `DROP TRIGGER upgrade_failure ON public.schema_migrations; DROP FUNCTION public.reject_upgrade_record()`); err != nil {

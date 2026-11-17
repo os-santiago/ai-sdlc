@@ -3,6 +3,8 @@ package store
 // Immutable command/candidate columns cannot be updated. Observation rows are
 // read-only: the worker cannot manufacture eligibility or refresh its own lease.
 var executionPrivileges = []string{
+	`GRANT SELECT ON execution_repairs,repair_model_budgets,review_repair_handoffs,review_feedback TO aisdlc_worker`,
+	`GRANT UPDATE(reserved_calls,reserved_input_bytes,reserved_output_bytes,state,stop_reason) ON repair_model_budgets TO aisdlc_worker`,
 	`GRANT SELECT ON execution_failures TO aisdlc_worker`,
 	`GRANT INSERT(request_id,pod_uid,container_id,exit_code) ON execution_failures TO aisdlc_worker`,
 	`GRANT SELECT ON execution_requests TO aisdlc_worker`,

@@ -40,7 +40,11 @@ func (db *DB) readCandidate(ctx context.Context, id, component string) (Verifica
  JOIN execution_models m ON m.request_id=c.request_id AND m.allocation_id=c.allocation_id
  JOIN model_allocations a ON a.id=c.allocation_id AND a.work_item_uuid=r.work_item_uuid AND a.pod_uid=c.pod_uid AND a.attempt=r.attempt
  JOIN model_budgets b ON b.work_item_uuid=r.work_item_uuid AND b.source_sha=c.source_sha AND b.repository=r.repository
- WHERE c.request_id=$1 AND l.phase='candidate-captured' AND l.cleanup_state='complete' AND l.pod_uid=c.pod_uid AND b.state='stopped' AND b.stop_reason='candidate-captured'`, id).Scan(&result.Record.RequestID, &result.Record.AllocationID, &result.Record.PodUID, &result.Record.SourceSHA, &result.Record.SourceTreeSHA256, &result.Record.CandidateTreeSHA256, &result.Record.ExportSHA256, &result.Record.ExportBytes, &result.Record.DeltaSHA256, &result.Delta, &result.Record.Changes, &result.Record.ModelCalls, &result.CreatedAt, &result.WorkItem, &result.Repository, &result.Payload, &result.Receipt)
+ LEFT JOIN execution_repairs repair ON repair.child_request_id=r.id AND repair.child_allocation_id=a.id AND repair.work_item_uuid=r.work_item_uuid
+ LEFT JOIN repair_model_budgets rb ON rb.allocation_id=a.id AND rb.work_item_uuid=r.work_item_uuid
+ WHERE c.request_id=$1 AND l.phase='candidate-captured' AND l.cleanup_state='complete' AND l.pod_uid=c.pod_uid AND b.state='stopped' AND b.stop_reason='candidate-captured'
+ AND ((r.attempt=1 AND rb.allocation_id IS NULL AND repair.child_request_id IS NULL)
+ OR (r.attempt=2 AND repair.child_request_id=r.id AND rb.state='stopped' AND rb.stop_reason='candidate-captured' AND rb.expires_at=repair.expires_at AND a.expires_at<=rb.expires_at))`, id).Scan(&result.Record.RequestID, &result.Record.AllocationID, &result.Record.PodUID, &result.Record.SourceSHA, &result.Record.SourceTreeSHA256, &result.Record.CandidateTreeSHA256, &result.Record.ExportSHA256, &result.Record.ExportBytes, &result.Record.DeltaSHA256, &result.Delta, &result.Record.Changes, &result.Record.ModelCalls, &result.CreatedAt, &result.WorkItem, &result.Repository, &result.Payload, &result.Receipt)
 	if err != nil {
 		return VerificationCandidate{}, observationError(err)
 	}

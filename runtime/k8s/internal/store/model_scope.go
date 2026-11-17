@@ -21,7 +21,12 @@ func (db *DB) ReadModelScope(ctx context.Context, allocation string) (ModelScope
 		return ModelScope{}, errModelPolicy
 	}
 	var s ModelScope
-	err := db.Pool.QueryRowContext(ctx, `SELECT a.id,a.work_item_uuid,a.pod_uid,b.repository,b.source_sha,b.policy_digest,b.model,a.attempt,a.response_limit,LEAST(a.expires_at,b.expires_at) FROM model_allocations a JOIN model_budgets b ON b.work_item_uuid=a.work_item_uuid WHERE a.id=$1`, allocation).Scan(&s.AllocationID, &s.WorkItem, &s.PodUID, &s.Repository, &s.SourceSHA, &s.PolicyDigest, &s.Model, &s.Attempt, &s.ResponseLimit, &s.ExpiresAt)
+	err := db.Pool.QueryRowContext(ctx, `SELECT a.id,a.work_item_uuid,a.pod_uid,b.repository,b.source_sha,b.policy_digest,b.model,a.attempt,a.response_limit,LEAST(a.expires_at,b.expires_at,rb.expires_at)
+ FROM model_allocations a JOIN model_budgets b ON b.work_item_uuid=a.work_item_uuid
+ LEFT JOIN execution_repairs r ON r.child_allocation_id=a.id
+ LEFT JOIN repair_model_budgets rb ON rb.allocation_id=a.id
+ WHERE a.id=$1 AND ((r.child_allocation_id IS NULL AND rb.allocation_id IS NULL)
+ OR (r.work_item_uuid=a.work_item_uuid AND rb.work_item_uuid=a.work_item_uuid AND rb.expires_at=r.expires_at AND a.attempt=2 AND a.response_limit=rb.response_limit AND a.expires_at<=rb.expires_at))`, allocation).Scan(&s.AllocationID, &s.WorkItem, &s.PodUID, &s.Repository, &s.SourceSHA, &s.PolicyDigest, &s.Model, &s.Attempt, &s.ResponseLimit, &s.ExpiresAt)
 	if err != nil {
 		return ModelScope{}, err
 	}
