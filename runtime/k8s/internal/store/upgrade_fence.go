@@ -16,6 +16,7 @@ var ErrUpgradeFence = errors.New("runtime upgrade fence denied")
 // no delivery, migration or rollback authority. Call Check immediately before
 // and after each original-identity-bound administrative Kubernetes operation.
 type UpgradeFence struct {
+	checkPermit chan struct{}
 	tx          *sql.Tx
 	tables      []string
 	relationIDs string
@@ -68,11 +69,22 @@ func upgradeFenceInventory(ctx context.Context, tx *sql.Tx, expected []string) (
 }
 
 func (f *UpgradeFence) Check(ctx context.Context) error {
-	if f == nil || f.tx == nil || time.Now().After(f.deadline) {
+	if f == nil || f.tx == nil || f.checkPermit == nil || time.Now().After(f.deadline) {
 		return ErrUpgradeFence
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
+	// A transaction shares one driver connection. Protect the whole observation,
+	// including Rows iteration/Close, from concurrent heartbeat/protocol queries.
+	select {
+	case f.checkPermit <- struct{}{}:
+		defer func() { <-f.checkPermit }()
+	case <-ctx.Done():
+		return ErrUpgradeFence
+	}
+	if ctx.Err() != nil || time.Now().After(f.deadline) {
+		return ErrUpgradeFence
+	}
 	var valid bool
 	// The same lock used by Migrate also excludes another maintenance fence.
 	if err := f.tx.QueryRowContext(ctx, `SELECT current_database()=$1 AND NOT pg_is_in_recovery()
@@ -188,13 +200,14 @@ func (db *DB) WithPreCandidateUpgradeFence(ctx context.Context, database string,
 		return ErrUpgradeFence
 	}
 	deadline, _ := active.Deadline()
-	fence := &UpgradeFence{tx: tx, tables: tables, relationIDs: ids, database: database, source: slices.Clone(source), deadline: deadline}
+	fence := &UpgradeFence{checkPermit: make(chan struct{}, 1), tx: tx, tables: tables, relationIDs: ids, database: database, source: slices.Clone(source), deadline: deadline}
 	if fence.Check(acquire) != nil || fence.inspectHistory(acquire) != nil {
 		return ErrUpgradeFence
 	}
 	// Continuous observation cancels the original callback if the backend dies.
 	// Check must still bracket every Kubernetes effect; a heartbeat is not a lease.
 	done := make(chan struct{})
+	stopHeartbeat := make(chan struct{})
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(250 * time.Millisecond)
@@ -202,6 +215,8 @@ func (db *DB) WithPreCandidateUpgradeFence(ctx context.Context, database string,
 		for {
 			select {
 			case <-active.Done():
+				return
+			case <-stopHeartbeat:
 				return
 			case <-ticker.C:
 				if fence.Check(active) != nil {
@@ -211,8 +226,19 @@ func (db *DB) WithPreCandidateUpgradeFence(ctx context.Context, database string,
 			}
 		}
 	}()
-	defer func() { cancel(); <-done }()
-	if err = pause(active, fence); err != nil {
+	stopped := false
+	joinHeartbeat := func() {
+		if !stopped {
+			close(stopHeartbeat)
+			<-done
+			stopped = true
+		}
+	}
+	defer func() { cancel(); joinHeartbeat() }()
+	err = pause(active, fence)
+	// No heartbeat may race the final inspection or acknowledged rollback.
+	joinHeartbeat()
+	if err != nil {
 		return err
 	}
 	if active.Err() != nil || fence.Check(active) != nil {
