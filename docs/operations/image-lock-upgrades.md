@@ -264,3 +264,44 @@ again only reobserves the result and repairs its installation snapshot if needed
 `status` is read-only. This operation does not provide resume, migration,
 backup/restore, rollback or an end-to-end delivery result. Those gates remain
 required before installing new runtime images.
+
+## Restore-verify a private backup of the paused runtime
+
+After the original pause has completed, the same entrypoint can capture and
+restore-verify a bounded backup:
+
+```bash
+./install.sh runtime-upgrade backup --cluster ORIGINAL_CLUSTER --provider podman
+./install.sh runtime-upgrade backup-status --cluster ORIGINAL_CLUSTER --provider podman
+```
+
+The command uses the original recorded pause plan. It rechecks the paused
+controllers, database Pod and credentials, then holds the reviewed SQL fence
+while exporting the `ai_sdlc` database and global roles. It writes an exclusive
+private directory and mode-0600 files; each archive is limited to 4 MiB for this
+local pilot. Existing or partial archives are never overwritten or adopted.
+
+A fresh owned PostgreSQL container uses the original immutable database image,
+no network, ephemeral data storage and read-only archive mounts. Restoration
+must succeed without ignored errors. The verifier compares every public table's
+row count and ordered row hashes, role attributes/password hashes, memberships,
+role settings and the complete schema dump, including ownership, privileges,
+functions and row-level security. Only the bootstrap grantor of built-in role
+memberships is canonicalized between fresh clusters. A deterministic restrict
+key makes the schema comparison repeatable; that SQL is only hashed and discarded,
+never executed. The archive and globals used for restoration retain their normal
+format. See PostgreSQL's [pg_dump](https://www.postgresql.org/docs/17/app-pgdump.html)
+and [pg_dumpall](https://www.postgresql.org/docs/17/app-pg-dumpall.html) documentation.
+
+Completion requires removing the original restore container and rechecking that
+the paused source still matches the captured backup. The private record is
+`runtime-upgrade-backup.json`; archives stay under `runtime-upgrade-backup/` for
+recovery review. A missing container acknowledgement or incomplete capture stays
+incomplete and is not automatically replayed. Preserve the original intent.
+
+`backup-status` is read-only and reports restoration of the recorded backup at
+`verifiedAt`; it does not assert that later database changes match it. A future
+upgrade must revalidate the current source against that proof. Neither command
+migrates or restores into the installed database, reactivates producers, grants
+rollback authority or validates autonomous delivery. This bounded local backup
+is not a replacement for an enterprise retention or disaster-recovery service.

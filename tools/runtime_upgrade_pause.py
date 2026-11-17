@@ -1,4 +1,4 @@
-"""Pause an original active runtime under bounded migrator write exclusion."""
+"""Pause and restore-verify an original runtime before a reviewed upgrade."""
 import argparse
 import copy
 from contextlib import ExitStack
@@ -195,7 +195,7 @@ class Pause:
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command',choices=('pause','status'));parser.add_argument('--cluster',required=True)
+    parser.add_argument('command',choices=('pause','status','backup','backup-status'));parser.add_argument('--cluster',required=True)
     parser.add_argument('--provider',choices=('auto','podman','docker'),default='auto')
     for name in ('source','target'):
         parser.add_argument('--'+name+'-run',type=int);parser.add_argument('--'+name+'-revision')
@@ -212,5 +212,11 @@ def main(argv=None):
         plan=None
         if args.command=='pause':
             plan=install_upgrade.plan(install_upgrade.Source(install.ROOT),install_images.GitHub(),args.source_run,args.source_revision,args.target_run,args.target_revision)
-        result=Pause(config,plan).run() if args.command=='pause' else Pause(config).status()
+        if args.command in ('backup','backup-status'):
+            if any(getattr(args,name+'_'+field) is not None for name in ('source','target') for field in ('run','revision')):
+                raise ValueError('Backup uses only the original recorded pause plan')
+            from runtime_upgrade_backup import Backup
+            backup=Backup(config)
+            result=backup.run() if args.command=='backup' else backup.status()
+        else:result=Pause(config,plan).run() if args.command=='pause' else Pause(config).status()
         print(json.dumps(result,indent=2));return 0

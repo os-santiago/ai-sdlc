@@ -34,7 +34,11 @@ digest in Git. Reapply the same command to reconcile desired state. To refresh
 pins from a reviewed publication, use the [image upgrade procedure](docs/operations/image-lock-upgrades.md).
 `./install.sh upgrade-plan` compares explicit published versions before mutation;
 its [preflight report](docs/operations/image-lock-upgrades.md#plan-a-transition-before-changing-an-installation)
-does not authorize upgrading an active installation.
+does not authorize upgrading an active installation. For an original pre-candidate
+runtime, `runtime-upgrade pause` preserves history while stopping producers;
+`runtime-upgrade backup` verifies a private copy by restoring it into an isolated
+database. See the same procedure for scope, recovery limits and remaining
+migration/reactivation gates.
 
 For an existing installer-owned Konflux cluster, use the
 [frozen runtime capability](docs/operations/frozen-konflux-runtime.md) and
