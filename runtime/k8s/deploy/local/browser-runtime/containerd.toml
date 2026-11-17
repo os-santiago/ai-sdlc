@@ -1,0 +1,10 @@
+# BEGIN AI-SDLC BROWSER RUNTIME v1
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.ai-sdlc-browser]
+  runtime_type = "io.containerd.runsc.v1"
+  runtime_path = "/opt/ai-sdlc/gvisor-release-20261109.0/containerd-shim-runsc-v1"
+  pod_annotations = []
+  container_annotations = []
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.ai-sdlc-browser.options]
+  TypeUrl = "io.containerd.runsc.v1.options"
+  ConfigPath = "/etc/containerd/ai-sdlc-browser.toml"
+# END AI-SDLC BROWSER RUNTIME v1

@@ -1,0 +1,10 @@
+# Fixed browser runner only. No model, workflow credential or shell command input.
+FROM mcr.microsoft.com/playwright/python@sha256:38dd67fc654b56b3cba611e4c8eb71cd33750e1cd29eea2a5dc00b484817a75f
+RUN apt-get update && apt-get install -y --no-install-recommends libnss3-tools \
+    && rm -rf /var/lib/apt/lists/*
+COPY components/browser-verifier/requirements.lock /opt/ai-sdlc/requirements.lock
+RUN python -m pip install --no-cache-dir --require-hashes -r /opt/ai-sdlc/requirements.lock
+COPY components/browser-verifier/browser.py /opt/ai-sdlc/browser.py
+ENV HOME=/work/home TMPDIR=/work/tmp PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+USER 1001:1001
+ENTRYPOINT ["python", "/opt/ai-sdlc/browser.py"]

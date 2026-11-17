@@ -7,6 +7,10 @@ responsibilities, authority boundaries and the remaining E2E graduation gates.
 
 For the current local demonstration, see [Saferus E2E readiness](docs/operations/saferus-e2e-readiness.md): verified preparation and remaining autonomous-delivery gates.
 
+The [browser verifier component](docs/operations/browser-verifier.md) adds real
+desktop/mobile conformance tests. Its integration into autonomous deployment
+health remains a separate gate.
+
 ## Install locally with kind and Helm
 
 On Linux amd64 with Python 3.11+ and Docker or Podman:

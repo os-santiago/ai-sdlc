@@ -47,9 +47,10 @@ def validate_run(run, run_id, revision):
         raise ValueError('Expected a successful exact-revision main container publication')
 
 
-def select_artifacts(catalog, run_id, revision, include_build=False, include_release=False):
-    expected = ARTIFACT_COMPONENTS | ({'artifact-builder', 'build-controller'} if include_build else set()) | ({'deployer'} if include_release else set())
+def select_artifacts(catalog, run_id, revision, include_build=False, include_release=False, include_browser=False):
+    expected = ARTIFACT_COMPONENTS | ({'artifact-builder', 'build-controller'} if include_build else set()) | ({'deployer'} if include_release else set()) | ({'browser-verifier'} if include_browser else set())
     if include_release and not include_build: raise ValueError('Release images require complete build publication')
+    if include_browser and not include_release: raise ValueError('Browser images require complete release publication')
     if (not isinstance(catalog, dict) or type(catalog.get('total_count')) is not int
             or not isinstance(catalog.get('artifacts'), list)
             or not 1 <= catalog['total_count'] <= 100
@@ -62,10 +63,12 @@ def select_artifacts(catalog, run_id, revision, include_build=False, include_rel
             raise ValueError('Invalid artifact record')
         name = item.get('name', '')
         prefix = 'release-image-' if include_release and isinstance(name,str) and name.startswith('release-image-') else 'supply-chain-image-' if include_build and isinstance(name, str) and name.startswith('supply-chain-image-') else 'image-'
+        if include_browser and isinstance(name, str) and name.startswith('browser-image-'):
+            prefix = 'browser-image-'
         if not isinstance(name, str) or not name.startswith(prefix):
             continue
         component = name[len(prefix):]
-        if (prefix == 'supply-chain-image-') != (component in ('artifact-builder', 'build-controller')) or (prefix=='release-image-') != (component=='deployer'):
+        if (prefix == 'supply-chain-image-') != (component in ('artifact-builder', 'build-controller')) or (prefix=='release-image-') != (component=='deployer') or (prefix=='browser-image-') != (component=='browser-verifier'):
             raise ValueError('Unexpected component publication artifact class')
         origin = item.get('workflow_run', {})
         if not isinstance(origin, dict):
@@ -131,10 +134,10 @@ class GitHub:
             return output.read(MAX_RESPONSE + 1)
 
 
-def resolve(api, run_id, revision, include_build=False, include_release=False):
+def resolve(api, run_id, revision, include_build=False, include_release=False, include_browser=False):
     run = decode(api.get('actions/runs/' + str(run_id)))
     validate_run(run, run_id, revision)
-    artifacts = select_artifacts(decode(api.get('actions/runs/' + str(run_id) + '/artifacts?per_page=100')), run_id, revision, include_build, include_release)
+    artifacts = select_artifacts(decode(api.get('actions/runs/' + str(run_id) + '/artifacts?per_page=100')), run_id, revision, include_build, include_release, include_browser)
     identities = {}
     for component, artifact in sorted(artifacts.items()):
         identities[component] = image_identity(api.get('actions/artifacts/' + str(artifact['id']) + '/zip'), artifact, component, revision)
@@ -152,6 +155,7 @@ def resolve(api, run_id, revision, include_build=False, include_release=False):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--include-release', action='store_true', help='Also require the exact-main deployer image; requires --include-build')
+    parser.add_argument('--include-browser', action='store_true', help='Also require the exact-main browser image; requires --include-release')
     parser.add_argument('--include-build', action='store_true', help='Also require exact-main publisher and build-controller identities')
     parser.add_argument('--run', type=int, required=True, help='Successful containers workflow run on main')
     parser.add_argument('--revision', required=True, help='Exact reviewed source commit')
@@ -162,13 +166,17 @@ def main(argv=None):
     if args.output.exists():
         parser.error('Output directory must not already exist')
     try:
-        lock, evidence = resolve(GitHub(), args.run, args.revision, args.include_build, args.include_release)
+        lock, evidence = resolve(GitHub(), args.run, args.revision, args.include_build, args.include_release, args.include_browser)
         args.output.mkdir(parents=True, mode=0o700, exist_ok=False)
         (args.output / 'images.lock.json').write_text(json.dumps(lock, indent=2) + '\n')
         evidence_json = json.dumps(evidence, indent=2) + '\n'
         (args.output / 'evidence.json').write_text(evidence_json)
         # Execution installation consumes this sibling of images.lock.json.
         (args.output / 'images.evidence.json').write_text(evidence_json)
+        if args.include_browser:
+            browser={'version':'ai-sdlc.browser-images/v1','revision':args.revision,
+                     'image':REGISTRY+'@'+evidence['images']['browser-verifier']['digest']}
+            (args.output/'browser-images.json').write_text(json.dumps(browser,indent=2)+'\n')
         if args.include_release:
             release={'version':'ai-sdlc.release-images/v1','revision':args.revision,'deployerDigest':evidence['images']['deployer']['digest']}
             (args.output/'release-images.json').write_text(json.dumps(release,indent=2)+'\n')

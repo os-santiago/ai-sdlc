@@ -197,9 +197,14 @@ helm template deploy/helm/ai-sdlc-k8s-runtime \
 ```
 
 `make render-k8s`, `make render-openshift` and `make helm-lint` wrap the
-above. `make containers` builds all twelve project images locally with Podman. The
+above. `make containers` builds all thirteen project images locally with Podman. The
 `model-mailbox` image is a hidden prerequisite, tested in disposable Pods; the
 installer does not activate it. See the [transport boundary](../../docs/security/offline-model-mailbox.md).
+
+The [browser verifier](../../docs/operations/browser-verifier.md) is a separate
+Firefox image with a fixed Saferus recipe and isolated gVisor conformance tests.
+Its deployer-owned integration remains pending; component tests do not establish
+autonomous deployment health.
 
 ### Engine source pin (image builds)
 
