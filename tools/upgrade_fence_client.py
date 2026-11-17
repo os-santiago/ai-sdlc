@@ -20,14 +20,18 @@ class HistoryRejected(ValueError):
 
 
 class Fence:
-    def __init__(self, provider, image, connection, port, source_catalog, *, expires_at, contained_review=False, browser_deployment=False):
-        if type(contained_review) is not bool or type(browser_deployment) is not bool or (contained_review and browser_deployment):
+    def __init__(self, provider, image, connection, port, source_catalog, *, expires_at, contained_review=False, browser_deployment=False, review_feedback=False):
+        choices=(contained_review,browser_deployment,review_feedback)
+        if any(type(value) is not bool for value in choices) or sum(choices)>1:
             raise ValueError('Explicit administrative history protocol required')
         self.protocol = 'ai-sdlc.reviewer-upgrade-fence/v1' if contained_review else 'ai-sdlc.upgrade-fence/v1'
         self.operation = 'hold-reviewer-upgrade-fence' if contained_review else 'hold-upgrade-fence'
         if browser_deployment:
             self.protocol = 'ai-sdlc.browser-upgrade-fence/v1'
             self.operation = 'hold-browser-upgrade-fence'
+        if review_feedback:
+            self.protocol = 'ai-sdlc.review-feedback-upgrade-fence/v1'
+            self.operation = 'hold-review-feedback-upgrade-fence'
         if type(expires_at) not in (int,float) or not math.isfinite(expires_at): raise ValueError('Finite original pause deadline required')
         parsed = urlsplit(connection)
         if (provider not in ('podman', 'docker') or not re.fullmatch(r'quay\.io/os-santiago/ai-sdlc@sha256:[a-f0-9]{64}', image)

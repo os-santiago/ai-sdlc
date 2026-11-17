@@ -61,18 +61,20 @@ func upgradeProtocolFixture(t *testing.T, schema ...int) (*store.DB, string, str
 	if len(schema) > 0 {
 		count = schema[0]
 	}
-	if count != 34 && count != 35 {
+	if count != 34 && count != 35 && count != 36 {
 		t.Fatal("unsupported fixture schema")
 	}
-	// These owned disposable fixtures exercise only the historical 34/35 bridge.
+	// Owned disposable fixtures may select the historical schema prefix.
 	// Remove the later schema here, never from an operational database.
 	if len(source) != 36 || source[35].Filename != "0036_review_feedback.sql" {
 		t.Fatal("fixture catalog changed")
 	}
-	if _, err = db.Pool.ExecContext(ctx, `DROP TABLE public.review_feedback; DELETE FROM public.schema_migrations WHERE filename='0036_review_feedback.sql'`); err != nil {
-		t.Fatal(err)
+	if count < 36 {
+		if _, err = db.Pool.ExecContext(ctx, `DROP TABLE public.review_feedback; DELETE FROM public.schema_migrations WHERE filename='0036_review_feedback.sql'`); err != nil {
+			t.Fatal(err)
+		}
+		source = source[:35]
 	}
-	source = source[:35]
 	if count == 34 {
 		if _, err = db.Pool.ExecContext(ctx, `DROP TABLE public.deployment_browser_cleanups,public.deployment_browser_evidence,public.deployment_browser_pods,public.deployment_browser_sends,public.deployment_browser_intents;
  DELETE FROM public.schema_migrations WHERE filename='0035_deployment_browser.sql'`); err != nil {
@@ -309,6 +311,82 @@ func TestUpgradeFenceBrowserProtocolDistinctAndTyped(t *testing.T) {
 			} else {
 				if first["state"] != "held" {
 					t.Fatal("browser bridge not held")
+				}
+				for _, operation := range []string{"check", "release"} {
+					if err = encoder.Encode(map[string]any{"operation": operation, "nonce": first["nonce"]}); err != nil {
+						t.Fatal(err)
+					}
+					var next map[string]any
+					if err = decoder.Decode(&next); err != nil {
+						t.Fatal(err)
+					}
+					state := "held"
+					if operation == "release" {
+						state = "released"
+					}
+					if next["state"] != state || next["nonce"] != first["nonce"] || next["expiresAt"] != first["expiresAt"] {
+						t.Fatal("original fence changed")
+					}
+				}
+				if err = <-done; err != nil {
+					t.Fatal(err)
+				}
+			}
+			cancel()
+			send.Close()
+			receive.Close()
+			if bad {
+				if _, err = db.Pool.Exec(`DELETE FROM release_gates`); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+}
+
+func TestUpgradeFenceFeedbackProtocolDistinctAndTyped(t *testing.T) {
+	for _, count := range []int{35, 36} {
+		db, name, connection, catalog := upgradeProtocolFixture(t, count)
+		seed, err := os.ReadFile("../../../internal/store/testdata/browser_upgrade_history.sql")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = db.Pool.Exec(string(seed)); err != nil {
+			t.Fatal(err)
+		}
+		for _, bad := range []bool{false, true, false} {
+			if bad {
+				if _, err = db.Pool.Exec(`INSERT INTO release_gates(repository,pull_request,state,correlation_id) VALUES('fixture/app',1,'blocked','fixture')`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			input, send := io.Pipe()
+			receive, output := io.Pipe()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			done := make(chan error, 1)
+			go func() { done <- holdSelectedUpgradeFence(ctx, input, output, feedbackFence) }()
+			encoder := json.NewEncoder(send)
+			decoder := json.NewDecoder(receive)
+			if err = encoder.Encode(map[string]any{"databaseURL": connection, "database": name, "sourceCatalog": catalog}); err != nil {
+				t.Fatal(err)
+			}
+			var first map[string]any
+			if err = decoder.Decode(&first); err != nil {
+				t.Fatal(err)
+			}
+			if first["version"] != "ai-sdlc.review-feedback-upgrade-fence/v1" || first["workflowRowsWritten"] != false || first["upgradeAuthorized"] != false {
+				t.Fatal("protocol authority mismatch")
+			}
+			if bad {
+				if first["state"] != "rejected" || first["reason"] != "history" || len(first) != 5 {
+					t.Fatal("history rejection missing")
+				}
+				if err = <-done; err == nil {
+					t.Fatal("denied history returned success")
+				}
+			} else {
+				if first["state"] != "held" {
+					t.Fatal("feedback bridge not held")
 				}
 				for _, operation := range []string{"check", "release"} {
 					if err = encoder.Encode(map[string]any{"operation": operation, "nonce": first["nonce"]}); err != nil {

@@ -44,12 +44,22 @@ func upgradeFenceTables(source []MigrationIdentity) ([]string, error) {
 }
 
 func selectedUpgradeFenceTables(source []MigrationIdentity, browser bool) ([]string, error) {
+	return scopedUpgradeFenceTables(source, browser, false)
+}
+
+func scopedUpgradeFenceTables(source []MigrationIdentity, browser, feedback bool) ([]string, error) {
 	catalog, err := MigrationCatalog()
-	if err != nil || len(catalog) != 36 || catalog[35].Filename != "0036_review_feedback.sql" || catalog[34].Filename != "0035_deployment_browser.sql" || catalog[32].Filename != "0033_production_completion.sql" || catalog[33].Filename != "0034_execution_failures.sql" || ValidateMigrationSource(source) != nil || (!browser && len(source) != 33 && len(source) != 34) || (browser && len(source) != 34 && len(source) != 35) {
+	if err != nil || len(catalog) != 36 || catalog[35].Filename != "0036_review_feedback.sql" || catalog[34].Filename != "0035_deployment_browser.sql" || catalog[32].Filename != "0033_production_completion.sql" || catalog[33].Filename != "0034_execution_failures.sql" || ValidateMigrationSource(source) != nil || (browser && feedback) {
+		return nil, ErrUpgradeFence
+	}
+	if (feedback && len(source) != 35 && len(source) != 36) || (!feedback && ((!browser && len(source) != 33 && len(source) != 34) || (browser && len(source) != 34 && len(source) != 35))) {
 		return nil, ErrUpgradeFence
 	}
 	// Historical bridges never admit the new feedback schema or its rows.
-	tables := slices.DeleteFunc(slices.Clone(bootstrapTables), func(s string) bool { return s == "review_feedback" })
+	tables := slices.Clone(bootstrapTables)
+	if len(source) < 36 {
+		tables = slices.DeleteFunc(tables, func(s string) bool { return s == "review_feedback" })
+	}
 	if len(source) < 35 {
 		tables = slices.DeleteFunc(tables, func(s string) bool { return slices.Contains(browserUpgradeTables, s) })
 	}
@@ -146,7 +156,7 @@ func (f *UpgradeFence) inspectHistory(ctx context.Context) error {
 	allowed := map[string]bool{}
 	if f.reviewerHistory {
 		var safe bool
-		if (len(f.source) != 34 && len(f.source) != 35) || f.tx.QueryRowContext(ctx, reviewerUpgradeHistory).Scan(&safe) != nil {
+		if (len(f.source) != 34 && len(f.source) != 35 && len(f.source) != 36) || f.tx.QueryRowContext(ctx, reviewerUpgradeHistory).Scan(&safe) != nil {
 			return ErrUpgradeFence
 		}
 		if !safe {
@@ -218,7 +228,18 @@ func (db *DB) WithBrowserDeploymentUpgradeFence(ctx context.Context, database st
 }
 
 func (db *DB) withUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, reviewerHistory, browser bool, pause func(context.Context, *UpgradeFence) error) error {
-	tables, err := selectedUpgradeFenceTables(source, browser)
+	return db.withScopedUpgradeFence(ctx, database, source, reviewerHistory, browser, false, pause)
+}
+
+// WithReviewFeedbackUpgradeFence is the separate 0035 -> 0036 administrative
+// bridge. Original failed reviews must be expired and cleaned, and every
+// browser/feedback/downstream table must be empty. It never repairs work.
+func (db *DB) WithReviewFeedbackUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, pause func(context.Context, *UpgradeFence) error) error {
+	return db.withScopedUpgradeFence(ctx, database, source, true, false, true, pause)
+}
+
+func (db *DB) withScopedUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, reviewerHistory, browser, feedback bool, pause func(context.Context, *UpgradeFence) error) error {
+	tables, err := scopedUpgradeFenceTables(source, browser, feedback)
 	if err != nil || db == nil || db.Pool == nil || database == "" || len(database) > 63 || pause == nil {
 		return ErrUpgradeFence
 	}

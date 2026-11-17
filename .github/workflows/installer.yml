@@ -46,6 +46,7 @@ jobs:
           python3 -m unittest discover -s tools -p 'test_tool_budget*.py' -v
           python3 -m unittest discover -s tools -p 'test_approval_window.py' -v
           python3 -m unittest discover -s tools -p 'test_reviewer_upgrade.py' -v
+          python3 -m unittest discover -s tools -p 'test_review_feedback_upgrade.py' -v
           python3 -m unittest discover -s tools -p 'test_lifecycle_diagnostics.py' -v
           python3 -m unittest discover -s tools -p test_helm.py -v
           python3 -m unittest discover -s tools -p test_provenance_helm.py -v
