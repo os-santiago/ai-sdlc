@@ -359,6 +359,9 @@ def shadow_intake_config(kubectl, cluster_uid, repository, installer=None):
 
 def _main(argv, stack):
     selected = sys.argv[1:] if argv is None else argv
+    if selected and selected[0] == 'upgrade-plan':
+        import install_upgrade
+        return install_upgrade.main(selected[1:])
     if selected and selected[0] == 'initial-runtime':
         import initial_activation
         return initial_activation.main(selected[1:])
