@@ -42,7 +42,11 @@ The command verifies that the actual ready baseline Pod belongs to the original
 Deployment, then reads hash-selected content from the original owned node. It
 checks descriptor sizes, every referenced config/layer hash, Linux/amd64 and the
 single-manifest relationship between the requested image and runtime ImageID.
-It does not import images or change the node's trust/storage configuration.
+Reads are bounded by each descriptor size and a 20-second deadline on the
+stdout stream. The provider keeps its normal file limits, so Podman can maintain
+its own state database independently of the small OCI blob being read. Owned
+reader processes are terminated before their PID is released. It does not import
+images or change the node's trust/storage configuration.
 After the setup rollout, the image and original OCI content must still match.
 
 `release-target-candidate.json` contains public target information, including the

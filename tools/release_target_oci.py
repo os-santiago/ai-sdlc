@@ -2,8 +2,52 @@
 import hashlib
 import json
 import re
+import os
+import selectors
+import signal
+import subprocess
+import time
 
 DIGEST=re.compile(r'sha256:[a-f0-9]{64}')
+
+
+def bounded_output(argv,limit,timeout=20):
+    """Bound only captured OCI bytes, never the provider's own state files."""
+    if type(limit) is not int or not 1<=limit<=64*1024*1024 or not 0<timeout<=20:
+        raise ValueError('Bounded OCI read required')
+    process=subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,start_new_session=True)
+    deadline=time.monotonic()+timeout;raw=bytearray()
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout,selectors.EVENT_READ)
+            while True:
+                remaining=deadline-time.monotonic()
+                if remaining<=0:raise ValueError('Original OCI content read timed out')
+                if not selector.select(remaining):raise ValueError('Original OCI content read timed out')
+                chunk=os.read(process.stdout.fileno(),min(65536,limit+1-len(raw)))
+                if not chunk:break
+                raw.extend(chunk)
+                if len(raw)>limit:raise ValueError('Original OCI blob exceeded descriptor bound')
+        # Observe completion without reaping: the PID must remain reserved until
+        # its owned process group has been terminated during cleanup.
+        while True:
+            remaining=deadline-time.monotonic()
+            if remaining<=0:raise ValueError('Original OCI content read timed out')
+            status=os.waitid(os.P_PID,process.pid,os.WEXITED|os.WNOHANG|os.WNOWAIT)
+            if status is not None:
+                if status.si_code!=os.CLD_EXITED or status.si_status!=0:
+                    raise ValueError('Original baseline OCI content unavailable')
+                break
+            time.sleep(min(.01,remaining))
+        return bytes(raw)
+    finally:
+        # This command owns a new process group. Closing stdout and terminating
+        # that group bounds stalled/oversized reads without touching the node.
+        process.stdout.close()
+        try:os.killpg(process.pid,signal.SIGKILL)
+        except ProcessLookupError:pass
+        process.wait(timeout=5)
 
 
 def verify(reference,runtime,read):
