@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -282,6 +283,7 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 	}
 	config.Model.Endpoint = originalEndpoint
 	gatewayReady.Store(true)
+	startedReview := time.Now()
 	state, runErr := runtime.PollOnce(ctx)
 	var storedState, cleanup, reason string
 	var proofRaw []byte
@@ -292,6 +294,16 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 	if db.Pool.QueryRow(`SELECT count(*) FROM review_model_calls WHERE state='handed-off'`).Scan(&handed) != nil {
 		t.Fatal("handoff evidence")
 	}
+	var diagnostic ControllerError
+	stage := "none"
+	if runErr != nil {
+		stage = "unclassified"
+		if errors.As(runErr, &diagnostic) {
+			stage = diagnostic.Stage
+		}
+	}
+	// Finite fixture observations only: no provider text, credentials or raw errors.
+	t.Logf("review observation: scenario=%s state=%s stored=%s reason=%s cleanup=%s stage=%s cleanupPending=%t calls=%d handed=%d elapsedMs=%d", control.Scenario, state, storedState, reason, cleanup, stage, diagnostic.CleanupPending, calls.Load(), handed, time.Since(startedReview).Milliseconds())
 	if control.Scenario == "lost-config-reply" {
 		if runErr == nil || storedState != "failed" || cleanup != "uncertain" || len(proofRaw) != 0 || calls.Load() != 0 || creates.Load() != 1 || deletes.Load() != 0 {
 			t.Fatal("unknown create not quarantined", storedState, cleanup, runErr)

@@ -65,10 +65,15 @@ class ApprovalWindow(ToolBudgetUpgrade):
             if self.approvals is not None and self.approvals != self.record['approvals']:
                 raise ValueError('An existing operation cannot adopt a new approval window')
 
-    def unchanged(self):
+    def custody(self):
         self.source_budget.custody()
         if bootstrap.digest(files.bounded_json(self.source_budget.path, 32 * 1024 * 1024)) != self.parent_hash:
             raise ValueError('Original tool-budget activation changed')
+        if self.record and (self.record.get('backup') or {}).get('phase') == 'verified':
+            data.verify_archives(self.directory, self.record['backup']['archives'])
+
+    def unchanged(self):
+        self.custody()
         installed = files.bounded_json(self.config.state_dir / 'installation.json', 2 * 1024 * 1024)
         if self.record is None:
             prior = self.source_budget.record['installationReports']
@@ -77,8 +82,6 @@ class ApprovalWindow(ToolBudgetUpgrade):
                 raise ValueError('Original complete installation snapshot required')
         elif installed not in [self.record['installationSource']] + self.record.get('installationReports', []):
             raise ValueError('Original installation snapshot changed during approval update')
-        if self.record and (self.record.get('backup') or {}).get('phase') == 'verified':
-            data.verify_archives(self.directory, self.record['backup']['archives'])
 
     def describe(self, phase):
         if phase == 'ready':

@@ -9,7 +9,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import Mock,patch
 
-from upgrade_fence_client import Fence,LABEL
+from upgrade_fence_client import Fence,LABEL,HistoryRejected
 
 IMAGE='quay.io/os-santiago/ai-sdlc@sha256:'+'a'*64
 URI='postgresql://ai_sdlc:synthetic@127.0.0.1:19001/ai_sdlc?sslmode=disable'
@@ -37,6 +37,47 @@ class FenceClientTests(unittest.TestCase):
                 self.read(fence,json.dumps(value).encode()+b'\n')
                 value[fault]=('b'*8+NONCE[8:]) if fault=='nonce' else value[fault]+1
                 with self.assertRaises(ValueError):self.read(fence,json.dumps(value).encode()+b'\n')
+
+    def test_contained_review_protocol_is_explicit_and_cannot_accept_legacy_ack(self):
+        fence=Fence('podman',IMAGE,URI,19001,[],expires_at=time.time()+60,contained_review=True)
+        self.assertEqual(fence.operation,'hold-reviewer-upgrade-fence')
+        with self.assertRaises(ValueError):self.read(fence,json.dumps(self.response()).encode()+b'\n')
+        self.read(fence,json.dumps(self.response(version='ai-sdlc.reviewer-upgrade-fence/v1')).encode()+b'\n')
+        with self.assertRaises(ValueError):self.read(self.fixture(),json.dumps(self.response(version='ai-sdlc.reviewer-upgrade-fence/v1')).encode()+b'\n')
+        with self.assertRaises(ValueError):Fence('podman',IMAGE,URI,19001,[],expires_at=time.time()+60,contained_review='true')
+
+    def test_only_exact_initial_compiled_history_rejection_has_specific_type(self):
+        rejected={'version':'ai-sdlc.upgrade-fence/v1','state':'rejected','reason':'history',
+                  'workflowRowsWritten':False,'upgradeAuthorized':False}
+        with self.assertRaises(HistoryRejected):
+            self.read(self.fixture(),json.dumps(rejected).encode()+b'\n')
+        faults=[{**rejected,'reason':'connection'}, {**rejected,'extra':True},
+                {**rejected,'version':'foreign'}, {**rejected,'upgradeAuthorized':True},
+                {**rejected,'workflowRowsWritten':True}]
+        for value in faults:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError) as caught:
+                    self.read(self.fixture(),json.dumps(value).encode()+b'\n')
+                self.assertNotIsInstance(caught.exception,HistoryRejected)
+        for raw in (b'',b'{broken}\n'):
+            with self.assertRaises(ValueError) as caught:self.read(self.fixture(),raw)
+            self.assertNotIsInstance(caught.exception,HistoryRejected)
+        fence=self.fixture();self.read(fence,json.dumps(self.response()).encode()+b'\n')
+        with self.assertRaises(ValueError) as caught:self.read(fence,json.dumps(rejected).encode()+b'\n')
+        self.assertNotIsInstance(caught.exception,HistoryRejected)
+
+    def test_stopped_helper_is_retained_until_original_identity_cleanup(self):
+        fence=self.fixture();fence.write=Mock();fence.read=Mock();fence.owned=Mock(return_value='a'*64)
+        with patch('upgrade_fence_client.subprocess.Popen') as start,patch('upgrade_fence_client.os.set_blocking'):
+            self.assertIs(fence.__enter__(),fence)
+            args=start.call_args.args[0]
+            self.assertNotIn('--rm',args)
+            self.assertIn(LABEL+'='+fence.owner,args)
+        fence.process=None
+        fence.owned=Mock(side_effect=['a'*64,None])
+        with patch('upgrade_fence_client.subprocess.run',return_value=Mock(returncode=0)) as run:
+            fence.close()
+            self.assertEqual(run.call_args.args[0],['podman','rm','-f','a'*64])
 
     def test_rejects_authority_malformed_duplicate_extra_and_oversized_frames(self):
         values=[self.response(upgradeAuthorized=True),self.response(workflowRowsWritten=True),

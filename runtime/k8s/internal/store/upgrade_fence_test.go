@@ -70,7 +70,7 @@ func TestUpgradeFenceRejectsActivityUntilOriginalCleanupCompletes(t *testing.T) 
 	deny := func() {
 		t.Helper()
 		err := db.WithPreCandidateUpgradeFence(ctx, name, source, func(context.Context, *UpgradeFence) error { calls++; return nil })
-		if !errors.Is(err, ErrUpgradeFence) || calls != 0 {
+		if !errors.Is(err, ErrUpgradeFenceHistory) || calls != 0 {
 			t.Fatal("active/unsupported history reached pause callback", err)
 		}
 	}

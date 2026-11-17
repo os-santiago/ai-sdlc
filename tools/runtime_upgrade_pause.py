@@ -196,7 +196,8 @@ class Pause:
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command',choices=('pause','status','backup','backup-status','diagnostic','diagnostic-status','recover-original',
-        'tool-budget','tool-budget-status','recover-tool-budget','reapprove','reapprove-status'));parser.add_argument('--cluster',required=True)
+        'tool-budget','tool-budget-status','recover-tool-budget','reapprove','reapprove-status',
+        'reviewer-image','reviewer-image-status'));parser.add_argument('--cluster',required=True)
     parser.add_argument('--provider',choices=('auto','podman','docker'),default='auto')
     parser.add_argument('--provenance-trust',type=Path)
     parser.add_argument('--release-target',type=Path)
@@ -220,7 +221,13 @@ def main(argv=None):
         plan=None
         if args.command=='pause':
             plan=install_upgrade.plan(install_upgrade.Source(install.ROOT),install_images.GitHub(),args.source_run,args.source_revision,args.target_run,args.target_revision)
-        if args.command in ('reapprove','reapprove-status'):
+        if args.command in ('reviewer-image','reviewer-image-status'):
+            if args.source_run is not None or args.source_revision is not None:
+                raise ValueError('Reviewer update preserves the original recorded source')
+            from reviewer_image_upgrade import ReviewerImageUpgrade
+            upgrade=ReviewerImageUpgrade(config,args.target_run,args.target_revision)
+            result=upgrade.run() if args.command=='reviewer-image' else upgrade.status()
+        elif args.command in ('reapprove','reapprove-status'):
             if any(getattr(args,name+'_'+field) is not None for name in ('source','target') for field in ('run','revision')):
                 raise ValueError('Reapproval preserves the original recorded component selection')
             from approval_window import ApprovalWindow

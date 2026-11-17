@@ -22,6 +22,16 @@ func holdUpgradeFence(input io.ReadCloser, output io.WriteCloser) error {
 }
 
 func holdUpgradeFenceContext(ctx context.Context, input io.ReadCloser, output io.WriteCloser) error {
+	return holdSelectedUpgradeFence(ctx, input, output, false)
+}
+
+func holdReviewerUpgradeFence(input io.ReadCloser, output io.WriteCloser) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 125*time.Second)
+	defer cancel()
+	return holdSelectedUpgradeFence(ctx, input, output, true)
+}
+
+func holdSelectedUpgradeFence(ctx context.Context, input io.ReadCloser, output io.WriteCloser, reviewerHistory bool) error {
 	denied := errors.New("runtime upgrade fence denied")
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -58,10 +68,16 @@ func holdUpgradeFenceContext(ctx context.Context, input io.ReadCloser, output io
 	nonce := store.NewID()
 	var expiry int64
 	released := false
-	emit := func(state string) error {
-		return json.NewEncoder(output).Encode(response{Version: "ai-sdlc.upgrade-fence/v1", State: state, Nonce: nonce, ExpiresAt: expiry})
+	version := "ai-sdlc.upgrade-fence/v1"
+	hold := db.WithPreCandidateUpgradeFence
+	if reviewerHistory {
+		version = "ai-sdlc.reviewer-upgrade-fence/v1"
+		hold = db.WithContainedReviewUpgradeFence
 	}
-	err = db.WithPreCandidateUpgradeFence(ctx, request.Database, request.SourceCatalog, func(active context.Context, fence *store.UpgradeFence) error {
+	emit := func(state string) error {
+		return json.NewEncoder(output).Encode(response{Version: version, State: state, Nonce: nonce, ExpiresAt: expiry})
+	}
+	err = hold(ctx, request.Database, request.SourceCatalog, func(active context.Context, fence *store.UpgradeFence) error {
 		// Loss of the held DB session must also unblock a waiting/blocked stream.
 		stopped := make(chan struct{})
 		stopWatch := make(chan struct{})
@@ -104,6 +120,17 @@ func holdUpgradeFenceContext(ctx context.Context, input io.ReadCloser, output io
 		}
 		return denied
 	})
+	if errors.Is(err, store.ErrUpgradeFenceHistory) && expiry == 0 && ctx.Err() == nil {
+		// No authority was acquired by the client. Do not expose SQL, table
+		// names or private input, and never relabel transport/query failures.
+		_ = json.NewEncoder(output).Encode(struct {
+			Version             string `json:"version"`
+			State               string `json:"state"`
+			Reason              string `json:"reason"`
+			WorkflowRowsWritten bool   `json:"workflowRowsWritten"`
+			UpgradeAuthorized   bool   `json:"upgradeAuthorized"`
+		}{Version: version, State: "rejected", Reason: "history"})
+	}
 	if err != nil || !released {
 		return denied
 	}

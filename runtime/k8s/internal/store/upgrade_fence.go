@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 	"errors"
 	"fmt"
 	"slices"
@@ -12,17 +13,25 @@ import (
 
 var ErrUpgradeFence = errors.New("runtime upgrade fence denied")
 
+// ErrUpgradeFenceHistory is emitted only after a successful SQL observation
+// proves the reviewed history predicate false. It never classifies I/O errors.
+var ErrUpgradeFenceHistory = fmt.Errorf("%w: history predicate rejected", ErrUpgradeFence)
+
+//go:embed reviewer_upgrade_history.sql
+var reviewerUpgradeHistory string
+
 // UpgradeFence exists only during its original bounded transaction. It grants
 // no delivery, migration or rollback authority. Call Check immediately before
 // and after each original-identity-bound administrative Kubernetes operation.
 type UpgradeFence struct {
-	checkPermit chan struct{}
-	tx          *sql.Tx
-	tables      []string
-	relationIDs string
-	database    string
-	source      []MigrationIdentity
-	deadline    time.Time
+	checkPermit     chan struct{}
+	tx              *sql.Tx
+	tables          []string
+	relationIDs     string
+	database        string
+	source          []MigrationIdentity
+	deadline        time.Time
+	reviewerHistory bool
 }
 
 // This reviewed bridge covers schemas 0033 and 0034, before any candidate or
@@ -125,6 +134,18 @@ func (f *UpgradeFence) inspectHistory(ctx context.Context) error {
 		}
 	}
 	allowed := map[string]bool{}
+	if f.reviewerHistory {
+		var safe bool
+		if len(f.source) != 34 || f.tx.QueryRowContext(ctx, reviewerUpgradeHistory).Scan(&safe) != nil {
+			return ErrUpgradeFence
+		}
+		if !safe {
+			return ErrUpgradeFenceHistory
+		}
+		for _, name := range []string{"execution_candidates", "verification_handoffs", "verification_requests", "verification_effects", "review_runs", "review_effects", "review_model_calls"} {
+			allowed[name] = true
+		}
+	}
 	for _, name := range []string{"admission_heads", "admissions", "authorized_inbox", "authorized_nonces", "authorized_outbox",
 		"execution_effects", "execution_failures", "execution_lifecycles", "execution_models", "execution_requests",
 		"intake_cursors", "intake_heads", "intake_observations", "intake_revisions", "managed_component_roles",
@@ -136,8 +157,11 @@ func (f *UpgradeFence) inspectHistory(ctx context.Context) error {
 			continue
 		}
 		var exists bool
-		if err = f.tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM public.`+name+`)`).Scan(&exists); err != nil || exists {
+		if err = f.tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM public.`+name+`)`).Scan(&exists); err != nil {
 			return ErrUpgradeFence
+		}
+		if exists {
+			return ErrUpgradeFenceHistory
 		}
 	}
 	var blocked bool
@@ -146,8 +170,11 @@ func (f *UpgradeFence) inspectHistory(ctx context.Context) error {
   OR EXISTS(SELECT 1 FROM public.execution_lifecycles l JOIN public.execution_requests r ON r.id=l.request_id WHERE r.state<>'stopped' OR l.cleanup_state<>'complete')
   OR EXISTS(SELECT 1 FROM public.execution_effects WHERE result IS NULL)
   OR EXISTS(SELECT 1 FROM public.model_budgets WHERE state<>'stopped')
-  OR EXISTS(SELECT 1 FROM public.model_calls WHERE state NOT IN('completed','stopped'))`).Scan(&blocked); err != nil || blocked {
+  OR EXISTS(SELECT 1 FROM public.model_calls WHERE state NOT IN('completed','stopped'))`).Scan(&blocked); err != nil {
 		return ErrUpgradeFence
+	}
+	if blocked {
+		return ErrUpgradeFenceHistory
 	}
 	return nil
 }
@@ -160,6 +187,20 @@ func (f *UpgradeFence) inspectHistory(ctx context.Context) error {
 // execution resources, then pause/confirm original producers before returning.
 // Never migrate, await workflow completion, or treat this as a drain receipt.
 func (db *DB) WithPreCandidateUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, pause func(context.Context, *UpgradeFence) error) error {
+	return db.withUpgradeFence(ctx, database, source, false, pause)
+}
+
+// WithContainedReviewUpgradeFence is a distinct administrative capability.
+// It admits only fully expired, cleaned and failed review history, never
+// publication or later work. The original pre-candidate contract is unchanged.
+func (db *DB) WithContainedReviewUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, pause func(context.Context, *UpgradeFence) error) error {
+	if len(source) != 34 {
+		return ErrUpgradeFence
+	}
+	return db.withUpgradeFence(ctx, database, source, true, pause)
+}
+
+func (db *DB) withUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, reviewerHistory bool, pause func(context.Context, *UpgradeFence) error) error {
 	tables, err := upgradeFenceTables(source)
 	if err != nil || db == nil || db.Pool == nil || database == "" || len(database) > 63 || pause == nil {
 		return ErrUpgradeFence
@@ -200,9 +241,12 @@ func (db *DB) WithPreCandidateUpgradeFence(ctx context.Context, database string,
 		return ErrUpgradeFence
 	}
 	deadline, _ := active.Deadline()
-	fence := &UpgradeFence{checkPermit: make(chan struct{}, 1), tx: tx, tables: tables, relationIDs: ids, database: database, source: slices.Clone(source), deadline: deadline}
-	if fence.Check(acquire) != nil || fence.inspectHistory(acquire) != nil {
+	fence := &UpgradeFence{checkPermit: make(chan struct{}, 1), tx: tx, tables: tables, relationIDs: ids, database: database, source: slices.Clone(source), deadline: deadline, reviewerHistory: reviewerHistory}
+	if fence.Check(acquire) != nil {
 		return ErrUpgradeFence
+	}
+	if err = fence.inspectHistory(acquire); err != nil {
+		return err
 	}
 	// Continuous observation cancels the original callback if the backend dies.
 	// Check must still bracket every Kubernetes effect; a heartbeat is not a lease.

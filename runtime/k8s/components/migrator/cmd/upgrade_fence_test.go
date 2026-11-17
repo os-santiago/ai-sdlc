@@ -143,6 +143,42 @@ func TestUpgradeFenceProtocolChecksAndReleaseDoNotAdvanceWork(t *testing.T) {
 	}
 }
 
+func TestUpgradeFenceProtocolHistoryRejectionIsNotTransportOrIdentityFailure(t *testing.T) {
+	db, name, connection, catalog := upgradeProtocolFixture(t)
+	if _, err := db.Pool.Exec(`INSERT INTO public.release_gates(repository,pull_request,state,correlation_id) VALUES('example/app',1,'blocked','fixture')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"history", "wrong-database", "cancelled"} {
+		t.Run(scenario, func(t *testing.T) {
+			original := name
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if scenario == "wrong-database" {
+				original += "_foreign"
+			}
+			if scenario == "cancelled" {
+				cancel()
+			}
+			raw, _ := json.Marshal(map[string]any{"databaseURL": connection, "database": original, "sourceCatalog": catalog})
+			output := &closedFenceBuffer{}
+			err := holdUpgradeFenceContext(ctx, io.NopCloser(bytes.NewReader(append(raw, '\n'))), output)
+			if err == nil {
+				t.Fatal("negative fence returned success")
+			}
+			if scenario != "history" {
+				if output.Len() != 0 {
+					t.Fatal("non-history failure emitted history classification")
+				}
+				return
+			}
+			var response map[string]any
+			if json.Unmarshal(output.Bytes(), &response) != nil || len(response) != 5 || response["version"] != "ai-sdlc.upgrade-fence/v1" || response["state"] != "rejected" || response["reason"] != "history" || response["upgradeAuthorized"] != false || response["workflowRowsWritten"] != false {
+				t.Fatal("explicit compiled history rejection missing")
+			}
+		})
+	}
+}
+
 func TestUpgradeFenceProtocolDeadlineClosesBlockedOutput(t *testing.T) {
 	db, name, connection, catalog := upgradeProtocolFixture(t)
 	input, send := io.Pipe()

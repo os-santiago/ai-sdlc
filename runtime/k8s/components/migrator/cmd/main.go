@@ -21,6 +21,11 @@ func run() error {
 		return errors.New("select migrate or bootstrap-identities")
 	}
 	switch os.Args[1] {
+	case "hold-reviewer-upgrade-fence":
+		if len(os.Args) != 2 {
+			return errors.New("unexpected reviewer upgrade fence arguments")
+		}
+		return holdReviewerUpgradeFence(os.Stdin, os.Stdout)
 	case "hold-upgrade-fence":
 		if len(os.Args) != 2 {
 			return errors.New("unexpected upgrade fence arguments")
