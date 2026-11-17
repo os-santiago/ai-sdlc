@@ -163,6 +163,30 @@ if __name__=='__main__':unittest.main()
 
 
 class DigestPullDefaultTests(unittest.TestCase):
+    def test_ephemeral_request_default_preserves_resource_authority(self):
+        desired={'spec':{'containers':[{'name':'model-gateway','resources':{
+            'limits':{'ephemeral-storage':'256Mi','memory':'768Mi'},
+            'requests':{'memory':'256Mi'}}}]}}
+        admitted=copy.deepcopy(desired)
+        admitted['spec']['containers'][0]['resources']['requests']['ephemeral-storage']='256Mi'
+        originals=copy.deepcopy((desired,admitted))
+        self.assertEqual(prep.normalized_template(desired),prep.normalized_template(admitted))
+        self.assertEqual((desired,admitted),originals)
+        for group,key,value in (('requests','ephemeral-storage','128Mi'),
+                ('limits','ephemeral-storage','512Mi'),('requests','cpu','100m'),
+                ('limits','memory','1Gi')):
+            changed=copy.deepcopy(admitted)
+            changed['spec']['containers'][0]['resources'][group][key]=value
+            self.assertNotEqual(prep.normalized_template(desired),prep.normalized_template(changed))
+        explicit=copy.deepcopy(desired)
+        explicit['spec']['containers'][0]['resources']['requests']['ephemeral-storage']='64Mi'
+        self.assertNotEqual(prep.normalized_template(explicit),prep.normalized_template(admitted))
+        no_limit=copy.deepcopy(desired)
+        del no_limit['spec']['containers'][0]['resources']['limits']['ephemeral-storage']
+        injected=copy.deepcopy(no_limit)
+        injected['spec']['containers'][0]['resources']['requests']['ephemeral-storage']='256Mi'
+        self.assertNotEqual(prep.normalized_template(no_limit),prep.normalized_template(injected))
+
     def test_digest_sidecar_default_is_shared_without_changing_raw_custody(self):
         expected={'spec':{'containers':[{'name':'main','image':'registry.invalid/main@sha256:'+'a'*64,'imagePullPolicy':'Always'}, {'name':'sidecar','image':'registry.invalid/sidecar@sha256:'+'b'*64}]}}
         actual=copy.deepcopy(expected);actual['spec']['containers'][1]['imagePullPolicy']='IfNotPresent';before=copy.deepcopy(actual)

@@ -40,6 +40,13 @@ def normalized_template(template):
     if spec.get('serviceAccount') == spec.get('serviceAccountName'):
         spec.pop('serviceAccount', None)
     for container in spec.get('containers', []):
+        # Pod admission copies an explicit resource limit to an omitted request.
+        # Canonicalize only the observed ephemeral-storage default; preserve
+        # explicit requests and every other resource/limit for exact comparison.
+        resources = container.get('resources', {})
+        limit = resources.get('limits', {}).get('ephemeral-storage')
+        if limit is not None and 'ephemeral-storage' not in resources.get('requests', {}):
+            resources.setdefault('requests', {})['ephemeral-storage'] = limit
         if container.get('imagePullPolicy')=='IfNotPresent' and re.fullmatch(r'.+@sha256:[a-f0-9]{64}',container.get('image','')):
             container.pop('imagePullPolicy')
         for key, default in {'terminationMessagePath':'/dev/termination-log','terminationMessagePolicy':'File'}.items():
