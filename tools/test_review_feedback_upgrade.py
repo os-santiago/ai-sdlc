@@ -68,6 +68,16 @@ class FeedbackTargets(unittest.TestCase):
 
 
 class FeedbackGuards(unittest.TestCase):
+    def test_equal_catalog_does_not_authorize_another_checkout_or_dirty_tools(self):
+        source = Mock()
+        source.git.side_effect = [b'reviewed\n', b'']
+        upgrade.exact_local_publication(source, 'reviewed')
+        for observations in ([b'older\n'], [b'reviewed\n', b' M tools/review_feedback_runtime_upgrade.py\n'],
+                             [b'reviewed\n', b'?? unreviewed.py\n']):
+            source.git.side_effect = observations
+            with self.subTest(observations=observations), self.assertRaises(ValueError):
+                upgrade.exact_local_publication(source, 'reviewed')
+
     def test_residual_browser_prevents_first_journal_or_effect(self):
         item = object.__new__(upgrade.ReviewFeedbackUpgrade)
         item.record = None

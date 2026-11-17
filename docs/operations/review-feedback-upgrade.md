@@ -5,12 +5,15 @@ transition after a completed [browser installation](browser-verifier.md).
 It preserves expired, cleaned failed reviews and installs retention for future
 authenticated rejections. It does not repair candidates or recover discarded text.
 
-Use a clean reviewed checkout and a successful immutable main container
+Use the exact clean checkout of the successful immutable main container
 publication whose catalog adds only `0036_review_feedback.sql`. The target chart
 must be byte-identical to the published source chart. Supply the separately
 reviewed provenance document changing only `verifierImage` to that publication's
 verifier digest; all keys, scope, registry CA and approval dates remain unchanged.
 The existing release target and approval window must still be valid.
+Catalog equality alone is insufficient: an older schema-36 publication may lack
+the new fence. The selected publication commit must equal the local HEAD, with no
+tracked changes or untracked files, including when resuming the original intent.
 
 ```bash
 ./install.sh runtime-upgrade review-feedback \
@@ -78,7 +81,21 @@ python tools/review_feedback_upgrade_fixture.py \
   --output <new-private-output-directory>
 ```
 
-The target here is an explicitly selected local test image, not publication
+The planner-produced `blocked` positive case uses an independent PostgreSQL
+instance because component roles are cluster-wide. Its reproducible command,
+also run by local-validation CI, is:
+
+```bash
+python tools/validate_feedback_planner.py --provider podman \
+  --output <new-private-planner-output-directory> --timeout 300
+```
+
+It invokes `BlockSupersededIssue` through the orchestrator's real database login,
+then proves the new fence preserves the result in both schemas while the earlier
+protocols still reject it. The general suite skips this separately gated fixture
+instead of adopting another test database's existing roles.
+
+For the migration composition above, the target is a local test image, not publication
 approval. The fixture creates and removes its own PostgreSQL containers; it never
 targets an installed runtime. Its success does not prove the complete Kubernetes
 transition. Verify the ten original Deployments and their readiness after any

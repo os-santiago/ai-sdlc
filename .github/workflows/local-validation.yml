@@ -1,10 +1,10 @@
 name: local-validation
 on:
   pull_request:
-    paths: ['tools/validate_runtime.py', 'tools/test_validate_runtime.py', 'tools/runtime-validation.lock.json', '.github/workflows/local-validation.yml']
+    paths: ['tools/validate_runtime.py', 'tools/test_validate_runtime.py', 'tools/validate_feedback_planner.py', 'runtime/k8s/internal/store/review_feedback_upgrade_planner_test.go', 'tools/runtime-validation.lock.json', '.github/workflows/local-validation.yml']
   push:
     branches: [main]
-    paths: ['tools/validate_runtime.py', 'tools/test_validate_runtime.py', 'tools/runtime-validation.lock.json', '.github/workflows/local-validation.yml']
+    paths: ['tools/validate_runtime.py', 'tools/test_validate_runtime.py', 'tools/validate_feedback_planner.py', 'runtime/k8s/internal/store/review_feedback_upgrade_planner_test.go', 'tools/runtime-validation.lock.json', '.github/workflows/local-validation.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -26,5 +26,22 @@ jobs:
           path: |
             ${{ runner.temp }}/runtime-validation/report.json
             ${{ runner.temp }}/runtime-validation/*.log
+          if-no-files-found: warn
+          retention-days: 7
+  planner-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Validate planner withdrawal with isolated component roles
+        run: python3 tools/validate_feedback_planner.py --provider docker --output "$RUNNER_TEMP/feedback-planner-validation" --timeout 300
+      - name: Preserve isolated planner evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: feedback-planner-validation
+          path: |
+            ${{ runner.temp }}/feedback-planner-validation/report.json
+            ${{ runner.temp }}/feedback-planner-validation/*.log
           if-no-files-found: warn
           retention-days: 7

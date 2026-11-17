@@ -29,6 +29,14 @@ from upgrade_migrator import Migrator
 VERSION = 'ai-sdlc.review-feedback-runtime-upgrade/v1'
 
 
+def exact_local_publication(source, revision):
+    # A matching SQL catalog is insufficient: an earlier publication can have
+    # schema36 but lack this fence protocol. Execute only its exact clean source.
+    if (source.git('rev-parse', 'HEAD').decode().strip() != revision
+            or source.git('status', '--porcelain', '--untracked-files=all').strip()):
+        raise ValueError('Feedback publication requires its exact clean local checkout')
+
+
 def no_browser_execution(observer, namespace_uid):
     """Original namespace identity brackets one bounded residual-work inventory."""
     for step in (0, 1):
@@ -86,16 +94,18 @@ class ReviewFeedbackUpgrade(BrowserUpgrade):
                 if type(run) is not int or not 0 < run <= 2**63-1 or not install_images.SHA.fullmatch(revision):
                     raise ValueError('Explicit exact-main feedback publication required')
                 source = install_upgrade.Source(install.ROOT)
+                exact_local_publication(source, revision)
                 source.git('merge-base', '--is-ancestor', prior['selection']['revision'], revision)
                 catalog = source.catalog(revision)
-                local = source.catalog(source.git('rev-parse', 'HEAD').decode().strip())
                 if (len(self.catalog) != 35 or len(catalog) != 36 or catalog[:35] != self.catalog
-                        or catalog[-1]['filename'] != compatibility.MIGRATION or catalog != local):
+                        or catalog[-1]['filename'] != compatibility.MIGRATION):
                     raise ValueError('Only the exact locally reviewed 35-to-36 feedback bridge is supported')
                 _, publication = install_images.resolve(install_images.GitHub(), run, revision,
                     include_build=True, include_release=True, include_browser=True)
                 self.selection = dict(publication, catalog=catalog)
             self.helper = (install_images.REGISTRY + '@' + self.selection['images']['migrator']['digest']) if self.selection else self.source_browser.helper
+            if self.selection is not None:
+                exact_local_publication(install_upgrade.Source(install.ROOT), self.selection['revision'])
         except BaseException:
             self.close()
             raise
