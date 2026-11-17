@@ -18,9 +18,12 @@ retry the installation as your normal user. This explicit command raises
 limits to the committed minima in
 [`host-prerequisites.json`](../runtime/k8s/deploy/local/host-prerequisites.json),
 following the [kind inotify guidance](https://kind.sigs.k8s.io/docs/user/known-issues/#pod-errors-due-to-too-many-open-files).
-It preserves higher limits, verifies the result, and affects only the current
+It preserves higher limits observed before configuration, verifies the result, and affects only the current
 boot. Use your host configuration manager for persistence across reboots.
 `./install.sh host` only checks; the installer never invokes sudo itself.
+Serialize this explicit host change with other host configuration writers.
+Linux sysctl writes do not provide an atomic maximum operation, so the installer
+cannot prevent an uncoordinated administrator from racing its read and write.
 The instance minimum is 1024. Concurrent kind clusters share the host's user
 quota: an exhausted quota can prevent kube-proxy from starting and leave DNS or
 webhooks timing out even when the open-file descriptor limit is high. This is a
