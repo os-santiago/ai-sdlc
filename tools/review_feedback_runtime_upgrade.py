@@ -8,6 +8,7 @@ import time
 import bootstrap_database_forward
 import bootstrap_prepare as bootstrap
 import browser_upgrade_chart
+from browser_approval_state import CurrentSource
 from browser_runtime_upgrade import BrowserUpgrade, BrowserPreflight, PHASES
 import build_foundation_install as files
 import build_runtime_install
@@ -53,7 +54,7 @@ class ReviewFeedbackUpgrade(BrowserUpgrade):
     """Reuse the original bounded pause/backup/Helm machinery, never its intent."""
     def __init__(self, config, run=None, revision=None, trust_path=None):
         self.config = config
-        self.source_browser = BrowserUpgrade(config)
+        self.source_browser = CurrentSource(config)
         prior = self.source_browser.record
         if (prior is None or prior.get('completed') != 'active' or prior.get('transition')
                 or prior.get('recoveryPause') or prior.get('mode') != 'browser-evidence'
@@ -63,7 +64,7 @@ class ReviewFeedbackUpgrade(BrowserUpgrade):
             self.source_browser.close()
             raise ValueError('Original completed schema35 browser installation required')
         self.parent, self.pause = self.source_browser.parent, self.source_browser.pause
-        self.parent_hash = bootstrap.digest(prior)
+        self.parent_hash = self.source_browser.digest()
         self.catalog = prior['selection']['catalog']
         self.path = config.state_dir / 'review-feedback-runtime-upgrade.json'
         self.directory = config.state_dir / 'review-feedback-runtime-backup'
@@ -120,7 +121,7 @@ class ReviewFeedbackUpgrade(BrowserUpgrade):
             raise ValueError('Feedback update cannot change the original published chart')
         with self.source_chart.selected():
             self.source_browser.custody()
-        if bootstrap.digest(files.bounded_json(self.source_browser.path, 32*1024*1024)) != self.parent_hash:
+        if self.source_browser.digest() != self.parent_hash:
             raise ValueError('Original browser installation custody changed')
         if self.record and (self.record.get('backup') or {}).get('phase') == 'verified':
             data.verify_archives(self.directory, self.record['backup']['archives'])
@@ -131,8 +132,7 @@ class ReviewFeedbackUpgrade(BrowserUpgrade):
         self.custody()
         observed = files.bounded_json(self.config.state_dir / 'installation.json', 2*1024*1024)
         if self.record is None:
-            reports = self.source_browser.record['installationReports']
-            if not reports or observed != reports[-1] or observed.get('configuration') != 'active' or observed.get('installationReady') is not True:
+            if observed != self.source_browser.current_report or observed.get('configuration') != 'active' or observed.get('installationReady') is not True:
                 raise ValueError('Original completed browser installation report required')
         elif observed not in [self.record['installationSource']] + self.record.get('installationReports', []):
             raise ValueError('Original installation report changed during feedback update')
