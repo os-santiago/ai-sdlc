@@ -83,6 +83,9 @@ spec:
             capabilities: {drop: [ALL]}
             readOnlyRootFilesystem: true
           volumeMounts:
+            {{- if and (eq $key "orchestrator") $.Values.release.enabled }}
+            - {name: outer-policy, mountPath: /etc/ai-sdlc/outer-policy, readOnly: true}
+            {{- end }}
             {{- if and (eq $key "releaseManager") $.Values.release.enabled }}
             - {name: release-target, mountPath: /etc/ai-sdlc/release, readOnly: true}
             - {name: release-trust, mountPath: /etc/ai-sdlc/provenance, readOnly: true}
@@ -140,6 +143,10 @@ spec:
             - {name: model-home, mountPath: /model-home}
         {{- end }}
       volumes:
+        {{- if and (eq $key "orchestrator") $.Values.release.enabled }}
+        - name: outer-policy
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-outer-policy}
+        {{- end }}
         {{- if and (eq $key "releaseManager") $.Values.release.enabled }}
         - name: release-target
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-release-target}

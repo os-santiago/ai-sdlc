@@ -27,7 +27,7 @@ func loopPolicies(t *testing.T, f fixture) (authority.Policy, authority.Policy) 
 			inner.Keys[id] = k
 		}
 		switch k.Role {
-		case "release-manager", "build-controller", "verifier", "relay", "deployer":
+		case "release-manager", "build-controller", "verifier", "relay", "deployer", "orchestrator":
 			outer.Keys[id] = k
 		}
 	}

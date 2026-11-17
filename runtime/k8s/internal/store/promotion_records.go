@@ -18,7 +18,7 @@ func (db *DB) ReadPromotionRecord(ctx context.Context, id string) (PromotionReco
 }
 func readPromotionRecord(ctx context.Context, q Querier, id, role string) (PromotionRecord, error) {
 	var r PromotionRecord
-	if !promotionID.MatchString(id) || (role != "release-manager" && role != "deployer") || AssertComponent(ctx, q, role) != nil {
+	if !promotionID.MatchString(id) || (role != "release-manager" && role != "deployer" && role != "orchestrator") || AssertComponent(ctx, q, role) != nil {
 		return r, ErrExecution
 	}
 	var raw, signed, config, plan []byte

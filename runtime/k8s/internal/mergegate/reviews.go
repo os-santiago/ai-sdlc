@@ -16,7 +16,7 @@ type review struct {
 	CommitID string `json:"commit_id"`
 }
 
-const threadQuery = `query($number:Int!,$owner:String!,$name:String!){repository(owner:$owner,name:$name){nameWithOwner pullRequest(number:$number){number headRefOid baseRefOid reviewThreads(first:100){totalCount pageInfo{hasNextPage} nodes{id isResolved}}}}}`
+const threadQuery = `query($number:Int!,$owner:String!,$name:String!){repository(owner:$owner,name:$name){nameWithOwner pullRequest(number:$number){number headRefOid baseRefOid closingIssuesReferences(first:1,excludeUserLinked:false){totalCount pageInfo{hasNextPage} nodes{id}} reviewThreads(first:100){totalCount pageInfo{hasNextPage} nodes{id isResolved}}}}}`
 
 func (c *Client) reviews(ctx context.Context, e Expected) (bool, string, error) {
 	var reviews []review
@@ -65,6 +65,13 @@ func (c *Client) reviews(ctx context.Context, e Expected) (bool, string, error) 
 					Number  int
 					Head    string `json:"headRefOid"`
 					Base    string `json:"baseRefOid"`
+					Closing *struct {
+						Total *int `json:"totalCount"`
+						Page  *struct {
+							Next *bool `json:"hasNextPage"`
+						} `json:"pageInfo"`
+						Nodes []struct{ ID string }
+					} `json:"closingIssuesReferences"`
 					Threads *struct {
 						Total *int `json:"totalCount"`
 						Page  *struct {
@@ -86,6 +93,12 @@ func (c *Client) reviews(ctx context.Context, e Expected) (bool, string, error) 
 	if p.Number != e.PullRequest || p.Head != e.HeadSHA || p.Base != e.BaseSHA || p.Threads == nil {
 		return false, "", ErrGate
 	}
+	// Saferus closes issues only after its acknowledged production release. The
+	// GraphQL connection includes manually linked issues, not just body keywords.
+	// Missing, truncated or nonempty data cannot authorize a premature close.
+	if c.repository == "os-santiago/saferus" && (p.Closing == nil || p.Closing.Total == nil || *p.Closing.Total != 0 || p.Closing.Page == nil || p.Closing.Page.Next == nil || *p.Closing.Page.Next || p.Closing.Nodes == nil || len(p.Closing.Nodes) != 0) {
+		return false, "", ErrGate
+	}
 	threads := p.Threads
 	if threads.Total == nil || *threads.Total < 0 || *threads.Total > 100 || threads.Page == nil || threads.Page.Next == nil || *threads.Page.Next || threads.Nodes == nil || len(threads.Nodes) != *threads.Total {
 		return false, "", ErrGate
@@ -103,5 +116,6 @@ func (c *Client) reviews(ctx context.Context, e Expected) (bool, string, error) 
 	return ready, digest(struct {
 		Reviews []review
 		Threads any
-	}{reviews, threads}), nil
+		Closing any
+	}{reviews, threads, p.Closing}), nil
 }

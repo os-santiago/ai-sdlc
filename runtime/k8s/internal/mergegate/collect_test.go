@@ -220,7 +220,17 @@ func fixtureAPIForRepository(t *testing.T, mode, repository string) (*Client, *a
 			if json.NewDecoder(r.Body).Decode(&query) != nil || query.Query != threadQuery || query.Variables.Number != 42 || query.Variables.Owner != "os-santiago" || query.Variables.Name != strings.Split(repository, "/")[1] {
 				t.Error("caller controlled query")
 			}
-			out = map[string]any{"data": map[string]any{"repository": map[string]any{"nameWithOwner": repository, "pullRequest": map[string]any{"number": 42, "headRefOid": expected.HeadSHA, "baseRefOid": expected.BaseSHA, "reviewThreads": map[string]any{"totalCount": 1, "pageInfo": map[string]any{"hasNextPage": mode == "truncated-threads"}, "nodes": []map[string]any{{"id": "thread1", "isResolved": mode != "unresolved-thread" && !(mode == "late-thread" && threadReads.Load() > 0)}}}}}}}
+			out = map[string]any{"data": map[string]any{"repository": map[string]any{"nameWithOwner": repository, "pullRequest": map[string]any{"number": 42, "headRefOid": expected.HeadSHA, "baseRefOid": expected.BaseSHA, "closingIssuesReferences": map[string]any{"totalCount": 0, "pageInfo": map[string]bool{"hasNextPage": false}, "nodes": []map[string]string{}}, "reviewThreads": map[string]any{"totalCount": 1, "pageInfo": map[string]any{"hasNextPage": mode == "truncated-threads"}, "nodes": []map[string]any{{"id": "thread1", "isResolved": mode != "unresolved-thread" && !(mode == "late-thread" && threadReads.Load() > 0)}}}}}}}
+			pull := out.(map[string]any)["data"].(map[string]any)["repository"].(map[string]any)["pullRequest"].(map[string]any)
+			if mode == "closing-issue" || mode == "late-closing-issue" && threadReads.Load() > 0 {
+				pull["closingIssuesReferences"] = map[string]any{"totalCount": 1, "pageInfo": map[string]bool{"hasNextPage": false}, "nodes": []map[string]string{{"id": "linked-issue"}}}
+			}
+			if mode == "missing-closing-issues" {
+				delete(pull, "closingIssuesReferences")
+			}
+			if mode == "truncated-closing-issues" {
+				pull["closingIssuesReferences"] = map[string]any{"totalCount": 0, "pageInfo": map[string]bool{"hasNextPage": true}, "nodes": []map[string]string{}}
+			}
 			threadReads.Add(1)
 			if mode == "graphql-error" {
 				out = map[string]any{"errors": []map[string]string{{"message": "private diagnostic"}}}
@@ -301,13 +311,13 @@ func TestGateCannotWriteAndHonorsCancellation(t *testing.T) {
 }
 
 func TestSaferusPolicyAndCredentialScope(t *testing.T) {
-	for _, mode := range []string{"success", "wrong-app", "failed-check", "unresolved-thread", "changes-requested", "missing-check"} {
+	for _, mode := range []string{"success", "wrong-app", "failed-check", "unresolved-thread", "changes-requested", "missing-check", "closing-issue", "late-closing-issue", "missing-closing-issues", "truncated-closing-issues"} {
 		t.Run(mode, func(t *testing.T) {
 			c, calls := fixtureAPIForRepository(t, mode, "os-santiago/saferus")
 			expected := fixtureExpected()
 			expected.Repository = "os-santiago/saferus"
 			r, err := c.Collect(context.Background(), expected, PolicyForRepository("os-santiago/saferus"))
-			if err != nil || r.Ready != (mode == "success") || calls.Load() == 0 {
+			if (err != nil) != strings.Contains(mode, "closing-issue") || r.Ready != (mode == "success") || calls.Load() == 0 {
 				t.Fatal(r, err)
 			}
 			before := calls.Load()

@@ -47,7 +47,7 @@ func newBuildFixture(t *testing.T, actual ...buildFixtureSource) buildFixture {
 				keys[id] = k
 			}
 			switch k.Role {
-			case "release-manager", "verifier", "deployer", "relay", "build-controller":
+			case "release-manager", "verifier", "deployer", "relay", "build-controller", "orchestrator":
 				outer.Keys[id] = k
 			}
 		}

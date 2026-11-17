@@ -32,7 +32,7 @@ func fixture(t *testing.T) (authority.Policy, authority.Policy, map[string]autho
 	}
 	for id, k := range inner.Keys {
 		switch k.Role {
-		case "release-manager", "build-controller", "verifier", "deployer", "relay":
+		case "release-manager", "build-controller", "verifier", "deployer", "relay", "orchestrator":
 			outer.Keys[id] = k
 		}
 	}
@@ -144,7 +144,7 @@ func TestBuilderCannotAliasAnyInnerOnlyIdentity(t *testing.T) {
 			key := inner.Keys[role+"-1"]
 			key.Role = "build-controller"
 			outer.Keys["build-controller-1"] = key
-			if inner.Validate() != nil || outer.Validate() != nil {
+			if inner.Validate() != nil || (role != "orchestrator" && outer.Validate() != nil) {
 				t.Fatal("fixture must isolate cross-policy alias")
 			}
 			if authority.ValidateLoopPolicies(inner, outer) == nil {

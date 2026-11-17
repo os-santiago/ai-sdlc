@@ -39,6 +39,8 @@ data:
   {{- end }}
   {{- if .Values.release.enabled }}
   {{- $_ := set $routes "promote-artifact" (printf "http://%s-release-manager:%v/internal/promote-artifact" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.releaseManager.port) }}
+  {{- $_ := set $routes "record-deployment" (printf "http://%s-release-manager:%v/internal/record-deployment" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.releaseManager.port) }}
+  {{- $_ := set $routes "record-production" (printf "http://%s-orchestrator:%v/internal/record-production" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.orchestrator.port) }}
   {{- $_ := set $routes "deploy-release" (printf "http://%s-deployer:8090/internal/deploy-release" (include "ai-sdlc-k8s-runtime.fullname" .)) }}
   {{- end }}
   AI_SDLC_RELAY_ROUTES: {{ $routes | toJson | quote }}

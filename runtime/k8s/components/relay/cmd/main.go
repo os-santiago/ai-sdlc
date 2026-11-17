@@ -83,7 +83,7 @@ func reviewedRoutes(raw string) (map[string]string, error) {
 		required = append(required, "verify-built")
 	}
 	if bootstrap.ReleaseEnabled() {
-		required = append(required, "promote-artifact", "deploy-release")
+		required = append(required, "promote-artifact", "deploy-release", "record-deployment", "record-production")
 	}
 	var routes map[string]string
 	if authority.DecodeStrict([]byte(raw), &routes) != nil || len(routes) != len(required) {

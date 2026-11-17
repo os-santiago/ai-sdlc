@@ -158,3 +158,15 @@ func scanWorkItemRow(row scannable) (WorkItemRecord, error) {
 	}
 	return rec, nil
 }
+
+// BlockSupersededIssue is the planner's original transactional withdrawal step.
+// A concurrently completed production fact remains completed: PostgreSQL
+// rechecks the status predicate after waiting for the original work-item lock.
+func BlockSupersededIssue(ctx context.Context, tx *sql.Tx, repository string, issue int) error {
+	if tx == nil || repository == "" || issue < 1 || issue > 2147483647 || AssertComponent(ctx, tx, "orchestrator") != nil {
+		return ErrExecution
+	}
+	issues, _ := json.Marshal([]int{issue})
+	_, e := tx.ExecContext(ctx, `UPDATE work_items SET status='blocked',updated_at=now() FROM plans WHERE work_items.plan_id=plans.id AND plans.repository=$1 AND work_items.issue_numbers @> $2::jsonb AND work_items.status NOT IN ('completed','failed')`, repository, string(issues))
+	return e
+}

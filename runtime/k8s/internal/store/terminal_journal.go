@@ -48,9 +48,12 @@ func (j *TerminalJournal) configuration() (releasing.Configuration, error) {
 	return out, nil
 }
 func terminalInput(ctx context.Context, q Querier, cfg releasing.Configuration, raw, signed []byte, now time.Time) (TerminalInput, error) {
+	return terminalInputRole(ctx, q, cfg, raw, signed, now, "release-manager")
+}
+func terminalInputRole(ctx context.Context, q Querier, cfg releasing.Configuration, raw, signed []byte, now time.Time, role string) (TerminalInput, error) {
 	r := TerminalInput{Configuration: cfg}
 	var sig authority.Receipt
-	if AssertComponent(ctx, q, "release-manager") != nil || len(signed) > 4096 || authority.DecodeStrict(signed, &sig) != nil {
+	if (role != "release-manager" && role != "orchestrator") || AssertComponent(ctx, q, role) != nil || len(signed) > 4096 || authority.DecodeStrict(signed, &sig) != nil {
 		return r, ErrExecution
 	}
 	var e error
@@ -58,7 +61,7 @@ func terminalInput(ctx context.Context, q Querier, cfg releasing.Configuration, 
 	if e != nil {
 		return r, ErrExecution
 	}
-	r.Upstream, e = readCompletionInput(ctx, q, r.Command.DeploymentID, "release-manager")
+	r.Upstream, e = readCompletionInput(ctx, q, r.Command.DeploymentID, role)
 	if e != nil {
 		return r, ErrExecution
 	}
@@ -112,11 +115,14 @@ func (j *TerminalJournal) QueueTerminal(ctx context.Context, raw, signed []byte)
 // issuance. It records acknowledged facts even after the issue closes or policy
 // changes; fresh is separately mandatory before each new external mutation.
 func terminalArchived(ctx context.Context, q Querier, c TerminalClaim) (TerminalInput, error) {
+	return terminalArchivedRole(ctx, q, c, "release-manager")
+}
+func terminalArchivedRole(ctx context.Context, q Querier, c TerminalClaim, role string) (TerminalInput, error) {
 	var r TerminalInput
 	var raw, signed, config, plan []byte
 	var hash string
 	var until, created time.Time
-	if !terminalID.MatchString(c.ID) || !lifecycleUUID.MatchString(c.Token) || AssertComponent(ctx, q, "release-manager") != nil {
+	if !terminalID.MatchString(c.ID) || !lifecycleUUID.MatchString(c.Token) || (role != "release-manager" && role != "orchestrator") || AssertComponent(ctx, q, role) != nil {
 		return r, ErrExecution
 	}
 	if q.QueryRowContext(ctx, `SELECT payload,receipt,configuration,plan,payload_digest,expires_at,created_at FROM terminal_requests WHERE id=$1 AND claim_token=$2 AND state IN('claimed','completed','quarantined')`, c.ID, c.Token).Scan(&raw, &signed, &config, &plan, &hash, &until, &created) != nil || hash != authority.Digest(raw) || !until.Equal(c.Until) {
@@ -128,7 +134,7 @@ func terminalArchived(ctx context.Context, q Querier, c TerminalClaim) (Terminal
 	if authority.DecodeStrict(config, &cfg) != nil || authority.DecodeStrict(raw, &command) != nil || authority.DecodeStrict(plan, &saved) != nil || command.ID() != c.ID || command.ExpiresAt != until.UnixMilli() || created.UnixMilli() < command.IssuedAt-5 || !created.Before(until) {
 		return r, ErrExecution
 	}
-	r, e := terminalInput(ctx, q, cfg, raw, signed, time.UnixMilli(command.IssuedAt))
+	r, e := terminalInputRole(ctx, q, cfg, raw, signed, time.UnixMilli(command.IssuedAt), role)
 	if e != nil || r.Plan != saved {
 		return TerminalInput{}, ErrExecution
 	}

@@ -17,7 +17,7 @@ type CompletionInput struct {
 
 func readCompletionInput(ctx context.Context, q Querier, id, role string) (CompletionInput, error) {
 	var result CompletionInput
-	if (role != "deployer" && role != "release-manager") || !deploymentID.MatchString(id) || AssertComponent(ctx, q, role) != nil {
+	if (role != "deployer" && role != "release-manager" && role != "orchestrator") || !deploymentID.MatchString(id) || AssertComponent(ctx, q, role) != nil {
 		return result, ErrExecution
 	}
 	var claim DeploymentClaim

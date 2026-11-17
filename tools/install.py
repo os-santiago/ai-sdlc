@@ -294,9 +294,9 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
     if build:
         outer_policy = dict(material['policy'], autonomy='auto-deploy',
                             keys={key_id: key for key_id, key in material['policy']['keys'].items()
-                                  if key['role'] in ('release-manager', 'build-controller', 'verifier', 'deployer', 'relay')},
+                                  if key['role'] in ('release-manager', 'build-controller', 'verifier', 'deployer', 'relay', 'orchestrator')},
                             grants=[grant for grant in reviewed_grants if grant['operation'] in
-                                    ('build-merged', 'verify-built', 'promote-artifact', 'deploy-release', 'record-deployment')])
+                                    ('build-merged', 'verify-built', 'promote-artifact', 'deploy-release', 'record-deployment', 'record-production')])
     # Bootstrap validation uses all public keys only in this private input.
     # The build identity is not added to the inner policy or its revision.
     for key_id, key in list(material['policy']['keys'].items()):

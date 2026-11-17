@@ -32,7 +32,7 @@ func setup(t *testing.T) (building.Configuration, Profile, building.Command, aut
 			inner.Keys[id] = k
 		}
 		switch k.Role {
-		case "release-manager", "build-controller", "verifier", "deployer", "relay":
+		case "release-manager", "build-controller", "verifier", "deployer", "relay", "orchestrator":
 			outer.Keys[id] = k
 		}
 	}

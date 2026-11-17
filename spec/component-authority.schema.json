@@ -75,7 +75,7 @@
     "grants": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 13,
+      "maxItems": 14,
       "items": {
         "oneOf": [
           {
@@ -492,6 +492,36 @@
               },
               "eventType": {
                 "const": "ArtifactProvenanceVerified"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "caller",
+              "target",
+              "operation",
+              "minimumLevel",
+              "eventType"
+            ],
+            "properties": {
+              "caller": {
+                "const": "release-manager"
+              },
+              "target": {
+                "const": "orchestrator"
+              },
+              "operation": {
+                "const": "record-production"
+              },
+              "minimumLevel": {
+                "enum": [
+                  "auto-deploy"
+                ]
+              },
+              "eventType": {
+                "const": "ProductionCompleted"
               }
             }
           }

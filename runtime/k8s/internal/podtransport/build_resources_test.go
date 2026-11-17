@@ -49,7 +49,7 @@ func buildResourceFixture(t *testing.T, handler func(*BuildResources, http.Respo
 			inner.Keys[id] = k
 		}
 		switch k.Role {
-		case "release-manager", "build-controller", "verifier", "deployer", "relay":
+		case "release-manager", "build-controller", "verifier", "deployer", "relay", "orchestrator":
 			outer.Keys[id] = k
 		}
 	}

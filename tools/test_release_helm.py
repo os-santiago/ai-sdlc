@@ -49,6 +49,17 @@ class ReleaseChartTests(unittest.TestCase):
         config=next(d['data'] for d in docs if d['kind']=='ConfigMap' and 'AI_SDLC_RELEASE' in d.get('data',{}))
         self.assertEqual(config['AI_SDLC_RELEASE'],'true')
         self.assertTrue(json.loads(config['AI_SDLC_RELAY_ROUTES'])['deploy-release'].endswith(':8090/internal/deploy-release'))
+        routes=json.loads(config['AI_SDLC_RELAY_ROUTES'])
+        self.assertEqual(len(routes),11)
+        self.assertTrue(routes['record-deployment'].endswith('/internal/record-deployment'))
+        self.assertTrue(routes['record-production'].endswith('/internal/record-production'))
+        orchestrator=next(d for d in docs if d['kind']=='Deployment' and d['metadata']['name']=='ai-sdlc-orchestrator')
+        pod=orchestrator['spec']['template']['spec']
+        self.assertFalse(pod['automountServiceAccountToken'])
+        mounts={v['mountPath'] for v in pod['containers'][0]['volumeMounts']}
+        self.assertIn('/etc/ai-sdlc/outer-policy',mounts)
+        self.assertNotIn('/etc/ai-sdlc/release',mounts)
+        self.assertNotIn('/etc/ai-sdlc/provenance',mounts)
         for name in ('ai-sdlc-release-manager','ai-sdlc-provenance-verifier'):
             item=next(d for d in docs if d['kind']=='Deployment' and d['metadata']['name']==name)
             mounts={v['mountPath'] for v in item['spec']['template']['spec']['containers'][0]['volumeMounts']}
