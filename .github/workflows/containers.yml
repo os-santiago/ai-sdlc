@@ -1,10 +1,10 @@
 name: containers
 on:
   pull_request:
-    paths: ['runtime/k8s/**', '.github/workflows/containers.yml']
+    paths: ['runtime/k8s/**', 'tools/**', 'install.sh', '.github/workflows/containers.yml']
   push:
     branches: [main, 'build/**']
-    paths: ['runtime/k8s/**', '.github/workflows/containers.yml']
+    paths: ['runtime/k8s/**', 'tools/**', 'install.sh', '.github/workflows/containers.yml']
   workflow_dispatch:
 permissions:
   contents: read
