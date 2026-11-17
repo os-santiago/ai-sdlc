@@ -1,0 +1,139 @@
+{
+  "review_feedback": {
+    "columnACLs": [
+      [
+        "decision",
+        [
+          "aisdlc_verifier=a/ai_sdlc"
+        ]
+      ],
+      [
+        "digest",
+        [
+          "aisdlc_verifier=a/ai_sdlc"
+        ]
+      ],
+      [
+        "recorded_at",
+        null
+      ],
+      [
+        "review_id",
+        [
+          "aisdlc_verifier=a/ai_sdlc"
+        ]
+      ]
+    ],
+    "columns": [
+      [
+        "review_id",
+        "text",
+        true,
+        null
+      ],
+      [
+        "decision",
+        "bytea",
+        true,
+        null
+      ],
+      [
+        "digest",
+        "text",
+        true,
+        null
+      ],
+      [
+        "recorded_at",
+        "timestamp with time zone",
+        true,
+        "clock_timestamp()"
+      ]
+    ],
+    "constraints": [
+      [
+        "c",
+        "CHECK (((octet_length(decision) >= 1) AND (octet_length(decision) <= 32768)))",
+        true,
+        false
+      ],
+      [
+        "c",
+        "CHECK ((digest ~ '^[a-f0-9]{64}$'::text))",
+        true,
+        false
+      ],
+      [
+        "f",
+        "FOREIGN KEY (review_id) REFERENCES review_runs(id)",
+        true,
+        false
+      ],
+      [
+        "p",
+        "PRIMARY KEY (review_id)",
+        true,
+        false
+      ]
+    ],
+    "disabledTriggers": 0,
+    "droppedColumns": 0,
+    "forceRls": true,
+    "generatedColumns": 0,
+    "indexes": [
+      [
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    ],
+    "inheritanceLinks": 0,
+    "internalTriggers": 2,
+    "kind": "r",
+    "owner": "ai_sdlc",
+    "persistence": "p",
+    "policies": [
+      [
+        "review_feedback_reader",
+        "r",
+        true,
+        [
+          "0"
+        ],
+        "(CURRENT_USER = 'aisdlc_verifier'::name)",
+        null
+      ],
+      [
+        "review_feedback_writer",
+        "a",
+        true,
+        [
+          "0"
+        ],
+        null,
+        "((CURRENT_USER = 'aisdlc_verifier'::name) AND (EXISTS ( SELECT 1\n   FROM review_runs r\n  WHERE ((r.id = review_feedback.review_id) AND (r.state = 'claimed'::text) AND (r.cleanup_state = 'complete'::text) AND (r.claim_until > clock_timestamp()) AND (r.expires_at > clock_timestamp())))))"
+      ]
+    ],
+    "relationACL": [
+      "ai_sdlc=arwdDxtm/ai_sdlc",
+      "aisdlc_verifier=r/ai_sdlc"
+    ],
+    "rls": true,
+    "rules": 0,
+    "typeACLs": [
+      [
+        "_review_feedback",
+        "ai_sdlc",
+        null
+      ],
+      [
+        "review_feedback",
+        "ai_sdlc",
+        null
+      ]
+    ],
+    "userTriggers": 0
+  }
+}

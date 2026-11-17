@@ -35,6 +35,9 @@ REQUIRED_TESTS = {
 
     ("internal/store", "TestUpgradeFenceBrowserBridgePreservesContainedHistory"),
     ("components/migrator/cmd", "TestUpgradeFenceBrowserProtocolDistinctAndTyped"),
+    ("internal/store", "TestUpgradeFenceFeedbackBridgePreservesContainedHistory"),
+    ("internal/store", "TestUpgradeFenceFeedbackRetainsBlockedCandidateOnly"),
+    ("components/migrator/cmd", "TestUpgradeFenceFeedbackProtocolDistinctAndTyped"),
     ('internal/store', 'TestUpgradeFenceConcurrentHeartbeatChecks'),
     ('internal/store', 'TestUpgradeFenceCheckQueueHonorsCancellation'),
     ('internal/store', 'TestUpgradeFencePreservesHistoryAndExcludesWriters'),
