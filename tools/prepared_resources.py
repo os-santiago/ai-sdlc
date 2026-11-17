@@ -6,6 +6,34 @@ from bootstrap_prepare import normalized_template, Preparation, digest
 KINDS={'ConfigMap','Deployment','StatefulSet','Service','ServiceAccount','Namespace',
     'Role','ClusterRole','RoleBinding','ClusterRoleBinding','NetworkPolicy','ResourceQuota','LimitRange','RuntimeClass'}
 
+RUNTIME_VERSIONS={
+    'ConfigMap':'v1','Service':'v1','ServiceAccount':'v1','ResourceQuota':'v1','LimitRange':'v1',
+    'Deployment':'apps/v1','StatefulSet':'apps/v1',
+    'Role':'rbac.authorization.k8s.io/v1','RoleBinding':'rbac.authorization.k8s.io/v1',
+    'NetworkPolicy':'networking.k8s.io/v1',
+}
+
+
+def runtime_inventory(objects):
+    """Index one bounded LIST result, never a cross-resource atomic snapshot."""
+    if not isinstance(objects,list):raise ValueError('Prepared runtime inventory must be a list')
+    indexed={};logical=set()
+    for obj in objects:
+        if not isinstance(obj,dict) or not isinstance(obj.get('metadata'),dict):
+            raise ValueError('Malformed prepared runtime resource')
+        kind=obj.get('kind');meta=obj['metadata'];name=meta.get('name')
+        if (not isinstance(kind,str) or kind not in RUNTIME_VERSIONS
+                or obj.get('apiVersion')!=RUNTIME_VERSIONS[kind]
+                or meta.get('namespace')!='ai-sdlc-runtime'
+                or not isinstance(name,str) or not name or len(name)>253):
+            raise ValueError('Prepared runtime resource scope changed')
+        Preparation.identity(obj)
+        identity=key(obj);scope=(kind,meta['namespace'],name)
+        if identity in indexed or scope in logical:
+            raise ValueError('Duplicate prepared runtime resource identity')
+        indexed[identity]=obj;logical.add(scope)
+    return indexed
+
 
 def key(obj):
     return '/'.join((obj['apiVersion'],obj['kind'],obj['metadata'].get('namespace',''),obj['metadata']['name']))
@@ -65,12 +93,16 @@ def documents(rendered):
 
 def observe(configuration,description,expected=None):
     desired_objects=documents(description['documents'])
+    indexed=None
     if hasattr(configuration,'inventory'):
-        scoped={'ConfigMap','Service','ServiceAccount','Role','RoleBinding','NetworkPolicy','Deployment','StatefulSet','ResourceQuota','LimitRange'}
+        scoped=set(RUNTIME_VERSIONS)
         expected_inventory={(obj['kind'],obj['metadata']['name']) for obj in desired_objects.values()
             if obj['kind'] in scoped and obj['metadata'].get('namespace')=='ai-sdlc-runtime'}
         ignored={('ConfigMap','kube-root-ca.crt'),('ConfigMap','trusted-ca'),('ServiceAccount','default')}
-        inventory=configuration.inventory(','.join(sorted(scoped)))
+        # Reuse only this invocation's already required inventory. Missing items
+        # reject below; a later GET must not mix in a different observation.
+        indexed=runtime_inventory(configuration.inventory(','.join(sorted(scoped))))
+        inventory=indexed.values()
         actual={(obj['kind'],obj['metadata']['name']) for obj in inventory}
         external={key(obj):{'uid':Preparation.identity(obj),'sha256':digest(content(obj))}
             for obj in inventory if (obj['kind'],obj['metadata']['name']) in ignored}
@@ -79,8 +111,11 @@ def observe(configuration,description,expected=None):
         if actual-ignored!=expected_inventory:
             raise ValueError('Unexpected or partial prepared runtime security inventory')
     observed={}
-    for identity,desired in documents(description['documents']).items():
-        current=configuration.read(desired['kind'],desired['metadata']['name'],desired['metadata'].get('namespace'))
+    for identity,desired in desired_objects.items():
+        if indexed is not None and desired['kind'] in RUNTIME_VERSIONS and desired['metadata'].get('namespace')=='ai-sdlc-runtime':
+            current=indexed.get(identity)
+        else:
+            current=configuration.read(desired['kind'],desired['metadata']['name'],desired['metadata'].get('namespace'))
         if current is None:raise ValueError('Prepared Helm resource is missing; partial state is excluded')
         uid=Preparation.identity(current)
         meta=current['metadata'];annotations=meta.get('annotations',{})
