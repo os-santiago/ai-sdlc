@@ -18,7 +18,7 @@ var bootstrapTables = []string{
 	"build_cleanups", "build_contexts", "build_effects", "build_handoffs", "build_observations", "build_plans", "build_requests", "build_slots", "built_records",
 	"completion_handoffs",
 	"deployment_handoffs", "deployment_health", "deployment_intents", "deployment_receipts", "deployment_requests", "deployment_sends",
-	"execution_candidates", "execution_effects", "execution_lifecycles", "execution_models", "execution_requests",
+	"execution_candidates", "execution_effects", "execution_failures", "execution_lifecycles", "execution_models", "execution_requests",
 	"intake_cursors", "intake_heads", "intake_observations", "intake_revisions",
 	"managed_component_roles", "merge_effects", "merge_requests", "merged_records", "model_allocations", "model_budgets", "model_calls",
 	"outbox", "planning_heads", "plans", "production_handoffs", "production_records", "promotion_handoffs", "promotion_records", "promotion_requests", "provenance_handoffs", "provenance_records", "provenance_requests",

@@ -131,8 +131,9 @@ func (s *Session) podURL() string {
 }
 
 type observation struct {
-	instances      map[string]instance
-	workerExitCode *int32
+	instances        map[string]instance
+	workerExitCode   *int32
+	workerTerminalID string
 }
 
 func (s *Session) observe(ctx context.Context, allowWorkerExit bool) (map[string]instance, error) {
@@ -181,6 +182,7 @@ func (s *Session) inspect(ctx context.Context, allowWorkerExit bool) (observatio
 	}
 	instances := map[string]instance{}
 	var workerExitCode *int32
+	var workerTerminalID string
 	expectedImages := map[string]string{}
 	for _, container := range s.expected.Spec.Containers {
 		expectedImages[container.Name] = container.Image
@@ -193,6 +195,7 @@ func (s *Session) inspect(ctx context.Context, allowWorkerExit bool) (observatio
 			stateOK = true
 			code := status.State.Terminated.ExitCode
 			workerExitCode = &code
+			workerTerminalID = status.State.Terminated.ContainerID
 		}
 		if (status.Name != "worker" && status.Name != "mailbox") || status.RestartCount != 0 || !stateOK || !containerIDPattern.MatchString(status.ContainerID) || len(status.ImageID) > 1024 || !imageIDPattern.MatchString(status.ImageID) || len(status.Image) == 0 || len(status.Image) > 1024 {
 			return observation{}, ErrTransport
@@ -216,7 +219,7 @@ func (s *Session) inspect(ctx context.Context, allowWorkerExit bool) (observatio
 	if ctx.Err() != nil || !time.Now().Before(s.expires) {
 		return observation{}, ErrTransport
 	}
-	return observation{instances: instances, workerExitCode: workerExitCode}, nil
+	return observation{instances: instances, workerExitCode: workerExitCode, workerTerminalID: workerTerminalID}, nil
 }
 
 func minDeadline(a, b time.Time) time.Time {

@@ -43,7 +43,8 @@ func main() {
 		stop := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
 			state, e := runtime.PollOnce(ctx)
 			if e != nil {
-				log.Print("candidate reconciliation stopped safely: " + execution.DiagnosticStage(e) + " cleanupPending=" + strconv.FormatBool(execution.CleanupPending(e)))
+				code, recorded := execution.WorkerFailureDiagnostic(e)
+				log.Print("candidate reconciliation stopped safely: " + execution.DiagnosticStage(e) + " cleanupPending=" + strconv.FormatBool(execution.CleanupPending(e)) + " workerExitCode=" + strconv.Itoa(int(code)) + " failureRecorded=" + strconv.FormatBool(recorded))
 			} else if state != "" {
 				log.Print("candidate reconciliation: " + state)
 			}

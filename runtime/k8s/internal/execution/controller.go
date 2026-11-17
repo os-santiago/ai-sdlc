@@ -18,6 +18,29 @@ type ControllerError struct{ Stage string }
 
 var errWorkerNonzero = errors.New("original worker exited nonzero")
 
+type nonzeroWorkerExit struct{ code int32 }
+
+func (e nonzeroWorkerExit) Error() string { return "original worker exited nonzero" }
+func (e nonzeroWorkerExit) Unwrap() error { return errWorkerNonzero }
+
+type workerFailure struct {
+	code     int32
+	recorded bool
+}
+
+func (e workerFailure) Error() string { return "execution controller stopped: worker-exit" }
+func (e workerFailure) Unwrap() error { return ControllerError{"worker-exit"} }
+
+// WorkerFailureDiagnostic exposes only a finite exit code and persistence flag.
+// Unknown failures remain code zero, never a claim of successful execution.
+func WorkerFailureDiagnostic(err error) (int32, bool) {
+	var failed workerFailure
+	if errors.As(err, &failed) && failed.code >= 1 && failed.code <= 255 {
+		return failed.code, failed.recorded
+	}
+	return 0, false
+}
+
 func (e ControllerError) Error() string { return "execution controller stopped: " + e.Stage }
 
 // cleanupFailure preserves the original stop cause. Cleanup failure must not
@@ -155,7 +178,11 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 		return nil
 	}); err != nil {
 		if errors.Is(err, errWorkerNonzero) {
-			stage = "worker-exit"
+			var failure nonzeroWorkerExit
+			errors.As(err, &failure)
+			uid, container, code, observationErr := session.WorkerFailure(ctx)
+			recorded := observationErr == nil && code == failure.code && db.RecordExecutionFailure(ctx, l.durable, uid, container, code) == nil
+			return record, workerFailure{code: failure.code, recorded: recorded}
 		}
 		return record, ControllerError{stage}
 	}
@@ -202,7 +229,7 @@ func driveModel(ctx context.Context, session modelSession, authorize func(contex
 		}
 		if exited {
 			if code != 0 {
-				return errWorkerNonzero
+				return nonzeroWorkerExit{code}
 			}
 			return nil
 		}

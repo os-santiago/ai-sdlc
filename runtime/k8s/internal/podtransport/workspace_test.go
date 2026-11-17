@@ -141,6 +141,45 @@ func TestWorkerExitObservationNeverInvokesHelperOrAdoptsReplacement(t *testing.T
 		})
 	}
 }
+func TestWorkerFailureObservationBindsOriginalTerminalContainer(t *testing.T) {
+	for _, mode := range []string{"terminated", "wrong-terminal", "zero", "replaced", "restarted", "expired"} {
+		t.Run(mode, func(t *testing.T) {
+			b, pod, _ := workspaceBinding(t)
+			session, execs := workspaceSession(t, b, pod, func(p *core.Pod, count int32) {
+				if count <= 1 {
+					return
+				}
+				status := &p.Status.ContainerStatuses[0]
+				status.State = core.ContainerState{Terminated: &core.ContainerStateTerminated{ExitCode: 7, ContainerID: status.ContainerID}}
+				switch mode {
+				case "wrong-terminal":
+					status.State.Terminated.ContainerID = "containerd://" + strings.Repeat("f", 64)
+				case "zero":
+					status.State.Terminated.ExitCode = 0
+				case "replaced":
+					p.UID = "99999999-9999-4999-8999-999999999999"
+				case "restarted":
+					status.RestartCount = 1
+				}
+			}, func(*http.Request, *websocket.Conn) { t.Error("diagnostic invoked a helper") })
+			if mode == "expired" {
+				session.expires = time.Now().Add(-time.Second)
+			}
+			uid, container, code, err := session.WorkerFailure(context.Background())
+			if mode == "terminated" {
+				if err != nil || uid != b.PodUID || container != session.instances["worker"].ID || code != 7 {
+					t.Fatal("original termination not bound", err)
+				}
+			} else if err == nil {
+				t.Fatal("invalid diagnostic accepted", mode)
+			}
+			if execs.Load() != 0 {
+				t.Fatal("diagnostic caused execution")
+			}
+		})
+	}
+}
+
 func sourceInput(t *testing.T, conn *websocket.Conn) []byte {
 	t.Helper()
 	var input []byte
