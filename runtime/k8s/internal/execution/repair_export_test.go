@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
@@ -30,9 +31,12 @@ type RepairFixtureForTest struct {
 	Prepare                               func(*testing.T, string) (Prepared, *Lifecycle)
 }
 
-func NewRepairFixtureForTest(t *testing.T, enabled bool) RepairFixtureForTest {
+func NewRepairFixtureForTest(t *testing.T, enabled bool, ttl ...time.Duration) RepairFixtureForTest {
 	t.Helper()
 	f, verifier, r, c, summary := reviewFeedbackFixtureConfigured(t, []func(*fixture){func(f *fixture) {
+		if len(ttl) > 0 {
+			f.command.ExpiresAt = time.Now().Add(ttl[0]).UnixMilli()
+		}
 		if enabled {
 			f.maxRepairs = 1
 		}
@@ -79,4 +83,56 @@ func NewRepairFixtureForTest(t *testing.T, enabled bool) RepairFixtureForTest {
 
 func RepairCommitFaultForTest(t *testing.T, role string) (*store.DB, <-chan struct{}) {
 	return executionCommitFault(t, 1, role)
+}
+
+// CleanupRepairForTest records synthetic UID cleanup through the actual worker
+// method; no Kubernetes operation is represented by this journal fixture.
+func CleanupRepairForTest(t *testing.T, f RepairFixtureForTest, l *Lifecycle, id string) {
+	t.Helper()
+	var config, pod string
+	if e := f.Admin.Pool.QueryRow(`SELECT config_uid,pod_uid FROM execution_lifecycles WHERE request_id=$1`, id).Scan(&config, &pod); e != nil {
+		t.Fatal(e)
+	}
+	if e := f.Worker.ConfirmExecutionCleanup(context.Background(), l.durable, config, pod); e != nil {
+		t.Fatal(e)
+	}
+}
+func RejectRepairReviewForTest(t *testing.T, f RepairFixtureForTest, id string) store.ReviewRun {
+	t.Helper()
+	ctx := context.Background()
+	v, e := f.Verifier.ReadVerification(ctx, id)
+	if e != nil {
+		t.Fatal(e)
+	}
+	c, e := f.Verifier.ClaimVerification(ctx, id, v.PayloadDigest)
+	if e != nil {
+		t.Fatal(e)
+	}
+	resources := map[string]string{}
+	for _, kind := range []string{"config", "baseline", "candidate", "reference", "tests"} {
+		resources[kind] = store.NewID()
+		effect, e := f.Verifier.BeginVerificationEffect(ctx, c, kind)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = f.Verifier.AcknowledgeVerificationEffect(ctx, effect, resources[kind]); e != nil {
+			t.Fatal(e)
+		}
+	}
+	proof, _ := json.Marshal(map[string]any{"version": "ai-sdlc.behavior-proof/v1", "command": json.RawMessage(v.Payload), "resourceUIDs": resources, "behaviorVerified": true, "publicationAuthorized": false})
+	if e = f.Verifier.ConfirmVerificationCleanup(ctx, c); e != nil {
+		t.Fatal(e)
+	}
+	if e = f.Verifier.FinishVerification(ctx, c, proof); e != nil {
+		t.Fatal(e)
+	}
+	r, e := f.Verifier.QueueReview(ctx, id, authority.Digest(proof), f.Review.ProfileDigest, f.Review.ConfigurationDigest, f.Review.AssignmentDigest)
+	if e != nil {
+		t.Fatal(e)
+	}
+	claim, result := reviewFeedbackEffects(t, f.Admin, f.Verifier, r)
+	if e = f.Verifier.RejectReviewWithFeedback(ctx, claim, result); e != nil {
+		t.Fatal(e)
+	}
+	return r
 }

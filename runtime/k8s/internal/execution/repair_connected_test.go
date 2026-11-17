@@ -13,8 +13,10 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/delivery"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/execution"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repairflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
@@ -46,6 +48,9 @@ func relayRepair(t *testing.T, f execution.RepairFixtureForTest, operation strin
 	target, db, effect := "orchestrator", f.Orchestrator, repairflow.Effect(load)
 	if operation == "execute-work" {
 		target, db, effect = "worker", f.Worker, execution.Effect(func() (authority.Policy, error) { return f.Policy, nil })
+	}
+	if operation == "verify-artifact" {
+		target, db, effect = "verifier", f.Verifier, verificationflow.Effect(func() (authority.Policy, error) { return f.Policy, nil })
 	}
 	if operation == "stop-rejected-work" {
 		effect = repairflow.StopEffect(func() (authority.Policy, error) { return f.Policy, nil })
@@ -201,6 +206,37 @@ func connectedRepairCapture(t *testing.T, unchanged bool) {
 	var after string
 	if e = f.Admin.Pool.QueryRow(`SELECT row_to_json(b)::text FROM model_budgets b WHERE work_item_uuid=$1`, f.Command.WorkItemID).Scan(&after); e != nil || original != after {
 		t.Fatal("parent budget changed", e)
+	}
+
+	execution.CleanupRepairForTest(t, f, l, child)
+	sent, e := execution.HandoffCandidate(ctx, f.Worker, func() (authority.Policy, authority.Identity, intake.Config, string, error) {
+		return f.Policy, f.Identities["worker"], f.Config, authority.Digest(f.Profile), nil
+	})
+	if e != nil || !sent {
+		t.Fatal("child verification handoff", sent, e)
+	}
+	if _, e = relayRepair(t, f, "verify-artifact", nil); e != nil {
+		t.Fatal("verification inbox", e)
+	}
+	var verificationID string
+	if e = f.Admin.Pool.QueryRow(`SELECT id FROM verification_requests WHERE candidate_id=$1`, child).Scan(&verificationID); e != nil {
+		t.Fatal(e)
+	}
+	review := execution.RejectRepairReviewForTest(t, f, verificationID)
+	if sent, e = repairflow.Handoff(ctx, f.Verifier, repairLoad(f, "verifier")); e != nil || sent {
+		t.Fatal("second rejection handoff", sent, e)
+	}
+	var outcome string
+	if e = f.Admin.Pool.QueryRow(`SELECT outcome FROM review_repair_handoffs WHERE review_id=$1`, review.ID).Scan(&outcome); e != nil || outcome != "terminal-rejection" {
+		t.Fatal("second rejection not terminal", outcome, e)
+	}
+	if _, e = relayRepair(t, f, "stop-rejected-work", nil); e != nil {
+		t.Fatal("second rejection closure", e)
+	}
+	var work string
+	var children int
+	if e = f.Admin.Pool.QueryRow(`SELECT status,(SELECT count(*) FROM execution_repairs) FROM work_items WHERE uuid=$1`, f.Command.WorkItemID).Scan(&work, &children); e != nil || work != "failed" || children != 1 {
+		t.Fatal("second rejection retried", work, children, e)
 	}
 }
 
@@ -379,6 +415,10 @@ func TestConnectedRepairTerminalCommitAcknowledgementLoss(t *testing.T) {
 }
 
 func TestConnectedRepairQueuedExpiryRetiresOnlyChild(t *testing.T) {
+	t.Run("direct-sweeps", func(t *testing.T) { connectedRepairQueuedExpiry(t, false) })
+	t.Run("gateway-unavailable", func(t *testing.T) { connectedRepairQueuedExpiry(t, true) })
+}
+func connectedRepairQueuedExpiry(t *testing.T, unavailable bool) {
 	f := execution.NewRepairFixtureForTest(t, true)
 	if _, e := f.Admin.Pool.Exec(`UPDATE model_budgets SET expires_at=clock_timestamp()+interval '2 seconds' WHERE work_item_uuid=$1`, f.Command.WorkItemID); e != nil {
 		t.Fatal(e)
@@ -404,11 +444,15 @@ func TestConnectedRepairQueuedExpiryRetiresOnlyChild(t *testing.T) {
 		time.Sleep(d)
 	}
 	ctx := context.Background()
-	if e := f.Worker.ExpireQueuedExecutions(ctx); e != nil {
-		t.Fatal(e)
-	}
-	if e := f.Worker.ExpireExecutionClaims(ctx); e != nil {
-		t.Fatal(e)
+	if unavailable {
+		pollUnavailableGateway(t, f)
+	} else {
+		if e := f.Worker.ExpireQueuedExecutions(ctx); e != nil {
+			t.Fatal(e)
+		}
+		if e := f.Worker.ExpireExecutionClaims(ctx); e != nil {
+			t.Fatal(e)
+		}
 	}
 	var state, reason, work, budget, after string
 	var effects int
@@ -417,5 +461,38 @@ func TestConnectedRepairQueuedExpiryRetiresOnlyChild(t *testing.T) {
 	}
 	if e := f.Admin.Pool.QueryRow(`SELECT row_to_json(b)::text FROM model_budgets b`).Scan(&after); e != nil || after != original {
 		t.Fatal("queued child recovery changed parent", e)
+	}
+}
+
+func TestConnectedRepairTerminalFactSurvivesOriginalExpiry(t *testing.T) {
+	f := execution.NewRepairFixtureForTest(t, false, 5*time.Second)
+	if _, e := repairflow.Handoff(context.Background(), f.Verifier, repairLoad(f, "verifier")); e != nil {
+		t.Fatal(e)
+	}
+	if wait := time.Until(time.UnixMilli(f.Command.ExpiresAt)) + 20*time.Millisecond; wait > 0 {
+		time.Sleep(wait)
+	}
+	if _, e := relayRepair(t, f, "stop-rejected-work", nil); e != nil {
+		t.Fatal("late rejection fact", e)
+	}
+	var state string
+	if e := f.Admin.Pool.QueryRow(`SELECT status FROM work_items WHERE uuid=$1`, f.Command.WorkItemID).Scan(&state); e != nil || state != "failed" {
+		t.Fatal(state, e)
+	}
+}
+func TestConnectedRepairTerminalPreservesNewIssueHead(t *testing.T) {
+	f := execution.NewRepairFixtureForTest(t, false)
+	if _, e := repairflow.Handoff(context.Background(), f.Verifier, repairLoad(f, "verifier")); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := f.Admin.Pool.Exec(`UPDATE intake_heads SET generation=generation+1`); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := relayRepair(t, f, "stop-rejected-work", nil); e != nil {
+		t.Fatal(e)
+	}
+	var state string
+	if e := f.Admin.Pool.QueryRow(`SELECT status FROM work_items WHERE uuid=$1`, f.Command.WorkItemID).Scan(&state); e != nil || state != "running" {
+		t.Fatal("superseded work changed", state, e)
 	}
 }
