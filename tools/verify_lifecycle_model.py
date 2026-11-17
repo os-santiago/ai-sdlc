@@ -14,6 +14,7 @@ import time
 import urllib.parse
 
 import network_probe
+import lifecycle_diagnostics
 from verify_executor import FIXTURE_BODY, FIXTURE_PATH, tree_digest
 from verify_pod_transport import TransportFixture
 from verify_workspace_bundle import identities, source_bundle, wire
@@ -110,10 +111,37 @@ def verify(kubectl, worker_image, mailbox_image, test_binary, bundle, scenario="
                      'roleRef': {'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'Role', 'name': 'lifecycle-controller'},
                      'subjects': [{'kind': 'ServiceAccount', 'name': 'lifecycle-controller', 'namespace': namespace}]}]})
                 private(ready, b'ready\n')
-                if process.wait(timeout=270):
+                # Preserve only finite status fields observed before component
+                # cleanup. This does not change its readiness budget or gates.
+                deadline = time.monotonic()+270
+                last_pod, before_deletion, observations, unavailable = None, None, 0, 0
+                while True:
+                    remaining = deadline-time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired('isolated lifecycle fixture',270)
+                    try:
+                        exit_code = process.wait(timeout=min(.5,remaining))
+                        break
+                    except subprocess.TimeoutExpired:
+                        if remaining < 4:
+                            continue
+                        try:
+                            observed = lifecycle_diagnostics.observe(command,namespace,namespace_uid,planned['pod'])
+                            if observed is not None:
+                                last_pod = observed
+                                if not observed['deleting']:
+                                    before_deletion = observed
+                                observations += 1
+                        except (ValueError,subprocess.TimeoutExpired):
+                            unavailable += 1
+                diagnostic={'scenario':scenario,'observations':observations,'unavailable':unavailable,
+                            'lastBeforeDeletion':before_deletion,'lastPod':last_pod}
+                if exit_code:
                     log.seek(0)
-                    raise ValueError('Composed lifecycle fixture failed: '+log.read(4096).decode(errors='replace'))
+                    raise ValueError('Composed lifecycle fixture failed: '+log.read(4096).decode(errors='replace')
+                                     +' finitePodObservation='+json.dumps(diagnostic,separators=(',',':')))
             result = json.loads(report.read_bytes())
+            result['fixturePodObservation']=diagnostic
             for kind, name in (("pod", planned["pod"]), ("configmap", planned["config"])):
                 if command(["-n", namespace, "get", kind, name, "--ignore-not-found", "-o", "json"]).strip():
                     raise ValueError("Controller did not retire its acknowledged resources")
