@@ -1,5 +1,9 @@
 -- One original issue may derive one repair. Original candidate, review,
 -- allocation, budget counters and deadlines remain immutable historical facts.
+ALTER TABLE execution_requests DROP CONSTRAINT execution_requests_stop_reason_check;
+ALTER TABLE execution_requests ADD CONSTRAINT execution_requests_stop_reason_check
+ CHECK(stop_reason IN ('','aborted','expired','authority-revoked','uncertain','candidate-captured'));
+
 CREATE TABLE review_repair_handoffs (
     review_id text PRIMARY KEY REFERENCES review_feedback(review_id),
     work_item_uuid uuid NOT NULL REFERENCES work_items(uuid),

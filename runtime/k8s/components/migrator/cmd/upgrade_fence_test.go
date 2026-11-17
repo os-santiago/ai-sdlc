@@ -70,6 +70,8 @@ func upgradeProtocolFixture(t *testing.T, schema ...int) (*store.DB, string, str
 		t.Fatal("fixture catalog changed")
 	}
 	if _, err = db.Pool.ExecContext(ctx, `DROP POLICY repair_worker_feedback_reader ON public.review_feedback;
+ ALTER TABLE public.execution_requests DROP CONSTRAINT execution_requests_stop_reason_check;
+ ALTER TABLE public.execution_requests ADD CONSTRAINT execution_requests_stop_reason_check CHECK(stop_reason IN ('','aborted','expired','authority-revoked','uncertain'));
  DROP TABLE public.repair_model_budgets,public.execution_repairs,public.review_repair_handoffs;
  DROP FUNCTION public.lock_repair_parent_budget(uuid);
  DELETE FROM public.schema_migrations WHERE filename='0037_review_repair.sql'`); err != nil {
