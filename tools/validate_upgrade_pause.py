@@ -50,12 +50,20 @@ def main(argv=None):
     kube=[binaries['kubectl'],'--kubeconfig',args.kubeconfig,'--context','kind-'+args.cluster,'--request-timeout=10s']
     helm=[binaries['helm'],'--kubeconfig',args.kubeconfig,'--kube-context','kind-'+args.cluster]
     report={'version':1,'status':'running','scope':'disposable PostgreSQL and namespaced Helm producer fixture',
-            'autonomousEndToEndValidated':False,'installedRuntimeValidated':False,'cleanup':[]}
+            'autonomousEndToEndValidated':False,'installedRuntimeValidated':False,'cleanup':[],
+            'owner':owner,'namespace':namespace,'databaseContainer':db_name,'creationAttempts':[]}
     def write_report():
         (args.output/'report.json').write_text(json.dumps(report,indent=2)+'\n')
+    def guard_namespace():
+        obj=json.loads(command(kube+['get','namespace',namespace,'-o','json']).stdout)
+        meta=obj['metadata']
+        if nsuid is None or meta.get('uid')!=nsuid or meta.get('labels',{}).get(LABEL)!=owner or meta.get('deletionTimestamp'):
+            raise ValueError('Original fixture namespace custody changed')
     def sql(value,check=True):
         return command([provider,'exec','-i',cid,'psql','-X','-q','-A','-t','-v','ON_ERROR_STOP=1','-v','VERBOSITY=sqlstate','-U','ai_sdlc','-d','ai_sdlc'],input=value,check=check)
+    write_report()
     try:
+        report['stage']='publication';write_report()
         _,publication=install_images.resolve(install_images.GitHub(),args.run,args.revision,include_build=True,include_release=True)
         image=install_images.REGISTRY+'@'+publication['images']['migrator']['digest']
         catalog=build_runtime_install.component_call(provider,image,'describe-migrations',{})
@@ -65,9 +73,11 @@ def main(argv=None):
                       dirty=bool(command(['git','status','--porcelain']).stdout))
         password=secrets.token_urlsafe(36)
         env=dict(os.environ,POSTGRES_USER='ai_sdlc',POSTGRES_PASSWORD=password,POSTGRES_DB='ai_sdlc')
+        report['stage']='database-start';report['creationAttempts'].append('database');write_report()
         cid=command([provider,'run','-d','--name',db_name,'--label',LABEL+'='+owner,
             '--env','POSTGRES_USER','--env','POSTGRES_PASSWORD','--env','POSTGRES_DB',
             '--tmpfs','/var/lib/postgresql/data:rw,size=512m','-p','127.0.0.1::5432',POSTGRES],env=env).stdout.strip()
+        report['databaseContainerID']=cid;write_report()
         details=json.loads(command([provider,'container','inspect',cid]).stdout)[0]
         if details['Config']['Labels'].get(LABEL)!=owner or details['Id']!=cid:raise ValueError('Original fixture database identity lost')
         endpoint=details['NetworkSettings']['Ports']['5432/tcp']
@@ -77,6 +87,7 @@ def main(argv=None):
             if command([provider,'exec',cid,'pg_isready','-h','127.0.0.1','-U','ai_sdlc','-d','ai_sdlc'],check=False).returncode==0:break
             time.sleep(.5)
         else:raise ValueError('Disposable database did not become ready')
+        report['stage']='schema';write_report()
         sql('CREATE TABLE public.schema_migrations(filename text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now());')
         for migration in catalog[:-1]:
             raw=source.git('show',args.revision+':'+install_upgrade.MIGRATIONS+migration['filename'])
@@ -89,8 +100,9 @@ def main(argv=None):
         snapshot="SELECT row_to_json(t)::text FROM (SELECT * FROM work_items ORDER BY uuid) t;SELECT row_to_json(t)::text FROM (SELECT * FROM outbox ORDER BY id) t;"
         before=sql(snapshot).stdout
         ns={'apiVersion':'v1','kind':'Namespace','metadata':{'name':namespace,'labels':{LABEL:owner}}}
+        report['stage']='namespace-start';report['creationAttempts'].append('namespace');write_report()
         created=json.loads(command(kube+['create','-f','-','-o','json'],input=json.dumps(ns)).stdout)
-        nsuid=created['metadata']['uid']
+        nsuid=created['metadata']['uid'];report['namespaceUID']=nsuid;write_report()
         with tempfile.TemporaryDirectory() as directory:
             chart=Path(directory);(chart/'templates').mkdir()
             (chart/'Chart.yaml').write_text('apiVersion: v2\nname: pause-fixture\nversion: 0.1.0\n')
@@ -120,12 +132,14 @@ spec:
             runAsUser: 65534
             seccompProfile: {type: RuntimeDefault}
 ''')
+            report['stage']='helm-install';write_report();guard_namespace()
             command(helm+['install','pause-fixture',chart,'-n',namespace,'--wait','--timeout','60s'],timeout=65)
             original=json.loads(command(kube+['get','deployment','producer','-n',namespace,'-o','json']).stdout)
             depuid=original['metadata']['uid']
             originalpods=json.loads(command(kube+['get','pods','-n',namespace,'-o','json']).stdout)['items']
             if len(originalpods)!=1:raise ValueError('Expected one original fixture producer')
             def observe(replicas):
+                guard_namespace()
                 dep=json.loads(command(kube+['get','deployment','producer','-n',namespace,'-o','json']).stdout)
                 pods=json.loads(command(kube+['get','pods','-n',namespace,'-o','json']).stdout)['items']
                 if dep['metadata']['uid']!=depuid or dep['spec']['replicas']!=replicas or len(pods)!=replicas:
@@ -135,11 +149,14 @@ spec:
             record={'phase':'planned','expiresAt':time.time()+120}
             def save(value):(args.output/'pause-intent.json').write_text(json.dumps(value,indent=2)+'\n')
             connection=f'postgresql://ai_sdlc:{password}@127.0.0.1:{port}/ai_sdlc?sslmode=disable'
+            report['stage']='fenced-pause';write_report()
             with Fence(provider,image,connection,port,catalog[:-1],expires_at=record['expiresAt']) as fence:
                 writer=f"SET lock_timeout='300ms';INSERT INTO outbox(id,aggregate_type,aggregate_id,event_type,payload,correlation_id) VALUES('{uuid.uuid4()}','fixture','blocked','fixture','{{}}','fixture');"
                 blocked=sql(writer,check=False)
                 if blocked.returncode==0 or '55P03' not in blocked.stderr:raise ValueError('Fixture writer was not blocked by the original fence')
-                def apply():fence.command(helm+['upgrade','pause-fixture',chart,'-n',namespace,'--set','replicas=0','--timeout','30s'],timeout=35)
+                def apply():
+                    guard_namespace()
+                    fence.command(helm+['upgrade','pause-fixture',chart,'-n',namespace,'--set','replicas=0','--timeout','30s'],timeout=35)
                 runtime_upgrade_pause.pause_once(record,fence,lambda:observe(1),lambda:observe(0),apply,save)
             observe(0)
             if sql(snapshot).stdout!=before:raise ValueError('Original fixture history changed during pause')
@@ -151,6 +168,10 @@ spec:
         report.update(status='failed',errorType=type(error).__name__)
         raise
     finally:
+        if nsuid is None and 'namespace' in report['creationAttempts']:
+            report['cleanup'].append({'kind':'namespace','status':'uncertain-no-original-UID'});report['status']='failed'
+        if cid is None and 'database' in report['creationAttempts']:
+            report['cleanup'].append({'kind':'database','status':'uncertain-no-original-ID'});report['status']='failed'
         if nsuid is not None:
             try:
                 delete={'apiVersion':'v1','kind':'DeleteOptions','preconditions':{'uid':nsuid}}
