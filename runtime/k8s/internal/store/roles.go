@@ -245,10 +245,12 @@ func (db *DB) ProvisionRolesForDeployment(ctx context.Context, passwords map[str
 				statements = append(statements, promotionPrivileges...)
 			}
 			if deployment && component == "release-manager" {
+				statements = append(statements, `GRANT SELECT ON deployment_requests,deployment_intents,deployment_sends,deployment_receipts,deployment_health TO aisdlc_release_manager`)
 				statements = append(statements, `GRANT SELECT ON deployment_handoffs TO aisdlc_release_manager`, `GRANT INSERT(promotion_id,command_id,payload_digest) ON deployment_handoffs TO aisdlc_release_manager`)
 			}
 			if deployment && component == "deployer" {
 				statements = append(statements, deploymentPrivileges...)
+				statements = append(statements, `GRANT SELECT ON completion_handoffs TO aisdlc_deployer`, `GRANT INSERT(deployment_id,command_id,payload_digest) ON completion_handoffs TO aisdlc_deployer`)
 			}
 			// REVOKE table privileges alone does not remove column grants.
 			for _, revoke := range columnRevocations {
