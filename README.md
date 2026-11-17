@@ -7,6 +7,9 @@ responsibilities, authority boundaries and the remaining E2E graduation gates.
 
 For the current local demonstration, see [Saferus E2E readiness](docs/operations/saferus-e2e-readiness.md): verified preparation and remaining autonomous-delivery gates.
 
+Independent review can opt into [one bounded repair](docs/operations/review-repair.md),
+using the original issue authority and remaining model budget. It is disabled by default.
+
 The [browser verifier component](docs/operations/browser-verifier.md) adds real
 desktop/mobile conformance tests. Deployment health requires its bounded evidence
 chain as well as HTTP/TLS checks; a component test is not autonomous E2E proof.

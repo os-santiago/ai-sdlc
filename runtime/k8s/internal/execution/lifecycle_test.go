@@ -32,7 +32,11 @@ func newLifecycleFixture(t *testing.T, configure ...func(*fixture)) *lifecycleFi
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &lifecycleFixture{f, p, Placement{"fixture", "example.invalid/worker@sha256:" + strings.Repeat("a", 64), "example.invalid/mailbox@sha256:" + strings.Repeat("b", 64)}}
+	placement := Placement{"fixture", "example.invalid/worker@sha256:" + strings.Repeat("a", 64), "example.invalid/mailbox@sha256:" + strings.Repeat("b", 64)}
+	if f.placementOverride != nil {
+		placement = *f.placementOverride
+	}
+	return &lifecycleFixture{f, p, placement}
 }
 func (f *lifecycleFixture) loadLifecycle(ctx context.Context) (PreparationInputs, Placement, error) {
 	in, err := f.load(ctx)

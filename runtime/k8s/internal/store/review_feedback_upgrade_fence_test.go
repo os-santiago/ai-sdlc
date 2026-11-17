@@ -85,7 +85,12 @@ func TestUpgradeFenceFeedbackBridgePreservesContainedHistory(t *testing.T) {
 				}
 				// Query the history predicate in the same transaction to exercise EACH
 				// table's emptiness independently without weakening any production FK.
-				f := &UpgradeFence{tx: tx, source: source, tables: bootstrapTables, reviewerHistory: true}
+				tables, err := scopedUpgradeFenceTables(source, false, true)
+				if err != nil {
+					tx.Rollback()
+					t.Fatal(err)
+				}
+				f := &UpgradeFence{tx: tx, source: source, tables: tables, reviewerHistory: true}
 				if err = f.inspectHistory(ctx); !errors.Is(err, ErrUpgradeFenceHistory) {
 					tx.Rollback()
 					t.Fatal("feedback/browser row accepted", table, err)

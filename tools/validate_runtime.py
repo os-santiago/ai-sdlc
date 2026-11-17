@@ -16,6 +16,14 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 OWNER_LABEL = 'ai-sdlc.io/validation-run'
 REQUIRED_TESTS = {
+    ("internal/execution", "TestConnectedRepairDerivesOneChildAndPreparesRejectedTree"),
+    ("internal/execution", "TestConnectedRepairObservationFailureDoesNotConsumeHandoff"),
+    ("internal/execution", "TestConnectedRepairDerivationLostCommitAcknowledgement"),
+    ("internal/execution", "TestConnectedRepairWaitPastDeadlineRollsBackChildAndOutbox"),
+    ("internal/execution", "TestConnectedRepairTerminalSerializesPlannerWithdrawal"),
+    ("internal/execution", "TestConnectedRepairChangedHeadDuringCloseRollsBackInbox"),
+    ("internal/execution", "TestConnectedRepairQueuedExpiryRetiresOnlyChild"),
+    ("internal/execution", "TestConnectedRepairTerminalFactSurvivesOriginalExpiry"),
     ("internal/execution", "TestReviewFeedbackExactPrivateHistoricalRecord"),
     ("internal/execution", "TestReviewFeedbackRejectsMismatchAndMissingCleanup"),
     ("internal/execution", "TestReviewFeedbackLostCommitAndInsertDenial"),

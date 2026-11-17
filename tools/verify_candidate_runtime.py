@@ -59,7 +59,8 @@ def verify(kubectl, worker, mailbox, binary, source_sha, scenario="success", ver
                                    'Runtime': runtime, 'SourceSHA': source_sha, 'ReportFile': str(report), 'Scenario': scenario, **(verification or {})}))
             (root/'go-tmp').mkdir()
             child_env = dict(os.environ, AI_SDLC_CANDIDATE_FIXTURE=str(control), TMPDIR=str(root/'go-tmp'))
-            result = subprocess.run([str(Path(binary).resolve()), '-test.run', '^TestRealCandidateRuntimeFixture$', '-test.v'],
+            test = '^TestRealConnectedRepairControllerFixture$' if scenario == 'repair' else '^TestRealCandidateRuntimeFixture$'
+            result = subprocess.run([str(Path(binary).resolve()), '-test.run', test, '-test.v'],
                 env=child_env, capture_output=True, timeout=420 if verification else 210)
             if scenario == 'crash-after-model-start' and result.returncode == 91:
                 result = subprocess.run([str(Path(binary).resolve()), '-test.run', '^TestRealCandidateRecoveryFixture$', '-test.v'], env=child_env, capture_output=True, timeout=210)

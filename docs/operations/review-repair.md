@@ -20,7 +20,8 @@ The worker starts from the rejected candidate and treats the feedback as
 untrusted data. Issue acceptance criteria, reviewed policy and model settings
 remain unchanged. It exports a cumulative delta against the original repository
 tree, so deterministic verification and a fresh independent review can evaluate
-the entire change. A second rejection cannot create another repair.
+the entire change. Exporting the rejected tree unchanged is refused before another
+review. A second rejection cannot create another repair.
 
 Ineligible, expired or exhausted repair decisions produce a separate signed
 rejection fact. Only the orchestrator can close the matching running work as
@@ -38,3 +39,30 @@ not fabricated exhaustion or permission to retry an external effect.
 Validation must distinguish actual PostgreSQL transactions and signed component
 delivery from synthetic model/Kubernetes effects in journal fixtures. An accepted
 repair reservation or unit test does not establish an issue-to-production E2E.
+
+## Validate the repair boundary
+
+`python3 tools/validate_runtime.py --provider podman` checks the signed handoffs,
+remaining capacity, cumulative capture, second rejection, delayed terminal facts,
+lost commit replies and concurrent planner withdrawal against disposable
+PostgreSQL. Expired queued attempts retire even when the model gateway is down.
+
+For a disposable kind cluster with the offline gVisor runtime and immutable
+worker/mailbox images already imported, compile the execution test binary and
+run:
+
+```bash
+python3 tools/verify_review_repair.py \
+  --kubectl /path/to/kubectl --kubeconfig /private/disposable-kubeconfig \
+  --worker-image REGISTRY/IMAGE@sha256:DIGEST \
+  --mailbox-image REGISTRY/IMAGE@sha256:DIGEST \
+  --test-binary /path/to/execution.test --report /private/repair-report.json
+```
+
+`AI_SDLC_TEST_DATABASE_URL` must name a disposable loopback `ai_sdlc_test`
+database; the fixture resets it. The `ai-sdlc-executors` namespace must not exist.
+This fixture uses synthetic predecessor history, source and model responses, then
+executes the child with actual SCC, Kubernetes and PostgreSQL. It checks imported
+parent content, private feedback, remaining calls, cumulative capture, unchanged
+parent budget and resource removal. It is not a demonstration of a fresh live
+issue reaching production.
