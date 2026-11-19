@@ -6,12 +6,18 @@ import review_feedback_upgrade_data as feedback
 
 MIGRATION = '0037_review_repair.sql'
 TABLES = ('execution_repairs', 'repair_model_budgets', 'review_repair_handoffs', 'review_repair_stops')
-# Canonical, order-independent privileges of every database object. Languages and
-# tablespaces are cluster bootstrap objects owned by each server's initdb
-# superuser (the restore administrator in the rehearsal); migrations never touch
-# them. ACL array order is historical, so a full dump is not order-stable.
-ACL = ACL_QUERY.replace('execution_failures', 'ai_sdlc_no_relation').replace(
-    'FROM entries e;', "FROM entries e WHERE e.kind NOT IN ('language','tablespace');")
+# Canonical, order-independent privileges of every database object. ACL array
+# order is historical, so a full dump is not order-stable. Tablespaces are
+# cluster objects; language owner/grantor is each server's initdb superuser
+# (the restore administrator in the rehearsal), so only those two fields are
+# normalized for languages: grantee, privilege and grantability still compare.
+_ENTRIES = 'FROM entries e;'
+ACL = ACL_QUERY.replace('execution_failures', 'ai_sdlc_no_relation').replace(_ENTRIES,
+    "FROM (SELECT kind,object,CASE WHEN kind='language' THEN NULL ELSE owner END owner,default_acl,"
+    "CASE WHEN kind='language' THEN NULL ELSE grantor END grantor,grantee,privilege_type,is_grantable "
+    "FROM entries WHERE kind<>'tablespace') e;")
+if ACL.count("kind<>'tablespace'") != 1 or 'execution_failures' in ACL or _ENTRIES in ACL:
+    raise RuntimeError('Repair ACL comparison query was not derived as reviewed')
 
 
 class Compatibility(Previous):

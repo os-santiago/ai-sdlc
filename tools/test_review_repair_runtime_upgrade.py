@@ -54,20 +54,53 @@ class RepairGuards(unittest.TestCase):
 
     def test_completed_migration_is_only_reverified(self):
         item = bare(record={'migration': {'state': 'completed', 'cleanup': 'removed'}, 'expiresAt': 1e12,
-                            'rehearsal': {'expected': 'e'}, 'selection': {'catalog': 'c'}})
+                            'migrationVerified': False, 'rehearsal': {'expected': 'e'}, 'selection': {'catalog': 'c'}})
         item.selection = item.record['selection']
-        item.deadline, item.retained, item.paused_source = Mock(), Mock(), Mock(return_value='src')
+        item.deadline, item.paused_source = Mock(), Mock(return_value='src')
         item.observe = Mock(return_value=({}, 'connection'))
         item.config = Mock()
+        # The pre-migration oracle (schema-36 catalog) must not run after the
+        # migration completed: it would always fail on the 37-entry catalog.
+        item.retained = Mock(side_effect=AssertionError('schema-36 oracle after completed migration'))
         item.snapshot = Mock(return_value='proof')
         with patch.object(upgrade, 'Migrator') as migrator, \
                 patch.object(upgrade.compatibility, 'Compatibility') as compat:
             compat.return_value.verify.return_value = {'verified': True}
             item.migrate()
         migrator.assert_not_called()
+        item.retained.assert_not_called()
         item.config.read.assert_not_called()
+        compat.return_value.verify.assert_called_once_with('src', 'e', 'c')
         self.assertTrue(item.record['migrationVerified'])
         self.assertEqual(item.record['completed'], 'migrated')
+
+    def test_first_migration_checks_the_paused_source_first(self):
+        item = bare(record={'migration': {}, 'expiresAt': 1e12})
+        item.deadline = Mock()
+        item.observe = Mock(return_value=({}, 'connection'))
+        item.retained = Mock(side_effect=ValueError('history changed'))
+        item.config = Mock()
+        with patch.object(upgrade, 'Migrator') as migrator, self.assertRaises(ValueError):
+            item.migrate()
+        migrator.assert_not_called()
+        item.config.read.assert_not_called()
+
+    def test_installed_ca_objects_must_hold_the_reviewed_ca_before_any_intent(self):
+        release = {'tlsCA': 'new-ca', 'namespace': 'ai-sdlc-production'}
+        for browser_ca in (None, {'immutable': False, 'data': {'ca.crt': 'new-ca'}, 'metadata': {'uid': 'u'}},
+                           {'immutable': True, 'data': {'ca.crt': 'old-ca'}, 'metadata': {'uid': 'u'}},
+                           {'immutable': True, 'data': {'ca.crt': 'new-ca', 'extra': 'x'}, 'metadata': {'uid': 'u'}}):
+            item = bare(record=None, selection={'images': {}}, approvals={'provenance': {}, 'release': release})
+            item.observe = Mock()
+            item.source_browser = Mock()
+            item.config = Mock()
+            item.config.read.return_value = browser_ca
+            with self.subTest(browser_ca=browser_ca), \
+                    patch.object(upgrade.review_repair_upgrade_targets, 'targets') as targets, \
+                    self.assertRaises(ValueError):
+                item.begin()
+            targets.assert_not_called()
+            item.save.assert_not_called()
 
     def test_unknown_migration_outcome_is_not_replayed(self):
         item = bare(record={'migration': {'state': 'starting'}, 'expiresAt': 1e12})
@@ -158,6 +191,14 @@ class RehearsalBounds(unittest.TestCase):
         with patch.object(rehearsal, 'capture', return_value=b'') as capture:
             item.command(['podman', 'ps'])
         self.assertLessEqual(capture.call_args.kwargs['timeout'], 120)
+
+
+class ACLQuery(unittest.TestCase):
+    def test_acl_query_was_derived_as_reviewed(self):
+        import review_repair_upgrade_data as data
+        self.assertIn("kind<>'tablespace'", data.ACL)
+        self.assertIn("CASE WHEN kind='language' THEN NULL ELSE grantor END", data.ACL)
+        self.assertNotIn('execution_failures', data.ACL)
 
 
 class SourceRender(unittest.TestCase):

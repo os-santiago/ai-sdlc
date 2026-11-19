@@ -361,10 +361,14 @@ class ReviewRepairUpgrade(ReviewFeedbackUpgrade):
     def migrate(self):
         self.deadline()
         observed, connection = self.observe('ready')
-        self.retained()
         intent = self.record['migration']
         if intent and (intent.get('state') != 'completed' or intent.get('cleanup') != 'removed'):
             raise ValueError('Original repair migration outcome cannot be replayed')
+        if not intent:
+            # Before any intent the database must still be the paused schema-36
+            # source. After a completed migration, verify() below checks history
+            # against the paused proof instead (the catalog is already 37).
+            self.retained()
         if not intent:
             secret = self.config.read('secret', 'ai-sdlc-database-roles')
             if set(secret.get('data', {})) != {'passwords.json'}:
