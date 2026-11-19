@@ -61,7 +61,7 @@ func upgradeProtocolFixture(t *testing.T, schema ...int) (*store.DB, string, str
 	if len(schema) > 0 {
 		count = schema[0]
 	}
-	if count != 34 && count != 35 && count != 36 {
+	if count < 34 || count > 37 {
 		t.Fatal("unsupported fixture schema")
 	}
 	// Owned disposable fixtures may select the historical schema prefix.
@@ -69,21 +69,23 @@ func upgradeProtocolFixture(t *testing.T, schema ...int) (*store.DB, string, str
 	if len(source) != 37 || source[35].Filename != "0036_review_feedback.sql" || source[36].Filename != "0037_review_repair.sql" {
 		t.Fatal("fixture catalog changed")
 	}
-	if _, err = db.Pool.ExecContext(ctx, `DROP POLICY repair_worker_feedback_reader ON public.review_feedback;
+	if count < 37 {
+		if _, err = db.Pool.ExecContext(ctx, `DROP POLICY repair_worker_feedback_reader ON public.review_feedback;
  ALTER TABLE public.execution_requests DROP CONSTRAINT execution_requests_stop_reason_check;
  ALTER TABLE public.execution_requests ADD CONSTRAINT execution_requests_stop_reason_check CHECK(stop_reason IN ('','aborted','expired','authority-revoked','uncertain'));
  DROP TABLE public.review_repair_stops,public.repair_model_budgets,public.execution_repairs,public.review_repair_handoffs;
  DROP POLICY repair_capacity_reader ON public.model_calls;
  DROP FUNCTION public.lock_repair_parent_budget(uuid);
  DELETE FROM public.schema_migrations WHERE filename='0037_review_repair.sql'`); err != nil {
-		t.Fatal(err)
-	}
-	for _, table := range []string{"execution_requests", "execution_lifecycles", "execution_models", "execution_candidates", "model_allocations", "model_budgets", "verification_requests", "review_runs", "review_effects", "review_model_calls", "review_feedback", "intake_heads", "intake_revisions", "intake_cursors", "intake_observations", "admission_heads", "admissions", "publication_handoffs"} {
-		if _, err = db.Pool.ExecContext(ctx, "DROP POLICY repair_orchestrator_reader ON public."+table); err != nil {
 			t.Fatal(err)
 		}
+		for _, table := range []string{"execution_requests", "execution_lifecycles", "execution_models", "execution_candidates", "model_allocations", "model_budgets", "verification_requests", "review_runs", "review_effects", "review_model_calls", "review_feedback", "intake_heads", "intake_revisions", "intake_cursors", "intake_observations", "admission_heads", "admissions", "publication_handoffs"} {
+			if _, err = db.Pool.ExecContext(ctx, "DROP POLICY repair_orchestrator_reader ON public."+table); err != nil {
+				t.Fatal(err)
+			}
+		}
+		source = source[:36]
 	}
-	source = source[:36]
 	if count < 36 {
 		if _, err = db.Pool.ExecContext(ctx, `DROP TABLE public.review_feedback; DELETE FROM public.schema_migrations WHERE filename='0036_review_feedback.sql'`); err != nil {
 			t.Fatal(err)
@@ -427,6 +429,101 @@ func TestUpgradeFenceFeedbackProtocolDistinctAndTyped(t *testing.T) {
 			send.Close()
 			receive.Close()
 			if bad {
+				if _, err = db.Pool.Exec(`DELETE FROM release_gates`); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+}
+
+func TestUpgradeFenceRepairProtocolDistinctAndTyped(t *testing.T) {
+	for _, count := range []int{36, 37} {
+		db, name, connection, catalog := upgradeProtocolFixture(t, count)
+		seed, err := os.ReadFile("../../../internal/store/testdata/browser_upgrade_history.sql")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = db.Pool.Exec(string(seed)); err != nil {
+			t.Fatal(err)
+		}
+		for _, scenario := range []string{"held", "history", "feedback-protocol"} {
+			if scenario == "history" {
+				if _, err = db.Pool.Exec(`INSERT INTO release_gates(repository,pull_request,state,correlation_id) VALUES('fixture/app',1,'blocked','fixture')`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			selection, version := repairFence, "ai-sdlc.review-repair-upgrade-fence/v1"
+			if scenario == "feedback-protocol" {
+				selection, version = feedbackFence, "ai-sdlc.review-feedback-upgrade-fence/v1"
+			}
+			input, send := io.Pipe()
+			receive, output := io.Pipe()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			done := make(chan error, 1)
+			go func() { done <- holdSelectedUpgradeFence(ctx, input, output, selection) }()
+			encoder := json.NewEncoder(send)
+			decoder := json.NewDecoder(receive)
+			if err = encoder.Encode(map[string]any{"databaseURL": connection, "database": name, "sourceCatalog": catalog}); err != nil {
+				t.Fatal(err)
+			}
+			var first map[string]any
+			if scenario == "feedback-protocol" && count == 37 {
+				// The earlier feedback bridge never admits the repair schema:
+				// an unsupported catalog is refused before any held response.
+				if err = decoder.Decode(&first); err == nil {
+					t.Fatal("feedback protocol answered schema37", first)
+				}
+				if err = <-done; err == nil {
+					t.Fatal("feedback protocol returned success on schema37")
+				}
+				cancel()
+				send.Close()
+				receive.Close()
+				continue
+			}
+			if err = decoder.Decode(&first); err != nil {
+				t.Fatal(scenario, count, err)
+			}
+			if first["version"] != version || first["workflowRowsWritten"] != false || first["upgradeAuthorized"] != false {
+				t.Fatal("protocol authority mismatch", scenario)
+			}
+			switch {
+			case scenario == "history":
+				if first["state"] != "rejected" || first["reason"] != "history" || len(first) != 5 {
+					t.Fatal("history rejection missing")
+				}
+				if err = <-done; err == nil {
+					t.Fatal("denied history returned success")
+				}
+			default:
+				if first["state"] != "held" {
+					t.Fatal("bridge not held", scenario, count)
+				}
+				for _, operation := range []string{"check", "release"} {
+					if err = encoder.Encode(map[string]any{"operation": operation, "nonce": first["nonce"]}); err != nil {
+						t.Fatal(err)
+					}
+					var next map[string]any
+					if err = decoder.Decode(&next); err != nil {
+						t.Fatal(err)
+					}
+					state := "held"
+					if operation == "release" {
+						state = "released"
+					}
+					if next["state"] != state || next["nonce"] != first["nonce"] || next["expiresAt"] != first["expiresAt"] {
+						t.Fatal("original fence changed")
+					}
+				}
+				if err = <-done; err != nil {
+					t.Fatal(err)
+				}
+			}
+			cancel()
+			send.Close()
+			receive.Close()
+			if scenario == "history" {
 				if _, err = db.Pool.Exec(`DELETE FROM release_gates`); err != nil {
 					t.Fatal(err)
 				}

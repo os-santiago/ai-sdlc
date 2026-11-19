@@ -36,6 +36,7 @@ type UpgradeFence struct {
 	deadline        time.Time
 	reviewerHistory bool
 	feedbackHistory bool
+	repairHistory   bool
 }
 
 // This reviewed bridge covers schemas 0033 and 0034, before any candidate or
@@ -53,15 +54,19 @@ func selectedUpgradeFenceTables(source []MigrationIdentity, browser bool) ([]str
 }
 
 func scopedUpgradeFenceTables(source []MigrationIdentity, browser, feedback bool) ([]string, error) {
+	return repairScopedUpgradeFenceTables(source, browser, feedback, false)
+}
+
+func repairScopedUpgradeFenceTables(source []MigrationIdentity, browser, feedback, repair bool) ([]string, error) {
 	catalog, err := MigrationCatalog()
-	if err != nil || len(catalog) != 37 || catalog[36].Filename != "0037_review_repair.sql" || catalog[35].Filename != "0036_review_feedback.sql" || catalog[34].Filename != "0035_deployment_browser.sql" || catalog[32].Filename != "0033_production_completion.sql" || catalog[33].Filename != "0034_execution_failures.sql" || ValidateMigrationSource(source) != nil || (browser && feedback) {
+	if err != nil || len(catalog) != 37 || catalog[36].Filename != "0037_review_repair.sql" || catalog[35].Filename != "0036_review_feedback.sql" || catalog[34].Filename != "0035_deployment_browser.sql" || catalog[32].Filename != "0033_production_completion.sql" || catalog[33].Filename != "0034_execution_failures.sql" || ValidateMigrationSource(source) != nil || (browser && feedback) || (repair && (browser || feedback)) {
 		return nil, ErrUpgradeFence
 	}
-	if (feedback && len(source) != 35 && len(source) != 36) || (!feedback && ((!browser && len(source) != 33 && len(source) != 34) || (browser && len(source) != 34 && len(source) != 35))) {
+	if (repair && len(source) != 36 && len(source) != 37) || (!repair && ((feedback && len(source) != 35 && len(source) != 36) || (!feedback && ((!browser && len(source) != 33 && len(source) != 34) || (browser && len(source) != 34 && len(source) != 35))))) {
 		return nil, ErrUpgradeFence
 	}
 	// Historical bridges never admit the new feedback schema or its rows.
-	tables := slices.DeleteFunc(slices.Clone(bootstrapTables), func(s string) bool { return slices.Contains(repairUpgradeTables, s) })
+	tables := slices.DeleteFunc(slices.Clone(bootstrapTables), func(s string) bool { return len(source) < 37 && slices.Contains(repairUpgradeTables, s) })
 	if len(source) < 36 {
 		tables = slices.DeleteFunc(tables, func(s string) bool { return s == "review_feedback" })
 	}
@@ -162,10 +167,10 @@ func (f *UpgradeFence) inspectHistory(ctx context.Context) error {
 	if f.reviewerHistory {
 		var safe bool
 		query := reviewerUpgradeHistory
-		if f.feedbackHistory {
+		if f.feedbackHistory || f.repairHistory {
 			query = reviewFeedbackUpgradeHistory
 		}
-		if (len(f.source) != 34 && len(f.source) != 35 && len(f.source) != 36) || f.tx.QueryRowContext(ctx, query).Scan(&safe) != nil {
+		if (len(f.source) != 34 && len(f.source) != 35 && len(f.source) != 36 && !(f.repairHistory && len(f.source) == 37)) || f.tx.QueryRowContext(ctx, query).Scan(&safe) != nil {
 			return ErrUpgradeFence
 		}
 		if !safe {
@@ -247,8 +252,17 @@ func (db *DB) WithReviewFeedbackUpgradeFence(ctx context.Context, database strin
 	return db.withScopedUpgradeFence(ctx, database, source, true, false, true, pause)
 }
 
+// WithReviewRepairUpgradeFence excludes writers for the exact 36-to-37 bridge.
+// Feedback and all child ledgers must be empty: no historical work gains repair.
+func (db *DB) WithReviewRepairUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, pause func(context.Context, *UpgradeFence) error) error {
+	return db.withRepairScopedUpgradeFence(ctx, database, source, true, false, false, true, pause)
+}
+
 func (db *DB) withScopedUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, reviewerHistory, browser, feedback bool, pause func(context.Context, *UpgradeFence) error) error {
-	tables, err := scopedUpgradeFenceTables(source, browser, feedback)
+	return db.withRepairScopedUpgradeFence(ctx, database, source, reviewerHistory, browser, feedback, false, pause)
+}
+func (db *DB) withRepairScopedUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, reviewerHistory, browser, feedback, repair bool, pause func(context.Context, *UpgradeFence) error) error {
+	tables, err := repairScopedUpgradeFenceTables(source, browser, feedback, repair)
 	if err != nil || db == nil || db.Pool == nil || database == "" || len(database) > 63 || pause == nil {
 		return ErrUpgradeFence
 	}
@@ -288,7 +302,7 @@ func (db *DB) withScopedUpgradeFence(ctx context.Context, database string, sourc
 		return ErrUpgradeFence
 	}
 	deadline, _ := active.Deadline()
-	fence := &UpgradeFence{checkPermit: make(chan struct{}, 1), tx: tx, tables: tables, relationIDs: ids, database: database, source: slices.Clone(source), deadline: deadline, reviewerHistory: reviewerHistory, feedbackHistory: feedback}
+	fence := &UpgradeFence{checkPermit: make(chan struct{}, 1), tx: tx, tables: tables, relationIDs: ids, database: database, source: slices.Clone(source), deadline: deadline, reviewerHistory: reviewerHistory, feedbackHistory: feedback, repairHistory: repair}
 	if fence.Check(acquire) != nil {
 		return ErrUpgradeFence
 	}
