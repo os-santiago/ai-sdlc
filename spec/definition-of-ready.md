@@ -83,6 +83,32 @@ a ceiling today). `runtime/k8s` reads both; `ai-sdlc-intake.yml` still
 hardcodes the R3/R4 numbers inline — migrating it to read the contract
 fields is tracked follow-up work (ADR-0004), not yet done.
 
+## Reviewability (admission and independent review share one contract)
+
+The independent reviewer sees only the issue text, its acceptance criteria and
+the read-only candidate tree: no Git history, no original baseline and no
+commands. It must request changes on missing context or uncertainty. An issue
+whose criteria cannot be judged from that view is therefore **not ready**:
+admitting it predetermines a rejection. `runtime/k8s` admission enforces:
+
+- **RV1 — no delivery obligations as criteria.** Independent verification and
+  review, required checks, signed build, provenance, promotion and deployment
+  are enforced by AI-SDLC policy for every issue; they are not properties of the
+  candidate and are removed from the acceptance criteria.
+- **RV2 — no baseline comparisons.** Criteria such as "byte-for-byte" or
+  "every other file/line unchanged" need the original source. State only the
+  files and changes allowed; deterministic scope checks belong to the
+  validation recipe.
+- **RV3 — no operational sections.** Sections other than the acceptance
+  criteria that carry approvals, expiry, renewal, budget, authority or deadline
+  notes are removed: reviewers would read them as requirements.
+
+A failing issue is decided `needs-clarification` with one reason per finding.
+`ProposeRevision` produces the reviewable body (request, recipe marker and every
+reviewable criterion preserved; RV2 clauses cut only when a self-contained
+statement remains, otherwise reported unresolved). The proposal grants no
+authority: only a revised issue revision can be admitted.
+
 ## Issue-template mapping
 
 For a repo with a `bug` and `feature` template:

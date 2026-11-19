@@ -196,6 +196,20 @@ func Evaluate(issue Issue, policy Policy) Result {
 			result.Reasons = append(result.Reasons, "Security or data boundary changes require human review.")
 		}
 	}
+	// Reviewability (Definition of Ready): admitting criteria the independent
+	// reviewer cannot judge would predetermine a rejection. Propose instead.
+	if findings := ReviewabilityFindings(issue); len(findings) > 0 {
+		if result.Decision == Accepted {
+			result.Decision = NeedsClarification
+		}
+		for _, finding := range findings {
+			if len(result.Reasons) >= 19 {
+				result.Reasons = append(result.Reasons, "Further reviewability findings omitted; see the proposed revision.")
+				break
+			}
+			result.Reasons = append(result.Reasons, finding.Reason)
+		}
+	}
 	if len(result.Reasons) == 0 {
 		result.Reasons = []string{"No blocking admission risks detected."}
 	}
