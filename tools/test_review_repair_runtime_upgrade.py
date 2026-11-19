@@ -52,6 +52,23 @@ class RepairGuards(unittest.TestCase):
         item.save.assert_not_called()
         item.apply.assert_not_called()
 
+    def test_completed_migration_is_only_reverified(self):
+        item = bare(record={'migration': {'state': 'completed', 'cleanup': 'removed'}, 'expiresAt': 1e12,
+                            'rehearsal': {'expected': 'e'}, 'selection': {'catalog': 'c'}})
+        item.selection = item.record['selection']
+        item.deadline, item.retained, item.paused_source = Mock(), Mock(), Mock(return_value='src')
+        item.observe = Mock(return_value=({}, 'connection'))
+        item.config = Mock()
+        item.snapshot = Mock(return_value='proof')
+        with patch.object(upgrade, 'Migrator') as migrator, \
+                patch.object(upgrade.compatibility, 'Compatibility') as compat:
+            compat.return_value.verify.return_value = {'verified': True}
+            item.migrate()
+        migrator.assert_not_called()
+        item.config.read.assert_not_called()
+        self.assertTrue(item.record['migrationVerified'])
+        self.assertEqual(item.record['completed'], 'migrated')
+
     def test_unknown_migration_outcome_is_not_replayed(self):
         item = bare(record={'migration': {'state': 'starting'}, 'expiresAt': 1e12})
         item.deadline = Mock()

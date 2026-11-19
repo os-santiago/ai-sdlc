@@ -363,20 +363,23 @@ class ReviewRepairUpgrade(ReviewFeedbackUpgrade):
         observed, connection = self.observe('ready')
         self.retained()
         intent = self.record['migration']
-        if intent:
+        if intent and (intent.get('state') != 'completed' or intent.get('cleanup') != 'removed'):
             raise ValueError('Original repair migration outcome cannot be replayed')
-        secret = self.config.read('secret', 'ai-sdlc-database-roles')
-        if set(secret.get('data', {})) != {'passwords.json'}:
-            raise ValueError('Original role credentials required')
-        passwords = json.loads(base64.b64decode(secret['data']['passwords.json'], validate=True))
-        with bootstrap_database_forward.original_database(self.config.base_run, self.config.kubectl,
-                connection, observed['resources']['pod'], timeout_seconds=240) as (forwarded, port):
-            helper = Migrator(self.config.provider, self.helper, forwarded, port, passwords, intent,
-                lambda _: self.save(self.record), expires_at=self.record['expiresAt'], guard=lambda: self.observe('ready'))
-            try:
-                helper.run()
-            finally:
-                helper.close()
+        if not intent:
+            secret = self.config.read('secret', 'ai-sdlc-database-roles')
+            if set(secret.get('data', {})) != {'passwords.json'}:
+                raise ValueError('Original role credentials required')
+            passwords = json.loads(base64.b64decode(secret['data']['passwords.json'], validate=True))
+            with bootstrap_database_forward.original_database(self.config.base_run, self.config.kubectl,
+                    connection, observed['resources']['pod'], timeout_seconds=240) as (forwarded, port):
+                helper = Migrator(self.config.provider, self.helper, forwarded, port, passwords, intent,
+                    lambda _: self.save(self.record), expires_at=self.record['expiresAt'], guard=lambda: self.observe('ready'))
+                try:
+                    helper.run()
+                finally:
+                    helper.close()
+        # A completed, cleaned migration whose verification failed is only
+        # re-verified; the migrator is never invoked again.
         self.observe('ready')
         self.record['compatibility'] = compatibility.Compatibility(self.database()).verify(
             self.paused_source(), self.record['rehearsal']['expected'], self.selection['catalog'])

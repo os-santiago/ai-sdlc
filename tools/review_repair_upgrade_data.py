@@ -1,11 +1,17 @@
 """Compare a schema37 installation with the same migration rehearsed on backup."""
 import json
 
-from diagnostic_upgrade_data import Compatibility as Previous, digest
+from diagnostic_upgrade_data import ACL_QUERY, Compatibility as Previous, digest
 import review_feedback_upgrade_data as feedback
 
 MIGRATION = '0037_review_repair.sql'
 TABLES = ('execution_repairs', 'repair_model_budgets', 'review_repair_handoffs', 'review_repair_stops')
+# Canonical, order-independent privileges of every database object. Languages and
+# tablespaces are cluster bootstrap objects owned by each server's initdb
+# superuser (the restore administrator in the rehearsal); migrations never touch
+# them. ACL array order is historical, so a full dump is not order-stable.
+ACL = ACL_QUERY.replace('execution_failures', 'ai_sdlc_no_relation').replace(
+    'FROM entries e;', "FROM entries e WHERE e.kind NOT IN ('language','tablespace');")
 
 
 class Compatibility(Previous):
@@ -20,6 +26,14 @@ class Compatibility(Previous):
         for table in present:
             if self.database.sql('SELECT count(*) FROM '+table+';') != '0\n':
                 raise ValueError('Existing repair history cannot be adopted')
+
+    def ddl(self):
+        db = self.database
+        return digest(db.command(db.prefix + ['pg_dump', '--schema-only', '--create', '--no-password',
+            '--restrict-key=aiSdlcSchemaComparisonOnly', '--no-privileges', '-U', db.user, '-d', 'ai_sdlc']))
+
+    def privileges(self):
+        return self.database.sql('BEGIN;' + ACL + 'ROLLBACK;')
 
     def tracking(self):
         return digest(self.database.sql("SELECT row_to_json(t)::text FROM (SELECT * FROM schema_migrations WHERE filename<>'"+MIGRATION+"' ORDER BY filename) t;"))
@@ -56,7 +70,7 @@ class Compatibility(Previous):
         self.history(source, current)
         if self.canonical_roles(restore_role) != source['canonicalRoles']:
             raise ValueError('Rehearsal changed role attributes')
-        return dict(schema=current['@schema'], canonicalRoles=self.canonical_roles(restore_role),
+        return dict(schema=self.ddl(), permissions=self.privileges(), canonicalRoles=self.canonical_roles(restore_role),
                     catalogSize=37, historyPreserved=True)
 
     def history(self, source, current):
@@ -75,9 +89,9 @@ class Compatibility(Previous):
         self.catalog(catalog,37)
         current=self.database.snapshot()
         self.history(source,current)
-        if (set(expected) != {'schema','canonicalRoles','catalogSize','historyPreserved'}
+        if (set(expected) != {'schema','permissions','canonicalRoles','catalogSize','historyPreserved'}
                 or expected['catalogSize'] != 37 or expected['historyPreserved'] is not True
-                or current['@schema'] != expected['schema']
+                or self.ddl() != expected['schema'] or self.privileges() != expected['permissions']
                 or self.canonical_roles() != expected['canonicalRoles']
                 or self.roles() != source['roles']):
             raise ValueError('Repair DDL, RLS, ACL, function or original role identity differs from rehearsal')
