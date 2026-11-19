@@ -35,14 +35,32 @@ type Finding struct {
 	Reason    string      `json:"reason"`
 }
 
-var deliveryObligation = regexp.MustCompile(`(?i)\b(independent (behavior )?(verification|review)|required checks|signed build|provenance|promot(e|ion)|deploy(ed|ment)?|test-production|production environment|record the deployed)\b`)
+// Process phrasing only: product features such as "deployment status" or
+// "token expiry" are reviewable properties and must not match.
+var deliveryObligation = regexp.MustCompile(`(?i)(\b(obtain|pass(ing)?|require[sd]?)\b[^.;]{0,40}\bindependent (behavior )?(verification|review)\b|\bpassing required checks\b|\bsigned (build|provenance)\b|\bbuild/provenance\b|\bprovenance (verification|components?)\b|\b(promot(e|ion)|deploy(ed|ment)?)\b[^.;]{0,60}\b(to|into|through)\b[^.;]{0,40}\b(environment|production|cluster|components?)\b|\brecord the deployed\b)`)
 
 // Clauses that need a before/after comparison of the source.
 var baselineComparison = regexp.MustCompile(`(?i)(byte-for-byte|every other (line|file)|all other (lines|files)|otherwise unchanged)`)
 
-var operationalSection = regexp.MustCompile(`(?i)\b(approvals?|expir(es|y|ation)|renew(al)?|budgets?|authority|deadline)\b`)
+var operationalTerm = regexp.MustCompile(`(?i)\b(approvals?|expir(es|y|ation)|renew(al|s)?|budgets?|authority|deadline)\b`)
 
-var heading = regexp.MustCompile(`(?m)^#{1,6}[ \t]+(.+?)[ \t]*$`)
+var recipeMarker = regexp.MustCompile(`(?i)AI-SDLC validation recipe:`)
+
+// Mirrors normalizedevent: headings need no space after '#'.
+var heading = regexp.MustCompile(`(?m)^#{1,6}[ \t]*(\S.*?)[ \t]*$`)
+
+// A section is operational only when it carries at least two distinct
+// operations terms and never when it holds the validation recipe marker.
+func operational(text string) bool {
+	if recipeMarker.MatchString(text) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, m := range operationalTerm.FindAllString(text, -1) {
+		seen[strings.ToLower(strings.TrimRight(m, "s"))[:4]] = true
+	}
+	return len(seen) >= 2
+}
 
 // ReviewabilityFindings returns every criterion or section that the read-only
 // independent reviewer cannot judge from the candidate.
@@ -59,7 +77,7 @@ func ReviewabilityFindings(issue Issue) []Finding {
 		}
 	}
 	for _, section := range sections(issue.Body) {
-		if !acceptanceSection(section.title) && operationalSection.MatchString(section.text) {
+		if !acceptanceSection(section.title) && operational(section.text) {
 			findings = append(findings, Finding{Kind: OperationalSection, Section: section.title, Reason: fmt.Sprintf(
 				"Section %q contains operational or authority notes that reviewers would treat as requirements; remove it from the issue.", section.title)})
 		}
@@ -97,7 +115,7 @@ func ProposeRevision(issue Issue) (string, []Finding) {
 	skipping := false
 	inAcceptance := false
 	for _, line := range strings.Split(issue.Body, "\n") {
-		if m := heading.FindStringSubmatch(line); m != nil {
+		if m := heading.FindStringSubmatch(line); m != nil && strings.HasPrefix(strings.TrimSpace(line), "#") {
 			title := strings.TrimSpace(m[1])
 			inAcceptance = acceptanceSection(title)
 			skipping = false
@@ -125,24 +143,28 @@ func ProposeRevision(issue Issue) (string, []Finding) {
 	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n", unresolved
 }
 
-// withoutBaselineClause removes the trailing clause that needs a baseline,
-// keeping the leading self-contained statement.
+var imperative = regexp.MustCompile(`(?i)^(add|cover|display|ensure|format|keep|limit|preserve|record|remove|render|replace|return|show|support|update|use|validate)\b`)
+
+// withoutBaselineClause removes only the clauses that need a baseline and keeps
+// every other clause. It resolves the finding only when the remainder starts
+// with an imperative statement; otherwise the author must rephrase it.
 func withoutBaselineClause(criterion string) (string, bool) {
 	for _, separator := range []string{"; ", ", "} {
 		parts := strings.Split(criterion, separator)
 		var kept []string
 		for _, part := range parts {
-			if baselineComparison.MatchString(part) {
-				break
-			}
-			kept = append(kept, part)
-		}
-		if len(kept) > 0 && len(kept) < len(parts) {
-			text := strings.TrimRight(strings.Join(kept, separator), " ,;.")
-			if !baselineComparison.MatchString(text) && len(strings.TrimSpace(text)) >= 12 {
-				return text + ".", true
+			if !baselineComparison.MatchString(part) {
+				kept = append(kept, strings.TrimRight(part, " ,;."))
 			}
 		}
+		if len(kept) == 0 || len(kept) == len(parts) {
+			continue
+		}
+		text := strings.Join(kept, separator)
+		if baselineComparison.MatchString(text) || !imperative.MatchString(strings.TrimSpace(text)) {
+			return "", false
+		}
+		return text + ".", true
 	}
 	return "", false
 }
