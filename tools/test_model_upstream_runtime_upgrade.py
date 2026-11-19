@@ -149,6 +149,15 @@ class History(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'untouched'):
             item.capture_first_pause(Mock())
 
+    def test_approval_renewal_binds_the_repair_recorded_release_identities(self):
+        recorded = {'tlsSecretUID': {'uid': 'u', 'sha256': 'rotated'}}
+        item = Mock()
+        item.source_browser.record = {'releaseIdentities': recorded}
+        with patch.object(upgrade.RepairApprovalPreflight, '__init__', lambda self, u, capture_browser=False:
+                          setattr(self, 'original', {'sources': {'release-original-identities': {'tlsSecretUID': {'uid': 'u', 'sha256': 'initial'}}}})):
+            preflight = upgrade.UpstreamApprovalPreflight(item, capture_browser=True)
+        self.assertEqual(preflight.original['sources']['release-original-identities'], recorded)
+
     def test_the_switch_uses_the_configuration_fence(self):
         item = object.__new__(upgrade.ModelUpstreamUpgrade)
         item.config, item.helper, item.catalog, item.record = Mock(provider='podman'), 'h', [], {'expiresAt': 1}

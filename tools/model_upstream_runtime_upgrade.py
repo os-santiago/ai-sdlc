@@ -179,6 +179,16 @@ def targets(source, selection, upstream, approvals, render_source, render_target
     return result
 
 
+class UpstreamApprovalPreflight(RepairApprovalPreflight):
+    """Approval renewal against the completed repair installation: its recorded
+    (already rotated) release identities are the original, and nothing may
+    change because this switch never rotates the CA."""
+    def __init__(self, upgrade, *, capture_browser=False):
+        super().__init__(upgrade, capture_browser=capture_browser)
+        self.original['sources']['release-original-identities'] = copy.deepcopy(
+            upgrade.source_browser.record['releaseIdentities'])
+
+
 class CompletedRepairSource:
     """Read-only custody of the completed schema-37 repair installation."""
     def __init__(self, config):
@@ -384,7 +394,7 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
         # first durable intent; the profile itself must stay identical.
         self.record = {'targets': result, 'browserCompiled': self.source_browser.browser_compiled}
         try:
-            preflight = RepairApprovalPreflight(self, capture_browser=True)
+            preflight = UpstreamApprovalPreflight(self, capture_browser=True)
         finally:
             self.record = None
         preflight.preflight()
