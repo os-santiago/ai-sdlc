@@ -5,8 +5,17 @@ from unittest.mock import Mock, patch
 import model_upstream_runtime_upgrade as upgrade
 import runtime_upgrade_pause
 
+import copy
+import json
+
 GOOD = {'adapter': 'openai', 'url': 'http://10.89.0.1:18080/v1/chat/completions', 'model': 'gemma-4-26b-a4b',
-        'cidr': '10.89.0.1/32', 'port': 18080, 'seconds': 300, 'directAnswers': True}
+        'cidr': '10.89.0.1/32', 'port': 18080, 'seconds': 300, 'directAnswers': True,
+        'callSeconds': 330, 'reviewCallSeconds': 170}
+DIGEST = lambda c: 'sha256:' + c * 64
+IMAGES = {name: {'digest': DIGEST('b')} for name in upgrade.install_images.ARTIFACT_COMPONENTS
+          | {'artifact-builder', 'build-controller', 'deployer', 'browser-verifier'}}
+DOCS = [{'kind': 'Deployment', 'metadata': {'name': 'ai-sdlc-intake'}, 'spec': {'replicas': 1}}]
+APPROVALS = {'provenance': {'p': 1}, 'release': {'tlsCA': 'CA', 'namespace': 'saferus'}}
 
 
 class UpstreamDocument(unittest.TestCase):
@@ -15,7 +24,8 @@ class UpstreamDocument(unittest.TestCase):
         for change in ({'cidr': '10.89.0.0/24'}, {'cidr': '10.89.0.2/32'}, {'port': 18081},
                        {'url': 'http://10.89.0.1/v1/chat/completions'}, {'url': 'https://10.89.0.1:18080/v1/chat/completions'},
                        {'url': 'http://203.0.113.9:18080/v1/chat/completions', 'cidr': '203.0.113.9/32'},
-                       {'url': 'http://host.example:18080/v1/chat/completions'}, {'seconds': 571}, {'seconds': 29}, {'model': ''},
+                       {'url': 'http://host.example:18080/v1/chat/completions'}, {'seconds': 571}, {'seconds': 29}, {'model': ''}, {'callSeconds': 319}, {'callSeconds': 601},
+                       {'reviewCallSeconds': 59}, {'reviewCallSeconds': 181},
                        {'extra': True}, {'adapter': 'anthropic'}, {'adapter': 'agent-cli'}, {'directAnswers': 'yes'}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 upgrade.validate_upstream(dict(GOOD, **change))
@@ -23,20 +33,63 @@ class UpstreamDocument(unittest.TestCase):
 
 class Targets(unittest.TestCase):
     def source(self):
-        return {'values': {'components': {'worker': {'digest': 'sha256:' + 'a'*64}}}, 'documents': ['doc'],
-                'images': {'components': {'worker': {'digest': 'sha256:' + 'a'*64}}}, 'externalRuntime': {}}
+        candidate = {'profile': {'maxRepairs': 1, 'maxSeconds': 600, 'maxSteps': 24},
+                     'placement': {'WorkerImage': 'w0', 'MailboxImage': 'm0', 'Namespace': 'n'}}
+        review = {'profile': {'maxSeconds': 180, 'maxSteps': 8}, 'workerImage': 'w0', 'mailboxImage': 'm0'}
+        values = {'components': {k: {'digest': DIGEST('a')} for k in upgrade.repair_targets.COMPONENTS},
+                  'migrator': {'digest': DIGEST('a')}, 'verifier': {'digest': DIGEST('a')},
+                  'build': {'digest': DIGEST('a'), 'configJSON': '{"profile": {}}'},
+                  'release': {'digest': DIGEST('a'), 'targetJSON': json.dumps({'tlsCA': 'CA'}), 'browserProfileJSON': '{}'},
+                  'provenance': {'trustJSON': '{}'}, 'intake': {'paused': False},
+                  'candidate': {'configJSON': json.dumps(candidate)}, 'review': {'configJSON': json.dumps(review)}}
+        return {'values': values, 'documents': DOCS, 'externalRuntime': {},
+                'images': {'components': {k: {'digest': DIGEST('a')} for k in upgrade.repair_targets.COMPONENTS},
+                           'migrator': {'digest': DIGEST('a')}}}
+
+    def run_targets(self, source=None, upstream=GOOD, approvals=APPROVALS, render_target=lambda v: copy.deepcopy(DOCS)):
+        source = source or self.source()
+        with patch.object(upgrade.repair_targets, 'validate_provenance'), \
+                patch.object(upgrade.repair_targets, 'validate_release'), \
+                patch.object(upgrade.repair_targets, 'rotated_profile', return_value='{"renewed": true}'), \
+                patch.object(upgrade, 'pause_values', side_effect=lambda v, c: copy.deepcopy(v)), \
+                patch.object(upgrade.initial_activation, 'phase_values', side_effect=lambda v, p, c: copy.deepcopy(v)), \
+                patch.object(upgrade.prepared_resources, 'documents', return_value={'d': 1}):
+            return upgrade.targets(source, {'images': IMAGES}, dict(upstream), approvals,
+                                   lambda v: copy.deepcopy(DOCS), render_target, Mock(), 1.0, 'uid')
+
+    def test_closed_delta_sets_gateway_windows_images_and_renewed_approvals(self):
+        active = self.run_targets()['active']['values']
+        candidate = json.loads(active['candidate']['configJSON'])
+        review = json.loads(active['review']['configJSON'])
+        worker = upgrade.install_images.REGISTRY + '@' + DIGEST('b')
+        self.assertEqual(candidate['profile']['callSeconds'], 330)
+        self.assertEqual(candidate['placement'], {'WorkerImage': worker, 'MailboxImage': worker, 'Namespace': 'n'})
+        self.assertEqual((review['profile']['callSeconds'], review['workerImage'], review['mailboxImage']), (170, worker, worker))
+        self.assertEqual(active['modelGateway']['adapter'], 'openai')
+        self.assertEqual(json.loads(active['provenance']['trustJSON']), APPROVALS['provenance'])
+        self.assertEqual(active['release']['browserProfileJSON'], '{"renewed": true}')
+        self.assertEqual(active['verifier']['digest'], DIGEST('b'))
+        self.assertEqual(active['intake'], {'paused': False})
 
     def test_target_chart_must_render_the_unchanged_installation_identically(self):
-        selection = {'images': {'worker': {'digest': 'sha256:' + 'b'*64}}}
         with self.assertRaisesRegex(ValueError, 'identically'):
-            upgrade.targets(self.source(), selection, GOOD, lambda v: ['doc'], lambda v: ['changed'], Mock())
+            self.run_targets(render_target=lambda v: ['changed'])
 
-    def test_existing_upstream_is_not_adopted(self):
+    def test_existing_upstream_windows_rotation_and_missing_approvals_are_refused(self):
         source = self.source()
         source['values']['modelGateway'] = {'adapter': 'openai'}
         with self.assertRaisesRegex(ValueError, 'already'):
-            upgrade.targets(source, {'images': {'worker': {'digest': 'sha256:' + 'b'*64}}}, GOOD,
-                            lambda v: ['doc'], lambda v: ['doc'], Mock())
+            self.run_targets(source)
+        source = self.source()
+        candidate = json.loads(source['values']['candidate']['configJSON'])
+        candidate['profile']['callSeconds'] = 60
+        source['values']['candidate']['configJSON'] = json.dumps(candidate)
+        with self.assertRaisesRegex(ValueError, 'call window'):
+            self.run_targets(source)
+        with self.assertRaisesRegex(ValueError, 'rotate'):
+            self.run_targets(approvals={'provenance': {}, 'release': {'tlsCA': 'OTHER'}})
+        with self.assertRaisesRegex(ValueError, 'approval'):
+            self.run_targets(approvals={'provenance': {}})
 
 
 class History(unittest.TestCase):
@@ -59,16 +112,25 @@ class History(unittest.TestCase):
 
     def test_in_flight_work_is_refused_before_the_journal_exists(self):
         item = object.__new__(upgrade.ModelUpstreamUpgrade)
-        item.record, item.selection, item.upstream = None, {'images': {'worker': {'digest': 'sha256:' + 'b'*64}}}, dict(GOOD)
+        item.record, item.selection, item.upstream = None, {'images': IMAGES}, dict(GOOD)
+        item.approvals = APPROVALS
         item.observe, item.save = Mock(), Mock()
         item.source_browser = Mock()
         item.source_browser.describe.return_value = Targets().source()
+        item.source_browser.record = {'resourceUIDs': {'d': 1}}
         item.config, item.helper, item.source_render = Mock(), 'h', Mock(return_value=['doc'])
         item.config.render.return_value = ['doc']
         database = Mock()
         database.sql.return_value = 't\n'
         item.database = Mock(return_value=database)
-        with patch.object(upgrade, 'targets', return_value={}), self.assertRaisesRegex(ValueError, 'In-flight'):
+        item.config.read.side_effect = lambda kind, name, ns: (
+            {'immutable': True, 'data': {'ca.crt': 'CA'}, 'metadata': {'uid': 'u'}} if name == 'approved-console-ca'
+            else {'data': {'ca.crt': 'CA'}})
+        with patch.object(upgrade, 'targets', return_value={}), \
+                patch.object(upgrade.build_runtime_install, 'component_call', return_value={
+                    'version': 'ai-sdlc.provenance-installation/v1', 'trust': APPROVALS['provenance'], 'trustSHA256': 'x',
+                    'profileSHA256': 'y', 'verifierImage': upgrade.install_images.REGISTRY + '@' + DIGEST('b')}), \
+                self.assertRaisesRegex(ValueError, 'In-flight'):
             item.begin()
         item.save.assert_not_called()
 
@@ -104,9 +166,9 @@ class History(unittest.TestCase):
 
 class Guards(unittest.TestCase):
     def test_begin_requires_publication_and_document_before_any_effect(self):
-        for selection, document in ((None, GOOD), ({'images': {}}, None)):
+        for selection, document, approvals in ((None, GOOD, APPROVALS), ({'images': {}}, None, APPROVALS), ({'images': {}}, GOOD, None)):
             item = object.__new__(upgrade.ModelUpstreamUpgrade)
-            item.record, item.selection, item.upstream = None, selection, document
+            item.record, item.selection, item.upstream, item.approvals = None, selection, document, approvals
             item.observe, item.save = Mock(), Mock()
             with self.subTest(selection=selection), self.assertRaises(ValueError):
                 item.begin()
@@ -114,9 +176,11 @@ class Guards(unittest.TestCase):
             item.save.assert_not_called()
 
     def test_cli_accepts_only_the_upstream_document(self):
-        for argv in (['model-upstream', '--cluster', 'c'],
+        for argv in (['model-upstream', '--cluster', 'c', '--model-upstream', 'u'],
                      ['model-upstream', '--cluster', 'c', '--model-upstream', 'u', '--provenance-trust', 'p'],
+                     ['model-upstream', '--cluster', 'c', '--provenance-trust', 'p', '--release-target', 'r'],
                      ['model-upstream-status', '--cluster', 'c', '--model-upstream', 'u'],
+                     ['model-upstream-status', '--cluster', 'c', '--provenance-trust', 'p'],
                      ['review-repair', '--cluster', 'c', '--provenance-trust', 'p', '--release-target', 'r', '--model-upstream', 'u']):
             with self.subTest(argv=argv), patch.object(runtime_upgrade_pause.platform, 'lock_state') as lock, \
                     self.assertRaises(ValueError):

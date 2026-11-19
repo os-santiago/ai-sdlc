@@ -208,8 +208,10 @@ def main(argv=None):
         parser.add_argument('--'+name+'-run',type=int);parser.add_argument('--'+name+'-revision')
     args=parser.parse_args(argv)
     if args.command in ('model-upstream','model-upstream-status'):
-        if args.provenance_trust is not None or args.release_target is not None or (args.command=='model-upstream') != (args.model_upstream is not None):
-            raise ValueError('Model upstream switch takes only its reviewed upstream document')
+        if args.command=='model-upstream-status' and (args.provenance_trust is not None or args.release_target is not None or args.model_upstream is not None):
+            raise ValueError('Model upstream status accepts no reviewed documents')
+        if args.command=='model-upstream' and len({args.provenance_trust is None, args.release_target is None, args.model_upstream is None}) != 1:
+            raise ValueError('Model upstream switch takes its reviewed upstream and both approval documents together')
     elif args.model_upstream is not None:
         raise ValueError('Model upstream document is accepted only by model-upstream')
     elif args.command in ('reapprove', 'browser-reapprove', 'review-repair'):
@@ -246,7 +248,7 @@ def main(argv=None):
             if args.source_run is not None or args.source_revision is not None:
                 raise ValueError('Model upstream switch preserves the original recorded repair source')
             from model_upstream_runtime_upgrade import ModelUpstreamUpgrade
-            upgrade=ModelUpstreamUpgrade(config,args.target_run,args.target_revision,args.model_upstream)
+            upgrade=ModelUpstreamUpgrade(config,args.target_run,args.target_revision,args.model_upstream,args.provenance_trust,args.release_target)
             try:result=upgrade.run() if args.command=='model-upstream' else upgrade.status()
             finally:upgrade.close()
         elif args.command in ('review-repair','review-repair-status'):
