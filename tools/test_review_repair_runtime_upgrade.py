@@ -103,6 +103,35 @@ class RepairGuards(unittest.TestCase):
                                             'trust' if files else None, 'target' if files else None)
 
 
+class IdentityBinding(unittest.TestCase):
+    def preflight(self, rotated):
+        def values(ca):
+            return {'release': {'targetJSON': json.dumps({'tlsCA': ca})}}
+        item = object.__new__(upgrade.RepairApprovalPreflight)
+        item.capture_browser = True
+        item.original = {'target': {'values': values('new' if rotated else 'old')},
+                         'sources': {'release-original-identities': {'clusterUID': {'uid': 'c'},
+                                     'tlsSecretUID': {'uid': 't', 'sha256': 'a'*64}}}}
+        item.upgrade = SimpleNamespace(source_browser=SimpleNamespace(describe=lambda phase: {'values': values('old')}))
+        return item
+
+    def test_only_rotated_tls_content_digest_may_change(self):
+        original = {'clusterUID': {'uid': 'c'}, 'tlsSecretUID': {'uid': 't', 'sha256': 'a'*64}}
+        changed = {'clusterUID': {'uid': 'c'}, 'tlsSecretUID': {'uid': 't', 'sha256': 'b'*64}}
+        item = self.preflight(True)
+        item.bind_source('release-original-identities', changed)
+        self.assertEqual(item.renewed_identities, changed)
+        item = self.preflight(False)
+        item.bind_source('release-original-identities', original)
+        self.assertEqual(item.renewed_identities, original)
+        for rotated, value in ((False, changed), (True, original),
+                               (True, dict(changed, tlsSecretUID={'uid': 'x', 'sha256': 'b'*64})),
+                               (True, dict(changed, clusterUID={'uid': 'other'})),
+                               (True, dict(changed, extra={'uid': 'e'}))):
+            with self.subTest(rotated=rotated, value=value), self.assertRaises(ValueError):
+                self.preflight(rotated).bind_source('release-original-identities', value)
+
+
 class SourceRender(unittest.TestCase):
     def test_expired_render_only_when_an_original_approval_expired(self):
         def description(provenance, release):

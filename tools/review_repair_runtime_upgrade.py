@@ -39,9 +39,37 @@ from upgrade_migrator import Migrator
 VERSION = 'ai-sdlc.review-repair-runtime-upgrade/v1'
 
 
+def rotated(target_values, original_values):
+    return (json.loads(target_values['release']['targetJSON'])['tlsCA']
+            != json.loads(original_values['release']['targetJSON'])['tlsCA'])
+
+
+class RepairBrowserPreflight(BrowserPreflight):
+    """Later phases bind the identities recorded by the capture preflight."""
+    def __init__(self, upgrade):
+        super().__init__(upgrade)
+        if upgrade.record.get('releaseIdentities') is not None:
+            self.original['sources']['release-original-identities'] = upgrade.record['releaseIdentities']
+
+
 class RepairApprovalPreflight(ApprovalPreflight):
-    """Like the browser approval binding, but a rotated CA may change caSHA256."""
+    """Like the browser approval binding, but a rotated CA may change only the
+    profile's CA digest/object and the console TLS Secret content digest."""
+    renewed_identities = None
+
     def bind_source(self, name, value):
+        if name == 'release-original-identities' and self.capture_browser:
+            original = self.original['sources'][name]
+            changed = {field for field in set(original) | set(value) if original.get(field) != value.get(field)}
+            if (not isinstance(value, dict) or set(value) != set(original)
+                    or changed - {'tlsSecretUID'}
+                    or value['tlsSecretUID'].get('uid') != original['tlsSecretUID'].get('uid')
+                    or set(value['tlsSecretUID']) != set(original['tlsSecretUID'])
+                    or bool(changed) != rotated(self.original['target']['values'], self.upgrade.source_browser.describe('active')['values'])
+                    or self.renewed_identities is not None and self.renewed_identities != value):
+                raise ValueError('Repair renewal changed release identities beyond the rotated TLS content')
+            self.renewed_identities = copy.deepcopy(value)
+            return
         if name != 'browser-original-profile' or not self.capture_browser:
             return super().bind_source(name, value)
         original = self.original['sources'][name]
@@ -252,8 +280,8 @@ class ReviewRepairUpgrade(ReviewFeedbackUpgrade):
         finally:
             self.record = None
         preflight.preflight()
-        if preflight.renewed_browser is None:
-            raise ValueError('Actual browser compilation for the new target is required')
+        if preflight.renewed_browser is None or preflight.renewed_identities is None:
+            raise ValueError('Actual browser and release compilation for the new target is required')
         self.observe('source')
         now = time.time()
         self.save({'version': VERSION, 'nonce': secrets.token_hex(16), 'parentSHA256': self.parent_hash,
@@ -264,6 +292,7 @@ class ReviewRepairUpgrade(ReviewFeedbackUpgrade):
             'approvalsSHA256': bootstrap.digest(self.approvals), 'targets': targets,
             'sourceProof': proof['data'], 'sourceCompatibility': proof, 'sourceRoleIdentities': roles,
             'resourceUIDs': copy.deepcopy(identities), 'browserCompiled': preflight.renewed_browser,
+            'releaseIdentities': preflight.renewed_identities,
             'pause': None, 'backup': None, 'rehearsal': {}, 'recoveryPause': None, 'migration': {},
             'migrationVerified': False, 'installationSource': self.source_browser.current_report,
             'installationReports': []})
@@ -371,13 +400,13 @@ class ReviewRepairUpgrade(ReviewFeedbackUpgrade):
             self.record['completed'] = 'ready'
             self.save(self.record)
         if self.record['completed'] == 'ready':
-            BrowserPreflight(self).preflight()
+            RepairBrowserPreflight(self).preflight()
             self.migrate()
         for phase in PHASES[PHASES.index(self.record['completed']) + 1:]:
             if self.record.get('transition') is None:
                 self.observe(self.record['completed'])
                 self.retained()
-                BrowserPreflight(self).preflight()
+                RepairBrowserPreflight(self).preflight()
                 self.retained()
             advance(self.record, phase, self.observe, self.apply, self.save, phases=PHASES)
         self.publish_report(active=True)
