@@ -258,6 +258,22 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
                 or compatibility.Compatibility(database).roles() != self.record['sourceRoleIdentities']):
             raise ValueError('Original history or authority changed during the model upstream switch')
 
+    def capture_first_pause(self, database):
+        """No migration exists, so the fenced snapshot is adopted as the retained
+        proof: queued work may legitimately progress between begin() and the
+        fence. Under the fence the in-flight predicate, the exact catalog, the
+        table inventory and the original database authority are re-proven."""
+        self.observe('source')
+        if (self.record['completed'] != 'source' or self.record.get('pause') is not None
+                or self.record.get('backup') is not None or self.record.get('transition') is not None
+                or self.record.get('recoveryPause') is not None or self.record.get('fencedSourceProof') is not None):
+            raise ValueError('Only the untouched first pause can capture the fenced source')
+        current = self.snapshot(database)
+        if set(current) != set(self.record['sourceProof']):
+            raise ValueError('Original table inventory changed before the first pause')
+        self.original_database_authority(current, database)
+        return current
+
     def fence(self, connection, port):
         return Fence(self.config.provider, self.helper, connection, port, self.catalog,
                      expires_at=self.record['expiresAt'], configuration=True)

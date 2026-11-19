@@ -45,7 +45,8 @@ class History(unittest.TestCase):
         database.sql.return_value = 'f\n'
         upgrade.in_flight(database)
         query = database.sql.call_args[0][0]
-        for table in ('execution_requests', 'model_calls', 'review_runs', 'review_model_calls', 'verification_effects'):
+        for table in ('execution_requests', 'model_calls', 'review_runs', 'review_model_calls', 'verification_effects',
+                      'repair_model_budgets', 'response_handed_off_at'):
             self.assertIn(table, query)
         for history in ('review_feedback', 'execution_repairs', 'deployment_browser'):
             self.assertNotIn(history, query)
@@ -70,6 +71,21 @@ class History(unittest.TestCase):
         with patch.object(upgrade, 'targets', return_value={}), self.assertRaisesRegex(ValueError, 'In-flight'):
             item.begin()
         item.save.assert_not_called()
+
+    def test_first_pause_adopts_the_fenced_snapshot_when_queued_work_progressed(self):
+        item = object.__new__(upgrade.ModelUpstreamUpgrade)
+        item.record = {'completed': 'source', 'pause': None, 'backup': None, 'transition': None, 'recoveryPause': None,
+                       'sourceProof': {'review_runs': {'rows': 1}, 'work_items': {'rows': 1}}}
+        item.observe, item.original_database_authority = Mock(), Mock()
+        progressed = {'review_runs': {'rows': 2}, 'work_items': {'rows': 1}}
+        item.snapshot = Mock(return_value=progressed)
+        self.assertEqual(item.capture_first_pause(Mock()), progressed)
+        item.snapshot.return_value = {'review_runs': {'rows': 2}}
+        with self.assertRaisesRegex(ValueError, 'inventory'):
+            item.capture_first_pause(Mock())
+        item.record['fencedSourceProof'] = progressed
+        with self.assertRaisesRegex(ValueError, 'untouched'):
+            item.capture_first_pause(Mock())
 
     def test_the_switch_uses_the_configuration_fence(self):
         item = object.__new__(upgrade.ModelUpstreamUpgrade)

@@ -38,7 +38,8 @@ func TestConfigurationUpgradeFenceAdmitsCompletedHistoryAndRejectsInFlightWork(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range append(append(slices.Clone(browserUpgradeTables), "review_feedback"), repairUpgradeTables...) {
+	history := append(append(slices.Clone(browserUpgradeTables), "review_feedback"), slices.DeleteFunc(slices.Clone(repairUpgradeTables), func(s string) bool { return s == "repair_model_budgets" })...)
+	for _, table := range history {
 		tx, err := db.Pool.BeginTx(ctx, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -54,6 +55,22 @@ func TestConfigurationUpgradeFenceAdmitsCompletedHistoryAndRejectsInFlightWork(t
 		}
 		if err = tx.Rollback(); err != nil {
 			t.Fatal(err)
+		}
+	}
+	for state, admitted := range map[string]bool{"stopped": true, "reserved": false, "active": false} {
+		tx, err := db.Pool.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(`ALTER TABLE public.repair_model_budgets RENAME TO configuration_original; CREATE TABLE public.repair_model_budgets(state text); INSERT INTO public.repair_model_budgets VALUES('` + state + `')`); err != nil {
+			tx.Rollback()
+			t.Fatal(err)
+		}
+		f := &UpgradeFence{tx: tx, source: source, tables: tables, configurationHistory: true}
+		err = f.inspectHistory(ctx)
+		tx.Rollback()
+		if (err == nil) != admitted || (!admitted && !errors.Is(err, ErrUpgradeFenceHistory)) {
+			t.Fatal("repair budget", state, err)
 		}
 	}
 	for _, live := range []string{
