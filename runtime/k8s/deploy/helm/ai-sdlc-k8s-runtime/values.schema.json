@@ -937,7 +937,8 @@
       "required": [
         "adapter",
         "upstream",
-        "benchmark"
+        "benchmark",
+        "reviewBenchmark"
       ],
       "properties": {
         "adapter": {
@@ -993,6 +994,26 @@
           }
         },
         "benchmark": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "promptTokens",
+            "completionTokens"
+          ],
+          "properties": {
+            "promptTokens": {
+              "type": "integer",
+              "minimum": 256,
+              "maximum": 262144
+            },
+            "completionTokens": {
+              "type": "integer",
+              "minimum": 64,
+              "maximum": 32768
+            }
+          }
+        },
+        "reviewBenchmark": {
           "type": "object",
           "additionalProperties": false,
           "required": [

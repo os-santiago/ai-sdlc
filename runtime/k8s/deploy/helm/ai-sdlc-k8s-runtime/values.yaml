@@ -170,3 +170,8 @@ modelGateway:
   benchmark:
     promptTokens: 16384
     completionTokens: 4096
+  # Envelope for the verifier's gateway: reviewers read large candidates but
+  # answer with a short verdict.
+  reviewBenchmark:
+    promptTokens: 16384
+    completionTokens: 1024
