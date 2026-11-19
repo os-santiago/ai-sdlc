@@ -29,6 +29,9 @@ type Configuration struct {
 	Namespace, WorkerImage, MailboxImage string
 	Profile, ADev                        []byte
 	Model                                modelbroker.ProviderConfig
+	// RequireGatewayProfile refuses reviews unless the gateway's benchmarked
+	// timeout fits the reviewer call window. Installation-only; not digested.
+	RequireGatewayProfile bool `json:"-"`
 }
 type Loader func(context.Context) (Configuration, error)
 

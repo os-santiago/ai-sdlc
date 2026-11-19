@@ -24,6 +24,8 @@ func TestIndependentQueueScheduling(t *testing.T) {
 	}{
 		{"", nil, true}, {"rejected", nil, true},
 		{"stopped", ControllerError{Stage: "gateway-unavailable"}, true},
+		{"stopped", ControllerError{Stage: "gateway-profile-unfit"}, true},
+		{"stopped", ControllerError{Stage: "gateway-profile-unfit", CleanupPending: true}, false},
 		{"review-passed", nil, true},
 		{"stopped", ControllerError{Stage: "model"}, false},
 		{"cleanup-uncertain", ControllerError{Stage: "cleanup", CleanupPending: true}, false},

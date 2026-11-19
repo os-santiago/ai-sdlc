@@ -195,6 +195,15 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 		d.abandon(ctx, ref)
 		return result, ErrUncertain
 	}
+	// Never publish after the mailbox stopped waiting: SCC has already seen a
+	// failure (and may retry), so a late handoff would never be received.
+	if mailboxEnd := time.UnixMilli(request.ExpiresAt); mailboxEnd.Before(until) {
+		until = mailboxEnd
+	}
+	if !time.Now().Before(until) {
+		d.abandon(ctx, ref)
+		return result, ErrUncertain
+	}
 	publicationCtx, stopPublicationAuthority := context.WithDeadline(ctx, until)
 	defer stopPublicationAuthority()
 	publishCtx, stopPublish := context.WithTimeout(publicationCtx, 5*time.Second)
