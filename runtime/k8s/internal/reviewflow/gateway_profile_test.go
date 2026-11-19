@@ -54,3 +54,15 @@ func TestReviewGateRequiresTheBenchmarkedTimeoutToFitTheReviewerWindow(t *testin
 		}
 	}
 }
+
+// The broker timeout is installation-only: the verifier and the publisher
+// compute the same review configuration digest whatever each was given.
+func TestReviewConfigurationDigestIgnoresTheBrokerTimeout(t *testing.T) {
+	c := Configuration{Namespace: "ai-sdlc-reviewers", Profile: []byte("{}"), Model: modelbroker.ProviderConfig{Endpoint: "http://127.0.0.1:8787/v1/chat/completions", AllowLoopbackHTTP: true}}
+	before := c.Digest()
+	c.Model.TimeoutSeconds = 330
+	c.RequireGatewayProfile = true
+	if c.Digest() != before {
+		t.Fatal("broker timeout or gate changed the review configuration digest")
+	}
+}

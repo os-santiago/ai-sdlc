@@ -65,6 +65,10 @@ class GatewayHandler(Handler):
             self.reply(200, {"timeoutSeconds": profile["timeoutSeconds"]})
 
     def do_POST(self):
+        # Authenticate before revealing benchmark state or taking the slot.
+        if not _authorized(self):
+            self.reply(401, {"error": {"message": "authentication required"}})
+            return
         if self.server.profile is None:
             self.reply(503, {"error": {"message": "model gateway benchmarking"}})
             return
