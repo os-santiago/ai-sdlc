@@ -137,7 +137,33 @@ class DripUpstream(BaseHTTPRequestHandler):
             time.sleep(0.2)
 
 
+class HeaderDrip(BaseHTTPRequestHandler):
+    def log_message(self, *_):
+        pass
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        for byte in b"HTTP/1.1 200 OK\r\nX-Slow: " + b"a" * 40:
+            try:
+                self.wfile.write(bytes([byte]))
+                self.wfile.flush()
+            except OSError:
+                return
+            time.sleep(0.2)
+
+
 class DeadlineTests(unittest.TestCase):
+    def test_dripped_headers_cannot_outlive_the_total_deadline(self):
+        server = HTTPServer(("127.0.0.1", 0), HeaderDrip)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        adapter = adapters.OpenAIAdapter("http://127.0.0.1:%d/v1/chat/completions" % server.server_address[1], "m", 1)
+        started = time.monotonic()
+        with self.assertRaises(RuntimeError):
+            adapter.complete(REQUEST)
+        self.assertLess(time.monotonic() - started, 2.5)
+
     def test_a_dripped_body_cannot_outlive_the_total_deadline(self):
         server = HTTPServer(("127.0.0.1", 0), DripUpstream)
         threading.Thread(target=server.serve_forever, daemon=True).start()

@@ -16,6 +16,7 @@ validated messages and tool schemas, plus the single upstream URL, model alias
 and optional credential the installation configured. Adding a provider means
 adding one class to ``ADAPTERS``; the gateway, worker and chart are unchanged.
 """
+import http.client
 import ipaddress
 import json
 import os
@@ -102,41 +103,88 @@ def read_credential(path):
     return value
 
 
-def post_json(url, payload, headers, seconds, opener=None):
-    """POST once with no proxy and no redirects. One total deadline covers
-    connect, wait and a slowly dripped body: a watchdog closes the socket."""
+class _Deadline:
+    """Shuts down the upstream socket at one total deadline, covering connect,
+    TLS, headers and a slowly dripped body."""
+    def __init__(self, seconds):
+        self.expired = threading.Event()
+        self.sockets = []
+        self.lock = threading.Lock()
+        self.timer = threading.Timer(seconds, self.fire)
+        self.timer.daemon = True
+
+    def track(self, sock):
+        with self.lock:
+            self.sockets.append(sock)
+            if self.expired.is_set():
+                self._close(sock)
+
+    @staticmethod
+    def _close(sock):
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def fire(self):
+        with self.lock:
+            self.expired.set()
+            for sock in self.sockets:
+                self._close(sock)
+
+
+def _tracked(base, deadline):
+    class Connection(base):
+        def connect(self):
+            super().connect()
+            deadline.track(self.sock)
+    return Connection
+
+
+class _HTTP(urllib.request.HTTPHandler):
+    def __init__(self, deadline):
+        super().__init__()
+        self.deadline = deadline
+
+    def http_open(self, req):
+        return self.do_open(_tracked(http.client.HTTPConnection, self.deadline), req)
+
+
+class _HTTPS(urllib.request.HTTPSHandler):
+    def __init__(self, deadline):
+        super().__init__()
+        self.deadline = deadline
+
+    def https_open(self, req):
+        return self.do_open(_tracked(http.client.HTTPSConnection, self.deadline), req,
+                            context=self._context)
+
+
+def post_json(url, payload, headers, seconds):
+    """POST once with no proxy and no redirects. One total deadline covers the
+    whole call: a watchdog armed before connecting shuts the socket down."""
     raw = json.dumps(payload).encode()
     call = urllib.request.Request(url, data=raw, method="POST", headers=dict(headers, **{"Content-Type": "application/json"}))
-    opener = opener or urllib.request.build_opener(_NoRedirect(), urllib.request.ProxyHandler({}))
-    deadline = time.monotonic() + seconds
-    expired = threading.Event()
+    deadline = _Deadline(seconds)
+    opener = urllib.request.build_opener(_NoRedirect(), urllib.request.ProxyHandler({}), _HTTP(deadline), _HTTPS(deadline))
     body = b""
+    deadline.timer.start()
     try:
         with opener.open(call, timeout=seconds) as response:
-            def abort():
-                expired.set()
-                try:
-                    response.fp.raw._sock.shutdown(socket.SHUT_RDWR)
-                except (AttributeError, OSError):
-                    response.close()
-            watchdog = threading.Timer(max(deadline - time.monotonic(), 0), abort)
-            watchdog.daemon = True
-            watchdog.start()
-            try:
-                if response.status != 200:
-                    raise RuntimeError("upstream status")
-                while len(body) <= MAX_RESPONSE_BYTES and not expired.is_set():
-                    chunk = response.read1(16384)
-                    if not chunk:
-                        break
-                    body += chunk
-            finally:
-                watchdog.cancel()
-    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+            if response.status != 200:
+                raise RuntimeError("upstream status")
+            while len(body) <= MAX_RESPONSE_BYTES and not deadline.expired.is_set():
+                chunk = response.read1(16384)
+                if not chunk:
+                    break
+                body += chunk
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError, http.client.HTTPException, AttributeError):
         if len(body) > MAX_RESPONSE_BYTES:
             raise ValueError("completion response exceeded bound") from None
         raise RuntimeError("completion backend failed") from None
-    if expired.is_set() or time.monotonic() > deadline:
+    finally:
+        deadline.timer.cancel()
+    if deadline.expired.is_set():
         raise RuntimeError("completion deadline exceeded")
     if len(body) > MAX_RESPONSE_BYTES:
         raise ValueError("completion response exceeded bound")
@@ -285,7 +333,7 @@ class AnthropicAdapter(Adapter):
             payload["tools"] = [{"name": t["function"]["name"], "description": t["function"].get("description", ""),
                                  "input_schema": t["function"].get("parameters") or {"type": "object"}} for t in tools]
         choice = request.get("tool_choice")
-        if choice == "none":
+        if choice == "none" and tools:
             # Keep tools: history may hold tool_use/tool_result blocks.
             payload["tool_choice"] = {"type": "none"}
         elif choice == "required":
