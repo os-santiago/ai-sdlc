@@ -171,6 +171,7 @@ class History(unittest.TestCase):
         self.assertEqual(values['upstream']['credentialSecret'], '')
         self.assertTrue(values['upstream']['directAnswers'])
         self.assertEqual(values['benchmark'], {'promptTokens': 16384, 'completionTokens': 4096})
+        self.assertEqual(values['reviewBenchmark'], {'promptTokens': 16384, 'completionTokens': 1024})
 
 
 class Guards(unittest.TestCase):

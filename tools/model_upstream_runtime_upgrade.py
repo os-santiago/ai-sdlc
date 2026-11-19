@@ -79,7 +79,8 @@ def gateway_values(upstream):
             'upstream': {'url': upstream['url'], 'model': upstream['model'], 'cidr': upstream['cidr'],
                          'port': upstream['port'], 'seconds': upstream['seconds'], 'credentialSecret': '',
                          'directAnswers': upstream['directAnswers']},
-            'benchmark': {'promptTokens': 16384, 'completionTokens': 4096}}
+            'benchmark': {'promptTokens': 16384, 'completionTokens': 4096},
+            'reviewBenchmark': {'promptTokens': 16384, 'completionTokens': 1024}}
 
 
 def in_flight(database):
