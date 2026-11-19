@@ -28,8 +28,9 @@ from model_adapters import adapter_from_environ
 from model_benchmark import BenchmarkFailed, benchmark
 
 ATTEMPTS = 5
-# Short randomized backoff: contention between gateways lasts one benchmark
-# (~15-30 s), and each rollout phase must converge within 120 s.
+# Short randomized backoff: contention between gateways sharing one upstream
+# lasts one benchmark (~15-30 s). Five attempts take at most ~250 s, within the
+# model upstream switch's 300 s rollout convergence window.
 RETRY_SECONDS = (5, 25)
 
 
@@ -108,7 +109,7 @@ def run_benchmark(server, prompt_tokens, completion_tokens, attempts=ATTEMPTS, p
             if attempt + 1 < attempts:
                 # Randomized backoff: gateways sharing one upstream start
                 # together and would otherwise measure each other's load.
-                time.sleep(random.uniform(*pause) if isinstance(pause, tuple) else pause)
+                time.sleep(random.uniform(*pause) if isinstance(pause, (tuple, list)) else pause)
             continue
         print(json.dumps({"event": "model-benchmark", "profile": profile}), flush=True)
         server.profile = profile
