@@ -43,33 +43,37 @@ func (db *DB) CaptureLifecycleCandidate(ctx context.Context, l Lifecycle, alloca
 		if json.Unmarshal(receiptRaw, &receipt) != nil || receipt.UID != pod || receipt.ExitCode == nil || *receipt.ExitCode != 0 || receipt.Digest != result.ExportSHA256 || receipt.Bytes != result.ExportBytes {
 			return ErrExecution
 		}
+		ledger, e := lockModel(ctx, tx, allocationID)
+		if e != nil || ledger.state != "active" {
+			return ErrExecution
+		}
 		var work string
-		var expiry time.Time
-		if tx.QueryRowContext(ctx, `SELECT b.work_item_uuid,LEAST(b.expires_at,a.expires_at)
+		if tx.QueryRowContext(ctx, `SELECT b.work_item_uuid
  FROM execution_models e JOIN model_allocations a ON a.id=e.allocation_id JOIN model_budgets b ON b.work_item_uuid=a.work_item_uuid
  JOIN execution_requests r ON r.id=e.request_id JOIN work_items w ON w.uuid=r.work_item_uuid
- WHERE e.request_id=$1 AND a.id=$2 AND a.pod_uid=$3 AND b.source_sha=$4 AND b.state='active'
+ WHERE e.request_id=$1 AND a.id=$2 AND a.pod_uid=$3 AND b.source_sha=$4
  AND w.status='running' AND r.work_item_uuid=a.work_item_uuid AND r.repository=b.repository AND r.attempt=a.attempt
- FOR UPDATE OF b`, l.Claim.ID, allocationID, pod, d.SourceSHA).Scan(&work, &expiry) != nil {
+ `, l.Claim.ID, allocationID, pod, d.SourceSHA).Scan(&work) != nil || work != ledger.workItem {
 			return ErrExecution
 		}
 		var pending int
 		if tx.QueryRowContext(ctx, `SELECT count(*),count(*) FILTER (WHERE c.state<>'completed' OR c.response_handed_off_at IS NULL)
- FROM model_calls c JOIN model_allocations a ON a.id=c.allocation_id WHERE a.work_item_uuid=$1`, work).Scan(&result.ModelCalls, &pending) != nil || pending != 0 || result.ModelCalls < 1 || result.ModelCalls > 128 {
+ FROM model_calls c JOIN model_allocations a ON a.id=c.allocation_id WHERE a.work_item_uuid=$1
+ AND (($2 AND a.id=$3::uuid) OR (NOT $2 AND NOT EXISTS(SELECT 1 FROM repair_model_budgets rb WHERE rb.allocation_id=a.id)))`, work, ledger.derived, allocationID).Scan(&result.ModelCalls, &pending) != nil || pending != 0 || result.ModelCalls < 1 || result.ModelCalls > 128 {
 			return ErrExecution
 		}
 		if _, e = tx.ExecContext(ctx, `INSERT INTO execution_candidates(request_id,allocation_id,pod_uid,source_sha,source_tree_sha256,candidate_tree_sha256,export_sha256,export_bytes,delta_sha256,delta,changes,model_calls)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, result.RequestID, result.AllocationID, result.PodUID, result.SourceSHA, result.SourceTreeSHA256, result.CandidateTreeSHA256, result.ExportSHA256, result.ExportBytes, result.DeltaSHA256, delta, result.Changes, result.ModelCalls); e != nil {
 			return ErrExecution
 		}
-		if _, e = tx.ExecContext(ctx, `UPDATE model_budgets SET state='stopped',stop_reason='candidate-captured' WHERE work_item_uuid=$1`, work); e != nil {
+		if _, e = tx.ExecContext(ctx, `UPDATE `+ledger.budgetTable()+` SET state='stopped',stop_reason='candidate-captured' WHERE work_item_uuid=$1`, work); e != nil {
 			return ErrExecution
 		}
 		if _, e = tx.ExecContext(ctx, `UPDATE execution_lifecycles SET phase='candidate-captured',updated_at=clock_timestamp() WHERE request_id=$1`, l.Claim.ID); e != nil {
 			return ErrExecution
 		}
 		var current bool
-		if tx.QueryRowContext(ctx, `SELECT $1::timestamptz>clock_timestamp()`, expiry).Scan(&current) != nil || !current {
+		if tx.QueryRowContext(ctx, `SELECT LEAST($1::timestamptz,$2::timestamptz)>clock_timestamp()`, ledger.budgetExpiry, ledger.allocationExpiry).Scan(&current) != nil || !current {
 			return ErrExecution
 		}
 		return lifecycleCurrent(ctx, tx, l.Claim)

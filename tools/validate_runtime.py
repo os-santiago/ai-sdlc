@@ -16,6 +16,14 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 OWNER_LABEL = 'ai-sdlc.io/validation-run'
 REQUIRED_TESTS = {
+    ("internal/execution", "TestConnectedRepairDerivesOneChildAndPreparesRejectedTree"),
+    ("internal/execution", "TestConnectedRepairObservationFailureDoesNotConsumeHandoff"),
+    ("internal/execution", "TestConnectedRepairDerivationLostCommitAcknowledgement"),
+    ("internal/execution", "TestConnectedRepairWaitPastDeadlineRollsBackChildAndOutbox"),
+    ("internal/execution", "TestConnectedRepairTerminalSerializesPlannerWithdrawal"),
+    ("internal/execution", "TestConnectedRepairChangedHeadDuringCloseRollsBackInbox"),
+    ("internal/execution", "TestConnectedRepairQueuedExpiryRetiresOnlyChild"),
+    ("internal/execution", "TestConnectedRepairTerminalFactSurvivesOriginalExpiry"),
     ("internal/execution", "TestReviewFeedbackExactPrivateHistoricalRecord"),
     ("internal/execution", "TestReviewFeedbackRejectsMismatchAndMissingCleanup"),
     ("internal/execution", "TestReviewFeedbackLostCommitAndInsertDenial"),
@@ -305,7 +313,7 @@ class Run:
             self.stage('git-trust', ['exec', runner, 'git', 'config', '--global', '--add', 'safe.directory', str(self.root)], 10)
             self.stage('build', ['exec', runner, 'go', 'build', './...'])
             self.stage('vet', ['exec', runner, 'go', 'vet', './...'])
-            self.stage('test', ['exec', runner, 'go', 'test', '-json', '-count=1', '-timeout=25m', '-p', '1', './...'], 1800)
+            self.stage('test', ['exec', runner, 'go', 'test', '-json', '-count=1', '-timeout=40m', '-p', '1', './...'], 3000)
             evidence = test_evidence(self.output / 'test.log')
             self.report['tests'] = evidence
             if evidence['missingDatabaseProof']:
@@ -329,7 +337,7 @@ class Run:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--provider', choices=['auto', 'podman', 'docker'], default='auto')
-    parser.add_argument('--timeout', type=int, default=2100, help='Overall work deadline, 60–3600 seconds')
+    parser.add_argument('--timeout', type=int, default=3500, help='Overall work deadline, 60–3600 seconds')
     parser.add_argument('--output', type=Path, help='New private directory for logs and report')
     args = parser.parse_args(argv)
     if not 60 <= args.timeout <= 3600:

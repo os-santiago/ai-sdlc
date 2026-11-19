@@ -71,6 +71,12 @@ func lifecycleBinding(p Prepared, placement Placement) (store.LifecycleBinding, 
 }
 func samePrepared(p Prepared, c Command, in PreparationInputs) bool {
 	a, err := executor.ParseAssignment(p.assignment, workspacebundle.Digest(p.assignment), time.Now())
+	if err != nil || (a.Repair == nil) != (c.Repair == nil) {
+		return false
+	}
+	if c.Repair != nil && a.Repair.Reference != *c.Repair {
+		return false
+	}
 	return err == nil && a.WorkItemID == c.WorkItemID && a.Attempt == c.Attempt && a.Repository == c.Repository && a.SourceSHA == c.SourceSHA && a.ProfileSHA256 == c.ProfileSHA256 && a.AuthorityRevision == c.AuthorityRevision && a.ExpiresAt == c.ExpiresAt && bytes.Equal(in.Profile, p.profile) && bytes.Equal(in.ADev, p.adev)
 }
 func stopLifecycleClaim(db *store.DB, claim store.ExecutionClaim) {

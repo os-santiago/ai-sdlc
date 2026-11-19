@@ -48,6 +48,14 @@ func InsertExecution(ctx context.Context, tx *sql.Tx, r ExecutionRequest) error 
 	if tx == nil || AssertComponent(ctx, tx, "worker") != nil {
 		return ErrExecution
 	}
+	if r.Attempt == 2 {
+		var reserved bool
+		if tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM execution_repairs repair JOIN repair_model_budgets b USING(work_item_uuid) JOIN work_items w ON w.uuid=repair.work_item_uuid
+ WHERE repair.child_request_id=$1 AND repair.work_item_uuid=$2 AND repair.child_payload=$3 AND repair.expires_at=$4
+ AND b.allocation_id=repair.child_allocation_id AND b.state='reserved' AND b.expires_at=repair.expires_at AND w.status='running')`, r.ID, r.WorkItem, r.Payload, r.ExpiresAt).Scan(&reserved) != nil || !reserved {
+			return ErrExecution
+		}
+	}
 	result, err := tx.ExecContext(ctx, `INSERT INTO execution_requests
         (id,work_item_uuid,attempt,repository,authority_revision,payload_digest,payload,receipt,expires_at)
         SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9 WHERE $9 > clock_timestamp()`,
@@ -58,6 +66,12 @@ func InsertExecution(ctx context.Context, tx *sql.Tx, r ExecutionRequest) error 
 	n, err := result.RowsAffected()
 	if err != nil || n != 1 {
 		return ErrExecution
+	}
+	if r.Attempt == 2 {
+		var live bool
+		if tx.QueryRowContext(ctx, `SELECT r.expires_at>clock_timestamp() AND w.status='running' FROM execution_requests r JOIN work_items w ON w.uuid=r.work_item_uuid WHERE r.id=$1`, r.ID).Scan(&live) != nil || !live {
+			return ErrExecution
+		}
 	}
 	return nil
 }

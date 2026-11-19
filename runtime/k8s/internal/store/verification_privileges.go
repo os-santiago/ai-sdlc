@@ -3,6 +3,7 @@ package store
 // The verifier can read generation evidence and mutate only its own bounded
 // verification ledger. It cannot rewrite candidate bytes or issue observations.
 var verificationPrivileges = []string{
+	`GRANT SELECT ON execution_repairs,repair_model_budgets TO aisdlc_verifier`,
 	`GRANT SELECT ON verification_handoffs,execution_candidates,execution_requests,execution_lifecycles,execution_models,model_allocations,model_budgets TO aisdlc_verifier`,
 	`GRANT SELECT ON verification_requests,verification_effects TO aisdlc_verifier`,
 	`GRANT INSERT(id,candidate_id,payload_digest,payload,receipt,expires_at) ON verification_requests TO aisdlc_verifier`,

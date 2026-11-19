@@ -75,7 +75,7 @@
     "grants": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 14,
+      "maxItems": 16,
       "items": {
         "oneOf": [
           {
@@ -522,6 +522,72 @@
               },
               "eventType": {
                 "const": "ProductionCompleted"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "caller",
+              "target",
+              "operation",
+              "minimumLevel",
+              "eventType"
+            ],
+            "properties": {
+              "caller": {
+                "const": "verifier"
+              },
+              "target": {
+                "const": "orchestrator"
+              },
+              "operation": {
+                "const": "repair-candidate"
+              },
+              "minimumLevel": {
+                "enum": [
+                  "auto-pr",
+                  "auto-merge-low",
+                  "auto-merge-all",
+                  "auto-deploy"
+                ]
+              },
+              "eventType": {
+                "const": "CandidateRepairRequested"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "caller",
+              "target",
+              "operation",
+              "minimumLevel",
+              "eventType"
+            ],
+            "properties": {
+              "caller": {
+                "const": "verifier"
+              },
+              "target": {
+                "const": "orchestrator"
+              },
+              "operation": {
+                "const": "stop-rejected-work"
+              },
+              "minimumLevel": {
+                "enum": [
+                  "auto-pr",
+                  "auto-merge-low",
+                  "auto-merge-all",
+                  "auto-deploy"
+                ]
+              },
+              "eventType": {
+                "const": "RejectedWorkStopped"
               }
             }
           }

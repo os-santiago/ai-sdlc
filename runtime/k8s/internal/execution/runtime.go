@@ -106,6 +106,9 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		return "", ErrAuthority
 	}
 	// Terminal cleanup runs even if new work is frozen or the model is unavailable.
+	if e = r.Component.DB.ExpireQueuedExecutions(ctx); e != nil {
+		return "", e
+	}
 	if e = r.Component.DB.ExpireExecutionClaims(ctx); e != nil {
 		return "", e
 	}
@@ -148,9 +151,6 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	provider, e := r.gateway()
 	if e != nil || provider.CheckGateway(ctx) != nil {
 		return "", ErrAuthority
-	}
-	if e = r.Component.DB.ExpireQueuedExecutions(ctx); e != nil {
-		return "", e
 	}
 	id, e := r.Component.DB.NextExecution(ctx)
 	if e != nil || id == "" {

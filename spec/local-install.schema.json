@@ -77,6 +77,10 @@
       "minLength": 1,
       "pattern": "^[^\\u0000]+$",
       "description": "Reviewed public build desired state path; requires the Konflux Saferus verification/review/publication/merge scope."
+    },
+    "reviewRepair": {
+      "type": "boolean",
+      "description": "Allow at most one repair from original unused generation capacity; disabled by default."
     }
   },
   "allOf": [
@@ -222,6 +226,31 @@
           },
           "independentReview": {
             "const": true
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "reviewRepair"
+        ],
+        "properties": {
+          "reviewRepair": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "independentReview"
+        ],
+        "properties": {
+          "independentReview": {
+            "const": true
+          },
+          "profile": {
+            "const": "verification"
           }
         }
       }

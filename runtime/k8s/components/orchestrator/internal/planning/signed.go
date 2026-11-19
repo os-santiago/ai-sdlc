@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/execution"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repairflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 	"net/http"
 	"os"
@@ -25,6 +26,11 @@ func SignedRoutes(component *bootstrap.Component, config intake.Config) service.
 	return func(mux *http.ServeMux) {
 		in := delivery.Inbox{DB: component.DB, Target: "orchestrator"}
 		mux.Handle("POST /internal/plan-admission", in.Handler(component.Authority, "plan-admission", "/internal/plan-admission", signedEffect(component, config)))
+		if os.Getenv("AI_SDLC_RUNTIME_MODE") == "verification" && os.Getenv("AI_SDLC_INDEPENDENT_REVIEW") == "true" {
+			load := repairflow.InstalledLoader(component.Authority, os.Getenv("AI_SDLC_EXECUTION_CONFIG_PATH"), os.Getenv("AI_SDLC_INTAKE_CONFIG_PATH"), "/etc/ai-sdlc/review/config.json")
+			mux.Handle("POST /internal/repair-candidate", in.Handler(component.Authority, "repair-candidate", "/internal/repair-candidate", repairflow.Effect(load)))
+			mux.Handle("POST /internal/stop-rejected-work", in.Handler(component.Authority, "stop-rejected-work", "/internal/stop-rejected-work", repairflow.StopEffect(func() (authority.Policy, error) { p, _, e := component.Authority(); return p, e })))
+		}
 	}
 }
 func signedEffect(component *bootstrap.Component, config intake.Config) delivery.Effect {

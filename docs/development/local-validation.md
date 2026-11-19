@@ -50,12 +50,14 @@ does not uniquely identify uncommitted bytes; validate a clean reviewed commit
 for release evidence. Keep these developer reports out of source control.
 
 ```bash
-python3 tools/validate_runtime.py --provider podman --timeout 2100 --output /tmp/my-new-validation
+python3 tools/validate_runtime.py --provider podman --timeout 3500 --output /tmp/my-new-validation
 ```
 
 The output directory must not already exist. The overall work deadline defaults
-to 2100 seconds and accepts 60–3600. Each Go package has a 25-minute deadline,
-within a 30-minute test stage; CI jobs allow 40 minutes including setup and cleanup.
+to 3500 seconds and accepts 60–3600. Each Go package has a 40-minute deadline,
+matching the contract job, within a 50-minute test stage; the local-validation CI
+job allows 70 minutes including setup and cleanup. The execution package's
+real expiry and recovery waits reach 30 minutes on hosted runners.
 Cleanup has a separate bounded window. A
 failed command exits nonzero, records attempted stages and removes only objects
 whose ownership label matches the run, by observed container ID. Cleanup errors

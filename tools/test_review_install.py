@@ -12,6 +12,51 @@ import install_config
 from verify_review_install import require_review_disabled
 
 class ReviewInstallTests(unittest.TestCase):
+    def test_repair_opt_in_changes_only_generation_profile(self):
+        lock_path = install.LOCAL / 'images.lock.json'
+        evidence = json.loads(lock_path.with_name('images.evidence.json').read_text())
+        evidence['images']['verifier'] = dict(evidence['images']['worker'], component='verifier')
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'images.lock.json'
+            path.with_name('images.evidence.json').write_text(json.dumps(evidence))
+            original = candidate_install.desired_values(install.ROOT, path, install.image_lock(lock_path), verification=True, review=True)
+            repaired = candidate_install.desired_values(install.ROOT, path, install.image_lock(lock_path), verification=True, review=True, repair=True)
+        before = json.loads(original['candidate']['configJSON'])
+        after = json.loads(repaired['candidate']['configJSON'])
+        self.assertNotIn('maxRepairs', before['profile'])
+        self.assertEqual(after['profile'].pop('maxRepairs'), 1)
+        self.assertEqual(after, before)
+        self.assertEqual(original['review'], repaired['review'])
+        self.assertNotIn('maxRepairs', json.loads(repaired['review']['configJSON'])['profile'])
+        with self.assertRaises(ValueError):
+            candidate_install.desired_values(install.ROOT, lock_path, {}, repair=True)
+
+    def test_repair_config_is_explicit_and_requires_review(self):
+        fixture = json.loads((install.ROOT / 'examples/homedir.local-install.json').read_text())
+        fixture.update(profile='verification', independentReview=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'config.json'
+            path.write_text(json.dumps(fixture))
+            original = install_config.load(path)[1]
+            fixture['reviewRepair'] = True
+            path.write_text(json.dumps(fixture))
+            values, digest = install_config.load(path)
+            self.assertIs(values['review_repair'], True)
+            self.assertNotEqual(digest, original)
+            for value in (1, 'true', None):
+                fixture['reviewRepair'] = value
+                path.write_text(json.dumps(fixture))
+                with self.assertRaises(ValueError):
+                    install_config.load(path)
+            fixture.update(reviewRepair=True, independentReview=False)
+            path.write_text(json.dumps(fixture))
+            with self.assertRaises(ValueError):
+                install_config.load(path)
+        with patch.object(install, 'tools') as tools:
+            with self.assertRaises(ValueError):
+                install.main(['local', '--review-repair'])
+            tools.assert_not_called()
+
     def test_disabled_inspection_rejects_hidden_review_credentials(self):
         base = {'containers': [{'name': 'verifier'}]}
         require_review_disabled(base)

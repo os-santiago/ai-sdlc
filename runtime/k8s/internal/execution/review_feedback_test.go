@@ -14,8 +14,12 @@ import (
 )
 
 func reviewFeedbackFixture(t *testing.T, ttl ...time.Duration) (*lifecycleFixture, *store.DB, store.ReviewRun, store.ReviewClaim, reviewresult.Result) {
+	return reviewFeedbackFixtureConfigured(t, nil, ttl...)
+}
+
+func reviewFeedbackFixtureConfigured(t *testing.T, configure []func(*fixture), ttl ...time.Duration) (*lifecycleFixture, *store.DB, store.ReviewRun, store.ReviewClaim, reviewresult.Result) {
 	t.Helper()
-	f, db, r := reviewJournalFixture(t)
+	f, db, r := reviewJournalFixtureConfigured(t, nil, configure)
 	ctx := context.Background()
 	{
 		passwords := map[string]string{}
@@ -31,9 +35,16 @@ func reviewFeedbackFixture(t *testing.T, ttl ...time.Duration) (*lifecycleFixtur
 			t.Fatal(err)
 		}
 	}
+	c, result := reviewFeedbackEffects(t, f.Admin, db, r)
+	return f, db, r, c, result
+}
+
+func reviewFeedbackEffects(t *testing.T, admin, db *store.DB, r store.ReviewRun) (store.ReviewClaim, reviewresult.Result) {
+	t.Helper()
+	ctx := context.Background()
 	c := claimReview(t, db, r)
 	var tree string
-	if f.Admin.Pool.QueryRow(`SELECT candidate_tree_sha256 FROM execution_candidates WHERE request_id=$1`, r.CandidateID).Scan(&tree) != nil {
+	if admin.Pool.QueryRow(`SELECT candidate_tree_sha256 FROM execution_candidates WHERE request_id=$1`, r.CandidateID).Scan(&tree) != nil {
 		t.Fatal("candidate tree")
 	}
 	pod := store.NewID()
@@ -83,7 +94,7 @@ func reviewFeedbackFixture(t *testing.T, ttl ...time.Duration) (*lifecycleFixtur
 	if db.ConfirmReviewCleanup(ctx, c) != nil {
 		t.Fatal("cleanup")
 	}
-	return f, db, r, c, reviewresult.Result{Verdict: "request_changes", FinalMessage: "Add a boundary regression test.\nVERDICT: request_changes", Iterations: 2, ReadCalls: 1}
+	return c, reviewresult.Result{Verdict: "request_changes", FinalMessage: "Add a boundary regression test.\nVERDICT: request_changes", Iterations: 2, ReadCalls: 1}
 }
 
 func TestReviewFeedbackExactPrivateHistoricalRecord(t *testing.T) {

@@ -27,6 +27,10 @@ data:
   {{- end }}
   {{- if eq .Values.runtime.mode "verification" }}
   {{- $_ := set $routes "verify-artifact" (printf "http://%s-verifier:8087/internal/verify-artifact" (include "ai-sdlc-k8s-runtime.fullname" .)) }}
+  {{- if .Values.review.enabled }}
+  {{- $_ := set $routes "repair-candidate" (printf "http://%s-orchestrator:%v/internal/repair-candidate" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.orchestrator.port) }}
+  {{- $_ := set $routes "stop-rejected-work" (printf "http://%s-orchestrator:%v/internal/stop-rejected-work" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.orchestrator.port) }}
+  {{- end }}
   {{- end }}
   {{- if .Values.publication.enabled }}
   {{- $_ := set $routes "publish-candidate" (printf "http://%s-release-manager:%v/internal/publish-candidate" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.releaseManager.port) }}

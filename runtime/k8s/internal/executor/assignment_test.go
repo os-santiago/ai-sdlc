@@ -10,7 +10,7 @@ import (
 )
 
 func profileFixture() Profile {
-	return Profile{ProfileVersion, "fixture-model", 8, 60, 2048, strings.Repeat("a", 64)}
+	return Profile{ProfileVersion, "fixture-model", 8, 60, 2048, strings.Repeat("a", 64), 0}
 }
 func assignmentFixture(now time.Time) Assignment {
 	return Assignment{Version: AssignmentVersion, WorkItemID: "11111111-1111-4111-8111-111111111111", Attempt: 1, Repository: "fixture/product", SourceSHA: strings.Repeat("b", 40), TreeSHA256: strings.Repeat("c", 64), ProfileSHA256: strings.Repeat("d", 64), AuthorityRevision: strings.Repeat("e", 64), IssueNumbers: []int{1}, Title: "Bounded fixture", Body: "Synthetic input, not execution authority.", AcceptanceCriteria: []string{"Preserve the source fixture"}, ExpiresAt: now.Add(time.Minute).UnixMilli()}

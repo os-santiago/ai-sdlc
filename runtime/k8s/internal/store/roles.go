@@ -184,6 +184,7 @@ func (db *DB) ProvisionRolesForDeployment(ctx context.Context, passwords map[str
 				`REVOKE ALL ON SCHEMA ` + quotedSchema + ` FROM ` + role,
 				`GRANT USAGE ON SCHEMA ` + quotedSchema + ` TO ` + role,
 				`REVOKE ALL ON ALL TABLES IN SCHEMA ` + quotedSchema + ` FROM ` + role,
+				`REVOKE ALL ON FUNCTION public.lock_repair_parent_budget(uuid) FROM ` + role,
 				`GRANT SELECT ON schema_migrations TO ` + role,
 			}
 			if component == "relay" {
@@ -202,6 +203,9 @@ func (db *DB) ProvisionRolesForDeployment(ctx context.Context, passwords map[str
 				statements = append(statements, executionPrivileges...)
 			}
 			if mode == "verification" {
+				if component == "orchestrator" && review {
+					statements = append(statements, repairOrchestratorPrivileges...)
+				}
 				if component == "worker" {
 					statements = append(statements, `GRANT SELECT,INSERT ON verification_handoffs TO `+role)
 				}
@@ -209,6 +213,7 @@ func (db *DB) ProvisionRolesForDeployment(ctx context.Context, passwords map[str
 					statements = append(statements, verificationPrivileges...)
 					if review {
 						statements = append(statements, reviewPrivileges...)
+						statements = append(statements, repairVerifierPrivileges...)
 					}
 				}
 			}

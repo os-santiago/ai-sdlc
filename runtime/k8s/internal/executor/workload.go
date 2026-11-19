@@ -41,6 +41,9 @@ func Compile(namespace, workerImage, mailboxImage string, assignmentRaw, profile
 	if err != nil {
 		return Workload{}, err
 	}
+	if a.Repair != nil && (p.Version != ProfileVersion || p.MaxRepairs != 1) {
+		return Workload{}, ErrInvalid
+	}
 	if len(adevRaw) == 0 || len(adevRaw) > 64*1024 || workspacebundle.Digest(adevRaw) != p.ADevSHA256 {
 		return Workload{}, ErrInvalid
 	}

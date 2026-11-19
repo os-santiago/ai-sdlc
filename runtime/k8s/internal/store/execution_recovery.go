@@ -16,15 +16,18 @@ func (db *DB) ExpireExecutionClaims(ctx context.Context) error {
 		return ErrExecution
 	}
 	return db.WithTx(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `SELECT r.id,r.work_item_uuid FROM execution_requests r WHERE (r.state='claimed' AND (r.claim_until<=clock_timestamp() OR r.expires_at<=clock_timestamp())) OR (r.state='stopped' AND (EXISTS(SELECT 1 FROM model_budgets b WHERE b.work_item_uuid=r.work_item_uuid AND b.state='active') OR (EXISTS(SELECT 1 FROM work_items w WHERE w.uuid=r.work_item_uuid AND w.status IN ('ready','running')) AND NOT EXISTS(SELECT 1 FROM execution_candidates c WHERE c.request_id=r.id)))) ORDER BY r.claim_until LIMIT 32 FOR UPDATE OF r SKIP LOCKED`)
+		rows, err := tx.QueryContext(ctx, `SELECT r.id,r.work_item_uuid,r.attempt FROM execution_requests r WHERE (r.state='claimed' AND (r.claim_until<=clock_timestamp() OR r.expires_at<=clock_timestamp())) OR (r.state='stopped' AND (EXISTS(SELECT 1 FROM model_budgets b WHERE b.work_item_uuid=r.work_item_uuid AND b.state='active' AND r.attempt=1) OR EXISTS(SELECT 1 FROM repair_model_budgets rb JOIN execution_repairs repair ON repair.child_allocation_id=rb.allocation_id WHERE repair.child_request_id=r.id AND rb.state IN ('reserved','active')) OR (EXISTS(SELECT 1 FROM work_items w WHERE w.uuid=r.work_item_uuid AND w.status IN ('ready','running')) AND NOT EXISTS(SELECT 1 FROM execution_candidates c WHERE c.request_id=r.id)))) ORDER BY r.claim_until LIMIT 32 FOR UPDATE OF r SKIP LOCKED`)
 		if err != nil {
 			return ErrExecution
 		}
-		type expired struct{ id, work string }
+		type expired struct {
+			id, work string
+			attempt  int
+		}
 		var items []expired
 		for rows.Next() {
 			var v expired
-			if rows.Scan(&v.id, &v.work) != nil {
+			if rows.Scan(&v.id, &v.work, &v.attempt) != nil {
 				rows.Close()
 				return ErrExecution
 			}
@@ -39,10 +42,20 @@ func (db *DB) ExpireExecutionClaims(ctx context.Context) error {
 			if _, err = tx.ExecContext(ctx, `UPDATE execution_requests SET state='stopped',stop_reason='expired',updated_at=clock_timestamp() WHERE id=$1 AND state='claimed'`, v.id); err != nil {
 				return err
 			}
-			if _, err = tx.ExecContext(ctx, `UPDATE model_budgets SET state='stopped',stop_reason='execution-expired' WHERE work_item_uuid=$1 AND state='active'`, v.work); err != nil {
+			// Serialize with original and derived calls without touching sealed
+			// parent counters or allowing late parent recovery to cancel a child.
+			if _, err = tx.ExecContext(ctx, `SELECT work_item_uuid FROM model_budgets WHERE work_item_uuid=$1 FOR UPDATE`, v.work); err != nil {
 				return err
 			}
-			if _, err = tx.ExecContext(ctx, `UPDATE model_calls c SET state=CASE WHEN c.state='reserved' THEN 'stopped' ELSE 'ambiguous' END FROM model_allocations a WHERE c.allocation_id=a.id AND a.work_item_uuid=$1 AND (c.state IN ('reserved','started') OR (c.state='completed' AND c.response_handed_off_at IS NULL))`, v.work); err != nil {
+			if v.attempt == 1 {
+				_, err = tx.ExecContext(ctx, `UPDATE model_budgets SET state='stopped',stop_reason='execution-expired' WHERE work_item_uuid=$1 AND state='active'`, v.work)
+			} else {
+				_, err = tx.ExecContext(ctx, `UPDATE repair_model_budgets rb SET state='stopped',stop_reason='execution-expired' FROM execution_repairs repair WHERE repair.child_request_id=$1 AND repair.child_allocation_id=rb.allocation_id AND rb.state IN ('reserved','active')`, v.id)
+			}
+			if err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, `UPDATE model_calls c SET state=CASE WHEN c.state='reserved' THEN 'stopped' ELSE 'ambiguous' END FROM model_allocations a WHERE c.allocation_id=a.id AND a.work_item_uuid=$1 AND (c.state IN ('reserved','started') OR (c.state='completed' AND c.response_handed_off_at IS NULL)) AND (($3=1 AND NOT EXISTS(SELECT 1 FROM repair_model_budgets rb WHERE rb.allocation_id=a.id)) OR ($3=2 AND EXISTS(SELECT 1 FROM execution_models e WHERE e.request_id=$2 AND e.allocation_id=a.id)))`, v.work, v.id, v.attempt); err != nil {
 				return err
 			}
 			if _, err = tx.ExecContext(ctx, `UPDATE work_items SET status='failed',updated_at=clock_timestamp() WHERE uuid=$1 AND status IN ('ready','running') AND NOT EXISTS(SELECT 1 FROM execution_candidates WHERE request_id=$2)`, v.work, v.id); err != nil {

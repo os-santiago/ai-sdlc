@@ -30,7 +30,7 @@ func TestIndependentRoleReadsOnlyCleanedCandidateLedger(t *testing.T) {
 		t.Fatal("inactive verifier privileges enabled")
 	}
 	// Explicit fixture-only activation. The normal provisioner still grants none.
-	if _, err = f.Admin.Pool.Exec(`GRANT SELECT ON execution_candidates,execution_requests,execution_lifecycles,execution_models,model_allocations,model_budgets TO aisdlc_verifier; GRANT UPDATE(cleanup_state) ON execution_lifecycles TO aisdlc_worker`); err != nil {
+	if _, err = f.Admin.Pool.Exec(`GRANT SELECT ON execution_candidates,execution_requests,execution_lifecycles,execution_models,model_allocations,model_budgets,execution_repairs,repair_model_budgets TO aisdlc_verifier; GRANT UPDATE(cleanup_state) ON execution_lifecycles TO aisdlc_worker`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = verifier.ReadVerificationCandidate(ctx, record.RequestID); err == nil {

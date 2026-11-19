@@ -25,7 +25,7 @@ func ValidateLoopPolicies(inner, outer Policy) error {
 	}
 	for _, g := range inner.Grants {
 		switch g.Operation {
-		case "admit-issue", "plan-admission", "execute-work", "verify-artifact", "publish-candidate", "merge-publication":
+		case "admit-issue", "plan-admission", "execute-work", "verify-artifact", "repair-candidate", "stop-rejected-work", "publish-candidate", "merge-publication":
 		default:
 			return denied
 		}

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repair"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
@@ -28,19 +29,20 @@ var repoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 var modelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
 
 type Assignment struct {
-	Version            string   `json:"version"`
-	WorkItemID         string   `json:"workItemId"`
-	Attempt            int      `json:"attempt"`
-	Repository         string   `json:"repository"`
-	SourceSHA          string   `json:"sourceSHA"`
-	TreeSHA256         string   `json:"treeSHA256"`
-	ProfileSHA256      string   `json:"profileSHA256"`
-	AuthorityRevision  string   `json:"authorityRevision"`
-	IssueNumbers       []int    `json:"issueNumbers"`
-	Title              string   `json:"title"`
-	Body               string   `json:"body"`
-	AcceptanceCriteria []string `json:"acceptanceCriteria"`
-	ExpiresAt          int64    `json:"expiresAt"`
+	Version            string             `json:"version"`
+	WorkItemID         string             `json:"workItemId"`
+	Attempt            int                `json:"attempt"`
+	Repository         string             `json:"repository"`
+	SourceSHA          string             `json:"sourceSHA"`
+	TreeSHA256         string             `json:"treeSHA256"`
+	ProfileSHA256      string             `json:"profileSHA256"`
+	AuthorityRevision  string             `json:"authorityRevision"`
+	IssueNumbers       []int              `json:"issueNumbers"`
+	Title              string             `json:"title"`
+	Body               string             `json:"body"`
+	AcceptanceCriteria []string           `json:"acceptanceCriteria"`
+	ExpiresAt          int64              `json:"expiresAt"`
+	Repair             *repair.Assignment `json:"repair,omitempty"`
 }
 
 // Profile contains reviewed local bounds, never arbitrary shell commands,
@@ -52,6 +54,7 @@ type Profile struct {
 	MaxSeconds int    `json:"maxSeconds"`
 	MaxTokens  int    `json:"maxTokens"`
 	ADevSHA256 string `json:"aDevSHA256"`
+	MaxRepairs int    `json:"maxRepairs,omitempty"`
 }
 
 func strictBound(raw []byte, expected string, maximum int, keys []string, value any) error {
@@ -73,7 +76,14 @@ func strictBound(raw []byte, expected string, maximum int, keys []string, value 
 func parseProfile(raw []byte, expected, version string) (Profile, error) {
 	var p Profile
 	keys := []string{"version", "model", "maxSteps", "maxSeconds", "maxTokens", "aDevSHA256"}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) == nil && fields["maxRepairs"] != nil && version == ProfileVersion {
+		keys = append(keys, "maxRepairs")
+	}
 	if strictBound(raw, expected, MaxProfileBytes, keys, &p) != nil || p.Version != version || !modelPattern.MatchString(p.Model) || p.MaxSteps < 1 || p.MaxSteps > 32 || p.MaxSeconds < 1 || p.MaxSeconds > 900 || p.MaxTokens < 1 || p.MaxTokens > 8192 || !workspacebundle.ValidDigest(p.ADevSHA256) {
+		return Profile{}, ErrInvalid
+	}
+	if p.MaxRepairs < 0 || p.MaxRepairs > 1 {
 		return Profile{}, ErrInvalid
 	}
 	return p, nil
@@ -104,7 +114,14 @@ func parseWorkloadProfile(raw []byte, expected string) (Profile, error) {
 func ParseAssignment(raw []byte, expected string, now time.Time) (Assignment, error) {
 	var a Assignment
 	keys := []string{"version", "workItemId", "attempt", "repository", "sourceSHA", "treeSHA256", "profileSHA256", "authorityRevision", "issueNumbers", "title", "body", "acceptanceCriteria", "expiresAt"}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) == nil && fields["repair"] != nil {
+		keys = append(keys, "repair")
+	}
 	if strictBound(raw, expected, MaxAssignmentBytes, keys, &a) != nil || a.Version != AssignmentVersion || !uuidPattern.MatchString(a.WorkItemID) || a.Attempt < 1 || a.Attempt > 16 || len(a.Repository) > 256 || !repoPattern.MatchString(a.Repository) || !workspacebundle.ValidSourceSHA(a.SourceSHA) || !workspacebundle.ValidDigest(a.TreeSHA256) || !workspacebundle.ValidDigest(a.ProfileSHA256) || !workspacebundle.ValidDigest(a.AuthorityRevision) {
+		return Assignment{}, ErrInvalid
+	}
+	if a.Repair != nil && (a.Attempt != 2 || !a.Repair.Valid() || a.TreeSHA256 != a.Repair.Reference.ParentTreeSHA256) {
 		return Assignment{}, ErrInvalid
 	}
 	for _, part := range strings.Split(a.Repository, "/") {

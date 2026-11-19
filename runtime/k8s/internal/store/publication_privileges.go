@@ -2,6 +2,7 @@ package store
 
 // Installed only through the explicit publication capability.
 var publicationPrivileges = []string{
+	`GRANT SELECT ON execution_repairs,repair_model_budgets TO aisdlc_release_manager`,
 	`GRANT SELECT ON published_records TO aisdlc_release_manager`,
 	`GRANT INSERT(publication_id,payload_digest,payload,receipt,proof_digest,proof,effects_digest,effects,authority_expires_at) ON published_records TO aisdlc_release_manager`,
 	`GRANT SELECT ON execution_candidates,execution_requests,execution_lifecycles,execution_models,model_allocations,model_budgets TO aisdlc_release_manager`,

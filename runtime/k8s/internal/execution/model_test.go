@@ -19,6 +19,9 @@ func modelLifecycleFixture(t *testing.T, configure ...func(*fixture)) (*lifecycl
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = f.Admin.Pool.Exec(`GRANT SELECT ON execution_repairs,repair_model_budgets TO aisdlc_worker; GRANT UPDATE(state) ON repair_model_budgets TO aisdlc_worker`); err != nil {
+		t.Fatal(err)
+	}
 	l := f.open(t)
 	pod := store.NewID()
 	for _, kind := range []string{"config", "pod", "source"} {

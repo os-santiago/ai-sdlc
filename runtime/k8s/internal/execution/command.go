@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repair"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
@@ -20,17 +21,18 @@ var uuid = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-
 var admissionID = regexp.MustCompile(`^admission-issue-[a-f0-9]{64}$`)
 
 type Command struct {
-	Version           string `json:"version"`
-	WorkItemID        string `json:"workItemId"`
-	Attempt           int    `json:"attempt"`
-	Repository        string `json:"repository"`
-	IssueNumber       int    `json:"issueNumber"`
-	Generation        int64  `json:"generation"`
-	AdmissionID       string `json:"admissionId"`
-	SourceSHA         string `json:"sourceSHA"`
-	ProfileSHA256     string `json:"profileSHA256"`
-	AuthorityRevision string `json:"authorityRevision"`
-	ExpiresAt         int64  `json:"expiresAt"`
+	Version           string            `json:"version"`
+	WorkItemID        string            `json:"workItemId"`
+	Attempt           int               `json:"attempt"`
+	Repository        string            `json:"repository"`
+	IssueNumber       int               `json:"issueNumber"`
+	Generation        int64             `json:"generation"`
+	AdmissionID       string            `json:"admissionId"`
+	SourceSHA         string            `json:"sourceSHA"`
+	ProfileSHA256     string            `json:"profileSHA256"`
+	AuthorityRevision string            `json:"authorityRevision"`
+	ExpiresAt         int64             `json:"expiresAt"`
+	Repair            *repair.Reference `json:"repair,omitempty"`
 }
 
 func (c Command) ID() string {
@@ -50,6 +52,9 @@ func Verify(p authority.Policy, receipt authority.Receipt, raw []byte, now time.
 		receipt.ID != c.ID() || !time.UnixMilli(c.ExpiresAt).After(now) ||
 		time.UnixMilli(c.ExpiresAt).After(now.Add(time.Hour)) ||
 		p.VerifyReceipt(receipt, "worker", "execute-work", raw) != nil {
+		return Command{}, ErrAuthority
+	}
+	if (c.Repair == nil && c.Attempt != 1) || (c.Repair != nil && (c.Attempt != 2 || !c.Repair.Valid() || c.Repair.ParentCandidateID == c.ID())) {
 		return Command{}, ErrAuthority
 	}
 	return c, nil

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
@@ -43,13 +44,25 @@ func (l *Lifecycle) CaptureCandidate(ctx context.Context, exported []byte) (reco
 	if err != nil || phase != "export-ready" {
 		return record, ErrAuthority
 	}
-	source, err := workspacebundle.Decode(l.prepared.Source())
+	// Repairs export a cumulative delta against the original repository tree,
+	// although the agent's workspace started from the rejected candidate.
+	source, err := workspacebundle.Decode(l.prepared.originalSource)
 	if err != nil {
 		return record, ErrAuthority
 	}
 	result, err := workspacebundle.Decode(raw)
 	if err != nil {
 		return record, ErrAuthority
+	}
+	assignment, err := executor.ParseAssignment(l.prepared.assignment, workspacebundle.Digest(l.prepared.assignment), time.Now())
+	if err != nil {
+		return record, ErrAuthority
+	}
+	if assignment.Repair != nil {
+		tree, e := result.TreeDigest()
+		if e != nil || tree == assignment.Repair.Reference.ParentTreeSHA256 {
+			return record, ErrAuthority
+		}
 	}
 	delta, err := candidate.Build(source, result)
 	if err != nil {

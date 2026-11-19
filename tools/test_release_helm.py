@@ -54,7 +54,9 @@ class ReleaseChartTests(unittest.TestCase):
         self.assertEqual(config['AI_SDLC_RELEASE'],'true')
         self.assertTrue(json.loads(config['AI_SDLC_RELAY_ROUTES'])['deploy-release'].endswith(':8090/internal/deploy-release'))
         routes=json.loads(config['AI_SDLC_RELAY_ROUTES'])
-        self.assertEqual(len(routes),11)
+        self.assertEqual(len(routes),13)
+        for operation in ('repair-candidate', 'stop-rejected-work'):
+            self.assertEqual(routes[operation], 'http://ai-sdlc-orchestrator:8082/internal/'+operation)
         self.assertTrue(routes['record-deployment'].endswith('/internal/record-deployment'))
         self.assertTrue(routes['record-production'].endswith('/internal/record-production'))
         orchestrator=next(d for d in docs if d['kind']=='Deployment' and d['metadata']['name']=='ai-sdlc-orchestrator')

@@ -133,6 +133,18 @@ func Run(ctx context.Context, assignmentDigest string) int {
 	if os.WriteFile(prompt, []byte(promptText), 0600) != nil {
 		return 1
 	}
+	if a.Repair != nil {
+		if p.Version != ProfileVersion || p.MaxRepairs != 1 {
+			return 1
+		}
+		// Tool steps and model calls are independent. The durable derived ledger
+		// enforces RemainingCalls; do not reduce the original SCC tool ceiling.
+		remaining := int(time.Until(time.UnixMilli(a.ExpiresAt)).Seconds())
+		if remaining < 1 {
+			return 1
+		}
+		p.MaxSeconds = min(p.MaxSeconds, remaining)
+	}
 	env := []string{
 		"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + stateDirectory + "/home", "TMPDIR=" + stateDirectory + "/tmp", "LC_ALL=C.UTF-8", "NO_COLOR=1", "CI=1",
 		"SC_CONFIG_PATH=" + InputDirectory + "/scc-config.json", "SC_BASE_URL=http://127.0.0.1:8091/v1", "SC_MODEL=" + p.Model,

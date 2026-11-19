@@ -72,6 +72,9 @@ func reviewedRoutes(raw string) (map[string]string, error) {
 	}
 	if os.Getenv("AI_SDLC_RUNTIME_MODE") == "verification" {
 		required = append(required, "verify-artifact")
+		if os.Getenv("AI_SDLC_INDEPENDENT_REVIEW") == "true" {
+			required = append(required, "repair-candidate", "stop-rejected-work")
+		}
 	}
 	if bootstrap.PublicationEnabled() {
 		required = append(required, "publish-candidate")

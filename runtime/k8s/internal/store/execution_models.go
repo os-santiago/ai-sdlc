@@ -88,11 +88,17 @@ func (db *DB) ReadLifecycleModel(ctx context.Context, l Lifecycle, configDigest 
 		if err != nil {
 			return ErrExecution
 		}
-		err = tx.QueryRowContext(ctx, `SELECT a.id,a.work_item_uuid,a.pod_uid,b.repository,b.source_sha,b.policy_digest,b.model,a.attempt,a.response_limit,LEAST(a.expires_at,b.expires_at)
+		err = tx.QueryRowContext(ctx, `SELECT a.id,a.work_item_uuid,a.pod_uid,b.repository,b.source_sha,b.policy_digest,b.model,a.attempt,a.response_limit,LEAST(a.expires_at,b.expires_at,rb.expires_at)
  FROM execution_models e JOIN model_allocations a ON a.id=e.allocation_id JOIN model_budgets b ON b.work_item_uuid=a.work_item_uuid JOIN work_items w ON w.uuid=a.work_item_uuid JOIN execution_requests r ON r.id=e.request_id
+ LEFT JOIN execution_repairs repair ON repair.child_request_id=r.id AND repair.child_allocation_id=a.id AND repair.work_item_uuid=r.work_item_uuid
+ LEFT JOIN repair_model_budgets rb ON rb.allocation_id=a.id AND rb.work_item_uuid=r.work_item_uuid
  WHERE e.request_id=$1 AND e.config_digest=$2 AND w.status='running'
- AND ((b.state='active' AND $4<>'candidate-captured') OR (b.state='stopped' AND b.stop_reason='candidate-captured' AND $4='candidate-captured'
- AND EXISTS(SELECT 1 FROM execution_candidates c WHERE c.request_id=e.request_id AND c.allocation_id=a.id AND c.pod_uid=a.pod_uid AND c.source_sha=b.source_sha)))
+ AND ((r.attempt=1 AND rb.allocation_id IS NULL AND repair.child_request_id IS NULL
+ AND ((b.state='active' AND $4<>'candidate-captured') OR (b.state='stopped' AND b.stop_reason='candidate-captured' AND $4='candidate-captured')))
+ OR (r.attempt=2 AND repair.child_request_id=r.id AND rb.expires_at=repair.expires_at AND rb.expires_at>clock_timestamp()
+ AND b.state='stopped' AND b.stop_reason='candidate-captured'
+ AND ((rb.state='active' AND $4<>'candidate-captured') OR (rb.state='stopped' AND rb.stop_reason='candidate-captured' AND $4='candidate-captured'))))
+ AND ($4<>'candidate-captured' OR EXISTS(SELECT 1 FROM execution_candidates c WHERE c.request_id=e.request_id AND c.allocation_id=a.id AND c.pod_uid=a.pod_uid AND c.source_sha=b.source_sha))
  AND a.pod_uid=$3 AND r.work_item_uuid=a.work_item_uuid AND r.attempt=a.attempt AND r.repository=b.repository AND a.expires_at>clock_timestamp() AND b.expires_at>clock_timestamp()`, l.Claim.ID, configDigest, pod, phase).Scan(&scope.AllocationID, &scope.WorkItem, &scope.PodUID, &scope.Repository, &scope.SourceSHA, &scope.PolicyDigest, &scope.Model, &scope.Attempt, &scope.ResponseLimit, &scope.ExpiresAt)
 		if err != nil || scope.ExpiresAt.After(l.Claim.Until) {
 			return ErrExecution

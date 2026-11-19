@@ -83,7 +83,7 @@ class PublicationInstallTests(unittest.TestCase):
         self.assertEqual(owners, ['ai-sdlc-release-manager'])
         config = next(d['data'] for d in docs if d['kind'] == 'ConfigMap' and d['metadata']['name'] == 'ai-sdlc-config')
         routes = json.loads(config['AI_SDLC_RELAY_ROUTES'])
-        self.assertEqual(len(routes), 5)
+        self.assertEqual(len(routes), 7)
         self.assertEqual(routes['publish-candidate'], 'http://ai-sdlc-release-manager:8084/internal/publish-candidate')
         self.assertIn('verify-artifact', routes)
         policy = next(d for d in docs if d['kind'] == 'NetworkPolicy' and d['metadata']['name'] == 'ai-sdlc-publication-github')

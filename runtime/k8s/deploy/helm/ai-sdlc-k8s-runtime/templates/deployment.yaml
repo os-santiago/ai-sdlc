@@ -21,6 +21,9 @@ spec:
         {{- include "ai-sdlc-k8s-runtime.selectorLabels" $ | nindent 8 }}
         app.kubernetes.io/component: {{ $component.name }}
       annotations:
+        {{- if and (eq $key "orchestrator") $.Values.review.enabled }}
+        checksum/review-config: {{ $.Values.review.configJSON | sha256sum }}
+        {{- end }}
         {{- if and (eq $key "releaseManager") $.Values.publication.enabled }}
         checksum/review-config: {{ $.Values.review.configJSON | sha256sum }}
         ai-sdlc.io/publication-credential-revision: {{ $.Values.publication.credentialRevision | quote }}
@@ -86,6 +89,9 @@ spec:
             capabilities: {drop: [ALL]}
             readOnlyRootFilesystem: true
           volumeMounts:
+            {{- if and (eq $key "orchestrator") $.Values.review.enabled }}
+            - {name: review-config, mountPath: /etc/ai-sdlc/review, readOnly: true}
+            {{- end }}
             {{- if and (eq $key "orchestrator") $.Values.release.enabled }}
             - {name: outer-policy, mountPath: /etc/ai-sdlc/outer-policy, readOnly: true}
             {{- end }}
@@ -184,6 +190,10 @@ spec:
               - configMap:
                   name: kube-root-ca.crt
                   items: [{key: ca.crt, path: ca.crt}]
+        {{- end }}
+        {{- if and (eq $key "orchestrator") $.Values.review.enabled }}
+        - name: review-config
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-review}
         {{- end }}
         {{- if and (eq $key "releaseManager") $.Values.publication.enabled }}
         - name: publication-client

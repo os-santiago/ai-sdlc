@@ -67,7 +67,7 @@ def main():
         raise ValueError('Expected exactly four immutable imported fixture images')
     # Bootstrap from the same migrator that will reconcile database roles.
     lock['migrator']['digest'] = images['migrator'].split('@')[1]
-    public = install.configure_identities(k, provider, lock, uid, repository, 'ai-sdlc-production', freeze=True, candidate=True, verification=True)
+    public = install.configure_identities(k, provider, lock, uid, repository, 'ai-sdlc-production', freeze=True, candidate=True, verification=True, review=True)
     if args.github_auth == 'gh-cli':
         install.configure_github_client(k, uid, repository)
     public['intake'] = install.shadow_intake_config(k, uid, repository)

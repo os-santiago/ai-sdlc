@@ -97,6 +97,10 @@ func (db *DB) CreateModelAllocation(ctx context.Context, a ModelAllocation) erro
 		if err != nil {
 			return err
 		}
+		var reservedChild bool
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM execution_repairs WHERE child_allocation_id=$1)`, a.ID).Scan(&reservedChild); err != nil || reservedChild {
+			return errModelPolicy
+		}
 		var now time.Time
 		if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
 			return err
@@ -121,6 +125,8 @@ func (db *DB) CreateModelAllocation(ctx context.Context, a ModelAllocation) erro
 
 type lockedModel struct {
 	workItem, model, state, podUID      string
+	allocationID                        string
+	derived                             bool
 	budget, allocation                  ModelLimits
 	budgetUsed, allocationUsed          ModelLimits
 	responseLimit                       int
@@ -130,7 +136,7 @@ type lockedModel struct {
 // All mutations lock budget -> allocation -> call. clock_timestamp is read
 // after blocking locks, avoiding the stale transaction-start value of now().
 func lockModel(ctx context.Context, tx *sql.Tx, allocation string) (lockedModel, error) {
-	var l lockedModel
+	l := lockedModel{allocationID: allocation}
 	err := tx.QueryRowContext(ctx, `SELECT work_item_uuid FROM model_allocations WHERE id=$1`, allocation).Scan(&l.workItem)
 	if err != nil {
 		return l, err
@@ -139,9 +145,15 @@ func lockModel(ctx context.Context, tx *sql.Tx, allocation string) (lockedModel,
 	if err != nil {
 		return l, err
 	}
+	if err = lockRepairModel(ctx, tx, &l); err != nil {
+		return l, err
+	}
 	err = tx.QueryRowContext(ctx, `SELECT pod_uid,max_calls,max_input_bytes,max_output_bytes,reserved_calls,reserved_input_bytes,reserved_output_bytes,response_limit,expires_at FROM model_allocations WHERE id=$1 FOR UPDATE`, allocation).Scan(&l.podUID, &l.allocation.Calls, &l.allocation.InputBytes, &l.allocation.OutputBytes, &l.allocationUsed.Calls, &l.allocationUsed.InputBytes, &l.allocationUsed.OutputBytes, &l.responseLimit, &l.allocationExpiry)
 	if err != nil {
 		return l, err
+	}
+	if l.derived && (l.allocation != l.budget || l.allocationExpiry.After(l.budgetExpiry)) {
+		return l, errModelPolicy
 	}
 	return l, nil
 }
@@ -156,7 +168,7 @@ func refreshModelTime(ctx context.Context, tx *sql.Tx, l *lockedModel) error {
 	// immediately, even if the periodic recovery sweep has not run. The parent
 	// lock serializes all call transitions; this observation needs no call lock.
 	var expired bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM model_calls c JOIN model_allocations a ON a.id=c.allocation_id WHERE a.work_item_uuid=$1 AND (c.state IN ('reserved','started') OR (c.state='completed' AND c.response_handed_off_at IS NULL)) AND c.expires_at<=$2)`, l.workItem, l.now).Scan(&expired); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM model_calls c JOIN model_allocations a ON a.id=c.allocation_id WHERE a.work_item_uuid=$1 AND (c.state IN ('reserved','started') OR (c.state='completed' AND c.response_handed_off_at IS NULL)) AND c.expires_at<=$2 AND (($3 AND a.id=$4::uuid) OR (NOT $3 AND NOT EXISTS(SELECT 1 FROM repair_model_budgets rb WHERE rb.allocation_id=a.id))))`, l.workItem, l.now, l.derived, l.allocationID).Scan(&expired); err != nil {
 		return err
 	}
 	if expired && l.state == "active" {
@@ -171,7 +183,7 @@ func (l lockedModel) active() bool {
 	return l.state == "active" && l.now.Before(l.budgetExpiry) && l.now.Before(l.allocationExpiry)
 }
 func stopModel(ctx context.Context, tx *sql.Tx, l lockedModel, reason string) error {
-	_, err := tx.ExecContext(ctx, `UPDATE model_budgets SET state='stopped',stop_reason=$2 WHERE work_item_uuid=$1 AND state='active'`, l.workItem, reason)
+	_, err := tx.ExecContext(ctx, `UPDATE `+l.budgetTable()+` SET state='stopped',stop_reason=$2 WHERE work_item_uuid=$1 AND state='active'`, l.workItem, reason)
 	return err
 }
 func readModelCall(ctx context.Context, tx *sql.Tx, r ModelCallRef) (ModelCall, error) {
@@ -182,9 +194,9 @@ func readModelCall(ctx context.Context, tx *sql.Tx, r ModelCallRef) (ModelCall, 
 
 // The parent budget lock serializes every response handoff. Check this barrier
 // both before reservation and before claiming a previously reserved call.
-func pendingModelHandoff(ctx context.Context, tx *sql.Tx, workItem string) (bool, error) {
+func pendingModelHandoff(ctx context.Context, tx *sql.Tx, l lockedModel) (bool, error) {
 	var pending bool
-	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM model_calls c JOIN model_allocations a ON a.id=c.allocation_id WHERE a.work_item_uuid=$1 AND c.state='completed' AND c.response_handed_off_at IS NULL)`, workItem).Scan(&pending)
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM model_calls c JOIN model_allocations a ON a.id=c.allocation_id WHERE a.work_item_uuid=$1 AND c.state='completed' AND c.response_handed_off_at IS NULL AND (($2 AND a.id=$3::uuid) OR (NOT $2 AND NOT EXISTS(SELECT 1 FROM repair_model_budgets rb WHERE rb.allocation_id=a.id))))`, l.workItem, l.derived, l.allocationID).Scan(&pending)
 	return pending, err
 }
 func validModelRef(r ModelCallRef) bool {
@@ -250,7 +262,7 @@ func (db *DB) ReserveModelCall(ctx context.Context, allocation, podUID string, s
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if pending, err := pendingModelHandoff(ctx, tx, l.workItem); err != nil {
+		if pending, err := pendingModelHandoff(ctx, tx, l); err != nil {
 			return err
 		} else if pending {
 			d.Reason = "response-handoff-pending"
@@ -284,7 +296,7 @@ func (db *DB) ReserveModelCall(ctx context.Context, allocation, podUID string, s
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE model_budgets SET reserved_calls=reserved_calls+1,reserved_input_bytes=reserved_input_bytes+$2,reserved_output_bytes=reserved_output_bytes+$3 WHERE work_item_uuid=$1`, l.workItem, input, output)
+		_, err = tx.ExecContext(ctx, `UPDATE `+l.budgetTable()+` SET reserved_calls=reserved_calls+1,reserved_input_bytes=reserved_input_bytes+$2,reserved_output_bytes=reserved_output_bytes+$3 WHERE work_item_uuid=$1`, l.workItem, input, output)
 		if err != nil {
 			return err
 		}
@@ -336,7 +348,7 @@ func (db *DB) ClaimModelCall(ctx context.Context, r ModelCallRef) (ModelDecision
 			d.Reason = "already-claimed"
 			return nil
 		}
-		if pending, err := pendingModelHandoff(ctx, tx, l.workItem); err != nil {
+		if pending, err := pendingModelHandoff(ctx, tx, l); err != nil {
 			return err
 		} else if pending {
 			d.Reason = "response-handoff-pending"
