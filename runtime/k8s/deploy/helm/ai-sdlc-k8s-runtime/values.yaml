@@ -163,6 +163,8 @@ modelGateway:
     seconds: 300
     # Optional Secret (key "credential") with the upstream API key.
     credentialSecret: ""
+    # Send chat_template_kwargs.enable_thinking=false (llama.cpp/vLLM only).
+    directAnswers: false
   # Planning envelope for the startup benchmark: the largest prompt and answer
   # one SCC step may need.
   benchmark:

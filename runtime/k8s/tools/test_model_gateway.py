@@ -2,6 +2,7 @@
 import json
 import os
 import tempfile
+import time
 import threading
 import unittest
 import urllib.error
@@ -70,8 +71,10 @@ class OpenAIAdapterTests(UpstreamCase):
         self.assertEqual(result.message["tool_calls"][0]["function"], {"name": "read_file", "arguments": "{\"path\":\"README.md\"}"})
         self.assertEqual((result.prompt_tokens, result.completion_tokens, result.estimated), (40, 9, False))
         path, headers, sent = FakeUpstream.seen[0]
-        self.assertEqual(sent["chat_template_kwargs"], {"enable_thinking": False})
-        self.assertEqual(set(sent), {"model", "messages", "max_tokens", "stream", "chat_template_kwargs", "tools"})
+        self.assertEqual(set(sent), {"model", "messages", "max_tokens", "stream", "tools"})
+        direct = adapters.OpenAIAdapter(self.base + "/v1/chat/completions", "gemma-4-26b-a4b", 5, "", True)
+        direct.complete(REQUEST)
+        self.assertEqual(FakeUpstream.seen[1][2]["chat_template_kwargs"], {"enable_thinking": False})
         self.assertNotIn("authorization", headers)
 
     def test_credential_is_sent_only_as_bearer_and_think_blocks_are_stripped(self):
@@ -85,7 +88,8 @@ class OpenAIAdapterTests(UpstreamCase):
         for reply in (openai_reply(calls=[{"type": "function", "function": {"name": "run_shell", "arguments": "{}"}}]),
                       openai_reply(calls=[{"type": "function", "function": {"name": "read_file", "arguments": "[]"}}]),
                       {"choices": []}, {"choices": [{"message": {"role": "user", "content": "x"}}]},
-                      openai_reply(content="x" * (65 * 1024))):
+                      openai_reply(content="x" * (65 * 1024)),
+                      {"choices": [{"finish_reason": "length", "message": {"role": "assistant", "content": "par"}}]}):
             FakeUpstream.reply = (200, reply, {})
             with self.subTest(reply=str(reply)[:60]), self.assertRaises(ValueError):
                 self.adapter().complete(REQUEST)
@@ -113,6 +117,37 @@ class OpenAIAdapterTests(UpstreamCase):
         self.assertEqual(FakeUpstream.seen, [])
         self.adapter().complete(dict(REQUEST, temperature=0, tool_choice={"type": "function", "function": {"name": "read_file"}}))
         self.assertEqual(FakeUpstream.seen[0][2]["temperature"], 0)
+
+
+class DripUpstream(BaseHTTPRequestHandler):
+    def log_message(self, *_):
+        pass
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.send_response(200)
+        self.send_header("Content-Length", "40")
+        self.end_headers()
+        for _ in range(40):
+            try:
+                self.wfile.write(b" ")
+                self.wfile.flush()
+            except OSError:
+                return
+            time.sleep(0.2)
+
+
+class DeadlineTests(unittest.TestCase):
+    def test_a_dripped_body_cannot_outlive_the_total_deadline(self):
+        server = HTTPServer(("127.0.0.1", 0), DripUpstream)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        adapter = adapters.OpenAIAdapter("http://127.0.0.1:%d/v1/chat/completions" % server.server_address[1], "m", 1)
+        started = time.monotonic()
+        with self.assertRaises(RuntimeError):
+            adapter.complete(REQUEST)
+        self.assertLess(time.monotonic() - started, 2.5)
 
 
 class AnthropicAdapterTests(UpstreamCase):
@@ -144,11 +179,22 @@ class AnthropicAdapterTests(UpstreamCase):
         self.assertEqual(sent["tools"][0]["input_schema"]["required"], ["path"])
         self.assertEqual((sent["tool_choice"], sent["temperature"], sent["max_tokens"]), ({"type": "any"}, 1.0, 2048))
 
+    def test_tool_choice_none_keeps_tools_for_tool_history(self):
+        FakeUpstream.reply = (200, {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}, {})
+        request = {"messages": [{"role": "user", "content": "x"}, {"role": "assistant", "content": "", "tool_calls": READ_CALL},
+                                {"role": "tool", "tool_call_id": "x", "content": "y"}], "tools": TOOLS, "tool_choice": "none"}
+        self.adapter().complete(request)
+        sent = FakeUpstream.seen[0][2]
+        self.assertEqual((sent["tool_choice"], len(sent["tools"])), ({"type": "none"}, 1))
+
     def test_unknown_blocks_and_unknown_tools_fail_closed(self):
         for content in ([{"type": "image", "source": {}}], [{"type": "tool_use", "name": "run_shell", "input": {}}]):
             FakeUpstream.reply = (200, {"role": "assistant", "content": content}, {})
             with self.subTest(content=content), self.assertRaises(ValueError):
                 self.adapter().complete(REQUEST)
+        FakeUpstream.reply = (200, {"role": "assistant", "stop_reason": "max_tokens", "content": [{"type": "text", "text": "par"}]}, {})
+        with self.assertRaisesRegex(ValueError, "truncated"):
+            self.adapter().complete(REQUEST)
 
 
 class ConfigurationTests(unittest.TestCase):
@@ -226,6 +272,9 @@ class BenchmarkTests(unittest.TestCase):
         with self.assertRaisesRegex(model_benchmark.BenchmarkFailed, "tool call"):
             model_benchmark.benchmark(ScriptedAdapter(self.clock, tool=False), 300)
 
+    def test_prefill_probes_are_never_identical(self):
+        self.assertNotEqual(model_benchmark.prefill_probe(), model_benchmark.prefill_probe())
+
     def test_adapters_without_usage_are_bounded_by_tool_call_latency(self):
         adapter = ScriptedAdapter(self.clock)
         adapter.reports_usage = False
@@ -290,7 +339,8 @@ class RealUpstreamTests(unittest.TestCase):
     def test_real_upstream_benchmarks_and_proposes_a_valid_tool_call(self):
         adapter = adapters.adapter_from_environ({"AI_SDLC_MODEL_ADAPTER": "openai",
                                                  "AI_SDLC_MODEL_UPSTREAM_URL": os.environ["AI_SDLC_TEST_MODEL_UPSTREAM"],
-                                                 "AI_SDLC_MODEL_UPSTREAM_MODEL": os.environ.get("AI_SDLC_TEST_MODEL_NAME", "gemma-4-26b-a4b")})
+                                                 "AI_SDLC_MODEL_UPSTREAM_MODEL": os.environ.get("AI_SDLC_TEST_MODEL_NAME", "gemma-4-26b-a4b"),
+                                                 "AI_SDLC_MODEL_UPSTREAM_DIRECT_ANSWERS": os.environ.get("AI_SDLC_TEST_MODEL_DIRECT", "true")})
         profile = model_benchmark.benchmark(adapter, adapter.seconds)
         print(json.dumps(profile))
         self.assertTrue(profile["toolCall"])

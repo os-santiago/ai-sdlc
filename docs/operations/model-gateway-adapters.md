@@ -17,7 +17,9 @@ AI service.
 Adapters never execute tools. They receive only validated messages and tool
 schemas, and their answers are normalized by the shared contract: unknown
 tools, non-object arguments, oversized replies, redirects and unknown content
-blocks fail closed. Inline `<think>` blocks are removed. Sampling controls
+blocks fail closed, and so do truncated answers (`finish_reason: length`,
+`stop_reason: max_tokens`). Inline `<think>` blocks are removed. One total
+deadline covers each upstream call, including a slowly dripped body. Sampling controls
 (`temperature`, `tool_choice`) are typed and bounded before any backend sees
 them.
 
@@ -37,6 +39,7 @@ modelGateway:
     port: 18080
     seconds: 300                                     # ceiling for one upstream call (30-570)
     credentialSecret: ""                             # optional Secret with key "credential"
+    directAnswers: true                              # llama.cpp/vLLM: chat_template_kwargs.enable_thinking=false
   benchmark:
     promptTokens: 16384      # planning envelope: the largest prompt one SCC step may need
     completionTokens: 4096   # and the largest answer
@@ -54,7 +57,8 @@ Upstream adapters benchmark the model before the gateway reports ready:
 1. **Tool call**: the model must propose a valid `read_file` call through the
    contract (functional readiness, not only reachability).
 2. **Prefill**: a ~1,800-token prompt with a 1-token answer gives prompt
-   tokens/second.
+   tokens/second. Each run starts with a fresh nonce so prompt caches cannot
+   inflate it, and the slower of two runs is used.
 3. **Generation**: a bounded answer gives completion tokens/second, net of its
    own prompt time.
 
@@ -89,3 +93,12 @@ The full measured profile is logged once as a `model-benchmark` JSON event:
 
 The example above is the measurement against a local llama.cpp server running
 Gemma 4 26B-A4B (64k context) on 2026-11-19.
+
+## Known limit: the per-call window
+
+Each executor model call is still bounded by a fixed 60 s window: the mailbox
+request wait and the `model_calls` reservation expiry. The broker stops 15 s
+before that (10 s for reviews), and review runs are capped at 180 s in total.
+Until that window becomes installation-configurable, a derived timeout above
+about 45 s cannot take effect. Making it configurable is the next required
+change before slow local models can run full SCC steps.

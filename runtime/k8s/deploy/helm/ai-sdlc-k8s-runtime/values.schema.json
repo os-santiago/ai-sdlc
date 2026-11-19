@@ -956,7 +956,8 @@
             "cidr",
             "port",
             "seconds",
-            "credentialSecret"
+            "credentialSecret",
+            "directAnswers"
           ],
           "properties": {
             "url": {
@@ -985,6 +986,9 @@
               "type": "string",
               "maxLength": 253,
               "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$"
+            },
+            "directAnswers": {
+              "type": "boolean"
             }
           }
         },
@@ -1008,7 +1012,29 @@
             }
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "adapter": {
+                "const": "anthropic"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "upstream": {
+                "properties": {
+                  "credentialSecret": {
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   },
   "required": [

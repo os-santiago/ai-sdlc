@@ -20,6 +20,8 @@ import ipaddress
 import json
 import os
 import re
+import socket
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -101,26 +103,41 @@ def read_credential(path):
 
 
 def post_json(url, payload, headers, seconds, opener=None):
-    """POST once with no proxy and no redirects; the whole call, including a
-    slowly dripped body, is bounded by ``seconds``."""
+    """POST once with no proxy and no redirects. One total deadline covers
+    connect, wait and a slowly dripped body: a watchdog closes the socket."""
     raw = json.dumps(payload).encode()
     call = urllib.request.Request(url, data=raw, method="POST", headers=dict(headers, **{"Content-Type": "application/json"}))
     opener = opener or urllib.request.build_opener(_NoRedirect(), urllib.request.ProxyHandler({}))
     deadline = time.monotonic() + seconds
+    expired = threading.Event()
     body = b""
     try:
         with opener.open(call, timeout=seconds) as response:
-            if response.status != 200:
-                raise RuntimeError("upstream status")
-            while len(body) <= MAX_RESPONSE_BYTES:
-                if time.monotonic() > deadline:
-                    raise RuntimeError("completion deadline exceeded")
-                chunk = response.read(16384)
-                if not chunk:
-                    break
-                body += chunk
-    except (urllib.error.URLError, OSError, TimeoutError):
+            def abort():
+                expired.set()
+                try:
+                    response.fp.raw._sock.shutdown(socket.SHUT_RDWR)
+                except (AttributeError, OSError):
+                    response.close()
+            watchdog = threading.Timer(max(deadline - time.monotonic(), 0), abort)
+            watchdog.daemon = True
+            watchdog.start()
+            try:
+                if response.status != 200:
+                    raise RuntimeError("upstream status")
+                while len(body) <= MAX_RESPONSE_BYTES and not expired.is_set():
+                    chunk = response.read1(16384)
+                    if not chunk:
+                        break
+                    body += chunk
+            finally:
+                watchdog.cancel()
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+        if len(body) > MAX_RESPONSE_BYTES:
+            raise ValueError("completion response exceeded bound") from None
         raise RuntimeError("completion backend failed") from None
+    if expired.is_set() or time.monotonic() > deadline:
+        raise RuntimeError("completion deadline exceeded")
     if len(body) > MAX_RESPONSE_BYTES:
         raise ValueError("completion response exceeded bound")
     return json.loads(body)
@@ -139,13 +156,22 @@ class Adapter:
     shared contract and returns a bounded ``Completion``."""
     name = ""
 
-    def __init__(self, url="", model="", seconds=300, credential=""):
+    def __init__(self, url="", model="", seconds=300, credential="", direct_answers=False):
         self.url, self.model, self.seconds, self.credential = url, model, seconds, credential
+        self.direct_answers = direct_answers
 
-    def complete(self, request, seconds=None):
+    def complete(self, request, seconds=None, probe=False):
+        """``probe`` is used only by the startup benchmark, whose prefill and
+        generation probes are truncated on purpose; SCC traffic never is."""
         messages, tools, names, tokens = validate_request(request)
         validate_parameters(request, names)
-        return self.backend(request, messages, tools, names, tokens, seconds or self.seconds)
+        self.truncation_ok = probe
+        try:
+            return self.backend(request, messages, tools, names, tokens, seconds or self.seconds)
+        finally:
+            self.truncation_ok = False
+
+    truncation_ok = False
 
     def backend(self, request, messages, tools, names, tokens, seconds):
         raise NotImplementedError
@@ -170,10 +196,11 @@ class OpenAIAdapter(Adapter):
     reports_usage = True
 
     def backend(self, request, messages, tools, names, tokens, seconds):
-        payload = {"model": self.model, "messages": messages, "max_tokens": tokens, "stream": False,
-                   # Direct answers: reasoning traces are not part of the contract.
-                   # Servers that do not template thinking ignore this field.
-                   "chat_template_kwargs": {"enable_thinking": False}}
+        payload = {"model": self.model, "messages": messages, "max_tokens": tokens, "stream": False}
+        if self.direct_answers:
+            # Direct answers: reasoning traces are not part of the contract.
+            # Only for servers that template thinking (llama.cpp, vLLM).
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         if tools:
             payload["tools"] = tools
         for key in ("temperature", "tool_choice"):
@@ -184,6 +211,8 @@ class OpenAIAdapter(Adapter):
         choices = answer.get("choices") if isinstance(answer, dict) else None
         if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
             raise ValueError("invalid completion")
+        if choices[0].get("finish_reason") == "length" and not self.truncation_ok:
+            raise ValueError("truncated completion")
         message = choices[0].get("message")
         if not isinstance(message, dict) or message.get("role", "assistant") != "assistant":
             raise ValueError("invalid completion")
@@ -257,7 +286,8 @@ class AnthropicAdapter(Adapter):
                                  "input_schema": t["function"].get("parameters") or {"type": "object"}} for t in tools]
         choice = request.get("tool_choice")
         if choice == "none":
-            payload.pop("tools", None)
+            # Keep tools: history may hold tool_use/tool_result blocks.
+            payload["tool_choice"] = {"type": "none"}
         elif choice == "required":
             payload["tool_choice"] = {"type": "any"}
         elif isinstance(choice, dict):
@@ -271,6 +301,8 @@ class AnthropicAdapter(Adapter):
         answer = post_json(self.url, payload, {"x-api-key": self.credential, "anthropic-version": self.version}, seconds)
         if not isinstance(answer, dict) or answer.get("role") != "assistant" or not isinstance(answer.get("content"), list):
             raise ValueError("invalid completion")
+        if answer.get("stop_reason") == "max_tokens" and not self.truncation_ok:
+            raise ValueError("truncated completion")
         text, proposed = [], []
         for block in answer["content"]:
             kind = block.get("type") if isinstance(block, dict) else None
@@ -310,4 +342,7 @@ def adapter_from_environ(environ=os.environ):
     credential = read_credential(environ.get("AI_SDLC_MODEL_UPSTREAM_CREDENTIAL_FILE", ""))
     if cls is AnthropicAdapter and not credential:
         raise RuntimeError("model upstream credential unavailable")
-    return cls(url, model, int(seconds), credential)
+    direct = environ.get("AI_SDLC_MODEL_UPSTREAM_DIRECT_ANSWERS", "false")
+    if direct not in ("true", "false"):
+        raise RuntimeError("model upstream unavailable")
+    return cls(url, model, int(seconds), credential, direct == "true")

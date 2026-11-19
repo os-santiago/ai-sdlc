@@ -140,8 +140,6 @@ func (p *Provider) invoke(ctx context.Context, request []byte, responseLimit int
 	return raw, nil
 }
 
-// CheckGateway checks only the trusted loopback sidecar. It neither reserves
-// nor invokes a model completion, and never follows redirects.
 // GatewayProfile reads the per-call timeout the loopback gateway derived from
 // its startup benchmark. It is available only after the gateway is ready, and
 // the caller must still bound it by the installation ceiling.
@@ -174,6 +172,8 @@ func (p *Provider) GatewayProfile(ctx context.Context) (int, error) {
 	return profile.TimeoutSeconds, nil
 }
 
+// CheckGateway checks only the trusted loopback sidecar. It neither reserves
+// nor invokes a model completion, and never follows redirects.
 func (p *Provider) CheckGateway(ctx context.Context) error {
 	if p == nil || !strings.HasPrefix(p.endpoint, "http://127.0.0.1:") {
 		return ErrProvider

@@ -20,6 +20,7 @@ Adapters that do not report token usage (an agent CLI) are bounded by their
 measured tool-call latency instead.
 """
 import math
+import secrets
 import time
 
 MIN_SECONDS = 30
@@ -33,8 +34,11 @@ TOOL_PROBE = {"messages": [
 # About 1,800 tokens of varied text, so caches and repetition do not inflate the rate.
 PREFILL_TEXT = " ".join("Line %d: the service records event %d with checksum %x and state %s." %
                         (i, i * 7, i * 2654435761 % 2**32, ("ready", "queued", "done")[i % 3]) for i in range(120))
-PREFILL_PROBE = {"messages": [{"role": "user", "content": PREFILL_TEXT + "\nReply with the single word OK."}],
-                 "max_tokens": 1, "temperature": 0}
+def prefill_probe():
+    # A fresh leading nonce defeats prompt/prefix caches (retries, restarts and
+    # a second gateway benchmarking the same upstream).
+    return {"messages": [{"role": "user", "content": "Run " + secrets.token_hex(16) + ".\n" + PREFILL_TEXT
+                          + "\nReply with the single word OK."}], "max_tokens": 1, "temperature": 0}
 GENERATION_PROBE = {"messages": [{"role": "user", "content": "Write the numbers from 1 to 400 separated by spaces."}],
                     "max_tokens": 192, "temperature": 0}
 
@@ -43,9 +47,9 @@ class BenchmarkFailed(RuntimeError):
     pass
 
 
-def _timed(adapter, request, seconds):
+def _timed(adapter, request, seconds, probe=False):
     started = time.monotonic()
-    completion = adapter.complete(request, seconds)
+    completion = adapter.complete(request, seconds, probe)
     return completion, max(time.monotonic() - started, 1e-3)
 
 
@@ -69,11 +73,15 @@ def benchmark(adapter, ceiling, prompt_tokens=16384, completion_tokens=4096, saf
         profile["basis"] = "tool-call-latency"
     else:
         try:
-            prefill, prefill_seconds = _timed(adapter, PREFILL_PROBE, ceiling)
-            generation, generation_seconds = _timed(adapter, GENERATION_PROBE, ceiling)
+            # The slower of two uncached prefill runs.
+            rates = []
+            for _ in range(2):
+                prefill, prefill_seconds = _timed(adapter, prefill_probe(), ceiling, True)
+                rates.append(prefill.prompt_tokens / prefill_seconds)
+            generation, generation_seconds = _timed(adapter, GENERATION_PROBE, ceiling, True)
         except Exception:
             raise BenchmarkFailed("model unavailable") from None
-        prefill_rate = prefill.prompt_tokens / prefill_seconds
+        prefill_rate = min(rates)
         # Remove the (short) prompt's share so the rate reflects decoding only.
         decode_seconds = max(generation_seconds - generation.prompt_tokens / prefill_rate, 1e-3)
         generation_rate = generation.completion_tokens / decode_seconds
