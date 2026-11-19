@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The worker claims no work until the gateway has benchmarked the model, and
@@ -33,11 +34,11 @@ func TestWorkerAdoptsTheBenchmarkedGatewayTimeoutWithinTheCeiling(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if same, err := r.benchmarked(context.Background(), provider); err != nil || same != provider {
+	if same, err := r.benchmarked(context.Background(), provider, 300*time.Second); err != nil || same != provider {
 		t.Fatal("profile adoption must be opt-in", err)
 	}
 	r.AdoptGatewayProfile = true
-	if adopted, err := r.benchmarked(context.Background(), provider); err != nil || adopted == provider {
+	if adopted, err := r.benchmarked(context.Background(), provider, 300*time.Second); err != nil || adopted == provider {
 		t.Fatal("benchmarked timeout not adopted", err)
 	}
 	for _, c := range []struct {
@@ -46,8 +47,16 @@ func TestWorkerAdoptsTheBenchmarkedGatewayTimeoutWithinTheCeiling(t *testing.T) 
 		ceiling int
 	}{{`{"timeoutSeconds":301}`, 200, 330}, {`{"timeoutSeconds":225}`, 503, 330}, {`{"timeoutSeconds":225}`, 200, 0}} {
 		body, status, r.ProviderTimeoutSeconds = c.body, c.status, c.ceiling
-		if _, err := r.benchmarked(context.Background(), provider); err == nil {
+		if _, err := r.benchmarked(context.Background(), provider, 300*time.Second); err == nil {
 			t.Fatal("accepted", c)
 		}
+	}
+	// A measured 225 s timeout does not fit the default 60 s call window.
+	body, status, r.ProviderTimeoutSeconds = `{"timeoutSeconds":225}`, 200, 330
+	if _, err := r.benchmarked(context.Background(), provider, time.Minute); err == nil {
+		t.Fatal("timeout beyond the call window accepted")
+	}
+	if _, err := r.benchmarked(context.Background(), provider, 245*time.Second); err != nil {
+		t.Fatal("timeout within the call window refused", err)
 	}
 }

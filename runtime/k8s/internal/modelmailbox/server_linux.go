@@ -24,7 +24,7 @@ type Server struct {
 }
 
 func NewServer(store *Store, id Identity, wait time.Duration) (*Server, error) {
-	if store == nil || id.Validate() != nil || wait < time.Millisecond || wait > 120*time.Second {
+	if store == nil || id.Validate() != nil || wait < time.Millisecond || wait > 600*time.Second {
 		return nil, errors.New("invalid mailbox server configuration")
 	}
 	for _, name := range []string{requestFile, responseFile} {

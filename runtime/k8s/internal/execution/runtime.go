@@ -157,7 +157,7 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if e != nil || provider.CheckGateway(ctx) != nil {
 		return "", ErrAuthority
 	}
-	if provider, e = r.benchmarked(ctx, provider); e != nil {
+	if provider, e = r.benchmarked(ctx, provider, config.Profile.CallWindow()); e != nil {
 		return "model-benchmark-pending", ErrAuthority
 	}
 	id, e := r.Component.DB.NextExecution(ctx)
@@ -211,12 +211,15 @@ func (r Runtime) Ready(ctx context.Context) error {
 }
 
 // benchmarked returns a provider bounded by the gateway's measured timeout.
-func (r Runtime) benchmarked(ctx context.Context, provider *modelbroker.Provider) (*modelbroker.Provider, error) {
+// The measured upstream timeout must also fit the profile's per-call window:
+// the broker stops 15 s before the window ends, so a slower model would only
+// produce uncertain calls. Such a worker claims no work (fail closed).
+func (r Runtime) benchmarked(ctx context.Context, provider *modelbroker.Provider, window time.Duration) (*modelbroker.Provider, error) {
 	if !r.AdoptGatewayProfile {
 		return provider, nil
 	}
 	seconds, e := provider.GatewayProfile(ctx)
-	if e != nil || r.ProviderTimeoutSeconds == 0 || seconds+30 > r.ProviderTimeoutSeconds {
+	if e != nil || r.ProviderTimeoutSeconds == 0 || seconds+30 > r.ProviderTimeoutSeconds || time.Duration(seconds+20)*time.Second > window {
 		return nil, ErrAuthority
 	}
 	r.ProviderTimeoutSeconds = seconds + 30

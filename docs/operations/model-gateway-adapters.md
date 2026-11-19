@@ -94,11 +94,32 @@ The full measured profile is logged once as a `model-benchmark` JSON event:
 The example above is the measurement against a local llama.cpp server running
 Gemma 4 26B-A4B (64k context) on 2026-11-19.
 
-## Known limit: the per-call window
+## Per-call window
 
-Each executor model call is still bounded by a fixed 60 s window: the mailbox
-request wait and the `model_calls` reservation expiry. The broker stops 15 s
-before that (10 s for reviews), and review runs are capped at 180 s in total.
-Until that window becomes installation-configurable, a derived timeout above
-about 45 s cannot take effect. Making it configurable is the next required
-change before slow local models can run full SCC steps.
+Each model call crosses SCC, the executor's model mailbox, the call reservation
+and the broker. By default each call has a fixed 60 s window, enough for the
+Codex CLI adapter. Slower installed models select it in the reviewed executor
+or reviewer profile:
+
+```json
+{"version": "ai-sdlc.executor-profile/v1", "maxSeconds": 900, "callSeconds": 300, ...}
+```
+
+`callSeconds` (60-600, at most `maxSeconds`; reviewers stay within their
+180 s run cap) sets:
+- SCC's provider wait (`model.timeout` and `SC_PROVIDER_CONNECT_TIMEOUT_MS`,
+  window + 15 s, so SCC never abandons and retries a call the broker may still
+  complete);
+- the mailbox request wait (`--wait-seconds`);
+- the `model_calls` reservation expiry.
+
+The broker still stops 15 s before the window ends (10 s for reviews). When
+the profile omits `callSeconds`, workloads, SCC configuration and reservations
+are identical to earlier releases.
+
+The worker only adopts the benchmarked gateway timeout `T` when it also fits
+the window (`T + 20 s <= callSeconds`). Otherwise it claims no work, because a
+slower model would only produce uncertain calls. Choose `upstream.seconds` (the
+benchmark ceiling) and `callSeconds` together, for example 216 s measured, a
+300 s ceiling and `callSeconds: 330`. The verifier keeps its ceiling. A review
+call longer than the reviewer window is stopped by the broker as uncertain.

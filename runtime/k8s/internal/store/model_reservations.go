@@ -210,6 +210,15 @@ func room(l, u ModelLimits, input, output int64) bool {
 // bytes are never stored. Caller must retain and revalidate the exact body
 // before dispatch, and never substitute a reconstructed request.
 func (db *DB) ReserveModelCall(ctx context.Context, allocation, podUID string, sequence int, payload []byte) (ModelDecision, error) {
+	return db.ReserveModelCallWithin(ctx, allocation, podUID, sequence, payload, time.Minute)
+}
+
+// ReserveModelCallWithin reserves one call whose expiry is bounded by window
+// (the profile's per-call window, 60-600 s), the allocation and the budget.
+func (db *DB) ReserveModelCallWithin(ctx context.Context, allocation, podUID string, sequence int, payload []byte, window time.Duration) (ModelDecision, error) {
+	if window < time.Minute || window > 10*time.Minute {
+		return ModelDecision{}, errModelPolicy
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	var d ModelDecision
@@ -285,7 +294,7 @@ func (db *DB) ReserveModelCall(ctx context.Context, allocation, podUID string, s
 			d.Reason = "budget-exhausted"
 			return nil
 		}
-		expires := l.now.Add(time.Minute)
+		expires := l.now.Add(window)
 		if l.allocationExpiry.Before(expires) {
 			expires = l.allocationExpiry
 		}

@@ -30,9 +30,14 @@ func run(ctx context.Context, args []string, input io.Reader, output io.Writer) 
 	uid := flags.String("pod-uid", "", "expected Pod UID")
 	model := flags.String("model", "", "reviewed model, required with token cap")
 	maxTokens := flags.Int("max-tokens", 0, "reviewed per-request token cap")
+	waitSeconds := flags.Int("wait-seconds", 60, "reviewed per-call window from the profile")
 	if flags.Parse(args[1:]) != nil || flags.NArg() != 0 {
 		return errors.New("invalid mailbox arguments")
 	}
+	if *waitSeconds < 60 || *waitSeconds > 600 || (mode != "serve" && *waitSeconds != 60) {
+		return errors.New("invalid mailbox call window")
+	}
+	wait := time.Duration(*waitSeconds) * time.Second
 	if (mode != "serve" && (*model != "" || *maxTokens != 0)) || ((*model == "") != (*maxTokens == 0)) {
 		return errors.New("invalid mailbox request limits")
 	}
@@ -61,9 +66,9 @@ func run(ctx context.Context, args []string, input io.Reader, output io.Writer) 
 		var server *modelmailbox.Server
 		var err error
 		if *model != "" {
-			server, err = modelmailbox.NewRestrictedServer(store, id, 60*time.Second, modelmailbox.RequestLimits{Model: *model, MaxTokens: *maxTokens})
+			server, err = modelmailbox.NewRestrictedServer(store, id, wait, modelmailbox.RequestLimits{Model: *model, MaxTokens: *maxTokens})
 		} else {
-			server, err = modelmailbox.NewServer(store, id, 60*time.Second)
+			server, err = modelmailbox.NewServer(store, id, wait)
 		}
 		if err != nil {
 			return err
