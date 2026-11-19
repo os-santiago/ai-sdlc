@@ -66,6 +66,8 @@ If its approval documents have expired, use the explicit
 starting that transition; existing workflow deadlines remain unchanged.
 It preserves failed review history and installs future rejection feedback;
 autonomous repair remains a separate capability.
+The later [schema-36-to-37 repair transition](docs/operations/review-repair-upgrade.md)
+enables one bounded repair and renews both approvals in the same operation.
 
 For an existing installer-owned Konflux cluster, use the
 [frozen runtime capability](docs/operations/frozen-konflux-runtime.md) and
