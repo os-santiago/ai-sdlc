@@ -33,6 +33,8 @@ from codexcli_openai_wrapper import MAX_RESPONSE_BYTES, assistant_message, valid
 
 # The worker/verifier broker allows the gateway timeout + 30 s (bounded at 600).
 UPSTREAM_SECONDS_MAX = 570
+# The startup benchmark derives timeouts of at least 30 s.
+UPSTREAM_SECONDS_MIN = 30
 # Explicit RFC 1918 / ULA ranges; ipaddress.is_private also admits
 # documentation and other special ranges.
 PRIVATE_NETWORKS = tuple(ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"))
@@ -379,7 +381,7 @@ def adapter_from_environ(environ=os.environ):
     if cls is None:
         raise RuntimeError("model adapter unavailable")
     seconds = environ.get("AI_SDLC_MODEL_UPSTREAM_SECONDS", "300")
-    if not seconds.isdigit() or not 1 <= int(seconds) <= UPSTREAM_SECONDS_MAX:
+    if not seconds.isdigit() or not UPSTREAM_SECONDS_MIN <= int(seconds) <= UPSTREAM_SECONDS_MAX:
         raise RuntimeError("model upstream unavailable")
     if cls is AgentCLIAdapter:
         return cls(seconds=int(seconds))

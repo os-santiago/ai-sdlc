@@ -240,7 +240,8 @@ class ConfigurationTests(unittest.TestCase):
                        {"AI_SDLC_MODEL_UPSTREAM_URL": "http://user:pw@10.89.0.1/v1/chat/completions"},
                        {"AI_SDLC_MODEL_UPSTREAM_URL": "http://10.89.0.1:18080/v1/other"},
                        {"AI_SDLC_MODEL_UPSTREAM_MODEL": ""}, {"AI_SDLC_MODEL_UPSTREAM_MODEL": "bad model"},
-                       {"AI_SDLC_MODEL_UPSTREAM_SECONDS": "0"}, {"AI_SDLC_MODEL_UPSTREAM_SECONDS": "571"},
+                       {"AI_SDLC_MODEL_UPSTREAM_SECONDS": "0"}, {"AI_SDLC_MODEL_UPSTREAM_SECONDS": "1"},
+                       {"AI_SDLC_MODEL_UPSTREAM_SECONDS": "29"}, {"AI_SDLC_MODEL_UPSTREAM_SECONDS": "571"},
                        {"AI_SDLC_MODEL_ADAPTER": "anthropic", "AI_SDLC_MODEL_UPSTREAM_URL": "https://api.example/v1/messages"},
                        {"AI_SDLC_MODEL_UPSTREAM_CREDENTIAL_FILE": "/nonexistent/key"}):
             with self.subTest(change=change), self.assertRaises(RuntimeError):
@@ -299,6 +300,15 @@ class BenchmarkTests(unittest.TestCase):
         with self.assertRaisesRegex(model_benchmark.BenchmarkFailed, "tool call"):
             model_benchmark.benchmark(ScriptedAdapter(self.clock, tool=False), 300)
 
+    def test_zero_reported_prompt_tokens_fail_with_a_diagnostic(self):
+        class ZeroPrompt(ScriptedAdapter):
+            def backend(self, request, messages, tools, names, tokens, seconds):
+                result = super().backend(request, messages, tools, names, tokens, seconds)
+                result.prompt_tokens = 0
+                return result
+        with self.assertRaisesRegex(model_benchmark.BenchmarkFailed, "unmeasurable"):
+            model_benchmark.benchmark(ZeroPrompt(self.clock), 300)
+
     def test_prefill_probes_are_never_identical(self):
         self.assertNotEqual(model_benchmark.prefill_probe(), model_benchmark.prefill_probe())
 
@@ -336,6 +346,10 @@ class GatewayTests(unittest.TestCase):
     def test_not_ready_and_no_completions_until_benchmarked_then_profile_is_served(self):
         self.assertEqual(self.call("/readyz"), (503, {"ready": False}))
         self.assertEqual(self.call("/v1/chat/completions", REQUEST)[0], 503)
+        # Unauthenticated callers learn nothing and never take the model slot.
+        self.assertEqual(self.call("/v1/chat/completions", REQUEST, token="x" * 40)[0], 401)
+        self.assertTrue(self.server.model_slot.acquire(blocking=False))
+        self.server.model_slot.release()
         self.assertEqual(self.call("/readyz", token="x" * 40)[0], 401)
         original = model_benchmark.time.monotonic
         model_benchmark.time.monotonic = lambda: self.clock[0]

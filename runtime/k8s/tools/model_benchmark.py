@@ -82,6 +82,8 @@ def benchmark(adapter, ceiling, prompt_tokens=16384, completion_tokens=4096, saf
         except Exception:
             raise BenchmarkFailed("model unavailable") from None
         prefill_rate = min(rates)
+        if prefill_rate <= 0:
+            raise BenchmarkFailed("model throughput unmeasurable")
         # Remove the (short) prompt's share so the rate reflects decoding only.
         decode_seconds = max(generation_seconds - generation.prompt_tokens / prefill_rate, 1e-3)
         generation_rate = generation.completion_tokens / decode_seconds
