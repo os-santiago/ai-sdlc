@@ -6,10 +6,9 @@
 fixed OpenAI-compatible upstream, for example a local llama.cpp server exposed
 only on the kind bridge.
 
-There is no schema change and no approval renewal: the parent's approvals must
-still be valid. Only the worker image, which ships the upstream gateway, and the
-reviewed `modelGateway` values change. The target chart must render the unchanged
-installation byte-identically before the switch.
+There is no schema change. The operation is a uniform publication with
+separately reviewed approval renewal (described below). The target chart must
+render the unchanged installation byte-identically before the switch.
 
 Supply a separately reviewed upstream document:
 
@@ -58,10 +57,20 @@ catalog, writers excluded, history admitted). It refuses only in-flight
 model-dependent work: claimed or uncleaned executions, verifications or
 reviews, open model budgets or calls, and unresolved verification or review
 effects. That predicate is checked before the operation journal is created, so
-a refusal leaves nothing to resume; retry when the work settles. Open repair
+a refusal leaves nothing to resume; retry when the work settles. Work that
+starts between that check and the fence makes the fence refuse after the
+journal exists. The operation is then still unpaused and can be resumed, but
+it must complete within its administrative deadline. Open repair
 budgets and model responses not yet handed off also count as in flight. A
 historical `uncertain` cleanup blocks the switch on purpose (containment):
 resolve it through the runtime's cleanup recovery first. Under the fence, the
 first pause adopts the fenced snapshot as the retained proof, because queued
 work may legitimately progress between the preliminary observation and the
-fence.
+fence. The paused database must equal that proof until the backup is verified.
+From `ready` on, the restarted runtime may progress queued or downstream work,
+so later phases re-prove only database authority (schema, roles, memberships,
+role settings, catalog and role identities).
+
+A renewed console TLS leaf certificate, even under the same CA, changes the
+recorded release identity, and the switch refuses it. Install such a renewal
+through its own reviewed operation first.

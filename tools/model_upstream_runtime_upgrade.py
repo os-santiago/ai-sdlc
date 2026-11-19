@@ -1,11 +1,12 @@
 """Switch the model gateways of a completed schema-37 installation to a fixed
-OpenAI-compatible upstream.
+OpenAI-compatible upstream, as a uniform same-schema publication.
 
-No schema change and no approval renewal: the parent's approvals must still be
-valid. Only the worker image (which ships the upstream gateway) and the
-reviewed `modelGateway` values change; every other value, resource identity,
-browser binding and release identity is inherited from the completed repair
-operation. Historical workflow authority is never renewed.
+No schema change. Every component image comes from the selected main
+publication; the reviewed modelGateway values and per-call windows are set,
+and separately reviewed provenance (new verifier image) and release (new
+finite window, same CA) documents are installed. Authority policy, build,
+budgets, scope, resource identities and release identities are inherited from
+the completed repair operation. Historical workflow authority is never renewed.
 """
 import copy
 import ipaddress
@@ -39,6 +40,7 @@ from upgrade_fence_client import Fence
 
 VERSION = 'ai-sdlc.model-upstream-runtime-upgrade/v1'
 CONVERGE_SECONDS = 300
+AUTHORITY_FIELDS = ('@schema', '@roles', '@membership', '@role-settings', 'schema_migrations')
 REPAIR_VERSION = 'ai-sdlc.review-repair-runtime-upgrade/v1'
 
 
@@ -327,10 +329,23 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
         return database.snapshot()
 
     def retained(self, database=None):
+        """Until the backup is verified the paused database must equal the
+        fenced proof row for row. From 'ready' on, the restarted runtime may
+        legitimately progress queued or downstream work (there is no migration
+        to protect), so later phases re-prove only database authority: schema,
+        roles, memberships, role settings, catalog and role identities."""
         database = database or self.database()
-        if (self.snapshot(database) != self.retained_proof()
-                or compatibility.Compatibility(database).roles() != self.record['sourceRoleIdentities']):
-            raise ValueError('Original history or authority changed during the model upstream switch')
+        roles = compatibility.Compatibility(database).roles()
+        if self.record['completed'] in ('source', 'paused'):
+            if self.snapshot(database) != self.retained_proof() or roles != self.record['sourceRoleIdentities']:
+                raise ValueError('Original history or authority changed during the model upstream switch')
+            return
+        names = json.loads(database.sql('SELECT json_agg(filename ORDER BY filename) FROM schema_migrations;'))
+        current = database.snapshot()
+        proof = self.retained_proof()
+        if (names != [x['filename'] for x in self.catalog] or roles != self.record['sourceRoleIdentities']
+                or any(current[field] != proof[field] for field in AUTHORITY_FIELDS)):
+            raise ValueError('Original database authority changed during the model upstream switch')
 
     def capture_first_pause(self, database):
         """No migration exists, so the fenced snapshot is adopted as the retained
@@ -451,7 +466,7 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
             issueIntakeEnabled=active, runtimeReadinessValidated=active, modelUpstreamUpgradeOperation=self.record['nonce'],
             modelUpstreamUpgradeParentSHA256=self.parent_hash, modelUpstreamSelection=copy.deepcopy(self.selection),
             modelUpstream=copy.deepcopy(self.record['upstream']), approvalDocumentsSHA256=self.record['approvalsSHA256'],
-            uniformTargetPublication=False,
+            uniformTargetPublication=True,
             observedAt=int(time.time()*1000), previousWorkflowAuthorityRenewed=False, workflowEvidence=False,
             autonomousEndToEndValidated=False)
         reports = self.record['installationReports']
@@ -470,6 +485,7 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
         self.observe(self.record['completed'])
         return {'version': VERSION, 'phase': self.record['completed'], 'catalogSize': len(self.catalog),
             'issueIntakeEnabled': self.record['completed'] == 'active', 'modelUpstream': self.record['upstream'],
+            'approvalsValidUntil': min(v['expiresAt'] for v in self.record['approvals'].values()),
             'administrativeDeadline': int(self.record['expiresAt']*1000),
             'previousWorkflowAuthorityRenewed': False, 'workflowEvidence': False,
             'autonomousEndToEndValidated': False}

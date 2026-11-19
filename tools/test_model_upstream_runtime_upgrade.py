@@ -165,6 +165,32 @@ class History(unittest.TestCase):
         self.assertEqual(upgrade.CONVERGE_SECONDS, 300)
         self.assertIn('converge_seconds=CONVERGE_SECONDS', inspect.getsource(upgrade.ModelUpstreamUpgrade.run))
 
+    def test_rows_must_match_until_backup_then_only_authority(self):
+        item = object.__new__(upgrade.ModelUpstreamUpgrade)
+        proof = {'@schema': 's', '@roles': 'r', '@membership': 'm', '@role-settings': 'x', 'schema_migrations': 'c',
+                 'execution_requests': {'rows': 1}}
+        item.record = {'completed': 'paused', 'sourceRoleIdentities': {'a': 1}, 'fencedSourceProof': proof, 'sourceProof': {}}
+        item.catalog = [{'filename': 'f'}]
+        database = Mock()
+        database.sql.return_value = '["f"]'
+        progressed = dict(proof, execution_requests={'rows': 2})
+        database.snapshot.return_value = progressed
+        item.snapshot = Mock(return_value=progressed)
+        with patch.object(upgrade.compatibility, 'Compatibility') as compat:
+            compat.return_value.roles.return_value = {'a': 1}
+            with self.assertRaisesRegex(ValueError, 'history'):
+                item.retained(database)
+            for phase in ('ready', 'staged', 'warming', 'armed'):
+                item.record['completed'] = phase
+                item.retained(database)
+            database.snapshot.return_value = dict(progressed, **{'@roles': 'changed'})
+            with self.assertRaisesRegex(ValueError, 'authority'):
+                item.retained(database)
+            database.snapshot.return_value = progressed
+            compat.return_value.roles.return_value = {'a': 2}
+            with self.assertRaisesRegex(ValueError, 'authority'):
+                item.retained(database)
+
     def test_the_switch_uses_the_configuration_fence(self):
         item = object.__new__(upgrade.ModelUpstreamUpgrade)
         item.config, item.helper, item.catalog, item.record = Mock(provider='podman'), 'h', [], {'expiresAt': 1}
