@@ -16,6 +16,7 @@ database URI, Kubernetes token or forge credential is read here.
 import hmac
 import json
 import os
+import random
 import sys
 import threading
 import time
@@ -26,7 +27,7 @@ from codexcli_openai_wrapper import Handler
 from model_adapters import adapter_from_environ
 from model_benchmark import BenchmarkFailed, benchmark
 
-ATTEMPTS = 3
+ATTEMPTS = 5
 RETRY_SECONDS = 20
 
 
@@ -103,7 +104,9 @@ def run_benchmark(server, prompt_tokens, completion_tokens, attempts=ATTEMPTS, p
         except BenchmarkFailed as failure:
             print(json.dumps({"event": "model-benchmark-failed", "attempt": attempt + 1, "reason": str(failure)}), flush=True)
             if attempt + 1 < attempts:
-                time.sleep(pause)
+                # Randomized backoff: gateways sharing one upstream start
+                # together and would otherwise measure each other's load.
+                time.sleep(pause + random.uniform(0, 2 * pause))
             continue
         print(json.dumps({"event": "model-benchmark", "profile": profile}), flush=True)
         server.profile = profile

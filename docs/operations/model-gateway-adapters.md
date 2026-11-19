@@ -41,8 +41,11 @@ modelGateway:
     credentialSecret: ""                             # optional Secret with key "credential"
     directAnswers: true                              # llama.cpp/vLLM: chat_template_kwargs.enable_thinking=false
   benchmark:
-    promptTokens: 16384      # planning envelope: the largest prompt one SCC step may need
+    promptTokens: 16384      # worker planning envelope: the largest prompt one SCC step may need
     completionTokens: 4096   # and the largest answer
+  reviewBenchmark:           # verifier envelope: large candidates, short verdicts
+    promptTokens: 16384
+    completionTokens: 1024
 ```
 
 `anthropic` requires `credentialSecret`. The credential is mounted read-only
@@ -69,7 +72,9 @@ timeout = ceil(1.5 * (promptTokens/prefillRate + completionTokens/generationRate
 ```
 
 If the derived timeout exceeds `upstream.seconds`, or no valid tool call is
-proposed, the benchmark fails. After three attempts the gateway exits, and the
+proposed, the benchmark fails. Attempts are retried with randomized backoff,
+so gateways sharing one upstream stop measuring each other's load. After
+five attempts the gateway exits, and the
 restarting container is the signal. Until it passes, `/readyz` returns 503 and
 completions return 503. The worker checks `/readyz` before every claim, so no
 work is claimed against an unmeasured model. Adapters that do not report token
@@ -93,6 +98,15 @@ The full measured profile is logged once as a `model-benchmark` JSON event:
 
 The example above is the measurement against a local llama.cpp server running
 Gemma 4 26B-A4B (64k context) on 2026-11-19.
+
+## Capacity
+
+A single local model serves the worker and the verifier. Concurrent calls
+share its throughput: two simultaneous benchmarks measured about half the solo
+rate (Gemma 4 26B-A4B: derived 357-498 s together against 215 s alone).
+Generation and review of one work item run one after the other. Several items
+in flight at once need a model server with more capacity, or a ceiling that
+covers the contention.
 
 ## Per-call window
 
