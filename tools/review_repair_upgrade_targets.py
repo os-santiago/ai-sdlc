@@ -4,6 +4,7 @@ The same operation installs a separately reviewed, finite approval window. A
 schema36 source has no other renewal path once its earlier approvals expired.
 """
 import copy
+import hashlib
 import json
 import ssl
 
@@ -85,6 +86,26 @@ def validate_release(original, approved, now):
         tls_ca_window(approved['tlsCA'], approved, now)
 
 
+def rotated_profile(raw, original, approved):
+    """The browser profile follows a rotated application CA; nothing else changes."""
+    profile = json.loads(raw)
+    if profile.get('caSHA256') != hashlib.sha256(original['tlsCA'].encode()).hexdigest():
+        raise ValueError('Original browser profile must pin the original release CA')
+    if approved['tlsCA'] == original['tlsCA']:
+        return raw
+    profile['caSHA256'] = hashlib.sha256(approved['tlsCA'].encode()).hexdigest()
+    return json.dumps(profile, sort_keys=True)
+
+
+def expected_compiled_profile(original_profile, target_values):
+    """Closed comparison for the recompiled browser installation."""
+    renewed = json.loads(target_values['release']['browserProfileJSON'])
+    ca = hashlib.sha256(json.loads(target_values['release']['targetJSON'])['tlsCA'].encode()).hexdigest()
+    if renewed.get('caSHA256') != ca or dict(renewed, caSHA256=original_profile.get('caSHA256')) != original_profile:
+        raise ValueError('Repair browser profile may change only its rotated CA digest')
+    return renewed
+
+
 def targets(source, selection, approvals, render_source, render_target, compile_build, now):
     if not isinstance(approvals, dict) or set(approvals) != {'provenance', 'release'}:
         raise ValueError('Both independently reviewed approval documents are required')
@@ -132,6 +153,8 @@ def targets(source, selection, approvals, render_source, render_target, compile_
     validate_release(json.loads(values['release']['targetJSON']), approvals['release'], now)
     active['provenance']['trustJSON'] = json.dumps(approvals['provenance'], sort_keys=True)
     active['release']['targetJSON'] = json.dumps(approvals['release'], sort_keys=True)
+    active['release']['browserProfileJSON'] = rotated_profile(values['release']['browserProfileJSON'],
+        json.loads(values['release']['targetJSON']), approvals['release'])
     paused = pause_values(values, compile_build)
     staged = pause_values(active, compile_build)
     def description(v, selected, render):

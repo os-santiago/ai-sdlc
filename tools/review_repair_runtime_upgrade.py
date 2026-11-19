@@ -39,6 +39,24 @@ from upgrade_migrator import Migrator
 VERSION = 'ai-sdlc.review-repair-runtime-upgrade/v1'
 
 
+class RepairApprovalPreflight(ApprovalPreflight):
+    """Like the browser approval binding, but a rotated CA may change caSHA256."""
+    def bind_source(self, name, value):
+        if name != 'browser-original-profile' or not self.capture_browser:
+            return super().bind_source(name, value)
+        original = self.original['sources'][name]
+        profile = review_repair_upgrade_targets.expected_compiled_profile(original['profile'],
+                                                                         self.original['target']['values'])
+        if (not isinstance(value, dict) or set(value) != {'version', 'profile', 'profileSHA256', 'targetSHA256'}
+                or value['version'] != original['version'] or value['profile'] != profile
+                or (profile == original['profile']) != (value['profileSHA256'] == original['profileSHA256'])
+                or value['targetSHA256'] == original['targetSHA256']
+                or self.expected_target_digest is None or value['targetSHA256'] != self.expected_target_digest
+                or self.renewed_browser is not None and self.renewed_browser != value):
+            raise ValueError('Repair renewal changed the browser profile or target binding')
+        self.renewed_browser = copy.deepcopy(value)
+
+
 class ReviewRepairUpgrade(ReviewFeedbackUpgrade):
     """Reuse bounded pause/backup/Helm machinery; never the feedback intent."""
     def __init__(self, config, run=None, revision=None, trust_path=None, target_path=None):
@@ -219,6 +237,11 @@ class ReviewRepairUpgrade(ReviewFeedbackUpgrade):
         installed_ca = self.config.read('configmap', 'saferus-ca', release['namespace'])
         if (not isinstance(installed_ca, dict) or installed_ca.get('data', {}).get('ca.crt') != release['tlsCA']):
             raise ValueError('Reviewed release CA differs from the installed application CA')
+        browser_ca = self.config.read('configmap', 'approved-console-ca', 'ai-sdlc-browser')
+        profile = json.loads(targets['active']['values']['release']['browserProfileJSON'])
+        if (not isinstance(browser_ca, dict) or browser_ca.get('metadata', {}).get('uid') != profile['caConfigMapUID']
+                or browser_ca.get('data', {}).get('ca.crt') != release['tlsCA']):
+            raise ValueError('Browser platform CA must be the original object holding the reviewed CA')
         proof = compatibility.Compatibility(self.database()).source(self.catalog)
         roles = self.original_database_authority(proof['data'])
         # Bind the browser profile to the new reviewed release target before
@@ -226,7 +249,7 @@ class ReviewRepairUpgrade(ReviewFeedbackUpgrade):
         preview = {'targets': targets, 'browserCompiled': self.source_browser.browser_compiled}
         self.record = preview
         try:
-            preflight = ApprovalPreflight(self, capture_browser=True)
+            preflight = RepairApprovalPreflight(self, capture_browser=True)
         finally:
             self.record = None
         preflight.preflight()

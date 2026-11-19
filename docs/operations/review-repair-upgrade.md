@@ -19,8 +19,20 @@ Supply two separately reviewed documents:
 - the release target, changing only `approvedAt`/`expiresAt`.
 
 Each window must start after the previous one, be current, exceed the previous
-expiry and last at most 24 hours. Keys, scope, identities, registry CA and the
-target binding cannot change.
+expiry and last at most 24 hours. Keys, scope, identities and registry CA cannot
+change.
+
+### Rotated application CA
+
+The demo application's TLS chain may expire independently of AI-SDLC approvals.
+After an operator rotates it in place (same Secret, ConfigMap and Deployment UIDs;
+unchanged Deployment template), the reviewed release target may also change
+`tlsCA`. The new CA must be a single certificate valid for the entire approved
+window, issued before `approvedAt`, and byte-identical to the installed
+application `saferus-ca` ConfigMap. The browser platform's original
+`ai-sdlc-browser/approved-console-ca` ConfigMap must already hold the same CA.
+The browser profile then changes only `caSHA256`; the real browser compiler must
+reproduce that profile for the new target before the first durable intent.
 
 ```bash
 ./install.sh runtime-upgrade review-repair \

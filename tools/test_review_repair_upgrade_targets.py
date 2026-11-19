@@ -1,6 +1,7 @@
 """The repair bridge changes a closed capability and chart delta."""
 import copy
 import json
+import ssl
 import time
 import unittest
 
@@ -115,6 +116,54 @@ class RepairTargets(unittest.TestCase):
                 mutate(approvals)
                 with self.assertRaises(ValueError):
                     repair.targets(source,selection,approvals,old,render,compiler,time.time())
+
+
+
+def make_ca(days=30):
+    import subprocess,tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as d:
+        subprocess.run(['openssl','req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-days',str(days),
+            '-subj','/CN=Saferus local demo CA','-keyout',d+'/ca.key','-out',d+'/ca.crt'],check=True,capture_output=True)
+        return Path(d+'/ca.crt').read_text()
+
+
+class CARotation(unittest.TestCase):
+    def setUp(self):
+        import hashlib
+        self.hashlib=hashlib
+        self.original={'tlsCA':'old-ca','approvedAt':1,'expiresAt':2,'namespace':'n'}
+        self.profile={'caSHA256':hashlib.sha256(b'old-ca').hexdigest(),'caConfigMapUID':'u','image':'i'}
+
+    def test_profile_changes_only_ca_digest_when_rotated(self):
+        raw=json.dumps(self.profile,sort_keys=True)
+        self.assertEqual(repair.rotated_profile(raw,self.original,dict(self.original)),raw)
+        rotated=json.loads(repair.rotated_profile(raw,self.original,dict(self.original,tlsCA='new-ca')))
+        self.assertEqual(rotated,dict(self.profile,caSHA256=self.hashlib.sha256(b'new-ca').hexdigest()))
+        with self.assertRaises(ValueError):
+            repair.rotated_profile(json.dumps(dict(self.profile,caSHA256='0'*64)),self.original,self.original)
+
+    def test_compiled_profile_rejects_any_other_change(self):
+        values=lambda profile,ca:{'release':{'browserProfileJSON':json.dumps(profile),'targetJSON':json.dumps({'tlsCA':ca})}}
+        rotated=dict(self.profile,caSHA256=self.hashlib.sha256(b'new-ca').hexdigest())
+        self.assertEqual(repair.expected_compiled_profile(self.profile,values(rotated,'new-ca')),rotated)
+        for profile,ca in ((dict(rotated,image='other'),'new-ca'),(rotated,'third-ca'),(dict(rotated,caConfigMapUID='x'),'new-ca')):
+            with self.subTest(profile=profile,ca=ca),self.assertRaises(ValueError):
+                repair.expected_compiled_profile(self.profile,values(profile,ca))
+
+    def test_rotated_ca_must_cover_the_approved_window(self):
+        ca=make_ca(30)
+        time.sleep(1)  # The approval necessarily follows the operator's CA rotation.
+        now=time.time()
+        original={'tlsCA':'old','approvedAt':int(now*1000)-7200000,'expiresAt':int(now*1000)-1000,'scope':'s'}
+        approved=dict(original,tlsCA=ca,approvedAt=int(now*1000)-100,expiresAt=int(now*1000)+3600000)
+        repair.validate_release(original,approved,now)
+        short=make_ca(1)
+        for bad in (dict(approved,tlsCA=short,expiresAt=int(now*1000)+86400000),
+                    dict(approved,approvedAt=int(now*1000)-3600000),
+                    dict(approved,tlsCA='not a certificate'),dict(approved,scope='other')):
+            with self.subTest(bad=bad.get('scope')),self.assertRaises((ValueError,ssl.SSLError)):
+                repair.validate_release(original,bad,now)
 
 
 if __name__=='__main__': unittest.main()
