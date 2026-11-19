@@ -123,9 +123,11 @@ class ReviewRepairUpgrade(ReviewFeedbackUpgrade):
         paused = phase in ('paused', 'ready', 'prepared', 'migrated', 'staged')
         if paused:
             observer.use_configured_render(description['documents'])
-        elif phase == 'source':
+        elif phase == 'source' and self.source_approvals_expired(description):
             # Expired approvals grant observation and containment only.
             observer.use_expired_source_render(description['documents'])
+        elif phase == 'source':
+            observer.use_activation_render(description['documents'], 'active')
         else:
             observer.use_activation_render(description['documents'], phase)
         observed, connection = observer.observe(paused=paused)
@@ -136,6 +138,16 @@ class ReviewRepairUpgrade(ReviewFeedbackUpgrade):
             profile = json.loads(description['values']['release']['browserProfileJSON'])
             no_browser_execution(observer, profile['namespaceUID'])
         return observed, connection
+
+    @staticmethod
+    def source_approvals_expired(description, now=None):
+        values = description['values']
+        now = time.time() if now is None else now
+        expiries = [json.loads(values[section][key])['expiresAt']
+                    for section, key in (('provenance', 'trustJSON'), ('release', 'targetJSON'))]
+        if any(type(value) is not int for value in expiries):
+            raise ValueError('Explicit original approval expiry required')
+        return min(expiries) <= now * 1000
 
     def original_database_authority(self, proof=None, database=None):
         database = database or self.database()

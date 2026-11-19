@@ -22,7 +22,9 @@ class Rehearsal:
                 or any(not re.fullmatch('[A-Za-z0-9_-]{32,128}',v) for v in passwords.values())):
             raise ValueError('Original database credentials and exact published rehearsal helper required')
         self.restore,self.image,self.record,self.save=restore,image,record,save
-        self.guard,self.deadline=guard,min(deadline,time.time()+120)
+        # Each guard re-observes the paused runtime; 300s keeps a completed
+        # rehearsal from expiring during its own final checks.
+        self.guard,self.deadline=guard,min(deadline,time.time()+300)
         self.connection=urlunsplit(('postgresql',parsed.netloc.rsplit('@',1)[0]+'@127.0.0.1:5432','/ai_sdlc','sslmode=disable',''))
         self.material=json.dumps(passwords).encode()
         self.owner=secrets.token_hex(24);self.name='ai-sdlc-repair-rehearsal-'+self.owner;self.cid=None
@@ -34,7 +36,7 @@ class Rehearsal:
 
     def command(self,args,**kwargs):
         self.live()
-        return capture(args,timeout=min(120,self.deadline-time.time()),**kwargs)
+        return capture(args,timeout=min(240,self.deadline-time.time()),**kwargs)
 
     def identity(self):
         self.restore.identity()

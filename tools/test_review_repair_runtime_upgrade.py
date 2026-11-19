@@ -103,6 +103,19 @@ class RepairGuards(unittest.TestCase):
                                             'trust' if files else None, 'target' if files else None)
 
 
+class SourceRender(unittest.TestCase):
+    def test_expired_render_only_when_an_original_approval_expired(self):
+        def description(provenance, release):
+            return {'values': {'provenance': {'trustJSON': json.dumps({'expiresAt': provenance})},
+                               'release': {'targetJSON': json.dumps({'expiresAt': release})}}}
+        expired = upgrade.ReviewRepairUpgrade.source_approvals_expired
+        self.assertTrue(expired(description(999, 5000), now=1))
+        self.assertTrue(expired(description(5000, 1000), now=1))
+        self.assertFalse(expired(description(5000, 5000), now=1))
+        with self.assertRaises(ValueError):
+            expired(description('5000', 5000), now=1)
+
+
 class RepairCLI(unittest.TestCase):
     def test_repair_requires_both_reviewed_documents_and_status_accepts_none(self):
         for argv in (['review-repair', '--cluster', 'c', '--provenance-trust', 'p'],
