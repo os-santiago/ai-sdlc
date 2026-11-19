@@ -23,6 +23,9 @@ var reviewerUpgradeHistory string
 //go:embed review_feedback_upgrade_history.sql
 var reviewFeedbackUpgradeHistory string
 
+//go:embed configuration_upgrade_in_flight.sql
+var configurationUpgradeInFlight string
+
 // UpgradeFence exists only during its original bounded transaction. It grants
 // no delivery, migration or rollback authority. Call Check immediately before
 // and after each original-identity-bound administrative Kubernetes operation.
@@ -37,6 +40,9 @@ type UpgradeFence struct {
 	reviewerHistory bool
 	feedbackHistory bool
 	repairHistory   bool
+	// configurationHistory admits all completed history of the exact current
+	// catalog and rejects only in-flight work (no migration exists).
+	configurationHistory bool
 }
 
 // This reviewed bridge covers schemas 0033 and 0034, before any candidate or
@@ -163,6 +169,16 @@ func (f *UpgradeFence) inspectHistory(ctx context.Context) error {
 			return ErrUpgradeFence
 		}
 	}
+	if f.configurationHistory {
+		var blocked bool
+		if len(f.source) != 37 || f.tx.QueryRowContext(ctx, configurationUpgradeInFlight).Scan(&blocked) != nil {
+			return ErrUpgradeFence
+		}
+		if blocked {
+			return ErrUpgradeFenceHistory
+		}
+		return nil
+	}
 	allowed := map[string]bool{}
 	if f.reviewerHistory {
 		var safe bool
@@ -261,7 +277,24 @@ func (db *DB) WithReviewRepairUpgradeFence(ctx context.Context, database string,
 func (db *DB) withScopedUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, reviewerHistory, browser, feedback bool, pause func(context.Context, *UpgradeFence) error) error {
 	return db.withRepairScopedUpgradeFence(ctx, database, source, reviewerHistory, browser, feedback, false, pause)
 }
+
+// WithConfigurationUpgradeFence is the no-migration capability for changing
+// installation configuration (for example the model gateway adapter) on the
+// exact current catalog. Writers are excluded as in every fence, all completed
+// history is admitted, and any in-flight model-dependent work is rejected.
+// It never grants migration, delivery or repair authority.
+func (db *DB) WithConfigurationUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, pause func(context.Context, *UpgradeFence) error) error {
+	if len(source) != 37 {
+		return ErrUpgradeFence
+	}
+	return db.withConfiguredUpgradeFence(ctx, database, source, false, false, false, true, true, pause)
+}
+
 func (db *DB) withRepairScopedUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, reviewerHistory, browser, feedback, repair bool, pause func(context.Context, *UpgradeFence) error) error {
+	return db.withConfiguredUpgradeFence(ctx, database, source, reviewerHistory, browser, feedback, repair, false, pause)
+}
+
+func (db *DB) withConfiguredUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, reviewerHistory, browser, feedback, repair, configuration bool, pause func(context.Context, *UpgradeFence) error) error {
 	tables, err := repairScopedUpgradeFenceTables(source, browser, feedback, repair)
 	if err != nil || db == nil || db.Pool == nil || database == "" || len(database) > 63 || pause == nil {
 		return ErrUpgradeFence
@@ -302,7 +335,7 @@ func (db *DB) withRepairScopedUpgradeFence(ctx context.Context, database string,
 		return ErrUpgradeFence
 	}
 	deadline, _ := active.Deadline()
-	fence := &UpgradeFence{checkPermit: make(chan struct{}, 1), tx: tx, tables: tables, relationIDs: ids, database: database, source: slices.Clone(source), deadline: deadline, reviewerHistory: reviewerHistory, feedbackHistory: feedback, repairHistory: repair}
+	fence := &UpgradeFence{checkPermit: make(chan struct{}, 1), tx: tx, tables: tables, relationIDs: ids, database: database, source: slices.Clone(source), deadline: deadline, reviewerHistory: reviewerHistory, feedbackHistory: feedback, repairHistory: repair, configurationHistory: configuration}
 	if fence.Check(acquire) != nil {
 		return ErrUpgradeFence
 	}
