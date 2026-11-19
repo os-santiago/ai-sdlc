@@ -48,6 +48,11 @@ func LoadPublicInstalled(path string) (Configuration, error) {
 	}
 	profile, _ := json.Marshal(installed.Profile)
 	c := Configuration{Namespace: "ai-sdlc-reviewers", WorkerImage: installed.WorkerImage, MailboxImage: installed.MailboxImage, Profile: profile, ADev: []byte(installed.ADev), Model: modelbroker.ProviderConfig{Endpoint: "http://127.0.0.1:8787/v1/chat/completions", AllowLoopbackHTTP: true}}
+	seconds, e := modelbroker.GatewayTimeoutSeconds(os.Getenv("AI_SDLC_MODEL_GATEWAY_SECONDS"))
+	if e != nil {
+		return Configuration{}, ErrReview
+	}
+	c.Model.TimeoutSeconds = seconds
 	parsed, e := executor.ParseReviewProfile(profile, authority.Digest(profile))
 	if e != nil || parsed.MaxSteps < 2 || len(c.ADev) < 1 || len(c.ADev) > 65536 || !utf8.Valid(c.ADev) || authority.Digest(c.ADev) != parsed.ADevSHA256 || executor.ValidatePlacement(c.Namespace, c.WorkerImage, c.MailboxImage) != nil {
 		return Configuration{}, ErrReview

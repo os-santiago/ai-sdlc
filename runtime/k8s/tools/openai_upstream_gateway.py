@@ -20,7 +20,8 @@ from urllib.parse import urlsplit
 
 from codexcli_openai_wrapper import Handler, MAX_RESPONSE_BYTES, assistant_message, validate_request
 
-UPSTREAM_SECONDS_MAX = 600
+# The worker/verifier broker allows seconds + 30 (bounded at 600).
+UPSTREAM_SECONDS_MAX = 570
 # Explicit RFC 1918 / ULA ranges; ipaddress.is_private also admits
 # documentation and other special ranges.
 PRIVATE_NETWORKS = tuple(ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"))

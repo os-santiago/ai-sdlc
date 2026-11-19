@@ -106,7 +106,7 @@ class ConfigurationTests(unittest.TestCase):
                        {"AI_SDLC_MODEL_UPSTREAM_URL": "http://user:pw@10.89.0.1/v1/chat/completions"},
                        {"AI_SDLC_MODEL_UPSTREAM_URL": "http://10.89.0.1:18080/v1/other"},
                        {"AI_SDLC_MODEL_UPSTREAM_MODEL": ""}, {"AI_SDLC_MODEL_UPSTREAM_MODEL": "bad model"},
-                       {"AI_SDLC_MODEL_UPSTREAM_SECONDS": "0"}, {"AI_SDLC_MODEL_UPSTREAM_SECONDS": "601"}):
+                       {"AI_SDLC_MODEL_UPSTREAM_SECONDS": "0"}, {"AI_SDLC_MODEL_UPSTREAM_SECONDS": "571"}):
             with self.subTest(change=change), self.assertRaises(RuntimeError):
                 gateway.upstream_config(dict(ok, **change))
 

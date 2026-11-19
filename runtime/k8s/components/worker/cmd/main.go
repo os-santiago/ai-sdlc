@@ -5,6 +5,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/delivery"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/execution"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 	"log"
 	"net/http"
@@ -29,11 +30,15 @@ func main() {
 		if _, _, e := execution.LoadRuntime(path); e != nil {
 			log.Fatal("candidate configuration unavailable")
 		}
+		gatewaySeconds, e := modelbroker.GatewayTimeoutSeconds(os.Getenv("AI_SDLC_MODEL_GATEWAY_SECONDS"))
+		if e != nil {
+			log.Fatal("model gateway timeout invalid")
+		}
 		routes = append(routes, func(mux *http.ServeMux) {
 			inbox := delivery.Inbox{DB: component.DB, Target: "worker"}
 			mux.Handle("POST /internal/execute-work", inbox.Handler(component.Authority, "execute-work", "/internal/execute-work", execution.Effect(func() (authority.Policy, error) { p, _, e := component.Authority(); return p, e })))
 		})
-		runtime := execution.Runtime{SourceCache: sourcefetch.NewCache(), Component: component, ConfigPath: path, IntakePath: os.Getenv("AI_SDLC_INTAKE_CONFIG_PATH"), APIServer: "https://kubernetes.default.svc", TokenPath: "/var/run/ai-sdlc/kubernetes/token", CAPath: "/var/run/ai-sdlc/kubernetes/ca.crt", GatewayTokenPath: "/var/run/ai-sdlc/model/token"}
+		runtime := execution.Runtime{SourceCache: sourcefetch.NewCache(), Component: component, ConfigPath: path, IntakePath: os.Getenv("AI_SDLC_INTAKE_CONFIG_PATH"), APIServer: "https://kubernetes.default.svc", TokenPath: "/var/run/ai-sdlc/kubernetes/token", CAPath: "/var/run/ai-sdlc/kubernetes/ca.crt", GatewayTokenPath: "/var/run/ai-sdlc/model/token", ProviderTimeoutSeconds: gatewaySeconds}
 		ready = func(ctx context.Context) error {
 			if e := component.Ready(ctx); e != nil {
 				return e

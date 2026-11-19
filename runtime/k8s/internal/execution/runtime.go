@@ -63,6 +63,7 @@ type Runtime struct {
 	Component                                                   *bootstrap.Component
 	ConfigPath, IntakePath, TokenPath, CAPath, GatewayTokenPath string
 	APIServer, ProviderEndpoint                                 string
+	ProviderTimeoutSeconds                                      int
 }
 
 func (r Runtime) PollOnce(ctx context.Context) (string, error) {
@@ -210,5 +211,5 @@ func (r Runtime) gateway() (*modelbroker.Provider, error) {
 	if endpoint == "" {
 		endpoint = "http://127.0.0.1:8787/v1/chat/completions"
 	}
-	return modelbroker.NewProvider(modelbroker.ProviderConfig{Endpoint: endpoint, BearerToken: string(secret), AllowLoopbackHTTP: true})
+	return modelbroker.NewProvider(modelbroker.ProviderConfig{Endpoint: endpoint, BearerToken: string(secret), AllowLoopbackHTTP: true, TimeoutSeconds: r.ProviderTimeoutSeconds})
 }

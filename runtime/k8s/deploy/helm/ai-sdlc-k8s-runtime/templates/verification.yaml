@@ -139,6 +139,9 @@ spec:
             - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
           env:
             - {name: AI_SDLC_HTTP_ADDRESS, value: ":8087"}
+            {{- if eq .Values.modelGateway.mode "openai-upstream" }}
+            - {name: AI_SDLC_MODEL_GATEWAY_SECONDS, value: {{ add .Values.modelGateway.upstream.seconds 30 | quote }}}
+            {{- end }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: {name: {{ printf "%s-verifier" .Values.authority.databaseSecretPrefix }}, key: uri}

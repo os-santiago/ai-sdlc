@@ -970,13 +970,13 @@
             },
             "port": {
               "type": "integer",
-              "minimum": 0,
+              "minimum": 1,
               "maximum": 65535
             },
             "seconds": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 600
+              "maximum": 570
             }
           }
         }

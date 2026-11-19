@@ -61,6 +61,9 @@ spec:
             - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-config}
           env:
             - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ $component.port }}"}
+            {{- if and (eq $key "worker") (eq $.Values.modelGateway.mode "openai-upstream") }}
+            - {name: AI_SDLC_MODEL_GATEWAY_SECONDS, value: {{ add $.Values.modelGateway.upstream.seconds 30 | quote }}}
+            {{- end }}
             {{- if and (eq $key "intake") (has $.Values.runtime.mode (list "shadow" "candidate" "verification")) }}
             - {name: AI_SDLC_GITHUB_CREDENTIAL_PATH, value: /etc/ai-sdlc/github/credential.json}
             {{- end }}

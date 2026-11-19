@@ -154,5 +154,5 @@ modelGateway:
     url: ""
     model: ""
     cidr: ""
-    port: 0
+    port: 8080
     seconds: 300
