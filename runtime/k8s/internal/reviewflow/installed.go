@@ -53,6 +53,7 @@ func LoadPublicInstalled(path string) (Configuration, error) {
 		return Configuration{}, ErrReview
 	}
 	c.Model.TimeoutSeconds = seconds
+	c.RequireGatewayProfile = os.Getenv("AI_SDLC_MODEL_GATEWAY_PROFILE") == "benchmark"
 	parsed, e := executor.ParseReviewProfile(profile, authority.Digest(profile))
 	if e != nil || parsed.MaxSteps < 2 || len(c.ADev) < 1 || len(c.ADev) > 65536 || !utf8.Valid(c.ADev) || authority.Digest(c.ADev) != parsed.ADevSHA256 || executor.ValidatePlacement(c.Namespace, c.WorkerImage, c.MailboxImage) != nil {
 		return Configuration{}, ErrReview

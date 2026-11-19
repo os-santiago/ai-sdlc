@@ -108,12 +108,15 @@ or reviewer profile:
 `callSeconds` (60-600, at most `maxSeconds`; reviewers stay within their
 180 s run cap) sets:
 - SCC's provider wait (`model.timeout` and `SC_PROVIDER_CONNECT_TIMEOUT_MS`,
-  window + 15 s, so SCC never abandons and retries a call the broker may still
-  complete);
+  window + 15 s, so SCC's own timer never fires before the mailbox answers);
 - the mailbox request wait (`--wait-seconds`);
 - the `model_calls` reservation expiry.
 
-The broker still stops 15 s before the window ends (10 s for reviews). When
+The broker still stops the provider call 15 s before the window ends (10 s
+for reviews), and never publishes a response after the mailbox window: once
+the mailbox has answered SCC with a timeout, a late handoff would never be
+received. That call is recorded as uncertain and the run stops. SCC may retry
+a mailbox timeout as a new call, which the ledger budgets like any other. When
 the profile omits `callSeconds`, workloads, SCC configuration and reservations
 are identical to earlier releases.
 
@@ -121,5 +124,6 @@ The worker only adopts the benchmarked gateway timeout `T` when it also fits
 the window (`T + 20 s <= callSeconds`). Otherwise it claims no work, because a
 slower model would only produce uncertain calls. Choose `upstream.seconds` (the
 benchmark ceiling) and `callSeconds` together, for example 216 s measured, a
-300 s ceiling and `callSeconds: 330`. The verifier keeps its ceiling. A review
-call longer than the reviewer window is stopped by the broker as uncertain.
+300 s ceiling and `callSeconds: 330`. In upstream mode the verifier applies the same
+gate against the reviewer profile's window: it queues and claims no review
+(`gateway-profile-unfit`) while the measured timeout does not fit.

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
@@ -60,6 +61,14 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	provider, e := modelbroker.NewProvider(p.config.Model)
 	if e != nil || provider.CheckGateway(ctx) != nil {
 		return proof, ControllerError{Stage: "gateway-unavailable"}
+	}
+	if p.config.RequireGatewayProfile {
+		// A model slower than the reviewer window would only end uncertain.
+		seconds, e := provider.GatewayProfile(ctx)
+		review, pe := executor.ParseReviewProfile(p.config.Profile, authority.Digest(p.config.Profile))
+		if e != nil || pe != nil || time.Duration(seconds+20)*time.Second > review.CallWindow() {
+			return proof, ControllerError{Stage: "gateway-profile-unfit"}
+		}
 	}
 	resources, e := podtransport.PlanResources(client, p.binding)
 	if e != nil {

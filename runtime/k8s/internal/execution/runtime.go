@@ -158,7 +158,7 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		return "", ErrAuthority
 	}
 	if provider, e = r.benchmarked(ctx, provider, config.Profile.CallWindow()); e != nil {
-		return "model-benchmark-pending", ErrAuthority
+		return "model-gateway-profile-unavailable-or-unfit", ErrAuthority
 	}
 	id, e := r.Component.DB.NextExecution(ctx)
 	if e != nil || id == "" {

@@ -141,6 +141,7 @@ spec:
             - {name: AI_SDLC_HTTP_ADDRESS, value: ":8087"}
             {{- if ne .Values.modelGateway.adapter "agent-cli" }}
             - {name: AI_SDLC_MODEL_GATEWAY_SECONDS, value: {{ add .Values.modelGateway.upstream.seconds 30 | quote }}}
+            - {name: AI_SDLC_MODEL_GATEWAY_PROFILE, value: benchmark}
             {{- end }}
             - name: DATABASE_URL
               valueFrom:
