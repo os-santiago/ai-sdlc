@@ -142,3 +142,17 @@ release:
   digest: ""
   targetJSON: ""
   browserProfileJSON: ""
+
+# Completion backend for the worker and verifier loopback model gateways.
+# codex: the bundled Codex CLI (default). openai-upstream: one fixed
+# OpenAI-compatible endpoint (e.g. a local llama.cpp server reachable on the
+# kind bridge). Plain HTTP is accepted only for a literal RFC 1918/ULA address;
+# egress is opened only to that CIDR and port.
+modelGateway:
+  mode: codex
+  upstream:
+    url: ""
+    model: ""
+    cidr: ""
+    port: 0
+    seconds: 300

@@ -79,6 +79,10 @@ spec:
             cidr: 0.0.0.0/0
             except: [0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4]
       ports: [{protocol: TCP, port: 443}]
+    {{- if eq $.Values.modelGateway.mode "openai-upstream" }}
+    - to: [{ipBlock: {cidr: {{ required "modelGateway.upstream.cidr is required" $.Values.modelGateway.upstream.cidr | quote }}}}]
+      ports: [{protocol: TCP, port: {{ required "modelGateway.upstream.port is required" $.Values.modelGateway.upstream.port }}}]
+    {{- end }}
     {{- range .Values.candidate.apiServerCIDRs }}
     - to: [{ipBlock: {cidr: {{ . | quote }}}}]
       ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 6443}]
@@ -158,11 +162,20 @@ spec:
         {{- if .Values.review.enabled }}
         - name: model-gateway
           image: "{{ .Values.image.repository }}@{{ .Values.components.worker.digest }}"
+          {{- if eq $.Values.modelGateway.mode "openai-upstream" }}
+          command: [python3, /opt/ai-sdlc/model/openai_upstream_gateway.py]
+          {{- else }}
           command: [python3, /opt/ai-sdlc/model/codex_gateway.py]
+          {{- end }}
           workingDir: /opt/ai-sdlc/model
           env:
             - {name: TMPDIR, value: /model-home/tmp}
             - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            {{- if eq $.Values.modelGateway.mode "openai-upstream" }}
+            - {name: AI_SDLC_MODEL_UPSTREAM_URL, value: {{ required "modelGateway.upstream.url is required" $.Values.modelGateway.upstream.url | quote }}}
+            - {name: AI_SDLC_MODEL_UPSTREAM_MODEL, value: {{ required "modelGateway.upstream.model is required" $.Values.modelGateway.upstream.model | quote }}}
+            - {name: AI_SDLC_MODEL_UPSTREAM_SECONDS, value: {{ $.Values.modelGateway.upstream.seconds | quote }}}
+            {{- end }}
             - name: CODEX_WRAPPER_TOKEN
               valueFrom: {secretKeyRef: {name: ai-sdlc-review-model-client, key: token}}
           securityContext:
@@ -175,7 +188,9 @@ spec:
             requests: {cpu: 100m, memory: 256Mi}
             limits: {cpu: "1", memory: 768Mi, ephemeral-storage: 256Mi}
           volumeMounts:
+            {{- if ne $.Values.modelGateway.mode "openai-upstream" }}
             - {name: model-auth, mountPath: /var/run/ai-sdlc/codex, readOnly: true}
+            {{- end }}
             - {name: model-home, mountPath: /model-home}
         {{- end }}
       volumes:
@@ -184,8 +199,10 @@ spec:
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-review}
         - name: review-model-client
           secret: {secretName: ai-sdlc-review-model-client, defaultMode: 0440}
+        {{- if ne $.Values.modelGateway.mode "openai-upstream" }}
         - name: model-auth
           secret: {secretName: ai-sdlc-codex-auth, defaultMode: 0440}
+        {{- end }}
         - name: model-home
           emptyDir: {sizeLimit: 128Mi}
         {{- end }}

@@ -930,6 +930,57 @@
           "type": "string"
         }
       }
+    },
+    "modelGateway": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "upstream"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "codex",
+            "openai-upstream"
+          ]
+        },
+        "upstream": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "url",
+            "model",
+            "cidr",
+            "port",
+            "seconds"
+          ],
+          "properties": {
+            "url": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "model": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "cidr": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600
+            }
+          }
+        }
+      }
     }
   },
   "required": [
