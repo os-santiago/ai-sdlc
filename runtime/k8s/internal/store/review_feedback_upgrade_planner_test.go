@@ -28,6 +28,16 @@ func TestUpgradeFenceFeedbackPlannerBlockedHistory(t *testing.T) {
  GRANT UPDATE(status,updated_at) ON work_items TO aisdlc_orchestrator`); err != nil {
 			t.Fatal("owned historical planner role", err)
 		}
+		// The role is cluster-wide: remove it after the planner connection
+		// (registered later, closed first) so a reused server can rerun this.
+		t.Cleanup(func() {
+			if _, err := db.Pool.ExecContext(context.Background(), `REVOKE UPDATE(status,updated_at) ON work_items FROM aisdlc_orchestrator;
+ REVOKE SELECT ON plans, work_items FROM aisdlc_orchestrator;
+ REVOKE USAGE ON SCHEMA public FROM aisdlc_orchestrator;
+ DROP ROLE aisdlc_orchestrator`); err != nil {
+				t.Error("drop historical planner role", err)
+			}
+		})
 		u, err := url.Parse(os.Getenv("AI_SDLC_TEST_DATABASE_URL"))
 		if err != nil {
 			t.Fatal("fixture connection")
