@@ -46,4 +46,10 @@ catalog, writers excluded, history admitted). It refuses only in-flight
 model-dependent work: claimed or uncleaned executions, verifications or
 reviews, open model budgets or calls, and unresolved verification or review
 effects. That predicate is checked before the operation journal is created, so
-a refusal leaves nothing to resume; retry when the work settles.
+a refusal leaves nothing to resume; retry when the work settles. Open repair
+budgets and model responses not yet handed off also count as in flight. A
+historical `uncertain` cleanup blocks the switch on purpose (containment):
+resolve it through the runtime's cleanup recovery first. Under the fence, the
+first pause adopts the fenced snapshot as the retained proof, because queued
+work may legitimately progress between the preliminary observation and the
+fence.
