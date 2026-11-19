@@ -5,6 +5,7 @@ schema36 source has no other renewal path once its earlier approvals expired.
 """
 import copy
 import json
+import ssl
 
 import approval_window_targets
 import initial_activation
@@ -59,6 +60,31 @@ def validate_provenance(original, approved, verifier, now):
     approval_window_targets.validate(original, restored, now)
 
 
+def tls_ca_window(raw, approved, now):
+    """A rotated application CA must be current for the whole approved window."""
+    if not isinstance(raw, str) or not 1 <= len(raw) <= 65536:
+        raise ValueError('Bounded rotated release CA required')
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.load_verify_locations(cadata=raw)
+    certificates = context.get_ca_certs()
+    if len(certificates) != 1:
+        raise ValueError('Exactly one rotated release CA certificate required')
+    start = ssl.cert_time_to_seconds(certificates[0]['notBefore'])
+    end = ssl.cert_time_to_seconds(certificates[0]['notAfter'])
+    if not start <= now < end or approved['approvedAt'] < start * 1000 or approved['expiresAt'] > end * 1000:
+        raise ValueError('Approved window exceeds the rotated release CA validity')
+
+
+def validate_release(original, approved, now):
+    """Only a new finite window and, after an operator rotation, tlsCA may change."""
+    if not isinstance(approved, dict) or set(approved) != set(original):
+        raise ValueError('Exact reviewed repair release target required')
+    restored = dict(copy.deepcopy(approved), tlsCA=original['tlsCA'])
+    approval_window_targets.validate(original, restored, now)
+    if approved['tlsCA'] != original['tlsCA']:
+        tls_ca_window(approved['tlsCA'], approved, now)
+
+
 def targets(source, selection, approvals, render_source, render_target, compile_build, now):
     if not isinstance(approvals, dict) or set(approvals) != {'provenance', 'release'}:
         raise ValueError('Both independently reviewed approval documents are required')
@@ -103,7 +129,7 @@ def targets(source, selection, approvals, render_source, render_target, compile_
     active['build']['configJSON'] = json.dumps(changed, sort_keys=True)
     validate_provenance(json.loads(values['provenance']['trustJSON']), approvals['provenance'],
                         install_images.REGISTRY + '@' + images['verifier']['digest'], now)
-    approval_window_targets.validate(json.loads(values['release']['targetJSON']), approvals['release'], now)
+    validate_release(json.loads(values['release']['targetJSON']), approvals['release'], now)
     active['provenance']['trustJSON'] = json.dumps(approvals['provenance'], sort_keys=True)
     active['release']['targetJSON'] = json.dumps(approvals['release'], sort_keys=True)
     paused = pause_values(values, compile_build)

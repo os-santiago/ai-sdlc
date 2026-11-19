@@ -215,6 +215,10 @@ class ReviewRepairUpgrade(ReviewFeedbackUpgrade):
                 or compiled['version'] != 'ai-sdlc.provenance-installation/v1'
                 or compiled['trust'] != self.approvals['provenance'] or compiled['verifierImage'] != verifier):
             raise ValueError('Reviewed repair trust compiler changed input')
+        release = self.approvals['release']
+        installed_ca = self.config.read('configmap', 'saferus-ca', release['namespace'])
+        if (not isinstance(installed_ca, dict) or installed_ca.get('data', {}).get('ca.crt') != release['tlsCA']):
+            raise ValueError('Reviewed release CA differs from the installed application CA')
         proof = compatibility.Compatibility(self.database()).source(self.catalog)
         roles = self.original_database_authority(proof['data'])
         # Bind the browser profile to the new reviewed release target before
