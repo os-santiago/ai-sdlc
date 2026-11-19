@@ -38,6 +38,7 @@ import upgrade_backup_data as data
 from upgrade_fence_client import Fence
 
 VERSION = 'ai-sdlc.model-upstream-runtime-upgrade/v1'
+CONVERGE_SECONDS = 300
 REPAIR_VERSION = 'ai-sdlc.review-repair-runtime-upgrade/v1'
 
 
@@ -435,7 +436,10 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
                 self.retained()
                 RepairBrowserPreflight(self).preflight()
                 self.retained()
-            advance(self.record, phase, self.observe, self.apply, self.save, phases=PHASES)
+            # Each rollout restarts the model gateways, which benchmark the
+            # model before the worker and verifier report ready.
+            advance(self.record, phase, self.observe, self.apply, self.save, phases=PHASES,
+                    converge_seconds=CONVERGE_SECONDS)
         self.publish_report(active=True)
         return self.status()
 

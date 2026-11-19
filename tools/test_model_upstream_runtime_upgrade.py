@@ -158,6 +158,13 @@ class History(unittest.TestCase):
             preflight = upgrade.UpstreamApprovalPreflight(item, capture_browser=True)
         self.assertEqual(preflight.original['sources']['release-original-identities'], recorded)
 
+    def test_rollout_convergence_allows_the_gateway_benchmark(self):
+        import diagnostic_runtime_upgrade
+        import inspect
+        self.assertEqual(inspect.signature(diagnostic_runtime_upgrade.advance).parameters['converge_seconds'].default, 120)
+        self.assertEqual(upgrade.CONVERGE_SECONDS, 300)
+        self.assertIn('converge_seconds=CONVERGE_SECONDS', inspect.getsource(upgrade.ModelUpstreamUpgrade.run))
+
     def test_the_switch_uses_the_configuration_fence(self):
         item = object.__new__(upgrade.ModelUpstreamUpgrade)
         item.config, item.helper, item.catalog, item.record = Mock(provider='podman'), 'h', [], {'expiresAt': 1}
