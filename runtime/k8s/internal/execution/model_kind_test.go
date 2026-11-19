@@ -82,7 +82,9 @@ func TestRealLifecycleModelFixture(t *testing.T) {
  GRANT UPDATE(status,updated_at) ON work_items TO aisdlc_worker;
  GRANT UPDATE(reserved_calls,reserved_input_bytes,reserved_output_bytes,state,stop_reason) ON model_budgets TO aisdlc_worker;
  GRANT UPDATE(reserved_calls,reserved_input_bytes,reserved_output_bytes) ON model_allocations TO aisdlc_worker;
- GRANT UPDATE ON model_calls TO aisdlc_worker`)
+ GRANT UPDATE ON model_calls TO aisdlc_worker;
+ GRANT SELECT ON execution_repairs,repair_model_budgets,review_repair_handoffs,review_feedback TO aisdlc_worker;
+ GRANT UPDATE(reserved_calls,reserved_input_bytes,reserved_output_bytes,state,stop_reason) ON repair_model_budgets TO aisdlc_worker`)
 	if err != nil {
 		t.Fatal("fixture-only grants")
 	}
