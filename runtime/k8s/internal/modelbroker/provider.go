@@ -142,6 +142,38 @@ func (p *Provider) invoke(ctx context.Context, request []byte, responseLimit int
 
 // CheckGateway checks only the trusted loopback sidecar. It neither reserves
 // nor invokes a model completion, and never follows redirects.
+// GatewayProfile reads the per-call timeout the loopback gateway derived from
+// its startup benchmark. It is available only after the gateway is ready, and
+// the caller must still bound it by the installation ceiling.
+func (p *Provider) GatewayProfile(ctx context.Context) (int, error) {
+	if p == nil || !strings.HasPrefix(p.endpoint, "http://127.0.0.1:") {
+		return 0, ErrProvider
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, e := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(p.endpoint, "/v1/chat/completions")+"/v1/gateway/profile", nil)
+	if e != nil {
+		return 0, ErrProvider
+	}
+	req.Header.Set("Authorization", "Bearer "+p.token)
+	response, e := p.client.Do(req)
+	if e != nil {
+		return 0, ErrProvider
+	}
+	defer response.Body.Close()
+	raw, e := io.ReadAll(io.LimitReader(response.Body, 65))
+	if e != nil || response.StatusCode != 200 || len(raw) > 64 {
+		return 0, ErrProvider
+	}
+	var profile struct {
+		TimeoutSeconds int `json:"timeoutSeconds"`
+	}
+	if authority.DecodeStrict(raw, &profile) != nil || profile.TimeoutSeconds < 30 || profile.TimeoutSeconds > MaxProviderTimeoutSeconds-30 {
+		return 0, ErrProvider
+	}
+	return profile.TimeoutSeconds, nil
+}
+
 func (p *Provider) CheckGateway(ctx context.Context) error {
 	if p == nil || !strings.HasPrefix(p.endpoint, "http://127.0.0.1:") {
 		return ErrProvider

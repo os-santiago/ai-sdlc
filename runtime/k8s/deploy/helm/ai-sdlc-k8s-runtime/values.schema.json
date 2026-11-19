@@ -935,14 +935,16 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "mode",
-        "upstream"
+        "adapter",
+        "upstream",
+        "benchmark"
       ],
       "properties": {
-        "mode": {
+        "adapter": {
           "enum": [
-            "codex",
-            "openai-upstream"
+            "agent-cli",
+            "openai",
+            "anthropic"
           ]
         },
         "upstream": {
@@ -953,7 +955,8 @@
             "model",
             "cidr",
             "port",
-            "seconds"
+            "seconds",
+            "credentialSecret"
           ],
           "properties": {
             "url": {
@@ -975,8 +978,33 @@
             },
             "seconds": {
               "type": "integer",
-              "minimum": 1,
+              "minimum": 30,
               "maximum": 570
+            },
+            "credentialSecret": {
+              "type": "string",
+              "maxLength": 253,
+              "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$"
+            }
+          }
+        },
+        "benchmark": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "promptTokens",
+            "completionTokens"
+          ],
+          "properties": {
+            "promptTokens": {
+              "type": "integer",
+              "minimum": 256,
+              "maximum": 262144
+            },
+            "completionTokens": {
+              "type": "integer",
+              "minimum": 64,
+              "maximum": 32768
             }
           }
         }

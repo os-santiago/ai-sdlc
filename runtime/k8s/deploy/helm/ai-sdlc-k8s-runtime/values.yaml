@@ -143,16 +143,28 @@ release:
   targetJSON: ""
   browserProfileJSON: ""
 
-# Completion backend for the worker and verifier loopback model gateways.
-# codex: the bundled Codex CLI (default). openai-upstream: one fixed
-# OpenAI-compatible endpoint (e.g. a local llama.cpp server reachable on the
-# kind bridge). Plain HTTP is accepted only for a literal RFC 1918/ULA address;
-# egress is opened only to that CIDR and port.
+# Completion backend adapter for the worker and verifier loopback model
+# gateways. The worker/verifier contract never changes; only the adapter does.
+# Upstream adapters use one fixed endpoint: plain HTTP is accepted only for a
+# literal RFC 1918/ULA address, and egress is opened only to that CIDR and port.
+# They benchmark the model at startup and stay unready until it passes.
 modelGateway:
-  mode: codex
+  # agent-cli: a local agent CLI as the completion model (Codex CLI wrapper).
+  # openai: any OpenAI-compatible /v1/chat/completions endpoint.
+  # anthropic: the Anthropic Messages API (/v1/messages); needs credentialSecret.
+  adapter: agent-cli
   upstream:
     url: ""
     model: ""
     cidr: ""
     port: 8080
+    # Installation ceiling for one upstream call; the startup benchmark derives
+    # the actual timeout and refuses to become ready above this ceiling.
     seconds: 300
+    # Optional Secret (key "credential") with the upstream API key.
+    credentialSecret: ""
+  # Planning envelope for the startup benchmark: the largest prompt and answer
+  # one SCC step may need.
+  benchmark:
+    promptTokens: 16384
+    completionTokens: 4096

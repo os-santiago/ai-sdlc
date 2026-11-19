@@ -64,6 +64,10 @@ type Runtime struct {
 	ConfigPath, IntakePath, TokenPath, CAPath, GatewayTokenPath string
 	APIServer, ProviderEndpoint                                 string
 	ProviderTimeoutSeconds                                      int
+	// AdoptGatewayProfile makes every model call use the timeout the gateway
+	// derived from its startup benchmark (+30 s for the response), bounded by
+	// ProviderTimeoutSeconds. No work is claimed until that profile exists.
+	AdoptGatewayProfile bool
 }
 
 func (r Runtime) PollOnce(ctx context.Context) (string, error) {
@@ -153,6 +157,9 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if e != nil || provider.CheckGateway(ctx) != nil {
 		return "", ErrAuthority
 	}
+	if provider, e = r.benchmarked(ctx, provider); e != nil {
+		return "model-benchmark-pending", ErrAuthority
+	}
 	id, e := r.Component.DB.NextExecution(ctx)
 	if e != nil || id == "" {
 		return "", e
@@ -202,6 +209,20 @@ func (r Runtime) Ready(ctx context.Context) error {
 	}
 	return provider.CheckGateway(ctx)
 }
+
+// benchmarked returns a provider bounded by the gateway's measured timeout.
+func (r Runtime) benchmarked(ctx context.Context, provider *modelbroker.Provider) (*modelbroker.Provider, error) {
+	if !r.AdoptGatewayProfile {
+		return provider, nil
+	}
+	seconds, e := provider.GatewayProfile(ctx)
+	if e != nil || r.ProviderTimeoutSeconds == 0 || seconds+30 > r.ProviderTimeoutSeconds {
+		return nil, ErrAuthority
+	}
+	r.ProviderTimeoutSeconds = seconds + 30
+	return r.gateway()
+}
+
 func (r Runtime) gateway() (*modelbroker.Provider, error) {
 	secret, e := ReadBounded(r.GatewayTokenPath, 512)
 	if e != nil {

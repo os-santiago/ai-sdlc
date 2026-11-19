@@ -38,7 +38,7 @@ func main() {
 			inbox := delivery.Inbox{DB: component.DB, Target: "worker"}
 			mux.Handle("POST /internal/execute-work", inbox.Handler(component.Authority, "execute-work", "/internal/execute-work", execution.Effect(func() (authority.Policy, error) { p, _, e := component.Authority(); return p, e })))
 		})
-		runtime := execution.Runtime{SourceCache: sourcefetch.NewCache(), Component: component, ConfigPath: path, IntakePath: os.Getenv("AI_SDLC_INTAKE_CONFIG_PATH"), APIServer: "https://kubernetes.default.svc", TokenPath: "/var/run/ai-sdlc/kubernetes/token", CAPath: "/var/run/ai-sdlc/kubernetes/ca.crt", GatewayTokenPath: "/var/run/ai-sdlc/model/token", ProviderTimeoutSeconds: gatewaySeconds}
+		runtime := execution.Runtime{SourceCache: sourcefetch.NewCache(), Component: component, ConfigPath: path, IntakePath: os.Getenv("AI_SDLC_INTAKE_CONFIG_PATH"), APIServer: "https://kubernetes.default.svc", TokenPath: "/var/run/ai-sdlc/kubernetes/token", CAPath: "/var/run/ai-sdlc/kubernetes/ca.crt", GatewayTokenPath: "/var/run/ai-sdlc/model/token", ProviderTimeoutSeconds: gatewaySeconds, AdoptGatewayProfile: os.Getenv("AI_SDLC_MODEL_GATEWAY_PROFILE") == "benchmark"}
 		ready = func(ctx context.Context) error {
 			if e := component.Ready(ctx); e != nil {
 				return e

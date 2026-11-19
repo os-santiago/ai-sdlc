@@ -1,6 +1,11 @@
 package modelbroker
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestInstallationTimeoutIsBoundedAndDefaultUnchanged(t *testing.T) {
 	for value, want := range map[string]int{"": 0, "30": 30, "330": 330, "600": 600} {
@@ -31,5 +36,38 @@ func TestInstallationTimeoutIsBoundedAndDefaultUnchanged(t *testing.T) {
 		if _, err := NewProvider(ProviderConfig{Endpoint: base.Endpoint, BearerToken: base.BearerToken, AllowLoopbackHTTP: true, TimeoutSeconds: seconds}); err == nil {
 			t.Fatal("unbounded timeout accepted", seconds)
 		}
+	}
+}
+
+func TestGatewayProfileIsAuthenticatedStrictAndBounded(t *testing.T) {
+	const token = "0123456789abcdef0123456789abcdef"
+	body := ""
+	status := 200
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/gateway/profile" || r.Header.Get("Authorization") != "Bearer "+token {
+			w.WriteHeader(401)
+			return
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+	p, err := NewProvider(ProviderConfig{Endpoint: server.URL + "/v1/chat/completions", BearerToken: token, AllowLoopbackHTTP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = `{"timeoutSeconds":225}`
+	if got, err := p.GatewayProfile(context.Background()); err != nil || got != 225 {
+		t.Fatal(got, err)
+	}
+	for _, bad := range []string{`{"timeoutSeconds":29}`, `{"timeoutSeconds":571}`, `{"timeoutSeconds":225,"x":1}`, `{"timeoutSeconds":"225"}`, `{}`} {
+		body = bad
+		if _, err := p.GatewayProfile(context.Background()); err == nil {
+			t.Fatal("accepted", bad)
+		}
+	}
+	body, status = `{"timeoutSeconds":225}`, 503
+	if _, err := p.GatewayProfile(context.Background()); err == nil {
+		t.Fatal("accepted a gateway that is still benchmarking")
 	}
 }
