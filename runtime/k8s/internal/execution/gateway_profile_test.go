@@ -6,13 +6,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 // The worker claims no work until the gateway has benchmarked the model, and
 // then bounds every call by the measured timeout under the installation ceiling.
 func TestWorkerAdoptsTheBenchmarkedGatewayTimeoutWithinTheCeiling(t *testing.T) {
-	const token = "0123456789abcdef0123456789abcdef"
+	token := strings.Repeat("t", 32) // synthetic, low-entropy fixture
 	body, status := `{"timeoutSeconds":225}`, 200
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/gateway/profile" || r.Header.Get("Authorization") != "Bearer "+token {

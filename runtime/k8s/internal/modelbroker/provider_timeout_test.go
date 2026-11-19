@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -18,7 +19,7 @@ func TestInstallationTimeoutIsBoundedAndDefaultUnchanged(t *testing.T) {
 			t.Fatal("accepted", value)
 		}
 	}
-	base := ProviderConfig{Endpoint: "http://127.0.0.1:8787/v1/chat/completions", BearerToken: "0123456789abcdef0123456789abcdef", AllowLoopbackHTTP: true}
+	base := ProviderConfig{Endpoint: "http://127.0.0.1:8787/v1/chat/completions", BearerToken: strings.Repeat("t", 32), AllowLoopbackHTTP: true}
 	for _, seconds := range []int{0, 30, 600} {
 		p, err := NewProvider(ProviderConfig{Endpoint: base.Endpoint, BearerToken: base.BearerToken, AllowLoopbackHTTP: true, TimeoutSeconds: seconds})
 		if err != nil {
@@ -40,7 +41,7 @@ func TestInstallationTimeoutIsBoundedAndDefaultUnchanged(t *testing.T) {
 }
 
 func TestGatewayProfileIsAuthenticatedStrictAndBounded(t *testing.T) {
-	const token = "0123456789abcdef0123456789abcdef"
+	token := strings.Repeat("t", 32) // synthetic, low-entropy fixture
 	body := ""
 	status := 200
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

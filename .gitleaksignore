@@ -21,3 +21,9 @@ c035a7ad14f870837d452d37c09cd5a7f7f2eee7:runtime/k8s/internal/intake/poller.go:g
 
 # Historical synthetic fixture-only Basic identity, never valid at a registry.
 e230101d596e7639432a8198639f74cc6dd656f0:tools/verify_build_admission.py:generic-api-key:93
+
+# Synthetic loopback bearer fixtures in model gateway timeout/profile tests
+# (PR #654); current fixtures generate a low-entropy token.
+04fa20fa984c945ee24b7e950a2305cdc815fc41:runtime/k8s/internal/modelbroker/provider_timeout_test.go:generic-api-key:16
+75b6e27e830c43483889832b94980bff76196355:runtime/k8s/internal/modelbroker/provider_timeout_test.go:generic-api-key:43
+75b6e27e830c43483889832b94980bff76196355:runtime/k8s/internal/execution/gateway_profile_test.go:generic-api-key:15
