@@ -42,12 +42,20 @@ def chart_delta(source, target):
             pod['spec']['containers'][0]['volumeMounts'].insert(0, dict(name='review-config', mountPath='/etc/ai-sdlc/review', readOnly=True))
             # Position is chart-defined, but volume identity/content is unordered.
             pod['spec']['volumes'].append(dict(name='review-config', configMap=dict(name='ai-sdlc-review')))
+    def config_checksums(documents):
+        return {obj['spec']['template']['metadata'].get('annotations', {}).get('checksum/config')
+                for obj in documents if obj['kind'] == 'Deployment'}
     def canonical(documents):
         result = copy.deepcopy(documents)
         for obj in result:
             if obj['kind'] == 'Deployment':
                 obj['spec']['template']['spec']['volumes'].sort(key=lambda x: x['name'])
+                # A derived digest of ai-sdlc-config, whose content is compared exactly.
+                obj['spec']['template']['metadata'].get('annotations', {}).pop('checksum/config', None)
         return prepared_resources.documents(result)
+    before, after = config_checksums(source), config_checksums(target)
+    if len(before) != 1 or len(after) != 1 or None in after or before == after:
+        raise ValueError('Repair chart must carry one changed configuration digest on every Deployment')
     if canonical(expected) != canonical(target):
         raise ValueError('Repair chart changed outside reviewed routes and public review mount')
 

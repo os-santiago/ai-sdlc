@@ -24,6 +24,10 @@ def legacy_render(render, values):
             pod['metadata']['annotations'].pop('checksum/review-config',None)
             pod['spec']['volumes'] = [v for v in pod['spec']['volumes'] if v['name'] != 'review-config']
             pod['spec']['containers'][0]['volumeMounts'] = [v for v in pod['spec']['containers'][0]['volumeMounts'] if v['name'] != 'review-config']
+    # The earlier chart's ai-sdlc-config lacked the routes, so its derived digest differed.
+    for obj in documents:
+        if obj['kind'] == 'Deployment':
+            obj['spec']['template']['metadata']['annotations']['checksum/config'] = 'f' * 64
     return documents
 
 
@@ -82,6 +86,22 @@ class RepairTargets(unittest.TestCase):
             return docs
         with self.assertRaisesRegex(ValueError,'outside reviewed'):
             repair.targets(source,selection,trust,old,drift,compiler,time.time())
+
+    def test_configuration_digest_must_change_uniformly(self):
+        source,old,render,compiler,selection,trust=self.source()
+        def stale(values):
+            docs=render(values);legacy=old(values)
+            for obj,prior in zip(docs,legacy):
+                if obj['kind']=='Deployment':
+                    obj['spec']['template']['metadata']['annotations']['checksum/config']=prior['spec']['template']['metadata']['annotations']['checksum/config']
+            return docs
+        def split(values):
+            docs=render(values)
+            next(x for x in docs if x['kind']=='Deployment')['spec']['template']['metadata']['annotations']['checksum/config']='0'*64
+            return docs
+        for drift in (stale,split):
+            with self.subTest(drift=drift.__name__),self.assertRaisesRegex(ValueError,'configuration digest'):
+                repair.targets(source,selection,trust,old,drift,compiler,time.time())
 
     def test_existing_repair_grant_cannot_be_adopted(self):
         source,old,render,compiler,selection,trust=self.source()
