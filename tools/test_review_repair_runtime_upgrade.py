@@ -132,6 +132,17 @@ class IdentityBinding(unittest.TestCase):
                 self.preflight(rotated).bind_source('release-original-identities', value)
 
 
+class RehearsalBounds(unittest.TestCase):
+    def test_every_rehearsal_command_respects_the_installer_bound(self):
+        import review_repair_rehearsal as rehearsal
+        item = object.__new__(rehearsal.Rehearsal)
+        item.deadline = __import__('time').time() + 300
+        item.live = Mock()
+        with patch.object(rehearsal, 'capture', return_value=b'') as capture:
+            item.command(['podman', 'ps'])
+        self.assertLessEqual(capture.call_args.kwargs['timeout'], 120)
+
+
 class SourceRender(unittest.TestCase):
     def test_expired_render_only_when_an_original_approval_expired(self):
         def description(provenance, release):

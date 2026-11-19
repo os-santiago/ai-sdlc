@@ -36,7 +36,8 @@ class Rehearsal:
 
     def command(self,args,**kwargs):
         self.live()
-        return capture(args,timeout=min(240,self.deadline-time.time()),**kwargs)
+        # installer_process.capture admits at most 120 s per command.
+        return capture(args,timeout=min(120,self.deadline-time.time()),**kwargs)
 
     def identity(self):
         self.restore.identity()
