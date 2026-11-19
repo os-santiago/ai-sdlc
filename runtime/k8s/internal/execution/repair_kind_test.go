@@ -218,9 +218,18 @@ func runRepairKind(t *testing.T, composition bool) {
 	}
 	publicationQueued := false
 	if composition {
+		// Fixture-only stand-in for the installed intake's unchanged-content poll
+		// (every PollSeconds). Without it the single seeded observation ages past
+		// 2*PollSeconds on slow runners; freshness checks themselves are unchanged.
+		observeUnchangedIssue := func() {
+			if _, err := f.Admin.Pool.Exec(`UPDATE intake_observations SET observed_at=clock_timestamp(); UPDATE intake_cursors SET watermark=clock_timestamp()`); err != nil {
+				t.Fatal("fixture intake poll", err)
+			}
+		}
 		policy := func() (authority.Policy, intake.Config, string, error) {
 			return f.Policy, f.Config, f.Command.ProfileSHA256, nil
 		}
+		observeUnchangedIssue()
 		if sent, err := execution.HandoffCandidate(ctx, f.Worker, func() (authority.Policy, authority.Identity, intake.Config, string, error) {
 			return f.Policy, f.Identities["worker"], f.Config, f.Command.ProfileSHA256, nil
 		}); err != nil || !sent {
@@ -233,6 +242,7 @@ func runRepairKind(t *testing.T, composition bool) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		observeUnchangedIssue()
 		if state, err := (verificationflow.Runtime{DB: f.Verifier, Load: policy, Client: verifierClient, Image: in.VerificationImage}).PollOnce(ctx); err != nil || state != "behavior-verified" {
 			t.Fatal("actual repaired behavior", state, err)
 		}
@@ -240,6 +250,7 @@ func runRepairKind(t *testing.T, composition bool) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		observeUnchangedIssue()
 		if state, err := (reviewflow.Runtime{DB: f.Verifier, Policy: policy, Load: func(context.Context) (reviewflow.Configuration, error) { return reviewConfig, nil }, Client: reviewClient}).PollOnce(ctx); err != nil || state != "review-passed" {
 			t.Fatal("actual repaired review", state, err)
 		}
@@ -250,6 +261,7 @@ func runRepairKind(t *testing.T, composition bool) {
 			return publicationflow.ReviewPolicy{Profile: authority.Digest(reviewConfig.Profile), Configuration: reviewConfig.Digest()}, nil
 		}
 		identity := func() (authority.Policy, authority.Identity, error) { return f.Policy, f.Identities["verifier"], nil }
+		observeUnchangedIssue()
 		if sent, err := publicationflow.Handoff(ctx, f.Verifier, policy, expected, identity); err != nil || !sent {
 			t.Fatal("normal publication handoff", sent, err)
 		}
