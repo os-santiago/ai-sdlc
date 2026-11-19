@@ -55,6 +55,23 @@ type Profile struct {
 	MaxTokens  int    `json:"maxTokens"`
 	ADevSHA256 string `json:"aDevSHA256"`
 	MaxRepairs int    `json:"maxRepairs,omitempty"`
+	// CallSeconds is the per-model-call window (SCC wait, mailbox wait and the
+	// call reservation). Omitted keeps the original 60 s window and identical
+	// workloads; slower installed models select 60-600 s, within MaxSeconds.
+	CallSeconds int `json:"callSeconds,omitempty"`
+}
+
+const (
+	DefaultCallSeconds = 60
+	MaxCallSeconds     = 600
+)
+
+// CallWindow is the bounded wait for one model call.
+func (p Profile) CallWindow() time.Duration {
+	if p.CallSeconds == 0 {
+		return DefaultCallSeconds * time.Second
+	}
+	return time.Duration(p.CallSeconds) * time.Second
 }
 
 func strictBound(raw []byte, expected string, maximum int, keys []string, value any) error {
@@ -80,10 +97,17 @@ func parseProfile(raw []byte, expected, version string) (Profile, error) {
 	if json.Unmarshal(raw, &fields) == nil && fields["maxRepairs"] != nil && version == ProfileVersion {
 		keys = append(keys, "maxRepairs")
 	}
+	window := fields["callSeconds"] != nil
+	if window {
+		keys = append(keys, "callSeconds")
+	}
 	if strictBound(raw, expected, MaxProfileBytes, keys, &p) != nil || p.Version != version || !modelPattern.MatchString(p.Model) || p.MaxSteps < 1 || p.MaxSteps > 32 || p.MaxSeconds < 1 || p.MaxSeconds > 900 || p.MaxTokens < 1 || p.MaxTokens > 8192 || !workspacebundle.ValidDigest(p.ADevSHA256) {
 		return Profile{}, ErrInvalid
 	}
 	if p.MaxRepairs < 0 || p.MaxRepairs > 1 {
+		return Profile{}, ErrInvalid
+	}
+	if window && (p.CallSeconds < DefaultCallSeconds || p.CallSeconds > MaxCallSeconds || p.CallSeconds > p.MaxSeconds) {
 		return Profile{}, ErrInvalid
 	}
 	return p, nil

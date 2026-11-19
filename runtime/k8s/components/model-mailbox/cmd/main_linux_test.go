@@ -31,3 +31,19 @@ func TestDeadlineBoundsStalledInputAndOutput(t *testing.T) {
 		})
 	}
 }
+
+func TestCallWindowArgumentIsBoundedAndServeOnly(t *testing.T) {
+	for _, args := range [][]string{
+		{"serve", "--attempt", "a-1", "--pod-uid", "u", "--wait-seconds", "59"},
+		{"serve", "--attempt", "a-1", "--pod-uid", "u", "--wait-seconds", "601"},
+		{"read", "--attempt", "a-1", "--pod-uid", "u", "--wait-seconds", "120"},
+	} {
+		if err := run(context.Background(), args, nil, io.Discard); err == nil || err.Error() != "invalid mailbox call window" {
+			t.Fatal("window accepted", args, err)
+		}
+	}
+	err := run(context.Background(), []string{"serve", "--attempt", "a-1", "--pod-uid", "u", "--wait-seconds", "300"}, nil, io.Discard)
+	if err != nil && err.Error() == "invalid mailbox call window" {
+		t.Fatal("valid window refused")
+	}
+}

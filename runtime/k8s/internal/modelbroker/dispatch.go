@@ -117,7 +117,7 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 	ref := store.ModelCallRef{AllocationID: allocation, PodUID: scope.PodUID, Sequence: int(request.Sequence), RequestSHA256: modelmailbox.Digest(request.Payload)}
 	result.Call = ref
 	stage = "reservation"
-	decision, err := d.DB.ReserveModelCall(ctx, allocation, scope.PodUID, int(request.Sequence), request.Payload)
+	decision, err := d.DB.ReserveModelCallWithin(ctx, allocation, scope.PodUID, int(request.Sequence), request.Payload, profile.CallWindow())
 	if err != nil {
 		d.abandon(ctx, ref)
 		return result, ErrUncertain
