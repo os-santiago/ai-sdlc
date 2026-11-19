@@ -198,17 +198,18 @@ def main(argv=None):
     parser.add_argument('command',choices=('pause','status','backup','backup-status','diagnostic','diagnostic-status','recover-original',
         'tool-budget','tool-budget-status','recover-tool-budget','reapprove','reapprove-status',
         'reviewer-image','reviewer-image-status','browser','browser-status',
-        'review-feedback','review-feedback-status','browser-reapprove','browser-reapprove-status'));parser.add_argument('--cluster',required=True)
+        'review-feedback','review-feedback-status','browser-reapprove','browser-reapprove-status',
+        'review-repair','review-repair-status'));parser.add_argument('--cluster',required=True)
     parser.add_argument('--provider',choices=('auto','podman','docker'),default='auto')
     parser.add_argument('--provenance-trust',type=Path)
     parser.add_argument('--release-target',type=Path)
     for name in ('source','target'):
         parser.add_argument('--'+name+'-run',type=int);parser.add_argument('--'+name+'-revision')
     args=parser.parse_args(argv)
-    if args.command in ('reapprove', 'browser-reapprove'):
+    if args.command in ('reapprove', 'browser-reapprove', 'review-repair'):
         if args.provenance_trust is None or args.release_target is None:
             raise ValueError('Reapproval requires both separately reviewed documents')
-    elif args.command == 'browser-reapprove-status':
+    elif args.command in ('browser-reapprove-status', 'review-repair-status'):
         if args.provenance_trust is not None or args.release_target is not None:
             raise ValueError('Status selects only the last recorded browser approval')
     elif args.command in ('browser','browser-status','review-feedback','review-feedback-status'):
@@ -234,6 +235,13 @@ def main(argv=None):
             from browser_approval_window import BrowserApproval
             upgrade=BrowserApproval(config,args.target_run,args.target_revision,args.provenance_trust,args.release_target)
             try:result=upgrade.run() if args.command=='browser-reapprove' else upgrade.status()
+            finally:upgrade.close()
+        elif args.command in ('review-repair','review-repair-status'):
+            if args.source_run is not None or args.source_revision is not None:
+                raise ValueError('Repair upgrade preserves the original recorded feedback source')
+            from review_repair_runtime_upgrade import ReviewRepairUpgrade
+            upgrade=ReviewRepairUpgrade(config,args.target_run,args.target_revision,args.provenance_trust,args.release_target)
+            try:result=upgrade.run() if args.command=='review-repair' else upgrade.status()
             finally:upgrade.close()
         elif args.command in ('review-feedback','review-feedback-status'):
             if args.source_run is not None or args.source_revision is not None:
