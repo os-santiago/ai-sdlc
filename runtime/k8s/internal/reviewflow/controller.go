@@ -62,13 +62,8 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	if e != nil || provider.CheckGateway(ctx) != nil {
 		return proof, ControllerError{Stage: "gateway-unavailable"}
 	}
-	if p.config.RequireGatewayProfile {
-		// A model slower than the reviewer window would only end uncertain.
-		seconds, e := provider.GatewayProfile(ctx)
-		review, pe := executor.ParseReviewProfile(p.config.Profile, authority.Digest(p.config.Profile))
-		if e != nil || pe != nil || time.Duration(seconds+20)*time.Second > review.CallWindow() {
-			return proof, ControllerError{Stage: "gateway-profile-unfit"}
-		}
+	if p.config.RequireGatewayProfile && gatewayProfileFits(ctx, provider, p.config.Profile) != nil {
+		return proof, ControllerError{Stage: "gateway-profile-unfit"}
 	}
 	resources, e := podtransport.PlanResources(client, p.binding)
 	if e != nil {
@@ -321,4 +316,19 @@ func drive(ctx context.Context, session reviewSession, fence func(context.Contex
 		case <-timer.C:
 		}
 	}
+}
+
+// gatewayProfileFits refuses a review whose calls could not complete: the
+// gateway's benchmarked timeout plus the broker margin must fit the reviewer
+// profile's per-call window. A model slower than that would only end uncertain.
+func gatewayProfileFits(ctx context.Context, provider *modelbroker.Provider, profile []byte) error {
+	seconds, e := provider.GatewayProfile(ctx)
+	if e != nil {
+		return e
+	}
+	review, e := executor.ParseReviewProfile(profile, authority.Digest(profile))
+	if e != nil || time.Duration(seconds+20)*time.Second > review.CallWindow() {
+		return ControllerError{Stage: "gateway-profile-unfit"}
+	}
+	return nil
 }

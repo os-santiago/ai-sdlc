@@ -5,6 +5,7 @@ import tempfile
 import time
 import threading
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -352,6 +353,15 @@ class GatewayTests(unittest.TestCase):
         self.adapter.tool = False
         self.assertIsNone(model_gateway.run_benchmark(self.server, 16384, 4096, attempts=2, pause=0))
         self.assertEqual(self.call("/readyz")[0], 503)
+
+    def test_production_backoff_is_randomized_between_attempts_only(self):
+        self.adapter.tool = False
+        with unittest.mock.patch.object(model_gateway.random, "uniform", return_value=7.5) as uniform, \
+                unittest.mock.patch.object(model_gateway.time, "sleep") as sleep:
+            self.assertIsNone(model_gateway.run_benchmark(self.server, 16384, 4096))
+        self.assertEqual(uniform.call_count, model_gateway.ATTEMPTS - 1)
+        uniform.assert_called_with(*model_gateway.RETRY_SECONDS)
+        self.assertEqual([c.args for c in sleep.call_args_list], [(7.5,)] * (model_gateway.ATTEMPTS - 1))
 
     def test_envelope_is_bounded(self):
         self.assertEqual(model_gateway.envelope({}), [16384, 4096])
