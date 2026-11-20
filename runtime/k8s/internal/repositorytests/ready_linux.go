@@ -26,6 +26,12 @@ const readyName = "ready.json"
 // MaxReadyBytes bounds the marker file.
 const MaxReadyBytes = 1024
 
+// ReadySeconds bounds the runner's wait for the marker, which covers the
+// controller's import and ready steps. A ready step that times out leaves the
+// pod unusable (a half-published marker is never accepted, and a second ready
+// is refused); the controller must fail the run, not retry it.
+const ReadySeconds = 120
+
 var ErrReady = errors.New("invalid repository tests ready marker")
 
 // Ready binds one run to its pod and its imported tree. It is a
@@ -64,7 +70,7 @@ func PublishReady(parent string, r Ready) error {
 		return ErrReady
 	}
 	tmp := ".ready-" + hex.EncodeToString(nonce[:])
-	file, err := unix.Openat(fd, tmp, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o644)
+	file, err := unix.Openat(fd, tmp, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
 	if err != nil {
 		return ErrReady
 	}
