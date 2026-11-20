@@ -301,7 +301,24 @@ class BenchmarkTests(unittest.TestCase):
         slow_start = model_benchmark.benchmark(ScriptedAdapter(self.clock, latency=3.0), 300)
         self.assertAlmostEqual(slow_start["latencySeconds"], 3.0, delta=0.5)
         self.assertAlmostEqual(slow_start["promptTokensPerSecond"], plain["promptTokensPerSecond"], delta=60)
-        self.assertLessEqual(slow_start["timeoutSeconds"], plain["timeoutSeconds"] + 1.5 * 3 + 8)
+        for profile in (plain, slow_start):
+            # Never below the measured unpadded estimate; never above the
+            # former derivation (safety applied to the latency-inflated rates).
+            self.assertGreaterEqual(profile["timeoutSeconds"], profile["unpaddedSeconds"] + 5)
+            self.assertLessEqual(profile["timeoutSeconds"], 1.5 * profile["unpaddedSeconds"] + 5 + 1)
+        self.assertLess(slow_start["timeoutSeconds"], 1.5 * slow_start["unpaddedSeconds"] + 5 - 1.5 * 3 * 2)
+
+    def test_queued_latency_probes_are_bounded_by_the_tool_probe(self):
+        class QueuedLatency(ScriptedAdapter):
+            # Both minimal calls wait behind another gateway; nothing else does.
+            def backend(self, request, messages, tools, names, tokens, seconds):
+                if tokens == 1 and "Run " in json.dumps(messages) and "Line 1:" not in json.dumps(messages):
+                    self.clock[0] += 30.0
+                return super().backend(request, messages, tools, names, tokens, seconds)
+        plain = model_benchmark.benchmark(ScriptedAdapter(self.clock), 300)
+        queued = model_benchmark.benchmark(QueuedLatency(self.clock), 300)
+        self.assertLessEqual(queued["latencySeconds"], queued["toolCallSeconds"])
+        self.assertGreaterEqual(queued["timeoutSeconds"], queued["unpaddedSeconds"] + 5)
 
     def test_latency_can_at_most_double_a_rate(self):
         class NoisyLatency(ScriptedAdapter):
@@ -313,8 +330,7 @@ class BenchmarkTests(unittest.TestCase):
         plain = model_benchmark.benchmark(ScriptedAdapter(self.clock), 300)
         noisy = model_benchmark.benchmark(NoisyLatency(self.clock), 300)
         self.assertLessEqual(noisy["promptTokensPerSecond"], 2 * plain["promptTokensPerSecond"] + 1)
-        # The token-proportional part shrinks by at most half; the latency is added back.
-        self.assertGreaterEqual(noisy["timeoutSeconds"], plain["timeoutSeconds"] / 2)
+        self.assertGreaterEqual(noisy["timeoutSeconds"], noisy["unpaddedSeconds"] + 5)
 
     def test_fast_models_get_the_floor_and_slow_or_toolless_models_fail_closed(self):
         self.assertEqual(model_benchmark.benchmark(ScriptedAdapter(self.clock, 50000, 5000), 300)["timeoutSeconds"], 30)
