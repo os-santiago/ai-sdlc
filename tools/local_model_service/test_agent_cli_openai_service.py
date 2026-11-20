@@ -188,13 +188,27 @@ class ParseTests(unittest.TestCase):
 
 
 class ShapeTests(unittest.TestCase):
-    def test_action_shapes_log_names_and_keys_never_values(self):
-        message = {"tool_calls": [{"function": {"name": "search_text", "arguments": json.dumps({"pattern": "secret-value", "glob": "*.js"})}},
-                                  {"function": {"name": "read_file", "arguments": "not json"}}]}
-        shapes = service.action_shapes(message)
-        self.assertEqual(shapes, [{"name": "search_text", "keys": ["glob", "pattern"]}, {"name": "read_file", "keys": None}])
-        self.assertNotIn("secret-value", json.dumps(shapes))
-        self.assertEqual(service.action_shapes(None), [])
+    OFFERED = [{"type": "function", "function": {"name": "search_text", "parameters": {"properties": {"pattern": {}, "glob": {}, "path": {}}}}},
+               {"type": "function", "function": {"name": "read_file", "parameters": {"properties": {"path": {}}}}}]
+
+    def test_action_shapes_log_declared_names_and_keys_never_values(self):
+        message = {"tool_calls": [
+            {"function": {"name": "search_text", "arguments": json.dumps({"pattern": "secret-value", "glob": "*.js", "ghp_SECRETKEY": 1})}},
+            {"function": {"name": "read_file", "arguments": "not json"}},
+            {"function": {"name": "invented_tool_secret", "arguments": "{}"}}]}
+        shapes = service.action_shapes(message, self.OFFERED)
+        self.assertEqual(shapes, [{"name": "search_text", "keys": ["glob", "pattern"], "otherKeys": 1},
+                                  {"name": None, "keys": None, "otherKeys": 0},
+                                  {"name": None, "keys": [], "otherKeys": 0}])
+        logged = json.dumps(shapes)
+        for secret in ("secret-value", "ghp_SECRETKEY", "invented_tool_secret"):
+            self.assertNotIn(secret, logged)
+
+    def test_odd_shapes_never_raise(self):
+        for message in (None, {}, {"tool_calls": None}, {"tool_calls": {"a": 1}}, {"tool_calls": [None, [], {"function": []},
+                        {"function": {"name": "read_file", "arguments": 5}}]}):
+            with self.subTest(message=message):
+                service.action_shapes(message, self.OFFERED)
 
 
 class RenderTests(unittest.TestCase):
