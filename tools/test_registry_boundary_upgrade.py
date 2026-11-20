@@ -158,9 +158,6 @@ class Cli(unittest.TestCase):
                 lock.assert_not_called()
 
 
-if __name__ == '__main__':
-    unittest.main()
-
 
 class ChainsCredential(unittest.TestCase):
     def test_chains_reads_the_publish_mount_secret_and_pods_carry_no_pull_secrets(self):
@@ -173,3 +170,7 @@ class ChainsCredential(unittest.TestCase):
         publish = [i for i in blueprint['items'] if i['kind'] == 'ServiceAccount' and i['metadata']['name'] == 'publish'][0]
         self.assertEqual(publish.get('secrets'), [{'name': 'registry-auth'}])
         self.assertNotIn('imagePullSecrets', publish)
+
+
+if __name__ == '__main__':
+    unittest.main()
