@@ -1,0 +1,19 @@
+{
+  "version": "ai-sdlc.project/v1",
+  "repository": "os-santiago/saferus",
+  "baseBranch": "main",
+  "publication": {
+    "allow": ["web/static/ttl.js", "tests/ttl.test.mjs", "tools/verify_browser.py"],
+    "maxChangedFiles": 3,
+    "maxChangedBytes": 98304,
+    "maxFileBytes": 32768
+  },
+  "merge": {
+    "rulesetID": 27343088,
+    "required": [{"context": "quality", "appID": 15368}],
+    "strictChecks": true,
+    "resolveThreads": true,
+    "humanApprovals": 0
+  },
+  "recipes": [{"name": "saferus-token-lifetime/v1", "marker": "required"}]
+}

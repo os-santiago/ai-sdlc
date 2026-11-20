@@ -1,0 +1,23 @@
+{
+  "version": "ai-sdlc.project/v1",
+  "repository": "os-santiago/homedir",
+  "baseBranch": "main",
+  "publication": {
+    "allow": ["quarkus-app/src/main/resources/META-INF/resources/js/utils.js", "tests/js/utils-locale-fallback.test.js"],
+    "maxChangedFiles": 2,
+    "maxChangedBytes": 65536,
+    "maxFileBytes": 32768
+  },
+  "merge": {
+    "rulesetID": 9071701,
+    "required": [
+      {"context": "Quality Summary", "appID": 15368},
+      {"context": "CI Summary", "appID": 15368},
+      {"context": "Quality Gate Summary", "appID": 15368}
+    ],
+    "strictChecks": true,
+    "resolveThreads": true,
+    "humanApprovals": 0
+  },
+  "recipes": [{"name": "homedir-date-locale/v1", "marker": "required"}]
+}
