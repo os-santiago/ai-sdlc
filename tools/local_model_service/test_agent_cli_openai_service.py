@@ -23,19 +23,26 @@ mode = %(mode)r
 if mode == "fail": sys.exit(3)
 if mode == "garbage": print("not json"); sys.exit(0)
 answer = {"type": "result", "subtype": "success", "is_error": False,
-          "structured_output": {"content": "Reading.", "tool_calls": [{"name": %(tool)r, "arguments": json.dumps({"path": "README.md"})}]},
+          "result": "```json\\n" + json.dumps({"content": "Reading.", "requested_actions": [{"action": %(tool)r, "input": json.dumps({"path": "README.md"})}]}) + "\\n```",
+          "num_turns": 1,
           "usage": {"input_tokens": 100, "cache_creation_input_tokens": 20, "cache_read_input_tokens": 30, "output_tokens": 12}}
 if mode == "error": answer.update(is_error=True, subtype="error_during_execution")
+if mode == "native":
+    count = os.path.join(os.path.dirname(%(record)r), "calls")
+    n = int(open(count).read()) + 1 if os.path.exists(count) else 1
+    open(count, "w").write(str(n))
+    if n == 1 or %(always)r:
+        answer.update(result="I will now read the file.")
 print(json.dumps(answer))
 """
 
 
 class ServiceTests(unittest.TestCase):
-    def start(self, mode="ok", tool="read_file"):
+    def start(self, mode="ok", tool="read_file", always=False):
         self.dir = tempfile.mkdtemp()
         self.record = os.path.join(self.dir, "record.json")
         binary = os.path.join(self.dir, "claude")
-        Path(binary).write_text(FAKE % {"record": self.record, "mode": mode, "tool": tool})
+        Path(binary).write_text(FAKE % {"record": self.record, "mode": mode, "tool": tool, "always": always})
         os.chmod(binary, stat.S_IRWXU)
         backend = service.ClaudeCLI(binary, {"PATH": "/usr/bin:/bin", "ANTHROPIC_API_KEY": "host-only"}, 5)
         self.server = service.Server(("127.0.0.1", 0), backend, TOKEN, {"claude-sonnet": "sonnet"})
@@ -74,6 +81,7 @@ class ServiceTests(unittest.TestCase):
         seen = json.load(open(self.record))
         argv = seen["argv"]
         self.assertEqual(argv[argv.index("--tools") + 1], "")
+        self.assertNotIn("--json-schema", argv)
         for flag in ("-p", "--bare", "--strict-mcp-config", "--no-session-persistence", "--disable-slash-commands"):
             self.assertIn(flag, argv)
         self.assertEqual(argv[argv.index("--model") + 1], "sonnet")
@@ -81,6 +89,7 @@ class ServiceTests(unittest.TestCase):
         marker = argv[argv.index("--system-prompt") + 1].split("marker ")[1].split(" ")[0]
         self.assertTrue(marker.startswith("turn-") and len(marker) == 21)
         self.assertIn("[%s user]\nRead README.md\n[system]" % marker, seen["stdin"])
+        self.assertIn("<available-actions>\n- read_file: Read a file", seen["stdin"])
         self.assertNotIn("Agent policy.", seen["stdin"])
         self.assertEqual(seen["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"], "4096")
         self.assertEqual(seen["env"]["ANTHROPIC_API_KEY"], "host-only")
@@ -99,6 +108,28 @@ class ServiceTests(unittest.TestCase):
             self.start(mode, tool)
             with self.subTest(mode=mode, tool=tool):
                 self.assertEqual(self.call(self.request())[0], 502)
+
+
+class ParseTests(unittest.TestCase):
+    def test_turn_is_extracted_from_prose_but_structure_stays_strict(self):
+        turn = {"content": "x", "requested_actions": []}
+        for text in (json.dumps(turn), "```json\n%s\n```" % json.dumps(turn), "Here it is:\n%s\nDone." % json.dumps(turn)):
+            self.assertEqual(service.parse_turn(text), turn)
+        for text in ("no json", json.dumps({"content": "x"}), json.dumps({"content": 1, "requested_actions": []}),
+                     json.dumps({"content": "x", "requested_actions": [], "extra": 1}), None):
+            self.assertIsNone(service.parse_turn(text))
+
+
+class NativeAttemptTests(ServiceTests):
+    def test_invalid_turn_is_retried_once_then_fails_closed(self):
+        self.start("native")
+        status, answer = self.call(self.request())
+        self.assertEqual(status, 200)
+        self.assertEqual(answer["choices"][0]["message"]["tool_calls"][0]["function"]["name"], "read_file")
+        self.assertIn("previous answer was not one valid JSON object", json.load(open(self.record))["stdin"])
+        self.server.shutdown(); self.server.server_close()
+        self.start("native", always=True)
+        self.assertEqual(self.call(self.request())[0], 502)
 
 
 @unittest.skipUnless(os.environ.get("AI_SDLC_TEST_AGENT_CLI"), "requires an authenticated Claude CLI on the host")
