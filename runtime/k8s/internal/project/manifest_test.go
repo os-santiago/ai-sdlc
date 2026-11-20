@@ -158,9 +158,6 @@ func TestUnicodeFoldedDuplicateKeysAndOmittedMergeFieldsAreRefused(t *testing.T)
 			t.Fatal("Unicode-folded duplicate key accepted", folded[:80])
 		}
 	}
-	if _, err := ParseManifest([]byte(strings.Replace(string(raw), `"baseBranch":"main"`, "\"baseBranch\":\"main\",\"ba\u017feBranch\":\"dev\"", 1))); err == nil {
-		t.Fatal("folded duplicate key accepted")
-	}
 	for _, field := range []string{`"strictChecks":true,`, `"resolveThreads":true,`, `,"humanApprovals":0`} {
 		if _, err := ParseManifest([]byte(strings.Replace(string(raw), field, "", 1))); err == nil {
 			t.Fatal("omitted merge field accepted", field)

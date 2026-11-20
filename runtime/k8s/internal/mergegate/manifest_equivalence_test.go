@@ -17,10 +17,12 @@ func TestBuiltinManifestsMatchCompiledMergePolicies(t *testing.T) {
 		var raw struct {
 			StrictChecks, ResolveThreads bool
 			HumanApprovals               int
+			BypassActors                 []json.RawMessage
 		}
 		file := map[string][]byte{project.Homedir: pilotManifest, project.Saferus: saferusManifest}[repository]
 		if json.Unmarshal(file, &raw) != nil || raw.StrictChecks != m.Merge.StrictChecks ||
-			raw.ResolveThreads != m.Merge.ResolveThreads || raw.HumanApprovals != m.Merge.HumanApprovals || m.BaseBranch != "main" {
+			raw.ResolveThreads != m.Merge.ResolveThreads || raw.HumanApprovals != m.Merge.HumanApprovals || m.BaseBranch != "main" ||
+			len(raw.BypassActors) != 0 {
 			t.Fatal("merge rule divergence", repository)
 		}
 		for i, c := range p.Required {
