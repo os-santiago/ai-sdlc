@@ -30,6 +30,12 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) >= 2 && os.Args[1] == "repository-tests-run" {
+		if e := runRepositoryTests(os.Args[2:], os.Stdout); e != nil {
+			log.Fatal(e)
+		}
+		return
+	}
 	if len(os.Args) != 1 {
 		log.Fatal("unknown verifier operation")
 	}
