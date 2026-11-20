@@ -5,9 +5,9 @@ SCC) never claims work against a model whose behavior and speed are unknown.
 
 Probes, all through the installation-selected adapter and the shared contract:
   1. tool call   the model proposes a valid call to a supplied tool (function)
-  0. latency     two minimal calls (fixed per-call latency)
   2. prefill     a long prompt with a 1-token answer (prompt tokens/second)
   3. generation  a short prompt with a bounded answer (completion tokens/second)
+  and two minimal calls that, with the tool call, bound the fixed per-call latency
 
 The per-call timeout is derived for the planning envelope (the largest prompt
 and answer one SCC step may need) with a safety factor:
@@ -96,7 +96,7 @@ def benchmark(adapter, ceiling, prompt_tokens=16384, completion_tokens=4096, saf
         profile["basis"] = "tool-call-latency"
     else:
         try:
-            # The smaller of two minimal calls is the fixed per-call latency.
+            # The smallest of three samples is the fixed per-call latency.
             latency = min([tool_seconds] + [_timed(adapter, latency_probe(), ceiling, True)[1] for _ in range(2)])
             # The slower of two uncached prefill runs.
             rates, raw_rates = [], []
