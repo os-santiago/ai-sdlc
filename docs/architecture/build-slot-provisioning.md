@@ -36,6 +36,13 @@ merged a second delivery whose build could never start.
   a fresh slot. Fixing this requires reworking
   `execution/build_containment_test.go` (it triggers expiry during the
   post-claim preflight) and validating with the kind tests.
+- **Slots consumed by failures:** after `ClaimBuild`, any failure (an in-loop
+  reinspection, the fence or the profile check) stops the build and cleans its
+  cluster resources, but the `build_slots` row stays, and no code path releases
+  it (the controller has no DELETE on the table). Moving the preflight before
+  the claim narrows this window; it does not remove it. A post-claim failure
+  consumes the slot. Slot capacity must be sized for failures, or a reviewed
+  release path (a new slot identity after verified cleanup) must be added.
 - A handed-off build whose slot never arrives is stranded: `merge_id` is unique
   and handoff happens once. Only new merges build after slots are added.
 
@@ -46,7 +53,9 @@ merged a second delivery whose build could never start.
    the containment test's injected expiry to a post-claim boundary. Validate in
    the kind jobs.
 2. **`add-slots` (build foundation, live).**
-   - Fence first: no PipelineRuns; cluster, node and boot identity unchanged;
+   - Fence first: no PipelineRuns; no claimed build and none pending cleanup
+     (a claimed build between phases re-inspects the admission policy and
+     would fail if it changed); cluster, node and boot identity unchanged;
      no unused slot in the current configuration.
    - For each new slot: a new storage identity, `initialize(sub-record)`, then
      PV and PVC `build-slot-N`.
