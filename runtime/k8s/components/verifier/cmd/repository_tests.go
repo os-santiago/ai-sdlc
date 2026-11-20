@@ -121,4 +121,4 @@ func installRunner(args []string, self string) error {
 }
 
 // maxRunnerBytes bounds the copied binary.
-const maxRunnerBytes = 256 * 1024 * 1024
+const maxRunnerBytes = 96 * 1024 * 1024

@@ -223,3 +223,15 @@ func TestCommandLookupWorkingDirectoryAndProcessGroupKill(t *testing.T) {
 		}
 	}
 }
+
+func TestRunnerUsesTheReviewedEnvironment(t *testing.T) {
+	r, _ := runner(t, []string{"sh", "-c", `test "$GOFLAGS" = "-mod=vendor" && test "$PATH" = "/usr/bin:/bin" && test "$HOME" = "$TMPDIR"`}, "")
+	r.Verification.Env = map[string]string{"PATH": "/usr/bin:/bin", "GOFLAGS": "-mod=vendor"}
+	if got, err := r.Run(context.Background()); err != nil || got.ExitCode != 0 {
+		t.Fatal("reviewed environment", got, err)
+	}
+	r.Verification.Env = map[string]string{"PATH": "/nonexistent"}
+	if got, err := r.Run(context.Background()); err != nil || got.ExitCode != 125 {
+		t.Fatal("lookup must use the reviewed PATH", got, err)
+	}
+}
