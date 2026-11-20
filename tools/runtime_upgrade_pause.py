@@ -219,6 +219,8 @@ def main(argv=None):
         if args.provenance_trust is None or args.release_target is None:
             raise ValueError('Reapproval requires both separately reviewed documents')
     elif args.command in ('browser-reapprove-status', 'review-repair-status', 'release-refresh-status'):
+        if args.command == 'release-refresh-status' and (args.target_run is not None or args.target_revision is not None):
+            raise ValueError('Release refresh status selects only the recorded operation')
         if args.provenance_trust is not None or args.release_target is not None:
             raise ValueError('Status selects only the last recorded browser approval')
     elif args.command in ('browser','browser-status','review-feedback','review-feedback-status'):

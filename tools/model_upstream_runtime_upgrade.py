@@ -127,7 +127,7 @@ def in_flight(database):
     the configuration fence enforces under its locks)."""
     query = IN_FLIGHT.read_text()
     if database.sql(query.strip().rstrip(';') + ';') != 'f\n':
-        raise ValueError('In-flight model-dependent work prevents the model upstream switch; retry when it settles')
+        raise ValueError('In-flight model-dependent work prevents the configuration switch; retry when it settles')
 
 
 def publication(source, selection, approvals, render_source, render_target, now, browser_ca_uid, label):
@@ -323,7 +323,7 @@ class CompletedRepairSource:
 
 
 class ModelUpstreamUpgrade(ReviewRepairUpgrade):
-    VERSION, MODE, REPORT, LABEL = VERSION, 'model-upstream', 'modelUpstream', 'model upstream'
+    VERSION, MODE, REPORT, LABEL = VERSION, 'model-upstream', 'modelUpstream', 'model upstream switch'
 
     def __init__(self, config, run=None, revision=None, upstream_path=None, trust_path=None, target_path=None):
         self.config = config
@@ -418,14 +418,14 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
         roles = compatibility.Compatibility(database).roles()
         if self.record['completed'] in ('source', 'paused'):
             if self.snapshot(database) != self.retained_proof() or roles != self.record['sourceRoleIdentities']:
-                raise ValueError('Original history or authority changed during the model upstream switch')
+                raise ValueError('Original history or authority changed during the ' + self.LABEL)
             return
         names = json.loads(database.sql('SELECT json_agg(filename ORDER BY filename) FROM schema_migrations;'))
         current = database.snapshot()
         proof = self.retained_proof()
         if (names != [x['filename'] for x in self.catalog] or roles != self.record['sourceRoleIdentities']
                 or any(current[field] != proof[field] for field in AUTHORITY_FIELDS)):
-            raise ValueError('Original database authority changed during the model upstream switch')
+            raise ValueError('Original database authority changed during the ' + self.LABEL)
 
     def capture_first_pause(self, database):
         """No migration exists, so the fenced snapshot is adopted as the retained
@@ -466,7 +466,7 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
         if self.record is not None:
             return
         if self.selection is None or self.upstream is None or self.approvals is None:
-            raise ValueError('Explicit reviewed model upstream publication, document and approvals required')
+            raise ValueError('Explicit reviewed ' + self.LABEL + ' publication, document and approvals required')
         validate_upstream(self.upstream)
         self.observe('source')
         credential_secret(secret_keys(self.config), self.upstream)
@@ -480,7 +480,7 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
         result = self.targets(source, compile_build, browser_ca['metadata']['uid'])
         identities = self.source_browser.record['resourceUIDs']
         if any(set(prepared_resources.documents(t['documents'])) != set(identities) for t in result.values()):
-            raise ValueError('Model upstream switch cannot add or remove original resources')
+            raise ValueError(self.LABEL.capitalize() + ' cannot add or remove original resources')
         verifier = install_images.REGISTRY + '@' + self.selection['images']['verifier']['digest']
         compiled = build_runtime_install.component_call(self.config.provider, self.helper, 'compile-provenance-installation',
             {'trust': self.approvals['provenance'], 'profile': json.loads(source['values']['build']['configJSON'])['profile'],
@@ -488,7 +488,7 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
         if (set(compiled) != {'version', 'trust', 'trustSHA256', 'profileSHA256', 'verifierImage'}
                 or compiled['version'] != 'ai-sdlc.provenance-installation/v1'
                 or compiled['trust'] != self.approvals['provenance'] or compiled['verifierImage'] != verifier):
-            raise ValueError('Reviewed model upstream trust compiler changed input')
+            raise ValueError('Reviewed ' + self.LABEL + ' trust compiler changed input')
         release = self.approvals['release']
         installed_ca = self.config.read('configmap', 'saferus-ca', release['namespace'])
         if not isinstance(installed_ca, dict) or installed_ca.get('data', {}).get('ca.crt') != release['tlsCA']:

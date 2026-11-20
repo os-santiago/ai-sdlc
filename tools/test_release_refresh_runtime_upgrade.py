@@ -160,7 +160,8 @@ class Cli(unittest.TestCase):
                      ['release-refresh', '--cluster', 'c', '--provenance-trust', 'p', '--release-target', 'r',
                       '--model-upstream', 'u'],
                      ['release-refresh-status', '--cluster', 'c', '--provenance-trust', 'p'],
-                     ['release-refresh-status', '--cluster', 'c', '--model-upstream', 'u']):
+                     ['release-refresh-status', '--cluster', 'c', '--model-upstream', 'u'],
+                     ['release-refresh-status', '--cluster', 'c', '--target-run', '1', '--target-revision', 'a' * 40]):
             with self.subTest(argv=argv), patch.object(runtime_upgrade_pause.platform, 'lock_state') as lock, \
                     self.assertRaises(ValueError):
                 runtime_upgrade_pause.main(argv)

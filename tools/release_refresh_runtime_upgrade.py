@@ -2,8 +2,12 @@
 installation, as a uniform same-schema publication with no configuration
 change.
 
-Every component image comes from the selected main publication (a descendant
-of the installed one, with the identical schema catalog), and separately
+Every runtime component image (orchestrator, intake, admission, worker,
+mailbox, relay, release-manager, verifier, migrator, build-controller and
+deployer) comes from the selected main publication (a descendant of the
+installed one, with the identical schema catalog). The browser-verifier and
+artifact-builder images stay as pinned by the reviewed release and build
+profiles, exactly as in the model-upstream switch. Separately
 reviewed provenance (new verifier image) and release (new finite window, same
 CA) documents are installed. The model upstream, per-call windows, authority
 policy, build, budgets, scope, resource identities and release identities are
