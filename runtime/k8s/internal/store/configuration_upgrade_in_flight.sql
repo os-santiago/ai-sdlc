@@ -1,8 +1,9 @@
 -- Configuration-only transitions (no migration) admit every completed record
 -- of the exact current catalog. They are refused while model-dependent work is
--- in flight: an executing candidate, an open model or repair budget, a live
--- call whose response was not handed off (completed calls recorded before
--- handoff tracking existed are history), an unclean
+-- in flight: an executing candidate, an open model or repair budget, a call
+-- whose response was not handed off while its window is open (after expiry
+-- the handoff can no longer happen and recovery records it as ambiguous), an
+-- unclean
 -- execution, a claimed or uncleaned verification or review, a started review
 -- model call, or an unresolved verification/review effect. Restarted
 -- components resume everything else with their normal recovery. A historical

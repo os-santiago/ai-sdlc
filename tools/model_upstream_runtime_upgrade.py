@@ -404,6 +404,7 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
 
     def backup(self):
         # Plain fenced export and verified offline restore; no migration exists.
+        self.deadline()
         backup = self.record.get('backup')
         if (backup is not None and backup.get('phase') == 'capturing' and backup.get('archives') == {}
                 and (not self.directory.exists() or (self.directory.is_dir() and not self.directory.is_symlink()
