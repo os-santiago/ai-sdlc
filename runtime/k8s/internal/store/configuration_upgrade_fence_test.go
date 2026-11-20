@@ -114,6 +114,7 @@ func TestConfigurationUpgradeFenceAdmitsCompletedHistoryAndRejectsInFlightWork(t
 	for _, live := range []string{
 		`UPDATE review_runs SET cleanup_state='pending'`,
 		startedCall + `UPDATE review_runs SET expires_at=clock_timestamp()+interval '1 hour'`,
+		// Also refused by the review_runs clause; kept as defense in depth.
 		startedCall + `UPDATE review_runs SET cleanup_state='pending'`,
 	} {
 		tx, err := db.Pool.BeginTx(ctx, nil)
