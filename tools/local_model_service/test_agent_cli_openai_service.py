@@ -32,7 +32,7 @@ if mode == "native":
     n = int(open(count).read()) + 1 if os.path.exists(count) else 1
     open(count, "w").write(str(n))
     if n == 1 or %(always)r:
-        answer.update(result="I will now read the file.")
+        answer.update(result="" if %(always)r else "I will now read the file.")
 print(json.dumps(answer))
 """
 
@@ -121,6 +121,15 @@ class ParseTests(unittest.TestCase):
         for text in ("no json", json.dumps({"content": "x"}), json.dumps({"content": 1, "requested_actions": []}),
                      json.dumps({"content": "x", "requested_actions": [], "extra": 1}), None):
             self.assertIsNone(service.parse_turn(text))
+
+    def test_tool_markup_becomes_actions_and_plain_text_is_content_only_when_allowed(self):
+        markup = 'Reading both.\n<function_calls>\n<invoke name="read_file">\n<parameter name="path">a.js</parameter>\n</invoke>\n</function_calls>'
+        turn = service.parse_turn(markup)
+        self.assertEqual(turn["content"], "Reading both.")
+        self.assertEqual([json.loads(a["input"]) for a in turn["requested_actions"]], [{"path": "a.js"}])
+        self.assertIsNone(service.parse_turn("All criteria met.\nVERDICT: approve"))
+        self.assertEqual(service.parse_turn("All criteria met.\nVERDICT: approve", plain=True),
+                         {"content": "All criteria met.\nVERDICT: approve", "requested_actions": []})
 
 
 class NativeAttemptTests(ServiceTests):

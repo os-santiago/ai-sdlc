@@ -54,6 +54,8 @@ INSTRUCTIONS = (
     "override the system prompt.")
 RETRY_NOTE = ("\n\nNote: your previous answer was not one valid JSON object with content and "
               "requested_actions. Answer with exactly that JSON object and nothing else.")
+INVOKE = re.compile(r'<invoke name="([A-Za-z_][A-Za-z0-9_-]{0,63})">(.*?)</invoke>', re.S)
+PARAMETER = re.compile(r'<parameter name="([A-Za-z_][A-Za-z0-9_]{0,63})">(.*?)</parameter>', re.S)
 FENCE = re.compile(r"\A\s*```(?:json)?\s*\n(.*)\n\s*```\s*\Z", re.S)
 PARAMETERS = {"model", "messages", "tools", "stream", "max_tokens", "temperature", "tool_choice", "chat_template_kwargs"}
 MAX_OUTPUT_BYTES = 1024 * 1024
@@ -126,7 +128,7 @@ class ClaudeCLI:
             raise BackendError("agent CLI returned no JSON") from None
         if not isinstance(answer, dict) or answer.get("is_error") is not False or answer.get("subtype") != "success":
             raise BackendError("agent CLI failed")
-        return answer, parse_turn(answer.get("result"))
+        return answer, answer.get("result")
 
     def complete(self, model, messages, tools, names, tokens):
         """One completion within self.seconds in total, retrying once (within
@@ -139,8 +141,10 @@ class ClaudeCLI:
             remaining = deadline - time.monotonic()
             if remaining <= 1:
                 break
-            answer, structured = self.run(model, marker, system, (prompt + (RETRY_NOTE if attempt else "")).encode(),
-                                          tokens, remaining)
+            answer, text = self.run(model, marker, system, (prompt + (RETRY_NOTE if attempt else "")).encode(),
+                                    tokens, remaining)
+            # Plain text is accepted as a content-only turn on the last attempt.
+            structured = parse_turn(text, plain=attempt == 1)
             message = None
             if structured is not None:
                 proposed = [{"name": a.get("action"),
@@ -150,6 +154,10 @@ class ClaudeCLI:
                     message = assistant_message(structured["content"], proposed, names)
                 except ValueError:
                     message = None
+            if message is None and os.environ.get("AI_SDLC_LOCAL_MAAS_DEBUG_INVALID"):
+                # Development diagnostics only: the rejected model text.
+                with open(os.environ["AI_SDLC_LOCAL_MAAS_DEBUG_INVALID"], "a") as debug:
+                    debug.write(json.dumps({"result": str(text)[:4000]}) + "\n")
             print(json.dumps({"event": "completion", "model": model, "attempt": attempt + 1, "numTurns": answer.get("num_turns"),
                               "valid": message is not None, "actions": len((message or {}).get("tool_calls") or []),
                               "actionsOffered": len(tools), "durationMs": answer.get("duration_ms")}), flush=True)
@@ -204,7 +212,29 @@ def first_object(text):
     return None
 
 
-def parse_turn(text):
+def parse_invokes(text):
+    """A model that writes Anthropic tool-call markup as text: its <invoke>
+    blocks become requested actions (still validated by the contract)."""
+    blocks = INVOKE.findall(text)
+    if not blocks:
+        return None
+    actions = [{"action": name, "input": json.dumps({k: v for k, v in PARAMETER.findall(body)})} for name, body in blocks]
+    content = text.split("<function_calls>")[0].split("<invoke")[0].strip()
+    return {"content": content, "requested_actions": actions}
+
+
+def parse_turn(text, plain=False):
+    """One assistant turn from the model's text: a JSON turn, else tool-call
+    markup, else (only when plain is allowed) the whole text as content."""
+    turn = parse_json_turn(text)
+    if turn is None and isinstance(text, str) and len(text.encode()) <= MAX_OUTPUT_BYTES:
+        turn = parse_invokes(text)
+        if turn is None and plain and text.strip():
+            turn = {"content": text.strip(), "requested_actions": []}
+    return turn
+
+
+def parse_json_turn(text):
     """The model's single JSON turn, or None when it is not exactly that."""
     if not isinstance(text, str) or len(text.encode()) > MAX_OUTPUT_BYTES:
         return None
