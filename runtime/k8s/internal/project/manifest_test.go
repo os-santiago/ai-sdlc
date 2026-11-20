@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func generic() Manifest {
@@ -75,6 +76,18 @@ func TestInvalidManifestsAreRefused(t *testing.T) {
 		"dup check":      func(m *Manifest) { m.Merge.Required = append(m.Merge.Required, m.Merge.Required[0]) },
 		"recipe name":    func(m *Manifest) { m.Recipes = []Recipe{{Name: "Bad Name", Marker: "none"}} },
 		"recipe marker":  func(m *Manifest) { m.Recipes = []Recipe{{Name: "x/v1", Marker: "maybe"}} },
+		"upper repo":     func(m *Manifest) { m.Repository = "Example/Service" },
+		"dash branch":    func(m *Manifest) { m.BaseBranch = "-x" },
+		"head branch":    func(m *Manifest) { m.BaseBranch = "HEAD" },
+		"lock branch":    func(m *Manifest) { m.BaseBranch = "main.lock" },
+		"cpu":            func(m *Manifest) { m.Verification.CPU = "99999m" },
+		"memory":         func(m *Manifest) { m.Verification.Memory = "999Gi" },
+		"bare memory":    func(m *Manifest) { m.Verification.Memory = "5" },
+		"double double":  func(m *Manifest) { m.Publication.Allow = []string{"**/**/*.go"} },
+		"many doubles":   func(m *Manifest) { m.Publication.Allow = []string{"**/a/**/b/**/c/**/d/**/e"} },
+		"glob charset":   func(m *Manifest) { m.Publication.Allow = []string{"src/a b.go"} },
+		"ruleset":        func(m *Manifest) { m.Merge.RulesetID = 0 },
+		"approvals":      func(m *Manifest) { m.Merge.HumanApprovals = 7 },
 	} {
 		m := generic()
 		v := *m.Verification
@@ -93,6 +106,8 @@ func TestPublicationGlobsDenyTraversalAndAutomation(t *testing.T) {
 		"go.mod": false, "vendor/x/y.go": false, "README.md": false,
 		".github/workflows/ci.go": false, "../main.go": false, "/main.go": false, "a//b.go": false,
 		"a/./b.go": false, "a\\b.go": false, "a/b.go/": false, ".git/config.go": false, "a\x00.go": false,
+		".GIT/config.go": false, "a\u200c.go": false, "pkg/CODEOWNERS": false, ".gitmodules": false,
+		"x/.gitattributes": false,
 	} {
 		if p.Allows(file) != allowed {
 			t.Fatal("publication decision", file, allowed)
@@ -119,6 +134,36 @@ func TestDoubleStarMatchesZeroOrMoreSegments(t *testing.T) {
 	} {
 		if matchGlob(c.glob, c.file) != c.match {
 			t.Fatal(c.glob, c.file, c.match)
+		}
+	}
+}
+
+func TestDoubleStarMatchingIsPolynomial(t *testing.T) {
+	deep := strings.TrimSuffix(strings.Repeat("a/", 500), "/")
+	started := time.Now()
+	for i := 0; i < 50; i++ {
+		matchGlob("**/a/**/a/**/a/**/x", deep)
+	}
+	if time.Since(started) > 2*time.Second {
+		t.Fatal("glob matching is not polynomial")
+	}
+}
+
+func TestUnicodeFoldedDuplicateKeysAndOmittedMergeFieldsAreRefused(t *testing.T) {
+	raw, _ := json.Marshal(generic())
+	literal := strings.Replace(string(raw), `"baseBranch":"main"`, "\"baseBranch\":\"main\",\"ba\u017feBranch\":\"dev\"", 1)
+	escaped := strings.Replace(string(raw), `"baseBranch":"main"`, `"baseBranch":"main","ba\u017feBranch":"dev"`, 1)
+	for _, folded := range []string{literal, escaped} {
+		if _, err := ParseManifest([]byte(folded)); err == nil {
+			t.Fatal("Unicode-folded duplicate key accepted", folded[:80])
+		}
+	}
+	if _, err := ParseManifest([]byte(strings.Replace(string(raw), `"baseBranch":"main"`, "\"baseBranch\":\"main\",\"ba\u017feBranch\":\"dev\"", 1))); err == nil {
+		t.Fatal("folded duplicate key accepted")
+	}
+	for _, field := range []string{`"strictChecks":true,`, `"resolveThreads":true,`, `,"humanApprovals":0`} {
+		if _, err := ParseManifest([]byte(strings.Replace(string(raw), field, "", 1))); err == nil {
+			t.Fatal("omitted merge field accepted", field)
 		}
 	}
 }

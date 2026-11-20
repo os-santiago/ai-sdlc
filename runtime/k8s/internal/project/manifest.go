@@ -84,14 +84,20 @@ type Recipe struct {
 }
 
 var (
-	ErrManifest       = errors.New("invalid project manifest")
-	repositoryName    = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$`)
-	branchName        = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}(/[A-Za-z0-9._-]{1,100}){0,4}$`)
-	pinnedImage       = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]{1,5})?(/[a-z0-9._-]+)+@sha256:[a-f0-9]{64}$`)
-	cpuQuantity       = regexp.MustCompile(`^([1-9][0-9]{0,4}m|[1-8])$`)
-	byteQuantity      = regexp.MustCompile(`^[1-9][0-9]{0,5}(Mi|Gi)$`)
-	recipeName        = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*/v[1-9][0-9]{0,2}$`)
-	alwaysDenied      = []string{".github/**"}
+	ErrManifest = errors.New("invalid project manifest")
+	// GitHub names are case-insensitive: manifests use the lowercase form.
+	repositoryName = regexp.MustCompile(`^[a-z0-9_.-]{1,100}/[a-z0-9_.-]{1,100}$`)
+	branchName     = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}(/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}){0,4}$`)
+	// Paths and globs use a conservative character set: no Unicode format
+	// characters, lookalikes or shell metacharacters.
+	pathChars    = regexp.MustCompile(`^[A-Za-z0-9._@+/-]+$`)
+	globChars    = regexp.MustCompile(`^[A-Za-z0-9._@+/*?-]+$`)
+	pinnedImage  = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]{1,5})?(/[a-z0-9._-]+)+@sha256:[a-f0-9]{64}$`)
+	cpuQuantity  = regexp.MustCompile(`^([1-9][0-9]{0,3}m|[1-8])$`)
+	byteQuantity = regexp.MustCompile(`^([1-9][0-9]{0,4}Mi|([1-9]|[1-5][0-9]|6[0-4])Gi)$`)
+	recipeName   = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*/v[1-9][0-9]{0,2}$`)
+	// Repository automation and Git metadata are never publishable.
+	alwaysDenied      = []string{".github/**", "**/.gitmodules", "**/.gitattributes", "**/CODEOWNERS"}
 	maxPublishedBytes = 4 * 1024 * 1024
 )
 
@@ -99,7 +105,15 @@ var (
 // duplicate keys are refused) and validates it.
 func ParseManifest(raw []byte) (Manifest, error) {
 	var m Manifest
-	if len(raw) == 0 || len(raw) > MaxManifestBytes || authority.DecodeStrict(raw, &m) != nil {
+	// ASCII only and no \\u escapes: encoding/json folds Unicode keys (for
+	// example U+017F to "s"), which would let a duplicate key escape the
+	// strict decoder.
+	for i, b := range raw {
+		if b >= 0x80 || (b == '\\' && i+1 < len(raw) && raw[i+1] == 'u') {
+			return Manifest{}, ErrManifest
+		}
+	}
+	if len(raw) == 0 || len(raw) > MaxManifestBytes || authority.DecodeStrict(raw, &m) != nil || explicitMerge(raw) != nil {
 		return Manifest{}, ErrManifest
 	}
 	if m.Validate() != nil {
@@ -108,8 +122,25 @@ func ParseManifest(raw []byte) (Manifest, error) {
 	return m, nil
 }
 
-// Digest is the canonical sha256 of the manifest, suitable for binding it into
-// signed installation policy.
+// explicitMerge requires the merge booleans and approval count to be stated,
+// so an omitted field cannot silently weaken the merge policy.
+func explicitMerge(raw []byte) error {
+	var doc struct {
+		Merge map[string]json.RawMessage `json:"merge"`
+	}
+	if json.Unmarshal(raw, &doc) != nil {
+		return ErrManifest
+	}
+	for _, field := range []string{"strictChecks", "resolveThreads", "humanApprovals"} {
+		if _, ok := doc.Merge[field]; !ok {
+			return ErrManifest
+		}
+	}
+	return nil
+}
+
+// Digest is the canonical sha256 of the manifest (its re-marshalled struct,
+// not the installed file bytes), suitable for binding into signed policy.
 func (m Manifest) Digest() string {
 	raw, _ := json.Marshal(m)
 	return authority.Digest(raw)
@@ -117,7 +148,7 @@ func (m Manifest) Digest() string {
 
 func (m Manifest) Validate() error {
 	if m.Version != ManifestVersion || !validRepository(m.Repository) || !branchName.MatchString(m.BaseBranch) ||
-		strings.Contains(m.BaseBranch, "..") {
+		strings.Contains(m.BaseBranch, "..") || m.BaseBranch == "HEAD" || strings.HasSuffix(m.BaseBranch, ".lock") {
 		return ErrManifest
 	}
 	if m.Verification == nil && len(m.Recipes) == 0 {
@@ -242,12 +273,12 @@ func (v Verification) MatchesTest(file string) bool {
 }
 
 func cleanPath(p string) error {
-	if p == "" || len(p) > 1024 || strings.HasPrefix(p, "/") || strings.HasSuffix(p, "/") ||
-		strings.ContainsAny(p, "\\") || strings.IndexFunc(p, unicode.IsControl) >= 0 || path.Clean(p) != p {
+	if p == "" || len(p) > 1024 || !pathChars.MatchString(p) || strings.HasPrefix(p, "/") ||
+		strings.HasSuffix(p, "/") || path.Clean(p) != p {
 		return ErrManifest
 	}
 	for _, part := range strings.Split(p, "/") {
-		if part == "" || part == "." || part == ".." || part == ".git" {
+		if part == "" || part == "." || part == ".." || strings.EqualFold(part, ".git") {
 			return ErrManifest
 		}
 	}
@@ -258,43 +289,53 @@ func cleanPath(p string) error {
 // and `?` within a segment, and `**` as a whole segment matching zero or more
 // segments. Character classes and brace alternation are refused.
 func validGlob(g string) error {
-	if g == "" || len(g) > 256 || strings.HasPrefix(g, "/") || strings.HasSuffix(g, "/") ||
-		strings.ContainsAny(g, "\\[]{}") || strings.IndexFunc(g, unicode.IsControl) >= 0 {
+	if g == "" || len(g) > 256 || !globChars.MatchString(g) || strings.HasPrefix(g, "/") || strings.HasSuffix(g, "/") {
 		return ErrManifest
 	}
+	previous, doubles := "", 0
 	for _, part := range strings.Split(g, "/") {
-		if part == "" || part == "." || part == ".." || part == ".git" ||
-			(strings.Contains(part, "**") && part != "**") {
+		if part == "" || part == "." || part == ".." || strings.EqualFold(part, ".git") ||
+			(strings.Contains(part, "**") && part != "**") || (part == "**" && previous == "**") {
 			return ErrManifest
 		}
+		if part == "**" {
+			doubles++
+		}
+		previous = part
+	}
+	if doubles > 4 {
+		return ErrManifest
 	}
 	return nil
 }
 
+// matchGlob is a dynamic program over (pattern segment, path segment): it is
+// O(len(pattern) * len(path)) for any mix of `**` segments.
 func matchGlob(g, file string) bool {
-	return matchSegments(strings.Split(g, "/"), strings.Split(file, "/"))
-}
-
-func matchSegments(pattern, parts []string) bool {
-	for len(pattern) > 0 {
-		if pattern[0] == "**" {
-			rest := pattern[1:]
-			for i := 0; i <= len(parts); i++ {
-				if matchSegments(rest, parts[i:]) {
-					return true
+	pattern, parts := strings.Split(g, "/"), strings.Split(file, "/")
+	// reach[j] reports whether pattern[:i] matches parts[:j].
+	reach := make([]bool, len(parts)+1)
+	reach[0] = true
+	for _, segment := range pattern {
+		next := make([]bool, len(parts)+1)
+		if segment == "**" {
+			seen := false
+			for j := range reach {
+				seen = seen || reach[j]
+				next[j] = seen
+			}
+		} else {
+			for j := 1; j <= len(parts); j++ {
+				if reach[j-1] {
+					if ok, err := path.Match(segment, parts[j-1]); err == nil && ok {
+						next[j] = true
+					}
 				}
 			}
-			return false
 		}
-		if len(parts) == 0 {
-			return false
-		}
-		if ok, err := path.Match(pattern[0], parts[0]); err != nil || !ok {
-			return false
-		}
-		pattern, parts = pattern[1:], parts[1:]
+		reach = next
 	}
-	return len(parts) == 0
+	return reach[len(parts)]
 }
 
 //go:embed builtin/*.json
