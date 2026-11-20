@@ -1,5 +1,13 @@
 # Documentation
 
+Start here:
+
+- [Capability matrix](capabilities.md): what is generic, project-specific or not
+  yet proven.
+- [Roadmap](roadmap.md): the path to an adoptable v1.
+- [Latest end-to-end evidence](evidence/2026-11-20-issue-only-e2e.md).
+- [Runtime upgrades and installation details](operations/runtime-upgrades.md).
+
 Current operational documentation lives with the Kubernetes/OpenShift runtime:
 
 - [Installation](installation.md) — one entrypoint, local kind, Helm desired
@@ -12,6 +20,6 @@ Current operational documentation lives with the Kubernetes/OpenShift runtime:
 - [DEPRECATION.md](../DEPRECATION.md) — GitHub Actions retirement and the
   preserved historical tag.
 
-The AI-SDLC orchestration documentation was removed with its implementation.
-Repository [quality checks](quality-checks.md) and [security log](security-log.md)
+The former GitHub Actions orchestration documentation was removed with that
+implementation. Repository [quality checks](quality-checks.md) and [security log](security-log.md)
 remain supported through GitHub Actions.
