@@ -265,14 +265,15 @@ class ScriptedAdapter(adapters.Adapter):
     name = "openai"
     reports_usage = True
 
-    def __init__(self, clock, prefill_rate=500.0, generation_rate=30.0, tool=True, seconds=300):
+    def __init__(self, clock, prefill_rate=500.0, generation_rate=30.0, tool=True, seconds=300, latency=0.0):
         super().__init__("", "fake-model", seconds)
         self.clock, self.prefill_rate, self.generation_rate, self.tool = clock, prefill_rate, generation_rate, tool
+        self.latency = latency
 
     def backend(self, request, messages, tools, names, tokens, seconds):
         prompt = max(1, len(json.dumps(messages)) // 4)
         completion = min(tokens, 150)
-        self.clock[0] += prompt / self.prefill_rate + completion / self.generation_rate
+        self.clock[0] += self.latency + prompt / self.prefill_rate + completion / self.generation_rate
         calls = [{"name": "read_file", "arguments": "{\"path\":\"README.md\"}"}] if tools and self.tool else []
         return adapters.Completion(adapters.assistant_message("", calls, names), prompt, completion, False)
 
@@ -292,6 +293,60 @@ class BenchmarkTests(unittest.TestCase):
         expected = 1.5 * (16384 / profile["promptTokensPerSecond"] + 4096 / profile["completionTokensPerSecond"]) + 5
         self.assertAlmostEqual(profile["timeoutSeconds"], expected, delta=8)
         self.assertLessEqual(profile["timeoutSeconds"], 300)
+
+    def test_fixed_latency_is_measured_once_not_extrapolated(self):
+        # A wrapper with 6 s fixed latency per call: the probes' latency must
+        # not be multiplied into the 16k-token planning envelope.
+        plain = model_benchmark.benchmark(ScriptedAdapter(self.clock), 300)
+        slow_start = model_benchmark.benchmark(ScriptedAdapter(self.clock, latency=3.0), 300)
+        self.assertAlmostEqual(slow_start["latencySeconds"], 3.0, delta=0.5)
+        self.assertAlmostEqual(slow_start["promptTokensPerSecond"], plain["promptTokensPerSecond"], delta=60)
+        for profile in (plain, slow_start):
+            # Never below the measured unpadded estimate; never above the
+            # former derivation (safety applied to the latency-inflated rates).
+            self.assertGreaterEqual(profile["timeoutSeconds"], profile["unpaddedSeconds"] + 5)
+            self.assertLessEqual(profile["timeoutSeconds"], 1.5 * profile["unpaddedSeconds"] + 5 + 1)
+        self.assertLess(slow_start["timeoutSeconds"], 1.5 * slow_start["unpaddedSeconds"] + 5 - 1.5 * 3 * 2)
+
+    def test_queued_latency_probes_are_bounded_by_the_tool_probe(self):
+        class QueuedLatency(ScriptedAdapter):
+            # Both minimal calls wait behind another gateway; nothing else does.
+            def backend(self, request, messages, tools, names, tokens, seconds):
+                if tokens == 1 and "Run " in json.dumps(messages) and "Line 1:" not in json.dumps(messages):
+                    self.clock[0] += 30.0
+                return super().backend(request, messages, tools, names, tokens, seconds)
+        plain = model_benchmark.benchmark(ScriptedAdapter(self.clock), 300)
+        queued = model_benchmark.benchmark(QueuedLatency(self.clock), 300)
+        self.assertLessEqual(queued["latencySeconds"], queued["toolCallSeconds"])
+        self.assertGreaterEqual(queued["timeoutSeconds"], queued["unpaddedSeconds"] + 5)
+
+    def test_latency_can_at_most_double_a_rate(self):
+        class NoisyLatency(ScriptedAdapter):
+            # The latency probes are slow, the real probes are not.
+            def backend(self, request, messages, tools, names, tokens, seconds):
+                if tokens == 1 and "single word OK" in json.dumps(messages) and "Line 1:" not in json.dumps(messages):
+                    self.clock[0] += 60.0
+                return super().backend(request, messages, tools, names, tokens, seconds)
+        plain = model_benchmark.benchmark(ScriptedAdapter(self.clock), 300)
+        noisy = model_benchmark.benchmark(NoisyLatency(self.clock), 300)
+        self.assertLessEqual(noisy["promptTokensPerSecond"], 2 * plain["promptTokensPerSecond"] + 1)
+        self.assertLessEqual(noisy["completionTokensPerSecond"], 2 * plain["completionTokensPerSecond"] + 1)
+        self.assertGreaterEqual(noisy["timeoutSeconds"], noisy["unpaddedSeconds"] + 5)
+
+    def test_a_short_generation_probe_cannot_inflate_the_decoding_rate(self):
+        class ShortGeneration(ScriptedAdapter):
+            # Generation finishes almost instantly after a 1 s fixed latency.
+            def backend(self, request, messages, tools, names, tokens, seconds):
+                result = super().backend(request, messages, tools, names, tokens, seconds)
+                if tokens == 192:
+                    self.clock[0] -= result.completion_tokens / self.generation_rate - 0.1
+                return result
+        plain = model_benchmark.benchmark(ScriptedAdapter(self.clock, latency=1.0), 300)
+        short = model_benchmark.benchmark(ShortGeneration(self.clock, latency=1.0), 300)
+        self.assertGreaterEqual(short["timeoutSeconds"], short["unpaddedSeconds"] + 5)
+        # 150 tokens decoded in ~0.1 s raw (net of a 0.004 s prompt share) is
+        # ~1500 tok/s; latency subtraction may at most double that.
+        self.assertLessEqual(short["completionTokensPerSecond"], 2 * 150 / 0.09)
 
     def test_fast_models_get_the_floor_and_slow_or_toolless_models_fail_closed(self):
         self.assertEqual(model_benchmark.benchmark(ScriptedAdapter(self.clock, 50000, 5000), 300)["timeoutSeconds"], 30)

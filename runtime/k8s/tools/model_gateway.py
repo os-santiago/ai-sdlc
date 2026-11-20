@@ -29,8 +29,9 @@ from model_benchmark import BenchmarkFailed, benchmark
 
 ATTEMPTS = 5
 # Short randomized backoff: contention between gateways sharing one upstream
-# lasts one benchmark (~15-30 s). Five attempts take at most ~250 s, within the
-# model upstream switch's 300 s rollout convergence window.
+# lasts one benchmark (~15-30 s, plus two minimal latency calls). A failed
+# attempt usually fails fast; the rollout convergence window (300 s) bounds a
+# gateway that keeps failing, which then stays unready (fail closed).
 RETRY_SECONDS = (5, 25)
 
 
