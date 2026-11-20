@@ -122,6 +122,11 @@ class ParseTests(unittest.TestCase):
                      json.dumps({"content": "x", "requested_actions": [], "extra": 1}), None):
             self.assertIsNone(service.parse_json_turn(text))
 
+    def test_invalid_structured_answers_are_never_final_text(self):
+        for text in ('{"content": 1, "requested_actions": [{"action": "read_file", "input": "{}"}]}',
+                     'Here: {"content": "x", "requested_actions": [], "requested_actions": [{"action": "read_file", "input": "{}"}]}'):
+            self.assertIsNone(service.parse_turn(text, plain=True))
+
     def test_imagined_continuations_are_cut_to_the_first_turn(self):
         many = "Reading.\n<function_calls>\n" + "".join('<invoke name="read_file"><parameter name="path">%d.js</parameter></invoke>\n' % i for i in range(2)) + \
                "</function_calls>\nResult: ...\n<function_calls>\n" + "".join('<invoke name="list_dir"><parameter name="path">x</parameter></invoke>' for _ in range(10)) + "</function_calls>"

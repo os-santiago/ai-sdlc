@@ -155,7 +155,7 @@ class ClaudeCLI:
                             if isinstance(a, dict) else a for a in structured["requested_actions"]]
                 try:
                     message = assistant_message(structured["content"], proposed, names)
-                except ValueError:
+                except (ValueError, RecursionError):
                     message = None
             if message is None and os.environ.get("AI_SDLC_LOCAL_MAAS_DEBUG_INVALID"):
                 # Development diagnostics only: the rejected model text.
@@ -208,8 +208,9 @@ def first_object(text):
     decoder = json.JSONDecoder()
     while start != -1:
         try:
-            value, _ = decoder.raw_decode(text, start)
-            return strict_json(json.dumps(value)) if isinstance(value, dict) else None
+            value, end = decoder.raw_decode(text, start)
+            # Validate the original fragment: re-serializing would hide duplicate keys.
+            return strict_json(text[start:end]) if isinstance(value, dict) else None
         except (ValueError, RecursionError):
             start = text.find("{", start + 1)
     return None
@@ -244,6 +245,14 @@ def parse_invokes(text):
     return {"content": content, "requested_actions": actions}
 
 
+def looks_structured(text):
+    """An attempted structured answer that failed validation is retried, never
+    accepted as a final plain-text turn."""
+    stripped = text.strip()
+    return (stripped.startswith(("{", "[", "```")) or '"requested_actions"' in text
+            or "<invoke" in text or "<requested_actions" in text or "<function_calls" in text)
+
+
 def own_turn(text, marker):
     """The model's own turn ends where it starts imitating transcript headers."""
     index = text.find("[" + marker) if marker else -1
@@ -261,7 +270,8 @@ def parse_turn(text, plain=False, marker=None):
         turn = parse_invokes(text)
         # Plain text is a content-only (often final) turn, unless it ends by
         # announcing an action it never requested: that is retried once.
-        if turn is None and text.strip() and (plain or not INTENT.search(text.strip()[-240:])):
+        if (turn is None and text.strip() and not looks_structured(text)
+                and (plain or not INTENT.search(text.strip()[-240:]))):
             turn = {"content": text.strip(), "requested_actions": []}
     return turn
 
