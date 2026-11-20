@@ -45,12 +45,7 @@ func runRepositoryTests(ctx context.Context, args []string, out io.Writer, paren
 	if authority.DecodeStrict(raw, &v) != nil {
 		return errors.New("invalid verification settings")
 	}
-	// Validate through a manifest wrapper so the runner accepts only settings
-	// the reviewed manifest rules allow.
-	check := project.Manifest{Version: project.ManifestVersion, Repository: "verification/settings", BaseBranch: "main",
-		Verification: &v, Publication: project.Publication{Allow: []string{"**"}, MaxChangedFiles: 1, MaxChangedBytes: 1, MaxFileBytes: 1},
-		Merge: project.Merge{RulesetID: 1, Required: []project.Check{{Context: "settings", AppID: 1}}}}
-	if check.Validate() != nil {
+	if v.Validate() != nil {
 		return errors.New("invalid verification settings")
 	}
 	uid, err := readUID(uidPath)

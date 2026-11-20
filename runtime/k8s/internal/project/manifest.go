@@ -186,6 +186,10 @@ func validRepository(repository string) bool {
 	return true
 }
 
+// Validate reports whether the settings satisfy the reviewed manifest rules
+// on their own, as the offline runner and the workload compiler receive them.
+func (v Verification) Validate() error { return v.validate() }
+
 func (v Verification) validate() error {
 	if !pinnedImage.MatchString(v.Image) || len(v.Command) == 0 || len(v.Command) > 32 ||
 		v.TimeoutSeconds < 30 || v.TimeoutSeconds > 600 || !cpuQuantity.MatchString(v.CPU) ||
