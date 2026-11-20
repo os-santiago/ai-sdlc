@@ -199,7 +199,8 @@ def main(argv=None):
         'tool-budget','tool-budget-status','recover-tool-budget','reapprove','reapprove-status',
         'reviewer-image','reviewer-image-status','browser','browser-status',
         'review-feedback','review-feedback-status','browser-reapprove','browser-reapprove-status',
-        'review-repair','review-repair-status','model-upstream','model-upstream-status'));parser.add_argument('--cluster',required=True)
+        'review-repair','review-repair-status','model-upstream','model-upstream-status',
+        'release-refresh','release-refresh-status'));parser.add_argument('--cluster',required=True)
     parser.add_argument('--provider',choices=('auto','podman','docker'),default='auto')
     parser.add_argument('--provenance-trust',type=Path)
     parser.add_argument('--release-target',type=Path)
@@ -214,10 +215,10 @@ def main(argv=None):
             raise ValueError('Model upstream switch takes its reviewed upstream and both approval documents together')
     elif args.model_upstream is not None:
         raise ValueError('Model upstream document is accepted only by model-upstream')
-    elif args.command in ('reapprove', 'browser-reapprove', 'review-repair'):
+    elif args.command in ('reapprove', 'browser-reapprove', 'review-repair', 'release-refresh'):
         if args.provenance_trust is None or args.release_target is None:
             raise ValueError('Reapproval requires both separately reviewed documents')
-    elif args.command in ('browser-reapprove-status', 'review-repair-status'):
+    elif args.command in ('browser-reapprove-status', 'review-repair-status', 'release-refresh-status'):
         if args.provenance_trust is not None or args.release_target is not None:
             raise ValueError('Status selects only the last recorded browser approval')
     elif args.command in ('browser','browser-status','review-feedback','review-feedback-status'):
@@ -250,6 +251,13 @@ def main(argv=None):
             from model_upstream_runtime_upgrade import ModelUpstreamUpgrade
             upgrade=ModelUpstreamUpgrade(config,args.target_run,args.target_revision,args.model_upstream,args.provenance_trust,args.release_target)
             try:result=upgrade.run() if args.command=='model-upstream' else upgrade.status()
+            finally:upgrade.close()
+        elif args.command in ('release-refresh','release-refresh-status'):
+            if args.source_run is not None or args.source_revision is not None:
+                raise ValueError('Release refresh preserves the original recorded model upstream source')
+            from release_refresh_runtime_upgrade import ReleaseRefreshUpgrade
+            upgrade=ReleaseRefreshUpgrade(config,args.target_run,args.target_revision,args.provenance_trust,args.release_target)
+            try:result=upgrade.run() if args.command=='release-refresh' else upgrade.status()
             finally:upgrade.close()
         elif args.command in ('review-repair','review-repair-status'):
             if args.source_run is not None or args.source_revision is not None:

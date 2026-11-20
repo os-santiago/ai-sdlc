@@ -130,58 +130,52 @@ def in_flight(database):
         raise ValueError('In-flight model-dependent work prevents the model upstream switch; retry when it settles')
 
 
-def targets(source, selection, upstream, approvals, render_source, render_target, compile_build, now, browser_ca_uid):
-    """Uniform same-schema publication with the reviewed model upstream, the
-    per-call windows and renewed approvals. Authority, budgets, build and
-    scope are inherited unchanged; no migration exists."""
+def publication(source, selection, approvals, render_source, render_target, now, browser_ca_uid, label):
+    """The uniform same-schema publication shared by every configuration-only
+    switch: every component image from the selected main publication and the
+    independently reviewed provenance (new verifier) and release (same CA)
+    documents. Returns the source values and the new active values."""
     if not isinstance(approvals, dict) or set(approvals) != {'provenance', 'release'}:
         raise ValueError('Both independently reviewed approval documents are required')
-    upstream = validate_upstream(upstream)
     values = source['values']
     if render_source(values) != source['documents']:
-        raise ValueError('Original installed repair render changed')
+        raise ValueError('Original installed ' + label + ' render changed')
     if render_target(values) != source['documents']:
         raise ValueError('Target chart must render the unchanged installation identically')
-    if values.get('modelGateway', {}).get('adapter', 'agent-cli') != 'agent-cli':
-        raise ValueError('Source already uses a model upstream')
     images = selection['images']
     expected = install_images.ARTIFACT_COMPONENTS | {'artifact-builder', 'build-controller', 'deployer', 'browser-verifier'}
     if set(images) != expected or any(not install_images.DIGEST.fullmatch(x.get('digest', '')) for x in images.values()):
         raise ValueError('Complete immutable schema37 publication required')
     active = copy.deepcopy(values)
-    lock = copy.deepcopy(source['images'])
     for key, component in repair_targets.COMPONENTS.items():
-        active['components'][key]['digest'] = lock['components'][key]['digest'] = images[component]['digest']
-    active['migrator']['digest'] = lock['migrator']['digest'] = images['migrator']['digest']
+        active['components'][key]['digest'] = images[component]['digest']
+    active['migrator']['digest'] = images['migrator']['digest']
     active['verifier']['digest'] = images['verifier']['digest']
     active['build']['digest'] = images['build-controller']['digest']
     active['release']['digest'] = images['deployer']['digest']
     worker = install_images.REGISTRY + '@' + images['worker']['digest']
     mailbox = install_images.REGISTRY + '@' + images['model-mailbox']['digest']
     candidate = json.loads(values['candidate']['configJSON'])
-    profile = candidate['profile']
-    if profile.get('maxRepairs') != 1 or 'callSeconds' in profile or upstream['callSeconds'] > profile['maxSeconds']:
-        raise ValueError('Completed repair generator profile without a call window required')
-    profile['callSeconds'] = upstream['callSeconds']
     candidate['placement'].update(WorkerImage=worker, MailboxImage=mailbox)
     active['candidate']['configJSON'] = json.dumps(candidate, sort_keys=True)
     review = json.loads(values['review']['configJSON'])
-    if 'callSeconds' in review['profile'] or upstream['reviewCallSeconds'] > review['profile']['maxSeconds']:
-        raise ValueError('Reviewer profile without a call window required')
-    review['profile']['callSeconds'] = upstream['reviewCallSeconds']
     review.update(workerImage=worker, mailboxImage=mailbox)
     active['review']['configJSON'] = json.dumps(review, sort_keys=True)
     repair_targets.validate_provenance(json.loads(values['provenance']['trustJSON']), approvals['provenance'],
                                        install_images.REGISTRY + '@' + images['verifier']['digest'], now)
     repair_targets.validate_release(json.loads(values['release']['targetJSON']), approvals['release'], now)
     if approvals['release']['tlsCA'] != json.loads(values['release']['targetJSON'])['tlsCA']:
-        raise ValueError('Model upstream switch cannot rotate the release CA')
+        raise ValueError('A configuration-only switch cannot rotate the release CA')
     active['provenance']['trustJSON'] = json.dumps(approvals['provenance'], sort_keys=True)
     active['release']['targetJSON'] = json.dumps(approvals['release'], sort_keys=True)
     active['release']['browserProfileJSON'] = repair_targets.rotated_profile(values['release']['browserProfileJSON'],
         json.loads(values['release']['targetJSON']), approvals['release'], browser_ca_uid)
-    active['modelGateway'] = gateway_values(upstream)
-    # Closed delta: nothing else in the installation values may change.
+    return values, active
+
+
+def without_publication(active, values):
+    """The active values with every publication field restored to the source;
+    the caller compares the result to prove a closed delta."""
     restored = copy.deepcopy(active)
     for section, key in (('candidate', 'configJSON'), ('review', 'configJSON'), ('provenance', 'trustJSON'),
                          ('release', 'targetJSON'), ('release', 'browserProfileJSON')):
@@ -190,11 +184,20 @@ def targets(source, selection, upstream, approvals, render_source, render_target
         restored['components'][key]['digest'] = values['components'][key]['digest']
     for section in ('migrator', 'verifier', 'build', 'release'):
         restored[section]['digest'] = values[section]['digest']
-    restored.pop('modelGateway')
-    original = copy.deepcopy(values)
-    original.pop('modelGateway', None)
-    if restored != original:
-        raise ValueError('Model upstream switch changed unrelated installation values')
+    return restored
+
+
+def publication_lock(source, selection):
+    lock = copy.deepcopy(source['images'])
+    for key, component in repair_targets.COMPONENTS.items():
+        lock['components'][key]['digest'] = selection['images'][component]['digest']
+    lock['migrator']['digest'] = selection['images']['migrator']['digest']
+    return lock
+
+
+def phase_targets(source, values, active, lock, render_source, render_target, compile_build, label):
+    """Paused, staged, warming, armed and active descriptions: no resource is
+    added or removed and intake is enabled last."""
     paused = pause_values(values, compile_build)
     staged = pause_values(active, compile_build)
     def description(v, selected, render):
@@ -205,17 +208,50 @@ def targets(source, selection, upstream, approvals, render_source, render_target
     for phase in ('warming', 'armed', 'active'):
         result[phase] = description(initial_activation.phase_values(staged, phase, compile_build), lock, render_target)
     if result['active']['values'] != active:
-        raise ValueError('Model upstream activation changed its reviewed target')
+        raise ValueError(label + ' activation changed its reviewed target')
     inventory = set(prepared_resources.documents(source['documents']))
     if any(set(prepared_resources.documents(v['documents'])) != inventory for v in result.values()):
-        raise ValueError('Model upstream switch cannot add or remove Helm resources')
+        raise ValueError(label + ' cannot add or remove Helm resources')
     armed = copy.deepcopy(result['armed']['documents'])
     for obj in armed:
         if obj['kind'] == 'Deployment' and obj['metadata']['name'] == 'ai-sdlc-intake':
             obj['spec']['replicas'] = 1
     if armed != result['active']['documents']:
-        raise ValueError('Model upstream activation must enable intake last')
+        raise ValueError(label + ' activation must enable intake last')
     return result
+
+
+def targets(source, selection, upstream, approvals, render_source, render_target, compile_build, now, browser_ca_uid):
+    """Uniform same-schema publication with the reviewed model upstream, the
+    per-call windows and renewed approvals. Authority, budgets, build and
+    scope are inherited unchanged; no migration exists."""
+    if not isinstance(approvals, dict) or set(approvals) != {'provenance', 'release'}:
+        raise ValueError('Both independently reviewed approval documents are required')
+    upstream = validate_upstream(upstream)
+    if source['values'].get('modelGateway', {}).get('adapter', 'agent-cli') != 'agent-cli':
+        raise ValueError('Source already uses a model upstream')
+    values, active = publication(source, selection, approvals, render_source, render_target, now, browser_ca_uid, 'repair')
+    candidate = json.loads(active['candidate']['configJSON'])
+    profile = candidate['profile']
+    if profile.get('maxRepairs') != 1 or 'callSeconds' in profile or upstream['callSeconds'] > profile['maxSeconds']:
+        raise ValueError('Completed repair generator profile without a call window required')
+    profile['callSeconds'] = upstream['callSeconds']
+    active['candidate']['configJSON'] = json.dumps(candidate, sort_keys=True)
+    review = json.loads(active['review']['configJSON'])
+    if 'callSeconds' in review['profile'] or upstream['reviewCallSeconds'] > review['profile']['maxSeconds']:
+        raise ValueError('Reviewer profile without a call window required')
+    review['profile']['callSeconds'] = upstream['reviewCallSeconds']
+    active['review']['configJSON'] = json.dumps(review, sort_keys=True)
+    active['modelGateway'] = gateway_values(upstream)
+    # Closed delta: nothing else in the installation values may change.
+    restored = without_publication(active, values)
+    restored.pop('modelGateway')
+    original = copy.deepcopy(values)
+    original.pop('modelGateway', None)
+    if restored != original:
+        raise ValueError('Model upstream switch changed unrelated installation values')
+    return phase_targets(source, values, active, publication_lock(source, selection), render_source, render_target,
+                         compile_build, 'Model upstream')
 
 
 class UpstreamApprovalPreflight(RepairApprovalPreflight):
@@ -287,6 +323,8 @@ class CompletedRepairSource:
 
 
 class ModelUpstreamUpgrade(ReviewRepairUpgrade):
+    VERSION, MODE, REPORT, LABEL = VERSION, 'model-upstream', 'modelUpstream', 'model upstream'
+
     def __init__(self, config, run=None, revision=None, upstream_path=None, trust_path=None, target_path=None):
         self.config = config
         self.source_chart = None
@@ -343,10 +381,17 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
             self.close()
             raise
 
+    def targets(self, source, compile_build, browser_ca_uid):
+        return targets(source, self.selection, self.upstream, self.approvals, self.source_render, self.config.render,
+                       compile_build, time.time(), browser_ca_uid)
+
+    def migrated_proof(self):
+        return self.source_browser.record['migratedProof']
+
     def original_database_authority(self, proof=None, database=None):
         database = database or self.database()
         current = proof if proof is not None else self.snapshot(database)
-        original = self.source_browser.record['migratedProof']
+        original = self.migrated_proof()
         for field in ('@schema', '@roles', '@membership', '@role-settings', 'schema_migrations'):
             if current[field] != original[field]:
                 raise ValueError('Original schema37 database authority changed')
@@ -432,8 +477,7 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
         if (not isinstance(browser_ca, dict) or browser_ca.get('immutable') is not True
                 or browser_ca.get('data') != {'ca.crt': self.approvals['release']['tlsCA']}):
             raise ValueError('Browser platform CA must be an immutable object holding exactly the reviewed CA')
-        result = targets(source, self.selection, self.upstream, self.approvals, self.source_render, self.config.render,
-                         compile_build, time.time(), browser_ca['metadata']['uid'])
+        result = self.targets(source, compile_build, browser_ca['metadata']['uid'])
         identities = self.source_browser.record['resourceUIDs']
         if any(set(prepared_resources.documents(t['documents'])) != set(identities) for t in result.values()):
             raise ValueError('Model upstream switch cannot add or remove original resources')
@@ -466,10 +510,10 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
             raise ValueError('Actual browser and release compilation for the new target is required')
         self.observe('source')
         now = time.time()
-        self.save({'version': VERSION, 'nonce': secrets.token_hex(16), 'parentSHA256': self.parent_hash,
+        self.save({'version': self.VERSION, 'nonce': secrets.token_hex(16), 'parentSHA256': self.parent_hash,
             'createdAt': now, 'expiresAt': initial_activation.activation_expiry(result['active']['values'], now),
             'chartSHA256': browser_upgrade_chart.digest(self.target_chart), 'sourceChartSHA256': self.source_chart.expected,
-            'mode': 'model-upstream', 'completed': 'source', 'transition': None,
+            'mode': self.MODE, 'completed': 'source', 'transition': None,
             'selection': copy.deepcopy(self.selection), 'upstream': copy.deepcopy(self.upstream),
             'approvals': copy.deepcopy(self.approvals), 'approvalsSHA256': bootstrap.digest(self.approvals),
             'targets': result, 'sourceProof': proof['data'], 'sourceCompatibility': proof, 'sourceRoleIdentities': roles,
@@ -481,8 +525,8 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
     def run(self):
         self.begin()
         self.deadline()
-        if self.record.get('mode') != 'model-upstream' or self.record.get('recoveryPause'):
-            raise ValueError('Original model upstream operation required')
+        if self.record.get('mode') != self.MODE or self.record.get('recoveryPause'):
+            raise ValueError('Original ' + self.LABEL + ' operation required')
         if self.record['completed'] == 'source':
             self.pause_current()
             self.record['completed'] = 'paused'
@@ -511,29 +555,31 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
     def publish_report(self, *, active):
         self.observe('active' if active else 'paused')
         result = copy.deepcopy(self.record['installationSource'])
-        result.update(configuration='active' if active else 'model-upstream-upgrade-paused', installationReady=active,
+        result.update(configuration='active' if active else self.MODE + '-upgrade-paused', installationReady=active,
             runtimePaused=not active, innerFrozen=not active, outerFrozen=not active, deliveryEnabled=active,
-            issueIntakeEnabled=active, runtimeReadinessValidated=active, modelUpstreamUpgradeOperation=self.record['nonce'],
-            modelUpstreamUpgradeParentSHA256=self.parent_hash, modelUpstreamSelection=copy.deepcopy(self.selection),
+            issueIntakeEnabled=active, runtimeReadinessValidated=active,
             modelUpstream=copy.deepcopy(self.record['upstream']), approvalDocumentsSHA256=self.record['approvalsSHA256'],
             uniformTargetPublication=True,
             observedAt=int(time.time()*1000), previousWorkflowAuthorityRenewed=False, workflowEvidence=False,
             autonomousEndToEndValidated=False)
+        result.update({self.REPORT + 'UpgradeOperation': self.record['nonce'],
+                       self.REPORT + 'UpgradeParentSHA256': self.parent_hash,
+                       self.REPORT + 'Selection': copy.deepcopy(self.selection)})
         reports = self.record['installationReports']
         if reports and {k: v for k, v in reports[-1].items() if k != 'observedAt'} == {k: v for k, v in result.items() if k != 'observedAt'}:
             result = reports[-1]
         else:
             if len(reports) >= 2:
-                raise ValueError('Original model upstream report bound exceeded')
+                raise ValueError('Original ' + self.LABEL + ' report bound exceeded')
             reports.append(result)
             self.save(self.record)
         platform.write_record(self.config.state_dir / 'installation.json', result)
 
     def status(self):
         if self.record is None or self.record.get('transition'):
-            raise ValueError('Complete model upstream phase required')
+            raise ValueError('Complete ' + self.LABEL + ' phase required')
         self.observe(self.record['completed'])
-        return {'version': VERSION, 'phase': self.record['completed'], 'catalogSize': len(self.catalog),
+        return {'version': self.VERSION, 'phase': self.record['completed'], 'catalogSize': len(self.catalog),
             'issueIntakeEnabled': self.record['completed'] == 'active', 'modelUpstream': self.record['upstream'],
             'approvalsValidUntil': min(v['expiresAt'] for v in self.record['approvals'].values()),
             'administrativeDeadline': int(self.record['expiresAt']*1000),
