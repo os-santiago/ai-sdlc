@@ -90,7 +90,11 @@ def render(messages, tools, tokens, marker):
             if isinstance(function, dict):
                 lines.append("[%s assistant requested action %s] %s %s" % (marker, call.get("id", ""),
                                                                            function.get("name"), function.get("arguments")))
-    lines += ["", "Write the next assistant turn (at most %d tokens)." % tokens]
+    # The agent's own system prompt may describe other tool-call formats; the
+    # answer format is restated last, where it takes precedence in practice.
+    lines += ["", "Write the next assistant turn (at most %d tokens) as exactly one JSON object "
+              "{\"content\": ..., \"requested_actions\": [...]} and nothing else: no text before or "
+              "after it, no XML or function-call markup, no transcript headers." % tokens]
     return "\n".join(lines)
 
 
