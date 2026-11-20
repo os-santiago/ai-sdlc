@@ -180,5 +180,14 @@ spec:
         - namespaceSelector:
             matchExpressions:
               - {key: kubernetes.io/metadata.name, operator: In, values: [ai-sdlc-runtime, ai-sdlc-builds, ai-sdlc-production]}
+        # Tekton Chains attaches the build's signature and attestation, which
+        # provenance verification requires; only its controller is admitted.
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: tekton-pipelines}}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: controller
+              app.kubernetes.io/instance: default
+              app.kubernetes.io/name: controller
+              app.kubernetes.io/part-of: tekton-chains
       ports: [{protocol: TCP, port: 5000}]
   egress: []
