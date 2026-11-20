@@ -4,8 +4,10 @@ Goal: a release that another team can install, point at **their own
 repository**, and evaluate with reproducible results. v1 prioritizes the inner
 loop (issue to merged, verified and reviewed pull request) and runs on standard
 Kubernetes and OpenShift. A generic outer loop (build, sign, deploy) follows as
-v1.1. Development happens first on local kind; when the v1 milestones pass
-there, testing, adjustment and evolution move to an OpenShift cluster. Milestones keep their original
+v1.1. Development happens first on local kind; when the criteria of the v1
+milestones that apply to kind pass there (for M5: the kit and installer run on
+kind without kind-specific mechanisms), testing, adjustment and evolution move
+to an OpenShift cluster, where the remaining M5 criteria are validated. Milestones keep their original
 numbers: M3 (the outer loop) was moved after M4 when the inner loop was chosen
 as the v1 core, and M5 (platform portability) was added after it. Status of each capability: [capability matrix](capabilities.md).
 
