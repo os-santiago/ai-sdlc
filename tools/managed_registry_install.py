@@ -31,6 +31,11 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def chart_manifest():
+    return digest({str(p.relative_to(CHART)):hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(CHART.rglob('*')) if p.is_file()})
+
+
 def network_spec(value):
     result=copy.deepcopy(value)
     for key in ('ingress','egress'):
@@ -91,8 +96,7 @@ def prepare(state_dir, cluster, provider, lock, existing_cluster):
     """Generate once, before the cluster or any registry object is created."""
     path=state_dir/'managed-registry.json'
     image=lock['image']['repository']+'@'+lock['migrator']['digest']
-    manifest=digest({str(p.relative_to(CHART)):hashlib.sha256(p.read_bytes()).hexdigest()
-        for p in sorted(CHART.rglob('*')) if p.is_file()})
+    manifest=chart_manifest()
     expected={'version':VERSION,'cluster':cluster,'provider':provider,'migratorImage':image,'chartSHA256':manifest}
     if path.exists() or path.is_symlink():
         state=read_record(path)
@@ -168,7 +172,9 @@ class Installer:
             '-f','-'],input=json.dumps(self.chart_values()),capture_output=True,limit=30)
         return [x for x in yaml.safe_load_all(result.stdout) if x and x['kind']!='Namespace']
 
-    def check_chart_objects(self, capture=False):
+    def check_chart_objects(self, capture=False, network=None):
+        # network: the expected NetworkPolicy spec while a reviewed boundary
+        # transition is in progress; every other object stays exact.
         expected=self.chart_objects()
         recorded=self.state.get('chartObjects')
         observed={}
@@ -194,7 +200,7 @@ class Installer:
             if kind=='Deployment' and (current['spec'].get('replicas')!=1 or
                     normalized_template(current['spec']['template'])!=normalized_template(desired['spec']['template'])):
                 raise ValueError('Registry execution template changed')
-            if kind=='NetworkPolicy' and network_spec(current.get('spec'))!=network_spec(desired.get('spec')):
+            if kind=='NetworkPolicy' and network_spec(current.get('spec'))!=network_spec(network if network is not None else desired.get('spec')):
                 raise ValueError('Registry network boundary changed')
             if not stable_chart_content(desired,current):
                 raise ValueError('Registry trust, endpoint, identity or storage configuration changed')

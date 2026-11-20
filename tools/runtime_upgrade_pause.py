@@ -200,7 +200,7 @@ def main(argv=None):
         'reviewer-image','reviewer-image-status','browser','browser-status',
         'review-feedback','review-feedback-status','browser-reapprove','browser-reapprove-status',
         'review-repair','review-repair-status','model-upstream','model-upstream-status',
-        'release-refresh','release-refresh-status'));parser.add_argument('--cluster',required=True)
+        'release-refresh','release-refresh-status','registry-boundary','registry-boundary-status'));parser.add_argument('--cluster',required=True)
     parser.add_argument('--provider',choices=('auto','podman','docker'),default='auto')
     parser.add_argument('--provenance-trust',type=Path)
     parser.add_argument('--release-target',type=Path)
@@ -215,6 +215,10 @@ def main(argv=None):
             raise ValueError('Model upstream switch takes its reviewed upstream and both approval documents together')
     elif args.model_upstream is not None:
         raise ValueError('Model upstream document is accepted only by model-upstream')
+    elif args.command in ('registry-boundary', 'registry-boundary-status'):
+        if (args.provenance_trust is not None or args.release_target is not None or args.target_run is not None
+                or args.target_revision is not None or args.source_run is not None or args.source_revision is not None):
+            raise ValueError('Registry boundary upgrade takes no publication or approval inputs')
     elif args.command in ('reapprove', 'browser-reapprove', 'review-repair', 'release-refresh'):
         if args.provenance_trust is None or args.release_target is None:
             raise ValueError('Reapproval requires both separately reviewed documents')
@@ -254,6 +258,15 @@ def main(argv=None):
             upgrade=ModelUpstreamUpgrade(config,args.target_run,args.target_revision,args.model_upstream,args.provenance_trust,args.release_target)
             try:result=upgrade.run() if args.command=='model-upstream' else upgrade.status()
             finally:upgrade.close()
+        elif args.command in ('registry-boundary','registry-boundary-status'):
+            import managed_registry_install
+            import supply_chain_install
+            from registry_boundary_upgrade import RegistryBoundaryUpgrade
+            record=managed_registry_install.read_record(state/'managed-registry.json')
+            installer=managed_registry_install.Installer(state,record,kubectl,binaries,supply_chain_install.Deadline(600),
+                record.get('clusterUID',''),read_only=args.command=='registry-boundary-status')
+            upgrade=RegistryBoundaryUpgrade(installer)
+            result=upgrade.run() if args.command=='registry-boundary' else upgrade.status()
         elif args.command in ('release-refresh','release-refresh-status'):
             if args.source_run is not None or args.source_revision is not None:
                 raise ValueError('Release refresh preserves the original recorded model upstream source')
