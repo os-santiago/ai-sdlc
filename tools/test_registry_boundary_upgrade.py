@@ -11,12 +11,15 @@ import registry_boundary_upgrade as boundary
 import runtime_upgrade_pause
 
 HELM = os.environ.get('AI_SDLC_TEST_HELM', 'helm')
+SECRETS = ('zot-htpasswd', 'internal-registry-client-auth', 'provenance-registry-reader')
 
 
 def accepted_state(**changes):
     state = {'version': registry.VERSION, 'status': 'verified', 'replacementProof': {'status': 'passed'},
              'chartObjects': {'NetworkPolicy/registry-boundary': 'uid'}, 'storage': {'pvcUID': 'p'},
-             'clusterUID': 'c', 'creationNonce': 'n', 'custody': {}}
+             'clusterUID': 'c', 'creationNonce': 'n', 'custody': {},
+             'objects': {'Namespace/kind-registry': {'uid': 'ns', 'nonce': 'x'},
+                         **{'Secret/' + n: {'uid': 'u-' + n, 'nonce': 'n-' + n} for n in SECRETS}}}
     state.update(changes)
     return state
 
@@ -26,15 +29,22 @@ class FakeInstaller:
         self.state = state or accepted_state()
         self.live = copy.deepcopy(live)
         self.saved, self.checks, self.helm = [], [], []
-        self.binaries, self.kubectl = {'helm': 'helm'}, ['kubectl', '--kubeconfig', 'k']
+        self.binaries, self.kubectl = {'helm': 'helm'}, ['kubectl', '--kubeconfig', 'k', '--context', 'kind-c']
         self.deadline = Mock()
         self.deadline.remaining.return_value = 600
         self.deadline.run.side_effect = self.apply
         self.physical = {'pvcUID': 'p'}
+        self.release = {'status': 'deployed', 'revision': 1}
+        self.secrets = {n: {'metadata': {'uid': 'u-' + n, 'annotations': {registry.NONCE: 'n-' + n}}, 'immutable': True}
+                        for n in SECRETS}
 
     def apply(self, argv, **kwargs):
+        if argv[1] == 'status':
+            return Mock(stdout=__import__('json').dumps({'info': {'status': self.release['status']},
+                                                         'version': self.release['revision']}))
         self.helm.append(argv)
         self.live = boundary.target_boundary(self.rendered()['spec'])
+        self.release = {'status': 'deployed', 'revision': self.release['revision'] + 1}
 
     def rendered(self):
         spec = boundary.original_boundary()
@@ -51,6 +61,8 @@ class FakeInstaller:
         assert cold is False
 
     def read(self, kind, name, namespace=None):
+        if kind == 'secret':
+            return copy.deepcopy(self.secrets.get(name))
         return {'spec': copy.deepcopy(self.live)}
 
     def check_chart_objects(self, capture=False, network=None):
@@ -102,6 +114,8 @@ class Run(unittest.TestCase):
         self.assertEqual(len(installer.helm), 1)
         self.assertIn('upgrade', installer.helm[0])
         self.assertNotIn('--install', installer.helm[0])
+        self.assertEqual(installer.helm[0][installer.helm[0].index('--kube-context') + 1], 'kind-c')
+        self.assertEqual(installer.state['boundaryUpgrade']['release'], {'status': 'deployed', 'revision': 1})
         self.assertFalse(installer.saved[0]['boundaryUpgrade']['completed'])  # intent before the effect
         self.assertTrue(installer.state['boundaryUpgrade']['completed'])
         self.assertEqual(installer.state['chartSHA256'], registry.chart_manifest())
@@ -112,8 +126,10 @@ class Run(unittest.TestCase):
         installer.save(dict(installer.state, boundaryUpgrade={
             'version': boundary.VERSION, 'from': registry.digest(registry.network_spec(boundary.original_boundary())),
             'to': registry.digest(registry.network_spec(boundary.target_boundary(installer.rendered()['spec']))),
-            'storage': {'pvcUID': 'p'}, 'completed': False, 'targetChartSHA256': registry.chart_manifest()}))
+            'storage': {'pvcUID': 'p'}, 'completed': False, 'targetChartSHA256': registry.chart_manifest(),
+            'release': {'status': 'deployed', 'revision': 1}, 'custody': {'Secret/' + n: 'u-' + n for n in SECRETS}}))
         installer.live = boundary.target_boundary(installer.rendered()['spec'])
+        installer.release = {'status': 'deployed', 'revision': 2}
         boundary.RegistryBoundaryUpgrade(installer).run()
         self.assertEqual(installer.helm, [])
         self.assertTrue(installer.state['boundaryUpgrade']['completed'])
@@ -128,9 +144,45 @@ class Run(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'without an original operation'):
             boundary.RegistryBoundaryUpgrade(admitted).run()
         moved = FakeInstaller(boundary.original_boundary())
-        moved.deadline.run.side_effect = lambda argv, **kw: (moved.apply(argv), setattr(moved, 'physical', {'pvcUID': 'q'}))
+        moved.deadline.run.side_effect = lambda argv, **kw: (moved.apply(argv, **kw) if argv[1] == 'status' else
+            (moved.apply(argv, **kw), setattr(moved, 'physical', {'pvcUID': 'q'}))[0])
         with self.assertRaisesRegex(ValueError, 'storage changed'):
             boundary.RegistryBoundaryUpgrade(moved).run()
+
+    def test_helm_release_state_gates_the_effect_and_completion(self):
+        pending = FakeInstaller(boundary.original_boundary())
+        pending.release = {'status': 'pending-upgrade', 'revision': 2}
+        with self.assertRaisesRegex(ValueError, 'must be deployed'):
+            boundary.RegistryBoundaryUpgrade(pending).run()
+        self.assertEqual(pending.helm, [])
+        # Helm applied the policy but its release stayed pending: never completed.
+        stuck = FakeInstaller(boundary.original_boundary())
+        stuck.deadline.run.side_effect = lambda argv, **kw: (stuck.apply(argv, **kw) if argv[1] == 'status' else
+            (stuck.helm.append(argv), setattr(stuck, 'live', boundary.target_boundary(stuck.rendered()['spec'])),
+             setattr(stuck, 'release', {'status': 'pending-upgrade', 'revision': 2})))
+        with self.assertRaisesRegex(ValueError, 'not the deployed boundary revision'):
+            boundary.RegistryBoundaryUpgrade(stuck).run()
+        self.assertFalse(stuck.state['boundaryUpgrade']['completed'])
+        with self.assertRaisesRegex(ValueError, 'not the deployed boundary revision'):
+            boundary.RegistryBoundaryUpgrade(stuck).run()
+        self.assertEqual(len(stuck.helm), 1)
+
+    def test_private_custody_must_keep_its_original_identity(self):
+        for change in (lambda s: s['zot-htpasswd']['metadata'].__setitem__('uid', 'other'),
+                       lambda s: s['provenance-registry-reader']['metadata']['annotations'].__setitem__(registry.NONCE, 'x'),
+                       lambda s: s['internal-registry-client-auth'].__setitem__('immutable', False),
+                       lambda s: s.pop('zot-htpasswd')):
+            installer = FakeInstaller(boundary.original_boundary())
+            change(installer.secrets)
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, 'custody'):
+                boundary.RegistryBoundaryUpgrade(installer).run()
+            self.assertEqual(installer.helm, [])
+
+    def test_helm_targets_the_fenced_context_only(self):
+        installer = FakeInstaller(boundary.original_boundary())
+        installer.kubectl = ['kubectl', '--kubeconfig', 'k']
+        with self.assertRaisesRegex(ValueError, 'Explicit registry cluster context'):
+            boundary.helm_target(installer)
 
     def test_only_an_accepted_managed_registry_is_selectable(self):
         for change in ({'status': 'installed'}, {'replacementProof': {}}, {'version': 'x'}, {'chartObjects': None}, {'storage': None}):

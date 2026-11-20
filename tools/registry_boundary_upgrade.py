@@ -54,6 +54,47 @@ def live_boundary(installer):
     return registry.network_spec(current.get('spec'))
 
 
+def helm_target(installer):
+    """The same kubeconfig and explicit context the kubectl fences use, so
+    Helm can never act on another cluster selected by its environment."""
+    kubectl = installer.kubectl
+    if '--kubeconfig' not in kubectl or '--context' not in kubectl:
+        raise ValueError('Explicit registry cluster context required')
+    return ['--kubeconfig', str(kubectl[kubectl.index('--kubeconfig') + 1]),
+            '--kube-context', str(kubectl[kubectl.index('--context') + 1])]
+
+
+def release_state(installer):
+    raw = installer.deadline.run([installer.binaries['helm'], 'status', registry.RELEASE, '--namespace',
+                                  registry.RELEASE_NAMESPACE, *helm_target(installer), '-o', 'json'],
+                                 capture_output=True, limit=30).stdout
+    value = json.loads(raw)
+    status, revision = (value.get('info') or {}).get('status'), value.get('version')
+    if not isinstance(status, str) or type(revision) is not int or revision < 1:
+        raise ValueError('Registry Helm release state unavailable')
+    return {'status': status, 'revision': revision}
+
+
+def custody(installer):
+    """The private registry Secrets created outside Helm keep their original
+    identity: same UID, custody nonce and immutability (immutable data cannot
+    change without a new UID). Observation only; nothing is created."""
+    observed = {}
+    for key, origin in sorted(installer.state.get('objects', {}).items()):
+        if not key.startswith('Secret/'):
+            continue
+        current = installer.read('secret', key.split('/', 1)[1], registry.NAMESPACE)
+        meta = (current or {}).get('metadata', {})
+        if (current is None or meta.get('uid') != origin.get('uid') or meta.get('deletionTimestamp')
+                or meta.get('annotations', {}).get(registry.NONCE) != origin.get('nonce')
+                or current.get('immutable') is not True):
+            raise ValueError('Original private registry custody changed')
+        observed[key] = meta['uid']
+    if len(observed) != 3:
+        raise ValueError('Original private registry custody incomplete')
+    return observed
+
+
 class RegistryBoundaryUpgrade:
     def __init__(self, installer):
         self.installer = installer
@@ -84,7 +125,8 @@ class RegistryBoundaryUpgrade:
         else:
             raise ValueError('Registry boundary differs from both reviewed states')
         return {'version': VERSION, 'phase': phase, 'journal': copy.deepcopy(installer.state.get('boundaryUpgrade')),
-                'storage': installer.storage(), 'workflowEvidence': False}
+                'storage': installer.storage(), 'custody': custody(installer), 'release': release_state(installer),
+                'workflowEvidence': False}
 
     def run(self):
         installer = self.installer
@@ -106,10 +148,18 @@ class RegistryBoundaryUpgrade:
                 raise ValueError('Registry boundary differs from the original; refusing')
             installer.check_chart_objects(network=original_boundary())
             physical = installer.storage()
+            secrets = custody(installer)
+            release = release_state(installer)
             if journal is None:
-                journal = dict(expected_journal, storage=physical, completed=False,
+                if release['status'] != 'deployed':
+                    raise ValueError('Registry Helm release must be deployed before the boundary upgrade')
+                journal = dict(expected_journal, storage=physical, custody=secrets, release=release, completed=False,
                                sourceChartSHA256=installer.state.get('chartSHA256'), targetChartSHA256=registry.chart_manifest())
                 installer.save(dict(installer.state, boundaryUpgrade=journal))
+            elif release != journal['release'] or secrets != journal['custody']:
+                # A pending or later Helm revision is not this operation's to
+                # resolve by sending the change again.
+                raise ValueError('Registry Helm release or custody changed since the boundary operation began')
             if journal.get('targetChartSHA256') != registry.chart_manifest():
                 raise ValueError('Registry chart changed since the boundary operation began')
             if installer.deadline.remaining(330) < 330:
@@ -119,11 +169,17 @@ class RegistryBoundaryUpgrade:
                 json.dump(installer.chart_values(), output)
                 output.flush()
                 installer.deadline.run([installer.binaries['helm'], 'upgrade', registry.RELEASE, registry.CHART,
-                                        '--kubeconfig', installer.kubectl[installer.kubectl.index('--kubeconfig') + 1],
+                                        *helm_target(installer),
                                         '--namespace', registry.RELEASE_NAMESPACE, '-f', output.name,
                                         '--server-side=false', '--wait=legacy', '--timeout', '5m'], limit=330)
         installer.fence(cold=False)
         installer.check_chart_objects()
+        if custody(installer) != journal['custody']:
+            raise ValueError('Original private registry custody changed during the boundary upgrade')
+        final = release_state(installer)
+        if final != {'status': 'deployed', 'revision': journal['release']['revision'] + 1}:
+            # Only the one revision this operation sent, fully deployed, completes it.
+            raise ValueError('Registry Helm release is not the deployed boundary revision')
         if installer.storage() != journal['storage']:
             raise ValueError('Original registry storage changed during the boundary upgrade')
         if journal.get('targetChartSHA256') != registry.chart_manifest():
