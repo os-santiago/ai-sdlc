@@ -11,7 +11,15 @@ Probes, all through the installation-selected adapter and the shared contract:
 The per-call timeout is derived for the planning envelope (the largest prompt
 and answer one SCC step may need) with a safety factor:
 
-  timeout = ceil(safety * (promptTokens/prefillRate + completionTokens/generationRate)) + overhead
+  timeout = ceil(safety * (latency + promptTokens/prefillRate + completionTokens/generationRate)) + overhead
+
+The fixed per-call latency (connection, queueing, a wrapper's start-up) is
+measured with a minimal call and removed from each probe before its rate is
+computed, then added once: otherwise the latency inside a short probe would be
+extrapolated to the whole planning envelope. The smaller of two latency runs
+is used, and latency may account for at most half of a probe's duration, so a
+noisy latency measurement can at most double a rate (halving the
+token-proportional part of the timeout) while being added back in full.
 
 clamped below at 30 s. A model that cannot meet the installation ceiling, or
 cannot propose a valid tool call, fails the benchmark: the gateway exits and
@@ -39,6 +47,16 @@ def prefill_probe():
     # a second gateway benchmarking the same upstream).
     return {"messages": [{"role": "user", "content": "Run " + secrets.token_hex(16) + ".\n" + PREFILL_TEXT
                           + "\nReply with the single word OK."}], "max_tokens": 1, "temperature": 0}
+def latency_probe():
+    return {"messages": [{"role": "user", "content": "Run " + secrets.token_hex(16) + ". Reply with the single word OK."}],
+            "max_tokens": 1, "temperature": 0}
+
+
+def _net(seconds, latency):
+    # Latency may account for at most half of a probe's duration.
+    return max(seconds - latency, seconds / 2)
+
+
 GENERATION_PROBE = {"messages": [{"role": "user", "content": "Write the numbers from 1 to 400 separated by spaces."}],
                     "max_tokens": 192, "temperature": 0}
 
@@ -73,24 +91,27 @@ def benchmark(adapter, ceiling, prompt_tokens=16384, completion_tokens=4096, saf
         profile["basis"] = "tool-call-latency"
     else:
         try:
+            # The smaller of two minimal calls is the fixed per-call latency.
+            latency = min(_timed(adapter, latency_probe(), ceiling, True)[1] for _ in range(2))
             # The slower of two uncached prefill runs.
             rates = []
             for _ in range(2):
                 prefill, prefill_seconds = _timed(adapter, prefill_probe(), ceiling, True)
-                rates.append(prefill.prompt_tokens / prefill_seconds)
+                rates.append(prefill.prompt_tokens / _net(prefill_seconds, latency))
             generation, generation_seconds = _timed(adapter, GENERATION_PROBE, ceiling, True)
         except Exception:
             raise BenchmarkFailed("model unavailable") from None
         prefill_rate = min(rates)
         if prefill_rate <= 0:
             raise BenchmarkFailed("model throughput unmeasurable")
-        # Remove the (short) prompt's share so the rate reflects decoding only.
-        decode_seconds = max(generation_seconds - generation.prompt_tokens / prefill_rate, 1e-3)
+        # Remove the latency and the (short) prompt's share so the rate reflects decoding only.
+        decode_seconds = max(_net(generation_seconds, latency) - generation.prompt_tokens / prefill_rate, 1e-3)
         generation_rate = generation.completion_tokens / decode_seconds
         if prefill_rate <= 0 or generation_rate <= 0 or generation.completion_tokens < 8:
             raise BenchmarkFailed("model throughput unmeasurable")
-        timeout = math.ceil(safety * (prompt_tokens / prefill_rate + completion_tokens / generation_rate)) + overhead
+        timeout = math.ceil(safety * (latency + prompt_tokens / prefill_rate + completion_tokens / generation_rate)) + overhead
         profile.update({"basis": "throughput", "estimatedUsage": prefill.estimated or generation.estimated,
+                        "latencySeconds": round(latency, 3),
                         "promptTokensPerSecond": round(prefill_rate, 1),
                         "completionTokensPerSecond": round(generation_rate, 1)})
     timeout = max(MIN_SECONDS, timeout)
