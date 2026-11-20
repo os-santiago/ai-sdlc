@@ -26,7 +26,7 @@ Milestones refer to the [roadmap](roadmap.md). Last reviewed 2026-11-20.
 | Approval windows | Expire (12 to 24 h) | Renewal needs reviewed documents and a newer publication (M2). |
 | Retry after a fail-closed stop | Not supported | Build and provenance are one attempt per merge (M2). |
 | Operator visibility | Limited | Several components log "stopped safely" without a reason (M2). |
-| Platforms | kind on Linux amd64 | Remote clusters and OpenShift are not validated. |
+| Platforms | kind on Linux amd64 | Build slots use node tmpfs mounts through the container runtime, the registry is a managed local one, and installation needs host access. Remote clusters and OpenShift are not validated (M5). |
 
 ## Proven so far
 

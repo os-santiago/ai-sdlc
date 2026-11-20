@@ -15,7 +15,8 @@ hidden human steps, and an independent check gates each consequential action.
 > but onboarding your own repository still requires code. See the
 > [capability matrix](docs/capabilities.md) for what is generic today, what is
 > project-specific, and what is not yet proven, and the [roadmap](docs/roadmap.md)
-> for the path to an adoptable v1.
+> for the path to an adoptable v1 on Kubernetes and OpenShift (developed on kind
+> first, then validated on OpenShift).
 
 ## How it works
 

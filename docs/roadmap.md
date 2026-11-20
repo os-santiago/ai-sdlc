@@ -2,10 +2,12 @@
 
 Goal: a release that another team can install, point at **their own
 repository**, and evaluate with reproducible results. v1 prioritizes the inner
-loop (issue to merged, verified and reviewed pull request). A generic outer
-loop (build, sign, deploy) follows as v1.1. Milestones keep their original
+loop (issue to merged, verified and reviewed pull request) and runs on standard
+Kubernetes and OpenShift. A generic outer loop (build, sign, deploy) follows as
+v1.1. Development happens first on local kind; when the v1 milestones pass
+there, testing, adjustment and evolution move to an OpenShift cluster. Milestones keep their original
 numbers: M3 (the outer loop) was moved after M4 when the inner loop was chosen
-as the v1 core. Status of each capability: [capability matrix](capabilities.md).
+as the v1 core, and M5 (platform portability) was added after it. Status of each capability: [capability matrix](capabilities.md).
 
 ## M0: Truthful positioning
 
@@ -61,6 +63,22 @@ bespoke intervention.
 
 **Accepted when** an external team can reproduce the published results in under
 a day.
+
+## M5: Platform portability (v1)
+
+- Replace kind-specific mechanisms with cluster equivalents:
+  - build slots on PVCs from a StorageClass, instead of node tmpfs mounts
+    created through the container runtime;
+  - a configurable external registry, instead of only the managed local one;
+  - no installer step that needs access to the node or host.
+- OpenShift compatibility: restricted SCCs, Routes, the operator-provided
+  Pipelines (Tekton) and Chains.
+- The evaluation kit (M4) and the installer run on any conformant cluster.
+
+**Accepted when** the evaluation kit produces the same results on kind, on an
+OpenShift cluster and on a managed Kubernetes cluster, with no
+platform-specific manual steps beyond documented prerequisites. Kind is
+completed first; OpenShift validation follows with access to a cluster.
 
 ## v1.1, M3: Pluggable outer loop
 
