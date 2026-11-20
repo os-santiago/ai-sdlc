@@ -330,7 +330,23 @@ class BenchmarkTests(unittest.TestCase):
         plain = model_benchmark.benchmark(ScriptedAdapter(self.clock), 300)
         noisy = model_benchmark.benchmark(NoisyLatency(self.clock), 300)
         self.assertLessEqual(noisy["promptTokensPerSecond"], 2 * plain["promptTokensPerSecond"] + 1)
+        self.assertLessEqual(noisy["completionTokensPerSecond"], 2 * plain["completionTokensPerSecond"] + 1)
         self.assertGreaterEqual(noisy["timeoutSeconds"], noisy["unpaddedSeconds"] + 5)
+
+    def test_a_short_generation_probe_cannot_inflate_the_decoding_rate(self):
+        class ShortGeneration(ScriptedAdapter):
+            # Generation finishes almost instantly after a 1 s fixed latency.
+            def backend(self, request, messages, tools, names, tokens, seconds):
+                result = super().backend(request, messages, tools, names, tokens, seconds)
+                if tokens == 192:
+                    self.clock[0] -= result.completion_tokens / self.generation_rate - 0.1
+                return result
+        plain = model_benchmark.benchmark(ScriptedAdapter(self.clock, latency=1.0), 300)
+        short = model_benchmark.benchmark(ShortGeneration(self.clock, latency=1.0), 300)
+        self.assertGreaterEqual(short["timeoutSeconds"], short["unpaddedSeconds"] + 5)
+        # 150 tokens decoded in ~0.1 s raw (net of a 0.004 s prompt share) is
+        # ~1500 tok/s; latency subtraction may at most double that.
+        self.assertLessEqual(short["completionTokensPerSecond"], 2 * 150 / 0.09)
 
     def test_fast_models_get_the_floor_and_slow_or_toolless_models_fail_closed(self):
         self.assertEqual(model_benchmark.benchmark(ScriptedAdapter(self.clock, 50000, 5000), 300)["timeoutSeconds"], 30)

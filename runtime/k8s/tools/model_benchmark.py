@@ -111,11 +111,12 @@ def benchmark(adapter, ceiling, prompt_tokens=16384, completion_tokens=4096, saf
         if prefill_rate <= 0:
             raise BenchmarkFailed("model throughput unmeasurable")
         # Remove the latency and the (short) prompt's share so the rate reflects decoding only.
-        decode_seconds = max(_net(generation_seconds, latency) - generation.prompt_tokens / prefill_rate, 1e-3)
+        raw_decode = max(generation_seconds - generation.prompt_tokens / min(raw_rates), 1e-3)
+        # Like the prefill rates, the decoding rate may at most double.
+        decode_seconds = max(_net(generation_seconds, latency) - generation.prompt_tokens / prefill_rate, raw_decode / 2)
         generation_rate = generation.completion_tokens / decode_seconds
         if prefill_rate <= 0 or generation_rate <= 0 or generation.completion_tokens < 8:
             raise BenchmarkFailed("model throughput unmeasurable")
-        raw_decode = max(generation_seconds - generation.prompt_tokens / min(raw_rates), 1e-3)
         unpadded = prompt_tokens / min(raw_rates) + completion_tokens / (generation.completion_tokens / raw_decode)
         timeout = max(math.ceil(safety * (latency + prompt_tokens / prefill_rate + completion_tokens / generation_rate)),
                       math.ceil(unpadded)) + overhead
