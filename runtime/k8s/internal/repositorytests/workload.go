@@ -17,8 +17,9 @@ const (
 	SettingsDirectory = "/etc/ai-sdlc/tests"
 	RunnerPath        = "/runner/component"
 	ScratchDirectory  = "/scratch"
-	// ReadySeconds bounds image start, import and the runner's marker wait.
-	ReadySeconds = 120
+	// PullSeconds bounds scheduling, image pulls and the runner install
+	// before the runner starts waiting for its marker (ReadySeconds).
+	PullSeconds = 180
 	// MarginSeconds covers tree verification, the report and termination.
 	MarginSeconds = 60
 )
@@ -88,7 +89,7 @@ func Settings(v project.Verification) ([]byte, error) {
 
 // DeadlineSeconds is the pod's hard deadline for a test timeout.
 func DeadlineSeconds(v project.Verification) int {
-	return ReadySeconds + v.TimeoutSeconds + MarginSeconds
+	return PullSeconds + ReadySeconds + v.TimeoutSeconds + MarginSeconds
 }
 
 // CompilePod renders one offline run. The repository's command is never in

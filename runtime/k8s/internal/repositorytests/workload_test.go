@@ -28,7 +28,7 @@ func TestCompilePodIsOfflineBoundedAndKeepsTheCommandOutOfTheSpec(t *testing.T) 
 	}
 	spec := w.Pod["spec"].(map[string]any)
 	for key, want := range map[string]any{"runtimeClassName": "ai-sdlc-offline", "automountServiceAccountToken": false, "enableServiceLinks": false,
-		"restartPolicy": "Never", "hostNetwork": false, "activeDeadlineSeconds": float64(ReadySeconds + 300 + MarginSeconds)} {
+		"restartPolicy": "Never", "hostNetwork": false, "activeDeadlineSeconds": float64(PullSeconds + ReadySeconds + 300 + MarginSeconds)} {
 		if spec[key] != want {
 			t.Fatal(key, spec[key])
 		}
