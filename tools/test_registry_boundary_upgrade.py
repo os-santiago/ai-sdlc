@@ -160,3 +160,16 @@ class Cli(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ChainsCredential(unittest.TestCase):
+    def test_chains_reads_the_publish_mount_secret_and_pods_carry_no_pull_secrets(self):
+        # Tekton Chains builds its keychain with UseMountSecrets (the account's
+        # `secrets`), so the boundary is the only missing piece. The build pod
+        # admission policy forbids imagePullSecrets, which the ServiceAccount
+        # admission plugin would copy into every publish pod.
+        import json
+        blueprint = json.loads((registry.CHART.parents[1] / 'konflux/build-foundation.json').read_text())
+        publish = [i for i in blueprint['items'] if i['kind'] == 'ServiceAccount' and i['metadata']['name'] == 'publish'][0]
+        self.assertEqual(publish.get('secrets'), [{'name': 'registry-auth'}])
+        self.assertNotIn('imagePullSecrets', publish)

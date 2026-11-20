@@ -5,6 +5,10 @@ admitted the runtime, build and production namespaces but not the Tekton Chains
 controller, so signatures and attestations could never be attached and
 provenance verification refused every build (fail closed).
 
+Tekton Chains authenticates with the build run's service account mounted
+secrets (k8schain UseMountSecrets), which the publish account already lists;
+the network boundary was the only missing piece.
+
 This closed transition changes exactly one thing: it adds the Chains
 controller peer to the registry ingress, through a Helm upgrade of the same
 release with the same values. Every other chart object, the recorded resource
@@ -106,6 +110,8 @@ class RegistryBoundaryUpgrade:
                 journal = dict(expected_journal, storage=physical, completed=False,
                                sourceChartSHA256=installer.state.get('chartSHA256'), targetChartSHA256=registry.chart_manifest())
                 installer.save(dict(installer.state, boundaryUpgrade=journal))
+            if journal.get('targetChartSHA256') != registry.chart_manifest():
+                raise ValueError('Registry chart changed since the boundary operation began')
             if installer.deadline.remaining(330) < 330:
                 raise ValueError('Insufficient registry Helm budget')
             installer.fence(cold=False)
