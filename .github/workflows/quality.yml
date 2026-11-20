@@ -94,6 +94,7 @@ jobs:
         run: |
           python3 -m unittest discover -s runtime/k8s/tools -p 'test_*.py' -v
           python3 -m unittest discover -s tools -p 'test_model_fixture_*.py' -v
+          python3 -m unittest discover -s tools/local_model_service -p 'test_*.py' -v
   contract:
     runs-on: ubuntu-latest
     # The execution package's real expiry/recovery waits reached 30m on hosted

@@ -27,6 +27,13 @@ Adding another provider means adding one `Adapter` subclass to
 `runtime/k8s/tools/model_adapters.py` (`ADAPTERS`) and the enum value to the
 chart schema. The worker, the verifier and the contract do not change.
 
+## Local development without a model service
+
+AI-SDLC only consumes a model-as-a-service. To simulate one on a developer host
+with a local agent CLI, see `tools/local_model_service/README.md`. The
+installation keeps using the `openai` adapter against that endpoint, and no CLI
+enters the cluster.
+
 ## Configuration
 
 ```yaml
