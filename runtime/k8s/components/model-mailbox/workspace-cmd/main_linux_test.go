@@ -101,3 +101,41 @@ func TestFixedReviewHelperRejectsForeignUIDAndCallerPaths(t *testing.T) {
 		t.Fatal("foreign reviewer accepted")
 	}
 }
+
+func TestReadyAndHoldModes(t *testing.T) {
+	parent := t.TempDir()
+	uid := "11111111-1111-4111-8111-111111111111"
+	uidPath := filepath.Join(t.TempDir(), "uid")
+	if e := os.WriteFile(uidPath, []byte(uid), 0444); e != nil {
+		t.Fatal(e)
+	}
+	b := workspacebundle.Bundle{Version: workspacebundle.Version, SourceSHA: strings.Repeat("a", 40), Files: []workspacebundle.File{{Path: "file", Mode: 0644, Data: []byte("bounded")}}}
+	if e := workspacebundle.Import(parent, b); e != nil {
+		t.Fatal(e)
+	}
+	tree, _ := b.TreeDigest()
+	if run([]string{"hold", "--pod-uid", uid}, nil, io.Discard, uidPath, parent) != nil {
+		t.Fatal("hold with the right identity refused")
+	}
+	for _, bad := range [][]string{
+		{"hold", "--pod-uid", "22222222-2222-4222-8222-222222222222"},
+		{"hold", "--pod-uid", uid, "--source-sha", b.SourceSHA},
+		{"ready", "--pod-uid", uid, "--source-sha", b.SourceSHA},
+		{"ready", "--pod-uid", uid, "--source-sha", b.SourceSHA, "--tree-sha256", strings.Repeat("b", 64)},
+		{"export", "--pod-uid", uid, "--source-sha", b.SourceSHA, "--tree-sha256", tree},
+	} {
+		if run(bad, nil, io.Discard, uidPath, parent) == nil {
+			t.Fatal("accepted", bad)
+		}
+	}
+	if _, e := os.Stat(filepath.Join(parent, "ready.json")); e == nil {
+		t.Fatal("a refused ready published a marker")
+	}
+	ready := []string{"ready", "--pod-uid", uid, "--source-sha", b.SourceSHA, "--tree-sha256", tree}
+	if e := run(ready, nil, io.Discard, uidPath, parent); e != nil {
+		t.Fatal(e)
+	}
+	if run(ready, nil, io.Discard, uidPath, parent) == nil {
+		t.Fatal("a second ready replaced the marker")
+	}
+}

@@ -15,12 +15,13 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repositorytests"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/reviewresult"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
 func run(args []string, input io.Reader, output io.Writer, uidPath, parent string) error {
-	if len(args) == 0 || (args[0] != "import" && args[0] != "export" && args[0] != "review") {
+	if len(args) == 0 || (args[0] != "import" && args[0] != "export" && args[0] != "review" && args[0] != "ready" && args[0] != "hold") {
 		return workspacebundle.ErrInvalid
 	}
 	flags := flag.NewFlagSet("workspace-transfer", flag.ContinueOnError)
@@ -28,11 +29,25 @@ func run(args []string, input io.Reader, output io.Writer, uidPath, parent strin
 	uid := flags.String("pod-uid", "", "expected assigned Pod UID")
 	source := flags.String("source-sha", "", "expected source commit")
 	digest := flags.String("digest", "", "expected import bundle SHA256")
-	if flags.Parse(args[1:]) != nil || flags.NArg() != 0 || (modelmailbox.Identity{Attempt: "workspace-transfer", PodUID: *uid}).Validate() != nil || !workspacebundle.ValidSourceSHA(*source) {
+	tree := flags.String("tree-sha256", "", "expected imported tree SHA256")
+	if flags.Parse(args[1:]) != nil || flags.NArg() != 0 || (modelmailbox.Identity{Attempt: "workspace-transfer", PodUID: *uid}).Validate() != nil {
 		return workspacebundle.ErrInvalid
 	}
-	if (args[0] == "import" && !workspacebundle.ValidDigest(*digest)) || (args[0] != "import" && *digest != "") {
-		return workspacebundle.ErrInvalid
+	switch args[0] {
+	case "hold":
+		// hold only proves the pod identity; it takes no tree arguments.
+		if *source != "" || *digest != "" || *tree != "" {
+			return workspacebundle.ErrInvalid
+		}
+	case "ready":
+		if !workspacebundle.ValidSourceSHA(*source) || !workspacebundle.ValidDigest(*tree) || *digest != "" {
+			return workspacebundle.ErrInvalid
+		}
+	default:
+		if !workspacebundle.ValidSourceSHA(*source) || *tree != "" ||
+			(args[0] == "import" && !workspacebundle.ValidDigest(*digest)) || (args[0] != "import" && *digest != "") {
+			return workspacebundle.ErrInvalid
+		}
 	}
 	f, e := os.Open(uidPath)
 	if e != nil {
@@ -42,6 +57,18 @@ func run(args []string, input io.Reader, output io.Writer, uidPath, parent strin
 	closeErr := f.Close()
 	if e != nil || closeErr != nil || len(observed) > 128 || strings.TrimSpace(string(observed)) != *uid {
 		return workspacebundle.ErrInvalid
+	}
+	switch args[0] {
+	case "hold":
+		return nil
+	case "ready":
+		// The controller calls ready only after it checked the import receipt;
+		// the marker releases the test container of this pod and tree. The tree
+		// is checked again here, before any repository code can run.
+		if repositorytests.VerifyTree(parent, *source, *tree) != nil {
+			return workspacebundle.ErrInvalid
+		}
+		return repositorytests.PublishReady(parent, repositorytests.Ready{Version: repositorytests.ReadyVersion, PodUID: *uid, SourceSHA: *source, TreeSHA256: *tree})
 	}
 	if args[0] == "import" {
 		b, e := workspacebundle.ReadVerified(input, *digest, *source)
@@ -85,6 +112,16 @@ func bounded(ctx context.Context, invoke func() error) error {
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if len(os.Args) >= 2 && os.Args[1] == "hold" {
+		// The idle exec target of a repository-tests pod: no listener, no
+		// bridge, only the identity check, then wait for termination.
+		if run(os.Args[1:], nil, io.Discard, "/var/run/ai-sdlc/pod/uid", "/workspaces") != nil {
+			fmt.Fprintln(os.Stderr, "workspace transfer rejected")
+			os.Exit(1)
+		}
+		<-ctx.Done()
+		return
+	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	err := bounded(ctx, func() error {
