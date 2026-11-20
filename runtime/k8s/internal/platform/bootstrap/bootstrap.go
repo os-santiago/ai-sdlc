@@ -134,6 +134,17 @@ func boundedFile(path string) ([]byte, error) {
 }
 
 func (c *Component) Authority() (authority.Policy, authority.Identity, error) {
+	// The installed manifest changes only when the whole load succeeds; any
+	// refusal clears it, so no stale scope survives a failed reload.
+	var installed *project.Manifest
+	loaded := false
+	defer func() {
+		if loaded {
+			project.SetInstalled(installed)
+		} else {
+			project.SetInstalled(nil)
+		}
+	}()
 	if err := ValidateMode(); err != nil {
 		return authority.Policy{}, authority.Identity{}, err
 	}
@@ -147,17 +158,6 @@ func (c *Component) Authority() (authority.Policy, authority.Identity, error) {
 	}
 	// The manifest is resolved from the same authenticated policy on every
 	// load, so delivery scope always follows the current reviewed policy.
-	// The installed manifest changes only when the whole load succeeds; any
-	// refusal clears it, so no stale scope survives a failed reload.
-	var installed *project.Manifest
-	loaded := false
-	defer func() {
-		if loaded {
-			project.SetInstalled(installed)
-		} else {
-			project.SetInstalled(nil)
-		}
-	}()
 	if p.ProjectSHA256 != "" {
 		manifest, err := project.Load(ProjectManifestPath(), p)
 		if err != nil {
