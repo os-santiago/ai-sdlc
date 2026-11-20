@@ -173,6 +173,7 @@ class ClaudeCLI:
                     pass
             print(json.dumps({"event": "completion", "model": model, "attempt": attempt + 1, "numTurns": answer.get("num_turns"),
                               "valid": message is not None, "actions": len((message or {}).get("tool_calls") or []),
+                              "actionShapes": action_shapes(message, tools), "contentBytes": len(((message or {}).get("content") or "").encode()),
                               "actionsOffered": len(tools), "durationMs": answer.get("duration_ms")}), flush=True)
             if message is not None:
                 usage = answer.get("usage") if isinstance(answer.get("usage"), dict) else {}
@@ -182,6 +183,37 @@ class ClaudeCLI:
                 completion_tokens = usage.get("output_tokens") if type(usage.get("output_tokens")) is int else 0
                 return message, prompt_tokens, completion_tokens
         raise BackendError("agent CLI did not return one valid turn in time")
+
+
+def action_shapes(message, tools=()):
+    """Names and argument keys of the proposed actions, never their values:
+    enough to explain a client-side guard refusal without logging content.
+    Only names and keys declared by the offered tools are logged; any other
+    key is counted, never shown (keys are model output)."""
+    declared = {}
+    for tool in tools or ():
+        try:
+            function = tool["function"]
+            declared[function["name"]] = set((function.get("parameters") or {}).get("properties") or {})
+        except (KeyError, TypeError, AttributeError):
+            continue
+    shapes = []
+    try:
+        calls = list((message or {}).get("tool_calls") or [])[:8]
+    except (TypeError, AttributeError):
+        return shapes
+    for call in calls:
+        try:
+            function = call.get("function") or {}
+            name = function.get("name")
+            arguments = json.loads(function.get("arguments") or "{}")
+            known = declared.get(name, set())
+            keys = sorted(k for k in arguments if k in known) if isinstance(arguments, dict) else None
+            other = sum(1 for k in arguments if k not in known) if isinstance(arguments, dict) else 0
+            shapes.append({"name": name if name in declared else None, "keys": keys, "otherKeys": other})
+        except (TypeError, AttributeError, ValueError, RecursionError):
+            shapes.append({"name": None, "keys": None, "otherKeys": 0})
+    return shapes
 
 
 def system_text(messages):

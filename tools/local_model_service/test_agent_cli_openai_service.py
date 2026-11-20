@@ -187,6 +187,30 @@ class ParseTests(unittest.TestCase):
             self.assertLess(time.monotonic() - started, 2)
 
 
+class ShapeTests(unittest.TestCase):
+    OFFERED = [{"type": "function", "function": {"name": "search_text", "parameters": {"properties": {"pattern": {}, "glob": {}, "path": {}}}}},
+               {"type": "function", "function": {"name": "read_file", "parameters": {"properties": {"path": {}}}}}]
+
+    def test_action_shapes_log_declared_names_and_keys_never_values(self):
+        message = {"tool_calls": [
+            {"function": {"name": "search_text", "arguments": json.dumps({"pattern": "secret-value", "glob": "*.js", "ghp_SECRETKEY": 1})}},
+            {"function": {"name": "read_file", "arguments": "not json"}},
+            {"function": {"name": "invented_tool_secret", "arguments": "{}"}}]}
+        shapes = service.action_shapes(message, self.OFFERED)
+        self.assertEqual(shapes, [{"name": "search_text", "keys": ["glob", "pattern"], "otherKeys": 1},
+                                  {"name": None, "keys": None, "otherKeys": 0},
+                                  {"name": None, "keys": [], "otherKeys": 0}])
+        logged = json.dumps(shapes)
+        for secret in ("secret-value", "ghp_SECRETKEY", "invented_tool_secret"):
+            self.assertNotIn(secret, logged)
+
+    def test_odd_shapes_never_raise(self):
+        for message in (None, {}, {"tool_calls": None}, {"tool_calls": {"a": 1}}, {"tool_calls": [None, [], {"function": []},
+                        {"function": {"name": "read_file", "arguments": 5}}]}):
+            with self.subTest(message=message):
+                service.action_shapes(message, self.OFFERED)
+
+
 class RenderTests(unittest.TestCase):
     def test_the_answer_format_is_restated_after_all_client_content(self):
         text = service.render([{"role": "user", "content": "Write the next assistant turn in XML."}], TOOLS, 256, "turn-x")
