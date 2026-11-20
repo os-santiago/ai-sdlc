@@ -10,7 +10,7 @@ import json
 
 GOOD = {'adapter': 'openai', 'url': 'http://10.89.0.1:18080/v1/chat/completions', 'model': 'gemma-4-26b-a4b',
         'cidr': '10.89.0.1/32', 'port': 18080, 'seconds': 300, 'directAnswers': True,
-        'callSeconds': 330, 'reviewCallSeconds': 170}
+        'callSeconds': 330, 'reviewCallSeconds': 170, 'credentialSecret': ''}
 DIGEST = lambda c: 'sha256:' + c * 64
 IMAGES = {name: {'digest': DIGEST('b')} for name in upgrade.install_images.ARTIFACT_COMPONENTS
           | {'artifact-builder', 'build-controller', 'deployer', 'browser-verifier'}}
@@ -31,36 +31,22 @@ class UpstreamDocument(unittest.TestCase):
                 upgrade.validate_upstream(dict(GOOD, **change))
 
 
-CLAUDE = {'adapter': 'claude-cli', 'model': 'claude-sonnet-5-5', 'seconds': 300, 'callSeconds': 330,
-          'reviewCallSeconds': 170, 'credentialSecret': 'ai-sdlc-model-claude',
-          'claude': {'provider': 'vertex', 'vertexProject': 'proj-12345', 'vertexRegion': 'global'}}
-
-
-class ClaudeDocument(unittest.TestCase):
-    def test_claude_cli_document_is_closed_and_bounded(self):
-        self.assertEqual(upgrade.validate_upstream(dict(CLAUDE)), CLAUDE)
-        anthropic = dict(CLAUDE, claude={'provider': 'anthropic', 'vertexProject': '', 'vertexRegion': ''})
-        self.assertEqual(upgrade.validate_upstream(anthropic)['claude']['provider'], 'anthropic')
-        for change in ({'url': 'http://10.0.0.1/v1/chat/completions'}, {'credentialSecret': 'Bad_Name'},
-                       {'credentialSecret': ''}, {'callSeconds': 300}, {'reviewCallSeconds': 181}, {'model': 'bad model'},
-                       {'claude': {'provider': 'openai', 'vertexProject': '', 'vertexRegion': ''}},
-                       {'claude': {'provider': 'vertex', 'vertexProject': 'x', 'vertexRegion': 'global'}},
-                       {'claude': {'provider': 'anthropic', 'vertexProject': 'proj-12345', 'vertexRegion': ''}}):
-            with self.subTest(change=change), self.assertRaises(ValueError):
-                upgrade.validate_upstream(dict(CLAUDE, **change))
-
-    def test_claude_gateway_values_and_credential_secret(self):
-        values = upgrade.gateway_values(dict(CLAUDE))
-        self.assertEqual((values['adapter'], values['claude'], values['upstream']['credentialSecret'], values['upstream']['cidr']),
-                         ('claude-cli', CLAUDE['claude'], 'ai-sdlc-model-claude', ''))
-        self.assertNotIn('claude', upgrade.gateway_values(dict(GOOD)))
+class ServiceCredential(unittest.TestCase):
+    def test_optional_bearer_secret_is_validated_without_reading_its_value(self):
+        maas = dict(GOOD, credentialSecret='ai-sdlc-local-maas', directAnswers=False)
+        self.assertEqual(upgrade.gateway_values(maas)['upstream']['credentialSecret'], 'ai-sdlc-local-maas')
+        for bad in ('Bad_Name', 1, None):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                upgrade.validate_upstream(dict(maas, credentialSecret=bad))
+        with self.assertRaises(ValueError):
+            upgrade.validate_upstream(dict(maas, adapter='claude-cli'))
         good = {'type': 'Opaque', 'data': {'credential': 'c2VjcmV0'}}
-        upgrade.credential_secret(lambda kind, name, ns: good, CLAUDE)
+        upgrade.credential_secret(lambda kind, name, ns: good, maas)
         for secret in (None, {'type': 'Opaque', 'data': {}}, {'type': 'Opaque', 'data': {'credential': 'x', 'extra': 'y'}},
                        {'type': 'kubernetes.io/tls', 'data': {'credential': 'x'}}):
             with self.subTest(secret=secret), self.assertRaises(ValueError):
-                upgrade.credential_secret(lambda kind, name, ns: secret, CLAUDE)
-        upgrade.credential_secret(lambda *a: self.fail('read for openai'), GOOD)
+                upgrade.credential_secret(lambda kind, name, ns: secret, maas)
+        upgrade.credential_secret(lambda *a: self.fail('read without a secret'), dict(GOOD))
 
 
 class Targets(unittest.TestCase):

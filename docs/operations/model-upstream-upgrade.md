@@ -15,7 +15,8 @@ Supply a separately reviewed upstream document:
 ```json
 {"adapter": "openai", "url": "http://10.89.0.1:18080/v1/chat/completions",
  "model": "gemma-4-26b-a4b", "cidr": "10.89.0.1/32", "port": 18080,
- "seconds": 300, "directAnswers": true, "callSeconds": 330, "reviewCallSeconds": 170}
+ "seconds": 300, "directAnswers": true, "callSeconds": 330, "reviewCallSeconds": 170,
+ "credentialSecret": ""}
 ```
 
 The URL must be plain HTTP to one literal RFC 1918/ULA host whose `/32` (or `/128`)
@@ -25,19 +26,11 @@ the gateways' startup benchmark must meet (see `model-gateway-adapters.md`).
 `maxSeconds`) becomes the executor profile's per-call window, and
 `reviewCallSeconds` (60-180) becomes the reviewer profile's window.
 
-For the Claude Code CLI adapter (see `model-gateway-adapters.md`), supply instead:
-
-```json
-{"adapter": "claude-cli", "model": "claude-sonnet-5-5", "seconds": 300,
- "callSeconds": 330, "reviewCallSeconds": 170, "credentialSecret": "ai-sdlc-model-claude",
- "claude": {"provider": "vertex", "vertexProject": "<project>", "vertexRegion": "global"}}
-```
-
-The operator first creates the Opaque Secret in `ai-sdlc-runtime` with exactly
-one `credential` key: an Anthropic API key, or a Vertex AI service account JSON.
-The switch verifies that Secret's shape before the journal exists and never
-reads its value. No egress rule is added; the gateways use the existing public
-HTTPS egress.
+`credentialSecret` optionally names an Opaque Secret in `ai-sdlc-runtime` with
+exactly one `credential` key: the model service's bearer token, for example
+the local model-as-a-service simulator in `tools/local_model_service/`. The
+switch verifies the Secret's shape before the journal exists and never reads
+its value.
 Upstream credentials are not supported by this mode; restrict exposure to the
 bridge address.
 
