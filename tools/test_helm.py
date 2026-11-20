@@ -229,3 +229,21 @@ class ChartTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class ProjectManifestChartTests(unittest.TestCase):
+    def test_project_manifest_is_rendered_only_when_set_and_immutable(self):
+        tests = ChartTests()
+        default = tests.render()
+        self.assertEqual(default.returncode, 0, default.stderr)
+        self.assertNotIn('name: ai-sdlc-project', default.stdout)
+        with tempfile.NamedTemporaryFile('w', suffix='.yaml') as values:
+            yaml.safe_dump({'project': {'manifestJSON': '{"version":"ai-sdlc.project/v1"}'}}, values)
+            values.flush()
+            rendered = tests.render('-f', values.name)
+        self.assertEqual(rendered.returncode, 0, rendered.stderr)
+        documents = [d for d in yaml.safe_load_all(rendered.stdout) if d and d.get('kind') == 'ConfigMap'
+                     and d['metadata']['name'] == 'ai-sdlc-project']
+        self.assertEqual(len(documents), 1)
+        self.assertIs(documents[0]['immutable'], True)
+        self.assertEqual(documents[0]['data'], {'manifest.json': '{"version":"ai-sdlc.project/v1"}'})

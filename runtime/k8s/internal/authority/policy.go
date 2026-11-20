@@ -17,6 +17,7 @@ import (
 )
 
 var repositoryPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+var projectDigest = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var environmentPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 var keyIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,127}$`)
 
@@ -45,6 +46,11 @@ type Policy struct {
 	Freeze      bool                 `json:"freeze"`
 	Keys        map[string]PublicKey `json:"keys"`
 	Grants      []Grant              `json:"grants"`
+	// ProjectSHA256 binds an installed project manifest into the policy
+	// revision, and therefore into every signed command and receipt. Empty
+	// selects the built-in manifest of a reference repository; omitted from
+	// JSON so existing policy revisions are unchanged.
+	ProjectSHA256 string `json:"projectSHA256,omitempty"`
 }
 
 // Operations are finite capabilities, not caller-controlled URLs or shell text.
@@ -155,6 +161,9 @@ func (p Policy) Validate() error {
 	}
 	if len(p.Keys) == 0 || len(p.Grants) == 0 {
 		return errors.New("policy must declare keys and grants")
+	}
+	if p.ProjectSHA256 != "" && !projectDigest.MatchString(p.ProjectSHA256) {
+		return errors.New("invalid project manifest digest")
 	}
 	keyOwners := map[string]string{}
 	for id, key := range p.Keys {

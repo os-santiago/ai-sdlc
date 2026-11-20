@@ -110,3 +110,17 @@ metadata:
 data:
   config.json: {{ .Values.candidate.configJSON | quote }}
 {{- end }}
+{{- if .Values.project.manifestJSON }}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-project
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+immutable: true
+data:
+  manifest.json: {{ .Values.project.manifestJSON | quote }}
+{{- end }}
