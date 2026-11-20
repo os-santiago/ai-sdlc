@@ -106,6 +106,8 @@ class RegistryBoundaryUpgrade:
                 journal = dict(expected_journal, storage=physical, completed=False,
                                sourceChartSHA256=installer.state.get('chartSHA256'), targetChartSHA256=registry.chart_manifest())
                 installer.save(dict(installer.state, boundaryUpgrade=journal))
+            if journal.get('targetChartSHA256') != registry.chart_manifest():
+                raise ValueError('Registry chart changed since the boundary operation began')
             if installer.deadline.remaining(330) < 330:
                 raise ValueError('Insufficient registry Helm budget')
             installer.fence(cold=False)

@@ -148,10 +148,10 @@ class Run(unittest.TestCase):
 
 
 class Cli(unittest.TestCase):
-    def test_registry_boundary_takes_no_publication_or_approval_inputs(self):
+    def test_chains_signing_takes_no_publication_or_approval_inputs(self):
         for extra in (['--provenance-trust', 'p'], ['--release-target', 'r'], ['--target-run', '1'],
                       ['--target-revision', 'a' * 40], ['--model-upstream', 'u']):
-            for command in ('registry-boundary', 'registry-boundary-status'):
+            for command in ('chains-signing', 'chains-signing-status'):
                 with self.subTest(command=command, extra=extra), \
                         patch.object(runtime_upgrade_pause.platform, 'lock_state') as lock, self.assertRaises(ValueError):
                     runtime_upgrade_pause.main([command, '--cluster', 'c', *extra])
