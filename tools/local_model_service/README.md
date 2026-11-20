@@ -24,8 +24,12 @@ ai-sdlc (kind)  --OpenAI API + bearer-->  host service  -->  claude -p (no tools
 - `POST /v1/chat/completions`: an OpenAI request becomes a `chat.completion`
   with native `tool_calls` and `usage`. Streaming is refused.
 - `GET /v1/models`: the configured aliases.
-- `Authorization: Bearer <token>`: a local service token stored in the
-  cluster's `credentialSecret`. It is not a provider key.
+- Authentication: a local bearer token (`tokenFile`, not a provider key),
+  and/or an allowlist of client addresses (`allowedClients`, for example the
+  kind node on the bridge). The installation's credential inventory is
+  closed, so until the installer manages a service Secret, use the client
+  allowlist. Inside the cluster, the chart's egress policy already limits
+  the endpoint to the worker and verifier gateways.
 
 Each call runs `claude -p` in a fresh empty directory with a minimal
 environment:
@@ -48,7 +52,7 @@ saturation 429.
 ## Run
 
 ```json
-{"address": "10.89.0.1", "port": 18090, "tokenFile": "/etc/ai-sdlc-local-maas/token",
+{"address": "10.89.0.1", "port": 18090, "allowedClients": ["10.89.0.5"],
  "binary": "/root/.local/share/claude/versions/2.1.329", "seconds": 300, "concurrency": 2,
  "models": {"claude-sonnet": "sonnet"},
  "environmentValues": {"CLAUDE_CODE_USE_VERTEX": "1", "ANTHROPIC_VERTEX_PROJECT_ID": "<project>",
@@ -62,8 +66,7 @@ python3 tools/local_model_service/agent_cli_openai_service.py --config /etc/ai-s
 
 Bind only to the kind bridge address. In the installation, select the `openai`
 adapter with `url: http://10.89.0.1:18090/v1/chat/completions`, `cidr:
-10.89.0.1/32`, `port: 18090`, the model alias, and a `credentialSecret`
-holding the service token.
+10.89.0.1/32`, `port: 18090` and the model alias.
 
 ## Evidence
 
