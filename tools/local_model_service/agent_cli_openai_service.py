@@ -173,6 +173,7 @@ class ClaudeCLI:
                     pass
             print(json.dumps({"event": "completion", "model": model, "attempt": attempt + 1, "numTurns": answer.get("num_turns"),
                               "valid": message is not None, "actions": len((message or {}).get("tool_calls") or []),
+                              "actionShapes": action_shapes(message), "contentBytes": len(((message or {}).get("content") or "").encode()),
                               "actionsOffered": len(tools), "durationMs": answer.get("duration_ms")}), flush=True)
             if message is not None:
                 usage = answer.get("usage") if isinstance(answer.get("usage"), dict) else {}
@@ -182,6 +183,21 @@ class ClaudeCLI:
                 completion_tokens = usage.get("output_tokens") if type(usage.get("output_tokens")) is int else 0
                 return message, prompt_tokens, completion_tokens
         raise BackendError("agent CLI did not return one valid turn in time")
+
+
+def action_shapes(message):
+    """Names and argument keys of the proposed actions, never their values:
+    enough to explain a client-side guard refusal without logging content."""
+    shapes = []
+    for call in (message or {}).get("tool_calls") or []:
+        function = call.get("function") or {}
+        try:
+            arguments = json.loads(function.get("arguments") or "{}")
+        except ValueError:
+            arguments = None
+        keys = sorted(arguments) if isinstance(arguments, dict) else None
+        shapes.append({"name": function.get("name"), "keys": keys})
+    return shapes
 
 
 def system_text(messages):

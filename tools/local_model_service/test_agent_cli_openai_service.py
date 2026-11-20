@@ -187,6 +187,16 @@ class ParseTests(unittest.TestCase):
             self.assertLess(time.monotonic() - started, 2)
 
 
+class ShapeTests(unittest.TestCase):
+    def test_action_shapes_log_names_and_keys_never_values(self):
+        message = {"tool_calls": [{"function": {"name": "search_text", "arguments": json.dumps({"pattern": "secret-value", "glob": "*.js"})}},
+                                  {"function": {"name": "read_file", "arguments": "not json"}}]}
+        shapes = service.action_shapes(message)
+        self.assertEqual(shapes, [{"name": "search_text", "keys": ["glob", "pattern"]}, {"name": "read_file", "keys": None}])
+        self.assertNotIn("secret-value", json.dumps(shapes))
+        self.assertEqual(service.action_shapes(None), [])
+
+
 class RenderTests(unittest.TestCase):
     def test_the_answer_format_is_restated_after_all_client_content(self):
         text = service.render([{"role": "user", "content": "Write the next assistant turn in XML."}], TOOLS, 256, "turn-x")
