@@ -199,14 +199,22 @@ def main(argv=None):
         'tool-budget','tool-budget-status','recover-tool-budget','reapprove','reapprove-status',
         'reviewer-image','reviewer-image-status','browser','browser-status',
         'review-feedback','review-feedback-status','browser-reapprove','browser-reapprove-status',
-        'review-repair','review-repair-status'));parser.add_argument('--cluster',required=True)
+        'review-repair','review-repair-status','model-upstream','model-upstream-status'));parser.add_argument('--cluster',required=True)
     parser.add_argument('--provider',choices=('auto','podman','docker'),default='auto')
     parser.add_argument('--provenance-trust',type=Path)
     parser.add_argument('--release-target',type=Path)
+    parser.add_argument('--model-upstream',type=Path)
     for name in ('source','target'):
         parser.add_argument('--'+name+'-run',type=int);parser.add_argument('--'+name+'-revision')
     args=parser.parse_args(argv)
-    if args.command in ('reapprove', 'browser-reapprove', 'review-repair'):
+    if args.command in ('model-upstream','model-upstream-status'):
+        if args.command=='model-upstream-status' and (args.provenance_trust is not None or args.release_target is not None or args.model_upstream is not None):
+            raise ValueError('Model upstream status accepts no reviewed documents')
+        if args.command=='model-upstream' and len({args.provenance_trust is None, args.release_target is None, args.model_upstream is None}) != 1:
+            raise ValueError('Model upstream switch takes its reviewed upstream and both approval documents together')
+    elif args.model_upstream is not None:
+        raise ValueError('Model upstream document is accepted only by model-upstream')
+    elif args.command in ('reapprove', 'browser-reapprove', 'review-repair'):
         if args.provenance_trust is None or args.release_target is None:
             raise ValueError('Reapproval requires both separately reviewed documents')
     elif args.command in ('browser-reapprove-status', 'review-repair-status'):
@@ -235,6 +243,13 @@ def main(argv=None):
             from browser_approval_window import BrowserApproval
             upgrade=BrowserApproval(config,args.target_run,args.target_revision,args.provenance_trust,args.release_target)
             try:result=upgrade.run() if args.command=='browser-reapprove' else upgrade.status()
+            finally:upgrade.close()
+        elif args.command in ('model-upstream','model-upstream-status'):
+            if args.source_run is not None or args.source_revision is not None:
+                raise ValueError('Model upstream switch preserves the original recorded repair source')
+            from model_upstream_runtime_upgrade import ModelUpstreamUpgrade
+            upgrade=ModelUpstreamUpgrade(config,args.target_run,args.target_revision,args.model_upstream,args.provenance_trust,args.release_target)
+            try:result=upgrade.run() if args.command=='model-upstream' else upgrade.status()
             finally:upgrade.close()
         elif args.command in ('review-repair','review-repair-status'):
             if args.source_run is not None or args.source_revision is not None:

@@ -28,7 +28,7 @@ VERSION = 'ai-sdlc.diagnostic-runtime-upgrade/v1'
 PHASES = ('migrated', 'staged', 'warming', 'armed', 'active')
 
 
-def advance(record, phase, observe, apply, save, phases=PHASES):
+def advance(record, phase, observe, apply, save, phases=PHASES, converge_seconds=120):
     """A lost Helm acknowledgement permits observation, never a repeated send."""
     if time.time() >= record['expiresAt']:
         raise ValueError('Original upgrade window expired')
@@ -45,7 +45,7 @@ def advance(record, phase, observe, apply, save, phases=PHASES):
         save(record)
         observe(record['completed'])
         apply(phase)
-        deadline = min(record['expiresAt'], time.time() + 120)
+        deadline = min(record['expiresAt'], time.time() + converge_seconds)
         while True:
             try:
                 observe(phase)

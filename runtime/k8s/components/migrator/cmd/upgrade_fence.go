@@ -39,7 +39,14 @@ const (
 	browserFence
 	feedbackFence
 	repairFence
+	configurationFence
 )
+
+func holdConfigurationUpgradeFence(input io.ReadCloser, output io.WriteCloser) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 125*time.Second)
+	defer cancel()
+	return holdSelectedUpgradeFence(ctx, input, output, configurationFence)
+}
 
 func holdReviewRepairUpgradeFence(input io.ReadCloser, output io.WriteCloser) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 125*time.Second)
@@ -98,7 +105,10 @@ func holdSelectedUpgradeFence(ctx context.Context, input io.ReadCloser, output i
 	released := false
 	version := "ai-sdlc.upgrade-fence/v1"
 	hold := db.WithPreCandidateUpgradeFence
-	if selection == repairFence {
+	if selection == configurationFence {
+		version = "ai-sdlc.configuration-upgrade-fence/v1"
+		hold = db.WithConfigurationUpgradeFence
+	} else if selection == repairFence {
 		version = "ai-sdlc.review-repair-upgrade-fence/v1"
 		hold = db.WithReviewRepairUpgradeFence
 	} else if selection == feedbackFence {
