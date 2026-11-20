@@ -40,12 +40,17 @@ class ServiceCredential(unittest.TestCase):
                 upgrade.validate_upstream(dict(maas, credentialSecret=bad))
         with self.assertRaises(ValueError):
             upgrade.validate_upstream(dict(maas, adapter='claude-cli'))
-        good = {'type': 'Opaque', 'data': {'credential': 'c2VjcmV0'}}
-        upgrade.credential_secret(lambda kind, name, ns: good, maas)
-        for secret in (None, {'type': 'Opaque', 'data': {}}, {'type': 'Opaque', 'data': {'credential': 'x', 'extra': 'y'}},
-                       {'type': 'kubernetes.io/tls', 'data': {'credential': 'x'}}):
-            with self.subTest(secret=secret), self.assertRaises(ValueError):
-                upgrade.credential_secret(lambda kind, name, ns: secret, maas)
+        calls = []
+        upgrade.credential_secret(lambda name, ns: calls.append((name, ns)) or ('Opaque', ['credential']), maas)
+        self.assertEqual(calls, [('ai-sdlc-local-maas', 'ai-sdlc-runtime')])
+        for observed in (None, ('Opaque', []), ('Opaque', ['credential', 'extra']), ('kubernetes.io/tls', ['credential'])):
+            with self.subTest(observed=observed), self.assertRaises(ValueError):
+                upgrade.credential_secret(lambda name, ns: observed, maas)
+        config = Mock(kubectl=['kubectl'])
+        config.base_run.return_value = Mock(stdout=b'Opaque credential')
+        self.assertEqual(upgrade.secret_keys(config)('s', 'ns'), ('Opaque', ['credential']))
+        argv = config.base_run.call_args[0][0]
+        self.assertTrue(argv[-1].startswith('go-template=') and '-o' in argv and 'ns' in argv)
         upgrade.credential_secret(lambda *a: self.fail('read without a secret'), dict(GOOD))
 
 

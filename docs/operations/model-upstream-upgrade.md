@@ -29,8 +29,8 @@ the gateways' startup benchmark must meet (see `model-gateway-adapters.md`).
 `credentialSecret` optionally names an Opaque Secret in `ai-sdlc-runtime` with
 exactly one `credential` key: the model service's bearer token, for example
 the local model-as-a-service simulator in `tools/local_model_service/`. The
-switch verifies the Secret's shape before the journal exists and never reads
-its value.
+switch verifies the Secret's type and key names (never its value) before the
+journal exists and again before every rollout phase.
 Upstream credentials are not supported by this mode; restrict exposure to the
 bridge address.
 

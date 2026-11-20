@@ -93,15 +93,32 @@ def gateway_values(upstream):
             'reviewBenchmark': {'promptTokens': 16384, 'completionTokens': 1024}}
 
 
-def credential_secret(read, upstream):
-    """An optional service bearer Secret must exist with exactly one
-    'credential' key before the journal; its value is never read here."""
+SECRET_KEYS_TEMPLATE = '{{.type}}{{range $k, $v := .data}} {{$k}}{{end}}'
+
+
+def credential_secret(keys, upstream):
+    """An optional service bearer Secret must exist as an Opaque Secret with
+    exactly one 'credential' key. Only its type and key names are queried;
+    the value never reaches this process."""
     if not upstream['credentialSecret']:
         return
-    secret = read('secret', upstream['credentialSecret'], platform.NAMESPACE)
-    if (not isinstance(secret, dict) or secret.get('type', 'Opaque') != 'Opaque'
-            or set((secret.get('data') or {})) != {'credential'} or not secret['data']['credential']):
-        raise ValueError('The reviewed model service Secret must hold exactly one credential key')
+    observed = keys(upstream['credentialSecret'], platform.NAMESPACE)
+    if observed != ('Opaque', ['credential']):
+        raise ValueError('The reviewed model service Secret must be Opaque with exactly one credential key')
+
+
+def secret_keys(config):
+    """Type and key names of a Secret through a go-template (no values)."""
+    def keys(name, namespace):
+        raw = config.base_run(config.kubectl + ['get', 'secret', name, '-n', namespace, '--ignore-not-found',
+                                                '-o', 'go-template=' + SECRET_KEYS_TEMPLATE],
+                              capture_output=True, timeout=20).stdout
+        text = raw.decode() if isinstance(raw, bytes) else raw
+        if not text.strip() or len(text) > 4096:
+            return None
+        kind, *names = text.split()
+        return kind, sorted(names)
+    return keys
 
 
 def in_flight(database):
@@ -396,7 +413,7 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
             raise ValueError('Explicit reviewed model upstream publication, document and approvals required')
         validate_upstream(self.upstream)
         self.observe('source')
-        credential_secret(self.config.read, self.upstream)
+        credential_secret(secret_keys(self.config), self.upstream)
         source = self.source_browser.describe('active')
         compile_build = lambda request: build_runtime_install.component_call(
             self.config.provider, self.helper, 'compile-build-installation', request)
@@ -467,6 +484,8 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
         for phase in PHASES[PHASES.index(self.record['completed']) + 1:]:
             if self.record.get('transition') is None:
                 self.observe(self.record['completed'])
+                # The gateways need the service Secret at every rollout.
+                credential_secret(secret_keys(self.config), self.record['upstream'])
                 self.retained()
                 RepairBrowserPreflight(self).preflight()
                 self.retained()
