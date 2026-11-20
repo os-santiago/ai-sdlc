@@ -20,6 +20,13 @@ const WorkspaceDirectory = "/workspaces"
 
 // SCCConfiguration is deterministic and contains no provider credential. The
 // endpoint is Pod-local; external model calls require a separate authority.
+// noBytecode keeps repository commands (for example a Python test run) from
+// writing __pycache__ files into the workspace; the candidate delta is the
+// workspace, and recipes accept only the intended source changes. SCC hands
+// run_shell children an allowlisted environment, so the name is allowlisted
+// in its configuration as well.
+const noBytecodeName, noBytecodeValue = "PYTHONDONTWRITEBYTECODE", "1"
+
 func SCCConfiguration(p Profile) []byte {
 	tools := []string{"read_file", "list_dir", "search_text", "memory_read", "write_file", "edit_file", "run_shell", "git", "memory_write", "code_query", "repo_probe"}
 	if p.Version == ReviewProfileVersion {
@@ -33,6 +40,9 @@ func SCCConfiguration(p Profile) []byte {
 	config := map[string]any{
 		"model":       model,
 		"permissions": map[string]any{"autoApprove": tools, "denyPaths": []string{".env", ".env.*", "**/*.key", "**/*.pem", "**/id_rsa*", "**/.ssh/*", "**/credentials*"}},
+	}
+	if p.Version != ReviewProfileVersion {
+		config["run_shell"] = map[string]any{"allowedEnvVars": []string{noBytecodeName}}
 	}
 	if p.Version == ReviewProfileVersion {
 		config["roles"] = map[string]string{"reviewer": p.Model}
@@ -160,6 +170,7 @@ func Run(ctx context.Context, assignmentDigest string) int {
 		"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + stateDirectory + "/home", "TMPDIR=" + stateDirectory + "/tmp", "LC_ALL=C.UTF-8", "NO_COLOR=1", "CI=1",
 		"SC_CONFIG_PATH=" + InputDirectory + "/scc-config.json", "SC_BASE_URL=http://127.0.0.1:8091/v1", "SC_MODEL=" + p.Model,
 		"NODE_OPTIONS=--max-old-space-size=256", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0",
+		noBytecodeName + "=" + noBytecodeValue,
 	}
 	if p.CallSeconds != 0 {
 		// The mailbox sends headers only with the completed answer.

@@ -68,3 +68,18 @@ func TestReviewerCannotUseGenerationAuthorityOrWritableSource(t *testing.T) {
 		}
 	}
 }
+
+// Repository commands run by the executor must not leave bytecode caches in
+// the workspace: the candidate delta is the workspace. SCC passes run_shell
+// children only allowlisted names, so the name must be allowlisted too.
+func TestExecutorCommandsDoNotWriteBytecode(t *testing.T) {
+	var cfg map[string]any
+	if json.Unmarshal(SCCConfiguration(profileFixture()), &cfg) != nil {
+		t.Fatal("config")
+	}
+	shell, _ := cfg["run_shell"].(map[string]any)
+	names, _ := shell["allowedEnvVars"].([]any)
+	if len(names) != 1 || names[0] != "PYTHONDONTWRITEBYTECODE" || noBytecodeName+"="+noBytecodeValue != "PYTHONDONTWRITEBYTECODE=1" {
+		t.Fatal("bytecode caches may enter the candidate", cfg["run_shell"])
+	}
+}
