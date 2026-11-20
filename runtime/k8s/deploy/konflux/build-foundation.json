@@ -195,11 +195,6 @@
         {
           "name": "registry-auth"
         }
-      ],
-      "imagePullSecrets": [
-        {
-          "name": "registry-auth"
-        }
       ]
     },
     {
