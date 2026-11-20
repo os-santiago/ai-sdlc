@@ -31,8 +31,13 @@ exactly one `credential` key: the model service's bearer token, for example
 the local model-as-a-service simulator in `tools/local_model_service/`. The
 switch verifies the Secret's type and key names (never its value) before the
 journal exists and again before every rollout phase.
-Upstream credentials are not supported by this mode; restrict exposure to the
-bridge address.
+Credentials embedded in the URL are refused. A bearer token is supported only
+through `credentialSecret` (below). Plain HTTP neither encrypts the token nor the
+requests, so the endpoint must stay on an isolated link such as the kind bridge.
+
+Run the start and resume commands from a clean checkout (no changes or
+untracked files) whose `HEAD` is exactly `--target-revision`; the installer
+refuses any other tree.
 
 ```bash
 ./install.sh runtime-upgrade model-upstream \
@@ -64,7 +69,10 @@ catalog, writers excluded, history admitted). It refuses only in-flight
 model-dependent work: claimed or uncleaned executions, verifications or
 reviews, open model budgets or calls, and unresolved verification or review
 effects. That predicate is checked before the operation journal is created, so
-a refusal leaves nothing to resume; retry when the work settles. Work that
+a refusal leaves nothing to resume; retry when the work settles. Separately,
+the installer's initial observation refuses the switch while residual
+execution, review, browser or build resources remain in the cluster, even when
+the SQL predicate finds no in-flight model work: let their cleanup finish first. Work that
 starts between that check and the fence makes the fence refuse after the
 journal exists. The operation is then still unpaused and can be resumed, but
 it must complete within its administrative deadline. Open repair

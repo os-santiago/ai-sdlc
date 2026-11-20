@@ -404,6 +404,16 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
 
     def backup(self):
         # Plain fenced export and verified offline restore; no migration exists.
+        backup = self.record.get('backup')
+        if (backup is not None and backup.get('phase') == 'capturing' and backup.get('archives') == {}
+                and (not self.directory.exists() or (self.directory.is_dir() and not self.directory.is_symlink()
+                                                     and not any(self.directory.iterdir())))):
+            # The fence was never acquired (or nothing was exported): no archive
+            # exists, so the capture can be retried. Partial files still refuse.
+            if self.directory.exists():
+                self.directory.rmdir()
+            self.record['backup'] = None
+            self.save(self.record)
         return ToolBudgetUpgrade.backup(self)
 
     def begin(self):
@@ -482,10 +492,11 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
             self.record['completed'] = 'ready'
             self.save(self.record)
         for phase in PHASES[PHASES.index(self.record['completed']) + 1:]:
+            # The gateways need the service Secret at every rollout, including
+            # when a pending transition is reconciled.
+            credential_secret(secret_keys(self.config), self.record['upstream'])
             if self.record.get('transition') is None:
                 self.observe(self.record['completed'])
-                # The gateways need the service Secret at every rollout.
-                credential_secret(secret_keys(self.config), self.record['upstream'])
                 self.retained()
                 RepairBrowserPreflight(self).preflight()
                 self.retained()

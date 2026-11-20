@@ -256,3 +256,60 @@ class Guards(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class AdvanceIntent(unittest.TestCase):
+    def test_a_transition_that_never_reached_helm_restarts_and_sent_ones_only_reconcile(self):
+        import diagnostic_runtime_upgrade as d
+        import time as clock
+        record = {'expiresAt': clock.time() + 60, 'completed': 'ready', 'transition': None}
+        saves, applied, seen = [], [], []
+        observe = lambda phase: seen.append(phase)
+        d.advance(record, 'staged', observe, applied.append, lambda r: saves.append(dict(r, transition=dict(r['transition']) if r['transition'] else None)),
+                  phases=('ready', 'staged'))
+        self.assertEqual(applied, ['staged'])
+        self.assertEqual([s['transition'] and s['transition']['sent'] for s in saves[:2]], [False, True])
+        self.assertEqual((record['completed'], record['transition']), ('staged', None))
+        # Intent recorded but Helm never invoked: the phase restarts from the source.
+        record = {'expiresAt': clock.time() + 60, 'completed': 'ready', 'transition': {'from': 'ready', 'to': 'staged', 'sent': False}}
+        applied = []
+        d.advance(record, 'staged', lambda p: None, applied.append, lambda r: None, phases=('ready', 'staged'))
+        self.assertEqual(applied, ['staged'])
+        # Sent (or a pre-'sent' journal): observation only, never a second send.
+        for transition in ({'from': 'ready', 'to': 'staged', 'sent': True}, {'from': 'ready', 'to': 'staged'}):
+            record = {'expiresAt': clock.time() + 60, 'completed': 'ready', 'transition': transition}
+            applied = []
+            d.advance(record, 'staged', lambda p: None, applied.append, lambda r: None, phases=('ready', 'staged'))
+            self.assertEqual((applied, record['completed']), ([], 'staged'))
+
+    def test_the_deadline_also_guards_a_successful_observation(self):
+        import diagnostic_runtime_upgrade as d
+        import time as clock
+        record = {'expiresAt': clock.time() + 60, 'completed': 'ready', 'transition': {'from': 'ready', 'to': 'staged', 'sent': True}}
+        def slow(phase):
+            record['expiresAt'] = clock.time() - 1
+        with self.assertRaisesRegex(ValueError, 'expired'):
+            d.advance(record, 'staged', slow, lambda p: None, lambda r: None, phases=('ready', 'staged'))
+        self.assertEqual(record['completed'], 'ready')
+
+
+class BackupRetry(unittest.TestCase):
+    def test_a_capture_that_never_exported_restarts_and_partial_files_refuse(self):
+        import tempfile, pathlib
+        root = pathlib.Path(tempfile.mkdtemp())
+        item = object.__new__(upgrade.ModelUpstreamUpgrade)
+        item.directory = root / 'backup'
+        item.directory.mkdir()
+        item.record = {'backup': {'phase': 'capturing', 'archives': {}, 'retainedData': {}}}
+        item.save = Mock()
+        with patch.object(upgrade.ToolBudgetUpgrade, 'backup', return_value='restarted') as base:
+            self.assertEqual(item.backup(), 'restarted')
+        self.assertIsNone(item.record['backup'])
+        self.assertFalse(item.directory.exists())
+        item.directory.mkdir()
+        (item.directory / 'partial').write_text('x')
+        item.record = {'backup': {'phase': 'capturing', 'archives': {}, 'retainedData': {}}}
+        with patch.object(upgrade.ToolBudgetUpgrade, 'backup', side_effect=ValueError('incomplete')) as base:
+            with self.assertRaisesRegex(ValueError, 'incomplete'):
+                item.backup()
+        self.assertEqual(item.record['backup']['phase'], 'capturing')

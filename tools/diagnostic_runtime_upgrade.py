@@ -29,10 +29,20 @@ PHASES = ('migrated', 'staged', 'warming', 'armed', 'active')
 
 
 def advance(record, phase, observe, apply, save, phases=PHASES, converge_seconds=120):
-    """A lost Helm acknowledgement permits observation, never a repeated send."""
+    """A lost Helm acknowledgement permits observation, never a repeated send.
+
+    The transition records ``sent`` only immediately before Helm is invoked. A
+    transition without ``sent: true`` from this version never reached Helm and
+    restarts safely; earlier journals (no ``sent`` key) keep the original
+    observation-only reconciliation."""
     if time.time() >= record['expiresAt']:
         raise ValueError('Original upgrade window expired')
     transition = record.get('transition')
+    if transition is not None and transition.get('sent') is False:
+        if transition['to'] != phase:
+            raise ValueError('Original upgrade transition differs')
+        record['transition'] = transition = None
+        save(record)
     if transition is not None:
         if transition['to'] != phase:
             raise ValueError('Original upgrade transition differs')
@@ -41,9 +51,11 @@ def advance(record, phase, observe, apply, save, phases=PHASES, converge_seconds
         if phase not in phases[1:] or record['completed'] != phases[phases.index(phase) - 1]:
             raise ValueError('Original upgrade phase order changed')
         observe(record['completed'])
-        record['transition'] = {'from': record['completed'], 'to': phase}
+        record['transition'] = {'from': record['completed'], 'to': phase, 'sent': False}
         save(record)
         observe(record['completed'])
+        record['transition']['sent'] = True
+        save(record)
         apply(phase)
         deadline = min(record['expiresAt'], time.time() + converge_seconds)
         while True:
@@ -54,6 +66,8 @@ def advance(record, phase, observe, apply, save, phases=PHASES, converge_seconds
                 if time.time() >= deadline:
                     raise ValueError('Original upgrade target has not converged') from None
                 time.sleep(.5)
+    if time.time() >= record['expiresAt']:
+        raise ValueError('Original upgrade window expired before the phase was recorded')
     record.update(completed=phase, transition=None)
     save(record)
 

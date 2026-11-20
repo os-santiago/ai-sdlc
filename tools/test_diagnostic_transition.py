@@ -17,7 +17,8 @@ class TransitionTests(unittest.TestCase):
         save = lambda value: snapshots.append(copy.deepcopy(value))
         with self.assertRaises(OSError):
             upgrade.advance(record, 'staged', observe, apply, save)
-        self.assertEqual(snapshots[-1]['transition'], {'from': 'migrated', 'to': 'staged'})
+        # Recorded as sent before Helm is invoked: a lost acknowledgement never replays.
+        self.assertEqual(snapshots[-1]['transition'], {'from': 'migrated', 'to': 'staged', 'sent': True})
         observe.side_effect = ValueError('target incomplete')
         with self.assertRaises(ValueError):
             upgrade.advance(record, 'staged', observe, apply, save)
