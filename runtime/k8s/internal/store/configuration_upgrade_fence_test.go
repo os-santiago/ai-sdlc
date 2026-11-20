@@ -73,6 +73,25 @@ func TestConfigurationUpgradeFenceAdmitsCompletedHistoryAndRejectsInFlightWork(t
 			t.Fatal("repair budget", state, err)
 		}
 	}
+	// A terminal ambiguous model call (never replayed) is history; a started
+	// call is in flight.
+	for state, admitted := range map[string]bool{"ambiguous": true, "stopped": true, "started": false, "reserved": false} {
+		tx, err := db.Pool.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(`INSERT INTO model_calls(allocation_id,sequence,request_sha256,input_bytes,response_limit,expires_at,state)
+			SELECT id,1,repeat('a',64),1,1,clock_timestamp()-interval '1 hour',$1 FROM model_allocations LIMIT 1`, state); err != nil {
+			tx.Rollback()
+			t.Fatal(state, err)
+		}
+		f := &UpgradeFence{tx: tx, source: source, tables: tables, configurationHistory: true}
+		err = f.inspectHistory(ctx)
+		tx.Rollback()
+		if (err == nil) != admitted || (!admitted && !errors.Is(err, ErrUpgradeFenceHistory)) {
+			t.Fatal("model call", state, err)
+		}
+	}
 	for _, live := range []string{
 		`UPDATE review_runs SET cleanup_state='pending'`,
 		`UPDATE review_model_calls SET state='started', response_digest=NULL, output_bytes=NULL, observation=NULL, handed_off_at=NULL`,
