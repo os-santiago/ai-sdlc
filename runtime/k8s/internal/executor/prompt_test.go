@@ -12,3 +12,31 @@ func TestPromptIncludesIssueWithoutLiteralClosingFence(t *testing.T) {
 		t.Fatal("issue content missing or literal fence escaped")
 	}
 }
+
+// The reviewer is told the limits the controller's review guard enforces
+// (modelbroker.ObserveReviewResponse and reviewresult.Verdict): an answer
+// outside them is refused and the review stops as uncertain.
+func TestReviewPromptStatesTheGuardedContract(t *testing.T) {
+	p := BuildReviewPrompt(Assignment{Repository: "owner/repo", IssueNumbers: []int{1}}, "policy")
+	for _, rule := range []string{
+		"at most 4 tool calls per turn",
+		"no verdict in a turn that\n  requests tools",
+		`without a leading "./" or "/"`,
+		"read_file takes path, and optionally offset and limit",
+		"list_dir and\n  code_query take only path",
+		"exactly one of path or glob",
+		"under 3500 characters, without code\n  fences",
+		"at least one tool turn before the final answer",
+		"without a trailing \"/\" and without glob characters",
+		"with no\n  formatting or punctuation",
+		"in any letter case",
+		"VERDICT: approve\nor\nVERDICT: request_changes",
+	} {
+		if !strings.Contains(p, rule) {
+			t.Fatalf("review prompt does not state %q", rule)
+		}
+	}
+	if strings.Contains(p, "```") {
+		t.Fatal("review prompt must not model a code fence")
+	}
+}

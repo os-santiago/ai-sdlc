@@ -70,6 +70,20 @@ VERDICT: request_changes
 Do not quote alternative verdicts or infer approval from unavailable evidence.
 Your output is advisory until the external controller authenticates and binds it.
 
+The controller rejects, and treats as uncertain, any turn outside these rules:
+- Read the candidate with at least one tool turn before the final answer.
+- Request at most 4 tool calls per turn, and write no verdict in a turn that
+  requests tools.
+- Paths are relative to the repository root, without a leading "./" or "/",
+  without a trailing "/" and without glob characters (except in a glob).
+- read_file takes path, and optionally offset and limit. list_dir and
+  code_query take only path.
+- search_text takes a literal pattern and exactly one of path or glob.
+- Write the final answer as plain text under 3500 characters, without code
+  fences. Its last line is exactly one of the two verdict lines above, with no
+  formatting or punctuation, and the word "verdict" followed by a colon appears
+  nowhere else, in any letter case.
+
 <reviewed-adev-policy>
 %s
 </reviewed-adev-policy>
