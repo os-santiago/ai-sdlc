@@ -92,9 +92,29 @@ func TestConfigurationUpgradeFenceAdmitsCompletedHistoryAndRejectsInFlightWork(t
 			t.Fatal("model call", state, err)
 		}
 	}
+	// A call left started by a review that stopped, was cleaned up and whose
+	// window expired can never be handed off: it is history, not in flight.
+	{
+		tx, err := db.Pool.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(`UPDATE review_model_calls SET state='started', response_digest=NULL, output_bytes=NULL, observation=NULL, handed_off_at=NULL`); err != nil {
+			tx.Rollback()
+			t.Fatal(err)
+		}
+		f := &UpgradeFence{tx: tx, source: source, tables: tables, configurationHistory: true}
+		err = f.inspectHistory(ctx)
+		tx.Rollback()
+		if err != nil {
+			t.Fatal("terminal review call refused", err)
+		}
+	}
+	const startedCall = `UPDATE review_model_calls SET state='started', response_digest=NULL, output_bytes=NULL, observation=NULL, handed_off_at=NULL;`
 	for _, live := range []string{
 		`UPDATE review_runs SET cleanup_state='pending'`,
-		`UPDATE review_model_calls SET state='started', response_digest=NULL, output_bytes=NULL, observation=NULL, handed_off_at=NULL`,
+		startedCall + `UPDATE review_runs SET expires_at=clock_timestamp()+interval '1 hour'`,
+		startedCall + `UPDATE review_runs SET cleanup_state='pending'`,
 	} {
 		tx, err := db.Pool.BeginTx(ctx, nil)
 		if err != nil {

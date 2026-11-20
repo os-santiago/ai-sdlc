@@ -5,7 +5,9 @@
 -- the handoff can no longer happen and recovery records it as ambiguous; an
 -- ambiguous call is terminal history that is never replayed), an unclean
 -- execution, a claimed or uncleaned verification or review, a started review
--- model call, or an unresolved verification/review effect. Restarted
+-- model call of a live review (a call left started by a review that stopped,
+-- was cleaned up and whose window expired can never be handed off: history),
+-- or an unresolved verification/review effect. Restarted
 -- components resume everything else with their normal recovery. A historical
 -- `uncertain` cleanup also blocks (intended containment): resolve it with the
 -- runtime's cleanup recovery before switching configuration.
@@ -19,5 +21,5 @@ SELECT
   OR EXISTS(SELECT 1 FROM public.verification_requests WHERE state='claimed' OR (state IN('passed','failed') AND cleanup_state<>'complete'))
   OR EXISTS(SELECT 1 FROM public.verification_effects WHERE completed_at IS NULL AND not_sent_at IS NULL)
   OR EXISTS(SELECT 1 FROM public.review_runs WHERE state='claimed' OR (state IN('passed','failed') AND cleanup_state<>'complete'))
-  OR EXISTS(SELECT 1 FROM public.review_model_calls WHERE state='started')
+  OR EXISTS(SELECT 1 FROM public.review_model_calls m JOIN public.review_runs r ON r.id=m.run_id WHERE m.state='started' AND NOT(r.state IN('passed','failed') AND r.cleanup_state='complete' AND r.expires_at<=clock_timestamp()))
   OR EXISTS(SELECT 1 FROM public.review_effects WHERE completed_at IS NULL AND not_sent_at IS NULL)
