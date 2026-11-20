@@ -102,10 +102,14 @@ admitting it predetermines a rejection. `runtime/k8s` admission enforces:
 - **RV3 — no operational sections.** Sections other than the acceptance
   criteria that carry approvals, expiry, renewal, budget, authority or deadline
   notes are removed: reviewers would read them as requirements.
-- **RV4 — no change-scope limits.** Criteria that limit which files a change
-  may touch ("limit the change to …", "only modify …") need the original source
-  to verify. The read-only reviewer can only request changes for them, so they
-  are removed from the proposal.
+- **RV4 — no change-scope limits.** Clauses that limit which files or paths a
+  change may touch ("limit the change to …", "only modify `file` …", "files
+  other than …") need the original source to verify. The read-only reviewer can
+  only request changes for them. The proposal cuts those clauses (and baseline
+  clauses) and keeps the rest of the criterion. If a scope clause also states
+  behavior ("only modify `x` so that …"), it is left for the author to
+  rephrase. Product or authorization rules ("users can only edit their own
+  comments", "limit the label to 20 characters") are not scope limits.
 
 A failing issue is decided `needs-clarification` with one reason per finding.
 `ProposeRevision` produces the reviewable body (request, recipe marker and every

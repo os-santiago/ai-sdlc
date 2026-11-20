@@ -155,8 +155,14 @@ func TestReviewabilityAvoidsFalsePositivesAndLossyRewrites(t *testing.T) {
 func TestScopeLimitCriteriaAreNotAdmittedAndRemovedFromTheProposal(t *testing.T) {
 	for _, criterion := range []string{
 		"Limit the change to `web/static/ttl.js`, `tests/ttl.test.mjs`, and that single presentation assertion in `tools/verify_browser.py`.",
-		"Restrict edits to the parser package.",
+		"Restrict the changes to the parser package.",
 		"Only modify files under web/static.",
+		"Change only `web/static/ttl.js`.",
+		"Edits must be confined to `web/static`.",
+		"Do not modify any file other than `ttl.js`.",
+		"No other files may change.",
+		"Keep the change scoped to the `web` directory.",
+		"The diff must only include `ttl.js`.",
 	} {
 		body := "Improve the token lifetime display so people read durations immediately in the console.\n\n## Acceptance criteria\n\n- [ ] Show `1 minute` for 60 seconds.\n- [ ] " + criterion + "\n"
 		issue := issueFromBody(t, body)
@@ -170,10 +176,30 @@ func TestScopeLimitCriteriaAreNotAdmittedAndRemovedFromTheProposal(t *testing.T)
 			t.Fatalf("scope limit not removed %q: %#v\n%s", criterion, unresolved, proposal)
 		}
 	}
-	for _, reviewable := range []string{"Limit the label to 20 characters.", "Display only the remaining minutes when hours are zero."} {
+	for _, reviewable := range []string{"Limit the label to 20 characters.", "Display only the remaining minutes when hours are zero.",
+		"Users can only edit their own comments.", "Admins can only change roles from the settings page.",
+		"Only edit mode is allowed for admins.", "Restrict edits to the document to its owner.",
+		"Limit changes to the password to once per day.", "Limit modifications to admin users.",
+		"Confine diffs to 500 lines in the viewer.", "Restrict uploads to 5 MB."} {
 		issue := issueFromBody(t, "Improve the token lifetime display so people read durations immediately in the console.\n\n## Acceptance criteria\n\n- [ ] "+reviewable+"\n")
 		if findings := ReviewabilityFindings(issue); len(findings) != 0 {
 			t.Fatalf("product property flagged %q: %#v", reviewable, findings)
 		}
+	}
+}
+
+// Mixed criteria keep their behavior: only the scope (and baseline) clauses are
+// cut, and a scope clause that states behavior is left for the author.
+func TestMixedScopeCriteriaKeepBehaviorOrStayUnresolved(t *testing.T) {
+	head := "Improve the token lifetime display so people read durations immediately in the console.\n\n## Acceptance criteria\n\n- [ ] "
+	issue := issueFromBody(t, head+"Update `#ttl` to `1 minute`, all other lines otherwise unchanged; only edit `verify_browser.py`.\n")
+	proposal, unresolved := ProposeRevision(issue)
+	if len(unresolved) != 0 || !strings.Contains(proposal, "- [ ] Update `#ttl` to `1 minute`.") || strings.Contains(proposal, "only edit") {
+		t.Fatalf("mixed criterion lost behavior: %#v\n%s", unresolved, proposal)
+	}
+	issue = issueFromBody(t, head+"Only modify `ttl.js` so that 60 seconds renders as `1 minute`.\n")
+	proposal, unresolved = ProposeRevision(issue)
+	if len(unresolved) != 1 || !strings.Contains(proposal, "so that 60 seconds renders") {
+		t.Fatalf("behavioral scope clause silently dropped: %#v\n%s", unresolved, proposal)
 	}
 }

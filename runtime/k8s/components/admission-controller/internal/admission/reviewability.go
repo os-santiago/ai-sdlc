@@ -43,8 +43,19 @@ type Finding struct {
 // "token expiry" are reviewable properties and must not match.
 var deliveryObligation = regexp.MustCompile(`(?i)(\b(obtain|pass(ing)?|require[sd]?)\b[^.;]{0,40}\bindependent (behavior )?(verification|review)\b|\bpassing required checks\b|\bsigned (build|provenance)\b|\bbuild/provenance\b|\bprovenance (verification|components?)\b|\b(promot(e|ion)|deploy(ed|ment)?)\b[^.;]{0,60}\b(to|into|through)\b[^.;]{0,40}\b(environment|production|cluster|components?)\b|\brecord the deployed\b)`)
 
-// Change-scope restrictions: which files a change may touch.
-var scopeLimit = regexp.MustCompile(`(?i)(\b(limit|restrict|confine)\b[^.;]{0,30}\b(changes?|edits?|diffs?|modifications?)\b[^.;]{0,15}\bto\b|\bonly (modify|change|touch|edit)\b)`)
+// Change-scope restrictions name which files or paths a change may touch.
+// Authorization or product rules ("users can only edit their own comments",
+// "limit the label to 20 characters") must not match: the object must be the
+// change itself or a file/path, never a product noun.
+const scopeObject = "(`[^`]+`|\\b(files?|paths?|packages?|director(y|ies)|modules?|folders?)\\b|[\\w./-]+\\.[a-z0-9]{1,5}\\b)"
+
+var scopeLimit = regexp.MustCompile(`(?i)(\b(limit|restrict|confine|keep|scope)\b[^.;]{0,20}\b(the|this|your)\s+(changes?|edits?|diffs?|modifications?)\b[^.;]{0,20}\b(to|within)\b` +
+	`|\b(changes?|edits?|diffs?|modifications?)\s+(must|should|may)\s+(be\s+)?(confined|limited|restricted|scoped)\s+to\b` +
+	`|^\s*(only\s+(modify|change|touch|edit)|(modify|change|touch|edit)\s+only)\s+(the\s+)?` + scopeObject +
+	`|\b(files?|paths?)\s+other\s+than\b|\bno\s+other\s+files?\b|\bthe\s+diff\b[^.;]{0,20}\bonly\b)`)
+
+// A scope clause that also states behavior cannot be cut without losing it.
+var scopePurpose = regexp.MustCompile(`(?i)\b(so that|in order to|to make|to render|to show|to display|while|which)\b`)
 
 // Clauses that need a before/after comparison of the source.
 var baselineComparison = regexp.MustCompile(`(?i)(byte-for-byte|every other (line|file)|all other (lines|files)|otherwise unchanged)`)
@@ -78,12 +89,12 @@ func ReviewabilityFindings(issue Issue) []Finding {
 		case deliveryObligation.MatchString(criterion):
 			findings = append(findings, Finding{Kind: DeliveryObligation, Criterion: i + 1, Reason: fmt.Sprintf(
 				"Acceptance criterion %d is a delivery obligation enforced by AI-SDLC policy, not a property a reviewer can verify in the candidate; remove it from the criteria.", i+1)})
-		case scopeLimit.MatchString(criterion):
+		case hasScopeClause(criterion):
 			findings = append(findings, Finding{Kind: ScopeLimit, Criterion: i + 1, Reason: fmt.Sprintf(
 				"Acceptance criterion %d limits which files the change may touch; the read-only reviewer cannot compare with the original source to verify it; remove it from the criteria.", i+1)})
 		case baselineComparison.MatchString(criterion):
 			findings = append(findings, Finding{Kind: BaselineComparison, Criterion: i + 1, Reason: fmt.Sprintf(
-				"Acceptance criterion %d requires comparing with the original source, which the read-only reviewer does not receive; state only the files and changes allowed.", i+1)})
+				"Acceptance criterion %d requires comparing with the original source, which the read-only reviewer does not receive; state only the required behavior.", i+1)})
 		}
 	}
 	for _, section := range sections(issue.Body) {
@@ -110,8 +121,17 @@ func ProposeRevision(issue Issue) (string, []Finding) {
 	var unresolved []Finding
 	for _, f := range findings {
 		switch f.Kind {
-		case DeliveryObligation, ScopeLimit:
+		case DeliveryObligation:
 			drop[issue.AcceptanceCriteria[f.Criterion-1]] = true
+		case ScopeLimit:
+			original := issue.AcceptanceCriteria[f.Criterion-1]
+			if trimmed, ok, empty := withoutScopeClause(original); empty {
+				drop[original] = true
+			} else if ok {
+				rewrite[original] = trimmed
+			} else {
+				unresolved = append(unresolved, f)
+			}
 		case BaselineComparison:
 			original := issue.AcceptanceCriteria[f.Criterion-1]
 			if trimmed, ok := withoutBaselineClause(original); ok {
@@ -153,7 +173,7 @@ func ProposeRevision(issue Issue) (string, []Finding) {
 	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n", unresolved
 }
 
-var imperative = regexp.MustCompile(`(?i)^(add|cover|display|ensure|format|keep|limit|preserve|record|remove|render|replace|return|show|support|update|use|validate)\b`)
+var imperative = regexp.MustCompile(`(?i)^(add|cover|display|ensure|format|keep|preserve|record|remove|render|replace|return|show|support|update|use|validate)\b`)
 
 // withoutBaselineClause removes only the clauses that need a baseline and keeps
 // every other clause. It resolves the finding only when the remainder starts
@@ -208,4 +228,46 @@ func criterionLine(line string) (criterion, prefix string, ok bool) {
 		return "", "", false
 	}
 	return m[2], m[1], true
+}
+
+func hasScopeClause(criterion string) bool {
+	for _, part := range strings.Split(criterion, "; ") {
+		if scopeLimit.MatchString(part) {
+			return true
+		}
+	}
+	return false
+}
+
+// withoutScopeClause removes "; "-separated clauses that only restrict scope
+// (or need a baseline). empty reports that nothing reviewable remains, so the
+// whole criterion can be dropped; ok reports a self-contained remainder. A
+// scope clause that also states behavior is left for the author (neither).
+func withoutScopeClause(criterion string) (remainder string, ok, empty bool) {
+	var kept []string
+	for _, part := range strings.Split(criterion, "; ") {
+		part = strings.TrimRight(strings.TrimSpace(part), " ,;.")
+		switch {
+		case scopeLimit.MatchString(part):
+			if scopePurpose.MatchString(part) {
+				return "", false, false
+			}
+		case baselineComparison.MatchString(part):
+			if trimmed, cut := withoutBaselineClause(part); cut {
+				kept = append(kept, strings.TrimRight(trimmed, "."))
+			} else if !strings.HasPrefix(strings.ToLower(part), "every ") && !strings.HasPrefix(strings.ToLower(part), "all other") {
+				return "", false, false
+			}
+		default:
+			kept = append(kept, part)
+		}
+	}
+	if len(kept) == 0 {
+		return "", false, true
+	}
+	text := strings.Join(kept, "; ")
+	if !imperative.MatchString(text) || hasScopeClause(text) || baselineComparison.MatchString(text) {
+		return "", false, false
+	}
+	return text + ".", true, false
 }
