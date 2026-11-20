@@ -13,11 +13,15 @@ that must pass before consequential actions. The detailed controls are in
   issue and candidate data as untrusted
   ([injection defense](../spec/injection-defense.md)).
 - **Separate authority per component.** Intake, admission controller,
-  orchestrator, worker, verifier, release manager, build controller and
-  deployer each run as their own Deployment, with:
-  - their own Ed25519 signing identity;
-  - their own database role;
-  - their own Kubernetes service account.
+  orchestrator, worker, verifier, release manager, relay, build controller and
+  deployer each run as their own Deployment, with their own Ed25519 signing
+  identity and their own database role.
+  - The worker (in candidate and verification mode), verifier, build
+    controller, deployer and provenance verifier have dedicated Kubernetes
+    service accounts.
+  - Intake, admission controller, orchestrator, release manager and relay share
+    the chart's default service account, which has no workload-creation
+    permissions.
 
   A component accepts work only as a request signed by the expected producer
   ([component authority](../spec/component-authority.md),
@@ -34,12 +38,12 @@ that must pass before consequential actions. The detailed controls are in
 
 | Boundary | Control |
 |---|---|
-| Model provider | Generation and review reach a model only through the model gateway (OpenAI-compatible, Anthropic or an agent CLI wrapper). The worker talks to its local gateway, not to the provider. A startup benchmark gates readiness. See [model gateway adapters](operations/model-gateway-adapters.md). |
-| Generated code and tests | Executor and verification pods run in the `ai-sdlc-offline` RuntimeClass, a pinned gVisor handler with `network=none`. They use no service account token, no host namespaces, fixed resources and short deadlines ([fixed workload resources](security/fixed-workload-resources.md)). |
+| Model provider | Generation and review reach a model only through the model gateway (OpenAI-compatible, Anthropic or an agent CLI wrapper), a sidecar in the worker and verifier pods. The executor and reviewer pods are offline: they reach the model only through a mailbox sidecar and a shared bridge volume. The gateway alone holds the provider credential. The worker and verifier pods themselves have public HTTPS egress, so the provider is kept from them by the missing credential, not by the network. A startup benchmark gates readiness. See [model gateway adapters](operations/model-gateway-adapters.md). |
+| Generated code and tests | Executor and verification pods run in the `ai-sdlc-offline` RuntimeClass, a pinned gVisor handler with `network=none`. They use no service account token, no host namespaces, fixed resources and bounded deadlines (17 minutes for an executor, 60 seconds for a verification run) ([fixed workload resources](security/fixed-workload-resources.md)). |
 | Reviewer | A read-only workspace and read-only tools. Each answer passes a guard that limits tools, arguments and the verdict format. |
 | Repository writes | Only the release manager publishes, using a scoped GitHub credential, and only paths allowed for the project. Merge requires the repository's required checks and the runtime's merge policy. |
 | Build and supply chain | Builds run as Tekton PipelineRuns in a dedicated namespace under admission policies. Tekton Chains signs images. Provenance verification checks the signature and attestation against reviewed trust before promotion. |
-| Cluster network | NetworkPolicies restrict each component's ingress and egress. Intake egress is limited to GitHub. The managed registry admits only the runtime, build, production and Chains controller identities. |
+| Cluster network | NetworkPolicies restrict each component's ingress and egress. Intake egress is limited to public HTTPS (no cluster-internal or private ranges). The managed registry admits only network peers in the runtime, build and production namespaces and the Tekton Chains controller pods ([registry boundary](operations/registry-boundary.md)). |
 
 ## Credentials
 
@@ -55,8 +59,11 @@ that must pass before consequential actions. The detailed controls are in
 ## Data sent to a model provider
 
 The model provider receives:
-- the generation and review prompts;
-- the issue title, body and acceptance criteria;
+- the generation and review prompts, including the reviewed A-Dev delivery
+  policy text;
+- the repository name, issue numbers, issue title, body and acceptance
+  criteria;
+- on a repair attempt, the earlier review feedback;
 - the content of repository files the agent reads through its tools;
 - tool results such as test output;
 - the candidate diff that the reviewer inspects.
@@ -68,7 +75,8 @@ and executor pods cannot reach the network directly.
 
 ## Approval and authorization gates
 
-- **Intake:** only issue events from configured, authorized actors start work.
+- **Intake:** only the configured trigger label, applied by a configured
+  authorized actor, starts work.
 - **Admission:** acceptance criteria must be reviewable by the independent
   reviewer, or admission proposes a revised issue.
 - **Installation changes:** closed, journaled transitions with backups and
@@ -78,8 +86,9 @@ and executor pods cannot reach the network directly.
 
 - Validated on kind (Linux amd64) only. The gVisor handler is installed inside
   the kind node; OpenShift and managed clusters need equivalent sandboxing (see
-  the roadmap, M5).
-- Generic onboarding of new repositories is not available yet (roadmap, M1).
+  M5 in the [roadmap](roadmap.md)).
+- Generic onboarding of new repositories is not available yet (M1 in the
+  [roadmap](roadmap.md)).
 - GitHub access uses a personal token today.
 
 ## Reporting a vulnerability
