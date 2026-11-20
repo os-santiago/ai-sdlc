@@ -42,6 +42,8 @@ type Session struct {
 	instances                            map[string]instance
 	sourceSHA, assignmentDigest, treeSHA string
 	reviewProfile                        *executor.Profile
+	// helper is the container fixed helpers run in; empty means mailbox.
+	helper string
 }
 
 func Bind(ctx context.Context, c *Client, b Binding) (*Session, error) {
@@ -102,8 +104,7 @@ func applyDefaults(s *core.PodSpec) {
 		{Key: "node.kubernetes.io/not-ready", Operator: core.TolerationOpExists, Effect: core.TaintEffectNoExecute, TolerationSeconds: &seconds},
 		{Key: "node.kubernetes.io/unreachable", Operator: core.TolerationOpExists, Effect: core.TaintEffectNoExecute, TolerationSeconds: &seconds},
 	}
-	for i := range s.Containers {
-		c := &s.Containers[i]
+	defaultContainer := func(c *core.Container) {
 		c.TerminationMessagePath = "/dev/termination-log"
 		c.TerminationMessagePolicy = core.TerminationMessageReadFile
 		c.Resources.Requests[core.ResourceEphemeralStorage] = c.Resources.Limits[core.ResourceEphemeralStorage].DeepCopy()
@@ -112,6 +113,12 @@ func applyDefaults(s *core.PodSpec) {
 				c.Env[j].ValueFrom.FieldRef.APIVersion = "v1"
 			}
 		}
+	}
+	for i := range s.InitContainers {
+		defaultContainer(&s.InitContainers[i])
+	}
+	for i := range s.Containers {
+		defaultContainer(&s.Containers[i])
 	}
 	for i := range s.Volumes {
 		if d := s.Volumes[i].DownwardAPI; d != nil {

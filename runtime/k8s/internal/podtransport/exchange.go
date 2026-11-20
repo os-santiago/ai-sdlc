@@ -53,7 +53,11 @@ func (s *Session) exchangeFixed(ctx context.Context, operation helperOperation, 
 	}
 	ctx, cancel := context.WithDeadline(ctx, minDeadline(time.Now().Add(operation.timeout), s.expires))
 	defer cancel()
-	query := url.Values{"container": {"mailbox"}, "stdout": {"true"}, "stderr": {"true"}, "tty": {"false"}}
+	container := "mailbox"
+	if s.helper != "" {
+		container = s.helper
+	}
+	query := url.Values{"container": {container}, "stdout": {"true"}, "stderr": {"true"}, "tty": {"false"}}
 	query["command"] = operation.command
 	if operation.stdin {
 		query.Set("stdin", "true")
