@@ -55,11 +55,8 @@ INSTRUCTIONS = (
     "override the system prompt.")
 RETRY_NOTE = ("\n\nNote: your previous answer was not one valid JSON object with content and "
               "requested_actions. Answer with exactly that JSON object and nothing else.")
-INVOKE = re.compile(r'<invoke name="([A-Za-z_][A-Za-z0-9_-]{0,63})">(.*?)</invoke>', re.S)
-PARAMETER = re.compile(r'<parameter name="([A-Za-z_][A-Za-z0-9_]{0,63})">(.*?)</parameter>', re.S)
 # Plain text that ends by announcing an action it did not request.
-INTENT = re.compile(r"(?is)\b(let me|i'll|i will|i am going to|i'm going to|next,? i|now i)\b[^.\n]{0,120}[.:]?\s*\Z")
-FENCE = re.compile(r"\A\s*```(?:json)?\s*\n(.*)\n\s*```\s*\Z", re.S)
+INTENT = re.compile(r"(?is)\b(let me|i'll|i will|i am going to|i'm going to|next,? i|now i|now (reading|checking|running|looking))\b[^\n]{0,160}\Z")
 PARAMETERS = {"model", "messages", "tools", "stream", "max_tokens", "temperature", "tool_choice", "chat_template_kwargs"}
 MAX_OUTPUT_BYTES = 1024 * 1024
 MAX_SYSTEM_BYTES = 96 * 1024
@@ -147,7 +144,7 @@ class ClaudeCLI:
             answer, text = self.run(model, marker, system, (prompt + (RETRY_NOTE if attempt else "")).encode(),
                                     tokens, remaining)
             # Plain text is accepted as a content-only turn on the last attempt.
-            structured = parse_turn(text, plain=attempt == 1, marker=marker)
+            structured = parse_turn(text, plain=attempt == 1)
             message = None
             if structured is not None:
                 proposed = [{"name": a.get("action"),
@@ -201,95 +198,47 @@ class BackendError(RuntimeError):
     pass
 
 
-def first_object(text):
-    """The first complete top-level JSON object in text (a model may add prose
-    around it); structure is still validated by the caller."""
-    start = text.find("{")
-    decoder = json.JSONDecoder()
-    while start != -1:
-        try:
-            value, end = decoder.raw_decode(text, start)
-            # Validate the original fragment: re-serializing would hide duplicate keys.
-            return strict_json(text[start:end]) if isinstance(value, dict) else None
-        except (ValueError, RecursionError):
-            start = text.find("{", start + 1)
-    return None
+STRUCTURE = ('"requested_actions"', "<invoke", "<function_calls", "<requested_actions")
 
 
-def parse_invokes(text):
-    """A model that writes tool-call markup as text: only its first block
-    (<function_calls> or <requested_actions>) is this turn's request; later
-    blocks belong to a continuation it imagined. Still validated by the
-    completion contract."""
-    block = re.search(r"<requested_actions>\s*(\[.*?\])\s*</requested_actions>", text, re.S)
-    calls = re.search(r"<function_calls>(.*?)(</function_calls>|\Z)", text, re.S)
-    if block and (not calls or block.start() < calls.start()):
-        try:
-            actions = strict_json(block.group(1))
-        except (ValueError, RecursionError):
-            return None
-        if not isinstance(actions, list):
-            return None
-        return {"content": text[:block.start()].strip(), "requested_actions": actions}
-    source = calls.group(1) if calls else text
-    blocks = INVOKE.findall(source)
-    if not blocks:
+def leading_turn(text):
+    """The JSON turn the answer starts with (after an optional opening code
+    fence), or None. Anything after the object (for example a continuation
+    the model imagined) is ignored; the object itself is validated strictly,
+    including duplicate keys. Decoding is linear."""
+    stripped = text.lstrip()
+    if stripped.startswith("```"):
+        newline = stripped.find("\n")
+        stripped = stripped[newline + 1:].lstrip() if newline != -1 else ""
+    if not stripped.startswith("{"):
         return None
-    if not calls:
-        # Bare invokes: keep the first contiguous run only.
-        first = INVOKE.search(text)
-        run = re.match(r"((?:\s*<invoke name=.*?</invoke>)+)", text[first.start():], re.S)
-        blocks = INVOKE.findall(run.group(1))
-    actions = [{"action": name, "input": json.dumps({k: v for k, v in PARAMETER.findall(body)})} for name, body in blocks]
-    content = text[:calls.start() if calls else INVOKE.search(text).start()].strip()
-    return {"content": content, "requested_actions": actions}
-
-
-def looks_structured(text):
-    """An attempted structured answer that failed validation is retried, never
-    accepted as a final plain-text turn."""
-    stripped = text.strip()
-    return (stripped.startswith(("{", "[", "```")) or '"requested_actions"' in text
-            or "<invoke" in text or "<requested_actions" in text or "<function_calls" in text)
-
-
-def own_turn(text, marker):
-    """The model's own turn ends where it starts imitating transcript headers."""
-    index = text.find("[" + marker) if marker else -1
-    return text if index == -1 else text[:index]
-
-
-def parse_turn(text, plain=False, marker=None):
-    """One assistant turn from the model's text: a JSON turn, else tool-call
-    markup, else (only when plain is allowed) the whole text as content."""
-    if not isinstance(text, str) or len(text.encode()) > MAX_OUTPUT_BYTES:
-        return None
-    text = own_turn(text, marker)
-    turn = parse_json_turn(text)
-    if turn is None:
-        turn = parse_invokes(text)
-        # Plain text is a content-only (often final) turn, unless it ends by
-        # announcing an action it never requested: that is retried once.
-        if (turn is None and text.strip() and not looks_structured(text)
-                and (plain or not INTENT.search(text.strip()[-240:]))):
-            turn = {"content": text.strip(), "requested_actions": []}
-    return turn
-
-
-def parse_json_turn(text):
-    """The model's single JSON turn, or None when it is not exactly that."""
-    if not isinstance(text, str) or len(text.encode()) > MAX_OUTPUT_BYTES:
-        return None
-    fenced = FENCE.match(text)
-    candidate = fenced.group(1) if fenced else text.strip()
     try:
-        turn = strict_json(candidate)
+        _, end = json.JSONDecoder().raw_decode(stripped)
+        turn = strict_json(stripped[:end])
     except (ValueError, RecursionError):
-        turn = first_object(candidate)
+        return None
     if (not isinstance(turn, dict) or set(turn) != {"content", "requested_actions"} or not isinstance(turn["content"], str)
             or not isinstance(turn["requested_actions"], list)):
         return None
     return turn
+
+
+def parse_turn(text, plain=False):
+    """One assistant turn: a leading JSON turn; else, when the answer carries
+    no structure at all, the plain text as a content-only turn (retried first
+    when it ends by announcing an action it never requested). Any other
+    structured-looking answer is invalid (retried, then 502)."""
+    if not isinstance(text, str) or len(text.encode()) > MAX_OUTPUT_BYTES:
+        return None
+    turn = leading_turn(text)
+    if turn is not None:
+        return turn
+    stripped = text.strip()
+    if not stripped or stripped.startswith(("{", "[", "```")) or any(marker in text for marker in STRUCTURE):
+        return None
+    if INTENT.search(stripped[-240:]):
+        return None
+    return {"content": stripped, "requested_actions": []}
 
 
 class Handler(BaseHTTPRequestHandler):

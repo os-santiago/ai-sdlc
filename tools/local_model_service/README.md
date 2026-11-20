@@ -31,11 +31,14 @@ Each call runs `claude -p` in a fresh empty directory with a minimal
 environment:
 - no native tools (`--tools ""`);
 - no session, settings, hooks, MCP servers, slash commands or CLAUDE.md;
-- the model has no tool at all, so it cannot attempt native calls; it answers
-  with one JSON object (`content`, `requested_actions`), extracted and
-  validated by the same completion contract as the gateways (tool allowlist,
-  object arguments and size bounds). An invalid answer is retried once within
-  the call's time budget.
+- the model has no tool at all, so it cannot attempt native calls. Its answer
+  must start with one JSON turn (`content`, `requested_actions`), validated
+  strictly and by the same completion contract as the gateways (tool
+  allowlist, object arguments and size bounds). Text after that object, such
+  as a continuation the model imagined, is ignored. A plain answer with no
+  structure is a content-only (final) turn. Any other structured-looking
+  answer, or one that ends by announcing an action it never requested, is
+  retried once within the call's time budget and then answered with 502.
 
 The agent's system messages go in the system prompt. Transcript turn headers
 carry a random per-call marker, so text inside files or tool results cannot
