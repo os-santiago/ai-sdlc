@@ -31,6 +31,38 @@ class UpstreamDocument(unittest.TestCase):
                 upgrade.validate_upstream(dict(GOOD, **change))
 
 
+CLAUDE = {'adapter': 'claude-cli', 'model': 'claude-sonnet-5-5', 'seconds': 300, 'callSeconds': 330,
+          'reviewCallSeconds': 170, 'credentialSecret': 'ai-sdlc-model-claude',
+          'claude': {'provider': 'vertex', 'vertexProject': 'proj-12345', 'vertexRegion': 'global'}}
+
+
+class ClaudeDocument(unittest.TestCase):
+    def test_claude_cli_document_is_closed_and_bounded(self):
+        self.assertEqual(upgrade.validate_upstream(dict(CLAUDE)), CLAUDE)
+        anthropic = dict(CLAUDE, claude={'provider': 'anthropic', 'vertexProject': '', 'vertexRegion': ''})
+        self.assertEqual(upgrade.validate_upstream(anthropic)['claude']['provider'], 'anthropic')
+        for change in ({'url': 'http://10.0.0.1/v1/chat/completions'}, {'credentialSecret': 'Bad_Name'},
+                       {'credentialSecret': ''}, {'callSeconds': 300}, {'reviewCallSeconds': 181}, {'model': 'bad model'},
+                       {'claude': {'provider': 'openai', 'vertexProject': '', 'vertexRegion': ''}},
+                       {'claude': {'provider': 'vertex', 'vertexProject': 'x', 'vertexRegion': 'global'}},
+                       {'claude': {'provider': 'anthropic', 'vertexProject': 'proj-12345', 'vertexRegion': ''}}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                upgrade.validate_upstream(dict(CLAUDE, **change))
+
+    def test_claude_gateway_values_and_credential_secret(self):
+        values = upgrade.gateway_values(dict(CLAUDE))
+        self.assertEqual((values['adapter'], values['claude'], values['upstream']['credentialSecret'], values['upstream']['cidr']),
+                         ('claude-cli', CLAUDE['claude'], 'ai-sdlc-model-claude', ''))
+        self.assertNotIn('claude', upgrade.gateway_values(dict(GOOD)))
+        good = {'type': 'Opaque', 'data': {'credential': 'c2VjcmV0'}}
+        upgrade.credential_secret(lambda kind, name, ns: good, CLAUDE)
+        for secret in (None, {'type': 'Opaque', 'data': {}}, {'type': 'Opaque', 'data': {'credential': 'x', 'extra': 'y'}},
+                       {'type': 'kubernetes.io/tls', 'data': {'credential': 'x'}}):
+            with self.subTest(secret=secret), self.assertRaises(ValueError):
+                upgrade.credential_secret(lambda kind, name, ns: secret, CLAUDE)
+        upgrade.credential_secret(lambda *a: self.fail('read for openai'), GOOD)
+
+
 class Targets(unittest.TestCase):
     def source(self):
         candidate = {'profile': {'maxRepairs': 1, 'maxSeconds': 600, 'maxSteps': 24},

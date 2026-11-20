@@ -24,6 +24,20 @@ the gateways' startup benchmark must meet (see `model-gateway-adapters.md`).
 `callSeconds` (at least `seconds + 20`, at most 600 and the executor profile's
 `maxSeconds`) becomes the executor profile's per-call window, and
 `reviewCallSeconds` (60-180) becomes the reviewer profile's window.
+
+For the Claude Code CLI adapter (see `model-gateway-adapters.md`), supply instead:
+
+```json
+{"adapter": "claude-cli", "model": "claude-sonnet-5-5", "seconds": 300,
+ "callSeconds": 330, "reviewCallSeconds": 170, "credentialSecret": "ai-sdlc-model-claude",
+ "claude": {"provider": "vertex", "vertexProject": "<project>", "vertexRegion": "global"}}
+```
+
+The operator first creates the Opaque Secret in `ai-sdlc-runtime` with exactly
+one `credential` key: an Anthropic API key, or a Vertex AI service account JSON.
+The switch verifies that Secret's shape before the journal exists and never
+reads its value. No egress rule is added; the gateways use the existing public
+HTTPS egress.
 Upstream credentials are not supported by this mode; restrict exposure to the
 bridge address.
 

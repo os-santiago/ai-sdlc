@@ -11,6 +11,7 @@ the completed repair operation. Historical workflow authority is never renewed.
 import copy
 import ipaddress
 import json
+import re
 import secrets
 import time
 from urllib.parse import urlsplit
@@ -45,15 +46,39 @@ REPAIR_VERSION = 'ai-sdlc.review-repair-runtime-upgrade/v1'
 
 
 UPSTREAM_KEYS = {'adapter', 'url', 'model', 'cidr', 'port', 'seconds', 'directAnswers', 'callSeconds', 'reviewCallSeconds'}
+CLAUDE_KEYS = {'adapter', 'model', 'seconds', 'callSeconds', 'reviewCallSeconds', 'credentialSecret', 'claude'}
 # The chart's per-call ceiling (the broker adds 30 s, bounded at 600).
 UPSTREAM_SECONDS = (30, 570)
 IN_FLIGHT = install.ROOT / 'runtime/k8s/internal/store/configuration_upgrade_in_flight.sql'
+SECRET_NAME = re.compile(r'[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?\Z')
+
+
+def _windows(value):
+    # The worker adopts a benchmarked timeout only within callSeconds - 20.
+    return (type(value['seconds']) is int and UPSTREAM_SECONDS[0] <= value['seconds'] <= UPSTREAM_SECONDS[1]
+            and type(value['callSeconds']) is int and max(60, value['seconds'] + 20) <= value['callSeconds'] <= 600
+            and type(value['reviewCallSeconds']) is int and 60 <= value['reviewCallSeconds'] <= 180
+            and isinstance(value['model'], str) and re.fullmatch(r'[A-Za-z0-9._:/-]{1,128}', value['model']) is not None)
 
 
 def validate_upstream(value):
-    """The reviewed upstream document: URL, model, egress CIDR/port must agree."""
+    """The reviewed upstream document: an OpenAI-compatible private endpoint
+    whose URL, egress CIDR and port agree, or the Claude Code CLI with a named
+    credential Secret and provider."""
+    if isinstance(value, dict) and value.get('adapter') == 'claude-cli':
+        claude = value.get('claude')
+        if (set(value) != CLAUDE_KEYS or not _windows(value) or not isinstance(value['credentialSecret'], str)
+                or not SECRET_NAME.fullmatch(value['credentialSecret'])
+                or not isinstance(claude, dict) or set(claude) != {'provider', 'vertexProject', 'vertexRegion'}
+                or claude['provider'] not in ('anthropic', 'vertex')
+                or (claude['provider'] == 'anthropic' and (claude['vertexProject'] or claude['vertexRegion']))
+                or (claude['provider'] == 'vertex' and (
+                    not re.fullmatch(r'[a-z][a-z0-9-]{4,61}[a-z0-9]', str(claude['vertexProject']))
+                    or not re.fullmatch(r'[a-z]+(-[a-z0-9]+)*|global', str(claude['vertexRegion']))))):
+            raise ValueError('Exact reviewed Claude CLI model document required')
+        return copy.deepcopy(value)
     if not isinstance(value, dict) or set(value) != UPSTREAM_KEYS or value['adapter'] != 'openai':
-        raise ValueError('Exact reviewed OpenAI-compatible model upstream document required')
+        raise ValueError('Exact reviewed model upstream document required')
     parts = urlsplit(value['url'])
     if (parts.scheme != 'http' or parts.path != '/v1/chat/completions' or parts.query or parts.fragment
             or parts.username or parts.password or parts.port != value['port']):
@@ -66,24 +91,34 @@ def validate_upstream(value):
     private = [ipaddress.ip_network(n) for n in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fc00::/7')]
     if (host not in network or network.num_addresses != 1 or not any(host in n for n in private)
             or type(value['port']) is not int or not 1 <= value['port'] <= 65535
-            or type(value['seconds']) is not int or not UPSTREAM_SECONDS[0] <= value['seconds'] <= UPSTREAM_SECONDS[1]
-            or type(value['directAnswers']) is not bool
-            # The worker adopts a benchmarked timeout only within callSeconds - 20.
-            or type(value['callSeconds']) is not int or not max(60, value['seconds'] + 20) <= value['callSeconds'] <= 600
-            or type(value['reviewCallSeconds']) is not int or not 60 <= value['reviewCallSeconds'] <= 180
-            or not isinstance(value['model'], str) or not 1 <= len(value['model']) <= 128):
+            or not _windows(value) or type(value['directAnswers']) is not bool):
         raise ValueError('Model upstream must be one private host with bounded settings')
     return copy.deepcopy(value)
 
 
 def gateway_values(upstream):
     upstream = validate_upstream(upstream)
-    return {'adapter': upstream['adapter'],
-            'upstream': {'url': upstream['url'], 'model': upstream['model'], 'cidr': upstream['cidr'],
-                         'port': upstream['port'], 'seconds': upstream['seconds'], 'credentialSecret': '',
-                         'directAnswers': upstream['directAnswers']},
-            'benchmark': {'promptTokens': 16384, 'completionTokens': 4096},
-            'reviewBenchmark': {'promptTokens': 16384, 'completionTokens': 1024}}
+    common = {'benchmark': {'promptTokens': 16384, 'completionTokens': 4096},
+              'reviewBenchmark': {'promptTokens': 16384, 'completionTokens': 1024}}
+    if upstream['adapter'] == 'claude-cli':
+        return dict(common, adapter='claude-cli', claude=copy.deepcopy(upstream['claude']),
+                    upstream={'url': '', 'model': upstream['model'], 'cidr': '', 'port': 8080, 'seconds': upstream['seconds'],
+                              'credentialSecret': upstream['credentialSecret'], 'directAnswers': False})
+    return dict(common, adapter=upstream['adapter'],
+                upstream={'url': upstream['url'], 'model': upstream['model'], 'cidr': upstream['cidr'],
+                          'port': upstream['port'], 'seconds': upstream['seconds'], 'credentialSecret': '',
+                          'directAnswers': upstream['directAnswers']})
+
+
+def credential_secret(read, upstream):
+    """The installation credential Secret must exist with exactly one
+    'credential' key before the journal; its value is never read here."""
+    if upstream['adapter'] != 'claude-cli':
+        return
+    secret = read('secret', upstream['credentialSecret'], platform.NAMESPACE)
+    if (not isinstance(secret, dict) or secret.get('type', 'Opaque') != 'Opaque'
+            or set((secret.get('data') or {})) != {'credential'} or not secret['data']['credential']):
+        raise ValueError('The reviewed Claude credential Secret must hold exactly one credential key')
 
 
 def in_flight(database):
@@ -378,6 +413,7 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
             raise ValueError('Explicit reviewed model upstream publication, document and approvals required')
         validate_upstream(self.upstream)
         self.observe('source')
+        credential_secret(self.config.read, self.upstream)
         source = self.source_browser.describe('active')
         compile_build = lambda request: build_runtime_install.component_call(
             self.config.provider, self.helper, 'compile-build-installation', request)
