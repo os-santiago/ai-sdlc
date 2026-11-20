@@ -13,7 +13,6 @@ AI service.
 | `agent-cli` (default) | A local agent CLI acting only as a completion model | Codex CLI (`codex_gateway.py`) |
 | `openai` | `POST /v1/chat/completions` | llama.cpp, vLLM, Ollama, LM Studio, LiteLLM, hosted OpenAI-compatible APIs |
 | `anthropic` | `POST /v1/messages` (Messages API) | Anthropic API or a compatible proxy |
-| `claude-cli` | Claude Code in print mode as a completion-only model | Anthropic API key or Google Vertex AI |
 
 Adapters never execute tools. They receive only validated messages and tool
 schemas, and their answers are normalized by the shared contract: unknown
@@ -28,42 +27,12 @@ Adding another provider means adding one `Adapter` subclass to
 `runtime/k8s/tools/model_adapters.py` (`ADAPTERS`) and the enum value to the
 chart schema. The worker, the verifier and the contract do not change.
 
-## Claude Code CLI adapter
+## Local development without a model service
 
-`claude-cli` runs the pinned Claude Code binary (worker image, official musl
-build verified by SHA-256) once per call:
-- print mode, `--tools ""` (no native tools), `--bare` (no hooks, settings,
-  CLAUDE.md or keychain), `--strict-mcp-config`, `--no-session-persistence`;
-- a JSON-schema structured answer with `content` and proposed `tool_calls`,
-  validated by the shared contract;
-- a fresh empty directory and a minimal environment per call, holding only
-  the installation credential;
-- the conversation rendered as a readable transcript with complete tool
-  results, plus fidelity instructions: read before editing, prefer exact
-  `edit_file` changes, never rewrite files from memory, and express every
-  tool use in `tool_calls`.
-
-```yaml
-modelGateway:
-  adapter: claude-cli
-  upstream: {model: claude-sonnet-5-5, seconds: 300, credentialSecret: ai-sdlc-model-claude}
-  claude: {provider: vertex, vertexProject: <project>, vertexRegion: global}   # or provider: anthropic
-```
-
-The Secret's `credential` key holds an Anthropic API key (`anthropic`) or a
-Google service account JSON (`vertex`). OAuth subscription tokens are never
-read. No egress rule is added: the gateway uses the existing public HTTPS
-egress.
-
-Offline trial on Saferus issue #4, with the real executor and reviewer
-profiles, on 2026-11-20:
-- generation succeeded in 207 s (6 iterations, 11 tool calls), with exactly
-  the three requested files changed and tests passing;
-- the independent review approved in 122 s.
-
-The same trial with a JSON-serialized conversation exhausted its 24 steps
-and rewrote an unrelated file from memory, which motivated the transcript
-rendering.
+AI-SDLC only consumes a model-as-a-service. To simulate one on a developer host
+with a local agent CLI, see `tools/local_model_service/README.md`. The
+installation keeps using the `openai` adapter against that endpoint, and no CLI
+enters the cluster.
 
 ## Configuration
 

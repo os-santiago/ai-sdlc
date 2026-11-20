@@ -79,7 +79,7 @@ spec:
             cidr: 0.0.0.0/0
             except: [0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4]
       ports: [{protocol: TCP, port: 443}]
-    {{- if has $.Values.modelGateway.adapter (list "openai" "anthropic") }}
+    {{- if ne $.Values.modelGateway.adapter "agent-cli" }}
     - to: [{ipBlock: {cidr: {{ required "modelGateway.upstream.cidr is required" $.Values.modelGateway.upstream.cidr | quote }}}}]
       ports: [{protocol: TCP, port: {{ required "modelGateway.upstream.port is required" $.Values.modelGateway.upstream.port }}}]
     {{- end }}
@@ -176,15 +176,7 @@ spec:
             - {name: TMPDIR, value: /model-home/tmp}
             - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
             {{- if ne $.Values.modelGateway.adapter "agent-cli" }}
-            {{- if eq $.Values.modelGateway.adapter "claude-cli" }}
-            - {name: AI_SDLC_MODEL_CLAUDE_PROVIDER, value: {{ $.Values.modelGateway.claude.provider | quote }}}
-            {{- if eq $.Values.modelGateway.claude.provider "vertex" }}
-            - {name: AI_SDLC_MODEL_CLAUDE_VERTEX_PROJECT, value: {{ required "modelGateway.claude.vertexProject is required" $.Values.modelGateway.claude.vertexProject | quote }}}
-            - {name: AI_SDLC_MODEL_CLAUDE_VERTEX_REGION, value: {{ required "modelGateway.claude.vertexRegion is required" $.Values.modelGateway.claude.vertexRegion | quote }}}
-            {{- end }}
-            {{- else }}
             - {name: AI_SDLC_MODEL_UPSTREAM_URL, value: {{ required "modelGateway.upstream.url is required" $.Values.modelGateway.upstream.url | quote }}}
-            {{- end }}
             - {name: AI_SDLC_MODEL_UPSTREAM_MODEL, value: {{ required "modelGateway.upstream.model is required" $.Values.modelGateway.upstream.model | quote }}}
             - {name: AI_SDLC_MODEL_UPSTREAM_SECONDS, value: {{ $.Values.modelGateway.upstream.seconds | quote }}}
             - {name: AI_SDLC_MODEL_ADAPTER, value: {{ $.Values.modelGateway.adapter | quote }}}
@@ -205,11 +197,7 @@ spec:
             readOnlyRootFilesystem: true
           resources:
             requests: {cpu: 100m, memory: 256Mi}
-            {{- if eq $.Values.modelGateway.adapter "claude-cli" }}
-            limits: {cpu: "1", memory: 1536Mi, ephemeral-storage: 512Mi}
-            {{- else }}
             limits: {cpu: "1", memory: 768Mi, ephemeral-storage: 256Mi}
-            {{- end }}
           volumeMounts:
             {{- if eq $.Values.modelGateway.adapter "agent-cli" }}
             - {name: model-auth, mountPath: /var/run/ai-sdlc/codex, readOnly: true}

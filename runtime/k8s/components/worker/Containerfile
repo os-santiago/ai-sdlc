@@ -93,15 +93,5 @@ RUN apk add --no-cache python3 curl \
     && tar -xzf /tmp/codex.tar.gz -C /usr/local/bin codex-x86_64-unknown-linux-musl \
     && mv /usr/local/bin/codex-x86_64-unknown-linux-musl /usr/local/bin/codex \
     && chmod 0555 /usr/local/bin/codex && rm /tmp/codex.tar.gz
-# Claude Code CLI for the claude-cli completion adapter (print mode, no tools).
-# Official native musl build, pinned by version and the release manifest's
-# SHA-256. Only the model-gateway sidecar runs it; executors never do.
-ARG CLAUDE_CODE_VERSION=2.1.329
-ARG CLAUDE_CODE_SHA256=1ad6247ddadb174a78ce065483d860e4287f60710eabeb60ccde8b125dc8ee2f
-RUN apk add --no-cache libgcc libstdc++ \
-    && curl --fail --location --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 600 \
-       "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/${CLAUDE_CODE_VERSION}/linux-x64-musl/claude" -o /usr/local/bin/claude \
-    && echo "${CLAUDE_CODE_SHA256}  /usr/local/bin/claude" | sha256sum -c - \
-    && chmod 0555 /usr/local/bin/claude
 COPY tools/codex_completion_process.py tools/codex_completion_child.py tools/codex_completion_policy.py tools/codex_completion_catalog.json tools/codex_completion_instructions.txt tools/codexcli_openai_wrapper.py tools/codex_gateway.py tools/model_adapters.py tools/model_benchmark.py tools/model_gateway.py /opt/ai-sdlc/model/
 USER 1000:1000
