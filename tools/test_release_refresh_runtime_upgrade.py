@@ -126,6 +126,98 @@ class Source(unittest.TestCase):
             self.open(journal(), parent='other')
 
 
+class Generations(unittest.TestCase):
+    def setUp(self):
+        import pathlib, tempfile
+        self.state = pathlib.Path(tempfile.mkdtemp())
+
+    def test_journals_are_numbered_after_the_first(self):
+        self.assertEqual(refresh.journal_paths(self.state, 1)[0].name, 'release-refresh-runtime-upgrade.json')
+        self.assertEqual(refresh.journal_paths(self.state, 2),
+                         (self.state / 'release-refresh-2-runtime-upgrade.json', self.state / 'release-refresh-2-runtime-backup'))
+        self.assertEqual(refresh.latest_generation(self.state), 0)
+        refresh.journal_paths(self.state, 1)[0].write_text('{}')
+        refresh.journal_paths(self.state, 2)[0].write_text('{}')
+        self.assertEqual(refresh.latest_generation(self.state), 2)
+        # A gap ends the chain: generation 4 without 3 is not selected.
+        refresh.journal_paths(self.state, 4)[0].write_text('{}')
+        self.assertEqual(refresh.latest_generation(self.state), 2)
+
+    def test_a_later_generation_starts_from_the_previous_completed_refresh(self):
+        import pathlib
+        config = Mock(state_dir=self.state)
+        upstream_record = journal()
+        first = journal(version=refresh.VERSION, mode='release-refresh', parentSHA256='upstream-digest',
+                        installationReports=[{'configuration': 'active', 'installationReady': True,
+                                              'releaseRefreshUpgradeOperation': 'n'}])
+        records = {'model-upstream-runtime-upgrade.json': upstream_record,
+                   'release-refresh-runtime-upgrade.json': first}
+        digests = {id(upstream_record): 'upstream-digest', id(first): 'first-digest'}
+        with patch.object(refresh.files, 'bounded_json', side_effect=lambda path, limit: records[pathlib.Path(path).name]), \
+                patch.object(refresh.bootstrap, 'digest', side_effect=lambda record: digests[id(record)]), \
+                patch.object(refresh, 'CompletedRepairSource') as repair, \
+                patch.object(refresh.data, 'verify_archives') as archives:
+            repair.return_value.digest.return_value = 'parent'
+            repair.return_value.record = {'migratedProof': {'@schema': 's'}}
+            source = refresh.completed_source(config, 2)
+            self.assertIs(source.record, first)
+            self.assertEqual(source.migrated_proof, {'@schema': 's'})
+            self.assertEqual(source.parent_source.record, upstream_record)
+            self.assertIn(self.state / 'release-refresh-runtime-backup', [c.args[0] for c in archives.call_args_list])
+            first['parentSHA256'] = 'other'
+            with self.assertRaisesRegex(ValueError, 'ancestry'):
+                refresh.completed_source(config, 2)
+
+
+class Selection(unittest.TestCase):
+    def selected(self, latest, completed, published=True, **inputs):
+        class Stop(Exception):
+            pass
+        seen = []
+        def source(config, generation):
+            seen.append(generation)
+            raise Stop()
+        record = {'completed': completed, 'nonce': 'n', 'installationReports': [
+            {'configuration': 'active' if published else 'release-refresh-upgrade-paused', 'releaseRefreshUpgradeOperation': 'n'}]}
+        with patch.object(refresh, 'latest_generation', return_value=latest), \
+                patch.object(refresh.files, 'bounded_json', return_value=record), \
+                patch.object(refresh, 'completed_source', side_effect=source), self.assertRaises(Stop):
+            refresh.ReleaseRefreshUpgrade(Mock(state_dir=__import__('pathlib').Path('/nonexistent-state')), **inputs)
+        return seen[0]
+
+    def test_new_inputs_after_a_completed_refresh_start_the_next_generation(self):
+        new = {'run': 1, 'revision': 'a' * 40, 'trust_path': 'p', 'target_path': 'r'}
+        self.assertEqual(self.selected(0, None, **new), 1)
+        self.assertEqual(self.selected(1, 'active', **new), 2)
+        self.assertEqual(self.selected(1, 'active'), 1)        # status of the completed generation
+        self.assertEqual(self.selected(2, 'warming', **new), 2)  # resume, never skip an unfinished one
+        for state in ('source', 'paused', 'ready', 'staged', 'armed'):
+            self.assertEqual(self.selected(3, state, **new), 3)
+        # Active but the final report was never published (crash window): resume.
+        self.assertEqual(self.selected(2, 'active', published=False, **new), 2)
+
+    def test_only_creating_beyond_the_bound_is_refused(self):
+        new = {'run': 1, 'revision': 'a' * 40, 'trust_path': 'p', 'target_path': 'r'}
+        bound = refresh.MAX_GENERATIONS
+        self.assertEqual(self.selected(bound, 'active'), bound)
+        self.assertEqual(self.selected(bound, 'warming', **new), bound)
+        with patch.object(refresh, 'latest_generation', return_value=bound), \
+                patch.object(refresh, 'finished', return_value=True), \
+                patch.object(refresh.files, 'bounded_json', return_value={}), self.assertRaisesRegex(ValueError, 'bound'):
+            refresh.ReleaseRefreshUpgrade(Mock(state_dir=__import__('pathlib').Path('/nonexistent-state')), **new)
+
+    def test_finished_requires_the_published_report(self):
+        record = {'completed': 'active', 'nonce': 'n', 'transition': None, 'recoveryPause': None,
+                  'installationReports': [{'configuration': 'active', 'releaseRefreshUpgradeOperation': 'n'}]}
+        self.assertTrue(refresh.finished(record))
+        for change in ({'completed': 'armed'}, {'transition': {'to': 'active'}}, {'recoveryPause': {}},
+                       {'installationReports': []}, {'nonce': 'other'},
+                       {'installationReports': [{'configuration': 'release-refresh-upgrade-paused',
+                                                 'releaseRefreshUpgradeOperation': 'n'}]}):
+            with self.subTest(change=change):
+                self.assertFalse(refresh.finished(dict(record, **change)))
+
+
 class Upgrade(unittest.TestCase):
     def test_refresh_reuses_the_switch_with_its_own_identity(self):
         self.assertTrue(issubclass(refresh.ReleaseRefreshUpgrade, upstream.ModelUpstreamUpgrade))
