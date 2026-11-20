@@ -51,6 +51,49 @@ type Verification struct {
 	// dependency files, test configuration, shared helpers, test data); a
 	// candidate that changes one is refused.
 	HarnessGlobs []string `json:"harnessGlobs,omitempty"`
+	// Env adds reviewed variables for the toolchain (for example PATH or a
+	// tool home inside the image). HOME, TMPDIR and the runner's fixed
+	// variables cannot be overridden.
+	Env map[string]string `json:"env,omitempty"`
+}
+
+// Bounds of Verification.Env.
+const (
+	MaxEnv           = 16
+	MaxEnvValueBytes = 1024
+)
+
+var (
+	envName     = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
+	reservedEnv = map[string]bool{"HOME": true, "TMPDIR": true, "CI": true, "LC_ALL": true, "TZ": true}
+)
+
+// SearchPath returns the directories of a reviewed PATH entry, or nil.
+func (v Verification) SearchPath() []string {
+	if v.Env["PATH"] == "" {
+		return nil
+	}
+	return strings.Split(v.Env["PATH"], ":")
+}
+
+func validEnv(env map[string]string) bool {
+	if len(env) > MaxEnv {
+		return false
+	}
+	for name, value := range env {
+		if !envName.MatchString(name) || reservedEnv[name] || strings.HasPrefix(name, "LD_") || value == "" ||
+			len(value) > MaxEnvValueBytes || strings.IndexFunc(value, unicode.IsControl) >= 0 {
+			return false
+		}
+	}
+	if path, ok := env["PATH"]; ok {
+		for _, dir := range strings.Split(path, ":") {
+			if !strings.HasPrefix(dir, "/") || (dir != "/" && cleanPath(dir[1:]) != nil) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 type Result struct {
@@ -195,7 +238,7 @@ func (v Verification) validate() error {
 		v.TimeoutSeconds < 30 || v.TimeoutSeconds > 600 || !cpuQuantity.MatchString(v.CPU) ||
 		!byteQuantity.MatchString(v.Memory) || !byteQuantity.MatchString(v.EphemeralStorage) ||
 		v.Network != "none" || !v.Result.ExitCode || v.Repeat < 1 || v.Repeat > 3 ||
-		len(v.TestGlobs) == 0 || len(v.TestGlobs) > 32 || len(v.HarnessGlobs) > 64 {
+		len(v.TestGlobs) == 0 || len(v.TestGlobs) > 32 || len(v.HarnessGlobs) > 64 || !validEnv(v.Env) {
 		return ErrManifest
 	}
 	for _, g := range v.HarnessGlobs {

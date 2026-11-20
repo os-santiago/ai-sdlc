@@ -34,10 +34,15 @@ func TestCompilePodIsOfflineBoundedAndKeepsTheCommandOutOfTheSpec(t *testing.T) 
 		}
 	}
 	containers := spec["containers"].([]any)
-	if len(containers) != 2 || len(spec["initContainers"].([]any)) != 1 {
-		t.Fatal("containers", containers)
+	inits := spec["initContainers"].([]any)
+	if len(containers) != 1 || len(inits) != 2 || inits[1].(map[string]any)["restartPolicy"] != "Always" || inits[1].(map[string]any)["name"] != "transfer" {
+		t.Fatal("the transfer sidecar must be a native sidecar and tests the only container", containers, inits)
 	}
-	tests := containers[1].(map[string]any)
+	tests := containers[0].(map[string]any)
+	limits := tests["resources"].(map[string]any)["limits"].(map[string]any)
+	if limits["ephemeral-storage"] != "1408Mi" || limits["memory"] != "1Gi" {
+		t.Fatal("the disk limit must cover the scratch, workspace and runner volumes", limits)
+	}
 	if tests["name"] != "tests" || tests["image"] != testPod().Verification.Image {
 		t.Fatal("tests container", tests)
 	}
@@ -61,6 +66,9 @@ func TestCompilePodIsOfflineBoundedAndKeepsTheCommandOutOfTheSpec(t *testing.T) 
 		}
 	}
 	config := w.ConfigMap
+	if config["metadata"].(map[string]any)["name"] != w.Pod["metadata"].(map[string]any)["name"].(string)+"-settings" {
+		t.Fatal("each run needs its own settings object")
+	}
 	if config["immutable"] != true {
 		t.Fatal("settings must be immutable")
 	}
@@ -84,6 +92,9 @@ func TestCompilePodRefusesInvalidInput(t *testing.T) {
 		"empty command":  func(p *Pod) { p.Verification.Command = nil },
 		"short timeout":  func(p *Pod) { p.Verification.TimeoutSeconds = 1 },
 		"repeat too big": func(p *Pod) { p.Verification.Repeat = 4 },
+		"reserved env":   func(p *Pod) { p.Verification.Env = map[string]string{"HOME": "/root"} },
+		"relative PATH":  func(p *Pod) { p.Verification.Env = map[string]string{"PATH": "bin:/usr/bin"} },
+		"loader env":     func(p *Pod) { p.Verification.Env = map[string]string{"LD_PRELOAD": "/x.so"} },
 	}
 	for name, mutate := range mutations {
 		p := testPod()
@@ -91,6 +102,16 @@ func TestCompilePodRefusesInvalidInput(t *testing.T) {
 		if _, err := CompilePod(p); err == nil {
 			t.Fatal("accepted", name)
 		}
+	}
+}
+
+func TestAttemptSixteenAndReviewedEnvCompile(t *testing.T) {
+	p := testPod()
+	p.Attempt = 16
+	p.Run = "candidate-2"
+	p.Verification.Env = map[string]string{"PATH": "/usr/local/go/bin:/usr/bin:/bin", "GOFLAGS": "-mod=vendor"}
+	if _, err := CompilePod(p); err != nil {
+		t.Fatal(err)
 	}
 }
 

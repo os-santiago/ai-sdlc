@@ -10,16 +10,21 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // Fixed layout of a repository-tests pod.
 const (
 	SettingsDirectory = "/etc/ai-sdlc/tests"
 	RunnerPath        = "/runner/component"
-	ScratchDirectory  = "/scratch"
+	// ScratchDirectory is HOME and TMPDIR; it is /tmp because many tools
+	// write there regardless of TMPDIR, and the root filesystem is read-only.
+	ScratchDirectory = "/tmp"
 	// PullSeconds bounds scheduling, image pulls and the runner install
 	// before the runner starts waiting for its marker (ReadySeconds).
-	PullSeconds = 180
+	PullSeconds     = 300
+	workspaceVolume = "256Mi"
+	runnerVolume    = "128Mi"
 	// MarginSeconds covers tree verification, the report and termination.
 	MarginSeconds = 60
 )
@@ -105,7 +110,8 @@ func CompilePod(p Pod) (Workload, error) {
 	}
 	settingsSHA := authority.Digest(settings)
 	name := fmt.Sprintf("tests-%s-%d-%s", p.WorkItemID, p.Attempt, p.Run)
-	configName := "repository-tests-" + settingsSHA[:32]
+	// One settings object per run: runs are created and cleaned up separately.
+	configName := name + "-settings"
 	labels := map[string]any{"app.kubernetes.io/part-of": "ai-sdlc", "ai-sdlc.io/component": "repository-tests", "ai-sdlc.io/work-item": p.WorkItemID, "ai-sdlc.io/run": p.Run}
 	metadata := func(n string) map[string]any {
 		return map[string]any{"name": n, "namespace": p.Namespace, "labels": labels, "annotations": map[string]any{
@@ -122,10 +128,17 @@ func CompilePod(p Pod) (Workload, error) {
 	copying := map[string]any{"requests": map[string]any{"cpu": "20m", "memory": "32Mi"}, "limits": map[string]any{"cpu": "200m", "memory": "64Mi", "ephemeral-storage": "128Mi"}}
 	install := map[string]any{"name": "install-runner", "image": p.VerifierImage, "imagePullPolicy": "IfNotPresent", "command": []string{"/component", "install-runner", RunnerPath},
 		"securityContext": security, "resources": copying, "volumeMounts": []any{map[string]any{"name": "runner", "mountPath": "/runner"}}}
-	transfer := map[string]any{"name": "transfer", "image": p.MailboxImage, "imagePullPolicy": "IfNotPresent", "command": []string{"/workspace-transfer", "hold", "--pod-uid", "$(POD_UID)"},
+	// transfer is a native sidecar: it starts before the tests container and
+	// is stopped when it exits, so the pod completes with the tests.
+	transfer := map[string]any{"name": "transfer", "image": p.MailboxImage, "imagePullPolicy": "IfNotPresent", "restartPolicy": "Always", "command": []string{"/workspace-transfer", "hold", "--pod-uid", "$(POD_UID)"},
 		"env":             []any{map[string]any{"name": "POD_UID", "valueFrom": map[string]any{"fieldRef": map[string]any{"fieldPath": "metadata.uid"}}}},
 		"securityContext": security, "resources": small, "volumeMounts": []any{workspace, identity}}
-	quota := map[string]any{"cpu": p.Verification.CPU, "memory": p.Verification.Memory, "ephemeral-storage": p.Verification.EphemeralStorage}
+	// The pod is evicted when its disk use exceeds the sum of its container
+	// limits, so the tests container's limit also covers the shared volumes.
+	disk := resource.MustParse(p.Verification.EphemeralStorage)
+	disk.Add(resource.MustParse(workspaceVolume))
+	disk.Add(resource.MustParse(runnerVolume))
+	quota := map[string]any{"cpu": p.Verification.CPU, "memory": p.Verification.Memory, "ephemeral-storage": disk.String()}
 	tests := map[string]any{"name": "tests", "image": p.Verification.Image, "imagePullPolicy": "IfNotPresent",
 		"command":         []string{RunnerPath, "repository-tests-run", SettingsDirectory + "/verification.json", ScratchDirectory, p.SourceSHA, p.TreeSHA256},
 		"securityContext": security, "resources": map[string]any{"requests": quota, "limits": quota},
@@ -141,14 +154,14 @@ func CompilePod(p Pod) (Workload, error) {
 		"volumes": []any{
 			// The imported tree is bounded by the bundle limits; the rest is
 			// room for build output the tests write next to the sources.
-			map[string]any{"name": "workspace", "emptyDir": map[string]any{"sizeLimit": "256Mi"}},
+			map[string]any{"name": "workspace", "emptyDir": map[string]any{"sizeLimit": workspaceVolume}},
 			map[string]any{"name": "scratch", "emptyDir": map[string]any{"sizeLimit": p.Verification.EphemeralStorage}},
-			map[string]any{"name": "runner", "emptyDir": map[string]any{"sizeLimit": "128Mi"}},
+			map[string]any{"name": "runner", "emptyDir": map[string]any{"sizeLimit": runnerVolume}},
 			map[string]any{"name": "settings", "configMap": map[string]any{"name": configName, "defaultMode": 0o444}},
 			map[string]any{"name": "pod-identity", "downwardAPI": map[string]any{"items": []any{map[string]any{"path": "uid", "fieldRef": map[string]any{"fieldPath": "metadata.uid"}}}}},
 		},
-		"initContainers": []any{install},
-		"containers":     []any{transfer, tests},
+		"initContainers": []any{install, transfer},
+		"containers":     []any{tests},
 	}}
 	raw, err := json.Marshal(Workload{config, pod})
 	if err != nil {

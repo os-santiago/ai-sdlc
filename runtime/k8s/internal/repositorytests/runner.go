@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -28,8 +29,9 @@ const (
 	MaxNameBytes   = 1024
 )
 
-// searchPath is the only PATH the command and its lookup use.
-var searchPath = []string{"/usr/local/bin", "/usr/bin", "/bin"}
+// searchPath is the PATH the command and its lookup use unless the reviewed
+// settings declare one. It covers the official toolchain images' locations.
+var searchPath = []string{"/usr/local/go/bin", "/usr/local/cargo/bin", "/opt/java/openjdk/bin", "/usr/local/bin", "/usr/bin", "/bin"}
 
 // Runner executes a manifest's test command in an already prepared, offline
 // workspace and produces exactly one bounded Run. It inherits no environment:
@@ -61,11 +63,15 @@ func (r Runner) Run(ctx context.Context) (Run, error) {
 		}
 		dir = filepath.Join(r.Workspace, filepath.FromSlash(v.WorkingDir))
 	}
+	dirs := searchPath
+	if reviewed := v.SearchPath(); reviewed != nil {
+		dirs = reviewed
+	}
 	program := v.Command[0]
 	if !strings.Contains(program, "/") {
-		// Resolve with the fixed PATH, never the runner's own environment.
+		// Resolve with the reviewed PATH, never the runner's own environment.
 		program = ""
-		for _, d := range searchPath {
+		for _, d := range dirs {
 			if info, err := os.Stat(filepath.Join(d, v.Command[0])); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
 				program = filepath.Join(d, v.Command[0])
 				break
@@ -79,7 +85,17 @@ func (r Runner) Run(ctx context.Context) (Run, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, program, v.Command[1:]...)
 	cmd.Dir = dir
-	cmd.Env = []string{"PATH=" + strings.Join(searchPath, ":"), "HOME=" + r.Scratch, "TMPDIR=" + r.Scratch, "LC_ALL=C.UTF-8", "TZ=UTC", "CI=1"}
+	cmd.Env = []string{"PATH=" + strings.Join(dirs, ":"), "HOME=" + r.Scratch, "TMPDIR=" + r.Scratch, "LC_ALL=C.UTF-8", "TZ=UTC", "CI=1"}
+	names := make([]string, 0, len(v.Env))
+	for name := range v.Env {
+		if name != "PATH" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		cmd.Env = append(cmd.Env, name+"="+v.Env[name])
+	}
 	// Repository output is untrusted and never becomes evidence: it goes to
 	// /dev/null, so no pipe can keep the runner waiting.
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
