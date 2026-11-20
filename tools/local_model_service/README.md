@@ -15,7 +15,7 @@ like any other model service. No agent CLI, provider credential or wrapper
 code enters the cluster or its images.
 
 ```
-ai-sdlc (kind)  --OpenAI API + bearer-->  host service  -->  claude -p (no tools)  -->  provider
+ai-sdlc (kind)  --OpenAI API (allowlist/token)-->  host service  -->  claude -p (no tools)  -->  provider
   worker/verifier gateways (openai adapter)   10.89.0.1:18090     per call, isolated        host credentials
 ```
 
@@ -32,7 +32,10 @@ ai-sdlc (kind)  --OpenAI API + bearer-->  host service  -->  claude -p (no tools
   when the cluster's network plugin applies NetworkPolicy) selects pods, not
   containers: every container sharing a gateway pod's network, such as
   `verifier` beside `model-gateway`, can reach the endpoint, and an address
-  allowlist cannot tell them apart. Where access must be limited to the
+  allowlist cannot tell them apart. In kind, pod traffic to the bridge is
+  usually masqueraded to the node address, so allowlisting the node admits
+  every pod and process on that node: allowlist-only access is no stronger
+  than NetworkPolicy enforcement. Where access must be limited to the
   gateway itself, use an independent credential (`tokenFile`) held only by
   the gateway.
 

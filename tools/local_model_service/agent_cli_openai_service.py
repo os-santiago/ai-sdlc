@@ -12,7 +12,8 @@ Contract:
   POST /v1/chat/completions  OpenAI request -> chat.completion with native
                              ``tool_calls`` and ``usage``
   GET  /v1/models            the configured model aliases
-  Authorization: Bearer <token>  (a local service token, not a provider key)
+  Access: an allowlist of client addresses and/or a local bearer token
+                             (a service token, not a provider key)
 
 The CLI runs once per call in a fresh empty directory with a minimal
 environment, no native tools, no session, settings, hooks, MCP servers or
@@ -116,13 +117,13 @@ class ClaudeCLI:
                 "--model", model]
 
     def run(self, model, marker, system, prompt, tokens, seconds):
-        with tempfile.TemporaryDirectory(prefix="agent-cli-") as home:
-            try:
+        try:
+            with tempfile.TemporaryDirectory(prefix="agent-cli-") as home:
                 done = subprocess.run(self.argv(model, marker, system or "(none)"), input=prompt, cwd=home,
                                       env=self.environment(home, tokens), capture_output=True, timeout=seconds,
                                       check=False)
-            except (OSError, ValueError, subprocess.TimeoutExpired):
-                raise BackendError("agent CLI failed") from None
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            raise BackendError("agent CLI failed") from None
         if done.returncode != 0 or len(done.stdout) > MAX_OUTPUT_BYTES:
             raise BackendError("agent CLI failed")
         try:
@@ -146,8 +147,8 @@ class ClaudeCLI:
                 break
             answer, text = self.run(model, marker, system, (prompt + (RETRY_NOTE if attempt else "")).encode(),
                                     tokens, remaining)
-            # Plain text is accepted as a content-only turn on the last attempt.
-            structured = parse_turn(text, plain=attempt == 1, marker=marker)
+            # Plain text without structure is a content-only turn on any attempt.
+            structured = parse_turn(text, marker=marker)
             message = None
             if structured is not None:
                 proposed = [{"name": a.get("action"),
@@ -161,8 +162,11 @@ class ClaudeCLI:
                     message = None
             if message is None and os.environ.get("AI_SDLC_LOCAL_MAAS_DEBUG_INVALID"):
                 # Development diagnostics only: the rejected model text.
-                with open(os.environ["AI_SDLC_LOCAL_MAAS_DEBUG_INVALID"], "a") as debug:
-                    debug.write(json.dumps({"result": str(text)[:4000]}) + "\n")
+                try:
+                    with open(os.environ["AI_SDLC_LOCAL_MAAS_DEBUG_INVALID"], "a") as debug:
+                        debug.write(json.dumps({"result": str(text)[:4000]}) + "\n")
+                except OSError:
+                    pass
             print(json.dumps({"event": "completion", "model": model, "attempt": attempt + 1, "numTurns": answer.get("num_turns"),
                               "valid": message is not None, "actions": len((message or {}).get("tool_calls") or []),
                               "actionsOffered": len(tools), "durationMs": answer.get("duration_ms")}), flush=True)
@@ -228,7 +232,7 @@ def leading_turn(text):
     return turn
 
 
-def parse_turn(text, plain=False, marker=None):
+def parse_turn(text, marker=None):
     """One assistant turn: a leading JSON turn; else, when the answer carries
     no structure at all, the plain text as a content-only turn (retried first
     when it ends by announcing an action it never requested). Any other

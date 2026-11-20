@@ -78,7 +78,7 @@ class ServiceTests(unittest.TestCase):
     def test_cli_is_completion_only_isolated_and_markers_cannot_be_forged(self):
         self.start()
         self.call(self.request())
-        seen = json.load(open(self.record))
+        seen = json.loads(Path(self.record).read_text())
         argv = seen["argv"]
         self.assertEqual(argv[argv.index("--tools") + 1], "")
         self.assertNotIn("--json-schema", argv)
@@ -193,7 +193,7 @@ class NativeAttemptTests(ServiceTests):
         status, answer = self.call(self.request())
         self.assertEqual(status, 200)
         self.assertEqual(answer["choices"][0]["message"]["tool_calls"][0]["function"]["name"], "read_file")
-        self.assertIn("previous answer was not one valid JSON object", json.load(open(self.record))["stdin"])
+        self.assertIn("previous answer was not one valid JSON object", json.loads(Path(self.record).read_text())["stdin"])
         self.server.shutdown(); self.server.server_close()
         self.start("native", always=True)
         self.assertEqual(self.call(self.request())[0], 502)
