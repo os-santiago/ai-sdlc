@@ -26,6 +26,10 @@ const (
 	// OperationalSection carries authority or operations notes a reviewer
 	// would read as requirements.
 	OperationalSection FindingKind = "operational-section"
+	// ScopeLimit restricts which files the change may touch. Verifying it
+	// needs the original source, which reviewers do not get, and nothing
+	// reviewable remains once the restriction is removed.
+	ScopeLimit FindingKind = "scope-limit"
 )
 
 type Finding struct {
@@ -38,6 +42,9 @@ type Finding struct {
 // Process phrasing only: product features such as "deployment status" or
 // "token expiry" are reviewable properties and must not match.
 var deliveryObligation = regexp.MustCompile(`(?i)(\b(obtain|pass(ing)?|require[sd]?)\b[^.;]{0,40}\bindependent (behavior )?(verification|review)\b|\bpassing required checks\b|\bsigned (build|provenance)\b|\bbuild/provenance\b|\bprovenance (verification|components?)\b|\b(promot(e|ion)|deploy(ed|ment)?)\b[^.;]{0,60}\b(to|into|through)\b[^.;]{0,40}\b(environment|production|cluster|components?)\b|\brecord the deployed\b)`)
+
+// Change-scope restrictions: which files a change may touch.
+var scopeLimit = regexp.MustCompile(`(?i)(\b(limit|restrict|confine)\b[^.;]{0,30}\b(changes?|edits?|diffs?|modifications?)\b[^.;]{0,15}\bto\b|\bonly (modify|change|touch|edit)\b)`)
 
 // Clauses that need a before/after comparison of the source.
 var baselineComparison = regexp.MustCompile(`(?i)(byte-for-byte|every other (line|file)|all other (lines|files)|otherwise unchanged)`)
@@ -71,6 +78,9 @@ func ReviewabilityFindings(issue Issue) []Finding {
 		case deliveryObligation.MatchString(criterion):
 			findings = append(findings, Finding{Kind: DeliveryObligation, Criterion: i + 1, Reason: fmt.Sprintf(
 				"Acceptance criterion %d is a delivery obligation enforced by AI-SDLC policy, not a property a reviewer can verify in the candidate; remove it from the criteria.", i+1)})
+		case scopeLimit.MatchString(criterion):
+			findings = append(findings, Finding{Kind: ScopeLimit, Criterion: i + 1, Reason: fmt.Sprintf(
+				"Acceptance criterion %d limits which files the change may touch; the read-only reviewer cannot compare with the original source to verify it; remove it from the criteria.", i+1)})
 		case baselineComparison.MatchString(criterion):
 			findings = append(findings, Finding{Kind: BaselineComparison, Criterion: i + 1, Reason: fmt.Sprintf(
 				"Acceptance criterion %d requires comparing with the original source, which the read-only reviewer does not receive; state only the files and changes allowed.", i+1)})
@@ -100,7 +110,7 @@ func ProposeRevision(issue Issue) (string, []Finding) {
 	var unresolved []Finding
 	for _, f := range findings {
 		switch f.Kind {
-		case DeliveryObligation:
+		case DeliveryObligation, ScopeLimit:
 			drop[issue.AcceptanceCriteria[f.Criterion-1]] = true
 		case BaselineComparison:
 			original := issue.AcceptanceCriteria[f.Criterion-1]

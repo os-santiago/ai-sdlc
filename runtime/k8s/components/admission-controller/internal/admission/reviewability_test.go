@@ -34,7 +34,7 @@ func TestUnreviewableIssueIsNotAdmittedAndGetsAReviewableProposal(t *testing.T) 
 	for _, f := range findings {
 		kinds[f.Kind]++
 	}
-	if kinds[DeliveryObligation] != 1 || kinds[BaselineComparison] != 2 || kinds[OperationalSection] != 1 {
+	if kinds[DeliveryObligation] != 1 || kinds[BaselineComparison] != 1 || kinds[ScopeLimit] != 1 || kinds[OperationalSection] != 1 {
 		t.Fatalf("unexpected findings %#v", findings)
 	}
 
@@ -57,18 +57,17 @@ func TestUnreviewableIssueIsNotAdmittedAndGetsAReviewableProposal(t *testing.T) 
 		"Cover `1 second`",
 		"Preserve `Unavailable`",
 		"Update the browser expectation for `#ttl` from `60 seconds` to `1 minute`.",
-		"Limit the change to `web/static/ttl.js`, `tests/ttl.test.mjs`, and that single presentation assertion in `tools/verify_browser.py`.",
 	} {
 		if !strings.Contains(proposal, keep) {
 			t.Fatalf("proposal lost %q:\n%s", keep, proposal)
 		}
 	}
-	for _, gone := range []string{"Delivery readiness", "byte-for-byte", "every other file", "provenance", "approvals"} {
+	for _, gone := range []string{"Delivery readiness", "byte-for-byte", "every other file", "provenance", "approvals", "Limit the change"} {
 		if strings.Contains(proposal, gone) {
 			t.Fatalf("proposal kept %q:\n%s", gone, proposal)
 		}
 	}
-	if len(revised.AcceptanceCriteria) != len(issue.AcceptanceCriteria)-1 {
+	if len(revised.AcceptanceCriteria) != len(issue.AcceptanceCriteria)-2 {
 		t.Fatalf("criteria %d -> %d", len(issue.AcceptanceCriteria), len(revised.AcceptanceCriteria))
 	}
 }
@@ -148,5 +147,33 @@ func TestReviewabilityAvoidsFalsePositivesAndLossyRewrites(t *testing.T) {
 	}
 	if got := Evaluate(issue, DefaultPolicy()); got.Decision != NeedsClarification {
 		t.Fatalf("unresolved baseline criterion admitted %#v", got)
+	}
+}
+
+// A change-scope restriction needs the original source to verify, so the
+// read-only reviewer can only request changes; admission proposes removing it.
+func TestScopeLimitCriteriaAreNotAdmittedAndRemovedFromTheProposal(t *testing.T) {
+	for _, criterion := range []string{
+		"Limit the change to `web/static/ttl.js`, `tests/ttl.test.mjs`, and that single presentation assertion in `tools/verify_browser.py`.",
+		"Restrict edits to the parser package.",
+		"Only modify files under web/static.",
+	} {
+		body := "Improve the token lifetime display so people read durations immediately in the console.\n\n## Acceptance criteria\n\n- [ ] Show `1 minute` for 60 seconds.\n- [ ] " + criterion + "\n"
+		issue := issueFromBody(t, body)
+		if got := Evaluate(issue, DefaultPolicy()); got.Decision != NeedsClarification {
+			t.Fatalf("scope limit admitted %q: %#v", criterion, got)
+		}
+		proposal, unresolved := ProposeRevision(issue)
+		revised := issueFromBody(t, proposal)
+		if len(unresolved) != 0 || strings.Contains(proposal, criterion) || Evaluate(revised, DefaultPolicy()).Decision != Accepted ||
+			len(revised.AcceptanceCriteria) != 1 {
+			t.Fatalf("scope limit not removed %q: %#v\n%s", criterion, unresolved, proposal)
+		}
+	}
+	for _, reviewable := range []string{"Limit the label to 20 characters.", "Display only the remaining minutes when hours are zero."} {
+		issue := issueFromBody(t, "Improve the token lifetime display so people read durations immediately in the console.\n\n## Acceptance criteria\n\n- [ ] "+reviewable+"\n")
+		if findings := ReviewabilityFindings(issue); len(findings) != 0 {
+			t.Fatalf("product property flagged %q: %#v", reviewable, findings)
+		}
 	}
 }
