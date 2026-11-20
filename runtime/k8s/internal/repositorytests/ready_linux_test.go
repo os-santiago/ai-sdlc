@@ -104,3 +104,26 @@ func TestVerifyTreeRefusesChangedOrGitTrees(t *testing.T) {
 		t.Fatal("a root .git accepted")
 	}
 }
+
+func TestAMarkerStillLinkedUnderItsTemporaryNameIsNotAccepted(t *testing.T) {
+	parent, source, tree := importedTree(t)
+	want := Ready{Version: ReadyVersion, PodUID: testUID, SourceSHA: source, TreeSHA256: tree}
+	raw := `{"version":"` + ReadyVersion + `","podUID":"` + testUID + `","sourceSHA":"` + source + `","treeSHA256":"` + tree + `"}`
+	if err := os.WriteFile(filepath.Join(parent, ".ready-x"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(filepath.Join(parent, ".ready-x"), filepath.Join(parent, "ready.json")); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if WaitReady(ctx, parent, want) == nil {
+		t.Fatal("a doubly linked marker released the run")
+	}
+	if err := os.Remove(filepath.Join(parent, ".ready-x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := WaitReady(context.Background(), parent, want); err != nil {
+		t.Fatal("the completed marker must release the run", err)
+	}
+}

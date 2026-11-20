@@ -38,6 +38,11 @@ type Runner struct {
 	Verification project.Verification
 	Workspace    string // absolute path of the checked-out tree
 	Scratch      string // absolute, writable path for HOME and TMPDIR
+	// ReapAll kills every other process of the pid namespace once the
+	// command ends, before the report is read, so nothing the repository
+	// started (even outside its process group) can still change it. Set only
+	// when the runner is the namespace's init process.
+	ReapAll bool
 }
 
 var errRunner = errors.New("repository test runner refused its input")
@@ -83,6 +88,9 @@ func (r Runner) Run(ctx context.Context) (Run, error) {
 	cmd.WaitDelay = 5 * time.Second
 	result := Run{}
 	err := cmd.Run()
+	if r.ReapAll {
+		_ = syscall.Kill(-1, syscall.SIGKILL)
+	}
 	switch {
 	case err == nil:
 		result.ExitCode = 0

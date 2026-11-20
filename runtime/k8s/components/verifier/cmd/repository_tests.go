@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repositorytests"
@@ -18,7 +20,7 @@ import (
 const (
 	testsParent  = "/workspaces"
 	testsUIDPath = "/var/run/ai-sdlc/pod/uid"
-	readyWait    = 60 * time.Second
+	readyWait    = repositorytests.ReadySeconds * time.Second
 )
 
 // runRepositoryTests is the entrypoint copied into an offline verification
@@ -61,7 +63,14 @@ func runRepositoryTests(ctx context.Context, args []string, out io.Writer, paren
 	if repositorytests.VerifyTree(parent, args[2], args[3]) != nil {
 		return errors.New("imported tree does not match")
 	}
-	result, err := repositorytests.Runner{Verification: v, Workspace: filepath.Join(parent, "repository"), Scratch: args[1]}.Run(ctx)
+	// A non-dumpable runner cannot be traced, and its /proc entries (and so
+	// its stdout) cannot be opened, by the same-uid repository code; the flag
+	// resets for the command on exec, which needs no protection.
+	if unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0) != nil {
+		return errors.New("runner isolation unavailable")
+	}
+	runner := repositorytests.Runner{Verification: v, Workspace: filepath.Join(parent, "repository"), Scratch: args[1], ReapAll: os.Getpid() == 1}
+	result, err := runner.Run(ctx)
 	if err != nil {
 		return err
 	}
@@ -83,8 +92,9 @@ func readUID(path string) (string, error) {
 }
 
 // installRunner copies this static binary to dest, which must not exist, so
-// an init container can place the runner into a volume the toolchain image
-// mounts read-only. The verifier image has no shell or cp.
+// an init container of a restartPolicy Never pod (a failed copy fails the
+// pod, never retries over a partial file) can place the runner into a volume
+// the toolchain image mounts read-only. The verifier image has no shell or cp.
 //
 //	component install-runner <dest>
 func installRunner(args []string, self string) error {

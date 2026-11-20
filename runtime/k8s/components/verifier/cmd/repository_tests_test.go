@@ -139,3 +139,17 @@ func TestInstallRunnerCopiesOnceAndExecutable(t *testing.T) {
 		}
 	}
 }
+
+func TestPodIdentityMustBeSmallAndPresent(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := readUID(filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("missing identity accepted")
+	}
+	big := filepath.Join(dir, "uid")
+	if err := os.WriteFile(big, []byte(strings.Repeat("a", 129)), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readUID(big); err == nil {
+		t.Fatal("oversized identity accepted")
+	}
+}
