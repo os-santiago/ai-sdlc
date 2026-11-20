@@ -938,14 +938,16 @@
         "adapter",
         "upstream",
         "benchmark",
-        "reviewBenchmark"
+        "reviewBenchmark",
+        "claude"
       ],
       "properties": {
         "adapter": {
           "enum": [
             "agent-cli",
             "openai",
-            "anthropic"
+            "anthropic",
+            "claude-cli"
           ]
         },
         "upstream": {
@@ -1032,6 +1034,31 @@
               "maximum": 32768
             }
           }
+        },
+        "claude": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider",
+            "vertexProject",
+            "vertexRegion"
+          ],
+          "properties": {
+            "provider": {
+              "enum": [
+                "anthropic",
+                "vertex"
+              ]
+            },
+            "vertexProject": {
+              "type": "string",
+              "maxLength": 63
+            },
+            "vertexRegion": {
+              "type": "string",
+              "maxLength": 63
+            }
+          }
         }
       },
       "allOf": [
@@ -1040,6 +1067,26 @@
             "properties": {
               "adapter": {
                 "const": "anthropic"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "upstream": {
+                "properties": {
+                  "credentialSecret": {
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "adapter": {
+                "const": "claude-cli"
               }
             }
           },

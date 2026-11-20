@@ -152,6 +152,7 @@ modelGateway:
   # agent-cli: a local agent CLI as the completion model (Codex CLI wrapper).
   # openai: any OpenAI-compatible /v1/chat/completions endpoint.
   # anthropic: the Anthropic Messages API (/v1/messages); needs credentialSecret.
+  # claude-cli: Claude Code CLI as a completion model; needs credentialSecret.
   adapter: agent-cli
   upstream:
     url: ""
@@ -170,6 +171,13 @@ modelGateway:
   benchmark:
     promptTokens: 16384
     completionTokens: 4096
+  # claude-cli: Claude Code in print mode as a completion-only model. The
+  # credentialSecret (key "credential") holds an Anthropic API key (provider
+  # anthropic) or a Google service account JSON (provider vertex).
+  claude:
+    provider: anthropic
+    vertexProject: ""
+    vertexRegion: ""
   # Envelope for the verifier's gateway: reviewers read large candidates but
   # answer with a short verdict.
   reviewBenchmark:
