@@ -127,3 +127,99 @@ func TestRunnerReadsOnlyARegularReportInsideTheWorkspace(t *testing.T) {
 		t.Fatal("a symlinked report was read")
 	}
 }
+
+func TestAFIFOAtTheReportPathCannotBlockTheRunner(t *testing.T) {
+	r, workspace := runner(t, []string{"/bin/sh", "-c", "exit 0"}, "out/report.xml")
+	if err := os.MkdirAll(filepath.Join(workspace, "out"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := unixMkfifo(filepath.Join(workspace, "out", "report.xml")); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := r.Run(context.Background()); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a FIFO report was accepted")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the runner blocked on a FIFO report")
+	}
+}
+
+func TestReportsCannotExhaustCPUOrMemory(t *testing.T) {
+	var repeated strings.Builder
+	repeated.WriteString(`<testsuite name="s">`)
+	for i := 0; i <= MaxTests; i++ {
+		repeated.WriteString(`<testcase classname="c" name="same"/>`)
+	}
+	repeated.WriteString(`</testsuite>`)
+	if _, err := ParseJUnit(strings.NewReader(repeated.String())); err == nil {
+		t.Fatal("repeated cases beyond MaxTests accepted")
+	}
+	deep := strings.Repeat(`<testsuite name="n">`, MaxSuiteDepth+2) + strings.Repeat(`</testsuite>`, MaxSuiteDepth+2)
+	if _, err := ParseJUnit(strings.NewReader(deep)); err == nil {
+		t.Fatal("suites deeper than MaxSuiteDepth accepted")
+	}
+	long := `<testsuite name="` + strings.Repeat("x", MaxNameBytes+1) + `"><testcase name="t"/></testsuite>`
+	if _, err := ParseJUnit(strings.NewReader(long)); err == nil {
+		t.Fatal("over-long name accepted")
+	}
+}
+
+func TestDifferentSuitePathsNeverShareAnIdentity(t *testing.T) {
+	flat, err := ParseJUnit(strings.NewReader(`<testsuite name="a/b"><testcase classname="c" name="t"/></testsuite>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested, err := ParseJUnit(strings.NewReader(`<testsuite name="a"><testsuite name="b"><testcase classname="c" name="t"/></testsuite></testsuite>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id := range flat {
+		if _, collide := nested[id]; collide {
+			t.Fatal("suite a/b and nested a then b share an identity")
+		}
+	}
+}
+
+func TestCommandLookupWorkingDirectoryAndProcessGroupKill(t *testing.T) {
+	r, workspace := runner(t, []string{"sh", "-c", `test "$(pwd)" = "$EXPECTED" 2>/dev/null; echo $$ > "$HOME/pid"; exit 0`}, "")
+	if got, err := r.Run(context.Background()); err != nil || got.ExitCode != 0 {
+		t.Fatal("bare command resolved with the fixed PATH", got, err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, "pkg"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r.Verification.WorkingDir = "pkg"
+	r.Verification.Command = []string{"/bin/sh", "-c", `test "$(basename "$(pwd)")" = pkg`}
+	if got, err := r.Run(context.Background()); err != nil || got.ExitCode != 0 {
+		t.Fatal("working directory", got, err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(workspace, "link")); err != nil {
+		t.Fatal(err)
+	}
+	r.Verification.WorkingDir = "link"
+	if _, err := r.Run(context.Background()); err == nil {
+		t.Fatal("symlinked working directory accepted")
+	}
+	r.Verification.WorkingDir = ""
+	r.Verification.TimeoutSeconds = 1
+	r.Verification.Command = []string{"/bin/sh", "-c", `sleep 60 & echo $! > "$HOME/child"; wait`}
+	if got, err := r.Run(context.Background()); err != nil || got.ExitCode != 124 {
+		t.Fatal("timeout", got, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(r.Scratch, "child"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid := strings.TrimSpace(string(raw))
+	time.Sleep(500 * time.Millisecond)
+	if _, err := os.Stat("/proc/" + pid); err == nil {
+		state, _ := os.ReadFile("/proc/" + pid + "/stat")
+		if !strings.Contains(string(state), ") Z") {
+			t.Fatal("background child survived the process-group kill", pid)
+		}
+	}
+}

@@ -11,15 +11,25 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 )
 
-// MaxReportBytes bounds a JUnit report read from the workspace.
-const MaxReportBytes = 4 * 1024 * 1024
+// Bounds of a JUnit report read from the workspace.
+const (
+	MaxReportBytes = 4 * 1024 * 1024
+	MaxSuiteDepth  = 16
+	MaxNameBytes   = 1024
+)
+
+// searchPath is the only PATH the command and its lookup use.
+var searchPath = []string{"/usr/local/bin", "/usr/bin", "/bin"}
 
 // Runner executes a manifest's test command in an already prepared, offline
 // workspace and produces exactly one bounded Run. It inherits no environment:
@@ -41,18 +51,33 @@ func (r Runner) Run(ctx context.Context) (Run, error) {
 	}
 	dir := r.Workspace
 	if v.WorkingDir != "" {
-		if project.CleanPath(v.WorkingDir) != nil {
+		if project.CleanPath(v.WorkingDir) != nil || noSymlinks(r.Workspace, v.WorkingDir) != nil {
 			return Run{}, errRunner
 		}
 		dir = filepath.Join(r.Workspace, filepath.FromSlash(v.WorkingDir))
 	}
+	program := v.Command[0]
+	if !strings.Contains(program, "/") {
+		// Resolve with the fixed PATH, never the runner's own environment.
+		program = ""
+		for _, d := range searchPath {
+			if info, err := os.Stat(filepath.Join(d, v.Command[0])); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
+				program = filepath.Join(d, v.Command[0])
+				break
+			}
+		}
+		if program == "" {
+			return Run{ExitCode: 125}, nil
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(v.TimeoutSeconds)*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, v.Command[0], v.Command[1:]...)
+	cmd := exec.CommandContext(ctx, program, v.Command[1:]...)
 	cmd.Dir = dir
-	cmd.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + r.Scratch, "TMPDIR=" + r.Scratch, "LC_ALL=C.UTF-8", "TZ=UTC", "CI=1"}
-	// Repository output is untrusted and never becomes evidence: discard it.
-	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	cmd.Env = []string{"PATH=" + strings.Join(searchPath, ":"), "HOME=" + r.Scratch, "TMPDIR=" + r.Scratch, "LC_ALL=C.UTF-8", "TZ=UTC", "CI=1"}
+	// Repository output is untrusted and never becomes evidence: it goes to
+	// /dev/null, so no pipe can keep the runner waiting.
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = 5 * time.Second
@@ -81,27 +106,53 @@ func (r Runner) Run(ctx context.Context) (Run, error) {
 	return result, nil
 }
 
-// readReport reads a JUnit report that must be a regular file inside the
-// workspace (no symlink at any component). A missing report yields no tests.
+// noSymlinks reports whether every component of rel under root exists and
+// none is a symbolic link.
+func noSymlinks(root, rel string) error {
+	path := root
+	for _, part := range strings.Split(rel, "/") {
+		path = filepath.Join(path, part)
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return errRunner
+		}
+	}
+	return nil
+}
+
+// readReport opens a JUnit report component by component beneath the
+// workspace with O_NOFOLLOW (no symlink anywhere, no race between check and
+// open) and O_NONBLOCK (a FIFO or device cannot block), and reads it only if
+// it is a regular file within the size bound. A missing report yields no tests.
 func readReport(workspace, rel string) (map[string]string, error) {
 	if project.CleanPath(rel) != nil {
 		return nil, errRunner
 	}
-	path := workspace
-	for _, part := range strings.Split(rel, "/") {
-		path = filepath.Join(path, part)
-		info, err := os.Lstat(path)
-		if os.IsNotExist(err) {
-			return map[string]string{}, nil
-		}
-		if err != nil || info.Mode()&os.ModeSymlink != 0 {
-			return nil, errRunner
-		}
-	}
-	f, err := os.Open(path)
+	dir, err := unix.Open(workspace, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, errRunner
 	}
+	parts := strings.Split(rel, "/")
+	for _, part := range parts[:len(parts)-1] {
+		next, err := unix.Openat(dir, part, unix.O_PATH|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		unix.Close(dir)
+		if err == unix.ENOENT {
+			return map[string]string{}, nil
+		}
+		if err != nil {
+			return nil, errRunner
+		}
+		dir = next
+	}
+	fd, err := unix.Openat(dir, parts[len(parts)-1], unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	unix.Close(dir)
+	if err == unix.ENOENT {
+		return map[string]string{}, nil
+	}
+	if err != nil {
+		return nil, errRunner
+	}
+	f := os.NewFile(uintptr(fd), rel)
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() > MaxReportBytes {
@@ -124,9 +175,11 @@ type junitSuite struct {
 	Suites []junitSuite `xml:"testsuite"`
 }
 
-// ParseJUnit maps each test case to its status, keyed by the sha256 of its
-// suite, class and name. Duplicate identities resolve to the worst status.
-// More than MaxTests cases is refused.
+// ParseJUnit maps each test case to its status, keyed by a sha256 over the
+// length-prefixed suite path, class and name (no two different triples share
+// an identity). Duplicate identities resolve to the worst status. More than
+// MaxTests cases (counted with duplicates), suites deeper than MaxSuiteDepth
+// or names longer than MaxNameBytes are refused.
 func ParseJUnit(r io.Reader) (map[string]string, error) {
 	decoder := xml.NewDecoder(r)
 	decoder.Strict = true
@@ -140,36 +193,47 @@ func ParseJUnit(r io.Reader) (map[string]string, error) {
 	}
 	out := map[string]string{}
 	rank := map[string]int{Pass: 0, Skip: 1, Fail: 2}
-	var walk func(junitSuite, string) error
-	walk = func(s junitSuite, prefix string) error {
-		scope := prefix + "/" + s.Name
+	cases := 0
+	var walk func(junitSuite, [32]byte, int) error
+	walk = func(s junitSuite, parent [32]byte, depth int) error {
+		if depth > MaxSuiteDepth || len(s.Name) > MaxNameBytes {
+			return errRunner
+		}
+		// A fixed-size digest per level keeps memory constant in depth.
+		scope := sha256.Sum256(append(append(parent[:], framed(s.Name)...), 's'))
 		for _, c := range s.Cases {
+			cases++
+			if cases > MaxTests || len(c.Name) > MaxNameBytes || len(c.Classname) > MaxNameBytes {
+				return errRunner
+			}
 			status := Pass
 			if c.Failure != nil || c.Error != nil {
 				status = Fail
 			} else if c.Skipped != nil {
 				status = Skip
 			}
-			sum := sha256.Sum256([]byte(scope + "\x00" + c.Classname + "\x00" + c.Name))
+			sum := sha256.Sum256(append(append(append(scope[:0:0], scope[:]...), framed(c.Classname)...), framed(c.Name)...))
 			key := hex.EncodeToString(sum[:])
 			if previous, ok := out[key]; !ok || rank[status] > rank[previous] {
 				out[key] = status
 			}
-			if len(out) > MaxTests {
-				return errRunner
-			}
 		}
 		for _, child := range s.Suites {
-			if err := walk(child, scope); err != nil {
+			if err := walk(child, scope, depth+1); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	if err := walk(root.junitSuite, ""); err != nil {
+	if err := walk(root.junitSuite, [32]byte{}, 0); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// framed length-prefixes a name so concatenations are unambiguous.
+func framed(name string) []byte {
+	return append([]byte(strconv.Itoa(len(name))+":"), name...)
 }
 
 // Encode renders a Run as the single result line ParseRun accepts.
