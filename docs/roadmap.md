@@ -69,3 +69,9 @@ a day.
 - Deployment targets described by configuration (workload, service, secrets,
   health probes), with a GitOps or Konflux release deployer.
 - Provenance policy bound to the project, not to a named compiler.
+
+**Accepted when** a repository that is not a reference project, using its own
+declared pipeline and deployment target, goes from a merged pull request to a
+signed, provenance-verified deployment with health evidence and a production
+record, and repeats it for consecutive merges without manual slot or target
+changes.
