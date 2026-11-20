@@ -24,7 +24,8 @@ const Recipe = "repository-tests/v1"
 
 // Bounds of one runner result line.
 const (
-	MaxResultBytes = 32 * 1024
+	// 512 tests encode to about 38 KiB (64-hex id plus status per test).
+	MaxResultBytes = 48 * 1024
 	MaxTests       = 512
 )
 

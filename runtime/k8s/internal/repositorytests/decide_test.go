@@ -1,6 +1,8 @@
 package repositorytests
 
 import (
+	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -133,3 +135,17 @@ func TestRunnerResultsAreStrictAndBounded(t *testing.T) {
 		t.Fatal("more than MaxTests accepted")
 	}
 }
+
+func TestAFullRunAtTheTestLimitFitsTheResultBound(t *testing.T) {
+	r := Run{ExitCode: 1, Tests: map[string]string{}}
+	for i := 0; len(r.Tests) < MaxTests; i++ {
+		h := strings.Repeat("f", 56) + strings.Repeat("0", 8-len(strconvItoa(i))) + strconvItoa(i)
+		r.Tests[h] = Fail
+	}
+	raw, _ := json.Marshal(r)
+	if _, err := ParseRun(raw); err != nil {
+		t.Fatal("a run at MaxTests does not fit MaxResultBytes", len(raw))
+	}
+}
+
+func strconvItoa(i int) string { return strconv.Itoa(i) }
