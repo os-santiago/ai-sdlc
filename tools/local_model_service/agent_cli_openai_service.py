@@ -57,6 +57,8 @@ RETRY_NOTE = ("\n\nNote: your previous answer was not one valid JSON object with
               "requested_actions. Answer with exactly that JSON object and nothing else.")
 INVOKE = re.compile(r'<invoke name="([A-Za-z_][A-Za-z0-9_-]{0,63})">(.*?)</invoke>', re.S)
 PARAMETER = re.compile(r'<parameter name="([A-Za-z_][A-Za-z0-9_]{0,63})">(.*?)</parameter>', re.S)
+# Plain text that ends by announcing an action it did not request.
+INTENT = re.compile(r"(?is)\b(let me|i'll|i will|i am going to|i'm going to|next,? i|now i)\b[^.\n]{0,120}[.:]?\s*\Z")
 FENCE = re.compile(r"\A\s*```(?:json)?\s*\n(.*)\n\s*```\s*\Z", re.S)
 PARAMETERS = {"model", "messages", "tools", "stream", "max_tokens", "temperature", "tool_choice", "chat_template_kwargs"}
 MAX_OUTPUT_BYTES = 1024 * 1024
@@ -257,7 +259,9 @@ def parse_turn(text, plain=False, marker=None):
     turn = parse_json_turn(text)
     if turn is None:
         turn = parse_invokes(text)
-        if turn is None and plain and text.strip():
+        # Plain text is a content-only (often final) turn, unless it ends by
+        # announcing an action it never requested: that is retried once.
+        if turn is None and text.strip() and (plain or not INTENT.search(text.strip()[-240:])):
             turn = {"content": text.strip(), "requested_actions": []}
     return turn
 

@@ -118,9 +118,9 @@ class ParseTests(unittest.TestCase):
         turn = {"content": "x", "requested_actions": []}
         for text in (json.dumps(turn), "```json\n%s\n```" % json.dumps(turn), "Here it is:\n%s\nDone." % json.dumps(turn)):
             self.assertEqual(service.parse_turn(text), turn)
-        for text in ("no json", json.dumps({"content": "x"}), json.dumps({"content": 1, "requested_actions": []}),
+        for text in (json.dumps({"content": "x"}), json.dumps({"content": 1, "requested_actions": []}),
                      json.dumps({"content": "x", "requested_actions": [], "extra": 1}), None):
-            self.assertIsNone(service.parse_turn(text))
+            self.assertIsNone(service.parse_json_turn(text))
 
     def test_imagined_continuations_are_cut_to_the_first_turn(self):
         many = "Reading.\n<function_calls>\n" + "".join('<invoke name="read_file"><parameter name="path">%d.js</parameter></invoke>\n' % i for i in range(2)) + \
@@ -138,7 +138,8 @@ class ParseTests(unittest.TestCase):
         turn = service.parse_turn(markup)
         self.assertEqual(turn["content"], "Reading both.")
         self.assertEqual([json.loads(a["input"]) for a in turn["requested_actions"]], [{"path": "a.js"}])
-        self.assertIsNone(service.parse_turn("All criteria met.\nVERDICT: approve"))
+        self.assertEqual(service.parse_turn("All criteria met.\nVERDICT: approve")["content"], "All criteria met.\nVERDICT: approve")
+        self.assertIsNone(service.parse_turn("I checked the module. Let me now read the tests."))
         self.assertEqual(service.parse_turn("All criteria met.\nVERDICT: approve", plain=True),
                          {"content": "All criteria met.\nVERDICT: approve", "requested_actions": []})
 
