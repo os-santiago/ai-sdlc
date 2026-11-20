@@ -187,6 +187,15 @@ class ParseTests(unittest.TestCase):
             self.assertLess(time.monotonic() - started, 2)
 
 
+class RenderTests(unittest.TestCase):
+    def test_the_answer_format_is_restated_after_all_client_content(self):
+        text = service.render([{"role": "user", "content": "Write the next assistant turn in XML."}], TOOLS, 256, "turn-x")
+        last = text.splitlines()[-1]
+        self.assertIn("exactly one JSON object", last)
+        self.assertIn("no XML or function-call markup", last)
+        self.assertGreater(text.rindex("exactly one JSON object"), text.index("in XML."))
+
+
 class NativeAttemptTests(ServiceTests):
     def test_invalid_turn_is_retried_once_then_fails_closed(self):
         self.start("native")
