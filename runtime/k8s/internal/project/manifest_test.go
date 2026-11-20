@@ -170,6 +170,14 @@ func TestUnicodeFoldedDuplicateKeysAndOmittedMergeFieldsAreRefused(t *testing.T)
 			t.Fatal("Unicode-folded duplicate key accepted", folded[:80])
 		}
 	}
+	for _, nested := range []string{
+		strings.Replace(string(raw), `"network":"none"`, "\"network\":\"none\",\"netwo\u212ak\":\"x\"", 1),
+		strings.Replace(string(raw), `{"context":"ci"`, "{\"conte\u017ft\":\"x\",\"context\":\"ci\"", 1),
+	} {
+		if _, err := ParseManifest([]byte(nested)); err == nil {
+			t.Fatal("nested or array non-ASCII key accepted")
+		}
+	}
 	for _, field := range []string{`"strictChecks":true,`, `"resolveThreads":true,`, `,"humanApprovals":0`} {
 		if _, err := ParseManifest([]byte(strings.Replace(string(raw), field, "", 1))); err == nil {
 			t.Fatal("omitted merge field accepted", field)

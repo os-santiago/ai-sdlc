@@ -109,7 +109,7 @@ func ParseManifest(raw []byte) (Manifest, error) {
 	// Object keys must be ASCII (escaped or literal): encoding/json folds
 	// Unicode keys (for example U+017F to "s"), which would let a duplicate
 	// key escape the strict decoder. Values may use JSON escapes.
-	if asciiKeys(raw) != nil {
+	if len(raw) == 0 || len(raw) > MaxManifestBytes || asciiKeys(raw) != nil {
 		return Manifest{}, ErrManifest
 	}
 	if len(raw) == 0 || len(raw) > MaxManifestBytes || authority.DecodeStrict(raw, &m) != nil || explicitMerge(raw) != nil {
