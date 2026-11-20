@@ -46,15 +46,38 @@ def targets(source, selection, upstream, approvals, render_source, render_target
                          compile_build, 'Release refresh')
 
 
-class CompletedUpstreamSource:
-    """Read-only custody of the completed model-upstream installation and,
-    through it, of the completed repair installation it was derived from."""
-    def __init__(self, config):
-        self.config = config
-        self.path = config.state_dir / 'model-upstream-runtime-upgrade.json'
+MAX_GENERATIONS = 64
+
+
+def journal_paths(state_dir, generation):
+    """Refresh journals are chained: generation 1 keeps the original names,
+    each later generation has its own journal and backup directory."""
+    if generation == 1:
+        return state_dir / 'release-refresh-runtime-upgrade.json', state_dir / 'release-refresh-runtime-backup'
+    return (state_dir / ('release-refresh-%d-runtime-upgrade.json' % generation),
+            state_dir / ('release-refresh-%d-runtime-backup' % generation))
+
+
+def latest_generation(state_dir):
+    generation = 0
+    while generation < MAX_GENERATIONS:
+        path = journal_paths(state_dir, generation + 1)[0]
+        if not (path.exists() or path.is_symlink()):
+            break
+        generation += 1
+    if generation == MAX_GENERATIONS:
+        raise ValueError('Release refresh generation bound reached')
+    return generation
+
+
+class CompletedJournalSource:
+    """Read-only custody of one completed configuration-only operation and,
+    through its parent, of every completed operation it was derived from."""
+    def __init__(self, config, path, backup, version, mode, report, label, parent):
+        self.config, self.path, self.backup, self.label = config, path, backup, label
         record = files.bounded_json(self.path, 32*1024*1024)
         reports = record.get('installationReports', [])
-        if (record.get('version') != upstream_upgrade.VERSION or record.get('mode') != 'model-upstream'
+        if (record.get('version') != version or record.get('mode') != mode
                 or record.get('completed') != 'active' or record.get('transition') or record.get('recoveryPause')
                 or record.get('migrationVerified') is not False or record.get('migration') != {}
                 or (record.get('backup') or {}).get('phase') != 'verified'
@@ -62,15 +85,15 @@ class CompletedUpstreamSource:
                 or not reports or reports[-1].get('configuration') != 'active'
                 or reports[-1].get('installationReady') is not True
                 or len((record.get('selection') or {}).get('catalog') or []) != 37
-                or reports[-1].get('modelUpstreamUpgradeOperation') != record.get('nonce')):
-            raise ValueError('Completed model upstream installation required')
+                or reports[-1].get(report + 'UpgradeOperation') != record.get('nonce')):
+            raise ValueError('Completed ' + label + ' installation required')
         self.record = record
         self.original_digest = bootstrap.digest(record)
-        self.repair = CompletedRepairSource(config)
+        self.parent_source = parent(config)
         try:
-            if self.repair.digest() != record['parentSHA256']:
-                raise ValueError('Model upstream ancestry changed')
-            self.parent, self.pause = self.repair.parent, self.repair.pause
+            if self.parent_source.digest() != record['parentSHA256']:
+                raise ValueError(label.capitalize() + ' ancestry changed')
+            self.parent, self.pause = self.parent_source.parent, self.parent_source.pause
             self.helper = install_images.REGISTRY + '@' + record['selection']['images']['migrator']['digest']
             self.custody()
         except BaseException:
@@ -82,15 +105,18 @@ class CompletedUpstreamSource:
 
     def custody(self):
         if bootstrap.digest(files.bounded_json(self.path, 32*1024*1024)) != self.original_digest:
-            raise ValueError('Original completed model upstream journal changed')
-        self.repair.custody()
-        data.verify_archives(self.config.state_dir / 'model-upstream-runtime-backup', self.record['backup']['archives'])
+            raise ValueError('Original completed ' + self.label + ' journal changed')
+        self.parent_source.custody()
+        data.verify_archives(self.backup, self.record['backup']['archives'])
 
     @property
     def migrated_proof(self):
         # No migration happened since the schema-37 repair: its verified proof
         # remains the database authority oracle.
-        return copy.deepcopy(self.repair.record['migratedProof'])
+        inherited = getattr(self.parent_source, 'migrated_proof', None)
+        if isinstance(inherited, dict):
+            return copy.deepcopy(inherited)
+        return copy.deepcopy(self.parent_source.record['migratedProof'])
 
     @property
     def current_report(self):
@@ -102,12 +128,28 @@ class CompletedUpstreamSource:
 
     def describe(self, phase):
         if phase != 'active':
-            raise ValueError('Only a completed model upstream source is selectable')
+            raise ValueError('Only a completed ' + self.label + ' source is selectable')
         self.custody()
         return copy.deepcopy(self.record['targets']['active'])
 
     def close(self):
-        self.repair.close()
+        self.parent_source.close()
+
+
+def CompletedUpstreamSource(config):
+    return CompletedJournalSource(config, config.state_dir / 'model-upstream-runtime-upgrade.json',
+                                  config.state_dir / 'model-upstream-runtime-backup', upstream_upgrade.VERSION,
+                                  'model-upstream', 'modelUpstream', 'model upstream', CompletedRepairSource)
+
+
+def completed_source(config, generation):
+    """The completed operation a refresh of the given generation starts from:
+    the model-upstream switch for generation 1, else the previous refresh."""
+    if generation == 1:
+        return CompletedUpstreamSource(config)
+    path, backup = journal_paths(config.state_dir, generation - 1)
+    return CompletedJournalSource(config, path, backup, VERSION, 'release-refresh', 'releaseRefresh',
+                                  'release refresh', lambda c: completed_source(c, generation - 1))
 
 
 class ReleaseRefreshUpgrade(ModelUpstreamUpgrade):
@@ -116,14 +158,21 @@ class ReleaseRefreshUpgrade(ModelUpstreamUpgrade):
     def __init__(self, config, run=None, revision=None, trust_path=None, target_path=None):
         self.config = config
         self.source_chart = None
-        self.source_browser = CompletedUpstreamSource(config)
+        # Resume the latest generation unless it completed; then start the next.
+        latest = latest_generation(config.state_dir)
+        self.generation = max(latest, 1)
+        if latest and files.bounded_json(journal_paths(config.state_dir, latest)[0], 32*1024*1024).get('completed') == 'active':
+            if run is None and trust_path is None:
+                self.generation = latest
+            else:
+                self.generation = latest + 1
+        self.source_browser = completed_source(config, self.generation)
         try:
             prior = self.source_browser.record
             self.parent, self.pause = self.source_browser.parent, self.source_browser.pause
             self.parent_hash = self.source_browser.digest()
             self.catalog = prior['selection']['catalog']
-            self.path = config.state_dir / 'release-refresh-runtime-upgrade.json'
-            self.directory = config.state_dir / 'release-refresh-runtime-backup'
+            self.path, self.directory = journal_paths(config.state_dir, self.generation)
             self.source_chart = browser_upgrade_chart.OriginalChart(install.ROOT,
                 prior['selection']['revision'], prior['chartSHA256'])
             self.target_chart = install.CHART
