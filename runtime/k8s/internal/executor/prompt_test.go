@@ -26,6 +26,10 @@ func TestReviewPromptStatesTheGuardedContract(t *testing.T) {
 		"list_dir and\n  code_query take only path",
 		"exactly one of path or glob",
 		"under 3500 characters, without code\n  fences",
+		"at least one tool turn before the final answer",
+		"without a trailing \"/\" and without glob characters",
+		"with no\n  formatting or punctuation",
+		"in any letter case",
 		"VERDICT: approve\nor\nVERDICT: request_changes",
 	} {
 		if !strings.Contains(p, rule) {
