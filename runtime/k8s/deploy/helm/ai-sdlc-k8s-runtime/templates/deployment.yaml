@@ -61,6 +61,10 @@ spec:
             - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-config}
           env:
             - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ $component.port }}"}
+            {{- if and (eq $key "worker") (ne $.Values.modelGateway.adapter "agent-cli") }}
+            - {name: AI_SDLC_MODEL_GATEWAY_SECONDS, value: {{ add $.Values.modelGateway.upstream.seconds 30 | quote }}}
+            - {name: AI_SDLC_MODEL_GATEWAY_PROFILE, value: benchmark}
+            {{- end }}
             {{- if and (eq $key "intake") (has $.Values.runtime.mode (list "shadow" "candidate" "verification")) }}
             - {name: AI_SDLC_GITHUB_CREDENTIAL_PATH, value: /etc/ai-sdlc/github/credential.json}
             {{- end }}
@@ -132,11 +136,27 @@ spec:
         {{- if and (eq $key "worker") (has $.Values.runtime.mode (list "candidate" "verification")) }}
         - name: model-gateway
           image: "{{ $.Values.image.repository }}@{{ $component.digest }}"
+          {{- if ne $.Values.modelGateway.adapter "agent-cli" }}
+          command: [python3, /opt/ai-sdlc/model/model_gateway.py]
+          {{- else }}
           command: [python3, /opt/ai-sdlc/model/codex_gateway.py]
+          {{- end }}
           workingDir: /opt/ai-sdlc/model
           env:
             - {name: TMPDIR, value: /model-home/tmp}
             - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            {{- if ne $.Values.modelGateway.adapter "agent-cli" }}
+            - {name: AI_SDLC_MODEL_UPSTREAM_URL, value: {{ required "modelGateway.upstream.url is required" $.Values.modelGateway.upstream.url | quote }}}
+            - {name: AI_SDLC_MODEL_UPSTREAM_MODEL, value: {{ required "modelGateway.upstream.model is required" $.Values.modelGateway.upstream.model | quote }}}
+            - {name: AI_SDLC_MODEL_UPSTREAM_SECONDS, value: {{ $.Values.modelGateway.upstream.seconds | quote }}}
+            - {name: AI_SDLC_MODEL_ADAPTER, value: {{ $.Values.modelGateway.adapter | quote }}}
+            - {name: AI_SDLC_MODEL_UPSTREAM_DIRECT_ANSWERS, value: {{ $.Values.modelGateway.upstream.directAnswers | quote }}}
+            - {name: AI_SDLC_MODEL_BENCHMARK_PROMPT_TOKENS, value: {{ $.Values.modelGateway.benchmark.promptTokens | quote }}}
+            - {name: AI_SDLC_MODEL_BENCHMARK_COMPLETION_TOKENS, value: {{ $.Values.modelGateway.benchmark.completionTokens | quote }}}
+            {{- if $.Values.modelGateway.upstream.credentialSecret }}
+            - {name: AI_SDLC_MODEL_UPSTREAM_CREDENTIAL_FILE, value: /var/run/ai-sdlc/model-upstream/credential}
+            {{- end }}
+            {{- end }}
             - name: CODEX_WRAPPER_TOKEN
               valueFrom: {secretKeyRef: {name: ai-sdlc-model-client, key: token}}
           securityContext:
@@ -149,7 +169,11 @@ spec:
             requests: {cpu: 100m, memory: 256Mi}
             limits: {cpu: "1", memory: 768Mi, ephemeral-storage: 256Mi}
           volumeMounts:
+            {{- if eq $.Values.modelGateway.adapter "agent-cli" }}
             - {name: model-auth, mountPath: /var/run/ai-sdlc/codex, readOnly: true}
+            {{- else if $.Values.modelGateway.upstream.credentialSecret }}
+            - {name: model-upstream-credential, mountPath: /var/run/ai-sdlc/model-upstream, readOnly: true}
+            {{- end }}
             - {name: model-home, mountPath: /model-home}
         {{- end }}
       volumes:
@@ -178,8 +202,13 @@ spec:
         {{- if and (eq $key "worker") (has $.Values.runtime.mode (list "candidate" "verification")) }}
         - name: model-client
           secret: {secretName: ai-sdlc-model-client, defaultMode: 0440}
+        {{- if eq $.Values.modelGateway.adapter "agent-cli" }}
         - name: model-auth
           secret: {secretName: ai-sdlc-codex-auth, defaultMode: 0440}
+        {{- else if $.Values.modelGateway.upstream.credentialSecret }}
+        - name: model-upstream-credential
+          secret: {secretName: {{ $.Values.modelGateway.upstream.credentialSecret | quote }}, defaultMode: 0440, items: [{key: credential, path: credential}]}
+        {{- end }}
         - name: model-home
           emptyDir: {sizeLimit: 128Mi}
         - name: kubernetes

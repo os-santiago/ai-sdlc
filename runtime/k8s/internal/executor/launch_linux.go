@@ -25,8 +25,13 @@ func SCCConfiguration(p Profile) []byte {
 	if p.Version == ReviewProfileVersion {
 		tools = []string{"read_file", "list_dir", "search_text", "code_query"}
 	}
+	model := map[string]any{"provider": "openai-compatible", "baseUrl": "http://127.0.0.1:8091/v1", "apiKey": "offline-mailbox-placeholder", "model": p.Model, "temperature": 0.2, "maxTokens": p.MaxTokens, "stream": false}
+	if p.CallSeconds != 0 {
+		// SCC waits past the mailbox window so the bounded broker decides.
+		model["timeout"] = sccWaitMillis(p)
+	}
 	config := map[string]any{
-		"model":       map[string]any{"provider": "openai-compatible", "baseUrl": "http://127.0.0.1:8091/v1", "apiKey": "offline-mailbox-placeholder", "model": p.Model, "temperature": 0.2, "maxTokens": p.MaxTokens, "stream": false},
+		"model":       model,
 		"permissions": map[string]any{"autoApprove": tools, "denyPaths": []string{".env", ".env.*", "**/*.key", "**/*.pem", "**/id_rsa*", "**/.ssh/*", "**/credentials*"}},
 	}
 	if p.Version == ReviewProfileVersion {
@@ -38,6 +43,12 @@ func SCCConfiguration(p Profile) []byte {
 	}
 	raw, _ := json.Marshal(config)
 	return raw
+}
+
+// sccWaitMillis outlasts the mailbox window, so SCC never abandons (and
+// retries) a call that the broker is still allowed to complete.
+func sccWaitMillis(p Profile) int64 {
+	return (p.CallWindow() + 15*time.Second).Milliseconds()
 }
 
 // readProjected reads only a fixed file from a trusted read-only projection.
@@ -149,6 +160,10 @@ func Run(ctx context.Context, assignmentDigest string) int {
 		"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + stateDirectory + "/home", "TMPDIR=" + stateDirectory + "/tmp", "LC_ALL=C.UTF-8", "NO_COLOR=1", "CI=1",
 		"SC_CONFIG_PATH=" + InputDirectory + "/scc-config.json", "SC_BASE_URL=http://127.0.0.1:8091/v1", "SC_MODEL=" + p.Model,
 		"NODE_OPTIONS=--max-old-space-size=256", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0",
+	}
+	if p.CallSeconds != 0 {
+		// The mailbox sends headers only with the completed answer.
+		env = append(env, "SC_PROVIDER_CONNECT_TIMEOUT_MS="+strconv.FormatInt(sccWaitMillis(p), 10))
 	}
 	runCtx, stopRun := context.WithTimeout(ctx, time.Duration(p.MaxSeconds)*time.Second)
 	defer stopRun()

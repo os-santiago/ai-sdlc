@@ -93,5 +93,5 @@ RUN apk add --no-cache python3 curl \
     && tar -xzf /tmp/codex.tar.gz -C /usr/local/bin codex-x86_64-unknown-linux-musl \
     && mv /usr/local/bin/codex-x86_64-unknown-linux-musl /usr/local/bin/codex \
     && chmod 0555 /usr/local/bin/codex && rm /tmp/codex.tar.gz
-COPY tools/codex_completion_process.py tools/codex_completion_child.py tools/codex_completion_policy.py tools/codex_completion_catalog.json tools/codex_completion_instructions.txt tools/codexcli_openai_wrapper.py tools/codex_gateway.py /opt/ai-sdlc/model/
+COPY tools/codex_completion_process.py tools/codex_completion_child.py tools/codex_completion_policy.py tools/codex_completion_catalog.json tools/codex_completion_instructions.txt tools/codexcli_openai_wrapper.py tools/codex_gateway.py tools/model_adapters.py tools/model_benchmark.py tools/model_gateway.py /opt/ai-sdlc/model/
 USER 1000:1000

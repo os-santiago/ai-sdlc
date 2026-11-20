@@ -63,6 +63,11 @@ type Runtime struct {
 	Component                                                   *bootstrap.Component
 	ConfigPath, IntakePath, TokenPath, CAPath, GatewayTokenPath string
 	APIServer, ProviderEndpoint                                 string
+	ProviderTimeoutSeconds                                      int
+	// AdoptGatewayProfile makes every model call use the timeout the gateway
+	// derived from its startup benchmark (+30 s for the response), bounded by
+	// ProviderTimeoutSeconds. No work is claimed until that profile exists.
+	AdoptGatewayProfile bool
 }
 
 func (r Runtime) PollOnce(ctx context.Context) (string, error) {
@@ -152,6 +157,9 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if e != nil || provider.CheckGateway(ctx) != nil {
 		return "", ErrAuthority
 	}
+	if provider, e = r.benchmarked(ctx, provider, config.Profile.CallWindow()); e != nil {
+		return "model-gateway-profile-unavailable-or-unfit", ErrAuthority
+	}
 	id, e := r.Component.DB.NextExecution(ctx)
 	if e != nil || id == "" {
 		return "", e
@@ -201,6 +209,23 @@ func (r Runtime) Ready(ctx context.Context) error {
 	}
 	return provider.CheckGateway(ctx)
 }
+
+// benchmarked returns a provider bounded by the gateway's measured timeout.
+// The measured upstream timeout must also fit the profile's per-call window:
+// the broker stops 15 s before the window ends, so a slower model would only
+// produce uncertain calls. Such a worker claims no work (fail closed).
+func (r Runtime) benchmarked(ctx context.Context, provider *modelbroker.Provider, window time.Duration) (*modelbroker.Provider, error) {
+	if !r.AdoptGatewayProfile {
+		return provider, nil
+	}
+	seconds, e := provider.GatewayProfile(ctx)
+	if e != nil || r.ProviderTimeoutSeconds == 0 || seconds+30 > r.ProviderTimeoutSeconds || time.Duration(seconds+20)*time.Second > window {
+		return nil, ErrAuthority
+	}
+	r.ProviderTimeoutSeconds = seconds + 30
+	return r.gateway()
+}
+
 func (r Runtime) gateway() (*modelbroker.Provider, error) {
 	secret, e := ReadBounded(r.GatewayTokenPath, 512)
 	if e != nil {
@@ -210,5 +235,5 @@ func (r Runtime) gateway() (*modelbroker.Provider, error) {
 	if endpoint == "" {
 		endpoint = "http://127.0.0.1:8787/v1/chat/completions"
 	}
-	return modelbroker.NewProvider(modelbroker.ProviderConfig{Endpoint: endpoint, BearerToken: string(secret), AllowLoopbackHTTP: true})
+	return modelbroker.NewProvider(modelbroker.ProviderConfig{Endpoint: endpoint, BearerToken: string(secret), AllowLoopbackHTTP: true, TimeoutSeconds: r.ProviderTimeoutSeconds})
 }

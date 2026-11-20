@@ -930,6 +930,132 @@
           "type": "string"
         }
       }
+    },
+    "modelGateway": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter",
+        "upstream",
+        "benchmark",
+        "reviewBenchmark"
+      ],
+      "properties": {
+        "adapter": {
+          "enum": [
+            "agent-cli",
+            "openai",
+            "anthropic"
+          ]
+        },
+        "upstream": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "url",
+            "model",
+            "cidr",
+            "port",
+            "seconds",
+            "credentialSecret",
+            "directAnswers"
+          ],
+          "properties": {
+            "url": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "model": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "cidr": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "seconds": {
+              "type": "integer",
+              "minimum": 30,
+              "maximum": 570
+            },
+            "credentialSecret": {
+              "type": "string",
+              "maxLength": 253,
+              "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$"
+            },
+            "directAnswers": {
+              "type": "boolean"
+            }
+          }
+        },
+        "benchmark": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "promptTokens",
+            "completionTokens"
+          ],
+          "properties": {
+            "promptTokens": {
+              "type": "integer",
+              "minimum": 256,
+              "maximum": 262144
+            },
+            "completionTokens": {
+              "type": "integer",
+              "minimum": 64,
+              "maximum": 32768
+            }
+          }
+        },
+        "reviewBenchmark": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "promptTokens",
+            "completionTokens"
+          ],
+          "properties": {
+            "promptTokens": {
+              "type": "integer",
+              "minimum": 256,
+              "maximum": 262144
+            },
+            "completionTokens": {
+              "type": "integer",
+              "minimum": 64,
+              "maximum": 32768
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "adapter": {
+                "const": "anthropic"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "upstream": {
+                "properties": {
+                  "credentialSecret": {
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   },
   "required": [

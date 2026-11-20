@@ -29,11 +29,17 @@ type Configuration struct {
 	Namespace, WorkerImage, MailboxImage string
 	Profile, ADev                        []byte
 	Model                                modelbroker.ProviderConfig
+	// RequireGatewayProfile refuses reviews unless the gateway's benchmarked
+	// timeout fits the reviewer call window. Installation-only; not digested.
+	RequireGatewayProfile bool `json:"-"`
 }
 type Loader func(context.Context) (Configuration, error)
 
 func (c Configuration) Digest() string {
 	c.Model.BearerToken = ""
+	// Installation-only, like the token: the verifier and the publisher must
+	// compute the same digest whatever broker timeout each process was given.
+	c.Model.TimeoutSeconds = 0
 	raw, _ := json.Marshal(c)
 	return authority.Digest(raw)
 }

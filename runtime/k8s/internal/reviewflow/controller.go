@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
@@ -60,6 +61,9 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	provider, e := modelbroker.NewProvider(p.config.Model)
 	if e != nil || provider.CheckGateway(ctx) != nil {
 		return proof, ControllerError{Stage: "gateway-unavailable"}
+	}
+	if p.config.RequireGatewayProfile && gatewayProfileFits(ctx, provider, p.config.Profile) != nil {
+		return proof, ControllerError{Stage: "gateway-profile-unfit"}
 	}
 	resources, e := podtransport.PlanResources(client, p.binding)
 	if e != nil {
@@ -312,4 +316,19 @@ func drive(ctx context.Context, session reviewSession, fence func(context.Contex
 		case <-timer.C:
 		}
 	}
+}
+
+// gatewayProfileFits refuses a review whose calls could not complete: the
+// gateway's benchmarked timeout plus the broker margin must fit the reviewer
+// profile's per-call window. A model slower than that would only end uncertain.
+func gatewayProfileFits(ctx context.Context, provider *modelbroker.Provider, profile []byte) error {
+	seconds, e := provider.GatewayProfile(ctx)
+	if e != nil {
+		return e
+	}
+	review, e := executor.ParseReviewProfile(profile, authority.Digest(profile))
+	if e != nil || time.Duration(seconds+20)*time.Second > review.CallWindow() {
+		return ControllerError{Stage: "gateway-profile-unfit"}
+	}
+	return nil
 }

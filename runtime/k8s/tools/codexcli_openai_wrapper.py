@@ -49,12 +49,13 @@ def strict_json(raw):
     return result
 
 
-def complete(request):
+def validate_request(request, model="codex-cli"):
+    """Shared, backend-independent completion request contract."""
     if not isinstance(request, dict) or len(json.dumps(request, ensure_ascii=False).encode()) > MAX_REQUEST_BYTES:
         raise ValueError("invalid completion request")
     if set(request) - {"model", "messages", "tools", "stream", "max_tokens", "temperature", "tool_choice"}:
         raise ValueError("unknown completion parameter")
-    if request.get("model", "codex-cli") != "codex-cli" or not isinstance(request.get("stream", False), bool):
+    if request.get("model", model) != model or not isinstance(request.get("stream", False), bool):
         raise ValueError("invalid model or streaming mode")
     tokens = request.get("max_tokens", 2048)
     if type(tokens) is not int or not 1 <= tokens <= 8192:
@@ -77,6 +78,32 @@ def complete(request):
         if not isinstance(name, str) or not NAME.fullmatch(name) or name in names:
             raise ValueError("invalid or repeated tool name")
         names.add(name)
+    return messages, tools, names, tokens
+
+
+def assistant_message(content, proposed, names):
+    """Shared, bounded OpenAI assistant message; proposals are never executed here."""
+    if (not isinstance(content, str) or len(content.encode()) > 64 * 1024
+            or not isinstance(proposed, list) or len(proposed) > 8):
+        raise ValueError("invalid completion")
+    calls = []
+    call_prefix = uuid.uuid4().hex
+    for index, call in enumerate(proposed):
+        if not isinstance(call, dict) or set(call) != {"name", "arguments"} or call.get("name") not in names:
+            raise ValueError("unknown proposed tool")
+        if (not isinstance(call["arguments"], str) or len(call["arguments"].encode()) > 32 * 1024
+                or not isinstance(strict_json(call["arguments"]), dict)):
+            raise ValueError("tool arguments must be an object")
+        calls.append({"id": f"call_{call_prefix}_{index}", "type": "function", "function": call})
+    message = {"role": "assistant", "content": content}
+    if calls:
+        message["tool_calls"] = calls
+    return message
+
+
+
+def complete(request):
+    messages, tools, names, tokens = validate_request(request)
     schema = {
         "type": "object", "additionalProperties": False,
         "required": ["content", "tool_calls"],
@@ -100,27 +127,17 @@ def complete(request):
     if len(encoded) > 2 * MAX_REQUEST_BYTES:
         raise ValueError("completion prompt exceeded bound")
     answer = strict_json(complete_process(encoded, json.dumps(schema)))
-    if (not isinstance(answer, dict) or set(answer) != {"content", "tool_calls"}
-            or not isinstance(answer.get("content"), str) or len(answer["content"].encode()) > 64 * 1024
-            or not isinstance(answer.get("tool_calls"), list) or len(answer["tool_calls"]) > 8):
+    if not isinstance(answer, dict) or set(answer) != {"content", "tool_calls"}:
         raise ValueError("invalid completion")
-    calls = []
-    call_prefix = uuid.uuid4().hex
-    for index, call in enumerate(answer["tool_calls"]):
-        if not isinstance(call, dict) or set(call) != {"name", "arguments"} or call.get("name") not in names:
-            raise ValueError("unknown proposed tool")
-        if (not isinstance(call["arguments"], str) or len(call["arguments"].encode()) > 32 * 1024
-                or not isinstance(strict_json(call["arguments"]), dict)):
-            raise ValueError("tool arguments must be an object")
-        calls.append({"id": f"call_{call_prefix}_{index}", "type": "function", "function": call})
-    message = {"role": "assistant", "content": answer["content"]}
-    if calls:
-        message["tool_calls"] = calls
-    return message
+    return assistant_message(answer["content"], answer["tool_calls"], names)
 
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
+
+    def complete_request(self, request):
+        # Resolved per call; alternative backends override this method.
+        return complete(request)
 
     def handle_one_request(self):
         # Socket inactivity alone does not bound a slow stream of headers/body.
@@ -194,7 +211,7 @@ class Handler(BaseHTTPRequestHandler):
             request = strict_json(raw.decode("utf-8", errors="strict"))
             self.read_deadline.cancel()
             self.connection.settimeout(3)
-            message = complete(request)
+            message = self.complete_request(request)
             finish = "tool_calls" if message.get("tool_calls") else "stop"
             response = {"id": "codex-local", "object": "chat.completion", "created": int(time.time()),
                         "model": "codex-cli", "choices": [{"index": 0, "message": message, "finish_reason": finish}]}

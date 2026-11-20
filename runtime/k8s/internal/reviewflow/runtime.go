@@ -24,7 +24,7 @@ type Runtime struct {
 func VerificationMayProceed(state string, err error) bool {
 	if err != nil {
 		var diagnostic ControllerError
-		return errors.As(err, &diagnostic) && !diagnostic.CleanupPending && diagnostic.Stage == "gateway-unavailable"
+		return errors.As(err, &diagnostic) && !diagnostic.CleanupPending && (diagnostic.Stage == "gateway-unavailable" || diagnostic.Stage == "gateway-profile-unfit")
 	}
 	return state == "" || state == "rejected" || state == "review-passed"
 }

@@ -117,7 +117,7 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 	ref := store.ModelCallRef{AllocationID: allocation, PodUID: scope.PodUID, Sequence: int(request.Sequence), RequestSHA256: modelmailbox.Digest(request.Payload)}
 	result.Call = ref
 	stage = "reservation"
-	decision, err := d.DB.ReserveModelCall(ctx, allocation, scope.PodUID, int(request.Sequence), request.Payload)
+	decision, err := d.DB.ReserveModelCallWithin(ctx, allocation, scope.PodUID, int(request.Sequence), request.Payload, profile.CallWindow())
 	if err != nil {
 		d.abandon(ctx, ref)
 		return result, ErrUncertain
@@ -195,6 +195,17 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 		d.abandon(ctx, ref)
 		return result, ErrUncertain
 	}
+	// Never publish after the mailbox stopped waiting: SCC has already seen a
+	// failure (and may retry), so a late handoff would never be received. The
+	// mailbox still rejects expired replies itself (clocks may differ).
+	if mailboxEnd := time.UnixMilli(request.ExpiresAt); mailboxEnd.Before(until) {
+		until = mailboxEnd
+	}
+	if !time.Now().Before(until) {
+		stage = "publication-expired"
+		d.abandon(ctx, ref)
+		return result, ErrUncertain
+	}
 	publicationCtx, stopPublicationAuthority := context.WithDeadline(ctx, until)
 	defer stopPublicationAuthority()
 	publishCtx, stopPublish := context.WithTimeout(publicationCtx, 5*time.Second)
@@ -229,7 +240,7 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 // request content or a command. It can safely be emitted by the controller.
 func SafeFailureStage(stage string) string {
 	switch stage {
-	case "configuration", "scope", "request-binding", "authorization-reservation", "reservation", "claim", "authorization-dispatch", "deadline", "provider", "completion-commit", "response-envelope", "authorization-publication", "publication", "acknowledgement", "publication-envelope", "publication-encoding", "publication-before-observation", "publication-helper-transport", "publication-helper-exit", "publication-receipt", "publication-after-observation", "publication-response-mutation", "publication-unknown":
+	case "configuration", "scope", "request-binding", "authorization-reservation", "reservation", "claim", "authorization-dispatch", "deadline", "provider", "completion-commit", "response-envelope", "authorization-publication", "publication", "acknowledgement", "publication-envelope", "publication-encoding", "publication-before-observation", "publication-helper-transport", "publication-helper-exit", "publication-receipt", "publication-after-observation", "publication-response-mutation", "publication-expired", "publication-unknown":
 		return stage
 	}
 	return "unknown"

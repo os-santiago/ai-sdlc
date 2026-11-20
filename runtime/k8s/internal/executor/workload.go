@@ -70,6 +70,9 @@ func Compile(namespace, workerImage, mailboxImage string, assignmentRaw, profile
 		"resources":    map[string]any{"requests": map[string]any{"cpu": "20m", "memory": "32Mi"}, "limits": map[string]any{"cpu": "500m", "memory": "256Mi", "ephemeral-storage": "128Mi"}},
 		"volumeMounts": []any{workspace, bridge, assignment, identity},
 	}
+	if p.CallSeconds != 0 {
+		mailbox["command"] = append(mailbox["command"].([]string), "--wait-seconds", fmt.Sprint(p.CallSeconds))
+	}
 	pod := map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": metadata(name), "spec": map[string]any{
 		"runtimeClassName": "ai-sdlc-offline", "automountServiceAccountToken": false, "enableServiceLinks": false, "restartPolicy": "Never", "activeDeadlineSeconds": 1020, "terminationGracePeriodSeconds": 1,
 		"hostNetwork": false, "hostPID": false, "hostIPC": false, "shareProcessNamespace": false,
