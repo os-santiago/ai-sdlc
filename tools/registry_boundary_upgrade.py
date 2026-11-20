@@ -95,6 +95,17 @@ def custody(installer):
     return observed
 
 
+def stuck_release(journal, release):
+    """Recovering an interrupted Helm release is an operator decision (Helm
+    refuses new operations on a pending release); the transition fails closed
+    and states exactly what to restore before it can be retried."""
+    base = (journal.get('release') or {}).get('revision')
+    return ('registry Helm release is %s at revision %s, not the journaled deployed revision %s: restore release %s/%s '
+            'to revision %s (for example with helm rollback once it is not pending) so the original boundary and '
+            'release are deployed again, then remove boundaryUpgrade from managed-registry.json and retry'
+            % (release.get('status'), release.get('revision'), base, registry.RELEASE_NAMESPACE, registry.RELEASE, base))
+
+
 class RegistryBoundaryUpgrade:
     def __init__(self, installer):
         self.installer = installer
@@ -156,10 +167,12 @@ class RegistryBoundaryUpgrade:
                 journal = dict(expected_journal, storage=physical, custody=secrets, release=release, completed=False,
                                sourceChartSHA256=installer.state.get('chartSHA256'), targetChartSHA256=registry.chart_manifest())
                 installer.save(dict(installer.state, boundaryUpgrade=journal))
-            elif release != journal['release'] or secrets != journal['custody']:
-                # A pending or later Helm revision is not this operation's to
-                # resolve by sending the change again.
-                raise ValueError('Registry Helm release or custody changed since the boundary operation began')
+            elif secrets != journal.get('custody'):
+                raise ValueError('Original private registry custody changed since the boundary operation began')
+            elif release != journal.get('release'):
+                # A pending, failed or later Helm revision is not this
+                # operation's to resolve by sending the change again.
+                raise ValueError(stuck_release(journal, release))
             if journal.get('targetChartSHA256') != registry.chart_manifest():
                 raise ValueError('Registry chart changed since the boundary operation began')
             if installer.deadline.remaining(330) < 330:
@@ -179,7 +192,7 @@ class RegistryBoundaryUpgrade:
         final = release_state(installer)
         if final != {'status': 'deployed', 'revision': journal['release']['revision'] + 1}:
             # Only the one revision this operation sent, fully deployed, completes it.
-            raise ValueError('Registry Helm release is not the deployed boundary revision')
+            raise ValueError('Registry Helm release is not the deployed boundary revision; ' + stuck_release(journal, final))
         if installer.storage() != journal['storage']:
             raise ValueError('Original registry storage changed during the boundary upgrade')
         if journal.get('targetChartSHA256') != registry.chart_manifest():

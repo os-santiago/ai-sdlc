@@ -163,9 +163,21 @@ class Run(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'not the deployed boundary revision'):
             boundary.RegistryBoundaryUpgrade(stuck).run()
         self.assertFalse(stuck.state['boundaryUpgrade']['completed'])
-        with self.assertRaisesRegex(ValueError, 'not the deployed boundary revision'):
+        with self.assertRaisesRegex(ValueError, 'restore release ai-sdlc-platform/ai-sdlc-registry to revision 1'):
             boundary.RegistryBoundaryUpgrade(stuck).run()
         self.assertEqual(len(stuck.helm), 1)
+        # Interrupted before the policy changed: still never resent.
+        early = FakeInstaller(boundary.original_boundary())
+        boundary.RegistryBoundaryUpgrade(early)  # selectable
+        early.save(dict(early.state, boundaryUpgrade={
+            'version': boundary.VERSION, 'from': registry.digest(registry.network_spec(boundary.original_boundary())),
+            'to': registry.digest(registry.network_spec(boundary.target_boundary(early.rendered()['spec']))),
+            'storage': {'pvcUID': 'p'}, 'completed': False, 'targetChartSHA256': registry.chart_manifest(),
+            'release': {'status': 'deployed', 'revision': 1}, 'custody': {'Secret/' + n: 'u-' + n for n in SECRETS}}))
+        early.release = {'status': 'pending-upgrade', 'revision': 2}
+        with self.assertRaisesRegex(ValueError, 'pending-upgrade at revision 2'):
+            boundary.RegistryBoundaryUpgrade(early).run()
+        self.assertEqual(early.helm, [])
 
     def test_private_custody_must_keep_its_original_identity(self):
         for change in (lambda s: s['zot-htpasswd']['metadata'].__setitem__('uid', 'other'),
