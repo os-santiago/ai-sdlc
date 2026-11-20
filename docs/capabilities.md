@@ -2,6 +2,8 @@
 
 What ai-sdlc does today, how general each capability is, and what remains
 unproven. "Generic" means it works for a repository without code changes.
+Every candidate must pass behaviour verification, so "Generic" for planning or
+generation does not mean a new issue can complete the loop yet.
 Milestones refer to the [roadmap](roadmap.md). Last reviewed 2026-11-20.
 
 | Stage / capability | Status | Notes |
@@ -10,7 +12,7 @@ Milestones refer to the [roadmap](roadmap.md). Last reviewed 2026-11-20.
 | Admission (reviewable criteria, proposed revision) | Generic | Rejects unreviewable criteria and proposes a ready revision. |
 | Planning and work items | Generic | |
 | Generation through a model service | Generic | OpenAI-compatible, Anthropic and agent-CLI adapters. A startup benchmark derives timeouts. The executor step budget (24) is exhausted in a share of runs. |
-| Behaviour verification | **Project-specific** | A reviewed per-issue oracle (reference implementation plus cases), only for the two reference repositories. The repository's own test suite is not used yet (M1). |
+| Behaviour verification | **Single predefined issue per repository** | Two embedded oracles (reference implementation plus cases), each selected by an exact marker in the issue body and mapped to one reference repository. A new issue, even on a reference repository, cannot pass verification. The repository's own test suite is not used yet (M1). |
 | Independent review | Generic | Read-only reviewer bound by a guarded answer contract. |
 | Bounded repair after review | Generic (opt-in) | One repair attempt from the original authority. |
 | Publication (pull request) | **Project-specific** | Two supported repositories with fixed file allowlists (M1). |

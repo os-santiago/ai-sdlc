@@ -30,12 +30,16 @@ the installation had not reached before:
 
 | Stage | Cause | Resolution |
 |---|---|---|
-| Verification | Build by-products (Python bytecode) in the candidate | Executor environment fix |
-| Review readiness | Benchmark extrapolated fixed per-call latency | Latency-aware benchmark |
-| Review | The reviewer was not told the limits the review guard enforces | Guarded contract stated in the reviewer prompt |
-| Upgrade fence | An abandoned review call was treated as in flight | In-flight predicate corrected |
-| Provenance | Registry boundary did not admit Tekton Chains | Chart fix and a closed registry-boundary transition |
-| Build capacity | One single-use build slot per installation | [Build slot provisioning](../architecture/build-slot-provisioning.md) (proposed) |
+| Verification | Build by-products (Python bytecode) in the candidate | Executor environment fix (#659) |
+| Review readiness | Benchmark extrapolated fixed per-call latency | Latency-aware benchmark (#662) |
+| Review | The reviewer was not told the limits the review guard enforces | Guarded contract stated in the reviewer prompt (#665) |
+| Upgrade fence | An abandoned review call was treated as in flight | In-flight predicate corrected (#666) |
+| Provenance | Registry boundary did not admit Tekton Chains | Chart fix and a closed registry-boundary transition (#667) |
+| Build capacity | One single-use build slot per installation | [Build slot provisioning](../architecture/build-slot-provisioning.md) (proposed, #668) |
+
+The images-only upgrade path used to install these fixes is the chained
+release refresh (#660, #663). The model service fixes were the local model
+service (#656), restating the answer format (#661) and diagnostics (#664).
 
 Every runtime change was merged with green CI and resolved review comments,
 after an independent audit. Every installation change went through a closed,

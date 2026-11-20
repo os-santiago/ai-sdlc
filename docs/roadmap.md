@@ -3,8 +3,9 @@
 Goal: a release that another team can install, point at **their own
 repository**, and evaluate with reproducible results. v1 prioritizes the inner
 loop (issue to merged, verified and reviewed pull request). A generic outer
-loop (build, sign, deploy) follows as v1.1. Status of each capability:
-[capability matrix](capabilities.md).
+loop (build, sign, deploy) follows as v1.1. Milestones keep their original
+numbers: M3 (the outer loop) was moved after M4 when the inner loop was chosen
+as the v1 core. Status of each capability: [capability matrix](capabilities.md).
 
 ## M0: Truthful positioning
 

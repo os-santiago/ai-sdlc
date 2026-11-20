@@ -40,8 +40,19 @@ issue ──► admission ──► plan ──► generation ──► behaviou
   wrapper), with a startup benchmark that sets per-call timeouts. See
   [model gateway adapters](docs/operations/model-gateway-adapters.md).
 
-Architecture and authority boundaries:
-[innerloop/outerloop architecture](docs/innerloop-outerloop.md).
+`ai-sdlc` is the Kubernetes/OpenShift runtime and portable contract for
+bounded, evidence-driven AI-assisted software delivery. See the
+[innerloop/outerloop architecture](docs/innerloop-outerloop.md) for component
+responsibilities, authority boundaries and the remaining E2E graduation gates.
+For the current local demonstration on the reference project (Saferus), see
+[Saferus E2E readiness](docs/operations/saferus-e2e-readiness.md): verified
+preparation and remaining autonomous-delivery gates.
+
+Independent review can opt into [one bounded repair](docs/operations/review-repair.md),
+using the original issue authority and remaining model budget. It is disabled by default.
+The [browser verifier component](docs/operations/browser-verifier.md) adds real
+desktop/mobile conformance tests. Deployment health requires its bounded evidence
+chain as well as HTTP/TLS checks; a component test is not autonomous E2E proof.
 
 ## Evidence
 
@@ -65,8 +76,10 @@ cd ai-sdlc
 ```
 
 This installs the runtime in maintenance mode (no delivery). If the preflight
-reports low Linux inotify limits, run `sudo ./install.sh host --configure-host`
-and retry. Prerequisites and limits: [installation](docs/installation.md).
+reports low Linux inotify limits, run `sudo ./install.sh host --configure-host`,
+then retry as your normal user. The explicit adjustment affects this boot only;
+see the [host prerequisites](docs/installation.md) for persistent host
+management and other limits.
 Enabling delivery, the upgrade transitions and the supply-chain profiles are
 described in [runtime upgrades and installation details](docs/operations/runtime-upgrades.md).
 
