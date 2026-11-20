@@ -54,7 +54,11 @@ func PolicyForRepository(repository string) Policy {
 		// Other repositories take their merge policy from the
 		// policy-bound project manifest.
 		m, ok := project.Lookup(repository)
-		if !ok || m.Merge.RulesetID > 2147483647 {
+		// Only values the merge gate enforces today are accepted: strict
+		// required checks, resolved threads, no human approval count and
+		// the main branch.
+		if !ok || m.Merge.RulesetID > 2147483647 || !m.Merge.StrictChecks || !m.Merge.ResolveThreads ||
+			m.Merge.HumanApprovals != 0 || m.BaseBranch != "main" {
 			return Policy{}
 		}
 		p := Policy{Repository: m.Repository, RulesetID: int(m.Merge.RulesetID)}

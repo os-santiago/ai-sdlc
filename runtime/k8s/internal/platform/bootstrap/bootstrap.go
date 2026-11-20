@@ -147,19 +147,29 @@ func (c *Component) Authority() (authority.Policy, authority.Identity, error) {
 	}
 	// The manifest is resolved from the same authenticated policy on every
 	// load, so delivery scope always follows the current reviewed policy.
+	// The installed manifest changes only when the whole load succeeds; any
+	// refusal clears it, so no stale scope survives a failed reload.
+	var installed *project.Manifest
+	loaded := false
+	defer func() {
+		if loaded {
+			project.SetInstalled(installed)
+		} else {
+			project.SetInstalled(nil)
+		}
+	}()
 	if p.ProjectSHA256 != "" {
 		manifest, err := project.Load(ProjectManifestPath(), p)
 		if err != nil {
 			return authority.Policy{}, authority.Identity{}, errors.New("project manifest does not match the installed policy")
 		}
-		project.SetInstalled(&manifest)
+		installed = &manifest
 	} else {
 		// A mounted manifest the policy does not bind is a configuration
 		// error; without either, built-in references keep their behaviour.
 		if _, err := os.Lstat(ProjectManifestPath()); err == nil || !os.IsNotExist(err) {
 			return authority.Policy{}, authority.Identity{}, errors.New("project manifest is mounted but not bound by the policy")
 		}
-		project.SetInstalled(nil)
 	}
 	if os.Getenv("AI_SDLC_RUNTIME_MODE") == "shadow" && p.Autonomy != "shadow" {
 		return authority.Policy{}, authority.Identity{}, errors.New("shadow mode requires shadow authority ceiling")
@@ -185,6 +195,7 @@ func (c *Component) Authority() (authority.Policy, authority.Identity, error) {
 	if identity.Role != c.Name || identity.Validate(p) != nil {
 		return authority.Policy{}, authority.Identity{}, errors.New("component signing identity mismatch")
 	}
+	loaded = true
 	return p, identity, nil
 }
 

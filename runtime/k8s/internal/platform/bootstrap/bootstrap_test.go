@@ -370,8 +370,8 @@ func TestAuthorityResolvesOnlyAPolicyBoundProjectManifest(t *testing.T) {
 	if err := os.WriteFile(c.PolicyPath, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := c.Authority(); err == nil {
-		t.Fatal("manifest with another digest accepted")
+	if _, _, err := c.Authority(); err == nil || project.Supported("example/project") {
+		t.Fatal("manifest with another digest accepted, or a stale manifest survived the failed load")
 	}
 	if err := os.Remove(manifestPath); err != nil {
 		t.Fatal(err)

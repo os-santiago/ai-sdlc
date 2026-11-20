@@ -108,3 +108,12 @@ func TestAMountedManifestWithoutAPolicyDigestIsRefused(t *testing.T) {
 		t.Fatal("unbound mounted manifest silently ignored")
 	}
 }
+
+func TestReferenceRepositoriesCannotBindAnInstalledManifest(t *testing.T) {
+	m, _ := Builtin(Saferus)
+	policy := policyFor(t, Saferus)
+	policy.ProjectSHA256 = m.Digest()
+	if _, err := Resolve(policy, m.Canonical()); err == nil {
+		t.Fatal("a reference repository accepted an installed manifest")
+	}
+}

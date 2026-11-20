@@ -22,6 +22,10 @@ func Resolve(policy authority.Policy, installed []byte) (Manifest, error) {
 		}
 		return m, nil
 	}
+	// Reference repositories are governed only by their built-in manifests.
+	if _, reference := Builtin(policy.Repository); reference {
+		return Manifest{}, ErrManifest
+	}
 	m, err := ParseManifest(installed)
 	if err != nil || m.Repository != policy.Repository || m.Digest() != policy.ProjectSHA256 {
 		return Manifest{}, ErrManifest
