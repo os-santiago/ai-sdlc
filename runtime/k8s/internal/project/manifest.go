@@ -47,6 +47,10 @@ type Verification struct {
 	Result           Result   `json:"result"`
 	Repeat           int      `json:"repeat"`
 	TestGlobs        []string `json:"testGlobs"`
+	// HarnessGlobs are files that change how tests run or report (build and
+	// dependency files, test configuration, shared helpers, test data); a
+	// candidate that changes one is refused.
+	HarnessGlobs []string `json:"harnessGlobs,omitempty"`
 }
 
 type Result struct {
@@ -187,8 +191,13 @@ func (v Verification) validate() error {
 		v.TimeoutSeconds < 30 || v.TimeoutSeconds > 600 || !cpuQuantity.MatchString(v.CPU) ||
 		!byteQuantity.MatchString(v.Memory) || !byteQuantity.MatchString(v.EphemeralStorage) ||
 		v.Network != "none" || !v.Result.ExitCode || v.Repeat < 1 || v.Repeat > 3 ||
-		len(v.TestGlobs) == 0 || len(v.TestGlobs) > 32 {
+		len(v.TestGlobs) == 0 || len(v.TestGlobs) > 32 || len(v.HarnessGlobs) > 64 {
 		return ErrManifest
+	}
+	for _, g := range v.HarnessGlobs {
+		if validGlob(g) != nil {
+			return ErrManifest
+		}
 	}
 	for _, arg := range v.Command {
 		if arg == "" || len(arg) > 1024 || strings.IndexFunc(arg, unicode.IsControl) >= 0 {
@@ -259,6 +268,19 @@ func (p Publication) Allows(file string) bool {
 	return false
 }
 
+// MatchesHarness reports whether a path is part of the test harness.
+func (v Verification) MatchesHarness(file string) bool {
+	if cleanPath(file) != nil {
+		return false
+	}
+	for _, g := range v.HarnessGlobs {
+		if matchGlob(g, file) {
+			return true
+		}
+	}
+	return false
+}
+
 // MatchesTest reports whether a path is one of the repository's test files.
 func (v Verification) MatchesTest(file string) bool {
 	if cleanPath(file) != nil {
@@ -271,6 +293,10 @@ func (v Verification) MatchesTest(file string) bool {
 	}
 	return false
 }
+
+// CleanPath reports whether p is a clean, relative, slash-separated
+// repository path in the conservative character set.
+func CleanPath(p string) error { return cleanPath(p) }
 
 func cleanPath(p string) error {
 	if p == "" || len(p) > 1024 || !pathChars.MatchString(p) || strings.HasPrefix(p, "/") ||
