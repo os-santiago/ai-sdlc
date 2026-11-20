@@ -155,12 +155,10 @@ func TestReviewabilityAvoidsFalsePositivesAndLossyRewrites(t *testing.T) {
 func TestScopeLimitCriteriaAreNotAdmittedAndRemovedFromTheProposal(t *testing.T) {
 	for _, criterion := range []string{
 		"Limit the change to `web/static/ttl.js`, `tests/ttl.test.mjs`, and that single presentation assertion in `tools/verify_browser.py`.",
-		"Restrict the changes to `internal/parser`.",
-		"Only modify files under web/static.",
-		"Change only `web/static/ttl.js`.",
-		"Edits must be confined to `web/static`.",
-		"Keep the change scoped to the `web` directory.",
+		"Restrict the changes to `internal/parser/parse.go`.",
+		"Only modify `web/static/ttl.js` and `tests/ttl.test.mjs`.",
 		"Only touch client.go.",
+		"Keep the change scoped to cmd/server/main.go.",
 	} {
 		body := "Improve the token lifetime display so people read durations immediately in the console.\n\n## Acceptance criteria\n\n- [ ] Show `1 minute` for 60 seconds.\n- [ ] " + criterion + "\n"
 		issue := issueFromBody(t, body)
@@ -185,7 +183,18 @@ func TestScopeLimitCriteriaAreNotAdmittedAndRemovedFromTheProposal(t *testing.T)
 		"Upload rejects files other than PNG and JPEG.", "The CLI accepts paths other than the working directory.",
 		"The export contains no other files than report.csv.", "The diff viewer only highlights changed lines.",
 		"Only touch the config.yaml when migration is enabled.", "Only change the file permissions when the user is an owner.",
-		"Only edit the file name in the rename dialog."} {
+		"Only edit the file name in the rename dialog.",
+		"Only edit `config.yaml` values through the settings UI.", "Restrict the changes to `user.email` to verified accounts.",
+		"Limit the edits to `profile.json` fields to the owner.", "Only change `status` from draft to published.",
+		"Keep the changes to `/api/v1` backward compatible.", "Only modify `user.role` as an admin.",
+		"Restrict the edits to `/admin/users` to administrators.", "Changes must be limited to `draft` documents.",
+		"Edits must be restricted to `owner` users.", "Scope the changes to `tenant.id` to the current tenant.",
+		"Only change passwords via `/account/security`.", "Only modify invoices/drafts, never sent invoices.",
+		"Limit the edits to `post.title` to 120 characters.", "Keep the changes to `/login` rate limited to 5 per minute.",
+		"Only change `order.status` to shipped after payment.", "Only edit `price` fields with manager approval.",
+		"Only touch `secrets.yaml` with the vault role.", "Only modify user data via app/api endpoints.",
+		"Only edit the `email` field after re-authentication.", "Only edit `name`.",
+		"Only change `visibility` to private for minors.", "Restrict the changes to `src/app.js` to the login flow."} {
 		issue := issueFromBody(t, "Improve the token lifetime display so people read durations immediately in the console.\n\n## Acceptance criteria\n\n- [ ] "+reviewable+"\n")
 		if findings := ReviewabilityFindings(issue); len(findings) != 0 {
 			t.Fatalf("product property flagged %q: %#v", reviewable, findings)
@@ -203,8 +212,7 @@ func TestMixedScopeCriteriaKeepBehaviorOrStayUnresolved(t *testing.T) {
 		t.Fatalf("mixed criterion lost behavior: %#v\n%s", unresolved, proposal)
 	}
 	issue = issueFromBody(t, head+"Only modify `ttl.js` so that 60 seconds renders as `1 minute`.\n")
-	proposal, unresolved = ProposeRevision(issue)
-	if len(unresolved) != 1 || !strings.Contains(proposal, "so that 60 seconds renders") {
-		t.Fatalf("behavioral scope clause silently dropped: %#v\n%s", unresolved, proposal)
+	if findings := ReviewabilityFindings(issue); len(findings) != 0 {
+		t.Fatalf("behavioral clause treated as a scope limit: %#v", findings)
 	}
 }

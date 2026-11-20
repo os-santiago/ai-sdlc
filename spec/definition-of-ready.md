@@ -102,17 +102,16 @@ admitting it predetermines a rejection. `runtime/k8s` admission enforces:
 - **RV3 — no operational sections.** Sections other than the acceptance
   criteria that carry approvals, expiry, renewal, budget, authority or deadline
   notes are removed: reviewers would read them as requirements.
-- **RV4 — no change-scope limits.** Clauses that limit the change to concrete
-  code paths ("limit the change to `web/static/ttl.js` …", "only modify
-  internal/admission/…") need the original source to verify. The read-only
-  reviewer can only request changes for them. Only clauses that name a path
-  qualify (a backticked span, a path with a slash or a file with a source
-  extension), and conditional clauses (when/if/unless) are excluded, so product
-  and authorization rules are never matched. A missed limit only risks a review
-  rejection, while a false match would delete a requirement. The proposal cuts
-  those clauses (and baseline clauses) and keeps the rest of the criterion. If a
-  scope clause also states behavior ("only modify `x` so that …"), it is left
-  for the author to rephrase.
+- **RV4 — no change-scope limits.** A clause that is purely a limit of the change
+  to concrete source files, such as "limit the change to `web/static/ttl.js` …
+  `tools/verify_browser.py`" or "only modify `a.go` and `b.go`", needs the
+  original source to verify. The read-only reviewer can only request changes for
+  it. The clause must end at a real source path: a slash path or a source-code
+  extension. Field names, endpoints, data files and any trailing qualifier ("to
+  verified accounts", "as an admin", "via …") never match, so product and
+  authorization rules are never removed. A missed limit only risks a review
+  rejection. The proposal cuts such clauses (and baseline clauses) and keeps the
+  rest of the criterion.
 
 A failing issue is decided `needs-clarification` with one reason per finding.
 `ProposeRevision` produces the reviewable body (request, recipe marker and every
