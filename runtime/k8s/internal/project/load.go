@@ -34,6 +34,11 @@ func Resolve(policy authority.Policy, installed []byte) (Manifest, error) {
 // valid only when the policy selects a built-in manifest.
 func Load(path string, policy authority.Policy) (Manifest, error) {
 	if policy.ProjectSHA256 == "" {
+		// A mounted manifest the policy does not bind is a configuration
+		// error, never silently ignored in favour of a built-in.
+		if _, err := os.Lstat(path); err == nil || !os.IsNotExist(err) {
+			return Manifest{}, ErrManifest
+		}
 		return Resolve(policy, nil)
 	}
 	f, err := os.Open(path)

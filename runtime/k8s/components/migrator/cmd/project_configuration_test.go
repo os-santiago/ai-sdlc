@@ -16,7 +16,7 @@ func TestProjectInstallationCompilerBindsOnlyTheInstallationRepository(t *testin
 		t.Fatal(err)
 	}
 	manifest := map[string]any{"version": project.ManifestVersion, "repository": "example/service", "baseBranch": "main",
-		"verification": map[string]any{"image": "registry.example/go@sha256:" + strings.Repeat("a", 64), "command": []string{"go", "test", "./..."},
+		"verification": map[string]any{"image": "registry.example/go@sha256:" + strings.Repeat("a", 64), "command": []string{"sh", "-c", "go vet ./... && go test ./... > <report>"},
 			"timeoutSeconds": 300, "cpu": "2", "memory": "2Gi", "ephemeralStorage": "1Gi", "network": "none",
 			"result": map[string]any{"exitCode": true}, "repeat": 1, "testGlobs": []string{"**/*_test.go"}},
 		"publication": map[string]any{"allow": []string{"**/*.go"}, "maxChangedFiles": 5, "maxChangedBytes": 65536, "maxFileBytes": 32768},
@@ -33,8 +33,8 @@ func TestProjectInstallationCompilerBindsOnlyTheInstallationRepository(t *testin
 		t.Fatal("output", out.String())
 	}
 	parsed, err := project.ParseManifest([]byte(result.ManifestJSON))
-	if err != nil || parsed.Digest() != result.ManifestSHA256 {
-		t.Fatal("canonical manifest and digest disagree", err)
+	if err != nil || parsed.Digest() != result.ManifestSHA256 || strings.Contains(out.String(), `\u00`) {
+		t.Fatal("canonical manifest with shell metacharacters must round-trip", err, out.String())
 	}
 	manifest["repository"] = "example/other"
 	raw, _ = json.Marshal(map[string]any{"policy": m.Policy, "manifest": manifest})

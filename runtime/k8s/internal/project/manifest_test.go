@@ -149,6 +149,18 @@ func TestDoubleStarMatchingIsPolynomial(t *testing.T) {
 	}
 }
 
+func TestJSONEscapesInValuesAreAccepted(t *testing.T) {
+	m := generic()
+	m.Verification.Command = []string{"sh", "-c", "go vet ./... && go test ./... > out"}
+	raw, _ := json.Marshal(m) // escapes & and > as JSON unicode escapes
+	if _, err := ParseManifest(raw); err != nil {
+		t.Fatal("escaped value refused", err)
+	}
+	if _, err := ParseManifest(m.Canonical()); err != nil || strings.Contains(string(m.Canonical()), string(rune(92))+"u00") {
+		t.Fatal("canonical form must be unescaped and parseable", err)
+	}
+}
+
 func TestUnicodeFoldedDuplicateKeysAndOmittedMergeFieldsAreRefused(t *testing.T) {
 	raw, _ := json.Marshal(generic())
 	literal := strings.Replace(string(raw), `"baseBranch":"main"`, "\"baseBranch\":\"main\",\"ba\u017feBranch\":\"dev\"", 1)

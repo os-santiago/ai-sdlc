@@ -1,6 +1,7 @@
 package project
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -105,13 +106,11 @@ var (
 // duplicate keys are refused) and validates it.
 func ParseManifest(raw []byte) (Manifest, error) {
 	var m Manifest
-	// ASCII only and no \\u escapes: encoding/json folds Unicode keys (for
-	// example U+017F to "s"), which would let a duplicate key escape the
-	// strict decoder.
-	for i, b := range raw {
-		if b >= 0x80 || (b == '\\' && i+1 < len(raw) && raw[i+1] == 'u') {
-			return Manifest{}, ErrManifest
-		}
+	// Object keys must be ASCII (escaped or literal): encoding/json folds
+	// Unicode keys (for example U+017F to "s"), which would let a duplicate
+	// key escape the strict decoder. Values may use JSON escapes.
+	if asciiKeys(raw) != nil {
+		return Manifest{}, ErrManifest
 	}
 	if len(raw) == 0 || len(raw) > MaxManifestBytes || authority.DecodeStrict(raw, &m) != nil || explicitMerge(raw) != nil {
 		return Manifest{}, ErrManifest
@@ -120,6 +119,34 @@ func ParseManifest(raw []byte) (Manifest, error) {
 		return Manifest{}, ErrManifest
 	}
 	return m, nil
+}
+
+func asciiKeys(raw []byte) error {
+	var doc any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&doc) != nil {
+		return ErrManifest
+	}
+	var walk func(any) error
+	walk = func(v any) error {
+		switch value := v.(type) {
+		case map[string]any:
+			for key, child := range value {
+				if strings.IndexFunc(key, func(r rune) bool { return r > 0x7f }) >= 0 || walk(child) != nil {
+					return ErrManifest
+				}
+			}
+		case []any:
+			for _, child := range value {
+				if walk(child) != nil {
+					return ErrManifest
+				}
+			}
+		}
+		return nil
+	}
+	return walk(doc)
 }
 
 // explicitMerge requires the merge booleans and approval count to be stated,
@@ -142,8 +169,18 @@ func explicitMerge(raw []byte) error {
 // Digest is the canonical sha256 of the manifest (its re-marshalled struct,
 // not the installed file bytes), suitable for binding into signed policy.
 func (m Manifest) Digest() string {
-	raw, _ := json.Marshal(m)
-	return authority.Digest(raw)
+	return authority.Digest(m.Canonical())
+}
+
+// Canonical is the manifest's canonical JSON: struct field order, no HTML
+// escaping (which would emit \\u escapes the parser refuses) and no trailing
+// newline. ParseManifest accepts it and Digest hashes it.
+func (m Manifest) Canonical() []byte {
+	var out bytes.Buffer
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(m)
+	return bytes.TrimSuffix(out.Bytes(), []byte("\n"))
 }
 
 func (m Manifest) Validate() error {

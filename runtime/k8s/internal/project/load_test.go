@@ -94,3 +94,17 @@ func TestPolicyRevisionIsUnchangedWithoutAProjectDigest(t *testing.T) {
 		t.Fatal("bound digest must change the revision", err)
 	}
 }
+
+func TestAMountedManifestWithoutAPolicyDigestIsRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "manifest.json")
+	if _, err := Load(path, policyFor(t, Saferus)); err != nil {
+		t.Fatal("reference without a mount must use the built-in", err)
+	}
+	raw, _ := json.Marshal(generic())
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path, policyFor(t, Saferus)); err == nil {
+		t.Fatal("unbound mounted manifest silently ignored")
+	}
+}

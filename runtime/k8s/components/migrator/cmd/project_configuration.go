@@ -33,8 +33,10 @@ func compileProjectInstallation(input io.Reader, output io.Writer) error {
 	if err != nil || manifest.Repository != policy.Repository {
 		return errors.New("project manifest does not match the installation repository")
 	}
-	canonical, _ := json.Marshal(manifest)
-	return json.NewEncoder(output).Encode(struct {
+	canonical := manifest.Canonical()
+	encoder := json.NewEncoder(output)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(struct {
 		Version        string `json:"version"`
 		Manifest       string `json:"manifestJSON"`
 		ManifestSHA256 string `json:"manifestSHA256"`

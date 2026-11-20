@@ -228,9 +228,6 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(routes['verify-artifact'], 'http://ai-sdlc-verifier:8087/internal/verify-artifact')
 
 
-if __name__ == '__main__': unittest.main()
-
-
 class ProjectManifestChartTests(unittest.TestCase):
     def test_project_manifest_is_rendered_only_when_set_and_immutable(self):
         tests = ChartTests()
@@ -247,3 +244,6 @@ class ProjectManifestChartTests(unittest.TestCase):
         self.assertEqual(len(documents), 1)
         self.assertIs(documents[0]['immutable'], True)
         self.assertEqual(documents[0]['data'], {'manifest.json': '{"version":"ai-sdlc.project/v1"}'})
+
+
+if __name__ == '__main__': unittest.main()
