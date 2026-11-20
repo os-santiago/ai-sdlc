@@ -16,8 +16,8 @@ Contract:
 
 The CLI runs once per call in a fresh empty directory with a minimal
 environment, no native tools, no session, settings, hooks, MCP servers or
-CLAUDE.md, and a JSON-schema structured answer validated by the shared
-completion contract. Provider credentials stay on the host.
+CLAUDE.md, and one JSON answer validated by the shared completion contract.
+Provider credentials stay on the host.
 """
 import argparse
 import hmac
@@ -107,16 +107,16 @@ class ClaudeCLI:
         # native calls; its single JSON answer is validated below.
         return [self.binary, "-p", "--output-format", "json",
                 "--tools", "", "--bare", "--strict-mcp-config", "--no-session-persistence", "--disable-slash-commands",
-                "--system-prompt", INSTRUCTIONS.format(marker=marker), "--append-system-prompt", system,
+                "--system-prompt=" + INSTRUCTIONS.format(marker=marker), "--append-system-prompt=" + system,
                 "--model", model]
 
-    def run(self, model, marker, system, prompt, tokens):
+    def run(self, model, marker, system, prompt, tokens, seconds):
         with tempfile.TemporaryDirectory(prefix="agent-cli-") as home:
             try:
                 done = subprocess.run(self.argv(model, marker, system or "(none)"), input=prompt, cwd=home,
-                                      env=self.environment(home, tokens), capture_output=True, timeout=self.seconds,
+                                      env=self.environment(home, tokens), capture_output=True, timeout=seconds,
                                       check=False)
-            except (OSError, subprocess.TimeoutExpired):
+            except (OSError, ValueError, subprocess.TimeoutExpired):
                 raise BackendError("agent CLI failed") from None
         if done.returncode != 0 or len(done.stdout) > MAX_OUTPUT_BYTES:
             raise BackendError("agent CLI failed")
@@ -129,29 +129,61 @@ class ClaudeCLI:
         return answer, parse_turn(answer.get("result"))
 
     def complete(self, model, messages, tools, names, tokens):
+        """One completion within self.seconds in total, retrying once (within
+        the remaining time) when the answer is not one valid turn."""
         marker = "turn-" + secrets.token_hex(8)
-        system = "\n\n".join(m.get("content") or "" for m in messages if m["role"] in ("system", "developer"))
-        if len(system.encode()) > MAX_SYSTEM_BYTES:
-            raise ValueError("system messages exceeded bound")
+        system = system_text(messages)
         prompt = render(messages, tools, tokens, marker)
+        deadline = time.monotonic() + self.seconds
         for attempt in range(2):
-            answer, structured = self.run(model, marker, system, (prompt + (RETRY_NOTE if attempt else "")).encode(), tokens)
-            print(json.dumps({"event": "completion", "model": model, "attempt": attempt + 1, "numTurns": answer.get("num_turns"),
-                              "valid": structured is not None, "actions": len((structured or {}).get("requested_actions") or []),
-                              "actionsOffered": len(tools), "durationMs": answer.get("duration_ms")}), flush=True)
-            if structured is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 1:
                 break
-        else:
-            raise BackendError("agent CLI did not return one valid turn")
-        proposed = [{"name": a.get("action"), "arguments": a.get("input")} if isinstance(a, dict) else a
-                    for a in structured["requested_actions"]]
-        message = assistant_message(structured["content"], proposed, names)
-        usage = answer.get("usage") if isinstance(answer.get("usage"), dict) else {}
-        # Cache reads are excluded: they would overstate prefill throughput.
-        prompt_tokens = sum(v for v in (usage.get("input_tokens"), usage.get("cache_creation_input_tokens"))
-                            if type(v) is int and v >= 0)
-        completion_tokens = usage.get("output_tokens") if type(usage.get("output_tokens")) is int else 0
-        return message, prompt_tokens, completion_tokens
+            answer, structured = self.run(model, marker, system, (prompt + (RETRY_NOTE if attempt else "")).encode(),
+                                          tokens, remaining)
+            message = None
+            if structured is not None:
+                proposed = [{"name": a.get("action"),
+                             "arguments": json.dumps(a["input"]) if isinstance(a.get("input"), dict) else a.get("input")}
+                            if isinstance(a, dict) else a for a in structured["requested_actions"]]
+                try:
+                    message = assistant_message(structured["content"], proposed, names)
+                except ValueError:
+                    message = None
+            print(json.dumps({"event": "completion", "model": model, "attempt": attempt + 1, "numTurns": answer.get("num_turns"),
+                              "valid": message is not None, "actions": len((message or {}).get("tool_calls") or []),
+                              "actionsOffered": len(tools), "durationMs": answer.get("duration_ms")}), flush=True)
+            if message is not None:
+                usage = answer.get("usage") if isinstance(answer.get("usage"), dict) else {}
+                # Cache reads are excluded: they would overstate prefill throughput.
+                prompt_tokens = sum(v for v in (usage.get("input_tokens"), usage.get("cache_creation_input_tokens"))
+                                    if type(v) is int and v >= 0)
+                completion_tokens = usage.get("output_tokens") if type(usage.get("output_tokens")) is int else 0
+                return message, prompt_tokens, completion_tokens
+        raise BackendError("agent CLI did not return one valid turn in time")
+
+
+def system_text(messages):
+    return "\n\n".join(m.get("content") or "" for m in messages if m["role"] in ("system", "developer"))
+
+
+def validate_history(messages):
+    """Assistant tool calls and tool results must be well formed before the
+    transcript is rendered; anything else is a client error."""
+    for message in messages:
+        calls = message.get("tool_calls")
+        if calls is not None:
+            if message["role"] != "assistant" or not isinstance(calls, list) or len(calls) > 8:
+                raise ValueError("invalid tool calls")
+            for call in calls:
+                function = call.get("function") if isinstance(call, dict) else None
+                if (not isinstance(function, dict) or not isinstance(call.get("id", ""), str)
+                        or not isinstance(function.get("name"), str) or not isinstance(function.get("arguments"), str)):
+                    raise ValueError("invalid tool call")
+        if message["role"] == "tool" and not isinstance(message.get("tool_call_id", ""), str):
+            raise ValueError("invalid tool result")
+    if len(system_text(messages).encode()) > MAX_SYSTEM_BYTES or "\x00" in system_text(messages):
+        raise ValueError("invalid system messages")
 
 
 class BackendError(RuntimeError):
@@ -190,17 +222,28 @@ def parse_turn(text):
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    # Bounds slow or partial requests; a model call itself is not on the socket.
+    timeout = 10
 
     def log_message(self, *_):
         pass
 
     def reply(self, status, value):
         body = json.dumps(value).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        if status != 200:
+            # Never reuse a connection whose request body may be unread.
+            self.close_connection = True
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            if status != 200:
+                self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # The caller gave up (for example its own timeout); nothing to send.
+            self.close_connection = True
 
     def authorized(self):
         supplied = self.headers.get_all("Authorization", [])
@@ -234,7 +277,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("unknown model")
             body = {k: v for k, v in request.items() if k != "chat_template_kwargs"}
             messages, tools, names, tokens = validate_request(body, model=model)
-        except (ValueError, KeyError, TypeError, RecursionError):
+            validate_history(messages)
+        except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
             self.reply(400, {"error": {"message": "invalid completion request"}})
             return
         if not self.server.slots.acquire(blocking=False):

@@ -85,8 +85,8 @@ class ServiceTests(unittest.TestCase):
         for flag in ("-p", "--bare", "--strict-mcp-config", "--no-session-persistence", "--disable-slash-commands"):
             self.assertIn(flag, argv)
         self.assertEqual(argv[argv.index("--model") + 1], "sonnet")
-        self.assertEqual(argv[argv.index("--append-system-prompt") + 1], "Agent policy.")
-        marker = argv[argv.index("--system-prompt") + 1].split("marker ")[1].split(" ")[0]
+        self.assertIn("--append-system-prompt=Agent policy.", argv)
+        marker = [a for a in argv if a.startswith("--system-prompt=")][0].split("marker ")[1].split(" ")[0]
         self.assertTrue(marker.startswith("turn-") and len(marker) == 21)
         self.assertIn("[%s user]\nRead README.md\n[system]" % marker, seen["stdin"])
         self.assertIn("<available-actions>\n- read_file: Read a file", seen["stdin"])
@@ -100,7 +100,10 @@ class ServiceTests(unittest.TestCase):
         self.start()
         self.assertEqual(self.call(self.request(), token="x" * 40)[0], 401)
         self.assertEqual(self.call(None, path="/v1/models")[1]["data"][0]["id"], "claude-sonnet")
-        for bad in (self.request(model="other"), self.request(stream=True), self.request(unexpected=1), {"model": "claude-sonnet"}):
+        bad_history = self.request(messages=[{"role": "user", "content": "x"}, {"role": "assistant", "content": "", "tool_calls": 5}])
+        huge_system = self.request(messages=[{"role": "system", "content": "x" * (97 * 1024)}, {"role": "user", "content": "x"}])
+        for bad in (self.request(model="other"), self.request(stream=True), self.request(unexpected=1), {"model": "claude-sonnet"},
+                    bad_history, huge_system):
             with self.subTest(bad=str(bad)[:60]):
                 self.assertEqual(self.call(bad)[0], 400)
         for mode, tool in (("fail", "read_file"), ("garbage", "read_file"), ("error", "read_file"), ("ok", "run_shell")):
