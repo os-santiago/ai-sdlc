@@ -43,16 +43,21 @@ type Finding struct {
 // "token expiry" are reviewable properties and must not match.
 var deliveryObligation = regexp.MustCompile(`(?i)(\b(obtain|pass(ing)?|require[sd]?)\b[^.;]{0,40}\bindependent (behavior )?(verification|review)\b|\bpassing required checks\b|\bsigned (build|provenance)\b|\bbuild/provenance\b|\bprovenance (verification|components?)\b|\b(promot(e|ion)|deploy(ed|ment)?)\b[^.;]{0,60}\b(to|into|through)\b[^.;]{0,40}\b(environment|production|cluster|components?)\b|\brecord the deployed\b)`)
 
-// Change-scope restrictions name which files or paths a change may touch.
-// Authorization or product rules ("users can only edit their own comments",
-// "limit the label to 20 characters") must not match: the object must be the
-// change itself or a file/path, never a product noun.
-const scopeObject = "(`[^`]+`|\\b(files?|paths?|packages?|director(y|ies)|modules?|folders?)\\b|[\\w./-]+\\.[a-z0-9]{1,5}\\b)"
+// Change-scope restrictions name concrete code paths a change may touch. Only
+// clauses that name a path (a backticked span, a path with a slash or a file
+// with a source extension) qualify, so authorization and product rules such
+// as "restrict the edits to the document to its owner", "changes must be
+// limited to 5 per minute" or "upload rejects files other than PNG" never
+// match. Conditional clauses (when/if/unless) are not treated as scope limits.
+// A missed scope limit only risks a review rejection; a false match would
+// silently delete a requirement, so this rule is deliberately narrow.
+const scopePath = "(`[^`]+`|[\\w.-]+/[\\w./-]*|[\\w.-]+\\.(go|py|js|mjs|cjs|ts|tsx|jsx|java|kt|rb|rs|c|h|cc|cpp|cs|php|sh|yaml|yml|json|toml|md|html|css|sql|tf)\\b)"
 
-var scopeLimit = regexp.MustCompile(`(?i)(\b(limit|restrict|confine|keep|scope)\b[^.;]{0,20}\b(the|this|your)\s+(changes?|edits?|diffs?|modifications?)\b[^.;]{0,20}\b(to|within)\b` +
-	`|\b(changes?|edits?|diffs?|modifications?)\s+(must|should|may)\s+(be\s+)?(confined|limited|restricted|scoped)\s+to\b` +
-	`|^\s*(only\s+(modify|change|touch|edit)|(modify|change|touch|edit)\s+only)\s+(the\s+)?` + scopeObject +
-	`|\b(files?|paths?)\s+other\s+than\b|\bno\s+other\s+files?\b|\bthe\s+diff\b[^.;]{0,20}\bonly\b)`)
+var scopeLimit = regexp.MustCompile(`(?i)(\b(limit|restrict|confine|keep|scope)\b[^.;]{0,20}\b(the|this|your)\s+(changes?|edits?|diffs?|modifications?)\b[^.;]{0,20}\b(to|within)\b[^.;]{0,40}` + scopePath +
+	`|\b(changes?|edits?|modifications?)\s+(must|should)\s+(be\s+)?(confined|limited|restricted|scoped)\s+to\b[^.;]{0,40}` + scopePath +
+	`|^\s*(only\s+(modify|change|touch|edit)|(modify|change|touch|edit)\s+only)\s+[^.;]{0,30}` + scopePath + `)`)
+
+var scopeCondition = regexp.MustCompile(`(?i)\b(when|whenever|if|unless|during)\b`)
 
 // A scope clause that also states behavior cannot be cut without losing it.
 var scopePurpose = regexp.MustCompile(`(?i)\b(so that|in order to|to make|to render|to show|to display|while|which)\b`)
@@ -232,11 +237,15 @@ func criterionLine(line string) (criterion, prefix string, ok bool) {
 
 func hasScopeClause(criterion string) bool {
 	for _, part := range strings.Split(criterion, "; ") {
-		if scopeLimit.MatchString(part) {
+		if scopeClause(part) {
 			return true
 		}
 	}
 	return false
+}
+
+func scopeClause(part string) bool {
+	return scopeLimit.MatchString(part) && !scopeCondition.MatchString(part)
 }
 
 // withoutScopeClause removes "; "-separated clauses that only restrict scope
@@ -248,7 +257,7 @@ func withoutScopeClause(criterion string) (remainder string, ok, empty bool) {
 	for _, part := range strings.Split(criterion, "; ") {
 		part = strings.TrimRight(strings.TrimSpace(part), " ,;.")
 		switch {
-		case scopeLimit.MatchString(part):
+		case scopeClause(part):
 			if scopePurpose.MatchString(part) {
 				return "", false, false
 			}
@@ -269,5 +278,5 @@ func withoutScopeClause(criterion string) (remainder string, ok, empty bool) {
 	if !imperative.MatchString(text) || hasScopeClause(text) || baselineComparison.MatchString(text) {
 		return "", false, false
 	}
-	return text + ".", true, false
+	return strings.ToUpper(text[:1]) + text[1:] + ".", true, false
 }

@@ -155,14 +155,12 @@ func TestReviewabilityAvoidsFalsePositivesAndLossyRewrites(t *testing.T) {
 func TestScopeLimitCriteriaAreNotAdmittedAndRemovedFromTheProposal(t *testing.T) {
 	for _, criterion := range []string{
 		"Limit the change to `web/static/ttl.js`, `tests/ttl.test.mjs`, and that single presentation assertion in `tools/verify_browser.py`.",
-		"Restrict the changes to the parser package.",
+		"Restrict the changes to `internal/parser`.",
 		"Only modify files under web/static.",
 		"Change only `web/static/ttl.js`.",
 		"Edits must be confined to `web/static`.",
-		"Do not modify any file other than `ttl.js`.",
-		"No other files may change.",
 		"Keep the change scoped to the `web` directory.",
-		"The diff must only include `ttl.js`.",
+		"Only touch client.go.",
 	} {
 		body := "Improve the token lifetime display so people read durations immediately in the console.\n\n## Acceptance criteria\n\n- [ ] Show `1 minute` for 60 seconds.\n- [ ] " + criterion + "\n"
 		issue := issueFromBody(t, body)
@@ -180,7 +178,14 @@ func TestScopeLimitCriteriaAreNotAdmittedAndRemovedFromTheProposal(t *testing.T)
 		"Users can only edit their own comments.", "Admins can only change roles from the settings page.",
 		"Only edit mode is allowed for admins.", "Restrict edits to the document to its owner.",
 		"Limit changes to the password to once per day.", "Limit modifications to admin users.",
-		"Confine diffs to 500 lines in the viewer.", "Restrict uploads to 5 MB."} {
+		"Confine diffs to 500 lines in the viewer.", "Restrict uploads to 5 MB.",
+		"Restrict the edits to the document to its owner.", "Limit the changes to the password to once per day.",
+		"Restrict your changes to settings to admins.", "Scope the changes to the tenant to the current organization.",
+		"Changes must be limited to 5 per minute per user.", "Edits should be restricted to the owner.",
+		"Upload rejects files other than PNG and JPEG.", "The CLI accepts paths other than the working directory.",
+		"The export contains no other files than report.csv.", "The diff viewer only highlights changed lines.",
+		"Only touch the config.yaml when migration is enabled.", "Only change the file permissions when the user is an owner.",
+		"Only edit the file name in the rename dialog."} {
 		issue := issueFromBody(t, "Improve the token lifetime display so people read durations immediately in the console.\n\n## Acceptance criteria\n\n- [ ] "+reviewable+"\n")
 		if findings := ReviewabilityFindings(issue); len(findings) != 0 {
 			t.Fatalf("product property flagged %q: %#v", reviewable, findings)
