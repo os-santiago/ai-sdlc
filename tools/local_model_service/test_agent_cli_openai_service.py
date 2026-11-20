@@ -198,6 +198,10 @@ class NativeAttemptTests(ServiceTests):
         self.start("native", always=True)
         self.assertEqual(self.call(self.request())[0], 502)
 
+    def test_non_text_action_names_are_invalid_turns(self):
+        self.start(tool=[])
+        self.assertEqual(self.call(self.request())[0], 502)
+
 
 @unittest.skipUnless(os.environ.get("AI_SDLC_TEST_AGENT_CLI"), "requires an authenticated Claude CLI on the host")
 class RealCLITests(unittest.TestCase):

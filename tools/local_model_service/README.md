@@ -28,8 +28,13 @@ ai-sdlc (kind)  --OpenAI API + bearer-->  host service  -->  claude -p (no tools
   and/or an allowlist of client addresses (`allowedClients`, for example the
   kind node on the bridge). The installation's credential inventory is
   closed, so until the installer manages a service Secret, use the client
-  allowlist. Inside the cluster, the chart's egress policy already limits
-  the endpoint to the worker and verifier gateways.
+  allowlist. Inside the cluster, the chart's egress policy (enforced only
+  when the cluster's network plugin applies NetworkPolicy) selects pods, not
+  containers: every container sharing a gateway pod's network, such as
+  `verifier` beside `model-gateway`, can reach the endpoint, and an address
+  allowlist cannot tell them apart. Where access must be limited to the
+  gateway itself, use an independent credential (`tokenFile`) held only by
+  the gateway.
 
 Each call runs `claude -p` in a fresh empty directory with a minimal
 environment:

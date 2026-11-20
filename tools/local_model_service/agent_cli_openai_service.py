@@ -154,8 +154,10 @@ class ClaudeCLI:
                              "arguments": json.dumps(a["input"]) if isinstance(a.get("input"), dict) else a.get("input")}
                             if isinstance(a, dict) else a for a in structured["requested_actions"]]
                 try:
+                    if any(not isinstance(a, dict) or not isinstance(a.get("name"), str) for a in proposed):
+                        raise ValueError("action names must be text")
                     message = assistant_message(structured["content"], proposed, names)
-                except (ValueError, RecursionError):
+                except (ValueError, TypeError, RecursionError):
                     message = None
             if message is None and os.environ.get("AI_SDLC_LOCAL_MAAS_DEBUG_INVALID"):
                 # Development diagnostics only: the rejected model text.
