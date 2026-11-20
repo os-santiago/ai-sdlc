@@ -65,9 +65,16 @@ def latest_generation(state_dir):
         if not (path.exists() or path.is_symlink()):
             break
         generation += 1
-    if generation == MAX_GENERATIONS:
-        raise ValueError('Release refresh generation bound reached')
     return generation
+
+
+def finished(record):
+    """A generation is finished only once its final active report is
+    published; 'active' alone may precede it (resumed, never skipped)."""
+    reports = record.get('installationReports') or []
+    return (record.get('completed') == 'active' and not record.get('transition') and record.get('recoveryPause') is None
+            and bool(reports) and reports[-1].get('configuration') == 'active'
+            and reports[-1].get('releaseRefreshUpgradeOperation') == record.get('nonce'))
 
 
 class CompletedJournalSource:
@@ -161,10 +168,10 @@ class ReleaseRefreshUpgrade(ModelUpstreamUpgrade):
         # Resume the latest generation unless it completed; then start the next.
         latest = latest_generation(config.state_dir)
         self.generation = max(latest, 1)
-        if latest and files.bounded_json(journal_paths(config.state_dir, latest)[0], 32*1024*1024).get('completed') == 'active':
-            if run is None and trust_path is None:
-                self.generation = latest
-            else:
+        if latest and finished(files.bounded_json(journal_paths(config.state_dir, latest)[0], 32*1024*1024)):
+            if run is not None or trust_path is not None:
+                if latest == MAX_GENERATIONS:
+                    raise ValueError('Release refresh generation bound reached')
                 self.generation = latest + 1
         self.source_browser = completed_source(config, self.generation)
         try:
