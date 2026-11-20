@@ -117,6 +117,9 @@ spec:
             {{- end }}
             - {name: contract, mountPath: /etc/ai-sdlc/contract, readOnly: true}
             - {name: authority, mountPath: /etc/ai-sdlc/authority, readOnly: true}
+{{- if $.Values.project.manifestJSON }}
+            - {name: project, mountPath: /etc/ai-sdlc/project, readOnly: true}
+{{- end }}
             - {name: identity, mountPath: /etc/ai-sdlc/identity, readOnly: true}
             {{- if and (eq $key "releaseManager") $.Values.publication.enabled }}
             - {name: publication-client, mountPath: /etc/ai-sdlc/publication, readOnly: true}
@@ -242,6 +245,10 @@ spec:
         {{- end }}
         - name: authority
           configMap: {name: {{ $.Values.authority.policyConfigMap }}}
+{{- if $.Values.project.manifestJSON }}
+        - name: project
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-project}
+{{- end }}
         - name: identity
           secret:
             secretName: {{ printf "%s-%s" $.Values.authority.identitySecretPrefix $component.name }}

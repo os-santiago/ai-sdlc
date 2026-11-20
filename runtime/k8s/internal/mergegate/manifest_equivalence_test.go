@@ -32,3 +32,18 @@ func TestBuiltinManifestsMatchCompiledMergePolicies(t *testing.T) {
 		}
 	}
 }
+
+func TestInstalledManifestProvidesTheMergePolicy(t *testing.T) {
+	if p := PolicyForRepository("example/service"); p.Repository != "" {
+		t.Fatal("unbound repository has a merge policy")
+	}
+	m, _ := project.Builtin(project.Saferus)
+	m.Repository = "example/service"
+	m.Merge.RulesetID = 42
+	project.SetInstalled(&m)
+	t.Cleanup(func() { project.SetInstalled(nil) })
+	p := PolicyForRepository("example/service")
+	if p.Repository != "example/service" || p.RulesetID != 42 || len(p.Required) != 1 || p.Required[0].Context != "quality" {
+		t.Fatal("manifest merge policy", p)
+	}
+}

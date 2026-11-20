@@ -109,6 +109,14 @@ func Open(ctx context.Context, name string) (*Component, error) {
 	return c, nil
 }
 
+// ProjectManifestPath is the read-only mount of the reviewed project manifest.
+func ProjectManifestPath() string {
+	if path := os.Getenv("AI_SDLC_PROJECT_MANIFEST_PATH"); path != "" {
+		return path
+	}
+	return "/etc/ai-sdlc/project/manifest.json"
+}
+
 func boundedFile(path string) ([]byte, error) {
 	if path == "" {
 		return nil, errors.New("trusted configuration path required")
@@ -136,6 +144,22 @@ func (c *Component) Authority() (authority.Policy, authority.Identity, error) {
 	p, err := authority.ParsePolicy(raw)
 	if err != nil {
 		return authority.Policy{}, authority.Identity{}, err
+	}
+	// The manifest is resolved from the same authenticated policy on every
+	// load, so delivery scope always follows the current reviewed policy.
+	if p.ProjectSHA256 != "" {
+		manifest, err := project.Load(ProjectManifestPath(), p)
+		if err != nil {
+			return authority.Policy{}, authority.Identity{}, errors.New("project manifest does not match the installed policy")
+		}
+		project.SetInstalled(&manifest)
+	} else {
+		// A mounted manifest the policy does not bind is a configuration
+		// error; without either, built-in references keep their behaviour.
+		if _, err := os.Lstat(ProjectManifestPath()); err == nil || !os.IsNotExist(err) {
+			return authority.Policy{}, authority.Identity{}, errors.New("project manifest is mounted but not bound by the policy")
+		}
+		project.SetInstalled(nil)
 	}
 	if os.Getenv("AI_SDLC_RUNTIME_MODE") == "shadow" && p.Autonomy != "shadow" {
 		return authority.Policy{}, authority.Identity{}, errors.New("shadow mode requires shadow authority ceiling")

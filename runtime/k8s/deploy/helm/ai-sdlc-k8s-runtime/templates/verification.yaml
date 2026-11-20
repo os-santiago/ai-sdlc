@@ -155,6 +155,9 @@ spec:
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
           volumeMounts:
             - {name: authority, mountPath: /etc/ai-sdlc/authority, readOnly: true}
+{{- if $.Values.project.manifestJSON }}
+            - {name: project, mountPath: /etc/ai-sdlc/project, readOnly: true}
+{{- end }}
             - {name: identity, mountPath: /etc/ai-sdlc/identity, readOnly: true}
             - {name: intake, mountPath: /etc/ai-sdlc/intake, readOnly: true}
             - {name: execution, mountPath: /etc/ai-sdlc/execution, readOnly: true}
@@ -224,6 +227,10 @@ spec:
         {{- end }}
         - name: authority
           configMap: {name: {{ .Values.authority.policyConfigMap }}}
+{{- if $.Values.project.manifestJSON }}
+        - name: project
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-project}
+{{- end }}
         - name: identity
           secret: {secretName: {{ printf "%s-verifier" .Values.authority.identitySecretPrefix }}, defaultMode: 0440}
         - name: intake

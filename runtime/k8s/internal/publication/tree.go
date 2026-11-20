@@ -41,12 +41,25 @@ func PrepareTree(c Command, source workspacebundle.Bundle, delta []byte) (TreePl
 	if !project.Supported(c.Repository) || c.SourceSHA != source.SourceSHA || c.IssueNumber < 1 || !candidateID.MatchString(c.CandidateID) || workspacebundle.Digest(delta) != c.DeltaSHA256 {
 		return TreePlan{}, ErrPublication
 	}
-	if _, err := verification.Prepare(c.Repository, verification.RecipeForRepository(c.Repository), "AI-SDLC validation recipe: "+verification.RecipeForRepository(c.Repository), source, delta); err != nil {
+	manifest, ok := project.Lookup(c.Repository)
+	if !ok {
 		return TreePlan{}, ErrPublication
 	}
+	if len(manifest.Recipes) > 0 {
+		// Reference repositories re-check their reviewed recipe's exact file set.
+		if _, err := verification.Prepare(c.Repository, verification.RecipeForRepository(c.Repository), "AI-SDLC validation recipe: "+verification.RecipeForRepository(c.Repository), source, delta); err != nil {
+			return TreePlan{}, ErrPublication
+		}
+	}
 	d, err := candidate.Decode(delta)
-	if err != nil || d.CandidateTreeSHA256 != c.CandidateTreeSHA256 {
+	if err != nil || d.CandidateTreeSHA256 != c.CandidateTreeSHA256 || len(d.Changes) == 0 || len(d.Changes) > manifest.Publication.MaxChangedFiles {
 		return TreePlan{}, ErrPublication
+	}
+	for _, change := range d.Changes {
+		// Publications only write regular files the manifest allows.
+		if !manifest.Publication.Allows(change.Path) || change.After == nil || change.After.Mode != 0644 {
+			return TreePlan{}, ErrPublication
+		}
 	}
 	result, err := candidate.Apply(source, d)
 	if err != nil {
