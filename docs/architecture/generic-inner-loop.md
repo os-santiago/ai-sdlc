@@ -14,7 +14,7 @@ never read from the target repository, an issue or model output.
 | Section | Content |
 |---|---|
 | `repository`, `baseBranch` | Lowercase GitHub repository and target branch |
-| `verification` | Pinned toolchain image (`repo@sha256:`), argv test command, working directory, timeout, resources, `network: none`, exit code and optional JUnit report, repeat count, test globs, harness globs |
+| `verification` | Pinned toolchain image (`repo@sha256:`), argv test command, working directory, timeout, resources, `network: none`, exit code and optional JUnit report, repeat count, test globs, harness globs, reviewed toolchain environment |
 | `publication` | Allow and deny path globs, file and byte limits |
 | `merge` | Ruleset, required checks, strict checks, resolved threads, human approvals |
 | `recipes` | Optional reviewed verification plug-ins (the per-issue oracles of the references) |
@@ -80,16 +80,36 @@ read-only reviewer receives the changed test files for that judgement.
 
 ## Sandbox
 
-Each run is an offline pod in the `ai-sdlc-offline` RuntimeClass (gVisor,
-`network=none`), with:
-- no service account token and no secrets;
-- a non-root user and a read-only root filesystem;
-- memory-backed scratch directories with size limits;
-- fixed resources and a hard deadline.
+Each run (baseline, cross, candidate 1..n) is its own offline pod in the
+`ai-sdlc-verifiers` namespace (single deny-all network policy, checked before
+every effect) and the `ai-sdlc-offline` RuntimeClass (gVisor, `network=none`):
 
-The source tree is imported into the pod by the verified workspace-bundle
-protocol. The toolchain image is chosen by the installation manifest, never by
-the repository.
+| Container | Image | Role |
+|---|---|---|
+| `install-runner` (init) | verifier | copies the static runner into a volume |
+| `transfer` (native sidecar) | model mailbox | idles in `workspace-transfer hold`; the controller's exec target |
+| `tests` | toolchain pinned by the installation manifest | runs the runner, which runs the repository's command |
+
+- No service account token, no secrets, no service links, `restartPolicy: Never`.
+- Non-root user, read-only root filesystem, all capabilities dropped,
+  RuntimeDefault seccomp; `/tmp` is the size-limited scratch (HOME, TMPDIR).
+- Guaranteed resources from the manifest; a hard deadline of pull budget,
+  ready wait, test timeout and margin.
+- The repository command reaches the runner only through an immutable
+  per-run settings ConfigMap, never the pod spec. The manifest may add a
+  reviewed toolchain environment (`verification.env`, for example `PATH`).
+
+**Sequence.** The controller:
+1. imports the exact tree through the sidecar (verified workspace-bundle
+   protocol), checking the receipt;
+2. publishes a ready marker bound to the pod UID, source and tree.
+
+The runner waits for that exact marker, verifies the tree digest again, turns
+non-dumpable (same-uid repository code cannot trace it or open its output),
+runs the command, kills any leftover process (it is the pid namespace's init),
+reads the report and prints one result line. No helper runs once the
+repository's code may run. The controller accepts the result only from a
+succeeded pod, from the same container instance, as exactly one line.
 
 ## Slices
 
@@ -98,5 +118,9 @@ the repository.
 3. Manifest-driven registry, publication and merge policy (#675)
 4. Decision rules (#676)
 5. Runner and JUnit parser (#677)
-6. Sandboxed three-tree workload and controller wiring, proof v2, reviewer input
+6. Sandboxed three-tree workload:
+   - pod-side marker, hold and runner install (#679)
+   - pod compiler (#680)
+   - trees and pod transport (#681)
+   - controller wiring, proof v2, reviewer input
 7. Installer support and a local kind run on a sample repository
