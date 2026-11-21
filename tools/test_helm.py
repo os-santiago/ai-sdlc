@@ -1,4 +1,5 @@
 """Test rendered installation contracts rather than template text."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -234,13 +235,15 @@ class ProjectManifestChartTests(unittest.TestCase):
         default = tests.render()
         self.assertEqual(default.returncode, 0, default.stderr)
         self.assertNotIn('name: ai-sdlc-project', default.stdout)
+        manifest = '{"version":"ai-sdlc.project/v1"}'
+        name = 'ai-sdlc-project-' + hashlib.sha256(manifest.encode()).hexdigest()[:12]
         with tempfile.NamedTemporaryFile('w', suffix='.yaml') as values:
             yaml.safe_dump({'project': {'manifestJSON': '{"version":"ai-sdlc.project/v1"}'}}, values)
             values.flush()
             rendered = tests.render('-f', values.name)
         self.assertEqual(rendered.returncode, 0, rendered.stderr)
         documents = [d for d in yaml.safe_load_all(rendered.stdout) if d and d.get('kind') == 'ConfigMap'
-                     and d['metadata']['name'] == 'ai-sdlc-project']
+                     and d['metadata']['name'] == name]
         self.assertEqual(len(documents), 1)
         self.assertIs(documents[0]['immutable'], True)
         self.assertEqual(documents[0]['data'], {'manifest.json': '{"version":"ai-sdlc.project/v1"}'})

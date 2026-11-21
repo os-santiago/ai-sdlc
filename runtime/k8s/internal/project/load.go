@@ -3,6 +3,7 @@ package project
 import (
 	"io"
 	"os"
+	"syscall"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 )
@@ -21,6 +22,11 @@ func Resolve(policy authority.Policy, installed []byte) (Manifest, error) {
 			return Manifest{}, ErrManifest
 		}
 		return m, nil
+	}
+	// A reference repository is governed only by its reviewed built-in
+	// manifest; an installation can never replace it.
+	if _, reference := Builtin(policy.Repository); reference {
+		return Manifest{}, ErrManifest
 	}
 	m, err := ParseManifest(installed)
 	if err != nil || m.Repository != policy.Repository || m.Digest() != policy.ProjectSHA256 {
@@ -41,11 +47,17 @@ func Load(path string, policy authority.Policy) (Manifest, error) {
 		}
 		return Resolve(policy, nil)
 	}
-	f, err := os.Open(path)
+	// The mount is a symlink farm, so the path is followed; the content is
+	// digest-checked. O_NONBLOCK and the regular-file check keep a FIFO or
+	// device from blocking the load.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return Manifest{}, ErrManifest
 	}
 	defer f.Close()
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		return Manifest{}, ErrManifest
+	}
 	raw, err := io.ReadAll(io.LimitReader(f, MaxManifestBytes+1))
 	if err != nil {
 		return Manifest{}, ErrManifest
