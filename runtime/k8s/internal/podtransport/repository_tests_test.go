@@ -71,6 +71,19 @@ func (c *testsCluster) current(t *TestsRun) core.Pod {
 	install := c.status("install-runner", init[0].Image, "a", completed)
 	install.State.Terminated.ContainerID = install.ContainerID
 	switch c.state {
+	case "initializing":
+		pod.Status.Phase = core.PodPending
+		copying := c.status("install-runner", init[0].Image, "a", running)
+		pod.Status.InitContainerStatuses = []core.ContainerStatus{copying, c.status("transfer", init[1].Image, "", creating)}
+		pod.Status.ContainerStatuses = []core.ContainerStatus{c.status("tests", tests.Image, "", creating)}
+	case "stopping":
+		pod.Status.Phase = core.PodRunning
+		transfer := c.status("transfer", init[1].Image, "b", core.ContainerState{Terminated: &core.ContainerStateTerminated{ExitCode: 137}})
+		transfer.State.Terminated.ContainerID = transfer.ContainerID
+		done := c.status("tests", tests.Image, "c", core.ContainerState{Terminated: &core.ContainerStateTerminated{ExitCode: 0}})
+		done.State.Terminated.ContainerID = done.ContainerID
+		pod.Status.InitContainerStatuses = []core.ContainerStatus{install, transfer}
+		pod.Status.ContainerStatuses = []core.ContainerStatus{done}
 	case "pending":
 		pod.Status.Phase = core.PodPending
 		pod.Status.InitContainerStatuses = []core.ContainerStatus{install, c.status("transfer", init[1].Image, "b", running)}
@@ -187,6 +200,37 @@ func TestTestsRunImportsReadiesAndReadsOneResult(t *testing.T) {
 	}
 	if run.Prepare(context.Background(), testsPodUID) == nil {
 		t.Fatal("a second Prepare ran helpers again")
+	}
+}
+
+func TestTestsRunToleratesInitCopyAndSidecarStopOrder(t *testing.T) {
+	p, source := testsFixturePod()
+	c := &testsCluster{state: "initializing", reply: honestReply(p, source), log: strings.Repeat(`{"exitCode":0}`+"\n", 2)}
+	run := testsServer(t, c)
+	go func() {
+		time.Sleep(400 * time.Millisecond)
+		c.mu.Lock()
+		c.state = "pending"
+		c.mu.Unlock()
+		time.Sleep(400 * time.Millisecond)
+		c.mu.Lock()
+		c.state = "running"
+		c.mu.Unlock()
+	}()
+	if err := run.Prepare(context.Background(), testsPodUID); err != nil {
+		t.Fatal("the init copy or a waiting sidecar failed Prepare", err)
+	}
+	c.mu.Lock()
+	c.state = "stopping"
+	c.mu.Unlock()
+	go func() {
+		time.Sleep(400 * time.Millisecond)
+		c.mu.Lock()
+		c.state = "succeeded"
+		c.mu.Unlock()
+	}()
+	if _, _, err := run.ReadResult(context.Background(), testsPodUID); err != nil {
+		t.Fatal("a sidecar stopped before the phase changed failed the run", err)
 	}
 }
 

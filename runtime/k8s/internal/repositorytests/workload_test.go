@@ -95,6 +95,8 @@ func TestCompilePodRefusesInvalidInput(t *testing.T) {
 		"repeat too big": func(p *Pod) { p.Verification.Repeat = 4 },
 		"reserved env":   func(p *Pod) { p.Verification.Env = map[string]string{"HOME": "/root"} },
 		"relative PATH":  func(p *Pod) { p.Verification.Env = map[string]string{"PATH": "bin:/usr/bin"} },
+		"writable PATH":  func(p *Pod) { p.Verification.Env = map[string]string{"PATH": "/workspaces/repository/bin:/usr/bin"} },
+		"scratch PATH":   func(p *Pod) { p.Verification.Env = map[string]string{"PATH": "/usr/bin:/tmp"} },
 		"loader env":     func(p *Pod) { p.Verification.Env = map[string]string{"LD_PRELOAD": "/x.so"} },
 	}
 	for name, mutate := range mutations {

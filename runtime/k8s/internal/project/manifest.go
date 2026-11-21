@@ -91,6 +91,13 @@ func validEnv(env map[string]string) bool {
 			if !strings.HasPrefix(dir, "/") || (dir != "/" && cleanPath(dir[1:]) != nil) {
 				return false
 			}
+			// Tools come from the toolchain image, never from directories the
+			// repository or the run can write.
+			for _, writable := range []string{"/workspaces", "/tmp", "/runner"} {
+				if dir == writable || strings.HasPrefix(dir, writable+"/") {
+					return false
+				}
+			}
 		}
 	}
 	return true

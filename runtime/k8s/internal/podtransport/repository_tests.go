@@ -130,6 +130,7 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 		images[c.Name] = c.Image
 	}
 	seen := map[string]bool{}
+	transferStopped := false
 	for _, s := range append(append([]core.ContainerStatus{}, pod.Status.InitContainerStatuses...), pod.Status.ContainerStatuses...) {
 		pin, known := images[s.Name]
 		if !known || seen[s.Name] || s.RestartCount != 0 || s.LastTerminationState.Terminated != nil || s.LastTerminationState.Running != nil ||
@@ -151,16 +152,20 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 			s.State.Terminated.ExitCode == 0 && s.State.Terminated.ContainerID == s.ContainerID
 		switch s.Name {
 		case "install-runner":
-			if !waiting && !completed {
+			if !waiting && !completed && !(running && o.phase == core.PodPending) {
 				return testsObservation{}, ErrTransport
 			}
 		case "transfer":
-			// The sidecar is stopped (exit 0 on SIGTERM) once the tests end.
-			if !waiting && !running && !(completed && o.phase == core.PodSucceeded) {
+			// The kubelet stops the sidecar once the tests end, possibly before
+			// the phase changes; its exit then no longer matters.
+			stopped := s.State.Terminated != nil && s.State.Running == nil && s.State.Waiting == nil && started
+			if !waiting && !running && !stopped {
 				return testsObservation{}, ErrTransport
 			}
 			if running {
 				o.transfer = s.ContainerID
+			} else if stopped {
+				transferStopped = true
 			}
 		case "tests":
 			switch {
@@ -173,7 +178,7 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 			}
 		}
 	}
-	if o.phase == core.PodSucceeded && o.testsState != "completed" {
+	if (o.phase == core.PodSucceeded || transferStopped) && o.testsState != "completed" {
 		return testsObservation{}, ErrTransport
 	}
 	return o, nil
