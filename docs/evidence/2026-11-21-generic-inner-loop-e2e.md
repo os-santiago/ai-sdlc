@@ -22,12 +22,14 @@ bytes, with a multibyte test. The run that delivered it:
 | Generation | Candidate captured in about 3.5 minutes |
 | Verification with the repository's own tests (`repository-tests/v1`) | **Passed**: baseline, cross and candidate pods ran `go test ./...` offline in gVisor; v2 behaviour proof recorded |
 | Independent review | **Approved**, with the verification summary in the reviewer's input |
-| Publication | The runtime opened the pull request |
+| Publication | The runtime opened the pull request with the installation's GitHub credential (the operator's account) |
 | Merge | The runtime merged it after the repository's required check passed |
 
 The issue label went on at 19:34 UTC and the merge landed at 19:43 UTC. The
 merged change (`[]rune` reversal plus a `TestReverseMultibyte` case) passes the
-repository's tests on its main branch.
+repository's tests on its main branch. It also added non-`gofmt` spacing to two
+existing test maps, which the reviewer did not flag. The review verdict comes
+from the runtime's records; on GitHub only the automated code review appears.
 
 ## Defects found and their resolution
 
@@ -41,12 +43,13 @@ had not reached before. Each stop exposed a defect, now fixed:
 | Verification | One candidate contained invisible U+200B characters from the model path and did not compile | Correctly refused; no change needed |
 | Generation budget | 16 model calls were fewer than SCC's 24 steps | One call per step for model upstreams (#692) |
 | Generation budget | Agents spent their steps trying to build and test in a workspace without a toolchain | Trusted workspace guidance in the prompt (#694) |
-| Verification | `FinishVerification` required the reference recipes' five resources | Per-recipe effect sets (#684) |
 | Publication | A schema allowlist limited publication to the two reference repositories | Migration 0038, with scope decided by the policy (#693) |
 
 The image pins came from exact `main` publications (#688, then later
-publications for the fixes above). The installer dry run also caught a chart
-guard that blocked publication for the manifest's repository (#684).
+publications for the fixes above). Before the first install, a dry-run `plan`
+and review comments caught two more defects in #684: a chart guard that
+blocked publication for the manifest's repository, and a proof contract that
+required the reference recipes' five resources.
 
 Every runtime change was merged with green CI and resolved review comments,
 after an independent audit.
