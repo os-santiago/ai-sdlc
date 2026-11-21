@@ -86,6 +86,9 @@ spec:
             {{- end }}
             - {name: build, mountPath: /etc/ai-sdlc/build, readOnly: true}
             - {name: authority, mountPath: /etc/ai-sdlc/authority, readOnly: true}
+{{- if $.Values.project.manifestJSON }}
+            - {name: project, mountPath: /etc/ai-sdlc/project, readOnly: true}
+{{- end }}
             - {name: outer-policy, mountPath: /etc/ai-sdlc/outer-policy, readOnly: true}
             - {name: trust, mountPath: /etc/ai-sdlc/provenance, readOnly: true}
             - {name: identity, mountPath: /etc/ai-sdlc/identity, readOnly: true}
@@ -101,6 +104,10 @@ spec:
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-build}
         - name: authority
           configMap: {name: {{ .Values.authority.policyConfigMap }}}
+{{- if $.Values.project.manifestJSON }}
+        - name: project
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.projectConfigName" $ }}}
+{{- end }}
         - name: outer-policy
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-outer-policy}
         - name: trust

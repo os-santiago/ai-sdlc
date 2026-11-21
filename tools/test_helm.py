@@ -247,6 +247,20 @@ class ProjectManifestChartTests(unittest.TestCase):
         self.assertEqual(len(documents), 1)
         self.assertIs(documents[0]['immutable'], True)
         self.assertEqual(documents[0]['data'], {'manifest.json': '{"version":"ai-sdlc.project/v1"}'})
+        pods = [d['spec']['template']['spec'] for d in yaml.safe_load_all(rendered.stdout)
+                if d and d.get('kind') in ('Deployment', 'StatefulSet')]
+        checked = 0
+        for pod in pods:
+            mounts = {m['name']: m for c in pod.get('containers', []) for m in c.get('volumeMounts', [])}
+            if 'authority' not in mounts:
+                continue
+            checked += 1
+            self.assertEqual(mounts['project']['mountPath'], '/etc/ai-sdlc/project')
+            self.assertIs(mounts['project']['readOnly'], True)
+            volumes = {v['name']: v for v in pod.get('volumes', [])}
+            self.assertEqual(volumes['project']['configMap']['name'], name)
+        self.assertGreater(checked, 0)
+        self.assertNotIn('/etc/ai-sdlc/project', default.stdout)
 
 
 if __name__ == '__main__': unittest.main()

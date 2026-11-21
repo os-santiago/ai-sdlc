@@ -32,3 +32,31 @@ func TestBuiltinManifestsMatchCompiledMergePolicies(t *testing.T) {
 		}
 	}
 }
+
+func TestInstalledManifestProvidesTheMergePolicy(t *testing.T) {
+	if p := PolicyForRepository("example/service"); p.Repository != "" {
+		t.Fatal("unbound repository has a merge policy")
+	}
+	m, _ := project.Builtin(project.Saferus)
+	m.Repository = "example/service"
+	m.Merge.RulesetID = 42
+	project.SetInstalled(&m)
+	t.Cleanup(func() { project.SetInstalled(nil) })
+	p := PolicyForRepository("example/service")
+	if p.Repository != "example/service" || p.RulesetID != 42 || len(p.Required) != 1 || p.Required[0].Context != "quality" || !p.valid() {
+		t.Fatal("manifest merge policy", p)
+	}
+	for name, change := range map[string]func(*project.Manifest){
+		"approvals": func(m *project.Manifest) { m.Merge.HumanApprovals = 1 },
+		"strict":    func(m *project.Manifest) { m.Merge.StrictChecks = false },
+		"threads":   func(m *project.Manifest) { m.Merge.ResolveThreads = false },
+		"branch":    func(m *project.Manifest) { m.BaseBranch = "develop" },
+	} {
+		unenforceable := m
+		change(&unenforceable)
+		project.SetInstalled(&unenforceable)
+		if PolicyForRepository("example/service").Repository != "" {
+			t.Fatal("unenforceable merge value accepted:", name)
+		}
+	}
+}
