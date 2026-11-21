@@ -1067,6 +1067,41 @@
         "manifestJSON": {
           "type": "string",
           "maxLength": 16384
+        },
+        "verifierQuota": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "requests.cpu": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,5}(m|Mi|Gi)?$"
+            },
+            "requests.memory": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,5}(m|Mi|Gi)?$"
+            },
+            "limits.cpu": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,5}(m|Mi|Gi)?$"
+            },
+            "limits.memory": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,5}(m|Mi|Gi)?$"
+            }
+          },
+          "anyOf": [
+            {
+              "maxProperties": 0
+            },
+            {
+              "required": [
+                "requests.cpu",
+                "requests.memory",
+                "limits.cpu",
+                "limits.memory"
+              ]
+            }
+          ]
         }
       }
     }

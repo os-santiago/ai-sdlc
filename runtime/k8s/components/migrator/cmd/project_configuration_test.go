@@ -58,3 +58,20 @@ func TestProjectInstallationCompilerRefusesReferenceRepositories(t *testing.T) {
 		t.Fatal("a manifest for a reference repository compiled")
 	}
 }
+
+func TestVerifierQuotaCoversThreeConcurrentRuns(t *testing.T) {
+	m := project.Manifest{Verification: &project.Verification{CPU: "500m", Memory: "512Mi"}}
+	quota, err := verifierQuota(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"requests.cpu": "1560m", "requests.memory": "1632Mi", "limits.cpu": "2100m", "limits.memory": "1728Mi"}
+	for k, v := range want {
+		if quota[k] != v {
+			t.Fatal(k, quota[k], v)
+		}
+	}
+	if q, err := verifierQuota(project.Manifest{}); err != nil || q != nil {
+		t.Fatal("a manifest without verification needs no quota")
+	}
+}

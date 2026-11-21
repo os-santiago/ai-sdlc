@@ -7,6 +7,7 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // compileProjectInstallation validates a reviewed project manifest against
@@ -37,11 +38,46 @@ func compileProjectInstallation(input io.Reader, output io.Writer) error {
 		return errors.New("a reference repository uses its built-in manifest")
 	}
 	canonical := manifest.Canonical()
+	quota, err := verifierQuota(manifest)
+	if err != nil {
+		return err
+	}
 	encoder := json.NewEncoder(output)
 	encoder.SetEscapeHTML(false)
 	return encoder.Encode(struct {
-		Version        string `json:"version"`
-		Manifest       string `json:"manifestJSON"`
-		ManifestSHA256 string `json:"manifestSHA256"`
-	}{"ai-sdlc.project-installation/v1", string(canonical), manifest.Digest()})
+		Version        string            `json:"version"`
+		Manifest       string            `json:"manifestJSON"`
+		ManifestSHA256 string            `json:"manifestSHA256"`
+		VerifierQuota  map[string]string `json:"verifierQuota,omitempty"`
+	}{"ai-sdlc.project-installation/v1", string(canonical), manifest.Digest(), quota})
+}
+
+// verifierQuota sizes the verifier namespace for the manifest's three
+// concurrent test runs. Each pod's effective requests are the tests
+// container's plus the transfer sidecar's (the init copy is smaller); its
+// limits add the sidecar's limits. The reference recipes need less.
+func verifierQuota(m project.Manifest) (map[string]string, error) {
+	if m.Verification == nil {
+		return nil, nil
+	}
+	cpu, err := resource.ParseQuantity(m.Verification.CPU)
+	if err != nil {
+		return nil, errors.New("invalid verification CPU")
+	}
+	memory, err := resource.ParseQuantity(m.Verification.Memory)
+	if err != nil {
+		return nil, errors.New("invalid verification memory")
+	}
+	sum := func(base resource.Quantity, extra string) string {
+		total := resource.Quantity{Format: base.Format}
+		for i := 0; i < 3; i++ {
+			total.Add(base)
+			total.Add(resource.MustParse(extra))
+		}
+		return total.String()
+	}
+	return map[string]string{
+		"requests.cpu": sum(cpu, "20m"), "requests.memory": sum(memory, "32Mi"),
+		"limits.cpu": sum(cpu, "200m"), "limits.memory": sum(memory, "64Mi"),
+	}, nil
 }

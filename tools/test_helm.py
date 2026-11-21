@@ -263,4 +263,35 @@ class ProjectManifestChartTests(unittest.TestCase):
         self.assertNotIn('/etc/ai-sdlc/project', default.stdout)
 
 
+    def test_repository_tests_get_exec_and_a_sized_quota_only_with_a_manifest(self):
+        tests = ChartTests()
+        base = ['--set', 'runtime.mode=verification', '--set', 'verifier.digest=sha256:' + 'a' * 64]
+        def verifier_objects(rendered):
+            docs = [d for d in yaml.safe_load_all(rendered.stdout) if d]
+            role = next(d for d in docs if d['kind'] == 'Role' and d['metadata']['name'] == 'verification-controller')
+            quota = next(d for d in docs if d['kind'] == 'ResourceQuota' and d['metadata']['name'] == 'verifier-bounds')
+            return [r for rule in role['rules'] for r in rule['resources']], quota['spec']['hard']
+        default = tests.render(*base)
+        self.assertEqual(default.returncode, 0, default.stderr)
+        resources, hard = verifier_objects(default)
+        self.assertNotIn('pods/exec', resources)
+        self.assertEqual(hard['requests.cpu'], '1')
+        values = {'project': {'manifestJSON': '{"version":"ai-sdlc.project/v1"}', 'verifierQuota': {
+            'requests.cpu': '1560m', 'requests.memory': '1632Mi', 'limits.cpu': '2100m', 'limits.memory': '1728Mi'}}}
+        with tempfile.NamedTemporaryFile('w', suffix='.yaml') as file:
+            yaml.safe_dump(values, file)
+            file.flush()
+            rendered = tests.render(*base, '-f', file.name)
+        self.assertEqual(rendered.returncode, 0, rendered.stderr)
+        resources, hard = verifier_objects(rendered)
+        self.assertIn('pods/exec', resources)
+        self.assertEqual((hard['requests.cpu'], hard['requests.memory'], hard['limits.cpu'], hard['limits.memory'], hard['pods']),
+                         ('1560m', '1632Mi', '2100m', '1728Mi', '4'))
+        values['project']['verifierQuota']['requests.cpu'] = '1; rm'
+        with tempfile.NamedTemporaryFile('w', suffix='.yaml') as file:
+            yaml.safe_dump(values, file)
+            file.flush()
+            self.assertNotEqual(tests.render(*base, '-f', file.name).returncode, 0)
+
+
 if __name__ == '__main__': unittest.main()
