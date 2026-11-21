@@ -294,4 +294,24 @@ class ProjectManifestChartTests(unittest.TestCase):
             self.assertNotEqual(tests.render(*base, '-f', file.name).returncode, 0)
 
 
+    def test_publication_accepts_only_the_policy_bound_manifest_repository(self):
+        tests = ChartTests()
+        manifest = json.dumps({'version': 'ai-sdlc.project/v1', 'repository': 'example/service'}, separators=(',', ':'))
+        digest = hashlib.sha256(manifest.encode()).hexdigest()
+        def render(repository, bound):
+            values = {'runtime': {'mode': 'verification'}, 'verifier': {'digest': 'sha256:' + 'a' * 64},
+                      'review': {'enabled': True, 'configJSON': '{}'}, 'publication': {'enabled': True},
+                      'project': {'manifestJSON': manifest},
+                      'authority': {'policyJSON': json.dumps({'repository': repository, 'projectSHA256': bound})}}
+            with tempfile.NamedTemporaryFile('w', suffix='.json') as file:
+                json.dump(values, file)
+                file.flush()
+                return tests.render('-f', file.name)
+        accepted = render('example/service', digest)
+        self.assertNotIn('supports only reviewed', accepted.stderr)
+        for repository, bound in (('example/other', digest), ('example/service', 'b' * 64), ('example/service', '')):
+            refused = render(repository, bound)
+            self.assertIn('supports only reviewed', refused.stderr, (repository, bound))
+
+
 if __name__ == '__main__': unittest.main()

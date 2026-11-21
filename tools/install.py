@@ -517,8 +517,18 @@ def _main(argv, stack):
     if not args.configure_prepared:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as preview:
             preview_values = dict(execution_values or {})
+            if args.merge:
+                # The native rule is reconciled only by local; the preview needs
+                # a placeholder for the chart's mandatory installed policy.
+                preview_values.setdefault('merge', {})['configJSON'] = json.dumps({'preview': True})
             if args.publication:
                 preview_values['authority'] = {'policyJSON': json.dumps({'repository': args.repository})}
+                if project_manifest is not None:
+                    # The preview binds this manifest as the policy will after compilation.
+                    preview_json = json.dumps(project_manifest, sort_keys=True, separators=(',', ':'))
+                    preview_values['project'] = {'manifestJSON': preview_json}
+                    preview_values['authority'] = {'policyJSON': json.dumps({'repository': args.repository,
+                        'projectSHA256': hashlib.sha256(preview_json.encode()).hexdigest()})}
             json.dump(preview_values, preview); preview.flush()
             run(helm_args + ['-f', preview.name], stdout=subprocess.DEVNULL)
     if args.command == 'plan':
