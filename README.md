@@ -57,7 +57,12 @@ chain as well as HTTP/TLS checks; a component test is not autonomous E2E proof.
 
 ## Evidence
 
-The most recent issue-only run (2026-11-20) went from a single authorized issue
+On 2026-11-21 a repository that is not a built-in reference went from one
+authorized issue to a merged pull request using only a reviewed project
+manifest. Its own test suite verified the change offline, and an independent
+review approved it ([generic inner loop E2E](docs/evidence/2026-11-21-generic-inner-loop-e2e.md)).
+
+The earlier issue-only run (2026-11-20) went from a single authorized issue
 event to a merged pull request without human intervention. Review, publication
 and merge were performed by the runtime, and the signed build ran. It then
 stopped fail-closed at provenance and at build capacity, exposing two
