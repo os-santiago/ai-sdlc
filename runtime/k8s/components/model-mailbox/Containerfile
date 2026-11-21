@@ -8,11 +8,13 @@ COPY components/model-mailbox ./components/model-mailbox
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/model-mailbox ./components/model-mailbox/cmd \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/workspace-transfer ./components/model-mailbox/workspace-cmd \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/executor-control ./components/model-mailbox/executor-cmd \
-    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/executor-render ./components/model-mailbox/render-cmd
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/executor-render ./components/model-mailbox/render-cmd \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/repository-tests ./components/model-mailbox/tests-cmd
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/model-mailbox /model-mailbox
 COPY --from=build /out/workspace-transfer /workspace-transfer
 COPY --from=build /out/executor-control /executor-control
 COPY --from=build /out/executor-render /executor-render
+COPY --from=build /out/repository-tests /repository-tests
 USER 1000:1000
 ENTRYPOINT ["/model-mailbox"]

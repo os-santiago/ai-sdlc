@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repositorytests"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
 // Fixed paths of the offline repository-tests pod.
@@ -23,17 +26,41 @@ const (
 	readyWait    = repositorytests.ReadySeconds * time.Second
 )
 
+// Command repository-tests ships in the model-mailbox image (static, no
+// shell). An init container copies it into the offline test pod, where it
+// runs inside the repository's pinned toolchain image:
+//
+//	repository-tests install <dest>
+//	repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs>
+func main() {
+	var err error
+	switch {
+	case len(os.Args) >= 2 && os.Args[1] == "install":
+		err = installRunner(os.Args[2:], "/proc/self/exe")
+	case len(os.Args) >= 2 && os.Args[1] == "run":
+		err = runRepositoryTests(context.Background(), os.Args[2:], os.Stdout, testsParent, testsUIDPath)
+	default:
+		err = errors.New("usage: repository-tests install|run ...")
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
 // runRepositoryTests is the entrypoint copied into an offline verification
 // pod. It waits for the transfer sidecar's ready marker for this pod and
-// tree, checks the imported tree, runs the repository's test command once
-// and writes exactly one bounded result line to stdout. It opens no
-// database, network or cluster connection and loads no signing identity.
+// tree, checks the imported tree, runs the repository's test command <runs>
+// times (each on a fresh copy of the verified tree, made before any run) and
+// writes one bounded result line per run to stdout. It opens no database,
+// network or cluster connection and loads no signing identity.
 //
-//	component repository-tests-run <verification.json> <scratch> <source-sha> <tree-sha256>
+//	repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs>
 func runRepositoryTests(ctx context.Context, args []string, out io.Writer, parent, uidPath string) error {
-	if len(args) != 4 {
-		return errors.New("usage: repository-tests-run <verification.json> <scratch> <source-sha> <tree-sha256>")
+	if len(args) != 5 || len(args[4]) != 1 || args[4][0] < '1' || args[4][0] > '3' {
+		return errors.New("usage: repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs 1-3>")
 	}
+	runs := int(args[4][0] - '0')
 	f, err := os.Open(args[0])
 	if err != nil {
 		return errors.New("verification settings unavailable")
@@ -47,12 +74,7 @@ func runRepositoryTests(ctx context.Context, args []string, out io.Writer, paren
 	if authority.DecodeStrict(raw, &v) != nil {
 		return errors.New("invalid verification settings")
 	}
-	// Validate through a manifest wrapper so the runner accepts only settings
-	// the reviewed manifest rules allow.
-	check := project.Manifest{Version: project.ManifestVersion, Repository: "verification/settings", BaseBranch: "main",
-		Verification: &v, Publication: project.Publication{Allow: []string{"**"}, MaxChangedFiles: 1, MaxChangedBytes: 1, MaxFileBytes: 1},
-		Merge: project.Merge{RulesetID: 1, Required: []project.Check{{Context: "settings", AppID: 1}}}}
-	if check.Validate() != nil {
+	if v.Validate() != nil || (runs != 1 && runs != v.Repeat) {
 		return errors.New("invalid verification settings")
 	}
 	uid, err := readUID(uidPath)
@@ -74,12 +96,34 @@ func runRepositoryTests(ctx context.Context, args []string, out io.Writer, paren
 	if unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0) != nil {
 		return errors.New("runner isolation unavailable")
 	}
-	runner := repositorytests.Runner{Verification: v, Workspace: filepath.Join(parent, "repository"), Scratch: args[1], ReapAll: os.Getpid() == 1}
-	result, err := runner.Run(ctx)
-	if err != nil {
-		return err
+	// Every repetition gets its own copy of the verified tree, all made
+	// before any repository code runs. A run can still alter later copies;
+	// that can only make the repetitions disagree, which fails as uncertain.
+	workspaces := []string{filepath.Join(parent, "repository")}
+	if runs > 1 {
+		tree, err := workspacebundle.Export(parent, args[2])
+		if err != nil {
+			return errors.New("imported tree does not match")
+		}
+		for i := 2; i <= runs; i++ {
+			copyParent := filepath.Join(args[1], ".runs", strconv.Itoa(i))
+			if os.MkdirAll(copyParent, 0o700) != nil || workspacebundle.Import(copyParent, tree) != nil {
+				return errors.New("run copy failed")
+			}
+			workspaces = append(workspaces, filepath.Join(copyParent, "repository"))
+		}
 	}
-	_, err = out.Write(append(result.Encode(), '\n'))
+	var lines []byte
+	for _, workspace := range workspaces {
+		runner := repositorytests.Runner{Verification: v, Workspace: workspace, Scratch: args[1], ReapAll: os.Getpid() == 1}
+		result, err := runner.Run(ctx)
+		if err != nil {
+			return err
+		}
+		lines = append(append(lines, result.Encode()...), '\n')
+	}
+	// One write after every run, so a failure leaves no partial result set.
+	_, err = out.Write(lines)
 	return err
 }
 
@@ -99,12 +143,12 @@ func readUID(path string) (string, error) {
 // installRunner copies this static binary to dest, which must not exist, so
 // an init container of a restartPolicy Never pod (a failed copy fails the
 // pod, never retries over a partial file) can place the runner into a volume
-// the toolchain image mounts read-only. The verifier image has no shell or cp.
+// the toolchain image mounts read-only. The mailbox image has no shell or cp.
 //
-//	component install-runner <dest>
+//	repository-tests install <dest>
 func installRunner(args []string, self string) error {
 	if len(args) != 1 || !filepath.IsAbs(args[0]) || filepath.Clean(args[0]) != args[0] {
-		return errors.New("usage: install-runner <absolute-destination>")
+		return errors.New("usage: repository-tests install <absolute-destination>")
 	}
 	src, err := os.Open(self)
 	if err != nil {
@@ -126,4 +170,4 @@ func installRunner(args []string, self string) error {
 }
 
 // maxRunnerBytes bounds the copied binary.
-const maxRunnerBytes = 256 * 1024 * 1024
+const maxRunnerBytes = 96 * 1024 * 1024

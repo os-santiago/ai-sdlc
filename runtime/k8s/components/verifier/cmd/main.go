@@ -30,18 +30,6 @@ func main() {
 		}
 		return
 	}
-	if len(os.Args) >= 2 && os.Args[1] == "repository-tests-run" {
-		if e := runRepositoryTests(context.Background(), os.Args[2:], os.Stdout, testsParent, testsUIDPath); e != nil {
-			log.Fatal(e)
-		}
-		return
-	}
-	if len(os.Args) >= 2 && os.Args[1] == "install-runner" {
-		if e := installRunner(os.Args[2:], "/proc/self/exe"); e != nil {
-			log.Fatal(e)
-		}
-		return
-	}
 	if len(os.Args) != 1 {
 		log.Fatal("unknown verifier operation")
 	}

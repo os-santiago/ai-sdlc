@@ -45,7 +45,7 @@ func newTestsPod(t *testing.T, v project.Verification) testsPod {
 	return p
 }
 
-func (p testsPod) args() []string { return []string{p.settings, p.scratch, p.source, p.tree} }
+func (p testsPod) args() []string { return []string{p.settings, p.scratch, p.source, p.tree, "1"} }
 
 func (p testsPod) ready(t *testing.T) {
 	t.Helper()
@@ -74,8 +74,34 @@ func TestRepositoryTestsEntrypointWritesOneResultLine(t *testing.T) {
 	if run, err := repositorytests.ParseRun([]byte(line)); err != nil || run.ExitCode != 7 {
 		t.Fatal("the command must run inside the imported repository", run, err)
 	}
-	if err := runRepositoryTests(context.Background(), p.args()[:3], &bytes.Buffer{}, p.parent, p.uidPath); err == nil {
-		t.Fatal("wrong arguments accepted")
+	for _, bad := range [][]string{p.args()[:4], append(p.args()[:4], "0"), append(p.args()[:4], "4"), append(p.args()[:4], "2")} {
+		if err := runRepositoryTests(context.Background(), bad, &bytes.Buffer{}, p.parent, p.uidPath); err == nil {
+			t.Fatal("wrong arguments accepted", bad[4:])
+		}
+	}
+}
+
+func TestRepeatedRunsEachGetAFreshTree(t *testing.T) {
+	v := settings()
+	v.Repeat = 3
+	// Each run sees the pristine tree and then dirties it.
+	v.Command = []string{"/bin/sh", "-c", "test ! -e dirty && touch dirty && exit 5"}
+	p := newTestsPod(t, v)
+	p.ready(t)
+	args := p.args()
+	args[4] = "3"
+	var out bytes.Buffer
+	if err := runRepositoryTests(context.Background(), args, &out, p.parent, p.uidPath); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatal("one line per run", out.String())
+	}
+	for _, line := range lines {
+		if run, err := repositorytests.ParseRun([]byte(line)); err != nil || run.ExitCode != 5 {
+			t.Fatal("a run did not see a fresh tree", line, err)
+		}
 	}
 }
 

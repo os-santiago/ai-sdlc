@@ -58,6 +58,11 @@ func (v *VerificationResources) fetch(ctx context.Context, endpoint, accept stri
 	if err != nil {
 		return nil, err
 	}
+	return r.fetch(ctx, endpoint, accept, limit)
+}
+
+// fetch is one bounded GET with the client's identity and no redirects.
+func (r *Resources) fetch(ctx context.Context, endpoint, accept string, limit int64) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -88,7 +93,12 @@ func (v *VerificationResources) isolation(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	raw, err := v.fetch(ctx, r.client.base+"/apis/networking.k8s.io/v1/namespaces/ai-sdlc-verifiers/networkpolicies?limit=16", "application/json", 65536)
+	return r.isolation(ctx)
+}
+
+// isolation requires the verifier namespace's single deny-all policy.
+func (r *Resources) isolation(ctx context.Context) error {
+	raw, err := r.fetch(ctx, r.client.base+"/apis/networking.k8s.io/v1/namespaces/ai-sdlc-verifiers/networkpolicies?limit=16", "application/json", 65536)
 	if err != nil {
 		return err
 	}
