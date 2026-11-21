@@ -11,7 +11,7 @@ Milestones refer to the [roadmap](roadmap.md). Last reviewed 2026-11-21 (alpha).
 | Issue intake (authorized label event) | Generic | Authorized actor IDs are configured per installation. |
 | Admission (reviewable criteria, proposed revision) | Generic | Rejects unreviewable criteria and proposes a ready revision. |
 | Planning and work items | Generic | |
-| Generation through a model service | Generic | OpenAI-compatible, Anthropic and agent-CLI adapters, selectable at installation (`--model-upstream`). A startup benchmark derives timeouts. The generator's workspace cannot build or run the repository's tests; the step budget (24) is still exhausted in a share of runs. |
+| Generation through a model service | Generic | The bundled agent CLI (Codex) by default, or one OpenAI-compatible endpoint on a private address selected at installation (`--model-upstream`). The Anthropic adapter exists but is not selectable at installation. A startup benchmark derives timeouts. The generator's workspace cannot build or run the repository's tests; the step budget (24) is still exhausted in a share of runs. |
 | Behaviour verification | Generic (alpha) | `repository-tests/v1`: the repository's own test command runs on the base, cross (base plus the new tests) and candidate trees in offline gVisor pods, with the toolchain image pinned by the project manifest. A JUnit report gives per-test evidence; without one the decision is *weak* and the reviewer judges it. The two reference repositories keep their embedded oracles. |
 | Independent review | Generic | Read-only reviewer bound by a guarded answer contract. |
 | Bounded repair after review | Generic (opt-in) | One repair attempt from the original authority. |
@@ -24,7 +24,7 @@ Milestones refer to the [roadmap](roadmap.md). Last reviewed 2026-11-21 (alpha).
 | Installation (delivery) | One command for the inner loop | `./install.sh local … --project-manifest … --model-upstream …` (first run creates the merge rule and asks for its ID). The outer loop still needs separate reviewed transitions (M2, M3). |
 | Upgrades | Bespoke per change | Closed, journaled transitions. The closest to generic is `release-refresh` (images only). Existing installations cannot yet apply migration 0038 (the tools fail closed) (M2). |
 | Approval windows | Expire (12 to 24 h) | Renewal needs reviewed documents and a newer publication (M2). |
-| Retry after a fail-closed stop | Not supported | Build and provenance are one attempt per merge (M2). |
+| Retry after a fail-closed stop | Partial | Inner loop: removing and re-adding the trigger label plans a new work item with a fresh execution. Outer loop: build and provenance are one attempt per merge (M2). |
 | Operator visibility | Limited | Several components log "stopped safely" without a reason (M2). |
 | Platforms | kind on Linux amd64 | Build slots use node tmpfs mounts through the container runtime, the registry is a managed local one, and installation needs host access. Remote clusters and OpenShift are not validated (M5). |
 

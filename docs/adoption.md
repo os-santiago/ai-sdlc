@@ -66,8 +66,9 @@ With the bundled Codex CLI, run the same command without
 
 The first run creates the native merge rule on GitHub, then stops and prints
 its ID. Set `merge.rulesetID` in the manifest to that ID and run the same
-command again. Wait until both model gateways report their startup benchmark
-before you file work.
+command again. With an OpenAI-compatible endpoint, wait until both model
+gateways report their startup benchmark before you file work. The bundled
+Codex CLI has no benchmark.
 
 ## 5. Deliver an issue
 
