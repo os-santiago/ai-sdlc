@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repositorytests"
 	"time"
 	"unicode/utf8"
 
@@ -137,6 +139,9 @@ func prepare(ctx context.Context, db *store.DB, policy verificationflow.PolicyLo
 	}
 	scopeRaw, _ := json.Marshal(scope)
 	reviewBody := snapshot.Issue.Body + "\n\nVerified candidate file paths (read these changes and their tests):\n" + string(scopeRaw)
+	if summary := verificationSummary(behavior); summary != "" {
+		reviewBody += "\n\n" + summary
+	}
 	a := executor.Assignment{Version: executor.AssignmentVersion, WorkItemID: command.WorkItemID, Attempt: 1, Repository: command.Repository, SourceSHA: command.SourceSHA, TreeSHA256: treeDigest, ProfileSHA256: authority.Digest(config.Profile), AuthorityRevision: command.AuthorityRevision, IssueNumbers: []int{command.IssueNumber}, Title: snapshot.Issue.Title, Body: reviewBody, AcceptanceCriteria: normalizedevent.ExtractAcceptanceCriteria(snapshot.Issue.Body), ExpiresAt: command.ExpiresAt}
 	assignment, _ := json.Marshal(a)
 	if _, e = executor.ParseAssignment(assignment, authority.Digest(assignment), time.Now()); e != nil {
@@ -185,4 +190,24 @@ func (a currentAuthority) AuthorizeReview(ctx context.Context, run store.ReviewR
 		return time.Time{}, ErrReview
 	}
 	return claim.Until, nil
+}
+
+// verificationSummary tells the reviewer what the repository's own tests
+// showed (v2 proofs only). A weak decision needs the reviewer's judgement.
+func verificationSummary(b verificationflow.BehaviorProof) string {
+	if b.Version != verificationflow.BehaviorProofV2 {
+		return ""
+	}
+	var d repositorytests.Decision
+	if authority.DecodeStrict(b.Decision, &d) != nil {
+		return ""
+	}
+	s := d.Summary
+	files, _ := json.Marshal(s.ChangedTestFiles)
+	text := fmt.Sprintf("Verification with the repository's own tests: baseline exit %d, candidate tests on the base code exit %d, candidate exit %d over %d runs, %d failing-to-passing tests, %d regressions. Changed test files: %s.",
+		s.BaselineExitCode, s.CrossExitCode, s.CandidateExitCode, s.CandidateRuns, s.FailToPass, s.Regressions, files)
+	if s.Weak {
+		text += " This is a weak result (no per-test report): it shows only that the changed tests fail on the base code. Judge whether they test the requested behaviour, rather than failing for another reason."
+	}
+	return text
 }
