@@ -99,11 +99,15 @@ func (c *Client) Fetch(ctx context.Context, sha string) (workspacebundle.Bundle,
 	}
 }
 
-// networkFailure reports a connection-level failure (dial, reset, timeout,
-// truncated stream). Certificate and protocol violations are not retried.
+// networkFailure reports a connection-level failure before a response (dial,
+// reset, timeout, connection closed before the headers). TLS certificate,
+// alert and record failures and protocol violations are not retried; a
+// truncated response body is a contract failure, never retried.
 func networkFailure(err error) bool {
 	var certificate *tls.CertificateVerificationError
-	if errors.As(err, &certificate) {
+	var alert tls.AlertError
+	var record tls.RecordHeaderError
+	if errors.As(err, &certificate) || errors.As(err, &alert) || errors.As(err, &record) {
 		return false
 	}
 	var op *net.OpError

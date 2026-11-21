@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -224,7 +225,7 @@ func TestManifestHTTPFailureIsBoundedAndOnlyTransientFailuresRetry(t *testing.T)
 	}
 }
 
-func TestATransientServerErrorRecoversOnRetry(t *testing.T) {
+func TestATransientServerErrorIsRetriedAndAContractFailureIsNot(t *testing.T) {
 	retryDelay = func(int) time.Duration { return time.Millisecond }
 	t.Cleanup(func() { retryDelay = func(attempt int) time.Duration { return time.Duration(attempt) * time.Second } })
 	var calls atomic.Int32
@@ -241,5 +242,57 @@ func TestATransientServerErrorRecoversOnRetry(t *testing.T) {
 	c.http.Transport.(*http.Transport).TLSClientConfig.RootCAs = server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
 	if _, err := c.Fetch(context.Background(), testSHA); err == nil || calls.Load() != 2 {
 		t.Fatalf("the 502 must be retried once and the contract violation must not: calls=%d", calls.Load())
+	}
+}
+
+func TestAClosedConnectionIsRetriedAndACertificateFailureIsNot(t *testing.T) {
+	retryDelay = func(int) time.Duration { return time.Millisecond }
+	t.Cleanup(func() { retryDelay = func(attempt int) time.Duration { return time.Duration(attempt) * time.Second } })
+	var calls, connections atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			conn.Close() // close before any response
+		}
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections.Add(1)
+		}
+	}
+	server.StartTLS()
+	defer server.Close()
+	c, _ := New("fixture/product", "")
+	c.api = server.URL
+	c.http.Transport.(*http.Transport).TLSClientConfig.RootCAs = server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+	if _, err := c.Fetch(context.Background(), testSHA); !errors.Is(err, ErrSource) || calls.Load() != fetchAttempts {
+		t.Fatalf("a closed connection must be retried boundedly: calls=%d err=%v", calls.Load(), err)
+	}
+	connections.Store(0)
+	untrusted, _ := New("fixture/product", "")
+	untrusted.api = server.URL // no fixture CA: the certificate is rejected
+	if _, err := untrusted.Fetch(context.Background(), testSHA); !errors.Is(err, ErrSource) || connections.Load() != 1 {
+		t.Fatalf("a certificate failure must not be retried: connections=%d", connections.Load())
+	}
+}
+
+func TestCancellationDuringBackoffStopsRetrying(t *testing.T) {
+	retryDelay = func(int) time.Duration { return time.Minute }
+	t.Cleanup(func() { retryDelay = func(attempt int) time.Duration { return time.Duration(attempt) * time.Second } })
+	var calls atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(503)
+	}))
+	defer server.Close()
+	c, _ := New("fixture/product", "")
+	c.api = server.URL
+	c.http.Transport.(*http.Transport).TLSClientConfig.RootCAs = server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, err := c.Fetch(ctx, testSHA); !errors.Is(err, ErrSource) || calls.Load() != 1 || time.Since(started) > 5*time.Second {
+		t.Fatalf("cancellation must end the backoff: calls=%d", calls.Load())
 	}
 }
