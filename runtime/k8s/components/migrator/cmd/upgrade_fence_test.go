@@ -61,13 +61,21 @@ func upgradeProtocolFixture(t *testing.T, schema ...int) (*store.DB, string, str
 	if len(schema) > 0 {
 		count = schema[0]
 	}
-	if count < 34 || count > 37 {
+	if count < 34 || count > 38 {
 		t.Fatal("unsupported fixture schema")
 	}
 	// Owned disposable fixtures may select the historical schema prefix.
 	// Remove the later schema here, never from an operational database.
-	if len(source) != 37 || source[35].Filename != "0036_review_feedback.sql" || source[36].Filename != "0037_review_repair.sql" {
+	if len(source) != 38 || source[35].Filename != "0036_review_feedback.sql" || source[36].Filename != "0037_review_repair.sql" || source[37].Filename != "0038_generic_publication_scope.sql" {
 		t.Fatal("fixture catalog changed")
+	}
+	if count < 38 {
+		if _, err = db.Pool.ExecContext(ctx, `ALTER TABLE public.publication_requests DROP CONSTRAINT publication_requests_repository_check;
+ ALTER TABLE public.publication_requests ADD CONSTRAINT publication_requests_repository_check CHECK(repository IN ('os-santiago/homedir', 'os-santiago/saferus'));
+ DELETE FROM public.schema_migrations WHERE filename='0038_generic_publication_scope.sql'`); err != nil {
+			t.Fatal(err)
+		}
+		source = source[:37]
 	}
 	if count < 37 {
 		if _, err = db.Pool.ExecContext(ctx, `DROP POLICY repair_worker_feedback_reader ON public.review_feedback;

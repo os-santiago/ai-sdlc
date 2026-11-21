@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -12,7 +14,32 @@ import (
 // every stage, including feedback, repair and browser records, and refuses
 // only in-flight model-dependent work.
 func TestConfigurationUpgradeFenceAdmitsCompletedHistoryAndRejectsInFlightWork(t *testing.T) {
-	db, name, source := upgradeFenceFixture(t, 37)
+	// The current catalog, and the current catalog without its relaxation
+	// migrations (which the configuration upgrade's migrator job applies).
+	for _, count := range []int{38, 37} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) { configurationFenceAt(t, count) })
+	}
+}
+
+func TestConfigurationSourceAdmitsOnlyMissingRelaxations(t *testing.T) {
+	catalog, err := MigrationCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n := 30; n <= len(catalog); n++ {
+		if configurationSource(catalog[:n]) != (n >= len(catalog)-len(RelaxationMigrations)) {
+			t.Fatal("configuration source", n)
+		}
+	}
+	changed := slices.Clone(catalog)
+	changed[len(changed)-1].SHA256 = strings.Repeat("0", 64)
+	if configurationSource(changed) {
+		t.Fatal("a changed migration was admitted")
+	}
+}
+
+func configurationFenceAt(t *testing.T, count int) {
+	db, name, source := upgradeFenceFixture(t, count)
 	ctx := context.Background()
 	if _, err := db.Pool.Exec(browserBridgeHistory); err != nil {
 		t.Fatal(err)
