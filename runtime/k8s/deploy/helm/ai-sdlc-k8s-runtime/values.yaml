@@ -30,6 +30,11 @@ authority:
   installationUID: ""
   identitySecretPrefix: ai-sdlc-identity
   databaseSecretPrefix: ai-sdlc-database
+# Optional reviewed project manifest (ai-sdlc.project/v1) for a repository
+# that is not a built-in reference. Its digest must be bound into the
+# authority policy as projectSHA256; empty renders nothing.
+project:
+  manifestJSON: ""
 migrator:
   enabled: true
   digest: ""
