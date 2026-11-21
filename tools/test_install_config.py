@@ -29,6 +29,27 @@ class InstallationConfigurationTests(unittest.TestCase):
         self.assertEqual(run.call_count, 1)
         self.assertEqual(run.call_args.args[0][:2], ['helm', 'template'])
 
+    def test_a_project_manifest_plans_publication_for_its_repository(self):
+        manifest = {'version': 'ai-sdlc.project/v1', 'repository': 'example/service', 'baseBranch': 'main',
+                    'verification': {}, 'merge': {'rulesetID': 1, 'required': [{'context': 'test', 'appID': 15368}],
+                                                  'strictChecks': True, 'resolveThreads': True, 'humanApprovals': 0}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'project.json'
+            path.write_text(json.dumps(manifest))
+            config = dict(self.fixture, repository='example/service', profile='verification', independentReview=True,
+                          publication=True, projectManifest='project.json', images=str((install.ROOT / 'examples' / self.fixture['images']).resolve()))
+            (Path(directory) / 'install.json').write_text(json.dumps(config))
+            output = io.StringIO()
+            with patch.object(install, 'tools', return_value={'helm': 'helm'}), patch.object(install, 'run'), contextlib.redirect_stdout(output):
+                self.assertEqual(install.main(['plan', '--config', str(Path(directory) / 'install.json')]), 0)
+            plan = json.loads(output.getvalue())
+            self.assertTrue(plan['publicationEnabled'])
+            self.assertEqual(plan['repository'], 'example/service')
+            del config['projectManifest']
+            (Path(directory) / 'install.json').write_text(json.dumps(config))
+            with self.assertRaises(ValueError):
+                install_config.load(Path(directory) / 'install.json')
+
     def test_rejects_untrusted_configuration_before_tools(self):
         invalid = [dict(self.fixture, token='synthetic'), dict(self.fixture, profile='active'),
                    dict(self.fixture, repository='../repo'), dict(self.fixture, cluster='../host'),

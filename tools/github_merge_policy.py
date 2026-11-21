@@ -14,9 +14,37 @@ if (REPOSITORY != 'os-santiago/homedir' or RULESET != 9071701
     raise ValueError('Unsupported merge policy scope')
 
 
+# A reviewed project manifest supplied to this installer run (never read from
+# the target repository). It extends the merge floor to its one repository.
+_PROJECT = {}
+
+
+def register_project(manifest):
+    import project_install
+    _PROJECT.clear()
+    _PROJECT[manifest['repository']] = manifest
+    return project_install.merge_value(manifest)
+
+
+def registered(repository):
+    return repository in _PROJECT
+
+
+def project_ruleset(repository):
+    import project_install
+    return project_install.ruleset_body(_PROJECT[repository]) if repository in _PROJECT else None
+
+
 def manifest_for(repository):
     names = {'os-santiago/homedir': ('homedir', 9071701),
              'os-santiago/saferus': ('saferus', 27343088)}
+    if repository in _PROJECT:
+        import project_install
+        value = project_install.merge_value(_PROJECT[repository])
+        if (value['strictChecks'] is not True or value['resolveThreads'] is not True
+                or value['humanApprovals'] != 0 or not value['required']):
+            raise ValueError('Unsupported merge policy scope')
+        return value
     if repository not in names:
         raise ValueError('Unsupported reviewed repository')
     name, ruleset = names[repository]

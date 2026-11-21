@@ -26,10 +26,13 @@ def load(path):
         raise ValueError('Invalid installation configuration JSON') from exc
     fields = {'apiVersion', 'kind', 'cluster', 'provider', 'repository',
               'environment', 'profile', 'images'}
-    if not isinstance(config, dict) or set(config) - {'independentReview', 'reviewRepair', 'publication', 'merge', 'platform', 'buildBundle'} != fields:
+    if not isinstance(config, dict) or set(config) - {'independentReview', 'reviewRepair', 'publication', 'merge', 'platform', 'buildBundle', 'projectManifest'} != fields:
         raise ValueError('Installation configuration requires exactly the documented fields')
     if any(not isinstance(value, str) for key, value in config.items() if key not in ('independentReview', 'reviewRepair', 'publication', 'merge')):
         raise ValueError('Installation configuration fields must be strings')
+    if 'projectManifest' in config and (not config['projectManifest'] or '\x00' in config['projectManifest']
+            or config['profile'] != 'verification' or config['repository'] in ('os-santiago/homedir', 'os-santiago/saferus')):
+        raise ValueError('A project manifest requires the verification profile and a non-reference repository')
     if config['apiVersion'] != 'ai-sdlc.io/local-install/v1' or config['kind'] != 'LocalInstallation':
         raise ValueError('Unsupported installation configuration version or kind')
     if (not re.fullmatch(r'[a-z][a-z0-9-]{0,35}', config['cluster'])
@@ -55,15 +58,17 @@ def load(path):
         raise ValueError('Independent review requires a boolean and verification profile')
     if 'reviewRepair' in config and (type(config['reviewRepair']) is not bool or (config['reviewRepair'] and config.get('independentReview') is not True)):
         raise ValueError('Review repair requires a boolean and independent review')
-    if 'publication' in config and (type(config['publication']) is not bool or (config['publication'] and (config['profile'] != 'verification' or config.get('independentReview') is not True or config['repository'] not in ('os-santiago/homedir', 'os-santiago/saferus')))):
+    if 'publication' in config and (type(config['publication']) is not bool or (config['publication'] and (config['profile'] != 'verification' or config.get('independentReview') is not True or (config['repository'] not in ('os-santiago/homedir', 'os-santiago/saferus') and 'projectManifest' not in config)))):
         raise ValueError('Publication requires verification, independent review and a reviewed repository')
     if 'merge' in config and (type(config['merge']) is not bool or (config['merge'] and config.get('publication') is not True)):
         raise ValueError('Merge requires explicit verified publication')
     digest = 'sha256:' + hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    values = {({'independentReview': 'independent_review', 'reviewRepair': 'review_repair', 'buildBundle': 'build_bundle'}.get(key, key)): value for key, value in config.items() if key not in ('apiVersion', 'kind')}
+    values = {({'independentReview': 'independent_review', 'reviewRepair': 'review_repair', 'buildBundle': 'build_bundle', 'projectManifest': 'project_manifest'}.get(key, key)): value for key, value in config.items() if key not in ('apiVersion', 'kind')}
     values['images'] = (path.parent / config['images']).resolve()
     if 'buildBundle' in config:
         values['build_bundle'] = (path.parent / config['buildBundle']).resolve()
+    if 'projectManifest' in config:
+        values['project_manifest'] = (path.parent / config['projectManifest']).resolve()
     return values, digest
 
 
@@ -76,7 +81,7 @@ def resolve(args):
     values, digest = load(args.config)
     for key, value in values.items():
         supplied = getattr(args, key)
-        if key in ('images', 'build_bundle') and supplied is not None:
+        if key in ('images', 'build_bundle', 'project_manifest') and supplied is not None:
             supplied = supplied.resolve()
         if supplied is not None and supplied != value:
             raise ValueError('CLI option conflicts with installation configuration: ' + key)
