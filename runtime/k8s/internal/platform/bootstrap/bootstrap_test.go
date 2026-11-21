@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
 
@@ -338,5 +339,48 @@ func TestReleaseRequiresCompleteExplicitCapabilities(t *testing.T) {
 	t.Setenv("AI_SDLC_RELEASE", "TRUE")
 	if ValidateMode() == nil {
 		t.Fatal("unknown release boolean accepted")
+	}
+}
+
+func TestAuthorityResolvesOnlyAPolicyBoundProjectManifest(t *testing.T) {
+	t.Cleanup(func() { project.SetInstalled(nil) })
+	c, material := files(t)
+	dir := filepath.Dir(c.PolicyPath)
+	manifestPath := filepath.Join(dir, "manifest.json")
+	t.Setenv("AI_SDLC_PROJECT_MANIFEST_PATH", manifestPath)
+	m, _ := project.Builtin(project.Saferus)
+	m.Repository = "example/project"
+	if err := os.WriteFile(manifestPath, m.Canonical(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Authority(); err == nil {
+		t.Fatal("a mounted manifest the policy does not bind was accepted")
+	}
+	bound := material.Policy
+	bound.ProjectSHA256 = m.Digest()
+	raw, _ := json.Marshal(bound)
+	if err := os.WriteFile(c.PolicyPath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Authority(); err != nil || !project.Supported("example/project") {
+		t.Fatal("bound manifest refused", err)
+	}
+	bound.ProjectSHA256 = strings.Repeat("a", 64)
+	raw, _ = json.Marshal(bound)
+	if err := os.WriteFile(c.PolicyPath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Authority(); err == nil || project.Supported("example/project") {
+		t.Fatal("manifest with another digest accepted, or a stale manifest survived the failed load")
+	}
+	if err := os.Remove(manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = json.Marshal(material.Policy)
+	if err := os.WriteFile(c.PolicyPath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Authority(); err != nil || project.Supported("example/project") {
+		t.Fatal("unbound policy must clear the installed manifest", err)
 	}
 }
