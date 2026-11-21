@@ -171,7 +171,10 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 			if errors.As(err, &refused) && db.CheckVerificationClaim(stopCtx, claim) == nil {
 				reason = "comparison-failed"
 			}
-			_ = db.StopVerification(stopCtx, claim, reason)
+			if db.StopVerification(stopCtx, claim, reason) != nil && reason != "uncertain" {
+				// The claim lapsed between the check and the update.
+				_ = db.StopVerification(stopCtx, claim, "uncertain")
+			}
 		}
 	}()
 	fence := func() error {

@@ -433,3 +433,24 @@ func TestRepositoryTestsVerificationFinishesWithItsFourResources(t *testing.T) {
 		t.Fatal("repository-tests proof refused", err)
 	}
 }
+
+func TestAComparisonRefusalNeedsALiveClaim(t *testing.T) {
+	f, db, r := verificationClaimFixture(t)
+	ctx := context.Background()
+	c, err := db.ClaimVerification(ctx, r.ID, r.PayloadDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.Admin.Pool.Exec(`UPDATE verification_requests SET claim_until=clock_timestamp()-interval '1 second' WHERE id=$1`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.Admin.Pool.QueryRow(`SELECT claim_until FROM verification_requests WHERE id=$1`, r.ID).Scan(&c.Until); err != nil {
+		t.Fatal(err)
+	}
+	if db.StopVerification(ctx, c, "comparison-failed") == nil {
+		t.Fatal("a refusal was recorded under a lapsed claim")
+	}
+	if err = db.StopVerification(ctx, c, "uncertain"); err != nil {
+		t.Fatal("uncertainty must still be recordable", err)
+	}
+}
