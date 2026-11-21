@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repositorytests"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
@@ -31,7 +32,22 @@ type Inputs struct {
 	files map[string][]byte
 }
 
+// Delta returns the validated candidate delta.
+func (i Inputs) Delta() candidate.Delta { return i.delta }
+
 func Prepare(repository, recipe, issueBody string, source workspacebundle.Bundle, raw []byte) (Inputs, error) {
+	if recipe == repositorytests.Recipe && ValidRecipe(repository, recipe) {
+		// The candidate must apply exactly to the fetched base; the trees and
+		// the decision are built by the repository-tests flow.
+		d, err := candidate.Decode(raw)
+		if err != nil {
+			return Inputs{}, ErrVerification
+		}
+		if _, err := candidate.Apply(source, d); err != nil {
+			return Inputs{}, ErrVerification
+		}
+		return Inputs{delta: d}, nil
+	}
 	if repository == "os-santiago/saferus" && recipe == LifetimeRecipe {
 		return prepareLifetime(issueBody, source, raw)
 	}
@@ -86,6 +102,11 @@ func RecipeRevision() string {
 }
 
 func RevisionForRecipe(recipe string) string {
+	if recipe == repositorytests.Recipe {
+		// The settings are bound by the policy's project digest; the revision
+		// binds the decision rules.
+		return workspacebundle.Digest([]byte(repositorytests.Recipe + "\x00" + repositorytests.RulesVersion))
+	}
 	directory := recipeDirectory(recipe)
 	if directory == "" {
 		return ""

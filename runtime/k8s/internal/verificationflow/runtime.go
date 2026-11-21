@@ -17,6 +17,8 @@ type Runtime struct {
 	Load   PolicyLoader
 	Client *podtransport.Client
 	Image  string
+	// MailboxImage carries the repository-tests runner and transfer helper.
+	MailboxImage string
 }
 
 func (r Runtime) PollOnce(ctx context.Context) (string, error) {
@@ -75,7 +77,7 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		}
 		return "rejected", nil
 	}
-	if _, err = Run(ctx, r.DB, r.Load, id, r.Client, r.Image); err != nil {
+	if _, err = RunWithMailbox(ctx, r.DB, r.Load, id, r.Client, r.Image, r.MailboxImage); err != nil {
 		return "stopped", err
 	}
 	return "behavior-verified", nil

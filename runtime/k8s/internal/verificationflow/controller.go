@@ -3,13 +3,17 @@ package verificationflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repositorytests"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
 type ControllerError struct{ Stage string }
@@ -22,15 +26,67 @@ type BehaviorProof struct {
 	ToolchainImage        string               `json:"toolchainImage"`
 	BaselineResultSHA256  string               `json:"baselineResultSHA256"`
 	CandidateResultSHA256 string               `json:"candidateResultSHA256"`
-	ReferenceResultSHA256 string               `json:"referenceResultSHA256"`
-	ResourceUIDs          map[string]string    `json:"resourceUIDs"`
-	BehaviorVerified      bool                 `json:"behaviorVerified"`
-	PublicationAuthorized bool                 `json:"publicationAuthorized"`
+	ReferenceResultSHA256 string               `json:"referenceResultSHA256,omitempty"`
+	// v2 (repository-tests/v1): the cross run's result digest and the
+	// reviewable decision with its summary.
+	CrossResultSHA256     string            `json:"crossResultSHA256,omitempty"`
+	Decision              json.RawMessage   `json:"decision,omitempty"`
+	ResourceUIDs          map[string]string `json:"resourceUIDs"`
+	BehaviorVerified      bool              `json:"behaviorVerified"`
+	PublicationAuthorized bool              `json:"publicationAuthorized"`
+}
+
+// Behavior proof versions: v1 for the reference recipes (five resources),
+// v2 for repository-tests/v1 (settings and three runs).
+const (
+	BehaviorProofV1 = "ai-sdlc.behavior-proof/v1"
+	BehaviorProofV2 = "ai-sdlc.behavior-proof/v2"
+)
+
+// DecisionError is a verified refusal by the repository-tests rules: the
+// runs completed and the decision is the reason, not an uncertainty.
+type DecisionError struct{ Reason string }
+
+func (e DecisionError) Error() string { return "verification refused: " + e.Reason }
+
+// ValidBehaviorProof checks the shape every consumer requires of a passed
+// behavior proof for the command.
+func ValidBehaviorProof(b BehaviorProof, c verification.Command) bool {
+	if !b.BehaviorVerified || b.PublicationAuthorized || b.Command != c {
+		return false
+	}
+	keys := []string{"config", "baseline", "candidate", "reference", "tests"}
+	switch {
+	case b.Version == BehaviorProofV1 && c.Recipe != repositorytests.Recipe && len(b.Decision) == 0 && b.CrossResultSHA256 == "":
+	case b.Version == BehaviorProofV2 && c.Recipe == repositorytests.Recipe && len(b.Decision) != 0 && b.ReferenceResultSHA256 == "":
+		keys = []string{"config", "baseline", "tests", "candidate"}
+		var d repositorytests.Decision
+		if authority.DecodeStrict(b.Decision, &d) != nil || !d.Passed || d.Reason != "" {
+			return false
+		}
+	default:
+		return false
+	}
+	if len(b.ResourceUIDs) != len(keys) {
+		return false
+	}
+	for _, key := range keys {
+		if b.ResourceUIDs[key] == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // Run consumes only an already signed durable inbox identifier. It never
 // accepts arbitrary commands, adopts claims, invokes a model, or publishes code.
 func Run(ctx context.Context, db *store.DB, load PolicyLoader, id string, client *podtransport.Client, image string) (proof BehaviorProof, err error) {
+	return RunWithMailbox(ctx, db, load, id, client, image, "")
+}
+
+// RunWithMailbox also receives the installation's pinned mailbox image, which
+// carries the repository-tests runner and transfer helper.
+func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id string, client *podtransport.Client, image, mailboxImage string) (proof BehaviorProof, err error) {
 	if db == nil || load == nil || client == nil {
 		return proof, ControllerError{"configuration"}
 	}
@@ -52,6 +108,7 @@ func Run(ctx context.Context, db *store.DB, load PolicyLoader, id string, client
 	defer claimCancel()
 	stage := "authority"
 	var resources *podtransport.VerificationResources
+	var testRuns map[string]*podtransport.TestsRun // by ledger kind
 	configUID := ""
 	pods := map[string]string{}
 	cleaned := false
@@ -70,6 +127,17 @@ func Run(ctx context.Context, db *store.DB, load PolicyLoader, id string, client
 			if configUID != "" && resources.DeleteConfig(cleanupCtx, configUID) != nil {
 				failed = true
 			}
+		} else if testRuns != nil {
+			for kind, uid := range pods {
+				if testRuns[kind] == nil || testRuns[kind].DeletePod(cleanupCtx, uid) != nil {
+					failed = true
+				}
+			}
+			if configUID != "" && testRuns["baseline"].DeleteConfig(cleanupCtx, configUID) != nil {
+				failed = true
+			}
+		} else if configUID != "" || len(pods) != 0 {
+			failed = true
 		}
 		if failed {
 			return ControllerError{"cleanup"}
@@ -93,7 +161,12 @@ func Run(ctx context.Context, db *store.DB, load PolicyLoader, id string, client
 			proof = BehaviorProof{}
 			stopCtx, stop := context.WithTimeout(context.Background(), 3*time.Second)
 			defer stop()
-			_ = db.StopVerification(stopCtx, claim, "uncertain")
+			reason := "uncertain"
+			var refused DecisionError
+			if errors.As(err, &refused) {
+				reason = "comparison-failed"
+			}
+			_ = db.StopVerification(stopCtx, claim, reason)
 		}
 	}()
 	fence := func() error {
@@ -112,15 +185,6 @@ func Run(ctx context.Context, db *store.DB, load PolicyLoader, id string, client
 		return proof, ControllerError{stage}
 	}
 	source, e := sourceClient.Fetch(ctx, c.SourceSHA)
-	if e != nil {
-		return proof, ControllerError{stage}
-	}
-	stage = "recipe"
-	inputs, e := verification.Prepare(c.Repository, c.Recipe, snapshot.Issue.Body, source, record.Delta)
-	if e != nil {
-		return proof, ControllerError{stage}
-	}
-	resources, e = podtransport.PlanVerification(client, c, inputs, image)
 	if e != nil {
 		return proof, ControllerError{stage}
 	}
@@ -155,6 +219,103 @@ func Run(ctx context.Context, db *store.DB, load PolicyLoader, id string, client
 			return verification.ErrVerification
 		}
 		return fence()
+	}
+	stage = "recipe"
+	inputs, e := verification.Prepare(c.Repository, c.Recipe, snapshot.Issue.Body, source, record.Delta)
+	if e != nil {
+		return proof, ControllerError{stage}
+	}
+	if c.Recipe == repositorytests.Recipe {
+		m, ok := project.Lookup(c.Repository)
+		if !ok || m.Verification == nil {
+			return proof, ControllerError{stage}
+		}
+		v := *m.Verification
+		trees, e := repositorytests.BuildTrees(source, inputs.Delta(), v)
+		if e != nil {
+			return proof, ControllerError{stage}
+		}
+		testRuns = map[string]*podtransport.TestsRun{}
+		for _, run := range repositorytests.RunNames() {
+			bundle, _ := trees.Tree(run)
+			raw, e := workspacebundle.Encode(bundle)
+			tree, treeErr := bundle.TreeDigest()
+			if e != nil || treeErr != nil {
+				return proof, ControllerError{stage}
+			}
+			p := repositorytests.Pod{Namespace: podtransport.VerifierNamespace, MailboxImage: mailboxImage, VerificationID: c.ID(), WorkItemID: c.WorkItemID,
+				Run: run, SourceSHA: c.SourceSHA, TreeSHA256: tree, Verification: v}
+			planned, e := podtransport.PlanTestsRun(client, p, raw, time.UnixMilli(c.ExpiresAt))
+			if e != nil {
+				return proof, ControllerError{stage}
+			}
+			testRuns[repositorytests.LedgerKind(run)] = planned
+		}
+		stage = "config"
+		if create("config", func() (string, error) { return testRuns["baseline"].CreateConfig(ctx) }) != nil {
+			return proof, ControllerError{stage}
+		}
+		// Runs are created together and run concurrently within the claim.
+		for _, run := range repositorytests.RunNames() {
+			kind := repositorytests.LedgerKind(run)
+			stage = kind
+			if create(kind, func() (string, error) { return testRuns[kind].CreatePod(ctx, configUID) }) != nil {
+				return proof, ControllerError{stage}
+			}
+		}
+		for _, run := range repositorytests.RunNames() {
+			kind := repositorytests.LedgerKind(run)
+			stage = kind
+			if fence() != nil || testRuns[kind].Prepare(ctx, pods[kind]) != nil {
+				return proof, ControllerError{stage}
+			}
+		}
+		stage = "results"
+		results := map[string][]repositorytests.Run{}
+		logs := map[string]string{}
+		for _, run := range repositorytests.RunNames() {
+			kind := repositorytests.LedgerKind(run)
+			if fence() != nil {
+				return proof, ControllerError{stage}
+			}
+			runs, raw, e := testRuns[kind].ReadResult(ctx, pods[kind])
+			if e != nil {
+				return proof, ControllerError{stage}
+			}
+			results[run], logs[kind] = runs, authority.Digest(raw)
+		}
+		stage = "comparison"
+		decision := repositorytests.Decide(v, repositorytests.Evidence{Baseline: results[repositorytests.RunBaseline][0], Cross: results[repositorytests.RunCross][0],
+			Candidate: results[repositorytests.RunCandidate], Changes: trees.Changes})
+		if !decision.Passed {
+			return proof, DecisionError{Reason: decision.Reason}
+		}
+		if fence() != nil {
+			return proof, ControllerError{"authority"}
+		}
+		stage = "cleanup"
+		if cleanup() != nil {
+			return proof, ControllerError{stage}
+		}
+		if fence() != nil {
+			return proof, ControllerError{"authority"}
+		}
+		uids := map[string]string{"config": configUID}
+		for kind, uid := range pods {
+			uids[kind] = uid
+		}
+		raw, _ := json.Marshal(decision)
+		proof = BehaviorProof{Version: BehaviorProofV2, Command: c, ToolchainImage: v.Image, BaselineResultSHA256: logs["baseline"], CandidateResultSHA256: logs["candidate"],
+			CrossResultSHA256: logs["tests"], Decision: raw, ResourceUIDs: uids, BehaviorVerified: true, PublicationAuthorized: false}
+		encoded, _ := json.Marshal(proof)
+		if db.FinishVerification(ctx, claim, encoded) != nil {
+			return BehaviorProof{}, ControllerError{"commit"}
+		}
+		return proof, nil
+	}
+	resources, e = podtransport.PlanVerification(client, c, inputs, image)
+	if e != nil {
+		return proof, ControllerError{stage}
 	}
 	stage = "config"
 	if create("config", func() (string, error) { return resources.CreateConfig(ctx) }) != nil {
@@ -192,7 +353,7 @@ func Run(ctx context.Context, db *store.DB, load PolicyLoader, id string, client
 	for kind, uid := range pods {
 		uids[kind] = uid
 	}
-	proof = BehaviorProof{Version: "ai-sdlc.behavior-proof/v1", Command: c, ToolchainImage: image, BaselineResultSHA256: authority.Digest(results.Baseline), CandidateResultSHA256: authority.Digest(results.Candidate), ReferenceResultSHA256: authority.Digest(results.Reference), ResourceUIDs: uids, BehaviorVerified: true, PublicationAuthorized: false}
+	proof = BehaviorProof{Version: BehaviorProofV1, Command: c, ToolchainImage: image, BaselineResultSHA256: authority.Digest(results.Baseline), CandidateResultSHA256: authority.Digest(results.Candidate), ReferenceResultSHA256: authority.Digest(results.Reference), ResourceUIDs: uids, BehaviorVerified: true, PublicationAuthorized: false}
 	raw, _ := json.Marshal(proof)
 	if db.FinishVerification(ctx, claim, raw) != nil {
 		return BehaviorProof{}, ControllerError{"commit"}

@@ -105,13 +105,8 @@ func prepare(ctx context.Context, db *store.DB, policy verificationflow.PolicyLo
 		return prepared{}, e
 	}
 	var behavior verificationflow.BehaviorProof
-	if authority.DecodeStrict(raw, &behavior) != nil || behavior.Version != "ai-sdlc.behavior-proof/v1" || !behavior.BehaviorVerified || behavior.PublicationAuthorized || behavior.Command != command || len(behavior.ResourceUIDs) != 5 {
+	if authority.DecodeStrict(raw, &behavior) != nil || !verificationflow.ValidBehaviorProof(behavior, command) {
 		return prepared{}, ErrReview
-	}
-	for _, key := range []string{"config", "baseline", "candidate", "reference", "tests"} {
-		if behavior.ResourceUIDs[key] == "" {
-			return prepared{}, ErrReview
-		}
 	}
 	source, e := fetch(ctx, command.Repository, command.SourceSHA)
 	if e != nil {

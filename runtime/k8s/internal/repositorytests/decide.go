@@ -22,6 +22,10 @@ import (
 // Recipe names this verification plug-in in commands and manifests.
 const Recipe = "repository-tests/v1"
 
+// RulesVersion names the decision rules below; a change to them must change
+// it, so commands signed under the old rules no longer verify.
+const RulesVersion = "decide/v1"
+
 // Bounds of one runner result line.
 const (
 	// 512 tests encode to about 38 KiB (64-hex id plus status per test).

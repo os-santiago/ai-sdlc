@@ -44,13 +44,8 @@ func matchProofsAt(v verification.Command, r store.PassedReview, expected Review
 		return reject()
 	}
 	var b verificationflow.BehaviorProof
-	if authority.DecodeStrict(r.Behavior, &b) != nil || b.Version != "ai-sdlc.behavior-proof/v1" || b.Command != v || !b.BehaviorVerified || b.PublicationAuthorized || len(b.ResourceUIDs) != 5 {
+	if authority.DecodeStrict(r.Behavior, &b) != nil || !verificationflow.ValidBehaviorProof(b, v) {
 		return reject()
-	}
-	for _, key := range []string{"config", "baseline", "candidate", "reference", "tests"} {
-		if b.ResourceUIDs[key] == "" {
-			return reject()
-		}
 	}
 	var p reviewProof
 	if authority.DecodeStrict(r.Proof, &p) != nil || p.Version != "ai-sdlc.independent-review-proof/v1" || p.Verdict != "approve" || !p.SourceUnchanged || p.PublicationAuthorized || p.ReviewID != r.Run.ID || p.VerificationID != v.ID() || p.CandidateID != v.CandidateID || p.BehaviorSHA256 != authority.Digest(r.Behavior) || p.ProfileSHA256 != expected.Profile || p.ConfigurationSHA256 != expected.Configuration || p.AssignmentSHA256 != r.Run.AssignmentDigest || p.CandidateTreeSHA256 != v.CandidateTreeSHA256 || !workspacebundle.ValidDigest(p.ModelEvidenceSHA256) {
