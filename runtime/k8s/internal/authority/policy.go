@@ -268,8 +268,15 @@ func rejectAmbiguousJSON(raw []byte) error {
 					return errors.New("invalid authority JSON")
 				}
 				name, ok := key.(string)
+				// encoding/json matches field names with Unicode case folding
+				// (for example U+017F folds to "s"), which strings.ToLower does
+				// not reproduce. Reviewed documents use ASCII keys only, so a
+				// non-ASCII key could only smuggle a duplicate field.
+				if !ok || strings.IndexFunc(name, func(r rune) bool { return r > 0x7f }) >= 0 {
+					return errors.New("non-ASCII authority JSON key")
+				}
 				name = strings.ToLower(name)
-				if !ok || seen[name] {
+				if seen[name] {
 					return errors.New("duplicate authority JSON key")
 				}
 				seen[name] = true
