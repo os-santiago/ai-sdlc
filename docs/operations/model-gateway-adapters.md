@@ -34,6 +34,25 @@ with a local agent CLI, see `tools/local_model_service/README.md`. The
 installation keeps using the `openai` adapter against that endpoint, and no CLI
 enters the cluster.
 
+## Choosing the model service at installation
+
+A local candidate or verification installation can select an OpenAI-compatible
+model service directly:
+
+```bash
+./install.sh local ... --model-upstream path/to/upstream.json
+```
+
+The document is the same reviewed upstream document as the
+[model-upstream runtime upgrade](model-upstream-upgrade.md) and is validated
+the same way: one private HTTP completions endpoint whose URL, `/32` CIDR and
+port agree, bounded `seconds`, and the per-call windows `callSeconds` (executor)
+and `reviewCallSeconds` (reviewer). An installation-time `credentialSecret` is
+not supported yet; the service's client allowlist controls access. The flag is
+chosen once: reconciling the installation with a different (or no) upstream is
+refused, and a change goes through a reviewed runtime transition. Until the
+installer stops requiring it, a Codex credential is still requested.
+
 ## Configuration
 
 ```yaml
