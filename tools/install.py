@@ -425,6 +425,7 @@ def _main(argv, stack):
     parser.add_argument('--refresh-github-credential', action='store_true')
     parser.add_argument('--codex-auth-file', type=Path, help='Explicit local Codex authentication source for the candidate sidecar Secret')
     parser.add_argument('--refresh-model-credential', action='store_true')
+    parser.add_argument('--model-upstream', type=Path, help='Reviewed OpenAI-compatible model service document (see docs/operations/model-gateway-adapters.md)')
     parser.add_argument('--project-manifest', type=Path, help='Reviewed ai-sdlc.project/v1 manifest for a repository that is not a built-in reference')
     args = parser.parse_args(argv)
     if args.command not in ('plan','local','status','tools','host','credentials','sandbox'):
@@ -512,6 +513,10 @@ def _main(argv, stack):
     if args.profile in ('candidate', 'verification'):
         import candidate_install
         execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images), verification=args.profile == "verification", review=bool(args.independent_review), publication=bool(args.publication), merge=bool(args.merge), repair=bool(args.review_repair))
+        if args.model_upstream is not None:
+            candidate_install.apply_model_upstream(execution_values, args.model_upstream)
+    elif args.model_upstream is not None:
+        raise ValueError('A model upstream requires the candidate or verification profile')
     # The prepared transition renders the original complete state first and its
     # complete target after native policy reconciliation. Its partial selection
     # cannot satisfy the chart's mandatory installed merge-policy input yet.

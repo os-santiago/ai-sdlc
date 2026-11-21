@@ -157,3 +157,42 @@ def review_credentials(kubectl, cluster_uid, installer=None):
         create_owned_secret(kubectl, 'ai-sdlc-review-model-client', {'token': secrets.token_urlsafe(48)}, cluster_uid)
     elif set(current) != {'token'} or not re.fullmatch(r'[A-Za-z0-9_-]{32,128}', current['token']):
         raise ValueError('Invalid independent review model client identity')
+
+
+def apply_model_upstream(values, path):
+    """Select a reviewed OpenAI-compatible model service at installation: the
+    gateways use the openai adapter against one private endpoint, and the
+    executor and reviewer profiles take its per-call windows. The document is
+    validated exactly like the model-upstream runtime upgrade's."""
+    import model_upstream_runtime_upgrade as upstreams
+    with Path(path).open('rb') as source:
+        raw = source.read(4097)
+    if len(raw) > 4096:
+        raise ValueError('Model upstream document exceeds 4 KiB')
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('Duplicate model upstream field')
+            result[key] = value
+        return result
+    try:
+        document = json.loads(raw, object_pairs_hook=unique)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError('Invalid model upstream JSON') from exc
+    upstream = upstreams.validate_upstream(document)
+    if upstream['credentialSecret']:
+        raise ValueError('An installation-time model service credential is not supported yet; use the client allowlist')
+    config = json.loads(values['candidate']['configJSON'])
+    if upstream['callSeconds'] > config['profile']['maxSeconds']:
+        raise ValueError('Model call window exceeds the executor profile')
+    config['profile']['callSeconds'] = upstream['callSeconds']
+    values['candidate']['configJSON'] = json.dumps(config, sort_keys=True)
+    if 'review' in values:
+        review = json.loads(values['review']['configJSON'])
+        if upstream['reviewCallSeconds'] > review['profile']['maxSeconds']:
+            raise ValueError('Model call window exceeds the reviewer profile')
+        review['profile']['callSeconds'] = upstream['reviewCallSeconds']
+        values['review']['configJSON'] = json.dumps(review, sort_keys=True)
+    values['modelGateway'] = upstreams.gateway_values(upstream)
+    return values
