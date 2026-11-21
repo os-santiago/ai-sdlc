@@ -17,7 +17,6 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/forge"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
-	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
@@ -99,11 +98,17 @@ func (w *Writer) post(ctx context.Context, fence WriteFence, suffix string, valu
 	return nil
 }
 func validatePlan(repository string, p TreePlan) (int, error) {
-	count := 2
-	if repository == project.Saferus {
-		count = 3
+	manifest, ok := project.Lookup(repository)
+	if !ok || !project.Supported(repository) || p.Repository != repository {
+		return 0, ErrPublication
 	}
-	if !project.Supported(repository) || p.Repository != repository {
+	// Reference recipes change an exact file set; other repositories change
+	// between one file and the manifest's limit.
+	countOK := len(p.Request.Tree) >= 1 && len(p.Request.Tree) <= manifest.Publication.MaxChangedFiles
+	if len(manifest.Recipes) > 0 {
+		countOK = len(p.Request.Tree) == manifest.Publication.MaxChangedFiles
+	}
+	if !countOK {
 		return 0, ErrPublication
 	}
 	match := pilotBranch.FindStringSubmatch(p.Branch)
@@ -111,12 +116,13 @@ func validatePlan(repository string, p TreePlan) (int, error) {
 		return 0, ErrPublication
 	}
 	n, e := strconv.Atoi(match[1])
-	if e != nil || n > 2147483647 || p.CommitMessage != "fix(ai-sdlc): address issue #"+match[1]+" [skip release]" || !workspacebundle.ValidSourceSHA(p.Request.BaseTree) || !workspacebundle.ValidSourceSHA(p.ExpectedTreeSHA) || len(p.Request.Tree) != count {
+	if e != nil || n > 2147483647 || p.CommitMessage != "fix(ai-sdlc): address issue #"+match[1]+" [skip release]" || !workspacebundle.ValidSourceSHA(p.Request.BaseTree) || !workspacebundle.ValidSourceSHA(p.ExpectedTreeSHA) {
 		return 0, ErrPublication
 	}
-	paths := map[string]bool{}
+	paths, total := map[string]bool{}, 0
 	for _, v := range p.Request.Tree {
-		if !verification.AllowedPublicationPath(repository, v.Path) || paths[v.Path] || v.Mode != "100644" || v.Type != "blob" || len(v.Content) == 0 || len(v.Content) > 512*1024 || !utf8.ValidString(v.Content) || strings.ContainsRune(v.Content, 0) {
+		total += len(v.Content)
+		if !manifest.Publication.Allows(v.Path) || paths[v.Path] || v.Mode != "100644" || v.Type != "blob" || len(v.Content) == 0 || len(v.Content) > 512*1024 || len(v.Content) > manifest.Publication.MaxFileBytes || total > manifest.Publication.MaxChangedBytes || !utf8.ValidString(v.Content) || strings.ContainsRune(v.Content, 0) {
 			return 0, ErrPublication
 		}
 		paths[v.Path] = true
