@@ -29,7 +29,8 @@ never read from the target repository, an issue or model output.
 wins. A path no allow pattern matches is denied. `.github/**`, `.gitmodules`,
 `.gitattributes` and `CODEOWNERS` (at any depth) are always denied. Matching is polynomial.
 
-**Binding.** The authority policy carries `projectSHA256` (omitted when
+**Binding** (slices 2 and 3, in review in #674 and #675; not yet on `main`).
+The authority policy carries `projectSHA256` (omitted when
 empty, so existing revisions are unchanged). Every component resolves the
 manifest from the same authenticated policy on each load, and records it only
 when the whole load succeeds:
@@ -39,6 +40,9 @@ when the whole load succeeds:
 - a mounted manifest that the policy does not bind is refused.
 
 ## Verification with the repository's own tests (`repository-tests/v1`)
+
+Status: decision rules and runner in review (slices 4 and 5); the sandbox
+and controller follow (slice 6).
 
 The sandboxed verifier runs the manifest's command on three trees:
 
@@ -82,6 +86,8 @@ its own entry point (for example `TestMain`). Rules cannot detect this; the
 read-only reviewer receives the changed test files for that judgement.
 
 ## Sandbox
+
+Status: in review (slice 6).
 
 Each run (baseline, cross, candidate 1..n) is its own offline pod in the
 `ai-sdlc-verifiers` namespace (single deny-all network policy, checked before
