@@ -21,13 +21,13 @@ never read from the target repository, an issue or model output.
 
 **Parsing:**
 - strict: unknown fields and duplicate keys are refused, object keys must be
-  ASCII, and the merge booleans must be explicit;
+  ASCII, and the merge booleans and `humanApprovals` must be explicit;
 - capped at 16 KiB;
 - one canonical form, whose sha256 is the manifest digest.
 
 **Globs** match clean, relative paths in a conservative character set. Deny
 wins. A path no allow pattern matches is denied. `.github/**`, `.gitmodules`,
-`.gitattributes` and `CODEOWNERS` are always denied. Matching is polynomial.
+`.gitattributes` and `CODEOWNERS` (at any depth) are always denied. Matching is polynomial.
 
 **Binding.** The authority policy carries `projectSHA256` (omitted when
 empty, so existing revisions are unchanged). Every component resolves the
@@ -48,31 +48,34 @@ The sandboxed verifier runs the manifest's command on three trees:
 | cross | base revision plus only the candidate's test files | the new tests must fail on the old code |
 | candidate | candidate revision, repeated | the change passes, consistently |
 
-The runner sees a fixed, empty environment and discards untrusted output. It
+The runner gives the command only fixed variables (PATH, HOME, TMPDIR,
+LC_ALL, TZ, CI) plus the manifest's reviewed `env`, and discards untrusted
+output. It
 reads only a regular report file inside the workspace and emits one bounded
 result: an exit code and per-test status keyed by the sha256 of the test
 identity.
 
-**Decision rules.** Each refusal has one reason:
+**Decision rules.** Each refusal has one reason, checked in this order:
 
 | Reason | Meaning |
 |---|---|
-| `incomplete-evidence` | The number of runs is wrong |
+| `incomplete-evidence` | The number of candidate runs differs from `repeat` |
 | `invalid-delta` | A changed path is invalid or contradictory |
-| `harness-changed` | Build, dependency, test configuration, helper or data files were changed |
+| `harness-changed` | A path matching the manifest's `harnessGlobs` (build, dependency, test configuration, helper or data files) was changed |
 | `test-deleted` | A test file was deleted or renamed |
 | `no-test-change` | No test file was changed |
 | `uncertain` | Candidate runs disagree |
 | `candidate-failed` | The candidate fails |
-| `no-cross-report` | With a report, the cross run produced none |
-| `regression` | A test that passed on the baseline no longer passes |
-| `no-failing-test` | No test fails explicitly on the base code and passes on the candidate |
+| `no-cross-report` | With a report, the cross or candidate run produced none |
+| `regression` | With a report, a test that passed on the baseline no longer passes |
 | `baseline-failing` | Without a report, the baseline fails |
+| `no-failing-test` | No test fails explicitly on the base code and passes on the candidate |
 
 A decision without a per-test report is marked **weak**, so the independent
 reviewer judges whether the tests exercise the requested behaviour. The
-summary (exit codes, counts, sorted changed test files) is bound into the
-verification proof and given to the reviewer.
+summary (exit codes, counts, at most 64 sorted changed test files) has a
+digest; binding it into the verification proof and giving it to the reviewer
+is the last part of slice 6.
 
 **Known limits, for the reviewer.** A test file can weaken assertions or define
 its own entry point (for example `TestMain`). Rules cannot detect this; the
@@ -93,8 +96,8 @@ every effect) and the `ai-sdlc-offline` RuntimeClass (gVisor, `network=none`):
 - No service account token, no secrets, no service links, `restartPolicy: Never`.
 - Non-root user, read-only root filesystem, all capabilities dropped,
   RuntimeDefault seccomp; `/tmp` is the size-limited scratch (HOME, TMPDIR).
-- Guaranteed resources from the manifest; a hard deadline of pull budget,
-  ready wait, test timeout and margin.
+- The tests container gets requests equal to the manifest's limits; a hard
+  deadline covers the pull budget, ready wait, test timeout and margin.
 - The repository command reaches the runner only through an immutable
   per-run settings ConfigMap, never the pod spec. The manifest may add a
   reviewed toolchain environment (`verification.env`, for example `PATH`).
@@ -110,6 +113,21 @@ runs the command, kills any leftover process (it is the pid namespace's init),
 reads the report and prints one result line. No helper runs once the
 repository's code may run. The controller accepts the result only from a
 succeeded pod, from the same container instance, as exactly one line.
+
+## Limits for adopters
+
+- `repeat` is 1–3 and the test timeout 30–600 seconds.
+- The imported tree is bounded by the workspace-bundle limits (16 MiB of
+  content, 4096 files) and has no `.git`: builds that need git metadata fail.
+  Dependencies must be vendored or in the toolchain image (no network).
+- The workspace volume holds the tree and any build output (256 MiB).
+- At most 512 test cases, a 4 MiB report and 16 levels of suite nesting.
+- The verifier namespace's resource quota bounds what a run can request; the
+  installer must size it for the manifest (slice 7).
+- The pod relies on Kubernetes native sidecars and the `ai-sdlc-offline`
+  RuntimeClass, which the installer provides (slice 7).
+- A failed pod or an unreadable result is a transport failure, not a
+  decision; nothing is retried automatically.
 
 ## Slices
 
