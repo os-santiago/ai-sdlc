@@ -37,6 +37,9 @@ def fixture():
     return material, secrets, resource
 
 
+DIGEST = __import__('hashlib').sha256(b'{"m":1}').hexdigest()
+
+
 class IdentityInstallationTests(unittest.TestCase):
     def configure(self, material, secrets, resource, freeze=None, **options):
         lock = {'image': {'repository': 'quay.io/os-santiago/ai-sdlc'},
@@ -58,6 +61,35 @@ class IdentityInstallationTests(unittest.TestCase):
             self.assertNotIn('privateKey', json.dumps(result))
             self.assertNotIn('password', json.dumps(result))
             return result
+
+    def test_a_project_manifest_is_compiled_bound_and_emitted(self):
+        material, secrets, resource = fixture()
+        manifest = {'version': 'ai-sdlc.project/v1', 'repository': 'example/project'}
+        lock = {'image': {'repository': 'quay.io/os-santiago/ai-sdlc'}, 'migrator': {'digest': 'sha256:' + 'a' * 64}}
+        calls = []
+        def run(args, **kwargs):
+            calls.append(args[-1])
+            if args[-1] == 'compile-project-installation':
+                return SimpleNamespace(stdout=json.dumps({'version': 'ai-sdlc.project-installation/v1', 'manifestJSON': '{"m":1}',
+                                                          'manifestSHA256': DIGEST, 'verifierQuota': {'requests.cpu': '810m'}}))
+            policy = json.loads(kwargs['input'])['policy']
+            self.assertEqual(policy['projectSHA256'], DIGEST)
+            return SimpleNamespace(stdout='')
+        with patch.object(installer, 'identity_material', return_value=material), \
+             patch.object(installer, 'owned_secret', side_effect=lambda k, name, uid: secrets.get(name)), \
+             patch.object(installer, 'read_resource', return_value=resource), \
+             patch.object(installer, 'run', side_effect=run), \
+             patch.object(installer, 'create_owned_secret'):
+            result = installer.configure_identities(['kubectl'], 'podman', lock, 'owned-uid', 'example/project', 'production-test',
+                                                    project_manifest=manifest)
+        self.assertEqual(calls, ['compile-project-installation', 'validate-bootstrap'])
+        self.assertEqual(json.loads(result['authority']['policyJSON'])['projectSHA256'], DIGEST)
+        self.assertEqual(result['project'], {'manifestJSON': '{"m":1}', 'verifierQuota': {'requests.cpu': '810m'}})
+        bound = json.loads(resource['data']['policy.json'])
+        bound['projectSHA256'] = DIGEST
+        resource['data']['policy.json'] = json.dumps(bound)
+        with self.assertRaises(ValueError):
+            self.configure(material, secrets, resource)
 
     def test_reapplication_preserves_identities_passwords_and_policy(self):
         material, secrets, resource = fixture()

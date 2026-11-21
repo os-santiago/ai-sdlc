@@ -7,6 +7,7 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 )
 
 // Runtime has no externally callable claim or advance operation. Its queue is
@@ -17,13 +18,17 @@ type Runtime struct {
 	Load   PolicyLoader
 	Client *podtransport.Client
 	Image  string
+	// MailboxImage carries the repository-tests runner and transfer helper.
+	MailboxImage string
 }
 
 func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if r.DB == nil || r.Load == nil || r.Client == nil {
 		return "", ControllerError{"configuration"}
 	}
-	ctx, cancel := context.WithTimeout(ctx, 4*time.Minute)
+	// Repository-tests verifications renew their claim while pods run; the
+	// bound covers the longest command lifetime plus cleanup.
+	ctx, cancel := context.WithTimeout(ctx, verification.MaxCommandAge+5*time.Minute)
 	defer cancel()
 	if r.DB.ExpireVerifications(ctx) != nil {
 		return "", ControllerError{"expiry"}
@@ -75,7 +80,7 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		}
 		return "rejected", nil
 	}
-	if _, err = Run(ctx, r.DB, r.Load, id, r.Client, r.Image); err != nil {
+	if _, err = RunWithMailbox(ctx, r.DB, r.Load, id, r.Client, r.Image, r.MailboxImage); err != nil {
 		return "stopped", err
 	}
 	return "behavior-verified", nil

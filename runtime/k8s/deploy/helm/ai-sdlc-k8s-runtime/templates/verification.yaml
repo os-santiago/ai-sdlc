@@ -14,7 +14,11 @@ apiVersion: v1
 kind: ResourceQuota
 metadata: {name: verifier-bounds, namespace: ai-sdlc-verifiers}
 spec:
+  {{- with .Values.project.verifierQuota }}
+  hard: {pods: "4", configmaps: "4", requests.cpu: {{ index . "requests.cpu" | quote }}, requests.memory: {{ index . "requests.memory" | quote }}, limits.cpu: {{ index . "limits.cpu" | quote }}, limits.memory: {{ index . "limits.memory" | quote }}}
+  {{- else }}
   hard: {pods: "4", configmaps: "4", requests.cpu: "1", requests.memory: 1Gi, limits.cpu: "4", limits.memory: 2Gi}
+  {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -38,6 +42,13 @@ rules:
   - apiGroups: [""]
     resources: [pods/log]
     verbs: [get]
+  {{- if .Values.project.manifestJSON }}
+  # repository-tests/v1 imports each run's tree through the pod's transfer
+  # sidecar; reference recipes never exec.
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [get, create]
+  {{- end }}
   - apiGroups: [networking.k8s.io]
     resources: [networkpolicies]
     verbs: [list]

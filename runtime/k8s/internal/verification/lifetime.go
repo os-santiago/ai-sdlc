@@ -5,6 +5,7 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repositorytests"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
@@ -20,9 +21,13 @@ func RecipeForRepository(repository string) string {
 		return LocaleRecipe
 	case project.Saferus:
 		return LifetimeRecipe
-	default:
-		return ""
 	}
+	// Any other repository is verified with its own tests when the policy
+	// binds an installed manifest that declares them.
+	if m, ok := project.Lookup(repository); ok && m.Verification != nil {
+		return repositorytests.Recipe
+	}
+	return ""
 }
 
 func ValidRecipe(repository, recipe string) bool {
@@ -31,6 +36,10 @@ func ValidRecipe(repository, recipe string) bool {
 
 func SelectRecipe(repository, body string) (string, bool) {
 	recipe := RecipeForRepository(repository)
+	if recipe == repositorytests.Recipe {
+		// The installed manifest selects it; the issue needs no marker.
+		return recipe, true
+	}
 	return recipe, recipe != "" && selectMarker(body, "AI-SDLC validation recipe: "+recipe)
 }
 

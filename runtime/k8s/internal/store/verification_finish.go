@@ -11,7 +11,21 @@ import (
 // FinishVerification stores behavior evidence only; it does not issue a merge,
 // agent review, publication or release decision.
 func (db *DB) FinishVerification(ctx context.Context, c VerificationClaim, proof []byte) error {
-	if len(proof) == 0 || len(proof) > 65536 || !json.Valid(proof) {
+	return db.FinishVerificationWith(ctx, c, proof, []string{"baseline", "candidate", "config", "reference", "tests"})
+}
+
+// FinishVerificationWith stores behavior evidence when the request's effects
+// are exactly the given kinds, every one acknowledged with a resource UID
+// (the reference recipes create five resources, repository-tests/v1 four).
+func (db *DB) FinishVerificationWith(ctx context.Context, c VerificationClaim, proof []byte, kinds []string) error {
+	expected := map[string]bool{}
+	for _, kind := range kinds {
+		if verificationResourceName(c.ID, kind) == "" {
+			return ErrExecution
+		}
+		expected[kind] = true
+	}
+	if len(proof) == 0 || len(proof) > 65536 || !json.Valid(proof) || len(expected) == 0 || len(expected) != len(kinds) {
 		return ErrExecution
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -25,7 +39,23 @@ func (db *DB) FinishVerification(ctx context.Context, c VerificationClaim, proof
 		if tx.QueryRowContext(ctx, `SELECT cleanup_state='complete' FROM verification_requests WHERE id=$1`, c.ID).Scan(&clean) != nil || !clean {
 			return ErrExecution
 		}
-		if tx.QueryRowContext(ctx, `SELECT count(*) FROM verification_effects WHERE request_id=$1 AND resource_uid IS NOT NULL`, c.ID).Scan(&count) != nil || count != 5 {
+		if tx.QueryRowContext(ctx, `SELECT count(*) FROM verification_effects WHERE request_id=$1`, c.ID).Scan(&count) != nil || count != len(expected) {
+			return ErrExecution
+		}
+		rows, err := tx.QueryContext(ctx, `SELECT kind FROM verification_effects WHERE request_id=$1 AND resource_uid IS NOT NULL`, c.ID)
+		if err != nil {
+			return ErrExecution
+		}
+		acknowledged := 0
+		for rows.Next() {
+			var kind string
+			if rows.Scan(&kind) != nil || !expected[kind] {
+				rows.Close()
+				return ErrExecution
+			}
+			acknowledged++
+		}
+		if rows.Close() != nil || rows.Err() != nil || acknowledged != len(expected) {
 			return ErrExecution
 		}
 		r, err := tx.ExecContext(ctx, `UPDATE verification_requests SET state='passed',proof=$2 WHERE id=$1 AND state='claimed' AND claim_until>clock_timestamp() AND expires_at>clock_timestamp()`, c.ID, proof)

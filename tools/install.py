@@ -3,6 +3,7 @@
 import argparse
 from contextlib import ExitStack
 import base64
+import copy
 import hashlib
 import json
 import os
@@ -21,6 +22,8 @@ import urllib.request
 import github_client
 import network_probe
 import install_config
+import project_install
+import github_merge_policy
 import konflux_runtime_install
 import build_runtime_install
 
@@ -191,7 +194,7 @@ def identity_material(provider, image, repository, environment):
     return json.loads(result.stdout)
 
 
-def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False, verification=False, publication=False, merge=False, require_build=False, build=False, installer=None, review=False):
+def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False, verification=False, publication=False, merge=False, require_build=False, build=False, installer=None, review=False, project_manifest=None):
     api = installer or SimpleNamespace(owned_secret=owned_secret, read_resource=read_resource,
         create_owned_secret=create_owned_secret, run=run)
     if build and (not merge or repository != 'os-santiago/saferus' or environment != 'ai-sdlc-production'):
@@ -202,7 +205,7 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
     require_build = require_build or build
     if merge and not publication:
         raise ValueError('Merge requires verified publication')
-    if publication and (not candidate or not verification or repository not in ('os-santiago/homedir', 'os-santiago/saferus')):
+    if publication and (not candidate or not verification or not project_install.reviewed(repository, project_manifest)):
         raise ValueError('Invalid publication authority scope')
     image = lock['image']['repository'] + '@' + lock['migrator']['digest']
     material = identity_material(provider, image, repository, environment)
@@ -289,6 +292,13 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
             password_upgrade = (current_passwords, {'passwords.json': json.dumps(passwords, sort_keys=True)})
     else:
         pending.append(('ai-sdlc-database-roles', {'passwords.json': json.dumps(passwords, sort_keys=True)}))
+    project_values = None
+    if project_manifest is not None:
+        # The pinned migrator compiles the manifest; the policy binds its digest.
+        compiled = project_install.compile_installation(api.run, provider, image, material['policy'], project_manifest)
+        project_values = project_install.bind(material['policy'], compiled)
+    elif material['policy'].get('projectSHA256'):
+        raise ValueError('Installed authority binds a project manifest; supply it with --project-manifest')
     # Validate all key pairs and policy before creating any of this bootstrap's
     # resources. Neither subprocess output nor private input is printed.
     api.run([provider, 'run', '--rm', '-i', '--network=none', '--log-driver=none', image,
@@ -317,6 +327,8 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
                             'installationUID': cluster_uid}}
     if outer_policy is not None:
         result['build'] = {'outerPolicyJSON': json.dumps(outer_policy, sort_keys=True)}
+    if project_values is not None:
+        result['project'] = project_values
     return result
 
 
@@ -326,12 +338,12 @@ def configure_github_client(kubectl, cluster_uid, repository, refresh=False, ins
     return github_client.configure(secrets_api, kubectl, cluster_uid, repository, refresh)
 
 
-def configure_publication_client(kubectl, cluster_uid, repository, auth, refresh=False, installer=None):
+def configure_publication_client(kubectl, cluster_uid, repository, auth, refresh=False, installer=None, project_manifest=None):
     api = installer or SimpleNamespace(owned_secret=owned_secret, read_resource=read_resource,
         create_owned_secret=create_owned_secret, run=run)
     name = 'ai-sdlc-publication-client'
-    if repository not in ('os-santiago/homedir', 'os-santiago/saferus'):
-        raise ValueError('Publication supports only reviewed Homedir or Saferus')
+    if not project_install.reviewed(repository, project_manifest):
+        raise ValueError('Publication supports only reviewed Homedir, Saferus or an installed project manifest')
     if api.owned_secret(kubectl, name, cluster_uid) is None and auth != 'gh-cli':
         raise ValueError('Publication needs an explicitly imported client via --github-auth gh-cli')
     github_client.configure(api, kubectl, cluster_uid, repository, refresh, name=name)
@@ -413,6 +425,7 @@ def _main(argv, stack):
     parser.add_argument('--refresh-github-credential', action='store_true')
     parser.add_argument('--codex-auth-file', type=Path, help='Explicit local Codex authentication source for the candidate sidecar Secret')
     parser.add_argument('--refresh-model-credential', action='store_true')
+    parser.add_argument('--project-manifest', type=Path, help='Reviewed ai-sdlc.project/v1 manifest for a repository that is not a built-in reference')
     args = parser.parse_args(argv)
     if args.command not in ('plan','local','status','tools','host','credentials','sandbox'):
         raise ValueError('Delegated installer subcommands must be the first argument')
@@ -422,6 +435,13 @@ def _main(argv, stack):
     for key, value in defaults.items():
         if getattr(args, key) is None:
             setattr(args, key, value)
+    project_manifest = None
+    if args.project_manifest is not None:
+        # status, credentials and sandbox address the same installed scope.
+        if args.command in ('plan', 'local') and args.profile != 'verification':
+            raise ValueError('A project manifest requires the verification profile')
+        project_manifest = project_install.load(args.project_manifest, args.repository)
+        github_merge_policy.register_project(project_manifest)
     if args.build_bundle is not None and (args.command not in ('plan', 'local') or args.platform != 'konflux'
             or args.profile != 'verification' or args.repository != 'os-santiago/saferus'
             or args.environment != 'ai-sdlc-production' or not args.merge or not args.publication or not args.independent_review):
@@ -441,7 +461,7 @@ def _main(argv, stack):
         raise ValueError('Merge option requires an installation scope')
     if args.merge and args.command == 'local' and args.github_auth != 'gh-cli':
         raise ValueError('Merge installation requires gh-cli authentication for native protection')
-    if args.publication and (args.repository not in ('os-santiago/homedir', 'os-santiago/saferus') or not args.independent_review or (args.command in ('plan', 'local') and args.profile != 'verification')):
+    if args.publication and (not project_install.reviewed(args.repository, project_manifest) or not args.independent_review or (args.command in ('plan', 'local') and args.profile != 'verification')):
         raise ValueError('Publication requires a reviewed repository, verification and independent review')
     if args.publication is not None and args.command not in ('plan', 'local', 'status', 'credentials', 'sandbox'):
         raise ValueError('Publication option requires an installation scope')
@@ -497,9 +517,19 @@ def _main(argv, stack):
     # cannot satisfy the chart's mandatory installed merge-policy input yet.
     if not args.configure_prepared:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as preview:
-            preview_values = dict(execution_values or {})
+            preview_values = copy.deepcopy(execution_values or {})
+            if args.merge:
+                # The native rule is reconciled only by local; the preview needs
+                # a placeholder for the chart's mandatory installed policy.
+                preview_values.setdefault('merge', {})['configJSON'] = json.dumps({'preview': True})
             if args.publication:
                 preview_values['authority'] = {'policyJSON': json.dumps({'repository': args.repository})}
+                if project_manifest is not None:
+                    # The preview binds this manifest as the policy will after compilation.
+                    preview_json = json.dumps(project_manifest, sort_keys=True, separators=(',', ':'))
+                    preview_values['project'] = {'manifestJSON': preview_json}
+                    preview_values['authority'] = {'policyJSON': json.dumps({'repository': args.repository,
+                        'projectSHA256': hashlib.sha256(preview_json.encode()).hexdigest()})}
             json.dump(preview_values, preview); preview.flush()
             run(helm_args + ['-f', preview.name], stdout=subprocess.DEVNULL)
     if args.command == 'plan':
@@ -622,10 +652,13 @@ def _main(argv, stack):
     if args.merge:
         import github_merge_install
         native_policy = github_merge_install.reconcile(state, args.repository)
+        if project_manifest is not None:
+            project_install.require_ruleset(project_manifest, native_policy)
         execution_values['merge']['configJSON'] = json.dumps(native_policy, sort_keys=True)
     public_values = configure_identities(kubectl, provider, image_lock(args.images),
                                          cluster_uid, args.repository, args.environment,
-                                         freeze=args.profile == 'maintenance', candidate=args.profile in ('candidate', 'verification'), verification=args.profile == 'verification', publication=bool(args.publication), merge=bool(args.merge), build=build_bundle is not None, review=bool(args.independent_review))
+                                         freeze=args.profile == 'maintenance', candidate=args.profile in ('candidate', 'verification'), verification=args.profile == 'verification', publication=bool(args.publication), merge=bool(args.merge), build=build_bundle is not None, review=bool(args.independent_review),
+                                         project_manifest=project_manifest)
     if intake_values is not None:
         public_values['intake'] = intake_values
     if args.profile in ('candidate', 'verification'):
@@ -636,7 +669,7 @@ def _main(argv, stack):
         if args.independent_review:
             candidate_install.review_credentials(kubectl, cluster_uid)
         if args.publication:
-            execution_values['publication']['credentialRevision'] = configure_publication_client(kubectl, cluster_uid, args.repository, args.github_auth, args.refresh_github_credential)
+            execution_values['publication']['credentialRevision'] = configure_publication_client(kubectl, cluster_uid, args.repository, args.github_auth, args.refresh_github_credential, project_manifest=project_manifest)
         offline_runtime.install(kubectl, provider, kind, args.cluster, cluster_uid, cache,
                                 lock['image']['repository'] + '@' + lock['components']['worker']['digest'])
         execution_values['candidate']['apiServerCIDRs'] = candidate_install.api_cidrs(kubectl)
@@ -665,6 +698,7 @@ def _main(argv, stack):
     report = {'cluster': args.cluster, 'platform': args.platform, 'namespace': NAMESPACE, 'provider': provider,
               'repository': args.repository, 'environment': args.environment,
               'configurationDigest': config_digest,
+              'projectSHA256': json.loads(public_values['authority']['policyJSON']).get('projectSHA256', ''),
               'mode': args.profile, 'installationReady': True, 'deliveryEnabled': False,
               'issueIntakeEnabled': args.profile in ('shadow', 'candidate', 'verification'),
               'candidateExecutionEnabled': args.profile in ('candidate', 'verification'),

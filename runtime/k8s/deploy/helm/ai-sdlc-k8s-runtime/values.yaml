@@ -35,6 +35,9 @@ authority:
 # authority policy as projectSHA256; empty renders nothing.
 project:
   manifestJSON: ""
+  # Set from the migrator's project installation output; sizes the verifier
+  # namespace for the manifest's three concurrent repository-tests runs.
+  verifierQuota: {}
 migrator:
   enabled: true
   digest: ""

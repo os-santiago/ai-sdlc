@@ -120,7 +120,7 @@ func main() {
 		}
 		// Recheck the complete installation config, including pinned images, before every effect.
 		sealed, _ := json.Marshal(config)
-		r := verificationflow.Runtime{DB: c.DB, Load: newLoader(workspacebundle.Digest(sealed)), Client: client, Image: config.Placement.WorkerImage}
+		r := verificationflow.Runtime{DB: c.DB, Load: newLoader(workspacebundle.Digest(sealed)), Client: client, Image: config.Placement.WorkerImage, MailboxImage: config.Placement.MailboxImage}
 		var reviewPoll queuePoll
 		if reviewEnabled {
 			review := reviewflow.Runtime{DB: c.DB, Policy: r.Load, Load: loadReview, Client: client}
@@ -155,7 +155,7 @@ func main() {
 		reconcileQueues(ctx, reviewPoll, r.PollOnce, handoff)
 	})
 	defer stop()
-	err = service.RunWithReadiness(service.Metadata{Name: "verifier", Responsibility: "independently verify bounded candidate behavior", Consumes: []string{"verify-artifact"}, Produces: []string{"ai-sdlc.behavior-proof/v1"}}, ready, func(mux *http.ServeMux) {
+	err = service.RunWithReadiness(service.Metadata{Name: "verifier", Responsibility: "independently verify bounded candidate behavior", Consumes: []string{"verify-artifact"}, Produces: []string{"ai-sdlc.behavior-proof/v1", "ai-sdlc.behavior-proof/v2"}}, ready, func(mux *http.ServeMux) {
 		inbox := delivery.Inbox{DB: c.DB, Target: "verifier"}
 		mux.Handle("POST /internal/verify-artifact", inbox.Handler(c.Authority, "verify-artifact", "/internal/verify-artifact", verificationflow.Effect(func() (authority.Policy, error) { p, _, e := c.Authority(); return p, e })))
 	})

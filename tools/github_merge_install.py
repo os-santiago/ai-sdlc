@@ -19,8 +19,10 @@ HASH = hashlib.sha256(json.dumps(BODY, sort_keys=True).encode()).hexdigest()
 
 def configuration(repository):
     manifest = floor.manifest_for(repository)
-    name = repository.split('/')[1]
-    body = json.loads((ROOT / f'runtime/k8s/deploy/github/{name}-merge-ruleset.json').read_text())
+    body = floor.project_ruleset(repository)
+    if body is None:
+        name = repository.split('/')[1]
+        body = json.loads((ROOT / f'runtime/k8s/deploy/github/{name}-merge-ruleset.json').read_text())
     return (manifest, body, f'repos/{repository}/rulesets',
             hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest())
 

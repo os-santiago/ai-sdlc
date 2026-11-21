@@ -22,6 +22,10 @@ import (
 // Recipe names this verification plug-in in commands and manifests.
 const Recipe = "repository-tests/v1"
 
+// RulesVersion names the decision rules below; a change to them must change
+// it, so commands signed under the old rules no longer verify.
+const RulesVersion = "decide/v1"
+
 // Bounds of one runner result line.
 const (
 	// 512 tests encode to about 38 KiB (64-hex id plus status per test).
@@ -205,7 +209,9 @@ func Decide(v project.Verification, e Evidence) Decision {
 	if e.Baseline.ExitCode != 0 {
 		return result(false, "baseline-failing")
 	}
-	if e.Cross.ExitCode == 0 {
+	// A timeout (124) or a command that could not run (125) is not a test
+	// failure on the base code.
+	if e.Cross.ExitCode == 0 || e.Cross.ExitCode == 124 || e.Cross.ExitCode == 125 {
 		return result(false, "no-failing-test")
 	}
 	s.FailToPass = 1

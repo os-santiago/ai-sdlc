@@ -102,13 +102,8 @@ func Effect(load Loader) delivery.Effect {
 		behavior, e := store.ReadRepairBehavior(ctx, tx, v.ID)
 		var proof verificationflow.BehaviorProof
 		if e != nil || authority.Digest(behavior) != c.Reference.BehaviorSHA256 || authority.DecodeStrict(behavior, &proof) != nil ||
-			proof.Version != "ai-sdlc.behavior-proof/v1" || proof.Command != verified || !proof.BehaviorVerified || proof.PublicationAuthorized || len(proof.ResourceUIDs) != 5 {
+			!verificationflow.ValidBehaviorProof(proof, verified) {
 			return nil, repair.ErrRepair
-		}
-		for _, name := range []string{"config", "baseline", "candidate", "reference", "tests"} {
-			if proof.ResourceUIDs[name] == "" {
-				return nil, repair.ErrRepair
-			}
 		}
 		allowance, e := store.LockRepairParent(ctx, tx, c.WorkItemID, original.ID(), parent.Record.AllocationID)
 		if e != nil {

@@ -32,7 +32,8 @@ type TestsRun struct {
 	source    []byte
 	timeout   time.Duration
 	runs      int
-	tests     string // container ID of the tests container seen by Prepare
+	imported  bool
+	tests     string // container ID of the tests container seen by Import
 }
 
 // PlanTestsRun compiles the run and checks, before any effect, that source is
@@ -203,20 +204,50 @@ func (t *TestsRun) poll(ctx context.Context, uid string, deadline time.Time, don
 	}
 }
 
-// Prepare waits until the sidecar and the tests container run (the runner
-// is then waiting for its marker), imports the exact source tree through
-// the sidecar and publishes the ready marker. The same sidecar and tests
-// container instances must be observed before and after.
+// TestsStatus is one non-blocking observation of a run's pod.
+type TestsStatus struct {
+	Ready     bool // the sidecar and the tests container run: import may start
+	Succeeded bool // the tests container completed and the pod succeeded
+}
+
+// Status observes the pod once. Any state outside the expected progression
+// (a failed container, a restart, a changed template) is an error.
+func (t *TestsRun) Status(ctx context.Context, uid string) (TestsStatus, error) {
+	if t == nil || !resourceUID.MatchString(uid) {
+		return TestsStatus{}, ErrTransport
+	}
+	o, err := t.observe(ctx, uid)
+	if err != nil {
+		return TestsStatus{}, err
+	}
+	return TestsStatus{Ready: o.phase == core.PodRunning && o.transfer != "" && o.testsState == "running", Succeeded: o.phase == core.PodSucceeded}, nil
+}
+
+// Prepare waits until the pod is ready, then imports (see Import).
 func (t *TestsRun) Prepare(ctx context.Context, uid string) error {
 	if t == nil || !resourceUID.MatchString(uid) || t.tests != "" {
 		return ErrTransport
 	}
-	started := time.Now()
-	before, err := t.poll(ctx, uid, started.Add(repositorytests.PullSeconds*time.Second), func(o testsObservation) bool {
+	if _, err := t.poll(ctx, uid, time.Now().Add(repositorytests.PullSeconds*time.Second), func(o testsObservation) bool {
 		return o.phase == core.PodRunning && o.transfer != "" && o.testsState == "running"
-	})
-	if err != nil {
+	}); err != nil {
 		return err
+	}
+	return t.Import(ctx, uid)
+}
+
+// Import requires a ready pod (the runner is then waiting for its marker),
+// imports the exact source tree through the sidecar and publishes the ready
+// marker. The same sidecar and tests container instances must be observed
+// before and after. It runs at most once per run.
+func (t *TestsRun) Import(ctx context.Context, uid string) error {
+	if t == nil || !resourceUID.MatchString(uid) || t.tests != "" || t.imported {
+		return ErrTransport
+	}
+	t.imported = true
+	before, err := t.observe(ctx, uid)
+	if err != nil || before.phase != core.PodRunning || before.transfer == "" || before.testsState != "running" {
+		return ErrTransport
 	}
 	// The runner waits ReadySeconds from its own start; import and ready
 	// must finish well within that.
@@ -261,10 +292,7 @@ func (t *TestsRun) Prepare(ctx context.Context, uid string) error {
 	return nil
 }
 
-// ReadResult waits for the pod to succeed (the runner exits 0 only after it
-// wrote every result), then reads the tests container's bounded log: exactly
-// one result line per repetition, from the same container instance Prepare
-// observed. It returns the runs and the exact log bytes for the proof.
+// ReadResult waits for the pod to succeed, then collects (see Collect).
 func (t *TestsRun) ReadResult(ctx context.Context, uid string) ([]repositorytests.Run, []byte, error) {
 	if t == nil || t.tests == "" || !resourceUID.MatchString(uid) {
 		return nil, nil, ErrTransport
@@ -272,6 +300,20 @@ func (t *TestsRun) ReadResult(ctx context.Context, uid string) ([]repositorytest
 	deadline := time.Now().Add(time.Duration(t.runs)*t.timeout + repositorytests.MarginSeconds*time.Second)
 	if _, err := t.poll(ctx, uid, deadline, func(o testsObservation) bool { return o.phase == core.PodSucceeded }); err != nil {
 		return nil, nil, err
+	}
+	return t.Collect(ctx, uid)
+}
+
+// Collect requires a succeeded pod (the runner exits 0 only after it wrote
+// every result) and reads the tests container's bounded log: exactly one
+// result line per repetition, from the same container instance Import
+// observed. It returns the runs and the exact log bytes for the proof.
+func (t *TestsRun) Collect(ctx context.Context, uid string) ([]repositorytests.Run, []byte, error) {
+	if t == nil || t.tests == "" || !resourceUID.MatchString(uid) {
+		return nil, nil, ErrTransport
+	}
+	if o, err := t.observe(ctx, uid); err != nil || o.phase != core.PodSucceeded || o.tests != t.tests {
+		return nil, nil, ErrTransport
 	}
 	r := t.resources
 	limit := int64(t.runs * (repositorytests.MaxResultBytes + 1))
