@@ -51,6 +51,27 @@ type UpgradeFence struct {
 var browserUpgradeTables = []string{"deployment_browser_cleanups", "deployment_browser_evidence", "deployment_browser_intents", "deployment_browser_pods", "deployment_browser_sends"}
 var repairUpgradeTables = []string{"execution_repairs", "repair_model_budgets", "review_repair_handoffs", "review_repair_stops"}
 
+// RelaxationMigrations only relax constraints: they add no table, column,
+// role or row, so a configuration upgrade may apply them on top of the
+// catalog it fences (a source missing them is admitted, and the upgrade's
+// own migrator job applies them). Every other migration needs its own bridge.
+var RelaxationMigrations = []string{"0038_generic_publication_scope.sql"}
+
+// configurationSource reports whether source is the current catalog, or the
+// current catalog without a suffix of relaxation migrations.
+func configurationSource(source []MigrationIdentity) bool {
+	catalog, err := MigrationCatalog()
+	if err != nil || ValidateMigrationSource(source) != nil || len(source) < len(catalog)-len(RelaxationMigrations) {
+		return false
+	}
+	for i, migration := range catalog[len(source):] {
+		if migration.Filename != RelaxationMigrations[len(RelaxationMigrations)-len(catalog)+len(source)+i] {
+			return false
+		}
+	}
+	return true
+}
+
 func upgradeFenceTables(source []MigrationIdentity) ([]string, error) {
 	return selectedUpgradeFenceTables(source, false)
 }
@@ -65,10 +86,10 @@ func scopedUpgradeFenceTables(source []MigrationIdentity, browser, feedback bool
 
 func repairScopedUpgradeFenceTables(source []MigrationIdentity, browser, feedback, repair bool) ([]string, error) {
 	catalog, err := MigrationCatalog()
-	if err != nil || len(catalog) != 37 || catalog[36].Filename != "0037_review_repair.sql" || catalog[35].Filename != "0036_review_feedback.sql" || catalog[34].Filename != "0035_deployment_browser.sql" || catalog[32].Filename != "0033_production_completion.sql" || catalog[33].Filename != "0034_execution_failures.sql" || ValidateMigrationSource(source) != nil || (browser && feedback) || (repair && (browser || feedback)) {
+	if err != nil || len(catalog) != 38 || catalog[37].Filename != "0038_generic_publication_scope.sql" || catalog[36].Filename != "0037_review_repair.sql" || catalog[35].Filename != "0036_review_feedback.sql" || catalog[34].Filename != "0035_deployment_browser.sql" || catalog[32].Filename != "0033_production_completion.sql" || catalog[33].Filename != "0034_execution_failures.sql" || ValidateMigrationSource(source) != nil || (browser && feedback) || (repair && (browser || feedback)) {
 		return nil, ErrUpgradeFence
 	}
-	if (repair && len(source) != 36 && len(source) != 37) || (!repair && ((feedback && len(source) != 35 && len(source) != 36) || (!feedback && ((!browser && len(source) != 33 && len(source) != 34) || (browser && len(source) != 34 && len(source) != 35))))) {
+	if (repair && len(source) != 36 && len(source) != 37 && len(source) != 38) || (!repair && ((feedback && len(source) != 35 && len(source) != 36) || (!feedback && ((!browser && len(source) != 33 && len(source) != 34) || (browser && len(source) != 34 && len(source) != 35))))) {
 		return nil, ErrUpgradeFence
 	}
 	// Historical bridges never admit the new feedback schema or its rows.
@@ -171,7 +192,7 @@ func (f *UpgradeFence) inspectHistory(ctx context.Context) error {
 	}
 	if f.configurationHistory {
 		var blocked bool
-		if len(f.source) != 37 || f.tx.QueryRowContext(ctx, configurationUpgradeInFlight).Scan(&blocked) != nil {
+		if !configurationSource(f.source) || f.tx.QueryRowContext(ctx, configurationUpgradeInFlight).Scan(&blocked) != nil {
 			return ErrUpgradeFence
 		}
 		if blocked {
@@ -284,7 +305,7 @@ func (db *DB) withScopedUpgradeFence(ctx context.Context, database string, sourc
 // history is admitted, and any in-flight model-dependent work is rejected.
 // It never grants migration, delivery or repair authority.
 func (db *DB) WithConfigurationUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, pause func(context.Context, *UpgradeFence) error) error {
-	if len(source) != 37 {
+	if !configurationSource(source) {
 		return ErrUpgradeFence
 	}
 	return db.withConfiguredUpgradeFence(ctx, database, source, false, false, false, true, true, pause)
