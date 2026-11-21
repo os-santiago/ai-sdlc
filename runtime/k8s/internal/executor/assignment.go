@@ -43,6 +43,10 @@ type Assignment struct {
 	AcceptanceCriteria []string           `json:"acceptanceCriteria"`
 	ExpiresAt          int64              `json:"expiresAt"`
 	Repair             *repair.Assignment `json:"repair,omitempty"`
+	// Workspace is installation-controlled context for the prompt, never
+	// issue text: WorkspaceOfflineTests when the repository is verified with
+	// its own tests offline and the generator's workspace cannot run them.
+	Workspace string `json:"workspace,omitempty"`
 }
 
 // Profile contains reviewed local bounds, never arbitrary shell commands,
@@ -135,6 +139,10 @@ func parseWorkloadProfile(raw []byte, expected string) (Profile, error) {
 	return ParseReviewProfile(raw, expected)
 }
 
+// WorkspaceOfflineTests marks an assignment whose repository is verified
+// with its own tests in independent offline verification.
+const WorkspaceOfflineTests = "offline-repository-tests"
+
 func ParseAssignment(raw []byte, expected string, now time.Time) (Assignment, error) {
 	var a Assignment
 	keys := []string{"version", "workItemId", "attempt", "repository", "sourceSHA", "treeSHA256", "profileSHA256", "authorityRevision", "issueNumbers", "title", "body", "acceptanceCriteria", "expiresAt"}
@@ -142,10 +150,16 @@ func ParseAssignment(raw []byte, expected string, now time.Time) (Assignment, er
 	if json.Unmarshal(raw, &fields) == nil && fields["repair"] != nil {
 		keys = append(keys, "repair")
 	}
+	if fields["workspace"] != nil {
+		keys = append(keys, "workspace")
+	}
 	if strictBound(raw, expected, MaxAssignmentBytes, keys, &a) != nil || a.Version != AssignmentVersion || !uuidPattern.MatchString(a.WorkItemID) || a.Attempt < 1 || a.Attempt > 16 || len(a.Repository) > 256 || !repoPattern.MatchString(a.Repository) || !workspacebundle.ValidSourceSHA(a.SourceSHA) || !workspacebundle.ValidDigest(a.TreeSHA256) || !workspacebundle.ValidDigest(a.ProfileSHA256) || !workspacebundle.ValidDigest(a.AuthorityRevision) {
 		return Assignment{}, ErrInvalid
 	}
 	if a.Repair != nil && (a.Attempt != 2 || !a.Repair.Valid() || a.TreeSHA256 != a.Repair.Reference.ParentTreeSHA256) {
+		return Assignment{}, ErrInvalid
+	}
+	if a.Workspace != "" && a.Workspace != WorkspaceOfflineTests {
 		return Assignment{}, ErrInvalid
 	}
 	for _, part := range strings.Split(a.Repository, "/") {

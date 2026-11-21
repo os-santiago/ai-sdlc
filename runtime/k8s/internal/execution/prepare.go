@@ -173,7 +173,7 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 		Repository: c.Repository, SourceSHA: c.SourceSHA, TreeSHA256: c.ProfileSHA256, ProfileSHA256: c.ProfileSHA256,
 		AuthorityRevision: c.AuthorityRevision, IssueNumbers: []int{c.IssueNumber}, Title: snapshot.Issue.Title, Body: snapshot.Issue.Body,
 		AcceptanceCriteria: normalizedevent.ExtractAcceptanceCriteria(snapshot.Issue.Body), ExpiresAt: c.ExpiresAt}
-	assignment.Body += WorkspaceNote(c.Repository)
+	assignment.Workspace = WorkspaceFor(c.Repository)
 	var parent store.VerificationCandidate
 	if c.Repair != nil {
 		a, p, e := repairPreparation(ctx, db, in.Policy, c)
@@ -234,17 +234,14 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 	return Prepared{assignment: raw, source: source, originalSource: originalSource, profile: in.Profile, adev: in.ADev, claim: claim}, nil
 }
 
-// WorkspaceNote tells the generator, for a repository verified with its own
-// tests, that its workspace cannot build or test: those runs happen in the
-// independent offline verification with the installation's toolchain.
-// Without it, agents spend their step budget on failing test commands.
-func WorkspaceNote(repository string) string {
+// WorkspaceFor marks the assignment of a repository verified with its own
+// tests, whose generator workspace cannot build or test: the prompt then says
+// so as reviewed installation context. Without it, agents spend their step
+// budget on failing test commands.
+func WorkspaceFor(repository string) string {
 	m, ok := project.Lookup(repository)
 	if !ok || m.Verification == nil {
 		return ""
 	}
-	return "\n\nWorkspace note from the installation: this workspace has no build toolchain and no network, " +
-		"so do not try to compile, install dependencies or run tests here. Read the relevant code, make the change, " +
-		"and add or update tests that check the requested behaviour. The repository's own test suite then runs in " +
-		"independent offline verification, which requires a test that fails on the current code and passes with your change."
+	return executor.WorkspaceOfflineTests
 }
