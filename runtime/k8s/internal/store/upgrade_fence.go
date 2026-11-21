@@ -292,6 +292,11 @@ func (db *DB) WithReviewFeedbackUpgradeFence(ctx context.Context, database strin
 // WithReviewRepairUpgradeFence excludes writers for the exact 36-to-37 bridge.
 // Feedback and all child ledgers must be empty: no historical work gains repair.
 func (db *DB) WithReviewRepairUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, pause func(context.Context, *UpgradeFence) error) error {
+	// The shared table selection also serves the configuration protocol,
+	// which admits the current 38-entry catalog; this bridge never does.
+	if len(source) != 36 && len(source) != 37 {
+		return ErrUpgradeFence
+	}
 	return db.withRepairScopedUpgradeFence(ctx, database, source, true, false, false, true, pause)
 }
 
