@@ -45,6 +45,20 @@ class ProjectManifestInstallTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             project_install.load(write(without), 'example/service')
 
+    def test_unsafe_scope_is_refused_before_any_remote_effect(self):
+        cases = {
+            'case-folded reference': dict(MANIFEST, repository='OS-Santiago/Saferus'),
+            'uppercase': dict(MANIFEST, repository='Example/Service'),
+            'other branch': dict(MANIFEST, baseBranch='develop'),
+            'missing app': dict(MANIFEST, merge=dict(MANIFEST['merge'], required=[{'context': 'test'}])),
+            'null app': dict(MANIFEST, merge=dict(MANIFEST['merge'], required=[{'context': 'test', 'appID': None}])),
+            'approvals': dict(MANIFEST, merge=dict(MANIFEST['merge'], humanApprovals=1)),
+            'no ruleset': dict(MANIFEST, merge=dict(MANIFEST['merge'], rulesetID='1')),
+        }
+        for name, manifest in cases.items():
+            with self.assertRaises(ValueError, msg=name):
+                project_install.load(write(manifest), manifest['repository'])
+
     def test_bind_keeps_an_existing_installed_manifest(self):
         compiled = {'manifestJSON': '{}', 'manifestSHA256': 'b' * 64, 'verifierQuota': {'requests.cpu': '810m'}}
         policy = {}
@@ -58,9 +72,14 @@ class ProjectManifestInstallTests(unittest.TestCase):
         calls = []
         def run(args, **kwargs):
             calls.append((args, json.loads(kwargs['input'])))
-            return SimpleNamespace(stdout=json.dumps({'version': 'ai-sdlc.project-installation/v1', 'manifestJSON': '{}', 'manifestSHA256': 'd' * 64}))
+            return SimpleNamespace(stdout=json.dumps({'version': 'ai-sdlc.project-installation/v1', 'manifestJSON': '{}', 'manifestSHA256': digest}))
+        import hashlib
+        digest = hashlib.sha256(b'{}').hexdigest()
         compiled = project_install.compile_installation(run, 'podman', 'registry.example/migrator@sha256:' + 'e' * 64, {'repository': 'example/service'}, MANIFEST)
-        self.assertEqual(compiled['manifestSHA256'], 'd' * 64)
+        self.assertEqual(compiled['manifestSHA256'], digest)
+        digest = 'd' * 64
+        with self.assertRaises(ValueError):
+            project_install.compile_installation(run, 'podman', 'registry.example/migrator@sha256:' + 'e' * 64, {'repository': 'example/service'}, MANIFEST)
         args, payload = calls[0]
         self.assertIn('--network=none', args)
         self.assertEqual(args[-1], 'compile-project-installation')

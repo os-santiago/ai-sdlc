@@ -44,6 +44,10 @@ class InstallationConfigurationTests(unittest.TestCase):
                 self.assertEqual(install.main(['plan', '--config', str(Path(directory) / 'install.json')]), 0)
             plan = json.loads(output.getvalue())
             self.assertTrue(plan['publicationEnabled'])
+            with patch.object(install, 'tools', return_value={'helm': 'helm', 'kind': 'kind', 'kubectl': 'kubectl'}), \
+                 patch.object(install, 'run', side_effect=ValueError('stop at cluster access')):
+                with self.assertRaisesRegex(ValueError, 'stop at cluster access'):
+                    install.main(['status', '--config', str(Path(directory) / 'install.json')])
             self.assertEqual(plan['repository'], 'example/service')
             del config['projectManifest']
             (Path(directory) / 'install.json').write_text(json.dumps(config))

@@ -337,11 +337,11 @@ def configure_github_client(kubectl, cluster_uid, repository, refresh=False, ins
     return github_client.configure(secrets_api, kubectl, cluster_uid, repository, refresh)
 
 
-def configure_publication_client(kubectl, cluster_uid, repository, auth, refresh=False, installer=None):
+def configure_publication_client(kubectl, cluster_uid, repository, auth, refresh=False, installer=None, project_manifest=None):
     api = installer or SimpleNamespace(owned_secret=owned_secret, read_resource=read_resource,
         create_owned_secret=create_owned_secret, run=run)
     name = 'ai-sdlc-publication-client'
-    if repository not in ('os-santiago/homedir', 'os-santiago/saferus') and not github_merge_policy.registered(repository):
+    if not project_install.reviewed(repository, project_manifest):
         raise ValueError('Publication supports only reviewed Homedir, Saferus or an installed project manifest')
     if api.owned_secret(kubectl, name, cluster_uid) is None and auth != 'gh-cli':
         raise ValueError('Publication needs an explicitly imported client via --github-auth gh-cli')
@@ -436,8 +436,9 @@ def _main(argv, stack):
             setattr(args, key, value)
     project_manifest = None
     if args.project_manifest is not None:
-        if args.command not in ('plan', 'local') or args.profile != 'verification':
-            raise ValueError('A project manifest requires plan or local with the verification profile')
+        # status, credentials and sandbox address the same installed scope.
+        if args.command in ('plan', 'local') and args.profile != 'verification':
+            raise ValueError('A project manifest requires the verification profile')
         project_manifest = project_install.load(args.project_manifest, args.repository)
         github_merge_policy.register_project(project_manifest)
     if args.build_bundle is not None and (args.command not in ('plan', 'local') or args.platform != 'konflux'
@@ -657,7 +658,7 @@ def _main(argv, stack):
         if args.independent_review:
             candidate_install.review_credentials(kubectl, cluster_uid)
         if args.publication:
-            execution_values['publication']['credentialRevision'] = configure_publication_client(kubectl, cluster_uid, args.repository, args.github_auth, args.refresh_github_credential)
+            execution_values['publication']['credentialRevision'] = configure_publication_client(kubectl, cluster_uid, args.repository, args.github_auth, args.refresh_github_credential, project_manifest=project_manifest)
         offline_runtime.install(kubectl, provider, kind, args.cluster, cluster_uid, cache,
                                 lock['image']['repository'] + '@' + lock['components']['worker']['digest'])
         execution_values['candidate']['apiServerCIDRs'] = candidate_install.api_cidrs(kubectl)
@@ -686,6 +687,7 @@ def _main(argv, stack):
     report = {'cluster': args.cluster, 'platform': args.platform, 'namespace': NAMESPACE, 'provider': provider,
               'repository': args.repository, 'environment': args.environment,
               'configurationDigest': config_digest,
+              'projectSHA256': json.loads(public_values['authority']['policyJSON']).get('projectSHA256', ''),
               'mode': args.profile, 'installationReady': True, 'deliveryEnabled': False,
               'issueIntakeEnabled': args.profile in ('shadow', 'candidate', 'verification'),
               'candidateExecutionEnabled': args.profile in ('candidate', 'verification'),

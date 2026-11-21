@@ -37,6 +37,9 @@ def fixture():
     return material, secrets, resource
 
 
+DIGEST = __import__('hashlib').sha256(b'{"m":1}').hexdigest()
+
+
 class IdentityInstallationTests(unittest.TestCase):
     def configure(self, material, secrets, resource, freeze=None, **options):
         lock = {'image': {'repository': 'quay.io/os-santiago/ai-sdlc'},
@@ -68,9 +71,9 @@ class IdentityInstallationTests(unittest.TestCase):
             calls.append(args[-1])
             if args[-1] == 'compile-project-installation':
                 return SimpleNamespace(stdout=json.dumps({'version': 'ai-sdlc.project-installation/v1', 'manifestJSON': '{"m":1}',
-                                                          'manifestSHA256': 'f' * 64, 'verifierQuota': {'requests.cpu': '810m'}}))
+                                                          'manifestSHA256': DIGEST, 'verifierQuota': {'requests.cpu': '810m'}}))
             policy = json.loads(kwargs['input'])['policy']
-            self.assertEqual(policy['projectSHA256'], 'f' * 64)
+            self.assertEqual(policy['projectSHA256'], DIGEST)
             return SimpleNamespace(stdout='')
         with patch.object(installer, 'identity_material', return_value=material), \
              patch.object(installer, 'owned_secret', side_effect=lambda k, name, uid: secrets.get(name)), \
@@ -80,10 +83,10 @@ class IdentityInstallationTests(unittest.TestCase):
             result = installer.configure_identities(['kubectl'], 'podman', lock, 'owned-uid', 'example/project', 'production-test',
                                                     project_manifest=manifest)
         self.assertEqual(calls, ['compile-project-installation', 'validate-bootstrap'])
-        self.assertEqual(json.loads(result['authority']['policyJSON'])['projectSHA256'], 'f' * 64)
+        self.assertEqual(json.loads(result['authority']['policyJSON'])['projectSHA256'], DIGEST)
         self.assertEqual(result['project'], {'manifestJSON': '{"m":1}', 'verifierQuota': {'requests.cpu': '810m'}})
         bound = json.loads(resource['data']['policy.json'])
-        bound['projectSHA256'] = 'f' * 64
+        bound['projectSHA256'] = DIGEST
         resource['data']['policy.json'] = json.dumps(bound)
         with self.assertRaises(ValueError):
             self.configure(material, secrets, resource)

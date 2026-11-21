@@ -19,7 +19,7 @@ Start from [`examples/ai-sdlc-sample.project.json`](../../examples/ai-sdlc-sampl
 | `verification.harnessGlobs` | Files a candidate may not change (build, dependency and test configuration) |
 | `verification.env` | Optional reviewed toolchain variables, for example `GOTOOLCHAIN=local` |
 | `publication` | The paths a candidate may change, and the file and size limits |
-| `merge` | The required checks (context and GitHub App ID), strict checks, resolved threads, zero human approvals |
+| `merge` | The required checks (context and GitHub App ID), strict checks, resolved threads, zero human approvals. `baseBranch` must be `main` |
 
 The pod limits in the manifest set the verifier namespace quota for three
 concurrent runs. The installer derives that quota.
@@ -34,7 +34,11 @@ concurrent runs. The installer derives that quota.
   --project-manifest path/to/manifest.json
 ```
 
-The installer:
+In an installation config file, the same manifest is the `projectManifest`
+key, resolved relative to the config file.
+
+The installer validates the manifest's repository (lowercase, not a
+reference) and merge section before any remote effect, then:
 1. compiles the manifest with the pinned migrator;
 2. binds its digest into the authority policy (`projectSHA256`);
 3. mounts it read-only in every component;

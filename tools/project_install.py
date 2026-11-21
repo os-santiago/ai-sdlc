@@ -5,8 +5,10 @@ from the target repository. The pinned migrator compiles it, the authority
 policy binds its digest, and the chart mounts it read-only.
 """
 import copy
+import hashlib
 import json
 from pathlib import Path
+import re
 
 REFERENCES = ('os-santiago/homedir', 'os-santiago/saferus')
 MAX_BYTES = 16384
@@ -35,11 +37,28 @@ def load(path, repository):
     if (not isinstance(manifest, dict) or manifest.get('version') != 'ai-sdlc.project/v1'
             or manifest.get('repository') != repository):
         raise ValueError('Project manifest must declare ai-sdlc.project/v1 for the installation repository')
-    if repository in REFERENCES:
-        raise ValueError('A reference repository uses its built-in manifest')
+    # GitHub names are case-insensitive; the runtime accepts only lowercase.
+    if not REPOSITORY.fullmatch(repository) or repository.lower() in REFERENCES:
+        raise ValueError('A project manifest needs a lowercase repository that is not a built-in reference')
     if not isinstance(manifest.get('verification'), dict) or not isinstance(manifest.get('merge'), dict):
         raise ValueError('Project manifest requires verification and merge sections')
+    # The runtime merge gate supports only main; refuse anything else before
+    # any remote effect.
+    if manifest.get('baseBranch') != 'main':
+        raise ValueError('Project manifest baseBranch must be main')
+    merge = manifest['merge']
+    required = merge.get('required')
+    if (type(merge.get('rulesetID')) is not int or not 0 < merge['rulesetID'] < 2 ** 31
+            or merge.get('strictChecks') is not True or merge.get('resolveThreads') is not True
+            or type(merge.get('humanApprovals')) is not int or merge['humanApprovals'] != 0
+            or not isinstance(required, list) or not 0 < len(required) <= 16
+            or any(not isinstance(c, dict) or set(c) != {'context', 'appID'} or not isinstance(c['context'], str)
+                   or not 0 < len(c['context']) <= 128 or type(c['appID']) is not int or c['appID'] <= 0 for c in required)):
+        raise ValueError('Project manifest merge section must name a ruleset and exact required checks with app IDs')
     return manifest
+
+
+REPOSITORY = re.compile(r'[a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}')
 
 
 def reviewed(repository, manifest):
@@ -58,6 +77,8 @@ def compile_installation(run, provider, image, policy, manifest):
     if (not isinstance(compiled, dict) or compiled.get('version') != 'ai-sdlc.project-installation/v1'
             or not isinstance(compiled.get('manifestJSON'), str) or not isinstance(compiled.get('manifestSHA256'), str)):
         raise ValueError('Unexpected project installation output')
+    if hashlib.sha256(compiled['manifestJSON'].encode()).hexdigest() != compiled['manifestSHA256']:
+        raise ValueError('Project installation digest does not match its manifest')
     return compiled
 
 
