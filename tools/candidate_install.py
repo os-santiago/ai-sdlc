@@ -191,6 +191,11 @@ def apply_model_upstream(values, path):
     if upstream['callSeconds'] > config['profile']['maxSeconds']:
         raise ValueError('Model call window exceeds the executor profile')
     config['profile']['callSeconds'] = upstream['callSeconds']
+    # One model call per SCC step: the call budget matches the step budget
+    # (each call reserves the response limit of output). The bundled Codex
+    # installations keep their reviewed 16-call budget and transitions.
+    steps = config['profile']['maxSteps']
+    config['model']['Limits'] = {'Calls': steps, 'InputBytes': 4194304, 'OutputBytes': steps * config['model']['ResponseLimit']}
     values['candidate']['configJSON'] = json.dumps(config, sort_keys=True)
     if 'review' in values:
         review = json.loads(values['review']['configJSON'])
