@@ -38,6 +38,10 @@ def require_unchanged_tool_budget(kubectl, desired):
     expected = json.loads(desired['candidate']['configJSON'])['profile']['maxSteps']
     if steps != expected:
         raise ValueError('Installed SCC tool budget differs; use a reviewed runtime transition before reconciliation')
+    # The per-call window exists exactly when a model upstream is installed, so
+    # reconciliation can neither switch the model service nor change its window.
+    if profile.get('callSeconds') != json.loads(desired['candidate']['configJSON'])['profile'].get('callSeconds'):
+        raise ValueError('Installed model service differs; use a reviewed runtime transition before reconciliation')
 
 
 def desired_values(root, image_lock_path, lock, verification=False, review=False, publication=False, merge=False, repair=False):

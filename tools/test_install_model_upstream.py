@@ -41,5 +41,18 @@ class ModelUpstreamInstallTests(unittest.TestCase):
                 candidate_install.apply_model_upstream(values(), write(document))
 
 
+    def test_reconciliation_cannot_switch_the_model_service(self):
+        from unittest.mock import patch
+        import install
+        installed = {'version': 'ai-sdlc.candidate-runtime/v1', 'profile': {'version': 'ai-sdlc.executor-profile/v1', 'maxSteps': 24}}
+        configmap = json.dumps({'data': {'config.json': json.dumps(installed)}})
+        desired = {'candidate': {'configJSON': json.dumps({'profile': {'maxSteps': 24, 'callSeconds': 330}})}}
+        with patch.object(install, 'run', return_value=type('R', (), {'stdout': configmap})()):
+            with self.assertRaisesRegex(ValueError, 'model service differs'):
+                candidate_install.require_unchanged_tool_budget(['kubectl'], desired)
+            desired['candidate']['configJSON'] = json.dumps({'profile': {'maxSteps': 24}})
+            candidate_install.require_unchanged_tool_budget(['kubectl'], desired)
+
+
 if __name__ == '__main__':
     unittest.main()
