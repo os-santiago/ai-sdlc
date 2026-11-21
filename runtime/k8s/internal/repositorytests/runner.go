@@ -88,8 +88,9 @@ func (r Runner) Run(ctx context.Context) (Run, error) {
 	cmd.WaitDelay = 5 * time.Second
 	result := Run{}
 	err := cmd.Run()
-	if r.ReapAll {
-		_ = syscall.Kill(-1, syscall.SIGKILL)
+	if r.ReapAll && reapAll(5*time.Second) != nil {
+		// Something the repository started survived: its report is untrusted.
+		return Run{}, errRunner
 	}
 	switch {
 	case err == nil:
@@ -248,4 +249,35 @@ func framed(name string) []byte {
 func (r Run) Encode() []byte {
 	raw, _ := json.Marshal(r)
 	return raw
+}
+
+// reapAll kills and waits for every other process of the pid namespace (the
+// runner is its init, so orphans are its children) until none is left. A
+// process created during the cleanup gets the signal again on the next pass.
+func reapAll(bound time.Duration) error {
+	return reap(bound, func() { _ = syscall.Kill(-1, syscall.SIGKILL) })
+}
+
+// waitChildren waits, without signalling, until the caller has no children.
+func waitChildren(bound time.Duration) error { return reap(bound, func() {}) }
+
+func reap(bound time.Duration, signal func()) error {
+	deadline := time.Now().Add(bound)
+	for {
+		signal()
+		var status syscall.WaitStatus
+		pid, err := syscall.Wait4(-1, &status, syscall.WNOHANG, nil)
+		switch {
+		case err == syscall.ECHILD:
+			return nil
+		case err != nil && err != syscall.EINTR:
+			return err
+		case pid > 0:
+			continue
+		}
+		if time.Now().After(deadline) {
+			return errRunner
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
