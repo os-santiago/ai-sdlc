@@ -23,7 +23,8 @@ func TestBehaviorProofVersionsMatchTheirRecipe(t *testing.T) {
 	passed, _ := json.Marshal(repositorytests.Decision{Passed: true, Summary: repositorytests.Summary{ChangedTestFiles: []string{"a_test.go"}}})
 	refused, _ := json.Marshal(repositorytests.Decision{Passed: false, Reason: "no-failing-test"})
 	v1 := BehaviorProof{Version: BehaviorProofV1, Command: reference, BehaviorVerified: true, ResourceUIDs: uidsFor("config", "baseline", "candidate", "reference", "tests")}
-	v2 := BehaviorProof{Version: BehaviorProofV2, Command: tests, BehaviorVerified: true, Decision: passed, CrossResultSHA256: strings.Repeat("c", 64), ResourceUIDs: uidsFor("config", "baseline", "tests", "candidate")}
+	v2 := BehaviorProof{Version: BehaviorProofV2, Command: tests, ToolchainImage: "registry.example/go@sha256:" + strings.Repeat("d", 64), BehaviorVerified: true, Decision: passed,
+		BaselineResultSHA256: strings.Repeat("a", 64), CrossResultSHA256: strings.Repeat("c", 64), CandidateResultSHA256: strings.Repeat("e", 64), ResourceUIDs: uidsFor("config", "baseline", "tests", "candidate")}
 	if !ValidBehaviorProof(v1, reference) || !ValidBehaviorProof(v2, tests) {
 		t.Fatal("valid proofs refused")
 	}
@@ -53,6 +54,8 @@ func TestBehaviorProofVersionsMatchTheirRecipe(t *testing.T) {
 			p.Version = "ai-sdlc.behavior-proof/v3"
 			return p, tests
 		},
+		"v2 without a cross digest": func() (BehaviorProof, verification.Command) { p := v2; p.CrossResultSHA256 = ""; return p, tests },
+		"v2 without a toolchain":    func() (BehaviorProof, verification.Command) { p := v2; p.ToolchainImage = ""; return p, tests },
 		"malformed decision": func() (BehaviorProof, verification.Command) {
 			p := v2
 			p.Decision = json.RawMessage(`{"passed":true,"extra":1}`)

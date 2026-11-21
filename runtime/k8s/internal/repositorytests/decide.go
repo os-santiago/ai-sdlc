@@ -209,7 +209,9 @@ func Decide(v project.Verification, e Evidence) Decision {
 	if e.Baseline.ExitCode != 0 {
 		return result(false, "baseline-failing")
 	}
-	if e.Cross.ExitCode == 0 {
+	// A timeout (124) or a command that could not run (125) is not a test
+	// failure on the base code.
+	if e.Cross.ExitCode == 0 || e.Cross.ExitCode == 124 || e.Cross.ExitCode == 125 {
 		return result(false, "no-failing-test")
 	}
 	s.FailToPass = 1

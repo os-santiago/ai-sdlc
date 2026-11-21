@@ -365,3 +365,37 @@ func TestLiveVerificationClaimCannotReuseCancelledEffect(t *testing.T) {
 		t.Fatal("no-send produced success")
 	}
 }
+
+func TestVerificationClaimRenewalReplacesOnlyALiveClaim(t *testing.T) {
+	f, db, r := verificationClaimFixture(t)
+	ctx := context.Background()
+	c, err := db.ClaimVerification(ctx, r.ID, r.PayloadDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.Admin.Pool.Exec(`UPDATE verification_requests SET claim_until=clock_timestamp()+interval '5 seconds' WHERE id=$1`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.Admin.Pool.QueryRow(`SELECT claim_until FROM verification_requests WHERE id=$1`, r.ID).Scan(&c.Until); err != nil {
+		t.Fatal(err)
+	}
+	renewed, err := db.RenewVerificationClaim(ctx, c)
+	if err != nil || !renewed.Until.After(c.Until) || renewed.Token != c.Token {
+		t.Fatal("renewal", err)
+	}
+	if db.CheckVerificationClaim(ctx, c) == nil || db.CheckVerificationClaim(ctx, renewed) != nil {
+		t.Fatal("the renewed claim must replace the old one")
+	}
+	if _, err = db.RenewVerificationClaim(ctx, c); err == nil {
+		t.Fatal("a replaced claim was renewed")
+	}
+	if _, err = f.Admin.Pool.Exec(`UPDATE verification_requests SET claim_until=clock_timestamp()-interval '1 second' WHERE id=$1`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.Admin.Pool.QueryRow(`SELECT claim_until FROM verification_requests WHERE id=$1`, r.ID).Scan(&renewed.Until); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.RenewVerificationClaim(ctx, renewed); err == nil {
+		t.Fatal("an expired claim was renewed")
+	}
+}

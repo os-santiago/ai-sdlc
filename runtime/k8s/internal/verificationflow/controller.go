@@ -58,7 +58,9 @@ func ValidBehaviorProof(b BehaviorProof, c verification.Command) bool {
 	keys := []string{"config", "baseline", "candidate", "reference", "tests"}
 	switch {
 	case b.Version == BehaviorProofV1 && c.Recipe != repositorytests.Recipe && len(b.Decision) == 0 && b.CrossResultSHA256 == "":
-	case b.Version == BehaviorProofV2 && c.Recipe == repositorytests.Recipe && len(b.Decision) != 0 && b.ReferenceResultSHA256 == "":
+	case b.Version == BehaviorProofV2 && c.Recipe == repositorytests.Recipe && len(b.Decision) != 0 && b.ReferenceResultSHA256 == "" &&
+		workspacebundle.ValidDigest(b.BaselineResultSHA256) && workspacebundle.ValidDigest(b.CrossResultSHA256) &&
+		workspacebundle.ValidDigest(b.CandidateResultSHA256) && b.ToolchainImage != "":
 		keys = []string{"config", "baseline", "tests", "candidate"}
 		var d repositorytests.Decision
 		if authority.DecodeStrict(b.Decision, &d) != nil || !d.Passed || d.Reason != "" {
@@ -90,6 +92,7 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 	if db == nil || load == nil || client == nil {
 		return proof, ControllerError{"configuration"}
 	}
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, 180*time.Second)
 	defer cancel()
 	c, record, snapshot, err := CurrentProof(ctx, db, load, id)
@@ -226,8 +229,12 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		return proof, ControllerError{stage}
 	}
 	if c.Recipe == repositorytests.Recipe {
+		// The settings come from the manifest the current policy binds; the
+		// command's authority revision covers that digest, and every fence
+		// re-checks it.
+		p, _, _, e := load()
 		m, ok := project.Lookup(c.Repository)
-		if !ok || m.Verification == nil {
+		if e != nil || !ok || m.Verification == nil || p.Revision() != c.AuthorityRevision || p.ProjectSHA256 == "" || m.Digest() != p.ProjectSHA256 {
 			return proof, ControllerError{stage}
 		}
 		v := *m.Verification
@@ -255,7 +262,24 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		if create("config", func() (string, error) { return testRuns["baseline"].CreateConfig(ctx) }) != nil {
 			return proof, ControllerError{stage}
 		}
-		// Runs are created together and run concurrently within the claim.
+		// The runs take minutes (image pulls, three concurrent pods, repeated
+		// candidate runs), so the claim is renewed while they run; the work
+		// stays bounded by the command's expiry and each pod's deadline.
+		claimCancel()
+		var bounded context.CancelFunc
+		ctx, bounded = context.WithDeadline(parent, time.UnixMilli(c.ExpiresAt))
+		defer bounded()
+		renew := func() error {
+			if time.Until(claim.Until) > 120*time.Second {
+				return nil
+			}
+			renewed, e := db.RenewVerificationClaim(ctx, claim)
+			if e != nil {
+				return e
+			}
+			claim = renewed
+			return fence()
+		}
 		for _, run := range repositorytests.RunNames() {
 			kind := repositorytests.LedgerKind(run)
 			stage = kind
@@ -263,11 +287,43 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 				return proof, ControllerError{stage}
 			}
 		}
+		deadline := time.Now()
 		for _, run := range repositorytests.RunNames() {
-			kind := repositorytests.LedgerKind(run)
-			stage = kind
-			if fence() != nil || testRuns[kind].Prepare(ctx, pods[kind]) != nil {
+			deadline = maxTime(deadline, time.Now().Add(time.Duration(repositorytests.DeadlineSeconds(run, v))*time.Second))
+		}
+		imported, finished := map[string]bool{}, map[string]bool{}
+		for len(finished) < len(testRuns) {
+			if time.Now().After(deadline) || renew() != nil {
 				return proof, ControllerError{stage}
+			}
+			for _, run := range repositorytests.RunNames() {
+				kind := repositorytests.LedgerKind(run)
+				if finished[kind] {
+					continue
+				}
+				stage = kind
+				status, e := testRuns[kind].Status(ctx, pods[kind])
+				if e != nil {
+					return proof, ControllerError{stage}
+				}
+				switch {
+				case status.Ready && !imported[kind]:
+					// Each run imports as soon as it is ready: its runner
+					// waits for the marker only a bounded time.
+					if fence() != nil || testRuns[kind].Import(ctx, pods[kind]) != nil {
+						return proof, ControllerError{stage}
+					}
+					imported[kind] = true
+				case status.Succeeded && imported[kind]:
+					finished[kind] = true
+				case status.Succeeded:
+					return proof, ControllerError{stage}
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return proof, ControllerError{stage}
+			case <-time.After(time.Second):
 			}
 		}
 		stage = "results"
@@ -275,10 +331,10 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		logs := map[string]string{}
 		for _, run := range repositorytests.RunNames() {
 			kind := repositorytests.LedgerKind(run)
-			if fence() != nil {
+			if renew() != nil || fence() != nil {
 				return proof, ControllerError{stage}
 			}
-			runs, raw, e := testRuns[kind].ReadResult(ctx, pods[kind])
+			runs, raw, e := testRuns[kind].Collect(ctx, pods[kind])
 			if e != nil {
 				return proof, ControllerError{stage}
 			}
@@ -288,6 +344,10 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		decision := repositorytests.Decide(v, repositorytests.Evidence{Baseline: results[repositorytests.RunBaseline][0], Cross: results[repositorytests.RunCross][0],
 			Candidate: results[repositorytests.RunCandidate], Changes: trees.Changes})
 		if !decision.Passed {
+			// A refusal is recorded only under current authority.
+			if fence() != nil {
+				return proof, ControllerError{"authority"}
+			}
 			return proof, DecisionError{Reason: decision.Reason}
 		}
 		if fence() != nil {
@@ -359,4 +419,11 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		return BehaviorProof{}, ControllerError{"commit"}
 	}
 	return proof, nil
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }

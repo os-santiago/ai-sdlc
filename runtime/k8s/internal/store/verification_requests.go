@@ -132,6 +132,22 @@ func (db *DB) CheckVerificationClaim(ctx context.Context, c VerificationClaim) e
 	}
 	return nil
 }
+
+// RenewVerificationClaim extends a still-valid claim by the original lease,
+// never past the command's expiry. The returned claim replaces the old one;
+// a lost or expired claim cannot be renewed.
+func (db *DB) RenewVerificationClaim(ctx context.Context, c VerificationClaim) (VerificationClaim, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if AssertComponent(ctx, db.Pool, "verifier") != nil {
+		return VerificationClaim{}, ErrExecution
+	}
+	renewed := c
+	if db.Pool.QueryRowContext(ctx, `UPDATE verification_requests SET claim_until=LEAST(expires_at,clock_timestamp()+interval '180 seconds') WHERE id=$1 AND claim_token=$2 AND claim_until=$3 AND state='claimed' AND claim_until>clock_timestamp() AND expires_at>clock_timestamp() RETURNING claim_until`, c.ID, c.Token, c.Until).Scan(&renewed.Until) != nil {
+		return VerificationClaim{}, ErrExecution
+	}
+	return renewed, nil
+}
 func (db *DB) StopVerification(ctx context.Context, c VerificationClaim, reason string) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
