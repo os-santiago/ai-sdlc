@@ -128,3 +128,23 @@ func TestControllerExitCannotHideObservedRequestDrift(t *testing.T) {
 		})
 	}
 }
+
+func TestControllerNamesEachDriveStop(t *testing.T) {
+	changed := req(1)
+	changed.Payload = []byte("substitution")
+	for want, s := range map[string]*driverSession{
+		"execution-sequence": {requests: []modelmailbox.Envelope{req(2)}, exitAfter: 1},
+		"execution-read":     {exitAfter: -1, readErr: podtransport.ErrTransport},
+	} {
+		err := driveModel(context.Background(), s, func(context.Context) error { return nil }, func(context.Context, modelmailbox.Envelope) error { return nil })
+		var stopped driveStop
+		if !errors.Is(err, ErrAuthority) || !errors.As(err, &stopped) || stopped.stage != want || DiagnosticStage(ControllerError{stopped.stage}) != want {
+			t.Fatalf("%s: err=%v", want, err)
+		}
+	}
+	err := driveModel(context.Background(), &driverSession{exitAfter: -1}, func(context.Context) error { return ErrAuthority }, nil)
+	var stopped driveStop
+	if !errors.As(err, &stopped) || stopped.stage != "execution-authority" {
+		t.Fatalf("authority: err=%v", err)
+	}
+}

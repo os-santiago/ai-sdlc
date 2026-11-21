@@ -64,7 +64,7 @@ func DiagnosticStage(err error) string {
 		return "authority-or-storage"
 	}
 	switch stopped.Stage {
-	case "source-preflight-authority", "source-rate-limited", "source-unavailable", "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "worker-exit", "export", "capture", "cleanup":
+	case "source-preflight-authority", "source-rate-limited", "source-unavailable", "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "execution-authority", "execution-observe", "execution-read", "execution-sequence", "execution-exit-race", "worker-exit", "export", "capture", "cleanup":
 		return stopped.Stage
 	}
 	if strings.HasPrefix(stopped.Stage, "model-") {
@@ -184,6 +184,10 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 			recorded := observationErr == nil && code == failure.code && db.RecordExecutionFailure(ctx, l.durable, uid, container, code) == nil
 			return record, workerFailure{code: failure.code, recorded: recorded}
 		}
+		var stopped driveStop
+		if stage == "execution" && errors.As(err, &stopped) {
+			stage = stopped.stage
+		}
 		return record, ControllerError{stage}
 	}
 	stage = "export"
@@ -209,6 +213,13 @@ func sameRequest(a, b modelmailbox.Envelope) bool {
 	return a.Version == b.Version && a.RequestSHA256 == b.RequestSHA256 && a.Attempt == b.Attempt && a.PodUID == b.PodUID && a.ExpiresAt == b.ExpiresAt && a.Kind == b.Kind && a.Status == b.Status && a.Sequence == b.Sequence && modelmailbox.Digest(a.Payload) == modelmailbox.Digest(b.Payload)
 }
 
+// driveStop names why driveModel stopped, for the safe diagnostic only. It is
+// still ErrAuthority: every cause stops the run the same, fail-closed way.
+type driveStop struct{ stage string }
+
+func (e driveStop) Error() string        { return ErrAuthority.Error() }
+func (e driveStop) Is(target error) bool { return target == ErrAuthority }
+
 type modelSession interface {
 	WorkerExit(context.Context) (int32, bool, error)
 	ReadRequest(context.Context) (modelmailbox.Envelope, error)
@@ -221,11 +232,11 @@ func driveModel(ctx context.Context, session modelSession, authorize func(contex
 	var previous modelmailbox.Envelope
 	for {
 		if ctx.Err() != nil || authorize(ctx) != nil {
-			return ErrAuthority
+			return driveStop{"execution-authority"}
 		}
 		code, exited, err := session.WorkerExit(ctx)
 		if err != nil {
-			return ErrAuthority
+			return driveStop{"execution-observe"}
 		}
 		if exited {
 			if code != 0 {
@@ -236,13 +247,13 @@ func driveModel(ctx context.Context, session modelSession, authorize func(contex
 		request, err := session.ReadRequest(ctx)
 		if err != nil && !errors.Is(err, modelmailbox.ErrPending) {
 			if !errors.Is(err, podtransport.ErrWorkerExited) {
-				return ErrAuthority
+				return driveStop{"execution-read"}
 			}
 			// An observed request at exit must already have a confirmed handoff.
 			// Never hide a new request, sequence gap or substituted duplicate
 			// behind the writer's zero exit. Pending/pre-read exit is empty.
 			if request.Sequence != 0 && (previous.Sequence == 0 || !sameRequest(request, previous)) {
-				return ErrAuthority
+				return driveStop{"execution-sequence"}
 			}
 			// The writer can exit between ReadRequest's before/after observations.
 			// Export/capture still require zero exit, no outstanding model call and a
@@ -254,16 +265,16 @@ func driveModel(ctx context.Context, session modelSession, authorize func(contex
 				}
 				return nil
 			}
-			return ErrAuthority
+			return driveStop{"execution-exit-race"}
 		}
 		if err == nil {
 			if request.Sequence == previous.Sequence && previous.Sequence != 0 {
 				if !sameRequest(request, previous) {
-					return ErrAuthority
+					return driveStop{"execution-sequence"}
 				}
 			} else {
 				if request.Sequence != previous.Sequence+1 {
-					return ErrAuthority
+					return driveStop{"execution-sequence"}
 				}
 				if deliver(ctx, request) != nil {
 					return ErrAuthority
@@ -276,7 +287,7 @@ func driveModel(ctx context.Context, session modelSession, authorize func(contex
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ErrAuthority
+			return driveStop{"execution-authority"}
 		case <-timer.C:
 		}
 	}
