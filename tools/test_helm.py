@@ -308,7 +308,7 @@ class ProjectManifestChartTests(unittest.TestCase):
                 file.flush()
                 return tests.render('-f', file.name)
         accepted = render('example/service', digest)
-        self.assertNotIn('supports only reviewed', accepted.stderr)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
         nameless = json.dumps({'version': 'ai-sdlc.project/v1'}, separators=(',', ':'))
         manifest_backup = manifest
         for repository, bound in (('example/other', digest), ('example/service', 'b' * 64), ('example/service', '')):

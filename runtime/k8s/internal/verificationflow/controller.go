@@ -166,7 +166,9 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 			defer stop()
 			reason := "uncertain"
 			var refused DecisionError
-			if errors.As(err, &refused) {
+			// A refusal is recorded only while the claim is still valid; the
+			// cleanup above may have outlived it.
+			if errors.As(err, &refused) && db.CheckVerificationClaim(stopCtx, claim) == nil {
 				reason = "comparison-failed"
 			}
 			_ = db.StopVerification(stopCtx, claim, reason)
@@ -270,7 +272,7 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		ctx, bounded = context.WithDeadline(parent, time.UnixMilli(c.ExpiresAt))
 		defer bounded()
 		renew := func() error {
-			if time.Until(claim.Until) > 120*time.Second {
+			if time.Until(claim.Until) > 150*time.Second {
 				return nil
 			}
 			renewed, e := db.RenewVerificationClaim(ctx, claim)
@@ -310,7 +312,8 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 				case status.Ready && !imported[kind]:
 					// Each run imports as soon as it is ready: its runner
 					// waits for the marker only a bounded time.
-					if fence() != nil || testRuns[kind].Import(ctx, pods[kind]) != nil {
+					// Renew first so the claim covers this whole import.
+					if renew() != nil || fence() != nil || testRuns[kind].Import(ctx, pods[kind]) != nil {
 						return proof, ControllerError{stage}
 					}
 					imported[kind] = true
@@ -368,7 +371,7 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		proof = BehaviorProof{Version: BehaviorProofV2, Command: c, ToolchainImage: v.Image, BaselineResultSHA256: logs["baseline"], CandidateResultSHA256: logs["candidate"],
 			CrossResultSHA256: logs["tests"], Decision: raw, ResourceUIDs: uids, BehaviorVerified: true, PublicationAuthorized: false}
 		encoded, _ := json.Marshal(proof)
-		if db.FinishVerification(ctx, claim, encoded) != nil {
+		if db.FinishVerificationWith(ctx, claim, encoded, []string{"baseline", "candidate", "config", "tests"}) != nil {
 			return BehaviorProof{}, ControllerError{"commit"}
 		}
 		return proof, nil

@@ -399,3 +399,37 @@ func TestVerificationClaimRenewalReplacesOnlyALiveClaim(t *testing.T) {
 		t.Fatal("an expired claim was renewed")
 	}
 }
+
+func TestRepositoryTestsVerificationFinishesWithItsFourResources(t *testing.T) {
+	_, db, r := verificationClaimFixture(t)
+	ctx := context.Background()
+	c, err := db.ClaimVerification(ctx, r.ID, r.PayloadDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"config", "baseline", "tests", "candidate"} {
+		e, err := db.BeginVerificationEffect(ctx, c, kind)
+		if err != nil {
+			t.Fatal(kind, err)
+		}
+		if err = db.AcknowledgeVerificationEffect(ctx, e, store.NewID()); err != nil {
+			t.Fatal("ack", err)
+		}
+	}
+	if db.ConfirmVerificationCleanup(ctx, c) != nil {
+		t.Fatal("cleanup")
+	}
+	proof := []byte(`{"behaviorVerified":true,"publicationAuthorized":false}`)
+	if db.FinishVerification(ctx, c, proof) == nil {
+		t.Fatal("the five-resource contract accepted four resources")
+	}
+	if db.FinishVerificationWith(ctx, c, proof, []string{"config", "baseline", "tests", "candidate", "reference"}) == nil {
+		t.Fatal("a missing resource was accepted")
+	}
+	if db.FinishVerificationWith(ctx, c, proof, []string{"config", "baseline", "tests", "candidate", "candidate"}) == nil {
+		t.Fatal("duplicate kinds accepted")
+	}
+	if err := db.FinishVerificationWith(ctx, c, proof, []string{"baseline", "candidate", "config", "tests"}); err != nil {
+		t.Fatal("repository-tests proof refused", err)
+	}
+}
