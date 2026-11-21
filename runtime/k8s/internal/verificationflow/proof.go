@@ -9,6 +9,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/execution"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
@@ -70,7 +71,9 @@ func currentProof(ctx context.Context, db *store.DB, load PolicyLoader, id strin
 		return reject()
 	}
 	p, config, profile, err := load()
-	if err != nil {
+	if err != nil || !BoundManifest(p) {
+		// The installed manifest registry follows each policy load; a
+		// transient mismatch is unavailable evidence, never a rejection.
 		return unavailable()
 	}
 	if !workspacebundle.ValidDigest(profile) {
@@ -108,7 +111,7 @@ func currentProof(ctx context.Context, db *store.DB, load PolicyLoader, id strin
 		return reject()
 	}
 	latest, latestConfig, latestProfile, err := load()
-	if err != nil || ctx.Err() != nil {
+	if err != nil || ctx.Err() != nil || !BoundManifest(latest) {
 		return unavailable()
 	}
 	if latestProfile != profile || latest.Revision() != p.Revision() || latestConfig.Digest() != config.Digest() || ctx.Err() != nil {
@@ -118,4 +121,14 @@ func currentProof(ctx context.Context, db *store.DB, load PolicyLoader, id strin
 		return reject()
 	}
 	return c, candidate, snapshot, nil
+}
+
+// BoundManifest reports whether the installed manifest registry holds exactly
+// the manifest the policy binds (or the policy binds none).
+func BoundManifest(p authority.Policy) bool {
+	if p.ProjectSHA256 == "" {
+		return true
+	}
+	m, ok := project.Lookup(p.Repository)
+	return ok && m.Repository == p.Repository && m.Digest() == p.ProjectSHA256
 }

@@ -149,3 +149,14 @@ func TestAFullRunAtTheTestLimitFitsTheResultBound(t *testing.T) {
 }
 
 func strconvItoa(i int) string { return strconv.Itoa(i) }
+
+func TestWeakDecisionsIgnoreTimeoutsAndUnrunnableCrossRuns(t *testing.T) {
+	v := project.Verification{Repeat: 1, TestGlobs: []string{"**/*_test.go"}}
+	for _, code := range []int{124, 125} {
+		e := Evidence{Baseline: Run{ExitCode: 0}, Cross: Run{ExitCode: code}, Candidate: []Run{{ExitCode: 0}},
+			Changes: []Change{{Path: "a/a_test.go"}}}
+		if d := Decide(v, e); d.Passed || d.Reason != "no-failing-test" {
+			t.Fatal("cross exit", code, d)
+		}
+	}
+}
