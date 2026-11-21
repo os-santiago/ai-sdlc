@@ -16,10 +16,10 @@ import (
 )
 
 // retryDelays spaces a command's eight delivery attempts (the schema's bound)
-// over about 26 minutes: quick retries first, then long ones, so a target that
-// is still starting (for example a model gateway benchmarking its upstream)
-// still receives it. Commands carry their own expiry.
-var retryDelays = [...]time.Duration{time.Second, 2 * time.Second, 4 * time.Second, time.Minute, 5 * time.Minute, 10 * time.Minute, 10 * time.Minute}
+// over about 19 minutes, inside the 20-minute command lifetime: quick retries
+// first, then long ones, so a target that is still starting (for example a
+// model gateway benchmarking its upstream) still receives it.
+var retryDelays = [...]time.Duration{time.Second, 2 * time.Second, 4 * time.Second, time.Minute, 5 * time.Minute, 7 * time.Minute, 6 * time.Minute}
 
 type Relay struct {
 	DB       *store.DB
