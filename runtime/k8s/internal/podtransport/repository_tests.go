@@ -31,6 +31,7 @@ type TestsRun struct {
 	treeSHA   string
 	source    []byte
 	timeout   time.Duration
+	runs      int
 	tests     string // container ID of the tests container seen by Prepare
 }
 
@@ -54,7 +55,8 @@ func PlanTestsRun(client *Client, p repositorytests.Pod, source []byte, expires 
 		return nil, ErrTransport
 	}
 	t := &TestsRun{resources: &Resources{client: client, binding: Binding{Namespace: p.Namespace}, expires: expires},
-		run: p.Run, sourceSHA: p.SourceSHA, treeSHA: p.TreeSHA256, source: source, timeout: time.Duration(p.Verification.TimeoutSeconds) * time.Second}
+		run: p.Run, sourceSHA: p.SourceSHA, treeSHA: p.TreeSHA256, source: source, runs: repositorytests.Repetitions(p.Run, p.Verification),
+		timeout: time.Duration(p.Verification.TimeoutSeconds) * time.Second}
 	config, _ := json.Marshal(w.ConfigMap)
 	pod, _ := json.Marshal(w.Pod)
 	if authority.DecodeStrict(config, &t.resources.config) != nil || authority.DecodeStrict(pod, &t.resources.pod) != nil {
@@ -255,35 +257,41 @@ func (t *TestsRun) Prepare(ctx context.Context, uid string) error {
 }
 
 // ReadResult waits for the pod to succeed (the runner exits 0 only after it
-// wrote its result), then reads the tests container's bounded log: exactly
-// one result line from the same container instance Prepare observed.
-func (t *TestsRun) ReadResult(ctx context.Context, uid string) (repositorytests.Run, []byte, error) {
+// wrote every result), then reads the tests container's bounded log: exactly
+// one result line per repetition, from the same container instance Prepare
+// observed. It returns the runs and the exact log bytes for the proof.
+func (t *TestsRun) ReadResult(ctx context.Context, uid string) ([]repositorytests.Run, []byte, error) {
 	if t == nil || t.tests == "" || !resourceUID.MatchString(uid) {
-		return repositorytests.Run{}, nil, ErrTransport
+		return nil, nil, ErrTransport
 	}
-	deadline := time.Now().Add(t.timeout + repositorytests.MarginSeconds*time.Second)
+	deadline := time.Now().Add(time.Duration(t.runs)*t.timeout + repositorytests.MarginSeconds*time.Second)
 	if _, err := t.poll(ctx, uid, deadline, func(o testsObservation) bool { return o.phase == core.PodSucceeded }); err != nil {
-		return repositorytests.Run{}, nil, err
+		return nil, nil, err
 	}
 	r := t.resources
-	limit := int64(repositorytests.MaxResultBytes + 1)
+	limit := int64(t.runs * (repositorytests.MaxResultBytes + 1))
 	raw, err := r.fetch(ctx, r.url("pods", r.pod.Name)+"/log?container=tests&limitBytes="+url.QueryEscape(itoa(limit+1)), "*/*", limit)
 	if err != nil {
-		return repositorytests.Run{}, nil, err
+		return nil, nil, err
 	}
 	after, err := t.observe(ctx, uid)
 	if err != nil || after.phase != core.PodSucceeded || after.tests != t.tests {
-		return repositorytests.Run{}, nil, ErrTransport
+		return nil, nil, ErrTransport
 	}
-	line, ok := bytes.CutSuffix(raw, []byte("\n"))
-	if !ok || bytes.ContainsAny(line, "\r\n") {
-		return repositorytests.Run{}, nil, ErrTransport
+	body, ok := bytes.CutSuffix(raw, []byte("\n"))
+	lines := bytes.Split(body, []byte("\n"))
+	if !ok || len(lines) != t.runs || bytes.ContainsRune(body, '\r') {
+		return nil, nil, ErrTransport
 	}
-	run, err := repositorytests.ParseRun(line)
-	if err != nil {
-		return repositorytests.Run{}, nil, ErrTransport
+	runs := make([]repositorytests.Run, 0, t.runs)
+	for _, line := range lines {
+		run, err := repositorytests.ParseRun(line)
+		if err != nil {
+			return nil, nil, ErrTransport
+		}
+		runs = append(runs, run)
 	}
-	return run, append([]byte(nil), line...), nil
+	return runs, append([]byte(nil), raw...), nil
 }
 
 func itoa(n int64) string {

@@ -56,12 +56,12 @@ func BuildTrees(source workspacebundle.Bundle, d delta.Delta, v project.Verifica
 
 // Tree selects the tree a run imports.
 func (t Trees) Tree(run string) (workspacebundle.Bundle, bool) {
-	switch {
-	case run == "baseline":
+	switch run {
+	case RunBaseline:
 		return t.Baseline, true
-	case run == "cross":
+	case RunCross:
 		return t.Cross, true
-	case len(run) == len("candidate-1") && run[:len("candidate-")] == "candidate-" && run[len(run)-1] >= '1' && run[len(run)-1] <= '3':
+	case RunCandidate:
 		return t.Candidate, true
 	}
 	return workspacebundle.Bundle{}, false

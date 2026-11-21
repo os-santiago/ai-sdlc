@@ -2,6 +2,7 @@ package repositorytests
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -11,7 +12,7 @@ import (
 func testPod() Pod {
 	return Pod{Namespace: "ai-sdlc", VerifierImage: "registry.example/verifier@sha256:" + strings.Repeat("a", 64),
 		MailboxImage: "registry.example/mailbox@sha256:" + strings.Repeat("b", 64), WorkItemID: "11111111-1111-4111-8111-111111111111",
-		Attempt: 1, Run: "cross", SourceSHA: strings.Repeat("c", 40), TreeSHA256: strings.Repeat("d", 64),
+		VerificationID: "verification-" + strings.Repeat("9", 64), Run: RunCross, SourceSHA: strings.Repeat("c", 40), TreeSHA256: strings.Repeat("d", 64),
 		Verification: project.Verification{Image: "registry.example/go@sha256:" + strings.Repeat("e", 64), Command: []string{"go", "test", "./...", "$(POD_UID)"},
 			TimeoutSeconds: 300, CPU: "1", Memory: "1Gi", EphemeralStorage: "1Gi", Network: "none", Result: project.Result{ExitCode: true},
 			Repeat: 2, TestGlobs: []string{"**/*_test.go"}}}
@@ -47,7 +48,7 @@ func TestCompilePodIsOfflineBoundedAndKeepsTheCommandOutOfTheSpec(t *testing.T) 
 		t.Fatal("tests container", tests)
 	}
 	command := tests["command"].([]any)
-	if command[0] != RunnerPath || command[1] != "repository-tests-run" || command[4] != testPod().SourceSHA || command[5] != testPod().TreeSHA256 {
+	if command[0] != RunnerPath || command[1] != "repository-tests-run" || command[4] != testPod().SourceSHA || command[5] != testPod().TreeSHA256 || command[6] != "1" {
 		t.Fatal("runner command", command)
 	}
 	if _, env := tests["env"]; env {
@@ -66,8 +67,8 @@ func TestCompilePodIsOfflineBoundedAndKeepsTheCommandOutOfTheSpec(t *testing.T) 
 		}
 	}
 	config := w.ConfigMap
-	if config["metadata"].(map[string]any)["name"] != w.Pod["metadata"].(map[string]any)["name"].(string)+"-settings" {
-		t.Fatal("each run needs its own settings object")
+	if config["metadata"].(map[string]any)["name"] != "verify-"+strings.Repeat("9", 32)+"-inputs" || w.Pod["metadata"].(map[string]any)["name"] != "verify-"+strings.Repeat("9", 32)+"-tests" {
+		t.Fatal("names must fit the verifier effect ledger", config["metadata"], w.Pod["metadata"])
 	}
 	if config["immutable"] != true {
 		t.Fatal("settings must be immutable")
@@ -83,7 +84,7 @@ func TestCompilePodRefusesInvalidInput(t *testing.T) {
 		"namespace":      func(p *Pod) { p.Namespace = "Bad_NS" },
 		"mutable image":  func(p *Pod) { p.VerifierImage = "registry.example/verifier:latest" },
 		"work item":      func(p *Pod) { p.WorkItemID = "x" },
-		"attempt":        func(p *Pod) { p.Attempt = 0 },
+		"verification":   func(p *Pod) { p.VerificationID = "verification-x" },
 		"unknown run":    func(p *Pod) { p.Run = "candidate-3" },
 		"source":         func(p *Pod) { p.SourceSHA = "abc" },
 		"tree":           func(p *Pod) { p.TreeSHA256 = "" },
@@ -105,34 +106,42 @@ func TestCompilePodRefusesInvalidInput(t *testing.T) {
 	}
 }
 
-func TestAttemptSixteenAndReviewedEnvCompile(t *testing.T) {
+func TestReviewedEnvCompiles(t *testing.T) {
 	p := testPod()
-	p.Attempt = 16
-	p.Run = "candidate-2"
 	p.Verification.Env = map[string]string{"PATH": "/usr/local/go/bin:/usr/bin:/bin", "GOFLAGS": "-mod=vendor"}
 	if _, err := CompilePod(p); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestRunNamesAndDistinctPods(t *testing.T) {
-	names := RunNames(3)
-	if strings.Join(names, ",") != "baseline,cross,candidate-1,candidate-2,candidate-3" {
-		t.Fatal(names)
-	}
-	seen := map[string]bool{}
+func TestRunsShareSettingsAndTheCandidateRepeats(t *testing.T) {
 	p := testPod()
 	p.Verification.Repeat = 3
-	for _, run := range names {
+	pods := map[string]bool{}
+	var settings any
+	for _, run := range RunNames() {
 		p.Run = run
 		w, err := CompilePod(p)
 		if err != nil {
 			t.Fatal(run, err)
 		}
 		name := w.Pod["metadata"].(map[string]any)["name"].(string)
-		if seen[name] || len(name) > 63 {
+		if pods[name] || len(name) > 63 {
 			t.Fatal("pod name", name)
 		}
-		seen[name] = true
+		pods[name] = true
+		if settings != nil && !reflect.DeepEqual(settings, w.ConfigMap) {
+			t.Fatal("the runs of one verification must share one settings object")
+		}
+		settings = w.ConfigMap
+		spec := w.Pod["spec"].(map[string]any)
+		command := spec["containers"].([]any)[0].(map[string]any)["command"].([]any)
+		want, deadline := "1", float64(PullSeconds+ReadySeconds+300+MarginSeconds)
+		if run == RunCandidate {
+			want, deadline = "3", float64(PullSeconds+ReadySeconds+3*300+MarginSeconds)
+		}
+		if command[6] != want || spec["activeDeadlineSeconds"] != deadline {
+			t.Fatal("repetitions", run, command[6], spec["activeDeadlineSeconds"])
+		}
 	}
 }

@@ -53,7 +53,7 @@ func TestBuildTreesSeparatesTheCandidatesTestsFromItsCode(t *testing.T) {
 	if !byPath["README.md"].Deleted || !byPath["textutil/extra_test.go"].Added || byPath["textutil/textutil.go"].Added || len(byPath) != 4 {
 		t.Fatal("changes", trees.Changes)
 	}
-	for run, want := range map[string]workspacebundle.Bundle{"baseline": trees.Baseline, "cross": trees.Cross, "candidate-1": trees.Candidate, "candidate-3": trees.Candidate} {
+	for run, want := range map[string]workspacebundle.Bundle{RunBaseline: trees.Baseline, RunCross: trees.Cross, RunCandidate: trees.Candidate} {
 		got, ok := trees.Tree(run)
 		gotTree, _ := got.TreeDigest()
 		wantTree, _ := want.TreeDigest()
@@ -61,7 +61,7 @@ func TestBuildTreesSeparatesTheCandidatesTestsFromItsCode(t *testing.T) {
 			t.Fatal("tree for", run)
 		}
 	}
-	for _, run := range []string{"candidate-4", "candidate-0", "reference", ""} {
+	for _, run := range []string{"candidate-1", "tests", "reference", ""} {
 		if _, ok := trees.Tree(run); ok {
 			t.Fatal("tree for", run)
 		}

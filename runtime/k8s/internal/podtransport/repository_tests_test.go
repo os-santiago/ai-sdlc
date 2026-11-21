@@ -30,10 +30,10 @@ func testsFixturePod() (repositorytests.Pod, []byte) {
 	tree, _ := b.TreeDigest()
 	return repositorytests.Pod{Namespace: VerifierNamespace, VerifierImage: "registry.example/verifier@sha256:" + strings.Repeat("1", 64),
 		MailboxImage: "registry.example/mailbox@sha256:" + strings.Repeat("2", 64), WorkItemID: "11111111-1111-4111-8111-111111111111",
-		Attempt: 1, Run: "candidate-1", SourceSHA: b.SourceSHA, TreeSHA256: tree,
+		VerificationID: "verification-" + strings.Repeat("9", 64), Run: repositorytests.RunCandidate, SourceSHA: b.SourceSHA, TreeSHA256: tree,
 		Verification: project.Verification{Image: "registry.example/go@sha256:" + strings.Repeat("3", 64), Command: []string{"go", "test", "./..."},
 			TimeoutSeconds: 30, CPU: "1", Memory: "1Gi", EphemeralStorage: "1Gi", Network: "none", Result: project.Result{ExitCode: true},
-			Repeat: 1, TestGlobs: []string{"**/*_test.go"}}}, raw
+			Repeat: 2, TestGlobs: []string{"**/*_test.go"}}}, raw
 }
 
 // testsCluster serves one pod whose status the test advances, the deny-all
@@ -159,7 +159,7 @@ func honestReply(p repositorytests.Pod, source []byte) func([]string) (string, b
 
 func TestTestsRunImportsReadiesAndReadsOneResult(t *testing.T) {
 	p, source := testsFixturePod()
-	c := &testsCluster{state: "running", reply: honestReply(p, source), log: `{"exitCode":0}` + "\n"}
+	c := &testsCluster{state: "running", reply: honestReply(p, source), log: `{"exitCode":0}` + "\n" + `{"exitCode":0}` + "\n"}
 	c.onExec = func(command []string) {
 		if command[1] == "ready" {
 			c.mu.Lock()
@@ -181,9 +181,9 @@ func TestTestsRunImportsReadiesAndReadsOneResult(t *testing.T) {
 	if !reflect.DeepEqual(c.execs, want) {
 		t.Fatal("helpers", c.execs)
 	}
-	got, line, err := run.ReadResult(context.Background(), testsPodUID)
-	if err != nil || got.ExitCode != 0 || string(line) != `{"exitCode":0}` {
-		t.Fatal("result", got, string(line), err)
+	got, raw, err := run.ReadResult(context.Background(), testsPodUID)
+	if err != nil || len(got) != 2 || got[1].ExitCode != 0 || string(raw) != c.log {
+		t.Fatal("result", got, string(raw), err)
 	}
 	if run.Prepare(context.Background(), testsPodUID) == nil {
 		t.Fatal("a second Prepare ran helpers again")
@@ -192,12 +192,14 @@ func TestTestsRunImportsReadiesAndReadsOneResult(t *testing.T) {
 
 func TestTestsRunRefusesAmbiguousResultsAndFailedPods(t *testing.T) {
 	for name, log := range map[string]string{
-		"two lines":     `{"exitCode":0}` + "\n" + `{"exitCode":1}` + "\n",
-		"no newline":    `{"exitCode":0}`,
-		"not a result":  "ok\n",
-		"carriage":      `{"exitCode":0}` + "\r\n",
-		"oversized":     strings.Repeat("x", repositorytests.MaxResultBytes+2),
-		"missing field": `{"tests":{}}` + "\n",
+		"one line":      `{"exitCode":0}` + "\n",
+		"three lines":   strings.Repeat(`{"exitCode":0}`+"\n", 3),
+		"no newline":    `{"exitCode":0}` + "\n" + `{"exitCode":0}`,
+		"not a result":  `{"exitCode":0}` + "\nok\n",
+		"carriage":      `{"exitCode":0}` + "\r\n" + `{"exitCode":0}` + "\n",
+		"empty line":    `{"exitCode":0}` + "\n\n",
+		"oversized":     strings.Repeat("x", 2*(repositorytests.MaxResultBytes+1)+1),
+		"missing field": `{"exitCode":0}` + "\n" + `{"tests":{}}` + "\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			p, source := testsFixturePod()

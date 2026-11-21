@@ -34,29 +34,64 @@ var (
 	namespacePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 	imagePattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9./:_-]*@sha256:[a-f0-9]{64}$`)
 	uuidPattern      = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
+	verificationID   = regexp.MustCompile(`^verification-[a-f0-9]{64}$`)
 )
 
-// Pod is one run of the three-tree verification.
-type Pod struct {
-	Namespace     string
-	VerifierImage string // provides the static runner, copied by an init container
-	MailboxImage  string // provides workspace-transfer for import, ready and hold
-	WorkItemID    string
-	Attempt       int
-	Run           string // RunNames
-	SourceSHA     string
-	TreeSHA256    string
-	Verification  project.Verification
+// Runs of one verification. Each is one pod; the candidate pod runs the
+// command Repeat times, each time on a fresh copy of the verified tree.
+const (
+	RunBaseline  = "baseline"
+	RunCross     = "cross"
+	RunCandidate = "candidate"
+)
+
+// RunNames lists the runs in order.
+func RunNames() []string { return []string{RunBaseline, RunCross, RunCandidate} }
+
+// LedgerKind is the verification effect kind (and resource name suffix) of a
+// run's pod: the cross run executes the candidate's tests on the base code.
+func LedgerKind(run string) string {
+	switch run {
+	case RunBaseline:
+		return "baseline"
+	case RunCross:
+		return "tests"
+	case RunCandidate:
+		return "candidate"
+	}
+	return ""
 }
 
-// RunNames lists the runs of one verification in order: the baseline, the
-// cross run and up to three candidate runs.
-func RunNames(repeat int) []string {
-	names := []string{"baseline", "cross"}
-	for i := 1; i <= repeat; i++ {
-		names = append(names, fmt.Sprintf("candidate-%d", i))
+// Repetitions is how many times a run executes the command.
+func Repetitions(run string, v project.Verification) int {
+	if run == RunCandidate {
+		return v.Repeat
 	}
-	return names
+	return 1
+}
+
+// Pod is one run of the three-tree verification. Names derive from the
+// signed verification command, so they fit the verifier's effect ledger.
+type Pod struct {
+	Namespace      string
+	VerifierImage  string // provides the static runner, copied by an init container
+	MailboxImage   string // provides workspace-transfer for import, ready and hold
+	VerificationID string // verification-<sha256> of the signed command
+	WorkItemID     string
+	Run            string // RunNames
+	SourceSHA      string
+	TreeSHA256     string
+	Verification   project.Verification
+}
+
+// Names returns the settings ConfigMap (shared by the runs of one
+// verification) and the run's pod name.
+func (p Pod) Names() (config, pod string) {
+	if !verificationID.MatchString(p.VerificationID) || LedgerKind(p.Run) == "" {
+		return "", ""
+	}
+	prefix := "verify-" + p.VerificationID[13:45]
+	return prefix + "-inputs", prefix + "-" + LedgerKind(p.Run)
 }
 
 // Workload is a pure compiler output: an immutable settings ConfigMap and the
@@ -67,13 +102,9 @@ type Workload struct {
 }
 
 func (p Pod) validate() error {
-	known := false
-	for _, name := range RunNames(p.Verification.Repeat) {
-		known = known || name == p.Run
-	}
-	if !namespacePattern.MatchString(p.Namespace) || len(p.VerifierImage) > 512 || len(p.MailboxImage) > 512 ||
+	if config, _ := p.Names(); config == "" || !namespacePattern.MatchString(p.Namespace) || len(p.VerifierImage) > 512 || len(p.MailboxImage) > 512 ||
 		!imagePattern.MatchString(p.VerifierImage) || !imagePattern.MatchString(p.MailboxImage) ||
-		!uuidPattern.MatchString(p.WorkItemID) || p.Attempt < 1 || p.Attempt > 16 || !known ||
+		!uuidPattern.MatchString(p.WorkItemID) ||
 		!workspacebundle.ValidSourceSHA(p.SourceSHA) || !workspacebundle.ValidDigest(p.TreeSHA256) ||
 		p.Verification.Validate() != nil {
 		return ErrWorkload
@@ -93,8 +124,8 @@ func Settings(v project.Verification) ([]byte, error) {
 }
 
 // DeadlineSeconds is the pod's hard deadline for a test timeout.
-func DeadlineSeconds(v project.Verification) int {
-	return PullSeconds + ReadySeconds + v.TimeoutSeconds + MarginSeconds
+func DeadlineSeconds(run string, v project.Verification) int {
+	return PullSeconds + ReadySeconds + Repetitions(run, v)*v.TimeoutSeconds + MarginSeconds
 }
 
 // CompilePod renders one offline run. The repository's command is never in
@@ -109,15 +140,15 @@ func CompilePod(p Pod) (Workload, error) {
 		return Workload{}, ErrWorkload
 	}
 	settingsSHA := authority.Digest(settings)
-	name := fmt.Sprintf("tests-%s-%d-%s", p.WorkItemID, p.Attempt, p.Run)
-	// One settings object per run: runs are created and cleaned up separately.
-	configName := name + "-settings"
-	labels := map[string]any{"app.kubernetes.io/part-of": "ai-sdlc", "ai-sdlc.io/component": "repository-tests", "ai-sdlc.io/work-item": p.WorkItemID, "ai-sdlc.io/run": p.Run}
-	metadata := func(n string) map[string]any {
-		return map[string]any{"name": n, "namespace": p.Namespace, "labels": labels, "annotations": map[string]any{
-			"ai-sdlc.io/settings-sha256": settingsSHA, "ai-sdlc.io/source-sha": p.SourceSHA, "ai-sdlc.io/tree-sha256": p.TreeSHA256}}
+	configName, name := p.Names()
+	labels := map[string]any{"app.kubernetes.io/part-of": "ai-sdlc", "ai-sdlc.io/component": "repository-tests", "ai-sdlc.io/work-item": p.WorkItemID}
+	common := map[string]any{"ai-sdlc.io/command": p.VerificationID, "ai-sdlc.io/settings-sha256": settingsSHA}
+	podAnnotations := map[string]any{"ai-sdlc.io/run": p.Run, "ai-sdlc.io/source-sha": p.SourceSHA, "ai-sdlc.io/tree-sha256": p.TreeSHA256}
+	for k, v := range common {
+		podAnnotations[k] = v
 	}
-	config := map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": metadata(configName), "immutable": true,
+	// The settings are the same for every run of one verification.
+	config := map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": configName, "namespace": p.Namespace, "labels": labels, "annotations": common}, "immutable": true,
 		"data": map[string]any{"verification.json": string(settings)}}
 	security := map[string]any{"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "readOnlyRootFilesystem": true, "allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []string{"ALL"}}}
 	workspace := map[string]any{"name": "workspace", "mountPath": "/workspaces"}
@@ -140,15 +171,15 @@ func CompilePod(p Pod) (Workload, error) {
 	disk.Add(resource.MustParse(runnerVolume))
 	quota := map[string]any{"cpu": p.Verification.CPU, "memory": p.Verification.Memory, "ephemeral-storage": disk.String()}
 	tests := map[string]any{"name": "tests", "image": p.Verification.Image, "imagePullPolicy": "IfNotPresent",
-		"command":         []string{RunnerPath, "repository-tests-run", SettingsDirectory + "/verification.json", ScratchDirectory, p.SourceSHA, p.TreeSHA256},
+		"command":         []string{RunnerPath, "repository-tests-run", SettingsDirectory + "/verification.json", ScratchDirectory, p.SourceSHA, p.TreeSHA256, fmt.Sprint(Repetitions(p.Run, p.Verification))},
 		"securityContext": security, "resources": map[string]any{"requests": quota, "limits": quota},
 		"volumeMounts": []any{workspace, identity,
 			map[string]any{"name": "scratch", "mountPath": ScratchDirectory},
 			map[string]any{"name": "runner", "mountPath": "/runner", "readOnly": true},
 			map[string]any{"name": "settings", "mountPath": SettingsDirectory, "readOnly": true}}}
-	pod := map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": metadata(name), "spec": map[string]any{
+	pod := map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": name, "namespace": p.Namespace, "labels": labels, "annotations": podAnnotations}, "spec": map[string]any{
 		"runtimeClassName": "ai-sdlc-offline", "automountServiceAccountToken": false, "enableServiceLinks": false, "restartPolicy": "Never",
-		"activeDeadlineSeconds": DeadlineSeconds(p.Verification), "terminationGracePeriodSeconds": 1,
+		"activeDeadlineSeconds": DeadlineSeconds(p.Run, p.Verification), "terminationGracePeriodSeconds": 1,
 		"hostNetwork": false, "hostPID": false, "hostIPC": false, "shareProcessNamespace": false,
 		"securityContext": map[string]any{"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000, "seccompProfile": map[string]any{"type": "RuntimeDefault"}},
 		"volumes": []any{
