@@ -42,6 +42,8 @@ def require_unchanged_tool_budget(kubectl, desired):
     # reconciliation can neither switch the model service nor change its window.
     if profile.get('callSeconds') != json.loads(desired['candidate']['configJSON'])['profile'].get('callSeconds'):
         raise ValueError('Installed model service differs; use a reviewed runtime transition before reconciliation')
+    if config.get('model', {}).get('Limits') != json.loads(desired['candidate']['configJSON']).get('model', {}).get('Limits'):
+        raise ValueError('Installed model budget differs; use a reviewed runtime transition before reconciliation')
 
 
 def desired_values(root, image_lock_path, lock, verification=False, review=False, publication=False, merge=False, repair=False):

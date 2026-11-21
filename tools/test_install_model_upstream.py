@@ -55,6 +55,9 @@ class ModelUpstreamInstallTests(unittest.TestCase):
                 candidate_install.require_unchanged_tool_budget(['kubectl'], desired)
             desired['candidate']['configJSON'] = json.dumps({'profile': {'maxSteps': 24}})
             candidate_install.require_unchanged_tool_budget(['kubectl'], desired)
+            desired['candidate']['configJSON'] = json.dumps({'profile': {'maxSteps': 24}, 'model': {'Limits': {'Calls': 24}}})
+            with self.assertRaisesRegex(ValueError, 'model budget differs'):
+                candidate_install.require_unchanged_tool_budget(['kubectl'], desired)
 
 
 if __name__ == '__main__':
