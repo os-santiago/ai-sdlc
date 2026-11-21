@@ -11,17 +11,6 @@ jobs:
   helm-kind:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: local-ci-only
-          POSTGRES_DB: ai_sdlc_test
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Install verified client tools and test dependencies
@@ -230,6 +219,7 @@ jobs:
           export AI_SDLC_TEST_HOMEDIR_SOURCE="$RUNNER_TEMP/homedir-source"
           python3 -m unittest discover -s tools -p test_generative_pilot.py -v
       - uses: actions/setup-go@802e89cd7394b98352d79117a8b463bbfc2fdacf
+        if: matrix.group != 'executor'
         with:
           go-version-file: runtime/k8s/go.mod
           cache-dependency-path: runtime/k8s/go.sum
