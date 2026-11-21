@@ -10,7 +10,7 @@ permissions:
 jobs:
   helm-kind:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:17-alpine
@@ -121,31 +121,68 @@ jobs:
         run: |
           ./install.sh sandbox --config "$RUNNER_TEMP/local-install.json"
           ./install.sh sandbox --config "$RUNNER_TEMP/local-install.json"
-      - name: Verify the bounded mailbox with SCC in the offline runtime
+  kind-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Independent kind scenarios run in parallel, each on its own disposable
+    # cluster; the installer job above keeps the install/reconcile coverage.
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [executor, transport, review]
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: local-ci-only
+          POSTGRES_DB: ai_sdlc_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Prepare disposable kind, offline runtime and fixture images
         run: |
+          ./install.sh tools > "$RUNNER_TEMP/install-tools.json"
+          python3 -m venv "$RUNNER_TEMP/installer-venv"
+          "$RUNNER_TEMP/installer-venv/bin/pip" install -r tools/quality-requirements.txt
+          echo "$RUNNER_TEMP/installer-venv/bin" >> "$GITHUB_PATH"
+          sudo ./install.sh host --configure-host
+          python3 - <<'PY'
+          import json, os, pathlib
+          config = json.loads(pathlib.Path('examples/homedir.local-install.json').read_text())
+          config.update(cluster='ai-sdlc', repository='os-santiago/ai-sdlc', provider='docker',
+                        profile='maintenance', images=str(pathlib.Path('runtime/k8s/deploy/local/images.lock.json').resolve()))
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'local-install.json').write_text(json.dumps(config))
+          PY
+          ./install.sh local --config "$RUNNER_TEMP/local-install.json" --timeout 10m
+          ./install.sh sandbox --config "$RUNNER_TEMP/local-install.json"
           # Export canonical OCI directly to kind; Docker save may synthesize a
           # different manifest for the same config. The host copy renders fixtures.
           docker buildx create --name ai-sdlc-fixtures --driver docker-container
-          docker buildx build --builder ai-sdlc-fixtures --provenance=false --load \
-            --output "type=oci,name=localhost/ai-sdlc-model-mailbox:conformance,dest=$RUNNER_TEMP/model-mailbox.oci" \
-            -f runtime/k8s/components/model-mailbox/Containerfile -t localhost/ai-sdlc-model-mailbox:conformance runtime/k8s
+          for component in model-mailbox worker; do
+            docker buildx build --builder ai-sdlc-fixtures --provenance=false --load \
+              --output "type=oci,name=localhost/ai-sdlc-${component}:conformance,dest=$RUNNER_TEMP/${component}.oci" \
+              -f "runtime/k8s/components/${component}/Containerfile" -t "localhost/ai-sdlc-${component}:conformance" runtime/k8s
+            docker exec -i ai-sdlc-control-plane ctr -n k8s.io images import --local --digests - < "$RUNNER_TEMP/${component}.oci"
+          done
+          git init -q "$RUNNER_TEMP/homedir-source"
+          git -C "$RUNNER_TEMP/homedir-source" fetch -q --depth 1 https://github.com/os-santiago/homedir.git 0622cdaeb59a11a27bd5f3d7e18183c401a5e412
+      - name: Verify the bounded mailbox with SCC in the offline runtime
+        if: matrix.group == 'executor'
+        run: |
           python3 - <<'PYTHON'
           import json, os, pathlib, subprocess, sys
           tools = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'install-tools.json').read_text())
-          image = 'localhost/ai-sdlc-model-mailbox:conformance'
-          archive = str(pathlib.Path(os.environ['RUNNER_TEMP'], 'model-mailbox.oci'))
-          with open(archive, 'rb') as stream:
-              subprocess.run(['docker', 'exec', '-i', 'ai-sdlc-control-plane', 'ctr', '-n', 'k8s.io',
-                              'images', 'import', '--local', '--digests', '-'],
-                             stdin=stream, check=True, timeout=60)
           subprocess.run([sys.executable, 'tools/verify_model_mailbox.py', '--kubectl', tools['kubectl'],
                           '--kubeconfig', str(pathlib.Path.home() / '.local/state/ai-sdlc/ai-sdlc/kubeconfig'),
-                          '--mailbox-image', image], check=True)
+                          '--mailbox-image', 'localhost/ai-sdlc-model-mailbox:conformance'], check=True)
           PYTHON
       - name: Round-trip pinned Homedir source through the offline workspace helper
+        if: matrix.group == 'executor'
         run: |
-          git init -q "$RUNNER_TEMP/homedir-source"
-          git -C "$RUNNER_TEMP/homedir-source" fetch -q --depth 1 https://github.com/os-santiago/homedir.git 0622cdaeb59a11a27bd5f3d7e18183c401a5e412
           python3 - <<'PYTHON'
           import json, os, pathlib, subprocess, sys
           tools = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'install-tools.json').read_text())
@@ -156,10 +193,8 @@ jobs:
                           '--source-sha', '0622cdaeb59a11a27bd5f3d7e18183c401a5e412'], check=True)
           PYTHON
       - name: Verify the fixed SCC executor and adversarial source configuration
+        if: matrix.group == 'executor'
         run: |
-          docker buildx build --builder ai-sdlc-fixtures --provenance=false --load \
-            --output "type=oci,name=localhost/ai-sdlc-worker:conformance,dest=$RUNNER_TEMP/worker.oci" \
-            -f runtime/k8s/components/worker/Containerfile -t localhost/ai-sdlc-worker:conformance runtime/k8s
           python3 - <<'PYTHON'
           import json, os, pathlib, subprocess, sys, tarfile
           sys.path.insert(0, 'tools')
@@ -169,11 +204,6 @@ jobs:
           tools = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'install-tools.json').read_text())
           worker_tag = 'localhost/ai-sdlc-worker:conformance'
           mailbox_tag = 'localhost/ai-sdlc-model-mailbox:conformance'
-          archive = str(pathlib.Path(os.environ['RUNNER_TEMP'], 'worker.oci'))
-          with open(archive, 'rb') as stream:
-              subprocess.run(['docker', 'exec', '-i', 'ai-sdlc-control-plane', 'ctr', '-n', 'k8s.io',
-                              'images', 'import', '--local', '--digests', '-'],
-                             stdin=stream, check=True, timeout=60)
           worker = register_digest('docker', 'ai-sdlc-control-plane', worker_tag)
           mailbox = register_digest('docker', 'ai-sdlc-control-plane', mailbox_tag)
           for component, reference in (('worker', worker), ('model-mailbox', mailbox)):
@@ -192,6 +222,7 @@ jobs:
               print(json.dumps(verify(kubectl, 'docker', mailbox_tag, mailbox, worker, source, variant)), flush=True)
           PYTHON
       - name: Reject false success from untrusted candidate validation
+        if: matrix.group == 'executor'
         run: |
           AI_SDLC_TEST_ORACLE_IMAGE="$(docker image inspect localhost/ai-sdlc-worker:conformance --format '{{.Id}}')"
           export AI_SDLC_TEST_ORACLE_IMAGE
@@ -203,16 +234,19 @@ jobs:
           go-version-file: runtime/k8s/go.mod
           cache-dependency-path: runtime/k8s/go.sum
       - name: Verify separate SCC tool and model-call budgets
+        if: matrix.group == 'executor'
         run: |
           executor_image="$(docker image inspect localhost/ai-sdlc-worker:conformance --format '{{.Id}}')"
           python3 tools/verify_executor_tool_budget.py --provider docker --image "$executor_image" > "$RUNNER_TEMP/executor-tool-budget-report.json"
       - name: Build the isolated Kubernetes transport test driver
+        if: matrix.group == 'transport' || matrix.group == 'review'
         working-directory: runtime/k8s
         run: |
           CGO_ENABLED=0 go test -c ./internal/podtransport -o "$RUNNER_TEMP/pod-transport.test"
           CGO_ENABLED=0 go test -c ./internal/execution -o "$RUNNER_TEMP/execution.test"
           CGO_ENABLED=0 go test -c ./internal/verificationflow -o "$RUNNER_TEMP/verifier.test"
       - name: Verify actual Kubernetes handoff, RBAC denial and Pod replacement
+        if: matrix.group == 'transport'
         env:
           AI_SDLC_TEST_SOURCE_TOKEN: ${{ github.token }}
           AI_SDLC_TEST_DATABASE_URL: postgres://postgres:local-ci-only@127.0.0.1:5432/ai_sdlc_test?sslmode=disable
@@ -265,6 +299,7 @@ jobs:
               pathlib.Path(os.environ['RUNNER_TEMP'], f'candidate-runtime-{scenario}-report.json').write_text(result.stdout)
           PYTHON
       - name: Verify independent read-only SCC reviewer and verdict rejection
+        if: matrix.group == 'review'
         run: |
           python3 - <<'PYTHON'
           import json, os, pathlib, sys
@@ -282,6 +317,7 @@ jobs:
               print(json.dumps(report), flush=True)
           PYTHON
       - name: Verify signed independent validation and fail-closed recovery
+        if: matrix.group == 'review'
         env:
           AI_SDLC_TEST_SOURCE_TOKEN: ${{ github.token }}
           AI_SDLC_TEST_DATABASE_URL: postgres://postgres:local-ci-only@127.0.0.1:5432/ai_sdlc_test?sslmode=disable
@@ -304,9 +340,10 @@ jobs:
               (root / f'verifier-{scenario}-report.json').write_text(json.dumps(report, indent=2))
               print(json.dumps(report), flush=True)
           PYTHON
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: pod-transport-conformance
+          name: kind-conformance-${{ matrix.group }}
           path: |
             ${{ runner.temp }}/*_transport-report.json
             ${{ runner.temp }}/workload_resources-report.json
