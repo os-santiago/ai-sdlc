@@ -3,6 +3,7 @@
 import argparse
 from contextlib import ExitStack
 import base64
+import copy
 import hashlib
 import json
 import os
@@ -516,7 +517,7 @@ def _main(argv, stack):
     # cannot satisfy the chart's mandatory installed merge-policy input yet.
     if not args.configure_prepared:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as preview:
-            preview_values = dict(execution_values or {})
+            preview_values = copy.deepcopy(execution_values or {})
             if args.merge:
                 # The native rule is reconciled only by local; the preview needs
                 # a placeholder for the chart's mandatory installed policy.

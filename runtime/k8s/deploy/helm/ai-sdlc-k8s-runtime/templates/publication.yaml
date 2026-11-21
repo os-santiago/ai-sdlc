@@ -11,7 +11,7 @@ manifest whose exact digest the authority policy binds. */}}
 {{- $installed := false }}
 {{- if and .Values.project.manifestJSON $policy.projectSHA256 }}
 {{- $manifest := .Values.project.manifestJSON | fromJson }}
-{{- $installed = and (eq $manifest.repository $policy.repository) (eq (.Values.project.manifestJSON | sha256sum) $policy.projectSHA256) }}
+{{- $installed = and $policy.repository (not (hasKey $manifest "Error")) (eq (toString $manifest.repository) (toString $policy.repository)) (eq (.Values.project.manifestJSON | sha256sum) $policy.projectSHA256) }}
 {{- end }}
 {{- if not (or (has $policy.repository (list "os-santiago/homedir" "os-santiago/saferus")) $installed) }}
 {{- fail "publication supports only reviewed Homedir, Saferus or the policy-bound project manifest's repository" }}

@@ -309,9 +309,20 @@ class ProjectManifestChartTests(unittest.TestCase):
                 return tests.render('-f', file.name)
         accepted = render('example/service', digest)
         self.assertNotIn('supports only reviewed', accepted.stderr)
+        nameless = json.dumps({'version': 'ai-sdlc.project/v1'}, separators=(',', ':'))
+        manifest_backup = manifest
         for repository, bound in (('example/other', digest), ('example/service', 'b' * 64), ('example/service', '')):
             refused = render(repository, bound)
             self.assertIn('supports only reviewed', refused.stderr, (repository, bound))
+        # Neither the policy nor the manifest names a repository.
+        values = {'runtime': {'mode': 'verification'}, 'verifier': {'digest': 'sha256:' + 'a' * 64},
+                  'review': {'enabled': True, 'configJSON': '{}'}, 'publication': {'enabled': True},
+                  'project': {'manifestJSON': nameless},
+                  'authority': {'policyJSON': json.dumps({'projectSHA256': hashlib.sha256(nameless.encode()).hexdigest()})}}
+        with tempfile.NamedTemporaryFile('w', suffix='.json') as file:
+            json.dump(values, file)
+            file.flush()
+            self.assertIn('supports only reviewed', tests.render('-f', file.name).stderr)
 
 
 if __name__ == '__main__': unittest.main()
