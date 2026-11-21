@@ -47,6 +47,9 @@ func (c *Client) getJSON(ctx context.Context, suffix string, limit int) ([]byte,
 	}
 	response, err := c.http.Do(req)
 	if err != nil {
+		if ctx.Err() == nil && networkFailure(err) {
+			return nil, errNetwork
+		}
 		return nil, ErrSource
 	}
 	defer response.Body.Close()

@@ -3,6 +3,7 @@ package sourcefetch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -15,11 +16,16 @@ import (
 type AvailabilityError struct {
 	retryAt     time.Time
 	rateLimited bool
+	serverError bool
 }
 
 func (e AvailabilityError) Error() string { return "public source temporarily unavailable" }
 func (e AvailabilityError) Unwrap() error { return ErrSource }
 func RateLimited(err error) bool          { var e AvailabilityError; return errors.As(err, &e) && e.rateLimited }
+
+// errNetwork marks a request that failed before any HTTP response.
+var errNetwork = fmt.Errorf("source request did not complete: %w", ErrSource)
+
 func httpSourceError(response *http.Response) error {
 	now := time.Now()
 	retry := now.Add(10 * time.Second)
@@ -36,7 +42,7 @@ func httpSourceError(response *http.Response) error {
 			}
 		}
 	}
-	return AvailabilityError{retryAt: retry, rateLimited: limited}
+	return AvailabilityError{retryAt: retry, rateLimited: limited, serverError: response.StatusCode >= 500 && response.StatusCode <= 599}
 }
 
 // Cache owns at most one verified immutable source bundle (bounded by the bundle
