@@ -114,3 +114,10 @@ instance whose Secret uses a different key name.
 {{- .Values.postgres.databaseURLSecret.key }}
 {{- end }}
 {{- end }}
+
+{{/* The immutable project manifest ConfigMap is named by its content digest,
+so installing a different manifest creates a new object instead of failing
+on immutable data. */}}
+{{- define "ai-sdlc-k8s-runtime.projectConfigName" -}}
+{{- printf "%s-project-%s" (include "ai-sdlc-k8s-runtime.fullname" .) (.Values.project.manifestJSON | sha256sum | trunc 12) -}}
+{{- end }}

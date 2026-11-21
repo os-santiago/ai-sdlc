@@ -219,6 +219,11 @@ func validRepository(repository string) bool {
 	return true
 }
 
+// hiddenRune reports control and format characters (bidirectional overrides,
+// zero-width characters), which would make a reviewed value read differently
+// from what runs.
+func hiddenRune(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }
+
 func (v Verification) validate() error {
 	if !pinnedImage.MatchString(v.Image) || len(v.Command) == 0 || len(v.Command) > 32 ||
 		v.TimeoutSeconds < 30 || v.TimeoutSeconds > 600 || !cpuQuantity.MatchString(v.CPU) ||
@@ -228,7 +233,7 @@ func (v Verification) validate() error {
 		return ErrManifest
 	}
 	for _, arg := range v.Command {
-		if arg == "" || len(arg) > 1024 || strings.IndexFunc(arg, unicode.IsControl) >= 0 {
+		if arg == "" || len(arg) > 1024 || strings.IndexFunc(arg, hiddenRune) >= 0 {
 			return ErrManifest
 		}
 	}
@@ -267,7 +272,7 @@ func (m Merge) validate() error {
 	}
 	seen := map[string]bool{}
 	for _, c := range m.Required {
-		if c.Context == "" || len(c.Context) > 128 || strings.IndexFunc(c.Context, unicode.IsControl) >= 0 ||
+		if c.Context == "" || len(c.Context) > 128 || strings.IndexFunc(c.Context, hiddenRune) >= 0 ||
 			c.AppID < 1 || seen[c.Context] {
 			return ErrManifest
 		}

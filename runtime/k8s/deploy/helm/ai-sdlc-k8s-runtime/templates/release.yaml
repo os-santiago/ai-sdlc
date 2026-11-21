@@ -131,7 +131,7 @@ spec:
           configMap: {name: {{ .Values.authority.policyConfigMap }}}
 {{- if $.Values.project.manifestJSON }}
         - name: project
-          configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-project}
+          configMap: {name: {{ include "ai-sdlc-k8s-runtime.projectConfigName" $ }}}
 {{- end }}
         - name: outer-policy
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-outer-policy}

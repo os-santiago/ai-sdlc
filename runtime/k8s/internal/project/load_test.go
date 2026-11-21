@@ -109,11 +109,37 @@ func TestAMountedManifestWithoutAPolicyDigestIsRefused(t *testing.T) {
 	}
 }
 
-func TestReferenceRepositoriesCannotBindAnInstalledManifest(t *testing.T) {
-	m, _ := Builtin(Saferus)
+func TestAReferenceRepositoryCannotBindAnInstalledManifest(t *testing.T) {
+	reference, _ := Builtin(Saferus)
+	reference.Publication.Allow = []string{"**"}
+	reference.Merge.HumanApprovals = 0
+	raw, _ := json.Marshal(reference)
 	policy := policyFor(t, Saferus)
-	policy.ProjectSHA256 = m.Digest()
-	if _, err := Resolve(policy, m.Canonical()); err == nil {
-		t.Fatal("a reference repository accepted an installed manifest")
+	policy.ProjectSHA256 = reference.Digest()
+	if _, err := Resolve(policy, raw); err == nil {
+		t.Fatal("a reference repository's built-in manifest was replaced")
+	}
+}
+
+func TestLoadRefusesAFIFOWithoutBlocking(t *testing.T) {
+	manifest := generic()
+	policy := policyFor(t, "example/service")
+	policy.ProjectSHA256 = manifest.Digest()
+	path := filepath.Join(t.TempDir(), "manifest.json")
+	if err := syscallMkfifo(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path, policy); err == nil {
+		t.Fatal("a FIFO manifest accepted")
+	}
+}
+
+func TestHiddenCharactersInCommandsAreRefused(t *testing.T) {
+	for _, hidden := range []rune{0x202e, 0x200b, 0x2066} {
+		manifest := generic()
+		manifest.Verification.Command = []string{"go", "test", "./..." + string(hidden)}
+		if manifest.Validate() == nil {
+			t.Fatalf("hidden character %U in a command accepted", hidden)
+		}
 	}
 }

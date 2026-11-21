@@ -46,3 +46,15 @@ func TestProjectInstallationCompilerBindsOnlyTheInstallationRepository(t *testin
 		t.Fatal("unknown request field accepted")
 	}
 }
+
+func TestProjectInstallationCompilerRefusesReferenceRepositories(t *testing.T) {
+	m, err := authority.Bootstrap(project.Saferus, "ai-sdlc-production")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference, _ := project.Builtin(project.Saferus)
+	raw, _ := json.Marshal(map[string]any{"policy": m.Policy, "manifest": reference})
+	if compileProjectInstallation(bytes.NewReader(raw), &bytes.Buffer{}) == nil {
+		t.Fatal("a manifest for a reference repository compiled")
+	}
+}

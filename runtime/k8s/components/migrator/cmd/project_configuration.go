@@ -33,6 +33,9 @@ func compileProjectInstallation(input io.Reader, output io.Writer) error {
 	if err != nil || manifest.Repository != policy.Repository {
 		return errors.New("project manifest does not match the installation repository")
 	}
+	if _, reference := project.Builtin(policy.Repository); reference {
+		return errors.New("a reference repository uses its built-in manifest")
+	}
 	canonical := manifest.Canonical()
 	encoder := json.NewEncoder(output)
 	encoder.SetEscapeHTML(false)
