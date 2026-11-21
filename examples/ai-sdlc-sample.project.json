@@ -1,0 +1,32 @@
+{
+  "version": "ai-sdlc.project/v1",
+  "repository": "os-santiago/ai-sdlc-sample",
+  "baseBranch": "main",
+  "verification": {
+    "image": "docker.io/library/golang@sha256:ea30e25680a5470bac02b08bb0e0a735fb75bd0ab7d431b9b95ee0abef362586",
+    "command": ["go", "test", "./..."],
+    "timeoutSeconds": 120,
+    "cpu": "500m",
+    "memory": "512Mi",
+    "ephemeralStorage": "1Gi",
+    "network": "none",
+    "result": {"exitCode": true},
+    "repeat": 2,
+    "testGlobs": ["**/*_test.go"],
+    "harnessGlobs": ["go.mod", "go.sum", "**/testdata/**"],
+    "env": {"GOTOOLCHAIN": "local", "GOFLAGS": "-mod=mod"}
+  },
+  "publication": {
+    "allow": ["**/*.go", "README.md"],
+    "maxChangedFiles": 6,
+    "maxChangedBytes": 65536,
+    "maxFileBytes": 32768
+  },
+  "merge": {
+    "rulesetID": 1,
+    "required": [{"context": "test", "appID": 15368}],
+    "strictChecks": true,
+    "resolveThreads": true,
+    "humanApprovals": 0
+  }
+}
