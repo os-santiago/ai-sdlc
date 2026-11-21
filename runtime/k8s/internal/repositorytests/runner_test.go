@@ -223,3 +223,22 @@ func TestCommandLookupWorkingDirectoryAndProcessGroupKill(t *testing.T) {
 		}
 	}
 }
+
+func TestReapAllWaitsForEveryChild(t *testing.T) {
+	// Outside a pid namespace kill(-1) would reach unrelated processes, so the
+	// loop is exercised only for its wait semantics: with no children left it
+	// returns at once.
+	if os.Getpid() == 1 {
+		t.Skip("only meaningful outside a pid namespace")
+	}
+	done := make(chan error, 1)
+	go func() { done <- waitChildren(time.Second) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("waiting for no children blocked")
+	}
+}
