@@ -42,6 +42,8 @@ def require_unchanged_tool_budget(kubectl, desired):
     # reconciliation can neither switch the model service nor change its window.
     if profile.get('callSeconds') != json.loads(desired['candidate']['configJSON'])['profile'].get('callSeconds'):
         raise ValueError('Installed model service differs; use a reviewed runtime transition before reconciliation')
+    if config.get('model', {}).get('Limits') != json.loads(desired['candidate']['configJSON']).get('model', {}).get('Limits'):
+        raise ValueError('Installed model budget differs; use a reviewed runtime transition before reconciliation')
 
 
 def desired_values(root, image_lock_path, lock, verification=False, review=False, publication=False, merge=False, repair=False):
@@ -191,6 +193,11 @@ def apply_model_upstream(values, path):
     if upstream['callSeconds'] > config['profile']['maxSeconds']:
         raise ValueError('Model call window exceeds the executor profile')
     config['profile']['callSeconds'] = upstream['callSeconds']
+    # One model call per SCC step: the call budget matches the step budget
+    # (each call reserves the response limit of output). The bundled Codex
+    # installations keep their reviewed 16-call budget and transitions.
+    steps = config['profile']['maxSteps']
+    config['model']['Limits'] = {'Calls': steps, 'InputBytes': 4194304, 'OutputBytes': steps * config['model']['ResponseLimit']}
     values['candidate']['configJSON'] = json.dumps(config, sort_keys=True)
     if 'review' in values:
         review = json.loads(values['review']['configJSON'])

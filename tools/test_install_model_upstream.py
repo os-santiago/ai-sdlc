@@ -11,8 +11,9 @@ UPSTREAM = {'adapter': 'openai', 'url': 'http://10.89.0.1:18090/v1/chat/completi
 
 
 def values():
-    profile = {'version': 'ai-sdlc.executor-profile/v1', 'maxSeconds': 600}
-    return {'candidate': {'configJSON': json.dumps({'profile': profile})},
+    profile = {'version': 'ai-sdlc.executor-profile/v1', 'maxSeconds': 600, 'maxSteps': 24}
+    model = {'Limits': {'Calls': 16, 'InputBytes': 2097152, 'OutputBytes': 4194304}, 'ResponseLimit': 262144}
+    return {'candidate': {'configJSON': json.dumps({'profile': profile, 'model': model})},
             'review': {'configJSON': json.dumps({'profile': dict(profile, maxSeconds=180)})}}
 
 
@@ -30,6 +31,8 @@ class ModelUpstreamInstallTests(unittest.TestCase):
         self.assertEqual(result['modelGateway']['upstream']['cidr'], '10.89.0.1/32')
         self.assertEqual(json.loads(result['candidate']['configJSON'])['profile']['callSeconds'], 330)
         self.assertEqual(json.loads(result['review']['configJSON'])['profile']['callSeconds'], 170)
+        limits = json.loads(result['candidate']['configJSON'])['model']['Limits']
+        self.assertEqual(limits, {'Calls': 24, 'InputBytes': 4194304, 'OutputBytes': 24 * 262144})
 
     def test_unsafe_or_ambiguous_documents_are_refused(self):
         for document in (dict(UPSTREAM, url='http://8.8.8.8:18090/v1/chat/completions', cidr='8.8.8.8/32'),
@@ -52,6 +55,9 @@ class ModelUpstreamInstallTests(unittest.TestCase):
                 candidate_install.require_unchanged_tool_budget(['kubectl'], desired)
             desired['candidate']['configJSON'] = json.dumps({'profile': {'maxSteps': 24}})
             candidate_install.require_unchanged_tool_budget(['kubectl'], desired)
+            desired['candidate']['configJSON'] = json.dumps({'profile': {'maxSteps': 24}, 'model': {'Limits': {'Calls': 24}}})
+            with self.assertRaisesRegex(ValueError, 'model budget differs'):
+                candidate_install.require_unchanged_tool_budget(['kubectl'], desired)
 
 
 if __name__ == '__main__':
