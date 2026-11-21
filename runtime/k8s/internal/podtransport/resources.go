@@ -170,13 +170,18 @@ func (r *Resources) CreatePod(ctx context.Context, configUID string) (string, er
 	return string(pod.UID), nil
 }
 
+// StartBudget bounds a pod's Pending phase: scheduling, a first image pull
+// from a registry and the offline sandbox start. It never exceeds the
+// assignment's expiry.
+const StartBudget = 120 * time.Second
+
 // WaitRunning polls only the compiled Pod name and exact returned UID. Pending
 // scheduling is bounded; mutations, replacement and terminal states fail.
 func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, error) {
 	if r == nil || !resourceUID.MatchString(uid) {
 		return nil, ErrTransport
 	}
-	ctx, cancel := context.WithDeadline(ctx, minDeadline(time.Now().Add(30*time.Second), r.expires))
+	ctx, cancel := context.WithDeadline(ctx, minDeadline(time.Now().Add(StartBudget), r.expires))
 	defer cancel()
 	for {
 		raw, status, err := r.request(ctx, http.MethodGet, "pods", r.pod.Name, nil, false)
