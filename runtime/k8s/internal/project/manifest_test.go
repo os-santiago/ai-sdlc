@@ -184,3 +184,12 @@ func TestUnicodeFoldedDuplicateKeysAndOmittedMergeFieldsAreRefused(t *testing.T)
 		}
 	}
 }
+
+func TestManifestRepositoriesMatchThePublicationSchema(t *testing.T) {
+	for repository, ok := range map[string]bool{"example/service": true, "a/b": true, "owner/name.go": true,
+		"owner/.github": false, "-owner/x": false, "owner/_x": false, "Owner/x": false, "a/..": false} {
+		if validRepository(repository) != ok {
+			t.Fatal(repository)
+		}
+	}
+}

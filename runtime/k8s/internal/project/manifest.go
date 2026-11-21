@@ -141,7 +141,9 @@ type Recipe struct {
 var (
 	ErrManifest = errors.New("invalid project manifest")
 	// GitHub names are case-insensitive: manifests use the lowercase form.
-	repositoryName = regexp.MustCompile(`^[a-z0-9_.-]{1,100}/[a-z0-9_.-]{1,100}$`)
+	// The same pattern as the publication schema (migration 0038), so a valid
+	// manifest can always be published.
+	repositoryName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}$`)
 	branchName     = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}(/[A-Za-z0-9_][A-Za-z0-9._-]{0,99}){0,4}$`)
 	// Paths and globs use a conservative character set: no Unicode format
 	// characters, lookalikes or shell metacharacters.
