@@ -41,6 +41,11 @@ how it is secured, in 10 minutes.
 changes, goes from an authorized issue to a merged pull request whose tests and
 independent review passed.
 
+**Status (2026-11-21): met once, released as `v0.1.0-alpha.1`**
+([evidence](evidence/2026-11-21-generic-inner-loop-e2e.md)). Follow-ups:
+running the repository's tests inside the generator's sandbox, JUnit reports
+in manifests, and closing the issue from the generated pull request.
+
 ## M2: Repeatable operations
 
 - One declarative installation bundle and a `doctor` preflight.
