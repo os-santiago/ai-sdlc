@@ -149,6 +149,18 @@ func TestDoubleStarMatchingIsPolynomial(t *testing.T) {
 	}
 }
 
+func TestJSONEscapesInValuesAreAccepted(t *testing.T) {
+	m := generic()
+	m.Verification.Command = []string{"sh", "-c", "go vet ./... && go test ./... > out"}
+	raw, _ := json.Marshal(m) // escapes & and > as JSON unicode escapes
+	if _, err := ParseManifest(raw); err != nil {
+		t.Fatal("escaped value refused", err)
+	}
+	if _, err := ParseManifest(m.Canonical()); err != nil || strings.Contains(string(m.Canonical()), string(rune(92))+"u00") {
+		t.Fatal("canonical form must be unescaped and parseable", err)
+	}
+}
+
 func TestUnicodeFoldedDuplicateKeysAndOmittedMergeFieldsAreRefused(t *testing.T) {
 	raw, _ := json.Marshal(generic())
 	literal := strings.Replace(string(raw), `"baseBranch":"main"`, "\"baseBranch\":\"main\",\"ba\u017feBranch\":\"dev\"", 1)
@@ -156,6 +168,14 @@ func TestUnicodeFoldedDuplicateKeysAndOmittedMergeFieldsAreRefused(t *testing.T)
 	for _, folded := range []string{literal, escaped} {
 		if _, err := ParseManifest([]byte(folded)); err == nil {
 			t.Fatal("Unicode-folded duplicate key accepted", folded[:80])
+		}
+	}
+	for _, nested := range []string{
+		strings.Replace(string(raw), `"network":"none"`, "\"network\":\"none\",\"netwo\u212ak\":\"x\"", 1),
+		strings.Replace(string(raw), `{"context":"ci"`, "{\"conte\u017ft\":\"x\",\"context\":\"ci\"", 1),
+	} {
+		if _, err := ParseManifest([]byte(nested)); err == nil {
+			t.Fatal("nested or array non-ASCII key accepted")
 		}
 	}
 	for _, field := range []string{`"strictChecks":true,`, `"resolveThreads":true,`, `,"humanApprovals":0`} {

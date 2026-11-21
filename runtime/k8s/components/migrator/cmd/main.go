@@ -98,6 +98,11 @@ func run() error {
 			return compileProvenanceInstallation(os.Stdin, os.Stdout)
 		}
 		return prepareProvenanceRegistryCustody(os.Stdin, os.Stdout)
+	case "compile-project-installation":
+		if len(os.Args) != 2 {
+			return errors.New("unexpected project configuration arguments")
+		}
+		return compileProjectInstallation(os.Stdin, os.Stdout)
 	case "compile-build-installation":
 		if len(os.Args) != 2 {
 			return errors.New("unexpected build configuration arguments")
