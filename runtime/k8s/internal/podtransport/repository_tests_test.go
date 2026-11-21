@@ -28,7 +28,7 @@ func testsFixturePod() (repositorytests.Pod, []byte) {
 	b := workspacebundle.Bundle{Version: workspacebundle.Version, SourceSHA: strings.Repeat("a", 40), Files: []workspacebundle.File{{Path: "go.mod", Mode: 0o644, Data: []byte("module x\n")}}}
 	raw, _ := workspacebundle.Encode(b)
 	tree, _ := b.TreeDigest()
-	return repositorytests.Pod{Namespace: VerifierNamespace, VerifierImage: "registry.example/verifier@sha256:" + strings.Repeat("1", 64),
+	return repositorytests.Pod{Namespace: VerifierNamespace,
 		MailboxImage: "registry.example/mailbox@sha256:" + strings.Repeat("2", 64), WorkItemID: "11111111-1111-4111-8111-111111111111",
 		VerificationID: "verification-" + strings.Repeat("9", 64), Run: repositorytests.RunCandidate, SourceSHA: b.SourceSHA, TreeSHA256: tree,
 		Verification: project.Verification{Image: "registry.example/go@sha256:" + strings.Repeat("3", 64), Command: []string{"go", "test", "./..."},

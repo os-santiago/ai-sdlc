@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -25,6 +26,28 @@ const (
 	readyWait    = repositorytests.ReadySeconds * time.Second
 )
 
+// Command repository-tests ships in the model-mailbox image (static, no
+// shell). An init container copies it into the offline test pod, where it
+// runs inside the repository's pinned toolchain image:
+//
+//	repository-tests install <dest>
+//	repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs>
+func main() {
+	var err error
+	switch {
+	case len(os.Args) >= 2 && os.Args[1] == "install":
+		err = installRunner(os.Args[2:], "/proc/self/exe")
+	case len(os.Args) >= 2 && os.Args[1] == "run":
+		err = runRepositoryTests(context.Background(), os.Args[2:], os.Stdout, testsParent, testsUIDPath)
+	default:
+		err = errors.New("usage: repository-tests install|run ...")
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
 // runRepositoryTests is the entrypoint copied into an offline verification
 // pod. It waits for the transfer sidecar's ready marker for this pod and
 // tree, checks the imported tree, runs the repository's test command <runs>
@@ -32,10 +55,10 @@ const (
 // writes one bounded result line per run to stdout. It opens no database,
 // network or cluster connection and loads no signing identity.
 //
-//	component repository-tests-run <verification.json> <scratch> <source-sha> <tree-sha256> <runs>
+//	repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs>
 func runRepositoryTests(ctx context.Context, args []string, out io.Writer, parent, uidPath string) error {
 	if len(args) != 5 || len(args[4]) != 1 || args[4][0] < '1' || args[4][0] > '3' {
-		return errors.New("usage: repository-tests-run <verification.json> <scratch> <source-sha> <tree-sha256> <runs 1-3>")
+		return errors.New("usage: repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs 1-3>")
 	}
 	runs := int(args[4][0] - '0')
 	f, err := os.Open(args[0])
@@ -120,12 +143,12 @@ func readUID(path string) (string, error) {
 // installRunner copies this static binary to dest, which must not exist, so
 // an init container of a restartPolicy Never pod (a failed copy fails the
 // pod, never retries over a partial file) can place the runner into a volume
-// the toolchain image mounts read-only. The verifier image has no shell or cp.
+// the toolchain image mounts read-only. The mailbox image has no shell or cp.
 //
-//	component install-runner <dest>
+//	repository-tests install <dest>
 func installRunner(args []string, self string) error {
 	if len(args) != 1 || !filepath.IsAbs(args[0]) || filepath.Clean(args[0]) != args[0] {
-		return errors.New("usage: install-runner <absolute-destination>")
+		return errors.New("usage: repository-tests install <absolute-destination>")
 	}
 	src, err := os.Open(self)
 	if err != nil {

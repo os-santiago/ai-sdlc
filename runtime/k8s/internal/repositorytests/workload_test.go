@@ -10,7 +10,7 @@ import (
 )
 
 func testPod() Pod {
-	return Pod{Namespace: "ai-sdlc", VerifierImage: "registry.example/verifier@sha256:" + strings.Repeat("a", 64),
+	return Pod{Namespace: "ai-sdlc",
 		MailboxImage: "registry.example/mailbox@sha256:" + strings.Repeat("b", 64), WorkItemID: "11111111-1111-4111-8111-111111111111",
 		VerificationID: "verification-" + strings.Repeat("9", 64), Run: RunCross, SourceSHA: strings.Repeat("c", 40), TreeSHA256: strings.Repeat("d", 64),
 		Verification: project.Verification{Image: "registry.example/go@sha256:" + strings.Repeat("e", 64), Command: []string{"go", "test", "./...", "$(POD_UID)"},
@@ -48,7 +48,7 @@ func TestCompilePodIsOfflineBoundedAndKeepsTheCommandOutOfTheSpec(t *testing.T) 
 		t.Fatal("tests container", tests)
 	}
 	command := tests["command"].([]any)
-	if command[0] != RunnerPath || command[1] != "repository-tests-run" || command[4] != testPod().SourceSHA || command[5] != testPod().TreeSHA256 || command[6] != "1" {
+	if command[0] != RunnerPath || command[1] != "run" || command[4] != testPod().SourceSHA || command[5] != testPod().TreeSHA256 || command[6] != "1" {
 		t.Fatal("runner command", command)
 	}
 	if _, env := tests["env"]; env {
@@ -82,7 +82,7 @@ func TestCompilePodIsOfflineBoundedAndKeepsTheCommandOutOfTheSpec(t *testing.T) 
 func TestCompilePodRefusesInvalidInput(t *testing.T) {
 	mutations := map[string]func(*Pod){
 		"namespace":      func(p *Pod) { p.Namespace = "Bad_NS" },
-		"mutable image":  func(p *Pod) { p.VerifierImage = "registry.example/verifier:latest" },
+		"mutable image":  func(p *Pod) { p.MailboxImage = "registry.example/mailbox:latest" },
 		"work item":      func(p *Pod) { p.WorkItemID = "x" },
 		"verification":   func(p *Pod) { p.VerificationID = "verification-x" },
 		"unknown run":    func(p *Pod) { p.Run = "candidate-3" },

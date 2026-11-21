@@ -16,7 +16,7 @@ import (
 // Fixed layout of a repository-tests pod.
 const (
 	SettingsDirectory = "/etc/ai-sdlc/tests"
-	RunnerPath        = "/runner/component"
+	RunnerPath        = "/runner/repository-tests"
 	// ScratchDirectory is HOME and TMPDIR; it is /tmp because many tools
 	// write there regardless of TMPDIR, and the root filesystem is read-only.
 	ScratchDirectory = "/tmp"
@@ -74,8 +74,7 @@ func Repetitions(run string, v project.Verification) int {
 // signed verification command, so they fit the verifier's effect ledger.
 type Pod struct {
 	Namespace      string
-	VerifierImage  string // provides the static runner, copied by an init container
-	MailboxImage   string // provides workspace-transfer for import, ready and hold
+	MailboxImage   string // provides the static runner (copied by an init container) and workspace-transfer
 	VerificationID string // verification-<sha256> of the signed command
 	WorkItemID     string
 	Run            string // RunNames
@@ -102,8 +101,8 @@ type Workload struct {
 }
 
 func (p Pod) validate() error {
-	if config, _ := p.Names(); config == "" || !namespacePattern.MatchString(p.Namespace) || len(p.VerifierImage) > 512 || len(p.MailboxImage) > 512 ||
-		!imagePattern.MatchString(p.VerifierImage) || !imagePattern.MatchString(p.MailboxImage) ||
+	if config, _ := p.Names(); config == "" || !namespacePattern.MatchString(p.Namespace) || len(p.MailboxImage) > 512 ||
+		!imagePattern.MatchString(p.MailboxImage) ||
 		!uuidPattern.MatchString(p.WorkItemID) ||
 		!workspacebundle.ValidSourceSHA(p.SourceSHA) || !workspacebundle.ValidDigest(p.TreeSHA256) ||
 		p.Verification.Validate() != nil {
@@ -157,7 +156,7 @@ func CompilePod(p Pod) (Workload, error) {
 	// The runner volume is disk-backed: a memory-backed copy would be charged
 	// to the init container's small memory limit.
 	copying := map[string]any{"requests": map[string]any{"cpu": "20m", "memory": "32Mi"}, "limits": map[string]any{"cpu": "200m", "memory": "64Mi", "ephemeral-storage": "128Mi"}}
-	install := map[string]any{"name": "install-runner", "image": p.VerifierImage, "imagePullPolicy": "IfNotPresent", "command": []string{"/component", "install-runner", RunnerPath},
+	install := map[string]any{"name": "install-runner", "image": p.MailboxImage, "imagePullPolicy": "IfNotPresent", "command": []string{"/repository-tests", "install", RunnerPath},
 		"securityContext": security, "resources": copying, "volumeMounts": []any{map[string]any{"name": "runner", "mountPath": "/runner"}}}
 	// transfer is a native sidecar: it starts before the tests container and
 	// is stopped when it exits, so the pod completes with the tests.
@@ -171,7 +170,7 @@ func CompilePod(p Pod) (Workload, error) {
 	disk.Add(resource.MustParse(runnerVolume))
 	quota := map[string]any{"cpu": p.Verification.CPU, "memory": p.Verification.Memory, "ephemeral-storage": disk.String()}
 	tests := map[string]any{"name": "tests", "image": p.Verification.Image, "imagePullPolicy": "IfNotPresent",
-		"command":         []string{RunnerPath, "repository-tests-run", SettingsDirectory + "/verification.json", ScratchDirectory, p.SourceSHA, p.TreeSHA256, fmt.Sprint(Repetitions(p.Run, p.Verification))},
+		"command":         []string{RunnerPath, "run", SettingsDirectory + "/verification.json", ScratchDirectory, p.SourceSHA, p.TreeSHA256, fmt.Sprint(Repetitions(p.Run, p.Verification))},
 		"securityContext": security, "resources": map[string]any{"requests": quota, "limits": quota},
 		"volumeMounts": []any{workspace, identity,
 			map[string]any{"name": "scratch", "mountPath": ScratchDirectory},
