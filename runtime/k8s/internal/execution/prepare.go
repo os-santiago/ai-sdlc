@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"time"
 	"unicode/utf8"
 
@@ -172,6 +173,7 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 		Repository: c.Repository, SourceSHA: c.SourceSHA, TreeSHA256: c.ProfileSHA256, ProfileSHA256: c.ProfileSHA256,
 		AuthorityRevision: c.AuthorityRevision, IssueNumbers: []int{c.IssueNumber}, Title: snapshot.Issue.Title, Body: snapshot.Issue.Body,
 		AcceptanceCriteria: normalizedevent.ExtractAcceptanceCriteria(snapshot.Issue.Body), ExpiresAt: c.ExpiresAt}
+	assignment.Workspace = WorkspaceFor(c.Repository)
 	var parent store.VerificationCandidate
 	if c.Repair != nil {
 		a, p, e := repairPreparation(ctx, db, in.Policy, c)
@@ -230,4 +232,16 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 		return Prepared{}, ErrAuthority
 	}
 	return Prepared{assignment: raw, source: source, originalSource: originalSource, profile: in.Profile, adev: in.ADev, claim: claim}, nil
+}
+
+// WorkspaceFor marks the assignment of a repository verified with its own
+// tests, whose generator workspace cannot build or test: the prompt then says
+// so as reviewed installation context. Without it, agents spend their step
+// budget on failing test commands.
+func WorkspaceFor(repository string) string {
+	m, ok := project.Lookup(repository)
+	if !ok || m.Verification == nil {
+		return ""
+	}
+	return executor.WorkspaceOfflineTests
 }
