@@ -15,6 +15,12 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
 
+// retryDelays spaces a command's eight delivery attempts (the schema's bound)
+// over about 19 minutes, inside the 20-minute command lifetime: quick retries
+// first, then long ones, so a target that is still starting (for example a
+// model gateway benchmarking its upstream) still receives it.
+var retryDelays = [...]time.Duration{time.Second, 2 * time.Second, 4 * time.Second, time.Minute, 5 * time.Minute, 7 * time.Minute, 6 * time.Minute}
+
 type Relay struct {
 	DB       *store.DB
 	Identity authority.Identity
@@ -115,7 +121,10 @@ func (relay Relay) finish(ctx context.Context, row pending, failure string, now 
 		if failure == "" {
 			result, err = tx.ExecContext(ctx, `UPDATE authorized_outbox SET published_at=$1,exhausted=false,last_error='',lease_token=NULL,lease_until=NULL WHERE producer=$2 AND event_id=$3 AND lease_token=$4 AND lease_until > $1`, now, row.producer, row.id, row.lease)
 		} else {
-			delay := time.Duration(1<<row.attempts) * time.Second
+			delay := retryDelays[len(retryDelays)-1]
+			if row.attempts >= 1 && row.attempts <= len(retryDelays) {
+				delay = retryDelays[row.attempts-1]
+			}
 			result, err = tx.ExecContext(ctx, `UPDATE authorized_outbox SET next_attempt_at=$1,last_error=$2,lease_token=NULL,lease_until=NULL WHERE producer=$3 AND event_id=$4 AND lease_token=$5 AND lease_until > $6`, now.Add(delay), failure, row.producer, row.id, row.lease, now)
 		}
 		if err != nil {
