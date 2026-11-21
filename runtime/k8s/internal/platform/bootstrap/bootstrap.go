@@ -75,8 +75,12 @@ func ProvenanceEnabled() bool {
 func MergeEnabled() bool { return ValidateMode() == nil && os.Getenv("AI_SDLC_MERGE") == "true" }
 func BuildEnabled() bool { return ValidateMode() == nil && os.Getenv("AI_SDLC_BUILD") == "true" }
 func CandidateAutonomy(p authority.Policy) bool {
+	return candidateAutonomy(p, project.Supported(p.Repository))
+}
+
+func candidateAutonomy(p authority.Policy, supported bool) bool {
 	if MergeEnabled() {
-		return project.Supported(p.Repository) && p.Autonomy == "auto-merge-low"
+		return supported && p.Autonomy == "auto-merge-low"
 	}
 	return p.Autonomy == "auto-pr"
 }
@@ -109,6 +113,14 @@ func Open(ctx context.Context, name string) (*Component, error) {
 	return c, nil
 }
 
+// ProjectManifestPath is the read-only mount of the reviewed project manifest.
+func ProjectManifestPath() string {
+	if path := os.Getenv("AI_SDLC_PROJECT_MANIFEST_PATH"); path != "" {
+		return path
+	}
+	return "/etc/ai-sdlc/project/manifest.json"
+}
+
 func boundedFile(path string) ([]byte, error) {
 	if path == "" {
 		return nil, errors.New("trusted configuration path required")
@@ -126,6 +138,17 @@ func boundedFile(path string) ([]byte, error) {
 }
 
 func (c *Component) Authority() (authority.Policy, authority.Identity, error) {
+	// The installed manifest changes only when the whole load succeeds; any
+	// refusal clears it, so no stale scope survives a failed reload.
+	var installed *project.Manifest
+	loaded := false
+	defer func() {
+		if loaded {
+			project.SetInstalled(installed)
+		} else {
+			project.SetInstalled(nil)
+		}
+	}()
 	if err := ValidateMode(); err != nil {
 		return authority.Policy{}, authority.Identity{}, err
 	}
@@ -137,11 +160,29 @@ func (c *Component) Authority() (authority.Policy, authority.Identity, error) {
 	if err != nil {
 		return authority.Policy{}, authority.Identity{}, err
 	}
+	// The manifest is resolved from the same authenticated policy on every
+	// load, so delivery scope always follows the current reviewed policy.
+	if p.ProjectSHA256 != "" {
+		manifest, err := project.Load(ProjectManifestPath(), p)
+		if err != nil {
+			return authority.Policy{}, authority.Identity{}, errors.New("project manifest does not match the installed policy")
+		}
+		installed = &manifest
+	} else {
+		// A mounted manifest the policy does not bind is a configuration
+		// error; without either, built-in references keep their behaviour.
+		if _, err := os.Lstat(ProjectManifestPath()); err == nil || !os.IsNotExist(err) {
+			return authority.Policy{}, authority.Identity{}, errors.New("project manifest is mounted but not bound by the policy")
+		}
+	}
 	if os.Getenv("AI_SDLC_RUNTIME_MODE") == "shadow" && p.Autonomy != "shadow" {
 		return authority.Policy{}, authority.Identity{}, errors.New("shadow mode requires shadow authority ceiling")
 	}
 	if CandidateEnabled() {
-		if !CandidateAutonomy(p) {
+		// Support follows this load's own manifest, not the registry, which
+		// is updated only after the load succeeds.
+		_, reference := project.Builtin(p.Repository)
+		if !candidateAutonomy(p, reference || (installed != nil && installed.Repository == p.Repository)) {
 			return authority.Policy{}, authority.Identity{}, errors.New("candidate authority ceiling does not match installed capabilities")
 		}
 		for _, grant := range p.Grants {
@@ -161,6 +202,7 @@ func (c *Component) Authority() (authority.Policy, authority.Identity, error) {
 	if identity.Role != c.Name || identity.Validate(p) != nil {
 		return authority.Policy{}, authority.Identity{}, errors.New("component signing identity mismatch")
 	}
+	loaded = true
 	return p, identity, nil
 }
 

@@ -51,7 +51,21 @@ func PolicyForRepository(repository string) Policy {
 	case project.Saferus:
 		raw = saferusManifest
 	default:
-		return Policy{}
+		// Other repositories take their merge policy from the
+		// policy-bound project manifest.
+		m, ok := project.Lookup(repository)
+		// Only values the merge gate enforces today are accepted: strict
+		// required checks, resolved threads, no human approval count and
+		// the main branch.
+		if !ok || m.Merge.RulesetID > 2147483647 || !m.Merge.StrictChecks || !m.Merge.ResolveThreads ||
+			m.Merge.HumanApprovals != 0 || m.BaseBranch != "main" {
+			return Policy{}
+		}
+		p := Policy{Repository: m.Repository, RulesetID: int(m.Merge.RulesetID)}
+		for _, c := range m.Merge.Required {
+			p.Required = append(p.Required, RequiredCheck{Context: c.Context, AppID: c.AppID})
+		}
+		return p
 	}
 	var p Policy
 	if json.Unmarshal(raw, &p) != nil {
