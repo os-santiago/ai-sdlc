@@ -10,10 +10,13 @@ Docker, Python 3.11 or later, and about 16 GB of free memory.
   must pass before a merge (for example a `test` job). The `gh` CLI must be
   logged in as an account with admin rights on it. That account is the
   authorized issue actor, and the runtime publishes with its credential.
-- **Model service:** one of the following.
-  - An OpenAI-compatible endpoint on a private address: vLLM, llama.cpp,
-    LiteLLM, or the [local simulator](../tools/local_model_service/README.md).
-  - The bundled Codex CLI with a local Codex login (`--codex-auth-file`).
+- **Model service:** a local Codex login file (`--codex-auth-file`). A fresh
+  installation always needs it, because it creates the model credential
+  Secret. You can omit it only when that Secret already exists and you do not
+  pass `--refresh-model-credential`. By default the runtime uses the bundled
+  Codex CLI with that login. To use another model instead, also provide an
+  OpenAI-compatible endpoint on a private address, such as vLLM, llama.cpp,
+  LiteLLM or the [local simulator](../tools/local_model_service/README.md).
 - **Toolchain:** a container image pinned by digest that runs your tests
   offline. Dependencies must be vendored or present in the image.
 
@@ -26,9 +29,10 @@ the paths a change may touch, and your required check (context and GitHub App
 ID, which is `15368` for GitHub Actions). Add a JUnit report path if your tests
 can produce one; it makes verification decisions strong instead of weak.
 
-## 3. Describe the model service
+## 3. Describe the model service (OpenAI-compatible endpoint only)
 
-For an OpenAI-compatible endpoint, write a document like this one:
+Skip this step if you use the bundled Codex CLI. For an OpenAI-compatible
+endpoint, write a document like this one:
 
 ```json
 {"adapter": "openai", "url": "http://10.89.0.1:18090/v1/chat/completions", "model": "your-model",
@@ -37,9 +41,17 @@ For an OpenAI-compatible endpoint, write a document like this one:
 ```
 
 The endpoint must be a literal private address reachable from the kind node.
-See [model gateway adapters](operations/model-gateway-adapters.md).
+At startup each model gateway benchmarks the model and derives a call timeout
+`T` (at most `seconds`). Work starts only when `T + 20` fits the window:
+`T + 20 <= callSeconds` for generation, and `T + 20 <= reviewCallSeconds` for
+review. With the values above, a model measured at more than 150 s can
+generate but will never be reviewed. Check the `model-benchmark` line in each
+gateway's log (`timeoutSeconds`), then choose a faster model or raise the
+windows. See [model gateway adapters](operations/model-gateway-adapters.md).
 
 ## 4. Install
+
+With an OpenAI-compatible endpoint:
 
 ```bash
 ./install.sh local --cluster my-eval --repository OWNER/REPO \
@@ -48,6 +60,9 @@ See [model gateway adapters](operations/model-gateway-adapters.md).
   --github-auth gh-cli --codex-auth-file ~/.codex/auth.json \
   --model-upstream upstream.json --project-manifest manifest.json
 ```
+
+With the bundled Codex CLI, run the same command without
+`--model-upstream upstream.json`.
 
 The first run creates the native merge rule on GitHub, then stops and prints
 its ID. Set `merge.rulesetID` in the manifest to that ID and run the same
@@ -62,8 +77,9 @@ before you file work.
 
 The runtime admits and plans the issue, then generates, verifies and reviews a
 candidate. It opens a pull request and merges it once your required check
-passes. Every stop is fail-closed. To retry after a stop, remove and re-add the
-label.
+passes. Every stop is fail-closed. To retry after a stop, remove the label,
+wait about 30 seconds, and add it again as the authorized actor. The new label
+event is admitted and planned as a new work item, which gets a fresh execution.
 
 ## 6. Know the limits
 
