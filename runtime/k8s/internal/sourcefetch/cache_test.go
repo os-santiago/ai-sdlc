@@ -91,7 +91,7 @@ func TestCacheKeepsPreviouslyVerifiedSourceDuringOtherSourceQuota(t *testing.T) 
 	c.fetch = func(_ context.Context, _, sha string) (workspacebundle.Bundle, error) {
 		calls++
 		if sha != testSHA {
-			return workspacebundle.Bundle{}, AvailabilityError{time.Now().Add(time.Minute), true}
+			return workspacebundle.Bundle{}, AvailabilityError{retryAt: time.Now().Add(time.Minute), rateLimited: true}
 		}
 		return cachedFixture(sha), nil
 	}

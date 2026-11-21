@@ -95,11 +95,17 @@ jobs:
           python3 -m unittest discover -s runtime/k8s/tools -p 'test_*.py' -v
           python3 -m unittest discover -s tools -p 'test_model_fixture_*.py' -v
           python3 -m unittest discover -s tools/local_model_service -p 'test_*.py' -v
-  contract:
+  contract-tests:
     runs-on: ubuntu-latest
-    # The execution package's real expiry/recovery waits reached 30m on hosted
-    # runners. Bound each package at 40m; preserve setup and other packages.
+    # internal/execution holds most of the suite (real expiry and recovery
+    # waits); its tests are split into deterministic shards, each with its
+    # own disposable database. Shard 0 runs every other package, the build,
+    # vet and the portable contract validation.
     timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4]
     services:
       postgres:
         image: postgres:17-alpine
@@ -118,27 +124,49 @@ jobs:
           go-version-file: runtime/k8s/go.mod
           cache-dependency-path: runtime/k8s/go.sum
       - name: Install contract validator
+        if: matrix.shard == 0
         run: |
           python3 -m venv "$RUNNER_TEMP/contract-venv"
           "$RUNNER_TEMP/contract-venv/bin/pip" install -r tools/quality-requirements.txt
           echo "$RUNNER_TEMP/contract-venv/bin" >> "$GITHUB_PATH"
       - name: Validate portable examples and fail-closed validator behavior
+        if: matrix.shard == 0
         run: bash tools/test-contracts.sh
       - name: Build, vet, and test runtime with a fresh PostgreSQL database
         working-directory: runtime/k8s
         env:
           AI_SDLC_TEST_DATABASE_URL: postgres://postgres:local-ci-only@localhost:5432/ai_sdlc_test?sslmode=disable
+          SHARD: ${{ matrix.shard }}
         run: |
           set -o pipefail
-          go build ./...
-          go vet ./...
-          go test -json -count=1 -p 1 -timeout=40m ./... | tee "$RUNNER_TEMP/runtime-tests.jsonl"
+          if [ "$SHARD" = 0 ]; then
+            go build ./...
+            go vet ./...
+            mapfile -t packages < <(go list ./... | grep -v '/internal/execution$')
+            go test -json -count=1 -p 1 -timeout=40m "${packages[@]}" | tee "$RUNNER_TEMP/runtime-tests.jsonl"
+          else
+            # Every top-level test lands in exactly one of shards 1-4.
+            tests="$(go test -list '.*' ./internal/execution | grep -E '^Test[A-Za-z0-9_]*$' | sort | awk -v n=4 -v s=$((SHARD - 1)) '(NR - 1) % n == s' | paste -sd'|')"
+            test -n "$tests"
+            go test -json -count=1 -timeout=40m -run "^(${tests})\$" ./internal/execution | tee "$RUNNER_TEMP/runtime-tests.jsonl"
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: runtime-test-timings
+          name: runtime-test-timings-${{ matrix.shard }}
           path: ${{ runner.temp }}/runtime-tests.jsonl
           if-no-files-found: warn
+  # The required "contract" check passes only when every shard passed.
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [contract-tests]
+    if: always()
+    steps:
+      - name: Require every runtime test shard
+        env:
+          RESULT: ${{ needs.contract-tests.result }}
+        run: test "$RESULT" = success
   security-log-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 5
