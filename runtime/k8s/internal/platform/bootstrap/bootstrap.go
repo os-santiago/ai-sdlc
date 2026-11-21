@@ -75,8 +75,12 @@ func ProvenanceEnabled() bool {
 func MergeEnabled() bool { return ValidateMode() == nil && os.Getenv("AI_SDLC_MERGE") == "true" }
 func BuildEnabled() bool { return ValidateMode() == nil && os.Getenv("AI_SDLC_BUILD") == "true" }
 func CandidateAutonomy(p authority.Policy) bool {
+	return candidateAutonomy(p, project.Supported(p.Repository))
+}
+
+func candidateAutonomy(p authority.Policy, supported bool) bool {
 	if MergeEnabled() {
-		return project.Supported(p.Repository) && p.Autonomy == "auto-merge-low"
+		return supported && p.Autonomy == "auto-merge-low"
 	}
 	return p.Autonomy == "auto-pr"
 }
@@ -175,7 +179,10 @@ func (c *Component) Authority() (authority.Policy, authority.Identity, error) {
 		return authority.Policy{}, authority.Identity{}, errors.New("shadow mode requires shadow authority ceiling")
 	}
 	if CandidateEnabled() {
-		if !CandidateAutonomy(p) {
+		// Support follows this load's own manifest, not the registry, which
+		// is updated only after the load succeeds.
+		_, reference := project.Builtin(p.Repository)
+		if !candidateAutonomy(p, reference || (installed != nil && installed.Repository == p.Repository)) {
 			return authority.Policy{}, authority.Identity{}, errors.New("candidate authority ceiling does not match installed capabilities")
 		}
 		for _, grant := range p.Grants {

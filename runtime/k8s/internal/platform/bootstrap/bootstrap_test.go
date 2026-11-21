@@ -289,6 +289,41 @@ func TestMergeRequiresExplicitPilotCapabilityAndCannotDeploy(t *testing.T) {
 	}
 }
 
+func TestMergeAcceptsTheRepositoryOfThisLoadsManifest(t *testing.T) {
+	t.Cleanup(func() { project.SetInstalled(nil) })
+	t.Setenv("AI_SDLC_RUNTIME_MODE", "verification")
+	t.Setenv("AI_SDLC_INDEPENDENT_REVIEW", "true")
+	t.Setenv("AI_SDLC_PUBLICATION", "true")
+	t.Setenv("AI_SDLC_MERGE", "true")
+	c, material := files(t)
+	manifestPath := filepath.Join(filepath.Dir(c.PolicyPath), "manifest.json")
+	t.Setenv("AI_SDLC_PROJECT_MANIFEST_PATH", manifestPath)
+	manifest, _ := project.Builtin(project.Saferus)
+	manifest.Repository = "example/project"
+	if err := os.WriteFile(manifestPath, manifest.Canonical(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p := material.Policy
+	p.Repository = "example/project"
+	p.Autonomy = "auto-merge-low"
+	p.ProjectSHA256 = manifest.Digest()
+	var grants []authority.Grant
+	for _, g := range p.Grants {
+		if g.Operation == "admit-issue" || g.Operation == "plan-admission" || g.Operation == "execute-work" || g.Operation == "verify-artifact" || g.Operation == "publish-candidate" || g.Operation == "merge-publication" {
+			grants = append(grants, g)
+		}
+	}
+	p.Grants = grants
+	raw, _ := json.Marshal(p)
+	if err := os.WriteFile(c.PolicyPath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	project.SetInstalled(nil)
+	if _, _, err := c.Authority(); err != nil || !project.Supported("example/project") {
+		t.Fatal("the first load of a bound repository with merge was refused", err)
+	}
+}
+
 func TestProvenanceCapabilityRequiresCompletePredecessorChain(t *testing.T) {
 	for _, key := range []string{"AI_SDLC_PUBLICATION", "AI_SDLC_MERGE", "AI_SDLC_BUILD", "AI_SDLC_INDEPENDENT_REVIEW", "AI_SDLC_PROVENANCE"} {
 		t.Setenv(key, "")
