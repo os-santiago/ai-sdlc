@@ -154,7 +154,12 @@ func (db *DB) StopVerification(ctx context.Context, c VerificationClaim, reason 
 	if AssertComponent(ctx, db.Pool, "verifier") != nil || !verificationStopReason(reason) {
 		return ErrExecution
 	}
-	result, err := db.Pool.ExecContext(ctx, `UPDATE verification_requests SET state='failed',reason=$3 WHERE id=$1 AND claim_token=$2 AND state='claimed'`, c.ID, c.Token, reason)
+	query := `UPDATE verification_requests SET state='failed',reason=$3 WHERE id=$1 AND claim_token=$2 AND state='claimed'`
+	if reason == "comparison-failed" {
+		// A refusal is a decision; it is recorded only under a live claim.
+		query += ` AND claim_until>clock_timestamp() AND expires_at>clock_timestamp()`
+	}
+	result, err := db.Pool.ExecContext(ctx, query, c.ID, c.Token, reason)
 	if err != nil {
 		return ErrExecution
 	}
