@@ -178,6 +178,7 @@ func (s *Session) inspect(ctx context.Context, allowWorkerExit bool) (observatio
 	if err != nil || len(raw) > maxPodBytes || authority.DecodeStrict(raw, &pod) != nil {
 		return observation{}, ErrTransport
 	}
+	pod = platformObserved(pod, s.expected)
 	if string(pod.UID) != s.identity.PodUID || pod.Name != s.expected.Name || pod.Namespace != s.expected.Namespace || pod.DeletionTimestamp != nil || pod.Status.Phase != core.PodRunning || pod.Spec.NodeName == "" || !reflect.DeepEqual(pod.Labels, s.expected.Labels) || !reflect.DeepEqual(pod.Annotations, s.expected.Annotations) {
 		return observation{}, ErrTransport
 	}

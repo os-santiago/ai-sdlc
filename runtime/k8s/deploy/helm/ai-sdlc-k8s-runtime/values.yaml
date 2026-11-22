@@ -115,6 +115,11 @@ networkPolicy:
   enabled: true
   databaseEgressCIDRs: []
 openshift:
+  # OpenShift admission profile. When enabled, the runtime's and workloads'
+  # ServiceAccounts may use the standard nonroot-v2 SCC (fixed non-root UID
+  # 1000), and the transports accept only the exact annotations, MCS level and
+  # default pull secret that OpenShift admission adds to a compiled pod.
+  enabled: false
   route: {enabled: false, host: ""}
 
 review:

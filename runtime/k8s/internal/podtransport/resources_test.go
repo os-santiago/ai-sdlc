@@ -168,6 +168,49 @@ func TestResourcePodCreateChecksConfigBeforeAndAfter(t *testing.T) {
 		})
 	}
 }
+func TestResourcePodCreateObservedKeepsCreatedUID(t *testing.T) {
+	for which, keeps := range map[string]bool{"success": true, "config-replaced-after": true, "spec": true, "uid": false, "conflict": false, "lost-response": false} {
+		t.Run(which, func(t *testing.T) {
+			var gets atomic.Int32
+			var created string
+			r, _ := resourcesFixture(t, func(resources *Resources, pod core.Pod, w http.ResponseWriter, request *http.Request) {
+				if request.Method == "GET" {
+					c := configResponse(resources)
+					if which == "config-replaced-after" && gets.Add(1)%2 == 0 {
+						c.UID = types.UID(fixtureOtherUID)
+					}
+					writeResource(w, 200, c)
+					return
+				}
+				switch which {
+				case "spec":
+					pod.Spec.HostNetwork = true
+				case "uid":
+					pod.UID = "invalid"
+				case "conflict":
+					w.WriteHeader(409)
+					return
+				case "lost-response":
+					connection, _, _ := w.(http.Hijacker).Hijack()
+					connection.Close()
+					return
+				}
+				created = string(pod.UID)
+				writeResource(w, 201, pod)
+			})
+			uid, err := r.CreatePodObserved(context.Background(), fixtureConfigUID)
+			if (err == nil) != (which == "success") {
+				t.Fatalf("err=%v", err)
+			}
+			if keeps && (uid == "" || uid != created) || !keeps && uid != "" {
+				t.Fatalf("uid=%q created=%q", uid, created)
+			}
+			if plain, e := r.CreatePod(context.Background(), fixtureConfigUID); which != "success" && (e == nil || plain != "") {
+				t.Fatal("CreatePod must not return a UID with an error")
+			}
+		})
+	}
+}
 func TestResourceWaitBindsExactRunningPod(t *testing.T) {
 	for _, which := range []string{"success", "replacement", "mutation", "failed", "expired"} {
 		t.Run(which, func(t *testing.T) {

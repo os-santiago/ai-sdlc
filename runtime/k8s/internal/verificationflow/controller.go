@@ -157,7 +157,8 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		}
 		if !cleaned && !cleanupAttempted {
 			if e := cleanup(); e != nil {
-				err = e
+				// Keep the stage that stopped the run for the diagnostic.
+				err = cleanupAfter{cause: e, stage: stage}
 			}
 		}
 		if err != nil {
@@ -221,6 +222,14 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 			}
 		}
 		if e != nil {
+			// The create response named the object even though a later check
+			// failed: record that UID, or cleanup could never remove it and
+			// the verifier would stay blocked.
+			if uid != "" {
+				ackCtx, stop := context.WithTimeout(context.Background(), 3*time.Second)
+				_ = db.AcknowledgeVerificationEffect(ackCtx, effect, uid)
+				stop()
+			}
 			return e
 		}
 		if db.AcknowledgeVerificationEffect(ctx, effect, uid) != nil {

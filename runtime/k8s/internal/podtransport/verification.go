@@ -131,7 +131,7 @@ func (v *VerificationResources) CreatePod(ctx context.Context, kind, configUID s
 	if e != nil || v.isolation(ctx) != nil {
 		return "", ErrTransport
 	}
-	return r.CreatePod(ctx, configUID)
+	return r.CreatePodObserved(ctx, configUID)
 }
 func (v *VerificationResources) DeletePod(ctx context.Context, kind, uid string) error {
 	r, e := v.resource(kind)

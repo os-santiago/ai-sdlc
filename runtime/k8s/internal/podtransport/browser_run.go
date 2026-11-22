@@ -154,7 +154,7 @@ func (b *BrowserResources) Verify(ctx context.Context, snapshot ConsoleSnapshot,
 	postStarted = true
 	raw, status, e := b.resources.request(ctx, http.MethodPost, "pods", "", body, false)
 	var created core.Pod
-	if e != nil || status != 201 || authority.DecodeStrict(raw, &created) != nil || !exactMetadata(created.ObjectMeta, b.pod.ObjectMeta, "") {
+	if e != nil || status != 201 || authority.DecodeStrict(raw, &created) != nil || !exactMetadata(platformObserved(created, b.pod).ObjectMeta, b.pod.ObjectMeta, "") {
 		return ConsoleRollout{}, evidence, ErrTransport
 	}
 	uid := string(created.UID)
