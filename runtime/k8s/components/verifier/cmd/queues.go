@@ -20,7 +20,7 @@ func reconcileQueues(ctx context.Context, review, verify queuePoll, handoff func
 	if review != nil {
 		state, err := review(ctx)
 		if err != nil {
-			log.Print("independent review stopped safely")
+			log.Print("independent review stopped safely: " + reviewflow.DiagnosticStage(err))
 		} else if state != "" {
 			log.Print("independent review: " + state)
 		}
