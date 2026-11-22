@@ -59,7 +59,7 @@ class GatewayHandler(Handler):
         sent it will wait (its call-seconds header). Without that header (an
         older broker) the benchmarked timeout applies, as before."""
         values = self.headers.get_all(CALL_SECONDS_HEADER) or []
-        if len(values) == 1 and values[0].isdigit() and 1 <= int(values[0]) <= 600:
+        if len(values) == 1 and values[0].isascii() and values[0].isdigit() and 1 <= int(values[0]) <= 600:
             return min(int(values[0]), self.server.adapter.seconds)
         return profile["timeoutSeconds"]
 

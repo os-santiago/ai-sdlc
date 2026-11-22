@@ -441,7 +441,8 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(self.call("/v1/chat/completions", REQUEST)[0], 200)
         self.assertEqual(seen, [profile["timeoutSeconds"]])
         # With it, the call may run to the broker's remaining wait, capped by the ceiling.
-        for header, expected in (("120", 120), (str(self.adapter.seconds + 100), self.adapter.seconds), ("0", profile["timeoutSeconds"]), ("x", profile["timeoutSeconds"])):
+        for header, expected in (("120", 120), (str(self.adapter.seconds + 100), self.adapter.seconds), ("0", profile["timeoutSeconds"]), ("x", profile["timeoutSeconds"]),
+                                 ("601", profile["timeoutSeconds"]), ("\u00b2", profile["timeoutSeconds"])):
             seen.clear()
             status, _ = self.call_with_header(header)
             self.assertEqual((status, seen), (200, [expected]))

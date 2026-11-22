@@ -175,7 +175,8 @@ take up to `upstream.seconds`, bounded by the broker's remaining wait for that
 call, which the provider sends as `X-AI-SDLC-Call-Seconds`. The gateway
 therefore never keeps working, or holding its single model slot, after the
 broker gives up (window minus 15 s; minus 10 s for reviews). Without the
-header, from an older broker, the gateway applies `T` as before. The startup probes show the best case; real calls have a latency
-tail, from queueing, provider retries or long answers. In the evaluation
+header, from an older broker, the gateway applies `T` as before. The startup
+probes show the best case; real calls have a latency tail, from queueing,
+provider retries or long answers. In the evaluation
 batteries, calls of 92–123 s failed against a benchmarked `T` of about 93 s,
 inside a 330 s window.
