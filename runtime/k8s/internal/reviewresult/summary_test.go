@@ -52,6 +52,26 @@ func TestVerdictRejectsFallbackAmbiguityAndTruncation(t *testing.T) {
 			t.Fatal(v, e)
 		}
 	}
+	for _, good := range []string{
+		"The parser now trims keys:\n```go\nk = strings.TrimSpace(k)\n```\nTests cover it.\nVERDICT: approve",
+		"Two blocks:\n~~~\na\n~~~\n```\nb\n```\nVERDICT: request_changes",
+	} {
+		if _, e := Verdict(good); e != nil {
+			t.Fatal("balanced fenced review refused")
+		}
+	}
+	for _, bad := range []string{
+		"```\nVERDICT: approve",
+		"```go\ncode\nVERDICT: approve",
+		"Use ```inline``` here.\nVERDICT: approve",
+		"```\na\n~~~\nVERDICT: approve",
+		"```\na\n```go\nVERDICT: approve",
+		"```\nverdict: x\n```\nVERDICT: approve",
+	} {
+		if _, e := Verdict(bad); e == nil {
+			t.Fatalf("fence ambiguity accepted: %q", bad)
+		}
+	}
 	for _, bad := range []string{"Looks good", "VERDICT: APPROVE", "VERDICT: approve\nmore", "> VERDICT: approve", "```\nVERDICT: approve\n```", "VERDICT: request_changes\nVERDICT: approve", "verdict: request_changes\nVERDICT: approve", strings.Repeat("a", 4000) + "\nVERDICT: approve", "\x00\nVERDICT: approve"} {
 		if _, e := Verdict(bad); e == nil {
 			t.Fatal("ambiguous verdict accepted")

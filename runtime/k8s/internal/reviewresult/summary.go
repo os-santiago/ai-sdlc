@@ -91,9 +91,11 @@ func Parse(raw []byte, model string, maxSteps int) (Result, error) {
 }
 
 // Verdict intentionally rejects SCC's prose/last-marker fallback, quoted
-// markers, multiple verdicts, code fences and truncated final messages.
+// markers, multiple verdicts, unbalanced or inline code fences and truncated
+// final messages. A review may quote code in fenced blocks: the single
+// "verdict:" occurrence must still be the exact last line, outside any block.
 func Verdict(message string) (string, error) {
-	if len(message) == 0 || len(message) >= 4000 || !utf8.ValidString(message) || strings.ContainsAny(message, "\x00\r") || strings.Contains(message, "```") || strings.Contains(message, "~~~") || strings.Count(strings.ToLower(message), "verdict:") != 1 {
+	if len(message) == 0 || len(message) >= 4000 || !utf8.ValidString(message) || strings.ContainsAny(message, "\x00\r") || !balancedFences(message) || strings.Count(strings.ToLower(message), "verdict:") != 1 {
 		return "", ErrInvalid
 	}
 	lines := strings.Split(strings.TrimSpace(message), "\n")
@@ -104,4 +106,39 @@ func Verdict(message string) (string, error) {
 		}
 	}
 	return "", ErrInvalid
+}
+
+// balancedFences accepts code fences only as whole fence lines that open and
+// close in pairs of the same marker, so the closing verdict line can never be
+// inside, or be mistaken for part of, a quoted block. Fence markers anywhere
+// else in a line are refused.
+func balancedFences(message string) bool {
+	open := ""
+	for _, line := range strings.Split(message, "\n") {
+		trimmed := strings.TrimSpace(line)
+		marker := ""
+		for _, m := range []string{"```", "~~~"} {
+			if strings.HasPrefix(trimmed, m) {
+				marker = m
+			}
+		}
+		if marker == "" {
+			if strings.Contains(line, "```") || strings.Contains(line, "~~~") {
+				return false
+			}
+			continue
+		}
+		if strings.Contains(trimmed[3:], "```") || strings.Contains(trimmed[3:], "~~~") {
+			return false
+		}
+		switch {
+		case open == "":
+			open = marker
+		case open == marker && trimmed == marker:
+			open = ""
+		default:
+			return false
+		}
+	}
+	return open == ""
 }
