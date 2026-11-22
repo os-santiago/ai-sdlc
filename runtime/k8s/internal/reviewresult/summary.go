@@ -96,6 +96,10 @@ func Parse(raw []byte, model string, maxSteps int) (Result, error) {
 // such as "Verdict = request_changes" is refused, not just "verdict:".
 var verdictMarker = regexp.MustCompile(`(?i)\bverdict\s*[:=]`)
 
+// htmlBlock is a raw HTML opener, which Markdown may render as a block that
+// swallows the rest of the review.
+var htmlBlock = regexp.MustCompile(`^ {0,3}<`)
+
 // Verdict intentionally rejects SCC's prose/last-marker fallback, quoted
 // markers, multiple verdicts, unbalanced or inline code fences and truncated
 // final messages. A review may quote code in fenced blocks: the single
@@ -106,6 +110,13 @@ func Verdict(message string) (string, error) {
 	}
 	lines := strings.Split(strings.TrimSpace(message), "\n")
 	last := lines[len(lines)-1]
+	// No raw HTML block may hide the verdict line when the review is
+	// rendered as Markdown (an unclosed comment, <pre> or <script>).
+	for _, line := range lines {
+		if htmlBlock.MatchString(line) {
+			return "", ErrInvalid
+		}
+	}
 	for _, verdict := range []string{"approve", "request_changes"} {
 		if last == "VERDICT: "+verdict {
 			return verdict, nil
