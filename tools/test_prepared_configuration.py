@@ -309,6 +309,7 @@ class PreparedCustodyTests(unittest.TestCase):
         c.record={'version':prepared.VERSION,'originalSHA256':'recorded-original','phase':'preparing',
             'requestSHA256':'superseded-request','source':{'documents':[],'externalRuntime':{}},
             'target':None,'resources':{},'privateSecrets':{},'sources':{},'originalSecrets':{}}
+        c.path.write_text(json.dumps(c.record))
         c.inventory=lambda kinds:[]
         c.read=lambda kind,name,namespace='ai-sdlc-runtime':None
         c.secret_inventory=lambda:{}
@@ -333,6 +334,10 @@ class PreparedCustodyTests(unittest.TestCase):
         self.assertEqual(persisted['source']['values'],{'runtime':{'paused':True}})
         self.assertEqual(persisted['source']['observed'],c.original['original'])
         self.assertEqual(c.current,'source')
+        # The abandoned intent is preserved as digest-named custody.
+        superseded=list(c.state_dir.glob('prepared-configuration.superseded-*.json'))
+        self.assertEqual(len(superseded),1)
+        self.assertEqual(json.loads(superseded[0].read_text())['requestSHA256'],'superseded-request')
 
     def test_recorded_effect_keeps_changed_request_permanently_rejected(self):
         for fault in ('resources','privateSecrets','sources','target','phase'):
@@ -346,7 +351,8 @@ class PreparedCustodyTests(unittest.TestCase):
                 c.guard=lambda **kwargs:(_ for _ in ()).throw(AssertionError('guard must not run'))
                 with self.assertRaisesRegex(ValueError,'Incomplete prepared configuration cannot accept a different target'):
                     c.begin()
-                self.assertFalse(c.path.exists())
+                self.assertEqual(json.loads(c.path.read_text())['requestSHA256'],'superseded-request')
+                self.assertFalse(list(c.state_dir.glob('prepared-configuration.superseded-*.json')))
 
     def test_effect_free_abandon_still_fails_closed_on_drifted_source(self):
         c=self.effect_free_fixture()
@@ -356,7 +362,9 @@ class PreparedCustodyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'neither its complete before nor after'):
             c.begin()
         self.assertEqual(c.record['requestSHA256'],'superseded-request')
-        self.assertFalse(c.path.exists())
+        # The rejected intent and its journal survive the failed re-proof.
+        self.assertEqual(json.loads(c.path.read_text())['requestSHA256'],'superseded-request')
+        self.assertFalse(list(c.state_dir.glob('prepared-configuration.superseded-*.json')))
 
     def test_controller_revision_derivation_preserves_original_physical_profile(self):
         state=Path(self.directory.name)
