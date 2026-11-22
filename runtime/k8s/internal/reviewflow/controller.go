@@ -232,7 +232,8 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	}
 	stage = "model-evidence"
 	evidence, e := db.ReadReviewModelEvidence(ctx, claim)
-	if e != nil || modelbroker.MatchReviewSummary(summary.Result(), evidence) != nil {
+	result := summary.Result().WithholdUnboundFeedback()
+	if e != nil || modelbroker.MatchReviewSummary(result, evidence) != nil {
 		return proof, ControllerError{Stage: stage}
 	}
 	stage = "cleanup"
@@ -243,8 +244,8 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	if fence(ctx) != nil {
 		return proof, ControllerError{Stage: stage}
 	}
-	if summary.Result().Verdict != "approve" {
-		if db.RejectReviewWithFeedback(ctx, claim, summary.Result()) != nil {
+	if result.Verdict != "approve" {
+		if db.RejectReviewWithFeedback(ctx, claim, result) != nil {
 			return proof, ControllerError{Stage: "rejection-commit"}
 		}
 		return proof, ControllerError{Stage: "request-changes"}
