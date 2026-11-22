@@ -1,7 +1,5 @@
 package reviewresult
 
-import "github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
-
 const ObservationVersion = "ai-sdlc.review-observation/v1"
 
 // Observation is derived from a provider response before delivery to the worker.
@@ -25,7 +23,7 @@ func MatchObservations(summary Result, evidence []Observation) error {
 			return ErrInvalid
 		}
 		if i == len(evidence)-1 {
-			if len(o.Tools) != 0 || o.Verdict != summary.Verdict || o.FinalSHA256 != authority.Digest([]byte(summary.FinalMessage)) {
+			if len(o.Tools) != 0 || o.Verdict != summary.Verdict || o.FinalSHA256 != summary.BoundFinalSHA256() {
 				return ErrInvalid
 			}
 		} else {
