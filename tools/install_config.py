@@ -26,7 +26,7 @@ def load(path):
         raise ValueError('Invalid installation configuration JSON') from exc
     fields = {'apiVersion', 'kind', 'cluster', 'provider', 'repository',
               'environment', 'profile', 'images'}
-    if not isinstance(config, dict) or set(config) - {'independentReview', 'reviewRepair', 'publication', 'merge', 'platform', 'buildBundle', 'projectManifest'} != fields:
+    if not isinstance(config, dict) or set(config) - {'independentReview', 'reviewRepair', 'publication', 'merge', 'platform', 'buildBundle', 'projectManifest', 'namespace', 'kubeconfig', 'context', 'timeout', 'modelUpstream'} != fields:
         raise ValueError('Installation configuration requires exactly the documented fields')
     if any(not isinstance(value, str) for key, value in config.items() if key not in ('independentReview', 'reviewRepair', 'publication', 'merge')):
         raise ValueError('Installation configuration fields must be strings')
@@ -43,8 +43,21 @@ def load(path):
             or config['profile'] not in ('maintenance', 'shadow', 'candidate', 'verification')
             or not config['images'] or '\x00' in config['images']):
         raise ValueError('Invalid or unsupported local installation scope')
-    if config.get('platform', 'kind') not in ('kind', 'konflux'):
+    if config.get('platform', 'kind') not in ('kind', 'konflux', 'openshift'):
         raise ValueError('Unsupported installation platform')
+    if config.get('platform') == 'openshift':
+        if (not config.get('kubeconfig') or '\x00' in config['kubeconfig']
+                or not config.get('context') or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,127}', config['context'])):
+            raise ValueError('An OpenShift target requires a kubeconfig path and context')
+    elif 'kubeconfig' in config or 'context' in config:
+        raise ValueError('kubeconfig and context select an existing OpenShift cluster only')
+    if config.get('namespace', 'ai-sdlc-runtime') != 'ai-sdlc-runtime':
+        raise ValueError('Only the fixed ai-sdlc-runtime namespace is supported')
+    if 'timeout' in config and not re.fullmatch(r'[1-9][0-9]{0,3}(s|m)', config['timeout']):
+        raise ValueError('Timeout must be bounded positive seconds or minutes')
+    if 'modelUpstream' in config and (not config['modelUpstream'] or '\x00' in config['modelUpstream']
+            or config['profile'] not in ('candidate', 'verification')):
+        raise ValueError('A model upstream requires the candidate or verification profile')
     if 'buildBundle' in config and (not config['buildBundle'] or '\x00' in config['buildBundle']
             or config.get('platform') != 'konflux' or config['profile'] != 'verification'
             or config['repository'] != 'os-santiago/saferus' or config['environment'] != 'ai-sdlc-production'
@@ -63,12 +76,16 @@ def load(path):
     if 'merge' in config and (type(config['merge']) is not bool or (config['merge'] and config.get('publication') is not True)):
         raise ValueError('Merge requires explicit verified publication')
     digest = 'sha256:' + hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    values = {({'independentReview': 'independent_review', 'reviewRepair': 'review_repair', 'buildBundle': 'build_bundle', 'projectManifest': 'project_manifest'}.get(key, key)): value for key, value in config.items() if key not in ('apiVersion', 'kind')}
+    values = {({'independentReview': 'independent_review', 'reviewRepair': 'review_repair', 'buildBundle': 'build_bundle', 'projectManifest': 'project_manifest', 'modelUpstream': 'model_upstream'}.get(key, key)): value for key, value in config.items() if key not in ('apiVersion', 'kind')}
     values['images'] = (path.parent / config['images']).resolve()
     if 'buildBundle' in config:
         values['build_bundle'] = (path.parent / config['buildBundle']).resolve()
     if 'projectManifest' in config:
         values['project_manifest'] = (path.parent / config['projectManifest']).resolve()
+    if 'kubeconfig' in config:
+        values['kubeconfig'] = (path.parent / config['kubeconfig']).resolve()
+    if 'modelUpstream' in config:
+        values['model_upstream'] = (path.parent / config['modelUpstream']).resolve()
     return values, digest
 
 
@@ -80,14 +97,14 @@ def resolve(args):
         raise ValueError('--config supports plan, local, status, credentials and sandbox only')
     values, digest = load(args.config)
     for key, value in values.items():
-        supplied = getattr(args, key)
-        if key in ('images', 'build_bundle', 'project_manifest') and supplied is not None:
+        supplied = getattr(args, key, None)
+        if key in ('images', 'build_bundle', 'project_manifest', 'kubeconfig', 'model_upstream') and supplied is not None:
             supplied = supplied.resolve()
         if supplied is not None and supplied != value:
             raise ValueError('CLI option conflicts with installation configuration: ' + key)
         # Status and credential operations address the same scope without
         # changing the installed profile or requesting shadow activation.
-        if key == 'build_bundle' and args.command not in ('plan', 'local'):
+        if key in ('build_bundle', 'model_upstream') and args.command not in ('plan', 'local'):
             continue
         if key != 'profile' or args.command in ('plan', 'local'):
             setattr(args, key, value)

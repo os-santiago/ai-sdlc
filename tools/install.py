@@ -416,7 +416,7 @@ def _main(argv, stack):
     parser.add_argument('--release-target', type=Path, help='Separately approved public Saferus target; prepared configuration only')
     parser.add_argument('--browser-profile', type=Path, help='Installed public browser scope bound to original node, namespace, CA, policies and immutable image')
     parser.add_argument('--release-images', type=Path, help='Reviewed pinned deployer publication; requires release target')
-    parser.add_argument('--timeout', default='10m')
+    parser.add_argument('--timeout')
     parser.add_argument('--repository')
     parser.add_argument('--environment')
     parser.add_argument('--profile', choices=['maintenance', 'shadow', 'candidate', 'verification'])
@@ -435,7 +435,8 @@ def _main(argv, stack):
         raise ValueError('Delegated installer subcommands must be the first argument')
     config_digest = install_config.resolve(args)
     defaults = dict(platform='kind', cluster='ai-sdlc', provider='auto', images=LOCAL / 'images.lock.json',
-                    repository='os-santiago/ai-sdlc', environment='ai-sdlc-production', profile='maintenance')
+                    repository='os-santiago/ai-sdlc', environment='ai-sdlc-production', profile='maintenance',
+                    timeout='10m')
     for key, value in defaults.items():
         if getattr(args, key) is None:
             setattr(args, key, value)
@@ -544,6 +545,7 @@ def _main(argv, stack):
     if args.command == 'plan':
         print(json.dumps({'cluster': args.cluster, 'platform': args.platform, 'namespace': NAMESPACE,
                           'chart': str(CHART.relative_to(ROOT)), 'mode': args.profile,
+                          'timeout': args.timeout,
                           'images': image_lock(args.images), 'deliveryEnabled': False,
                           'independentReviewEnabled': bool(args.independent_review),
                           'publicationEnabled': bool(args.publication),

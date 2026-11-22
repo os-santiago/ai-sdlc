@@ -68,9 +68,42 @@
     "platform": {
       "enum": [
         "kind",
-        "konflux"
+        "konflux",
+        "openshift"
       ],
-      "description": "kind creates an owned runtime cluster; konflux uses an existing owned supply-chain cluster with frozen default or explicitly approved build capability."
+      "description": "kind creates an owned runtime cluster; konflux uses an existing owned supply-chain cluster with frozen default or explicitly approved build capability; openshift installs into an existing owned cluster selected by kubeconfig and context."
+    },
+    "namespace": {
+      "const": "ai-sdlc-runtime",
+      "description": "Optional assertion of the fixed runtime namespace; the installer supports ai-sdlc-runtime only."
+    },
+    "kubeconfig": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\u0000]+$",
+      "description": "Existing OpenShift kubeconfig path, relative to this configuration file or absolute; requires the openshift platform."
+    },
+    "context": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,127}$",
+      "description": "Context of the declared kubeconfig to install into; requires the openshift platform."
+    },
+    "timeout": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,3}(s|m)$",
+      "description": "Bounded positive seconds or minutes applied to each wait operation; defaults to 10m."
+    },
+    "projectManifest": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\u0000]+$",
+      "description": "Reviewed ai-sdlc.project/v1 manifest path, relative to this configuration file or absolute; requires the verification profile and a non-reference repository."
+    },
+    "modelUpstream": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\u0000]+$",
+      "description": "Reviewed OpenAI-compatible model service document path, relative to this configuration file or absolute; requires the candidate or verification profile."
     },
     "buildBundle": {
       "type": "string",
@@ -119,14 +152,25 @@
           },
           "profile": {
             "const": "verification"
+          }
+        },
+        "anyOf": [
+          {
+            "properties": {
+              "repository": {
+                "enum": [
+                  "os-santiago/homedir",
+                  "os-santiago/saferus"
+                ]
+              }
+            }
           },
-          "repository": {
-            "enum": [
-              "os-santiago/homedir",
-              "os-santiago/saferus"
+          {
+            "required": [
+              "projectManifest"
             ]
           }
-        }
+        ]
       }
     },
     {
@@ -226,6 +270,86 @@
           },
           "independentReview": {
             "const": true
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "projectManifest"
+        ]
+      },
+      "then": {
+        "properties": {
+          "profile": {
+            "const": "verification"
+          },
+          "repository": {
+            "not": {
+              "enum": [
+                "os-santiago/homedir",
+                "os-santiago/saferus"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "platform"
+        ],
+        "properties": {
+          "platform": {
+            "const": "openshift"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "kubeconfig",
+          "context"
+        ]
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "required": [
+              "kubeconfig"
+            ]
+          },
+          {
+            "required": [
+              "context"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "platform": {
+            "const": "openshift"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "modelUpstream"
+        ]
+      },
+      "then": {
+        "properties": {
+          "profile": {
+            "enum": [
+              "candidate",
+              "verification"
+            ]
           }
         }
       }
