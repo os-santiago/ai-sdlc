@@ -26,7 +26,7 @@ Milestones refer to the [roadmap](roadmap.md). Last reviewed 2026-11-21 (alpha).
 | Approval windows | Expire (12 to 24 h) | Renewal needs reviewed documents and a newer publication (M2). |
 | Retry after a fail-closed stop | Partial | Inner loop: removing and re-adding the trigger label plans a new work item with a fresh execution. Outer loop: build and provenance are one attempt per merge (M2). |
 | Operator visibility | Limited | Several components log "stopped safely" without a reason (M2). |
-| Platforms | kind on Linux amd64 | Build slots use node tmpfs mounts through the container runtime, the registry is a managed local one, and installation needs host access. Remote clusters and OpenShift are not validated (M5). |
+| Platforms | kind on Linux amd64; OpenShift inner loop (preview) | Build slots use node tmpfs mounts through the container runtime, the registry is a managed local one, and installation needs host access. On OpenShift Local, one issue was delivered end to end with `install.sh local --platform openshift`, but without a kernel sandbox (`crun`); Kata is not yet evaluated (M5). Remote clusters are not validated. |
 
 ## Proven so far
 
