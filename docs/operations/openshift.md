@@ -82,6 +82,16 @@ supported sandbox runtime there is OpenShift sandboxed containers (Kata). The
 next M5 step is to evaluate it as the `ai-sdlc-offline` handler, together with
 the namespace's deny-all NetworkPolicy.
 
+OpenShift sandboxed containers 1.13 was tried on OpenShift Local 5.0. The
+host has nested virtualization (AMD), and the operator installed. However,
+the `KataConfig` failed at the MachineConfig step: the node could not install
+the `kata-containers` RHCOS extension (`Packages not found: 9pfs, cloud-init,
+gvisor-tap-vsock-gvforwarder, hyperv-daemons`). OpenShift Local's trimmed
+RHCOS image does not carry the extensions content. Deleting the `KataConfig`
+returned the pool to its previous configuration. Evaluating Kata therefore
+needs an OpenShift cluster with the full RHCOS extensions, on bare metal or
+with nested virtualization.
+
 For a local compatibility evaluation only, the RuntimeClass can point to the
 default `crun` handler. That keeps the SCC, Pod Security admission, the
 read-only root filesystem, the dropped capabilities and the deny-all
@@ -130,7 +140,7 @@ connection as coming from its own address.
 |---|---|
 | Fixed UID 1000 under `nonroot-v2` | Validated on OpenShift Local |
 | Exact pod comparison with OpenShift admission (`openshift.enabled`) | Validated on OpenShift Local for executor, verification and review pods (the additions above, plus the memory-pressure toleration and CRI-O image identity) |
-| Sandbox runtime | gVisor under CRI-O fails. The validated run used `crun`, which gives no kernel sandbox. Kata has not been evaluated yet |
+| Sandbox runtime | gVisor under CRI-O fails. Kata cannot install on OpenShift Local (no RHCOS extensions). The validated run used `crun`, which gives no kernel sandbox. Kata needs a full OpenShift cluster |
 | Outer-loop console rollout (`console_rollout.go`) | Not covered: it compares the production pods without the profile |
 | Installer path (`install.sh local --platform openshift`) | Shadow and full verification profiles installed on OpenShift Local |
 | End-to-end delivery on OpenShift | One issue went from label to merged pull request in 6.5 minutes on OpenShift Local ([evidence](../evidence/2026-11-22-evaluation-batteries-2-3-openshift.md)) |
