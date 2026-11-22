@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "description": "Machine-readable deny fixtures for spec/component-authority.md. Each case loads component-authority.v1.json, applies the declared in-memory mutations to a parsed Policy, then calls Policy.Allows with the declared call. Every case must be denied. The positiveControl flag additionally requires every grant declared by the base policy to be allowed before denials are exercised. Cryptographic tampering vectors (signature, transport, nonce, receipt) are covered by Go tests in runtime/k8s/internal/authority and cannot be expressed without real key material.",
+  "description": "Machine-readable deny fixtures for spec/component-authority.md. Each case loads component-authority.v1.json, applies the declared in-memory mutations to a parsed Policy, then calls Policy.Allows with the declared call. Every case must be denied. The exerciseAllGrants flag additionally requires every grant declared by the base policy to be allowed before denials are exercised. Cryptographic tampering vectors (signature, transport, nonce, receipt) are covered by Go tests in runtime/k8s/internal/authority and cannot be expressed without real key material.",
   "source": "component-authority.v1.json",
   "base": {"freeze": false, "autonomy": "auto-deploy"},
   "exerciseAllGrants": true,

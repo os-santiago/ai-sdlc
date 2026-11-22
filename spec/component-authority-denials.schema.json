@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://os-santiago.github.io/ai-sdlc/component-authority-denials.schema.json",
+  "$id": "https://github.com/os-santiago/ai-sdlc/spec/component-authority-denials.schema.json",
   "title": "AI-SDLC component authority denial fixtures",
   "description": "Machine-readable allow/deny fixture file executed by runtime/k8s/internal/authority tests. Each case mutates a parsed copy of the referenced positive policy and must be denied by Policy.Allows.",
   "type": "object",

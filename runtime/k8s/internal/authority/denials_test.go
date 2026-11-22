@@ -36,7 +36,7 @@ type denyFixture struct {
 			To   string `json:"to"`
 			Role string `json:"role"`
 		} `json:"keyAlias"`
-		Call struct {
+		Call *struct {
 			Caller      string `json:"caller"`
 			Target      string `json:"target"`
 			Operation   string `json:"operation"`
@@ -116,6 +116,9 @@ func TestCommittedDenialFixtures(t *testing.T) {
 				key := p.Keys[c.KeyAlias.From]
 				key.Role = c.KeyAlias.Role
 				p.Keys[c.KeyAlias.To] = key
+			}
+			if c.Call == nil {
+				t.Fatalf("denial fixture %q lacks a call", c.Name)
 			}
 			repo, env := c.Call.Repository, c.Call.Environment
 			if repo == "" {
