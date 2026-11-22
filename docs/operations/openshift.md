@@ -129,8 +129,8 @@ connection as coming from its own address.
 | Item | State |
 |---|---|
 | Fixed UID 1000 under `nonroot-v2` | Validated on OpenShift Local |
-| Exact pod comparison with OpenShift admission (`openshift.enabled`) | Implemented, unit tested against the measured additions |
-| Sandbox runtime | gVisor under CRI-O fails; Kata not yet evaluated |
+| Exact pod comparison with OpenShift admission (`openshift.enabled`) | Validated on OpenShift Local for executor, verification and review pods (the additions above, plus the memory-pressure toleration and CRI-O image identity) |
+| Sandbox runtime | gVisor under CRI-O fails. The validated run used `crun`, which gives no kernel sandbox. Kata has not been evaluated yet |
 | Outer-loop console rollout (`console_rollout.go`) | Not covered: it compares the production pods without the profile |
-| Installer path (`install.sh local --platform openshift`) | Shadow profile installed on OpenShift Local: every component admitted under `nonroot-v2`, migrations applied, intake reading the repository |
-| End-to-end delivery on OpenShift | Not yet run |
+| Installer path (`install.sh local --platform openshift`) | Shadow and full verification profiles installed on OpenShift Local |
+| End-to-end delivery on OpenShift | One issue went from label to merged pull request in 6.5 minutes on OpenShift Local ([evidence](../evidence/2026-11-22-evaluation-batteries-2-3-openshift.md)) |
