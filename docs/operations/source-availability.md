@@ -41,6 +41,12 @@ exhausted, the stop is named, so it cannot be mistaken for a defect:
   `cleanup-after-source-rate-limited`);
 - review stops at `preparation-source-rate-limited`.
 
+Each anonymous read spends two API calls, for the commit and its recursive
+tree, then downloads the pinned archive from the fixed archive host. That
+download is not counted against the API quota, and the archive is verified
+against the tree manifest. A read with a credential asks the API for the
+archive redirect, because only that redirect carries a private-archive ticket.
+
 These stops end the attempt like any other source failure. Wait for the reset,
 or reduce the deliveries that share one egress address.
 
