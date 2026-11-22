@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://os-santiago.github.io/ai-sdlc/component-authority-denials.schema.json",
+  "title": "AI-SDLC component authority denial fixtures",
+  "description": "Machine-readable allow/deny fixture file executed by runtime/k8s/internal/authority tests. Each case mutates a parsed copy of the referenced positive policy and must be denied by Policy.Allows.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "source", "base", "cases"],
+  "properties": {
+    "version": {"const": "1"},
+    "description": {"type": "string"},
+    "source": {
+      "type": "string",
+      "description": "Positive policy fixture, relative to this file's directory, that parses under component-authority.schema.json."
+    },
+    "base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["freeze", "autonomy"],
+      "properties": {
+        "freeze": {"type": "boolean"},
+        "autonomy": {
+          "type": "string",
+          "enum": ["shadow", "suggest", "auto-pr", "auto-merge-low", "auto-merge-all", "auto-deploy"]
+        }
+      }
+    },
+    "exerciseAllGrants": {
+      "type": "boolean",
+      "description": "When true, every grant declared by the source policy must be allowed before denial cases run (positive control for every allowed component transition)."
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "call"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,126}$"},
+          "description": {"type": "string"},
+          "set": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "freeze": {"type": "boolean"},
+              "autonomy": {"type": "string"}
+            }
+          },
+          "grantPatch": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["operation"],
+            "properties": {
+              "operation": {"type": "string"},
+              "minimumLevel": {"type": "string"},
+              "eventType": {"type": "string"}
+            }
+          },
+          "appendGrant": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["caller", "target", "operation", "minimumLevel", "eventType"],
+            "properties": {
+              "caller": {"type": "string"},
+              "target": {"type": "string"},
+              "operation": {"type": "string"},
+              "minimumLevel": {"type": "string"},
+              "eventType": {"type": "string"}
+            }
+          },
+          "keyAlias": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["from", "to", "role"],
+            "properties": {
+              "from": {"type": "string"},
+              "to": {"type": "string"},
+              "role": {"type": "string"}
+            }
+          },
+          "call": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["caller", "target", "operation"],
+            "properties": {
+              "caller": {"type": "string"},
+              "target": {"type": "string"},
+              "operation": {"type": "string"},
+              "repository": {"type": "string"},
+              "environment": {"type": "string"}
+            }
+          }
+        }
+      }
+    }
+  }
+}

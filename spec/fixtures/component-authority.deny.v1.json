@@ -1,0 +1,107 @@
+{
+  "version": "1",
+  "description": "Machine-readable deny fixtures for spec/component-authority.md. Each case loads component-authority.v1.json, applies the declared in-memory mutations to a parsed Policy, then calls Policy.Allows with the declared call. Every case must be denied. The positiveControl flag additionally requires every grant declared by the base policy to be allowed before denials are exercised. Cryptographic tampering vectors (signature, transport, nonce, receipt) are covered by Go tests in runtime/k8s/internal/authority and cannot be expressed without real key material.",
+  "source": "component-authority.v1.json",
+  "base": {"freeze": false, "autonomy": "auto-deploy"},
+  "exerciseAllGrants": true,
+  "cases": [
+    {
+      "name": "forged-actor-issue-author",
+      "description": "An issue author identity is data, never a component identity.",
+      "call": {"caller": "issue-author", "target": "worker", "operation": "execute-work"}
+    },
+    {
+      "name": "forged-actor-model-output",
+      "description": "Model output cannot present itself as a trusted component.",
+      "call": {"caller": "model-output", "target": "orchestrator", "operation": "record-attempt"}
+    },
+    {
+      "name": "cross-repository-command",
+      "description": "A command scoped to another repository is denied even with a valid grant shape.",
+      "call": {"caller": "orchestrator", "target": "worker", "operation": "execute-work", "repository": "other/project"}
+    },
+    {
+      "name": "cross-environment-command",
+      "description": "A command scoped to another environment is denied.",
+      "call": {"caller": "orchestrator", "target": "worker", "operation": "execute-work", "environment": "production"}
+    },
+    {
+      "name": "privilege-escalation-downgraded-floor",
+      "description": "Lowering a grant's autonomy floor below the built-in floor is rejected at validation.",
+      "grantPatch": {"operation": "execute-work", "minimumLevel": "shadow"},
+      "call": {"caller": "orchestrator", "target": "worker", "operation": "execute-work"}
+    },
+    {
+      "name": "privilege-escalation-changed-event-type",
+      "description": "Changing the bound event type of a grant is rejected at validation.",
+      "grantPatch": {"operation": "admit-issue", "eventType": "Anything"},
+      "call": {"caller": "intake", "target": "admission-controller", "operation": "admit-issue"}
+    },
+    {
+      "name": "privilege-escalation-shared-key-across-roles",
+      "description": "One verification key cannot be owned by two roles.",
+      "keyAlias": {"from": "relay-example", "to": "worker-example", "role": "worker"},
+      "call": {"caller": "worker", "target": "verifier", "operation": "verify-artifact"}
+    },
+    {
+      "name": "duplicate-grant",
+      "description": "A duplicated operation grant is ambiguous reviewed configuration.",
+      "appendGrant": {"caller": "intake", "target": "admission-controller", "operation": "admit-issue", "minimumLevel": "shadow", "eventType": "IssueObserved"},
+      "call": {"caller": "intake", "target": "admission-controller", "operation": "admit-issue"}
+    },
+    {
+      "name": "freeze-denies-every-transition",
+      "description": "A freeze denies every operational transition, including intake.",
+      "set": {"freeze": true},
+      "call": {"caller": "intake", "target": "admission-controller", "operation": "admit-issue"}
+    },
+    {
+      "name": "shadow-produces-zero-mutations",
+      "description": "Shadow autonomy can record intake and admission decisions but cannot execute work.",
+      "set": {"autonomy": "shadow"},
+      "call": {"caller": "orchestrator", "target": "worker", "operation": "execute-work"}
+    },
+    {
+      "name": "suggest-has-no-implementation-authority",
+      "description": "Suggest autonomy does not grant implementation authority.",
+      "set": {"autonomy": "suggest"},
+      "call": {"caller": "orchestrator", "target": "worker", "operation": "execute-work"}
+    },
+    {
+      "name": "unknown-autonomy-level",
+      "description": "An unknown autonomy ceiling is rejected at validation.",
+      "set": {"autonomy": "unlimited"},
+      "call": {"caller": "orchestrator", "target": "worker", "operation": "execute-work"}
+    },
+    {
+      "name": "maintenance-cannot-admit-issues",
+      "description": "Installation and maintenance identities hold no operational grants.",
+      "call": {"caller": "installer", "target": "admission-controller", "operation": "admit-issue"}
+    },
+    {
+      "name": "maintenance-cannot-enqueue-work",
+      "description": "Maintenance cannot enqueue work or advance delivery state.",
+      "call": {"caller": "installer", "target": "orchestrator", "operation": "plan-admission"}
+    },
+    {
+      "name": "maintenance-cannot-approve-evidence",
+      "description": "Maintenance cannot approve evidence or verify candidates.",
+      "call": {"caller": "installer", "target": "release-manager", "operation": "publish-candidate"}
+    },
+    {
+      "name": "unknown-operation",
+      "description": "Operations outside the finite capability set deny access.",
+      "call": {"caller": "release-manager", "target": "release-manager", "operation": "merge-anything"}
+    },
+    {
+      "name": "wrong-target",
+      "description": "A grant binds one exact caller, target and operation; a different target denies.",
+      "call": {"caller": "orchestrator", "target": "release-manager", "operation": "execute-work"}
+    },
+    {
+      "name": "wrong-caller",
+      "description": "A different caller for a declared operation denies.",
+      "call": {"caller": "worker", "target": "worker", "operation": "execute-work"}
+    }
+  ]
+}

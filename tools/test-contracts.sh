@@ -9,6 +9,11 @@ with open("spec/component-authority.schema.json", encoding="utf-8") as source:
 Draft202012Validator.check_schema(schema)
 with open("spec/fixtures/component-authority.v1.json", encoding="utf-8") as source:
     Draft202012Validator(schema).validate(json.load(source))
+with open("spec/component-authority-denials.schema.json", encoding="utf-8") as source:
+    denials_schema = json.load(source)
+Draft202012Validator.check_schema(denials_schema)
+with open("spec/fixtures/component-authority.deny.v1.json", encoding="utf-8") as source:
+    Draft202012Validator(denials_schema).validate(json.load(source))
 with open("spec/local-install.schema.json", encoding="utf-8") as source:
     schema = json.load(source)
 Draft202012Validator.check_schema(schema)
