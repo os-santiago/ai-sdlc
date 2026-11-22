@@ -28,16 +28,33 @@ type Result struct {
 	FinalSHA256 string
 }
 
-// BoundFinalSHA256 is the digest a provider observation must match. For an
-// approval, SCC's reported pre-redaction digest is accepted: an approval
-// carries no text into any later stage, and its verdict is still the
-// provider's. Any other verdict must bind its exact text, because a request
-// for changes forwards that text to the repair generator.
+// WithheldFeedback replaces a request for changes whose text could not be
+// bound to the provider response. It is ai-sdlc's own fixed text: repair
+// receives only the provider's verdict, never unbound reviewer text.
+const WithheldFeedback = "The independent reviewer requested changes, but its text could not be bound to the provider response, so only the request for changes is forwarded.\nVERDICT: request_changes"
+
+// BoundFinalSHA256 is the digest a provider observation must match. SCC's
+// reported pre-redaction digest is accepted for an approval, which carries no
+// text into any later stage, and for the fixed WithheldFeedback, which carries
+// none of the reviewer's text. In both cases the verdict is still the
+// provider's. Any other request for changes must bind its exact text, because
+// repair forwards it to the generator.
 func (r Result) BoundFinalSHA256() string {
-	if r.FinalSHA256 != "" && r.Verdict == "approve" {
+	if r.FinalSHA256 != "" && (r.Verdict == "approve" || (r.Verdict == "request_changes" && r.FinalMessage == WithheldFeedback)) {
 		return r.FinalSHA256
 	}
 	return authority.Digest([]byte(r.FinalMessage))
+}
+
+// WithholdUnboundFeedback replaces the text of a request for changes that
+// differs from SCC's pre-redaction digest (for example after secret
+// redaction) with WithheldFeedback. The binding then still requires the
+// provider digest and verdict.
+func (r Result) WithholdUnboundFeedback() Result {
+	if r.Verdict == "request_changes" && r.FinalSHA256 != "" && authority.Digest([]byte(r.FinalMessage)) != r.FinalSHA256 {
+		r.FinalMessage = WithheldFeedback
+	}
+	return r
 }
 
 // Parse requires a single completed reviewer phase on the expected model, no
