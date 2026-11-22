@@ -418,6 +418,24 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(answer["choices"][0]["message"]["tool_calls"][0]["function"]["name"], "read_file")
 
+    def test_completions_use_the_upstream_ceiling_not_the_benchmarked_timeout(self):
+        original = model_benchmark.time.monotonic
+        model_benchmark.time.monotonic = lambda: self.clock[0]
+        try:
+            profile = model_gateway.run_benchmark(self.server, 16384, 4096, attempts=1)
+        finally:
+            model_benchmark.time.monotonic = original
+        seen = []
+        real = self.adapter.complete
+        def recording(request, seconds=None, probe=False):
+            seen.append(seconds)
+            return real(request, seconds, probe)
+        self.adapter.complete = recording
+        self.assertEqual(self.call("/v1/chat/completions", REQUEST)[0], 200)
+        # None selects the adapter's configured ceiling for one upstream call.
+        self.assertEqual(seen, [None])
+        self.assertNotEqual(profile["timeoutSeconds"], None)
+
     def test_failed_benchmark_never_becomes_ready(self):
         self.adapter.tool = False
         self.assertIsNone(model_gateway.run_benchmark(self.server, 16384, 4096, attempts=2, pause=0))

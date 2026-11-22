@@ -47,7 +47,12 @@ class GatewayHandler(Handler):
         profile = self.server.profile
         if profile is None:
             raise RuntimeError("model gateway not benchmarked")
-        return self.server.adapter.complete(request, profile["timeoutSeconds"]).message
+        # The benchmarked timeout admits the model (it must fit the caller's
+        # call window); each real call may use the installation's ceiling for
+        # one upstream call, because real calls have a latency tail that the
+        # startup probes do not show. The caller's broker still stops every
+        # call before its window ends.
+        return self.server.adapter.complete(request).message
 
     def do_GET(self):
         self.read_deadline.cancel()

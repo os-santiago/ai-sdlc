@@ -169,3 +169,10 @@ benchmark ceiling) and `callSeconds` together, for example 216 s measured, a
 300 s ceiling and `callSeconds: 330`. In upstream mode the verifier applies the same
 gate against the reviewer profile's window: it queues and claims no review
 (`gateway-profile-unfit`) while the measured timeout does not fit.
+
+`T` admits the model; it does not shorten each call. Every upstream call may
+take up to `upstream.seconds`, and the broker still stops it before the call
+window ends. The startup probes show the best case; real calls have a latency
+tail, from queueing, provider retries or long answers. In the evaluation
+batteries, calls of 92–123 s failed against a benchmarked `T` of about 93 s,
+inside a 330 s window.
