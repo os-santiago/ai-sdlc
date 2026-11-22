@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/engine"
@@ -51,17 +52,24 @@ func TestDispatchRouteAcceptsCompleteWorkItemReady(t *testing.T) {
 }
 
 func TestDispatchRouteFailsClosedWithoutARealEngine(t *testing.T) {
-	for name, deps := range map[string]Deps{
-		"nil-engine":  {},
-		"stub-engine": {Engine: engine.StubEngine{}},
+	for name, tc := range map[string]struct {
+		deps Deps
+		want string
+	}{
+		"nil-engine":          {Deps{}, "requires a configured engine"},
+		"stub-engine":         {Deps{Engine: engine.StubEngine{}}, "test stub engine"},
+		"stub-engine-pointer": {Deps{Engine: &engine.StubEngine{}}, "test stub engine"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			mux := http.NewServeMux()
-			Routes(mux, deps)
+			Routes(mux, tc.deps)
 			response := httptest.NewRecorder()
 			mux.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/attempts/dispatch", bytes.NewReader([]byte(`{}`))))
 			if response.Code != http.StatusServiceUnavailable {
 				t.Fatalf("status %d, want 503: %s", response.Code, response.Body.String())
+			}
+			if !strings.Contains(response.Body.String(), tc.want) {
+				t.Fatalf("body %q, want %q", response.Body.String(), tc.want)
 			}
 		})
 	}

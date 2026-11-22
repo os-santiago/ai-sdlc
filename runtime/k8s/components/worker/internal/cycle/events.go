@@ -21,7 +21,10 @@ import (
 // terminate" needs a durable attempt count to resume from) and a real
 // Engine. Dispatch fails closed when Engine is nil and always refuses
 // engine.StubEngine: a test double must never persist an
-// ImplementationAttemptDecided event into a durable outbox.
+// ImplementationAttemptDecided event into a durable outbox. The check is
+// a denylist on the shipped test double — an implementation wrapping a
+// StubEngine is outside this contract; production wiring must supply a
+// real engine.
 type Deps struct {
 	DB     *store.DB
 	Engine engine.Engine
