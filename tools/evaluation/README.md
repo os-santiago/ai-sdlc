@@ -11,7 +11,7 @@ and then only observes.
 | `failure` | The runtime stopped the attempt; the report records the stage, the reason and the components' safe stop lines |
 | `timeout` | Neither happened within `--timeout-minutes` |
 
-A failed attempt is retried up to `--attempts`. The report gives the
+A failed attempt is retried up to `--attempts`. When an issue is done, the runner removes its label, so another installation watching the repository does not pick it up. The report gives the
 first-attempt rate and the rate within that budget. The runner stops with
 `runtime-blocked` when a failed verification's cleanup blocks all later work,
 because further attempts would only measure that block.

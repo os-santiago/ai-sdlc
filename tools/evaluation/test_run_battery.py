@@ -82,6 +82,15 @@ class MainTests(unittest.TestCase):
         self.assertEqual(report['stopped'], 'runtime-blocked')
         self.assertEqual(report['summary']['issues'], 0)
 
+    def test_label_is_removed_after_the_last_attempt(self):
+        github = FakeGitHub()
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch('run_battery.Runtime', return_value=FakeRuntime([state()])), \
+                mock.patch('run_battery.GitHub', return_value=github), \
+                mock.patch('run_battery.attempt', side_effect=lambda *a: {'outcome': 'success'}):
+            run_battery.main(['--repository', 'o/r', '--issues', '4,5', '--kubectl', 'k', '--kubeconfig', 'c', '--output', str(Path(directory) / 'r.json')])
+        self.assertEqual(github.labels, [(4, False), (5, False)])
+
     def test_rates_count_first_attempt_and_budget(self):
         results = iter([{'outcome': 'failure'}, {'outcome': 'success'}, {'outcome': 'success'}])
         with tempfile.TemporaryDirectory() as directory, \
