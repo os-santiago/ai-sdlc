@@ -9,8 +9,9 @@ Anthropic Messages), configured only by the installation, never by a request.
 At startup the gateway benchmarks the model (``model_benchmark``) before it
 reports ready. ``/readyz`` stays 503 until then, and the worker checks it
 before claiming any work. The measured profile, including the derived per-call
-timeout, is served at ``/v1/gateway/profile`` to the authenticated caller, and
-the gateway applies that timeout to every upstream call. No generated source,
+timeout, is served at ``/v1/gateway/profile`` to the authenticated caller, which
+uses it to admit the model. Each upstream call may run up to the configured
+ceiling, bounded by the caller's remaining wait. No generated source,
 database URI, Kubernetes token or forge credential is read here.
 """
 import hmac
@@ -33,6 +34,8 @@ ATTEMPTS = 5
 # attempt usually fails fast; the rollout convergence window (300 s) bounds a
 # gateway that keeps failing, which then stays unready (fail closed).
 RETRY_SECONDS = (5, 25)
+# The broker's remaining wait for this call (modelbroker.CallSecondsHeader).
+CALL_SECONDS_HEADER = "X-AI-SDLC-Call-Seconds"
 
 
 def _authorized(handler):
@@ -47,12 +50,18 @@ class GatewayHandler(Handler):
         profile = self.server.profile
         if profile is None:
             raise RuntimeError("model gateway not benchmarked")
-        # The benchmarked timeout admits the model (it must fit the caller's
-        # call window); each real call may use the installation's ceiling for
-        # one upstream call, because real calls have a latency tail that the
-        # startup probes do not show. The caller's broker still stops every
-        # call before its window ends.
-        return self.server.adapter.complete(request).message
+        return self.server.adapter.complete(request, self.call_seconds(profile)).message
+
+    def call_seconds(self, profile):
+        """The benchmarked timeout admits the model; each real call may run up
+        to the installation's ceiling, because real calls have a latency tail
+        the startup probes do not show, but never longer than the broker that
+        sent it will wait (its call-seconds header). Without that header (an
+        older broker) the benchmarked timeout applies, as before."""
+        values = self.headers.get_all(CALL_SECONDS_HEADER) or []
+        if len(values) == 1 and values[0].isdigit() and 1 <= int(values[0]) <= 600:
+            return min(int(values[0]), self.server.adapter.seconds)
+        return profile["timeoutSeconds"]
 
     def do_GET(self):
         self.read_deadline.cancel()

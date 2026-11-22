@@ -398,6 +398,12 @@ class GatewayTests(unittest.TestCase):
         except urllib.error.HTTPError as error:
             return error.code, json.loads(error.read())
 
+    def call_with_header(self, seconds):
+        request = urllib.request.Request(self.base + "/v1/chat/completions", data=json.dumps(REQUEST).encode(),
+                                         headers={"Authorization": "Bearer " + TOKEN, model_gateway.CALL_SECONDS_HEADER: seconds})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, json.loads(response.read())
+
     def test_not_ready_and_no_completions_until_benchmarked_then_profile_is_served(self):
         self.assertEqual(self.call("/readyz"), (503, {"ready": False}))
         self.assertEqual(self.call("/v1/chat/completions", REQUEST)[0], 503)
@@ -418,7 +424,7 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(answer["choices"][0]["message"]["tool_calls"][0]["function"]["name"], "read_file")
 
-    def test_completions_use_the_upstream_ceiling_not_the_benchmarked_timeout(self):
+    def test_completions_run_to_the_broker_wait_capped_by_the_ceiling(self):
         original = model_benchmark.time.monotonic
         model_benchmark.time.monotonic = lambda: self.clock[0]
         try:
@@ -431,10 +437,14 @@ class GatewayTests(unittest.TestCase):
             seen.append(seconds)
             return real(request, seconds, probe)
         self.adapter.complete = recording
+        # Without the broker's header, the benchmarked timeout applies (older brokers).
         self.assertEqual(self.call("/v1/chat/completions", REQUEST)[0], 200)
-        # None selects the adapter's configured ceiling for one upstream call.
-        self.assertEqual(seen, [None])
-        self.assertNotEqual(profile["timeoutSeconds"], None)
+        self.assertEqual(seen, [profile["timeoutSeconds"]])
+        # With it, the call may run to the broker's remaining wait, capped by the ceiling.
+        for header, expected in (("120", 120), (str(self.adapter.seconds + 100), self.adapter.seconds), ("0", profile["timeoutSeconds"]), ("x", profile["timeoutSeconds"])):
+            seen.clear()
+            status, _ = self.call_with_header(header)
+            self.assertEqual((status, seen), (200, [expected]))
 
     def test_failed_benchmark_never_becomes_ready(self):
         self.adapter.tool = False

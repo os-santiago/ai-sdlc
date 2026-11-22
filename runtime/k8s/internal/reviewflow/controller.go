@@ -337,6 +337,8 @@ func drive(ctx context.Context, session reviewSession, fence func(context.Contex
 // gatewayProfileFits refuses a review whose calls could not complete: the
 // gateway's benchmarked timeout plus the broker margin must fit the reviewer
 // profile's per-call window. A model slower than that would only end uncertain.
+// Admission only: each call runs up to the gateway's ceiling, bounded by the
+// broker's remaining wait that the provider sends with the request.
 func gatewayProfileFits(ctx context.Context, provider *modelbroker.Provider, profile []byte) error {
 	seconds, e := provider.GatewayProfile(ctx)
 	if e != nil {

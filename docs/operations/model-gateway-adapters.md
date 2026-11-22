@@ -162,8 +162,8 @@ a mailbox timeout as a new call, which the ledger budgets like any other. When
 the profile omits `callSeconds`, workloads, SCC configuration and reservations
 are identical to earlier releases.
 
-The worker only adopts the benchmarked gateway timeout `T` when it also fits
-the window (`T + 20 s <= callSeconds`). Otherwise it claims no work, because a
+The worker only admits the model when the benchmarked gateway timeout `T` also
+fits the window (`T + 20 s <= callSeconds`). Otherwise it claims no work, because a
 slower model would only produce uncertain calls. Choose `upstream.seconds` (the
 benchmark ceiling) and `callSeconds` together, for example 216 s measured, a
 300 s ceiling and `callSeconds: 330`. In upstream mode the verifier applies the same
@@ -171,8 +171,11 @@ gate against the reviewer profile's window: it queues and claims no review
 (`gateway-profile-unfit`) while the measured timeout does not fit.
 
 `T` admits the model; it does not shorten each call. Every upstream call may
-take up to `upstream.seconds`, and the broker still stops it before the call
-window ends. The startup probes show the best case; real calls have a latency
+take up to `upstream.seconds`, bounded by the broker's remaining wait for that
+call, which the provider sends as `X-AI-SDLC-Call-Seconds`. The gateway
+therefore never keeps working, or holding its single model slot, after the
+broker gives up (window minus 15 s; minus 10 s for reviews). Without the
+header, from an older broker, the gateway applies `T` as before. The startup probes show the best case; real calls have a latency
 tail, from queueing, provider retries or long answers. In the evaluation
 batteries, calls of 92–123 s failed against a benchmarked `T` of about 93 s,
 inside a 330 s window.
