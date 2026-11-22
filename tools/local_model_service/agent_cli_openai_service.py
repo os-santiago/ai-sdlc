@@ -120,7 +120,12 @@ class ClaudeCLI:
         # No --json-schema: structured output would hand the model an internal
         # tool. With --tools "" the model has no tool at all and cannot attempt
         # native calls; its single JSON answer is validated below.
-        return [self.binary, "-p", "--output-format", "json",
+        # --max-turns 1: one model turn per completion. Without it the CLI
+        # sometimes looped internally (the model reaching for a tool it does
+        # not have): every completion over 85 s in the evaluation batteries had
+        # num_turns 3, while single-turn completions never exceeded 53 s. An
+        # exceeded turn fails this attempt; complete() retries once in time.
+        return [self.binary, "-p", "--output-format", "json", "--max-turns", "1",
                 "--tools", "", "--bare", "--strict-mcp-config", "--no-session-persistence", "--disable-slash-commands",
                 "--system-prompt=" + INSTRUCTIONS.format(marker=marker), "--append-system-prompt=" + system,
                 "--model", model]

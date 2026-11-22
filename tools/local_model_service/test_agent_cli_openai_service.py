@@ -93,6 +93,7 @@ class ServiceTests(unittest.TestCase):
         self.assertNotIn("Agent policy.", seen["stdin"])
         self.assertEqual(seen["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"], "4096")
         self.assertEqual(seen["env"]["MAX_THINKING_TOKENS"], "0")
+        self.assertEqual(argv[argv.index("--max-turns") + 1], "1")
         self.assertEqual(seen["env"]["ANTHROPIC_API_KEY"], "host-only")
         self.assertEqual(seen["cwd"], seen["env"]["HOME"])
         self.assertFalse(os.path.exists(seen["cwd"]))
