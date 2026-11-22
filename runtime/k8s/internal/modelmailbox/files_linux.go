@@ -54,10 +54,22 @@ func (s *Store) read(name string) ([]byte, error) {
 		return nil, ErrPending
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, MaxEnvelopeBytes+1))
+	if err == nil && syscall.Fstat(fd, &after) == nil && removedDuringRead(before, after) {
+		// The server removes a consumed request (or response) right after the
+		// exchange; a reader that opened it just before sees the last link go.
+		// That envelope no longer exists, exactly like a missing file.
+		return nil, os.ErrNotExist
+	}
 	if err != nil || len(raw) > MaxEnvelopeBytes || syscall.Fstat(fd, &after) != nil || after.Nlink != 1 || before.Size != after.Size || int64(len(raw)) != after.Size || before.Mtim != after.Mtim || before.Ctim != after.Ctim {
 		return nil, errors.New("mailbox envelope changed or exceeded limit")
 	}
 	return raw, nil
+}
+
+// removedDuringRead reports an envelope whose only link was removed while it
+// was read, with its content otherwise unchanged.
+func removedDuringRead(before, after syscall.Stat_t) bool {
+	return before.Nlink == 1 && after.Nlink == 0 && before.Size == after.Size && before.Mtim == after.Mtim
 }
 
 func (s *Store) publish(name string, e Envelope) error {
