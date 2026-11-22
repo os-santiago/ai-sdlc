@@ -1,0 +1,85 @@
+# OpenShift admission profile (M5, in progress)
+
+This page records what the runtime needs on OpenShift and what has been
+validated so far, on a local OpenShift 5.0 cluster (Red Hat OpenShift Local,
+CRI-O, OVN-Kubernetes). It is not yet a supported installation path.
+
+## What OpenShift changes
+
+Every ai-sdlc workload runs as the fixed non-root UID and GID 1000, with
+`fsGroup: 1000` where it needs a writable volume. OpenShift's default SCC,
+`restricted-v2`, rejects these: it assigns a UID and fsGroup from the
+namespace's range instead.
+
+The standard `nonroot-v2` SCC accepts them unchanged. Admission then adds
+fields that the runtime did not compile. These were measured on a pod admitted
+under `nonroot-v2`:
+
+| Added by | Field |
+|---|---|
+| SCC admission | `openshift.io/scc`, `seccomp.security.alpha.kubernetes.io/pod` and `security.openshift.io/validated-scc-subject-type` annotations |
+| SCC admission | `spec.securityContext.seLinuxOptions.level`, the namespace's MCS level (for example `s0:c26,c5`) |
+| ServiceAccount admission | one `imagePullSecrets` entry, `default-dockercfg-<5 chars>` |
+| OVN-Kubernetes and Multus, after scheduling | `k8s.ovn.org/pod-networks` and `k8s.v1.cni.cncf.io/network-status` annotations |
+
+The pod transports compare each pod with its compiled template exactly, so
+these additions would stop every execution, verification and review.
+
+## The profile
+
+Set `openshift.enabled: true` in the chart values. Then:
+
+- The chart binds the `system:openshift:scc:nonroot-v2` ClusterRole to the
+  ServiceAccounts of each runtime and workload namespace: the release
+  namespace, and the executors, verifiers and reviewers namespaces when they
+  are enabled. The binding grants nothing else.
+- The runtime configuration sets `AI_SDLC_PLATFORM=openshift`. The pod
+  transports then remove only the additions in the table above, and only in
+  their exact formats, before the comparison:
+  - the SCC annotation must name `nonroot-v2` or `restricted-v2`;
+  - the seccomp annotation must be `runtime/default`;
+  - the SELinux options may carry only an MCS level;
+  - there may be at most one pull secret, and it must be the default
+    ServiceAccount's.
+
+  Any other difference still fails closed, including a pod admitted under a
+  privileged SCC.
+
+Without the value, nothing changes on other Kubernetes distributions.
+
+## Sandbox runtime
+
+Executor and verification pods use the `ai-sdlc-offline` RuntimeClass. On kind
+its handler is gVisor (`runsc`) under containerd, with networking disabled.
+
+On CRI-O, the same pinned `runsc` release was registered as a runtime handler
+and failed in three ways:
+
+1. **SELinux label:** gVisor rejects the SELinux process label that CRI-O adds.
+2. **Namespace paths:** gVisor cannot join the UTS and IPC namespaces that
+   CRI-O pins (`/var/run/utsns/...`).
+3. **Exit status and output:** with both removed by a wrapper, and with infra
+   containers enabled, the sandbox starts and the containers run to
+   completion. However, conmon receives neither their output nor their exit
+   status ("process is still alive but not a direct child").
+
+gVisor under CRI-O is therefore not a working sandbox on OpenShift today. The
+supported sandbox runtime there is OpenShift sandboxed containers (Kata). The
+next M5 step is to evaluate it as the `ai-sdlc-offline` handler, together with
+the namespace's deny-all NetworkPolicy.
+
+For a local compatibility evaluation only, the RuntimeClass can point to the
+default `crun` handler. That keeps the SCC, Pod Security admission, the
+read-only root filesystem, the dropped capabilities and the deny-all
+NetworkPolicy, but removes the gVisor kernel boundary. Do not run untrusted
+generations that way outside a disposable cluster.
+
+## Status
+
+| Item | State |
+|---|---|
+| Fixed UID 1000 under `nonroot-v2` | Validated on OpenShift Local |
+| Exact pod comparison with OpenShift admission (`openshift.enabled`) | Implemented, unit tested against the measured additions |
+| Sandbox runtime | gVisor under CRI-O fails; Kata not yet evaluated |
+| Installer path (`install.sh`) for OpenShift | Not started; the local installer targets kind |
+| End-to-end delivery on OpenShift | Not yet run |

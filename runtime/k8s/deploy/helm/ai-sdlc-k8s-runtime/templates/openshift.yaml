@@ -1,0 +1,27 @@
+{{- if .Values.openshift.enabled }}
+{{- $namespaces := list (include "ai-sdlc-k8s-runtime.namespace" .) }}
+{{- if has .Values.runtime.mode (list "candidate" "verification") }}
+{{- $namespaces = append $namespaces "ai-sdlc-executors" }}
+{{- end }}
+{{- if eq .Values.runtime.mode "verification" }}
+{{- $namespaces = append $namespaces "ai-sdlc-verifiers" }}
+{{- end }}
+{{- if .Values.review.enabled }}
+{{- $namespaces = append $namespaces "ai-sdlc-reviewers" }}
+{{- end }}
+{{- range $namespaces }}
+---
+# Every ServiceAccount of this namespace may admit pods under nonroot-v2, the
+# standard SCC for a fixed non-root UID. It grants no other permission.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ai-sdlc-scc-nonroot-v2
+  namespace: {{ . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" $ | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: "system:openshift:scc:nonroot-v2"}
+subjects:
+  - {apiGroup: rbac.authorization.k8s.io, kind: Group, name: "system:serviceaccounts:{{ . }}"}
+{{- end }}
+{{- end }}

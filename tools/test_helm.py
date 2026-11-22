@@ -228,6 +228,24 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(set(routes), {'admit-issue', 'plan-admission', 'execute-work', 'verify-artifact'})
         self.assertEqual(routes['verify-artifact'], 'http://ai-sdlc-verifier:8087/internal/verify-artifact')
 
+    def test_openshift_profile_binds_only_nonroot_scc_and_sets_platform(self):
+        base = ['--set', 'runtime.mode=verification', '--set', 'verifier.digest=sha256:' + 'a' * 64]
+        plain = [d for d in yaml.safe_load_all(self.render(*base).stdout) if d]
+        self.assertFalse([d for d in plain if d['kind'] == 'RoleBinding' and d['metadata']['name'] == 'ai-sdlc-scc-nonroot-v2'])
+        self.assertFalse([d for d in plain if d['kind'] == 'ConfigMap' and 'AI_SDLC_PLATFORM' in d.get('data', {})])
+        result = self.render(*base, '--set', 'openshift.enabled=true')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        docs = [d for d in yaml.safe_load_all(result.stdout) if d]
+        bindings = {d['metadata']['namespace']: d for d in docs if d['kind'] == 'RoleBinding' and d['metadata']['name'] == 'ai-sdlc-scc-nonroot-v2'}
+        self.assertEqual(set(bindings), {'ai-sdlc-runtime', 'ai-sdlc-executors', 'ai-sdlc-verifiers'})
+        for namespace, binding in bindings.items():
+            self.assertEqual(binding['roleRef'], {'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'ClusterRole', 'name': 'system:openshift:scc:nonroot-v2'})
+            self.assertEqual(binding['subjects'], [{'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'Group', 'name': 'system:serviceaccounts:' + namespace}])
+        config = next(d['data'] for d in docs if d['kind'] == 'ConfigMap' and 'AI_SDLC_RUNTIME_MODE' in d.get('data', {}))
+        self.assertEqual(config['AI_SDLC_PLATFORM'], 'openshift')
+        self.assertNotEqual(self.render(*base, '--set', 'openshift.enabled=yes').returncode, 0)
+
+
 
 class ProjectManifestChartTests(unittest.TestCase):
     def test_project_manifest_is_rendered_only_when_set_and_immutable(self):

@@ -19,6 +19,9 @@ data:
   AI_SDLC_PUBLICATION: {{ .Values.publication.enabled | quote }}
   AI_SDLC_INDEPENDENT_REVIEW: {{ .Values.review.enabled | quote }}
   AI_SDLC_RUNTIME_MODE: {{ .Values.runtime.mode | quote }}
+  {{- if .Values.openshift.enabled }}
+  AI_SDLC_PLATFORM: openshift
+  {{- end }}
   AI_SDLC_INTAKE_CONFIG_PATH: /etc/ai-sdlc/intake/config.json
   AI_SDLC_LOG_LEVEL: {{ .Values.logLevel | quote }}
   {{- $routes := dict "admit-issue" (printf "http://%s-admission-controller:%v/internal/admit-issue" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.admissionController.port) "plan-admission" (printf "http://%s-orchestrator:%v/internal/plan-admission" (include "ai-sdlc-k8s-runtime.fullname" .) .Values.components.orchestrator.port) }}
