@@ -64,7 +64,10 @@ Before installing the remaining delivery capabilities on an owned, frozen
 Saferus Konflux environment, `./install.sh prepare --cluster <name> --images
 <reviewed-images.lock.json>` verifies an empty current database and pauses all
 delivery services through Helm. It preserves PostgreSQL and frozen authority;
-ordinary `local` reapplication cannot silently resume it. See
+ordinary `local` reapplication cannot silently resume it. The same refusal
+holds while an original runtime is paused by `runtime-upgrade pause`:
+reapplying `local` refuses until the recorded transition or `recover-original`
+releases the `runtime-upgrade-pause.json` journal. See
 [initial preparation](build-runtime-install.md#initial-empty-runtime-preparation)
 for prerequisites and the distinction from upgrading a runtime with history.
 

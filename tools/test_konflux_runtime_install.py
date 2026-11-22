@@ -1,6 +1,7 @@
 import copy
 from contextlib import ExitStack
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -130,6 +131,69 @@ class FrozenRuntimeTests(unittest.TestCase):
         self.resource = {'data': {'AI_SDLC_RUNTIME_MODE': 'maintenance', 'policy.json': '{"freeze":false}'}}
         with self.assertRaisesRegex(ValueError, 'frozen'):
             capability.require_frozen(self.command, [])
+
+    def pause_journal_fixture(self):
+        state = Path(self.temporary.name) / 'ai-sdlc' / 'cluster'
+        state.mkdir(parents=True)
+        marker = {'version': 1, 'cluster': 'cluster', 'provider': 'podman',
+                  'clusterUID': CLUSTER_UID, 'scope': 'isolated-konflux'}
+        (state / 'konflux-ownership.json').write_text(json.dumps(marker))
+        return state
+
+    def test_local_refuses_unreleased_upgrade_pause_journal_without_effects(self):
+        state = self.pause_journal_fixture()
+        journal = {'version': 'ai-sdlc.runtime-upgrade-pause/v1', 'phase': 'planned'}
+        args = ['local', '--platform', 'konflux', '--cluster', 'cluster', '--repository', 'os-santiago/saferus']
+        for phase, pattern in (('planned', 'incomplete'), ('pausing', 'incomplete'), ('paused', 'remains paused')):
+            journal['phase'] = phase
+            (state / 'runtime-upgrade-pause.json').write_text(json.dumps(journal))
+            with self.subTest(phase=phase), \
+                    patch.dict(os.environ, {'XDG_STATE_HOME': self.temporary.name}), \
+                    patch.object(install, 'tools', return_value={'helm': 'helm', 'kind': 'kind', 'kubectl': 'kubectl'}), \
+                    patch.object(install.konflux_runtime_install, 'lock_state'), \
+                    patch.object(install.konflux_runtime_install, 'select_provider', return_value='podman'), \
+                    patch.object(install, 'run') as run, \
+                    self.assertRaisesRegex(ValueError, pattern):
+                install.main(args)
+            # The read-only Helm template preview is the only permitted call;
+            # no mutating effect may run while the journal is unreleased.
+            run.assert_called_once()
+            self.assertEqual(run.call_args.args[0][1], 'template')
+            self.assertTrue((state / 'runtime-upgrade-pause.json').exists())
+
+    def test_local_proceeds_when_upgrade_pause_journal_is_released(self):
+        state = self.pause_journal_fixture()
+        journal = {'version': 'ai-sdlc.runtime-upgrade-pause/v1', 'phase': 'paused'}
+        (state / 'runtime-upgrade-pause.json').write_text(json.dumps(journal))
+        # A completed transition or recover-original republishes an active,
+        # unpaused installation report while retaining the journal as custody.
+        (state / 'installation.json').write_text(json.dumps({'configuration': 'active', 'runtimePaused': False}))
+        (state / 'kubeconfig').write_text('{}')
+
+        def api(args, **kwargs):
+            args = [str(a) for a in args]
+            if args[:2] == ['kind', 'get'] and 'clusters' in args:
+                return subprocess.CompletedProcess(args, 0, 'cluster\n')
+            if 'kube-system' in args:
+                return subprocess.CompletedProcess(args, 0, CLUSTER_UID)
+            return subprocess.CompletedProcess(args, 0, '')
+
+        args = ['local', '--platform', 'konflux', '--cluster', 'cluster', '--repository', 'os-santiago/saferus']
+        with patch.dict(os.environ, {'XDG_STATE_HOME': self.temporary.name}), \
+                patch.object(install, 'tools', return_value={'helm': 'helm', 'kind': 'kind', 'kubectl': 'kubectl'}), \
+                patch.object(install, 'host_prerequisites'), \
+                patch.object(install, 'configure_identities', return_value={'authority': {'policyJSON': '{}'}}), \
+                patch.object(install.network_probe, 'verify', return_value='verified'), \
+                patch.object(install.konflux_runtime_install, 'lock_state'), \
+                patch.object(install.konflux_runtime_install, 'select_provider', return_value='podman'), \
+                patch.object(install.konflux_runtime_install, 'verify_cluster'), \
+                patch.object(install.konflux_runtime_install, 'namespace'), \
+                patch.object(install.konflux_runtime_install, 'require_frozen'), \
+                patch.object(install, 'run', side_effect=api) as run:
+            self.assertEqual(install.main(args), 0)
+        self.assertTrue(any('upgrade' in call.args[0] and '--install' in call.args[0]
+                            for call in run.call_args_list))
+        self.assertEqual(json.loads((state / 'installation.json').read_text())['cluster'], 'cluster')
 
 
 if __name__ == '__main__':
