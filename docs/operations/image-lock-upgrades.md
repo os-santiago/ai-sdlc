@@ -78,7 +78,7 @@ configuration. Then the scope remains shadow intake in its dedicated kind cluste
 ```bash
 ./install.sh plan --config examples/homedir.local-install.json
 ./install.sh local --config examples/homedir.local-install.json
-python3 tools/verify_shadow_intake.py --cluster ai-sdlc-homedir --provider podman --repository os-santiago/homedir --issue 1576 --expected needs-human --timeout 20
+python3 tools/verify_shadow_intake.py --cluster ai-sdlc-homedir --provider podman --repository os-santiago/homedir --issue 1576 --expected accepted --timeout 20
 ```
 
 For an already authorized candidate installation, preserve its candidate profile:
