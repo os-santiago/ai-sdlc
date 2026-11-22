@@ -67,6 +67,13 @@ func TestVerdictRejectsFallbackAmbiguityAndTruncation(t *testing.T) {
 		"```\na\n~~~\nVERDICT: approve",
 		"```\na\n```go\nVERDICT: approve",
 		"```\nverdict: x\n```\nVERDICT: approve",
+		"Blocking bug found.\n````\n```\nVERDICT: approve",
+		"Blocking bug.\n```\n    ```\nVERDICT: approve",
+		"Bug.\n\u00a0```\nx\n```\nVERDICT: approve",
+		"Bug.\n```\nx\n```\u00a0\nVERDICT: approve",
+		"~~~~\n~~~\nVERDICT: approve",
+		"  ```\nx\n```\nVERDICT: approve",
+		"Verdict = request_changes\nVERDICT: approve",
 	} {
 		if _, e := Verdict(bad); e == nil {
 			t.Fatalf("fence ambiguity accepted: %q", bad)
