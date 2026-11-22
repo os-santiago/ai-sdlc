@@ -47,6 +47,10 @@ Set `openshift.enabled: true` in the chart values. Then:
 
   Any other difference still fails closed, including a pod admitted under a
   privileged SCC.
+- The chart's DNS egress rules target the `dns-default` pods in
+  `openshift-dns` on port 5353. Network policy matches the pod port behind the
+  Service's port 53, so the Kubernetes rule (`kube-system`, port 53) would block
+  every name lookup, including the database.
 
 Without the value, nothing changes on other Kubernetes distributions.
 
@@ -77,6 +81,42 @@ read-only root filesystem, the dropped capabilities and the deny-all
 NetworkPolicy, but removes the gVisor kernel boundary. Do not run untrusted
 generations that way outside a disposable cluster.
 
+## Install
+
+The administrator prepares the cluster:
+
+- a default StorageClass;
+- the `ai-sdlc-offline` RuntimeClass for the sandbox runtime (see above);
+- a kubeconfig context allowed to create namespaces, RBAC and workloads.
+
+The installing host still needs Docker or Podman, which generate the
+installation's identities locally, and the other local installer
+prerequisites.
+
+Then the installer targets that context instead of creating a kind cluster:
+
+```bash
+./install.sh local --platform openshift --kubeconfig ~/.kube/config --context admin \
+  --cluster my-openshift --repository OWNER/REPO --environment ai-sdlc-production \
+  --profile verification --independent-review --publication --merge --review-repair \
+  --github-auth gh-cli --codex-auth-file ~/.codex/auth.json \
+  --model-upstream upstream.json --project-manifest manifest.json
+```
+
+On first install the installer records the cluster's UID and the context in
+its state directory, and it refuses a different cluster or context for that
+`--cluster` name later. Use a `--cluster` name of its own: the installer
+refuses a state directory that belongs to a kind or Konflux installation, and
+it records nothing for a cluster without the OpenShift security API. Before any change it checks three things: the
+OpenShift security API, a default StorageClass, and the RuntimeClass when the
+profile runs generations. It never installs a node runtime. It renders the
+chart with `openshift.enabled=true`.
+
+The model endpoint must be reachable from the cluster's pods at a literal
+private address. On OpenShift Local with user-mode networking, pods reach the
+host's addresses through the VM's network proxy, and the host sees the
+connection as coming from its own address.
+
 ## Status
 
 | Item | State |
@@ -85,5 +125,5 @@ generations that way outside a disposable cluster.
 | Exact pod comparison with OpenShift admission (`openshift.enabled`) | Implemented, unit tested against the measured additions |
 | Sandbox runtime | gVisor under CRI-O fails; Kata not yet evaluated |
 | Outer-loop console rollout (`console_rollout.go`) | Not covered: it compares the production pods without the profile |
-| Installer path (`install.sh`) for OpenShift | Not started; the local installer targets kind |
+| Installer path (`install.sh local --platform openshift`) | Shadow profile installed on OpenShift Local: every component admitted under `nonroot-v2`, migrations applied, intake reading the repository |
 | End-to-end delivery on OpenShift | Not yet run |
