@@ -106,16 +106,20 @@ new ones. The report is
 | #30 `textutil.CountVowels` | review `model` | review `model-evidence` |
 | #32 `textfmt.Repeat` | review `model-mailbox-read` | execution `execution-observe` |
 | #42 `textutil.Capitalize` | timeout: merge blocked (see below) | merged, 6.1 min |
-| #43 `mathutil.Abs` | review `model-evidence` | merged, 4.7 min, with a fenced approval |
+| #43 `mathutil.Abs` | review `model-evidence` | merged, 4.7 min (fenced approval, per the service log) |
 | #44 `kv.Merge` | merged, 12.5 min (16 model calls) | |
 | #45 `textfmt.Center` | merged, 6.8 min | |
 
-- **#711 measured:** a fenced approval that the old parser refused was
-  accepted, and the issue was delivered (#43, attempt 2).
-- **`model-evidence`, likely secret redaction:** the local service now flags
-  answers that the agent CLI's secret redaction would rewrite (#713). The one
-  `model-evidence` stop measured after that (#43, attempt 1) was flagged, and
-  no unflagged approval failed. The suspected mechanism is that the agent CLI
+- **#711 measured:** a fenced approval that the old parser would have refused
+  was accepted, and the issue was delivered (#43, attempt 2). The fence comes
+  from the local model service's answer-shape log, which is not kept in the
+  repository.
+- **`model-evidence`, likely secret redaction:** a pending change (#713),
+  deployed only on the local service from 06:37 UTC, flags answers that the
+  agent CLI's secret redaction would rewrite. After that time, the service's
+  log shows the only `model-evidence` stop (#43, attempt 1) flagged and no
+  unflagged approval failing. #30's `model-evidence` stop (attempt 2, 06:26)
+  came before the flag existed. The suspected mechanism is that the agent CLI
   redacts `name: value` text such as `Tests pass: yes` in its saved final
   message, so the summary no longer matches the provider's digest. This is
   likely but not yet confirmed.
