@@ -1,0 +1,119 @@
+{
+  "repository": "os-santiago/ai-sdlc-sample",
+  "attemptBudget": 2,
+  "issues": [
+    {
+      "issue": 4,
+      "attempts": [
+        {
+          "issue": 4,
+          "startedAt": "2026-11-21T23:34:03Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 46,
+          "modelCalls": 0
+        },
+        {
+          "issue": 4,
+          "startedAt": "2026-11-21T23:35:31Z",
+          "outcome": "success",
+          "pullRequest": 12,
+          "seconds": 326,
+          "modelCalls": 7
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 5,
+      "attempts": [
+        {
+          "issue": 5,
+          "startedAt": "2026-11-21T23:41:39Z",
+          "outcome": "success",
+          "pullRequest": 13,
+          "seconds": 410,
+          "modelCalls": 11
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 6,
+      "attempts": [
+        {
+          "issue": 6,
+          "startedAt": "2026-11-21T23:49:11Z",
+          "outcome": "success",
+          "pullRequest": 14,
+          "seconds": 348,
+          "modelCalls": 8
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 7,
+      "attempts": [
+        {
+          "issue": 7,
+          "startedAt": "2026-11-21T23:55:41Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 195,
+          "modelCalls": 12
+        },
+        {
+          "issue": 7,
+          "startedAt": "2026-11-21T23:59:39Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 293,
+          "modelCalls": 19
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 8,
+      "attempts": [
+        {
+          "issue": 8,
+          "startedAt": "2026-11-22T00:05:14Z",
+          "outcome": "success",
+          "pullRequest": 15,
+          "seconds": 368,
+          "modelCalls": 8
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 9,
+      "attempts": [
+        {
+          "issue": 9,
+          "startedAt": "2026-11-22T00:12:05Z",
+          "outcome": "failure",
+          "stage": "verification",
+          "reason": "uncertain",
+          "seconds": 131,
+          "modelCalls": 5
+        },
+        {
+          "issue": 9,
+          "startedAt": "2026-11-22T00:14:59Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 217,
+          "modelCalls": 12
+        }
+      ],
+      "success": false
+    }
+  ]
+}

@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""Run an evaluation battery of issues against an installed ai-sdlc runtime.
+
+For each issue the only input is the authorized trigger label (removed, then
+re-added). The runner observes, never advances, the delivery:
+
+  * success: a pull request for the issue is merged within the timeout;
+  * failure: the runtime stops the attempt (execution, verification, review or
+    publication), recorded with its stage and reason;
+  * timeout: neither happened in time.
+
+Results go to a JSON report with per-attempt durations, model calls and stop
+reasons, plus the success rates (first attempt, and within the attempt budget).
+A failed attempt also records the components' own safe stop lines (for example
+`worker-exit ... workerExitCode=23`). The runner stops early, with the reason
+`runtime-blocked`, when a verification cleanup blocks all later work.
+The runner reads the runtime's database and logs through `kubectl` with the
+installation's kubeconfig; it writes nothing to the cluster.
+"""
+import argparse
+import json
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+LABEL = 'ai-sdlc:shadow'
+POLL_SECONDS = 20
+
+
+def run(args, **kwargs):
+    return subprocess.run(args, check=True, capture_output=True, text=True, timeout=120, **kwargs).stdout
+
+
+class Runtime:
+    def __init__(self, kubectl, kubeconfig, namespace='ai-sdlc-runtime'):
+        self.base = [kubectl, '--kubeconfig', str(kubeconfig), '-n', namespace]
+
+    def sql(self, query):
+        out = run(self.base + ['exec', 'ai-sdlc-postgres-0', '--', 'psql', '-U', 'ai_sdlc', '-d', 'ai_sdlc', '-Atc', query])
+        return [line for line in out.splitlines() if line]
+
+    def stop_lines(self, since):
+        """The components' safe stop diagnostics since the attempt started."""
+        lines = []
+        for deployment, container in (('ai-sdlc-worker', 'worker'), ('ai-sdlc-verifier', 'verifier')):
+            try:
+                out = run(self.base + ['logs', 'deploy/' + deployment, '-c', container, '--since-time=' + since])
+            except subprocess.SubprocessError:
+                continue
+            lines += sorted({line.split(' ', 2)[-1] for line in out.splitlines() if 'stopped safely' in line})
+        return lines[:10]
+
+    def blocked(self):
+        """A failed verification whose cleanup is not complete blocks all later work."""
+        rows = self.sql("SELECT count(*) FROM verification_requests WHERE state='failed' AND cleanup_state<>'complete'")
+        return bool(rows) and rows[0] != '0'
+
+    def snapshot(self):
+        """Counts and the latest states, enough to attribute a new attempt."""
+        def one(query):
+            rows = self.sql(query)
+            return rows[0] if rows else ''
+        return {
+            'executions': int(one('SELECT count(*) FROM execution_requests') or 0),
+            'execution': one("SELECT state||'|'||coalesce(stop_reason,'') FROM execution_requests ORDER BY created_at DESC LIMIT 1"),
+            'verifications': int(one('SELECT count(*) FROM verification_requests') or 0),
+            'verification': one("SELECT state||'|'||reason FROM verification_requests ORDER BY created_at DESC LIMIT 1"),
+            'reviews': int(one('SELECT count(*) FROM review_runs') or 0),
+            'review': one('SELECT state FROM review_runs ORDER BY created_at DESC LIMIT 1'),
+            'publications': int(one('SELECT count(*) FROM publication_requests') or 0),
+            'publication': one('SELECT state FROM publication_requests ORDER BY created_at DESC LIMIT 1'),
+            'modelCalls': int(one('SELECT count(*) FROM model_calls') or 0),
+        }
+
+
+class GitHub:
+    def __init__(self, repository):
+        self.repository = repository
+
+    def label(self, issue, add):
+        flag = '--add-label' if add else '--remove-label'
+        subprocess.run(['gh', 'issue', 'edit', str(issue), '--repo', self.repository, flag, LABEL],
+                       capture_output=True, text=True, timeout=60)
+
+    def merged_pull(self, issue, since):
+        """A merged pull request from the runtime's branch for this issue."""
+        out = run(['gh', 'pr', 'list', '--repo', self.repository, '--state', 'merged', '--limit', '50',
+                   '--json', 'number,headRefName,mergedAt'])
+        for pr in json.loads(out):
+            if pr['headRefName'].startswith('ai-sdlc/issue-%d-' % issue) and pr['mergedAt'] >= since:
+                return pr['number']
+        return None
+
+
+def attempt(runtime, github, issue, timeout):
+    before = runtime.snapshot()
+    github.label(issue, False)
+    time.sleep(40)
+    since = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    started = time.monotonic()
+    github.label(issue, True)
+    result = {'issue': issue, 'startedAt': since}
+    while time.monotonic() - started < timeout:
+        time.sleep(POLL_SECONDS)
+        merged = github.merged_pull(issue, since)
+        now = runtime.snapshot()
+        new_execution = now['executions'] > before['executions']
+        stage = None
+        if merged:
+            result.update(outcome='success', pullRequest=merged)
+            break
+        if new_execution and now['execution'].startswith('stopped|') and now['execution'] != 'stopped|candidate-captured':
+            stage = ('execution', now['execution'].split('|', 1)[1])
+        elif now['verifications'] > before['verifications'] and now['verification'].startswith('failed|'):
+            stage = ('verification', now['verification'].split('|', 1)[1])
+        elif now['reviews'] > before['reviews'] and now['review'] in ('failed', 'rejected', 'stopped'):
+            stage = ('review', now['review'])
+        if stage:
+            result.update(outcome='failure', stage=stage[0], reason=stage[1])
+            break
+    else:
+        result.update(outcome='timeout')
+    after = runtime.snapshot()
+    result['seconds'] = round(time.monotonic() - started)
+    result['modelCalls'] = after['modelCalls'] - before['modelCalls']
+    if result['outcome'] != 'success':
+        result['diagnostics'] = runtime.stop_lines(since)
+    return result
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument('--repository', required=True)
+    parser.add_argument('--issues', required=True, help='Comma-separated issue numbers')
+    parser.add_argument('--kubectl', required=True)
+    parser.add_argument('--kubeconfig', type=Path, required=True)
+    parser.add_argument('--attempts', type=int, default=2)
+    parser.add_argument('--timeout-minutes', type=int, default=15)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args(argv)
+    runtime, github = Runtime(args.kubectl, args.kubeconfig), GitHub(args.repository)
+    report = {'repository': args.repository, 'attemptBudget': args.attempts, 'issues': []}
+    for issue in [int(n) for n in args.issues.split(',')]:
+        if runtime.blocked():
+            report['stopped'] = 'runtime-blocked'
+            break
+        attempts = []
+        for _ in range(args.attempts):
+            if attempts and runtime.blocked():
+                break
+            result = attempt(runtime, github, issue, args.timeout_minutes * 60)
+            attempts.append(result)
+            print(json.dumps(result), flush=True)
+            args.output.write_text(json.dumps(report | {'inProgress': attempts}, indent=2) + '\n')
+            if result['outcome'] == 'success':
+                break
+        report['issues'].append({'issue': issue, 'attempts': attempts,
+                                 'success': attempts[-1]['outcome'] == 'success'})
+        args.output.write_text(json.dumps(report, indent=2) + '\n')
+    total = len(report['issues'])
+    report.pop('inProgress', None)
+    first = sum(1 for i in report['issues'] if i['attempts'][0]['outcome'] == 'success')
+    within = sum(1 for i in report['issues'] if i['success'])
+    report['summary'] = {'issues': total, 'firstAttemptSuccess': first, 'successWithinBudget': within,
+                         'firstAttemptRate': round(first / total, 3) if total else 0,
+                         'rateWithinBudget': round(within / total, 3) if total else 0}
+    args.output.write_text(json.dumps(report, indent=2) + '\n')
+    print(json.dumps(report['summary']))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
