@@ -179,7 +179,7 @@ Both batteries used the same runtime images as battery 5. Their reports are
 [battery 6](2026-11-22-evaluation-battery-6.json) and
 [battery 7](2026-11-22-evaluation-battery-7.json).
 
-| Stop | Battery 6 (18 attempts) | Battery 7 (16 attempts) |
+| Stop | Battery 6 (15 attempts, 10 stopped) | Battery 7 (15 attempts, 11 stopped) |
 |---|---|---|
 | `model-provider` (call over the gateway's timeout) | 7 | 9 |
 | execution `cleanup` after a captured candidate | 2 | 0 |
@@ -211,8 +211,11 @@ Both batteries used the same runtime images as battery 5. Their reports are
   forwards only the verdict in that case, so a repair can run.
 
 Battery 5 (88% within two attempts) ran in the same environment, on the same
-images, with the VM stopped. The spread between batteries 5 and 7 measures the
-local model service, not the runtime. A battery against a stable model
+images, with the VM stopped. Our working hypothesis is that the spread between
+batteries 5 to 7 comes mainly from the local model service: its latency
+varied over the day, and battery 7's simulator change lowered the derived
+timeout. That configuration change accounts for part of battery 7's result,
+so the batteries do not separate the two effects. A battery against a stable model
 endpoint, such as a hosted API or a local vLLM, is needed for a rate that
 predicts adoption.
 
