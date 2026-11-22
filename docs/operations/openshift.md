@@ -77,6 +77,36 @@ read-only root filesystem, the dropped capabilities and the deny-all
 NetworkPolicy, but removes the gVisor kernel boundary. Do not run untrusted
 generations that way outside a disposable cluster.
 
+## Install
+
+The administrator prepares the cluster:
+
+- a default StorageClass;
+- the `ai-sdlc-offline` RuntimeClass for the sandbox runtime (see above);
+- a kubeconfig context allowed to create namespaces, RBAC and workloads.
+
+Then the installer targets that context instead of creating a kind cluster:
+
+```bash
+./install.sh local --platform openshift --kubeconfig ~/.kube/config --context admin \
+  --cluster my-openshift --repository OWNER/REPO --environment ai-sdlc-production \
+  --profile verification --independent-review --publication --merge --review-repair \
+  --github-auth gh-cli --codex-auth-file ~/.codex/auth.json \
+  --model-upstream upstream.json --project-manifest manifest.json
+```
+
+On first install the installer records the cluster's UID and the context in
+its state directory, and it refuses a different cluster or context for that
+`--cluster` name later. Before any change it checks three things: the
+OpenShift security API, a default StorageClass, and the RuntimeClass when the
+profile runs generations. It never installs a node runtime. It renders the
+chart with `openshift.enabled=true`.
+
+The model endpoint must be reachable from the cluster's pods at a literal
+private address. On OpenShift Local with user-mode networking, pods reach the
+host's addresses through the VM's network proxy, and the host sees the
+connection as coming from its own address.
+
 ## Status
 
 | Item | State |
@@ -85,5 +115,5 @@ generations that way outside a disposable cluster.
 | Exact pod comparison with OpenShift admission (`openshift.enabled`) | Implemented, unit tested against the measured additions |
 | Sandbox runtime | gVisor under CRI-O fails; Kata not yet evaluated |
 | Outer-loop console rollout (`console_rollout.go`) | Not covered: it compares the production pods without the profile |
-| Installer path (`install.sh`) for OpenShift | Not started; the local installer targets kind |
+| Installer path (`install.sh local --platform openshift`) | Implemented; first install on OpenShift Local in progress |
 | End-to-end delivery on OpenShift | Not yet run |
