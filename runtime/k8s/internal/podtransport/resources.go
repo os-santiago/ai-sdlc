@@ -218,6 +218,11 @@ func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, erro
 	for {
 		raw, status, err := r.request(ctx, http.MethodGet, "pods", r.pod.Name, nil, false)
 		if err != nil {
+			// request() collapses deadline expiry into ErrTransport; callers
+			// cannot see the derived context, so name the expired wait here.
+			if ctx.Err() != nil {
+				return nil, startDeadline{}
+			}
 			return nil, err
 		}
 		if status != 200 {
@@ -237,7 +242,14 @@ func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, erro
 		if ready && pod.Status.Phase == core.PodRunning {
 			b := r.binding
 			b.PodUID = uid
-			return Bind(ctx, r.client, b)
+			s, err := Bind(ctx, r.client, b)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil, startDeadline{}
+				}
+				return nil, err
+			}
+			return s, nil
 		}
 		select {
 		case <-ctx.Done():

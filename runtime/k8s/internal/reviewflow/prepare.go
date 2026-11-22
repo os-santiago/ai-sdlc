@@ -86,6 +86,7 @@ type sourceLoader func(context.Context, string, string) (workspacebundle.Bundle,
 type prepareStop struct{ step string }
 
 func (e prepareStop) Error() string { return ErrReview.Error() }
+func (e prepareStop) Unwrap() error { return ErrReview }
 
 // sourceFetchStep names which bounded source acquisition failed: the caller's
 // deadline, the provider's rate limit, or plain unavailability.
