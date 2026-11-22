@@ -6,7 +6,9 @@ package reviewresult
 import (
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -90,18 +92,73 @@ func Parse(raw []byte, model string, maxSteps int) (Result, error) {
 	return Result{verdict, message, steps, calls}, nil
 }
 
+// verdictMarker matches SCC's reviewer marker syntax, so any second marker
+// such as "Verdict = request_changes" is refused, not just "verdict:".
+var verdictMarker = regexp.MustCompile(`(?i)\bverdict\s*[:=]`)
+
+// htmlBlock is a raw HTML opener, which Markdown may render as a block that
+// swallows the rest of the review.
+var htmlBlock = regexp.MustCompile(`^ {0,3}<`)
+
 // Verdict intentionally rejects SCC's prose/last-marker fallback, quoted
-// markers, multiple verdicts, code fences and truncated final messages.
+// markers, multiple verdicts, unbalanced or inline code fences and truncated
+// final messages. A review may quote code in fenced blocks: the single
+// "verdict:" occurrence must still be the exact last line, outside any block.
 func Verdict(message string) (string, error) {
-	if len(message) == 0 || len(message) >= 4000 || !utf8.ValidString(message) || strings.ContainsAny(message, "\x00\r") || strings.Contains(message, "```") || strings.Contains(message, "~~~") || strings.Count(strings.ToLower(message), "verdict:") != 1 {
+	if len(message) == 0 || len(message) >= 4000 || !utf8.ValidString(message) || strings.ContainsAny(message, "\x00\r") || !balancedFences(message) || strings.Count(strings.ToLower(message), "verdict:") != 1 || len(verdictMarker.FindAllStringIndex(message, -1)) != 1 {
 		return "", ErrInvalid
 	}
 	lines := strings.Split(strings.TrimSpace(message), "\n")
 	last := lines[len(lines)-1]
+	// No raw HTML block may hide the verdict line when the review is
+	// rendered as Markdown (an unclosed comment, <pre> or <script>).
+	for _, line := range lines {
+		if htmlBlock.MatchString(line) {
+			return "", ErrInvalid
+		}
+	}
 	for _, verdict := range []string{"approve", "request_changes"} {
 		if last == "VERDICT: "+verdict {
 			return verdict, nil
 		}
 	}
 	return "", ErrInvalid
+}
+
+// balancedFences accepts code fences only as whole fence lines that open and
+// close in pairs of the same marker, so the closing verdict line can never be
+// inside, or be mistaken for part of, a quoted block. A fence line starts at
+// column 0, uses exactly three marker characters and has no trailing
+// whitespace of any kind; the closing line is the bare marker. Anything else
+// carrying a marker (indented, longer runs, inline) is refused, so Markdown
+// rendering cannot disagree about where a block ends.
+func balancedFences(message string) bool {
+	open := ""
+	for _, line := range strings.Split(message, "\n") {
+		marker := ""
+		for _, m := range []string{"```", "~~~"} {
+			if strings.HasPrefix(line, m) {
+				marker = m
+			}
+		}
+		if marker == "" {
+			if strings.Contains(line, "```") || strings.Contains(line, "~~~") {
+				return false
+			}
+			continue
+		}
+		rest := line[3:]
+		if strings.ContainsAny(rest, "`~") || line != strings.TrimRightFunc(line, unicode.IsSpace) {
+			return false
+		}
+		switch {
+		case open == "":
+			open = marker
+		case open == marker && rest == "":
+			open = ""
+		default:
+			return false
+		}
+	}
+	return open == ""
 }
