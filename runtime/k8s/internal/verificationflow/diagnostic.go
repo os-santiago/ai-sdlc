@@ -1,6 +1,11 @@
 package verificationflow
 
-import "errors"
+import (
+	"errors"
+	"strings"
+
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
+)
 
 // cleanupAfter is a failed cleanup that followed a stop at stage. It unwraps
 // only to the cleanup failure, so a refusal it follows still counts as
@@ -26,7 +31,31 @@ func DiagnosticStage(err error) string {
 	return "unknown"
 }
 
+// createStop names which step of creating a verification resource failed.
+// Every value still stops the run the same way; it only refines the log.
+type createStop struct{ step string }
+
+func (e createStop) Error() string { return verification.ErrVerification.Error() }
+
+func createStage(stage string, err error) string {
+	var stop createStop
+	if errors.As(err, &stop) {
+		return stage + "-" + stop.step
+	}
+	return stage
+}
+
 func knownStage(stage string) bool {
+	if base, step, ok := strings.Cut(stage, "-"); ok {
+		switch base {
+		case "config", "baseline", "candidate", "reference", "tests":
+			switch step {
+			case "fence", "ledger", "create", "acknowledge":
+				return true
+			}
+		}
+		return false
+	}
 	switch stage {
 	case "configuration", "authority", "request", "claim", "source", "recipe", "config", "baseline", "candidate", "reference", "tests", "results", "comparison", "cleanup", "commit", "expiry", "queue", "rejection":
 		return true
