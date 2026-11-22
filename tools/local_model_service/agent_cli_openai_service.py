@@ -107,13 +107,8 @@ class ClaudeCLI:
     def environment(self, home, tokens):
         return dict(self.base_environment, HOME=home, TMPDIR=home, LC_ALL="C.UTF-8", NO_COLOR="1",
                     DISABLE_AUTOUPDATER="1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", DISABLE_TELEMETRY="1",
-                    # A completion backend answers directly. Extended thinking made
-                    # latency depend on hidden reasoning that the gateway's startup
-                    # benchmark cannot see (measured: 42.6 s and 3393 output tokens
-                    # with it, 17-20 s and about 1000 without, for the same answer),
-                    # so long calls outran the benchmarked timeout.
-                    MAX_THINKING_TOKENS="0",
-                    # The contract still caps a request at 8192 tokens.
+                    # Floor: the output limit must exceed the model's thinking budget;
+                    # the contract still caps a request at 8192 tokens.
                     CLAUDE_CODE_MAX_OUTPUT_TOKENS=str(max(tokens, 4096)))
 
     def argv(self, model, marker, system):
