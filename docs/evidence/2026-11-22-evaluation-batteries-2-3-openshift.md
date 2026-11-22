@@ -18,6 +18,7 @@ CLI, as in the earlier runs.
 | Battery 2 | kind | `612feaf` | 10 | 6 (60%) | 7 (70%) |
 | Battery 3 | kind | `9caf83b` | 8 | 4 (50%) | 6 (75%) |
 | Battery 4 | kind | `b2033ca` | 6 | 2 (33%) | 4 (67%) |
+| Battery 5 | kind | `6bb0a94` | 8 | 6 (75%) | 7 (88%) |
 | One issue | OpenShift Local | `b2033ca` | 1 | 1 | 1 |
 
 - **Successful deliveries:** in batteries 2 and 3, 5.4 to 7.5 minutes from
@@ -134,6 +135,41 @@ new ones. The report is
   persisted with the OpenShift VM stopped, so host memory pressure does not
   fully explain them. They cluster around the worker's exit and are not yet
   explained.
+
+## Battery 5 (images `6bb0a94`: review digest binding and mailbox read fix)
+
+This battery ran after three fixes:
+- an approving review binds through SCC's pre-redaction final-message digest
+  (sc-agent-cli#637, #716, #718);
+- a mailbox envelope removed during a read counts as absent (#717);
+- a third-party review bot no longer reviews runtime pull requests in the
+  sample repository.
+
+The battery re-ran #30 and #32, which failed in batteries 3 and 4, and six
+new issues. The report is
+[battery 5](2026-11-22-evaluation-battery-5.json).
+
+| Issue | Attempt 1 | Attempt 2 |
+|---|---|---|
+| #30 `textutil.CountVowels` | merged, 5.7 min | |
+| #32 `textfmt.Repeat` | merged, 6.8 min | |
+| #51 `mathutil.Product` | merged, 5.7 min | |
+| #52 `textutil.ReverseWords` | merged, 6.8 min | |
+| #53 `kv.Delete` | execution `model-provider` | execution `model-provider` |
+| #54 `textfmt.Ellipsis` | merged, 6.4 min | |
+| #55 `mathutil.Range` | review `cleanup` | merged, 9.3 min |
+| #56 `textutil.IsBlank` | merged, 8.9 min | |
+
+- **No `model-evidence`, `model-response-policy` or `model-mailbox-read`
+  stops.** These had caused most failures in batteries 3 and 4. #30 had
+  failed four times in review before and was delivered on its first attempt.
+- **`model-provider` (#53):** some agent-CLI calls of the local model service
+  took 68–95 s, while the worker gateway's benchmarked timeout was 92 s. Each
+  call is already capped at 4096 output tokens, so this is latency variance
+  of the local simulator, not answer size. Raising the planning envelope was
+  proposed and rejected after audit (#719).
+- **Review `cleanup` (#55, attempt 1):** a transient review cleanup failure.
+  This is not refined yet.
 
 ## Limits
 
