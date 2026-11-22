@@ -146,3 +146,15 @@ func TestControllerNamesEachDriveStop(t *testing.T) {
 		t.Fatalf("authority: err=%v", err)
 	}
 }
+
+func TestCleanupFailureNamesTheStepWithoutAnEarlierCause(t *testing.T) {
+	if got := DiagnosticStage(cleanupFailure{step: "cleanup-pod"}); got != "cleanup-pod" {
+		t.Fatal(got)
+	}
+	if got := DiagnosticStage(cleanupFailure{cause: ControllerError{"readiness"}, step: "cleanup-pod"}); got != "readiness" {
+		t.Fatal("the earlier cause must win", got)
+	}
+	if got := DiagnosticStage(cleanupFailure{}); got != "cleanup" || !CleanupPending(cleanupFailure{step: "cleanup-config"}) {
+		t.Fatal(got)
+	}
+}

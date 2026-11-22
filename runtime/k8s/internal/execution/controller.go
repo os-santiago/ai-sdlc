@@ -45,12 +45,20 @@ func (e ControllerError) Error() string { return "execution controller stopped: 
 
 // cleanupFailure preserves the original stop cause. Cleanup failure must not
 // erase the stage that made a model call uncertain.
-type cleanupFailure struct{ cause error }
+// step names the failed cleanup step for the diagnostic when there is no
+// earlier cause, for example after a candidate was captured.
+type cleanupFailure struct {
+	cause error
+	step  string
+}
 
 func (e cleanupFailure) Error() string { return "execution cleanup incomplete" }
 func (e cleanupFailure) Unwrap() error {
 	if e.cause != nil {
 		return e.cause
+	}
+	if e.step != "" {
+		return ControllerError{e.step}
 	}
 	return ControllerError{"cleanup"}
 }
@@ -64,7 +72,7 @@ func DiagnosticStage(err error) string {
 		return "authority-or-storage"
 	}
 	switch stopped.Stage {
-	case "source-preflight-authority", "source-rate-limited", "source-unavailable", "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "execution-authority", "execution-observe", "execution-read", "execution-sequence", "execution-exit-race", "worker-exit", "export", "capture", "cleanup":
+	case "source-preflight-authority", "source-rate-limited", "source-unavailable", "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "execution-authority", "execution-observe", "execution-read", "execution-sequence", "execution-exit-race", "worker-exit", "export", "capture", "cleanup", "cleanup-pod", "cleanup-config", "cleanup-confirm":
 		return stopped.Stage
 	}
 	if strings.HasPrefix(stopped.Stage, "model-") {
@@ -94,18 +102,18 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 		if resources != nil {
 			cleanup, stop := context.WithTimeout(context.Background(), 25*time.Second)
 			defer stop()
-			failed := false
-			if podUID != "" {
-				failed = resources.DeletePod(cleanup, podUID) != nil
+			step := ""
+			if podUID != "" && resources.DeletePod(cleanup, podUID) != nil {
+				step = "cleanup-pod"
 			}
-			if configUID != "" && resources.DeleteConfig(cleanup, configUID) != nil {
-				failed = true
+			if configUID != "" && resources.DeleteConfig(cleanup, configUID) != nil && step == "" {
+				step = "cleanup-config"
 			}
-			if !failed && l != nil && configUID != "" && podUID != "" {
-				failed = db.ConfirmExecutionCleanup(cleanup, l.durable, configUID, podUID) != nil
+			if step == "" && l != nil && configUID != "" && podUID != "" && db.ConfirmExecutionCleanup(cleanup, l.durable, configUID, podUID) != nil {
+				step = "cleanup-confirm"
 			}
-			if failed {
-				err = cleanupFailure{cause: err}
+			if step != "" {
+				err = cleanupFailure{cause: err, step: step}
 			}
 		}
 		if err != nil {
