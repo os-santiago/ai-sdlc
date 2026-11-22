@@ -26,7 +26,9 @@ func DiagnosticStage(err error) string {
 		switch stopped.Stage {
 		case "authority", "binding", "claim", "cleanup", "cleanup-pod", "cleanup-config", "cleanup-confirm", "commit", "config", "configuration", "expiry", "export",
 			"gateway-profile-unfit", "gateway-unavailable", "import", "model", "observation", "pod",
-			"preparation", "queue", "readiness", "rejection", "rejection-commit", "request-changes", "start", "template":
+			"preparation", "preparation-authority", "preparation-proof", "preparation-revalidate",
+			"preparation-source-unavailable", "preparation-source-rate-limited", "preparation-source-deadline",
+			"queue", "readiness", "readiness-deadline", "rejection", "rejection-commit", "request-changes", "start", "template":
 			return stopped.Stage
 		}
 	}

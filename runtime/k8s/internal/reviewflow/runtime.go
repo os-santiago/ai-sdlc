@@ -21,10 +21,20 @@ type Runtime struct {
 // VerificationMayProceed keeps independent queues moving only when review has
 // completed its work or performed no new work. Cleanup uncertainty and
 // post-claim failures stop both; review-passed already confirms cleanup.
+// Preparation is strictly pre-claim, so a transient source flake there defers
+// the verification rather than stopping it.
 func VerificationMayProceed(state string, err error) bool {
 	if err != nil {
 		var diagnostic ControllerError
-		return errors.As(err, &diagnostic) && !diagnostic.CleanupPending && (diagnostic.Stage == "gateway-unavailable" || diagnostic.Stage == "gateway-profile-unfit")
+		if !errors.As(err, &diagnostic) || diagnostic.CleanupPending {
+			return false
+		}
+		switch diagnostic.Stage {
+		case "gateway-unavailable", "gateway-profile-unfit",
+			"preparation-source-unavailable", "preparation-source-rate-limited", "preparation-source-deadline":
+			return true
+		}
+		return false
 	}
 	return state == "" || state == "rejected" || state == "review-passed"
 }

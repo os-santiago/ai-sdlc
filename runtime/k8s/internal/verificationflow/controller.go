@@ -195,6 +195,12 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 	}
 	source, e := sourceClient.Fetch(ctx, c.SourceSHA)
 	if e != nil {
+		switch {
+		case ctx.Err() != nil:
+			return proof, ControllerError{"source-deadline"}
+		case sourcefetch.RateLimited(e):
+			return proof, ControllerError{"source-rate-limited"}
+		}
 		return proof, ControllerError{stage}
 	}
 	create := func(kind string, apply func() (string, error)) error {

@@ -81,6 +81,25 @@ type prepared struct {
 }
 type sourceLoader func(context.Context, string, string) (workspacebundle.Bundle, error)
 
+// prepareStop names which bounded preparation step failed, for the safe
+// diagnostic only. Every cause still stops the review the same way.
+type prepareStop struct{ step string }
+
+func (e prepareStop) Error() string { return ErrReview.Error() }
+func (e prepareStop) Unwrap() error { return ErrReview }
+
+// sourceFetchStep names which bounded source acquisition failed: the caller's
+// deadline, the provider's rate limit, or plain unavailability.
+func sourceFetchStep(ctx context.Context, err error) string {
+	switch {
+	case ctx.Err() != nil:
+		return "source-deadline"
+	case sourcefetch.RateLimited(err):
+		return "source-rate-limited"
+	}
+	return "source-unavailable"
+}
+
 func fetchSource(ctx context.Context, repository, sha string) (workspacebundle.Bundle, error) {
 	c, e := sourcefetch.New(repository, "")
 	if e != nil {
@@ -100,19 +119,19 @@ func prepare(ctx context.Context, db *store.DB, policy verificationflow.PolicyLo
 	}
 	command, record, snapshot, e := verificationflow.CurrentProof(ctx, db, policy, id)
 	if e != nil {
-		return prepared{}, e
+		return prepared{}, prepareStop{"authority"}
 	}
 	raw, e := db.ReadBehaviorProof(ctx, id)
 	if e != nil {
-		return prepared{}, e
+		return prepared{}, prepareStop{"proof"}
 	}
 	var behavior verificationflow.BehaviorProof
 	if authority.DecodeStrict(raw, &behavior) != nil || !verificationflow.ValidBehaviorProof(behavior, command) {
-		return prepared{}, ErrReview
+		return prepared{}, prepareStop{"proof"}
 	}
 	source, e := fetch(ctx, command.Repository, command.SourceSHA)
 	if e != nil {
-		return prepared{}, ErrReview
+		return prepared{}, prepareStop{sourceFetchStep(ctx, e)}
 	}
 	if _, e = verification.Prepare(command.Repository, command.Recipe, snapshot.Issue.Body, source, record.Delta); e != nil {
 		return prepared{}, ErrReview
@@ -149,15 +168,15 @@ func prepare(ctx context.Context, db *store.DB, policy verificationflow.PolicyLo
 	}
 	current, _, _, e := verificationflow.CurrentProof(ctx, db, policy, id)
 	if e != nil || current != command {
-		return prepared{}, ErrReview
+		return prepared{}, prepareStop{"revalidate"}
 	}
 	latest, e := loadConfiguration(ctx, load)
 	if e != nil || latest.Digest() != config.Digest() {
-		return prepared{}, ErrReview
+		return prepared{}, prepareStop{"revalidate"}
 	}
 	proof, e := db.ReadBehaviorProof(ctx, id)
 	if e != nil || !bytes.Equal(raw, proof) {
-		return prepared{}, ErrReview
+		return prepared{}, prepareStop{"revalidate"}
 	}
 	run := store.ReviewRun{ID: store.ReviewID(id, authority.Digest(raw), a.ProfileSHA256, config.Digest(), authority.Digest(assignment)), VerificationID: id, CandidateID: command.CandidateID, WorkItem: command.WorkItemID, BehaviorDigest: authority.Digest(raw), ProfileDigest: a.ProfileSHA256, ConfigurationDigest: config.Digest(), AssignmentDigest: authority.Digest(assignment), ExpiresAt: time.UnixMilli(command.ExpiresAt)}
 	return prepared{run: run, command: command, binding: podtransport.Binding{Namespace: config.Namespace, WorkerImage: config.WorkerImage, MailboxImage: config.MailboxImage, Assignment: assignment, Profile: config.Profile, ADev: config.ADev}, source: sourceRaw, tree: treeDigest, config: config}, nil
