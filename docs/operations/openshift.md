@@ -120,6 +120,12 @@ Then the installer targets that context instead of creating a kind cluster:
   --model-upstream upstream.json --project-manifest manifest.json
 ```
 
+The same target can be preserved as reviewed desired state with `--config`
+(see [examples/openshift.local-install.json](../../examples/openshift.local-install.json)):
+the file declares `platform`, `kubeconfig`, `context`, the fixed
+`ai-sdlc-runtime` namespace and a bounded `timeout`; credential import remains
+an explicit CLI choice.
+
 On first install the installer records the cluster's UID and the context in
 its state directory, and it refuses a different cluster or context for that
 `--cluster` name later. Use a `--cluster` name of its own: the installer

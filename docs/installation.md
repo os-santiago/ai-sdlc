@@ -79,23 +79,41 @@ Reapply the same `local --config` command to reconcile the installation.
 
 The [v1 schema](../spec/local-install.schema.json) requires `apiVersion`, `kind`,
 `cluster`, `provider`, `repository`, `environment`, `profile` and `images`.
-Only local kind, maintenance/shadow and Docker/Podman/auto are supported.
-Copy and review the example to select Docker or another target. The installer
-rejects unknown fields, duplicate JSON keys, non-string values, unsupported
-versions and files over 16 KiB before invoking tools. Credential fields and
-active delivery modes are not accepted. Image-lock paths resolve relative to
-the configuration file, regardless of the caller's current directory.
+The `platform` field selects the target: `kind` (default) creates an owned
+local cluster, `konflux` addresses the frozen reviewed Saferus scope, and
+`openshift` installs into an existing owned cluster selected by the required
+`kubeconfig` and `context` fields — see the
+[OpenShift example](../examples/openshift.local-install.json) and
+[operations notes](operations/openshift.md). `namespace` may assert the fixed
+`ai-sdlc-runtime` namespace; no other value is accepted. `timeout` bounds each
+wait operation with a finite budget in positive seconds or minutes (at most
+four digits, defaulting to `10m`). `projectManifest` names a reviewed
+`ai-sdlc.project/v1` manifest for a non-reference repository under the
+verification profile, and `modelUpstream` names a reviewed model service
+document under the candidate or verification profile. Maintenance, shadow,
+candidate and verification profiles and Docker/Podman/auto providers are
+supported. Copy and review an example to select Docker or another target.
+The installer rejects unknown fields, duplicate JSON keys, non-string values,
+unsupported versions and files over 16 KiB before invoking tools. Credential
+fields and active delivery modes are not accepted. Image-lock, kubeconfig,
+manifest and upstream paths resolve relative to the configuration file,
+regardless of the caller's current directory.
 
 CLI scope options must match the file when both are supplied; conflicting
 values fail before credential access or cluster mutation. Without `--config`,
-existing CLI defaults still apply. `--timeout`, credential import/refresh and
-explicit host setup remain operational flags, never implicit config actions.
+existing CLI defaults still apply. Credential import/refresh, explicit host
+setup and prepared/release inputs remain operational flags, never implicit
+config actions.
 `status` and `credentials` use the configured target without changing its mode.
 Plans and installation reports include repository, environment and a SHA-256
 of canonical configuration JSON. Image digests are recorded separately: the
 configuration digest alone does not pin the contents of the referenced lock.
-This is the local subset of #424; remote configuration and execution budgets
-are still pending. See the [enterprise pilot](enterprise-pilot.md).
+Database, storage, network-policy and ADEV/policy digests remain committed
+chart desired state in
+[`local/values.yaml`](../runtime/k8s/deploy/local/values.yaml) rather than
+installation-configuration fields: the installer has no option that could
+honor different values, so naming them in the file would be unenforceable
+configuration. See the [enterprise pilot](enterprise-pilot.md).
 
 ## What is installed
 

@@ -1,0 +1,15 @@
+{
+  "apiVersion": "ai-sdlc.io/local-install/v1",
+  "kind": "LocalInstallation",
+  "platform": "openshift",
+  "cluster": "ai-sdlc-openshift",
+  "provider": "podman",
+  "namespace": "ai-sdlc-runtime",
+  "kubeconfig": "openshift.kubeconfig",
+  "context": "admin/api.cluster.example.com:6443",
+  "repository": "os-santiago/homedir",
+  "environment": "ai-sdlc-production",
+  "profile": "maintenance",
+  "timeout": "10m",
+  "images": "../runtime/k8s/deploy/local/images.lock.json"
+}
