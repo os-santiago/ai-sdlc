@@ -54,6 +54,9 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	defer cancel()
 	p, e := prepare(ctx, db, policy, load, id, fetch)
 	if e != nil {
+		if errors.Is(e, errSourceRateLimited) {
+			return proof, ControllerError{Stage: "preparation-source-rate-limited"}
+		}
 		return proof, ControllerError{Stage: "preparation"}
 	}
 	// Observe the authenticated sidecar before queuing or claiming authority.

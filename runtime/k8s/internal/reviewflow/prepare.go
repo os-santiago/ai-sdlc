@@ -79,6 +79,11 @@ type prepared struct {
 	tree    string
 	config  Configuration
 }
+
+// errSourceRateLimited is a preparation stop caused by the forge's rate
+// limit. It stops review exactly like any other preparation failure.
+var errSourceRateLimited = fmt.Errorf("review source rate limited: %w", ErrReview)
+
 type sourceLoader func(context.Context, string, string) (workspacebundle.Bundle, error)
 
 func fetchSource(ctx context.Context, repository, sha string) (workspacebundle.Bundle, error) {
@@ -112,6 +117,9 @@ func prepare(ctx context.Context, db *store.DB, policy verificationflow.PolicyLo
 	}
 	source, e := fetch(ctx, command.Repository, command.SourceSHA)
 	if e != nil {
+		if sourcefetch.RateLimited(e) {
+			return prepared{}, errSourceRateLimited
+		}
 		return prepared{}, ErrReview
 	}
 	if _, e = verification.Prepare(command.Repository, command.Recipe, snapshot.Issue.Body, source, record.Delta); e != nil {

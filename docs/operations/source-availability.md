@@ -30,6 +30,20 @@ Unavailable observations, canceled reads, and failed configuration loads defer
 instead. This distinction is exercised with two signed queued requests, including
 an obsolete generation followed by current work and a database permission outage.
 
+## Verification and review reads
+
+Independent verification and review fetch the same public source again,
+without a credential (#741). These reads draw on the forge's anonymous
+per-address quota, as the worker's preflight does. When the quota is
+exhausted, the stop is named, so it cannot be mistaken for a defect:
+
+- verification stops at `source-rate-limited` (or
+  `cleanup-after-source-rate-limited`);
+- review stops at `preparation-source-rate-limited`.
+
+These stops end the attempt like any other source failure. Wait for the reset,
+or reduce the deliveries that share one egress address.
+
 ## Conformance source authentication
 
 Quality workflows supply their read-only `github.token` only to the trusted
