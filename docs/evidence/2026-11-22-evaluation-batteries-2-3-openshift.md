@@ -72,7 +72,7 @@ its own final summary (sc-agent-cli#636, #700).
 
 | Cause | Where | Status |
 |---|---|---|
-| The reviewer approved with one exact final `VERDICT: approve` line but quoted code in a fenced block, which the verdict parser refused. | Both `model-response-policy` stops measured with the model service's answer shape (#705): #7 and #32 in battery 3 | Fixed in #711, which accepts balanced fences; two adversarial audits ran. It ran in the OpenShift delivery, but has not been measured in a battery yet. |
+| The reviewer approved with one exact final `VERDICT: approve` line but quoted code in a fenced block, which the verdict parser refused. | Both `model-response-policy` stops in battery 3, #7 and #32, measured with the model service's answer shape (#705). The source is the local service's log, which holds format facts only, never text, and is not kept in this repository | Fixed in #711, which accepts balanced fences; two adversarial audits ran. It ran in the OpenShift delivery, but has not been measured in a battery yet. |
 | The model-evidence binding did not match the reviewer summary. | 2 stops | Cause not confirmed. Non-ASCII text was ruled out: it also appears in passing reviews. |
 | A mailbox read failed after the reviewer had exited cleanly. | 1 stop | The transport refuses to infer a clean exit after a protocol error, and the tests fix that rule. Left as an operator decision. |
 | Review or verification resource steps failed (`cleanup`, `config`), and one model authorization check failed. | 3 stops | Likely control-plane latency: the host also ran a 16 GiB OpenShift Local VM. For verification resource steps, #706 now names the exact step (for example `config-fence`); review `cleanup` and model authorization stops are not refined yet. |
