@@ -20,6 +20,7 @@ under `nonroot-v2`:
 | SCC admission | `openshift.io/scc`, `seccomp.security.alpha.kubernetes.io/pod` and `security.openshift.io/validated-scc-subject-type` annotations |
 | SCC admission | `spec.securityContext.seLinuxOptions.level`, the namespace's MCS level (for example `s0:c26,c5`) |
 | ServiceAccount admission | one `imagePullSecrets` entry, `default-dockercfg-<5 chars>` |
+| Admission, for pods that request memory | a `node.kubernetes.io/memory-pressure` toleration (`Exists`, `NoSchedule`) |
 | OVN-Kubernetes and Multus, after scheduling | `k8s.ovn.org/pod-networks` and `k8s.v1.cni.cncf.io/network-status` annotations |
 
 The pod transports compare each pod with its compiled template exactly, so
@@ -43,7 +44,8 @@ Set `openshift.enabled: true` in the chart values. Then:
   - the SELinux options may carry only an MCS level;
   - there may be at most one pull secret, and it must be the default
     ServiceAccount's;
-  - the network annotations are accepted only once the pod is scheduled.
+  - the network annotations are accepted only once the pod is scheduled;
+  - one memory-pressure toleration, in exactly the admitted form, may be added.
 
   Any other difference still fails closed, including a pod admitted under a
   privileged SCC.
