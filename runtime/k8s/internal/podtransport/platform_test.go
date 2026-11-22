@@ -27,6 +27,7 @@ func openShiftAdmitted(p core.Pod) core.Pod {
 	p.Spec.SecurityContext.SELinuxOptions = &core.SELinuxOptions{Level: "s0:c26,c5"}
 	p.Spec.ImagePullSecrets = []core.LocalObjectReference{{Name: "default-dockercfg-bntkq"}}
 	p.Spec.NodeName = "node"
+	p.Spec.Tolerations = append(p.Spec.Tolerations, core.Toleration{Key: "node.kubernetes.io/memory-pressure", Operator: core.TolerationOpExists, Effect: core.TaintEffectNoSchedule})
 	return p
 }
 
@@ -67,6 +68,14 @@ func TestPlatformObservedKeepsEverythingElse(t *testing.T) {
 		"pod networks not json":   func(p *core.Pod) { p.Annotations["k8s.ovn.org/pod-networks"] = "{not-json}" },
 		"network status not json": func(p *core.Pod) { p.Annotations["k8s.v1.cni.cncf.io/network-status"] = "[not-json]" },
 		"network status empty":    func(p *core.Pod) { p.Annotations["k8s.v1.cni.cncf.io/network-status"] = "[]" },
+		"memory pressure with seconds": func(p *core.Pod) {
+			seconds := int64(30)
+			p.Spec.Tolerations[len(p.Spec.Tolerations)-1].TolerationSeconds = &seconds
+		},
+		"memory pressure NoExecute": func(p *core.Pod) { p.Spec.Tolerations[len(p.Spec.Tolerations)-1].Effect = core.TaintEffectNoExecute },
+		"another toleration": func(p *core.Pod) {
+			p.Spec.Tolerations = append(p.Spec.Tolerations, core.Toleration{Operator: core.TolerationOpExists})
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			admitted := openShiftAdmitted(expected)

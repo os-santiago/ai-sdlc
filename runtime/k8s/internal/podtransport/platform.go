@@ -66,6 +66,7 @@ func platformObserved(actual, expected core.Pod) core.Pod {
 	if len(expected.Spec.ImagePullSecrets) == 0 && len(actual.Spec.ImagePullSecrets) == 1 && openShiftPullSecret.MatchString(actual.Spec.ImagePullSecrets[0].Name) {
 		actual.Spec.ImagePullSecrets = nil
 	}
+	actual.Spec.Tolerations = withoutAddedMemoryPressure(actual.Spec.Tolerations, expected.Spec.Tolerations)
 	return actual
 }
 
@@ -82,4 +83,30 @@ func wellFormedNetworkAnnotation(key, value string) bool {
 		return json.Unmarshal([]byte(value), &statuses) == nil && len(statuses) > 0
 	}
 	return true
+}
+
+// OpenShift admission adds this toleration to pods that request memory. It
+// only lets the pod schedule on a node under memory pressure; it grants no
+// access. Exactly one undeclared copy, in exactly this form, is removed.
+var openShiftMemoryPressure = core.Toleration{Key: "node.kubernetes.io/memory-pressure", Operator: core.TolerationOpExists, Effect: core.TaintEffectNoSchedule}
+
+func withoutAddedMemoryPressure(actual, expected []core.Toleration) []core.Toleration {
+	for _, t := range expected {
+		if t.Key == openShiftMemoryPressure.Key {
+			return actual
+		}
+	}
+	index := -1
+	for i, t := range actual {
+		if t.Key == openShiftMemoryPressure.Key {
+			if index >= 0 || t.Operator != openShiftMemoryPressure.Operator || t.Effect != openShiftMemoryPressure.Effect || t.Value != "" || t.TolerationSeconds != nil {
+				return actual
+			}
+			index = i
+		}
+	}
+	if index < 0 {
+		return actual
+	}
+	return append(append([]core.Toleration(nil), actual[:index]...), actual[index+1:]...)
 }
