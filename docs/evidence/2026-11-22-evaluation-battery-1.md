@@ -30,18 +30,22 @@ verification (see below).
   model calls. Every merged change passed independent verification with the
   repository's own tests and an independent review.
 
-The raw report is [2026-11-22-evaluation-battery-1.json](2026-11-22-evaluation-battery-1.json).
+The report the runner wrote is
+[2026-11-22-evaluation-battery-1.json](2026-11-22-evaluation-battery-1.json).
+The battery was stopped by hand, so the file has no summary. It also predates
+the runner's `diagnostics` field; the stop lines below come from the worker's
+log.
 
 ## Failure causes and fixes
 
 | Cause | Attempts | Fix |
 |---|---|---|
-| The final summary of an unattended run triggered SCC's self-heal re-prompts. Words like "error", "unable to" or "recommend" read as an unfixed failure, and three prose answers in a row aborted the run (exit 23). This happened after the change was written, every time an issue was about error handling. | 3 | os-santiago/sc-agent-cli#636; the worker pin is updated in #700 |
+| The final summary of an unattended run triggered SCC's self-heal re-prompts. Words like "error", "unable to" or "recommend" read as an unfixed failure, and three prose answers in a row aborted the run (exit 23). This happened after the change was written, and in issues #7 and #9 on every attempt. | 3 | os-santiago/sc-agent-cli#636; the worker pin is updated in #700 |
 | A verification pod's create response was read, but a later check failed. Its UID was discarded, so cleanup could never remove the pod and the verifier stayed blocked for all later work. | 1, and it blocked the battery | #699 keeps and acknowledges the observed UID |
-| An execution stopped 14 s after it started, with no model call. Every exit of the model drive loop was logged as `execution`, so the cause is unknown. | 1 | #697 names each exit (`execution-authority`, `-read`, `-sequence`, ...) for the next occurrence |
+| An execution stopped 14 s after it started, with no model call. The attempt took 46 s from label to stop. Every exit of the model drive loop was logged as `execution`, so the cause is unknown. | 1 | #697 names each exit (`execution-authority`, `-read`, `-sequence`, ...) for the next occurrence |
 
-The verification failure caused one more defect. In that case the verifier
-logs only `cleanup` and loses the stage that failed first.
+A follow-up remains from the verification failure. Once cleanup fails, the
+verifier logs only `cleanup` and loses the stage that failed first.
 
 ## Limits
 
@@ -52,4 +56,8 @@ logs only `cleanup` and loses the stage that failed first.
 - **Lost create responses:** a create response that never arrives still blocks
   the verifier until an operator intervenes. This is by design
   ([independent verification](../operations/independent-verification.md)).
-- **Next battery:** the next run uses images that contain the fixes above.
+- **Next battery:** the next run uses images that contain the fixes above,
+  once they are merged and published.
+- **Runner version:** this battery ran on an earlier runner, before per-issue
+  attribution and the `runtime-blocked` stop. Attempt 2 of #9 therefore ran
+  while the verifier was blocked.

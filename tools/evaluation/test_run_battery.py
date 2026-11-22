@@ -9,14 +9,14 @@ import run_battery
 
 def state(executions=0, execution='', verifications=0, verification='', reviews=0, review='', calls=0):
     return {'executions': executions, 'execution': execution, 'verifications': verifications, 'verification': verification,
-            'reviews': reviews, 'review': review, 'publications': 0, 'publication': '', 'modelCalls': calls}
+            'reviews': reviews, 'review': review, 'modelCalls': calls}
 
 
 class FakeRuntime:
     def __init__(self, snapshots, blocked=False):
         self.snapshots, self.is_blocked = list(snapshots), blocked
 
-    def snapshot(self):
+    def snapshot(self, issue):
         return self.snapshots.pop(0) if len(self.snapshots) > 1 else self.snapshots[0]
 
     def stop_lines(self, since):
@@ -55,6 +55,14 @@ class AttemptTests(unittest.TestCase):
         with mock.patch('run_battery.time.monotonic', side_effect=[0, 0, 30, 61, 61]):
             result = run_battery.attempt(FakeRuntime([old, captured]), FakeGitHub(), 5, 60)
         self.assertEqual(result['outcome'], 'timeout')
+
+    def test_review_request_for_changes_is_not_final(self):
+        repair = state(reviews=1, review='failed|request-changes')
+        with mock.patch('run_battery.time.monotonic', side_effect=[0, 0, 30, 61, 61]):
+            result = run_battery.attempt(FakeRuntime([state(), repair]), FakeGitHub(), 5, 60)
+        self.assertEqual(result['outcome'], 'timeout')
+        rejected = run_battery.attempt(FakeRuntime([state(), state(reviews=1, review='failed|rejected')]), FakeGitHub(), 5, 60)
+        self.assertEqual((rejected['outcome'], rejected['stage'], rejected['reason']), ('failure', 'review', 'rejected'))
 
     def test_label_is_removed_then_added(self):
         github = FakeGitHub(merged=3)

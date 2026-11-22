@@ -57,20 +57,23 @@ class Runtime:
         rows = self.sql("SELECT count(*) FROM verification_requests WHERE state='failed' AND cleanup_state<>'complete'")
         return bool(rows) and rows[0] != '0'
 
-    def snapshot(self):
-        """Counts and the latest states, enough to attribute a new attempt."""
+    def snapshot(self, issue):
+        """This issue's counts and latest states, enough to attribute a new attempt."""
         def one(query):
             rows = self.sql(query)
             return rows[0] if rows else ''
+        n = int(issue)
+        executions = "FROM execution_requests WHERE convert_from(payload,'UTF8')::json->>'issueNumber' = '%d'" % n
+        verifications = "FROM verification_requests WHERE convert_from(payload,'UTF8')::json->>'issueNumber' = '%d'" % n
+        reviews = "FROM review_runs WHERE work_item_uuid IN (SELECT work_item_uuid %s)" % executions
         return {
-            'executions': int(one('SELECT count(*) FROM execution_requests') or 0),
-            'execution': one("SELECT state||'|'||coalesce(stop_reason,'') FROM execution_requests ORDER BY created_at DESC LIMIT 1"),
-            'verifications': int(one('SELECT count(*) FROM verification_requests') or 0),
-            'verification': one("SELECT state||'|'||reason FROM verification_requests ORDER BY created_at DESC LIMIT 1"),
-            'reviews': int(one('SELECT count(*) FROM review_runs') or 0),
-            'review': one('SELECT state FROM review_runs ORDER BY created_at DESC LIMIT 1'),
-            'publications': int(one('SELECT count(*) FROM publication_requests') or 0),
-            'publication': one('SELECT state FROM publication_requests ORDER BY created_at DESC LIMIT 1'),
+            'executions': int(one('SELECT count(*) ' + executions) or 0),
+            'execution': one("SELECT state||'|'||stop_reason %s ORDER BY created_at DESC LIMIT 1" % executions),
+            'verifications': int(one('SELECT count(*) ' + verifications) or 0),
+            'verification': one("SELECT state||'|'||reason %s ORDER BY created_at DESC LIMIT 1" % verifications),
+            'reviews': int(one('SELECT count(*) ' + reviews) or 0),
+            'review': one("SELECT state||'|'||reason %s ORDER BY created_at DESC LIMIT 1" % reviews),
+            # Model calls are not keyed by issue; attempts run one at a time.
             'modelCalls': int(one('SELECT count(*) FROM model_calls') or 0),
         }
 
@@ -81,8 +84,10 @@ class GitHub:
 
     def label(self, issue, add):
         flag = '--add-label' if add else '--remove-label'
-        subprocess.run(['gh', 'issue', 'edit', str(issue), '--repo', self.repository, flag, LABEL],
-                       capture_output=True, text=True, timeout=60)
+        result = subprocess.run(['gh', 'issue', 'edit', str(issue), '--repo', self.repository, flag, LABEL],
+                                capture_output=True, text=True, timeout=60)
+        if add and result.returncode != 0:
+            raise RuntimeError('could not add the trigger label to issue %d' % issue)
 
     def merged_pull(self, issue, since):
         """A merged pull request from the runtime's branch for this issue."""
@@ -95,9 +100,9 @@ class GitHub:
 
 
 def attempt(runtime, github, issue, timeout):
-    before = runtime.snapshot()
     github.label(issue, False)
     time.sleep(40)
+    before = runtime.snapshot(issue)
     since = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     started = time.monotonic()
     github.label(issue, True)
@@ -105,7 +110,7 @@ def attempt(runtime, github, issue, timeout):
     while time.monotonic() - started < timeout:
         time.sleep(POLL_SECONDS)
         merged = github.merged_pull(issue, since)
-        now = runtime.snapshot()
+        now = runtime.snapshot(issue)
         new_execution = now['executions'] > before['executions']
         stage = None
         if merged:
@@ -115,14 +120,15 @@ def attempt(runtime, github, issue, timeout):
             stage = ('execution', now['execution'].split('|', 1)[1])
         elif now['verifications'] > before['verifications'] and now['verification'].startswith('failed|'):
             stage = ('verification', now['verification'].split('|', 1)[1])
-        elif now['reviews'] > before['reviews'] and now['review'] in ('failed', 'rejected', 'stopped'):
-            stage = ('review', now['review'])
+        elif now['reviews'] > before['reviews'] and now['review'].startswith('failed|') and now['review'] != 'failed|request-changes':
+            # A request for changes leads to a repair, not a final stop.
+            stage = ('review', now['review'].split('|', 1)[1])
         if stage:
             result.update(outcome='failure', stage=stage[0], reason=stage[1])
             break
     else:
         result.update(outcome='timeout')
-    after = runtime.snapshot()
+    after = runtime.snapshot(issue)
     result['seconds'] = round(time.monotonic() - started)
     result['modelCalls'] = after['modelCalls'] - before['modelCalls']
     if result['outcome'] != 'success':
