@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -223,5 +224,17 @@ func TestSaferusWriterBindsRepositoryAndFinitePaths(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Fatal("invalid plan reached network")
+	}
+}
+
+func TestIssueReferenceClosesOnlyManifestIssues(t *testing.T) {
+	for repository, want := range map[string]string{
+		project.Homedir:              "Refs #7",
+		project.Saferus:              "Refs #7",
+		"os-santiago/ai-sdlc-sample": "Closes #7",
+	} {
+		if got := IssueReference(repository, 7); got != want {
+			t.Fatalf("%s: %q", repository, got)
+		}
 	}
 }

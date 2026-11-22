@@ -226,7 +226,7 @@ func (w *Writer) CreatePullRequest(ctx context.Context, fence WriteFence, p Tree
 		Draft               bool   `json:"draft"`
 		MaintainerCanModify bool   `json:"maintainer_can_modify"`
 	}{
-		Title: p.CommitMessage, Body: "Refs #" + strconv.Itoa(number) + "\n\nAI-SDLC verified candidate.\nPublication proof SHA-256: `" + proofDigest + "`.\nTarget: local kind production test only.\n", Head: p.Branch, Base: "main"}
+		Title: p.CommitMessage, Body: IssueReference(w.repository, number) + "\n\nAI-SDLC verified candidate.\nPublication proof SHA-256: `" + proofDigest + "`.\nIt merges only after the repository's required checks pass.\n", Head: p.Branch, Base: "main"}
 	type end struct {
 		Ref  string `json:"ref"`
 		SHA  string `json:"sha"`
@@ -246,4 +246,15 @@ func (w *Writer) CreatePullRequest(ctx context.Context, fence WriteFence, p Tree
 		return PublishedPullRequest{}, ErrPublication
 	}
 	return PublishedPullRequest{result.Number, commit, p.Branch, result.URL}, nil
+}
+
+// IssueReference links the pull request to its issue. For a repository
+// governed by a project manifest the merge is the final delivery stage, so
+// the pull request closes the issue. The built-in references continue to
+// build, attest and deploy after the merge, so their issues stay open.
+func IssueReference(repository string, issue int) string {
+	if repository == project.Homedir || repository == project.Saferus {
+		return "Refs #" + strconv.Itoa(issue)
+	}
+	return "Closes #" + strconv.Itoa(issue)
 }
