@@ -63,7 +63,10 @@ func TestPlatformObservedKeepsEverythingElse(t *testing.T) {
 		"oversized network status": func(p *core.Pod) {
 			p.Annotations["k8s.v1.cni.cncf.io/network-status"] = "[" + strings.Repeat("x", maxOpenShiftAnnotation) + "]"
 		},
-		"invalid mcs level": func(p *core.Pod) { p.Spec.SecurityContext.SELinuxOptions.Level = "s0:c1" },
+		"invalid mcs level":       func(p *core.Pod) { p.Spec.SecurityContext.SELinuxOptions.Level = "s0:c1" },
+		"pod networks not json":   func(p *core.Pod) { p.Annotations["k8s.ovn.org/pod-networks"] = "{not-json}" },
+		"network status not json": func(p *core.Pod) { p.Annotations["k8s.v1.cni.cncf.io/network-status"] = "[not-json]" },
+		"network status empty":    func(p *core.Pod) { p.Annotations["k8s.v1.cni.cncf.io/network-status"] = "[]" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			admitted := openShiftAdmitted(expected)

@@ -1,6 +1,7 @@
 package podtransport
 
 import (
+	"encoding/json"
 	"os"
 	"regexp"
 
@@ -49,7 +50,7 @@ func platformObserved(actual, expected core.Pod) core.Pod {
 		if openShiftNetworkAnnotations[key] && actual.Spec.NodeName == "" {
 			continue
 		}
-		if _, declared := expected.Annotations[key]; added && !declared && len(value) <= maxOpenShiftAnnotation && format.MatchString(value) {
+		if _, declared := expected.Annotations[key]; added && !declared && len(value) <= maxOpenShiftAnnotation && format.MatchString(value) && wellFormedNetworkAnnotation(key, value) {
 			delete(actual.Annotations, key)
 		}
 	}
@@ -66,4 +67,19 @@ func platformObserved(actual, expected core.Pod) core.Pod {
 		actual.Spec.ImagePullSecrets = nil
 	}
 	return actual
+}
+
+// wellFormedNetworkAnnotation requires the plugins' JSON shapes: a JSON object
+// of networks for OVN-Kubernetes and a JSON array of network objects for
+// Multus. Other annotations are fully constrained by their pattern.
+func wellFormedNetworkAnnotation(key, value string) bool {
+	switch key {
+	case "k8s.ovn.org/pod-networks":
+		var networks map[string]map[string]any
+		return json.Unmarshal([]byte(value), &networks) == nil && len(networks) > 0
+	case "k8s.v1.cni.cncf.io/network-status":
+		var statuses []map[string]any
+		return json.Unmarshal([]byte(value), &statuses) == nil && len(statuses) > 0
+	}
+	return true
 }
