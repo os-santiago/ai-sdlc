@@ -20,8 +20,9 @@ CLI, as in the earlier runs.
 | Battery 4 | kind | `b2033ca` | 6 | 2 (33%) | 4 (67%) |
 | One issue | OpenShift Local | `b2033ca` | 1 | 1 | 1 |
 
-- **Successful deliveries:** 5 to 7.5 minutes from label to merge, using 5 to
-  12 model calls. Every merged change passed verification with the
+- **Successful deliveries:** in batteries 2 and 3, 5.4 to 7.5 minutes from
+  label to merge, using 5 to 12 model calls. Battery 4 ranged from 4.7 to 12.5
+  minutes, using up to 16 calls. Every merged change passed verification with the
   repository's own tests and an independent review.
 - **OpenShift Local (OpenShift 5.0, CRI-O):** issue #29 went from label to
   merged pull request #41 in 6.5 minutes. The steps were:
