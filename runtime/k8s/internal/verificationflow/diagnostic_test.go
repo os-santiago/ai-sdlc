@@ -30,3 +30,18 @@ func TestDiagnosticKeepsTheStageBeforeAFailedCleanup(t *testing.T) {
 		t.Fatal("unbounded stage")
 	}
 }
+
+func TestDiagnosticNamesTheFailedCreateStep(t *testing.T) {
+	for _, step := range []string{"fence", "ledger", "create", "acknowledge"} {
+		stage := createStage("config", createStop{step})
+		if DiagnosticStage(ControllerError{stage}) != "config-"+step {
+			t.Fatal(stage)
+		}
+	}
+	if createStage("baseline", errors.New("other")) != "baseline" {
+		t.Fatal("unrefined stage changed")
+	}
+	if DiagnosticStage(ControllerError{"config-sensitive"}) != "unknown" || DiagnosticStage(ControllerError{"queue-fence"}) != "unknown" {
+		t.Fatal("unbounded create step")
+	}
+}

@@ -199,11 +199,11 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 	}
 	create := func(kind string, apply func() (string, error)) error {
 		if fence() != nil {
-			return verification.ErrVerification
+			return createStop{"fence"}
 		}
 		effect, e := db.BeginVerificationEffect(ctx, claim, kind)
 		if e != nil {
-			return e
+			return createStop{"ledger"}
 		}
 		if fence() != nil {
 			unsentCtx, stop := context.WithTimeout(context.Background(), 3*time.Second)
@@ -211,7 +211,7 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 			// must never infer no-send merely from the missing UID.
 			_ = db.CancelUnsentVerificationEffect(unsentCtx, effect)
 			stop()
-			return verification.ErrVerification
+			return createStop{"fence"}
 		}
 		uid, e := apply()
 		if uid != "" {
@@ -230,12 +230,15 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 				_ = db.AcknowledgeVerificationEffect(ackCtx, effect, uid)
 				stop()
 			}
-			return e
+			return createStop{"create"}
 		}
 		if db.AcknowledgeVerificationEffect(ctx, effect, uid) != nil {
-			return verification.ErrVerification
+			return createStop{"acknowledge"}
 		}
-		return fence()
+		if fence() != nil {
+			return createStop{"fence"}
+		}
+		return nil
 	}
 	stage = "recipe"
 	inputs, e := verification.Prepare(c.Repository, c.Recipe, snapshot.Issue.Body, source, record.Delta)
@@ -273,8 +276,8 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 			testRuns[repositorytests.LedgerKind(run)] = planned
 		}
 		stage = "config"
-		if create("config", func() (string, error) { return testRuns["baseline"].CreateConfig(ctx) }) != nil {
-			return proof, ControllerError{stage}
+		if e := create("config", func() (string, error) { return testRuns["baseline"].CreateConfig(ctx) }); e != nil {
+			return proof, ControllerError{createStage(stage, e)}
 		}
 		// The runs take minutes (image pulls, three concurrent pods, repeated
 		// candidate runs), so the claim is renewed while they run; the work
@@ -297,8 +300,8 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		for _, run := range repositorytests.RunNames() {
 			kind := repositorytests.LedgerKind(run)
 			stage = kind
-			if create(kind, func() (string, error) { return testRuns[kind].CreatePod(ctx, configUID) }) != nil {
-				return proof, ControllerError{stage}
+			if e := create(kind, func() (string, error) { return testRuns[kind].CreatePod(ctx, configUID) }); e != nil {
+				return proof, ControllerError{createStage(stage, e)}
 			}
 		}
 		deadline := time.Now()
@@ -393,13 +396,13 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		return proof, ControllerError{stage}
 	}
 	stage = "config"
-	if create("config", func() (string, error) { return resources.CreateConfig(ctx) }) != nil {
-		return proof, ControllerError{stage}
+	if e := create("config", func() (string, error) { return resources.CreateConfig(ctx) }); e != nil {
+		return proof, ControllerError{createStage(stage, e)}
 	}
 	for _, kind := range []string{"baseline", "candidate", "reference", "tests"} {
 		stage = kind
-		if create(kind, func() (string, error) { return resources.CreatePod(ctx, kind, configUID) }) != nil {
-			return proof, ControllerError{stage}
+		if e := create(kind, func() (string, error) { return resources.CreatePod(ctx, kind, configUID) }); e != nil {
+			return proof, ControllerError{createStage(stage, e)}
 		}
 	}
 	stage = "results"
