@@ -186,6 +186,11 @@ class ClaudeCLI:
         raise BackendError("agent CLI did not return one valid turn in time")
 
 
+# A sensitive-looking "name: value" pair, the shape the agent CLI's secret
+# redaction rewrites in its saved final message (for example "Tests pass: yes").
+REDACTION_RISK = re.compile(r"\b(?:[A-Za-z0-9]+[._-])*(?:key|token|pass|passwd|password|pwd|auth|authorization|secret|credentials?|cookie|sig|signature|bearer)\b\s*[\"']?\s*[:=]", re.IGNORECASE)
+
+
 def answer_shape(message):
     """For a final answer (no actions), the format facts a reviewer verdict
     parser checks, never the text: code fences, how often "verdict:" appears
@@ -197,7 +202,7 @@ def answer_shape(message):
         last = content.strip().split("\n")[-1] if content.strip() else ""
         verdict = {"VERDICT: approve": "approve", "VERDICT: request_changes": "request_changes"}.get(last, "other")
         return {"fences": "```" in content or "~~~" in content, "verdictMentions": content.lower().count("verdict:"),
-                "lastLine": verdict, "chars": len(content)}
+                "lastLine": verdict, "chars": len(content), "redactionRisk": bool(REDACTION_RISK.search(content))}
     except (TypeError, AttributeError):
         return None
 

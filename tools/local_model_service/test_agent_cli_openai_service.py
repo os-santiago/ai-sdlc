@@ -256,12 +256,14 @@ class AnswerShapeTests(unittest.TestCase):
     def test_shape_reports_format_facts_never_text(self):
         import agent_cli_openai_service as service
         good = service.answer_shape({"content": "Looks right.\nVERDICT: approve"})
-        self.assertEqual(good, {"fences": False, "verdictMentions": 1, "lastLine": "approve", "chars": 29})
+        self.assertEqual(good, {"fences": False, "verdictMentions": 1, "lastLine": "approve", "chars": 29, "redactionRisk": False})
         bad = service.answer_shape({"content": "Verdict: needs work\n```go\nx := 1\n```\nVERDICT: request_changes"})
         self.assertEqual((bad["fences"], bad["verdictMentions"], bad["lastLine"]), (True, 2, "request_changes"))
         self.assertEqual(service.answer_shape({"content": "done", "tool_calls": [{}]}), None)
         self.assertEqual(service.answer_shape({"content": "trailing\nVERDICT: approve."})["lastLine"], "other")
         self.assertNotIn("needs work", json.dumps(bad))
+        self.assertTrue(service.answer_shape({"content": "Tests pass: yes\nVERDICT: approve"})["redactionRisk"])
+        self.assertFalse(service.answer_shape({"content": "Key observations follow.\nVERDICT: approve"})["redactionRisk"])
 
 
 if __name__ == "__main__":
