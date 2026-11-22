@@ -3,6 +3,8 @@ package verificationflow
 import (
 	"errors"
 	"fmt"
+	"os"
+	"regexp"
 	"testing"
 )
 
@@ -62,5 +64,38 @@ func TestDiagnosticNamesTheSourceRateLimit(t *testing.T) {
 	}
 	if DiagnosticStage(ControllerError{"source-sensitive"}) != "unknown" {
 		t.Fatal("unbounded source detail")
+	}
+}
+
+func TestDiagnosticNamesARefusalAndOnlyItsKnownReason(t *testing.T) {
+	if got := DiagnosticStage(DecisionError{Reason: "candidate-failed"}); got != "refused-candidate-failed" {
+		t.Fatal(got)
+	}
+	if got := DiagnosticStage(fmt.Errorf("wrapped: %w", DecisionError{Reason: "regression"})); got != "refused-regression" {
+		t.Fatal(got)
+	}
+	if got := DiagnosticStage(DecisionError{Reason: "sensitive-fixture"}); got != "refused" {
+		t.Fatal("unbounded refusal reason", got)
+	}
+	// A failed cleanup after a refusal keeps the existing cleanup diagnostic.
+	if got := DiagnosticStage(cleanupAfter{cause: ControllerError{"cleanup"}, stage: "comparison"}); got != "cleanup-after-comparison" {
+		t.Fatal(got)
+	}
+}
+
+// Every refusal reason the repository test decision can return is nameable.
+func TestEveryDecisionRefusalReasonIsKnown(t *testing.T) {
+	raw, err := os.ReadFile("../repositorytests/decide.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := regexp.MustCompile(`result\(false, "([a-z-]+)"\)`).FindAllStringSubmatch(string(raw), -1)
+	if len(found) < 5 {
+		t.Fatal("decision reasons not found")
+	}
+	for _, m := range found {
+		if !refusalReason(m[1]) {
+			t.Fatalf("decision reason %q is not in the diagnostic allowlist", m[1])
+		}
 	}
 }

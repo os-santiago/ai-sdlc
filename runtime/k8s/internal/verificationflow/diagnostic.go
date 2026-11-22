@@ -28,7 +28,26 @@ func DiagnosticStage(err error) string {
 	if errors.As(err, &controlled) && knownStage(controlled.Stage) {
 		return controlled.Stage
 	}
+	// A refusal is a correct verdict on the candidate, not a controller
+	// fault: name it, with its reason only when that is a known constant.
+	var refused DecisionError
+	if errors.As(err, &refused) {
+		if refusalReason(refused.Reason) {
+			return "refused-" + refused.Reason
+		}
+		return "refused"
+	}
 	return "unknown"
+}
+
+// refusalReason bounds the repository test decision reasons the log may name.
+func refusalReason(reason string) bool {
+	switch reason {
+	case "incomplete-evidence", "invalid-delta", "harness-changed", "test-deleted", "no-test-change", "uncertain",
+		"candidate-failed", "no-cross-report", "regression", "no-failing-test", "baseline-failing":
+		return true
+	}
+	return false
 }
 
 // createStop names which step of creating a verification resource failed.
