@@ -46,6 +46,11 @@ Set `openshift.enabled: true` in the chart values. Then:
     ServiceAccount's;
   - the network annotations are accepted only once the pod is scheduled;
   - one memory-pressure toleration, in exactly the admitted form, may be added.
+- Container image identity: containerd reports the pinned digest in a
+  container's `imageID`. CRI-O reports there the platform manifest it resolved
+  from a pinned image index, and the exact pinned reference in `image`. Under
+  the profile, the transports also accept that CRI-O form: `image` must equal
+  the compiled pin exactly, and `imageID` must be a well-formed digest.
 
   Any other difference still fails closed, including a pod admitted under a
   privileged SCC.

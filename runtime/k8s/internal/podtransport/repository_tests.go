@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -139,7 +138,7 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 			return testsObservation{}, ErrTransport
 		}
 		seen[s.Name] = true
-		if s.ImageID != "" && (!imageIDPattern.MatchString(s.ImageID) || s.ImageID[strings.LastIndex(s.ImageID, "@")+1:] != pin[strings.LastIndex(pin, "@")+1:]) {
+		if s.ImageID != "" && (!imageIDPattern.MatchString(s.ImageID) || !imageMatchesPin(s.Image, s.ImageID, pin)) {
 			return testsObservation{}, ErrTransport
 		}
 		started := s.ContainerID != ""

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"regexp"
+	"strings"
 
 	core "k8s.io/api/core/v1"
 )
@@ -68,6 +69,18 @@ func platformObserved(actual, expected core.Pod) core.Pod {
 	}
 	actual.Spec.Tolerations = withoutAddedMemoryPressure(actual.Spec.Tolerations, expected.Spec.Tolerations)
 	return actual
+}
+
+// imageMatchesPin reports whether a container status runs the compiled image
+// pin. containerd (kind) reports the pinned digest in ImageID. CRI-O reports
+// there the platform manifest it resolved from a pinned image index, and the
+// exact pinned reference in Image; under the OpenShift profile that exact
+// reference is accepted, since the kubelet pulled it by that digest.
+func imageMatchesPin(image, imageID, pin string) bool {
+	if imageID[strings.LastIndex(imageID, "@")+1:] == pin[strings.LastIndex(pin, "@")+1:] {
+		return true
+	}
+	return platformOpenShift && strings.Contains(pin, "@sha256:") && image == pin && imageIDPattern.MatchString(imageID)
 }
 
 // wellFormedNetworkAnnotation requires the plugins' JSON shapes: a JSON object
