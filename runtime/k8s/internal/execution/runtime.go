@@ -64,8 +64,8 @@ type Runtime struct {
 	ConfigPath, IntakePath, TokenPath, CAPath, GatewayTokenPath string
 	APIServer, ProviderEndpoint                                 string
 	ProviderTimeoutSeconds                                      int
-	// AdoptGatewayProfile makes every model call use the timeout the gateway
-	// derived from its startup benchmark (+30 s for the response), bounded by
+	// AdoptGatewayProfile admits the model only when the timeout the gateway
+	// derived from its startup benchmark fits the call window and
 	// ProviderTimeoutSeconds. No work is claimed until that profile exists.
 	AdoptGatewayProfile bool
 }
@@ -210,10 +210,12 @@ func (r Runtime) Ready(ctx context.Context) error {
 	return provider.CheckGateway(ctx)
 }
 
-// benchmarked returns a provider bounded by the gateway's measured timeout.
+// benchmarked admits the model when the gateway's measured timeout fits.
 // The measured upstream timeout must also fit the profile's per-call window:
 // the broker stops 15 s before the window ends, so a slower model would only
-// produce uncertain calls. Such a worker claims no work (fail closed).
+// produce uncertain calls. Such a worker claims no work (fail closed). The
+// measurement admits the model; it does not shorten each call, which keeps
+// the installation's upstream ceiling (the gateway applies the same ceiling).
 func (r Runtime) benchmarked(ctx context.Context, provider *modelbroker.Provider, window time.Duration) (*modelbroker.Provider, error) {
 	if !r.AdoptGatewayProfile {
 		return provider, nil
@@ -222,7 +224,6 @@ func (r Runtime) benchmarked(ctx context.Context, provider *modelbroker.Provider
 	if e != nil || r.ProviderTimeoutSeconds == 0 || seconds+30 > r.ProviderTimeoutSeconds || time.Duration(seconds+20)*time.Second > window {
 		return nil, ErrAuthority
 	}
-	r.ProviderTimeoutSeconds = seconds + 30
 	return r.gateway()
 }
 
