@@ -351,7 +351,17 @@ AI_SDLC_TEST_HELM=<verified-helm-path> python3 -m unittest discover -s tools -p 
 ./install.sh local --provider podman
 python3 tools/verify_local_install.py --provider podman
 ./install.sh status --provider podman
+./install.sh doctor --provider podman
+./install.sh status --provider podman --issue <number>
 ```
+
+`doctor` is a read-only diagnostic: it checks configuration, pinned image
+digests, applied migrations, component readiness, credential Secret name
+presence and recorded intake/model connectivity — never Secret values, never
+a mutating subcommand. `status --issue` traces an issue's admission, plan,
+attempt, publication, merge and release/deployment evidence with stable
+reason codes; missing stages are explicitly `unavailable`. See
+[doctor and issue status](operations/doctor.md).
 
 `test_helm.py` needs the pinned Python packages in
 [`quality-requirements.txt`](../tools/quality-requirements.txt). CI uses Docker
