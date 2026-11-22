@@ -29,10 +29,12 @@ these additions would stop every execution, verification and review.
 
 Set `openshift.enabled: true` in the chart values. Then:
 
-- The chart binds the `system:openshift:scc:nonroot-v2` ClusterRole to the
-  ServiceAccounts of each runtime and workload namespace: the release
-  namespace, and the executors, verifiers and reviewers namespaces when they
-  are enabled. The binding grants nothing else.
+- The chart binds the `system:openshift:scc:nonroot-v2` ClusterRole, which
+  grants nothing else, to two kinds of subject:
+  - the component ServiceAccounts of the release namespace;
+  - the `default` ServiceAccount, which workload pods run as without a token,
+    in the executors, verifiers, reviewers and browser namespaces when they
+    are enabled.
 - The runtime configuration sets `AI_SDLC_PLATFORM=openshift`. The pod
   transports then remove only the additions in the table above, and only in
   their exact formats, before the comparison:
@@ -40,7 +42,8 @@ Set `openshift.enabled: true` in the chart values. Then:
   - the seccomp annotation must be `runtime/default`;
   - the SELinux options may carry only an MCS level;
   - there may be at most one pull secret, and it must be the default
-    ServiceAccount's.
+    ServiceAccount's;
+  - the network annotations are accepted only once the pod is scheduled.
 
   Any other difference still fails closed, including a pod admitted under a
   privileged SCC.
@@ -81,5 +84,6 @@ generations that way outside a disposable cluster.
 | Fixed UID 1000 under `nonroot-v2` | Validated on OpenShift Local |
 | Exact pod comparison with OpenShift admission (`openshift.enabled`) | Implemented, unit tested against the measured additions |
 | Sandbox runtime | gVisor under CRI-O fails; Kata not yet evaluated |
+| Outer-loop console rollout (`console_rollout.go`) | Not covered: it compares the production pods without the profile |
 | Installer path (`install.sh`) for OpenShift | Not started; the local installer targets kind |
 | End-to-end delivery on OpenShift | Not yet run |

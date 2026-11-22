@@ -24,6 +24,8 @@ var openShiftAnnotations = map[string]*regexp.Regexp{
 	"k8s.v1.cni.cncf.io/network-status":                regexp.MustCompile(`(?s)^\[.*\]$`),
 }
 
+var openShiftNetworkAnnotations = map[string]bool{"k8s.ovn.org/pod-networks": true, "k8s.v1.cni.cncf.io/network-status": true}
+
 // The SCC assigns the namespace's MCS level, and the ServiceAccount admission
 // adds the default ServiceAccount's registry pull secret.
 var (
@@ -42,6 +44,11 @@ func platformObserved(actual, expected core.Pod) core.Pod {
 	actual = *actual.DeepCopy()
 	for key, format := range openShiftAnnotations {
 		value, added := actual.Annotations[key]
+		// The network plugins annotate a pod only once it is scheduled; one
+		// already present at creation would come from someone else.
+		if openShiftNetworkAnnotations[key] && actual.Spec.NodeName == "" {
+			continue
+		}
 		if _, declared := expected.Annotations[key]; added && !declared && len(value) <= maxOpenShiftAnnotation && format.MatchString(value) {
 			delete(actual.Annotations, key)
 		}

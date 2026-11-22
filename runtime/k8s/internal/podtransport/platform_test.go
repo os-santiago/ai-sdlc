@@ -1,6 +1,7 @@
 package podtransport
 
 import (
+	"strings"
 	"testing"
 
 	core "k8s.io/api/core/v1"
@@ -25,6 +26,7 @@ func openShiftAdmitted(p core.Pod) core.Pod {
 	p.Annotations["k8s.v1.cni.cncf.io/network-status"] = "[{\n \"name\": \"ovn-kubernetes\"\n}]"
 	p.Spec.SecurityContext.SELinuxOptions = &core.SELinuxOptions{Level: "s0:c26,c5"}
 	p.Spec.ImagePullSecrets = []core.LocalObjectReference{{Name: "default-dockercfg-bntkq"}}
+	p.Spec.NodeName = "node"
 	return p
 }
 
@@ -38,6 +40,7 @@ func TestPlatformObservedRemovesOnlyOpenShiftAdmission(t *testing.T) {
 	withPlatform(t, true)
 	expected := compiledPod()
 	got := platformObserved(openShiftAdmitted(expected), expected)
+	got.Spec.NodeName = ""
 	if !equality.Semantic.DeepEqual(got.ObjectMeta, expected.ObjectMeta) || !equality.Semantic.DeepEqual(got.Spec, expected.Spec) {
 		t.Fatalf("admitted pod not normalized: %+v", got)
 	}
@@ -55,16 +58,53 @@ func TestPlatformObservedKeepsEverythingElse(t *testing.T) {
 		"extra pull secret": func(p *core.Pod) {
 			p.Spec.ImagePullSecrets = append(p.Spec.ImagePullSecrets, core.LocalObjectReference{Name: "default-dockercfg-abcde"})
 		},
-		"seccomp unconfined": func(p *core.Pod) { p.Annotations["seccomp.security.alpha.kubernetes.io/pod"] = "unconfined" },
+		"seccomp unconfined":        func(p *core.Pod) { p.Annotations["seccomp.security.alpha.kubernetes.io/pod"] = "unconfined" },
+		"network before scheduling": func(p *core.Pod) { p.Spec.NodeName = "" },
+		"oversized network status": func(p *core.Pod) {
+			p.Annotations["k8s.v1.cni.cncf.io/network-status"] = "[" + strings.Repeat("x", maxOpenShiftAnnotation) + "]"
+		},
+		"invalid mcs level": func(p *core.Pod) { p.Spec.SecurityContext.SELinuxOptions.Level = "s0:c1" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			admitted := openShiftAdmitted(expected)
 			mutate(&admitted)
 			got := platformObserved(admitted, expected)
+			got.Spec.NodeName = ""
 			if equality.Semantic.DeepEqual(got.ObjectMeta, expected.ObjectMeta) && equality.Semantic.DeepEqual(got.Spec, expected.Spec) {
 				t.Fatal("unexpected mutation accepted")
 			}
 		})
+	}
+}
+
+func TestPlatformObservedKeepsDeclaredAnnotations(t *testing.T) {
+	withPlatform(t, true)
+	expected := compiledPod()
+	expected.Annotations["openshift.io/scc"] = "restricted-v2"
+	admitted := openShiftAdmitted(expected)
+	admitted.Annotations["openshift.io/scc"] = "nonroot-v2"
+	if got := platformObserved(admitted, expected); got.Annotations["openshift.io/scc"] != "nonroot-v2" {
+		t.Fatal("declared annotation removed")
+	}
+}
+
+func TestExactPodTemplateUnderOpenShiftProfile(t *testing.T) {
+	expected := compiledPod()
+	expected.APIVersion, expected.Kind = "v1", "Pod"
+	expected.UID = "0f7b2f0a-1111-4222-8333-944455556666"
+	admitted := openShiftAdmitted(expected)
+	applyDefaults(&admitted.Spec)
+	withPlatform(t, false)
+	if exactPodTemplate(admitted, expected, "") {
+		t.Fatal("OpenShift admission accepted without the profile")
+	}
+	withPlatform(t, true)
+	if !exactPodTemplate(admitted, expected, "") {
+		t.Fatal("admitted pod rejected under the profile")
+	}
+	admitted.Spec.HostNetwork = true
+	if exactPodTemplate(admitted, expected, "") {
+		t.Fatal("changed spec accepted under the profile")
 	}
 }
 

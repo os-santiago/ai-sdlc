@@ -240,7 +240,10 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(set(bindings), {'ai-sdlc-runtime', 'ai-sdlc-executors', 'ai-sdlc-verifiers'})
         for namespace, binding in bindings.items():
             self.assertEqual(binding['roleRef'], {'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'ClusterRole', 'name': 'system:openshift:scc:nonroot-v2'})
-            self.assertEqual(binding['subjects'], [{'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'Group', 'name': 'system:serviceaccounts:' + namespace}])
+            if namespace == 'ai-sdlc-runtime':
+                self.assertEqual(binding['subjects'], [{'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'Group', 'name': 'system:serviceaccounts:ai-sdlc-runtime'}])
+            else:
+                self.assertEqual(binding['subjects'], [{'kind': 'ServiceAccount', 'name': 'default', 'namespace': namespace}])
         config = next(d['data'] for d in docs if d['kind'] == 'ConfigMap' and 'AI_SDLC_RUNTIME_MODE' in d.get('data', {}))
         self.assertEqual(config['AI_SDLC_PLATFORM'], 'openshift')
         self.assertNotEqual(self.render(*base, '--set', 'openshift.enabled=yes').returncode, 0)
