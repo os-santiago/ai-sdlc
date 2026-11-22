@@ -214,8 +214,9 @@ build arg (`components/worker/Containerfile`) — a 40-char commit SHA or
 semver tag; anything else fails the build closed. The reviewed default is
 `e3d15621e47f0aa48af23ef6144692241f282652`, including bounded diff application,
 MCP input-pipe failure isolation, patched development tooling, bounded
-reviewer verdict finalization after the inspection-tool limit, and acceptance
-of a final summary after completed work instead of a self-heal livelock.
+reviewer verdict finalization after the inspection-tool limit, acceptance of a
+final summary after completed work instead of a self-heal livelock, and the
+unredacted final-message digest in the run manifest.
 The source revision is baked into the worker; changing a contract field cannot
 modify a published image. For a contract declaring a different `engine.pin`,
 pass its resolved value explicitly when building:

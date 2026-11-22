@@ -30,7 +30,8 @@ RUN apk add --no-cache git
 # Engine source pin (issue #356): immutable ref — full commit SHA or
 # semver tag — baked into the image. The reviewed default is SCC main
 # 2026-11-22 (bounded reviewer verdict finalization, ambiguity controls and
-# final summaries after completed work without a self-heal livelock). A contract
+# final summaries after completed work without a self-heal livelock, and the
+# unredacted final-message digest in the run manifest). A contract
 # field does not rewrite an already-published image: pass its resolved
 # source pin explicitly when building a matching worker:
 #   podman build --build-arg SCC_ENGINE_PIN=<resolved engine.pin> ...
