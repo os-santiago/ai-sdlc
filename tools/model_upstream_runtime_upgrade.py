@@ -89,7 +89,7 @@ def gateway_values(upstream):
             'upstream': {'url': upstream['url'], 'model': upstream['model'], 'cidr': upstream['cidr'],
                          'port': upstream['port'], 'seconds': upstream['seconds'],
                          'credentialSecret': upstream['credentialSecret'], 'directAnswers': upstream['directAnswers']},
-            'benchmark': {'promptTokens': 16384, 'completionTokens': 4096},
+            'benchmark': {'promptTokens': 16384, 'completionTokens': 8192},
             'reviewBenchmark': {'promptTokens': 16384, 'completionTokens': 1024}}
 
 

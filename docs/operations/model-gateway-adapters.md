@@ -70,7 +70,7 @@ modelGateway:
     directAnswers: true                              # llama.cpp/vLLM: chat_template_kwargs.enable_thinking=false
   benchmark:
     promptTokens: 16384      # worker planning envelope: the largest prompt one SCC step may need
-    completionTokens: 4096   # and the largest answer
+    completionTokens: 8192   # and the largest answer (a step writing a whole file)
   reviewBenchmark:           # verifier envelope: large candidates, short verdicts
     promptTokens: 16384
     completionTokens: 1024

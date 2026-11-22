@@ -179,10 +179,11 @@ modelGateway:
     # Send chat_template_kwargs.enable_thinking=false (llama.cpp/vLLM only).
     directAnswers: false
   # Planning envelope for the startup benchmark: the largest prompt and answer
-  # one SCC step may need.
+  # one SCC step may need. A step that writes a whole file can answer with
+  # several thousand tokens; 4096 timed such steps out on a slow agent CLI.
   benchmark:
     promptTokens: 16384
-    completionTokens: 4096
+    completionTokens: 8192
   # Envelope for the verifier's gateway: reviewers read large candidates but
   # answer with a short verdict.
   reviewBenchmark:
