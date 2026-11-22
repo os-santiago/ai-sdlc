@@ -52,6 +52,83 @@ func TestEvaluateEscalatesSecurityBoundary(t *testing.T) {
 	if got.Decision != NeedsHuman || got.Risk != "high" {
 		t.Fatalf("got %#v", got)
 	}
+	found := false
+	for _, g := range got.RequiredGates {
+		if g == "human-security-review" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected human-security-review gate, got %v", got.RequiredGates)
+	}
+}
+
+// Homedir os-santiago/homedir#1576 asked for browser layout regression tests
+// and only excluded authorization changes under "Out of scope"; a declared
+// exclusion is not a request and must not escalate the issue.
+func TestEvaluateIgnoresExcludedSecurityTerms(t *testing.T) {
+	issue := validIssue()
+	issue.Title = "Add browser layout regression tests"
+	issue.Body = "Add browser layout regression tests covering the homepage and focus " +
+		"indicators so future markup changes cannot silently regress the rendered layout.\n\n" +
+		"## Out of scope\n\n" +
+		"- No authorization changes\n" +
+		"- No login flow changes\n"
+	got := Evaluate(issue, DefaultPolicy())
+	if got.Decision != Accepted || got.Risk != "low" {
+		t.Fatalf("got %#v", got)
+	}
+}
+
+func TestEvaluateExclusionHeadingVariants(t *testing.T) {
+	headings := []string{
+		"## Out of scope",
+		"### Out of scope",
+		"## Non-goals",
+		"## Not in scope",
+		"## Exclusions",
+	}
+	for _, h := range headings {
+		issue := validIssue()
+		issue.Title = "Add browser layout regression tests"
+		issue.Body = "Add browser layout regression tests covering the homepage and focus " +
+			"indicators so future markup changes cannot silently regress the rendered layout.\n\n" +
+			h + "\n\n" +
+			"- No authorization or oidc changes\n"
+		got := Evaluate(issue, DefaultPolicy())
+		if got.Decision != Accepted || got.Risk != "low" {
+			t.Fatalf("heading %q: got %#v", h, got)
+		}
+	}
+}
+
+// Exclusions remove terms from the reviewed scope but never disarm the
+// destructive scan: an "out of scope" line that names destructive work is
+// itself a stop signal.
+func TestEvaluateRejectsDestructiveWorkInsideExclusion(t *testing.T) {
+	issue := validIssue()
+	issue.Title = "Add browser layout regression tests"
+	issue.Body = "Add browser layout regression tests covering the homepage and focus " +
+		"indicators so future markup changes cannot silently regress the rendered layout.\n\n" +
+		"## Out of scope\n\n" +
+		"- Do not wipe production data\n"
+	got := Evaluate(issue, DefaultPolicy())
+	if got.Decision != Rejected || got.Risk != "critical" {
+		t.Fatalf("got %#v", got)
+	}
+}
+
+// Only dedicated exclusion headings leave the reviewed scope: inline negated
+// prose still names the boundary, so it keeps escalating conservatively.
+func TestEvaluateNegatedClaimStillEscalates(t *testing.T) {
+	issue := validIssue()
+	issue.Title = "Adjust community board layout"
+	issue.Body = "Adjust the community board layout and add regression coverage; " +
+		"this change does not modify authorization in any way and keeps the current role checks intact."
+	got := Evaluate(issue, DefaultPolicy())
+	if got.Decision != NeedsHuman || got.Risk != "high" {
+		t.Fatalf("got %#v", got)
+	}
 }
 
 func TestPolicyFromContractRequiresAuthorizationOnlyWhenLabelersConfigured(t *testing.T) {

@@ -86,6 +86,11 @@ var elevatedRiskPatterns = compileAll(
 	`\b(security policy|cryptography|encryption|secret rotation)\b`,
 )
 
+// exclusionSectionTitle matches headings whose content declares negative
+// boundaries, never requested work.
+var exclusionSectionTitle = regexp.MustCompile(
+	`(?i)(out[- ]of[- ]scope|non[- ]goals?|not in scope|exclusions?|won'?t do|explicitly excluded)`)
+
 // DefaultPolicy returns the standalone (contract-free) policy, used only
 // when no .ai-sdlc.yaml is available (e.g. local unit tests, dry-run CLI).
 // MinimumBodyLength (120) and MaximumAcceptanceCriteria (8) now match the
@@ -153,6 +158,7 @@ func Evaluate(issue Issue, policy Policy) Result {
 		result.RequiredGates = []string{"tests", "quality", "security", "issue-coverage"}
 	}
 	text := strings.ToLower(issue.Title + "\n" + issue.Body)
+	scope := requestScopeText(issue)
 
 	if issue.Repository == "" || issue.Number < 1 || issue.Revision == "" {
 		result.Decision = NeedsClarification
@@ -171,13 +177,15 @@ func Evaluate(issue Issue, policy Policy) Result {
 		result.Decision = NeedsHuman
 		result.Reasons = append(result.Reasons, "Admission requires an authorized actor.")
 	}
+	// Destructive patterns scan the full text, exclusions included — fail
+	// closed: an "out of scope: wipe prod" line is itself a stop signal.
 	if matchesAny(destructivePatterns, text) {
 		result.Decision = Rejected
 		result.Risk = "critical"
 		result.Reasons = append(result.Reasons, "Issue requests destructive, secret-disclosing or protection-bypass work.")
 		return result
 	}
-	if matchesAny(guardrailDegradationPatterns, text) {
+	if matchesAny(guardrailDegradationPatterns, scope) {
 		result.Decision = NeedsHuman
 		result.Risk = "high"
 		result.Reasons = append(result.Reasons, "Issue may weaken operational or engineering guardrails.")
@@ -188,7 +196,12 @@ func Evaluate(issue Issue, policy Policy) Result {
 		result.Decision = NeedsDecomposition
 		result.Reasons = append(result.Reasons, "Issue exceeds the configured atomic work limit.")
 	}
-	if matchesAny(elevatedRiskPatterns, text) {
+	// Elevated-risk terms match only the reviewed request scope: exclusion
+	// sections declare what the issue will not touch, so counting them
+	// escalates work the author already fenced off (the homedir#1576 false
+	// positive, #457). Destructive patterns above still scan the full text —
+	// an exclusion can never disarm a stop signal.
+	if matchesAny(elevatedRiskPatterns, scope) {
 		result.Risk = "high"
 		result.RequiredGates = append(result.RequiredGates, "human-security-review")
 		if result.Decision == Accepted {
@@ -214,6 +227,27 @@ func Evaluate(issue Issue, policy Policy) Result {
 		result.Reasons = []string{"No blocking admission risks detected."}
 	}
 	return result
+}
+
+// requestScopeText returns the reviewed request scope: title plus body with
+// exclusion sections removed. Destructive patterns still scan the full text —
+// an "out of scope: wipe prod" line is itself a stop signal.
+func requestScopeText(issue Issue) string {
+	var b strings.Builder
+	b.WriteString(issue.Title)
+	b.WriteString("\n")
+	first := heading.FindStringIndex(issue.Body)
+	if first == nil {
+		b.WriteString(issue.Body)
+		return strings.ToLower(b.String())
+	}
+	b.WriteString(issue.Body[:first[0]])
+	for _, s := range sections(issue.Body) {
+		if !exclusionSectionTitle.MatchString(s.title) {
+			b.WriteString(s.text)
+		}
+	}
+	return strings.ToLower(b.String())
 }
 
 func compileAll(patterns ...string) []*regexp.Regexp {

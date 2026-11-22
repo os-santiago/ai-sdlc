@@ -126,9 +126,12 @@ this initial explicit Helm reconciliation.
   intake generation 1 reached `needs-human`, with two signed deliveries and
   receipts, zero plans, execution requests, attempts and release gates.
   The conservative classifier matched the issue's exclusion of authorization
-  changes. Keep the stop; assess false positives without weakening high-risk
-  admission ([#457](https://github.com/os-santiago/ai-sdlc/issues/457)). The
-  observer now supports every declared admission outcome.
+  changes — a false positive kept here as observed evidence. Admission now
+  drops declared exclusion sections ("Out of scope", "Non-goals", …) before
+  matching elevated-risk terms, so the issue is expected to admit on a new
+  intake generation, while destructive patterns still scan the full text
+  ([#457](https://github.com/os-santiago/ai-sdlc/issues/457)). The observer
+  now supports every declared admission outcome.
 - Selected application baseline: 22 JavaScript tests and 25 Java/Quarkus tests
   passed at the Homedir revision above. Java invocation:
   `mvn -B -ntp test -Dtest=I18nIntegrityTest,CommunityReputationNavExposureTest,CommunityBoardResourceTest`
@@ -152,7 +155,7 @@ Observe the same live issue without advancing it:
 ```bash
 python3 tools/verify_shadow_intake.py --cluster ai-sdlc-homedir \
   --provider podman --repository os-santiago/homedir --issue 1576 \
-  --expected needs-human
+  --expected accepted
 ```
 
 Sanitized local reports live under
