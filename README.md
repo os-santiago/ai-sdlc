@@ -82,9 +82,14 @@ cd ai-sdlc
 ./install.sh plan
 ./install.sh local
 ./install.sh status
+./install.sh doctor
 ```
 
-This installs the runtime in maintenance mode (no delivery). If the preflight
+This installs the runtime in maintenance mode (no delivery). `doctor` is a
+read-only health check (configuration, pinned images, migrations, readiness,
+credential presence and recorded intake/model connectivity); `status --issue N`
+traces one issue through the delivery chain. Neither advances work; see
+[doctor and issue status](docs/operations/doctor.md). If the preflight
 reports low Linux inotify limits, run `sudo ./install.sh host --configure-host`,
 then retry as your normal user. The explicit adjustment affects this boot only;
 see the [host prerequisites](docs/installation.md) for persistent host

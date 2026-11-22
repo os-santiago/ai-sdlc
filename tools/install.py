@@ -399,6 +399,12 @@ def _main(argv, stack):
     if selected and selected[0] == 'supply-chain':
         import supply_chain_install
         return supply_chain_install.main(selected[1:])
+    if selected and selected[0] == 'doctor':
+        import doctor
+        return doctor.main(selected[1:])
+    if selected and selected[0] == 'issue-status':
+        import issue_status
+        return issue_status.main(selected[1:])
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['plan', 'local', 'status', 'tools', 'host', 'credentials', 'sandbox', 'supply-chain', 'build-foundation', 'release-target', 'registry-node', 'initial-runtime'])
     parser.add_argument('--configure-host', action='store_true', help='Raise inotify limits to committed minima for this boot; requires root')
@@ -418,6 +424,7 @@ def _main(argv, stack):
     parser.add_argument('--release-images', type=Path, help='Reviewed pinned deployer publication; requires release target')
     parser.add_argument('--timeout', default='10m')
     parser.add_argument('--repository')
+    parser.add_argument('--issue', type=int, help='Read-only issue-correlated status; valid only with status')
     parser.add_argument('--environment')
     parser.add_argument('--profile', choices=['maintenance', 'shadow', 'candidate', 'verification'])
     parser.add_argument('--merge', action='store_true', default=None, help='Enable low-risk reviewed-repository merge after authenticated required checks')
@@ -492,6 +499,8 @@ def _main(argv, stack):
         raise ValueError('Credential refresh requires local or credentials with --github-auth gh-cli')
     if args.configure_host and args.command not in ('local', 'host'):
         raise ValueError('--configure-host is valid only with local or host')
+    if args.issue is not None and (args.command != 'status' or not 1 <= args.issue <= 2147483647):
+        raise ValueError('--issue is a bounded positive issue number valid only with status')
     if args.command == 'host':
         print(json.dumps({'inotify': host_prerequisites(args.configure_host)}, indent=2))
         return 0
@@ -617,6 +626,15 @@ def _main(argv, stack):
         config = read_resource(kubectl, 'configmap', 'ai-sdlc-config')
         mode = (config or {}).get('data', {}).get('AI_SDLC_RUNTIME_MODE', 'unknown')
         print('Installation mode: ' + mode + '. Autonomous issue-to-production delivery: unavailable.')
+        if args.issue is not None:
+            import issue_status
+            policy = read_resource(kubectl, 'configmap', 'ai-sdlc-authority')
+            installed = json.loads((policy or {}).get('data', {}).get('policy.json', '{}') or '{}').get('repository')
+            if installed and installed != args.repository:
+                raise ValueError('Issue status observes the installed authority scope (' + installed +
+                                 '); pass the matching --repository')
+            report = issue_status.observe(kubectl + ['-n', NAMESPACE], installed or args.repository, args.issue)
+            print(json.dumps(report, indent=2, sort_keys=True))
         return 0
     if args.command == 'credentials':
         policy = read_resource(kubectl, 'configmap', 'ai-sdlc-authority')
