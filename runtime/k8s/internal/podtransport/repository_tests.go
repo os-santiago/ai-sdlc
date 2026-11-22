@@ -82,7 +82,7 @@ func (t *TestsRun) CreatePod(ctx context.Context, configUID string) (string, err
 	if t == nil || t.resources.isolation(ctx) != nil {
 		return "", ErrTransport
 	}
-	return t.resources.CreatePod(ctx, configUID)
+	return t.resources.CreatePodObserved(ctx, configUID)
 }
 
 func (t *TestsRun) DeletePod(ctx context.Context, uid string) error {

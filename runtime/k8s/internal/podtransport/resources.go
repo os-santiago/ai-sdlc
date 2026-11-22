@@ -144,6 +144,18 @@ func (r *Resources) CreateConfig(ctx context.Context) (string, error) {
 	return r.checkConfig(response, "")
 }
 func (r *Resources) CreatePod(ctx context.Context, configUID string) (string, error) {
+	uid, err := r.CreatePodObserved(ctx, configUID)
+	if err != nil {
+		return "", err
+	}
+	return uid, nil
+}
+
+// CreatePodObserved is CreatePod for a ledger that must remove what it
+// created: from a decoded 201 on, the pod exists and its UID is known, so the
+// UID is returned with any later failure. Callers still treat the error as a
+// failed create; the UID serves only to acknowledge and delete that object.
+func (r *Resources) CreatePodObserved(ctx context.Context, configUID string) (string, error) {
 	if r == nil || !resourceUID.MatchString(configUID) {
 		return "", ErrTransport
 	}
@@ -161,13 +173,20 @@ func (r *Resources) CreatePod(ctx context.Context, configUID string) (string, er
 		return "", ErrTransport
 	}
 	var pod core.Pod
-	if authority.DecodeStrict(response, &pod) != nil || !exactPodTemplate(pod, r.pod, "") || (pod.Status.Phase != core.PodPending && pod.Status.Phase != core.PodRunning) {
+	if authority.DecodeStrict(response, &pod) != nil {
 		return "", ErrTransport
 	}
-	if err = r.getConfig(ctx, configUID); err != nil {
-		return "", err
+	created := ""
+	if resourceUID.MatchString(string(pod.UID)) {
+		created = string(pod.UID)
 	}
-	return string(pod.UID), nil
+	if !exactPodTemplate(pod, r.pod, "") || (pod.Status.Phase != core.PodPending && pod.Status.Phase != core.PodRunning) {
+		return created, ErrTransport
+	}
+	if err = r.getConfig(ctx, configUID); err != nil {
+		return created, err
+	}
+	return created, nil
 }
 
 // StartBudget bounds a pod's Pending phase: scheduling, a first image pull
