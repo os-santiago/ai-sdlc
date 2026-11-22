@@ -37,7 +37,7 @@ RUN apk add --no-cache git
 # (`make containers SCC_ENGINE_PIN=<pin>` — see runtime/k8s/README.md).
 # init+fetch+checkout instead of `git clone --branch`: a bare SHA is a
 # valid fetch target but not a clone-able branch/tag name.
-ARG SCC_ENGINE_PIN=b86701a80a82a8ae99655b727ff148d499f970dd
+ARG SCC_ENGINE_PIN=e3d15621e47f0aa48af23ef6144692241f282652
 # Fail closed on anything but an immutable ref — the same check
 # this image build enforces. A mutable ref
 # (main, HEAD, …) would bake whatever lands upstream next into a

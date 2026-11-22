@@ -212,7 +212,7 @@ The worker image builds `scc` from `os-santiago/sc-agent-cli` at
 image-build time, pinned to an immutable ref via the `SCC_ENGINE_PIN`
 build arg (`components/worker/Containerfile`) — a 40-char commit SHA or
 semver tag; anything else fails the build closed. The reviewed default is
-`b86701a80a82a8ae99655b727ff148d499f970dd`, including bounded diff application,
+`e3d15621e47f0aa48af23ef6144692241f282652`, including bounded diff application,
 MCP input-pipe failure isolation, patched development tooling, bounded
 reviewer verdict finalization after the inspection-tool limit, and acceptance
 of a final summary after completed work instead of a self-heal livelock.
