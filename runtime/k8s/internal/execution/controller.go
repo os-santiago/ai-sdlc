@@ -72,7 +72,7 @@ func DiagnosticStage(err error) string {
 		return "authority-or-storage"
 	}
 	switch stopped.Stage {
-	case "source-preflight-authority", "source-rate-limited", "source-unavailable", "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "execution-authority", "execution-observe", "execution-read", "execution-sequence", "execution-exit-race", "worker-exit", "export", "capture", "cleanup", "cleanup-pod", "cleanup-config", "cleanup-confirm":
+	case "source-preflight-authority", "source-rate-limited", "source-unavailable", "configuration", "ownership", "resources", "config", "pod", "readiness", "readiness-deadline", "source", "model", "start", "execution", "execution-authority", "execution-observe", "execution-read", "execution-sequence", "execution-exit-race", "worker-exit", "export", "capture", "cleanup", "cleanup-pod", "cleanup-config", "cleanup-confirm":
 		return stopped.Stage
 	}
 	if strings.HasPrefix(stopped.Stage, "model-") {
@@ -155,6 +155,9 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 	stage = "readiness"
 	session, err := resources.WaitRunning(ctx, podUID)
 	if err != nil {
+		if podtransport.StartDeadline(err) || ctx.Err() != nil {
+			return record, ControllerError{"readiness-deadline"}
+		}
 		return record, ControllerError{stage}
 	}
 	stage = "source"

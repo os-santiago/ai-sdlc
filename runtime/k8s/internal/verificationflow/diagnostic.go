@@ -53,6 +53,11 @@ func knownStage(stage string) bool {
 			case "fence", "ledger", "create", "acknowledge":
 				return true
 			}
+		case "source":
+			switch step {
+			case "rate-limited", "deadline":
+				return true
+			}
 		}
 		return false
 	}

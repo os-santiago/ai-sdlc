@@ -54,7 +54,12 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	defer cancel()
 	p, e := prepare(ctx, db, policy, load, id, fetch)
 	if e != nil {
-		return proof, ControllerError{Stage: "preparation"}
+		stage := "preparation"
+		var stop prepareStop
+		if errors.As(e, &stop) && stop.step != "" {
+			stage = "preparation-" + stop.step
+		}
+		return proof, ControllerError{Stage: stage}
 	}
 	// Observe the authenticated sidecar before queuing or claiming authority.
 	// Startup unavailability must not consume an irreversible model attempt.
@@ -181,6 +186,9 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	stage = "readiness"
 	session, e := resources.WaitRunning(ctx, podUID)
 	if e != nil {
+		if podtransport.StartDeadline(e) || ctx.Err() != nil {
+			return proof, ControllerError{Stage: "readiness-deadline"}
+		}
 		return proof, ControllerError{Stage: stage}
 	}
 	stage = "import"

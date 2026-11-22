@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -246,6 +247,27 @@ func TestResourceWaitBindsExactRunningPod(t *testing.T) {
 				t.Fatal("expired readiness contacted API")
 			}
 		})
+	}
+}
+func TestResourceWaitRunningNamesTheExpiredStartDeadline(t *testing.T) {
+	r, _ := resourcesFixture(t, func(_ *Resources, pod core.Pod, w http.ResponseWriter, _ *http.Request) {
+		pod.Status.Phase = core.PodPending
+		pod.Status.ContainerStatuses = nil
+		writeResource(w, 200, pod)
+	})
+	_, pod, _ := bindingFixture(t)
+	r.expires = time.Now().Add(250 * time.Millisecond)
+	session, err := r.WaitRunning(context.Background(), string(pod.UID))
+	if session != nil || !StartDeadline(err) || !errors.Is(err, ErrTransport) {
+		t.Fatal("expired start wait was not named", err)
+	}
+	if err.Error() == ErrTransport.Error() {
+		t.Fatal("deadline kept the coarse message")
+	}
+	for _, other := range []error{nil, ErrTransport, errors.New("sensitive-fixture")} {
+		if StartDeadline(other) {
+			t.Fatal("unrelated failure named as start deadline")
+		}
 	}
 }
 func TestResourceDeleteUsesUIDAndObservesRemoval(t *testing.T) {

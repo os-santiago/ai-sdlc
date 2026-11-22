@@ -46,6 +46,17 @@ func TestDiagnosticNamesTheFailedCreateStep(t *testing.T) {
 	}
 }
 
+func TestDiagnosticNamesTheBoundedSourceWait(t *testing.T) {
+	for _, stage := range []string{"source", "source-rate-limited", "source-deadline"} {
+		if got := DiagnosticStage(ControllerError{stage}); got != stage {
+			t.Fatalf("got %q, want %q", got, stage)
+		}
+	}
+	if DiagnosticStage(ControllerError{"source-sensitive-fixture"}) != "unknown" {
+		t.Fatal("unbounded source step")
+	}
+}
+
 func TestDiagnosticKeepsTheRefinedStepAfterAFailedCleanup(t *testing.T) {
 	stage := createStage("config", createStop{"acknowledge"})
 	if got := DiagnosticStage(cleanupAfter{cause: ControllerError{"cleanup"}, stage: stage}); got != "cleanup-after-config-acknowledge" {

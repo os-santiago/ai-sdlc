@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"reflect"
@@ -194,6 +195,18 @@ func (r *Resources) CreatePodObserved(ctx context.Context, configUID string) (st
 // assignment's expiry.
 const StartBudget = 120 * time.Second
 
+// startDeadline names which bounded wait expired: the poll stayed Pending past
+// StartBudget or the assignment's expiry. It is still a transport failure; the
+// name exists only so callers can report the expired wait.
+type startDeadline struct{}
+
+func (startDeadline) Error() string { return "pod start deadline expired" }
+func (startDeadline) Unwrap() error { return ErrTransport }
+
+// StartDeadline reports whether the pod start wait expired rather than the pod
+// itself violating the contract.
+func StartDeadline(err error) bool { var d startDeadline; return errors.As(err, &d) }
+
 // WaitRunning polls only the compiled Pod name and exact returned UID. Pending
 // scheduling is bounded; mutations, replacement and terminal states fail.
 func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, error) {
@@ -228,7 +241,7 @@ func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, erro
 		}
 		select {
 		case <-ctx.Done():
-			return nil, ErrTransport
+			return nil, startDeadline{}
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
