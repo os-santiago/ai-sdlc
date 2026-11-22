@@ -45,3 +45,10 @@ func TestDiagnosticNamesTheFailedCreateStep(t *testing.T) {
 		t.Fatal("unbounded create step")
 	}
 }
+
+func TestDiagnosticKeepsTheRefinedStepAfterAFailedCleanup(t *testing.T) {
+	stage := createStage("config", createStop{"acknowledge"})
+	if got := DiagnosticStage(cleanupAfter{cause: ControllerError{"cleanup"}, stage: stage}); got != "cleanup-after-config-acknowledge" {
+		t.Fatal(got)
+	}
+}

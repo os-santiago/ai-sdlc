@@ -277,7 +277,8 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		}
 		stage = "config"
 		if e := create("config", func() (string, error) { return testRuns["baseline"].CreateConfig(ctx) }); e != nil {
-			return proof, ControllerError{createStage(stage, e)}
+			stage = createStage(stage, e)
+			return proof, ControllerError{stage}
 		}
 		// The runs take minutes (image pulls, three concurrent pods, repeated
 		// candidate runs), so the claim is renewed while they run; the work
@@ -301,7 +302,8 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 			kind := repositorytests.LedgerKind(run)
 			stage = kind
 			if e := create(kind, func() (string, error) { return testRuns[kind].CreatePod(ctx, configUID) }); e != nil {
-				return proof, ControllerError{createStage(stage, e)}
+				stage = createStage(stage, e)
+				return proof, ControllerError{stage}
 			}
 		}
 		deadline := time.Now()
@@ -397,12 +399,14 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 	}
 	stage = "config"
 	if e := create("config", func() (string, error) { return resources.CreateConfig(ctx) }); e != nil {
-		return proof, ControllerError{createStage(stage, e)}
+		stage = createStage(stage, e)
+		return proof, ControllerError{stage}
 	}
 	for _, kind := range []string{"baseline", "candidate", "reference", "tests"} {
 		stage = kind
 		if e := create(kind, func() (string, error) { return resources.CreatePod(ctx, kind, configUID) }); e != nil {
-			return proof, ControllerError{createStage(stage, e)}
+			stage = createStage(stage, e)
+			return proof, ControllerError{stage}
 		}
 	}
 	stage = "results"
