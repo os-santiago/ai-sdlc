@@ -60,8 +60,7 @@ postgres:
     instances: 1
     storageSize: 1Gi
   databaseURLSecret: {name: ai-sdlc-postgres-app, key: uri}
-# Maintenance never invokes this engine or loads a model credential.
-engine: scc
+# Maintenance never invokes the pinned engine or loads a model credential.
 modelProvider:
   baseURL: https://integrate.api.nvidia.com/v1
   model: nvidia/llama-3.1-nemotron-70b-instruct

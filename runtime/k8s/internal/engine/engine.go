@@ -11,11 +11,10 @@
 // StubEngine and SCCEngine (scc.go) are the two implementations shipped
 // here. SCCEngine shells out to sc-agent-cli with the headless contract
 // and (via Checker) checks out the target repo with a GitHub App
-// installation token first — see scc.go and internal/checkout. The one
-// remaining prerequisite before AI_SDLC_ENGINE=scc does anything in a
-// real cluster is a Node-capable worker image (currently
-// distroless/static — see scc.go's SCCEngine doc comment and
-// docs/architecture/adr/0005-runtime-k8s-event-bus-and-engine-invocation.md).
+// installation token first — see scc.go and internal/checkout. There is
+// no runtime engine selection and no fallback: the live execution path
+// runs the pinned engine inside isolated executor pods, and the dispatch
+// boundary fails closed on a missing or test-double engine.
 package engine
 
 import "context"
@@ -56,11 +55,12 @@ type Engine interface {
 	Invoke(ctx context.Context, request Request) (Result, error)
 }
 
-// StubEngine is a deterministic, no-subprocess, no-network implementation:
-// every invocation "succeeds" with no changed files. It exists so the
-// event-bus wiring (ADR-0005) is testable end-to-end — admission through
-// release-manager — without scc or model credentials. Selected by default
-// (AI_SDLC_ENGINE unset or "stub"); see components/worker/cmd/main.go.
+// StubEngine is a deterministic, no-subprocess, no-network test double:
+// every invocation "succeeds" with no changed files. It exists so engine
+// contract behavior is testable without scc or model credentials. It is
+// never selected by configuration — components/worker/internal/cycle
+// rejects it at the dispatch boundary, so a stub result can never reach
+// the durable outbox.
 type StubEngine struct{}
 
 // Invoke always returns a successful, no-op result.

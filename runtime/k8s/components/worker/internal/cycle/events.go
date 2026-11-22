@@ -18,9 +18,10 @@ import (
 // Deps (DB == nil) leaves /v1/cycles/evaluate exactly as ADR-0004 shipped
 // it. /v1/attempts/dispatch (ADR-0005) requires both DB (attempt history
 // must survive a pod restart — ADR-0003's "every attempt loop must
-// terminate" needs a durable attempt count to resume from) and Engine
-// (defaults to engine.StubEngine{} when nil, never requires one — see
-// components/worker/cmd/main.go).
+// terminate" needs a durable attempt count to resume from) and a real
+// Engine. Dispatch fails closed when Engine is nil and always refuses
+// engine.StubEngine: a test double must never persist an
+// ImplementationAttemptDecided event into a durable outbox.
 type Deps struct {
 	DB     *store.DB
 	Engine engine.Engine
@@ -66,6 +67,14 @@ func Routes(mux *http.ServeMux, deps Deps) {
 	})
 
 	mux.HandleFunc("POST /v1/attempts/dispatch", func(w http.ResponseWriter, r *http.Request) {
+		switch deps.Engine.(type) {
+		case nil:
+			service.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "worker attempt dispatch requires a configured engine; there is no fallback"})
+			return
+		case engine.StubEngine, *engine.StubEngine:
+			service.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the test stub engine cannot dispatch work or publish attempt events"})
+			return
+		}
 		if deps.DB == nil {
 			service.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "worker attempt dispatch requires a database; set DATABASE_URL"})
 			return
@@ -74,12 +83,8 @@ func Routes(mux *http.ServeMux, deps Deps) {
 		if !service.DecodeJSON(w, r, &command) {
 			return
 		}
-		eng := deps.Engine
-		if eng == nil {
-			eng = engine.StubEngine{}
-		}
 		policy := PolicyFromContract(contract.LoadFromEnv())
-		decision, attemptNumber, err := dispatch(r.Context(), deps.DB, eng, command, policy)
+		decision, attemptNumber, err := dispatch(r.Context(), deps.DB, deps.Engine, command, policy)
 		if err != nil {
 			service.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return

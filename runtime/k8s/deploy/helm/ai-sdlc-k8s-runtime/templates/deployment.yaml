@@ -72,7 +72,6 @@ spec:
               valueFrom:
                 secretKeyRef: {name: {{ printf "%s-%s" $.Values.authority.databaseSecretPrefix $component.name }}, key: uri}
             {{- if eq $key "worker" }}
-            - {name: AI_SDLC_ENGINE, value: {{ $.Values.engine | quote }}}
             - {name: AI_SDLC_PROVIDER_BASE_URL, value: {{ $.Values.modelProvider.baseURL | quote }}}
             - {name: AI_SDLC_MODEL, value: {{ $.Values.modelProvider.model | quote }}}
             - {name: AI_SDLC_WORKSPACE_DIR, value: {{ $.Values.modelProvider.workspaceDir | quote }}}
