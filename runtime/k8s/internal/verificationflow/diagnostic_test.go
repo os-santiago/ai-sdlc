@@ -52,3 +52,15 @@ func TestDiagnosticKeepsTheRefinedStepAfterAFailedCleanup(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestDiagnosticNamesTheSourceRateLimit(t *testing.T) {
+	if got := DiagnosticStage(ControllerError{"source-rate-limited"}); got != "source-rate-limited" {
+		t.Fatal(got)
+	}
+	if got := DiagnosticStage(cleanupAfter{cause: ControllerError{"cleanup"}, stage: "source-rate-limited"}); got != "cleanup-after-source-rate-limited" {
+		t.Fatal(got)
+	}
+	if DiagnosticStage(ControllerError{"source-sensitive"}) != "unknown" {
+		t.Fatal("unbounded source detail")
+	}
+}

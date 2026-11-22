@@ -195,6 +195,11 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 	}
 	source, e := sourceClient.Fetch(ctx, c.SourceSHA)
 	if e != nil {
+		// The forge's rate limit stops the run like any other source failure;
+		// naming it tells an operator to wait or add capacity, not to debug.
+		if sourcefetch.RateLimited(e) {
+			stage = "source-rate-limited"
+		}
 		return proof, ControllerError{stage}
 	}
 	create := func(kind string, apply func() (string, error)) error {

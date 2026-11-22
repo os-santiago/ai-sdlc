@@ -46,6 +46,9 @@ func createStage(stage string, err error) string {
 }
 
 func knownStage(stage string) bool {
+	if stage == "source-rate-limited" {
+		return true
+	}
 	if base, step, ok := strings.Cut(stage, "-"); ok {
 		switch base {
 		case "config", "baseline", "candidate", "reference", "tests":
