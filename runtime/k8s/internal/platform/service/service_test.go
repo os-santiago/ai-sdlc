@@ -171,6 +171,28 @@ func TestVerificationBoundaryRequiresExplicitModeAndOnlyFourPaths(t *testing.T) 
 	}
 }
 
+func TestIndependentReviewBoundaryRequiresVerificationAndExplicitOption(t *testing.T) {
+	for _, mode := range []string{"candidate", "verification"} {
+		for _, review := range []string{"", "false", "true", "unexpected"} {
+			t.Setenv("AI_SDLC_RUNTIME_MODE", mode)
+			t.Setenv("AI_SDLC_INDEPENDENT_REVIEW", review)
+			server := httptest.NewServer(RuntimeBoundary(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })))
+			for _, path := range []string{"/internal/repair-candidate", "/internal/stop-rejected-work", "/internal/repair-candidate?override=1", "/internal/stop-rejected-work/again"} {
+				response, err := http.Post(server.URL+path, "application/json", strings.NewReader("{}"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				response.Body.Close()
+				allowed := mode == "verification" && review == "true" && (path == "/internal/repair-candidate" || path == "/internal/stop-rejected-work")
+				if (response.StatusCode == 204) != allowed {
+					t.Fatal("review route ceiling", mode, review, path, response.StatusCode)
+				}
+			}
+			server.Close()
+		}
+	}
+}
+
 func TestPublicationBoundaryOnlyAllowsExplicitSignedRoute(t *testing.T) {
 	t.Setenv("AI_SDLC_RUNTIME_MODE", "verification")
 	t.Setenv("AI_SDLC_INDEPENDENT_REVIEW", "true")
