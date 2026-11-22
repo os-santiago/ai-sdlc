@@ -139,7 +139,7 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 	stage = "pod"
 	if err = l.RunEffect(ctx, stage, func(ctx context.Context, in EffectInput) (store.LifecycleResult, error) {
 		var e error
-		podUID, e = resources.CreatePod(ctx, in.ConfigUID)
+		podUID, e = resources.CreatePodObserved(ctx, in.ConfigUID)
 		return store.LifecycleResult{UID: podUID}, e
 	}); err != nil {
 		return record, ControllerError{stage}
