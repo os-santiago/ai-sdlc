@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -213,7 +212,7 @@ func (s *Session) inspect(ctx context.Context, allowWorkerExit bool) (observatio
 		// content digest, not the tag, to match the compiler's immutable pin.
 		// Multi-platform index pins need explicit platform resolution first.
 		image := expectedImages[status.Name]
-		if status.ImageID[strings.LastIndex(status.ImageID, "@")+1:] != image[strings.LastIndex(image, "@")+1:] {
+		if !imageMatchesPin(status.Image, status.ImageID, image) {
 			return observation{}, ErrTransport
 		}
 		if _, duplicate := instances[status.Name]; duplicate {

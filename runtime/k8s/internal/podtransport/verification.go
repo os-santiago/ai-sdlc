@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -171,7 +170,7 @@ func (v *VerificationResources) observe(ctx context.Context, kind, uid string) (
 		return false, instance{}, ErrTransport
 	}
 	image := r.pod.Spec.Containers[0].Image
-	if s.ImageID[strings.LastIndex(s.ImageID, "@")+1:] != image[strings.LastIndex(image, "@")+1:] {
+	if !imageMatchesPin(s.Image, s.ImageID, image) {
 		return false, instance{}, ErrTransport
 	}
 	return true, instance{s.ContainerID, s.ImageID, s.Image}, nil

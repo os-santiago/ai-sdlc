@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -256,7 +255,7 @@ func (r *Resources) containersReady(pod core.Pod) (bool, error) {
 		if len(status.Image) > 1024 || len(status.ImageID) > 1024 {
 			return false, ErrTransport
 		}
-		if status.ImageID != "" && (!imageIDPattern.MatchString(status.ImageID) || status.ImageID[strings.LastIndex(status.ImageID, "@")+1:] != pin[strings.LastIndex(pin, "@")+1:]) {
+		if status.ImageID != "" && (!imageIDPattern.MatchString(status.ImageID) || !imageMatchesPin(status.Image, status.ImageID, pin)) {
 			return false, ErrTransport
 		}
 		if status.State.Running != nil && status.State.Waiting == nil {

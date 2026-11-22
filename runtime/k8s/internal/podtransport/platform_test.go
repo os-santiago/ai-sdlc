@@ -128,3 +128,27 @@ func TestPlatformObservedIsExactOffOpenShift(t *testing.T) {
 		t.Fatal("OpenShift admission accepted outside the OpenShift profile")
 	}
 }
+
+func TestImageMatchesPinAcceptsCRIOOnlyUnderOpenShift(t *testing.T) {
+	pin := "quay.io/o/r@sha256:" + strings.Repeat("a", 64)
+	platform := "quay.io/o/r@sha256:" + strings.Repeat("b", 64)
+	withPlatform(t, false)
+	if !imageMatchesPin("quay.io/o/r:tag", pin, pin) {
+		t.Fatal("containerd identity rejected")
+	}
+	if imageMatchesPin(pin, platform, pin) {
+		t.Fatal("CRI-O identity accepted outside the OpenShift profile")
+	}
+	withPlatform(t, true)
+	if !imageMatchesPin(pin, platform, pin) {
+		t.Fatal("CRI-O identity rejected under the OpenShift profile")
+	}
+	for name, image := range map[string]string{"other pin": "quay.io/o/r@sha256:" + strings.Repeat("c", 64), "tag": "quay.io/o/r:latest", "other repository": "quay.io/x/r@sha256:" + strings.Repeat("a", 64)} {
+		if imageMatchesPin(image, platform, pin) {
+			t.Fatal(name + " accepted")
+		}
+	}
+	if imageMatchesPin(pin, "not-an-image-id", pin) {
+		t.Fatal("malformed image ID accepted")
+	}
+}
