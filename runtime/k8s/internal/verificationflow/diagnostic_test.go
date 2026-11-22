@@ -16,3 +16,17 @@ func TestDiagnosticsNeverIncludeUntrustedErrors(t *testing.T) {
 		t.Fatal("bounded wrapped stage")
 	}
 }
+
+func TestDiagnosticKeepsTheStageBeforeAFailedCleanup(t *testing.T) {
+	err := cleanupAfter{cause: ControllerError{"cleanup"}, stage: "baseline"}
+	if DiagnosticStage(err) != "cleanup-after-baseline" {
+		t.Fatal(DiagnosticStage(err))
+	}
+	var refused DecisionError
+	if errors.As(cleanupAfter{cause: ControllerError{"cleanup"}, stage: "comparison"}, &refused) {
+		t.Fatal("a failed cleanup must not expose the refusal it followed")
+	}
+	if DiagnosticStage(cleanupAfter{cause: ControllerError{"cleanup"}, stage: "sensitive-fixture"}) != "cleanup" {
+		t.Fatal("unbounded stage")
+	}
+}

@@ -157,7 +157,8 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		}
 		if !cleaned && !cleanupAttempted {
 			if e := cleanup(); e != nil {
-				err = e
+				// Keep the stage that stopped the run for the diagnostic.
+				err = cleanupAfter{cause: e, stage: stage}
 			}
 		}
 		if err != nil {
