@@ -17,6 +17,7 @@ CLI, as in the earlier runs.
 | Battery 1 | kind | `44a506c` | 6 | 3 (50%) | 4 (67%) |
 | Battery 2 | kind | `612feaf` | 10 | 6 (60%) | 7 (70%) |
 | Battery 3 | kind | `9caf83b` | 8 | 4 (50%) | 6 (75%) |
+| Battery 4 | kind | `b2033ca` | 6 | 2 (33%) | 4 (67%) |
 | One issue | OpenShift Local | `b2033ca` | 1 | 1 | 1 |
 
 - **Successful deliveries:** 5 to 7.5 minutes from label to merge, using 5 to
@@ -93,12 +94,48 @@ Each one stopped the first OpenShift attempts fail-closed:
 - **Installer:** there was no path for an existing cluster. Added
   `install.sh local --platform openshift` (#704).
 
+## Battery 4 (images `b2033ca`, with balanced fences; OpenShift VM stopped)
+
+The battery re-ran the two issues that failed in battery 3 (#30, #32) and four
+new ones. The report is
+[battery 4](2026-11-22-evaluation-battery-4.json).
+
+| Issue | Attempt 1 | Attempt 2 |
+|---|---|---|
+| #30 `textutil.CountVowels` | review `model` | review `model-evidence` |
+| #32 `textfmt.Repeat` | review `model-mailbox-read` | execution `execution-observe` |
+| #42 `textutil.Capitalize` | timeout: merge blocked (see below) | merged, 6.1 min |
+| #43 `mathutil.Abs` | review `model-evidence` | merged, 4.7 min, with a fenced approval |
+| #44 `kv.Merge` | merged, 12.5 min (16 model calls) | |
+| #45 `textfmt.Center` | merged, 6.8 min | |
+
+- **#711 measured:** a fenced approval that the old parser refused was
+  accepted, and the issue was delivered (#43, attempt 2).
+- **`model-evidence`, likely secret redaction:** the local service now flags
+  answers that the agent CLI's secret redaction would rewrite (#713). The one
+  `model-evidence` stop measured after that (#43, attempt 1) was flagged, and
+  no unflagged approval failed. The suspected mechanism is that the agent CLI
+  redacts `name: value` text such as `Tests pass: yes` in its saved final
+  message, so the summary no longer matches the provider's digest. This is
+  likely but not yet confirmed.
+- **Merge blocked by a third-party bot:** the sample repository's native
+  ruleset requires resolved review threads. A review bot installed on the
+  repository left a thread open on the first pull request for #42. The merge
+  controller waited for checks until the attempt timed out. The retry
+  produced a second pull request, which merged; the first was closed as
+  superseded. The runtime does not answer review comments, so a target
+  repository needs no thread-resolution rule, or no other reviewer bots.
+- **Transport stops (`model-mailbox-read`, `execution-observe`):** they
+  persisted with the OpenShift VM stopped, so host memory pressure does not
+  fully explain them. They cluster around the worker's exit and are not yet
+  explained.
+
 ## Limits
 
 - **Sample size:** one small repository and one model path. The rates do not
   predict other repositories or models.
 - **Weak decisions:** the sample has no JUnit report.
-- **#711 not measured in a battery:** it ran only in the single OpenShift delivery.
+- **#711 measured once in battery 4,** where it turned a refused fenced approval into a delivery.
 - **OpenShift sandbox:** gVisor does not run under CRI-O. The OpenShift
   delivery used `crun` with SCC `nonroot-v2`, Pod Security admission and a
   deny-all NetworkPolicy, without a kernel sandbox. That is acceptable only on
