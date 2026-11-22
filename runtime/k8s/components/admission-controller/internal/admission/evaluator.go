@@ -87,9 +87,12 @@ var elevatedRiskPatterns = compileAll(
 )
 
 // exclusionSectionTitle matches headings whose content declares negative
-// boundaries, never requested work.
+// boundaries, never requested work. Anchored at the start so a heading that
+// merely mentions scope ("Non-goals and deferred auth work") stays in scope —
+// a trailing parenthetical like the issue template's "Out of scope (negative
+// boundaries)" still matches.
 var exclusionSectionTitle = regexp.MustCompile(
-	`(?i)(out[- ]of[- ]scope|non[- ]goals?|not in scope|exclusions?|won'?t do|explicitly excluded)`)
+	`(?i)^(out[- ]of[- ]scope|non[- ]goals?|not in scope|exclusions?|won'?t do|explicitly excluded)\s*(\(.*\))?\s*:?$`)
 
 // DefaultPolicy returns the standalone (contract-free) policy, used only
 // when no .ai-sdlc.yaml is available (e.g. local unit tests, dry-run CLI).
@@ -244,6 +247,10 @@ func requestScopeText(issue Issue) string {
 	b.WriteString(issue.Body[:first[0]])
 	for _, s := range sections(issue.Body) {
 		if !exclusionSectionTitle.MatchString(s.title) {
+			// Keep the heading too: a requested change titled "## OIDC
+			// provider migration" must still reach the risk patterns;
+			// sections() excludes the heading line from s.text.
+			b.WriteString(s.title + "\n")
 			b.WriteString(s.text)
 		}
 	}

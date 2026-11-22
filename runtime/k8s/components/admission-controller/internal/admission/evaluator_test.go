@@ -131,6 +131,34 @@ func TestEvaluateNegatedClaimStillEscalates(t *testing.T) {
 	}
 }
 
+func TestEvaluateSecurityTermInKeptSectionHeadingStillEscalates(t *testing.T) {
+	issue := validIssue()
+	issue.Title = "Improve the community board layout"
+	issue.Body = "Improve the community board layout and add regression coverage " +
+		"so future markup changes cannot silently regress the rendered layout.\n\n" +
+		"## OIDC provider migration\n\n" +
+		"Implement the change described in the acceptance criteria.\n\n" +
+		"## Out of scope\n\n" +
+		"- No authorization changes\n"
+	got := Evaluate(issue, DefaultPolicy())
+	if got.Decision != NeedsHuman || got.Risk != "high" {
+		t.Fatalf("got %#v", got)
+	}
+}
+
+func TestEvaluateScopeMentioningHeadingStaysInScope(t *testing.T) {
+	issue := validIssue()
+	issue.Title = "Add browser layout regression tests"
+	issue.Body = "Add browser layout regression tests covering the homepage and focus " +
+		"indicators so future markup changes cannot silently regress the rendered layout.\n\n" +
+		"## Non-goals and deferred authorization work\n\n" +
+		"- The oidc provider swap is scheduled separately\n"
+	got := Evaluate(issue, DefaultPolicy())
+	if got.Decision != NeedsHuman || got.Risk != "high" {
+		t.Fatalf("got %#v", got)
+	}
+}
+
 func TestPolicyFromContractRequiresAuthorizationOnlyWhenLabelersConfigured(t *testing.T) {
 	c := contract.Default()
 	policy := PolicyFromContract(c)
