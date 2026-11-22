@@ -1,0 +1,179 @@
+{
+  "repository": "os-santiago/ai-sdlc-sample",
+  "attemptBudget": 2,
+  "issues": [
+    {
+      "issue": 7,
+      "attempts": [
+        {
+          "issue": 7,
+          "startedAt": "2026-11-22T04:28:07Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 236,
+          "modelCalls": 6,
+          "diagnostics": []
+        },
+        {
+          "issue": 7,
+          "startedAt": "2026-11-22T04:32:46Z",
+          "outcome": "success",
+          "pullRequest": 35,
+          "seconds": 449,
+          "modelCalls": 9
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 10,
+      "attempts": [
+        {
+          "issue": 10,
+          "startedAt": "2026-11-22T04:40:59Z",
+          "outcome": "success",
+          "pullRequest": 36,
+          "seconds": 409,
+          "modelCalls": 10
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 21,
+      "attempts": [
+        {
+          "issue": 21,
+          "startedAt": "2026-11-22T04:48:33Z",
+          "outcome": "success",
+          "pullRequest": 37,
+          "seconds": 386,
+          "modelCalls": 10
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 30,
+      "attempts": [
+        {
+          "issue": 30,
+          "startedAt": "2026-11-22T04:55:42Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 279,
+          "modelCalls": 8,
+          "diagnostics": [
+            "independent review stopped safely: model-mailbox-read"
+          ]
+        },
+        {
+          "issue": 30,
+          "startedAt": "2026-11-22T05:01:04Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 301,
+          "modelCalls": 9,
+          "diagnostics": [
+            "independent review stopped safely: model-evidence"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 31,
+      "attempts": [
+        {
+          "issue": 31,
+          "startedAt": "2026-11-22T05:06:48Z",
+          "outcome": "success",
+          "pullRequest": 38,
+          "seconds": 387,
+          "modelCalls": 12
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 32,
+      "attempts": [
+        {
+          "issue": 32,
+          "startedAt": "2026-11-22T05:14:00Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 237,
+          "modelCalls": 8,
+          "diagnostics": [
+            "independent review stopped safely: model-response-policy"
+          ]
+        },
+        {
+          "issue": 32,
+          "startedAt": "2026-11-22T05:18:40Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 237,
+          "modelCalls": 6,
+          "diagnostics": [
+            "independent review stopped safely: model-evidence"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 33,
+      "attempts": [
+        {
+          "issue": 33,
+          "startedAt": "2026-11-22T05:23:22Z",
+          "outcome": "success",
+          "pullRequest": 39,
+          "seconds": 322,
+          "modelCalls": 10
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 34,
+      "attempts": [
+        {
+          "issue": 34,
+          "startedAt": "2026-11-22T05:29:28Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 280,
+          "modelCalls": 8,
+          "diagnostics": [
+            "independent review stopped safely: cleanup"
+          ]
+        },
+        {
+          "issue": 34,
+          "startedAt": "2026-11-22T05:34:50Z",
+          "outcome": "success",
+          "pullRequest": 40,
+          "seconds": 450,
+          "modelCalls": 8
+        }
+      ],
+      "success": true
+    }
+  ],
+  "summary": {
+    "issues": 8,
+    "firstAttemptSuccess": 4,
+    "successWithinBudget": 6,
+    "firstAttemptRate": 0.5,
+    "rateWithinBudget": 0.75
+  }
+}

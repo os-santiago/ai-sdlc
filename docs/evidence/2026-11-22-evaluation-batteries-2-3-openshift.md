@@ -33,6 +33,10 @@ CLI, as in the earlier runs.
   The sandbox RuntimeClass there used `crun`, not gVisor (see the limits
   below).
 
+The runner's reports are
+[battery 2](2026-11-22-evaluation-battery-2.json) and
+[battery 3](2026-11-22-evaluation-battery-3.json).
+
 ## Battery 2 (images `612feaf`)
 
 | Issue | Attempt 1 | Attempt 2 |
