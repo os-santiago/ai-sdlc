@@ -36,8 +36,12 @@ func signedRouteCases() []signedRouteCase {
 	released := map[string]string{"AI_SDLC_RUNTIME_MODE": "verification", "AI_SDLC_INDEPENDENT_REVIEW": "true", "AI_SDLC_PUBLICATION": "true", "AI_SDLC_MERGE": "true", "AI_SDLC_BUILD": "true", "AI_SDLC_PROVENANCE": "true", "AI_SDLC_RELEASE": "true"}
 	return []signedRouteCase{
 		{"plan-admission", "plan-admission", "admission-controller", "orchestrator", verification, true},
+		{"admit-issue", "admit-issue", "intake", "admission-controller", verification, true},
+		{"admit-issue-maintenance", "admit-issue", "intake", "admission-controller", map[string]string{"AI_SDLC_RUNTIME_MODE": "maintenance"}, false},
 		{"execute-work", "execute-work", "orchestrator", "worker", verification, true},
 		{"execute-work-shadow", "execute-work", "orchestrator", "worker", map[string]string{"AI_SDLC_RUNTIME_MODE": "shadow"}, false},
+		{"verify-artifact", "verify-artifact", "worker", "verifier", verification, true},
+		{"verify-artifact-shadow", "verify-artifact", "worker", "verifier", map[string]string{"AI_SDLC_RUNTIME_MODE": "shadow"}, false},
 		{"repair-candidate", "repair-candidate", "verifier", "orchestrator", review, true},
 		{"stop-rejected-work", "stop-rejected-work", "verifier", "orchestrator", review, true},
 		{"repair-candidate-without-review", "repair-candidate", "verifier", "orchestrator", verification, false},
