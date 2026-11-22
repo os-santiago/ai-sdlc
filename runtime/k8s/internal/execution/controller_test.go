@@ -130,8 +130,6 @@ func TestControllerExitCannotHideObservedRequestDrift(t *testing.T) {
 }
 
 func TestControllerNamesEachDriveStop(t *testing.T) {
-	changed := req(1)
-	changed.Payload = []byte("substitution")
 	for want, s := range map[string]*driverSession{
 		"execution-sequence": {requests: []modelmailbox.Envelope{req(2)}, exitAfter: 1},
 		"execution-read":     {exitAfter: -1, readErr: podtransport.ErrTransport},
