@@ -53,8 +53,8 @@ class ConnectTests(unittest.TestCase):
     def tearDown(self):
         self.directory.cleanup()
 
-    def connect(self, uid='uid-1', **overrides):
-        run = FakeRun({'get namespace kube-system': (0, uid)})
+    def connect(self, uid='uid-1', apis='v1\nsecurity.openshift.io/v1\n', **overrides):
+        run = FakeRun({'get namespace kube-system': (0, uid), 'api-versions': (0, apis)})
         return openshift_install.connect(run, {'kubectl': 'kubectl'}, self.state, args(kubeconfig=self.source, **overrides))
 
     def test_first_local_use_records_the_cluster_and_copies_a_private_kubeconfig(self):
@@ -72,6 +72,26 @@ class ConnectTests(unittest.TestCase):
             self.connect(uid='uid-2')
         with self.assertRaises(ValueError):
             self.connect(context='other')
+
+    def test_a_cluster_that_is_not_openshift_is_never_recorded(self):
+        with self.assertRaises(ValueError):
+            self.connect(apis='v1\napps/v1\n')
+        self.assertFalse((self.state / openshift_install.MARKER).exists())
+
+    def test_kind_or_konflux_state_is_refused_before_any_copy(self):
+        for name in openshift_install.OTHER_MARKERS:
+            with self.subTest(marker=name):
+                (self.state / name).write_text('{}')
+                with self.assertRaises(ValueError):
+                    self.connect()
+                self.assertFalse((self.state / 'kubeconfig').exists())
+                (self.state / name).unlink()
+
+    def test_kind_paths_refuse_openshift_state(self):
+        openshift_install.refuse_other_platform(self.state)
+        self.connect()
+        with self.assertRaises(ValueError):
+            openshift_install.refuse_other_platform(self.state)
 
     def test_status_never_records_a_cluster(self):
         with self.assertRaises(ValueError):

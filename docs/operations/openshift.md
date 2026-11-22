@@ -44,13 +44,13 @@ Set `openshift.enabled: true` in the chart values. Then:
   - there may be at most one pull secret, and it must be the default
     ServiceAccount's;
   - the network annotations are accepted only once the pod is scheduled.
+
+  Any other difference still fails closed, including a pod admitted under a
+  privileged SCC.
 - The chart's DNS egress rules target the `dns-default` pods in
   `openshift-dns` on port 5353. Network policy matches the pod port behind the
   Service's port 53, so the Kubernetes rule (`kube-system`, port 53) would block
   every name lookup, including the database.
-
-  Any other difference still fails closed, including a pod admitted under a
-  privileged SCC.
 
 Without the value, nothing changes on other Kubernetes distributions.
 
@@ -89,6 +89,10 @@ The administrator prepares the cluster:
 - the `ai-sdlc-offline` RuntimeClass for the sandbox runtime (see above);
 - a kubeconfig context allowed to create namespaces, RBAC and workloads.
 
+The installing host still needs Docker or Podman, which generate the
+installation's identities locally, and the other local installer
+prerequisites.
+
 Then the installer targets that context instead of creating a kind cluster:
 
 ```bash
@@ -101,7 +105,9 @@ Then the installer targets that context instead of creating a kind cluster:
 
 On first install the installer records the cluster's UID and the context in
 its state directory, and it refuses a different cluster or context for that
-`--cluster` name later. Before any change it checks three things: the
+`--cluster` name later. Use a `--cluster` name of its own: the installer
+refuses a state directory that belongs to a kind or Konflux installation, and
+it records nothing for a cluster without the OpenShift security API. Before any change it checks three things: the
 OpenShift security API, a default StorageClass, and the RuntimeClass when the
 profile runs generations. It never installs a node runtime. It renders the
 chart with `openshift.enabled=true`.

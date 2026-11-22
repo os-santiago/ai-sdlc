@@ -554,6 +554,8 @@ def _main(argv, stack):
         return 0
     state = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'ai-sdlc' / args.cluster
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if args.platform != 'openshift':
+        openshift_install.refuse_other_platform(state)
     provider = args.provider
     if args.platform == 'konflux':
         konflux_runtime_install.lock_state(state, stack)
