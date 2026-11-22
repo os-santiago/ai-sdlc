@@ -92,18 +92,23 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	stage := "authority"
 	configUID, podUID := "", ""
 	cleaned, cleanupAttempted := false, false
+	cleanupStage := ""
 	cleanup := func() error {
 		cleanupAttempted = true
 		cleanupCtx, stop := context.WithTimeout(context.Background(), 30*time.Second)
 		defer stop()
-		failed := false
+		failed := ""
 		if podUID != "" && resources.DeletePod(cleanupCtx, podUID) != nil {
-			failed = true
+			failed = "cleanup-pod"
 		}
-		if configUID != "" && resources.DeleteConfig(cleanupCtx, configUID) != nil {
-			failed = true
+		if configUID != "" && resources.DeleteConfig(cleanupCtx, configUID) != nil && failed == "" {
+			failed = "cleanup-config"
 		}
-		if failed || db.ConfirmReviewCleanup(cleanupCtx, claim) != nil {
+		if failed == "" && db.ConfirmReviewCleanup(cleanupCtx, claim) != nil {
+			failed = "cleanup-confirm"
+		}
+		if failed != "" {
+			cleanupStage = failed
 			return ErrReview
 		}
 		cleaned = true
@@ -167,7 +172,10 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 		return proof, ControllerError{Stage: stage}
 	}
 	stage = "pod"
-	if effect("pod", func() (string, string, error) { podUID, e = resources.CreatePodObserved(ctx, configUID); return podUID, "", e }) != nil {
+	if effect("pod", func() (string, string, error) {
+		podUID, e = resources.CreatePodObserved(ctx, configUID)
+		return podUID, "", e
+	}) != nil {
 		return proof, ControllerError{Stage: stage}
 	}
 	stage = "readiness"
@@ -229,7 +237,7 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	}
 	stage = "cleanup"
 	if cleanup() != nil {
-		return proof, ControllerError{Stage: stage, CleanupPending: true}
+		return proof, ControllerError{Stage: cleanupStage, CleanupPending: true}
 	}
 	stage = "authority"
 	if fence(ctx) != nil {

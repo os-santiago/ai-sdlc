@@ -17,6 +17,7 @@ func TestReviewDiagnosticStageIsBounded(t *testing.T) {
 		ControllerError{Stage: "model-worker-exit-23"}:           "model-worker-exit-23",
 		ControllerError{Stage: "model-worker-exit-256"}:          "model-unknown",
 		ControllerError{Stage: "model-provider"}:                 "model-provider",
+		ControllerError{Stage: "cleanup-pod"}:                    "cleanup-pod",
 	} {
 		if got := DiagnosticStage(err); got != want {
 			t.Fatalf("%v: got %q, want %q", err, got, want)
