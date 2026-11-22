@@ -11,12 +11,15 @@ It is built for platform and security teams who want AI-assisted delivery they
 can **audit and bound**: an issue is the only external input, there are no
 hidden human steps, and an independent check gates each consequential action.
 
-> **Status: pre-1.0.** The core loop has run end to end on a reference project,
-> but onboarding your own repository still requires code. See the
-> [capability matrix](docs/capabilities.md) for what is generic today, what is
-> project-specific, and what is not yet proven, and the [roadmap](docs/roadmap.md)
-> for the path to an adoptable v1 on Kubernetes and OpenShift (developed on kind
-> first, then validated on OpenShift).
+> **Status: alpha (`v0.1.0-alpha.1`).** The inner loop (issue → verified,
+> independently reviewed and merged pull request) now works for **your own
+> repository** from a reviewed project manifest, with verification by the
+> repository's own test suite in offline sandboxed pods
+> ([evidence](docs/evidence/2026-11-21-generic-inner-loop-e2e.md)). It is meant
+> for technical evaluation, not production: see the
+> [alpha release notes](docs/releases/v0.1.0-alpha.1.md) for known limits, the
+> [adoption guide](docs/adoption.md) to try it, the
+> [capability matrix](docs/capabilities.md) and the [roadmap](docs/roadmap.md).
 
 ## How it works
 
