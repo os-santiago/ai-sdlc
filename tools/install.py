@@ -569,6 +569,8 @@ def _main(argv, stack):
         if args.command == 'local' and (pause_journal.exists() or pause_journal.is_symlink()):
             import build_foundation_install
             record = build_foundation_install.bounded_json(pause_journal, 16 * 1024 * 1024)
+            if not isinstance(record, dict):
+                raise ValueError('Unknown runtime-upgrade pause journal; preserve upgrade custody')
             if record.get('version') != 'ai-sdlc.runtime-upgrade-pause/v1':
                 raise ValueError('Unknown runtime-upgrade pause journal; preserve upgrade custody')
             if record.get('phase') != 'paused':
@@ -738,7 +740,7 @@ def _main(argv, stack):
               'repository': args.repository, 'environment': args.environment,
               'configurationDigest': config_digest,
               'projectSHA256': json.loads(public_values['authority']['policyJSON']).get('projectSHA256', ''),
-              'mode': args.profile, 'installationReady': True, 'deliveryEnabled': False,
+              'mode': args.profile, 'installationReady': True, 'deliveryEnabled': False, 'runtimePaused': False,
               'issueIntakeEnabled': args.profile in ('shadow', 'candidate', 'verification'),
               'candidateExecutionEnabled': args.profile in ('candidate', 'verification'),
               'independentVerificationEnabled': args.profile == 'verification',

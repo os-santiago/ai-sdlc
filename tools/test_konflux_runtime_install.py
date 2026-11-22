@@ -193,7 +193,41 @@ class FrozenRuntimeTests(unittest.TestCase):
             self.assertEqual(install.main(args), 0)
         self.assertTrue(any('upgrade' in call.args[0] and '--install' in call.args[0]
                             for call in run.call_args_list))
-        self.assertEqual(json.loads((state / 'installation.json').read_text())['cluster'], 'cluster')
+        report = json.loads((state / 'installation.json').read_text())
+        self.assertEqual(report['cluster'], 'cluster')
+        # local's own report must preserve the released signal; otherwise the
+        # retained journal would block every subsequent reconcile forever.
+        self.assertFalse(report['runtimePaused'])
+
+    def test_local_report_release_signal_survives_repeated_reconcile(self):
+        state = self.pause_journal_fixture()
+        journal = {'version': 'ai-sdlc.runtime-upgrade-pause/v1', 'phase': 'paused'}
+        (state / 'runtime-upgrade-pause.json').write_text(json.dumps(journal))
+        (state / 'installation.json').write_text(json.dumps({'configuration': 'active', 'runtimePaused': False}))
+        (state / 'kubeconfig').write_text('{}')
+
+        def api(args, **kwargs):
+            args = [str(a) for a in args]
+            if args[:2] == ['kind', 'get'] and 'clusters' in args:
+                return subprocess.CompletedProcess(args, 0, 'cluster\n')
+            if 'kube-system' in args:
+                return subprocess.CompletedProcess(args, 0, CLUSTER_UID)
+            return subprocess.CompletedProcess(args, 0, '')
+
+        args = ['local', '--platform', 'konflux', '--cluster', 'cluster', '--repository', 'os-santiago/saferus']
+        with patch.dict(os.environ, {'XDG_STATE_HOME': self.temporary.name}), \
+                patch.object(install, 'tools', return_value={'helm': 'helm', 'kind': 'kind', 'kubectl': 'kubectl'}), \
+                patch.object(install, 'host_prerequisites'), \
+                patch.object(install, 'configure_identities', return_value={'authority': {'policyJSON': '{}'}}), \
+                patch.object(install.network_probe, 'verify', return_value='verified'), \
+                patch.object(install.konflux_runtime_install, 'lock_state'), \
+                patch.object(install.konflux_runtime_install, 'select_provider', return_value='podman'), \
+                patch.object(install.konflux_runtime_install, 'verify_cluster'), \
+                patch.object(install.konflux_runtime_install, 'namespace'), \
+                patch.object(install.konflux_runtime_install, 'require_frozen'), \
+                patch.object(install, 'run', side_effect=api):
+            for _ in range(2):
+                self.assertEqual(install.main(args), 0)
 
 
 if __name__ == '__main__':

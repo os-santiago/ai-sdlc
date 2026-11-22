@@ -188,8 +188,12 @@ class Pause:
                             '--kubeconfig',str(self.config.state_dir/'kubeconfig'),'--kube-context','kind-'+self.config.cluster,
                             '-n',platform.NAMESPACE,'-f',f.name,'--timeout','60s'],timeout=60)
                 pause_once(record,fence,observe_source,self.target,apply_target,self.save)
-        self.target();record['phase']='paused';self.save(record)
+        # Publish the paused report before marking the journal complete: a
+        # crash between the two leaves an incomplete journal, which callers
+        # treat as an unreleased pause rather than a released one.
+        self.target();record['phase']='paused';self.record=record
         self.publish_report()
+        self.save(record)
         return self.status()
 
 
