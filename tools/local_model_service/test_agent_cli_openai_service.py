@@ -264,6 +264,11 @@ class AnswerShapeTests(unittest.TestCase):
         self.assertNotIn("needs work", json.dumps(bad))
         self.assertTrue(service.answer_shape({"content": "Tests pass: yes\nVERDICT: approve"})["redactionRisk"])
         self.assertFalse(service.answer_shape({"content": "Key observations follow.\nVERDICT: approve"})["redactionRisk"])
+        self.assertTrue(service.answer_shape({"content": "DB_PASSWORD = x\nVERDICT: approve"})["redactionRisk"])
+        import time
+        started = time.monotonic()
+        service.answer_shape({"content": "a-" * 50000 + "key" + " " * 20000})
+        self.assertLess(time.monotonic() - started, 1.0)
 
 
 if __name__ == "__main__":
