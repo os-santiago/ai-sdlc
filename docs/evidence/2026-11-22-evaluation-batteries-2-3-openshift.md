@@ -19,6 +19,8 @@ CLI, as in the earlier runs.
 | Battery 3 | kind | `9caf83b` | 8 | 4 (50%) | 6 (75%) |
 | Battery 4 | kind | `b2033ca` | 6 | 2 (33%) | 4 (67%) |
 | Battery 5 | kind | `6bb0a94` | 8 | 6 (75%) | 7 (88%) |
+| Battery 6 | kind | `6bb0a94` | 9 | 3 (33%) | 5 (56%) |
+| Battery 7 | kind | `6bb0a94` (simulator without extended thinking) | 8 | 1 (13%) | 4 (50%) |
 | One issue | OpenShift Local | `b2033ca` | 1 | 1 | 1 |
 
 - **Successful deliveries:** in batteries 2 and 3, 5.4 to 7.5 minutes from
@@ -170,6 +172,52 @@ new issues. The report is
   proposed and rejected after audit (#719).
 - **Review `cleanup` (#55, attempt 1):** a transient review cleanup failure.
   This is not refined yet.
+
+## Batteries 6 and 7: the evaluation model service dominates
+
+Both batteries used the same runtime images as battery 5. Their reports are
+[battery 6](2026-11-22-evaluation-battery-6.json) and
+[battery 7](2026-11-22-evaluation-battery-7.json).
+
+| Stop | Battery 6 (15 attempts, 10 stopped) | Battery 7 (15 attempts, 11 stopped) |
+|---|---|---|
+| `model-provider` (call over the gateway's timeout) | 7 | 9 |
+| execution `cleanup` after a captured candidate | 2 | 0 |
+| review `model-evidence` (request for changes, redacted) | 1 | 0 |
+| verification `comparison-failed` (candidate tests fail) | 0 | 2 |
+
+- **`model-provider` comes from the local service's latency tail.** All
+  completions logged since the start of the day by the local model service
+  (an agent CLI in front of a hosted model) break down as follows:
+  - 677 single-turn completions never exceeded 53 s;
+  - 34 completions with two CLI turns had a median of 58 s;
+  - 10 with three CLI turns had a median of 99 s, and all were over 85 s.
+
+  Limiting the CLI to one turn did not remove the two-turn completions
+  (closed #736), so they are most likely the CLI retrying the upstream
+  provider under load. The worker gateway's benchmarked timeout, about 93 s,
+  cannot cover that tail.
+- **Battery 7 changed only the simulator** by disabling extended thinking
+  (#732). The benchmark then derived a 65 s timeout while the tail stayed,
+  and `model-provider` stops rose. #732 is reverted in #737.
+- **Battery 6 started with the OpenShift Local VM running** (16 GiB) after a
+  Kata trial. The VM was stopped mid-battery, and stops continued without it.
+- **Execution `cleanup` after a captured candidate:** the candidate was
+  captured, the inline cleanup failed, and the request ended `uncertain`. The
+  verification of the handed-off candidate then failed too. Idle gVisor pods
+  delete in about 1 s on kind, so the failing step is unknown. #723 now names
+  it.
+- **Review `model-evidence` on a redacted request for changes:** #731 now
+  forwards only the verdict in that case, so a repair can run.
+
+Battery 5 (88% within two attempts) ran in the same environment, on the same
+images, with the VM stopped. Our working hypothesis is that the spread between
+batteries 5 to 7 comes mainly from the local model service: its latency
+varied over the day, and battery 7's simulator change lowered the derived
+timeout. That configuration change accounts for part of battery 7's result,
+so the batteries do not separate the two effects. A battery against a stable model
+endpoint, such as a hosted API or a local vLLM, is needed for a rate that
+predicts adoption.
 
 ## Limits
 

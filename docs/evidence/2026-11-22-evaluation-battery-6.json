@@ -1,0 +1,227 @@
+{
+  "repository": "os-santiago/ai-sdlc-sample",
+  "attemptBudget": 2,
+  "issues": [
+    {
+      "issue": 53,
+      "attempts": [
+        {
+          "issue": 53,
+          "startedAt": "2026-11-22T16:38:18Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 540,
+          "modelCalls": 23,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: cleanup cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 53,
+          "startedAt": "2026-11-22T16:48:00Z",
+          "outcome": "success",
+          "pullRequest": 73,
+          "seconds": 450,
+          "modelCalls": 15
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 65,
+      "attempts": [
+        {
+          "issue": 65,
+          "startedAt": "2026-11-22T16:56:15Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 236,
+          "modelCalls": 10,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-provider cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 65,
+          "startedAt": "2026-11-22T17:00:53Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 237,
+          "modelCalls": 9,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-provider cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 66,
+      "attempts": [
+        {
+          "issue": 66,
+          "startedAt": "2026-11-22T17:05:36Z",
+          "outcome": "success",
+          "pullRequest": 74,
+          "seconds": 556,
+          "modelCalls": 11
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 67,
+      "attempts": [
+        {
+          "issue": 67,
+          "startedAt": "2026-11-22T17:15:37Z",
+          "outcome": "success",
+          "pullRequest": 75,
+          "seconds": 726,
+          "modelCalls": 16
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 68,
+      "attempts": [
+        {
+          "issue": 68,
+          "startedAt": "2026-11-22T17:28:27Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 215,
+          "modelCalls": 8,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: cleanup cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 68,
+          "startedAt": "2026-11-22T17:32:44Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 322,
+          "modelCalls": 9,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-provider cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 69,
+      "attempts": [
+        {
+          "issue": 69,
+          "startedAt": "2026-11-22T17:38:51Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 300,
+          "modelCalls": 13,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-provider cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 69,
+          "startedAt": "2026-11-22T17:44:34Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 216,
+          "modelCalls": 8,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-provider cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 70,
+      "attempts": [
+        {
+          "issue": 70,
+          "startedAt": "2026-11-22T17:48:55Z",
+          "outcome": "success",
+          "pullRequest": 76,
+          "seconds": 428,
+          "modelCalls": 13
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 71,
+      "attempts": [
+        {
+          "issue": 71,
+          "startedAt": "2026-11-22T17:56:47Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 473,
+          "modelCalls": 15,
+          "diagnostics": [
+            "independent review stopped safely: model-evidence"
+          ]
+        },
+        {
+          "issue": 71,
+          "startedAt": "2026-11-22T18:05:23Z",
+          "outcome": "success",
+          "pullRequest": 77,
+          "seconds": 535,
+          "modelCalls": 15
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 72,
+      "attempts": [
+        {
+          "issue": 72,
+          "startedAt": "2026-11-22T18:15:02Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 198,
+          "modelCalls": 5,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-provider cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 72,
+          "startedAt": "2026-11-22T18:19:02Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 258,
+          "modelCalls": 9,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-provider cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        }
+      ],
+      "success": false
+    }
+  ],
+  "summary": {
+    "issues": 9,
+    "firstAttemptSuccess": 3,
+    "successWithinBudget": 5,
+    "firstAttemptRate": 0.333,
+    "rateWithinBudget": 0.556
+  }
+}
