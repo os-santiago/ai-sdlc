@@ -211,6 +211,14 @@ func (l *Lifecycle) RunEffect(ctx context.Context, kind string, operation Lifecy
 		code := *observed.ExitCode
 		observed.ExitCode = &code
 	}
+	if err != nil && kind == "pod" && observed.UID != "" {
+		// The create response named the pod although a later check failed.
+		// Record that UID so cleanup can delete exactly that object; the run
+		// still stops below. Without it, cleanup could never complete.
+		ackCtx, stop := context.WithTimeout(context.Background(), 3*time.Second)
+		_ = l.db.CompleteLifecycleEffect(ackCtx, effect, store.LifecycleResult{UID: observed.UID})
+		stop()
+	}
 	if err != nil || ctx.Err() != nil {
 		return ErrAuthority
 	}

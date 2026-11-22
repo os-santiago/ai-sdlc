@@ -148,6 +148,13 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 		}
 		uid, digest, e := invoke()
 		if e != nil {
+			// A pod the create response named, though a later check failed:
+			// acknowledge it so cleanup can delete exactly that object.
+			if kind == "pod" && uid != "" {
+				ackCtx, stop := context.WithTimeout(context.Background(), 3*time.Second)
+				_ = db.AcknowledgeReviewEffect(ackCtx, intent, uid, digest)
+				stop()
+			}
 			return e
 		}
 		if db.AcknowledgeReviewEffect(ctx, intent, uid, digest) != nil {
@@ -160,7 +167,7 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 		return proof, ControllerError{Stage: stage}
 	}
 	stage = "pod"
-	if effect("pod", func() (string, string, error) { podUID, e = resources.CreatePod(ctx, configUID); return podUID, "", e }) != nil {
+	if effect("pod", func() (string, string, error) { podUID, e = resources.CreatePodObserved(ctx, configUID); return podUID, "", e }) != nil {
 		return proof, ControllerError{Stage: stage}
 	}
 	stage = "readiness"
