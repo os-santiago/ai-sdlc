@@ -28,10 +28,13 @@ type Result struct {
 	FinalSHA256 string
 }
 
-// BoundFinalSHA256 is the digest a provider observation must match: SCC's
-// reported pre-redaction digest when present, else FinalMessage's own.
+// BoundFinalSHA256 is the digest a provider observation must match. For an
+// approval, SCC's reported pre-redaction digest is accepted: an approval
+// carries no text into any later stage, and its verdict is still the
+// provider's. Any other verdict must bind its exact text, because a request
+// for changes forwards that text to the repair generator.
 func (r Result) BoundFinalSHA256() string {
-	if r.FinalSHA256 != "" {
+	if r.FinalSHA256 != "" && r.Verdict == "approve" {
 		return r.FinalSHA256
 	}
 	return authority.Digest([]byte(r.FinalMessage))
@@ -111,10 +114,11 @@ func Parse(raw []byte, model string, maxSteps int) (Result, error) {
 	return Result{Verdict: verdict, FinalMessage: message, Iterations: steps, ReadCalls: calls, FinalSHA256: finalSHA256}, nil
 }
 
-// verdictMarker matches SCC's reviewer marker syntax, so any second marker
-// such as "Verdict = request_changes" is refused, not just "verdict:".
+// sha256Hex is a lowercase hex SHA-256 digest.
 var sha256Hex = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
+// verdictMarker matches SCC's reviewer marker syntax, so any second marker
+// such as "Verdict = request_changes" is refused, not just "verdict:".
 var verdictMarker = regexp.MustCompile(`(?i)\bverdict\s*[:=]`)
 
 // htmlBlock is a raw HTML opener, which Markdown may render as a block that

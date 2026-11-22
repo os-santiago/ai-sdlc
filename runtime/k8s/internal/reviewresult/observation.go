@@ -1,6 +1,5 @@
 package reviewresult
 
-
 const ObservationVersion = "ai-sdlc.review-observation/v1"
 
 // Observation is derived from a provider response before delivery to the worker.
