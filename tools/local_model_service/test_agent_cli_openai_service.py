@@ -252,10 +252,6 @@ class RealCLITests(unittest.TestCase):
         self.assertGreater(prompt, 0)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class AnswerShapeTests(unittest.TestCase):
     def test_shape_reports_format_facts_never_text(self):
         import agent_cli_openai_service as service
@@ -266,3 +262,7 @@ class AnswerShapeTests(unittest.TestCase):
         self.assertEqual(service.answer_shape({"content": "done", "tool_calls": [{}]}), None)
         self.assertEqual(service.answer_shape({"content": "trailing\nVERDICT: approve."})["lastLine"], "other")
         self.assertNotIn("needs work", json.dumps(bad))
+
+
+if __name__ == "__main__":
+    unittest.main()
