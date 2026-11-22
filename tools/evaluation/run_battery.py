@@ -11,7 +11,9 @@ re-added). The runner observes, never advances, the delivery:
 
 Results go to a JSON report with per-attempt durations, model calls and stop
 reasons, plus the success rates (first attempt, and within the attempt budget).
-A failed attempt also records the components' own safe stop lines (for example
+When an issue's attempts end, the runner removes its trigger label, so no
+other installation watching the repository picks it up later. A failed
+attempt also records the components' own safe stop lines (for example
 `worker-exit ... workerExitCode=23`). The runner stops early, with the reason
 `runtime-blocked`, when a verification cleanup blocks all later work.
 The runner reads the runtime's database and logs through `kubectl` with the
@@ -162,6 +164,9 @@ def main(argv=None):
             args.output.write_text(json.dumps(report | {'inProgress': attempts}, indent=2) + '\n')
             if result['outcome'] == 'success':
                 break
+        # Leave no trigger label behind: another installation watching the
+        # same repository must not pick the issue up after the battery.
+        github.label(issue, False)
         report['issues'].append({'issue': issue, 'attempts': attempts,
                                  'success': attempts[-1]['outcome'] == 'success'})
         args.output.write_text(json.dumps(report, indent=2) + '\n')
