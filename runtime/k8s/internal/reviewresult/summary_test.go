@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 )
 
 func validSummary() map[string]any {
@@ -87,6 +89,41 @@ func TestVerdictRejectsFallbackAmbiguityAndTruncation(t *testing.T) {
 	for _, bad := range []string{"Looks good", "VERDICT: APPROVE", "VERDICT: approve\nmore", "> VERDICT: approve", "```\nVERDICT: approve\n```", "VERDICT: request_changes\nVERDICT: approve", "verdict: request_changes\nVERDICT: approve", strings.Repeat("a", 4000) + "\nVERDICT: approve", "\x00\nVERDICT: approve"} {
 		if _, e := Verdict(bad); e == nil {
 			t.Fatal("ambiguous verdict accepted")
+		}
+	}
+}
+
+func TestRedactedFinalMessageBindsThroughPreRedactionDigest(t *testing.T) {
+	raw := "Tests pass: yes\nVERDICT: approve"
+	digest := authority.Digest([]byte(raw))
+	summary := validSummary()
+	summary["final_message"] = "Tests pass: [REDACTED]\nVERDICT: approve"
+	summary["final_message_sha256"] = digest
+	encoded, _ := json.Marshal(summary)
+	result, err := Parse(encoded, "fixture-model", 4)
+	if err != nil || result.FinalSHA256 != digest || result.BoundFinalSHA256() != digest {
+		t.Fatal(result, err)
+	}
+	read := Observation{Version: ObservationVersion, Tools: map[string]int{"read_file": 1}}
+	final := Observation{Version: ObservationVersion, Tools: map[string]int{}, Verdict: "approve", FinalSHA256: digest}
+	if MatchObservations(result, []Observation{read, final}) != nil {
+		t.Fatal("redacted summary refused despite a matching pre-redaction digest")
+	}
+	other := final
+	other.FinalSHA256 = authority.Digest([]byte("something else"))
+	if MatchObservations(result, []Observation{read, other}) == nil {
+		t.Fatal("mismatched provider digest accepted")
+	}
+	legacy := result
+	legacy.FinalSHA256 = ""
+	if MatchObservations(legacy, []Observation{read, final}) == nil {
+		t.Fatal("redacted text accepted without a digest")
+	}
+	for _, bad := range []any{"ABC", strings.Repeat("g", 64), 7, nil} {
+		summary["final_message_sha256"] = bad
+		encoded, _ := json.Marshal(summary)
+		if _, err := Parse(encoded, "fixture-model", 4); err == nil {
+			t.Fatalf("invalid digest %v accepted", bad)
 		}
 	}
 }

@@ -26,6 +26,9 @@ type ReviewFeedback struct {
 	CandidateTreeSHA256 string `json:"candidateTreeSHA256"`
 	ModelEvidenceSHA256 string `json:"modelEvidenceSHA256"`
 	FinalSHA256         string `json:"finalSHA256"`
+	// ObservedFinalSHA256 is the provider-bound digest of the final message
+	// when SCC's redaction made FinalMessage differ from it.
+	ObservedFinalSHA256 string `json:"observedFinalSHA256,omitempty"`
 	Verdict             string `json:"verdict"`
 	FinalMessage        string `json:"finalMessage"`
 	Iterations          int    `json:"iterations"`
@@ -100,6 +103,9 @@ func reviewFeedbackEvidence(ctx context.Context, q Querier, id string, summary r
 	raw, _ := json.Marshal(evidence)
 	f.ModelEvidenceSHA256 = authority.Digest(raw)
 	f.FinalSHA256 = authority.Digest([]byte(summary.FinalMessage))
+	if bound := summary.BoundFinalSHA256(); bound != f.FinalSHA256 {
+		f.ObservedFinalSHA256 = bound
+	}
 	return f, created, expires, nil
 }
 
@@ -172,7 +178,7 @@ func readReviewFeedback(ctx context.Context, q Querier, id string) (ReviewFeedba
 		return ReviewFeedbackRecord{}, ErrExecution
 	}
 	f := result.Decision
-	expected, earliest, expires, err := reviewFeedbackEvidence(ctx, q, id, reviewresult.Result{Verdict: f.Verdict, FinalMessage: f.FinalMessage, Iterations: f.Iterations, ReadCalls: f.ReadCalls})
+	expected, earliest, expires, err := reviewFeedbackEvidence(ctx, q, id, reviewresult.Result{Verdict: f.Verdict, FinalMessage: f.FinalMessage, Iterations: f.Iterations, ReadCalls: f.ReadCalls, FinalSHA256: f.ObservedFinalSHA256})
 	canonical, _ := json.Marshal(expected)
 	if err != nil || !bytes.Equal(canonical, raw) || result.RecordedAt.Before(earliest) || !result.RecordedAt.Before(expires) || result.RecordedAt.After(time.Now()) {
 		return ReviewFeedbackRecord{}, ErrExecution
