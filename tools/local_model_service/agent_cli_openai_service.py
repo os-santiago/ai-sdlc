@@ -174,7 +174,8 @@ class ClaudeCLI:
             print(json.dumps({"event": "completion", "model": model, "attempt": attempt + 1, "numTurns": answer.get("num_turns"),
                               "valid": message is not None, "actions": len((message or {}).get("tool_calls") or []),
                               "actionShapes": action_shapes(message, tools), "contentBytes": len(((message or {}).get("content") or "").encode()),
-                              "actionsOffered": len(tools), "durationMs": answer.get("duration_ms")}), flush=True)
+                              "actionsOffered": len(tools), "durationMs": answer.get("duration_ms"),
+                              "answerShape": answer_shape(message)}), flush=True)
             if message is not None:
                 usage = answer.get("usage") if isinstance(answer.get("usage"), dict) else {}
                 # Cache reads are excluded: they would overstate prefill throughput.
@@ -183,6 +184,22 @@ class ClaudeCLI:
                 completion_tokens = usage.get("output_tokens") if type(usage.get("output_tokens")) is int else 0
                 return message, prompt_tokens, completion_tokens
         raise BackendError("agent CLI did not return one valid turn in time")
+
+
+def answer_shape(message):
+    """For a final answer (no actions), the format facts a reviewer verdict
+    parser checks, never the text: code fences, how often "verdict:" appears
+    and what the last line is."""
+    try:
+        if not message or message.get("tool_calls"):
+            return None
+        content = message.get("content") or ""
+        last = content.strip().split("\n")[-1] if content.strip() else ""
+        verdict = {"VERDICT: approve": "approve", "VERDICT: request_changes": "request_changes"}.get(last, "other")
+        return {"fences": "```" in content or "~~~" in content, "verdictMentions": content.lower().count("verdict:"),
+                "lastLine": verdict, "chars": len(content)}
+    except (TypeError, AttributeError):
+        return None
 
 
 def action_shapes(message, tools=()):
