@@ -64,6 +64,7 @@ func imageSuffix(value string) string {
 func BrowserPodDigest(p core.Pod) string { raw, _ := json.Marshal(p); return authority.Digest(raw) }
 
 func exactBrowserPod(actual, expected core.Pod, uid string) bool {
+	actual = platformObserved(actual, expected)
 	if actual.APIVersion != "v1" || actual.Kind != "Pod" || !exactMetadata(actual.ObjectMeta, expected.ObjectMeta, uid) {
 		return false
 	}

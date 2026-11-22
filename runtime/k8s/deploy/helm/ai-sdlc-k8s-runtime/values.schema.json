@@ -668,6 +668,9 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
         "route": {
           "type": "object",
           "additionalProperties": false,

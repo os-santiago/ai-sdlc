@@ -109,6 +109,7 @@ func (r *Resources) checkConfig(raw []byte, uid string) (string, error) {
 	return string(actual.UID), nil
 }
 func exactPodTemplate(actual, expected core.Pod, uid string) bool {
+	actual = platformObserved(actual, expected)
 	if actual.APIVersion != "v1" || actual.Kind != "Pod" || !exactMetadata(actual.ObjectMeta, expected.ObjectMeta, uid) {
 		return false
 	}

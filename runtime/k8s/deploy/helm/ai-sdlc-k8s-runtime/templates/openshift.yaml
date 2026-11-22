@@ -1,0 +1,44 @@
+{{- if .Values.openshift.enabled }}
+{{- $release := include "ai-sdlc-k8s-runtime.namespace" . }}
+{{- $workloads := list }}
+{{- if has .Values.runtime.mode (list "candidate" "verification") }}
+{{- $workloads = append $workloads "ai-sdlc-executors" }}
+{{- end }}
+{{- if eq .Values.runtime.mode "verification" }}
+{{- $workloads = append $workloads "ai-sdlc-verifiers" }}
+{{- end }}
+{{- if .Values.review.enabled }}
+{{- $workloads = append $workloads "ai-sdlc-reviewers" }}
+{{- end }}
+{{- if .Values.release.enabled }}
+{{- $workloads = append $workloads "ai-sdlc-browser" }}
+{{- end }}
+---
+# The release namespace holds only this chart's component ServiceAccounts;
+# each may admit pods under nonroot-v2, the standard SCC for a fixed non-root
+# UID. The binding grants no other permission.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ai-sdlc-scc-nonroot-v2
+  namespace: {{ $release }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: "system:openshift:scc:nonroot-v2"}
+subjects:
+  - {apiGroup: rbac.authorization.k8s.io, kind: Group, name: "system:serviceaccounts:{{ $release }}"}
+{{- range $workloads }}
+---
+# Workload pods run as this namespace's default ServiceAccount, with no token.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ai-sdlc-scc-nonroot-v2
+  namespace: {{ . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" $ | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: "system:openshift:scc:nonroot-v2"}
+subjects:
+  - {kind: ServiceAccount, name: default, namespace: {{ . }}}
+{{- end }}
+{{- end }}
