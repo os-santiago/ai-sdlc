@@ -44,6 +44,10 @@ Set `openshift.enabled: true` in the chart values. Then:
   - there may be at most one pull secret, and it must be the default
     ServiceAccount's;
   - the network annotations are accepted only once the pod is scheduled.
+- The chart's DNS egress rules target the `dns-default` pods in
+  `openshift-dns` on port 5353. Network policy matches the pod port behind the
+  Service's port 53, so the Kubernetes rule (`kube-system`, port 53) would block
+  every name lookup, including the database.
 
   Any other difference still fails closed, including a pod admitted under a
   privileged SCC.
@@ -115,5 +119,5 @@ connection as coming from its own address.
 | Exact pod comparison with OpenShift admission (`openshift.enabled`) | Implemented, unit tested against the measured additions |
 | Sandbox runtime | gVisor under CRI-O fails; Kata not yet evaluated |
 | Outer-loop console rollout (`console_rollout.go`) | Not covered: it compares the production pods without the profile |
-| Installer path (`install.sh local --platform openshift`) | Implemented; first install on OpenShift Local in progress |
+| Installer path (`install.sh local --platform openshift`) | Shadow profile installed on OpenShift Local: every component admitted under `nonroot-v2`, migrations applied, intake reading the repository |
 | End-to-end delivery on OpenShift | Not yet run |

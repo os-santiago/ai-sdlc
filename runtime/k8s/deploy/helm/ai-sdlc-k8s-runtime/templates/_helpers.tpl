@@ -121,3 +121,15 @@ on immutable data. */}}
 {{- define "ai-sdlc-k8s-runtime.projectConfigName" -}}
 {{- printf "%s-project-%s" (include "ai-sdlc-k8s-runtime.fullname" .) (.Values.project.manifestJSON | sha256sum | trunc 12) -}}
 {{- end }}
+
+{{/*
+OpenShift DNS egress: the cluster DNS pods run in openshift-dns and listen on
+5353 behind the dns-default Service's port 53. Network policy matches the
+pod port, so kube-system:53 never applies there.
+*/}}
+{{- define "ai-sdlc-k8s-runtime.openshiftDNSEgress" -}}
+- to:
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: openshift-dns}}
+      podSelector: {matchLabels: {dns.operator.openshift.io/daemonset-dns: default}}
+  ports: [{protocol: UDP, port: 5353}, {protocol: TCP, port: 5353}]
+{{- end }}

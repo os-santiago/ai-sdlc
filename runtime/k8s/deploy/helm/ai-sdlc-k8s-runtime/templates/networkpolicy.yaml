@@ -41,10 +41,14 @@ spec:
               {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 14 }}
       ports: [{protocol: TCP, port: 5432}]
   egress:
+{{- if .Values.openshift.enabled }}
+    {{- include "ai-sdlc-k8s-runtime.openshiftDNSEgress" . | nindent 4 }}
+{{- else }}
     - to:
         - namespaceSelector:
             matchLabels: {kubernetes.io/metadata.name: kube-system}
       ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+{{- end }}
     - to:
         - podSelector:
             matchLabels:

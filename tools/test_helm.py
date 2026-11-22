@@ -247,6 +247,18 @@ class ChartTests(unittest.TestCase):
         config = next(d['data'] for d in docs if d['kind'] == 'ConfigMap' and 'AI_SDLC_RUNTIME_MODE' in d.get('data', {}))
         self.assertEqual(config['AI_SDLC_PLATFORM'], 'openshift')
         self.assertNotEqual(self.render(*base, '--set', 'openshift.enabled=yes').returncode, 0)
+        def dns_rules(documents):
+            return {(d['metadata']['name'], json.dumps(r['to'], sort_keys=True), json.dumps(r['ports'], sort_keys=True))
+                    for d in documents if d['kind'] == 'NetworkPolicy' for r in d['spec'].get('egress', [])
+                    if any(p.get('port') in (53, 5353) for p in r.get('ports', []))}
+        openshift_dns = dns_rules(docs)
+        self.assertTrue(openshift_dns)
+        for _, to, ports in openshift_dns:
+            self.assertEqual(json.loads(to), [{'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': 'openshift-dns'}},
+                                               'podSelector': {'matchLabels': {'dns.operator.openshift.io/daemonset-dns': 'default'}}}])
+            self.assertEqual(json.loads(ports), [{'protocol': 'UDP', 'port': 5353}, {'protocol': 'TCP', 'port': 5353}])
+        for _, to, _ in dns_rules(plain):
+            self.assertIn('kube-system', to)
 
 
 
