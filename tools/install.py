@@ -25,6 +25,7 @@ import install_config
 import project_install
 import github_merge_policy
 import konflux_runtime_install
+import openshift_install
 import build_runtime_install
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -402,8 +403,10 @@ def _main(argv, stack):
     parser.add_argument('command', choices=['plan', 'local', 'status', 'tools', 'host', 'credentials', 'sandbox', 'supply-chain', 'build-foundation', 'release-target', 'registry-node', 'initial-runtime'])
     parser.add_argument('--configure-host', action='store_true', help='Raise inotify limits to committed minima for this boot; requires root')
     parser.add_argument('--config', type=Path, help='Reviewed local installation JSON; credentials remain explicit CLI choices')
-    parser.add_argument('--platform', choices=['kind', 'konflux'])
+    parser.add_argument('--platform', choices=['kind', 'konflux', 'openshift'])
     parser.add_argument('--cluster')
+    parser.add_argument('--kubeconfig', type=Path, help='Existing OpenShift cluster kubeconfig; --platform openshift only')
+    parser.add_argument('--context', help='Context of --kubeconfig to install into; --platform openshift only')
     parser.add_argument('--provider', choices=['auto', 'docker', 'podman'])
     parser.add_argument('--images', type=Path)
     parser.add_argument('--build-bundle', type=Path, help='Reviewed public build profile, original slots and pinned controller image; Konflux only')
@@ -456,6 +459,7 @@ def _main(argv, stack):
         if not args.configure_prepared or args.release_target is None or args.release_images is None or args.browser_profile is None:
             raise ValueError('Release configuration requires prepared mode, approved target, published deployer pins and installed browser profile')
     konflux_runtime_install.validate_options(args)
+    openshift_install.validate_options(args)
     if args.merge and not args.publication:
         raise ValueError('Merge requires explicit verified publication')
     if args.merge is not None and args.command not in ('plan', 'local', 'status', 'credentials', 'sandbox'):
@@ -564,35 +568,42 @@ def _main(argv, stack):
     if not provider or not shutil.which(provider):
         raise ValueError('Install Docker or Podman, then rerun; the installer does not change host privileges.')
     run([provider, 'info'], stdout=subprocess.DEVNULL)
-    if args.command == 'local':
+    openshift = args.platform == 'openshift'
+    if args.command == 'local' and not openshift:
         host_prerequisites(args.configure_host)
     env = dict(os.environ, KIND_EXPERIMENTAL_PROVIDER=provider)
-    kubeconfig = state / 'kubeconfig'
     kind = binaries['kind']
-    clusters = run([kind, 'get', 'clusters'], env=env, capture_output=True).stdout.splitlines()
-    marker = state / ('konflux-ownership.json' if args.platform == 'konflux' else 'ownership.json')
-    if args.platform == 'konflux' and args.cluster not in clusters:
-        raise ValueError('Recorded Konflux cluster is absent; refusing recreation')
-    if args.cluster in clusters and not marker.exists():
-        raise ValueError('Cluster already exists without this installer ownership record; choose a different --cluster.')
-    if args.command in ('status', 'credentials', 'sandbox') and args.cluster not in clusters:
-        raise ValueError('The requested local cluster does not exist')
-    created = args.cluster not in clusters
-    if created:
-        run([kind, 'create', 'cluster', '--name', args.cluster, '--config', LOCAL / 'kind.yaml',
-             '--kubeconfig', kubeconfig, '--wait', args.timeout], env=env)
-    run([kind, 'export', 'kubeconfig', '--name', args.cluster, '--kubeconfig', kubeconfig], env=env)
-    kubeconfig.chmod(0o600)
-    kubectl = [binaries['kubectl'], '--kubeconfig', kubeconfig, '--context', 'kind-' + args.cluster]
-    cluster_uid = run(kubectl + ['get', 'namespace', 'kube-system', '-o', 'jsonpath={.metadata.uid}'], capture_output=True).stdout.strip()
-    if created:
-        if not cluster_uid:
-            raise ValueError('Cannot establish the created cluster identity')
-        marker.write_text(json.dumps({'cluster': args.cluster, 'provider': provider, 'clusterUID': cluster_uid}) + '\n')
-    elif args.platform == 'konflux':
-        konflux_runtime_install.verify_cluster(run, kubectl, state, args.cluster, provider, cluster_uid)
+    if openshift:
+        # An existing cluster: no kind lifecycle, node runtime or kind context.
+        kubeconfig, kubectl, cluster_uid, created = openshift_install.connect(run, binaries, state, args)
+        kube_context = args.context
     else:
-        check_ownership(marker, args.cluster, provider, cluster_uid)
+        kubeconfig = state / 'kubeconfig'
+        kube_context = 'kind-' + args.cluster
+        clusters = run([kind, 'get', 'clusters'], env=env, capture_output=True).stdout.splitlines()
+        marker = state / ('konflux-ownership.json' if args.platform == 'konflux' else 'ownership.json')
+        if args.platform == 'konflux' and args.cluster not in clusters:
+            raise ValueError('Recorded Konflux cluster is absent; refusing recreation')
+        if args.cluster in clusters and not marker.exists():
+            raise ValueError('Cluster already exists without this installer ownership record; choose a different --cluster.')
+        if args.command in ('status', 'credentials', 'sandbox') and args.cluster not in clusters:
+            raise ValueError('The requested local cluster does not exist')
+        created = args.cluster not in clusters
+        if created:
+            run([kind, 'create', 'cluster', '--name', args.cluster, '--config', LOCAL / 'kind.yaml',
+                 '--kubeconfig', kubeconfig, '--wait', args.timeout], env=env)
+        run([kind, 'export', 'kubeconfig', '--name', args.cluster, '--kubeconfig', kubeconfig], env=env)
+        kubeconfig.chmod(0o600)
+        kubectl = [binaries['kubectl'], '--kubeconfig', kubeconfig, '--context', kube_context]
+        cluster_uid = run(kubectl + ['get', 'namespace', 'kube-system', '-o', 'jsonpath={.metadata.uid}'], capture_output=True).stdout.strip()
+        if created:
+            if not cluster_uid:
+                raise ValueError('Cannot establish the created cluster identity')
+            marker.write_text(json.dumps({'cluster': args.cluster, 'provider': provider, 'clusterUID': cluster_uid}) + '\n')
+        elif args.platform == 'konflux':
+            konflux_runtime_install.verify_cluster(run, kubectl, state, args.cluster, provider, cluster_uid)
+        else:
+            check_ownership(marker, args.cluster, provider, cluster_uid)
     if args.command == 'local' and execution_values is not None:
         candidate_install.require_unchanged_tool_budget(kubectl, execution_values)
     if not created and args.platform == 'konflux':
@@ -629,10 +640,13 @@ def _main(argv, stack):
         return 0
     # kind's node readiness alone does not establish service networking or
     # dynamic storage. Fail here before consuming the bounded migration window.
-    run(kubectl + ['wait', '--for=condition=Ready', 'pods', '--all', '-n', 'kube-system',
-                   '--timeout', args.timeout])
-    run(kubectl + ['rollout', 'status', 'deployment/local-path-provisioner',
-                   '-n', 'local-path-storage', '--timeout', args.timeout])
+    if openshift:
+        openshift_install.preflight(run, kubectl, sandbox=args.profile in ('candidate', 'verification'))
+    else:
+        run(kubectl + ['wait', '--for=condition=Ready', 'pods', '--all', '-n', 'kube-system',
+                       '--timeout', args.timeout])
+        run(kubectl + ['rollout', 'status', 'deployment/local-path-provisioner',
+                       '-n', 'local-path-storage', '--timeout', args.timeout])
     if args.platform != 'konflux':
         run(kubectl + ['apply', '-f', LOCAL / 'namespace.yaml'])
     if build_bundle is not None:
@@ -675,8 +689,9 @@ def _main(argv, stack):
             candidate_install.review_credentials(kubectl, cluster_uid)
         if args.publication:
             execution_values['publication']['credentialRevision'] = configure_publication_client(kubectl, cluster_uid, args.repository, args.github_auth, args.refresh_github_credential, project_manifest=project_manifest)
-        offline_runtime.install(kubectl, provider, kind, args.cluster, cluster_uid, cache,
-                                lock['image']['repository'] + '@' + lock['components']['worker']['digest'])
+        if not openshift:
+            offline_runtime.install(kubectl, provider, kind, args.cluster, cluster_uid, cache,
+                                    lock['image']['repository'] + '@' + lock['components']['worker']['digest'])
         execution_values['candidate']['apiServerCIDRs'] = candidate_install.api_cidrs(kubectl)
         public_values.update(execution_values)
     if build_bundle is not None:
@@ -687,12 +702,13 @@ def _main(argv, stack):
         json.dump(public_values, values)
         values.flush()
         run([binaries['helm'], 'upgrade', '--install', 'ai-sdlc', CHART,
-             '--kubeconfig', kubeconfig, '--kube-context', 'kind-' + args.cluster,
+             '--kubeconfig', kubeconfig, '--kube-context', kube_context,
              '--namespace', NAMESPACE, '-f', LOCAL / 'values.yaml',
              '-f', LOCAL / 'profiles' / (args.profile + '.json'), '-f', args.images,
              # Poll readiness during recovery rather than failing immediately
              # on a Deployment's stale ProgressDeadlineExceeded condition.
-             '-f', values.name, '--wait=legacy', '--wait-for-jobs', '--timeout', args.timeout])
+             '-f', values.name, *(['--set', 'openshift.enabled=true'] if openshift else []),
+             '--wait=legacy', '--wait-for-jobs', '--timeout', args.timeout])
     run(kubectl + ['rollout', 'status', 'statefulset/ai-sdlc-postgres', '-n', NAMESPACE,
                    '--timeout', args.timeout])
     for name in list(COMPONENT_NAMES.values()) + (["verifier"] if args.profile == "verification" else []) + (["build-controller"] if build_bundle is not None else []):
