@@ -1,7 +1,9 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -135,6 +137,10 @@ def run_inspect(cluster, mode='maintenance'):
 
 
 class DelegationTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+
     def test_install_delegates_doctor_and_issue_status(self):
         for command in ('doctor', 'issue-status'):
             with self.assertRaises(SystemExit) as raised:
@@ -150,6 +156,45 @@ class DelegationTests(unittest.TestCase):
             installer.main(['host', '--issue', '3'])
         with self.assertRaises(ValueError):
             installer.main(['credentials', '--issue', '3'])
+
+    def _status_issue(self, argv, authority_repository):
+        """Drive status --issue with an installed authority scope mocked."""
+        authority = {'data': {'policy.json': json.dumps({'repository': authority_repository})}}
+        state_home = Path(self.temporary.name)
+        state = state_home / 'ai-sdlc' / 'ai-sdlc'
+        state.mkdir(parents=True, exist_ok=True)
+        marker = {'cluster': 'ai-sdlc', 'provider': 'podman', 'clusterUID': 'uid-1'}
+        (state / 'ownership.json').write_text(json.dumps(marker))
+        (state / 'kubeconfig').write_text('{}')
+
+        def api(args, **kwargs):
+            args = [str(a) for a in args]
+            if args[:2] == ['kind', 'get']:
+                return subprocess.CompletedProcess(args, 0, 'ai-sdlc\n')
+            if 'kube-system' in args:
+                return subprocess.CompletedProcess(args, 0, 'uid-1')
+            if 'ai-sdlc-authority' in args:
+                return subprocess.CompletedProcess(args, 0, json.dumps(authority))
+            return subprocess.CompletedProcess(args, 0, '')
+
+        observed = []
+        with patch.dict(os.environ, {'XDG_STATE_HOME': str(state_home)}), \
+                patch.object(installer, 'tools', return_value={'helm': 'helm', 'kind': 'kind', 'kubectl': 'kubectl'}), \
+                patch.object(installer.shutil, 'which',
+                             side_effect=lambda name: '/bin/podman' if name == 'podman' else None), \
+                patch.object(installer, 'run', side_effect=api), \
+                patch.object(issue_status, 'observe', side_effect=lambda *a: observed.append(a) or {}):
+            installer.main(argv)
+        return observed
+
+    def test_status_issue_observes_the_installed_authority_scope(self):
+        observed = self._status_issue(['status', '--repository', 'os-santiago/saferus', '--issue', '5'],
+                                      'os-santiago/saferus')
+        self.assertEqual(observed[0][1:], ('os-santiago/saferus', 5))
+
+    def test_status_issue_rejects_a_repository_outside_the_installed_scope(self):
+        with self.assertRaisesRegex(ValueError, 'os-santiago/saferus'):
+            self._status_issue(['status', '--issue', '5'], 'os-santiago/saferus')
 
 
 class DoctorBoundaryTests(unittest.TestCase):

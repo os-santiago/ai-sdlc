@@ -111,9 +111,9 @@ def scope_queries(repository, issue):
     SELECT json_build_object(
       'now', now(),
       'revision', (SELECT json_build_object('generation',l.generation,'observedAt',l.observed_at) FROM latest l),
-      'intakeCursor', (SELECT json_build_object('watermark',c.watermark,'nextPoll',c.next_poll,
-          'failures',c.failures,'lagSeconds',EXTRACT(EPOCH FROM (now()-c.watermark)))
-          FROM intake_cursors c WHERE c.repository='{repository}' LIMIT 1),
+      'intakeCursor', (SELECT json_build_object('watermark',max(c.watermark),'nextPoll',max(c.next_poll),
+          'failures',coalesce(sum(c.failures),0),'lagSeconds',EXTRACT(EPOCH FROM (now()-max(c.watermark))))
+          FROM intake_cursors c WHERE c.repository='{repository}'),
       'admission', (SELECT json_build_object('decision',a.decision,'risk',a.risk,
           'reasonCount',jsonb_array_length(a.reasons),
           'requiredGateCount',jsonb_array_length(a.required_gates),'createdAt',a.created_at)
@@ -412,12 +412,18 @@ def kubectl_base(cluster, context=None):
 def query_read_only(kubectl, sql, timeout=20):
     if not sql.lstrip().startswith('BEGIN READ ONLY'):
         raise ValueError('Issue status executes only read-only transactions')
-    result = subprocess.run(kubectl + ['exec', '-i', 'ai-sdlc-postgres-0', '--',
-                            'psql', '-U', 'ai_sdlc', '-d', 'ai_sdlc', '-XAtq', '-v', 'ON_ERROR_STOP=1'],
-                            input=sql, text=True, capture_output=True, timeout=timeout)
-    if result.returncode:
+    try:
+        result = subprocess.run(kubectl + ['exec', '-i', 'ai-sdlc-postgres-0', '--',
+                                'psql', '-U', 'ai_sdlc', '-d', 'ai_sdlc', '-XAtq', '-v', 'ON_ERROR_STOP=1'],
+                                input=sql, text=True, capture_output=True, timeout=timeout)
+        if result.returncode:
+            return None
+        return json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        # Timeouts and malformed output degrade the stage to
+        # 'observation-denied' like a privilege denial; the caller decides
+        # whether that stage is core or auxiliary.
         return None
-    return json.loads(result.stdout)
 
 
 def observe(kubectl, repository, issue):

@@ -628,7 +628,12 @@ def _main(argv, stack):
         print('Installation mode: ' + mode + '. Autonomous issue-to-production delivery: unavailable.')
         if args.issue is not None:
             import issue_status
-            report = issue_status.observe(kubectl + ['-n', NAMESPACE], args.repository, args.issue)
+            policy = read_resource(kubectl, 'configmap', 'ai-sdlc-authority')
+            installed = json.loads((policy or {}).get('data', {}).get('policy.json', '{}') or '{}').get('repository')
+            if installed and installed != args.repository:
+                raise ValueError('Issue status observes the installed authority scope (' + installed +
+                                 '); pass the matching --repository')
+            report = issue_status.observe(kubectl + ['-n', NAMESPACE], installed or args.repository, args.issue)
             print(json.dumps(report, indent=2, sort_keys=True))
         return 0
     if args.command == 'credentials':

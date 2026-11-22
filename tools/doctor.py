@@ -192,7 +192,7 @@ def check_model(present, query, mode):
         return _check('failed', 'credentials-missing', detail='No model credential Secret is present')
     observed = query(model_sql())
     if observed is None:
-        return _check('passed', 'ok', credentialSecrets=secrets,
+        return _check('unavailable', 'observation-denied', credentialSecrets=secrets,
                       detail='Credential present; model call journal is not observable')
     data = json.loads(observed) if isinstance(observed, str) else observed
     statuses = data.get('statuses') or {}
