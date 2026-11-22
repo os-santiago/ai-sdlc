@@ -248,6 +248,29 @@ class UninstallTests(unittest.TestCase):
         self.assertFalse(result['applied'])
         self.assertEqual(api.deleted, [])
 
+    def test_auxiliary_namespace_deletion_requires_an_empty_scan(self):
+        manifest = MANIFEST + """---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-sdlc-executors
+"""
+        objects = installed_objects()
+        objects[('namespaces', 'ai-sdlc-executors', '')] = resource(
+            'Namespace', 'ai-sdlc-executors', labels=dict(HELM))
+        objects[('secrets', 'leftover', 'ai-sdlc-executors')] = resource(
+            'Secret', 'leftover', 'ai-sdlc-executors')
+        result = self.invoke([], Api(objects=objects, manifest=manifest))
+        retained = {(item['kind'], item['name']) for item in result['retained']}
+        self.assertIn(('Namespace', 'ai-sdlc-executors'), retained)
+        self.assertNotIn(('namespaces', 'ai-sdlc-executors'),
+                         {(item['resource'], item['name']) for item in result['remove']})
+
+        del objects[('secrets', 'leftover', 'ai-sdlc-executors')]
+        result = self.invoke([], Api(objects=objects, manifest=manifest))
+        self.assertIn(('namespaces', 'ai-sdlc-executors'),
+                      {(item['resource'], item['name']) for item in result['remove']})
+
     def test_refuses_without_ownership_record(self):
         (self.state / 'ownership.json').unlink()
         api = Api(objects=installed_objects())

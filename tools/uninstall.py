@@ -116,6 +116,16 @@ def frozen(run, kubectl):
     return freeze is True and (config is None or data.get('AI_SDLC_RUNTIME_MODE') == 'maintenance')
 
 
+def namespace_empty(run, kubectl, name):
+    """An auxiliary namespace may be deleted only when it holds none of the
+    namespaced resources the owned inventory never scanned; deleting a
+    namespace cascades over its whole contents."""
+    items = []
+    for kind in ('all', 'persistentvolumeclaims', 'secrets', 'configmaps'):
+        items += listed(run, kubectl, kind, name)
+    return not items
+
+
 def owned_claims(statefulsets):
     """PVC names created by owned StatefulSets; claim volumes carry no labels."""
     claims = set()
@@ -179,6 +189,13 @@ def plan(run, kubectl, manifest, cluster_uid, namespaced_kinds, delete_data):
             retained.append({'kind': kind, 'name': name, 'reason': 'recovery metadata'})
         elif kind == 'PersistentVolumeClaim':
             retained.append({'kind': kind, 'name': name, 'reason': 'durable data'})
+        elif kind == 'Namespace':
+            if namespace_empty(run, kubectl, name):
+                remove.append({'kind': kind, 'name': name, 'resource': plural, 'namespaced': False,
+                               'uid': live.get('metadata', {}).get('uid')})
+            else:
+                retained.append({'kind': kind, 'name': name,
+                                 'reason': 'auxiliary namespace holds resources outside the owned inventory; drain it first'})
         elif kind in REMOVABLE:
             remove.append({'kind': kind, 'name': name, 'resource': plural, 'namespaced': namespaced,
                            'uid': live.get('metadata', {}).get('uid')})
