@@ -310,9 +310,10 @@ func drive(ctx context.Context, session reviewSession, fence func(context.Contex
 		}
 		request, e := session.ReadRequest(ctx)
 		if errors.Is(e, podtransport.ErrWorkerExited) {
-			// The worker wrote a request it never saw answered, then exited.
+			// An unhanded or substituted request at exit is a sequence breach,
+			// as in the execution drive.
 			if request.Sequence != 0 && !sameRequest(request, previous) {
-				return ControllerError{Stage: "drive-exit-race"}
+				return ControllerError{Stage: "drive-sequence"}
 			}
 			code, exited, e = session.WorkerExit(ctx)
 			if e == nil && exited && code == 10 && previous.Sequence >= 2 {

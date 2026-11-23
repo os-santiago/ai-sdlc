@@ -90,7 +90,7 @@ func TestReviewDriveDeduplicatesOnlyExactHandoffs(t *testing.T) {
 			}
 			// Each stop names its bounded drive step; a failed delivery keeps
 			// the dispatcher's stage, so drive itself names none.
-			want := map[string]string{"substitution": "drive-sequence", "exit-race": "drive-exit-race", "wrong-exit": "worker-exit-0", "revoked": "drive-authority"}[scenario]
+			want := map[string]string{"substitution": "drive-sequence", "exit-race": "drive-sequence", "wrong-exit": "worker-exit-0", "revoked": "drive-authority"}[scenario]
 			var stopped ControllerError
 			if want != "" && (!errors.As(e, &stopped) || stopped.Stage != want) {
 				t.Fatalf("%s: stop %v, want %s", scenario, e, want)
@@ -132,6 +132,24 @@ func TestReviewDriveNamesObservationAndDeadlineStops(t *testing.T) {
 	for _, stage := range []string{"drive-observe", "drive-deadline"} {
 		if DiagnosticStage(ControllerError{Stage: "model-" + stage}) != "model-"+stage {
 			t.Fatal(stage)
+		}
+	}
+}
+
+type gapSession struct{ first uint64 }
+
+func (gapSession) WorkerExit(context.Context) (int32, bool, error) { return 0, false, nil }
+func (s gapSession) ReadRequest(context.Context) (modelmailbox.Envelope, error) {
+	return modelmailbox.Envelope{Sequence: s.first, Payload: []byte("skipped")}, nil
+}
+
+func TestReviewDriveNeverDeliversASequenceGap(t *testing.T) {
+	for _, first := range []uint64{2, 3} {
+		calls := 0
+		e := drive(context.Background(), gapSession{first: first}, func(context.Context) error { return nil }, func(modelmailbox.Envelope) error { calls++; return nil })
+		var stopped ControllerError
+		if calls != 0 || !errors.As(e, &stopped) || stopped.Stage != "drive-sequence" {
+			t.Fatalf("first sequence %d: calls=%d stop=%v", first, calls, e)
 		}
 	}
 }
