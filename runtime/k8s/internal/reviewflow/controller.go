@@ -284,15 +284,23 @@ func sameRequest(a, b modelmailbox.Envelope) bool {
 	y, _ := json.Marshal(right)
 	return bytes.Equal(x, y) && bytes.Equal(a.Payload, b.Payload)
 }
+
+// drive relays the reviewer's model requests. Each stop names a bounded
+// drive step (reported as model-drive-<step>), like the execution drive; a
+// failed delivery keeps the dispatcher's own stage. Every stop still ends the
+// review the same way.
 func drive(ctx context.Context, session reviewSession, fence func(context.Context) error, deliver func(modelmailbox.Envelope) error) error {
 	var previous modelmailbox.Envelope
 	for {
-		if ctx.Err() != nil || fence(ctx) != nil {
-			return ErrReview
+		if ctx.Err() != nil {
+			return ControllerError{Stage: "drive-deadline"}
+		}
+		if fence(ctx) != nil {
+			return ControllerError{Stage: "drive-authority"}
 		}
 		code, exited, e := session.WorkerExit(ctx)
 		if e != nil {
-			return ErrReview
+			return ControllerError{Stage: "drive-observe"}
 		}
 		if exited {
 			if code != 10 || previous.Sequence < 2 {
@@ -302,14 +310,15 @@ func drive(ctx context.Context, session reviewSession, fence func(context.Contex
 		}
 		request, e := session.ReadRequest(ctx)
 		if errors.Is(e, podtransport.ErrWorkerExited) {
+			// The worker wrote a request it never saw answered, then exited.
 			if request.Sequence != 0 && !sameRequest(request, previous) {
-				return ErrReview
+				return ControllerError{Stage: "drive-exit-race"}
 			}
 			code, exited, e = session.WorkerExit(ctx)
 			if e == nil && exited && code == 10 && previous.Sequence >= 2 {
 				return nil
 			}
-			return ErrReview
+			return ControllerError{Stage: "drive-exit-race"}
 		}
 		if e != nil && !errors.Is(e, modelmailbox.ErrPending) {
 			return ControllerError{Stage: "mailbox-read"}
@@ -317,10 +326,13 @@ func drive(ctx context.Context, session reviewSession, fence func(context.Contex
 		if e == nil {
 			if request.Sequence == previous.Sequence && previous.Sequence > 0 {
 				if !sameRequest(request, previous) {
-					return ErrReview
+					return ControllerError{Stage: "drive-sequence"}
 				}
 			} else {
-				if request.Sequence != previous.Sequence+1 || deliver(request) != nil {
+				if request.Sequence != previous.Sequence+1 {
+					return ControllerError{Stage: "drive-sequence"}
+				}
+				if deliver(request) != nil {
 					return ErrReview
 				}
 				previous = request
@@ -331,7 +343,7 @@ func drive(ctx context.Context, session reviewSession, fence func(context.Contex
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ErrReview
+			return ControllerError{Stage: "drive-deadline"}
 		case <-timer.C:
 		}
 	}

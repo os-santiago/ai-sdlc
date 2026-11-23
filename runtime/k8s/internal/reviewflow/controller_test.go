@@ -88,6 +88,50 @@ func TestReviewDriveDeduplicatesOnlyExactHandoffs(t *testing.T) {
 			if scenario == "delivery-failed" && calls != 1 {
 				t.Fatal("uncertain delivery replayed")
 			}
+			// Each stop names its bounded drive step; a failed delivery keeps
+			// the dispatcher's stage, so drive itself names none.
+			want := map[string]string{"substitution": "drive-sequence", "exit-race": "drive-exit-race", "wrong-exit": "worker-exit-0", "revoked": "drive-authority"}[scenario]
+			var stopped ControllerError
+			if want != "" && (!errors.As(e, &stopped) || stopped.Stage != want) {
+				t.Fatalf("%s: stop %v, want %s", scenario, e, want)
+			}
+			if scenario == "delivery-failed" && (errors.As(e, &stopped) || !errors.Is(e, ErrReview)) {
+				t.Fatal("a failed delivery must keep the dispatcher's stage")
+			}
+			if want != "" && DiagnosticStage(ControllerError{Stage: "model-" + want}) != "model-"+want {
+				t.Fatalf("%s: drive stop is not a bounded diagnostic", scenario)
+			}
 		})
+	}
+}
+
+type stuckSession struct{ observeFails bool }
+
+func (s stuckSession) WorkerExit(context.Context) (int32, bool, error) {
+	if s.observeFails {
+		return 0, false, errors.New("observation unavailable")
+	}
+	return 0, false, nil
+}
+func (stuckSession) ReadRequest(context.Context) (modelmailbox.Envelope, error) {
+	return modelmailbox.Envelope{}, modelmailbox.ErrPending
+}
+
+func TestReviewDriveNamesObservationAndDeadlineStops(t *testing.T) {
+	allow := func(context.Context) error { return nil }
+	never := func(modelmailbox.Envelope) error { t.Fatal("nothing to deliver"); return nil }
+	var stopped ControllerError
+	if e := drive(context.Background(), stuckSession{observeFails: true}, allow, never); !errors.As(e, &stopped) || stopped.Stage != "drive-observe" {
+		t.Fatal(e)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	if e := drive(ctx, stuckSession{}, allow, never); !errors.As(e, &stopped) || stopped.Stage != "drive-deadline" {
+		t.Fatal(e)
+	}
+	for _, stage := range []string{"drive-observe", "drive-deadline"} {
+		if DiagnosticStage(ControllerError{Stage: "model-" + stage}) != "model-"+stage {
+			t.Fatal(stage)
+		}
 	}
 }
