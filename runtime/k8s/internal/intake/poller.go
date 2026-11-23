@@ -146,6 +146,15 @@ func (p Poller) scan(ctx context.Context, reserved lease) (int, error) {
 			if !tracked && (!listed.HasLabel(p.Config.TriggerLabel) || listed.State != "open") {
 				continue
 			}
+			if tracked && !listed.HasLabel(p.Config.TriggerLabel) {
+				unchanged, err := p.unchangedIneligible(ctx, listed)
+				if err != nil {
+					return count, err
+				}
+				if unchanged {
+					continue
+				}
+			}
 			// Capture the start of the actual authoritative reads, not a later
 			// database commit time that could follow a long row-lock wait.
 			observedAt := time.Now().UTC()
@@ -169,6 +178,31 @@ func (p Poller) scan(ctx context.Context, reserved lease) (int, error) {
 		}
 	}
 	return count, errors.New("intake pagination bound exceeded; watermark retained")
+}
+
+// unchangedIneligible reports whether a tracked issue that the listing shows
+// without the trigger label is exactly as last recorded: an ineligible head
+// under the current configuration with the same state and update time. Such an
+// issue can have no active work, and GitHub advances updated_at on any label,
+// state, content or comment change, so re-reading it would only spend API
+// calls and lengthen every scan. Each scan re-observed every tracked issue,
+// so the scan grew with the number of issues ever delivered until issue
+// observations of active work aged past the evidence window (2 x pollSeconds).
+func (p Poller) unchangedIneligible(ctx context.Context, listed forge.Issue) (bool, error) {
+	var raw []byte
+	err := p.DB.Pool.QueryRowContext(ctx, `SELECT r.payload FROM intake_heads h JOIN intake_revisions r ON r.repository=h.repository AND r.issue_number=h.issue_number AND r.generation=h.generation WHERE h.repository=$1 AND h.issue_number=$2 AND r.config_digest=$3`, p.Config.Repository, listed.Number, p.Config.Digest()).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, errors.New("intake head lookup failed")
+	}
+	var last Snapshot
+	if json.Unmarshal(raw, &last) != nil {
+		return false, nil
+	}
+	return !last.Eligible && last.Issue.Number == listed.Number && !last.Issue.HasLabel(p.Config.TriggerLabel) &&
+		last.Issue.State == listed.State && !listed.UpdatedAt.IsZero() && last.Issue.UpdatedAt.Equal(listed.UpdatedAt), nil
 }
 
 func (p Poller) snapshot(ctx context.Context, number int) (Snapshot, error) {

@@ -400,3 +400,47 @@ func TestReviewedBindingChangesProduceFreshGeneration(t *testing.T) {
 		t.Fatal("new observation retained stale binding")
 	}
 }
+
+func TestUnchangedIneligibleTrackedIssueIsNotReread(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	if n, err := f.poller.PollOnce(ctx, time.Now()); err != nil || n != 1 {
+		t.Fatalf("first scan: %d %v", n, err)
+	}
+	// Withdrawing the label advances updated_at and is recorded once.
+	f.source.issue.Labels = nil
+	f.source.issue.UpdatedAt = f.source.issue.UpdatedAt.Add(time.Second)
+	f.due(t)
+	if n, err := f.poller.PollOnce(ctx, time.Now()); err != nil || n != 1 {
+		t.Fatalf("withdrawal: %d %v", n, err)
+	}
+	observed := func() time.Time {
+		var at time.Time
+		if err := f.admin.Pool.QueryRow(`SELECT max(observed_at) FROM intake_observations`).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	before, calls := observed(), f.source.calls
+	f.due(t)
+	if n, err := f.poller.PollOnce(ctx, time.Now()); err != nil || n != 0 {
+		t.Fatalf("unchanged scan: %d %v", n, err)
+	}
+	if f.source.calls-calls != 1 || !observed().Equal(before) {
+		t.Fatalf("an unchanged ineligible issue was re-read: %d source calls", f.source.calls-calls)
+	}
+	// A comment advances updated_at: the issue is read again, but creates no work.
+	f.source.issue.UpdatedAt = f.source.issue.UpdatedAt.Add(time.Second)
+	calls = f.source.calls
+	f.due(t)
+	if n, err := f.poller.PollOnce(ctx, time.Now()); err != nil || n != 0 || f.source.calls-calls < 3 {
+		t.Fatalf("changed ineligible issue not re-read: %d %v calls=%d", n, err, f.source.calls-calls)
+	}
+	// Re-adding the label is always read and creates work.
+	f.source.issue.Labels = []forge.Label{{Name: "ready"}}
+	f.source.issue.UpdatedAt = f.source.issue.UpdatedAt.Add(time.Second)
+	f.due(t)
+	if n, err := f.poller.PollOnce(ctx, time.Now()); err != nil || n != 1 {
+		t.Fatalf("relabel: %d %v", n, err)
+	}
+}
