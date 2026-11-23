@@ -7,9 +7,9 @@ from unittest import mock
 import run_battery
 
 
-def state(executions=0, execution='', verifications=0, verification='', reviews=0, review='', calls=0):
+def state(executions=0, execution='', verifications=0, verification='', reviews=0, review='', calls=0, candidate=False):
     return {'executions': executions, 'execution': execution, 'verifications': verifications, 'verification': verification,
-            'reviews': reviews, 'review': review, 'modelCalls': calls}
+            'reviews': reviews, 'review': review, 'modelCalls': calls, 'executionCandidate': candidate}
 
 
 class FakeRuntime:
@@ -49,15 +49,28 @@ class AttemptTests(unittest.TestCase):
         self.assertEqual((result['outcome'], result['stage'], result['reason']), ('failure', 'execution', 'uncertain'))
         self.assertIn('workerExitCode=23', result['diagnostics'][0])
 
-    def test_execution_stop_with_a_verification_handoff_is_not_final(self):
-        stopped = state(executions=1, execution='stopped|uncertain')
-        handed = dict(stopped, verifications=1, verification='claimed|')
+    def test_stop_after_capture_waits_for_the_handoff(self):
+        stopped = state(executions=1, execution='stopped|uncertain', candidate=True)
         with mock.patch('run_battery.time.monotonic', side_effect=[0, 0, 20, 40, 61, 61]):
-            result = run_battery.attempt(FakeRuntime([state(), stopped, handed, handed]), FakeGitHub(), 7, 60)
-        self.assertEqual(result['outcome'], 'timeout')
+            result = run_battery.attempt(FakeRuntime([state(), stopped, stopped]), FakeGitHub(), 7, 60)
+        self.assertEqual((result['outcome'], result['executionStop']), ('timeout', 'uncertain'))
         # The handed-off candidate decides the attempt.
-        passed = run_battery.attempt(FakeRuntime([state(), stopped, handed, dict(handed, verification='failed|comparison-failed')]), FakeGitHub(), 7, 60)
-        self.assertEqual((passed['outcome'], passed['stage'], passed['reason']), ('failure', 'verification', 'comparison-failed'))
+        handed = dict(stopped, verifications=1, verification='failed|comparison-failed')
+        refused = run_battery.attempt(FakeRuntime([state(), stopped, handed]), FakeGitHub(), 7, 60)
+        self.assertEqual((refused['outcome'], refused['stage'], refused['reason'], refused['executionStop']),
+                         ('failure', 'verification', 'comparison-failed', 'uncertain'))
+
+    def test_stop_without_a_candidate_is_final_at_once(self):
+        result = run_battery.attempt(FakeRuntime([state(), state(executions=1, execution='stopped|uncertain')]), FakeGitHub(), 7, 60)
+        self.assertEqual((result['outcome'], result['stage']), ('failure', 'execution'))
+        self.assertNotIn('executionStop', result)
+
+    def test_repair_stop_after_an_earlier_verification_is_a_failure(self):
+        verified = state(executions=1, execution='stopped|candidate-captured', verifications=1, verification='passed|', reviews=1, review='failed|request-changes', candidate=True)
+        repair_running = dict(verified, executions=2, execution='claimed|', executionCandidate=False)
+        repair_stopped = dict(repair_running, execution='stopped|uncertain')
+        result = run_battery.attempt(FakeRuntime([state(), verified, repair_running, repair_stopped]), FakeGitHub(), 7, 60)
+        self.assertEqual((result['outcome'], result['stage'], result['reason']), ('failure', 'execution', 'uncertain'))
 
     def test_captured_candidate_and_old_failures_are_not_attributed(self):
         old = state(executions=1, execution='stopped|uncertain', verifications=1, verification='failed|uncertain')

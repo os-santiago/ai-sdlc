@@ -29,8 +29,6 @@ from pathlib import Path
 
 LABEL = 'ai-sdlc:shadow'
 POLL_SECONDS = 20
-# Polls an execution stop must persist without a verification handoff.
-HANDOFF_POLLS = 2
 
 
 def run(args, **kwargs):
@@ -73,6 +71,9 @@ class Runtime:
         return {
             'executions': int(one('SELECT count(*) ' + executions) or 0),
             'execution': one("SELECT state||'|'||stop_reason %s ORDER BY created_at DESC LIMIT 1" % executions),
+            # A captured candidate can still be handed to verification after
+            # its execution stopped (for example after a failed pod cleanup).
+            'executionCandidate': one("SELECT count(*) FROM execution_candidates WHERE request_id=(SELECT id %s ORDER BY created_at DESC LIMIT 1)" % executions) not in ('', '0'),
             'verifications': int(one('SELECT count(*) ' + verifications) or 0),
             'verification': one("SELECT state||'|'||reason %s ORDER BY created_at DESC LIMIT 1" % verifications),
             'reviews': int(one('SELECT count(*) ' + reviews) or 0),
@@ -111,7 +112,9 @@ def attempt(runtime, github, issue, timeout):
     started = time.monotonic()
     github.label(issue, True)
     result = {'issue': issue, 'startedAt': since}
-    stop_polls = 0
+    # Verifications are compared per execution: a repair execution that stops
+    # after an earlier verification in the same attempt is still a failure.
+    seen_executions, handoff_base = before['executions'], before['verifications']
     while time.monotonic() - started < timeout:
         time.sleep(POLL_SECONDS)
         merged = github.merged_pull(issue, since)
@@ -121,14 +124,16 @@ def attempt(runtime, github, issue, timeout):
         if merged:
             result.update(outcome='success', pullRequest=merged)
             break
-        handed_off = now['verifications'] > before['verifications']
-        if new_execution and now['execution'].startswith('stopped|') and now['execution'] != 'stopped|candidate-captured' and not handed_off:
-            # A stop after capture (for example a failed pod cleanup) can
-            # still hand the candidate to verification a few seconds later.
-            # Conclude only when the next poll still shows no handoff.
-            stop_polls += 1
-            if stop_polls >= HANDOFF_POLLS:
-                stage = ('execution', now['execution'].split('|', 1)[1])
+        if now['executions'] != seen_executions:
+            seen_executions, handoff_base = now['executions'], now['verifications']
+        stopped = new_execution and now['execution'].startswith('stopped|') and now['execution'] != 'stopped|candidate-captured'
+        if stopped and (now.get('executionCandidate') or now['verifications'] > handoff_base):
+            # The stopped execution captured a candidate: the runtime hands it
+            # to verification once its cleanup completes, so the attempt goes on.
+            result['executionStop'] = now['execution'].split('|', 1)[1]
+            stopped = False
+        if stopped:
+            stage = ('execution', now['execution'].split('|', 1)[1])
         elif now['verifications'] > before['verifications'] and now['verification'].startswith('failed|'):
             stage = ('verification', now['verification'].split('|', 1)[1])
         elif now['reviews'] > before['reviews'] and now['review'].startswith('failed|') and now['review'] != 'failed|request-changes':
