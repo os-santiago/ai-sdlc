@@ -37,11 +37,12 @@ func DiagnosticStage(err error) string {
 }
 
 // The review controller's own model stages, beyond the shared dispatch ones.
-var workerExit = regexp.MustCompile(`^worker-exit-([1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])$`)
+var workerExit = regexp.MustCompile(`^worker-exit-(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])$`)
 
 func reviewModelStage(stage string) bool {
 	switch stage {
-	case "evidence", "mailbox-read", "response-policy", "authorization-completion", "authorization-acknowledgement":
+	case "evidence", "mailbox-read", "response-policy", "authorization-completion", "authorization-acknowledgement",
+		"drive-deadline", "drive-authority", "drive-observe", "drive-exit-race", "drive-sequence":
 		return true
 	}
 	return false

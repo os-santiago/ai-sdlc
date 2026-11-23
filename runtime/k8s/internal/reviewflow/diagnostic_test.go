@@ -16,6 +16,8 @@ func TestReviewDiagnosticStageIsBounded(t *testing.T) {
 		ControllerError{Stage: "model-evidence"}:                  "model-evidence",
 		ControllerError{Stage: "model-worker-exit-23"}:            "model-worker-exit-23",
 		ControllerError{Stage: "model-worker-exit-256"}:           "model-unknown",
+		ControllerError{Stage: "model-worker-exit-0"}:             "model-worker-exit-0",
+		ControllerError{Stage: "model-worker-exit-00"}:            "model-unknown",
 		ControllerError{Stage: "model-provider"}:                  "model-provider",
 		ControllerError{Stage: "cleanup-pod"}:                     "cleanup-pod",
 		ControllerError{Stage: "preparation-source-rate-limited"}: "preparation-source-rate-limited",
