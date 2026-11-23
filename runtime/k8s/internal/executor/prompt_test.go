@@ -40,3 +40,16 @@ func TestReviewPromptStatesTheGuardedContract(t *testing.T) {
 		t.Fatal("review prompt must not model a code fence")
 	}
 }
+
+func TestPromptAsksForTargetedEditsWithinTheAnswerBound(t *testing.T) {
+	p := BuildPrompt(Assignment{Repository: "fixture/project", IssueNumbers: []int{1}, Title: "t", Body: "b"}, "policy")
+	flat := strings.Join(strings.Fields(p), " ")
+	for _, rule := range []string{"answer cut off at that bound", "edit_file", "never by rewriting a whole existing file with write_file", "Keep existing tests intact", "named like the existing test files"} {
+		if !strings.Contains(flat, rule) {
+			t.Fatalf("prompt lacks %q", rule)
+		}
+	}
+	if strings.Index(p, "edit_file") > strings.Index(p, "<untrusted-issue-data>") {
+		t.Fatal("edit guidance must be trusted context, before the issue data")
+	}
+}
