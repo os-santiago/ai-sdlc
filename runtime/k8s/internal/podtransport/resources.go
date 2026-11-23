@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"reflect"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -289,7 +291,7 @@ func (r *Resources) DeleteConfig(ctx context.Context, uid string) error {
 // UID. A successful DELETE response alone does not prove removal.
 func (r *Resources) remove(ctx context.Context, kind, name, uid string) error {
 	if !resourceUID.MatchString(uid) {
-		return ErrTransport
+		return removalError{"invalid-uid", ErrTransport}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -300,24 +302,27 @@ func (r *Resources) remove(ctx context.Context, kind, name, uid string) error {
 	input, _ := json.Marshal(options)
 	_, status, err := r.request(ctx, http.MethodDelete, kind, name, input, true)
 	if err != nil {
-		return err
+		return removalError{requestStep("delete", err), err}
 	}
 	if status == 404 {
 		return nil
 	}
 	if status != 200 && status != 202 {
-		return ErrTransport
+		return removalError{"delete-status-" + statusClass(status), ErrTransport}
 	}
 	for {
 		raw, status, err := r.request(ctx, http.MethodGet, kind, name, nil, true)
 		if err != nil {
-			return err
+			if ctx.Err() != nil {
+				return removalError{"observe-timeout", err}
+			}
+			return removalError{requestStep("observe", err), err}
 		}
 		if status == 404 {
 			return nil
 		}
 		if status != 200 {
-			return ErrTransport
+			return removalError{"observe-status-" + statusClass(status), ErrTransport}
 		}
 		var object struct {
 			meta.TypeMeta `json:",inline"`
@@ -328,13 +333,62 @@ func (r *Resources) remove(ctx context.Context, kind, name, uid string) error {
 			BinaryData    json.RawMessage `json:"binaryData,omitempty"`
 			Immutable     *bool           `json:"immutable,omitempty"`
 		}
-		if authority.DecodeStrict(raw, &object) != nil || string(object.Metadata.UID) != uid || object.Metadata.Name != name || object.Metadata.Namespace != r.binding.Namespace {
-			return ErrTransport
+		if authority.DecodeStrict(raw, &object) != nil {
+			return removalError{"observe-decode", ErrTransport}
+		}
+		if string(object.Metadata.UID) != uid || object.Metadata.Name != name || object.Metadata.Namespace != r.binding.Namespace {
+			return removalError{"observe-identity", ErrTransport}
 		}
 		select {
 		case <-ctx.Done():
-			return ErrTransport
+			return removalError{"observe-timeout", ErrTransport}
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+}
+
+// removalError names the bounded removal step that failed. It unwraps to the
+// original transport or permission error, so every caller still stops the
+// same way; the step only refines the stop diagnostic.
+type removalError struct {
+	step  string
+	cause error
+}
+
+func (e removalError) Error() string { return "resource removal failed at " + e.step }
+func (e removalError) Unwrap() error { return e.cause }
+
+// RemovalStep returns the failed removal step, or "" for any other error.
+func RemovalStep(err error) string {
+	var failed removalError
+	if errors.As(err, &failed) {
+		return failed.step
+	}
+	return ""
+}
+
+var removalSteps = regexp.MustCompile(`^(invalid-uid|(delete|observe)-(request|permission)|observe-(timeout|decode|identity)|(delete|observe)-status-(401|409|410|422|429|500|503|504|[1-5]xx|invalid))$`)
+
+// KnownRemovalStep reports whether step is one RemovalStep can return, so a
+// diagnostic allowlist stays bounded.
+func KnownRemovalStep(step string) bool { return removalSteps.MatchString(step) }
+
+func requestStep(phase string, err error) string {
+	if errors.Is(err, ErrPermission) {
+		return phase + "-permission"
+	}
+	return phase + "-request"
+}
+
+// statusClass keeps the diagnostic bounded: the exact code for the few
+// statuses a removal can plausibly see, otherwise only its class.
+func statusClass(status int) string {
+	switch status {
+	case 401, 409, 410, 422, 429, 500, 503, 504:
+		return strconv.Itoa(status)
+	}
+	if status >= 100 && status <= 599 {
+		return strconv.Itoa(status/100) + "xx"
+	}
+	return "invalid"
 }

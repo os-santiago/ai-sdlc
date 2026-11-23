@@ -101,11 +101,15 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 		cleanupCtx, stop := context.WithTimeout(context.Background(), 30*time.Second)
 		defer stop()
 		failed := ""
-		if podUID != "" && resources.DeletePod(cleanupCtx, podUID) != nil {
-			failed = "cleanup-pod"
+		if podUID != "" {
+			if e := resources.DeletePod(cleanupCtx, podUID); e != nil {
+				failed = removalStage("cleanup-pod", e)
+			}
 		}
-		if configUID != "" && resources.DeleteConfig(cleanupCtx, configUID) != nil && failed == "" {
-			failed = "cleanup-config"
+		if configUID != "" {
+			if e := resources.DeleteConfig(cleanupCtx, configUID); e != nil && failed == "" {
+				failed = removalStage("cleanup-config", e)
+			}
 		}
 		if failed == "" && db.ConfirmReviewCleanup(cleanupCtx, claim) != nil {
 			failed = "cleanup-confirm"

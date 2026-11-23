@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 )
 
 // DiagnosticStage is bounded controller metadata for the stop log, never
@@ -29,6 +30,11 @@ func DiagnosticStage(err error) string {
 			"preparation", "preparation-source-rate-limited", "queue", "readiness", "rejection", "rejection-commit", "request-changes", "start", "template":
 			return stopped.Stage
 		}
+		for _, step := range []string{"cleanup-pod-", "cleanup-config-"} {
+			if detail, ok := strings.CutPrefix(stopped.Stage, step); ok && podtransport.KnownRemovalStep(detail) {
+				return stopped.Stage
+			}
+		}
 	}
 	if errors.Is(err, ErrReview) {
 		return "rejected"
@@ -46,4 +52,13 @@ func reviewModelStage(stage string) bool {
 		return true
 	}
 	return false
+}
+
+// removalStage refines a cleanup step with the bounded removal step that
+// failed, for example cleanup-pod-observe-timeout.
+func removalStage(step string, err error) string {
+	if detail := podtransport.RemovalStep(err); podtransport.KnownRemovalStep(detail) {
+		return step + "-" + detail
+	}
+	return step
 }
