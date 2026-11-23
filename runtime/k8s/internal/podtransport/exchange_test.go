@@ -277,3 +277,45 @@ func TestBindingRejectsChangedPodBeforeAnyExec(t *testing.T) {
 		})
 	}
 }
+
+func TestPublicationNamesTheExitCodeOfAnAlreadyExitedWorker(t *testing.T) {
+	binding, pod, reply := bindingFixture(t)
+	var gets, execs atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/exec") {
+			execs.Add(1)
+			w.WriteHeader(500)
+			return
+		}
+		p := pod.DeepCopy()
+		if gets.Add(1) > 1 {
+			// The launcher's run budget ended while the call was in flight.
+			for i := range p.Status.ContainerStatuses {
+				if status := &p.Status.ContainerStatuses[i]; status.Name == "worker" {
+					status.State = core.ContainerState{Terminated: &core.ContainerStateTerminated{ExitCode: 124, ContainerID: status.ContainerID}}
+				}
+			}
+		}
+		raw, _ := json.Marshal(p)
+		w.Write(raw)
+	}))
+	defer server.Close()
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	c, err := NewClient(Config{APIServer: server.URL, CA: ca, BearerToken: strings.Repeat("x", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Bind(context.Background(), c, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Publish(context.Background(), reply)
+	var exited interface{ WorkerExitCode() (int32, bool) }
+	var stage interface{ PublicationStage() string }
+	if err == nil || execs.Load() != 0 || !errors.As(err, &exited) || !errors.As(err, &stage) || stage.PublicationStage() != "before-observation" {
+		t.Fatalf("publication to an exited worker: %v", err)
+	}
+	if code, ok := exited.WorkerExitCode(); !ok || code != 124 || !errors.Is(err, ErrTransport) {
+		t.Fatalf("exit code %d %v", code, ok)
+	}
+}

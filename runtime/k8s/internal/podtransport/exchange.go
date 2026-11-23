@@ -237,7 +237,7 @@ func (s *Session) Publish(ctx context.Context, e modelmailbox.Envelope) (err err
 	}
 	stage = "before-observation"
 	if _, err := s.observe(ctx, false); err != nil {
-		return err
+		return s.exitedWorker(ctx, err)
 	}
 	stage = "helper-transport"
 	receipt, code, err := s.exchange(ctx, "respond", raw)
@@ -258,6 +258,28 @@ func (s *Session) Publish(ctx context.Context, e modelmailbox.Envelope) (err err
 	}
 	return nil
 }
+
+// exitedWorker keeps err, but when the worker container has already exited it
+// carries that bounded exit code, for example 124 when the launcher's run
+// budget ended while a model call was still in flight. It only observes.
+func (s *Session) exitedWorker(ctx context.Context, err error) error {
+	observed, e := s.inspect(ctx, true)
+	if e != nil || observed.workerExitCode == nil {
+		return err
+	}
+	return workerExitedError{code: *observed.workerExitCode, cause: err}
+}
+
+type workerExitedError struct {
+	code  int32
+	cause error
+}
+
+func (e workerExitedError) Error() string { return "worker exited before publication" }
+func (e workerExitedError) WorkerExitCode() (int32, bool) {
+	return e.code, e.code >= 0 && e.code <= 255
+}
+func (e workerExitedError) Unwrap() error { return e.cause }
 
 // Only fixed publication boundaries are surfaced; never helper stderr or API
 // exception text. Unwrap preserves the existing error classification.
