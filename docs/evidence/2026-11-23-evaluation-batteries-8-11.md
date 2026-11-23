@@ -16,9 +16,9 @@ agent CLI as in batteries 5 to 7, with extended thinking on (#737).
 |---|---|---|---|---|
 | Battery 7 | `6bb0a94` | 8 | 1 (13%) | 4 (50%) |
 | Battery 8 | `c4a4522`: per-call ceiling (#739) | 10 | 5 (50%) | 8 (80%) |
-| Battery 9 | `4f613eb`: plus #740–#744 | 10 | 6 (60%) | 9 (90%) |
+| Battery 9 | `4f613eb`: plus #740, #742–#744 | 10 | 6 (60%) | 9 (90%) |
 | Battery 10 | `4f613eb`, stopped early (see below) | 5 of 11 | 1 | 2 |
-| Battery 11 | `55739d6`: plus #746–#751, fresh installation | 9 | 6 (67%) | 8 (89%) |
+| Battery 11 | `55739d6`: plus #746–#749, #751, fresh installation | 9 | 6 (67%) | 8 (89%) |
 
 The reports are [battery 8](2026-11-23-evaluation-battery-8.json),
 [battery 9](2026-11-23-evaluation-battery-9.json),
@@ -29,8 +29,8 @@ Successful deliveries took 6.5 to 12.8 minutes from label to merge.
 
 ## What changed the rate
 
-- **No `model-provider` stops since #739.** Batteries 6 and 7 had 7 and 9:
-  calls ran past the gateway's benchmarked timeout. Each call may now run up
+- **One `model-provider` stop since #739** (battery 11), against 7 and 9 in
+  batteries 6 and 7, where calls ran past the gateway's benchmarked timeout. Each call may now run up
   to the upstream ceiling, bounded by the broker's remaining wait.
 - **Earlier failures were delivered.**
   - #81 (string escaping) failed twice in battery 8 and was delivered in
@@ -46,8 +46,8 @@ Successful deliveries took 6.5 to 12.8 minutes from label to merge.
 |---|---|---|
 | verification `unknown`, now `refused-candidate-failed` | 8 | The candidate's own new tests fail. Two refused candidates were extracted and run offline: one test file did not compile, and the other implementation disagreed with its own test on an edge case. The generator has `run_shell` but no toolchain (#745). |
 | execution `model-publication-before-observation ... workerExitCode=0` | 3 | The generation hit its 600 s `maxSeconds`. A pod-status recorder showed the worker killed with exit code 124 at exactly 600 s, with a model call in flight. `workerExitCode=0` only meant "not a worker-exit stop". It is now named `model-publication-worker-exit-124` (#749). The budget is fixed in the installer (#750). |
-| execution `worker-exit ... workerExitCode=22` | 2 | SCC `BUDGET_EXCEEDED` (steps) after 24 calls (#750). |
-| execution `model-authorization-publication` | 4 | All in battery 10, from 03:29 UTC on, about three hours after that installation. Every later attempt failed at the broker's re-authorization before publishing a response. A fresh installation delivered the first of the same issues (battery 11). The failing check is now named (#751). |
+| execution `worker-exit ... workerExitCode=22` | 2 | SCC `BUDGET_EXCEEDED` at the 24-step budget, after 24 and 16 model calls (#750). |
+| execution `model-authorization-publication` | 4 | All in battery 10, from 03:29 UTC on, about three hours after that installation. Every later execution failed at the broker's re-authorization before publishing a response. A fresh installation delivered the first of the same issues (battery 11). The failing check is now named (#751). |
 | execution or review `cleanup-pod` | 3 | Once the pod deletion failed 3–6 s after the pod had completed normally. The failing step is now named (#748); in battery 11 it was `observe-request`, a transport failure of the confirmation GET. The battery runner then removed the label while the runtime was still handing the candidate to verification (#747). |
 | execution `model-provider` | 1 | One call over its window (battery 11). |
 | review `model-response-policy` | 1 | The reviewer's final answer had no `VERDICT` line (74 characters). |
@@ -101,7 +101,7 @@ after deletion, well inside the 10-second confirmation budget.
 
 | Change | Effect |
 |---|---|
-| #740 | The repair composition fixture scopes CI's read token. It caused most `review-kind` CI flakes (#685). |
+| #740 | The repair composition fixture scopes CI's read token. It was the most frequent `review-kind` CI flake (#685), most likely unauthenticated fetches hitting the rate limit. |
 | #742 | Verification and review name a forge rate limit. |
 | #743 | An anonymous source read downloads the pinned archive directly: two API calls instead of three. |
 | #744 | A verification refusal reads `refused-<reason>`. |
