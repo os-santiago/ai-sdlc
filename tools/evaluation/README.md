@@ -17,7 +17,9 @@ cleanup), the runtime hands the candidate to verification once cleanup
 completes; that verification, review and merge then decide the attempt, and the
 report keeps the stop as `executionStop`. The stop is final after all when the
 handoff can no longer happen: cleanup ended `uncertain` or exhausted its three
-attempts, the handoff was rejected, or the request expired without one.
+attempts (after the last retry window), the handoff was rejected, or the
+request expired without one. A captured candidate whose handoff is rejected
+(for example `unsupported-recipe`) is a failure at stage `handoff`.
 Handoffs are compared per execution, so a repair execution that stops after an
 earlier verification is still a failure. A request for changes is not final
 either, because it leads to a repair.

@@ -7,9 +7,10 @@ from unittest import mock
 import run_battery
 
 
-def state(executions=0, execution='', verifications=0, verification='', reviews=0, review='', calls=0, candidate=False, impossible=False):
+def state(executions=0, execution='', verifications=0, verification='', reviews=0, review='', calls=0, candidate=False, impossible=False, reason=''):
     return {'executions': executions, 'execution': execution, 'verifications': verifications, 'verification': verification,
-            'reviews': reviews, 'review': review, 'modelCalls': calls, 'executionCandidate': candidate, 'handoffImpossible': impossible}
+            'reviews': reviews, 'review': review, 'modelCalls': calls, 'executionCandidate': candidate, 'handoffImpossible': impossible,
+            'handoffReason': reason}
 
 
 class FakeRuntime:
@@ -64,6 +65,21 @@ class AttemptTests(unittest.TestCase):
         dead = state(executions=1, execution='stopped|uncertain', candidate=True, impossible=True)
         result = run_battery.attempt(FakeRuntime([state(), dead]), FakeGitHub(), 7, 60)
         self.assertEqual((result['outcome'], result['stage'], result['reason']), ('failure', 'execution', 'uncertain'))
+
+    def test_captured_candidate_whose_handoff_is_rejected_is_a_failure(self):
+        rejected = state(executions=1, execution='stopped|candidate-captured', candidate=True, impossible=True, reason='unsupported-recipe')
+        result = run_battery.attempt(FakeRuntime([state(), rejected]), FakeGitHub(), 7, 60)
+        self.assertEqual((result['outcome'], result['stage'], result['reason']), ('failure', 'handoff', 'unsupported-recipe'))
+        sent = dict(rejected, handoffImpossible=False, handoffReason='')
+        with mock.patch('run_battery.time.monotonic', side_effect=[0, 0, 30, 61, 61]):
+            pending = run_battery.attempt(FakeRuntime([state(), sent]), FakeGitHub(), 7, 60)
+        self.assertEqual(pending['outcome'], 'timeout')
+
+    def test_execution_stop_survives_into_a_verification_failure(self):
+        stopped = state(executions=1, execution='stopped|uncertain', candidate=True)
+        refused = dict(stopped, verifications=1, verification='failed|comparison-failed')
+        result = run_battery.attempt(FakeRuntime([state(), refused]), FakeGitHub(), 7, 60)
+        self.assertEqual((result['stage'], result['executionStop']), ('verification', 'uncertain'))
 
     def test_stop_without_a_candidate_is_final_at_once(self):
         result = run_battery.attempt(FakeRuntime([state(), state(executions=1, execution='stopped|uncertain')]), FakeGitHub(), 7, 60)
@@ -133,3 +149,31 @@ class MainTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class QueryTests(unittest.TestCase):
+    def test_terminal_cleanup_waits_for_the_third_retry_window(self):
+        self.assertIn("cleanup_attempts>=3 AND l.cleanup_after<=now()", run_battery.TERMINAL_CLEANUP)
+        self.assertIn("cleanup_state='uncertain'", run_battery.TERMINAL_CLEANUP)
+
+    def test_blocked_counts_only_stopped_executions_with_terminal_cleanup(self):
+        runtime = run_battery.Runtime('kubectl', 'kubeconfig')
+        queries = []
+        with mock.patch.object(run_battery.Runtime, 'sql', lambda self, q: queries.append(q) or ['0']):
+            self.assertFalse(runtime.blocked())
+        self.assertEqual(len(queries), 2)
+        self.assertIn("r.state='stopped'", queries[1])
+        self.assertIn(run_battery.TERMINAL_CLEANUP, queries[1])
+        with mock.patch.object(run_battery.Runtime, 'sql', lambda self, q: ['1'] if 'execution_lifecycles' in q else ['0']):
+            self.assertTrue(runtime.blocked())
+
+    def test_snapshot_queries_bind_the_latest_execution(self):
+        runtime = run_battery.Runtime('kubectl', 'kubeconfig')
+        queries = []
+        with mock.patch.object(run_battery.Runtime, 'sql', lambda self, q: queries.append(q) or ['0']):
+            runtime.snapshot(7)
+        joined = '\n'.join(queries)
+        self.assertIn("'issueNumber' = '7'", joined)
+        self.assertGreaterEqual(joined.count('ORDER BY created_at DESC, id DESC LIMIT 1'), 6)
+        self.assertIn("h.state='rejected'", joined)
+        self.assertIn("r.expires_at<=now() AND NOT EXISTS", joined)
