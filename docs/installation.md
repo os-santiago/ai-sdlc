@@ -280,9 +280,12 @@ installed. Argo CD can be considered when unattended reconciliation becomes
 a requirement; its source would remain this same chart and values.
 
 Persistent state and unrelated cluster resources must survive reapplication.
-The installer does not implement automatic database rollback, production
-backup or destructive uninstall. Helm history/rollback is available for
-compatible manifests; database downgrade safety is not implied (#441).
+The installer does not implement automatic database rollback or production
+backup. Helm history/rollback is available for compatible manifests; database
+downgrade safety is not implied (#441). `./install.sh uninstall` emits a
+read-only plan of installer-owned resources and, with `--apply`, removes them
+while retaining data, credentials and recovery metadata; see
+[Uninstall owned runtime resources](operations/uninstall.md).
 
 ## Installation readiness versus autonomous delivery
 
