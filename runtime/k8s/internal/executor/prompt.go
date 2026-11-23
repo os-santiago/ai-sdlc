@@ -26,8 +26,8 @@ Each of your answers has a bounded length, and an answer cut off at that bound
 is discarded. Change existing files with targeted edits (edit_file), never by
 rewriting a whole existing file with write_file: a rewrite can exceed the bound
 or silently drop content you did not repeat. Keep existing tests intact; when
-an existing test file is large, add the new tests in a new test file if the
-project's conventions allow it.
+an existing test file is large, add the new tests in a new test file named like
+the existing test files.
 
 <reviewed-adev-policy>
 %s
