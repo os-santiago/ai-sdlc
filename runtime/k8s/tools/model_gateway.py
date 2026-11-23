@@ -38,6 +38,17 @@ RETRY_SECONDS = (5, 25)
 CALL_SECONDS_HEADER = "X-AI-SDLC-Call-Seconds"
 
 
+def log_call(outcome, started, seconds, reason=None, prompt=None, completion=None):
+    """One bounded event per completion: outcome, duration, the call budget and
+    token counts. Never request or response content."""
+    event = {"event": "model-call", "outcome": outcome, "seconds": round(time.monotonic() - started, 1), "budgetSeconds": seconds}
+    if reason is not None:
+        event["reason"] = reason
+    if isinstance(prompt, int) and isinstance(completion, int):
+        event["promptTokens"], event["completionTokens"] = prompt, completion
+    print(json.dumps(event), flush=True)
+
+
 def _authorized(handler):
     token = os.environ.get("CODEX_WRAPPER_TOKEN", "")
     supplied = handler.headers.get_all("Authorization", [])
@@ -45,12 +56,41 @@ def _authorized(handler):
             and hmac.compare_digest(supplied[0].encode(), ("Bearer " + token).encode()))
 
 
+# Failure messages raised by the adapters, mapped to bounded log classes.
+# Anything else is logged as "other"; no message text or content is logged.
+FAILURE_CLASSES = (
+    ("truncated completion", "truncated"),
+    ("completion deadline exceeded", "deadline"),
+    ("upstream status", "upstream-status"),
+    ("completion response exceeded bound", "oversized"),
+    ("completion backend failed", "backend"),
+    ("model upstream unavailable", "unavailable"),
+    ("invalid", "invalid"),
+)
+
+
+def failure_class(error):
+    text = str(error)
+    for prefix, name in FAILURE_CLASSES:
+        if text.startswith(prefix):
+            return name
+    return "other"
+
+
 class GatewayHandler(Handler):
     def complete_request(self, request):
         profile = self.server.profile
         if profile is None:
             raise RuntimeError("model gateway not benchmarked")
-        return self.server.adapter.complete(request, self.call_seconds(profile)).message
+        seconds = self.call_seconds(profile)
+        started = time.monotonic()
+        try:
+            completion = self.server.adapter.complete(request, seconds)
+        except Exception as error:
+            log_call("failed", started, seconds, reason=failure_class(error))
+            raise
+        log_call("ok", started, seconds, prompt=completion.prompt_tokens, completion=completion.completion_tokens)
+        return completion.message
 
     def call_seconds(self, profile):
         """The benchmarked timeout admits the model; each real call may run up
