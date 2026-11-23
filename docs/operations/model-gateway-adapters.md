@@ -133,13 +133,13 @@ After the benchmark, the gateway logs one bounded `model-call` event per
 completion:
 
 ```json
-{"event": "model-call", "outcome": "ok", "seconds": 4.2, "budgetSeconds": 176, "promptTokens": 9180, "completionTokens": 104}
+{"event": "model-call", "outcome": "ok", "seconds": 4.2, "budgetSeconds": 176, "promptTokens": 9180, "completionTokens": 104, "estimated": false}
 {"event": "model-call", "outcome": "failed", "seconds": 176.0, "budgetSeconds": 176, "reason": "deadline"}
 ```
 
 `reason` is a fixed class: `truncated` (the answer reached its token bound),
 `deadline`, `upstream-status`, `oversized`, `backend`, `unavailable`, `invalid`
-or `other`. Events never contain request or response content. They separate
+or `other`. `estimated` is true when the upstream reported no usage and the counts are estimates. Events never contain request or response content. They separate
 a slow model from an answer cut off at its bound, which both surface as
 `model-provider` stops.
 

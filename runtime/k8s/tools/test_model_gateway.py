@@ -462,12 +462,19 @@ class GatewayTests(unittest.TestCase):
             def failing(request, seconds=None, probe=False):
                 raise ValueError("truncated completion with secret-fixture text")
             self.adapter.complete = failing
-            self.assertNotEqual(self.call("/v1/chat/completions", REQUEST)[0], 200)
+            # The response mapping is unchanged: ValueError 400, others 502.
+            self.assertEqual(self.call("/v1/chat/completions", REQUEST)[0], 400)
+            def deadline(request, seconds=None, probe=False):
+                raise RuntimeError("completion deadline exceeded")
+            self.adapter.complete = deadline
+            self.assertEqual(self.call("/v1/chat/completions", REQUEST)[0], 502)
             self.adapter.complete = real
         events = [json.loads(line) for line in out.getvalue().splitlines() if '"model-call"' in line]
-        self.assertEqual([e["outcome"] for e in events], ["ok", "failed"])
+        self.assertEqual([e["outcome"] for e in events], ["ok", "failed", "failed"])
         self.assertIn("promptTokens", events[0])
-        self.assertEqual(events[1]["reason"], "truncated")
+        self.assertIn("estimated", events[0])
+        self.assertNotIn("reason", events[0])
+        self.assertEqual([events[1]["reason"], events[2]["reason"]], ["truncated", "deadline"])
         self.assertNotIn("secret-fixture", out.getvalue())
         self.assertEqual(model_gateway.failure_class(RuntimeError("completion deadline exceeded")), "deadline")
         self.assertEqual(model_gateway.failure_class(ValueError("invalid assistant tool call")), "invalid")
