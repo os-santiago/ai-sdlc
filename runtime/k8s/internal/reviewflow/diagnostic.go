@@ -16,6 +16,9 @@ func DiagnosticStage(err error) string {
 	if errors.As(err, &stopped) {
 		if strings.HasPrefix(stopped.Stage, "model-") {
 			detail := strings.TrimPrefix(stopped.Stage, "model-")
+			if step, ok := strings.CutPrefix(detail, "mailbox-read-"); ok && podtransport.KnownReadStep(step) {
+				return stopped.Stage
+			}
 			switch {
 			case reviewModelStage(detail):
 				return stopped.Stage

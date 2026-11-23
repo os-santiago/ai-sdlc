@@ -22,6 +22,8 @@ func TestReviewDiagnosticStageIsBounded(t *testing.T) {
 		ControllerError{Stage: "cleanup-pod"}:                       "cleanup-pod",
 		ControllerError{Stage: "cleanup-pod-observe-timeout"}:       "cleanup-pod-observe-timeout",
 		ControllerError{Stage: "cleanup-config-observe-status-5xx"}: "cleanup-config-observe-status-5xx",
+		ControllerError{Stage: "model-mailbox-read-helper-exit-2"}:  "model-mailbox-read-helper-exit-2",
+		ControllerError{Stage: "model-mailbox-read-sensitive"}:      "model-unknown",
 		ControllerError{Stage: "cleanup-pod-sensitive"}:             "unknown",
 		ControllerError{Stage: "preparation-source-rate-limited"}:   "preparation-source-rate-limited",
 		ControllerError{Stage: "preparation-sensitive"}:             "unknown",

@@ -93,6 +93,9 @@ func DiagnosticStage(err error) string {
 			return stopped.Stage
 		}
 	}
+	if detail, ok := strings.CutPrefix(stopped.Stage, "execution-read-"); ok && podtransport.KnownReadStep(detail) {
+		return stopped.Stage
+	}
 	return "unknown"
 }
 
@@ -274,6 +277,9 @@ func driveModel(ctx context.Context, session modelSession, authorize func(contex
 		request, err := session.ReadRequest(ctx)
 		if err != nil && !errors.Is(err, modelmailbox.ErrPending) {
 			if !errors.Is(err, podtransport.ErrWorkerExited) {
+				if step := podtransport.ReadStep(err); step != "" {
+					return driveStop{"execution-read-" + step}
+				}
 				return driveStop{"execution-read"}
 			}
 			// An observed request at exit must already have a confirmed handoff.
