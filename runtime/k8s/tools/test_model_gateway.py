@@ -447,6 +447,39 @@ class GatewayTests(unittest.TestCase):
             status, _ = self.call_with_header(header)
             self.assertEqual((status, seen), (200, [expected]))
 
+    def test_each_completion_logs_one_bounded_event_without_content(self):
+        original = model_benchmark.time.monotonic
+        model_benchmark.time.monotonic = lambda: self.clock[0]
+        try:
+            model_gateway.run_benchmark(self.server, 16384, 4096, attempts=1)
+        finally:
+            model_benchmark.time.monotonic = original
+        import contextlib, io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.call("/v1/chat/completions", REQUEST)[0], 200)
+            real = self.adapter.complete
+            def failing(request, seconds=None, probe=False):
+                raise ValueError("truncated completion with secret-fixture text")
+            self.adapter.complete = failing
+            # The response mapping is unchanged: ValueError 400, others 502.
+            self.assertEqual(self.call("/v1/chat/completions", REQUEST)[0], 400)
+            def deadline(request, seconds=None, probe=False):
+                raise RuntimeError("completion deadline exceeded")
+            self.adapter.complete = deadline
+            self.assertEqual(self.call("/v1/chat/completions", REQUEST)[0], 502)
+            self.adapter.complete = real
+        events = [json.loads(line) for line in out.getvalue().splitlines() if '"model-call"' in line]
+        self.assertEqual([e["outcome"] for e in events], ["ok", "failed", "failed"])
+        self.assertIn("promptTokens", events[0])
+        self.assertIn("estimated", events[0])
+        self.assertNotIn("reason", events[0])
+        self.assertEqual([events[1]["reason"], events[2]["reason"]], ["truncated", "deadline"])
+        self.assertNotIn("secret-fixture", out.getvalue())
+        self.assertEqual(model_gateway.failure_class(RuntimeError("completion deadline exceeded")), "deadline")
+        self.assertEqual(model_gateway.failure_class(ValueError("invalid assistant tool call")), "invalid")
+        self.assertEqual(model_gateway.failure_class(RuntimeError("anything else")), "other")
+
     def test_failed_benchmark_never_becomes_ready(self):
         self.adapter.tool = False
         self.assertIsNone(model_gateway.run_benchmark(self.server, 16384, 4096, attempts=2, pause=0))
