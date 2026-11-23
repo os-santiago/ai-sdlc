@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
@@ -139,12 +140,18 @@ func (l *Lifecycle) ActivateModel(ctx context.Context, load ModelPolicyLoader) (
 // alone never authorizes a call, and no call is allowed before start acknowledgement
 // or after candidate collection begins.
 func (l *Lifecycle) Authorize(ctx context.Context, scope store.ModelScope) (until time.Time, err error) {
-	if l == nil || !l.mu.TryLock() {
-		return time.Time{}, ErrAuthority
+	if l == nil {
+		return time.Time{}, authorityStop("authority")
+	}
+	if !l.mu.TryLock() {
+		return time.Time{}, authorityStop("busy")
 	}
 	defer l.mu.Unlock()
-	if l.stopped || l.model == nil || !sameModelScope(scope, l.model.scope) {
-		return time.Time{}, ErrAuthority
+	if l.stopped {
+		return time.Time{}, authorityStop("stopped")
+	}
+	if l.model == nil || !sameModelScope(scope, l.model.scope) {
+		return time.Time{}, authorityStop("scope")
 	}
 	ctx, cancel := context.WithDeadline(ctx, l.durable.Claim.Until)
 	defer cancel()
@@ -153,12 +160,34 @@ func (l *Lifecycle) Authorize(ctx context.Context, scope store.ModelScope) (unti
 	defer func() {
 		if recover() != nil {
 			until = time.Time{}
-			err = ErrAuthority
+			err = authorityStop("panic")
 		}
 	}()
 	_, phase, err := l.proofPhase(ctx)
-	if err != nil || phase != "start-ready" || ctx.Err() != nil {
-		return time.Time{}, ErrAuthority
+	if err != nil {
+		var named authorityStop
+		switch {
+		case ctx.Err() != nil:
+			return time.Time{}, authorityStop("deadline")
+		case errors.As(err, &named):
+			return time.Time{}, named
+		}
+		return time.Time{}, authorityStop("authority")
+	}
+	if phase != "start-ready" {
+		return time.Time{}, authorityStop("phase")
+	}
+	if ctx.Err() != nil {
+		return time.Time{}, authorityStop("deadline")
 	}
 	return l.durable.Claim.Until, nil
 }
+
+// authorityStop names the bounded check that refused current execution
+// authority. It unwraps to ErrAuthority, so every caller refuses as before;
+// the step only refines the stop diagnostic (AuthorityStep).
+type authorityStop string
+
+func (e authorityStop) Error() string         { return "execution authority refused at " + string(e) }
+func (e authorityStop) Unwrap() error         { return ErrAuthority }
+func (e authorityStop) AuthorityStep() string { return string(e) }

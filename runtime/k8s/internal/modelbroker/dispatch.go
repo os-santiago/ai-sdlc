@@ -57,8 +57,20 @@ func (d Dispatcher) authorize(ctx context.Context, scope store.ModelScope) (unti
 		}
 	}()
 	until, err = d.Authority.Authorize(ctx, scope)
-	if err != nil || ctx.Err() != nil || !until.After(time.Now()) || !scope.ExpiresAt.After(time.Now()) {
-		return time.Time{}, ErrRejected
+	switch {
+	case err != nil:
+		step := "authority"
+		var named interface{ AuthorityStep() string }
+		if errors.As(err, &named) && authorizationRefusalStage.MatchString("authorization-dispatch-"+named.AuthorityStep()) {
+			step = named.AuthorityStep()
+		}
+		return time.Time{}, authorizationRefusal(step)
+	case ctx.Err() != nil:
+		return time.Time{}, authorizationRefusal("deadline")
+	case !until.After(time.Now()):
+		return time.Time{}, authorizationRefusal("claim-expired")
+	case !scope.ExpiresAt.After(time.Now()):
+		return time.Time{}, authorizationRefusal("scope-expired")
 	}
 	if scope.ExpiresAt.Before(until) {
 		until = scope.ExpiresAt
@@ -109,6 +121,7 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 	stage = "authorization-reservation"
 	until, err := d.authorize(ctx, scope)
 	if err != nil {
+		stage = refusedStage(stage, err)
 		return result, ErrRejected
 	}
 	ctx, cancelAuthority := context.WithDeadline(ctx, until)
@@ -147,6 +160,7 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 	stage = "authorization-dispatch"
 	until, err = d.authorize(ctx, scope)
 	if err != nil {
+		stage = refusedStage(stage, err)
 		d.abandon(ctx, ref)
 		return result, ErrUncertain
 	}
@@ -193,6 +207,7 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 	stage = "authorization-publication"
 	until, err = d.authorize(ctx, scope)
 	if err != nil {
+		stage = refusedStage(stage, err)
 		d.abandon(ctx, ref)
 		return result, ErrUncertain
 	}
@@ -252,7 +267,7 @@ func SafeFailureStage(stage string) string {
 	case "configuration", "scope", "request-binding", "authorization-reservation", "reservation", "claim", "authorization-dispatch", "deadline", "provider", "completion-commit", "response-envelope", "authorization-publication", "publication", "acknowledgement", "publication-envelope", "publication-encoding", "publication-before-observation", "publication-helper-transport", "publication-helper-exit", "publication-receipt", "publication-after-observation", "publication-response-mutation", "publication-expired", "publication-unknown":
 		return stage
 	}
-	if publicationWorkerExit.MatchString(stage) {
+	if publicationWorkerExit.MatchString(stage) || authorizationRefusalStage.MatchString(stage) {
 		return stage
 	}
 	return "unknown"
@@ -260,6 +275,25 @@ func SafeFailureStage(stage string) string {
 
 // A bounded container exit code (0-255), without leading zeros.
 var publicationWorkerExit = regexp.MustCompile(`^publication-worker-exit-(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])$`)
+
+// authorizationRefusal names the bounded check that refused current authority
+// before a model call step. It unwraps to ErrRejected.
+type authorizationRefusal string
+
+func (e authorizationRefusal) Error() string { return "model call authorization refused" }
+func (e authorizationRefusal) Unwrap() error { return ErrRejected }
+
+func refusedStage(stage string, err error) string {
+	var refused authorizationRefusal
+	if errors.As(err, &refused) {
+		return stage + "-" + string(refused)
+	}
+	return stage
+}
+
+// The refusal steps of Dispatcher.authorize and the execution lifecycle's
+// Authorize; any other text stays unknown.
+var authorizationRefusalStage = regexp.MustCompile(`^authorization-(reservation|dispatch|publication)-(authority|deadline|claim-expired|scope-expired|busy|stopped|scope|panic|phase|model-proof|model-policy|prepared|binding|claim|claim-read|inputs|record|repair|snapshot|reload)$`)
 
 func safePublicationStage(stage string) string {
 	switch stage {

@@ -137,6 +137,56 @@ func TestBrokerAuthorityRevokedDuringProviderDoesNotPublish(t *testing.T) {
 	if parent != "stopped" || state != "ambiguous" || handed || invoked.Load() != 1 || published.Load() != 0 {
 		t.Fatal("response evidence lost or published after revocation")
 	}
+	if result.FailureStage != "authorization-publication-authority" {
+		t.Fatal("unnamed revocation stage", result.FailureStage)
+	}
+}
+
+type fixtureAuthorityStop string
+
+func (e fixtureAuthorityStop) Error() string         { return "sensitive arbitrary exception" }
+func (e fixtureAuthorityStop) AuthorityStep() string { return string(e) }
+
+func TestBrokerNamesTheAuthorityRefusalStep(t *testing.T) {
+	for step, want := range map[string]string{"model-policy": "authorization-publication-model-policy", "sensitive arbitrary exception": "authorization-publication-authority"} {
+		t.Run(want, func(t *testing.T) {
+			var revoked atomic.Bool
+			d, a, profile, request := brokerFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				revoked.Store(true)
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(completionBody)
+			}, publisherFunc(func(context.Context, modelmailbox.Envelope) error { return nil }))
+			d.Authority = fixtureAuthority(func(ctx context.Context, scope store.ModelScope) (time.Time, error) {
+				if revoked.Load() {
+					return time.Time{}, fixtureAuthorityStop(step)
+				}
+				return scope.ExpiresAt, ctx.Err()
+			})
+			result, err := d.Deliver(context.Background(), a.ID, profile, request)
+			if !errors.Is(err, ErrUncertain) || result.HandoffConfirmed || result.FailureStage != want {
+				t.Fatalf("stage %q, want %q", result.FailureStage, want)
+			}
+		})
+	}
+}
+
+func TestAuthorizationRefusalStagesAreBounded(t *testing.T) {
+	for _, good := range []string{"authorization-reservation-busy", "authorization-dispatch-claim-expired", "authorization-publication-snapshot", "authorization-publication-scope-expired"} {
+		if SafeFailureStage(good) != good {
+			t.Fatal(good)
+		}
+	}
+	for _, bad := range []string{"authorization-completion-busy", "authorization-publication-", "authorization-publication-sensitive", "authorization-publication-busy-x"} {
+		if SafeFailureStage(bad) != "unknown" {
+			t.Fatal(bad)
+		}
+	}
+	if refusedStage("authorization-dispatch", errors.New("other")) != "authorization-dispatch" || refusedStage("authorization-dispatch", authorizationRefusal("deadline")) != "authorization-dispatch-deadline" {
+		t.Fatal("refused stage")
+	}
+	if !errors.Is(authorizationRefusal("busy"), ErrRejected) {
+		t.Fatal("refusal must unwrap to ErrRejected")
+	}
 }
 func TestBrokerAuthorityDeadlineCannotBeExtendedByLaterCheck(t *testing.T) {
 	var invoked, published, checks atomic.Int32
