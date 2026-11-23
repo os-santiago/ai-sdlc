@@ -8,6 +8,7 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 )
 
 type driverSession struct {
@@ -176,3 +177,17 @@ func TestCleanupDiagnosticNamesTheBoundedRemovalStep(t *testing.T) {
 }
 
 var ErrTestUnrelated = errors.New("unrelated")
+
+func TestAuthorityStopNamesTheCheckAndStillRefuses(t *testing.T) {
+	for _, step := range []string{"busy", "stopped", "scope", "model-policy", "snapshot", "reload", "deadline"} {
+		err := error(authorityStop(step))
+		var named interface{ AuthorityStep() string }
+		if !errors.Is(err, ErrAuthority) || !errors.As(err, &named) || named.AuthorityStep() != step {
+			t.Fatalf("%s: %v", step, err)
+		}
+	}
+	var nilLifecycle *Lifecycle
+	if _, err := nilLifecycle.Authorize(context.Background(), store.ModelScope{}); !errors.Is(err, ErrAuthority) {
+		t.Fatal("a missing lifecycle must still refuse")
+	}
+}

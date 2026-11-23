@@ -94,57 +94,57 @@ func preparationProof(ctx context.Context, db *store.DB, load PreparationLoader,
 	return preparationProofStatus(ctx, db, load, claim, "ready")
 }
 func preparationProofStatus(ctx context.Context, db *store.DB, load PreparationLoader, claim store.ExecutionClaim, status string) (Command, intake.Snapshot, PreparationInputs, error) {
-	fail := func() (Command, intake.Snapshot, PreparationInputs, error) {
-		return Command{}, intake.Snapshot{}, PreparationInputs{}, ErrAuthority
+	fail := func(step string) (Command, intake.Snapshot, PreparationInputs, error) {
+		return Command{}, intake.Snapshot{}, PreparationInputs{}, authorityStop(step)
 	}
 	if db == nil || load == nil || ctx.Err() != nil || !claim.Until.After(time.Now()) {
-		return fail()
+		return fail("claim")
 	}
 	r, err := db.ReadClaimedExecution(ctx, claim)
 	if err != nil {
-		return fail()
+		return fail("claim-read")
 	}
 	in, err := load(ctx)
 	if err != nil {
-		return fail()
+		return fail("inputs")
 	}
 	if len(in.Profile) == 0 || len(in.Profile) > executor.MaxProfileBytes || len(in.ADev) == 0 || len(in.ADev) > 64*1024 {
-		return fail()
+		return fail("inputs")
 	}
 	in = copyInputs(in)
 	c, err := verifyRecord(in.Policy, r)
 	if err != nil || checkInputs(in, c) != nil {
-		return fail()
+		return fail("record")
 	}
 	if c.Repair != nil {
 		if repairInputs(ctx, db, in, c) != nil {
-			return fail()
+			return fail("repair")
 		}
 		status = "running"
 	}
 	snapshot, err := verifiedSnapshotStatus(ctx, db, in.Policy, in.Intake, c, status)
 	if err != nil {
-		return fail()
+		return fail("snapshot")
 	}
 	// Reload after the bounded proof query, and check the durable token again.
 	current, err := load(ctx)
 	if err != nil || current.Policy.Revision() != in.Policy.Revision() || current.Intake.Digest() != in.Intake.Digest() ||
 		!bytes.Equal(current.Profile, in.Profile) || !bytes.Equal(current.ADev, in.ADev) {
-		return fail()
+		return fail("reload")
 	}
 	if _, err = verifyRecord(current.Policy, r); err != nil {
-		return fail()
+		return fail("record")
 	}
 	if _, err = db.ReadClaimedExecution(ctx, claim); err != nil {
-		return fail()
+		return fail("claim-read")
 	}
 	latest, err := load(ctx)
 	if err != nil || latest.Policy.Revision() != in.Policy.Revision() || latest.Intake.Digest() != in.Intake.Digest() ||
 		!bytes.Equal(latest.Profile, in.Profile) || !bytes.Equal(latest.ADev, in.ADev) || ctx.Err() != nil || !claim.Until.After(time.Now()) {
-		return fail()
+		return fail("reload")
 	}
 	if _, err = verifyRecord(latest.Policy, r); err != nil {
-		return fail()
+		return fail("record")
 	}
 	return c, snapshot, in, nil
 }

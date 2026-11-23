@@ -134,7 +134,7 @@ func (l *Lifecycle) proofPhase(ctx context.Context) (executor.Workload, string, 
 	if l.model != nil {
 		var err error
 		if phase, err = l.modelProof(ctx); err != nil {
-			return executor.Workload{}, "", ErrAuthority
+			return executor.Workload{}, "", authorityStop("model-proof")
 		}
 		status = "running"
 	}
@@ -145,18 +145,21 @@ func (l *Lifecycle) proofPhase(ctx context.Context) (executor.Workload, string, 
 		if l.model != nil {
 			current, err := l.model.load(ctx)
 			if err != nil || current != l.model.policy {
-				return PreparationInputs{}, ErrAuthority
+				return PreparationInputs{}, authorityStop("model-policy")
 			}
 		}
 		return lifecycleInputs(l.load, l.placement)(ctx)
 	}
 	c, _, in, err := preparationProofStatus(ctx, l.db, load, l.prepared.claim, status)
-	if err != nil || !samePrepared(l.prepared, c, in) {
-		return executor.Workload{}, "", ErrAuthority
+	if err != nil {
+		return executor.Workload{}, "", err
+	}
+	if !samePrepared(l.prepared, c, in) {
+		return executor.Workload{}, "", authorityStop("prepared")
 	}
 	binding, w, err := lifecycleBinding(l.prepared, l.placement)
 	if err != nil || binding != l.durable.Binding {
-		return executor.Workload{}, "", ErrAuthority
+		return executor.Workload{}, "", authorityStop("binding")
 	}
 	return w, phase, nil
 }

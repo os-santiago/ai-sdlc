@@ -140,11 +140,14 @@ func (l *Lifecycle) ActivateModel(ctx context.Context, load ModelPolicyLoader) (
 // or after candidate collection begins.
 func (l *Lifecycle) Authorize(ctx context.Context, scope store.ModelScope) (until time.Time, err error) {
 	if l == nil || !l.mu.TryLock() {
-		return time.Time{}, ErrAuthority
+		return time.Time{}, authorityStop("busy")
 	}
 	defer l.mu.Unlock()
-	if l.stopped || l.model == nil || !sameModelScope(scope, l.model.scope) {
-		return time.Time{}, ErrAuthority
+	if l.stopped {
+		return time.Time{}, authorityStop("stopped")
+	}
+	if l.model == nil || !sameModelScope(scope, l.model.scope) {
+		return time.Time{}, authorityStop("scope")
 	}
 	ctx, cancel := context.WithDeadline(ctx, l.durable.Claim.Until)
 	defer cancel()
@@ -153,12 +156,30 @@ func (l *Lifecycle) Authorize(ctx context.Context, scope store.ModelScope) (unti
 	defer func() {
 		if recover() != nil {
 			until = time.Time{}
-			err = ErrAuthority
+			err = authorityStop("panic")
 		}
 	}()
 	_, phase, err := l.proofPhase(ctx)
-	if err != nil || phase != "start-ready" || ctx.Err() != nil {
-		return time.Time{}, ErrAuthority
+	if err != nil {
+		if ctx.Err() != nil {
+			return time.Time{}, authorityStop("deadline")
+		}
+		return time.Time{}, err
+	}
+	if phase != "start-ready" {
+		return time.Time{}, authorityStop("phase")
+	}
+	if ctx.Err() != nil {
+		return time.Time{}, authorityStop("deadline")
 	}
 	return l.durable.Claim.Until, nil
 }
+
+// authorityStop names the bounded check that refused current execution
+// authority. It unwraps to ErrAuthority, so every caller refuses as before;
+// the step only refines the stop diagnostic (AuthorityStep).
+type authorityStop string
+
+func (e authorityStop) Error() string         { return "execution authority refused at " + string(e) }
+func (e authorityStop) Unwrap() error         { return ErrAuthority }
+func (e authorityStop) AuthorityStep() string { return string(e) }
