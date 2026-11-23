@@ -147,9 +147,6 @@ class MainTests(unittest.TestCase):
         self.assertEqual((summary['firstAttemptSuccess'], summary['successWithinBudget'], summary['rateWithinBudget']), (1, 2, 1.0))
 
 
-if __name__ == '__main__':
-    unittest.main()
-
 
 class QueryTests(unittest.TestCase):
     def test_terminal_cleanup_waits_for_the_third_retry_window(self):
@@ -177,3 +174,7 @@ class QueryTests(unittest.TestCase):
         self.assertGreaterEqual(joined.count('ORDER BY created_at DESC, id DESC LIMIT 1'), 6)
         self.assertIn("h.state='rejected'", joined)
         self.assertIn("r.expires_at<=now() AND NOT EXISTS", joined)
+
+
+if __name__ == '__main__':
+    unittest.main()
