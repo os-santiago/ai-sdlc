@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"time"
 	"unicode/utf8"
@@ -97,6 +98,15 @@ func preparationProofStatus(ctx context.Context, db *store.DB, load PreparationL
 	fail := func(step string) (Command, intake.Snapshot, PreparationInputs, error) {
 		return Command{}, intake.Snapshot{}, PreparationInputs{}, authorityStop(step)
 	}
+	// A loader that names its own refusal (for example the model policy)
+	// keeps that step; any other load failure keeps the given one.
+	failLoad := func(err error, step string) (Command, intake.Snapshot, PreparationInputs, error) {
+		var named authorityStop
+		if errors.As(err, &named) {
+			return fail(string(named))
+		}
+		return fail(step)
+	}
 	if db == nil || load == nil || ctx.Err() != nil || !claim.Until.After(time.Now()) {
 		return fail("claim")
 	}
@@ -106,7 +116,7 @@ func preparationProofStatus(ctx context.Context, db *store.DB, load PreparationL
 	}
 	in, err := load(ctx)
 	if err != nil {
-		return fail("inputs")
+		return failLoad(err, "inputs")
 	}
 	if len(in.Profile) == 0 || len(in.Profile) > executor.MaxProfileBytes || len(in.ADev) == 0 || len(in.ADev) > 64*1024 {
 		return fail("inputs")
@@ -128,7 +138,10 @@ func preparationProofStatus(ctx context.Context, db *store.DB, load PreparationL
 	}
 	// Reload after the bounded proof query, and check the durable token again.
 	current, err := load(ctx)
-	if err != nil || current.Policy.Revision() != in.Policy.Revision() || current.Intake.Digest() != in.Intake.Digest() ||
+	if err != nil {
+		return failLoad(err, "reload")
+	}
+	if current.Policy.Revision() != in.Policy.Revision() || current.Intake.Digest() != in.Intake.Digest() ||
 		!bytes.Equal(current.Profile, in.Profile) || !bytes.Equal(current.ADev, in.ADev) {
 		return fail("reload")
 	}
@@ -139,7 +152,10 @@ func preparationProofStatus(ctx context.Context, db *store.DB, load PreparationL
 		return fail("claim-read")
 	}
 	latest, err := load(ctx)
-	if err != nil || latest.Policy.Revision() != in.Policy.Revision() || latest.Intake.Digest() != in.Intake.Digest() ||
+	if err != nil {
+		return failLoad(err, "reload")
+	}
+	if latest.Policy.Revision() != in.Policy.Revision() || latest.Intake.Digest() != in.Intake.Digest() ||
 		!bytes.Equal(latest.Profile, in.Profile) || !bytes.Equal(latest.ADev, in.ADev) || ctx.Err() != nil || !claim.Until.After(time.Now()) {
 		return fail("reload")
 	}

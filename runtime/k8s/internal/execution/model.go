@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
@@ -139,7 +140,10 @@ func (l *Lifecycle) ActivateModel(ctx context.Context, load ModelPolicyLoader) (
 // alone never authorizes a call, and no call is allowed before start acknowledgement
 // or after candidate collection begins.
 func (l *Lifecycle) Authorize(ctx context.Context, scope store.ModelScope) (until time.Time, err error) {
-	if l == nil || !l.mu.TryLock() {
+	if l == nil {
+		return time.Time{}, authorityStop("authority")
+	}
+	if !l.mu.TryLock() {
 		return time.Time{}, authorityStop("busy")
 	}
 	defer l.mu.Unlock()
@@ -161,10 +165,14 @@ func (l *Lifecycle) Authorize(ctx context.Context, scope store.ModelScope) (unti
 	}()
 	_, phase, err := l.proofPhase(ctx)
 	if err != nil {
-		if ctx.Err() != nil {
+		var named authorityStop
+		switch {
+		case ctx.Err() != nil:
 			return time.Time{}, authorityStop("deadline")
+		case errors.As(err, &named):
+			return time.Time{}, named
 		}
-		return time.Time{}, err
+		return time.Time{}, authorityStop("authority")
 	}
 	if phase != "start-ready" {
 		return time.Time{}, authorityStop("phase")

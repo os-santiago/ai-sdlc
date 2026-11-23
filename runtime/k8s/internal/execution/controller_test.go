@@ -6,9 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+	"os"
+	"regexp"
 )
 
 type driverSession struct {
@@ -189,5 +192,34 @@ func TestAuthorityStopNamesTheCheckAndStillRefuses(t *testing.T) {
 	var nilLifecycle *Lifecycle
 	if _, err := nilLifecycle.Authorize(context.Background(), store.ModelScope{}); !errors.Is(err, ErrAuthority) {
 		t.Fatal("a missing lifecycle must still refuse")
+	}
+}
+
+// Every authorityStop literal in this package is a step the broker reports,
+// so the two allowlists cannot drift apart.
+func TestEveryAuthorityStepIsReportedByTheBroker(t *testing.T) {
+	steps := map[string]bool{}
+	for _, file := range []string{"model.go", "lifecycle.go", "prepare.go"} {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range regexp.MustCompile(`(?:authorityStop|fail|failLoad\(err,)\(?\s*"([a-z-]+)"\)`).FindAllStringSubmatch(string(raw), -1) {
+			steps[m[1]] = true
+		}
+	}
+	if len(steps) < 12 {
+		t.Fatalf("authority steps not found: %v", steps)
+	}
+	for step := range steps {
+		for _, at := range []string{"reservation", "dispatch", "publication"} {
+			stage := "authorization-" + at + "-" + step
+			if modelbroker.SafeFailureStage(stage) != stage {
+				t.Fatalf("broker does not report %q", stage)
+			}
+		}
+		if DiagnosticStage(ControllerError{"model-authorization-publication-" + step}) != "model-authorization-publication-"+step {
+			t.Fatalf("execution diagnostic drops %q", step)
+		}
 	}
 }
