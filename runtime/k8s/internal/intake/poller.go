@@ -146,7 +146,7 @@ func (p Poller) scan(ctx context.Context, reserved lease) (int, error) {
 			if !tracked && (!listed.HasLabel(p.Config.TriggerLabel) || listed.State != "open") {
 				continue
 			}
-			if tracked && !listed.HasLabel(p.Config.TriggerLabel) {
+			if tracked && (!listed.HasLabel(p.Config.TriggerLabel) || listed.State != "open") {
 				unchanged, err := p.unchangedIneligible(ctx, listed)
 				if err != nil {
 					return count, err
@@ -180,17 +180,23 @@ func (p Poller) scan(ctx context.Context, reserved lease) (int, error) {
 	return count, errors.New("intake pagination bound exceeded; watermark retained")
 }
 
-// unchangedIneligible reports whether a tracked issue that the listing shows
-// without the trigger label is exactly as last recorded: an ineligible head
-// under the current configuration with the same state and update time. Such an
-// issue can have no active work, and GitHub advances updated_at on any label,
-// state, content or comment change, so re-reading it would only spend API
-// calls and lengthen every scan. Each scan re-observed every tracked issue,
-// so the scan grew with the number of issues ever delivered until issue
-// observations of active work aged past the evidence window (2 x pollSeconds).
+// unchangedIneligible reports whether a tracked issue that cannot be eligible
+// (the listing shows it closed or without the trigger label) is recorded as
+// an ineligible head under the current configuration and authority revision,
+// with the same request content the listing shows: title, body, state,
+// labels and author. Such an issue has no work any stage would accept, so
+// re-reading it would only spend API calls and lengthen every scan. Each scan
+// re-read every tracked issue, so it grew with the number of issues ever
+// delivered until observations of active work aged past the evidence window
+// (2 x pollSeconds). An open, labeled issue is never skipped: re-labeling by
+// an authorized actor leaves its labels unchanged but can make it eligible.
 func (p Poller) unchangedIneligible(ctx context.Context, listed forge.Issue) (bool, error) {
+	policy, _, err := p.current()
+	if err != nil {
+		return false, err
+	}
 	var raw []byte
-	err := p.DB.Pool.QueryRowContext(ctx, `SELECT r.payload FROM intake_heads h JOIN intake_revisions r ON r.repository=h.repository AND r.issue_number=h.issue_number AND r.generation=h.generation WHERE h.repository=$1 AND h.issue_number=$2 AND r.config_digest=$3`, p.Config.Repository, listed.Number, p.Config.Digest()).Scan(&raw)
+	err = p.DB.Pool.QueryRowContext(ctx, `SELECT r.payload FROM intake_heads h JOIN intake_revisions r ON r.repository=h.repository AND r.issue_number=h.issue_number AND r.generation=h.generation WHERE h.repository=$1 AND h.issue_number=$2 AND r.config_digest=$3`, p.Config.Repository, listed.Number, p.Config.Digest()).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -201,8 +207,29 @@ func (p Poller) unchangedIneligible(ctx context.Context, listed forge.Issue) (bo
 	if json.Unmarshal(raw, &last) != nil {
 		return false, nil
 	}
-	return !last.Eligible && last.Issue.Number == listed.Number && !last.Issue.HasLabel(p.Config.TriggerLabel) &&
-		last.Issue.State == listed.State && !listed.UpdatedAt.IsZero() && last.Issue.UpdatedAt.Equal(listed.UpdatedAt), nil
+	return !last.Eligible && last.AuthorityRevision == policy.Revision() && sameRequest(last.Issue, listed), nil
+}
+
+// sameRequest compares the request content a listing returns with a recorded
+// issue. updated_at is deliberately ignored: comments and cross-references
+// advance it without changing the request.
+func sameRequest(a, b forge.Issue) bool {
+	if a.Number != b.Number || a.Title != b.Title || a.Body != b.Body || a.State != b.State || a.User.ID != b.User.ID || len(a.Labels) != len(b.Labels) {
+		return false
+	}
+	labels := map[string]int{}
+	for _, l := range a.Labels {
+		labels[l.Name]++
+	}
+	for _, l := range b.Labels {
+		labels[l.Name]--
+	}
+	for _, n := range labels {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (p Poller) snapshot(ctx context.Context, number int) (Snapshot, error) {

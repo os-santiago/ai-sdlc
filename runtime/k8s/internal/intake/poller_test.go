@@ -404,43 +404,48 @@ func TestReviewedBindingChangesProduceFreshGeneration(t *testing.T) {
 func TestUnchangedIneligibleTrackedIssueIsNotReread(t *testing.T) {
 	f := setup(t)
 	ctx := context.Background()
+	scan := func(label string, wantRecorded int, wantReread bool) {
+		t.Helper()
+		calls := f.source.calls
+		f.due(t)
+		if n, err := f.poller.PollOnce(ctx, time.Now()); err != nil || n != wantRecorded {
+			t.Fatalf("%s: recorded %d, %v", label, n, err)
+		}
+		if reread := f.source.calls-calls > 1; reread != wantReread {
+			t.Fatalf("%s: re-read %v, want %v", label, reread, wantReread)
+		}
+	}
 	if n, err := f.poller.PollOnce(ctx, time.Now()); err != nil || n != 1 {
 		t.Fatalf("first scan: %d %v", n, err)
 	}
-	// Withdrawing the label advances updated_at and is recorded once.
+	// Withdrawing the label is read and recorded once, then skipped.
 	f.source.issue.Labels = nil
 	f.source.issue.UpdatedAt = f.source.issue.UpdatedAt.Add(time.Second)
-	f.due(t)
-	if n, err := f.poller.PollOnce(ctx, time.Now()); err != nil || n != 1 {
-		t.Fatalf("withdrawal: %d %v", n, err)
+	scan("withdrawal", 1, true)
+	scan("unchanged", 0, false)
+	// Comments advance updated_at only: still skipped on every later scan.
+	for i := 0; i < 3; i++ {
+		f.source.issue.UpdatedAt = f.source.issue.UpdatedAt.Add(time.Second)
+		scan("comment", 0, false)
 	}
-	observed := func() time.Time {
-		var at time.Time
-		if err := f.admin.Pool.QueryRow(`SELECT max(observed_at) FROM intake_observations`).Scan(&at); err != nil {
-			t.Fatal(err)
-		}
-		return at
-	}
-	before, calls := observed(), f.source.calls
-	f.due(t)
-	if n, err := f.poller.PollOnce(ctx, time.Now()); err != nil || n != 0 {
-		t.Fatalf("unchanged scan: %d %v", n, err)
-	}
-	if f.source.calls-calls != 1 || !observed().Equal(before) {
-		t.Fatalf("an unchanged ineligible issue was re-read: %d source calls", f.source.calls-calls)
-	}
-	// A comment advances updated_at: the issue is read again, but creates no work.
-	f.source.issue.UpdatedAt = f.source.issue.UpdatedAt.Add(time.Second)
-	calls = f.source.calls
-	f.due(t)
-	if n, err := f.poller.PollOnce(ctx, time.Now()); err != nil || n != 0 || f.source.calls-calls < 3 {
-		t.Fatalf("changed ineligible issue not re-read: %d %v calls=%d", n, err, f.source.calls-calls)
-	}
-	// Re-adding the label is always read and creates work.
+	// A content edit is read (and recorded as a new ineligible revision).
+	f.source.issue.Body += " clarified"
+	scan("edit", 1, true)
+	scan("after edit", 0, false)
+	// An authority revision change re-reads and re-records the ineligible head
+	// once, so planning can still see the withdrawal under the new revision.
+	f.policy.ProjectSHA256 = strings.Repeat("b", 64)
+	scan("authority rotation", 1, true)
+	scan("after rotation", 0, false)
+	// Closed with the label kept: ineligible on both sides, so skipped after
+	// it is recorded once.
+	f.source.issue.State = "closed"
 	f.source.issue.Labels = []forge.Label{{Name: "ready"}}
-	f.source.issue.UpdatedAt = f.source.issue.UpdatedAt.Add(time.Second)
-	f.due(t)
-	if n, err := f.poller.PollOnce(ctx, time.Now()); err != nil || n != 1 {
-		t.Fatalf("relabel: %d %v", n, err)
-	}
+	scan("closed labeled", 1, true)
+	scan("closed labeled unchanged", 0, false)
+	// Reopening is read, and with the label it creates work again.
+	f.source.issue.State = "open"
+	scan("reopened", 1, true)
+	// An open, labeled issue is always read.
+	scan("open labeled", 0, true)
 }
