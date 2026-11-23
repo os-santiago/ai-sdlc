@@ -29,6 +29,10 @@ from pathlib import Path
 
 LABEL = 'ai-sdlc:shadow'
 POLL_SECONDS = 20
+# An execution cleanup that will not complete: the runtime blocks all worker
+# work until an operator acts (store.ExecutionCleanupBlocked). Normal retries
+# (pending with fewer than three attempts) are not terminal.
+TERMINAL_CLEANUP = "(l.cleanup_state='uncertain' OR (l.cleanup_state='pending' AND l.cleanup_attempts>=3))"
 
 
 def run(args, **kwargs):
@@ -55,8 +59,13 @@ class Runtime:
         return lines[:10]
 
     def blocked(self):
-        """A failed verification whose cleanup is not complete blocks all later work."""
+        """A failed verification whose cleanup is not complete, or an execution
+        cleanup that will not complete, blocks all later work."""
         rows = self.sql("SELECT count(*) FROM verification_requests WHERE state='failed' AND cleanup_state<>'complete'")
+        if bool(rows) and rows[0] != '0':
+            return True
+        rows = self.sql("SELECT count(*) FROM execution_lifecycles l JOIN execution_requests r ON r.id=l.request_id "
+                        "WHERE r.state='stopped' AND " + TERMINAL_CLEANUP)
         return bool(rows) and rows[0] != '0'
 
     def snapshot(self, issue):
@@ -70,10 +79,17 @@ class Runtime:
         reviews = "FROM review_runs WHERE work_item_uuid IN (SELECT work_item_uuid %s)" % executions
         return {
             'executions': int(one('SELECT count(*) ' + executions) or 0),
-            'execution': one("SELECT state||'|'||stop_reason %s ORDER BY created_at DESC LIMIT 1" % executions),
+            'execution': one("SELECT state||'|'||stop_reason %s ORDER BY created_at DESC, id DESC LIMIT 1" % executions),
             # A captured candidate can still be handed to verification after
             # its execution stopped (for example after a failed pod cleanup).
-            'executionCandidate': one("SELECT count(*) FROM execution_candidates WHERE request_id=(SELECT id %s ORDER BY created_at DESC LIMIT 1)" % executions) not in ('', '0'),
+            'executionCandidate': one("SELECT count(*) FROM execution_candidates WHERE request_id=(SELECT id %s ORDER BY created_at DESC, id DESC LIMIT 1)" % executions) not in ('', '0'),
+            # The handoff can no longer happen: cleanup ended uncertain or ran
+            # out of retries, the handoff was refused, or the request expired
+            # without one.
+            'handoffImpossible': one(("SELECT count(*) FROM execution_requests r JOIN execution_lifecycles l ON l.request_id=r.id "
+                                      "WHERE r.id=(SELECT id %s ORDER BY created_at DESC, id DESC LIMIT 1) AND (" + TERMINAL_CLEANUP + " "
+                                      "OR EXISTS(SELECT 1 FROM verification_handoffs h WHERE h.candidate_id=r.id AND h.state='rejected') "
+                                      "OR (r.expires_at<=now() AND NOT EXISTS(SELECT 1 FROM verification_handoffs h WHERE h.candidate_id=r.id)))") % executions) not in ('', '0'),
             'verifications': int(one('SELECT count(*) ' + verifications) or 0),
             'verification': one("SELECT state||'|'||reason %s ORDER BY created_at DESC LIMIT 1" % verifications),
             'reviews': int(one('SELECT count(*) ' + reviews) or 0),
@@ -127,7 +143,11 @@ def attempt(runtime, github, issue, timeout):
         if now['executions'] != seen_executions:
             seen_executions, handoff_base = now['executions'], now['verifications']
         stopped = new_execution and now['execution'].startswith('stopped|') and now['execution'] != 'stopped|candidate-captured'
-        if stopped and (now.get('executionCandidate') or now['verifications'] > handoff_base):
+        if stopped and now['verifications'] > handoff_base:
+            # Already handed off: the verification below decides.
+            result['executionStop'] = now['execution'].split('|', 1)[1]
+            stopped = False
+        elif stopped and now.get('executionCandidate') and not now.get('handoffImpossible'):
             # The stopped execution captured a candidate: the runtime hands it
             # to verification once its cleanup completes, so the attempt goes on.
             result['executionStop'] = now['execution'].split('|', 1)[1]

@@ -7,9 +7,9 @@ from unittest import mock
 import run_battery
 
 
-def state(executions=0, execution='', verifications=0, verification='', reviews=0, review='', calls=0, candidate=False):
+def state(executions=0, execution='', verifications=0, verification='', reviews=0, review='', calls=0, candidate=False, impossible=False):
     return {'executions': executions, 'execution': execution, 'verifications': verifications, 'verification': verification,
-            'reviews': reviews, 'review': review, 'modelCalls': calls, 'executionCandidate': candidate}
+            'reviews': reviews, 'review': review, 'modelCalls': calls, 'executionCandidate': candidate, 'handoffImpossible': impossible}
 
 
 class FakeRuntime:
@@ -59,6 +59,11 @@ class AttemptTests(unittest.TestCase):
         refused = run_battery.attempt(FakeRuntime([state(), stopped, handed]), FakeGitHub(), 7, 60)
         self.assertEqual((refused['outcome'], refused['stage'], refused['reason'], refused['executionStop']),
                          ('failure', 'verification', 'comparison-failed', 'uncertain'))
+
+    def test_stop_whose_handoff_can_no_longer_happen_is_final(self):
+        dead = state(executions=1, execution='stopped|uncertain', candidate=True, impossible=True)
+        result = run_battery.attempt(FakeRuntime([state(), dead]), FakeGitHub(), 7, 60)
+        self.assertEqual((result['outcome'], result['stage'], result['reason']), ('failure', 'execution', 'uncertain'))
 
     def test_stop_without_a_candidate_is_final_at_once(self):
         result = run_battery.attempt(FakeRuntime([state(), state(executions=1, execution='stopped|uncertain')]), FakeGitHub(), 7, 60)
