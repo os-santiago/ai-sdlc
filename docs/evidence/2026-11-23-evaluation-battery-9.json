@@ -1,0 +1,205 @@
+{
+  "repository": "os-santiago/ai-sdlc-sample",
+  "attemptBudget": 2,
+  "issues": [
+    {
+      "issue": 81,
+      "attempts": [
+        {
+          "issue": 81,
+          "startedAt": "2026-11-23T00:29:26Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 665,
+          "modelCalls": 16,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-publication-before-observation cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 81,
+          "startedAt": "2026-11-23T00:41:14Z",
+          "outcome": "success",
+          "pullRequest": 108,
+          "seconds": 600,
+          "modelCalls": 13
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 87,
+      "attempts": [
+        {
+          "issue": 87,
+          "startedAt": "2026-11-23T00:51:59Z",
+          "outcome": "failure",
+          "stage": "verification",
+          "reason": "comparison-failed",
+          "seconds": 323,
+          "modelCalls": 10,
+          "diagnostics": [
+            "verification reconciliation stopped safely: refused-candidate-failed"
+          ]
+        },
+        {
+          "issue": 87,
+          "startedAt": "2026-11-23T00:58:05Z",
+          "outcome": "failure",
+          "stage": "verification",
+          "reason": "comparison-failed",
+          "seconds": 535,
+          "modelCalls": 14,
+          "diagnostics": [
+            "verification reconciliation stopped safely: refused-candidate-failed"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 100,
+      "attempts": [
+        {
+          "issue": 100,
+          "startedAt": "2026-11-23T01:07:44Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 407,
+          "modelCalls": 24,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: worker-exit cleanupPending=false workerExitCode=22 failureRecorded=true"
+          ]
+        },
+        {
+          "issue": 100,
+          "startedAt": "2026-11-23T01:15:14Z",
+          "outcome": "success",
+          "pullRequest": 109,
+          "seconds": 428,
+          "modelCalls": 16
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 101,
+      "attempts": [
+        {
+          "issue": 101,
+          "startedAt": "2026-11-23T01:23:06Z",
+          "outcome": "success",
+          "pullRequest": 110,
+          "seconds": 470,
+          "modelCalls": 14
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 102,
+      "attempts": [
+        {
+          "issue": 102,
+          "startedAt": "2026-11-23T01:31:40Z",
+          "outcome": "success",
+          "pullRequest": 111,
+          "seconds": 641,
+          "modelCalls": 17
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 103,
+      "attempts": [
+        {
+          "issue": 103,
+          "startedAt": "2026-11-23T01:43:05Z",
+          "outcome": "success",
+          "pullRequest": 112,
+          "seconds": 470,
+          "modelCalls": 12
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 104,
+      "attempts": [
+        {
+          "issue": 104,
+          "startedAt": "2026-11-23T01:51:39Z",
+          "outcome": "success",
+          "pullRequest": 113,
+          "seconds": 579,
+          "modelCalls": 15
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 105,
+      "attempts": [
+        {
+          "issue": 105,
+          "startedAt": "2026-11-23T02:02:02Z",
+          "outcome": "success",
+          "pullRequest": 114,
+          "seconds": 578,
+          "modelCalls": 12
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 106,
+      "attempts": [
+        {
+          "issue": 106,
+          "startedAt": "2026-11-23T02:12:25Z",
+          "outcome": "success",
+          "pullRequest": 115,
+          "seconds": 513,
+          "modelCalls": 18
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 107,
+      "attempts": [
+        {
+          "issue": 107,
+          "startedAt": "2026-11-23T02:21:42Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 301,
+          "modelCalls": 11,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: cleanup-pod cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 107,
+          "startedAt": "2026-11-23T02:27:26Z",
+          "outcome": "success",
+          "pullRequest": 116,
+          "seconds": 471,
+          "modelCalls": 17
+        }
+      ],
+      "success": true
+    }
+  ],
+  "summary": {
+    "issues": 10,
+    "firstAttemptSuccess": 6,
+    "successWithinBudget": 9,
+    "firstAttemptRate": 0.6,
+    "rateWithinBudget": 0.9
+  }
+}
