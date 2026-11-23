@@ -148,5 +148,5 @@
       ]
     }
   ],
-  "stopped": "operator-stopped: from 03:29 UTC every execution stopped at model-authorization-publication; the battery was stopped to install images that name the refused check"
+  "stopped": "operator-stopped: from 03:29 UTC, four of five attempts stopped at model-authorization-publication (the fifth stopped at verification baseline); the battery was stopped to install images that name the refused check"
 }
