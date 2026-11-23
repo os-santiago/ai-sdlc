@@ -11,6 +11,12 @@ and then only observes.
 | `failure` | The runtime stopped the attempt; the report records the stage, the reason and the components' safe stop lines |
 | `timeout` | Neither happened within `--timeout-minutes` |
 
+An execution stop is final only if, on the next poll, the runtime still has not
+handed a candidate to verification. A stop after capture (for example a failed
+pod cleanup) can still hand off the captured candidate, and that verification,
+review and merge then decide the attempt. A request for changes is not final
+either, because it leads to a repair.
+
 A failed attempt is retried up to `--attempts`. When an issue is done, the runner removes its label, so another installation watching the repository does not pick it up. The report gives the
 first-attempt rate and the rate within that budget. The runner stops with
 `runtime-blocked` when a failed verification's cleanup blocks all later work,

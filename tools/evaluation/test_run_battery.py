@@ -49,6 +49,16 @@ class AttemptTests(unittest.TestCase):
         self.assertEqual((result['outcome'], result['stage'], result['reason']), ('failure', 'execution', 'uncertain'))
         self.assertIn('workerExitCode=23', result['diagnostics'][0])
 
+    def test_execution_stop_with_a_verification_handoff_is_not_final(self):
+        stopped = state(executions=1, execution='stopped|uncertain')
+        handed = dict(stopped, verifications=1, verification='claimed|')
+        with mock.patch('run_battery.time.monotonic', side_effect=[0, 0, 20, 40, 61, 61]):
+            result = run_battery.attempt(FakeRuntime([state(), stopped, handed, handed]), FakeGitHub(), 7, 60)
+        self.assertEqual(result['outcome'], 'timeout')
+        # The handed-off candidate decides the attempt.
+        passed = run_battery.attempt(FakeRuntime([state(), stopped, handed, dict(handed, verification='failed|comparison-failed')]), FakeGitHub(), 7, 60)
+        self.assertEqual((passed['outcome'], passed['stage'], passed['reason']), ('failure', 'verification', 'comparison-failed'))
+
     def test_captured_candidate_and_old_failures_are_not_attributed(self):
         old = state(executions=1, execution='stopped|uncertain', verifications=1, verification='failed|uncertain')
         captured = dict(old, executions=2, execution='stopped|candidate-captured')

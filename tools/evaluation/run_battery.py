@@ -29,6 +29,8 @@ from pathlib import Path
 
 LABEL = 'ai-sdlc:shadow'
 POLL_SECONDS = 20
+# Polls an execution stop must persist without a verification handoff.
+HANDOFF_POLLS = 2
 
 
 def run(args, **kwargs):
@@ -109,6 +111,7 @@ def attempt(runtime, github, issue, timeout):
     started = time.monotonic()
     github.label(issue, True)
     result = {'issue': issue, 'startedAt': since}
+    stop_polls = 0
     while time.monotonic() - started < timeout:
         time.sleep(POLL_SECONDS)
         merged = github.merged_pull(issue, since)
@@ -118,8 +121,14 @@ def attempt(runtime, github, issue, timeout):
         if merged:
             result.update(outcome='success', pullRequest=merged)
             break
-        if new_execution and now['execution'].startswith('stopped|') and now['execution'] != 'stopped|candidate-captured':
-            stage = ('execution', now['execution'].split('|', 1)[1])
+        handed_off = now['verifications'] > before['verifications']
+        if new_execution and now['execution'].startswith('stopped|') and now['execution'] != 'stopped|candidate-captured' and not handed_off:
+            # A stop after capture (for example a failed pod cleanup) can
+            # still hand the candidate to verification a few seconds later.
+            # Conclude only when the next poll still shows no handoff.
+            stop_polls += 1
+            if stop_polls >= HANDOFF_POLLS:
+                stage = ('execution', now['execution'].split('|', 1)[1])
         elif now['verifications'] > before['verifications'] and now['verification'].startswith('failed|'):
             stage = ('verification', now['verification'].split('|', 1)[1])
         elif now['reviews'] > before['reviews'] and now['review'].startswith('failed|') and now['review'] != 'failed|request-changes':
