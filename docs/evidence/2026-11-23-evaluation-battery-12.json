@@ -1,0 +1,323 @@
+{
+  "repository": "os-santiago/ai-sdlc-sample",
+  "attemptBudget": 2,
+  "issues": [
+    {
+      "issue": 124,
+      "attempts": [
+        {
+          "issue": 124,
+          "startedAt": "2026-11-23T06:15:40Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 497,
+          "modelCalls": 12,
+          "diagnostics": [
+            "independent review stopped safely: model-drive-observe"
+          ]
+        },
+        {
+          "issue": 124,
+          "startedAt": "2026-11-23T06:24:41Z",
+          "outcome": "success",
+          "pullRequest": 147,
+          "seconds": 564,
+          "modelCalls": 12
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 137,
+      "attempts": [
+        {
+          "issue": 137,
+          "startedAt": "2026-11-23T06:34:49Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 261,
+          "modelCalls": 10,
+          "diagnostics": [
+            "independent review stopped safely: model-drive-exit-race"
+          ]
+        },
+        {
+          "issue": 137,
+          "startedAt": "2026-11-23T06:39:53Z",
+          "outcome": "success",
+          "pullRequest": 148,
+          "seconds": 455,
+          "modelCalls": 17
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 138,
+      "attempts": [
+        {
+          "issue": 138,
+          "startedAt": "2026-11-23T06:48:13Z",
+          "outcome": "timeout",
+          "seconds": 908,
+          "modelCalls": 10,
+          "diagnostics": []
+        },
+        {
+          "issue": 138,
+          "startedAt": "2026-11-23T07:04:04Z",
+          "outcome": "timeout",
+          "seconds": 908,
+          "modelCalls": 11,
+          "diagnostics": []
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 139,
+      "attempts": [
+        {
+          "issue": 139,
+          "startedAt": "2026-11-23T07:19:57Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 305,
+          "modelCalls": 12,
+          "diagnostics": [
+            "independent review stopped safely: model-mailbox-read"
+          ]
+        },
+        {
+          "issue": 139,
+          "startedAt": "2026-11-23T07:25:45Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 196,
+          "modelCalls": 5,
+          "diagnostics": [
+            "independent review stopped safely: authority"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 140,
+      "attempts": [
+        {
+          "issue": 140,
+          "startedAt": "2026-11-23T07:29:46Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 153,
+          "modelCalls": 7,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-authorization-publication-snapshot cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 140,
+          "startedAt": "2026-11-23T07:33:03Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 241,
+          "modelCalls": 15,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-authorization-publication-snapshot cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 141,
+      "attempts": [
+        {
+          "issue": 141,
+          "startedAt": "2026-11-23T07:37:48Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 134,
+          "modelCalls": 8,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-authorization-publication-snapshot cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 141,
+          "startedAt": "2026-11-23T07:40:46Z",
+          "outcome": "timeout",
+          "seconds": 907,
+          "modelCalls": 20,
+          "diagnostics": []
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 142,
+      "attempts": [
+        {
+          "issue": 142,
+          "startedAt": "2026-11-23T07:56:37Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 111,
+          "modelCalls": 4,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-authorization-publication-snapshot cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 142,
+          "startedAt": "2026-11-23T07:59:11Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 110,
+          "modelCalls": 7,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-authorization-publication-snapshot cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 143,
+      "attempts": [
+        {
+          "issue": 143,
+          "startedAt": "2026-11-23T08:01:48Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 111,
+          "modelCalls": 4,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: execution-authority cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 143,
+          "startedAt": "2026-11-23T08:04:22Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 111,
+          "modelCalls": 4,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-authorization-publication-snapshot cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 144,
+      "attempts": [
+        {
+          "issue": 144,
+          "startedAt": "2026-11-23T08:06:57Z",
+          "outcome": "failure",
+          "stage": "verification",
+          "reason": "uncertain",
+          "seconds": 478,
+          "modelCalls": 11,
+          "diagnostics": [
+            "verification reconciliation stopped safely: cleanup-after-candidate"
+          ]
+        },
+        {
+          "issue": 144,
+          "startedAt": "2026-11-23T08:15:39Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 154,
+          "modelCalls": 8,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-authorization-publication-snapshot cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 145,
+      "attempts": [
+        {
+          "issue": 145,
+          "startedAt": "2026-11-23T08:18:58Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 154,
+          "modelCalls": 7,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-authorization-publication-snapshot cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 145,
+          "startedAt": "2026-11-23T08:22:15Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 68,
+          "modelCalls": 4,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-authorization-publication-snapshot cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 146,
+      "attempts": [
+        {
+          "issue": 146,
+          "startedAt": "2026-11-23T08:24:08Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 68,
+          "modelCalls": 3,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-authorization-publication-snapshot cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 146,
+          "startedAt": "2026-11-23T08:26:01Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 89,
+          "modelCalls": 4,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-authorization-publication-snapshot cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        }
+      ],
+      "success": false
+    }
+  ],
+  "summary": {
+    "issues": 11,
+    "firstAttemptSuccess": 0,
+    "successWithinBudget": 2,
+    "firstAttemptRate": 0.0,
+    "rateWithinBudget": 0.182
+  }
+}

@@ -1,0 +1,227 @@
+{
+  "repository": "os-santiago/ai-sdlc-sample",
+  "attemptBudget": 2,
+  "issues": [
+    {
+      "issue": 149,
+      "attempts": [
+        {
+          "issue": 149,
+          "startedAt": "2026-11-23T09:03:30Z",
+          "outcome": "success",
+          "pullRequest": 159,
+          "seconds": 477,
+          "modelCalls": 11
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 150,
+      "attempts": [
+        {
+          "issue": 150,
+          "startedAt": "2026-11-23T09:12:12Z",
+          "outcome": "success",
+          "pullRequest": 160,
+          "seconds": 456,
+          "modelCalls": 14
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 151,
+      "attempts": [
+        {
+          "issue": 151,
+          "startedAt": "2026-11-23T09:20:33Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 305,
+          "modelCalls": 13,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: execution-exit-race cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 151,
+          "startedAt": "2026-11-23T09:26:21Z",
+          "outcome": "success",
+          "pullRequest": 161,
+          "seconds": 586,
+          "modelCalls": 17
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 152,
+      "attempts": [
+        {
+          "issue": 152,
+          "startedAt": "2026-11-23T09:36:51Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 394,
+          "modelCalls": 15,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: worker-exit cleanupPending=true workerExitCode=22 failureRecorded=true"
+          ]
+        },
+        {
+          "issue": 152,
+          "startedAt": "2026-11-23T09:44:08Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 348,
+          "modelCalls": 13,
+          "diagnostics": [
+            "independent review stopped safely: model-mailbox-read"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 153,
+      "attempts": [
+        {
+          "issue": 153,
+          "startedAt": "2026-11-23T09:50:40Z",
+          "outcome": "success",
+          "pullRequest": 162,
+          "seconds": 478,
+          "modelCalls": 13
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 154,
+      "attempts": [
+        {
+          "issue": 154,
+          "startedAt": "2026-11-23T09:59:25Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 435,
+          "modelCalls": 16,
+          "diagnostics": [
+            "independent review stopped safely: model-drive-observe"
+          ]
+        },
+        {
+          "issue": 154,
+          "startedAt": "2026-11-23T10:07:23Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 370,
+          "modelCalls": 14,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: execution-read cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 155,
+      "attempts": [
+        {
+          "issue": 155,
+          "startedAt": "2026-11-23T10:14:17Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 197,
+          "modelCalls": 11,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: execution-read cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 155,
+          "startedAt": "2026-11-23T10:18:18Z",
+          "executionStop": "uncertain",
+          "outcome": "failure",
+          "stage": "verification",
+          "reason": "comparison-failed",
+          "seconds": 304,
+          "modelCalls": 13,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: cleanup-config-observe-request cleanupPending=true workerExitCode=0 failureRecorded=false",
+            "verification reconciliation stopped safely: refused-candidate-failed"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 156,
+      "attempts": [
+        {
+          "issue": 156,
+          "startedAt": "2026-11-23T10:24:07Z",
+          "outcome": "success",
+          "pullRequest": 163,
+          "seconds": 585,
+          "modelCalls": 13
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 157,
+      "attempts": [
+        {
+          "issue": 157,
+          "startedAt": "2026-11-23T10:34:36Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 328,
+          "modelCalls": 13,
+          "diagnostics": [
+            "independent review stopped safely: model-drive-observe"
+          ]
+        },
+        {
+          "issue": 157,
+          "startedAt": "2026-11-23T10:40:47Z",
+          "outcome": "success",
+          "pullRequest": 164,
+          "seconds": 391,
+          "modelCalls": 12
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 158,
+      "attempts": [
+        {
+          "issue": 158,
+          "startedAt": "2026-11-23T10:48:03Z",
+          "outcome": "success",
+          "pullRequest": 165,
+          "seconds": 586,
+          "modelCalls": 14
+        }
+      ],
+      "success": true
+    }
+  ],
+  "summary": {
+    "issues": 10,
+    "firstAttemptSuccess": 5,
+    "successWithinBudget": 7,
+    "firstAttemptRate": 0.5,
+    "rateWithinBudget": 0.7
+  }
+}
