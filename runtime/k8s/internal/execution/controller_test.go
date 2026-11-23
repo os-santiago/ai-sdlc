@@ -223,3 +223,14 @@ func TestEveryAuthorityStepIsReportedByTheBroker(t *testing.T) {
 		}
 	}
 }
+
+func TestReadStopNamesTheBoundedReadStep(t *testing.T) {
+	for _, stage := range []string{"execution-read-helper-exit-1", "execution-read-envelope", "execution-read-after-observation"} {
+		if got := DiagnosticStage(ControllerError{stage}); got != stage {
+			t.Fatalf("%s: %q", stage, got)
+		}
+	}
+	if DiagnosticStage(ControllerError{"execution-read-sensitive"}) != "unknown" {
+		t.Fatal("unbounded read step")
+	}
+}

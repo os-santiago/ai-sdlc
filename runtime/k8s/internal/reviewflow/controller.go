@@ -326,6 +326,9 @@ func drive(ctx context.Context, session reviewSession, fence func(context.Contex
 			return ControllerError{Stage: "drive-exit-race"}
 		}
 		if e != nil && !errors.Is(e, modelmailbox.ErrPending) {
+			if step := podtransport.ReadStep(e); step != "" {
+				return ControllerError{Stage: "mailbox-read-" + step}
+			}
 			return ControllerError{Stage: "mailbox-read"}
 		}
 		if e == nil {

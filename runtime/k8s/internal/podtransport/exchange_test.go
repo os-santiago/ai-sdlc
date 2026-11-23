@@ -353,3 +353,24 @@ func publishToExitedWorker(t *testing.T, kind string) {
 		}
 	}
 }
+
+func TestMailboxReadStepsAreNamedAndKeepTheCause(t *testing.T) {
+	for step, cause := range map[string]error{"helper-transport": ErrTransport, "helper-exit-1": ErrTransport, "envelope": ErrTransport, "before-observation": ErrPermission, "after-observation": ErrTransport} {
+		err := readFailure(step, cause)
+		if ReadStep(err) != step || !KnownReadStep(step) || !errors.Is(err, cause) {
+			t.Fatalf("%s: %v", step, err)
+		}
+	}
+	// An observed worker exit is not a read failure; callers still see it.
+	if err := readFailure("after-observation", ErrWorkerExited); err != ErrWorkerExited || ReadStep(err) != "" {
+		t.Fatal("worker exit must stay unwrapped")
+	}
+	for _, bad := range []string{"helper-exit-0", "helper-exit-256", "helper-exit-01", "sensitive"} {
+		if KnownReadStep(bad) {
+			t.Fatal(bad)
+		}
+	}
+	if ReadStep(ErrTransport) != "" {
+		t.Fatal("an unrelated error has no read step")
+	}
+}
