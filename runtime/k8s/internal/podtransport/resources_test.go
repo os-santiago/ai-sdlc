@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -304,6 +305,12 @@ func TestResourceDeleteUsesUIDAndObservesRemoval(t *testing.T) {
 			if deletes.Load() != 1 || ((which == "conflict" || which == "missing") && gets.Load() != 0) {
 				t.Fatal("cleanup retried or ignored response")
 			}
+			// The failed removal step is named and bounded; the error still
+			// unwraps to the transport error every caller stops on.
+			want := map[string]string{"conflict": "delete-status-409", "replacement": "observe-identity", "still-present": "observe-timeout"}[which]
+			if got := RemovalStep(err); got != want || (want != "" && (!KnownRemovalStep(got) || !errors.Is(err, ErrTransport))) {
+				t.Fatalf("removal step %q, want %q", got, want)
+			}
 		})
 	}
 }
@@ -437,5 +444,26 @@ func TestReviewRecoveryCleanupIsNamespaceAndUIDBound(t *testing.T) {
 	}
 	if calls.Load() != 3 {
 		t.Fatal("unexpected cleanup calls", calls.Load())
+	}
+}
+
+func TestRemovalStepsAreBounded(t *testing.T) {
+	for _, good := range []string{"invalid-uid", "delete-request", "delete-permission", "observe-request", "observe-permission", "observe-timeout", "observe-decode", "observe-identity", "delete-status-409", "observe-status-5xx", "delete-status-invalid"} {
+		if !KnownRemovalStep(good) {
+			t.Fatal(good)
+		}
+	}
+	for _, bad := range []string{"", "delete-status-418", "observe-status-6xx", "delete-status-409x", "observe", "delete-sensitive"} {
+		if KnownRemovalStep(bad) {
+			t.Fatal(bad)
+		}
+	}
+	for status, want := range map[int]string{409: "409", 404: "4xx", 503: "503", 302: "3xx", 700: "invalid", 0: "invalid"} {
+		if got := statusClass(status); got != want || !KnownRemovalStep("delete-status-"+got) {
+			t.Fatal(status, got)
+		}
+	}
+	if RemovalStep(ErrTransport) != "" {
+		t.Fatal("an unrelated error has no removal step")
 	}
 }

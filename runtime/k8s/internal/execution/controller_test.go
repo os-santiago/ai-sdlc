@@ -158,3 +158,21 @@ func TestCleanupFailureNamesTheStepWithoutAnEarlierCause(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestCleanupDiagnosticNamesTheBoundedRemovalStep(t *testing.T) {
+	for _, stage := range []string{"cleanup-pod-observe-timeout", "cleanup-config-delete-status-409", "cleanup-pod-delete-permission"} {
+		if got := DiagnosticStage(cleanupFailure{step: stage}); got != stage {
+			t.Fatalf("%s: got %q", stage, got)
+		}
+	}
+	for _, stage := range []string{"cleanup-pod-sensitive", "cleanup-config-delete-status-418", "cleanup-confirm-observe-timeout"} {
+		if got := DiagnosticStage(cleanupFailure{step: stage}); got != "unknown" {
+			t.Fatalf("%s: unbounded stage %q", stage, got)
+		}
+	}
+	if removalStage("cleanup-pod", ErrTestUnrelated) != "cleanup-pod" {
+		t.Fatal("an unrelated error keeps the plain step")
+	}
+}
+
+var ErrTestUnrelated = errors.New("unrelated")

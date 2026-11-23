@@ -62,6 +62,16 @@ func (e cleanupFailure) Unwrap() error {
 	}
 	return ControllerError{"cleanup"}
 }
+
+// removalStage refines a cleanup step with the bounded removal step that
+// failed, for example cleanup-pod-observe-timeout.
+func removalStage(step string, err error) string {
+	if detail := podtransport.RemovalStep(err); podtransport.KnownRemovalStep(detail) {
+		return step + "-" + detail
+	}
+	return step
+}
+
 func CleanupPending(err error) bool { var failed cleanupFailure; return errors.As(err, &failed) }
 
 // DiagnosticStage returns only fixed operational categories. Never log an
@@ -77,6 +87,11 @@ func DiagnosticStage(err error) string {
 	}
 	if strings.HasPrefix(stopped.Stage, "model-") {
 		return "model-" + modelbroker.SafeFailureStage(strings.TrimPrefix(stopped.Stage, "model-"))
+	}
+	for _, step := range []string{"cleanup-pod-", "cleanup-config-"} {
+		if detail, ok := strings.CutPrefix(stopped.Stage, step); ok && podtransport.KnownRemovalStep(detail) {
+			return stopped.Stage
+		}
 	}
 	return "unknown"
 }
@@ -103,11 +118,15 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 			cleanup, stop := context.WithTimeout(context.Background(), 25*time.Second)
 			defer stop()
 			step := ""
-			if podUID != "" && resources.DeletePod(cleanup, podUID) != nil {
-				step = "cleanup-pod"
+			if podUID != "" {
+				if e := resources.DeletePod(cleanup, podUID); e != nil {
+					step = removalStage("cleanup-pod", e)
+				}
 			}
-			if configUID != "" && resources.DeleteConfig(cleanup, configUID) != nil && step == "" {
-				step = "cleanup-config"
+			if configUID != "" {
+				if e := resources.DeleteConfig(cleanup, configUID); e != nil && step == "" {
+					step = removalStage("cleanup-config", e)
+				}
 			}
 			if step == "" && l != nil && configUID != "" && podUID != "" && db.ConfirmExecutionCleanup(cleanup, l.durable, configUID, podUID) != nil {
 				step = "cleanup-confirm"
