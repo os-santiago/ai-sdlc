@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
@@ -217,6 +218,14 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 		if errors.As(err, &diagnostic) {
 			stage = "publication-" + safePublicationStage(diagnostic.PublicationStage())
 		}
+		// The worker had already exited, for example killed (124) when its run
+		// budget ended while this call was in flight: name its exit code.
+		var exited interface{ WorkerExitCode() (int32, bool) }
+		if errors.As(err, &exited) {
+			if code, ok := exited.WorkerExitCode(); ok {
+				stage = fmt.Sprintf("publication-worker-exit-%d", code)
+			}
+		}
 		if modelmailbox.Digest(reply.Payload) != responseDigest {
 			stage = "publication-response-mutation"
 		}
@@ -243,8 +252,14 @@ func SafeFailureStage(stage string) string {
 	case "configuration", "scope", "request-binding", "authorization-reservation", "reservation", "claim", "authorization-dispatch", "deadline", "provider", "completion-commit", "response-envelope", "authorization-publication", "publication", "acknowledgement", "publication-envelope", "publication-encoding", "publication-before-observation", "publication-helper-transport", "publication-helper-exit", "publication-receipt", "publication-after-observation", "publication-response-mutation", "publication-expired", "publication-unknown":
 		return stage
 	}
+	if publicationWorkerExit.MatchString(stage) {
+		return stage
+	}
 	return "unknown"
 }
+
+// A bounded container exit code (0-255), without leading zeros.
+var publicationWorkerExit = regexp.MustCompile(`^publication-worker-exit-(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])$`)
 
 func safePublicationStage(stage string) string {
 	switch stage {

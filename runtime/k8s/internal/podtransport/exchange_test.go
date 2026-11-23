@@ -277,3 +277,79 @@ func TestBindingRejectsChangedPodBeforeAnyExec(t *testing.T) {
 		})
 	}
 }
+
+func TestPublicationNamesTheExitCodeOfAnAlreadyExitedWorker(t *testing.T) {
+	for _, kind := range []string{"exited", "other-terminal-id", "restarted", "running-then-forbidden"} {
+		t.Run(kind, func(t *testing.T) { publishToExitedWorker(t, kind) })
+	}
+}
+
+func publishToExitedWorker(t *testing.T, kind string) {
+	binding, pod, reply := bindingFixture(t)
+	var gets, execs atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/exec") {
+			execs.Add(1)
+			w.WriteHeader(500)
+			return
+		}
+		p := pod.DeepCopy()
+		if gets.Add(1) > 1 {
+			if kind == "running-then-forbidden" {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			// The launcher's run budget ended while the call was in flight.
+			for i := range p.Status.ContainerStatuses {
+				if status := &p.Status.ContainerStatuses[i]; status.Name == "worker" {
+					status.State = core.ContainerState{Terminated: &core.ContainerStateTerminated{ExitCode: 124, ContainerID: status.ContainerID}}
+					if kind == "other-terminal-id" {
+						status.State.Terminated.ContainerID = "containerd://" + strings.Repeat("f", 64)
+					}
+					if kind == "restarted" {
+						status.RestartCount = 1
+					}
+				}
+			}
+		}
+		raw, _ := json.Marshal(p)
+		w.Write(raw)
+	}))
+	defer server.Close()
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	c, err := NewClient(Config{APIServer: server.URL, CA: ca, BearerToken: strings.Repeat("x", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Bind(context.Background(), c, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Publish(context.Background(), reply)
+	var exited interface{ WorkerExitCode() (int32, bool) }
+	var stage interface{ PublicationStage() string }
+	if err == nil || execs.Load() != 0 || !errors.As(err, &stage) || stage.PublicationStage() != "before-observation" {
+		t.Fatalf("%s: publication not refused before any exec: %v", kind, err)
+	}
+	if gets.Load() != 2 {
+		t.Fatalf("%s: %d pod observations, want one after binding", kind, gets.Load())
+	}
+	switch kind {
+	case "exited":
+		if !errors.As(err, &exited) || !errors.Is(err, ErrTransport) {
+			t.Fatalf("exit code not carried: %v", err)
+		}
+		if code, ok := exited.WorkerExitCode(); !ok || code != 124 {
+			t.Fatalf("exit code %d %v", code, ok)
+		}
+	case "running-then-forbidden":
+		if errors.As(err, &exited) || !errors.Is(err, ErrPermission) {
+			t.Fatalf("permission failure changed: %v", err)
+		}
+	default:
+		// Only the pinned, unrestarted instance may report an exit code.
+		if errors.As(err, &exited) || !errors.Is(err, ErrTransport) {
+			t.Fatalf("%s: exit code from an unpinned instance: %v", kind, err)
+		}
+	}
+}

@@ -17,6 +17,14 @@ prompts, model responses and arbitrary process output are not retained here.
 If observation or persistence fails, cleanup still runs and the attempt remains
 stopped. A false `failureRecorded` must never be treated as durable evidence.
 
+`workerExitCode=0` in a stop line means that the stop was not a worker exit,
+not that the worker exited 0. When the worker has already exited while a model
+response waits for publication, the stop names that exit code instead, for
+example `model-publication-worker-exit-124`. Code 124 is the launcher ending
+the run at the profile's `maxSeconds` while the call was still in flight: the
+generation ran out of time, not a transport fault. The publication still stops
+the call as uncertain, as before.
+
 The first managed Saferus attempt on 2026-11-17 stopped before this capability
 existed. Its seven successful model HTTP responses do not explain its nonzero
 executor exit, and cleanup removed the transient diagnostic files. This change

@@ -236,8 +236,19 @@ func (s *Session) Publish(ctx context.Context, e modelmailbox.Envelope) (err err
 		return ErrTransport
 	}
 	stage = "before-observation"
-	if _, err := s.observe(ctx, false); err != nil {
+	// One observation that also reports a terminated worker: publication is
+	// refused exactly as before, and an exit of the pinned worker instance
+	// (for example 124 when the launcher's run budget ended while this call
+	// was in flight) is named by its bounded exit code.
+	observed, err := s.inspect(ctx, true)
+	if err != nil {
 		return err
+	}
+	if observed.workerExitCode != nil {
+		if observed.workerTerminalID != observed.instances["worker"].ID {
+			return ErrTransport
+		}
+		return workerExitedError{code: *observed.workerExitCode, cause: ErrTransport}
 	}
 	stage = "helper-transport"
 	receipt, code, err := s.exchange(ctx, "respond", raw)
@@ -258,6 +269,19 @@ func (s *Session) Publish(ctx context.Context, e modelmailbox.Envelope) (err err
 	}
 	return nil
 }
+
+// workerExitedError is a refused publication because the pinned worker
+// instance has already exited. It unwraps to ErrTransport.
+type workerExitedError struct {
+	code  int32
+	cause error
+}
+
+func (e workerExitedError) Error() string { return "worker exited before publication" }
+func (e workerExitedError) WorkerExitCode() (int32, bool) {
+	return e.code, e.code >= 0 && e.code <= 255
+}
+func (e workerExitedError) Unwrap() error { return e.cause }
 
 // Only fixed publication boundaries are surfaced; never helper stderr or API
 // exception text. Unwrap preserves the existing error classification.
