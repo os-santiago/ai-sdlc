@@ -23,6 +23,7 @@ type LifecycleBinding struct {
 
 // MaxStartSeconds bounds LifecycleBinding.StartSeconds.
 const MaxStartSeconds = 300
+
 type Lifecycle struct {
 	Claim   ExecutionClaim
 	Binding LifecycleBinding

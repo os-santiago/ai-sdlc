@@ -306,7 +306,9 @@ func TestToolchainInitContainerIDsAreStable(t *testing.T) {
 	}
 	// After binding, any change to an init container stops the session.
 	for name, edit := range map[string]func(*core.Pod){
-		"replaced":  func(p *core.Pod) { p.Status.InitContainerStatuses[1] = terminatedInit(executor.InitCopyToolchain, fixtureToolchainImage, "registry.example/go@sha256:"+strings.Repeat("c", 64), "f", 0) },
+		"replaced": func(p *core.Pod) {
+			p.Status.InitContainerStatuses[1] = terminatedInit(executor.InitCopyToolchain, fixtureToolchainImage, "registry.example/go@sha256:"+strings.Repeat("c", 64), "f", 0)
+		},
 		"restarted": func(p *core.Pod) { p.Status.InitContainerStatuses[1].RestartCount = 1 },
 		"removed":   func(p *core.Pod) { p.Status.InitContainerStatuses = nil },
 		"failed":    func(p *core.Pod) { p.Status.InitContainerStatuses[1].State.Terminated.ExitCode = 3 },
