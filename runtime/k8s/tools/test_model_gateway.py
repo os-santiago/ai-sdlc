@@ -383,6 +383,11 @@ class GatewayTests(unittest.TestCase):
         self.server = model_gateway.GatewayServer(("127.0.0.1", 0), model_gateway.GatewayHandler, self.adapter)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.base = "http://127.0.0.1:%d" % self.server.server_address[1]
+        # The scripted profile (~259 s of a 300 s ceiling) triggers the recheck;
+        # its randomized pause must not slow the suite down.
+        sleep = unittest.mock.patch.object(model_gateway.time, "sleep")
+        self.sleep = sleep.start()
+        self.addCleanup(sleep.stop)
 
     def tearDown(self):
         self.server.shutdown()
@@ -493,6 +498,65 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(uniform.call_count, model_gateway.ATTEMPTS - 1)
         uniform.assert_called_with(*model_gateway.RETRY_SECONDS)
         self.assertEqual([c.args for c in sleep.call_args_list], [(7.5,)] * (model_gateway.ATTEMPTS - 1))
+
+    def scripted_profiles(self, *outcomes):
+        """Replaces the benchmark with scripted outcomes: a timeout or a failure."""
+        calls = []
+        def fake(adapter, ceiling, prompt_tokens, completion_tokens):
+            calls.append(ceiling)
+            outcome = outcomes[len(calls) - 1]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return {"timeoutSeconds": outcome}
+        patcher = unittest.mock.patch.object(model_gateway, "benchmark", side_effect=fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
+
+    def test_first_attempt_waits_a_bounded_random_stagger(self):
+        calls = self.scripted_profiles(100)
+        with unittest.mock.patch.object(model_gateway.random, "uniform", return_value=12.5) as uniform:
+            profile = model_gateway.run_benchmark(self.server, 16384, 4096, stagger=30)
+        self.assertEqual(profile, {"timeoutSeconds": 100})
+        uniform.assert_called_once_with(0, 30)
+        self.assertEqual([c.args for c in self.sleep.call_args_list], [(12.5,)])
+        self.assertEqual(len(calls), 1)
+
+    def test_no_stagger_by_default_or_when_disabled(self):
+        self.scripted_profiles(100, 100)
+        with unittest.mock.patch.object(model_gateway.random, "uniform") as uniform:
+            model_gateway.run_benchmark(self.server, 16384, 4096)
+            model_gateway.run_benchmark(self.server, 16384, 4096, stagger=0)
+        uniform.assert_not_called()
+        self.sleep.assert_not_called()
+
+    def test_stagger_setting_is_bounded(self):
+        self.assertEqual(model_gateway.stagger_seconds({}), 30)
+        self.assertEqual(model_gateway.stagger_seconds({model_gateway.STAGGER_ENV: "0"}), 0)
+        self.assertEqual(model_gateway.stagger_seconds({model_gateway.STAGGER_ENV: "120"}), 120)
+        for bad in ("121", "-1", "", "x", "1.5", "\u00b2"):
+            with self.subTest(bad=bad), self.assertRaises(RuntimeError):
+                model_gateway.stagger_seconds({model_gateway.STAGGER_ENV: bad})
+
+    def test_profile_near_the_ceiling_is_measured_once_more_and_the_faster_kept(self):
+        # Ceiling 300 s: 250 s exceeds 0.8 x 300; a concurrent benchmark may have inflated it.
+        calls = self.scripted_profiles(250, 120)
+        with unittest.mock.patch.object(model_gateway.random, "uniform", return_value=9.0):
+            self.assertEqual(model_gateway.run_benchmark(self.server, 16384, 4096), {"timeoutSeconds": 120})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([c.args for c in self.sleep.call_args_list], [(9.0,)])
+        self.assertEqual(self.call("/v1/gateway/profile"), (200, {"timeoutSeconds": 120}))
+
+    def test_recheck_keeps_the_first_profile_when_not_faster_or_failed(self):
+        calls = self.scripted_profiles(250, 260, 250, model_benchmark.BenchmarkFailed("model too slow for the installation ceiling"))
+        for _ in range(2):
+            self.assertEqual(model_gateway.run_benchmark(self.server, 16384, 4096, pause=0), {"timeoutSeconds": 250})
+        self.assertEqual(len(calls), 4)
+
+    def test_profile_well_within_the_ceiling_is_not_rechecked(self):
+        calls = self.scripted_profiles(240)
+        self.assertEqual(model_gateway.run_benchmark(self.server, 16384, 4096, pause=0), {"timeoutSeconds": 240})
+        self.assertEqual(len(calls), 1)
 
     def test_envelope_is_bounded(self):
         self.assertEqual(model_gateway.envelope({}), [16384, 4096])
