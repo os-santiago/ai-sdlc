@@ -85,7 +85,8 @@ The worker then runs with:
   own, so these variables also reach SCC's Node.js process; nothing that
   configures Node.js, OpenSSL, the C library, a shell, Python, Git, npm or the
   launcher is passed. A value that names `/workspaces` or `/scratch` is
-  dropped. The same names are allowlisted for `run_shell`. Values are not
+  refused at installation: the migrator names the error. The same names are
+  allowlisted for `run_shell`. Values are not
   rewritten, so a variable that names a path in the verification image (for
   example `GOROOT`) does not apply in generation; Go finds its root from the
   `go` binary. Other variables stay verification-only;
@@ -133,6 +134,12 @@ The worker log names the stop:
 
 The runtime does not fall back to the offline guidance: fix the manifest and
 reinstall.
+
+The runtime accepts only the canonical manifest bytes the installer writes.
+An installed manifest in any other form, such as keys in another letter case,
+which Go's decoder would accept, stops the runtime with "project manifest is not in
+canonical form". The chart likewise refuses to render a `project.manifestJSON`
+that is not a JSON manifest object.
 
 #### Rotation
 
