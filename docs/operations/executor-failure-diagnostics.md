@@ -69,9 +69,12 @@ for example `model-publication-helper-exit-124`:
 
 | Code | Meaning |
 |---|---|
-| 124 | The helper's own 5-second deadline ended (for example a slow exec stream) |
-| 3 | The request is no longer pending in the mailbox |
-| 1 | Any other refusal (malformed or mismatched response) |
+| 124 | The helper's own 5-second deadline ended, or it received a termination signal |
+| 3 | The response staging file vanished before it could be linked into place |
+| 1 | Any other refusal: the request cannot be read (missing or still pending), a response already exists, the response is malformed or mismatched, or the helper's environment (Pod UID, bridge directory) is invalid |
+
+If the controller's own exec deadline ends first, the stop is
+`model-publication-helper-transport` instead.
 
 As with every publication failure, the call stays uncertain and is never
 retried by this diagnostic.
