@@ -11,6 +11,10 @@ import secrets
 # 900 s) and the lifecycle's 1,020 s ceiling (maxSeconds + 120 s).
 DEFAULT_GENERATION_SECONDS, MIN_GENERATION_SECONDS, MAX_GENERATION_SECONDS = 600, 600, 900
 DEFAULT_GENERATION_STEPS, MIN_GENERATION_STEPS, MAX_GENERATION_STEPS = 24, 24, 32
+# Requested output tokens per model answer (the profile's maxTokens). The
+# maximum is the runtime's own cap: executor profile validation, the mailbox
+# RequestLimits and the bundled adapter contract all refuse more than 8192.
+DEFAULT_ANSWER_TOKENS, MIN_ANSWER_TOKENS, MAX_ANSWER_TOKENS = 4096, 4096, 8192
 
 
 def generation_budget(seconds=None, steps=None, model_upstream=False):
@@ -29,6 +33,24 @@ def generation_budget(seconds=None, steps=None, model_upstream=False):
         raise ValueError('--generation-steps above 24 requires --model-upstream: the bundled Codex adapter keeps '
                          'its 16-call provider ledger, which a larger step budget would not raise')
     return seconds, steps
+
+
+def answer_tokens(tokens=None, model_upstream=False):
+    """Validated per-answer token bound; None selects the reviewed default.
+
+    The bound should fit a whole-file rewrite of a publishable file (up to
+    32 KiB, about 10k tokens of code): a model whose patches are refused falls
+    back to rewriting files, and a truncated answer stops the attempt. Above the
+    default requires a model upstream: the bundled Codex adapter validates
+    max_tokens but never applies it to the Codex CLI, so a larger bound there
+    would change the reviewed configuration without changing any answer."""
+    tokens = DEFAULT_ANSWER_TOKENS if tokens is None else tokens
+    if type(tokens) is not int or not MIN_ANSWER_TOKENS <= tokens <= MAX_ANSWER_TOKENS:
+        raise ValueError('Generation answer tokens must be an integer from 4096 to 8192')
+    if tokens > DEFAULT_ANSWER_TOKENS and model_upstream is not True:
+        raise ValueError('--generation-answer-tokens above 4096 requires --model-upstream: the bundled Codex adapter '
+                         'does not apply a per-answer token bound, so a larger one would change nothing')
+    return tokens
 
 
 def installed_execution_config(kubectl):
@@ -90,11 +112,12 @@ def require_unchanged_tool_budget(kubectl, desired):
         return  # First candidate configuration, including maintenance promotion.
     try:
         profile = config['profile']
-        steps, seconds = profile['maxSteps'], profile['maxSeconds']
+        steps, seconds, tokens = profile['maxSteps'], profile['maxSeconds'], profile['maxTokens']
         if (config['version'] != 'ai-sdlc.candidate-runtime/v1'
                 or profile['version'] != 'ai-sdlc.executor-profile/v1'
                 or type(steps) is not int or not 1 <= steps <= 32
-                or type(seconds) is not int or not 1 <= seconds <= 900):
+                or type(seconds) is not int or not 1 <= seconds <= 900
+                or type(tokens) is not int or not 1 <= tokens <= MAX_ANSWER_TOKENS):
             raise ValueError()
     except (KeyError, TypeError, ValueError):
         raise ValueError('Installed execution configuration is malformed; preserve it for review') from None
@@ -112,6 +135,11 @@ def require_unchanged_tool_budget(kubectl, desired):
     # reconciliation can neither switch the model service nor change its window.
     if profile.get('callSeconds') != json.loads(desired['candidate']['configJSON'])['profile'].get('callSeconds'):
         raise ValueError('Installed model service differs; use a reviewed runtime transition before reconciliation')
+    # The recorded answer bound is reselected with the same
+    # --generation-answer-tokens; omitting it never resets an installed bound.
+    if tokens != expected['maxTokens']:
+        raise ValueError('Installed generation answer-token bound differs; repeat the recorded --generation-answer-tokens. '
+                         'No runtime transition changes it: changing an installed bound requires a reinstallation')
     if config.get('model', {}).get('Limits') != json.loads(desired['candidate']['configJSON']).get('model', {}).get('Limits'):
         raise ValueError('Installed model budget differs; use a reviewed runtime transition before reconciliation')
 
@@ -128,8 +156,10 @@ def validate_runtime_class(name):
 
 
 def desired_values(root, image_lock_path, lock, verification=False, review=False, publication=False, merge=False, repair=False,
-                   generation_seconds=None, generation_steps=None, model_upstream=False, runtime_class=DEFAULT_RUNTIME_CLASS):
+                   generation_seconds=None, generation_steps=None, model_upstream=False, runtime_class=DEFAULT_RUNTIME_CLASS,
+                   generation_answer_tokens=None):
     seconds, steps = generation_budget(generation_seconds, generation_steps, model_upstream)
+    tokens = answer_tokens(generation_answer_tokens, model_upstream)
     if type(repair) is not bool or (repair and not review):
         raise ValueError("Review repair requires explicit independent review")
     if merge and not publication:
@@ -157,7 +187,7 @@ def desired_values(root, image_lock_path, lock, verification=False, review=False
     adev = (root / 'runtime/k8s/deploy/helm/ai-sdlc-k8s-runtime/files/adev-profile.yaml').read_text()
     profile = {'version': 'ai-sdlc.executor-profile/v1', 'model': 'codex-cli',
                # SCC counts tools, including parallel calls, not model turns.
-               'maxSteps': steps, 'maxSeconds': seconds, 'maxTokens': 4096,
+               'maxSteps': steps, 'maxSeconds': seconds, 'maxTokens': tokens,
                'aDevSHA256': hashlib.sha256(adev.encode()).hexdigest()}
     config = {'version': 'ai-sdlc.candidate-runtime/v1', 'profile': profile, 'aDev': adev,
               'placement': {'Namespace': 'ai-sdlc-executors',
@@ -185,7 +215,9 @@ def desired_values(root, image_lock_path, lock, verification=False, review=False
             raise ValueError('Verification requires matching reviewed verifier image publication')
         result['verifier'] = {'digest': value}
     if review:
-        review_profile = dict(profile, version='ai-sdlc.reviewer-profile/v1', maxSteps=8, maxSeconds=180)
+        # Reviewers answer with a short verdict: their answer bound stays the default.
+        review_profile = dict(profile, version='ai-sdlc.reviewer-profile/v1', maxSteps=8, maxSeconds=180,
+                              maxTokens=DEFAULT_ANSWER_TOKENS)
         review_config = {'version': 'ai-sdlc.independent-review-runtime/v1', 'profile': review_profile,
                          'aDev': adev, 'workerImage': config['placement']['WorkerImage'],
                          'mailboxImage': config['placement']['MailboxImage']}
@@ -300,5 +332,7 @@ def apply_model_upstream(values, path):
             raise ValueError('Model call window exceeds the reviewer profile')
         review['profile']['callSeconds'] = upstream['reviewCallSeconds']
         values['review']['configJSON'] = json.dumps(review, sort_keys=True)
-    values['modelGateway'] = upstreams.gateway_values(upstream)
+    # The benchmark's answer envelope follows the answer bound, so the derived
+    # per-call timeout covers the longest answer the profile admits.
+    values['modelGateway'] = upstreams.gateway_values(upstream, config['profile']['maxTokens'])
     return values

@@ -205,3 +205,21 @@ func TestRestrictedMailboxRejectsOverriddenModelAndTokenLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The largest installation-selected answer bound (8192) is admitted exactly.
+func TestRequestLimitsAdmitTheLargestAnswerBound(t *testing.T) {
+	limits := RequestLimits{Model: "m", MaxTokens: 8192}
+	if err := limits.Validate([]byte(`{"model":"m","messages":[{}],"max_tokens":8192,"stream":false}`)); err != nil {
+		t.Fatal(err)
+	}
+	if limits.Validate([]byte(`{"model":"m","messages":[{}],"max_tokens":8193,"stream":false}`)) == nil {
+		t.Fatal("request above the answer bound admitted")
+	}
+	store, _, _ := setupServer(t, time.Second)
+	if _, err := NewRestrictedServer(store, testIdentity, time.Second, limits); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewRestrictedServer(store, testIdentity, time.Second, RequestLimits{Model: "m", MaxTokens: 8193}); err == nil {
+		t.Fatal("answer bound above the runtime cap admitted")
+	}
+}

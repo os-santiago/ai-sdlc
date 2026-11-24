@@ -73,7 +73,7 @@ modelGateway:
     directAnswers: true                              # llama.cpp/vLLM: chat_template_kwargs.enable_thinking=false
   benchmark:
     promptTokens: 16384      # worker planning envelope: the largest prompt one SCC step may need
-    completionTokens: 4096   # and the largest answer
+    completionTokens: 4096   # and the largest answer: the generator profile's maxTokens
   reviewBenchmark:           # verifier envelope: large candidates, short verdicts
     promptTokens: 16384
     completionTokens: 1024
@@ -101,6 +101,13 @@ The per-call timeout is derived for the planning envelope:
 ```text
 timeout = ceil(1.5 * (promptTokens/prefillRate + completionTokens/generationRate)) + 5   (minimum 30 s)
 ```
+
+With `--model-upstream`, the installer sets the worker envelope's
+`completionTokens` to the generator's answer-token bound
+(`--generation-answer-tokens`, 4096 by default and at most 8192), so the derived
+timeout covers the longest answer the profile admits. Runtime transitions carry
+the recorded bound and its envelope unchanged. The verifier envelope stays at
+1,024.
 
 If the derived timeout exceeds `upstream.seconds`, or no valid tool call is
 proposed, the benchmark fails. Attempts are retried with randomized backoff,

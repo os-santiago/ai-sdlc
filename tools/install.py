@@ -433,6 +433,7 @@ def _main(argv, stack):
     parser.add_argument('--project-manifest', type=Path, help='Reviewed ai-sdlc.project/v1 manifest for a repository that is not a built-in reference')
     parser.add_argument('--generation-seconds', type=int, help='Generation time budget in seconds (600-900, default 600); candidate or verification only, recorded in the execution configuration')
     parser.add_argument('--generation-steps', type=int, help='Generation SCC tool-step budget (24-32, default 24; above 24 requires --model-upstream); candidate or verification only, recorded in the execution configuration')
+    parser.add_argument('--generation-answer-tokens', type=int, help='Requested output tokens per generator model answer (4096-8192, default 4096; above 4096 requires --model-upstream); candidate or verification only, recorded in the execution configuration')
     args = parser.parse_args(argv)
     if args.command not in ('plan','local','status','tools','host','credentials','sandbox'):
         raise ValueError('Delegated installer subcommands must be the first argument')
@@ -496,6 +497,11 @@ def _main(argv, stack):
             raise ValueError('A generation budget requires plan or local with the candidate or verification profile')
         import candidate_install
         candidate_install.generation_budget(args.generation_seconds, args.generation_steps, args.model_upstream is not None)
+    if args.generation_answer_tokens is not None:
+        if args.command not in ('plan', 'local') or args.profile not in ('candidate', 'verification'):
+            raise ValueError('A generation answer-token bound requires plan or local with the candidate or verification profile')
+        import candidate_install
+        candidate_install.answer_tokens(args.generation_answer_tokens, args.model_upstream is not None)
     if args.refresh_model_credential and args.codex_auth_file is None:
         raise ValueError('Model credential refresh requires an explicit authentication file')
     if args.github_auth != 'none' and args.command not in ('plan', 'local', 'credentials'):
@@ -532,7 +538,8 @@ def _main(argv, stack):
         import candidate_install
         execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images), verification=args.profile == "verification", review=bool(args.independent_review), publication=bool(args.publication), merge=bool(args.merge), repair=bool(args.review_repair),
                                                           generation_seconds=args.generation_seconds, generation_steps=args.generation_steps,
-                                                          model_upstream=args.model_upstream is not None, runtime_class=runtime_class)
+                                                          model_upstream=args.model_upstream is not None, runtime_class=runtime_class,
+                                                          generation_answer_tokens=args.generation_answer_tokens)
         if args.model_upstream is not None:
             candidate_install.apply_model_upstream(execution_values, args.model_upstream)
     elif args.model_upstream is not None:

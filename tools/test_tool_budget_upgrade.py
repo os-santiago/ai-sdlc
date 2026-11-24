@@ -18,13 +18,14 @@ import test_initial_activation
 
 
 class TargetTests(unittest.TestCase):
-    def source(self, seconds=600):
+    def source(self, seconds=600, tokens=4096):
         source, _, render = test_diagnostic_upgrade.DiagnosticTests().source()
         lock_path = install.LOCAL / 'images.lock.json'
         candidate = candidate_install.desired_values(install.ROOT, lock_path, install.image_lock(lock_path),
                                                      generation_seconds=seconds)['candidate']
         config = json.loads(candidate['configJSON'])
         config['profile']['maxSteps'] = 16
+        config['profile']['maxTokens'] = tokens
         source['values']['candidate']['configJSON'] = json.dumps(config, sort_keys=True)
         source['values'] = initial_activation.phase_values(source['values'], 'active', test_initial_activation.compiler(source['values']))
         source['documents'] = render(source['values'])
@@ -67,10 +68,22 @@ class TargetTests(unittest.TestCase):
         self.assertEqual(json.loads(recovered['active']['values']['candidate']['configJSON'])['profile']['maxSeconds'], 900)
         self.assertEqual(recovered['active']['documents'], source['documents'])
 
+    def test_recorded_answer_tokens_are_carried_through_every_phase(self):
+        source, render = self.source(tokens=8192)
+        targets = tool_budget_targets.targets(source, render, test_initial_activation.compiler(source['values']))
+        for phase in ('paused', 'staged', 'warming', 'armed', 'active'):
+            profile = json.loads(targets[phase]['values']['candidate']['configJSON'])['profile']
+            self.assertEqual(profile['maxTokens'], 8192)
+            self.assertEqual(profile['maxSteps'], 16 if phase == 'paused' else 24)
+        recovered = tool_budget_targets.targets(source, render, test_initial_activation.compiler(source['values']), original=True)
+        self.assertEqual(json.loads(recovered['active']['values']['candidate']['configJSON'])['profile']['maxTokens'], 8192)
+        self.assertEqual(recovered['active']['documents'], source['documents'])
+
     def test_unreviewed_source_limits_are_rejected(self):
         source, render = self.source()
         for field, value in [('maxSteps', 32), ('maxSeconds', 599), ('maxSeconds', 901), ('maxSeconds', True),
-                             ('maxSeconds', '600'), ('maxTokens', 8192)]:
+                             ('maxSeconds', '600'), ('maxTokens', 4095), ('maxTokens', 8193),
+                             ('maxTokens', True), ('maxTokens', '4096')]:
             bad = copy.deepcopy(source)
             config = json.loads(bad['values']['candidate']['configJSON'])
             config['profile'][field] = value

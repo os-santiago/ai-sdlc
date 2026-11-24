@@ -56,9 +56,9 @@ class ServiceCredential(unittest.TestCase):
 
 class Targets(unittest.TestCase):
     def source(self):
-        candidate = {'profile': {'maxRepairs': 1, 'maxSeconds': 600, 'maxSteps': 24},
+        candidate = {'profile': {'maxRepairs': 1, 'maxSeconds': 600, 'maxSteps': 24, 'maxTokens': 4096},
                      'placement': {'WorkerImage': 'w0', 'MailboxImage': 'm0', 'Namespace': 'n'}}
-        review = {'profile': {'maxSeconds': 180, 'maxSteps': 8}, 'workerImage': 'w0', 'mailboxImage': 'm0'}
+        review = {'profile': {'maxSeconds': 180, 'maxSteps': 8, 'maxTokens': 4096}, 'workerImage': 'w0', 'mailboxImage': 'm0'}
         values = {'components': {k: {'digest': DIGEST('a')} for k in upgrade.repair_targets.COMPONENTS},
                   'migrator': {'digest': DIGEST('a')}, 'verifier': {'digest': DIGEST('a')},
                   'build': {'digest': DIGEST('a'), 'configJSON': '{"profile": {}}'},
@@ -101,6 +101,21 @@ class Targets(unittest.TestCase):
         source['values']['candidate']['configJSON'] = json.dumps(candidate)
         profile = json.loads(self.run_targets(source)['active']['values']['candidate']['configJSON'])['profile']
         self.assertEqual((profile['maxSeconds'], profile['maxSteps'], profile['callSeconds']), (900, 32, 330))
+
+    def test_a_recorded_answer_bound_is_inherited_and_sizes_the_benchmark(self):
+        self.assertEqual(self.run_targets()['active']['values']['modelGateway']['benchmark']['completionTokens'], 4096)
+        source = self.source()
+        candidate = json.loads(source['values']['candidate']['configJSON'])
+        candidate['profile']['maxTokens'] = 8192
+        source['values']['candidate']['configJSON'] = json.dumps(candidate)
+        active = self.run_targets(source)['active']['values']
+        self.assertEqual(json.loads(active['candidate']['configJSON'])['profile']['maxTokens'], 8192)
+        self.assertEqual(active['modelGateway']['benchmark'], {'promptTokens': 16384, 'completionTokens': 8192})
+        for bad in (None, 2048, 8193, True, '4096'):
+            candidate['profile']['maxTokens'] = bad
+            source['values']['candidate']['configJSON'] = json.dumps(candidate)
+            with self.subTest(maxTokens=bad), self.assertRaisesRegex(ValueError, 'answer-token bound'):
+                self.run_targets(source)
 
     def test_target_chart_must_render_the_unchanged_installation_identically(self):
         with self.assertRaisesRegex(ValueError, 'identically'):
@@ -236,6 +251,10 @@ class History(unittest.TestCase):
         self.assertTrue(values['upstream']['directAnswers'])
         self.assertEqual(values['benchmark'], {'promptTokens': 16384, 'completionTokens': 4096})
         self.assertEqual(values['reviewBenchmark'], {'promptTokens': 16384, 'completionTokens': 1024})
+        self.assertEqual(upgrade.gateway_values(dict(GOOD), 8192)['benchmark'], {'promptTokens': 16384, 'completionTokens': 8192})
+        for bad in (4095, 8193, True, '8192', None):
+            with self.subTest(tokens=bad), self.assertRaises(ValueError):
+                upgrade.gateway_values(dict(GOOD), bad)
 
 
 class Guards(unittest.TestCase):

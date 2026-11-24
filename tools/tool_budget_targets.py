@@ -18,7 +18,9 @@ def targets(source, render, compile_build, *, original=False):
             # transition never resets a selected budget to the 600 s default.
             or type(profile.get('maxSeconds')) is not int
             or not candidate_install.MIN_GENERATION_SECONDS <= profile['maxSeconds'] <= candidate_install.MAX_GENERATION_SECONDS
-            or profile.get('maxTokens') != 4096
+            # Likewise the recorded answer-token bound.
+            or type(profile.get('maxTokens')) is not int
+            or not candidate_install.MIN_ANSWER_TOKENS <= profile['maxTokens'] <= candidate_install.MAX_ANSWER_TOKENS
             or candidate.get('model') != {'Limits': {'Calls': 16, 'InputBytes': 2097152,
                 'OutputBytes': 4194304}, 'ResponseLimit': 262144}):
         raise ValueError('Original bounded 16-tool generator profile required')

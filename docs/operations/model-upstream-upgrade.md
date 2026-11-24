@@ -55,7 +55,8 @@ point at the published worker and model-mailbox images. Because the verifier
 image changes, the separately reviewed provenance trust document must select it,
 and the separately reviewed release target renews its finite window. The CA
 cannot rotate here. Authority policy, build configuration, budgets and scope are
-inherited unchanged, which a closed value delta enforces.
+inherited unchanged, which a closed value delta enforces. The worker gateway's
+benchmark answer envelope is the recorded generator `maxTokens`.
 
 The operation has its own journal, pauses all consumers under the database
 write fence, exports and restores a verified backup, then stages, warms, arms
