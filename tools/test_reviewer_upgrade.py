@@ -57,6 +57,24 @@ class ReviewerTargets(unittest.TestCase):
             intake = next(d for d in deployments if d['metadata']['name'] == 'ai-sdlc-intake')
             self.assertEqual(intake['spec']['replicas'], int(phase == 'active'))
 
+    def test_review_tool_allowlist_is_inherited_as_recorded(self):
+        # Installations recorded before the setting render unchanged and never
+        # gain it; newer ones keep it in every phase.
+        image = install_images.REGISTRY + '@sha256:' + 'c' * 64
+        for recorded in (False, True):
+            with self.subTest(recorded=recorded):
+                source, render, compiler = self.source()
+                if not recorded:
+                    source['values']['review'].pop('narrowModelTools')
+                    source['documents'] = render(source['values'])
+                result = reviewer_upgrade_targets.targets(source, image, render, compiler)
+                for phase in ('paused', 'staged', 'warming', 'armed', 'active'):
+                    verifier = next(d for d in result[phase]['documents'] if d['kind'] == 'Deployment'
+                                    and d['metadata']['name'] == 'ai-sdlc-verifier')
+                    gateway = next(c for c in verifier['spec']['template']['spec']['containers'] if c['name'] == 'model-gateway')
+                    names = [e['name'] for e in gateway['env']]
+                    self.assertEqual('AI_SDLC_MODEL_GATEWAY_TOOLS' in names, recorded)
+
     def test_unpinned_foreign_and_unchanged_images_rejected(self):
         source, render, compiler = self.source()
         for image in ('latest', 'another/image@sha256:' + 'c'*64,

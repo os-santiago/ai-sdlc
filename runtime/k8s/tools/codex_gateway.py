@@ -13,10 +13,15 @@ from http.server import HTTPServer
 
 from codex_completion_process import backend_binary
 from codex_completion_policy import policy_snapshot
-from codexcli_openai_wrapper import Handler
+from codexcli_openai_wrapper import Handler, narrow_tools, tool_allowlist
 
 
 class GatewayHandler(Handler):
+    def complete_request(self, request):
+        # The installation's tool allowlist (review gateway only); see
+        # codexcli_openai_wrapper.narrow_tools.
+        return super().complete_request(narrow_tools(request, self.server.tools)[0])
+
     def do_POST(self):
         if not self.server.model_slot.acquire(blocking=False):
             self.reply(429, {"error": {"message": "completion gateway busy"}})
@@ -30,7 +35,8 @@ class GatewayHandler(Handler):
 class GatewayServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
-    def __init__(self, *args):
+    def __init__(self, *args, tools=None):
+        self.tools = tools
         self.connections = threading.BoundedSemaphore(4)
         self.model_slot = threading.BoundedSemaphore(1)
         super().__init__(*args)
@@ -74,7 +80,7 @@ def main():
     os.environ["HOME"] = "/model-home"
     backend_binary()
     policy_snapshot()
-    GatewayServer(("127.0.0.1", 8787), GatewayHandler).serve_forever()
+    GatewayServer(("127.0.0.1", 8787), GatewayHandler, tools=tool_allowlist()).serve_forever()
 
 
 if __name__ == "__main__":

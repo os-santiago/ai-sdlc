@@ -88,6 +88,70 @@ into the gateway only, and is sent only as the provider's authentication header
 (`Authorization: Bearer` for `openai`, `x-api-key` for `anthropic`). The
 default (`agent-cli`) renders byte-identically to earlier charts.
 
+## Review tool allowlist
+
+SCC offers the model every tool it registers (`read_file`, `write_file`,
+`edit_file`, `list_dir`, `search_text`, `run_shell`, `web_fetch`, `memory_read`,
+`memory_write`, `git`, `code_query`, `mcp_validate`, `repo_probe`) and has no
+setting to limit that list. The reviewer's SCC configuration only auto-approves
+the four read-only tools and denies commands, but a model that is offered
+`run_shell` may still call it, and the broker's strict
+[review response policy](review-model-guard.md) then rejects the whole review
+(`response-policy`). This was observed with a local Qwen3-Coder upstream.
+
+The verifier's review gateway therefore narrows the tools before the model sees
+them. With independent review enabled and `review.narrowModelTools: true`, the
+chart sets one environment variable on the verifier's `model-gateway` container
+only:
+
+```yaml
+- {name: AI_SDLC_MODEL_GATEWAY_TOOLS, value: "read_file,list_dir,search_text,code_query"}
+```
+
+The list is fixed in the chart, not a free value: it is exactly the set the
+review response policy (`modelbroker.reviewArguments`) and the reviewer's SCC
+`autoApprove` accept, and a Go test fails if the three diverge. The worker
+(generation) gateway never receives it. For each completion request the gateway
+(`narrow_tools` in `codexcli_openai_wrapper.py`, used by both `model_gateway.py`
+and `codex_gateway.py`):
+
+- validates the request with the shared contract first, so a malformed `tools`
+  array is refused (400) exactly as before;
+- removes every tool definition whose name is not in the allowlist, keeping the
+  remaining definitions byte for byte and in their original order, and never
+  adds one;
+- refuses (400, before any upstream call) a `tool_choice` that names a removed
+  tool, or `required` when no tool remains; `auto` and `none` pass unchanged;
+- then hands the narrowed request to the adapter, whose answer contract treats a
+  proposal for a removed tool as an unknown tool (fail closed).
+
+Without the variable the gateway is unchanged. A present but empty, malformed or
+repeated list refuses to start. At startup the gateway logs
+`{"event": "model-gateway-tools", "allowed": [...]}`, and each `model-call`
+event carries `"toolsWithheld": N` (the number of definitions the model did not
+see; tool names are never logged).
+
+The broker's evidence still binds the request it sent to the gateway (the SCC
+request, with every tool), not the narrowed upstream payload: the journal's
+`request_digest` is computed over the mailbox payload before the provider call,
+and nothing in the broker digests or compares what the gateway forwards. The
+narrowing happens at the model boundary and only removes offered tools, so the
+model saw a subset of the recorded tool list. The response policy is unchanged:
+a call to any other tool is still rejected (defence in depth).
+
+**Installation and upgrades.** `./install.sh local` sets
+`review.narrowModelTools: true` for every installation with independent review.
+Installations recorded before this setting omit it and render byte-identically
+with the new chart, so the closed-delta upgrade tools (model-upstream switch,
+release refresh, reviewer image and the others that re-render recorded values
+and require identical documents) keep accepting them and keep the recorded value
+unchanged; none of them enables the setting, because each is defined as a
+closed configuration transition. An ordinary `./install.sh local`
+reconciliation with independent review applies the installer's current desired
+values and so enables it (the verifier rolls out once); until then an older
+installation offers the reviewer every SCC tool, and the response policy still
+rejects any call outside the four.
+
 ## Startup benchmark
 
 Upstream adapters benchmark the model before the gateway reports ready:
@@ -308,6 +372,10 @@ absent otherwise:
 {"event": "model-call", "outcome": "ok", "seconds": 31.5, "budgetSeconds": 300, "promptTokens": 9632, "completionTokens": 88, "estimated": false, "degenerateRetries": 1}
 {"event": "model-call", "outcome": "failed", "seconds": 24.9, "budgetSeconds": 300, "reason": "degenerate", "degenerateRetries": 1}
 ```
+
+On the review gateway with a [tool allowlist](#review-tool-allowlist), every
+event also carries `"toolsWithheld": N` when the request offered tools outside
+the allowlist (absent otherwise).
 
 `reason` is a fixed class: `truncated` (the answer reached its token bound),
 `degenerate` (the answer degenerated into repetition twice, see

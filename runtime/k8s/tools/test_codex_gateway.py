@@ -57,3 +57,26 @@ class GatewayTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join()
+
+
+class ToolNarrowingTests(unittest.TestCase):
+    def test_review_allowlist_narrows_tools_before_the_agent_cli_backend(self):
+        tools = [{'type': 'function', 'function': {'name': name}} for name in ('run_shell', 'read_file', 'write_file', 'list_dir')]
+        request = {'messages': [{'role': 'user', 'content': 'Review'}], 'tools': tools}
+        seen = []
+
+        def complete(value):
+            seen.append(value)
+            return {'role': 'assistant', 'content': 'fixture'}
+
+        handler = gateway.GatewayHandler.__new__(gateway.GatewayHandler)
+        with patch.object(wrapper, 'complete', side_effect=complete):
+            for allowed, expected in ((None, ['run_shell', 'read_file', 'write_file', 'list_dir']),
+                                      (frozenset({'read_file', 'list_dir'}), ['read_file', 'list_dir'])):
+                handler.server = type('Server', (), {'tools': allowed})()
+                seen.clear()
+                handler.complete_request(request)
+                self.assertEqual([t['function']['name'] for t in seen[0]['tools']], expected)
+            with self.assertRaises(ValueError):
+                handler.complete_request(dict(request, tool_choice={'type': 'function', 'function': {'name': 'run_shell'}}))
+        self.assertEqual(len(request['tools']), 4)

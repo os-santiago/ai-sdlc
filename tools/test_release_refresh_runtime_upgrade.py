@@ -59,6 +59,17 @@ class RefreshTargets(unittest.TestCase):
         self.assertEqual(active['release']['browserProfileJSON'], '{"renewed": true}')
         self.assertEqual(result['source'], source)
 
+    def test_the_review_tool_allowlist_is_inherited_as_recorded(self):
+        # The refresh is a closed delta: it neither adds the setting to an
+        # installation recorded before it nor removes it from a newer one.
+        for recorded in (None, True):
+            source = installed()
+            if recorded is not None:
+                source['values']['review']['narrowModelTools'] = recorded
+            active = run_targets(source)['active']['values']
+            self.assertEqual(active['review'].get('narrowModelTools'), recorded)
+            self.assertEqual(set(active['review']), set(source['values']['review']))
+
     def test_a_different_or_missing_upstream_is_refused(self):
         source = installed()
         source['values'].pop('modelGateway')

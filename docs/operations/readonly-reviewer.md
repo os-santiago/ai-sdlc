@@ -17,7 +17,10 @@ disables rework, blocks shell commands and Git mutations, and automatically perm
 four inspection tools. It does not use SCC's blanket `-y` approval. Source-owned
 configuration and SCC output remain untrusted; the
 [model guard](review-model-guard.md) independently rejects proposed tools outside
-the four-tool allowlist before handoff.
+the four-tool allowlist before handoff. SCC still advertises all of its
+registered tools in each request; the verifier's review gateway removes the
+others before the model sees them
+([Review tool allowlist](model-gateway-adapters.md#review-tool-allowlist)).
 
 ## Result contract
 

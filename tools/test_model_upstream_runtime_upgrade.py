@@ -94,6 +94,17 @@ class Targets(unittest.TestCase):
         self.assertEqual(active['verifier']['digest'], DIGEST('b'))
         self.assertEqual(active['intake'], {'paused': False})
 
+    def test_the_review_tool_allowlist_is_inherited_as_recorded(self):
+        # The switch changes only the gateway values and windows: the review
+        # tool allowlist stays as recorded (absent on older installations).
+        for recorded in (None, True):
+            source = self.source()
+            if recorded is not None:
+                source['values']['review']['narrowModelTools'] = recorded
+            active = self.run_targets(source)['active']['values']
+            self.assertEqual(active['review'].get('narrowModelTools'), recorded)
+            self.assertNotIn('tools', active['modelGateway'])
+
     def test_a_recorded_generation_budget_is_inherited_unchanged(self):
         source = self.source()
         candidate = json.loads(source['values']['candidate']['configJSON'])

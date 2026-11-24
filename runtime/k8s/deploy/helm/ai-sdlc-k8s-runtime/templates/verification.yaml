@@ -197,6 +197,12 @@ spec:
           env:
             - {name: TMPDIR, value: /model-home/tmp}
             - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            {{- if .Values.review.narrowModelTools }}
+            {{- /* Exactly the tools the broker's review response policy
+                   (modelbroker.reviewArguments) and the reviewer's SCC
+                   autoApprove accept; the model is offered no other tool. */}}
+            - {name: AI_SDLC_MODEL_GATEWAY_TOOLS, value: "read_file,list_dir,search_text,code_query"}
+            {{- end }}
             {{- if ne $.Values.modelGateway.adapter "agent-cli" }}
             - {name: AI_SDLC_MODEL_UPSTREAM_URL, value: {{ required "modelGateway.upstream.url is required" $.Values.modelGateway.upstream.url | quote }}}
             - {name: AI_SDLC_MODEL_UPSTREAM_MODEL, value: {{ required "modelGateway.upstream.model is required" $.Values.modelGateway.upstream.model | quote }}}
