@@ -22,7 +22,10 @@ ai-sdlc (kind)  --OpenAI API (allowlist/token)-->  host service  -->  claude -p 
 ## Contract
 
 - `POST /v1/chat/completions`: an OpenAI request becomes a `chat.completion`
-  with native `tool_calls` and `usage`. Streaming is refused.
+  with native `tool_calls` and `usage`. A request with `stream: true` (and
+  optionally `stream_options: {"include_usage": true}`) gets the same answer
+  framed as server-sent events: the CLI answers at once, so only the framing
+  changes. The gateway's `openai` adapter streams to guard local models.
 - `GET /v1/models`: the configured aliases.
 - Authentication: a local bearer token (`tokenFile`, not a provider key),
   and/or an allowlist of client addresses (`allowedClients`, for example the
