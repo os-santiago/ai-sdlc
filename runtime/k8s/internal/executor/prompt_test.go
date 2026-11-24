@@ -44,7 +44,7 @@ func TestReviewPromptStatesTheGuardedContract(t *testing.T) {
 func TestPromptAsksForTargetedEditsWithinTheAnswerBound(t *testing.T) {
 	p := BuildPrompt(Assignment{Repository: "fixture/project", IssueNumbers: []int{1}, Title: "t", Body: "b"}, "policy")
 	flat := strings.Join(strings.Fields(p), " ")
-	for _, rule := range []string{"answer cut off at that bound", "edit_file", "never by rewriting a whole existing file with write_file", "Keep existing tests intact", "named like the existing test files"} {
+	for _, rule := range []string{"answer cut off at that bound", "edit_file", "never by rewriting a whole existing file with write_file", "Keep existing tests intact", "named like the existing test files", "@@ -START,COUNT +START,COUNT @@", "If a patch is refused", "a new file of the same package or module", "Never fall back to"} {
 		if !strings.Contains(flat, rule) {
 			t.Fatalf("prompt lacks %q", rule)
 		}
