@@ -126,10 +126,13 @@ and `codex_gateway.py`):
   proposal for a removed tool as an unknown tool (fail closed).
 
 Without the variable the gateway is unchanged. A present but empty, malformed or
-repeated list refuses to start. At startup the gateway logs
-`{"event": "model-gateway-tools", "allowed": [...]}`, and each `model-call`
-event carries `"toolsWithheld": N` (the number of definitions the model did not
-see; tool names are never logged).
+repeated list refuses to start. With an upstream adapter (`openai`,
+`anthropic`), the gateway logs `{"event": "model-gateway-tools", "allowed":
+[...]}` at startup, and each `model-call` event carries `"toolsWithheld": N`
+(the number of definitions the model did not see; tool names are never
+logged). The bundled agent-cli gateway narrows the same way but emits neither
+event. Narrowing needs a gateway image that contains this change; the chart and
+the image lock come from the same revision.
 
 The broker's evidence still binds the request it sent to the gateway (the SCC
 request, with every tool), not the narrowed upstream payload: the journal's
