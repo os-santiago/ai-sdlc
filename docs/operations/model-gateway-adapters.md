@@ -152,6 +152,21 @@ Generation and review of one work item run one after the other. Several items
 in flight at once need a model server with more capacity, or a ceiling that
 covers the contention.
 
+The worker and verifier gateways start together, so their startup benchmarks
+would otherwise overlap and the second would adopt an inflated profile, which
+can make every review `gateway-profile-unfit`. Two bounded measures prevent
+this:
+
+- Before its first attempt, each gateway waits a random 0 to N seconds.
+  `AI_SDLC_MODEL_BENCHMARK_STAGGER_SECONDS` sets N: default 30, range 0-120,
+  and 0 disables the delay. An invalid value stops the gateway at startup.
+  Readiness is delayed by at most N seconds.
+- When the first profile's timeout exceeds 80% of the installation ceiling,
+  the gateway waits a random 5-25 s, benchmarks once more and keeps the faster
+  profile. A failed second measurement keeps the first profile. The recheck
+  is logged as `model-benchmark-recheck`; `model-benchmark` logs the profile
+  kept.
+
 ## Per-call window
 
 Each model call crosses SCC, the executor's model mailbox, the call reservation

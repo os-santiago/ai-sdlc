@@ -176,5 +176,28 @@ class QueryTests(unittest.TestCase):
         self.assertIn("r.expires_at<=now() AND NOT EXISTS", joined)
 
 
+
+class RunRetryTests(unittest.TestCase):
+    def test_transient_failures_are_retried_then_raised(self):
+        calls = []
+        def flaky(args, **kwargs):
+            calls.append(args)
+            if len(calls) < 3:
+                raise run_battery.subprocess.CalledProcessError(1, args)
+            return mock.Mock(stdout="ok")
+        with mock.patch('run_battery.subprocess.run', side_effect=flaky), mock.patch('run_battery.time.sleep') as sleep:
+            self.assertEqual(run_battery.run(['gh', 'x']), "ok")
+        self.assertEqual((len(calls), sleep.call_count), (3, 2))
+        def failing(args, **kwargs):
+            raise run_battery.subprocess.TimeoutExpired(args, 120)
+        with mock.patch('run_battery.subprocess.run', side_effect=failing) as runs, mock.patch('run_battery.time.sleep') as sleep:
+            with self.assertRaises(run_battery.subprocess.TimeoutExpired):
+                run_battery.run(['gh', 'x'])
+        self.assertEqual((runs.call_count, [c.args[0] for c in sleep.call_args_list]), (4, [5, 15, 45]))
+        with mock.patch('run_battery.subprocess.run', side_effect=failing) as runs, mock.patch('run_battery.time.sleep') as sleep:
+            with self.assertRaises(run_battery.subprocess.TimeoutExpired):
+                run_battery.run(['kubectl', 'logs'], retry=False)
+        self.assertEqual((runs.call_count, sleep.call_count), (1, 0))
+
 if __name__ == '__main__':
     unittest.main()

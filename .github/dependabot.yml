@@ -18,3 +18,21 @@ updates:
     labels: [dependencies]
     commit-message:
       prefix: "chore(deps)"
+  # Base images in the component Containerfiles are pinned as tag@digest;
+  # this refreshes the digest (and tag) through reviewed pull requests.
+  - package-ecosystem: docker
+    directories:
+      - /runtime/k8s/components/*
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      base-images:
+        patterns: ["*"]
+    ignore:
+      # Node majors change the worker runtime; adopt them deliberately.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+    labels: [dependencies]
+    commit-message:
+      prefix: "chore(deps)"
