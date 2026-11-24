@@ -213,8 +213,10 @@ func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, erro
 	if r == nil || !resourceUID.MatchString(uid) {
 		return nil, ErrTransport
 	}
-	ctx, cancel := context.WithDeadline(ctx, minDeadline(time.Now().Add(StartBudget), r.expires))
+	ctx, cancel := context.WithDeadline(ctx, minDeadline(time.Now().Add(startBudget(r.pod)), r.expires))
 	defer cancel()
+	// Init container IDs, once observed, must never change.
+	seen := map[string]instance{}
 	for {
 		raw, status, err := r.request(ctx, http.MethodGet, "pods", r.pod.Name, nil, false)
 		if err != nil {
@@ -227,17 +229,27 @@ func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, erro
 		if authority.DecodeStrict(raw, &pod) != nil || !exactPodTemplate(pod, r.pod, uid, r.binding.Admission) {
 			return nil, ErrTransport
 		}
-		if pod.Status.Phase != core.PodPending && pod.Status.Phase != core.PodRunning {
-			return nil, ErrTransport
-		}
-		ready, err := r.containersReady(pod)
+		// The init sequence is checked first, so a failed toolchain copy
+		// (which fails the pod) is named rather than a generic phase stop.
+		ready, err := r.containersReady(pod, seen)
 		if err != nil {
 			return nil, err
+		}
+		if pod.Status.Phase != core.PodPending && pod.Status.Phase != core.PodRunning {
+			return nil, ErrTransport
 		}
 		if ready && pod.Status.Phase == core.PodRunning {
 			b := r.binding
 			b.PodUID = uid
-			return Bind(ctx, r.client, b)
+			session, err := Bind(ctx, r.client, b)
+			if err != nil {
+				return nil, err
+			}
+			// The session's baseline is the same init containers observed here.
+			if !stableInit(seen, session.initInstances()) {
+				return nil, ErrTransport
+			}
+			return session, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -249,22 +261,31 @@ func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, erro
 
 // Only initial ContainerCreating/PodInitializing states may be polled. This
 // is not a generic retry of failed binding, restarts or unknown transport errors.
-func (r *Resources) containersReady(pod core.Pod) (bool, error) {
-	if len(pod.Status.ContainerStatuses) > 2 || len(pod.Status.InitContainerStatuses) != 0 || len(pod.Status.EphemeralContainerStatuses) != 0 {
+// The compiled init containers must progress exactly in order before any
+// worker or mailbox container starts.
+func (r *Resources) containersReady(pod core.Pod, seen map[string]instance) (bool, error) {
+	if len(pod.Status.ContainerStatuses) > 2 || len(pod.Status.EphemeralContainerStatuses) != 0 {
+		return false, ErrTransport
+	}
+	initialized, err := observeInit(r.pod.Spec.InitContainers, pod.Status.InitContainerStatuses, false)
+	if err != nil {
+		return false, err
+	}
+	if !stableInit(seen, initialized.instances) {
 		return false, ErrTransport
 	}
 	images := map[string]string{}
 	for _, container := range r.pod.Spec.Containers {
 		images[container.Name] = container.Image
 	}
-	seen := map[string]bool{}
+	started := map[string]bool{}
 	running := 0
 	for _, status := range pod.Status.ContainerStatuses {
 		pin, known := images[status.Name]
-		if !known || seen[status.Name] || status.RestartCount != 0 || status.State.Terminated != nil || status.LastTerminationState.Terminated != nil || status.LastTerminationState.Running != nil || status.LastTerminationState.Waiting != nil {
+		if !known || started[status.Name] || status.RestartCount != 0 || status.State.Terminated != nil || status.LastTerminationState.Terminated != nil || status.LastTerminationState.Running != nil || status.LastTerminationState.Waiting != nil {
 			return false, ErrTransport
 		}
-		seen[status.Name] = true
+		started[status.Name] = true
 		if len(status.Image) > 1024 || len(status.ImageID) > 1024 {
 			return false, ErrTransport
 		}
@@ -272,7 +293,7 @@ func (r *Resources) containersReady(pod core.Pod) (bool, error) {
 			return false, ErrTransport
 		}
 		if status.State.Running != nil && status.State.Waiting == nil {
-			if !containerIDPattern.MatchString(status.ContainerID) || status.ImageID == "" || status.Image == "" {
+			if !initialized.complete || !containerIDPattern.MatchString(status.ContainerID) || status.ImageID == "" || status.Image == "" {
 				return false, ErrTransport
 			}
 			running++
