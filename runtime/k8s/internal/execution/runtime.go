@@ -68,10 +68,6 @@ type Runtime struct {
 	// derived from its startup benchmark fits the call window and
 	// ProviderTimeoutSeconds. No work is claimed until that profile exists.
 	AdoptGatewayProfile bool
-	// SandboxCheck observes the installed sandbox RuntimeClass before any
-	// work is claimed. Nil uses the read-only API preflight; only fixtures
-	// that cannot read cluster-scoped classes replace it.
-	SandboxCheck func(context.Context, *podtransport.Client, string) (podtransport.RuntimeClassAdmission, error)
 }
 
 func (r Runtime) PollOnce(ctx context.Context) (string, error) {
@@ -167,7 +163,7 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	// Cleanup and handoff above always run; only claiming new work and
 	// creating pods require the sandbox class, checked with this poll's
 	// sealed configuration and client so the verified class is the one used.
-	admission, e := r.sandbox(ctx, client, config.Placement.SandboxRuntimeClass())
+	admission, e := client.CheckRuntimeClass(ctx, config.Placement.SandboxRuntimeClass())
 	if e != nil {
 		return "sandbox-runtime-class-unavailable", ControllerError{"sandbox-runtime-class"}
 	}
@@ -240,15 +236,8 @@ func (r Runtime) CheckSandbox(ctx context.Context) error {
 	if e != nil {
 		return ErrAuthority
 	}
-	_, e = r.sandbox(ctx, client, config.Placement.SandboxRuntimeClass())
+	_, e = client.CheckRuntimeClass(ctx, config.Placement.SandboxRuntimeClass())
 	return e
-}
-
-func (r Runtime) sandbox(ctx context.Context, client *podtransport.Client, class string) (podtransport.RuntimeClassAdmission, error) {
-	if r.SandboxCheck != nil {
-		return r.SandboxCheck(ctx, client, class)
-	}
-	return client.CheckRuntimeClass(ctx, class)
 }
 
 // benchmarked admits the model when the gateway's measured timeout fits.

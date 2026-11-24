@@ -96,12 +96,15 @@ installer checks it exists before any change. A later reinstall without
 back to the default; name the class explicitly to keep or change it. On kind
 the installer keeps installing and using `ai-sdlc-offline`.
 
-Known limitations: the preflight accepts any handler, because the handler
+The chart reads the class field (`placement.RuntimeClass`, `runtimeClass`)
+case-insensitively, as the runtime's JSON decoding does, and refuses a document
+that spells it more than once. In the verifier, an unavailable reviewer class
+stops only new reviews and an unavailable verification class stops only new
+verifications; the handoff of approved work continues in the same cycle.
+
+Known limitation: the preflight accepts any handler, because the handler
 belongs to the platform; choosing a real sandbox class is the installer's
-responsibility. The chart compares the class field names case-sensitively
-(`placement.RuntimeClass`, `runtimeClass`), while the runtime's strict JSON
-decoding matches field names case-insensitively; the installer always writes
-the documented spelling.
+responsibility.
 
 The `network=none` property below belongs to the kind handler. On another
 platform the namespaces' deny-all NetworkPolicy, enforced by the platform's

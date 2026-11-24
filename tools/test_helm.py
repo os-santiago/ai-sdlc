@@ -263,7 +263,15 @@ class ChartTests(unittest.TestCase):
         # Default documents omit the class; they match only the default value.
         result = self.sandbox_docs(dict(default, review={'enabled': True, 'configJSON': '{}'}))[0]
         self.assertEqual(result.returncode, 0, result.stderr)
-        for values in (dict(default, sandbox={'runtimeClassName': 'kata'}), kata,
+        # The runtime matches field names case-insensitively; so does the chart.
+        lower = {'candidate': {'configJSON': json.dumps({'placement': {'runtimeClass': 'kata'}})}}
+        result = self.sandbox_docs(dict(lower, sandbox={'runtimeClassName': 'kata'},
+                                        review={'enabled': True, 'configJSON': json.dumps({'RUNTIMECLASS': 'kata'})}))[0]
+        self.assertEqual(result.returncode, 0, result.stderr)
+        both = {'candidate': {'configJSON': json.dumps({'placement': {'RuntimeClass': 'kata', 'runtimeclass': 'kata'}})}}
+        for values in (lower, dict(default, review={'enabled': True, 'configJSON': json.dumps({'RuntimeClass': 'kata'})}),
+                       dict(both, sandbox={'runtimeClassName': 'kata'}),
+                       dict(default, sandbox={'runtimeClassName': 'kata'}), kata,
                        dict(kata, sandbox={'runtimeClassName': 'kata'}, review={'enabled': True, 'configJSON': '{}'}),
                        {'sandbox': {'runtimeClassName': 'Kata'}}, {'sandbox': {'runtimeClassName': 'kata/../x'}},
                        {'sandbox': {'runtimeClassName': ''}}, {'sandbox': {'runtimeClassName': None}}):

@@ -137,7 +137,7 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 	if e != nil {
 		t.Fatal("behavior Kubernetes")
 	}
-	verifier := verificationflow.Runtime{DB: db, Load: policy, Client: client, Image: in.Image, RuntimeClass: executor.DefaultRuntimeClass, SandboxCheck: fixtureSandbox}
+	verifier := verificationflow.Runtime{DB: db, Load: policy, Client: client, Image: in.Image, RuntimeClass: executor.DefaultRuntimeClass}
 	if state, e := verifier.PollOnce(ctx); e != nil || state != "behavior-verified" {
 		t.Fatal("behavior prerequisite", state, e)
 	}
@@ -256,7 +256,7 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 	if e != nil {
 		t.Fatal("review Kubernetes")
 	}
-	runtime := Runtime{DB: db, Policy: policy, Load: load, Client: reviewClient, SandboxCheck: fixtureSandbox}
+	runtime := Runtime{DB: db, Policy: policy, Load: load, Client: reviewClient}
 	// Readiness failure is a pre-claim observation, not a consumed workflow
 	// attempt. Exercise real HTTP 503 and connection refusal against PostgreSQL.
 	var originalExpiry time.Time
@@ -361,12 +361,4 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 	if os.WriteFile(in.ReportFile, report, 0600) != nil {
 		t.Fatal("report")
 	}
-}
-
-// fixtureSandbox stands in for the cluster-scoped RuntimeClass preflight: the
-// kind fixture identities are namespaced, like the controllers' pod RBAC, and
-// the fixture class has no admission additions. The preflight itself is unit
-// tested in podtransport.
-func fixtureSandbox(context.Context, *podtransport.Client, string) (podtransport.RuntimeClassAdmission, error) {
-	return podtransport.RuntimeClassAdmission{}, nil
 }

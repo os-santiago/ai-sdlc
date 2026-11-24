@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import urllib.parse
 
+import fixture_runtime_class
 import network_probe
 from verify_pod_transport import TransportFixture
 from verify_workspace_bundle import wire
@@ -21,6 +22,7 @@ def verify(kubectl, worker, mailbox, binary, source_sha, scenario="success", ver
     namespace = 'ai-sdlc-executors'
     transport = TransportFixture(kubectl, binary)
     namespace_uid = None
+    sandbox_grant = fixture_runtime_class.new_nonce()
     def command(args, value=None, timeout=45):
         result = subprocess.run(kubectl + args, input=wire(value) if isinstance(value, dict) else value,
                                 capture_output=True, timeout=timeout)
@@ -44,6 +46,8 @@ def verify(kubectl, worker, mailbox, binary, source_sha, scenario="success", ver
              'subjects': [{'kind': 'ServiceAccount', 'name': 'candidate-controller', 'namespace': namespace}]},
             {'apiVersion': 'networking.k8s.io/v1', 'kind': 'NetworkPolicy', 'metadata': {'name': 'deny-all', 'namespace': namespace},
              'spec': {'podSelector': {}, 'policyTypes': ['Ingress', 'Egress']}}]})
+        # The controller's sandbox preflight reads only the fixture RuntimeClass.
+        fixture_runtime_class.grant(command, sandbox_grant, [(namespace, 'candidate-controller')])
         token = command(['-n', namespace, 'create', 'token', 'candidate-controller', '--duration=10m']).decode().strip()
         adev = Path(__file__).resolve().parents[1].joinpath('runtime/k8s/deploy/helm/ai-sdlc-k8s-runtime/files/adev-profile.yaml').read_text()
         runtime = {'version': 'ai-sdlc.candidate-runtime/v1', 'aDev': adev,
@@ -73,8 +77,11 @@ def verify(kubectl, worker, mailbox, binary, source_sha, scenario="success", ver
                     raise ValueError('Executor resources were not retired')
             result['resourcesConfirmedRemoved'] = True
     finally:
-        if namespace_uid:
-            network_probe.cleanup_namespace(command, namespace, namespace_uid)
+        try:
+            fixture_runtime_class.revoke(command, sandbox_grant)
+        finally:
+            if namespace_uid:
+                network_probe.cleanup_namespace(command, namespace, namespace_uid)
     result['ownedNamespaceRemoved'] = True
     return result
 

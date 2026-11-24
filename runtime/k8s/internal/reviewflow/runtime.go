@@ -16,18 +16,16 @@ type Runtime struct {
 	Policy verificationflow.PolicyLoader
 	Load   Loader
 	Client *podtransport.Client
-	// SandboxCheck observes the reviewer sandbox RuntimeClass before a review
-	// is claimed. Nil uses the read-only API preflight; only fixtures replace it.
-	SandboxCheck func(context.Context, *podtransport.Client, string) (podtransport.RuntimeClassAdmission, error)
 }
 
 // VerificationMayProceed keeps independent queues moving only when review has
 // completed its work or performed no new work. Cleanup uncertainty and
-// post-claim failures stop both; review-passed already confirms cleanup.
+// post-claim failures stop both; review-passed already confirms cleanup. An
+// unavailable gateway or sandbox RuntimeClass stops review before any claim.
 func VerificationMayProceed(state string, err error) bool {
 	if err != nil {
 		var diagnostic ControllerError
-		return errors.As(err, &diagnostic) && !diagnostic.CleanupPending && (diagnostic.Stage == "gateway-unavailable" || diagnostic.Stage == "gateway-profile-unfit")
+		return errors.As(err, &diagnostic) && !diagnostic.CleanupPending && (diagnostic.Stage == "gateway-unavailable" || diagnostic.Stage == "gateway-profile-unfit" || diagnostic.Stage == "sandbox-runtime-class")
 	}
 	return state == "" || state == "rejected" || state == "review-passed"
 }
@@ -122,14 +120,8 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if e != nil {
 		return "", ControllerError{Stage: "configuration"}
 	}
-	check := r.SandboxCheck
-	if check == nil {
-		check = func(ctx context.Context, c *podtransport.Client, class string) (podtransport.RuntimeClassAdmission, error) {
-			return c.CheckRuntimeClass(ctx, class)
-		}
-	}
 	sandbox := Sandbox{RuntimeClass: config.SandboxRuntimeClass()}
-	if sandbox.Admission, e = check(ctx, r.Client, sandbox.RuntimeClass); e != nil {
+	if sandbox.Admission, e = r.Client.CheckRuntimeClass(ctx, sandbox.RuntimeClass); e != nil {
 		return "sandbox-runtime-class-unavailable", ControllerError{Stage: "sandbox-runtime-class"}
 	}
 	if _, e = Run(ctx, r.DB, r.Policy, r.Load, id, r.Client, sandbox); e != nil {

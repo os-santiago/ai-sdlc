@@ -170,3 +170,17 @@ Without an overhead the caller renders its original quota unchanged.
 {{- $o := .Values.sandbox.podOverhead | default dict -}}
 {{- if or $o.cpu $o.memory }}true{{ end -}}
 {{- end -}}
+
+{{/*
+The sandbox RuntimeClass a configuration document selects, matching the field
+name case-insensitively as the runtime's JSON decoding does. Absent means the
+default; more than one spelling fails. Input: dict "doc" map "field" label.
+*/}}
+{{- define "ai-sdlc-k8s-runtime.sandboxClassField" -}}
+{{- $found := list -}}
+{{- range $key, $value := .doc -}}
+{{- if eq (lower $key) "runtimeclass" -}}{{- $found = append $found $value -}}{{- end -}}
+{{- end -}}
+{{- if gt (len $found) 1 -}}{{- fail (printf "the %s field appears more than once with different capitalization" .field) -}}{{- end -}}
+{{- if $found -}}{{- first $found | default "ai-sdlc-offline" -}}{{- else -}}ai-sdlc-offline{{- end -}}
+{{- end -}}

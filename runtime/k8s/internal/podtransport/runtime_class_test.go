@@ -240,6 +240,41 @@ func TestPodComparisonAcceptsExactlyTheClassAdditions(t *testing.T) {
 	}
 }
 
+// On OpenShift a class may itself declare the memory-pressure toleration that
+// OpenShift admission otherwise adds. The normalization must keep the declared
+// copy, and still remove the undeclared OpenShift addition for other classes.
+func TestOpenShiftKeepsAClassDeclaredMemoryPressureToleration(t *testing.T) {
+	withPlatform(t, true)
+	b, _, _ := bindingFixture(t)
+	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.RuntimeClass, b.Assignment, b.Profile, b.ADev, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(w.Pod)
+	var template core.Pod
+	if json.Unmarshal(raw, &template) != nil {
+		t.Fatal("template")
+	}
+	uid := "11111111-1111-4111-8111-111111111111"
+	a, err := admissionOf(kataClass(nil, &node.Scheduling{Tolerations: []core.Toleration{openShiftMemoryPressure}}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exactPodTemplate(admittedPod(template, a, uid), template, uid, a) {
+		t.Fatal("class-declared memory-pressure toleration removed as an OpenShift addition")
+	}
+	plain := admittedPod(template, RuntimeClassAdmission{}, uid)
+	plain.Spec.Tolerations = append(plain.Spec.Tolerations, openShiftMemoryPressure)
+	if !exactPodTemplate(plain, template, uid, RuntimeClassAdmission{}) {
+		t.Fatal("undeclared OpenShift memory-pressure addition not removed")
+	}
+	twice := admittedPod(template, a, uid)
+	twice.Spec.Tolerations = append(twice.Spec.Tolerations, openShiftMemoryPressure)
+	if exactPodTemplate(twice, template, uid, a) {
+		t.Fatal("extra memory-pressure copy accepted")
+	}
+}
+
 func TestSessionBindAcceptsExactlyTheObservedClassAdditions(t *testing.T) {
 	overhead := core.ResourceList{core.ResourceCPU: resource.MustParse("250m"), core.ResourceMemory: resource.MustParse("350Mi")}
 	a, err := admissionOf(kataClass(overhead, &node.Scheduling{NodeSelector: map[string]string{"katacontainers.io/kata-runtime": "true"},

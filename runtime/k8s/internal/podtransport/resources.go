@@ -114,13 +114,16 @@ func (r *Resources) checkConfig(raw []byte, uid string) (string, error) {
 // the exact API defaults and the RuntimeClass admission additions. Any other
 // difference, including any other added field, fails.
 func exactPodTemplate(actual, expected core.Pod, uid string, admission RuntimeClassAdmission) bool {
-	actual = platformObserved(actual, expected)
-	if actual.APIVersion != "v1" || actual.Kind != "Pod" || !exactMetadata(actual.ObjectMeta, expected.ObjectMeta, uid) {
-		return false
-	}
+	// The platform normalization sees the template with the defaults and the
+	// class additions, so a toleration the class declares is never removed
+	// as an OpenShift addition.
 	expected = *expected.DeepCopy()
 	applyDefaults(&expected.Spec)
 	if !applyAdmission(&expected.Spec, admission) {
+		return false
+	}
+	actual = platformObserved(actual, expected)
+	if actual.APIVersion != "v1" || actual.Kind != "Pod" || !exactMetadata(actual.ObjectMeta, expected.ObjectMeta, uid) {
 		return false
 	}
 	actual = *actual.DeepCopy()

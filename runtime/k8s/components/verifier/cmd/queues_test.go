@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/reviewflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
 )
 
 func TestPublicationFailureNeverPrecedesCleanupOrStarvesNextCycle(t *testing.T) {
@@ -49,5 +50,38 @@ func TestUncertainCleanupStopsHandoff(t *testing.T) {
 		if calls != 0 {
 			t.Fatal("handoff bypassed uncertain cleanup")
 		}
+	}
+}
+
+// A missing sandbox RuntimeClass stops only new claims: each poll has already
+// finished its cleanup, so verification still runs and approved work is still
+// handed off in the same cycle.
+func TestMissingSandboxClassStillHandsOffApprovedWork(t *testing.T) {
+	reviewSandbox := func(context.Context) (string, error) {
+		return "sandbox-runtime-class-unavailable", reviewflow.ControllerError{Stage: "sandbox-runtime-class"}
+	}
+	verifySandbox := func(context.Context) (string, error) {
+		return "sandbox-runtime-class-unavailable", verificationflow.ControllerError{Stage: "sandbox-runtime-class"}
+	}
+	verifyIdle := func(context.Context) (string, error) { return "", nil }
+	reviewIdle := func(context.Context) (string, error) { return "", nil }
+	for label, polls := range map[string][2]queuePoll{
+		"review":       {reviewSandbox, verifyIdle},
+		"verification": {reviewIdle, verifySandbox},
+		"both":         {reviewSandbox, verifySandbox},
+	} {
+		calls := 0
+		reconcileQueues(context.Background(), polls[0], polls[1], func(context.Context) (bool, error) { calls++; return true, nil })
+		if calls != 1 {
+			t.Fatal(label, "handoff blocked by the sandbox class check")
+		}
+	}
+	// Other verification failures still stop the handoff.
+	calls := 0
+	reconcileQueues(context.Background(), reviewIdle, func(context.Context) (string, error) {
+		return "stopped", verificationflow.ControllerError{Stage: "pod"}
+	}, func(context.Context) (bool, error) { calls++; return true, nil })
+	if calls != 0 {
+		t.Fatal("handoff ran after a post-claim verification failure")
 	}
 }

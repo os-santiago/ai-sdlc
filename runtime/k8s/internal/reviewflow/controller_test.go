@@ -26,6 +26,8 @@ func TestIndependentQueueScheduling(t *testing.T) {
 		{"stopped", ControllerError{Stage: "gateway-unavailable"}, true},
 		{"stopped", ControllerError{Stage: "gateway-profile-unfit"}, true},
 		{"stopped", ControllerError{Stage: "gateway-profile-unfit", CleanupPending: true}, false},
+		{"sandbox-runtime-class-unavailable", ControllerError{Stage: "sandbox-runtime-class"}, true},
+		{"sandbox-runtime-class-unavailable", ControllerError{Stage: "sandbox-runtime-class", CleanupPending: true}, false},
 		{"review-passed", nil, true},
 		{"stopped", ControllerError{Stage: "model"}, false},
 		{"cleanup-uncertain", ControllerError{Stage: "cleanup", CleanupPending: true}, false},

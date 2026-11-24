@@ -7,14 +7,16 @@ chart never creates, changes or lists runtime classes.
 {{- if has .Values.runtime.mode (list "candidate" "verification") }}
 {{- $class := .Values.sandbox.runtimeClassName }}
 {{- /* The installed documents carry the class; absence means the default. */ -}}
+{{- /* The runtime matches JSON field names case-insensitively, so every
+spelling of the class field counts, and more than one spelling is refused. */ -}}
 {{- if .Values.candidate.configJSON }}
 {{- $placement := (fromJson .Values.candidate.configJSON).placement | default dict }}
-{{- if ne (get $placement "RuntimeClass" | default "ai-sdlc-offline") $class }}
+{{- if ne (include "ai-sdlc-k8s-runtime.sandboxClassField" (dict "doc" $placement "field" "placement RuntimeClass")) $class }}
 {{- fail "sandbox.runtimeClassName differs from the execution configuration placement RuntimeClass" }}
 {{- end }}
 {{- end }}
 {{- if and .Values.review.enabled .Values.review.configJSON }}
-{{- if ne (get (fromJson .Values.review.configJSON) "runtimeClass" | default "ai-sdlc-offline") $class }}
+{{- if ne (include "ai-sdlc-k8s-runtime.sandboxClassField" (dict "doc" (fromJson .Values.review.configJSON) "field" "review runtimeClass")) $class }}
 {{- fail "sandbox.runtimeClassName differs from the review configuration runtimeClass" }}
 {{- end }}
 {{- end }}

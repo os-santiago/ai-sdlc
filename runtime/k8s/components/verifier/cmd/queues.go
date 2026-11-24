@@ -31,9 +31,12 @@ func reconcileQueues(ctx context.Context, review, verify queuePoll, handoff func
 	state, err := verify(ctx)
 	if err != nil {
 		log.Print("verification reconciliation stopped safely: " + verificationflow.DiagnosticStage(err))
-		return
-	}
-	if state != "" {
+		// A missing sandbox class stops only new claims; cleanup already
+		// completed, so approved work is still handed off.
+		if !verificationflow.SandboxUnavailable(err) {
+			return
+		}
+	} else if state != "" {
 		log.Print("verification reconciliation: " + state)
 	}
 	if handoff != nil {

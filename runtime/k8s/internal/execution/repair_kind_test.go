@@ -138,7 +138,7 @@ func runRepairKind(t *testing.T, composition bool) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if state, err := (verificationflow.Runtime{DB: f.Verifier, Load: policy, Client: verifierClient, Image: in.VerificationImage}).PollOnce(ctx); err != nil || state != "behavior-verified" {
+		if state, err := (verificationflow.Runtime{DB: f.Verifier, Load: policy, Client: verifierClient, Image: in.VerificationImage, RuntimeClass: in.Runtime.Placement.SandboxRuntimeClass()}).PollOnce(ctx); err != nil || state != "behavior-verified" {
 			t.Fatal("actual predecessor behavior", state, err)
 		}
 		reviewClient, err := podtransport.NewClient(in.ReviewConfig)
@@ -256,7 +256,7 @@ func runRepairKind(t *testing.T, composition bool) {
 			t.Fatal(err)
 		}
 		observeUnchangedIssue()
-		if state, err := (verificationflow.Runtime{DB: f.Verifier, Load: policy, Client: verifierClient, Image: in.VerificationImage}).PollOnce(ctx); err != nil || state != "behavior-verified" {
+		if state, err := (verificationflow.Runtime{DB: f.Verifier, Load: policy, Client: verifierClient, Image: in.VerificationImage, RuntimeClass: in.Runtime.Placement.SandboxRuntimeClass()}).PollOnce(ctx); err != nil || state != "behavior-verified" {
 			t.Fatal("actual repaired behavior", state, err)
 		}
 		reviewClient, err := podtransport.NewClient(in.ReviewConfig)
