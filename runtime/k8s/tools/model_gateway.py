@@ -48,11 +48,13 @@ RECHECK_FRACTION = 0.8
 CALL_SECONDS_HEADER = "X-AI-SDLC-Call-Seconds"
 
 
-def log_call(outcome, started, seconds, reason=None, prompt=None, completion=None, estimated=None, recounted=0):
+def log_call(outcome, started, seconds, reason=None, prompt=None, completion=None, estimated=None, recounted=0,
+             degenerate_retries=0):
     """One bounded event per completion: outcome, duration, the call budget,
-    token counts and how many edit_file patches had their hunk counts
-    repaired. Never request or response content. Logging never changes the
-    response: a failed write is ignored."""
+    token counts, how many edit_file patches had their hunk counts repaired
+    and, when the degenerate-output guard fired, how many retries it spent
+    (``degenerateRetries``, 0 or 1). Never request or response content.
+    Logging never changes the response: a failed write is ignored."""
     event = {"event": "model-call", "outcome": outcome, "seconds": round(time.monotonic() - started, 1), "budgetSeconds": seconds}
     if reason is not None:
         event["reason"] = reason
@@ -61,6 +63,8 @@ def log_call(outcome, started, seconds, reason=None, prompt=None, completion=Non
         event["estimated"] = bool(estimated)
     if type(recounted) is int and 0 < recounted <= 8:
         event["editPatchesRecounted"] = recounted
+    if type(degenerate_retries) is int and 0 <= degenerate_retries <= 1 and (degenerate_retries or reason == "degenerate"):
+        event["degenerateRetries"] = degenerate_retries
     try:
         print(json.dumps(event), flush=True)
     except (OSError, ValueError):
@@ -78,6 +82,7 @@ def _authorized(handler):
 # Anything else is logged as "other"; no message text or content is logged.
 FAILURE_CLASSES = (
     ("truncated completion", "truncated"),
+    ("degenerate completion", "degenerate"),
     ("completion deadline exceeded", "deadline"),
     ("upstream status", "upstream-status"),
     ("completion response exceeded bound", "oversized"),
@@ -105,10 +110,12 @@ class GatewayHandler(Handler):
         try:
             completion = self.server.adapter.complete(request, seconds)
         except Exception as error:
-            log_call("failed", started, seconds, reason=failure_class(error))
+            log_call("failed", started, seconds, reason=failure_class(error),
+                     degenerate_retries=getattr(error, "degenerate_retries", 0))
             raise
         log_call("ok", started, seconds, prompt=completion.prompt_tokens, completion=completion.completion_tokens, estimated=completion.estimated,
-                 recounted=getattr(completion, "edit_patches_recounted", 0))
+                 recounted=getattr(completion, "edit_patches_recounted", 0),
+                 degenerate_retries=getattr(completion, "degenerate_retries", 0))
         return completion.message
 
     def call_seconds(self, profile):

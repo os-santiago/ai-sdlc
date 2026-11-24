@@ -61,7 +61,7 @@ RETRY_NOTE = ("\n\nNote: your previous answer was not one valid JSON object with
               "requested_actions. Answer with exactly that JSON object and nothing else.")
 # Plain text that ends by announcing an action it did not request.
 INTENT = re.compile(r"(?is)\b(let me|i'll|i will|i am going to|i'm going to|next,? i|now i|now (reading|checking|running|looking))\b[^\n]{0,160}\Z")
-PARAMETERS = {"model", "messages", "tools", "stream", "max_tokens", "temperature", "tool_choice", "chat_template_kwargs"}
+PARAMETERS = {"model", "messages", "tools", "stream", "stream_options", "max_tokens", "temperature", "tool_choice", "chat_template_kwargs"}
 MAX_OUTPUT_BYTES = 1024 * 1024
 MAX_SYSTEM_BYTES = 96 * 1024
 MODEL = re.compile(r"[A-Za-z0-9._:@/-]{1,128}\Z")
@@ -337,6 +337,17 @@ class Handler(BaseHTTPRequestHandler):
             # The caller gave up (for example its own timeout); nothing to send.
             self.close_connection = True
 
+    def reply_events(self, body):
+        """A complete answer framed as server-sent events (see ``stream_events``)."""
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+
     def authorized(self):
         """A bearer token when configured; otherwise (or additionally) only the
         allowlisted client addresses, for example the kind node on the bridge
@@ -369,12 +380,17 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get("Transfer-Encoding") or not re.fullmatch(r"[1-9][0-9]{0,6}", length) or int(length) > MAX_REQUEST_BYTES:
                 raise ValueError("invalid request size")
             request = strict_json(self.rfile.read(int(length)).decode("utf-8", errors="strict"))
-            if not isinstance(request, dict) or set(request) - PARAMETERS or request.get("stream", False):
+            if not isinstance(request, dict) or set(request) - PARAMETERS:
+                raise ValueError("unsupported parameters")
+            stream = request.get("stream", False)
+            options = request.get("stream_options", {"include_usage": False})
+            if (type(stream) is not bool or not isinstance(options, dict) or set(options) - {"include_usage"}
+                    or type(options.get("include_usage", False)) is not bool or ("stream_options" in request and not stream)):
                 raise ValueError("unsupported parameters")
             model = request.get("model")
             if model not in self.server.models:
                 raise ValueError("unknown model")
-            body = {k: v for k, v in request.items() if k != "chat_template_kwargs"}
+            body = {k: v for k, v in request.items() if k not in ("chat_template_kwargs", "stream", "stream_options")}
             messages, tools, names, tokens = validate_request(body, model=model)
             validate_history(messages)
         except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
@@ -391,11 +407,33 @@ class Handler(BaseHTTPRequestHandler):
             return
         finally:
             self.server.slots.release()
-        self.reply(200, {"id": "chatcmpl-" + secrets.token_hex(12), "object": "chat.completion", "created": int(time.time()),
-                         "model": model, "choices": [{"index": 0, "message": message,
-                                                      "finish_reason": "tool_calls" if message.get("tool_calls") else "stop"}],
-                         "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
-                                   "total_tokens": prompt_tokens + completion_tokens}})
+        answer = {"id": "chatcmpl-" + secrets.token_hex(12), "object": "chat.completion", "created": int(time.time()),
+                  "model": model, "choices": [{"index": 0, "message": message,
+                                               "finish_reason": "tool_calls" if message.get("tool_calls") else "stop"}],
+                  "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
+                            "total_tokens": prompt_tokens + completion_tokens}}
+        if stream:
+            self.reply_events(stream_events(answer, options.get("include_usage", False)))
+        else:
+            self.reply(200, answer)
+
+
+def stream_events(answer, include_usage):
+    """A finished ``chat.completion`` as the ``chat.completion.chunk`` events a
+    streaming server sends: the whole message in one delta (tool calls with
+    their ``index``), the finish reason, the usage when requested, and
+    ``[DONE]``. The CLI answers at once, so streaming only changes the framing;
+    the gateway's ``openai`` adapter requests it to guard local models."""
+    choice = answer["choices"][0]
+    delta = dict(choice["message"])
+    if "tool_calls" in delta:
+        delta["tool_calls"] = [dict(call, index=i) for i, call in enumerate(delta["tool_calls"])]
+    head = {k: answer[k] for k in ("id", "created", "model")}
+    events = [dict(head, object="chat.completion.chunk", choices=[{"index": 0, "delta": delta, "finish_reason": None}]),
+              dict(head, object="chat.completion.chunk", choices=[{"index": 0, "delta": {}, "finish_reason": choice["finish_reason"]}])]
+    if include_usage:
+        events.append(dict(head, object="chat.completion.chunk", choices=[], usage=answer["usage"]))
+    return b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events) + b"data: [DONE]\n\n"
 
 
 class Server(ThreadingMixIn, HTTPServer):

@@ -75,6 +75,28 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(json.loads(choice["message"]["tool_calls"][0]["function"]["arguments"]), {"path": "README.md"})
         self.assertEqual(answer["usage"], {"prompt_tokens": 120, "completion_tokens": 12, "total_tokens": 132})
 
+    def test_streamed_requests_get_the_same_answer_as_server_sent_events(self):
+        self.start()
+        request = urllib.request.Request(self.base + "/v1/chat/completions",
+                                         data=json.dumps(self.request(stream=True, stream_options={"include_usage": True})).encode(),
+                                         headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            media, raw = response.headers["Content-Type"], response.read().decode()
+        self.assertEqual(media, "text/event-stream")
+        events = [line[len("data: "):] for line in raw.split("\n\n") if line]
+        self.assertEqual(events[-1], "[DONE]")
+        chunks = [json.loads(event) for event in events[:-1]]
+        self.assertEqual({c["object"] for c in chunks}, {"chat.completion.chunk"})
+        call = chunks[0]["choices"][0]["delta"]["tool_calls"][0]
+        self.assertEqual((call["index"], call["function"]["name"], json.loads(call["function"]["arguments"])), (0, "read_file", {"path": "README.md"}))
+        self.assertEqual(chunks[1]["choices"][0]["finish_reason"], "tool_calls")
+        self.assertEqual((chunks[2]["choices"], chunks[2]["usage"]["total_tokens"]), ([], 132))
+        # Without include_usage there is no usage event.
+        with urllib.request.urlopen(urllib.request.Request(self.base + "/v1/chat/completions",
+                                    data=json.dumps(self.request(stream=True)).encode(),
+                                    headers={"Authorization": "Bearer " + TOKEN}), timeout=10) as response:
+            self.assertNotIn(b"usage", response.read())
+
     def test_cli_is_completion_only_isolated_and_markers_cannot_be_forged(self):
         self.start()
         self.call(self.request())
@@ -102,7 +124,9 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.call(None, path="/v1/models")[1]["data"][0]["id"], "claude-sonnet")
         bad_history = self.request(messages=[{"role": "user", "content": "x"}, {"role": "assistant", "content": "", "tool_calls": 5}])
         huge_system = self.request(messages=[{"role": "system", "content": "x" * (97 * 1024)}, {"role": "user", "content": "x"}])
-        for bad in (self.request(model="other"), self.request(stream=True), self.request(unexpected=1), {"model": "claude-sonnet"},
+        for bad in (self.request(model="other"), self.request(stream="yes"), self.request(stream_options={"include_usage": True}),
+                    self.request(stream=True, stream_options={"include_usage": 1}), self.request(stream=True, stream_options={"other": True}),
+                    self.request(unexpected=1), {"model": "claude-sonnet"},
                     bad_history, huge_system):
             with self.subTest(bad=str(bad)[:60]):
                 self.assertEqual(self.call(bad)[0], 400)

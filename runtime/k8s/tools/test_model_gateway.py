@@ -8,7 +8,7 @@ import unittest
 import unittest.mock
 import urllib.error
 import urllib.request
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 import model_adapters as adapters
 import model_benchmark
@@ -72,7 +72,8 @@ class OpenAIAdapterTests(UpstreamCase):
         self.assertEqual(result.message["tool_calls"][0]["function"], {"name": "read_file", "arguments": "{\"path\":\"README.md\"}"})
         self.assertEqual((result.prompt_tokens, result.completion_tokens, result.estimated), (40, 9, False))
         path, headers, sent = FakeUpstream.seen[0]
-        self.assertEqual(set(sent), {"model", "messages", "max_tokens", "stream", "tools"})
+        self.assertEqual(set(sent), {"model", "messages", "max_tokens", "stream", "stream_options", "tools"})
+        self.assertEqual((sent["stream"], sent["stream_options"]), (True, {"include_usage": True}))
         direct = adapters.OpenAIAdapter(self.base + "/v1/chat/completions", "gemma-4-26b-a4b", 5, "", True)
         direct.complete(REQUEST)
         self.assertEqual(FakeUpstream.seen[1][2]["chat_template_kwargs"], {"enable_thinking": False})
@@ -175,6 +176,318 @@ class DeadlineTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             adapter.complete(REQUEST)
         self.assertLess(time.monotonic() - started, 2.5)
+
+
+def sse_event(value):
+    return b"data: " + (value if isinstance(value, bytes) else json.dumps(value).encode()) + b"\n\n"
+
+
+def chunk(content=None, calls=None, finish=None, role=None, usage=None, choices=True):
+    """One ``chat.completion.chunk`` as llama.cpp streams it."""
+    body = {"object": "chat.completion.chunk", "choices": []}
+    if choices:
+        delta = {}
+        if role:
+            delta["role"] = role
+        if content is not None:
+            delta["content"] = content
+        if calls is not None:
+            delta["tool_calls"] = calls
+        body["choices"] = [{"index": 0, "delta": delta, "finish_reason": finish}]
+    if usage is not None:
+        body["usage"] = usage
+    return body
+
+
+def stream(*chunks, done=True):
+    return b"".join(sse_event(c) for c in chunks) + (sse_event(b"[DONE]") if done else b"")
+
+
+def degenerate_stream(_body):
+    """Starts like a real answer, then emits ``?`` until it is disconnected."""
+    yield sse_event(chunk(content="I will read the file", role="assistant"))
+    for _ in range(20000):
+        yield sse_event(chunk(content="??"))
+        time.sleep(0.001)
+
+
+class SSEUpstream(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.0"
+    script = []
+    seen = []
+    disconnected = []
+
+    def log_message(self, *_):
+        pass
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        SSEUpstream.seen.append(body)
+        reply = SSEUpstream.script[min(len(SSEUpstream.seen), len(SSEUpstream.script)) - 1]
+        pieces = reply(body) if callable(reply) else [reply]
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        try:
+            for piece in pieces:
+                self.wfile.write(piece)
+                self.wfile.flush()
+        except OSError:
+            SSEUpstream.disconnected.append(time.monotonic())
+
+
+TOOLS2 = TOOLS + [{"type": "function", "function": {"name": "list_dir", "description": "List a directory",
+                   "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}}]
+REQUEST2 = dict(REQUEST, tools=TOOLS2)
+
+
+class StreamingTests(unittest.TestCase):
+    """The openai adapter streams, assembles the non-streaming answer and
+    guards it against degenerate output with one bounded retry."""
+
+    def setUp(self):
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), SSEUpstream)
+        self.server.daemon_threads = True
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = "http://127.0.0.1:%d/v1/chat/completions" % self.server.server_address[1]
+        SSEUpstream.seen, SSEUpstream.disconnected = [], []
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+    def adapter(self, seconds=30):
+        return adapters.OpenAIAdapter(self.url, "qwen3-coder", seconds)
+
+    @staticmethod
+    def shape(message):
+        """The message without the per-call random ids the gateway assigns."""
+        calls = [call["function"] for call in message.get("tool_calls", [])]
+        return message["content"], calls
+
+    def test_streamed_content_and_tool_calls_assemble_like_the_non_streaming_answer(self):
+        content = "<think>plan</think>\nReading both."
+        calls = [{"id": "a", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\": \"README.md\"}"}},
+                 {"id": "b", "type": "function", "function": {"name": "list_dir", "arguments": "{\"path\": \"docs\"}"}}]
+        usage = {"prompt_tokens": 120, "completion_tokens": 31, "total_tokens": 151}
+        # Content split per token; each call's id, name and type only in its
+        # first delta, its arguments split across deltas and interleaved by
+        # index; a keep-alive comment, CRLF line ends and a usage-only chunk.
+        events = [chunk(role="assistant", content="")] + [chunk(content=piece) for piece in ("<think>pl", "an</think>\nRe", "ading", " both.")]
+        events += [chunk(calls=[{"index": 0, "id": "a", "type": "function", "function": {"name": "read_file", "arguments": ""}}]),
+                   chunk(calls=[{"index": 0, "function": {"arguments": "{\"path\": "}}]),
+                   chunk(calls=[{"index": 1, "id": "b", "type": "function", "function": {"name": "list_dir", "arguments": "{\"pa"}}]),
+                   chunk(calls=[{"index": 0, "function": {"arguments": "\"README.md\"}"}}]),
+                   chunk(calls=[{"index": 1, "function": {"arguments": "th\": \"docs\"}"}}]),
+                   chunk(finish="tool_calls"), chunk(usage=usage, choices=False)]
+        body = stream(*events).replace(b"\n\n", b"\r\n\r\n", 3)
+        SSEUpstream.script = [b": ping\n\n" + body]
+        streamed = self.adapter().complete(REQUEST2)
+
+        upstream = HTTPServer(("127.0.0.1", 0), FakeUpstream)
+        threading.Thread(target=upstream.serve_forever, daemon=True).start()
+        self.addCleanup(upstream.server_close)
+        self.addCleanup(upstream.shutdown)
+        FakeUpstream.seen = []
+        FakeUpstream.reply = (200, dict(openai_reply(content, calls, usage), choices=[{"index": 0, "finish_reason": "tool_calls",
+                              "message": {"role": "assistant", "content": content, "tool_calls": calls}}]), {})
+        plain = adapters.OpenAIAdapter("http://127.0.0.1:%d/v1/chat/completions" % upstream.server_address[1], "qwen3-coder", 30).complete(REQUEST2)
+
+        self.assertEqual(self.shape(streamed.message), self.shape(plain.message))
+        self.assertEqual(self.shape(streamed.message), ("Reading both.", [c["function"] for c in calls]))
+        self.assertEqual(set(streamed.message), set(plain.message))
+        self.assertEqual([c["type"] for c in streamed.message["tool_calls"]], ["function", "function"])
+        self.assertEqual((streamed.prompt_tokens, streamed.completion_tokens, streamed.estimated), (120, 31, False))
+        self.assertEqual((streamed.degenerate_retries, len(SSEUpstream.seen)), (0, 1))
+        self.assertEqual(SSEUpstream.seen[0]["stream_options"], {"include_usage": True})
+
+    def test_usage_is_taken_from_any_chunk_and_estimated_when_absent(self):
+        SSEUpstream.script = [stream(chunk(content="Done.", role="assistant"),
+                                     chunk(finish="stop", usage={"prompt_tokens": 9, "completion_tokens": 2}))]
+        result = self.adapter().complete(REQUEST)
+        self.assertEqual((result.message["content"], result.prompt_tokens, result.completion_tokens, result.estimated), ("Done.", 9, 2, False))
+        # A server without include_usage: estimates, as without usage before.
+        SSEUpstream.script = [stream(chunk(content="Done.", role="assistant"), chunk(finish="stop"))]
+        result = self.adapter().complete(REQUEST)
+        self.assertTrue(result.estimated)
+        self.assertEqual(result.completion_tokens, 1)
+        # Malformed counts are not trusted either.
+        SSEUpstream.script = [stream(chunk(content="Done."), chunk(finish="stop", usage={"prompt_tokens": -1, "completion_tokens": "2"}))]
+        self.assertTrue(self.adapter().complete(REQUEST).estimated)
+
+    def test_degenerate_first_answer_is_disconnected_and_retried_once(self):
+        clean = stream(chunk(calls=[{"index": 0, "id": "c", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\":\"README.md\"}"}}]),
+                       chunk(finish="tool_calls"))
+        SSEUpstream.script = [degenerate_stream, clean]
+        started = time.monotonic()
+        result = self.adapter().complete(REQUEST)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual(result.degenerate_retries, 1)
+        self.assertEqual(result.message["tool_calls"][0]["function"]["name"], "read_file")
+        self.assertEqual(len(SSEUpstream.seen), 2)
+        self.assertEqual(SSEUpstream.seen[0], SSEUpstream.seen[1])  # the same request, unchanged
+        # The upstream saw the first connection close: llama.cpp then cancels the generation.
+        deadline = time.monotonic() + 3
+        while not SSEUpstream.disconnected and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(len(SSEUpstream.disconnected), 1)
+
+    def test_a_second_degenerate_answer_fails_the_call_as_degenerate(self):
+        SSEUpstream.script = [degenerate_stream]
+        with self.assertRaises(adapters.DegenerateCompletion) as caught:
+            self.adapter().complete(REQUEST)
+        self.assertEqual((caught.exception.degenerate_retries, len(SSEUpstream.seen)), (1, 2))
+        self.assertEqual(model_gateway.failure_class(caught.exception), "degenerate")
+        # Corrupted tool arguments are guarded too.
+        def corrupted_arguments(_body):
+            yield sse_event(chunk(calls=[{"index": 0, "id": "x", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\":\""}}]))
+            for _ in range(5000):
+                yield sse_event(chunk(calls=[{"index": 0, "function": {"arguments": "a?"}}]))
+        SSEUpstream.seen, SSEUpstream.script = [], [corrupted_arguments]
+        with self.assertRaises(adapters.DegenerateCompletion):
+            self.adapter().complete(REQUEST)
+        self.assertEqual(len(SSEUpstream.seen), 2)
+
+    def test_no_retry_without_budget_and_the_retry_shares_one_deadline(self):
+        # 5 s of budget is below the retry minimum: fail at once, no retry.
+        SSEUpstream.script = [degenerate_stream]
+        with self.assertRaises(adapters.DegenerateCompletion) as caught:
+            self.adapter(seconds=5).complete(REQUEST)
+        self.assertEqual((caught.exception.degenerate_retries, len(SSEUpstream.seen)), (0, 1))
+        # A retry that stalls ends at the original deadline, not a fresh one.
+        def stalled(_body):
+            yield sse_event(chunk(content="Reading", role="assistant"))
+            for _ in range(100):
+                yield b": ping\n\n"
+                time.sleep(0.1)
+        SSEUpstream.seen, SSEUpstream.script = [], [degenerate_stream, stalled]
+        started = time.monotonic()
+        with unittest.mock.patch.object(adapters, "DEGENERATE_RETRY_MIN_SECONDS", 1), \
+                self.assertRaisesRegex(RuntimeError, "deadline") as caught:
+            self.adapter(seconds=2).complete(REQUEST)
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual((caught.exception.degenerate_retries, len(SSEUpstream.seen)), (1, 2))
+
+    def test_other_failures_are_never_retried(self):
+        for reply in (stream(chunk(content="par", role="assistant"), chunk(finish="length")),
+                      stream(chunk(content="x"), {"error": {"code": 500, "message": "boom"}}, done=False),
+                      stream(chunk(content="cut off"), done=False),
+                      # [DONE] without a finish reason is not a complete answer.
+                      stream(chunk(content="no finish", role="assistant")),
+                      # Bare-CR line ends are not split: one oversized or invalid line.
+                      stream(chunk(content="x"), chunk(finish="stop")).replace(b"\n", b"\r"),
+                      # A multi-line event over the per-event bound.
+                      b"".join(b"data: " + b"x" * 1000 + b"\n" for _ in range(300)) + b"\n" + stream(chunk(finish="stop")),
+                      stream(chunk(calls=[{"index": 0, "function": {"name": "run_shell", "arguments": "{}"}}]), chunk(finish="tool_calls")),
+                      stream(chunk(calls=[{"index": 8, "function": {"name": "read_file", "arguments": "{}"}}])),
+                      b"data: {not json\n\n",
+                      stream(*[chunk(content="word " * 1000) for _ in range(60)])):
+            SSEUpstream.seen, SSEUpstream.script = [], [reply]
+            with self.subTest(reply=reply[:80]), self.assertRaises((ValueError, RuntimeError)) as caught:
+                self.adapter().complete(REQUEST)
+            self.assertNotIsInstance(caught.exception, adapters.DegenerateCompletion)
+            self.assertEqual(len(SSEUpstream.seen), 1)
+        classes = []
+        for reply in (stream(chunk(content="par", role="assistant"), chunk(finish="length")),
+                      stream(chunk(content="x"), {"error": {"code": 500}}, done=False),
+                      stream(*[chunk(content="word " * 1000) for _ in range(60)]),
+                      b"".join(b"data: " + b"x" * 1000 + b"\n" for _ in range(300)) + b"\n" + stream(chunk(finish="stop"))):
+            SSEUpstream.script = [reply]
+            try:
+                self.adapter().complete(REQUEST)
+            except Exception as error:
+                classes.append(model_gateway.failure_class(error))
+        self.assertEqual(classes, ["truncated", "backend", "oversized", "oversized"])
+
+    def test_events_follow_the_sse_format(self):
+        # Several data lines join with a line feed up to the blank line (with
+        # or without the space after the colon, CRLF or LF); comments, other
+        # fields and empty events are skipped; the end of the stream ends the
+        # last event.
+        first = json.dumps(chunk(content="Hel", role="assistant"), indent=1).encode().split(b"\n")
+        events = (b"event: message\r\nid: 1\r\n" + b"\r\n".join(b"data: " + line for line in first[:3]) + b"\r\n: ping\r\n"
+                  + b"\r\n".join(b"data:" + line for line in first[3:]) + b"\r\n\r\n"
+                  + b"data:\n\n" + b"data\n\n" + b": comment only\n\n"
+                  + sse_event(chunk(content="lo")) + b"data: " + json.dumps(chunk(finish="stop")).encode())
+        SSEUpstream.script = [events]
+        self.assertEqual(self.adapter().complete(REQUEST).message["content"], "Hello")
+        # [DONE] split from nothing else still ends the stream; later bytes are ignored.
+        SSEUpstream.script = [stream(chunk(content="ok"), chunk(finish="stop")) + b"data: {not json\n\n"]
+        self.assertEqual(self.adapter().complete(REQUEST).message["content"], "ok")
+
+    def test_reasoning_fields_are_watched_and_lone_surrogates_judged_as_before(self):
+        # vLLM streams reasoning as "reasoning", llama.cpp as "reasoning_content".
+        for key in ("reasoning", "reasoning_content"):
+            def looping(_body, key=key):
+                for _ in range(5000):
+                    yield sse_event({"choices": [{"index": 0, "delta": {key: "?"}, "finish_reason": None}]})
+            SSEUpstream.seen, SSEUpstream.script = [], [looping]
+            with self.subTest(key=key), self.assertRaises(adapters.DegenerateCompletion):
+                self.adapter().complete(REQUEST)
+        # Reasoning text is never returned.
+        SSEUpstream.script = [stream({"choices": [{"index": 0, "delta": {"reasoning": "plan"}}]}, chunk(content="Done."), chunk(finish="stop"))]
+        self.assertEqual(self.adapter().complete(REQUEST).message["content"], "Done.")
+        # A lone surrogate reaches the same check as in a JSON answer, with the same outcome.
+        raw = b'data: {"choices": [{"index": 0, "delta": {"content": "x\\ud800"}}]}\n\n' + stream(chunk(finish="stop"))
+        SSEUpstream.script = [raw]
+        with self.assertRaises(ValueError) as streamed:
+            self.adapter().complete(REQUEST)
+        upstream = HTTPServer(("127.0.0.1", 0), FakeUpstream)
+        threading.Thread(target=upstream.serve_forever, daemon=True).start()
+        self.addCleanup(upstream.server_close)
+        self.addCleanup(upstream.shutdown)
+        FakeUpstream.reply = (200, b'{"choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "x\\ud800"}}]}', {})
+        with self.assertRaises(ValueError) as plain:
+            adapters.OpenAIAdapter("http://127.0.0.1:%d/v1/chat/completions" % upstream.server_address[1], "m", 30).complete(REQUEST)
+        self.assertEqual(type(streamed.exception), type(plain.exception))
+        self.assertNotIsInstance(streamed.exception, adapters.DegenerateCompletion)
+
+    def test_truncation_is_refused_except_for_benchmark_probes(self):
+        SSEUpstream.script = [stream(chunk(content="1 2 3", role="assistant"), chunk(finish="length", usage={"prompt_tokens": 5, "completion_tokens": 3}))]
+        with self.assertRaisesRegex(ValueError, "truncated"):
+            self.adapter().complete(REQUEST)
+        result = self.adapter().complete(REQUEST, probe=True)
+        self.assertEqual((result.message["content"], result.completion_tokens), ("1 2 3", 3))
+
+    def test_legitimate_code_with_long_separators_is_not_flagged(self):
+        code = ("// " + "-" * 300 + "\n" + "=" * 1000 + "\n# " + "#" * 400 + "\n/" + "*" * 600 + "/\n"
+                + "x = 1  " + " " * 3000 + "\n" + "\n" * 600 + "    " * 300 + "return 0\n"
+                + "-" * 1023 + "\n" + "- " * 500 + "\n" + "| --- " * 150 + "|\n" + "0, " * 160 + "\n"
+                + "ZERO = \"" + "A" * 256 + "\"\n" + "MASK = 0x" + "ff" * 128 + "\n" + "# " + "─" * 300 + "\n"
+                + "DATA = [" + "0," * 255 + "0]\n" + "|---" * 128 + "|\n")
+        arguments = json.dumps({"path": "src/" + "a" * 200 + ".c"})
+        events = [chunk(content=code[i:i + 7], role="assistant" if not i else None) for i in range(0, len(code), 7)]
+        events += [chunk(calls=[{"index": 0, "id": "c", "type": "function", "function": {"name": "read_file", "arguments": arguments}}]), chunk(finish="tool_calls")]
+        SSEUpstream.script = [stream(*events)]
+        result = self.adapter().complete(REQUEST)
+        self.assertEqual(result.message["content"], code)
+        self.assertEqual(result.degenerate_retries, 0)
+
+    def test_guard_thresholds(self):
+        guard = adapters.DegenerateGuard
+        flagged = ["?" * 256, "ok " + "?" * 256, "G" * 512, "a" * 512, "0" * 512, "ab" * 512, "abc" * 342, "¿?" * 512,
+                   "-" * 1024, "=" * 1024, "|" * 1024, "─" * 1024, "- " * 512, "|---" * 256, "0," * 512,
+                   "ab\n" + "xy" * 512]
+        clean = ["?" * 255, "G" * 511, "-" * 1023, "=" * 1023, "- " * 511, " " * 5000, "\n" * 5000, "\t" * 5000,
+                 ("?" * 200 + "\n") * 10, ("ab" * 600 + "\\n") * 2, "abcde" * 300, "the same words " * 100,
+                 # One-line data and drawings the audit found: base64 of 192 zero
+                 # bytes, hex of zeros and ff, a written-out "a" * 256, a minified
+                 # list of 256 zeros, box-drawing and table rules.
+                 "\"" + "A" * 256 + "\"", "0" * 256, "ff" * 128, "\"" + "a" * 256 + "\"", "[" + "0," * 255 + "0]",
+                 "─" * 256, "═" * 1023, "│║┄┈" * 200, "|---" * 128, "ab" * 511]
+        for text in flagged:
+            with self.subTest(flagged=text[:20]):
+                self.assertTrue(guard().feed("content", text))
+        for text in clean:
+            with self.subTest(clean=text[:20]):
+                self.assertFalse(guard().feed("content", text))
+        # Streamed one character at a time, the same text trips at the same point.
+        incremental = guard()
+        self.assertFalse(any(incremental.feed("content", "?") for _ in range(255)))
+        self.assertTrue(incremental.feed("content", "?"))
+        # Channels are separate: two calls' arguments never join into one run.
+        split = guard()
+        self.assertFalse(split.feed(("arguments", 0), "?" * 200) or split.feed(("arguments", 1), "?" * 200))
 
 
 class AnthropicAdapterTests(UpstreamCase):
@@ -484,6 +797,38 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(model_gateway.failure_class(RuntimeError("completion deadline exceeded")), "deadline")
         self.assertEqual(model_gateway.failure_class(ValueError("invalid assistant tool call")), "invalid")
         self.assertEqual(model_gateway.failure_class(RuntimeError("anything else")), "other")
+
+    def test_degenerate_retries_are_logged_with_the_bounded_reason(self):
+        original = model_benchmark.time.monotonic
+        model_benchmark.time.monotonic = lambda: self.clock[0]
+        try:
+            model_gateway.run_benchmark(self.server, 16384, 4096, attempts=1)
+        finally:
+            model_benchmark.time.monotonic = original
+        import contextlib, io
+        real = self.adapter.complete
+        def retried(request, seconds=None, probe=False):
+            completion = real(request, seconds, probe)
+            completion.degenerate_retries = 1
+            return completion
+        def degenerate(retries):
+            def fail(request, seconds=None, probe=False):
+                raise adapters.DegenerateCompletion(retries)
+            return fail
+        def deadline_after_retry(request, seconds=None, probe=False):
+            error = RuntimeError("completion deadline exceeded")
+            error.degenerate_retries = 1
+            raise error
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            for complete, status in ((real, 200), (retried, 200), (degenerate(1), 400), (degenerate(0), 400), (deadline_after_retry, 502)):
+                self.adapter.complete = complete
+                self.assertEqual(self.call("/v1/chat/completions", REQUEST)[0], status)
+        self.adapter.complete = real
+        events = [json.loads(line) for line in out.getvalue().splitlines() if '"model-call"' in line]
+        self.assertEqual([(e["outcome"], e.get("reason"), e.get("degenerateRetries")) for e in events],
+                         [("ok", None, None), ("ok", None, 1), ("failed", "degenerate", 1), ("failed", "degenerate", 0),
+                          ("failed", "deadline", 1)])
 
     def test_failed_benchmark_never_becomes_ready(self):
         self.adapter.tool = False

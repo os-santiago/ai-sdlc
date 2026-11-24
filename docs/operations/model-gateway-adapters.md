@@ -26,6 +26,10 @@ them.
 Proposed `edit_file` patches also get their hunk counts recomputed from the
 hunk bodies (see [Edit-patch hunk counts](#edit-patch-hunk-counts)).
 
+The `openai` adapter streams from its upstream and stops a degenerate answer
+(one character or a short unit repeated) as soon as it starts, with one bounded
+retry (see [Streaming and the degenerate-output guard](#streaming-and-the-degenerate-output-guard)).
+
 Adding another provider means adding one `Adapter` subclass to
 `runtime/k8s/tools/model_adapters.py` (`ADAPTERS`) and the enum value to the
 chart schema. The worker, the verifier and the contract do not change.
@@ -177,6 +181,109 @@ match. It only lets a correct edit with wrong bookkeeping reach that check.
 Each repair is visible in the `model-call` event as `editPatchesRecounted`;
 patch content is never logged.
 
+## Streaming and the degenerate-output guard
+
+On an integrated GPU, a local llama.cpp server intermittently turned an
+answer into one repeated character (`?`) until `max_tokens`: 8,192 tokens in
+524 s in evaluation battery 22. The same request was correct on the CPU and
+usually correct when sent again
+([evidence](../evidence/2026-11-24-local-model-gpu-instability.md)). Without
+streaming, the gateway waited for the whole answer before refusing it as
+`truncated`, and the attempt stopped. Other models can loop the same way.
+
+The `openai` adapter therefore requests `stream: true` with
+`stream_options: {"include_usage": true}` and reads the server-sent events
+(`data:` lines ending with `data: [DONE]`; comments such as keep-alive pings
+are skipped). It assembles exactly what the non-streaming answer held: the
+content, each tool call by `index` (id, name and arguments; string fields
+concatenate, as the OpenAI SDKs accumulate them), the last `finish_reason` and
+the last `usage` object. Without usage (a server that ignores
+`include_usage`), token counts are estimated, as before. The assembled answer
+then goes through the same checks as a non-streaming one: truncation refusal,
+`assistant_message` bounds and the hunk-count repair. A server that ignores
+`stream` and answers `application/json` is read as before, without the guard.
+The local model-service simulator (`tools/local_model_service`) answers a
+streamed request with the same answer framed as events.
+The gateway's own answer to its caller is unchanged and never streamed.
+
+Streaming adds bounds of its own: 8 MiB of raw events (an 8,192-token answer
+streams about 2.1 MB from llama.cpp), 256 KiB per event line, 256 KiB of
+assembled text and at most 8 tool-call indices. A mid-stream error event is a
+`backend` failure, and so is a stream without a finish reason, even one that
+ends with `[DONE]`: like a non-streaming answer, only a reported finish
+completes it. Events follow the SSE format: the `data:` lines
+of an event (LF or CRLF line ends) join with a line feed up to the blank line
+that ends it, or up to the end of the stream, and the whole event is then
+parsed as one JSON chunk. Comments, other fields and events without data are
+skipped. Each line and each event are bounded by 256 KiB (`oversized`). Lines
+ended by a bare CR alone are not split, so such a stream fails closed
+(`invalid`, or `oversized`). Reasoning deltas (`reasoning_content` from
+llama.cpp, `reasoning` from vLLM) are watched by the guard and never returned.
+A lone surrogate in a delta is judged by the same message check as in a JSON
+answer, with the same outcome.
+
+While the answer streams, a guard watches the end of each generated text
+separately: the content, any reasoning text, and each tool call's arguments.
+A text is **degenerate** when it ends with:
+
+| Pattern | Bound |
+|---|---|
+| One non-whitespace character repeated: an ASCII letter or digit | 512 characters |
+| One separator character repeated (`-=#*/_~.+\|` and box drawing such as `─═│║┄┈`) | 1,024 characters |
+| Any other non-whitespace character repeated (for example `?`) | 256 characters |
+| A unit of 2–4 characters (not only whitespace) repeated, with no line break | the last 1,024 characters |
+
+Code and data repeat, so the bounds sit above what one line of source
+plausibly holds:
+
+- **A line break clears both checks.** A raw newline counts, and so does the
+  `\n` escape inside JSON tool arguments. A separator line of any length that
+  ends with a newline never accumulates, and a run of repeated lines is never
+  flagged.
+- **Letters and digits get 512.** One-line data literals repeat them: base64
+  of zero bytes (`AAAA…`; 192 zero bytes are 256 characters), hex of zeros or
+  `ff`, or a written-out `"a" * 256`. Below 512 these pass: base64 of up to 383
+  zero bytes, hex of up to 255 bytes. The cost is detection time for a letter
+  loop. The `G` loop observed on the GPU (one character per token) is stopped
+  after 512 tokens instead of 256, about 8 s more at 30 tokens/s, against 8,192
+  tokens and minutes uncaught. The observed `?` loop keeps the 256 bound.
+- **Separators get 1,024.** These are runs of `-`, `=`, `#`, `*`, `/`, `_`,
+  `~`, `.`, `+` or `|`, and the Unicode box-drawing block. Comment rules,
+  banners and box-drawn tables are usually 80–120 characters, and a
+  1,024-character rule with no line break is not plausible source.
+- **Units get 1,024.** Minified literals repeat 2–4 character units: `0,` in
+  a list of up to 512 zeros, or `|---` in a markdown table rule of up to 256
+  columns. A 2–4 character loop is stopped a few seconds later than with a
+  512-character window.
+- **Whitespace is never flagged.** Runs of spaces, tabs or newlines, and units
+  made only of whitespace, repeat legitimately in indentation and alignment.
+- **Units are 2–4 characters.** A longer period (`abcde`) or repeated words
+  are not checked. The guard targets token-level corruption, not a model that
+  repeats sentences.
+
+Still flagged, by design: a single line holding at least 512 of the same letter
+or digit, 256 of another symbol, or 1,024 characters of one 2–4 character
+unit. Base64 of 384 or more zero bytes on one line is the most plausible
+legitimate case. Such an answer fails as `degenerate` after its one retry.
+
+The check is a constant amount of work per streamed delta (a bounded
+1,024-character tail per text).
+
+On detection the gateway shuts the upstream connection down. llama.cpp's
+server cancels the generation when its client disconnects: the streaming
+response polls the connection between results and cancels the task when it
+is closed (`server_response_reader::stop`), unless the request opted into a
+resumable stream session (`X-Conversation-Id`), which the gateway never sends.
+Other servers may keep generating until their own bound.
+
+The gateway then sends the same request once more, if at least 10 s of the
+call's budget remain. The budget is the per-call `seconds`, already bounded by
+the broker's `X-AI-SDLC-Call-Seconds`, and one deadline covers both attempts.
+A second degenerate answer, or a first one with no budget left for a retry,
+fails the call with reason `degenerate`. The guard retries only this detected
+corruption. Every other failure, including `truncated`, is returned at once:
+retrying it is the broker's decision.
+
 ## Per-call events
 
 After the benchmark, the gateway logs one bounded `model-call` event per
@@ -191,8 +298,20 @@ A successful call that repaired the hunk counts of proposed `edit_file`
 patches also carries `"editPatchesRecounted": N` (1 to 8, the number of repaired
 calls); the field is absent otherwise.
 
+When the degenerate-output guard fired, the event carries
+`"degenerateRetries": N`, the number of retries it spent (0 or 1). The field is
+present on a success after a retry, on a `degenerate` failure (0 when no
+budget was left for a retry), and on any other failure of the retry; it is
+absent otherwise:
+
+```json
+{"event": "model-call", "outcome": "ok", "seconds": 31.5, "budgetSeconds": 300, "promptTokens": 9632, "completionTokens": 88, "estimated": false, "degenerateRetries": 1}
+{"event": "model-call", "outcome": "failed", "seconds": 24.9, "budgetSeconds": 300, "reason": "degenerate", "degenerateRetries": 1}
+```
+
 `reason` is a fixed class: `truncated` (the answer reached its token bound),
-`deadline`, `upstream-status`, `oversized`, `backend`, `unavailable`, `invalid`
+`degenerate` (the answer degenerated into repetition twice, see
+[the guard](#streaming-and-the-degenerate-output-guard)), `deadline`, `upstream-status`, `oversized`, `backend`, `unavailable`, `invalid`
 or `other`. `estimated` is true when the upstream reported no usage and the counts are estimates. Events never contain request or response content. They separate
 a slow model from an answer cut off at its bound, which both surface as
 `model-provider` stops.
