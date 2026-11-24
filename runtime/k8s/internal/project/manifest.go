@@ -131,7 +131,9 @@ const (
 
 // toolchainExcluded are directories a toolchain root may not be or be under:
 // the run's writable directories and kernel or device filesystems.
-var toolchainExcluded = []string{"/workspaces", "/tmp", "/runner", "/proc", "/sys", "/dev"}
+// Runtime, credential and writable locations: a service account token or host
+// state must never be copied into a volume the generator can read.
+var toolchainExcluded = []string{"/workspaces", "/tmp", "/runner", "/proc", "/sys", "/dev", "/run", "/var/run", "/var/tmp", "/etc"}
 
 // ValidateToolchainRoot reports whether root is an absolute, clean directory
 // path in the conservative character set, other than / and outside the run's

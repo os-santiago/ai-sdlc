@@ -77,8 +77,11 @@ var defaultToolchainLimits = toolchainLimits{files: maxToolchainFiles, bytes: ma
 //   - Modes are normalized: directories 0555, files 0444, or 0555 when any
 //     execute bit is set. Setuid, setgid and sticky bits never survive.
 //   - An executable ELF file with a PT_INTERP program header (dynamically
-//     linked) is refused: the worker image has no matching loader. ELF files
-//     without an execute bit, such as test data, are copied as data.
+//     linked) is refused, so that only self-contained toolchains qualify and a
+//     toolchain built for another libc fails at copy time, not inside a
+//     generation. This is a compatibility check, not a security boundary: the
+//     generator already runs arbitrary shell in its sandbox. ELF files without
+//     an execute bit, such as test data, are copied as data.
 //   - Every entry counts against the file cap; regular file bytes count
 //     against the byte cap; the depth is bounded.
 //   - The tree is built in a staging directory beside dest and renamed into

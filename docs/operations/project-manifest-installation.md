@@ -37,10 +37,11 @@ the repository's tests before it exports a candidate:
 }
 ```
 
-- `root` is an absolute, clean directory path. It cannot be `/` or lie under
-  `/workspaces`, `/tmp`, `/runner`, `/proc`, `/sys` or `/dev`.
-- `path` lists one to eight clean, relative directories under `root`
-  (no `..`), in `PATH` order.
+- `root` is an absolute, clean directory path of at most 256 bytes. It cannot
+  be `/` or lie under `/workspaces`, `/tmp`, `/runner`, `/proc`, `/sys`,
+  `/dev`, `/run`, `/var/run`, `/var/tmp` or `/etc`.
+- `path` lists one to eight distinct, clean, relative directories under `root`
+  (no `..`, no `.git`), in `PATH` order.
 - The section requires `verification`: the toolchain comes from the same
   pinned image as the tests.
 - A manifest without the section keeps its digest. Adding it changes the
@@ -52,9 +53,12 @@ The copier enforces these rules:
 - It never follows symbolic links. It copies only relative links that stay
   inside the root.
 - It strips setuid, setgid and sticky bits, and makes the copy read-only.
-- It caps the copy at 50,000 entries and 1 GiB.
+- It caps the copy at 50,000 entries, 1 GiB and a depth of 64.
 - It refuses executables that are dynamically linked (an ELF file with an
-  interpreter), because the worker image has no matching loader.
+  interpreter), so a toolchain built for another libc fails at copy time.
+  This is a compatibility check, not a security boundary.
+- The destination must not exist yet: it is a subdirectory of the volume,
+  written atomically.
 
 Only self-contained toolchains, such as Go's, qualify.
 
