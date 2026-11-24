@@ -62,8 +62,72 @@ The copier enforces these rules:
 
 Only self-contained toolchains, such as Go's, qualify.
 
-> **Status:** the manifest section and the copier exist; the executor pod does
-> not use them yet. See issue #745.
+#### What the generator gets
+
+With the section, each generation (and its repair) runs in an executor pod
+with two init containers before the worker and the mailbox start:
+
+1. `install-runner` (the mailbox image) installs the static copier into a
+   small disk volume.
+2. `copy-toolchain` (the pinned `verification.image`, the digest the verifier
+   uses) copies `root` into a 1 GiB disk volume.
+
+The worker then runs with:
+- the toolchain mounted read-only at `/toolchain/root`, and `toolchain.path`
+  (under that directory) before the worker image's directories on `PATH`;
+- a 1 GiB disk scratch volume at `/scratch` for `TMPDIR` and
+  `XDG_CACHE_HOME`, which holds the Go build cache;
+- `verification.env` without `PATH` and without names the launcher reserves
+  (`NO_COLOR`, `PYTHONDONTWRITEBYTECODE` and names starting with `SC_`,
+  `NODE_`, `GIT_`, `NPM_` or `XDG_`). The same names are allowlisted for
+  `run_shell`. Values are not rewritten, so a variable that names a path in
+  the verification image (for example `GOROOT`) does not apply in generation;
+  Go finds its root from the `go` binary;
+- 512 MiB more memory (a 1,280 MiB limit) and a 2,304 MiB ephemeral-storage
+  limit and request, which cover the three disk volumes, so the kubelet evicts
+  the pod predictably if they fill;
+- a prompt that names the manifest's test command and its directory, and
+  tells the generator to run it with `run_shell` and fix its change until it
+  passes before it finishes.
+
+The worker stops before running SCC if a declared `path` directory contains
+`node`, `git`, `scc`, `sh` or `env`: those would replace the worker's own
+programs on `PATH`.
+
+The installer sizes the executor namespace for this pod: `executor-bounds`
+grows `limits.memory` from 4 GiB to 6 GiB (four pods with 512 MiB more each).
+Requests do not change. A RuntimeClass `podOverhead` is added on top, as
+before. The readiness budget, the lifecycle claim and the pod deadline grow
+by 180 s for the image pull and the copy (see
+[the timing envelope](candidate-runtime.md#timing-envelope)).
+
+#### Stops
+
+A toolchain the copier refuses fails the pod at init, before any model call.
+The worker log names the stop:
+
+| Stop | Cause |
+| --- | --- |
+| `readiness-toolchain-dynamic` | An executable is dynamically linked (for example a glibc toolchain) |
+| `readiness-toolchain-link` | A symbolic link may leave the root |
+| `readiness-toolchain-limit` | More than 50,000 entries, 1 GiB or depth 64 |
+| `readiness-toolchain-source` | The root is missing, unreadable, behind a symbolic link, or contains a device, FIFO or socket |
+| `readiness-toolchain-usage` | The root or destination is refused |
+| `readiness-toolchain-destination` | The volume could not be written |
+| `readiness-toolchain-memory` | The copy ran out of memory |
+| `readiness-toolchain-install` | The copier could not be installed |
+| `readiness-toolchain-failed` | Any other copy failure |
+
+The runtime does not fall back to the offline guidance: fix the manifest and
+reinstall.
+
+#### Rotation
+
+Adding, changing or removing `generation.toolchain` changes the manifest
+digest, which the installation policy binds. The installer refuses a
+different manifest for an installed policy, so changing the toolchain of an
+installed repository requires a reinstall. A new `verification.image` digest
+also changes the generator's toolchain.
 
 ## 2. Install
 
