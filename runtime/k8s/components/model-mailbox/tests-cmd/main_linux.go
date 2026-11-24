@@ -32,6 +32,11 @@ const (
 //
 //	repository-tests install <dest>
 //	repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs>
+//
+// The same binary, run inside the pinned toolchain image, copies a reviewed
+// toolchain root into a volume for the generation worker:
+//
+//	repository-tests copy-toolchain <root> <dest>
 func main() {
 	var err error
 	switch {
@@ -39,11 +44,17 @@ func main() {
 		err = installRunner(os.Args[2:], "/proc/self/exe")
 	case len(os.Args) >= 2 && os.Args[1] == "run":
 		err = runRepositoryTests(context.Background(), os.Args[2:], os.Stdout, testsParent, testsUIDPath)
+	case len(os.Args) >= 2 && os.Args[1] == "copy-toolchain":
+		err = copyToolchain(os.Args[2:], defaultToolchainLimits)
 	default:
-		err = errors.New("usage: repository-tests install|run ...")
+		err = errors.New("usage: repository-tests install|run|copy-toolchain ...")
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		var refusal *toolchainError
+		if errors.As(err, &refusal) {
+			os.Exit(refusal.code)
+		}
 		os.Exit(1)
 	}
 }

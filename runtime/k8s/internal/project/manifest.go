@@ -33,6 +33,11 @@ type Manifest struct {
 	Publication  Publication   `json:"publication"`
 	Merge        Merge         `json:"merge"`
 	Recipes      []Recipe      `json:"recipes,omitempty"`
+	// Generation is optional and omitted when absent, so manifests without
+	// it keep their canonical form and digest. It is a separate section, not
+	// part of Verification, because the verifier's settings digest encodes
+	// Verification.
+	Generation *Generation `json:"generation,omitempty"`
 }
 
 // Verification runs the repository's own tests in the sandboxed verifier.
@@ -102,6 +107,66 @@ func validEnv(env map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// Generation declares reviewed inputs for the generation sandbox. It requires
+// Verification: the toolchain is copied from the verifier's pinned image.
+type Generation struct {
+	Toolchain *Toolchain `json:"toolchain"`
+}
+
+// Toolchain names a self-contained toolchain inside the verification image.
+// Root is copied, bounded, into a volume the generation worker mounts
+// read-only; Path lists directories under Root to put on the worker's PATH.
+type Toolchain struct {
+	Root string   `json:"root"`
+	Path []string `json:"path"`
+}
+
+// Bounds of Toolchain.
+const (
+	MaxToolchainPath      = 8
+	MaxToolchainRootBytes = 256
+)
+
+// toolchainExcluded are directories a toolchain root may not be or be under:
+// the run's writable directories and kernel or device filesystems.
+var toolchainExcluded = []string{"/workspaces", "/tmp", "/runner", "/proc", "/sys", "/dev"}
+
+// ValidateToolchainRoot reports whether root is an absolute, clean directory
+// path in the conservative character set, other than / and outside the run's
+// writable and kernel directories.
+func ValidateToolchainRoot(root string) error {
+	if len(root) < 2 || len(root) > MaxToolchainRootBytes || root[0] != '/' || cleanPath(root[1:]) != nil {
+		return ErrManifest
+	}
+	for _, excluded := range toolchainExcluded {
+		if root == excluded || strings.HasPrefix(root, excluded+"/") {
+			return ErrManifest
+		}
+	}
+	return nil
+}
+
+func (g Generation) validate() error {
+	if g.Toolchain == nil {
+		return ErrManifest
+	}
+	return g.Toolchain.validate()
+}
+
+func (t Toolchain) validate() error {
+	if ValidateToolchainRoot(t.Root) != nil || len(t.Path) == 0 || len(t.Path) > MaxToolchainPath {
+		return ErrManifest
+	}
+	seen := map[string]bool{}
+	for _, dir := range t.Path {
+		if len(dir) > MaxToolchainRootBytes || cleanPath(dir) != nil || seen[dir] {
+			return ErrManifest
+		}
+		seen[dir] = true
+	}
+	return nil
 }
 
 type Result struct {
@@ -248,6 +313,9 @@ func (m Manifest) Validate() error {
 		return ErrManifest
 	}
 	if m.Verification != nil && m.Verification.validate() != nil {
+		return ErrManifest
+	}
+	if m.Generation != nil && (m.Verification == nil || m.Generation.validate() != nil) {
 		return ErrManifest
 	}
 	if m.Publication.validate() != nil || m.Merge.validate() != nil || len(m.Recipes) > 8 {
