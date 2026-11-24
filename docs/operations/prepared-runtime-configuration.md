@@ -72,6 +72,12 @@ closed. Migrations commit per file; this procedure does not promise a single
 transaction across schema and Kubernetes changes. Keep the original records and
 resources for the separately reviewed containment-preserving recovery procedure;
 do not delete records, rotate secrets or unpause workloads to force progress.
+A durable intent persisted in the read-only window before any effect — phase
+`preparing` with no target and no journaled resources, private credentials or
+bound sources — may be abandoned for a newly reviewed request only after the
+cluster is re-proven equal to its recorded source; the installer then captures a
+fresh before-state under the new request digest. Any recorded credential, bound
+source or applied target keeps the intent permanently fail-closed.
 The existing offline-sandbox installer retains its own custody and conformance
 controls; the preparation boundary is checked before and after it runs.
 

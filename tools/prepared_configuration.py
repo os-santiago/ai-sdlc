@@ -87,13 +87,33 @@ class Configuration:
         platform.write_record(self.path,candidate)
         self.record=candidate
 
+    def effect_free(self):
+        """A durable intent persisted before any journaled credential, bound
+        source or target effect; nothing was ever POSTed or applied. This
+        relies on install_prepared ordering: every unjournaled mutator
+        (github_merge_install.reconcile, offline_runtime.install) only runs
+        after provenance has journaled its first source or secret effect, so
+        an empty journal implies no effects reached the cluster."""
+        return (self.record.get('phase')=='preparing' and self.record.get('target') is None
+                and not self.record.get('resources') and not self.record.get('privateSecrets')
+                and not self.record.get('sources'))
+
     def begin(self):
         if self.record is not None and self.record['phase']!='configured-paused':
             if self.record.get('requestSHA256')!=self.request_digest:
-                raise ValueError('Incomplete prepared configuration cannot accept a different target')
-            self.guard(inspect=True)
-            self.resolve_secret_intents()
-            return
+                if not self.effect_free():
+                    raise ValueError('Incomplete prepared configuration cannot accept a different target')
+                self.guard(inspect=True)  # Re-prove the recorded before-state before abandoning the intent.
+                # Prior records are immutable custody: archive the abandoned
+                # intent under its digest before the replacement candidate
+                # overwrites the journal, keeping an unbroken audit chain.
+                platform.write_record(self.state_dir/
+                    f'prepared-configuration.superseded-{bootstrap.digest(self.record)[:16]}.json',self.record)
+                self.record=None
+            else:
+                self.guard(inspect=True)
+                self.resolve_secret_intents()
+                return
         if self.record is None:
             report=build_foundation_install.bounded_json(self.state_dir/'installation.json')
             images=report.get('images')

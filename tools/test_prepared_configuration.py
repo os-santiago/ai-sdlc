@@ -295,6 +295,77 @@ class PreparedCustodyTests(unittest.TestCase):
         self.config.check_secrets=lambda:(_ for _ in ()).throw(ValueError('changed original secret'))
         with self.assertRaisesRegex(ValueError,'changed original secret'):self.config.begin()
 
+    def effect_free_fixture(self):
+        """A `preparing` intent persisted before any credential or Helm effect."""
+        state=Path(self.directory.name)
+        (state/'installation.json').write_text(json.dumps({'images':{'installed':'images'}}))
+        foundation={'clusterUID':'cluster','namespaceUID':'namespace','nodeID':'node','nodeUID':'node-uid',
+            'nodeBootID':'boot','databaseSecretSHA256':'same','resources':{},'roleSecrets':{},'deployments':{}}
+        c=prepared.Configuration.__new__(prepared.Configuration)
+        c.binaries={'helm':'helm'};c.state_dir=state;c.path=state/'prepared-configuration.json'
+        c.deadline=time.monotonic()+30;c.current=None
+        c.request_digest='new-reviewed-request'
+        c.original={'imagesSHA256':bootstrap_prepare.digest({'installed':'images'}),'original':foundation}
+        c.record={'version':prepared.VERSION,'originalSHA256':'recorded-original','phase':'preparing',
+            'requestSHA256':'superseded-request','source':{'documents':[],'externalRuntime':{}},
+            'target':None,'resources':{},'privateSecrets':{},'sources':{},'originalSecrets':{}}
+        c.path.write_text(json.dumps(c.record))
+        c.inventory=lambda kinds:[]
+        c.read=lambda kind,name,namespace='ai-sdlc-runtime':None
+        c.secret_inventory=lambda:{}
+        c.render=lambda values:[]
+        c.base_run=lambda argv,**kwargs:SimpleNamespace(stdout=json.dumps({'runtime':{'paused':True}}))
+        c.observer=lambda description:SimpleNamespace(inspect=lambda paused:copy.deepcopy(foundation),
+            observe=lambda paused:(copy.deepcopy(foundation),None))
+        return c
+
+    def test_effect_free_rejected_intent_abandoned_only_after_source_reproven(self):
+        c=self.effect_free_fixture()
+        calls=[];real_guard=c.guard
+        def recording(**kwargs):
+            calls.append(kwargs)
+            return real_guard(**kwargs)
+        c.guard=recording
+        c.begin()
+        self.assertEqual(calls,[{'inspect':True}])
+        persisted=json.loads(c.path.read_text())
+        self.assertEqual(persisted['requestSHA256'],'new-reviewed-request')
+        self.assertEqual(persisted['phase'],'preparing')
+        self.assertEqual(persisted['source']['values'],{'runtime':{'paused':True}})
+        self.assertEqual(persisted['source']['observed'],c.original['original'])
+        self.assertEqual(c.current,'source')
+        # The abandoned intent is preserved as digest-named custody.
+        superseded=list(c.state_dir.glob('prepared-configuration.superseded-*.json'))
+        self.assertEqual(len(superseded),1)
+        self.assertEqual(json.loads(superseded[0].read_text())['requestSHA256'],'superseded-request')
+
+    def test_recorded_effect_keeps_changed_request_permanently_rejected(self):
+        for fault in ('resources','privateSecrets','sources','target','phase'):
+            with self.subTest(fault=fault):
+                c=self.effect_free_fixture()
+                if fault=='resources':c.record['resources']={'v1/Secret/ai-sdlc-runtime/x':{'nonce':'n'}}
+                elif fault=='privateSecrets':c.record['privateSecrets']={'ai-sdlc-x':{'metadata':{'name':'ai-sdlc-x'}}}
+                elif fault=='sources':c.record['sources']={'registry':'sha256:'+'a'*64}
+                elif fault=='target':c.record['target']={'documents':[]}
+                else:c.record['phase']='applying'
+                c.guard=lambda **kwargs:(_ for _ in ()).throw(AssertionError('guard must not run'))
+                with self.assertRaisesRegex(ValueError,'Incomplete prepared configuration cannot accept a different target'):
+                    c.begin()
+                self.assertEqual(json.loads(c.path.read_text())['requestSHA256'],'superseded-request')
+                self.assertFalse(list(c.state_dir.glob('prepared-configuration.superseded-*.json')))
+
+    def test_effect_free_abandon_still_fails_closed_on_drifted_source(self):
+        c=self.effect_free_fixture()
+        drifted=dict(c.original['original'],clusterUID='replaced')
+        c.observer=lambda description:SimpleNamespace(inspect=lambda paused:drifted,
+            observe=lambda paused:(drifted,None))
+        with self.assertRaisesRegex(ValueError,'neither its complete before nor after'):
+            c.begin()
+        self.assertEqual(c.record['requestSHA256'],'superseded-request')
+        # The rejected intent and its journal survive the failed re-proof.
+        self.assertEqual(json.loads(c.path.read_text())['requestSHA256'],'superseded-request')
+        self.assertFalse(list(c.state_dir.glob('prepared-configuration.superseded-*.json')))
+
     def test_controller_revision_derivation_preserves_original_physical_profile(self):
         state=Path(self.directory.name)
         original={'version':'ai-sdlc.build-desired/v1','revision':'a'*40,'controllerDigest':'sha256:'+'a'*64,
