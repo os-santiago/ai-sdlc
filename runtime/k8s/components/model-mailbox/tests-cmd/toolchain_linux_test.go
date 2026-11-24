@@ -298,3 +298,32 @@ func assertRefused(t *testing.T, name string, err error, code int, dest, root st
 		}
 	}
 }
+
+func TestCopyToolchainRefusesALinkedAncestor(t *testing.T) {
+	root, dest := toolchainFixture(t, tree{"bin/go": {mode: 0o755, data: elf64(ptLoad)}})
+	// alias -> the fixture's parent directory, so alias/go names the same
+	// real tree through a linked ancestor.
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(filepath.Dir(root), alias); err != nil {
+		t.Fatal(err)
+	}
+	if realDirectoryPath(filepath.Join(alias, "go")) {
+		t.Fatal("a path through a linked ancestor was accepted")
+	}
+	if !realDirectoryPath(root) {
+		t.Fatal("a path without links was refused")
+	}
+	err := copyTree(filepath.Join(alias, "go"), dest, defaultToolchainLimits)
+	assertRefused(t, "linked ancestor", err, exitToolchainSource, dest, root)
+	if err := copyTree(root, dest, defaultToolchainLimits); err != nil {
+		t.Fatalf("the real path was refused: %v", err)
+	}
+}
+
+func TestRealDirectoryPathRejectsRelativeAndUncleanPaths(t *testing.T) {
+	for _, p := range []string{"usr/local/go", "/usr/local/../local/go", "/usr//local"} {
+		if realDirectoryPath(p) {
+			t.Errorf("%q was accepted", p)
+		}
+	}
+}

@@ -65,8 +65,9 @@ var defaultToolchainLimits = toolchainLimits{files: maxToolchainFiles, bytes: ma
 //	repository-tests copy-toolchain <root> <dest>
 //
 // Policy:
-//   - The walk never follows symbolic links, and the root itself must be a
-//     real directory.
+//   - The walk never follows symbolic links. The root and every one of its
+//     ancestors must be real directories, so a linked ancestor cannot move
+//     the walk to a path the denylist excludes.
 //   - Only directories, regular files and safe internal symbolic links are
 //     copied; devices, FIFOs and sockets are refused.
 //   - A symbolic link is safe when its target is relative and clean, made of
@@ -97,7 +98,7 @@ func copyToolchain(args []string, limits toolchainLimits) error {
 
 // copyTree applies the copy policy to an already validated root and dest.
 func copyTree(root, dest string, limits toolchainLimits) error {
-	if info, err := os.Lstat(root); err != nil || !info.IsDir() {
+	if !realDirectoryPath(root) {
 		return errToolchainSource
 	}
 	if _, err := os.Lstat(dest); !errors.Is(err, os.ErrNotExist) {
@@ -123,6 +124,28 @@ func copyTree(root, dest string, limits toolchainLimits) error {
 		return err
 	}
 	return nil
+}
+
+// realDirectoryPath reports whether the absolute, clean path p and each of
+// its ancestors is a real directory, not a symbolic link. The source image is
+// immutable while the init container runs, so checking before the walk holds
+// for the whole walk; the walk itself opens every directory with O_NOFOLLOW.
+func realDirectoryPath(p string) bool {
+	if !filepath.IsAbs(p) || filepath.Clean(p) != p {
+		return false
+	}
+	current := "/"
+	for _, part := range strings.Split(strings.TrimPrefix(p, "/"), "/") {
+		if part == "" {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil || !info.IsDir() {
+			return false
+		}
+	}
+	return true
 }
 
 // within reports whether p is base or lies under it.
