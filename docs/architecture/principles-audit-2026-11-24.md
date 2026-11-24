@@ -43,7 +43,7 @@ Go and chart paths are relative to `runtime/k8s/`; paths starting with
 |---|---|---|---|
 | 1.1 | High | **Review is not an independent authority.** The verifier runs verification, review (holding the review model token), the repair handoff and the publication handoff in one loop. The provenance verifier is the same binary with the same signing identity (`components/verifier/cmd/main.go:116-147`, `deploy/helm/.../provenance.yaml:116`). | Build a separate reviewer role and identity, and a distinct identity for provenance verification. |
 | 1.2 | High | **Merge is self-granted.** `merge-publication` is a release-manager→release-manager grant (`policy.go:66`). | Require a separate gate role, or a fresh reviewer or verifier co-signature, to merge. |
-| 1.3 | Medium | **The release manager runs six loops covering seven duties:** publication, merge, build dispatch, promotion and deploy dispatch (one shared loop), terminal write and production dispatch (`components/release-manager/cmd/main.go:177-264`). | Split it into an inner-loop publisher/merger and an outer-loop release coordinator, with separate roles and grants. |
+| 1.3 | Medium | **The release manager runs six loops covering seven duties:** publication, merge, build dispatch, promotion and deploy dispatch (one shared loop), terminal write and production dispatch (`components/release-manager/cmd/main.go:177-264`). | Split it into a publisher, a merge gate (its own role; merge requires a co-signature, see 1.2) and an outer-loop release coordinator, each with its own role and grants. |
 | 1.4 | Medium | **Dead contracts.** `record-attempt` and `record-release` are declared with no producer or consumer, so the orchestrator is blind after planning until production. | Implement them, so the orchestrator owns per-issue state, or remove them. |
 | 1.5 | Medium | **The model-mailbox image is really a shared toolkit.** It ships five binaries, including the verification test runner (`components/model-mailbox/tests-cmd/main_linux.go:29`). | Rename it or split it by owner. |
 | 1.6 | Medium | **Stale responsibility docs.** `docs/innerloop-outerloop.md` and the `runtime/k8s/README.md` components table disagree with the code. There is no inner-loop architecture document. | Add a stage-ownership table generated from `policy.go` and service metadata, checked in CI. |
@@ -115,7 +115,7 @@ Session evidence: hours of operation exposed an intake freshness decay (fixed in
 |---|---|---|---|
 | 4.1 | High | **Runtime images are unsigned.** The installer trusts GitHub API metadata, not a signature (`containers.yml:9-10`, `install_images.py:39-107`). | Sign keyless with cosign and Rekor on main. Verify signer identity and issuer in the installer before writing pins. |
 | 4.2 | High | **No signed SLSA provenance.** The BuildKit provenance is unsigned and unverified (an earlier attestation path regressed). | Attest build provenance per digest, and verify it at install. |
-| 4.3 | High | **No admission-time signature policy** for runtime or produced images. | Ship an optional sigstore ClusterImagePolicy or Kyverno `verifyImages` policy, and the OpenShift image policy. |
+| 4.3 | High | **No admission-time signature policy** for runtime or produced images. | Ship a signature policy (sigstore ClusterImagePolicy, Kyverno `verifyImages`, or the OpenShift image policy) that is **required** for autonomous profiles. Disabling it is a reviewed, recorded exception. |
 | 4.4 | High | **No vulnerability gate** (epic #87). | Run govulncheck in CI. Scan each pushed digest, block fixable high and critical findings, and attest the result. |
 | 4.5 | Medium | **Unbound SBOM, unpinned bases.** The SBOM is not attested to the image. Runtime bases use mutable tags, and digests are optional for the main components in the chart. | Attest the SBOM per digest. Pin every base image and make digests mandatory. |
 | 4.6 | Medium | **Produced-artifact trust is fixture grade.** It uses a local key, no transparency log, SLSA v0.2, Conforma with an empty policy, and a hard-coded scope. The promotion gate is inactive (#455, #574, #439). | Move to keyless or KMS signing, SLSA v1, real Enterprise Contract policies, and an active promotion gate with a tamper test. |
@@ -141,7 +141,7 @@ Session evidence: hours of operation exposed an intake freshness decay (fixed in
 
 | # | Severity | Gap | Recommendation |
 |---|---|---|---|
-| 5.1 | Critical | **No working sandbox outside kind.** gVisor fails under CRI-O, Kata is not evaluated, and OpenShift ran on `crun`. The RuntimeClass name is hard-coded in three places (`executor/workload.go:77`, `repositorytests/workload.go:180`, `verification/workload.go:101`). | Add a sandbox abstraction with a configurable RuntimeClass, mapped to GKE Sandbox, OpenShift sandboxed containers, and AKS or EKS Kata options. Preflight refuses autonomy without a sandbox. |
+| 5.1 | Critical | **No working sandbox outside kind.** gVisor fails under CRI-O, Kata is not evaluated, and OpenShift ran on `crun`. The RuntimeClass name is hard-coded in three places (`executor/workload.go:77`, `repositorytests/workload.go:180`, `verification/workload.go:101`), and the installer installs the handler itself by patching the kind node. | Consume the platform's standard `RuntimeClass` instead of installing one. Make its name a chart value, verify in preflight that it exists, refuse autonomous work without it, and document the class per platform (GKE Sandbox `gvisor`, OpenShift sandboxed containers `kata`, AKS Pod Sandboxing, Kata on EKS bare metal). |
 | 5.2 | High | **The chart is not self-contained.** The tag defaults to `unpublished`, Secrets are created by the installer, and templates fail without installer JSON (#430). | Go Helm first: a published OCI chart and images, and a documented Secret contract (ExternalSecrets or pre-created). The installer becomes a thin wrapper. |
 | 5.3 | High | **The installer accepts only local kind-based platforms (`kind`, `konflux`) or OpenShift**, and needs a local container engine (#434). | Add a generic Kubernetes path with capability preflight. |
 | 5.4 | High | **Runtime upgrades are one-off scripts** hard-coded to kind contexts (#441). | Build one generic, ordered upgrade command reusing the journals. |
@@ -149,9 +149,33 @@ Session evidence: hours of operation exposed an intake freshness decay (fixed in
 | 5.6 | Medium | **No uninstall (#443), no backup or restore after cluster loss (#442), and no air-gapped install (new).** | Add `uninstall --keep-data`, scheduled backups, and a release bundle with mirror configuration. |
 | 5.7 | Medium | **Local-topology assumptions.** The model endpoint must be a literal private IP. There is only an OpenShift Route, amd64-only images, fixed namespaces, and a stale Kustomize base. | Relax each assumption. Generate Kustomize from Helm or delete it. |
 
-Operator/OLM: once the chart is self-contained, wrap it in a Helm-based
-operator for an OLM channel. Move to a reconciling Go operator only when the
-generic upgrade command exists.
+**Installation path: Helm chart and Operator.** The installer's duties map
+onto an operator:
+- generating identities and database role secrets (adopted by UID, never
+  regenerated);
+- applying the chart (21 templates, including 4 namespaces and cluster
+  roles);
+- running migrations;
+- the upgrade journals (pause, verified backup, migrate, reactivate), which
+  are already a state machine and map to reconcile phases.
+
+The path:
+1. Make the Helm chart self-contained and publish it.
+2. Build a Go operator (Operator Framework) with an `AISDLCInstallation`
+   custom resource that renders the same chart, so there is one source. It
+   owns identities, migrations and status conditions.
+3. Move the upgrade journals into reconciled phases, and publish through
+   OLM channels.
+
+A Helm-based operator would only repackage today's gaps, so it is not the
+target.
+
+OLM is native on OpenShift but absent by default on EKS, GKE and AKS, where
+the chart remains the delivery form. Risks:
+- the operator's cluster privileges: minimal RBAC, a signed image, no
+  business authority;
+- custody of identity material: it never appears in status or logs;
+- CRD versioning, with conversion from the first beta.
 
 Session evidence: a host reboot showed that host prerequisites and the local
 model proxy are not persistent. The local evaluation topology is not a
@@ -168,6 +192,7 @@ the principle and gaps it closes, and the existing issues it continues.
 | Item | Closes | Issues |
 |---|---|---|
 | Keyless signing of runtime images; signature verification in the installer; signed SLSA provenance and SBOM attestations per digest | P4 4.1, 4.2, 4.5 | #430 |
+| Remove the unsigned legacy handlers; split or rename the model-mailbox toolkit image by owner; add a predictive role to the A-Dev profile (tighten or advise only) | P1 1.5, 1.7, P2 2.7 | new |
 | Vulnerability gate: govulncheck plus image scan, blocking fixable high and critical | P4 4.4, P3 3.7 | #87 |
 | Pin every base image by digest; make chart digests mandatory | P4 4.5 | new |
 | A separate reviewer identity and role; provenance verifier identity; merge needs a co-signature | P1 1.1, 1.2 | new |
@@ -181,14 +206,15 @@ the principle and gaps it closes, and the existing issues it continues.
 
 | Item | Closes | Issues |
 |---|---|---|
-| Sandbox abstraction with configurable RuntimeClass and provider mapping; preflight refuses autonomy without one; evaluate Kata on OpenShift | P5 5.1 | new |
-| Self-contained, published Helm chart (OCI); Secret contract; thin installer | P5 5.2 | #430, #431, #432 |
-| Generic Kubernetes install path; external Postgres with TLS | P5 5.3, 5.5 | #434 |
+| Consume the platform's `RuntimeClass` as a chart value, verified in preflight (refuse autonomy without it); per-platform documentation; evaluate Kata on OpenShift | P5 5.1 | new |
+| Self-contained, published, signed Helm chart (OCI); Secret contract; thin installer | P5 5.2 | #430, #431, #432 |
+| Operator `v1alpha1`: `AISDLCInstallation` CRD; Go operator (Operator Framework) rendering the same chart, owning identities, migrations and status; validated with OLM on OpenShift and kind | P5 5.2, 5.4 | new |
+| Generic Kubernetes install path; external Postgres with TLS; relax local-topology assumptions (model endpoint by FQDN through an egress policy, Ingress/Gateway API objects, configurable namespaces, Kustomize generated from Helm or removed) | P5 5.3, 5.5, 5.7 | #434, #431 |
 | Generic upgrade and rollback command; uninstall that keeps data; scheduled backup and tested restore; doctor | P5 5.4, 5.6, P3 3.1 | #441, #442, #443, #435 |
 | CNPG high availability by default; leader election with standbys and PDBs | P3 3.1, 3.5 | new |
 | Metrics, traces and alerts, with correlation IDs | P3 3.2, 3.7 | M2 |
 | Admission policies as chart templates; executor and verifier pod-shape policies | P3 3.4 | new |
-| Split the release manager into inner-loop publisher/merger and outer-loop coordinator | P1 1.3 | new |
+| Split the release manager into publisher, merge gate and outer-loop release coordinator, each with its own role | P1 1.3 | new |
 | Predictive in shadow: budget and timeout calibration from `model-call` events; retry gating; flake history | P2 2.3, 2.4 | #750, #758 |
 
 ### Phase 3: Enterprise outer loop and distribution (12 weeks and beyond)
@@ -196,8 +222,8 @@ the principle and gaps it closes, and the existing issues it continues.
 | Item | Closes | Issues |
 |---|---|---|
 | Produced artifacts: keyless or KMS Chains signing, SLSA v1, real Enterprise Contract policies, active promotion gate with tamper test | P4 4.6 | #455, #574, #439, #525 |
-| Admission-time signature policy for runtime and produced images (sigstore policy controller, OpenShift image policy) | P4 4.3 | new |
-| Helm-based Operator and OLM channel; air-gapped bundle; multi-arch images | P5 | new |
+| Required admission-time signature policy for runtime and produced images (sigstore policy controller, OpenShift image policy); disabling it is a recorded exception | P4 4.3 | new |
+| Operator lifecycle: upgrade journals as reconciled phases, `stable` OLM channel, signed bundle on OperatorHub, later the certified catalog; air-gapped bundle; multi-arch images | P5 5.4, 5.6 | new |
 | Support matrix with recorded end-to-end runs on EKS, GKE, AKS, ROSA and ARO | P5 | #440, #444 |
 | Predictive admission (tighten only) and anomaly detection on stop and latency rates | P2 2.2, 2.5 | new |
 | Human approval tiers by risk; structured verdicts and test reports for autonomy | P3 3.6, P2 2.6 | new |

@@ -109,16 +109,33 @@ Verification produces evidence. It never grants authority by itself.
 
 AI-SDLC runs on conformant Kubernetes and OpenShift, on premises and in any
 cloud, without depending on a local development topology. Platform
-differences are confined to declared capabilities:
-- the sandbox runtime class;
-- storage;
-- DNS;
-- ingress;
-- the image signature policy.
+differences are confined to declared capabilities that AI-SDLC consumes
+through standard Kubernetes APIs and never installs itself:
+- the sandbox `RuntimeClass` (gVisor, Kata or the provider's equivalent), a
+  configuration value that preflight verifies exists. Autonomous work is
+  refused when there is none.
+- storage, DNS, ingress, and the image signature policy.
 
-Installation and upgrade use standard, supportable mechanisms:
-- a published, self-contained Helm chart;
-- an Operator/OLM path once the chart is complete;
+**Installation and upgrade follow one path with two standard delivery
+forms, from a single source of truth:**
+
+1. **A Helm chart is the foundation.** It is published and signed as an OCI
+   artifact, and is self-contained: a cluster administrator can install it
+   without the repository's installer. It has a documented Secret contract
+   (supplied, or generated once and adopted) and versioned values. The Helm
+   chart is the delivery form for clusters without OLM (EKS, GKE, AKS,
+   vanilla Kubernetes).
+2. **An Operator is the lifecycle form.** It is built with the Operator
+   Framework and distributed through OLM channels (OperatorHub, and the
+   certified catalog on OpenShift).
+   - An `AISDLCInstallation` custom resource declares the installation.
+   - The operator renders the same chart, so there is one source.
+   - It owns identities, migrations and status conditions.
+   - It turns upgrades into reconciled phases: pause, verified backup,
+     migrate, reactivate.
+   - It never holds business authority: it does not sign work commands.
+
+Both forms provide:
 - versioned, reversible upgrades;
 - an uninstall that preserves data;
 - scheduled backup and restore;
@@ -127,5 +144,5 @@ Installation and upgrade use standard, supportable mechanisms:
 
 **Evidence of compliance:**
 - a support matrix, with an end-to-end run recorded per target platform;
-- published, signed releases;
-- tested upgrade and rollback paths.
+- published, signed chart and operator bundle releases;
+- tested upgrade and rollback paths through both delivery forms.
