@@ -430,6 +430,8 @@ def _main(argv, stack):
     parser.add_argument('--refresh-model-credential', action='store_true')
     parser.add_argument('--model-upstream', type=Path, help='Reviewed OpenAI-compatible model service document (see docs/operations/model-gateway-adapters.md)')
     parser.add_argument('--project-manifest', type=Path, help='Reviewed ai-sdlc.project/v1 manifest for a repository that is not a built-in reference')
+    parser.add_argument('--generation-seconds', type=int, help='Generation time budget in seconds (600-900, default 600); candidate or verification only, recorded in the execution configuration')
+    parser.add_argument('--generation-steps', type=int, help='Generation SCC tool-step budget (24-32, default 24; above 24 requires --model-upstream); candidate or verification only, recorded in the execution configuration')
     args = parser.parse_args(argv)
     if args.command not in ('plan','local','status','tools','host','credentials','sandbox'):
         raise ValueError('Delegated installer subcommands must be the first argument')
@@ -482,6 +484,11 @@ def _main(argv, stack):
         raise ValueError('--profile shadow/candidate/verification is valid only with plan or local')
     if (args.codex_auth_file is not None or args.refresh_model_credential) and (args.command != 'local' or args.profile not in ('candidate', 'verification')):
         raise ValueError('Model credentials are only accepted by an explicit local candidate installation')
+    if args.generation_seconds is not None or args.generation_steps is not None:
+        if args.command not in ('plan', 'local') or args.profile not in ('candidate', 'verification'):
+            raise ValueError('A generation budget requires plan or local with the candidate or verification profile')
+        import candidate_install
+        candidate_install.generation_budget(args.generation_seconds, args.generation_steps, args.model_upstream is not None)
     if args.refresh_model_credential and args.codex_auth_file is None:
         raise ValueError('Model credential refresh requires an explicit authentication file')
     if args.github_auth != 'none' and args.command not in ('plan', 'local', 'credentials'):
@@ -516,7 +523,9 @@ def _main(argv, stack):
     execution_values = None
     if args.profile in ('candidate', 'verification'):
         import candidate_install
-        execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images), verification=args.profile == "verification", review=bool(args.independent_review), publication=bool(args.publication), merge=bool(args.merge), repair=bool(args.review_repair))
+        execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images), verification=args.profile == "verification", review=bool(args.independent_review), publication=bool(args.publication), merge=bool(args.merge), repair=bool(args.review_repair),
+                                                          generation_seconds=args.generation_seconds, generation_steps=args.generation_steps,
+                                                          model_upstream=args.model_upstream is not None)
         if args.model_upstream is not None:
             candidate_install.apply_model_upstream(execution_values, args.model_upstream)
     elif args.model_upstream is not None:

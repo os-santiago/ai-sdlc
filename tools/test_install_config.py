@@ -100,6 +100,62 @@ class InstallationConfigurationTests(unittest.TestCase):
         self.assertEqual(args.cluster, 'ai-sdlc-homedir')
         self.assertIsNone(args.profile)
 
+    def test_generation_budget_is_recorded_bounded_and_candidate_only(self):
+        import jsonschema
+        schema = json.loads((install.ROOT / 'spec/local-install.schema.json').read_text())
+        candidate = json.loads((install.ROOT / 'examples/homedir-candidate.local-install.json').read_text())
+        candidate['images'] = str((install.ROOT / 'examples' / candidate['images']).resolve())
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'install.json'
+            jsonschema.validate(dict(candidate, generationSeconds=900, generationSteps=32), schema)
+            selected = dict(candidate, generationSeconds=900, generationSteps=24)
+            jsonschema.validate(selected, schema)
+            path.write_text(json.dumps(selected))
+            values, digest = install_config.load(path)
+            self.assertEqual((values['generation_seconds'], values['generation_steps']), (900, 24))
+            path.write_text(json.dumps(candidate))
+            self.assertNotEqual(install_config.load(path)[1], digest)
+            self.assertNotIn('generation_seconds', install_config.load(path)[0])
+            # The plan renders the recorded budget into the candidate configuration.
+            path.write_text(json.dumps(selected))
+            rendered = []
+            def run(command, **kwargs):
+                rendered.append(json.loads(Path(command[-1]).read_text()))
+            with patch.object(install, 'tools', return_value={'helm': 'helm'}), patch.object(install, 'run', side_effect=run), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(install.main(['plan', '--config', str(path)]), 0)
+            profile = json.loads(rendered[0]['candidate']['configJSON'])['profile']
+            self.assertEqual((profile['maxSeconds'], profile['maxSteps']), (900, 24))
+            # More than 24 steps needs a model upstream; the Codex path refuses before tools.
+            path.write_text(json.dumps(dict(candidate, generationSteps=32)))
+            with patch.object(install, 'tools') as tools:
+                with self.assertRaisesRegex(ValueError, 'requires --model-upstream'):
+                    install.main(['plan', '--config', str(path)])
+                tools.assert_not_called()
+            path.write_text(json.dumps(selected))
+            with patch.object(install, 'tools') as tools:
+                with self.assertRaisesRegex(ValueError, 'conflicts'):
+                    install.main(['local', '--config', str(path), '--generation-seconds', '600'])
+                tools.assert_not_called()
+            # Status addresses the same scope without the plan/local-only option.
+            with patch.object(install, 'tools', return_value={'helm': 'helm', 'kind': 'kind', 'kubectl': 'kubectl'}), \
+                 patch.object(install, 'run', side_effect=ValueError('stop at cluster access')):
+                with self.assertRaisesRegex(ValueError, 'stop at cluster access'):
+                    install.main(['status', '--config', str(path)])
+            invalid = [dict(candidate, generationSeconds=599), dict(candidate, generationSeconds=901),
+                       dict(candidate, generationSeconds=True), dict(candidate, generationSeconds='900'),
+                       dict(candidate, generationSteps=23), dict(candidate, generationSteps=33),
+                       dict(candidate, generationSteps=24.0), dict(self.fixture, generationSeconds=900),
+                       dict(self.fixture, generationSteps=32)]
+            for config in invalid:
+                path.write_text(json.dumps(config))
+                with self.subTest(config=config), self.assertRaises(ValueError):
+                    install_config.load(path)
+                # JSON Schema accepts 24.0 as an integer; the parser rejects it.
+                if not isinstance(config.get('generationSteps'), float):
+                    with self.subTest(schema=config), self.assertRaises(jsonschema.ValidationError):
+                        jsonschema.validate(config, schema)
+
 
 if __name__ == '__main__':
     unittest.main()

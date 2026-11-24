@@ -35,6 +35,21 @@ type Command struct {
 	Repair            *repair.Reference `json:"repair,omitempty"`
 }
 
+// BaseGenerationSeconds is the generation budget the original 20-minute
+// command lifetime was sized for: 600 s of generation inside the 720 s
+// lifecycle claim (maxSeconds + 120 s), leaving 480 s for queueing,
+// preparation and the verification handoff, which inherits this expiry.
+const BaseGenerationSeconds = 600
+
+// CommandLifetime is the signed execution command's lifetime, and the worker's
+// per-poll bound, for a reviewed generation budget. A budget above 600 s
+// extends both by the same number of seconds (at most 25 minutes at the 900 s
+// maximum), so a longer generation keeps the original 480 s for preparation
+// and handoff. The default 600 s budget keeps exactly 20 minutes.
+func CommandLifetime(maxSeconds int) time.Duration {
+	return 20*time.Minute + time.Duration(max(0, min(maxSeconds, 900)-BaseGenerationSeconds))*time.Second
+}
+
 func (c Command) ID() string {
 	raw, _ := json.Marshal(c)
 	return "execution-" + authority.Digest(raw)

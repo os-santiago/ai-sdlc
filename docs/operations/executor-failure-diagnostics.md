@@ -25,6 +25,37 @@ the run at the profile's `maxSeconds` while the call was still in flight: the
 generation ran out of time, not a transport fault. The publication still stops
 the call as uncertain, as before.
 
+When the installed `maxSeconds` is above the 600-second default, SCC receives a
+shorter time budget than the launcher's kill: one call window plus 15 seconds
+earlier, at most an eighth of `maxSeconds`, and taken only from the seconds above
+600 (825 of 900 seconds with the default window). SCC checks that budget before
+each model call, so a run that runs out of time then normally ends as
+`worker-exit workerExitCode=22`, with no call in flight, instead of exit 124. At
+the default 600 seconds SCC keeps the full 600, exactly as before, so a
+time-out with a call in flight still ends with 124. Code 124 also remains
+possible above the default when the last call or tool outlasts the margin, for
+example a slow model whose call window is longer than an eighth of the budget;
+the stop line above still names it.
+
+#### Telling a time-out from a step-budget stop
+
+Code 22 is SCC's budget exhaustion for both its time and its tool-step budget.
+Both are failures, and partial changes are never promoted. The diagnostic keeps
+only the exit code, not SCC's summary, so tell them apart from durable records:
+
+- **Elapsed time.** Compare `execution_failures.observed_at` with the attempt's
+  `execution_lifecycles.created_at`. A time-out ends at or after SCC's
+  `--max-seconds` (above), plus the setup before SCC starts. A step-budget stop
+  usually ends well before it.
+- **Model calls.** Count the attempt's `model_calls`. With a model upstream,
+  where one call is allowed per step, a step-budget stop typically uses close to
+  `maxSteps` calls; a time-out uses fewer calls of longer duration.
+- **SCC's audit and summary.** `run/summary.json` reports `exitReason`
+  `budget_exceeded` for both, and SCC's audit log in `run/audit.jsonl` shows
+  which budget ran out (the [isolated tool-budget evidence](../evidence/2026-11-17-scc-tool-budget.json)
+  checked a step-budget marker). These files exist only while the executor
+  workspace does; cleanup removes them, so they are not durable evidence.
+
 The first managed Saferus attempt on 2026-11-17 stopped before this capability
 existed. Its seven successful model HTTP responses do not explain its nonzero
 executor exit, and cleanup removed the transient diagnostic files. This change
