@@ -58,6 +58,14 @@ def installed_execution_config(kubectl):
     return config
 
 
+def _field(document, name, default):
+    """A field matched case-insensitively; more than one spelling is malformed."""
+    values = [value for key, value in document.items() if key.lower() == name.lower()]
+    if len(values) > 1:
+        raise ValueError('Installed execution configuration is malformed; preserve it for review')
+    return values[0] if values else default
+
+
 def require_runtime_class(kubectl, explicit):
     """A reinstall keeps the installed sandbox RuntimeClass unless the operator
     names a class explicitly; omitting --runtime-class never silently switches
@@ -65,8 +73,9 @@ def require_runtime_class(kubectl, explicit):
     config = installed_execution_config(kubectl)
     if config is None:
         return
-    placement = config.get('placement')
-    installed = placement.get('RuntimeClass', DEFAULT_RUNTIME_CLASS) if isinstance(placement, dict) else None
+    # The runtime matches JSON field names case-insensitively; so does this guard.
+    placement = _field(config, 'placement', {})
+    installed = _field(placement, 'RuntimeClass', DEFAULT_RUNTIME_CLASS) if isinstance(placement, dict) else None
     if not isinstance(installed, str):
         raise ValueError('Installed execution configuration is malformed; preserve it for review')
     if explicit is None and installed != DEFAULT_RUNTIME_CLASS:

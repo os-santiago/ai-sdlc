@@ -120,9 +120,12 @@ class CandidateInstallTests(unittest.TestCase):
         for config, explicit in ((None, None), (default, None), (default, 'kata'), (kata, 'kata'), (kata, 'gvisor'), (kata, 'ai-sdlc-offline')):
             with self.subTest(config=config, explicit=explicit), installed(config):
                 candidate_install.require_runtime_class(['kubectl'], explicit)
-        with installed(kata), self.assertRaisesRegex(ValueError, 'pass --runtime-class kata'):
-            candidate_install.require_runtime_class(['kubectl'], None)
-        for bad in ([], {'placement': []}, {'placement': {'RuntimeClass': 7}}):
+        # The runtime reads the field names case-insensitively; so does the guard.
+        for spelled in (kata, {'placement': {'runtimeClass': 'kata'}}, {'Placement': {'RUNTIMECLASS': 'kata'}}):
+            with self.subTest(spelled=spelled), installed(spelled), self.assertRaisesRegex(ValueError, 'pass --runtime-class kata'):
+                candidate_install.require_runtime_class(['kubectl'], None)
+        for bad in ([], {'placement': []}, {'placement': {'RuntimeClass': 7}},
+                    {'placement': {'RuntimeClass': 'kata', 'runtimeClass': 'kata'}}, {'placement': {}, 'Placement': {}}):
             with self.subTest(bad=bad), installed(bad), self.assertRaisesRegex(ValueError, 'malformed'):
                 candidate_install.require_runtime_class(['kubectl'], None)
 

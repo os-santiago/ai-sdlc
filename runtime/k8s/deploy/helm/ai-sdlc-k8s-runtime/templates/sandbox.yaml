@@ -10,7 +10,7 @@ chart never creates, changes or lists runtime classes.
 {{- /* The runtime matches JSON field names case-insensitively, so every
 spelling of the class field counts, and more than one spelling is refused. */ -}}
 {{- if .Values.candidate.configJSON }}
-{{- $placement := (fromJson .Values.candidate.configJSON).placement | default dict }}
+{{- $placement := include "ai-sdlc-k8s-runtime.placementField" (fromJson .Values.candidate.configJSON) | fromJson }}
 {{- if ne (include "ai-sdlc-k8s-runtime.sandboxClassField" (dict "doc" $placement "field" "placement RuntimeClass")) $class }}
 {{- fail "sandbox.runtimeClassName differs from the execution configuration placement RuntimeClass" }}
 {{- end }}

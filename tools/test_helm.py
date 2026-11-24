@@ -268,9 +268,15 @@ class ChartTests(unittest.TestCase):
         result = self.sandbox_docs(dict(lower, sandbox={'runtimeClassName': 'kata'},
                                         review={'enabled': True, 'configJSON': json.dumps({'RUNTIMECLASS': 'kata'})}))[0]
         self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.sandbox_docs({'candidate': {'configJSON': json.dumps({'Placement': {'RuntimeClass': 'kata'}})},
+                                    'sandbox': {'runtimeClassName': 'kata'}})[0]
+        self.assertEqual(result.returncode, 0, result.stderr)
         both = {'candidate': {'configJSON': json.dumps({'placement': {'RuntimeClass': 'kata', 'runtimeclass': 'kata'}})}}
+        two_placements = {'candidate': {'configJSON': json.dumps({'placement': {}, 'PLACEMENT': {'RuntimeClass': 'kata'}})}}
         for values in (lower, dict(default, review={'enabled': True, 'configJSON': json.dumps({'RuntimeClass': 'kata'})}),
                        dict(both, sandbox={'runtimeClassName': 'kata'}),
+                       dict(two_placements, sandbox={'runtimeClassName': 'kata'}), two_placements,
+                       {'candidate': {'configJSON': json.dumps({'placement': []})}},
                        dict(default, sandbox={'runtimeClassName': 'kata'}), kata,
                        dict(kata, sandbox={'runtimeClassName': 'kata'}, review={'enabled': True, 'configJSON': '{}'}),
                        {'sandbox': {'runtimeClassName': 'Kata'}}, {'sandbox': {'runtimeClassName': 'kata/../x'}},

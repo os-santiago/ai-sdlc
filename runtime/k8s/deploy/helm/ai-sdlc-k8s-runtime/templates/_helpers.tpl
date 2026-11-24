@@ -184,3 +184,20 @@ default; more than one spelling fails. Input: dict "doc" map "field" label.
 {{- if gt (len $found) 1 -}}{{- fail (printf "the %s field appears more than once with different capitalization" .field) -}}{{- end -}}
 {{- if $found -}}{{- first $found | default "ai-sdlc-offline" -}}{{- else -}}ai-sdlc-offline{{- end -}}
 {{- end -}}
+
+{{/*
+The execution configuration's placement object as JSON, matching the field
+name case-insensitively as the runtime does. Absent means an empty object;
+more than one spelling fails. Input: the decoded configuration document.
+*/}}
+{{- define "ai-sdlc-k8s-runtime.placementField" -}}
+{{- $found := list -}}
+{{- range $key, $value := . -}}
+{{- if eq (lower $key) "placement" -}}{{- $found = append $found $value -}}{{- end -}}
+{{- end -}}
+{{- if gt (len $found) 1 -}}{{- fail "the execution configuration placement field appears more than once with different capitalization" -}}{{- end -}}
+{{- $placement := dict -}}
+{{- if $found -}}{{- if not (kindIs "invalid" (first $found)) -}}{{- $placement = first $found -}}{{- end -}}{{- end -}}
+{{- if not (kindIs "map" $placement) -}}{{- fail "the execution configuration placement must be an object" -}}{{- end -}}
+{{- toJson $placement -}}
+{{- end -}}
