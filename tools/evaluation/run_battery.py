@@ -37,8 +37,20 @@ POLL_SECONDS = 20
 TERMINAL_CLEANUP = "(l.cleanup_state='uncertain' OR (l.cleanup_state='pending' AND l.cleanup_attempts>=3 AND l.cleanup_after<=now()))"
 
 
+RETRY_DELAYS = (5, 15, 45)
+
+
 def run(args, **kwargs):
-    return subprocess.run(args, check=True, capture_output=True, text=True, timeout=120, **kwargs).stdout
+    """Runs a read-only observation command. A transient failure (a forge
+    or cluster API blip, a timeout) is retried with backoff, so one blip does
+    not abort a battery of many hours; the last failure is raised."""
+    for delay in RETRY_DELAYS + (None,):
+        try:
+            return subprocess.run(args, check=True, capture_output=True, text=True, timeout=120, **kwargs).stdout
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            if delay is None:
+                raise
+            time.sleep(delay)
 
 
 class Runtime:
