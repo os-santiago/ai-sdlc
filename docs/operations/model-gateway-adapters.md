@@ -211,10 +211,13 @@ streams about 2.1 MB from llama.cpp), 256 KiB per event line, 256 KiB of
 assembled text and at most 8 tool-call indices. A mid-stream error event is a
 `backend` failure, and so is a stream without a finish reason, even one that
 ends with `[DONE]`: like a non-streaming answer, only a reported finish
-completes it. Each `data:` line must hold one whole JSON chunk, as
-OpenAI-compatible servers send it. An empty `data:`, a chunk split over several
-`data:` lines, and lines ended by a bare CR fail closed (`invalid`, or
-`oversized` past the line bound). Reasoning deltas (`reasoning_content` from
+completes it. Events follow the SSE format: the `data:` lines
+of an event (LF or CRLF line ends) join with a line feed up to the blank line
+that ends it, or up to the end of the stream, and the whole event is then
+parsed as one JSON chunk. Comments, other fields and events without data are
+skipped. Each line and each event are bounded by 256 KiB (`oversized`). Lines
+ended by a bare CR alone are not split, so such a stream fails closed
+(`invalid`, or `oversized`). Reasoning deltas (`reasoning_content` from
 llama.cpp, `reasoning` from vLLM) are watched by the guard and never returned.
 A lone surrogate in a delta is judged by the same message check as in a JSON
 answer, with the same outcome.

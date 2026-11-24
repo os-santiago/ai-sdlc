@@ -467,6 +467,7 @@ class _Stream:
     def __init__(self, guard):
         self.guard, self.content, self.calls = guard, [], {}
         self.finish, self.usage, self.done, self.size = None, None, False, 0
+        self.data, self.data_size = [], 0  # the current event's data lines
 
     def keep(self, channel, text):
         # A lone surrogate (a JSON "\ud800" escape) is counted, not refused
@@ -478,17 +479,36 @@ class _Stream:
             raise _Stop(DegenerateCompletion())
 
     def line(self, line):
-        """One SSE line. Comments (``:``, keep-alive pings), blank lines and
-        other fields are skipped; ``[DONE]`` ends the stream. Each ``data:``
-        line must hold one whole JSON chunk, as OpenAI-compatible servers send
-        it: an empty ``data:``, an event split over several ``data:`` lines,
-        or lines ended by a bare CR (never split) fail closed as ``invalid``
-        (or ``oversized`` past the line bound)."""
-        line = line.rstrip(b"\r")
-        if not line.startswith(b"data:"):
+        """One SSE line (its LF removed; a CR before it is removed here).
+        ``data:`` fields accumulate until a blank line ends the event, as the
+        SSE format defines: several ``data:`` lines join with a line feed, and
+        one leading space is removed from each value. Comments (``:``, such
+        as keep-alive pings) and other fields are skipped; an event without
+        data is not dispatched. Lines ended by a bare CR alone are not split,
+        so such a stream fails closed (``invalid``, or ``oversized`` past the
+        line bound)."""
+        line = line[:-1] if line.endswith(b"\r") else line
+        if not line:
+            self.dispatch()
             return
-        data = line[5:].strip()
-        if data == b"[DONE]":
+        field, _, value = line.partition(b":")
+        if field != b"data":
+            return  # a comment (empty field name) or a field the chunks do not use
+        value = value[1:] if value.startswith(b" ") else value
+        self.data_size += len(value) + 1
+        if self.data_size > MAX_STREAM_LINE_BYTES:
+            raise _Stop(ValueError("completion response exceeded bound"))
+        self.data.append(value)
+
+    def dispatch(self):
+        """Parses the accumulated event; ``[DONE]`` ends the stream."""
+        if not self.data:
+            return
+        data = b"\n".join(self.data)
+        self.data, self.data_size = [], 0
+        if not data.strip():
+            return  # empty data: nothing to dispatch
+        if data.strip() == b"[DONE]":
             self.done = True
             return
         try:
@@ -571,8 +591,11 @@ class _Stream:
                 self.line(line)
                 if self.done:
                     break
-        if buffer and not self.done:
-            self.line(buffer)
+        if not self.done:
+            # The end of the stream ends the last line and event.
+            if buffer:
+                self.line(buffer)
+            self.dispatch()
         return self
 
     def answer(self):

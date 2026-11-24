@@ -374,11 +374,10 @@ class StreamingTests(unittest.TestCase):
                       stream(chunk(content="cut off"), done=False),
                       # [DONE] without a finish reason is not a complete answer.
                       stream(chunk(content="no finish", role="assistant")),
-                      # Rejected SSE framings: empty data, a chunk split over two
-                      # data lines, and bare-CR line ends.
-                      b"data:\n\n" + stream(chunk(content="x"), chunk(finish="stop")),
-                      b'data: {"choices": [{"index": 0,\ndata: "delta": {"content": "x"}}]}\n\n' + stream(chunk(finish="stop")),
+                      # Bare-CR line ends are not split: one oversized or invalid line.
                       stream(chunk(content="x"), chunk(finish="stop")).replace(b"\n", b"\r"),
+                      # A multi-line event over the per-event bound.
+                      b"".join(b"data: " + b"x" * 1000 + b"\n" for _ in range(300)) + b"\n" + stream(chunk(finish="stop")),
                       stream(chunk(calls=[{"index": 0, "function": {"name": "run_shell", "arguments": "{}"}}]), chunk(finish="tool_calls")),
                       stream(chunk(calls=[{"index": 8, "function": {"name": "read_file", "arguments": "{}"}}])),
                       b"data: {not json\n\n",
@@ -391,13 +390,30 @@ class StreamingTests(unittest.TestCase):
         classes = []
         for reply in (stream(chunk(content="par", role="assistant"), chunk(finish="length")),
                       stream(chunk(content="x"), {"error": {"code": 500}}, done=False),
-                      stream(*[chunk(content="word " * 1000) for _ in range(60)])):
+                      stream(*[chunk(content="word " * 1000) for _ in range(60)]),
+                      b"".join(b"data: " + b"x" * 1000 + b"\n" for _ in range(300)) + b"\n" + stream(chunk(finish="stop"))):
             SSEUpstream.script = [reply]
             try:
                 self.adapter().complete(REQUEST)
             except Exception as error:
                 classes.append(model_gateway.failure_class(error))
-        self.assertEqual(classes, ["truncated", "backend", "oversized"])
+        self.assertEqual(classes, ["truncated", "backend", "oversized", "oversized"])
+
+    def test_events_follow_the_sse_format(self):
+        # Several data lines join with a line feed up to the blank line (with
+        # or without the space after the colon, CRLF or LF); comments, other
+        # fields and empty events are skipped; the end of the stream ends the
+        # last event.
+        first = json.dumps(chunk(content="Hel", role="assistant"), indent=1).encode().split(b"\n")
+        events = (b"event: message\r\nid: 1\r\n" + b"\r\n".join(b"data: " + line for line in first[:3]) + b"\r\n: ping\r\n"
+                  + b"\r\n".join(b"data:" + line for line in first[3:]) + b"\r\n\r\n"
+                  + b"data:\n\n" + b"data\n\n" + b": comment only\n\n"
+                  + sse_event(chunk(content="lo")) + b"data: " + json.dumps(chunk(finish="stop")).encode())
+        SSEUpstream.script = [events]
+        self.assertEqual(self.adapter().complete(REQUEST).message["content"], "Hello")
+        # [DONE] split from nothing else still ends the stream; later bytes are ignored.
+        SSEUpstream.script = [stream(chunk(content="ok"), chunk(finish="stop")) + b"data: {not json\n\n"]
+        self.assertEqual(self.adapter().complete(REQUEST).message["content"], "ok")
 
     def test_reasoning_fields_are_watched_and_lone_surrogates_judged_as_before(self):
         # vLLM streams reasoning as "reasoning", llama.cpp as "reasoning_content".
