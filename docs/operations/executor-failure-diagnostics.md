@@ -62,3 +62,16 @@ executor exit, and cleanup removed the transient diagnostic files. This change
 cannot reconstruct that historical cause. Installing a migration over a runtime
 with workflow history requires a separately validated upgrade/recovery path;
 the empty-install preparation and initial activation commands do not provide it.
+
+When publishing a model response into the executor pod fails because the
+mailbox helper exits nonzero, the stop names the helper's bounded exit code,
+for example `model-publication-helper-exit-124`:
+
+| Code | Meaning |
+|---|---|
+| 124 | The helper's own 5-second deadline ended (for example a slow exec stream) |
+| 3 | The request is no longer pending in the mailbox |
+| 1 | Any other refusal (malformed or mismatched response) |
+
+As with every publication failure, the call stays uncertain and is never
+retried by this diagnostic.

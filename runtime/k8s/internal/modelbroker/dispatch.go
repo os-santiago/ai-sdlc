@@ -267,7 +267,7 @@ func SafeFailureStage(stage string) string {
 	case "configuration", "scope", "request-binding", "authorization-reservation", "reservation", "claim", "authorization-dispatch", "deadline", "provider", "completion-commit", "response-envelope", "authorization-publication", "publication", "acknowledgement", "publication-envelope", "publication-encoding", "publication-before-observation", "publication-helper-transport", "publication-helper-exit", "publication-receipt", "publication-after-observation", "publication-response-mutation", "publication-expired", "publication-unknown":
 		return stage
 	}
-	if publicationWorkerExit.MatchString(stage) || authorizationRefusalStage.MatchString(stage) {
+	if publicationWorkerExit.MatchString(stage) || publicationHelperExit.MatchString(stage) || authorizationRefusalStage.MatchString(stage) {
 		return stage
 	}
 	return "unknown"
@@ -275,6 +275,9 @@ func SafeFailureStage(stage string) string {
 
 // A bounded container exit code (0-255), without leading zeros.
 var publicationWorkerExit = regexp.MustCompile(`^publication-worker-exit-(0|[1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])$`)
+
+// A bounded nonzero exit code (1-255) of the mailbox publication helper.
+var publicationHelperExit = regexp.MustCompile(`^publication-helper-exit-([1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5])$`)
 
 // authorizationRefusal names the bounded check that refused current authority
 // before a model call step. It unwraps to ErrRejected.
@@ -298,6 +301,9 @@ var authorizationRefusalStage = regexp.MustCompile(`^authorization-(reservation|
 func safePublicationStage(stage string) string {
 	switch stage {
 	case "envelope", "encoding", "before-observation", "helper-transport", "helper-exit", "receipt", "after-observation":
+		return stage
+	}
+	if publicationHelperExit.MatchString("publication-" + stage) {
 		return stage
 	}
 	return "unknown"

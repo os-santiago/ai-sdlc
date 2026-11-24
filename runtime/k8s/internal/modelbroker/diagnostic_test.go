@@ -25,6 +25,9 @@ func TestBrokerEmitsOnlyAllowlistedPublicationStage(t *testing.T) {
 		err         error
 	}{
 		{"helper-transport", "publication-helper-transport", nil},
+		{"helper-exit-124", "publication-helper-exit-124", nil},
+		{"helper-exit-0", "publication-unknown", nil},
+		{"helper-exit-256", "publication-unknown", nil},
 		{"sensitive arbitrary exception", "publication-unknown", nil},
 		{"", "publication-worker-exit-124", fixtureExitedWorker{124}},
 	} {
@@ -59,6 +62,19 @@ func TestPublicationWorkerExitStageIsBounded(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{"publication-worker-exit-256", "publication-worker-exit-01", "publication-worker-exit--1", "publication-worker-exit-"} {
+		if SafeFailureStage(bad) != "unknown" {
+			t.Fatal(bad)
+		}
+	}
+}
+
+func TestPublicationHelperExitStageIsBounded(t *testing.T) {
+	for _, good := range []string{"publication-helper-exit-1", "publication-helper-exit-3", "publication-helper-exit-124", "publication-helper-exit-255"} {
+		if SafeFailureStage(good) != good {
+			t.Fatal(good)
+		}
+	}
+	for _, bad := range []string{"publication-helper-exit-0", "publication-helper-exit-256", "publication-helper-exit-03", "publication-helper-exit-"} {
 		if SafeFailureStage(bad) != "unknown" {
 			t.Fatal(bad)
 		}
