@@ -239,6 +239,11 @@ or reviewer profile:
 - the mailbox request wait (`--wait-seconds`);
 - the `model_calls` reservation expiry.
 
+Node's `fetch` inside SCC also abandons a response after 300 s without headers
+or body bytes. For windows above 240 s the mailbox therefore commits a `200` at
+240 s and sends whitespace until the answer arrives; see
+[calls longer than 300 seconds](../security/offline-model-mailbox.md#calls-longer-than-300-seconds).
+
 The broker still stops the provider call 15 s before the window ends (10 s
 for reviews), and never publishes a response after the mailbox window: once
 the mailbox has answered SCC with a timeout, a late handoff would never be

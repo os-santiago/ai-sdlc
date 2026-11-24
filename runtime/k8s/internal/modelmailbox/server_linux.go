@@ -14,6 +14,19 @@ import (
 	"time"
 )
 
+// SCC calls the mailbox with Node's global fetch, whose built-in undici
+// dispatcher aborts a request when response headers take longer than 300 s
+// (headersTimeout) or when the body is idle for 300 s (bodyTimeout). These
+// defaults are not configurable from SCC's settings. When the model answer is
+// still pending at keepaliveCommit, the mailbox commits a 200 JSON response
+// and sends one whitespace byte every keepaliveInterval until the answer
+// arrives; JSON parsers ignore leading whitespace. Answers that arrive earlier
+// are delivered exactly as before, with their own status and no padding.
+const (
+	keepaliveCommit   = 240 * time.Second // safely under undici's 300 s headersTimeout
+	keepaliveInterval = 30 * time.Second  // well under undici's 300 s bodyTimeout
+)
+
 type Server struct {
 	store    *Store
 	id       Identity
@@ -21,6 +34,10 @@ type Server struct {
 	active   chan struct{}
 	sequence uint64         // accessed only while holding active
 	limits   *RequestLimits // optional for the transport-only conformance fixture
+	// commitAfter and keepaliveEvery default to keepaliveCommit and
+	// keepaliveInterval; tests shorten them.
+	commitAfter    time.Duration
+	keepaliveEvery time.Duration
 }
 
 func NewServer(store *Store, id Identity, wait time.Duration) (*Server, error) {
@@ -32,7 +49,7 @@ func NewServer(store *Store, id Identity, wait time.Duration) (*Server, error) {
 			return nil, errors.New("mailbox is not empty; use a new attempt volume")
 		}
 	}
-	return &Server{store: store, id: id, wait: wait, active: make(chan struct{}, 1)}, nil
+	return &Server{store: store, id: id, wait: wait, active: make(chan struct{}, 1), commitAfter: keepaliveCommit, keepaliveEvery: keepaliveInterval}, nil
 }
 
 // RequestLimits is a local request constraint, never a durable provider quota.
@@ -129,23 +146,67 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
+	commit := time.NewTimer(s.commitAfter)
+	defer commit.Stop()
+	var keepalive <-chan time.Time
+	controller := http.NewResponseController(w)
+	committed := false
+	// After the keepalive commit the client already holds a 200, so a failure
+	// can no longer change the status. The connection is aborted mid-body
+	// instead (no final chunk): fetch rejects the body read ("terminated"),
+	// which SCC classifies as a retryable transport failure, the same retry
+	// class as the 502/504 it receives before the commit. A 200 error JSON
+	// body would instead be a non-retryable "No choices in response".
+	abort := func(code string) {
+		log.Printf("model response aborted after keepalive commit sequence=%d reason=%s", request.Sequence, code)
+		panic(http.ErrAbortHandler) // deferred cleanup still runs
+	}
+	// fail reports a failure with its real status while the status is open.
+	fail := func(status int, code string) {
+		if committed {
+			abort(code)
+		}
+		failure(w, status, code)
+	}
 	for {
 		select {
 		case <-ctx.Done():
-			failure(w, 504, "mailbox_deadline")
+			fail(504, "mailbox_deadline")
 			return
+		case <-commit.C:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			committed = true
+			if !writeKeepalive(w, controller) {
+				abort("keepalive_write")
+			}
+			log.Printf("model response keepalive committed sequence=%d", request.Sequence)
+			ticker := time.NewTicker(s.keepaliveEvery)
+			defer ticker.Stop()
+			keepalive = ticker.C
+		case <-keepalive:
+			if !writeKeepalive(w, controller) {
+				abort("keepalive_write")
+			}
 		case <-tick.C:
 			raw, err := s.store.read(responseFile)
 			if errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrPending) {
 				continue
 			}
 			if err != nil {
-				failure(w, 502, "unsafe_response")
+				fail(502, "unsafe_response")
 				return
 			}
 			response, err := Decode(raw)
 			if err != nil || response.Validate(s.id, "response") != nil || response.Sequence != request.Sequence || response.RequestSHA256 != request.RequestSHA256 || response.ExpiresAt != request.ExpiresAt {
-				failure(w, 502, "response_mismatch")
+				fail(502, "response_mismatch")
+				return
+			}
+			if committed {
+				if response.Status != http.StatusOK {
+					abort("status_after_commit")
+				}
+				_, _ = w.Write(response.Payload)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -154,6 +215,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// writeKeepalive sends one insignificant JSON whitespace byte and flushes it,
+// resetting the client's body idle timer. It reports false when the client is
+// gone or the writer cannot flush; the caller then aborts the connection so a
+// whitespace-only body never ends cleanly.
+func writeKeepalive(w http.ResponseWriter, controller *http.ResponseController) bool {
+	if _, err := w.Write([]byte{' '}); err != nil {
+		return false
+	}
+	return controller.Flush() == nil
 }
 
 // Listen binds exclusively to IPv4 loopback. No user-supplied bind address,
