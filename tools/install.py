@@ -588,6 +588,24 @@ def _main(argv, stack):
             return prepared_configuration.install_prepared(args,state,binaries,provider,execution_values)
         if args.command == 'local' and ((state / 'bootstrap-preparation.json').exists() or (state / 'bootstrap-preparation.json').is_symlink()):
             raise ValueError('Prepared runtime remains paused; use explicit --configure-prepared with reviewed inputs; never delete preparation custody for ordinary reconciliation')
+        pause_journal = state / 'runtime-upgrade-pause.json'
+        if args.command == 'local' and (pause_journal.exists() or pause_journal.is_symlink()):
+            import build_foundation_install
+            record = build_foundation_install.bounded_json(pause_journal, 16 * 1024 * 1024)
+            if not isinstance(record, dict):
+                raise ValueError('Unknown runtime-upgrade pause journal; preserve upgrade custody')
+            if record.get('version') != 'ai-sdlc.runtime-upgrade-pause/v1':
+                raise ValueError('Unknown runtime-upgrade pause journal; preserve upgrade custody')
+            if record.get('phase') != 'paused':
+                raise ValueError('Runtime-upgrade pause intent is incomplete; preserve its journal and reconcile through ./install.sh runtime-upgrade')
+            # The journal is retained as custody after its recorded transition
+            # resumes the runtime; the installation report is the release signal.
+            try:
+                released = build_foundation_install.bounded_json(state / 'installation.json', 2 * 1024 * 1024).get('runtimePaused') is False
+            except (ValueError, OSError):
+                released = False
+            if not released:
+                raise ValueError('Runtime remains paused by a runtime-upgrade journal; resume only through the recorded ./install.sh runtime-upgrade transition or recover-original, never by reapplying local')
     if provider == 'auto':
         provider = next((p for p in ('docker', 'podman') if shutil.which(p)), None)
     if not provider or not shutil.which(provider):
@@ -751,7 +769,7 @@ def _main(argv, stack):
               'repository': args.repository, 'environment': args.environment,
               'configurationDigest': config_digest,
               'projectSHA256': json.loads(public_values['authority']['policyJSON']).get('projectSHA256', ''),
-              'mode': args.profile, 'installationReady': True, 'deliveryEnabled': False,
+              'mode': args.profile, 'installationReady': True, 'deliveryEnabled': False, 'runtimePaused': False,
               'issueIntakeEnabled': args.profile in ('shadow', 'candidate', 'verification'),
               'candidateExecutionEnabled': args.profile in ('candidate', 'verification'),
               'independentVerificationEnabled': args.profile == 'verification',
