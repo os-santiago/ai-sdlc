@@ -29,6 +29,10 @@ updates:
     groups:
       base-images:
         patterns: ["*"]
+    ignore:
+      # Node majors change the worker runtime; adopt them deliberately.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
     labels: [dependencies]
     commit-message:
       prefix: "chore(deps)"
