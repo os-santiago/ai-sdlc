@@ -1,5 +1,5 @@
 # Fixed browser runner only. No model, workflow credential or shell command input.
-FROM mcr.microsoft.com/playwright/python@sha256:38dd67fc654b56b3cba611e4c8eb71cd33750e1cd29eea2a5dc00b484817a75f
+FROM mcr.microsoft.com/playwright/python@sha256:98e88016a5705def757564f70469e80161c4e4dbf787bbe35a710fabb70bb7da
 RUN apt-get update && apt-get install -y --no-install-recommends libnss3-tools \
     && rm -rf /var/lib/apt/lists/*
 COPY components/browser-verifier/requirements.lock /opt/ai-sdlc/requirements.lock

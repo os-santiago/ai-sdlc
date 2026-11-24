@@ -1,6 +1,6 @@
 # Build context: runtime/k8s/ (not the repo root)
 #   podman build -f components/orchestrator/Containerfile -t ai-sdlc-orchestrator:dev .
-FROM docker.io/library/golang@sha256:ea30e25680a5470bac02b08bb0e0a735fb75bd0ab7d431b9b95ee0abef362586 AS build
+FROM docker.io/library/golang@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
