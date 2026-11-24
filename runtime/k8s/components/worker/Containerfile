@@ -25,7 +25,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/component ./compon
 # the final stage). Pruning dev dependencies and copying /opt/scc
 # wholesale avoids that; the final stage's wrapper script replaces the
 # one dropped by not using npm's own global-install bin-linking.
-FROM docker.io/library/node:22-alpine AS sccbuild
+FROM docker.io/library/node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a AS sccbuild
 RUN apk add --no-cache git
 # Engine source pin (issue #356): immutable ref — full commit SHA or
 # semver tag — baked into the image. The reviewed default is SCC main
@@ -66,7 +66,7 @@ RUN git init -q /opt/scc \
 # running a real dispatch against this image and hitting "mkdir
 # /tmp/ai-sdlc-attempt-...: read-only file system") all have somewhere
 # to go despite readOnlyRootFilesystem: true — no extra volume needed.
-FROM docker.io/library/node:22-alpine
+FROM docker.io/library/node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a
 RUN apk add --no-cache git
 COPY --from=sccbuild /opt/scc /opt/scc
 # Replaces sc-agent-cli's own bin/scc wrapper (`import '../dist/cli.js'`,
