@@ -99,3 +99,12 @@ func TestEveryDecisionRefusalReasonIsKnown(t *testing.T) {
 		}
 	}
 }
+
+func TestDiagnosticStageNamesAMissingSandboxRuntimeClass(t *testing.T) {
+	if got := DiagnosticStage(ControllerError{"sandbox-runtime-class"}); got != "sandbox-runtime-class" {
+		t.Fatal(got)
+	}
+	if got := DiagnosticStage(ControllerError{"sandbox-other"}); got != "unknown" {
+		t.Fatal(got)
+	}
+}

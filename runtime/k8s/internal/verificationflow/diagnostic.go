@@ -65,7 +65,7 @@ func createStage(stage string, err error) string {
 }
 
 func knownStage(stage string) bool {
-	if stage == "source-rate-limited" {
+	if stage == "source-rate-limited" || stage == "sandbox-runtime-class" {
 		return true
 	}
 	if base, step, ok := strings.Cut(stage, "-"); ok {
