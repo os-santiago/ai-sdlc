@@ -238,12 +238,14 @@ token, and 32 calls stay within the 8 MiB output quota, so no byte quota
 changes.
 
 With a model upstream, the worker gateway's startup benchmark uses the bound as
-its answer envelope (`modelGateway.benchmark.completionTokens`), so the derived
-per-call timeout covers the longest answer the profile admits. A model too slow
-to write 8,192 tokens within the upstream `seconds` ceiling fails its benchmark
-and never reports ready, rather than timing out in the middle of a rewrite.
-Raise `seconds` (and `callSeconds`) in the upstream document, or keep a lower
-bound. A longer answer also takes more of the generation time budget.
+its answer envelope (`modelGateway.benchmark.completionTokens`). The benchmark
+only admits the model: a model whose measured speed cannot write the longest
+answer the profile admits within the upstream `seconds` ceiling fails its
+benchmark and never reports ready. Each real call may still run up to the
+ceiling (bounded by the broker's call window), so an admitted model can still
+time out on an unusually slow answer. Raise `seconds` (and `callSeconds`) in
+the upstream document, or keep a lower bound. A longer answer also takes more
+of the generation time budget.
 
 Values above 4096 require `--model-upstream`. The bundled Codex adapter checks
 `max_tokens` (at most 8192) but does not pass it to the Codex CLI, so a larger
