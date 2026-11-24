@@ -91,8 +91,6 @@ def bind(policy, compiled):
     values = {'manifestJSON': compiled['manifestJSON']}
     if compiled.get('verifierQuota'):
         values['verifierQuota'] = compiled['verifierQuota']
-    if compiled.get('executorQuota'):
-        values['executorQuota'] = compiled['executorQuota']
     return values
 
 

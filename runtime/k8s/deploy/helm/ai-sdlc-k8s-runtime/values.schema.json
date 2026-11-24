@@ -1130,41 +1130,6 @@
               ]
             }
           ]
-        },
-        "executorQuota": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "requests.cpu": {
-              "type": "string",
-              "pattern": "^[1-9][0-9]{0,5}m?$"
-            },
-            "requests.memory": {
-              "type": "string",
-              "pattern": "^[1-9][0-9]{0,5}(Mi|Gi)$"
-            },
-            "limits.cpu": {
-              "type": "string",
-              "pattern": "^[1-9][0-9]{0,5}m?$"
-            },
-            "limits.memory": {
-              "type": "string",
-              "pattern": "^[1-9][0-9]{0,5}(Mi|Gi)$"
-            }
-          },
-          "anyOf": [
-            {
-              "maxProperties": 0
-            },
-            {
-              "required": [
-                "requests.cpu",
-                "requests.memory",
-                "limits.cpu",
-                "limits.memory"
-              ]
-            }
-          ]
         }
       }
     }

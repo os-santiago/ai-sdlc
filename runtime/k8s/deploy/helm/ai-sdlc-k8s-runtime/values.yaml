@@ -53,9 +53,6 @@ project:
   # Set from the migrator's project installation output; sizes the verifier
   # namespace for the manifest's three concurrent repository-tests runs.
   verifierQuota: {}
-  # Set from the same output when the manifest declares generation.toolchain;
-  # grows the executor namespace for the toolchain workload.
-  executorQuota: {}
 migrator:
   enabled: true
   digest: ""

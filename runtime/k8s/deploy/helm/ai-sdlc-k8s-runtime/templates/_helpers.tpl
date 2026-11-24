@@ -201,3 +201,16 @@ more than one spelling fails. Input: the decoded configuration document.
 {{- if not (kindIs "map" $placement) -}}{{- fail "the execution configuration placement must be an object" -}}{{- end -}}
 {{- toJson $placement -}}
 {{- end -}}
+
+{{/*
+generationToolchain renders "true" when project.manifestJSON declares a
+generation.toolchain object, else nothing. The executor quota uses it.
+*/}}
+{{- define "ai-sdlc-k8s-runtime.generationToolchain" -}}
+{{- with .Values.project.manifestJSON -}}
+{{- $m := fromJson . -}}
+{{- if kindIs "map" (get $m "generation") -}}
+{{- if kindIs "map" (get (get $m "generation") "toolchain") -}}true{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

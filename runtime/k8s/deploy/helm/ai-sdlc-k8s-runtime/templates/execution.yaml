@@ -11,13 +11,15 @@ apiVersion: v1
 kind: ResourceQuota
 metadata: {name: executor-bounds, namespace: ai-sdlc-executors}
 spec:
-  {{- /* A manifest with a generation toolchain grows the quota (project.executorQuota from the migrator). */}}
-  {{- if include "ai-sdlc-k8s-runtime.sandboxOverheadSet" . }}
-  hard: {pods: "4", configmaps: "8", {{ include "ai-sdlc-k8s-runtime.sandboxQuota" (dict "root" . "pods" 4 "quota" (.Values.project.executorQuota | default (dict "requests.cpu" "1" "requests.memory" "1Gi" "limits.cpu" "6" "limits.memory" "4Gi"))) }}}
-  {{- else if .Values.project.executorQuota }}
-  {{- with .Values.project.executorQuota }}
-  hard: {pods: "4", configmaps: "8", requests.cpu: {{ index . "requests.cpu" | quote }}, requests.memory: {{ index . "requests.memory" | quote }}, limits.cpu: {{ index . "limits.cpu" | quote }}, limits.memory: {{ index . "limits.memory" | quote }}}
+  {{- /* A manifest with generation.toolchain runs a worker with 512Mi more
+         memory: the quota is derived from the same manifestJSON the runtime
+         mounts, so it can never lag behind the manifest (issue #745). */}}
+  {{- $memory := "4Gi" }}
+  {{- if include "ai-sdlc-k8s-runtime.generationToolchain" . }}
+  {{- $memory = "6Gi" }}
   {{- end }}
+  {{- if include "ai-sdlc-k8s-runtime.sandboxOverheadSet" . }}
+  hard: {pods: "4", configmaps: "8", {{ include "ai-sdlc-k8s-runtime.sandboxQuota" (dict "root" . "pods" 4 "quota" (dict "requests.cpu" "1" "requests.memory" "1Gi" "limits.cpu" "6" "limits.memory" $memory)) }}}
   {{- else }}
   hard:
     pods: "4"
@@ -25,7 +27,7 @@ spec:
     requests.cpu: "1"
     requests.memory: 1Gi
     limits.cpu: "6"
-    limits.memory: 4Gi
+    limits.memory: {{ $memory }}
   {{- end }}
 ---
 apiVersion: networking.k8s.io/v1

@@ -160,7 +160,9 @@ func toolchainVolumes() []any {
 const ExecutorPods = 4
 
 // ToolchainExecutorQuota is the executor namespace ResourceQuota for an
-// installation whose manifest declares a generation toolchain: the default
+// installation whose manifest declares a generation toolchain. The chart
+// derives the same values from project.manifestJSON (templates/execution.yaml;
+// tools/test_helm.py checks them): the default
 // quota grown by exactly the toolchain workload's additions for each of the
 // four pods. Only the worker's memory limit grows (512Mi); the init
 // containers' effective requests and limits stay below the worker and
