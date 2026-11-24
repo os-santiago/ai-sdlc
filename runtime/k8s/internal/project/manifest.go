@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path"
 	"regexp"
 	"strings"
@@ -157,6 +158,31 @@ func (g Generation) validate() error {
 	return g.Toolchain.validate()
 }
 
+// generationEnvNames is the strict allowlist of verification.env names the
+// generation toolchain receives: Go's, cgo's and Rust's. They reach SCC's own
+// Node.js process as well as run_shell children, so nothing that configures
+// Node.js, OpenSSL, the C library, a shell, Python, Git, npm, SCC or the
+// launcher qualifies. Other variables stay verification-only.
+var generationEnvNames = regexp.MustCompile(`^(GO[A-Z0-9]+|CGO_[A-Z0-9_]+|CARGO_[A-Z0-9_]+|RUST[A-Z0-9_]*)$`)
+
+// writableValue matches a value that names the generation worker's writable
+// workspace or scratch volume, for example GOCACHE=/workspaces/cache or
+// GOFLAGS=-modfile=/scratch/go.mod.
+var writableValue = regexp.MustCompile(`(^|[:=, ])/(workspaces|scratch)(/|$|[:, ])`)
+
+// GenerationEnvName reports whether a verification variable reaches the
+// generation toolchain.
+func GenerationEnvName(name string) bool { return generationEnvNames.MatchString(name) }
+
+// GenerationEnvValue reports whether a value may reach the generation
+// toolchain: it must not name /workspaces or /scratch.
+func GenerationEnvValue(value string) bool { return !writableValue.MatchString(value) }
+
+// ErrGenerationEnv refuses a manifest with generation.toolchain whose
+// verification.env gives a toolchain variable a value under /workspaces or
+// /scratch, the generator's writable volumes.
+var ErrGenerationEnv = fmt.Errorf("%w: a verification.env variable passed to generation.toolchain (GO*, CGO_*, CARGO_*, RUST*) names /workspaces or /scratch", ErrManifest)
+
 // Validate reports whether t is a valid toolchain declaration. The executor
 // rechecks the copy of it that an assignment carries.
 func (t Toolchain) Validate() error { return t.validate() }
@@ -262,7 +288,10 @@ func ParseManifest(raw []byte) (Manifest, error) {
 	if len(raw) == 0 || len(raw) > MaxManifestBytes || authority.DecodeStrict(raw, &m) != nil || explicitMerge(raw) != nil {
 		return Manifest{}, ErrManifest
 	}
-	if m.Validate() != nil {
+	if err := m.Validate(); err != nil {
+		if errors.Is(err, ErrGenerationEnv) {
+			return Manifest{}, ErrGenerationEnv
+		}
 		return Manifest{}, ErrManifest
 	}
 	return m, nil
@@ -343,6 +372,13 @@ func (m Manifest) Validate() error {
 	}
 	if m.Generation != nil && (m.Verification == nil || m.Generation.validate() != nil) {
 		return ErrManifest
+	}
+	if m.Generation != nil {
+		for name, value := range m.Verification.Env {
+			if GenerationEnvName(name) && !GenerationEnvValue(value) {
+				return ErrGenerationEnv
+			}
+		}
 	}
 	if m.Publication.validate() != nil || m.Merge.validate() != nil || len(m.Recipes) > 8 {
 		return ErrManifest

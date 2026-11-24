@@ -2,6 +2,7 @@ package project
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -297,5 +298,40 @@ func TestInvalidGenerationSectionsAreRefused(t *testing.T) {
 		if ValidateToolchainRoot(root) != nil {
 			t.Fatal("refused valid root", root)
 		}
+	}
+}
+
+// A toolchain variable that would point the generator at its writable
+// volumes is refused at installation with a clear error, not dropped later.
+func TestGenerationToolchainRefusesWritableEnvValues(t *testing.T) {
+	base := generic()
+	base.Generation = &Generation{Toolchain: &Toolchain{Root: "/usr/local/go", Path: []string{"bin"}}}
+	for _, env := range []map[string]string{
+		{"GOCACHE": "/workspaces/cache"},
+		{"GOFLAGS": "-modfile=/scratch/go.mod"},
+		{"GOPATH": "/go:/workspaces"},
+		{"CARGO_HOME": "/scratch"},
+	} {
+		m := base
+		v := *base.Verification
+		v.Env = env
+		m.Verification = &v
+		_, err := ParseManifest(m.Canonical())
+		if !errors.Is(err, ErrGenerationEnv) || !errors.Is(err, ErrManifest) || !strings.Contains(err.Error(), "/workspaces or /scratch") {
+			t.Fatal("writable toolchain value accepted or unnamed", env, err)
+		}
+		// Without generation.toolchain the variable is verification-only.
+		m.Generation = nil
+		if _, err := ParseManifest(m.Canonical()); err != nil {
+			t.Fatal("verification-only value refused", env, err)
+		}
+	}
+	// Names outside the allowlist are verification-only and never refused for their value.
+	m := base
+	v := *base.Verification
+	v.Env = map[string]string{"GOTOOLCHAIN": "local", "SOMETHING": "/workspaces/x"}
+	m.Verification = &v
+	if _, err := ParseManifest(m.Canonical()); err != nil {
+		t.Fatal(err)
 	}
 }

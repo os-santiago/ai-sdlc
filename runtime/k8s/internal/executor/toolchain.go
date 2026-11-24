@@ -2,7 +2,6 @@ package executor
 
 import (
 	"path"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -42,10 +41,10 @@ const (
 	// copyMount is where the copy container mounts the toolchain volume.
 	// A toolchain root can never be under /workspaces or /runner, so neither
 	// mount can shadow the root being copied.
-	copyMount        = "/workspaces"
-	copyDestination  = copyMount + "/root"
-	runnerMount      = "/runner"
-	runnerPath       = runnerMount + "/repository-tests"
+	copyMount       = "/workspaces"
+	copyDestination = copyMount + "/root"
+	runnerMount     = "/runner"
+	runnerPath      = runnerMount + "/repository-tests"
 	// toolchainVolume leaves room above the copier's 1 GiB byte cap for the
 	// file-system blocks of up to 50,000 entries.
 	toolchainVolume  = "1280Mi"
@@ -62,28 +61,15 @@ const (
 	InitCopyToolchain = "copy-toolchain"
 )
 
-// toolchainEnvNames is a strict allowlist of variables a self-contained
-// toolchain reads: Go's (GOFLAGS, GOTOOLCHAIN, ...), cgo's and Rust's. They
-// reach SCC's own Node.js process as well as run_shell children (SCC builds
-// the child environment from its own), so nothing that configures Node.js,
-// OpenSSL, the C library, a shell, Python, Git, npm, SCC or the launcher
-// (PATH, HOME, TMPDIR, XDG_*) is ever passed. Every other verification
-// variable stays verification-only.
-var toolchainEnvNames = regexp.MustCompile(`^(GO[A-Z0-9]+|CGO_[A-Z0-9_]+|CARGO_[A-Z0-9_]+|RUST[A-Z0-9_]*)$`)
-
-// writablePath matches a value that names the worker's writable workspace or
-// scratch volume, for example GOCACHE=/workspaces/cache or
-// GOFLAGS=-modfile=/scratch/go.mod: build state there could leak into the
-// candidate or outlive the launcher's own layout.
-var writablePath = regexp.MustCompile(`(^|[:=, ])/(workspaces|scratch)(/|$|[:, ])`)
-
 // ToolchainEnvAllowed reports whether a verification variable name may reach
-// the generation worker. PATH is rebuilt from the toolchain's declared path.
-func ToolchainEnvAllowed(name string) bool { return toolchainEnvNames.MatchString(name) }
+// the generation worker: the manifest's strict Go, cgo and Rust allowlist
+// (project.GenerationEnvName). PATH is rebuilt from the declared path.
+func ToolchainEnvAllowed(name string) bool { return project.GenerationEnvName(name) }
 
 // ToolchainEnvValueAllowed reports whether a value may reach the generation
-// worker: it must not name the writable workspace or scratch volume.
-func ToolchainEnvValueAllowed(value string) bool { return !writablePath.MatchString(value) }
+// worker: it must not name the writable workspace or scratch volume. Manifest
+// validation already refuses such a value; the assignment rechecks it.
+func ToolchainEnvValueAllowed(value string) bool { return project.GenerationEnvValue(value) }
 
 func (t *Toolchain) valid() bool {
 	if t == nil || len(t.Image) > 512 || !imagePattern.MatchString(t.Image) || !project.ValidImage(t.Image) ||
