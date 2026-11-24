@@ -30,7 +30,7 @@ func TestToolchainOnlyForManifestsThatDeclareOne(t *testing.T) {
 	m := project.Manifest{Version: project.ManifestVersion, Repository: "example/service", BaseBranch: "main",
 		Verification: &project.Verification{Image: image, Command: []string{"go", "test", "./..."}, WorkingDir: "svc",
 			TimeoutSeconds: 60, CPU: "1", Memory: "1Gi", EphemeralStorage: "1Gi", Network: "none", Result: project.Result{ExitCode: true},
-			Repeat: 1, TestGlobs: []string{"**/*_test.go"}, Env: map[string]string{"GOTOOLCHAIN": "local", "PATH": "/usr/local/go/bin:/usr/bin", "GIT_DIR": "x"}}}
+			Repeat: 1, TestGlobs: []string{"**/*_test.go"}, Env: map[string]string{"GOTOOLCHAIN": "local", "PATH": "/usr/local/go/bin:/usr/bin", "GIT_DIR": "x", "OPENSSL_CONF": "/x", "GOCACHE": "/workspaces/cache"}}}
 	project.SetInstalled(&m)
 	if ToolchainFor("example/service") != nil || ToolchainFor(project.Homedir) != nil {
 		t.Fatal("toolchain without generation.toolchain")

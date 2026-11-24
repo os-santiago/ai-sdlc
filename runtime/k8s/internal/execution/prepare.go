@@ -267,7 +267,9 @@ func WorkspaceFor(repository string) string {
 // manifest declares, or nil. The image is the verifier's pinned image, so the
 // generator runs the same toolchain as verification. PATH and the variables
 // the launcher reserves are not passed: the worker's PATH is rebuilt from the
-// declared directories.
+// declared directories. Only the toolchain variables the executor allowlists
+// (Go, cgo and Rust names) are passed, never a value that names the worker's
+// writable workspace or scratch volume.
 func ToolchainFor(repository string) *executor.Toolchain {
 	m, ok := project.Lookup(repository)
 	if !ok || m.Verification == nil || m.Generation == nil || m.Generation.Toolchain == nil {
@@ -277,7 +279,7 @@ func ToolchainFor(repository string) *executor.Toolchain {
 	toolchain := &executor.Toolchain{Image: v.Image, Root: t.Root, Path: append([]string(nil), t.Path...),
 		Command: append([]string(nil), v.Command...), WorkingDir: v.WorkingDir}
 	for name, value := range v.Env {
-		if executor.ToolchainEnvAllowed(name) {
+		if executor.ToolchainEnvAllowed(name) && executor.ToolchainEnvValueAllowed(value) {
 			if toolchain.Env == nil {
 				toolchain.Env = map[string]string{}
 			}

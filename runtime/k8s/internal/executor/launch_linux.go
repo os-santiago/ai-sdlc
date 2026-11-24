@@ -252,10 +252,12 @@ func launchEnvironment(p Profile, toolchain *Toolchain, stateDirectory string) [
 	return env
 }
 
-// shadowedTools are the worker programs SCC and its tools resolve through
-// PATH. The toolchain directories come first on PATH, so a toolchain that
-// ships one of them would replace the worker's own; such a run stops.
-var shadowedTools = []string{"node", "git", "scc", "sh", "env"}
+// shadowedTools are the worker programs SCC, its tools and their shells
+// resolve through PATH (SCC runs git and probes for bwrap by name; scc starts
+// with "env node"). The toolchain directories come first on PATH, so a
+// toolchain that ships one of them would replace the worker's own; such a
+// run stops.
+var shadowedTools = []string{"node", "git", "scc", "sh", "bash", "env", "bwrap", "busybox", "sed", "python3"}
 
 // prepareToolchain checks the copied toolchain and creates the scratch
 // directories. The copy was made by the init container; it is read-only.

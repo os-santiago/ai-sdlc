@@ -123,12 +123,12 @@ func TestToolchainWorkloadCopiesTheRootBeforeTheWorker(t *testing.T) {
 		t.Fatal("worker mounts", mounts)
 	}
 	limits := worker["resources"].(map[string]any)["limits"].(map[string]any)
-	if limits["memory"] != "1280Mi" || limits["ephemeral-storage"] != "2304Mi" || limits["cpu"] != "1" {
+	if limits["memory"] != "1280Mi" || limits["ephemeral-storage"] != "2560Mi" || limits["cpu"] != "1" {
 		t.Fatal("worker limits", limits)
 	}
 	volumes := spec["volumes"].([]any)
 	want := []any{
-		map[string]any{"name": "toolchain", "emptyDir": map[string]any{"sizeLimit": "1Gi"}},
+		map[string]any{"name": "toolchain", "emptyDir": map[string]any{"sizeLimit": "1280Mi"}},
 		map[string]any{"name": "scratch", "emptyDir": map[string]any{"sizeLimit": "1Gi"}},
 		map[string]any{"name": "runner", "emptyDir": map[string]any{"sizeLimit": "128Mi"}},
 	}
@@ -184,29 +184,53 @@ func TestToolchainAssignmentIsBoundedAndReviewedOnly(t *testing.T) {
 		t.Fatal("toolchain without the offline-tests workspace")
 	}
 	for name, edit := range map[string]func(*Toolchain){
-		"tag image":        func(tc *Toolchain) { tc.Image = "docker.io/library/golang:1.27" },
-		"no root":          func(tc *Toolchain) { tc.Root = "" },
-		"relative root":    func(tc *Toolchain) { tc.Root = "usr/local/go" },
-		"excluded root":    func(tc *Toolchain) { tc.Root = "/var/run/secrets" },
-		"workspace root":   func(tc *Toolchain) { tc.Root = "/workspaces/go" },
-		"no path":          func(tc *Toolchain) { tc.Path = nil },
-		"escaping path":    func(tc *Toolchain) { tc.Path = []string{"../bin"} },
-		"absolute path":    func(tc *Toolchain) { tc.Path = []string{"/bin"} },
-		"no command":       func(tc *Toolchain) { tc.Command = nil },
-		"empty argument":   func(tc *Toolchain) { tc.Command = []string{"go", ""} },
-		"control argument": func(tc *Toolchain) { tc.Command = []string{"go\ntest"} },
-		"bad directory":    func(tc *Toolchain) { tc.WorkingDir = "../x" },
-		"PATH":             func(tc *Toolchain) { tc.Env["PATH"] = "/usr/local/go/bin" },
-		"NODE_OPTIONS":     func(tc *Toolchain) { tc.Env["NODE_OPTIONS"] = "--require=/x" },
-		"SC_MODEL":         func(tc *Toolchain) { tc.Env["SC_MODEL"] = "other" },
-		"GIT_DIR":          func(tc *Toolchain) { tc.Env["GIT_DIR"] = "/x" },
-		"XDG_CACHE_HOME":   func(tc *Toolchain) { tc.Env["XDG_CACHE_HOME"] = "/x" },
-		"NO_COLOR":         func(tc *Toolchain) { tc.Env["NO_COLOR"] = "0" },
-		"LD_PRELOAD":       func(tc *Toolchain) { tc.Env["LD_PRELOAD"] = "/x.so" },
-		"HOME":             func(tc *Toolchain) { tc.Env["HOME"] = "/x" },
+		"tag image":         func(tc *Toolchain) { tc.Image = "docker.io/library/golang:1.27" },
+		"no root":           func(tc *Toolchain) { tc.Root = "" },
+		"relative root":     func(tc *Toolchain) { tc.Root = "usr/local/go" },
+		"excluded root":     func(tc *Toolchain) { tc.Root = "/var/run/secrets" },
+		"workspace root":    func(tc *Toolchain) { tc.Root = "/workspaces/go" },
+		"no path":           func(tc *Toolchain) { tc.Path = nil },
+		"escaping path":     func(tc *Toolchain) { tc.Path = []string{"../bin"} },
+		"absolute path":     func(tc *Toolchain) { tc.Path = []string{"/bin"} },
+		"no command":        func(tc *Toolchain) { tc.Command = nil },
+		"empty argument":    func(tc *Toolchain) { tc.Command = []string{"go", ""} },
+		"control argument":  func(tc *Toolchain) { tc.Command = []string{"go\ntest"} },
+		"bad directory":     func(tc *Toolchain) { tc.WorkingDir = "../x" },
+		"PATH":              func(tc *Toolchain) { tc.Env["PATH"] = "/usr/local/go/bin" },
+		"GOCACHE workspace": func(tc *Toolchain) { tc.Env["GOCACHE"] = "/workspaces/cache" },
+		"GOFLAGS scratch":   func(tc *Toolchain) { tc.Env["GOFLAGS"] = "-modfile=/scratch/go.mod" },
+		"GOPATH list":       func(tc *Toolchain) { tc.Env["GOPATH"] = "/go:/workspaces" },
+		"NODE_OPTIONS":      func(tc *Toolchain) { tc.Env["NODE_OPTIONS"] = "--require=/x" },
+		"SC_MODEL":          func(tc *Toolchain) { tc.Env["SC_MODEL"] = "other" },
+		"GIT_DIR":           func(tc *Toolchain) { tc.Env["GIT_DIR"] = "/x" },
+		"XDG_CACHE_HOME":    func(tc *Toolchain) { tc.Env["XDG_CACHE_HOME"] = "/x" },
+		"NO_COLOR":          func(tc *Toolchain) { tc.Env["NO_COLOR"] = "0" },
+		"LD_PRELOAD":        func(tc *Toolchain) { tc.Env["LD_PRELOAD"] = "/x.so" },
+		"HOME":              func(tc *Toolchain) { tc.Env["HOME"] = "/x" },
 	} {
 		if parse(edit, WorkspaceOfflineTests) == nil {
 			t.Fatal("invalid toolchain accepted:", name)
+		}
+	}
+	// Only the Go, cgo and Rust allowlist reaches the worker (and SCC's own
+	// Node.js process); everything that configures Node.js, OpenSSL, the C
+	// library, a shell, Python, Git, npm or the launcher is refused.
+	for _, name := range []string{"OPENSSL_CONF", "OPENSSL_MODULES", "BASH_ENV", "ENV", "SHELL", "IFS", "PS4", "PYTHONPATH", "PYTHONSTARTUP",
+		"UV_THREADPOOL_SIZE", "SSL_CERT_FILE", "SSL_CERT_DIR", "MALLOC_ARENA_MAX", "NODE_OPTIONS", "NODE_PATH", "LD_PRELOAD", "LD_LIBRARY_PATH",
+		"GIT_DIR", "NPM_CONFIG_PREFIX", "SC_MODEL", "XDG_CACHE_HOME", "HOME", "TMPDIR", "PATH", "NO_COLOR", "CI", "PYTHONDONTWRITEBYTECODE",
+		"JAVA_TOOL_OPTIONS", "MAVEN_OPTS", "TZ", "LANG", "GOOGLE_APPLICATION_CREDENTIALS", "GO_", "RUSTC WRAPPER", "go"} {
+		if ToolchainEnvAllowed(name) {
+			t.Fatal("variable outside the toolchain allowlist accepted:", name)
+		}
+	}
+	for _, name := range []string{"GOFLAGS", "GOTOOLCHAIN", "GOPROXY", "GO111MODULE", "GODEBUG", "GOROOT", "CGO_ENABLED", "CARGO_HOME", "RUSTFLAGS", "RUST_BACKTRACE"} {
+		if !ToolchainEnvAllowed(name) {
+			t.Fatal("toolchain variable refused:", name)
+		}
+	}
+	for _, value := range []string{"-mod=mod", "local", "/go", "/usr/local/go", "/workspacesX", "off", "-trimpath -buildvcs=false"} {
+		if !ToolchainEnvValueAllowed(value) {
+			t.Fatal("toolchain value refused:", value)
 		}
 	}
 	// Unknown nested fields and explicit nulls are refused as everywhere else.

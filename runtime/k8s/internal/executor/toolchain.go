@@ -2,6 +2,7 @@ package executor
 
 import (
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -45,11 +46,13 @@ const (
 	copyDestination  = copyMount + "/root"
 	runnerMount      = "/runner"
 	runnerPath       = runnerMount + "/repository-tests"
-	toolchainVolume  = "1Gi"
+	// toolchainVolume leaves room above the copier's 1 GiB byte cap for the
+	// file-system blocks of up to 50,000 entries.
+	toolchainVolume  = "1280Mi"
 	scratchVolume    = "1Gi"
 	runnerVolume     = "128Mi"
 	toolchainMemory  = "1280Mi" // the original 768Mi worker limit plus 512Mi
-	toolchainStorage = "2304Mi" // 128Mi + toolchain + scratch + runner volumes
+	toolchainStorage = "2560Mi" // 128Mi + toolchain + scratch + runner volumes
 	baseSearchPath   = "/usr/local/bin:/usr/bin:/bin"
 )
 
@@ -59,25 +62,28 @@ const (
 	InitCopyToolchain = "copy-toolchain"
 )
 
-// launcherEnv are variables the launcher sets for SCC itself; a toolchain
-// variable can never replace one. Names with these prefixes configure SCC,
-// Node.js, Git, npm or the XDG directories the launcher owns.
-var launcherEnv = map[string]bool{"PATH": true, "HOME": true, "TMPDIR": true, "LC_ALL": true, "NO_COLOR": true, "CI": true, noBytecodeName: true}
-var launcherEnvPrefixes = []string{"SC_", "NODE_", "GIT_", "NPM_", "XDG_"}
+// toolchainEnvNames is a strict allowlist of variables a self-contained
+// toolchain reads: Go's (GOFLAGS, GOTOOLCHAIN, ...), cgo's and Rust's. They
+// reach SCC's own Node.js process as well as run_shell children (SCC builds
+// the child environment from its own), so nothing that configures Node.js,
+// OpenSSL, the C library, a shell, Python, Git, npm, SCC or the launcher
+// (PATH, HOME, TMPDIR, XDG_*) is ever passed. Every other verification
+// variable stays verification-only.
+var toolchainEnvNames = regexp.MustCompile(`^(GO[A-Z0-9]+|CGO_[A-Z0-9_]+|CARGO_[A-Z0-9_]+|RUST[A-Z0-9_]*)$`)
 
-// ToolchainEnvAllowed reports whether a verification variable may reach the
-// generation worker. PATH is rebuilt from the toolchain's declared path.
-func ToolchainEnvAllowed(name string) bool {
-	if launcherEnv[name] {
-		return false
-	}
-	for _, prefix := range launcherEnvPrefixes {
-		if strings.HasPrefix(name, prefix) {
-			return false
-		}
-	}
-	return true
-}
+// writablePath matches a value that names the worker's writable workspace or
+// scratch volume, for example GOCACHE=/workspaces/cache or
+// GOFLAGS=-modfile=/scratch/go.mod: build state there could leak into the
+// candidate or outlive the launcher's own layout.
+var writablePath = regexp.MustCompile(`(^|[:=, ])/(workspaces|scratch)(/|$|[:, ])`)
+
+// ToolchainEnvAllowed reports whether a verification variable name may reach
+// the generation worker. PATH is rebuilt from the toolchain's declared path.
+func ToolchainEnvAllowed(name string) bool { return toolchainEnvNames.MatchString(name) }
+
+// ToolchainEnvValueAllowed reports whether a value may reach the generation
+// worker: it must not name the writable workspace or scratch volume.
+func ToolchainEnvValueAllowed(value string) bool { return !writablePath.MatchString(value) }
 
 func (t *Toolchain) valid() bool {
 	if t == nil || len(t.Image) > 512 || !imagePattern.MatchString(t.Image) || !project.ValidImage(t.Image) ||
@@ -87,8 +93,8 @@ func (t *Toolchain) valid() bool {
 	if t.Env != nil && (len(t.Env) == 0 || !project.ValidEnv(t.Env)) {
 		return false
 	}
-	for name := range t.Env {
-		if !ToolchainEnvAllowed(name) {
+	for name, value := range t.Env {
+		if !ToolchainEnvAllowed(name) || !ToolchainEnvValueAllowed(value) {
 			return false
 		}
 	}
