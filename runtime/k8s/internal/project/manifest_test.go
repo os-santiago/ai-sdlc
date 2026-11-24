@@ -335,3 +335,43 @@ func TestGenerationToolchainRefusesWritableEnvValues(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRelocateToolchainValueMapsWholeEntriesUnderTheRoot(t *testing.T) {
+	root, dest := "/opt/reviewed-go", "/toolchain/root"
+	for value, want := range map[string]string{
+		"/opt/reviewed-go":             "/toolchain/root",
+		"/opt/reviewed-go/pkg/tool":    "/toolchain/root/pkg/tool",
+		"/go:/opt/reviewed-go/bin":     "/go:/toolchain/root/bin",
+		"/opt/reviewed-go-old":         "/opt/reviewed-go-old",
+		"local":                        "local",
+		"-mod=mod -trimpath":           "-mod=mod -trimpath",
+		"/opt/reviewed":                "/opt/reviewed",
+		"/opt/reviewed-gopath:/srv/go": "/opt/reviewed-gopath:/srv/go",
+	} {
+		got, ok := RelocateToolchainValue(root, dest, value)
+		if !ok || got != want {
+			t.Fatal("relocation", value, got, ok)
+		}
+	}
+	for _, value := range []string{"-toolexec=/opt/reviewed-go/bin/x", "-a /opt/reviewed-go/bin", "x,/opt/reviewed-go"} {
+		if _, ok := RelocateToolchainValue(root, dest, value); ok {
+			t.Fatal("untranslatable root reference accepted", value)
+		}
+	}
+	if RelocateToolchainPath(root, dest, "/opt/reviewed-go/bin/go") != "/toolchain/root/bin/go" || RelocateToolchainPath(root, dest, "go") != "go" {
+		t.Fatal("command relocation")
+	}
+	// Validation refuses a toolchain variable whose root reference cannot be translated.
+	m := generic()
+	m.Generation = &Generation{Toolchain: &Toolchain{Root: root, Path: []string{"bin"}}}
+	v := *m.Verification
+	v.Env = map[string]string{"GOFLAGS": "-toolexec=/opt/reviewed-go/bin/x"}
+	m.Verification = &v
+	if _, err := ParseManifest(m.Canonical()); !errors.Is(err, ErrGenerationEnv) {
+		t.Fatal("untranslatable toolchain value accepted", err)
+	}
+	v.Env = map[string]string{"GOROOT": root}
+	if _, err := ParseManifest(m.Canonical()); err != nil {
+		t.Fatal("GOROOT under the root refused", err)
+	}
+}

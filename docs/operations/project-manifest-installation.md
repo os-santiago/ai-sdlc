@@ -86,10 +86,15 @@ The worker then runs with:
   configures Node.js, OpenSSL, the C library, a shell, Python, Git, npm or the
   launcher is passed. A value that names `/workspaces` or `/scratch` is
   refused at installation: the migrator names the error. The same names are
-  allowlisted for `run_shell`. Values are not
-  rewritten, so a variable that names a path in the verification image (for
-  example `GOROOT`) does not apply in generation; Go finds its root from the
-  `go` binary. Other variables stay verification-only;
+  allowlisted for `run_shell`. Each `:`-separated entry at or under `root`
+  is relocated to the copy (for example `GOROOT=/usr/local/go` becomes
+  `/toolchain/root`); a value that names `root` in any other way (for example
+  inside a flag) is refused at installation. Other variables stay
+  verification-only;
+- the test command with an absolute executable under `root` (for example
+  `/usr/local/go/bin/go`) relocated the same way, in the command and the
+  prompt. A relative command such as `go test ./...` is unchanged, and the
+  verifier always runs the manifest's own command and environment;
 - 512 MiB more memory (a 1,280 MiB limit) and a 2,560 MiB ephemeral-storage
   limit, which covers the three disk volumes (1,280 + 1,024 + 128 MiB) and
   the worker's own 128 MiB, so the kubelet evicts the pod predictably if they

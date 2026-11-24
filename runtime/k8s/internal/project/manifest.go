@@ -181,7 +181,44 @@ func GenerationEnvValue(value string) bool { return !writableValue.MatchString(v
 // ErrGenerationEnv refuses a manifest with generation.toolchain whose
 // verification.env gives a toolchain variable a value under /workspaces or
 // /scratch, the generator's writable volumes.
-var ErrGenerationEnv = fmt.Errorf("%w: a verification.env variable passed to generation.toolchain (GO*, CGO_*, CARGO_*, RUST*) names /workspaces or /scratch", ErrManifest)
+var ErrGenerationEnv = fmt.Errorf("%w: a verification.env variable passed to generation.toolchain (GO*, CGO_*, CARGO_*, RUST*) names /workspaces or /scratch, or names the toolchain root other than as a whole ':'-separated path entry", ErrManifest)
+
+// underRoot reports whether p is root or a path below it.
+func underRoot(root, p string) bool {
+	return p == root || strings.HasPrefix(p, root+"/")
+}
+
+// RelocateToolchainPath maps a path at or below root to the same path below
+// dest, where the generation worker mounts the copy; any other path is
+// returned unchanged.
+func RelocateToolchainPath(root, dest, p string) string {
+	if !underRoot(root, p) {
+		return p
+	}
+	return dest + strings.TrimPrefix(p, root)
+}
+
+var valueTokens = regexp.MustCompile(`[=, \t]`)
+
+// RelocateToolchainValue maps every ':'-separated entry of value that is root
+// or lies below it to dest (GOROOT=/usr/local/go becomes the copy). ok is
+// false when value names root anywhere else (for example inside a flag such
+// as -toolexec=/usr/local/go/x), which cannot be translated safely.
+func RelocateToolchainValue(root, dest, value string) (string, bool) {
+	entries := strings.Split(value, ":")
+	for i, entry := range entries {
+		if underRoot(root, entry) {
+			entries[i] = RelocateToolchainPath(root, dest, entry)
+			continue
+		}
+		for _, token := range valueTokens.Split(entry, -1) {
+			if underRoot(root, token) {
+				return "", false
+			}
+		}
+	}
+	return strings.Join(entries, ":"), true
+}
 
 // Validate reports whether t is a valid toolchain declaration. The executor
 // rechecks the copy of it that an assignment carries.
@@ -375,7 +412,10 @@ func (m Manifest) Validate() error {
 	}
 	if m.Generation != nil {
 		for name, value := range m.Verification.Env {
-			if GenerationEnvName(name) && !GenerationEnvValue(value) {
+			if !GenerationEnvName(name) {
+				continue
+			}
+			if _, ok := RelocateToolchainValue(m.Generation.Toolchain.Root, "/", value); !GenerationEnvValue(value) || !ok {
 				return ErrGenerationEnv
 			}
 		}
