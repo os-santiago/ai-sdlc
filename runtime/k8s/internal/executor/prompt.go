@@ -25,9 +25,19 @@ Leave commits, pushes, provider credentials and external access to that controll
 Each of your answers has a bounded length, and an answer cut off at that bound
 is discarded. Change existing files with targeted edits (edit_file), never by
 rewriting a whole existing file with write_file: a rewrite can exceed the bound
-or silently drop content you did not repeat. Keep existing tests intact; when
-an existing test file is large, add the new tests in a new test file named like
-the existing test files.
+or silently drop content you did not repeat. An edit_file patch is a unified
+diff for one file: "--- a/PATH", "+++ b/PATH", then hunks headed
+"@@ -START,COUNT +START,COUNT @@". The first COUNT is the number of context
+(" ") and removed ("-") lines; the second is the number of context and added
+("+") lines. Recount both after every change to the hunk. If a patch is
+refused, read the file again, then send one small hunk with copied context
+lines and recounted COUNTs. If it is still refused and the change only adds
+code, put the new code in a new file of the same package or module with
+write_file, plus the smallest edit_file change that wires it in where the
+language requires it (import, export, mod). Never fall back to rewriting an
+existing file. Keep existing tests intact; when an existing test file is
+large, add the new tests in a new test file named like the existing test
+files.
 
 <reviewed-adev-policy>
 %s
