@@ -154,7 +154,7 @@ func testsServer(t *testing.T, c *testsCluster) *TestsRun {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err = PlanTestsRun(client, p, source, time.Now().Add(time.Minute))
+	run, err = PlanTestsRun(client, p, RuntimeClassAdmission{}, source, time.Now().Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,15 +301,15 @@ func TestPlanTestsRunRefusesAnotherTreeOrNamespace(t *testing.T) {
 	}
 	other := p
 	other.TreeSHA256 = strings.Repeat("f", 64)
-	if _, err := PlanTestsRun(client, other, source, time.Now().Add(time.Minute)); err == nil {
+	if _, err := PlanTestsRun(client, other, RuntimeClassAdmission{}, source, time.Now().Add(time.Minute)); err == nil {
 		t.Fatal("a bundle for another tree accepted")
 	}
 	other = p
 	other.Namespace = "default"
-	if _, err := PlanTestsRun(client, other, source, time.Now().Add(time.Minute)); err == nil {
+	if _, err := PlanTestsRun(client, other, RuntimeClassAdmission{}, source, time.Now().Add(time.Minute)); err == nil {
 		t.Fatal("a namespace without the deny-all policy accepted")
 	}
-	if _, err := PlanTestsRun(client, p, source, time.Now().Add(-time.Second)); err == nil {
+	if _, err := PlanTestsRun(client, p, RuntimeClassAdmission{}, source, time.Now().Add(-time.Second)); err == nil {
 		t.Fatal("an expired run accepted")
 	}
 }

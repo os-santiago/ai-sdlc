@@ -8,7 +8,9 @@ sandboxed containers, selected with --runtime-class; `ai-sdlc-offline` by
 default) and a default StorageClass. See docs/operations/openshift.md.
 """
 import json
+import math
 import os
+import re
 from pathlib import Path
 
 MARKER = 'openshift-ownership.json'
@@ -89,3 +91,30 @@ def preflight(run, kubectl, sandbox, runtime_class='ai-sdlc-offline'):
             raise ValueError('Provide the sandbox runtime as RuntimeClass ' + runtime_class + ' before installing, or select the installed class with --runtime-class (docs/operations/openshift.md)')
         return json.loads(result.stdout).get('handler', '')
     return ''
+
+
+_QUANTITY = re.compile(r'([0-9]+(?:\.[0-9]+)?)(m|Ki|Mi|Gi|Ti|k|M|G|T)?')
+_FACTOR = {None: 1, 'm': 0.001, 'k': 10**3, 'M': 10**6, 'G': 10**9, 'T': 10**12,
+           'Ki': 2**10, 'Mi': 2**20, 'Gi': 2**30, 'Ti': 2**40}
+
+
+def pod_overhead(run, kubectl, runtime_class):
+    """The class's overhead.podFixed as chart quota headroom, rounded up to
+    whole millicores and Mi; empty when the class declares no overhead."""
+    result = run(kubectl + ['get', 'runtimeclass', runtime_class, '-o', 'json'], capture_output=True)
+    fixed = ((json.loads(result.stdout).get('overhead') or {}).get('podFixed')) or {}
+    if not isinstance(fixed, dict) or set(fixed) - {'cpu', 'memory'}:
+        raise ValueError('RuntimeClass ' + runtime_class + ' declares an unsupported pod overhead; only cpu and memory are supported')
+    headroom = {}
+    for name, value in fixed.items():
+        match = _QUANTITY.fullmatch(str(value))
+        if not match:
+            raise ValueError('RuntimeClass ' + runtime_class + ' declares an unsupported ' + name + ' overhead quantity')
+        amount = float(match.group(1)) * _FACTOR[match.group(2)]
+        if name == 'cpu':
+            headroom['cpu'] = str(math.ceil(round(amount * 1000, 6))) + 'm'
+        else:
+            headroom['memory'] = str(math.ceil(round(amount / 2**20, 6))) + 'Mi'
+    if any(int(v[:-1] if v.endswith('m') else v[:-2]) > 999999 for v in headroom.values()):
+        raise ValueError('RuntimeClass ' + runtime_class + ' declares a pod overhead above the supported bound')
+    return {k: v for k, v in headroom.items() if v not in ('0m', '0Mi')}

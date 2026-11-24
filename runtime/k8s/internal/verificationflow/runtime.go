@@ -22,6 +22,9 @@ type Runtime struct {
 	MailboxImage string
 	// RuntimeClass is the installed sandbox RuntimeClass for verification pods.
 	RuntimeClass string
+	// SandboxCheck observes that class before any verification is claimed.
+	// Nil uses the read-only API preflight; only fixtures replace it.
+	SandboxCheck func(context.Context, *podtransport.Client, string) (podtransport.RuntimeClassAdmission, error)
 }
 
 func (r Runtime) PollOnce(ctx context.Context) (string, error) {
@@ -82,7 +85,20 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		}
 		return "rejected", nil
 	}
-	if _, err = RunWithMailbox(ctx, r.DB, r.Load, id, r.Client, r.Image, r.MailboxImage, r.RuntimeClass); err != nil {
+	// Expiry, cleanup and rejection above always run; claiming the work and
+	// creating its pods require the sandbox class, observed now with this
+	// poll's client.
+	check := r.SandboxCheck
+	if check == nil {
+		check = func(ctx context.Context, c *podtransport.Client, class string) (podtransport.RuntimeClassAdmission, error) {
+			return c.CheckRuntimeClass(ctx, class)
+		}
+	}
+	admission, err := check(ctx, r.Client, r.RuntimeClass)
+	if err != nil {
+		return "sandbox-runtime-class-unavailable", ControllerError{"sandbox-runtime-class"}
+	}
+	if _, err = RunWithMailbox(ctx, r.DB, r.Load, id, r.Client, r.Image, r.MailboxImage, r.RuntimeClass, admission); err != nil {
 		return "stopped", err
 	}
 	return "behavior-verified", nil

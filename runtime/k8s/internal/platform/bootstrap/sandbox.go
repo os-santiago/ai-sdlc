@@ -7,22 +7,34 @@ import (
 	"sync"
 )
 
-// SandboxGate guards a component that creates sandboxed pods. Check runs the
-// read-only sandbox RuntimeClass preflight; while it fails the component is
-// not ready and claims no work. There is no fallback to running without the
-// sandbox. Only state changes are logged, with a fixed bounded line, so a
-// failing probe or poll loop does not repeat the message or echo API errors.
+// ErrSandboxUnavailable is the only error SandboxGate returns.
+var ErrSandboxUnavailable = errors.New("sandbox runtime class unavailable")
+
+// SandboxGate guards the readiness of a component that creates sandboxed
+// pods. Check runs the read-only sandbox RuntimeClass preflight; while it
+// fails the component is not ready (its poll loop separately refuses to claim
+// work). There is no fallback to running without the sandbox. Only state
+// changes are logged, with a fixed bounded line: Known lists the preflight's
+// own named errors whose message may be logged; anything else (including API
+// error text) is reported as "sandbox runtime class unavailable".
 type SandboxGate struct {
-	mu          sync.Mutex
-	unavailable bool
-	logf        func(string)
+	Known  []error
+	mu     sync.Mutex
+	reason string
+	logf   func(string)
 }
 
 func (g *SandboxGate) Check(ctx context.Context, preflight func(context.Context) error) error {
-	err := ErrSandboxUnavailable
+	reason := ErrSandboxUnavailable.Error()
 	if preflight != nil && ctx.Err() == nil {
-		if preflight(ctx) == nil {
-			err = nil
+		if err := preflight(ctx); err == nil {
+			reason = ""
+		} else {
+			for _, known := range g.Known {
+				if errors.Is(err, known) {
+					reason = known.Error()
+				}
+			}
 		}
 	}
 	g.mu.Lock()
@@ -31,14 +43,16 @@ func (g *SandboxGate) Check(ctx context.Context, preflight func(context.Context)
 	if report == nil {
 		report = func(s string) { log.Print(s) }
 	}
-	if err != nil && !g.unavailable {
-		report("sandbox runtime class unavailable")
-	} else if err == nil && g.unavailable {
-		report("sandbox runtime class available")
+	if reason != g.reason {
+		if reason == "" {
+			report("sandbox runtime class available")
+		} else {
+			report(reason)
+		}
 	}
-	g.unavailable = err != nil
-	return err
+	g.reason = reason
+	if reason != "" {
+		return ErrSandboxUnavailable
+	}
+	return nil
 }
-
-// ErrSandboxUnavailable is the only error SandboxGate returns.
-var ErrSandboxUnavailable = errors.New("sandbox runtime class unavailable")

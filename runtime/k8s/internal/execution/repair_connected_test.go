@@ -415,10 +415,12 @@ func TestConnectedRepairTerminalCommitAcknowledgementLoss(t *testing.T) {
 }
 
 func TestConnectedRepairQueuedExpiryRetiresOnlyChild(t *testing.T) {
-	t.Run("direct-sweeps", func(t *testing.T) { connectedRepairQueuedExpiry(t, false) })
-	t.Run("gateway-unavailable", func(t *testing.T) { connectedRepairQueuedExpiry(t, true) })
+	t.Run("direct-sweeps", func(t *testing.T) { connectedRepairQueuedExpiry(t, "") })
+	t.Run("gateway-unavailable", func(t *testing.T) { connectedRepairQueuedExpiry(t, "gateway") })
+	// A missing sandbox class refuses new work but never blocks expiry.
+	t.Run("sandbox-runtime-class-missing", func(t *testing.T) { connectedRepairQueuedExpiry(t, "sandbox") })
 }
-func connectedRepairQueuedExpiry(t *testing.T, unavailable bool) {
+func connectedRepairQueuedExpiry(t *testing.T, unavailable string) {
 	f := execution.NewRepairFixtureForTest(t, true)
 	if _, e := f.Admin.Pool.Exec(`UPDATE model_budgets SET expires_at=clock_timestamp()+interval '2 seconds' WHERE work_item_uuid=$1`, f.Command.WorkItemID); e != nil {
 		t.Fatal(e)
@@ -444,8 +446,8 @@ func connectedRepairQueuedExpiry(t *testing.T, unavailable bool) {
 		time.Sleep(d)
 	}
 	ctx := context.Background()
-	if unavailable {
-		pollUnavailableGateway(t, f)
+	if unavailable != "" {
+		pollUnavailableGateway(t, f, unavailable == "sandbox")
 	} else {
 		if e := f.Worker.ExpireQueuedExecutions(ctx); e != nil {
 			t.Fatal(e)

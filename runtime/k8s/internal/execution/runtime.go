@@ -68,6 +68,10 @@ type Runtime struct {
 	// derived from its startup benchmark fits the call window and
 	// ProviderTimeoutSeconds. No work is claimed until that profile exists.
 	AdoptGatewayProfile bool
+	// SandboxCheck observes the installed sandbox RuntimeClass before any
+	// work is claimed. Nil uses the read-only API preflight; only fixtures
+	// that cannot read cluster-scoped classes replace it.
+	SandboxCheck func(context.Context, *podtransport.Client, string) (podtransport.RuntimeClassAdmission, error)
 }
 
 func (r Runtime) PollOnce(ctx context.Context) (string, error) {
@@ -160,6 +164,13 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if provider, e = r.benchmarked(ctx, provider, config.Profile.CallWindow()); e != nil {
 		return "model-gateway-profile-unavailable-or-unfit", ErrAuthority
 	}
+	// Cleanup and handoff above always run; only claiming new work and
+	// creating pods require the sandbox class, checked with this poll's
+	// sealed configuration and client so the verified class is the one used.
+	admission, e := r.sandbox(ctx, client, config.Placement.SandboxRuntimeClass())
+	if e != nil {
+		return "sandbox-runtime-class-unavailable", ControllerError{"sandbox-runtime-class"}
+	}
 	id, e := r.Component.DB.NextExecution(ctx)
 	if e != nil || id == "" {
 		return "", e
@@ -187,7 +198,7 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if e != nil {
 		return "stopped", e
 	}
-	_, e = RunController(ctx, r.Component.DB, load, prep, client, provider, func(ctx context.Context) (ModelPolicy, error) { _, _, e := load(ctx); return config.Model, e })
+	_, e = RunController(ctx, r.Component.DB, load, prep, client, admission, provider, func(ctx context.Context) (ModelPolicy, error) { _, _, e := load(ctx); return config.Model, e })
 	if e != nil {
 		return "stopped", e
 	}
@@ -229,7 +240,15 @@ func (r Runtime) CheckSandbox(ctx context.Context) error {
 	if e != nil {
 		return ErrAuthority
 	}
-	return client.CheckRuntimeClass(ctx, config.Placement.SandboxRuntimeClass())
+	_, e = r.sandbox(ctx, client, config.Placement.SandboxRuntimeClass())
+	return e
+}
+
+func (r Runtime) sandbox(ctx context.Context, client *podtransport.Client, class string) (podtransport.RuntimeClassAdmission, error) {
+	if r.SandboxCheck != nil {
+		return r.SandboxCheck(ctx, client, class)
+	}
+	return client.CheckRuntimeClass(ctx, class)
 }
 
 // benchmarked admits the model when the gateway's measured timeout fits.

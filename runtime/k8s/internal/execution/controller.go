@@ -82,7 +82,7 @@ func DiagnosticStage(err error) string {
 		return "authority-or-storage"
 	}
 	switch stopped.Stage {
-	case "source-preflight-authority", "source-rate-limited", "source-unavailable", "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "execution-authority", "execution-observe", "execution-read", "execution-sequence", "execution-exit-race", "worker-exit", "export", "capture", "cleanup", "cleanup-pod", "cleanup-config", "cleanup-confirm":
+	case "source-preflight-authority", "sandbox-runtime-class", "source-rate-limited", "source-unavailable", "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "execution-authority", "execution-observe", "execution-read", "execution-sequence", "execution-exit-race", "worker-exit", "export", "capture", "cleanup", "cleanup-pod", "cleanup-config", "cleanup-confirm":
 		return stopped.Stage
 	}
 	if strings.HasPrefix(stopped.Stage, "model-") {
@@ -103,7 +103,9 @@ func DiagnosticStage(err error) string {
 // candidate. Only trusted bootstrap code may supply dependencies. It does not
 // accept work from HTTP, create claims, retry/adopt executions, validate code or
 // authorize publication. A captured candidate remains unvalidated durable data.
-func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prepared Prepared, client *podtransport.Client, provider *modelbroker.Provider, model ModelPolicyLoader) (record store.CandidateRecord, err error) {
+// admission is what the preflight observed the sandbox RuntimeClass adds to
+// each pod; the zero value is a class without overhead or scheduling.
+func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prepared Prepared, client *podtransport.Client, admission podtransport.RuntimeClassAdmission, provider *modelbroker.Provider, model ModelPolicyLoader) (record store.CandidateRecord, err error) {
 	if db == nil || load == nil || client == nil || provider == nil || model == nil {
 		return record, ControllerError{"configuration"}
 	}
@@ -154,7 +156,7 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 	ctx, cancel := context.WithDeadline(ctx, l.durable.Claim.Until)
 	defer cancel()
 	stage = "resources"
-	resources, err = podtransport.PlanResources(client, podtransport.Binding{Namespace: l.placement.Namespace, WorkerImage: l.placement.WorkerImage, MailboxImage: l.placement.MailboxImage, RuntimeClass: l.placement.SandboxRuntimeClass(), Assignment: prepared.Assignment(), Profile: prepared.Profile(), ADev: prepared.ADev()})
+	resources, err = podtransport.PlanResources(client, podtransport.Binding{Namespace: l.placement.Namespace, WorkerImage: l.placement.WorkerImage, MailboxImage: l.placement.MailboxImage, RuntimeClass: l.placement.SandboxRuntimeClass(), Admission: admission, Assignment: prepared.Assignment(), Profile: prepared.Profile(), ADev: prepared.ADev()})
 	if err != nil {
 		return record, ControllerError{stage}
 	}

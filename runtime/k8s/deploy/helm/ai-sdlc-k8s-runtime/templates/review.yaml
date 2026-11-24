@@ -29,7 +29,11 @@ metadata:
   namespace: ai-sdlc-reviewers
   annotations: {helm.sh/resource-policy: keep}
 spec:
+  {{- if include "ai-sdlc-k8s-runtime.sandboxOverheadSet" . }}
+  hard: {pods: "2", configmaps: "4", {{ include "ai-sdlc-k8s-runtime.sandboxQuota" (dict "root" . "pods" 2 "quota" (dict "requests.cpu" "1" "requests.memory" "1Gi" "limits.cpu" "4" "limits.memory" "2Gi")) }}}
+  {{- else }}
   hard: {pods: "2", configmaps: "4", requests.cpu: "1", requests.memory: 1Gi, limits.cpu: "4", limits.memory: 2Gi}
+  {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

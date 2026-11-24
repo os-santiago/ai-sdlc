@@ -7,13 +7,13 @@ import re
 import secrets
 
 
-def require_unchanged_tool_budget(kubectl, desired):
-    """Ordinary reconciliation cannot silently change an installed SCC budget."""
+def installed_execution_config(kubectl):
+    """The installed execution configuration document, or None before the first."""
     import install
     result = install.run(kubectl + ['--request-timeout=10s', 'get', 'configmap', 'ai-sdlc-execution',
         '-n', install.NAMESPACE, '--ignore-not-found', '-o', 'json'], capture_output=True, timeout=15)
     if not result.stdout.strip():
-        return  # First candidate configuration, including maintenance promotion.
+        return None
     def unique_object(pairs):
         result = dict(pairs)
         if len(result) != len(pairs):
@@ -27,6 +27,35 @@ def require_unchanged_tool_budget(kubectl, desired):
         if not isinstance(raw, str) or len(raw.encode()) > 262144:
             raise ValueError()
         config = json.loads(raw, object_pairs_hook=unique_object)
+        if not isinstance(config, dict):
+            raise ValueError()
+    except (KeyError, TypeError, ValueError):
+        raise ValueError('Installed execution configuration is malformed; preserve it for review') from None
+    return config
+
+
+def require_runtime_class(kubectl, explicit):
+    """A reinstall keeps the installed sandbox RuntimeClass unless the operator
+    names a class explicitly; omitting --runtime-class never silently switches
+    an installation back to ai-sdlc-offline."""
+    config = installed_execution_config(kubectl)
+    if config is None:
+        return
+    placement = config.get('placement')
+    installed = placement.get('RuntimeClass', DEFAULT_RUNTIME_CLASS) if isinstance(placement, dict) else None
+    if not isinstance(installed, str):
+        raise ValueError('Installed execution configuration is malformed; preserve it for review')
+    if explicit is None and installed != DEFAULT_RUNTIME_CLASS:
+        raise ValueError('The installation uses sandbox RuntimeClass ' + validate_runtime_class(installed)
+                         + '; pass --runtime-class ' + installed + ' to keep it, or another name to change it explicitly')
+
+
+def require_unchanged_tool_budget(kubectl, desired):
+    """Ordinary reconciliation cannot silently change an installed SCC budget."""
+    config = installed_execution_config(kubectl)
+    if config is None:
+        return  # First candidate configuration, including maintenance promotion.
+    try:
         profile = config['profile']
         steps = profile['maxSteps']
         if (config['version'] != 'ai-sdlc.candidate-runtime/v1'

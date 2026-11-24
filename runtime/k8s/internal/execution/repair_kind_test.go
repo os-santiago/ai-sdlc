@@ -215,7 +215,7 @@ func runRepairKind(t *testing.T, composition bool) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	record, e := execution.RunController(ctx, f.Worker, f.LoadLifecycle, prepared, client, provider, func(context.Context) (execution.ModelPolicy, error) { return f.Runtime.Model, nil })
+	record, e := execution.RunController(ctx, f.Worker, f.LoadLifecycle, prepared, client, podtransport.RuntimeClassAdmission{}, provider, func(context.Context) (execution.ModelPolicy, error) { return f.Runtime.Model, nil })
 	if e != nil {
 		t.Fatal("actual child controller", execution.DiagnosticStage(e), "calls", calls.Load())
 	}

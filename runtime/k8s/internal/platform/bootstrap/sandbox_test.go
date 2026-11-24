@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -32,7 +33,12 @@ func TestSandboxGateFailsClosedAndLogsTransitionsOnly(t *testing.T) {
 	if err := g.Check(ctx, present); !errors.Is(err, ErrSandboxUnavailable) {
 		t.Fatal("canceled preflight accepted")
 	}
-	want := []string{"sandbox runtime class unavailable", "sandbox runtime class available", "sandbox runtime class unavailable"}
+	named := errors.New("sandbox runtime class overhead exceeds quota headroom")
+	g.Known = []error{named}
+	if err := g.Check(context.Background(), func(context.Context) error { return fmt.Errorf("wrapped: %w", named) }); !errors.Is(err, ErrSandboxUnavailable) {
+		t.Fatal("named failure accepted")
+	}
+	want := []string{"sandbox runtime class unavailable", "sandbox runtime class available", "sandbox runtime class unavailable", "sandbox runtime class overhead exceeds quota headroom"}
 	if len(lines) != len(want) {
 		t.Fatal("unexpected log lines", lines)
 	}
