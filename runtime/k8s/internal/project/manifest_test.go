@@ -336,6 +336,19 @@ func TestGenerationToolchainRefusesWritableEnvValues(t *testing.T) {
 	}
 }
 
+func TestGenerationEnvValueRefusesNonCanonicalPaths(t *testing.T) {
+	for _, value := range []string{"/opt/go/../../scratch", "-modfile=/srv/./x", "/srv//x", "/srv/x/"} {
+		if GenerationEnvValue(value) {
+			t.Fatal("non-canonical path accepted", value)
+		}
+	}
+	for _, value := range []string{"/srv/go:/opt/go/bin", "-mod=mod -trimpath", "local", "-ldflags=-s -w"} {
+		if !GenerationEnvValue(value) {
+			t.Fatal("canonical value refused", value)
+		}
+	}
+}
+
 func TestRelocateToolchainValueMapsWholeEntriesUnderTheRoot(t *testing.T) {
 	root, dest := "/opt/reviewed-go", "/toolchain/root"
 	for value, want := range map[string]string{
@@ -353,7 +366,7 @@ func TestRelocateToolchainValueMapsWholeEntriesUnderTheRoot(t *testing.T) {
 			t.Fatal("relocation", value, got, ok)
 		}
 	}
-	for _, value := range []string{"-toolexec=/opt/reviewed-go/bin/x", "-a /opt/reviewed-go/bin", "x,/opt/reviewed-go"} {
+	for _, value := range []string{"-toolexec=/opt/reviewed-go/bin/x", "-a /opt/reviewed-go/bin", "x,/opt/reviewed-go", "-I/opt/reviewed-go/include", "-L/opt/reviewed-go/lib", "file:///opt/reviewed-go/src", "\"/opt/reviewed-go\"", "a;/opt/reviewed-go", "/opt/reviewed-go/../../scratch/cache", "/opt/reviewed-go/./bin"} {
 		if _, ok := RelocateToolchainValue(root, dest, value); ok {
 			t.Fatal("untranslatable root reference accepted", value)
 		}

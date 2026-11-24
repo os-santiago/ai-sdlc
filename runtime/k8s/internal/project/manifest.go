@@ -176,16 +176,57 @@ func GenerationEnvName(name string) bool { return generationEnvNames.MatchString
 
 // GenerationEnvValue reports whether a value may reach the generation
 // toolchain: it must not name /workspaces or /scratch.
-func GenerationEnvValue(value string) bool { return !writableValue.MatchString(value) }
+func GenerationEnvValue(value string) bool {
+	if writableValue.MatchString(value) {
+		return false
+	}
+	// A path that is not in canonical form (for example /opt/go/../../scratch)
+	// could resolve to a writable volume the lexical check above misses.
+	for _, token := range pathTokens.Split(value, -1) {
+		if i := strings.IndexByte(token, '/'); i >= 0 && path.Clean(token[i:]) != token[i:] {
+			return false
+		}
+	}
+	return true
+}
+
+// pathTokens splits a value into the pieces that can hold a path: list
+// entries, flag values, words and quoted or semicolon-separated parts.
+var pathTokens = regexp.MustCompile(`[:=, \t;"']`)
+
+// namesRoot reports whether s mentions root as a whole path component: root
+// followed by the end of s or by a character that cannot continue a path
+// component name ('/', a quote, ';' and so on). "/opt/go-old" does not name
+// "/opt/go".
+func namesRoot(root, s string) bool {
+	for i := strings.Index(s, root); i >= 0; {
+		end := i + len(root)
+		if end == len(s) || !componentByte(s[end]) {
+			return true
+		}
+		next := strings.Index(s[i+1:], root)
+		if next < 0 {
+			return false
+		}
+		i += 1 + next
+	}
+	return false
+}
 
 // ErrGenerationEnv refuses a manifest with generation.toolchain whose
 // verification.env gives a toolchain variable a value under /workspaces or
 // /scratch, the generator's writable volumes.
-var ErrGenerationEnv = fmt.Errorf("%w: a verification.env variable passed to generation.toolchain (GO*, CGO_*, CARGO_*, RUST*) names /workspaces or /scratch, or names the toolchain root other than as a whole ':'-separated path entry", ErrManifest)
+var ErrGenerationEnv = fmt.Errorf("%w: a verification.env variable passed to generation.toolchain (GO*, CGO_*, CARGO_*, RUST*) names /workspaces or /scratch, uses a non-canonical path, or names the toolchain root other than as a whole ':'-separated path entry", ErrManifest)
 
 // underRoot reports whether p is root or a path below it.
 func underRoot(root, p string) bool {
 	return p == root || strings.HasPrefix(p, root+"/")
+}
+
+// componentByte reports whether b can continue a path component name.
+func componentByte(b byte) bool {
+	return b == '.' || b == '_' || b == '-' || b == '+' || b == '@' || b == '~' ||
+		(b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
 // RelocateToolchainPath maps a path at or below root to the same path below
@@ -198,8 +239,6 @@ func RelocateToolchainPath(root, dest, p string) string {
 	return dest + strings.TrimPrefix(p, root)
 }
 
-var valueTokens = regexp.MustCompile(`[=, \t]`)
-
 // RelocateToolchainValue maps every ':'-separated entry of value that is root
 // or lies below it to dest (GOROOT=/usr/local/go becomes the copy). ok is
 // false when value names root anywhere else (for example inside a flag such
@@ -208,13 +247,16 @@ func RelocateToolchainValue(root, dest, value string) (string, bool) {
 	entries := strings.Split(value, ":")
 	for i, entry := range entries {
 		if underRoot(root, entry) {
+			if path.Clean(entry) != entry {
+				return "", false
+			}
 			entries[i] = RelocateToolchainPath(root, dest, entry)
 			continue
 		}
-		for _, token := range valueTokens.Split(entry, -1) {
-			if underRoot(root, token) {
-				return "", false
-			}
+		// Any other mention of root, including one attached to a flag such as
+		// -I/opt/go/include or inside a file:// URL, cannot be translated.
+		if namesRoot(root, entry) {
+			return "", false
 		}
 	}
 	return strings.Join(entries, ":"), true
