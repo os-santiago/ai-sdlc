@@ -134,9 +134,14 @@ The trust boundary does not change:
   disk scratch volume for temporary files and build caches; it is not part of
   the exported candidate, which is still the regular files of the workspace.
 - `run_shell` children get the toolchain directories first on `PATH` and the
-  allowlisted toolchain variables. A variable can never replace SCC, Node.js,
-  Git, npm or launcher settings. A toolchain that ships `node`, `git`, `scc`,
-  `sh` or `env` in a `PATH` directory stops the run before SCC starts.
+  toolchain variables. SCC builds the child environment from its own, so the
+  variables reach SCC's Node.js process too. They are therefore a strict
+  allowlist of Go, cgo and Rust names (`GO…`, `CGO_…`, `CARGO_…`, `RUST…`):
+  no variable that configures Node.js, OpenSSL, the C library, a shell,
+  Python, Git, npm, SCC or the launcher can be set, and no value may name the
+  writable `/workspaces` or `/scratch`. A toolchain that ships `node`, `git`,
+  `scc`, `sh`, `bash`, `env`, `bwrap`, `busybox`, `sed` or `python3` in a
+  `PATH` directory stops the run before SCC starts.
 - Running the tests in generation is guidance for the model, not evidence:
   independent offline verification still runs the same command on a fresh
   copy and decides.

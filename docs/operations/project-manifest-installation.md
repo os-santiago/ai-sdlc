@@ -70,34 +70,47 @@ with two init containers before the worker and the mailbox start:
 1. `install-runner` (the mailbox image) installs the static copier into a
    small disk volume.
 2. `copy-toolchain` (the pinned `verification.image`, the digest the verifier
-   uses) copies `root` into a 1 GiB disk volume.
+   uses) copies `root` into a 1,280 MiB disk volume. The volume is larger
+   than the copier's 1 GiB byte cap to leave room for the file-system blocks
+   of up to 50,000 entries.
 
 The worker then runs with:
 - the toolchain mounted read-only at `/toolchain/root`, and `toolchain.path`
   (under that directory) before the worker image's directories on `PATH`;
 - a 1 GiB disk scratch volume at `/scratch` for `TMPDIR` and
   `XDG_CACHE_HOME`, which holds the Go build cache;
-- `verification.env` without `PATH` and without names the launcher reserves
-  (`NO_COLOR`, `PYTHONDONTWRITEBYTECODE` and names starting with `SC_`,
-  `NODE_`, `GIT_`, `NPM_` or `XDG_`). The same names are allowlisted for
-  `run_shell`. Values are not rewritten, so a variable that names a path in
-  the verification image (for example `GOROOT`) does not apply in generation;
-  Go finds its root from the `go` binary;
-- 512 MiB more memory (a 1,280 MiB limit) and a 2,304 MiB ephemeral-storage
-  limit and request, which cover the three disk volumes, so the kubelet evicts
-  the pod predictably if they fill;
+- only the toolchain variables of `verification.env`: a strict allowlist of
+  Go (`GO…`, for example `GOFLAGS` or `GOTOOLCHAIN`), cgo (`CGO_…`) and Rust
+  (`CARGO_…`, `RUST…`) names. SCC builds its children's environment from its
+  own, so these variables also reach SCC's Node.js process; nothing that
+  configures Node.js, OpenSSL, the C library, a shell, Python, Git, npm or the
+  launcher is passed. A value that names `/workspaces` or `/scratch` is
+  dropped. The same names are allowlisted for `run_shell`. Values are not
+  rewritten, so a variable that names a path in the verification image (for
+  example `GOROOT`) does not apply in generation; Go finds its root from the
+  `go` binary. Other variables stay verification-only;
+- 512 MiB more memory (a 1,280 MiB limit) and a 2,560 MiB ephemeral-storage
+  limit, which covers the three disk volumes (1,280 + 1,024 + 128 MiB) and
+  the worker's own 128 MiB, so the kubelet evicts the pod predictably if they
+  fill. Kubernetes sets each request to its limit, so the scheduler reserves
+  per pod 2,560 MiB (worker) + 128 MiB (mailbox) of ephemeral storage, and
+  128 MiB for each init container while it runs. The executor quota does not
+  bound ephemeral storage;
 - a prompt that names the manifest's test command and its directory, and
   tells the generator to run it with `run_shell` and fix its change until it
   passes before it finishes.
 
 The worker stops before running SCC if a declared `path` directory contains
-`node`, `git`, `scc`, `sh` or `env`: those would replace the worker's own
-programs on `PATH`.
+`node`, `git`, `scc`, `sh`, `bash`, `env`, `bwrap`, `busybox`, `sed` or
+`python3`: those would replace the worker's own programs on `PATH`.
 
-The installer sizes the executor namespace for this pod: `executor-bounds`
-grows `limits.memory` from 4 GiB to 6 GiB (four pods with 512 MiB more each).
-Requests do not change. A RuntimeClass `podOverhead` is added on top, as
-before. The readiness budget, the lifecycle claim and the pod deadline grow
+The chart sizes the executor namespace for this pod from the same
+`project.manifestJSON` the runtime mounts: `executor-bounds` grows
+`limits.memory` from 4 GiB to 6 GiB (four pods with 512 MiB more each)
+whenever the manifest declares `generation.toolchain`, so an upgrade can never
+run a toolchain pod under the smaller quota. Requests do not change. A
+RuntimeClass `podOverhead` is added on top, as before. The readiness budget,
+the lifecycle claim, the pod deadline and the signed command lifetime grow
 by 180 s for the image pull and the copy (see
 [the timing envelope](candidate-runtime.md#timing-envelope)).
 

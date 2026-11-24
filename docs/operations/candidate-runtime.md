@@ -225,8 +225,10 @@ toolchain. That start adds 180 s to the readiness budget (120 s to 300 s), to
 the lifecycle claim and to the Pod deadline (1,200 s at the default budget,
 1,500 s at 900 s), so the claim and the Pod keep their margins. The launcher's
 bound starts with the worker, after the copy, and does not change. The
-signed command keeps 300 s beyond the longer claim. Without a toolchain every
-bound is unchanged.
+signed command and the worker's poll bound grow by the same 180 s (23 minutes
+at the default budget, 28 minutes at 900 s), so they keep 480 s beyond the
+longer claim, well under the one-hour bound every command verifier enforces.
+Without a toolchain every bound is unchanged.
 
 Before this option, the Pod deadline (1,020 s) and the launcher's bound (980 s)
 were fixed. Left fixed at 900 s, the claim would have reached the Pod deadline
