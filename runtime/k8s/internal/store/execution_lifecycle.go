@@ -16,7 +16,13 @@ var lifecycleUUID = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-
 type LifecycleBinding struct {
 	BindingDigest, SourceDigest, Namespace, PodName, ConfigName string
 	MaxSeconds, SourceBytes                                     int
+	// StartSeconds is the reviewed start time the pod adds before the
+	// generation runs (0, or the toolchain image pull and copy).
+	StartSeconds int
 }
+
+// MaxStartSeconds bounds LifecycleBinding.StartSeconds.
+const MaxStartSeconds = 300
 type Lifecycle struct {
 	Claim   ExecutionClaim
 	Binding LifecycleBinding
@@ -65,7 +71,7 @@ func lockLifecycleClaim(ctx context.Context, tx *sql.Tx, claim ExecutionClaim) e
 // command and reviewed profile bound the nonrenewable lifetime. No existing
 // reservation is adopted, even by the same token or after a lost COMMIT ACK.
 func (db *DB) ReserveLifecycle(ctx context.Context, claim ExecutionClaim, binding LifecycleBinding) (Lifecycle, error) {
-	if binding.SourceBytes < 1 || binding.SourceBytes > 32*1024*1024 || binding.MaxSeconds < 1 || binding.MaxSeconds > 900 || !lifecycleDigest.MatchString(binding.BindingDigest) || !lifecycleDigest.MatchString(binding.SourceDigest) {
+	if binding.SourceBytes < 1 || binding.SourceBytes > 32*1024*1024 || binding.MaxSeconds < 1 || binding.MaxSeconds > 900 || binding.StartSeconds < 0 || binding.StartSeconds > MaxStartSeconds || !lifecycleDigest.MatchString(binding.BindingDigest) || !lifecycleDigest.MatchString(binding.SourceDigest) {
 		return Lifecycle{}, ErrExecution
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -78,7 +84,7 @@ func (db *DB) ReserveLifecycle(ctx context.Context, claim ExecutionClaim, bindin
 		}
 		// The uniqueness constraint below prevents a second lifetime extension;
 		// transaction rollback also restores this request update on any conflict.
-		if tx.QueryRowContext(ctx, `UPDATE execution_requests SET claim_token=$3,claim_until=LEAST(expires_at,clock_timestamp()+$2*interval '1 second'),updated_at=clock_timestamp() WHERE id=$1 AND claim_until>clock_timestamp() AND expires_at>clock_timestamp() RETURNING claim_until`, claim.ID, binding.MaxSeconds+120, result.Claim.Token).Scan(&result.Claim.Until) != nil {
+		if tx.QueryRowContext(ctx, `UPDATE execution_requests SET claim_token=$3,claim_until=LEAST(expires_at,clock_timestamp()+$2*interval '1 second'),updated_at=clock_timestamp() WHERE id=$1 AND claim_until>clock_timestamp() AND expires_at>clock_timestamp() RETURNING claim_until`, claim.ID, binding.MaxSeconds+120+binding.StartSeconds, result.Claim.Token).Scan(&result.Claim.Until) != nil {
 			return ErrExecution
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO execution_lifecycles(request_id,claim_token,claim_until,binding_digest,source_digest,namespace,pod_name,config_name,source_bytes) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, claim.ID, result.Claim.Token, result.Claim.Until, binding.BindingDigest, binding.SourceDigest, binding.Namespace, binding.PodName, binding.ConfigName, binding.SourceBytes)

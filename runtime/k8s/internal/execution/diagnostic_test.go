@@ -16,6 +16,8 @@ func TestDiagnosticStageNeverLogsUnderlyingContent(t *testing.T) {
 		{ControllerError{"model-private credential and model output"}, "model-unknown"},
 		{fmt.Errorf("private wrapper: %w", ControllerError{"model-publication-helper-transport"}), "model-publication-helper-transport"},
 		{ControllerError{"cleanup"}, "cleanup"},
+		{ControllerError{"readiness-toolchain-dynamic"}, "readiness-toolchain-dynamic"},
+		{ControllerError{"readiness-toolchain-private path"}, "unknown"},
 	} {
 		if got := DiagnosticStage(tc.err); got != tc.want {
 			t.Fatalf("unexpected category %q", got)

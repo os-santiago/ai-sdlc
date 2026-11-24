@@ -82,7 +82,7 @@ func lifecycleBinding(p Prepared, placement Placement) (store.LifecycleBinding, 
 		return store.LifecycleBinding{}, executor.Workload{}, ErrAuthority
 	}
 	return store.LifecycleBinding{BindingDigest: workspacebundle.Digest(raw), SourceDigest: workspacebundle.Digest(p.source), Namespace: placement.Namespace,
-		PodName: w.Pod["metadata"].(map[string]any)["name"].(string), ConfigName: w.ConfigMap["metadata"].(map[string]any)["name"].(string), MaxSeconds: profile.MaxSeconds, SourceBytes: len(p.source)}, w, nil
+		PodName: w.Pod["metadata"].(map[string]any)["name"].(string), ConfigName: w.ConfigMap["metadata"].(map[string]any)["name"].(string), MaxSeconds: profile.MaxSeconds, SourceBytes: len(p.source), StartSeconds: startSeconds(a)}, w, nil
 }
 func samePrepared(p Prepared, c Command, in PreparationInputs) bool {
 	a, err := executor.ParseAssignment(p.assignment, workspacebundle.Digest(p.assignment), time.Now())
@@ -250,4 +250,14 @@ func (l *Lifecycle) RunEffect(ctx context.Context, kind string, operation Lifecy
 		return ErrAuthority
 	}
 	return nil
+}
+
+// startSeconds extends the nonrenewable lifetime by the toolchain start the
+// pod deadline and readiness budget already cover, so a slow toolchain pull
+// does not consume the generation budget.
+func startSeconds(a executor.Assignment) int {
+	if a.Toolchain != nil {
+		return executor.ToolchainStartSeconds
+	}
+	return 0
 }
