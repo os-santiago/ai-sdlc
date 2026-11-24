@@ -216,8 +216,11 @@ class ReleaseRefreshUpgrade(ModelUpstreamUpgrade):
                 catalog = source.catalog(revision)
                 if catalog != self.catalog:
                     raise ValueError('Release refresh cannot change the schema catalog')
-                _, publication_record = install_images.resolve(install_images.GitHub(), run, revision,
-                    include_build=True, include_release=True, include_browser=True)
+                api = install_images.GitHub()
+                # Verify signatures; revisions without the cutover sentinel predate signing.
+                _, publication_record = install_images.resolve(api, run, revision,
+                    include_build=True, include_release=True, include_browser=True,
+                    verify=install_images.signature_verifier(api, revision, allow_unsigned_legacy=True))
                 self.selection = dict(publication_record, catalog=catalog)
             self.helper = (install_images.REGISTRY + '@' + self.selection['images']['migrator']['digest']) if self.selection else self.source_browser.helper
             if self.selection is not None:

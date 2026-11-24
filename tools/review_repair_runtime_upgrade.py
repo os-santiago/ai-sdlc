@@ -129,8 +129,11 @@ class ReviewRepairUpgrade(ReviewFeedbackUpgrade):
                 if (len(self.catalog) != 36 or len(catalog) != 37 or catalog[:36] != self.catalog
                         or catalog[-1]['filename'] != compatibility.MIGRATION):
                     raise ValueError('Only the exact locally reviewed 36-to-37 repair bridge is supported')
-                _, publication = install_images.resolve(install_images.GitHub(), run, revision,
-                    include_build=True, include_release=True, include_browser=True)
+                api = install_images.GitHub()
+                # Verify signatures; revisions without the cutover sentinel predate signing.
+                _, publication = install_images.resolve(api, run, revision,
+                    include_build=True, include_release=True, include_browser=True,
+                    verify=install_images.signature_verifier(api, revision, allow_unsigned_legacy=True))
                 self.selection = dict(publication, catalog=catalog)
             self.helper = (install_images.REGISTRY + '@' + self.selection['images']['migrator']['digest']) if self.selection else self.source_browser.helper
             if self.selection is not None:

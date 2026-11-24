@@ -1,0 +1,10 @@
+# Image signing cutover sentinel.
+#
+# A source revision that contains this file publishes runtime images signed
+# keyless by .github/workflows/containers.yml (job `sign`). tools/install_images.py
+# reads this path from the exact commit's Git tree: when present, every image of
+# that revision must carry a valid signature, and --allow-unsigned-legacy is
+# refused. Revisions without it predate signing.
+#
+# Do not remove or rename this file while containers.yml signs images;
+# tools/test_install_images.py enforces that the two stay consistent.
