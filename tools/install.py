@@ -73,10 +73,23 @@ def host_prerequisites(configure=False, proc_root=Path('/proc/sys/fs/inotify')):
     return observed
 
 
-def tools(cache):
+# Cluster tools every installation needs. cosign is pinned in the same lock but
+# fetched only by `./install.sh tools` and the image-lock resolver.
+CLUSTER_TOOLS = ('kind', 'helm', 'kubectl')
+
+
+def tool_cache():
+    return Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'ai-sdlc/tools'
+
+
+def tools(cache, names=None):
     if platform.system() != 'Linux' or platform.machine() not in ('x86_64', 'amd64'):
         raise ValueError('This release supports Linux amd64. Other platforms are not yet validated.')
     lock = json.loads((ROOT / 'tools/install-tools.lock.json').read_text())
+    if names is not None:
+        if not set(names) <= set(lock):
+            raise ValueError('Requested tool is not pinned in install-tools.lock.json')
+        lock = {name: lock[name] for name in names}
     cache.mkdir(parents=True, exist_ok=True)
     binaries = {}
     for name, entry in lock.items():
@@ -523,11 +536,11 @@ def _main(argv, stack):
             or any(part in ('.', '..') for part in args.repository.split('/'))
             or not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,62}', args.environment)):
         raise ValueError('Invalid authority repository or environment scope')
-    cache = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'ai-sdlc/tools'
+    cache = tool_cache()
     if args.command != 'tools':
         image_lock(args.images)
     build_bundle = build_runtime_install.load_bundle(args.build_bundle, image_lock(args.images)) if args.build_bundle is not None and not args.configure_prepared else None
-    binaries = tools(cache)
+    binaries = tools(cache) if args.command == 'tools' else tools(cache, CLUSTER_TOOLS)
     if args.command == 'tools':
         print(json.dumps(binaries, indent=2))
         return 0

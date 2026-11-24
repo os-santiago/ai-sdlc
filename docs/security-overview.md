@@ -43,6 +43,7 @@ that must pass before consequential actions. The detailed controls are in
 | Reviewer | A read-only workspace and read-only tools. Each answer passes a guard that limits tools, arguments and the verdict format. |
 | Repository writes | Only the release manager publishes, using a scoped GitHub credential, and only paths allowed for the project. Merge requires the repository's required checks and the runtime's merge policy. |
 | Build and supply chain | Builds run as Tekton PipelineRuns in a dedicated namespace under admission policies. Tekton Chains signs images. Provenance verification checks the signature and attestation against reviewed trust before promotion. |
+| AI-SDLC runtime images | The `containers` workflow signs each main image digest keyless with cosign (Fulcio and Rekor) and attests its SBOM. The image-lock resolver verifies each signature against that workflow on `main` before it writes a lock, and fails closed ([signature verification](operations/image-lock-upgrades.md#signature-verification)). Installation from a committed lock and cluster admission do not yet verify signatures. |
 | Cluster network | NetworkPolicies restrict each component's ingress and egress. Intake egress is limited to public HTTPS (no cluster-internal or private ranges). The managed registry admits only network peers in the runtime, build and production namespaces and the Tekton Chains controller pods ([registry boundary](operations/registry-boundary.md)). |
 
 ## Credentials

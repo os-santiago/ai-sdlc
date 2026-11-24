@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Prepare reviewed installer image pins from a successful main publication."""
+"""Prepare reviewed installer image pins from a successful, signed main publication."""
 import argparse
+import base64
 import hashlib
 import io
 import json
@@ -21,6 +22,43 @@ ARTIFACT_COMPONENTS = set(COMPONENTS.values()) | {'migrator', 'model-mailbox', '
 SHA = re.compile('[a-f0-9]{40}')
 DIGEST = re.compile('sha256:[a-f0-9]{64}')
 MAX_RESPONSE = 1024 * 1024
+# Keyless signer identity: only this repository's containers workflow, running
+# on refs/heads/main for a push, signs runtime images (containers.yml `sign`).
+WORKFLOW_REF = 'refs/heads/main'
+CERTIFICATE_IDENTITY = 'https://github.com/' + REPOSITORY + '/.github/workflows/containers.yml@' + WORKFLOW_REF
+CERTIFICATE_ISSUER = 'https://token.actions.githubusercontent.com'
+# A revision whose containers workflow contains this step signs its images, so
+# its publication must verify. Only revisions whose workflow predates signing
+# may be accepted unsigned, and only with --allow-unsigned-legacy.
+SIGNING_STEP = b'cosign sign --yes'
+WORKFLOW_PATH = '.github/workflows/containers.yml'
+VERIFY_SECONDS = 90
+VERIFY_DEADLINE = 900
+
+
+class SignatureError(ValueError):
+    """A named, bounded signature failure for one component image."""
+
+    def __init__(self, component):
+        super().__init__(component)
+        self.component = component
+
+
+class ImageUnsigned(SignatureError):
+    """The registry holds no signature for the digest."""
+
+
+class ImageSignatureRejected(SignatureError):
+    """A signature exists but does not verify for the expected identity, or
+    verification could not complete (registry, Rekor or trust root failure)."""
+
+
+class ImageVerificationTimeout(SignatureError):
+    """Verification exceeded its per-image or overall time bound."""
+
+
+class UnsignedLegacyNotEligible(ValueError):
+    """--allow-unsigned-legacy was requested for a revision whose workflow signs."""
 
 
 def unique_object(pairs):
@@ -134,13 +172,87 @@ class GitHub:
             return output.read(MAX_RESPONSE + 1)
 
 
-def resolve(api, run_id, revision, include_build=False, include_release=False, include_browser=False):
+def verify_command(cosign, digest, revision):
+    if not DIGEST.fullmatch(digest) or not SHA.fullmatch(revision):
+        raise ValueError('Signature verification requires a digest and full source SHA')
+    # The certificate must name this workflow on main, triggered by a push of
+    # the exact revision. The image is addressed by digest only, never by tag.
+    return [str(cosign), 'verify',
+            '--certificate-identity', CERTIFICATE_IDENTITY,
+            '--certificate-oidc-issuer', CERTIFICATE_ISSUER,
+            '--certificate-github-workflow-repository', REPOSITORY,
+            '--certificate-github-workflow-ref', WORKFLOW_REF,
+            '--certificate-github-workflow-trigger', 'push',
+            '--certificate-github-workflow-sha', revision,
+            REGISTRY + '@' + digest]
+
+
+class Cosign:
+    def __init__(self, binary):
+        self.binary = binary
+        self.deadline = time.monotonic() + VERIFY_DEADLINE
+
+    def verify(self, component, digest, revision):
+        command = verify_command(self.binary, digest, revision)
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise ImageVerificationTimeout(component)
+        with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+            try:
+                result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=output, stderr=errors,
+                                        timeout=min(VERIFY_SECONDS, remaining), check=False,
+                                        preexec_fn=bound_output)
+            except subprocess.TimeoutExpired:
+                raise ImageVerificationTimeout(component) from None
+            if result.returncode == 0 and output.tell() < MAX_RESPONSE:
+                return
+            errors.seek(0)
+            if result.returncode != 0 and b'no signatures found' in errors.read(MAX_RESPONSE):
+                raise ImageUnsigned(component)
+            raise ImageSignatureRejected(component)
+
+
+def publication_workflow(api, revision):
+    """Read the containers workflow exactly as committed at the revision."""
+    if not SHA.fullmatch(revision):
+        raise ValueError('Workflow lookup requires a full source SHA')
+    record = decode(api.get('contents/' + WORKFLOW_PATH + '?ref=' + revision))
+    if (not isinstance(record, dict) or record.get('type') != 'file' or record.get('path') != WORKFLOW_PATH
+            or record.get('encoding') != 'base64' or not isinstance(record.get('content'), str)):
+        raise ValueError('Unexpected publication workflow record')
+    return base64.b64decode(record['content'], validate=False)
+
+
+def verify_publication(verifier, identities, revision, legacy_workflow=None):
+    """Verify every image signature; fail closed on the first failure.
+
+    legacy_workflow is the revision's containers workflow, supplied only when
+    the operator passed --allow-unsigned-legacy.
+    """
+    allow_unsigned = legacy_workflow is not None
+    if allow_unsigned and SIGNING_STEP in legacy_workflow:
+        raise UnsignedLegacyNotEligible('The revision signs its images')
+    signatures = {}
+    for component, identity in sorted(identities.items()):
+        try:
+            verifier.verify(component, identity['digest'], revision)
+            signatures[component] = 'verified'
+        except ImageUnsigned:
+            if not allow_unsigned:
+                raise
+            signatures[component] = 'unsigned-legacy'
+    return {'certificateIdentity': CERTIFICATE_IDENTITY, 'certificateIssuer': CERTIFICATE_ISSUER,
+            'workflowTrigger': 'push', 'images': signatures}
+
+
+def resolve(api, run_id, revision, include_build=False, include_release=False, include_browser=False, verify=None):
     run = decode(api.get('actions/runs/' + str(run_id)))
     validate_run(run, run_id, revision)
     artifacts = select_artifacts(decode(api.get('actions/runs/' + str(run_id) + '/artifacts?per_page=100')), run_id, revision, include_build, include_release, include_browser)
     identities = {}
     for component, artifact in sorted(artifacts.items()):
         identities[component] = image_identity(api.get('actions/artifacts/' + str(artifact['id']) + '/zip'), artifact, component, revision)
+    signatures = verify(identities) if verify is not None else None
     lock = {'image': {'repository': REGISTRY, 'tag': revision},
             'components': {key: {'digest': identities[component]['digest']} for key, component in COMPONENTS.items()},
             'migrator': {'digest': identities['migrator']['digest']}}
@@ -149,7 +261,17 @@ def resolve(api, run_id, revision, include_build=False, include_release=False, i
                 'images': identities,
                 'artifacts': {key: {'id': value['id'], 'digest': value['digest']} for key, value in artifacts.items()},
                 'scope': 'GitHub publication identity only; registry pulls, signed provenance and deployment require separate validation.'}
+    if signatures is not None:
+        evidence['signatures'] = signatures
+        evidence['scope'] = ('GitHub publication identity and keyless image signatures; registry pulls, '
+                             'SBOM attestations, signed provenance and deployment require separate validation.')
     return lock, evidence
+
+
+def pinned_cosign():
+    # Same pinned, checksum-verified tool cache as `./install.sh tools`.
+    import install
+    return install.tools(install.tool_cache(), ('cosign',))['cosign']
 
 
 def main(argv=None):
@@ -160,13 +282,23 @@ def main(argv=None):
     parser.add_argument('--run', type=int, required=True, help='Successful containers workflow run on main')
     parser.add_argument('--revision', required=True, help='Exact reviewed source commit')
     parser.add_argument('--output', type=Path, required=True, help='New directory for image lock and evidence')
+    parser.add_argument('--allow-unsigned-legacy', action='store_true',
+                        help='Accept unsigned images only for a revision whose containers workflow predates '
+                             'image signing; signatures that exist must still verify')
     args = parser.parse_args(argv)
     if args.run <= 0 or args.run > 2**63 - 1 or not SHA.fullmatch(args.revision):
         parser.error('A positive run ID and full lowercase source SHA are required')
     if args.output.exists():
         parser.error('Output directory must not already exist')
     try:
-        lock, evidence = resolve(GitHub(), args.run, args.revision, args.include_build, args.include_release, args.include_browser)
+        verifier = Cosign(pinned_cosign())
+        api = GitHub()
+
+        def verify(identities):
+            workflow = publication_workflow(api, args.revision) if args.allow_unsigned_legacy else None
+            return verify_publication(verifier, identities, args.revision, workflow)
+        lock, evidence = resolve(api, args.run, args.revision, args.include_build, args.include_release, args.include_browser,
+                                 verify=verify)
         args.output.mkdir(parents=True, mode=0o700, exist_ok=False)
         (args.output / 'images.lock.json').write_text(json.dumps(lock, indent=2) + '\n')
         evidence_json = json.dumps(evidence, indent=2) + '\n'
@@ -185,6 +317,9 @@ def main(argv=None):
                      'publisherImage': REGISTRY+'@'+evidence['images']['artifact-builder']['digest'],
                      'controllerDigest': evidence['images']['build-controller']['digest']}
             (args.output / 'build-images.json').write_text(json.dumps(build, indent=2)+'\n')
+    except SignatureError as exc:
+        # Component names come from the fixed publication set.
+        parser.exit(1, 'Image signature verification failed: ' + type(exc).__name__ + ' (' + exc.component + ')\n')
     except (ValueError, OSError, subprocess.SubprocessError, zipfile.BadZipFile) as exc:
         parser.exit(1, 'Image resolution failed: ' + type(exc).__name__ + '\n')
     print('Review installer pins: ' + str(args.output / 'images.lock.json'))
