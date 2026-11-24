@@ -5,7 +5,10 @@
 audits, one per principle, read the code, charts, workflows and docs, and
 cited evidence by file and line. Their findings are consolidated here.
 Evaluation evidence comes from
-[batteries 8 to 13](../evidence/2026-11-23-evaluation-batteries-8-11.md).
+[batteries 8 to 11](../evidence/2026-11-23-evaluation-batteries-8-11.md) and
+[batteries 12 and 13](../evidence/2026-11-23-evaluation-batteries-12-13.md).
+Go and chart paths are relative to `runtime/k8s/`; paths starting with
+`tools/`, `docs/` or `.github/` are relative to the repository root.
 
 **Maturity scale:**
 
@@ -25,7 +28,7 @@ Evaluation evidence comes from
 | P2. Generative and predictive AI | **2** | Generative AI is confined to implementation, review and repair, behind deterministic gates | No predictive component, and no model evaluation harness |
 | P3. Embedded policy and resilience | **3** | Integrity enforcement: signed authority, forced RLS, fenced leases, idempotent delivery, sandboxed exact-shape workloads | No metrics or traces, no HA, no database backup, no quality and security baseline on candidates |
 | P4. Trusted supply chain | **2** | Rigorous design for produced artifacts (bound build records, closed schemas, short-lived trust) | The runtime's own images are unsigned. The installer trusts API metadata, not signatures. No vulnerability gate. The produced-artifact gate is not active |
-| P5. Cloud native, standard install and upgrade | **2** | A real Helm chart, digest pins, careful upgrade journals, an OpenShift Local run | The supported target is local kind. The sandbox works only on kind. The chart is not self-contained. Lifecycle issues #430–#444 are open |
+| P5. Cloud native, standard install and upgrade | **2** | A real Helm chart, digest pins, careful upgrade journals, an OpenShift Local run | The supported target is local kind. The sandbox works only on kind. The chart is not self-contained. distribution and lifecycle issues #430–#444 are open |
 
 ## P1. Independent, aligned components (3/5)
 
@@ -40,7 +43,7 @@ Evaluation evidence comes from
 |---|---|---|---|
 | 1.1 | High | **Review is not an independent authority.** The verifier runs verification, review (holding the review model token), the repair handoff and the publication handoff in one loop. The provenance verifier is the same binary with the same signing identity (`components/verifier/cmd/main.go:116-147`, `deploy/helm/.../provenance.yaml:116`). | Build a separate reviewer role and identity, and a distinct identity for provenance verification. |
 | 1.2 | High | **Merge is self-granted.** `merge-publication` is a release-manager→release-manager grant (`policy.go:66`). | Require a separate gate role, or a fresh reviewer or verifier co-signature, to merge. |
-| 1.3 | Medium | **The release manager runs seven loops:** publication, merge, build dispatch, promotion, deploy dispatch, terminal write and production dispatch (`components/release-manager/cmd/main.go:177-262`). | Split it into an inner-loop publisher/merger and an outer-loop release coordinator, with separate roles and grants. |
+| 1.3 | Medium | **The release manager runs six loops covering seven duties:** publication, merge, build dispatch, promotion and deploy dispatch (one shared loop), terminal write and production dispatch (`components/release-manager/cmd/main.go:177-264`). | Split it into an inner-loop publisher/merger and an outer-loop release coordinator, with separate roles and grants. |
 | 1.4 | Medium | **Dead contracts.** `record-attempt` and `record-release` are declared with no producer or consumer, so the orchestrator is blind after planning until production. | Implement them, so the orchestrator owns per-issue state, or remove them. |
 | 1.5 | Medium | **The model-mailbox image is really a shared toolkit.** It ships five binaries, including the verification test runner (`components/model-mailbox/tests-cmd/main_linux.go:29`). | Rename it or split it by owner. |
 | 1.6 | Medium | **Stale responsibility docs.** `docs/innerloop-outerloop.md` and the `runtime/k8s/README.md` components table disagree with the code. There is no inner-loop architecture document. | Add a stage-ownership table generated from `policy.go` and service metadata, checked in CI. |
@@ -61,7 +64,7 @@ Session evidence: the autonomous inner loop closes the issue only through the dr
 |---|---|---|---|
 | 2.1 | High | **No model evaluation harness.** Batteries cover about 10 issues, one repository and one model. The startup benchmark measures speed only. | Build a versioned evaluation suite with a seeded corpus and ground truth across repositories, including injection and should-reject cases. Report pass@1 and pass@2 with intervals, and a reviewer confusion matrix. Make it a required gate for a model or adapter change. |
 | 2.2 | High | **Admission risk is regex only** (`admission/evaluator.go:145-215`). | Add a predictive admission score that can only tighten a decision: decompose, or escalate to a human. Run it in shadow against battery outcomes first. |
-| 2.3 | Medium | **Static budgets and one-shot timeouts.** Budget and timeout stops were about a quarter of recent failures (#750, exit codes 22 and 124). The gateway timeout comes from one startup sample (#758). | Predict per-issue budgets within the reviewed ceilings. Recalibrate timeouts from `model-call` percentiles (#757). |
+| 2.3 | Medium | **Static budgets and one-shot timeouts.** Budget and timeout stops were about a quarter of recent failures (#750, exit codes 22 and 124). The gateway timeout comes from a single, possibly contended, startup benchmark (#758). | Predict per-issue budgets within the reviewed ceilings. Recalibrate timeouts from `model-call` percentiles (#757). |
 | 2.4 | Medium | **Unconditional retry and repair, and no flake history** (`repositorytests/decide.go`). | Estimate retry value from stop class and history. Keep per-test pass/fail history and flake scores. |
 | 2.5 | Medium | **Degradation is found by hand** (batteries 10 and 12). | Detect anomalies over stop-reason and latency rates. |
 | 2.6 | Low | **The reviewer judges weak evidence** (no JUnit report), **and the verdict is free text.** | Require structured test reports for autonomy, and use a structured verdict. |
@@ -80,7 +83,7 @@ Session evidence:
 - **Workloads:** PSA restricted, deny-all NetworkPolicies, ResourceQuotas, a sandbox RuntimeClass, and exact pod-shape checks.
 - **Recovery:** strong crash recovery through cleanup journals and recovery loops.
 - **CI:** SHA-pinned actions, CodeQL, gitleaks, Dependabot.
-- **Diagnostics:** every fail-closed stop now names its bounded cause (#742–#756).
+- **Diagnostics:** the stops seen in batteries 8–13 now name their bounded cause (#742, #744, #746, #748, #749, #751, #756).
 
 **Gaps:**
 
@@ -138,12 +141,12 @@ Session evidence: hours of operation exposed an intake freshness decay (fixed in
 
 | # | Severity | Gap | Recommendation |
 |---|---|---|---|
-| 5.1 | Critical | **No working sandbox outside kind.** gVisor fails under CRI-O, Kata is not evaluated, and OpenShift ran on `crun`. The RuntimeClass name is hard-coded (`executor/workload.go:77`). | Add a sandbox abstraction with a configurable RuntimeClass, mapped to GKE Sandbox, OpenShift sandboxed containers, and AKS or EKS Kata options. Preflight refuses autonomy without a sandbox. |
+| 5.1 | Critical | **No working sandbox outside kind.** gVisor fails under CRI-O, Kata is not evaluated, and OpenShift ran on `crun`. The RuntimeClass name is hard-coded in three places (`executor/workload.go:77`, `repositorytests/workload.go:180`, `verification/workload.go:101`). | Add a sandbox abstraction with a configurable RuntimeClass, mapped to GKE Sandbox, OpenShift sandboxed containers, and AKS or EKS Kata options. Preflight refuses autonomy without a sandbox. |
 | 5.2 | High | **The chart is not self-contained.** The tag defaults to `unpublished`, Secrets are created by the installer, and templates fail without installer JSON (#430). | Go Helm first: a published OCI chart and images, and a documented Secret contract (ExternalSecrets or pre-created). The installer becomes a thin wrapper. |
-| 5.3 | High | **The installer accepts only kind or OpenShift** and needs a local container engine (#434). | Add a generic Kubernetes path with capability preflight. |
+| 5.3 | High | **The installer accepts only local kind-based platforms (`kind`, `konflux`) or OpenShift**, and needs a local container engine (#434). | Add a generic Kubernetes path with capability preflight. |
 | 5.4 | High | **Runtime upgrades are one-off scripts** hard-coded to kind contexts (#441). | Build one generic, ordered upgrade command reusing the journals. |
 | 5.5 | High | **No external or managed database path.** The bundled URI uses `sslmode=disable`. | Support an external Postgres with TLS required, and document role provisioning. |
-| 5.6 | Medium | **No uninstall, no backup or restore after cluster loss, no air-gapped install** (#442, #443). | Add `uninstall --keep-data`, scheduled backups, and a release bundle with mirror configuration. |
+| 5.6 | Medium | **No uninstall (#443), no backup or restore after cluster loss (#442), and no air-gapped install (new).** | Add `uninstall --keep-data`, scheduled backups, and a release bundle with mirror configuration. |
 | 5.7 | Medium | **Local-topology assumptions.** The model endpoint must be a literal private IP. There is only an OpenShift Route, amd64-only images, fixed namespaces, and a stale Kustomize base. | Relax each assumption. Generate Kustomize from Helm or delete it. |
 
 Operator/OLM: once the chart is self-contained, wrap it in a Helm-based
@@ -194,8 +197,8 @@ the principle and gaps it closes, and the existing issues it continues.
 |---|---|---|
 | Produced artifacts: keyless or KMS Chains signing, SLSA v1, real Enterprise Contract policies, active promotion gate with tamper test | P4 4.6 | #455, #574, #439, #525 |
 | Admission-time signature policy for runtime and produced images (sigstore policy controller, OpenShift image policy) | P4 4.3 | new |
-| Helm-based Operator and OLM channel; air-gapped bundle; multi-arch images | P5 | #433, #444 |
-| Support matrix with recorded end-to-end runs on EKS, GKE, AKS, ROSA and ARO | P5 | #440 |
+| Helm-based Operator and OLM channel; air-gapped bundle; multi-arch images | P5 | new |
+| Support matrix with recorded end-to-end runs on EKS, GKE, AKS, ROSA and ARO | P5 | #440, #444 |
 | Predictive admission (tighten only) and anomaly detection on stop and latency rates | P2 2.2, 2.5 | new |
 | Human approval tiers by risk; structured verdicts and test reports for autonomy | P3 3.6, P2 2.6 | new |
 | Pluggable, multi-project outer loop | P1 | M3 |
