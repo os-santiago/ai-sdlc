@@ -116,3 +116,41 @@ network-fetched dependencies. This fixture does not prove Java/Maven validation,
 provider-backed generation, live admission, durable job supervision, candidate
 review, Konflux/SLSA promotion or deployment. Those require separate reviewed
 components and real evidence before autonomous delivery is enabled.
+
+## Optional generation toolchain (issue #745)
+
+A repository whose reviewed manifest declares `generation.toolchain` gets its
+own self-contained toolchain in generation. The assignment then carries the
+pinned verification image, the toolchain root and `PATH` directories, the
+verification command and the filtered verification environment. All of it
+comes from the installed manifest, whose digest the authority policy binds,
+never from the issue, the repository or the model. The assignment and its
+workload are byte-identical to the original when the section is absent.
+
+The trust boundary does not change:
+- Both init containers run with the worker's security context: UID 1000,
+  dropped capabilities, read-only root, no privilege escalation, no
+  service-account token, inside the same sandbox RuntimeClass and with no
+  network. The toolchain image only supplies files; the copy is bounded,
+  never follows symbolic links and strips setuid, setgid and sticky bits.
+- The worker mounts the copy read-only. The only new writable volume is the
+  disk scratch volume for temporary files and build caches; it is not part of
+  the exported candidate, which is still the regular files of the workspace.
+- `run_shell` children get the toolchain directories first on `PATH` and the
+  toolchain variables. SCC builds the child environment from its own, so the
+  variables reach SCC's Node.js process too. They are therefore a strict
+  allowlist of Go, cgo and Rust names (`GO…`, `CGO_…`, `CARGO_…`, `RUST…`):
+  no variable that configures Node.js, OpenSSL, the C library, a shell,
+  Python, Git, npm, SCC or the launcher can be set, and no value may name the
+  writable `/workspaces` or `/scratch`. A toolchain that ships `node`, `git`,
+  `scc`, `sh`, `bash`, `env`, `bwrap`, `busybox`, `sed` or `python3` in a
+  `PATH` directory stops the run before SCC starts.
+- Running the tests in generation is guidance for the model, not evidence:
+  independent offline verification still runs the same command on a fresh
+  copy and decides.
+
+The trusted controller accepts exactly the compiled init sequence. Readiness
+and every later observation require the compiled init containers, in order,
+running their pinned images, never restarted, exited 0 and with unchanged
+container IDs. Any other init status refuses the pod. A failed copy is named
+with a bounded `readiness-toolchain-*` stop.

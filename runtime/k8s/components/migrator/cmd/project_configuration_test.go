@@ -36,6 +36,15 @@ func TestProjectInstallationCompilerBindsOnlyTheInstallationRepository(t *testin
 	if err != nil || parsed.Digest() != result.ManifestSHA256 || strings.Contains(out.String(), `\u00`) {
 		t.Fatal("canonical manifest with shell metacharacters must round-trip", err, out.String())
 	}
+	// A toolchain variable naming the generator's writable volumes is refused with a clear error.
+	manifest["generation"] = map[string]any{"toolchain": map[string]any{"root": "/usr/local/go", "path": []string{"bin"}}}
+	manifest["verification"].(map[string]any)["env"] = map[string]string{"GOCACHE": "/workspaces/cache"}
+	raw, _ = json.Marshal(map[string]any{"policy": m.Policy, "manifest": manifest})
+	if err := compileProjectInstallation(bytes.NewReader(raw), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "/workspaces or /scratch") {
+		t.Fatal("writable toolchain value not named", err)
+	}
+	delete(manifest, "generation")
+	delete(manifest["verification"].(map[string]any), "env")
 	manifest["repository"] = "example/other"
 	raw, _ = json.Marshal(map[string]any{"policy": m.Policy, "manifest": manifest})
 	if compileProjectInstallation(bytes.NewReader(raw), &bytes.Buffer{}) == nil {

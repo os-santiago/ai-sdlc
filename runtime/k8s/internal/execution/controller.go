@@ -93,6 +93,9 @@ func DiagnosticStage(err error) string {
 			return stopped.Stage
 		}
 	}
+	if detail, ok := strings.CutPrefix(stopped.Stage, "readiness-"); ok && podtransport.KnownReadinessStep(detail) {
+		return stopped.Stage
+	}
 	if detail, ok := strings.CutPrefix(stopped.Stage, "execution-read-"); ok && podtransport.KnownReadStep(detail) {
 		return stopped.Stage
 	}
@@ -179,6 +182,11 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 	stage = "readiness"
 	session, err := resources.WaitRunning(ctx, podUID)
 	if err != nil {
+		// A refused toolchain copy is named, for example
+		// readiness-toolchain-dynamic for a dynamically linked toolchain.
+		if step := podtransport.ReadinessStep(err); podtransport.KnownReadinessStep(step) {
+			stage = "readiness-" + step
+		}
 		return record, ControllerError{stage}
 	}
 	stage = "source"

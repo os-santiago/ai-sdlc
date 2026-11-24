@@ -1,6 +1,8 @@
 package project
 
 import (
+	"bytes"
+	"errors"
 	"io"
 	"os"
 	"syscall"
@@ -32,8 +34,20 @@ func Resolve(policy authority.Policy, installed []byte) (Manifest, error) {
 	if err != nil || m.Repository != policy.Repository || m.Digest() != policy.ProjectSHA256 {
 		return Manifest{}, ErrManifest
 	}
+	// The installer always writes the canonical form (its digest is checked
+	// over the exact bytes). Requiring it here means every reader of the
+	// installed bytes, including the chart's case-sensitive template that
+	// sizes the executor quota, sees the same keys the strict but
+	// case-insensitive Go decoder accepted.
+	if !bytes.Equal(installed, m.Canonical()) {
+		return Manifest{}, ErrManifestNotCanonical
+	}
 	return m, nil
 }
+
+// ErrManifestNotCanonical refuses an installed manifest whose bytes are not
+// its canonical form, for example with differently capitalized keys.
+var ErrManifestNotCanonical = errors.New("installed project manifest is not in canonical form")
 
 // Load reads the installed manifest from a reviewed, read-only mount (never
 // from a workspace) and resolves it against the policy. A missing file is

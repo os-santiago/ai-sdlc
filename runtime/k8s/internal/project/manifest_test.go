@@ -2,6 +2,7 @@ package project
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -297,5 +298,93 @@ func TestInvalidGenerationSectionsAreRefused(t *testing.T) {
 		if ValidateToolchainRoot(root) != nil {
 			t.Fatal("refused valid root", root)
 		}
+	}
+}
+
+// A toolchain variable that would point the generator at its writable
+// volumes is refused at installation with a clear error, not dropped later.
+func TestGenerationToolchainRefusesWritableEnvValues(t *testing.T) {
+	base := generic()
+	base.Generation = &Generation{Toolchain: &Toolchain{Root: "/usr/local/go", Path: []string{"bin"}}}
+	for _, env := range []map[string]string{
+		{"GOCACHE": "/workspaces/cache"},
+		{"GOFLAGS": "-modfile=/scratch/go.mod"},
+		{"GOPATH": "/go:/workspaces"},
+		{"CARGO_HOME": "/scratch"},
+	} {
+		m := base
+		v := *base.Verification
+		v.Env = env
+		m.Verification = &v
+		_, err := ParseManifest(m.Canonical())
+		if !errors.Is(err, ErrGenerationEnv) || !errors.Is(err, ErrManifest) || !strings.Contains(err.Error(), "/workspaces or /scratch") {
+			t.Fatal("writable toolchain value accepted or unnamed", env, err)
+		}
+		// Without generation.toolchain the variable is verification-only.
+		m.Generation = nil
+		if _, err := ParseManifest(m.Canonical()); err != nil {
+			t.Fatal("verification-only value refused", env, err)
+		}
+	}
+	// Names outside the allowlist are verification-only and never refused for their value.
+	m := base
+	v := *base.Verification
+	v.Env = map[string]string{"GOTOOLCHAIN": "local", "SOMETHING": "/workspaces/x"}
+	m.Verification = &v
+	if _, err := ParseManifest(m.Canonical()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGenerationEnvValueRefusesNonCanonicalPaths(t *testing.T) {
+	for _, value := range []string{"/opt/go/../../scratch", "-modfile=/srv/./x", "/srv//x", "/srv/x/"} {
+		if GenerationEnvValue(value) {
+			t.Fatal("non-canonical path accepted", value)
+		}
+	}
+	for _, value := range []string{"/srv/go:/opt/go/bin", "-mod=mod -trimpath", "local", "-ldflags=-s -w"} {
+		if !GenerationEnvValue(value) {
+			t.Fatal("canonical value refused", value)
+		}
+	}
+}
+
+func TestRelocateToolchainValueMapsWholeEntriesUnderTheRoot(t *testing.T) {
+	root, dest := "/opt/reviewed-go", "/toolchain/root"
+	for value, want := range map[string]string{
+		"/opt/reviewed-go":             "/toolchain/root",
+		"/opt/reviewed-go/pkg/tool":    "/toolchain/root/pkg/tool",
+		"/go:/opt/reviewed-go/bin":     "/go:/toolchain/root/bin",
+		"/opt/reviewed-go-old":         "/opt/reviewed-go-old",
+		"local":                        "local",
+		"-mod=mod -trimpath":           "-mod=mod -trimpath",
+		"/opt/reviewed":                "/opt/reviewed",
+		"/opt/reviewed-gopath:/srv/go": "/opt/reviewed-gopath:/srv/go",
+	} {
+		got, ok := RelocateToolchainValue(root, dest, value)
+		if !ok || got != want {
+			t.Fatal("relocation", value, got, ok)
+		}
+	}
+	for _, value := range []string{"-toolexec=/opt/reviewed-go/bin/x", "-a /opt/reviewed-go/bin", "x,/opt/reviewed-go", "-I/opt/reviewed-go/include", "-L/opt/reviewed-go/lib", "file:///opt/reviewed-go/src", "\"/opt/reviewed-go\"", "a;/opt/reviewed-go", "/opt/reviewed-go/../../scratch/cache", "/opt/reviewed-go/./bin"} {
+		if _, ok := RelocateToolchainValue(root, dest, value); ok {
+			t.Fatal("untranslatable root reference accepted", value)
+		}
+	}
+	if RelocateToolchainPath(root, dest, "/opt/reviewed-go/bin/go") != "/toolchain/root/bin/go" || RelocateToolchainPath(root, dest, "go") != "go" {
+		t.Fatal("command relocation")
+	}
+	// Validation refuses a toolchain variable whose root reference cannot be translated.
+	m := generic()
+	m.Generation = &Generation{Toolchain: &Toolchain{Root: root, Path: []string{"bin"}}}
+	v := *m.Verification
+	v.Env = map[string]string{"GOFLAGS": "-toolexec=/opt/reviewed-go/bin/x"}
+	m.Verification = &v
+	if _, err := ParseManifest(m.Canonical()); !errors.Is(err, ErrGenerationEnv) {
+		t.Fatal("untranslatable toolchain value accepted", err)
+	}
+	v.Env = map[string]string{"GOROOT": root}
+	if _, err := ParseManifest(m.Canonical()); err != nil {
+		t.Fatal("GOROOT under the root refused", err)
 	}
 }

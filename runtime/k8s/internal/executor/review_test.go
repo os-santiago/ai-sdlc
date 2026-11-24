@@ -48,7 +48,7 @@ func TestReviewerCannotUseGenerationAuthorityOrWritableSource(t *testing.T) {
 		}
 	}
 	var cfg map[string]any
-	if json.Unmarshal(SCCConfiguration(p), &cfg) != nil {
+	if json.Unmarshal(SCCConfiguration(p, nil), &cfg) != nil {
 		t.Fatal("config")
 	}
 	permissions := cfg["permissions"].(map[string]any)
@@ -74,7 +74,7 @@ func TestReviewerCannotUseGenerationAuthorityOrWritableSource(t *testing.T) {
 // children only allowlisted names, so the name must be allowlisted too.
 func TestExecutorCommandsDoNotWriteBytecode(t *testing.T) {
 	var cfg map[string]any
-	if json.Unmarshal(SCCConfiguration(profileFixture()), &cfg) != nil {
+	if json.Unmarshal(SCCConfiguration(profileFixture(), nil), &cfg) != nil {
 		t.Fatal("config")
 	}
 	shell, _ := cfg["run_shell"].(map[string]any)

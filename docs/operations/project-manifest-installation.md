@@ -62,8 +62,97 @@ The copier enforces these rules:
 
 Only self-contained toolchains, such as Go's, qualify.
 
-> **Status:** the manifest section and the copier exist; the executor pod does
-> not use them yet. See issue #745.
+#### What the generator gets
+
+With the section, each generation (and its repair) runs in an executor pod
+with two init containers before the worker and the mailbox start:
+
+1. `install-runner` (the mailbox image) installs the static copier into a
+   small disk volume.
+2. `copy-toolchain` (the pinned `verification.image`, the digest the verifier
+   uses) copies `root` into a 1,280 MiB disk volume. The volume is larger
+   than the copier's 1 GiB byte cap to leave room for the file-system blocks
+   of up to 50,000 entries.
+
+The worker then runs with:
+- the toolchain mounted read-only at `/toolchain/root`, and `toolchain.path`
+  (under that directory) before the worker image's directories on `PATH`;
+- a 1 GiB disk scratch volume at `/scratch` for `TMPDIR` and
+  `XDG_CACHE_HOME`, which holds the Go build cache;
+- only the toolchain variables of `verification.env`: a strict allowlist of
+  Go (`GO…`, for example `GOFLAGS` or `GOTOOLCHAIN`), cgo (`CGO_…`) and Rust
+  (`CARGO_…`, `RUST…`) names. SCC builds its children's environment from its
+  own, so these variables also reach SCC's Node.js process; nothing that
+  configures Node.js, OpenSSL, the C library, a shell, Python, Git, npm or the
+  launcher is passed. A value that names `/workspaces` or `/scratch` is
+  refused at installation: the migrator names the error. The same names are
+  allowlisted for `run_shell`. Each `:`-separated entry at or under `root`
+  is relocated to the copy (for example `GOROOT=/usr/local/go` becomes
+  `/toolchain/root`); a value that names `root` in any other way (for example
+  inside a flag) is refused at installation. Other variables stay
+  verification-only;
+- the test command with an absolute executable under `root` (for example
+  `/usr/local/go/bin/go`) relocated the same way, in the command and the
+  prompt. A relative command such as `go test ./...` is unchanged, and the
+  verifier always runs the manifest's own command and environment;
+- 512 MiB more memory (a 1,280 MiB limit) and a 2,560 MiB ephemeral-storage
+  limit, which covers the three disk volumes (1,280 + 1,024 + 128 MiB) and
+  the worker's own 128 MiB, so the kubelet evicts the pod predictably if they
+  fill. Kubernetes sets each request to its limit, so the scheduler reserves
+  per pod 2,560 MiB (worker) + 128 MiB (mailbox) of ephemeral storage, and
+  128 MiB for each init container while it runs. The executor quota does not
+  bound ephemeral storage;
+- a prompt that names the manifest's test command and its directory, and
+  tells the generator to run it with `run_shell` and fix its change until it
+  passes before it finishes.
+
+The worker stops before running SCC if a declared `path` directory contains
+`node`, `git`, `scc`, `sh`, `bash`, `env`, `bwrap`, `busybox`, `sed` or
+`python3`: those would replace the worker's own programs on `PATH`.
+
+The chart sizes the executor namespace for this pod from the same
+`project.manifestJSON` the runtime mounts: `executor-bounds` grows
+`limits.memory` from 4 GiB to 6 GiB (four pods with 512 MiB more each)
+whenever the manifest declares `generation.toolchain`, so an upgrade can never
+run a toolchain pod under the smaller quota. Requests do not change. A
+RuntimeClass `podOverhead` is added on top, as before. The readiness budget,
+the lifecycle claim, the pod deadline and the signed command lifetime grow
+by 180 s for the image pull and the copy (see
+[the timing envelope](candidate-runtime.md#timing-envelope)).
+
+#### Stops
+
+A toolchain the copier refuses fails the pod at init, before any model call.
+The worker log names the stop:
+
+| Stop | Cause |
+| --- | --- |
+| `readiness-toolchain-dynamic` | An executable is dynamically linked (for example a glibc toolchain) |
+| `readiness-toolchain-link` | A symbolic link may leave the root |
+| `readiness-toolchain-limit` | More than 50,000 entries, 1 GiB or depth 64 |
+| `readiness-toolchain-source` | The root is missing, unreadable, behind a symbolic link, or contains a device, FIFO or socket |
+| `readiness-toolchain-usage` | The root or destination is refused |
+| `readiness-toolchain-destination` | The volume could not be written |
+| `readiness-toolchain-memory` | The copy ran out of memory |
+| `readiness-toolchain-install` | The copier could not be installed |
+| `readiness-toolchain-failed` | Any other copy failure |
+
+The runtime does not fall back to the offline guidance: fix the manifest and
+reinstall.
+
+The runtime accepts only the canonical manifest bytes the installer writes.
+An installed manifest in any other form, such as keys in another letter case,
+which Go's decoder would accept, stops the runtime with "project manifest is not in
+canonical form". The chart likewise refuses to render a `project.manifestJSON`
+that is not a JSON manifest object.
+
+#### Rotation
+
+Adding, changing or removing `generation.toolchain` changes the manifest
+digest, which the installation policy binds. The installer refuses a
+different manifest for an installed policy, so changing the toolchain of an
+installed repository requires a reinstall. A new `verification.image` digest
+also changes the generator's toolchain.
 
 ## 2. Install
 

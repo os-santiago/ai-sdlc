@@ -408,6 +408,34 @@ class ProjectManifestChartTests(unittest.TestCase):
             file.flush()
             self.assertNotEqual(tests.render(*base, '-f', file.name).returncode, 0)
 
+    def test_executor_quota_grows_only_with_a_generation_toolchain(self):
+        """The quota derives from manifestJSON itself, so an upgrade that keeps
+        an older values file can never run a toolchain pod under the old quota."""
+        tests = ChartTests()
+        def manifest(generation):
+            m = {'version': 'ai-sdlc.project/v1', 'repository': 'example/service'}
+            if generation is not None:
+                m['generation'] = generation
+            return json.dumps(m, separators=(',', ':'))
+        def executor_hard(values):
+            rendered, docs = tests.sandbox_docs(values)
+            self.assertEqual(rendered.returncode, 0, rendered.stderr)
+            return next(d for d in docs if d['kind'] == 'ResourceQuota' and d['metadata']['name'] == 'executor-bounds')['spec']['hard']
+        original = {'pods': '4', 'configmaps': '8', 'requests.cpu': '1', 'requests.memory': '1Gi', 'limits.cpu': '6', 'limits.memory': '4Gi'}
+        self.assertEqual(executor_hard({}), original)
+        self.assertEqual(executor_hard({'project': {'manifestJSON': manifest(None)}}), original)
+        toolchain = {'toolchain': {'root': '/usr/local/go', 'path': ['bin']}}
+        # executor.ToolchainExecutorQuota: four pods with 512Mi more worker memory each.
+        self.assertEqual(executor_hard({'project': {'manifestJSON': manifest(toolchain)}}), dict(original, **{'limits.memory': '6Gi'}))
+        for odd in ({}, {'toolchain': None}, {'toolchain': 'x'}):
+            self.assertEqual(executor_hard({'project': {'manifestJSON': manifest(odd)}}), original, odd)
+        # The RuntimeClass overhead (#769) composes: four pods' overhead is added on top.
+        hard = executor_hard({'project': {'manifestJSON': manifest(toolchain)}, 'sandbox': {'podOverhead': {'cpu': '100m', 'memory': '64Mi'}}})
+        self.assertEqual(hard, {'pods': '4', 'configmaps': '8', 'requests.cpu': '1400m', 'requests.memory': '1280Mi', 'limits.cpu': '6400m', 'limits.memory': '6400Mi'})
+        # A malformed or non-object manifest fails the render instead of silently sizing 4Gi.
+        for bad in ('{"version":', '[1]', '"x"', '{"generation":{"toolchain":{}}}'):
+            self.assertNotEqual(tests.sandbox_docs({'project': {'manifestJSON': bad}})[0].returncode, 0, bad)
+        self.assertNotIn('executorQuota', (ROOT / 'runtime/k8s/deploy/helm/ai-sdlc-k8s-runtime/values.yaml').read_text())
 
     def test_publication_accepts_only_the_policy_bound_manifest_repository(self):
         tests = ChartTests()

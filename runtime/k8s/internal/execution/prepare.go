@@ -190,6 +190,7 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 		AuthorityRevision: c.AuthorityRevision, IssueNumbers: []int{c.IssueNumber}, Title: snapshot.Issue.Title, Body: snapshot.Issue.Body,
 		AcceptanceCriteria: normalizedevent.ExtractAcceptanceCriteria(snapshot.Issue.Body), ExpiresAt: c.ExpiresAt}
 	assignment.Workspace = WorkspaceFor(c.Repository)
+	assignment.Toolchain = ToolchainFor(c.Repository)
 	var parent store.VerificationCandidate
 	if c.Repair != nil {
 		a, p, e := repairPreparation(ctx, db, in.Policy, c)
@@ -260,4 +261,43 @@ func WorkspaceFor(repository string) string {
 		return ""
 	}
 	return executor.WorkspaceOfflineTests
+}
+
+// ToolchainFor returns the generation toolchain a repository's reviewed
+// manifest declares, or nil. The image is the verifier's pinned image, so the
+// generator runs the same toolchain as verification. PATH is not passed: the
+// worker's PATH is rebuilt from the declared directories. Only the toolchain
+// variables the manifest allowlists (Go, cgo and Rust names) are passed;
+// other variables stay verification-only.
+//
+// The worker mounts the copy at executor.ToolchainDirectory, not at Root, so
+// an absolute command under Root (for example /usr/local/go/bin/go) and every
+// variable entry under Root (for example GOROOT) are relocated to the copy.
+// The verifier keeps the manifest's original command and environment.
+// Manifest validation refuses any toolchain variable this cannot translate
+// or that names the writable volumes, so nothing is dropped here.
+func ToolchainFor(repository string) *executor.Toolchain {
+	m, ok := project.Lookup(repository)
+	if !ok || m.Verification == nil || m.Generation == nil || m.Generation.Toolchain == nil {
+		return nil
+	}
+	v, t := m.Verification, m.Generation.Toolchain
+	command := append([]string(nil), v.Command...)
+	command[0] = project.RelocateToolchainPath(t.Root, executor.ToolchainDirectory, command[0])
+	toolchain := &executor.Toolchain{Image: v.Image, Root: t.Root, Path: append([]string(nil), t.Path...),
+		Command: command, WorkingDir: v.WorkingDir}
+	for name, value := range v.Env {
+		if !executor.ToolchainEnvAllowed(name) {
+			continue
+		}
+		relocated, ok := project.RelocateToolchainValue(t.Root, executor.ToolchainDirectory, value)
+		if !ok || !executor.ToolchainEnvValueAllowed(relocated) {
+			continue
+		}
+		if toolchain.Env == nil {
+			toolchain.Env = map[string]string{}
+		}
+		toolchain.Env[name] = relocated
+	}
+	return toolchain
 }

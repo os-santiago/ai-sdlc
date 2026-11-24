@@ -164,6 +164,9 @@ func (c *Component) Authority() (authority.Policy, authority.Identity, error) {
 	// load, so delivery scope always follows the current reviewed policy.
 	if p.ProjectSHA256 != "" {
 		manifest, err := project.Load(ProjectManifestPath(), p)
+		if errors.Is(err, project.ErrManifestNotCanonical) {
+			return authority.Policy{}, authority.Identity{}, errors.New("project manifest is not in canonical form; reinstall it with the installer")
+		}
 		if err != nil {
 			return authority.Policy{}, authority.Identity{}, errors.New("project manifest does not match the installed policy")
 		}

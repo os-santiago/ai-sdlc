@@ -27,7 +27,7 @@ const WorkspaceDirectory = "/workspaces"
 // in its configuration as well.
 const noBytecodeName, noBytecodeValue = "PYTHONDONTWRITEBYTECODE", "1"
 
-func SCCConfiguration(p Profile) []byte {
+func SCCConfiguration(p Profile, toolchain *Toolchain) []byte {
 	tools := []string{"read_file", "list_dir", "search_text", "memory_read", "write_file", "edit_file", "run_shell", "git", "memory_write", "code_query", "repo_probe"}
 	if p.Version == ReviewProfileVersion {
 		tools = []string{"read_file", "list_dir", "search_text", "code_query"}
@@ -42,7 +42,9 @@ func SCCConfiguration(p Profile) []byte {
 		"permissions": map[string]any{"autoApprove": tools, "denyPaths": []string{".env", ".env.*", "**/*.key", "**/*.pem", "**/id_rsa*", "**/.ssh/*", "**/credentials*"}},
 	}
 	if p.Version != ReviewProfileVersion {
-		config["run_shell"] = map[string]any{"allowedEnvVars": []string{noBytecodeName}}
+		// Toolchain variables reach run_shell children the same way; PATH,
+		// TMPDIR and XDG_CACHE_HOME are already in SCC's base allowlist.
+		config["run_shell"] = map[string]any{"allowedEnvVars": append([]string{noBytecodeName}, toolchain.envNames()...)}
 	}
 	if p.Version == ReviewProfileVersion {
 		config["roles"] = map[string]string{"reviewer": p.Model}
@@ -132,7 +134,7 @@ func Run(ctx context.Context, assignmentDigest string) int {
 		return 1
 	}
 	config, err := readProjected(InputDirectory+"/scc-config.json", MaxProfileBytes)
-	if err != nil || string(config) != string(SCCConfiguration(p)) {
+	if err != nil || string(config) != string(SCCConfiguration(p, a.Toolchain)) {
 		return 1
 	}
 	uid, err := readProjected("/var/run/ai-sdlc/pod/uid", 128)
@@ -189,16 +191,10 @@ func Run(ctx context.Context, assignmentDigest string) int {
 		}
 		p.MaxSeconds = min(p.MaxSeconds, remaining)
 	}
-	env := []string{
-		"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + stateDirectory + "/home", "TMPDIR=" + stateDirectory + "/tmp", "LC_ALL=C.UTF-8", "NO_COLOR=1", "CI=1",
-		"SC_CONFIG_PATH=" + InputDirectory + "/scc-config.json", "SC_BASE_URL=http://127.0.0.1:8091/v1", "SC_MODEL=" + p.Model,
-		"NODE_OPTIONS=--max-old-space-size=256", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0",
-		noBytecodeName + "=" + noBytecodeValue,
+	if a.Toolchain != nil && prepareToolchain(ToolchainDirectory, ScratchDirectory, a.Toolchain) != nil {
+		return 1
 	}
-	if p.CallSeconds != 0 {
-		// The mailbox sends headers only with the completed answer.
-		env = append(env, "SC_PROVIDER_CONNECT_TIMEOUT_MS="+strconv.FormatInt(sccWaitMillis(p), 10))
-	}
+	env := launchEnvironment(p, a.Toolchain, stateDirectory)
 	runCtx, stopRun := context.WithTimeout(ctx, time.Duration(p.MaxSeconds)*time.Second)
 	defer stopRun()
 	args := sccArguments(p, prompt, stateDirectory)
@@ -226,6 +222,63 @@ func Run(ctx context.Context, assignmentDigest string) int {
 		return 124
 	}
 	return 1
+}
+
+// launchEnvironment is SCC's complete, explicit environment. With a
+// toolchain, its declared directories precede the worker image's on PATH,
+// TMPDIR and the XDG cache move to the disk-backed scratch volume, and the
+// reviewed toolchain variables follow in a fixed order.
+func launchEnvironment(p Profile, toolchain *Toolchain, stateDirectory string) []string {
+	temporary := stateDirectory + "/tmp"
+	if toolchain != nil {
+		temporary = ScratchDirectory + "/tmp"
+	}
+	env := []string{
+		"PATH=" + toolchain.SearchPath(), "HOME=" + stateDirectory + "/home", "TMPDIR=" + temporary, "LC_ALL=C.UTF-8", "NO_COLOR=1", "CI=1",
+		"SC_CONFIG_PATH=" + InputDirectory + "/scc-config.json", "SC_BASE_URL=http://127.0.0.1:8091/v1", "SC_MODEL=" + p.Model,
+		"NODE_OPTIONS=--max-old-space-size=256", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0",
+		noBytecodeName + "=" + noBytecodeValue,
+	}
+	if p.CallSeconds != 0 {
+		// The mailbox sends headers only with the completed answer.
+		env = append(env, "SC_PROVIDER_CONNECT_TIMEOUT_MS="+strconv.FormatInt(sccWaitMillis(p), 10))
+	}
+	if toolchain != nil {
+		env = append(env, "XDG_CACHE_HOME="+ScratchDirectory+"/cache")
+		for _, name := range toolchain.envNames() {
+			env = append(env, name+"="+toolchain.Env[name])
+		}
+	}
+	return env
+}
+
+// shadowedTools are the worker programs SCC, its tools and their shells
+// resolve through PATH (SCC runs git and probes for bwrap by name; scc starts
+// with "env node"). The toolchain directories come first on PATH, so a
+// toolchain that ships one of them would replace the worker's own; such a
+// run stops.
+var shadowedTools = []string{"node", "git", "scc", "sh", "bash", "env", "bwrap", "busybox", "sed", "python3"}
+
+// prepareToolchain checks the copied toolchain and creates the scratch
+// directories. The copy was made by the init container; it is read-only.
+func prepareToolchain(toolchainDirectory, scratchDirectory string, t *Toolchain) error {
+	info, err := os.Lstat(toolchainDirectory)
+	if err != nil || !info.IsDir() {
+		return ErrInvalid
+	}
+	for _, dir := range t.Path {
+		for _, tool := range shadowedTools {
+			if _, err := os.Lstat(filepath.Join(toolchainDirectory, dir, tool)); !errors.Is(err, os.ErrNotExist) {
+				return ErrInvalid
+			}
+		}
+	}
+	for _, name := range []string{"tmp", "cache"} {
+		if os.Mkdir(filepath.Join(scratchDirectory, name), 0700) != nil {
+			return ErrInvalid
+		}
+	}
+	return nil
 }
 
 func sccArguments(p Profile, prompt, stateDirectory string) []string {

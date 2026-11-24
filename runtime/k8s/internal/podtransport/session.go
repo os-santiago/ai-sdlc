@@ -193,10 +193,16 @@ func (s *Session) inspect(ctx context.Context, allowWorkerExit bool) (observatio
 	// the compiled template plus the exact supported API defaults above.
 	pod.Spec.NodeName = ""
 	canonicalTolerations(&pod.Spec)
-	if !equality.Semantic.DeepEqual(pod.Spec, s.expected.Spec) || len(pod.Status.ContainerStatuses) != 2 || len(pod.Status.InitContainerStatuses) != 0 || len(pod.Status.EphemeralContainerStatuses) != 0 {
+	if !equality.Semantic.DeepEqual(pod.Spec, s.expected.Spec) || len(pod.Status.ContainerStatuses) != 2 || len(pod.Status.EphemeralContainerStatuses) != 0 {
 		return observation{}, ErrTransport
 	}
-	instances := map[string]instance{}
+	// A running pod has completed exactly its compiled init sequence; those
+	// terminated instances are part of the baseline and may never change.
+	initialized, err := observeInit(s.expected.Spec.InitContainers, pod.Status.InitContainerStatuses, true)
+	if err != nil || !initialized.complete {
+		return observation{}, ErrTransport
+	}
+	instances := initialized.instances
 	var workerExitCode *int32
 	var workerTerminalID string
 	expectedImages := map[string]string{}
@@ -236,6 +242,17 @@ func (s *Session) inspect(ctx context.Context, allowWorkerExit bool) (observatio
 		return observation{}, ErrTransport
 	}
 	return observation{instances: instances, workerExitCode: workerExitCode, workerTerminalID: workerTerminalID}, nil
+}
+
+// initInstances are the session's baseline init container instances.
+func (s *Session) initInstances() map[string]instance {
+	result := map[string]instance{}
+	for _, c := range s.expected.Spec.InitContainers {
+		if observed, ok := s.instances[c.Name]; ok {
+			result[c.Name] = observed
+		}
+	}
+	return result
 }
 
 func minDeadline(a, b time.Time) time.Time {

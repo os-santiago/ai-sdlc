@@ -47,6 +47,10 @@ type Assignment struct {
 	// issue text: WorkspaceOfflineTests when the repository is verified with
 	// its own tests offline and the generator's workspace cannot run them.
 	Workspace string `json:"workspace,omitempty"`
+	// Toolchain is the repository's self-contained toolchain from its
+	// reviewed manifest; it requires WorkspaceOfflineTests. Omitted keeps
+	// the original assignment bytes and workload.
+	Toolchain *Toolchain `json:"toolchain,omitempty"`
 }
 
 // Profile contains reviewed local bounds, never arbitrary shell commands,
@@ -200,6 +204,9 @@ func ParseAssignment(raw []byte, expected string, now time.Time) (Assignment, er
 	if fields["workspace"] != nil {
 		keys = append(keys, "workspace")
 	}
+	if fields["toolchain"] != nil {
+		keys = append(keys, "toolchain")
+	}
 	if strictBound(raw, expected, MaxAssignmentBytes, keys, &a) != nil || a.Version != AssignmentVersion || !uuidPattern.MatchString(a.WorkItemID) || a.Attempt < 1 || a.Attempt > 16 || len(a.Repository) > 256 || !repoPattern.MatchString(a.Repository) || !workspacebundle.ValidSourceSHA(a.SourceSHA) || !workspacebundle.ValidDigest(a.TreeSHA256) || !workspacebundle.ValidDigest(a.ProfileSHA256) || !workspacebundle.ValidDigest(a.AuthorityRevision) {
 		return Assignment{}, ErrInvalid
 	}
@@ -207,6 +214,9 @@ func ParseAssignment(raw []byte, expected string, now time.Time) (Assignment, er
 		return Assignment{}, ErrInvalid
 	}
 	if a.Workspace != "" && a.Workspace != WorkspaceOfflineTests {
+		return Assignment{}, ErrInvalid
+	}
+	if a.Toolchain != nil && (a.Workspace != WorkspaceOfflineTests || !a.Toolchain.valid()) {
 		return Assignment{}, ErrInvalid
 	}
 	for _, part := range strings.Split(a.Repository, "/") {

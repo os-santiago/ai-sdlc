@@ -79,8 +79,13 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		return "", err
 	}
 	// The poll covers preparation and the whole executor lifecycle; it grows
-	// with the reviewed generation budget exactly like the signed command.
-	ctx, cancel := context.WithTimeout(ctx, CommandLifetime(config.Profile.MaxSeconds))
+	// with the reviewed generation budget and the repository's toolchain
+	// start exactly like the signed command.
+	start := 0
+	if p, _, e := r.Component.Authority(); e == nil {
+		start = StartSecondsFor(p.Repository)
+	}
+	ctx, cancel := context.WithTimeout(ctx, CommandLifetime(config.Profile.MaxSeconds, start))
 	defer cancel()
 	original, _ := json.Marshal(config)
 	load := func(ctx context.Context) (PreparationInputs, Placement, error) {
