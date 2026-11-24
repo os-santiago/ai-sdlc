@@ -209,6 +209,11 @@ generation.toolchain object, else nothing. The executor quota uses it.
 {{- define "ai-sdlc-k8s-runtime.generationToolchain" -}}
 {{- with .Values.project.manifestJSON -}}
 {{- $m := fromJson . -}}
+{{- /* fromJson reports malformed or non-object JSON as an "Error" key, which a
+       strict manifest can never contain: refuse rather than size 4Gi. */ -}}
+{{- if or (hasKey $m "Error") (not (hasKey $m "version")) -}}
+{{- fail "project.manifestJSON must be the installer's canonical manifest JSON object" -}}
+{{- end -}}
 {{- if kindIs "map" (get $m "generation") -}}
 {{- if kindIs "map" (get (get $m "generation") "toolchain") -}}true{{- end -}}
 {{- end -}}

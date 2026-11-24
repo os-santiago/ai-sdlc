@@ -432,6 +432,9 @@ class ProjectManifestChartTests(unittest.TestCase):
         # The RuntimeClass overhead (#769) composes: four pods' overhead is added on top.
         hard = executor_hard({'project': {'manifestJSON': manifest(toolchain)}, 'sandbox': {'podOverhead': {'cpu': '100m', 'memory': '64Mi'}}})
         self.assertEqual(hard, {'pods': '4', 'configmaps': '8', 'requests.cpu': '1400m', 'requests.memory': '1280Mi', 'limits.cpu': '6400m', 'limits.memory': '6400Mi'})
+        # A malformed or non-object manifest fails the render instead of silently sizing 4Gi.
+        for bad in ('{"version":', '[1]', '"x"', '{"generation":{"toolchain":{}}}'):
+            self.assertNotEqual(tests.sandbox_docs({'project': {'manifestJSON': bad}})[0].returncode, 0, bad)
         self.assertNotIn('executorQuota', (ROOT / 'runtime/k8s/deploy/helm/ai-sdlc-k8s-runtime/values.yaml').read_text())
 
     def test_publication_accepts_only_the_policy_bound_manifest_repository(self):
