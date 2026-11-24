@@ -18,7 +18,7 @@ first at empty context and then at 16k context.
 | gpt-oss-20b MXFP4 | 635 / 27.4 | 452 / 23.5 | The server's harmony tool-call parser returned HTTP 500 at about 17k context |
 
 Server settings:
-- f16 KV cache: a q8_0 cache produced corrupted tokens.
+- f16 KV cache: a q8_0 cache produced corrupted tokens. That was observed before the intermittent GPU fault below was known, and may share its cause.
 - 32k context: every model degraded above about 33–45k.
 - One slot, flash attention on.
 
@@ -32,9 +32,10 @@ event classified as `truncated`. The investigation went in five steps:
    The completion was one sentence followed by `?` until the 4,096-token
    request cap.
 2. **Reference backend.** Replaying the same request on the CPU backend gave a
-   correct tool call (`list_dir`). On the GPU it gave the same corrupted
-   output, with and without the prompt cache. This places the fault in the GPU
-   path, not in the model or the request.
+   correct tool call (`list_dir`). On the live GPU server it reproduced the
+   corrupted output in three of three replays, with and without the prompt
+   cache. This places the fault in the GPU path, not in the request or the
+   model weights.
 3. **Backend settings.** Each llama.cpp Vulkan switch was tested with 6–12
    replays in one server process:
    - disabling sparse flash attention, stream-K, async submission, fusion and
