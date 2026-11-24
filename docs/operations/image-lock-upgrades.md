@@ -424,8 +424,9 @@ generator profile through the same entrypoint:
 
 This closed transition changes only the generator's SCC tool-step limit from 16
 to 24. It preserves 16 provider calls, the recorded generation time (600 seconds
-unless the installation selected up to 900 with `--generation-seconds`), 4,096
-requested output tokens per response, every byte quota, reviewer profile, image, placement, credential and
+unless the installation selected up to 900 with `--generation-seconds`), the
+recorded requested output tokens per response (4,096 unless the installation
+selected up to 8,192 with `--generation-answer-tokens`), every byte quota, reviewer profile, image, placement, credential and
 original trust expiry. The chart derives new configuration checksums for its
 controllers; no checksum is ignored during observation. Restoring the single
 candidate configuration value must reproduce the original active render exactly.

@@ -207,6 +207,48 @@ The provider-call ledger follows the model path, and so does the step range:
   `--model-upstream`. `--generation-seconds` is accepted on both paths. Raising
   the Codex provider quota is a separate reviewed decision.
 
+#### Answer-token bound
+
+`--generation-answer-tokens` (4096-8192, default 4096), or
+`generationAnswerTokens` in a local installation configuration, sets the
+profile's `maxTokens`: the output tokens the generator may request for one
+model answer. It is recorded in the reviewed execution configuration like the
+other budget options. With the default the configuration bytes and digest are
+unchanged.
+
+The bound should fit a full rewrite of the largest file publication accepts.
+A model whose `edit_file` patches are refused falls back to `write_file` with
+the whole file. An answer that reaches the bound is truncated, the gateway
+refuses it as `truncated`, and the attempt stops. Publication accepts files up
+to the manifest's `maxFileBytes`, typically 32,768 bytes. In one evaluation,
+rewriting an 8.8 KB Go file took 2,781 completion tokens (about 3.2 bytes per
+token). Rewriting the next file, its test, reached 4,096 and was refused. At
+that rate 4,096 tokens hold a rewrite of about 13 KB and 8,192 tokens about
+26 KB. 8192 is the runtime's own cap: the executor profile, the model mailbox
+and the broker request limits all refuse more. So the maximum fits most
+publishable files but not every file near 32,768 bytes. One tool call's
+arguments are also limited to 32 KiB.
+
+Everything else derives from the recorded `maxTokens`: the mailbox's
+`--max-tokens` cap in the executor Pod, the broker's request limits, and SCC's
+`maxTokens` setting. The independent reviewer keeps 4096, since it answers
+with a short verdict. The call ledger reserves the 256 KiB response limit for
+every call, whatever the bound. That covers 8192 tokens at up to 32 bytes per
+token, and 32 calls stay within the 8 MiB output quota, so no byte quota
+changes.
+
+With a model upstream, the worker gateway's startup benchmark uses the bound as
+its answer envelope (`modelGateway.benchmark.completionTokens`), so the derived
+per-call timeout covers the longest answer the profile admits. A model too slow
+to write 8,192 tokens within the upstream `seconds` ceiling fails its benchmark
+and never reports ready, rather than timing out in the middle of a rewrite.
+Raise `seconds` (and `callSeconds`) in the upstream document, or keep a lower
+bound. A longer answer also takes more of the generation time budget.
+
+Values above 4096 require `--model-upstream`. The bundled Codex adapter checks
+`max_tokens` (at most 8192) but does not pass it to the Codex CLI, so a larger
+bound would change the reviewed configuration without changing any answer.
+
 #### Timing envelope
 
 All bounds below keep their original values at the default budget and grow
@@ -266,11 +308,12 @@ original authority. An image-only diagnostic upgrade does not authorize changing
 the executor profile or replaying a failed execution. Ordinary candidate or
 verification reconciliation reads the installed execution configuration first
 and rejects a different tool budget or generation time before changing runtime
-resources or credentials. Repeat the recorded `--generation-seconds` and
-`--generation-steps` on every reconciliation; omitting them never resets an
+resources or credentials. It refuses a different answer-token bound in the same
+way. Repeat the recorded `--generation-seconds`, `--generation-steps` and
+`--generation-answer-tokens` on every reconciliation; omitting them never resets an
 installed budget to the default. No runtime transition changes a selected
 generation budget yet: changing it on an existing installation requires a
 reinstallation. The closed 16-to-24-step transition in
 [image-lock upgrades](image-lock-upgrades.md) applies only to its original
-source and carries the recorded generation time unchanged. Missing configuration permits first-time setup; an API error,
+source and carries the recorded generation time and answer-token bound unchanged. Missing configuration permits first-time setup; an API error,
 malformed configuration or duplicate JSON field does not count as absence.
