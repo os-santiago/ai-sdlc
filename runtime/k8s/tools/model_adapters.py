@@ -87,8 +87,10 @@ def _hunks(lines):
                 return None
         elif line[0] not in " +-":
             return None
-        elif line.startswith("--- ") and index + 1 < len(lines) and lines[index + 1].startswith("+++ "):
-            return None  # a second file's header
+        elif FILE_HEADER.match(line):
+            # jsdiff starts a new file at any "--- " or "+++ " line; a removed
+            # "-- x" or added "++ x" line is ambiguous with it, so leave it.
+            return None
         else:
             # Blank lines followed by more body are context lines.
             current["old"] += current["blank"] + (line[0] != "+")
@@ -158,26 +160,34 @@ def recount_edit_patches(message):
     bytes; a repaired call keeps all its other keys and values."""
     repaired = 0
     for call in message.get("tool_calls") or []:
-        function = call.get("function") if isinstance(call, dict) else None
-        if not isinstance(function, dict) or function.get("name") != EDIT_TOOL:
-            continue
-        raw = function.get("arguments")
-        if not isinstance(raw, str) or len(raw.encode()) > MAX_EDIT_ARGUMENT_BYTES:
-            continue
         try:
-            arguments = json.loads(raw)
-        except (ValueError, RecursionError):
+            repaired += _recount_call(call)
+        except Exception:  # a repair never fails the call; the call stays as sent
             continue
-        patch = recount_patch(arguments.get("patch")) if isinstance(arguments, dict) else None
-        if patch is None:
-            continue
-        arguments["patch"] = patch
-        encoded = json.dumps(arguments, ensure_ascii=False)
-        if len(encoded.encode()) > MAX_EDIT_ARGUMENT_BYTES:
-            continue
-        function["arguments"] = encoded
-        repaired += 1
     return repaired
+
+
+def _recount_call(call):
+    """Repairs one call in place; 1 when repaired, else 0 with no change."""
+    function = call.get("function") if isinstance(call, dict) else None
+    if not isinstance(function, dict) or function.get("name") != EDIT_TOOL:
+        return 0
+    raw = function.get("arguments")
+    if not isinstance(raw, str) or len(raw.encode()) > MAX_EDIT_ARGUMENT_BYTES:
+        return 0
+    try:
+        arguments = json.loads(raw)
+    except (ValueError, RecursionError):
+        return 0
+    patch = recount_patch(arguments.get("patch")) if isinstance(arguments, dict) else None
+    if patch is None:
+        return 0
+    arguments["patch"] = patch
+    encoded = json.dumps(arguments, ensure_ascii=False)
+    if len(encoded.encode()) > MAX_EDIT_ARGUMENT_BYTES:
+        return 0
+    function["arguments"] = encoded
+    return 1
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):

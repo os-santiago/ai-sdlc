@@ -110,6 +110,8 @@ class RecountPatchTests(unittest.TestCase):
             "no hunk": "--- a/x\n+++ b/x\n a\n",
             "empty": "",
             "malformed header": "@@ -1,2 +1,3@@\n a\n+b\n c\n",
+            "lone added file header": "@@ -1,1 +1,1 @@\n-a\n+b\n+++ x\n",
+            "tab file header": "@@ -1,1 +1,1 @@\n-a\n+b\n---\tx\n",
             "header without starts": "@@ -a,1 +1,1 @@\n a\n",
             "section text without a space": "@@ -1,1 +1,2 @@x\n a\n+b\n c\n",
             "huge start": "@@ -1234567890,1 +1,2 @@\n a\n+b\n c\n",
@@ -154,6 +156,14 @@ class RecountMessageTests(unittest.TestCase):
         self.assertEqual(list(repaired), ["path", "patch", "note"])
         self.assertEqual((repaired["path"], repaired["note"]), ("mathutil/mathutil.go", "café"))
         self.assertEqual(repaired["patch"], adapters.recount_patch(REAL))
+
+    def test_a_failing_repair_leaves_the_call_unchanged(self):
+        # A lone surrogate is valid escaped JSON but cannot be encoded as UTF-8.
+        for raw in ('{"path":"f","patch":"@@ -1,9 +1,9 @@\\n-a\\n+\\ud800\\n"}',
+                    '{"path":"\\ud800","patch":"@@ -1,9 +1,9 @@\\n-a\\n+b\\n"}'):
+            message = {"role": "assistant", "content": "", "tool_calls": [edit_call(raw)]}
+            self.assertEqual(adapters.recount_edit_patches(message), 0)
+            self.assertEqual(message["tool_calls"][0]["function"]["arguments"], raw)
 
     def test_messages_without_a_repair_are_byte_identical(self):
         correct = adapters.recount_patch(REAL)
