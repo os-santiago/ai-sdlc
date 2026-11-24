@@ -156,7 +156,8 @@ you need, and do not repeat a search or rerun the test command with extra
 flags, filters or separate build or lint steps when the test command already
 answers the question (re-reading a file after a refused edit is not a repeat).
 Once the test command passes, runs your new tests, and you have removed any
-file it created, stop calling tools and finish with a short summary.
+file the command created that is not part of your change, stop calling tools
+and finish with a short summary.
 `, directory, strings.Join(quoted, " "))
 }
 
