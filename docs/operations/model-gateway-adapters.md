@@ -23,6 +23,9 @@ deadline covers each upstream call, including a slowly dripped body. Sampling co
 (`temperature`, `tool_choice`) are typed and bounded before any backend sees
 them.
 
+Proposed `edit_file` patches also get their hunk counts recomputed from the
+hunk bodies (see [Edit-patch hunk counts](#edit-patch-hunk-counts)).
+
 Adding another provider means adding one `Adapter` subclass to
 `runtime/k8s/tools/model_adapters.py` (`ADAPTERS`) and the enum value to the
 chart schema. The worker, the verifier and the contract do not change.
@@ -127,6 +130,46 @@ The full measured profile is logged once as a `model-benchmark` JSON event:
 The example above is the measurement against a local llama.cpp server running
 Gemma 4 26B-A4B (64k context) on 2026-11-19.
 
+## Edit-patch hunk counts
+
+SCC's `edit_file` takes a unified diff and parses it strictly (jsdiff
+`parsePatch` plus an exact `@@ -start,count +start,count @@` check). The two
+counts in each hunk header are redundant: they are fully determined by the hunk
+body, yet local models often get them wrong. In evaluation batteries 20 and 21
+a local Qwen3-Coder declared `@@ -390,3 +390,8 @@` for a hunk of 9 context and
+9 added lines; SCC refused the call, and the model's fallback (rewriting the
+whole file) exceeded the 4,096-token answer bound and stopped the attempt.
+
+The gateway therefore applies one deterministic normalization to every
+adapter's answer (`recount_edit_patches` in `model_adapters.py`), before it
+returns the answer and so before the broker digests, stores or hands it off:
+for each tool call named exactly `edit_file` whose JSON arguments hold a string
+`patch`, each hunk header's two counts are recomputed from its body. Context
+lines (a space prefix, or a bare empty line, a common omission) count on both
+sides, `-` lines on the old side, `+` lines on the new side, and
+`\ No newline at end of file` on neither. Blank lines that end a hunk are
+counted only when the declared counts already include them, because the
+parser otherwise skips them. Only the counts change: start values, the
+optional section text after `@@`, every body and file-header line, and every
+other argument key and value stay the same. A repaired call's arguments are
+re-serialized as JSON with the same keys in the same order.
+
+It does nothing, leaving the arguments byte for byte unchanged, when the
+declared counts are already consistent, or when anything is ambiguous: no
+hunk, a line starting with `@@` that is not a well-formed header (SCC's own
+header form, starts and counts of at most nine digits), a body line with an
+unknown prefix or an unknown backslash line, a hunk with no counted line, more
+than one file, a carriage return, more than 512 hunks, a patch or argument over
+32 KiB, a recount that would turn a side empty or non-empty (which would change
+the meaning of its start), or a non-zero count at start 0. SCC then refuses or
+applies the patch exactly as before. The work is one linear pass per call.
+
+The normalization never alters what the edit does: SCC still matches every
+context and removed line against the file and refuses a patch that does not
+match. It only lets a correct edit with wrong bookkeeping reach that check.
+Each repair is visible in the `model-call` event as `editPatchesRecounted`;
+patch content is never logged.
+
 ## Per-call events
 
 After the benchmark, the gateway logs one bounded `model-call` event per
@@ -136,6 +179,10 @@ completion:
 {"event": "model-call", "outcome": "ok", "seconds": 4.2, "budgetSeconds": 176, "promptTokens": 9180, "completionTokens": 104, "estimated": false}
 {"event": "model-call", "outcome": "failed", "seconds": 176.0, "budgetSeconds": 176, "reason": "deadline"}
 ```
+
+A successful call that repaired the hunk counts of proposed `edit_file`
+patches also carries `"editPatchesRecounted": N` (1 to 8, the number of repaired
+calls); the field is absent otherwise.
 
 `reason` is a fixed class: `truncated` (the answer reached its token bound),
 `deadline`, `upstream-status`, `oversized`, `backend`, `unavailable`, `invalid`
