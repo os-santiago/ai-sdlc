@@ -12,11 +12,23 @@ with recorded evidence, not by calendar.
 |---|---|---|
 | Release | `v0.1.0-alpha.1` pre-release | [notes](v0.1.0-alpha.1.md) |
 | Inner loop (issue label → merged pull request) | Autonomous end to end. 70–90% of issues delivered within two attempts in batteries 8, 9, 11 and 13 (fresh installations), on one sample Go repository with an agent-CLI model service. Batteries 10 and 12 degraded from an intake freshness decay, fixed in #753. Every stop names its cause. | [batteries 8–11](../evidence/2026-11-23-evaluation-batteries-8-11.md), [12–13](../evidence/2026-11-23-evaluation-batteries-12-13.md) |
-| Remaining failure causes | The generator cannot run the tests (#745); the fixed generation budget (#750); the transport between the controllers and the sandbox pods. The largest class by count, the intake freshness decay, is fixed (#753). | the same batteries |
-| Local model | On Vulkan, needed an f16 KV cache, a 32k context and one slot to avoid a long-context numerical instability; its delivery rate is not yet measured | [audit, P2 session evidence](../architecture/principles-audit-2026-11-24.md) |
+| Remaining failure causes | The generator cannot run the tests yet (#745, stage 1 merged in #763); the transport between the controllers and the sandbox pods. The largest class by count, the intake freshness decay, is fixed (#753). | the same batteries |
+| Local model | On the reference laptop iGPU (Vulkan), a 30B coding model gives intermittently corrupted output: the same captured request is correct on the CPU backend and corrupt on the GPU, at 0–40% of runs, with no reliable backend setting. Battery 18 could not be measured. A reliable model path is the main blocker for the functional gate. | [2026-11-24 local model evidence](../evidence/2026-11-24-local-model-gpu-instability.md) |
 | Outer loop (build → release → deploy) | Project-specific: build, provenance and deploy work only for the reference project (M3) | [capabilities](../capabilities.md) |
 | Platforms | Local kind supported. OpenShift Local delivered once without a kernel sandbox. | [OpenShift](../operations/openshift.md) |
 | Principle maturity | P1 3, P2 2, P3 3, P4 2, P5 2 | [audit](../architecture/principles-audit-2026-11-24.md) |
+
+## Progress
+
+Updated 2026-11-24.
+
+| Item | State | Pull requests |
+|---|---|---|
+| B1 | Stage 1 merged: the manifest `generation.toolchain` section and the bounded copier. Stages 2–4 in progress: executor init containers, pod-shape acceptance, quota and prompt. | #763 |
+| B2 | Done: staggered gateway benchmarks, and the generation budget configurable at install (600–900 s, 24–32 steps), with defaults unchanged | #762, #770 |
+| B3 | Done: the sandbox `RuntimeClass` is a value checked in preflight. Autonomous work stops without it, and the RuntimeClass admission overhead and scheduling are accepted exactly. Follow-ups in #771. | #769 |
+| B5 | Partial: govulncheck gate and component base images pinned by digest. Image signing and install-time verification remain. | #764 |
+| Others | Not started | |
 
 ## Prioritization
 
