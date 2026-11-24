@@ -13,14 +13,21 @@ DEFAULT_GENERATION_SECONDS, MIN_GENERATION_SECONDS, MAX_GENERATION_SECONDS = 600
 DEFAULT_GENERATION_STEPS, MIN_GENERATION_STEPS, MAX_GENERATION_STEPS = 24, 24, 32
 
 
-def generation_budget(seconds=None, steps=None):
-    """Validated (seconds, steps); None selects the reviewed default."""
+def generation_budget(seconds=None, steps=None, model_upstream=False):
+    """Validated (seconds, steps); None selects the reviewed default.
+
+    More than 24 steps requires a model upstream, whose call ledger follows
+    the steps. The bundled Codex adapter keeps its reviewed 16-call ledger, so
+    extra tool steps there would rarely be reachable and only look larger."""
     seconds = DEFAULT_GENERATION_SECONDS if seconds is None else seconds
     steps = DEFAULT_GENERATION_STEPS if steps is None else steps
     if type(seconds) is not int or not MIN_GENERATION_SECONDS <= seconds <= MAX_GENERATION_SECONDS:
         raise ValueError('Generation seconds must be an integer from 600 to 900')
     if type(steps) is not int or not MIN_GENERATION_STEPS <= steps <= MAX_GENERATION_STEPS:
         raise ValueError('Generation steps must be an integer from 24 to 32')
+    if steps > DEFAULT_GENERATION_STEPS and model_upstream is not True:
+        raise ValueError('--generation-steps above 24 requires --model-upstream: the bundled Codex adapter keeps '
+                         'its 16-call provider ledger, which a larger step budget would not raise')
     return seconds, steps
 
 
@@ -55,11 +62,14 @@ def require_unchanged_tool_budget(kubectl, desired):
         raise ValueError('Installed execution configuration is malformed; preserve it for review') from None
     expected = json.loads(desired['candidate']['configJSON'])['profile']
     if steps != expected['maxSteps']:
-        raise ValueError('Installed SCC tool budget differs; select the recorded --generation-steps or use a reviewed runtime transition')
+        raise ValueError('Installed SCC tool budget differs; repeat the recorded --generation-steps. No runtime transition '
+                         'changes a selected budget: changing it requires a reinstallation (the reviewed 16-to-24-step '
+                         'transition applies only to its original source)')
     # The recorded generation time is reselected with the same
     # --generation-seconds; omitting it never resets an installed budget.
     if seconds != expected['maxSeconds']:
-        raise ValueError('Installed generation time budget differs; select the recorded --generation-seconds or use a reviewed runtime transition')
+        raise ValueError('Installed generation time budget differs; repeat the recorded --generation-seconds. No runtime '
+                         'transition changes it: changing an installed budget requires a reinstallation')
     # The per-call window exists exactly when a model upstream is installed, so
     # reconciliation can neither switch the model service nor change its window.
     if profile.get('callSeconds') != json.loads(desired['candidate']['configJSON'])['profile'].get('callSeconds'):
@@ -69,8 +79,8 @@ def require_unchanged_tool_budget(kubectl, desired):
 
 
 def desired_values(root, image_lock_path, lock, verification=False, review=False, publication=False, merge=False, repair=False,
-                   generation_seconds=None, generation_steps=None):
-    seconds, steps = generation_budget(generation_seconds, generation_steps)
+                   generation_seconds=None, generation_steps=None, model_upstream=False):
+    seconds, steps = generation_budget(generation_seconds, generation_steps, model_upstream)
     if type(repair) is not bool or (repair and not review):
         raise ValueError("Review repair requires explicit independent review")
     if merge and not publication:

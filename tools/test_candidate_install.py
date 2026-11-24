@@ -111,24 +111,31 @@ class CandidateInstallTests(unittest.TestCase):
         lock_path = install.LOCAL / 'images.lock.json'
         lock = install.image_lock(lock_path)
         values = candidate_install.desired_values(install.ROOT, lock_path, lock, verification=True, review=True,
-                                                  generation_seconds=900, generation_steps=32)
+                                                  generation_seconds=900, generation_steps=32, model_upstream=True)
         config = json.loads(values['candidate']['configJSON'])
         self.assertEqual((config['profile']['maxSeconds'], config['profile']['maxSteps']), (900, 32))
-        # The bundled Codex provider quota does not follow the tool steps.
-        self.assertEqual(config['model'], {'Limits': {'Calls': 16, 'InputBytes': 2097152, 'OutputBytes': 4194304},
-                                           'ResponseLimit': 262144})
+        # The bundled Codex path keeps 24 steps and its 16-call provider quota:
+        # more steps than its ledger can reach are refused, not recorded.
+        codex = json.loads(candidate_install.desired_values(install.ROOT, lock_path, lock, generation_seconds=900)['candidate']['configJSON'])
+        self.assertEqual((codex['profile']['maxSeconds'], codex['profile']['maxSteps']), (900, 24))
+        self.assertEqual(codex['model'], {'Limits': {'Calls': 16, 'InputBytes': 2097152, 'OutputBytes': 4194304},
+                                          'ResponseLimit': 262144})
+        for steps in (25, 32):
+            with self.subTest(codex_steps=steps), self.assertRaisesRegex(ValueError, 'requires --model-upstream'):
+                candidate_install.desired_values(install.ROOT, lock_path, lock, generation_steps=steps)
         review = json.loads(values['review']['configJSON'])['profile']
         self.assertEqual((review['maxSeconds'], review['maxSteps']), (180, 8))
         for seconds, steps in ((599, 24), (901, 24), (600, 23), (600, 33), (True, 24), (600, False),
                                ('900', 24), (600, 24.0), (0, 24), (-600, 24)):
             with self.subTest(seconds=seconds, steps=steps), self.assertRaises(ValueError):
                 candidate_install.desired_values(install.ROOT, lock_path, lock, generation_seconds=seconds,
-                                                 generation_steps=steps)
+                                                 generation_steps=steps, model_upstream=True)
 
     def test_generation_budget_option_is_validated_before_tools(self):
         base = ['plan', '--profile', 'candidate']
         invalid = [base + ['--generation-seconds', '599'], base + ['--generation-seconds', '901'],
                    base + ['--generation-steps', '23'], base + ['--generation-steps', '33'],
+                   base + ['--generation-steps', '25'], base + ['--generation-seconds', '900', '--generation-steps', '32'],
                    ['plan', '--profile', 'shadow', '--generation-seconds', '900'],
                    ['plan', '--generation-steps', '32'],
                    ['status', '--generation-seconds', '900'], ['credentials', '--generation-steps', '32',
@@ -151,12 +158,12 @@ class CandidateInstallTests(unittest.TestCase):
         with patch.object(install, 'run', return_value=subprocess.CompletedProcess([], 0, configmap)):
             candidate_install.require_unchanged_tool_budget(['kubectl'], recorded)
             # Omitting --generation-seconds would reset 900 s to 600 s: refused.
-            with self.assertRaisesRegex(ValueError, 'generation time budget differs'):
+            with self.assertRaisesRegex(ValueError, 'generation time budget differs.*requires a reinstallation'):
                 candidate_install.require_unchanged_tool_budget(['kubectl'], default)
-        stepped = candidate_install.desired_values(install.ROOT, lock_path, lock, generation_steps=32)
+        stepped = candidate_install.desired_values(install.ROOT, lock_path, lock, generation_steps=32, model_upstream=True)
         configmap = json.dumps({'data': {'config.json': stepped['candidate']['configJSON']}})
         with patch.object(install, 'run', return_value=subprocess.CompletedProcess([], 0, configmap)):
-            with self.assertRaisesRegex(ValueError, 'tool budget differs'):
+            with self.assertRaisesRegex(ValueError, 'tool budget differs.*requires a reinstallation'):
                 candidate_install.require_unchanged_tool_budget(['kubectl'], default)
         for bad in (0, 901, True, '600', None):
             config = json.loads(default['candidate']['configJSON'])

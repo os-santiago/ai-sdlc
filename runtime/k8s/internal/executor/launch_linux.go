@@ -61,6 +61,29 @@ func sccWaitMillis(p Profile) int64 {
 	return (p.CallWindow() + 15*time.Second).Milliseconds()
 }
 
+// ProjectedProcessSeconds reads the projected assignment and profile, bound to
+// assignmentDigest, and returns their ProcessSeconds. Any invalid input keeps
+// DefaultProcessSeconds; Run then rejects the same input.
+func ProjectedProcessSeconds(inputDirectory, assignmentDigest string, now time.Time) int {
+	raw, err := readProjected(inputDirectory+"/assignment.json", MaxAssignmentBytes)
+	if err != nil {
+		return DefaultProcessSeconds
+	}
+	a, err := ParseAssignment(raw, assignmentDigest, now)
+	if err != nil {
+		return DefaultProcessSeconds
+	}
+	profileRaw, err := readProjected(inputDirectory+"/profile.json", MaxProfileBytes)
+	if err != nil {
+		return DefaultProcessSeconds
+	}
+	p, err := parseWorkloadProfile(profileRaw, a.ProfileSHA256)
+	if err != nil {
+		return DefaultProcessSeconds
+	}
+	return ProcessSeconds(p)
+}
+
 // readProjected reads only a fixed file from a trusted read-only projection.
 // Kubernetes ConfigMap projections use symlinks, so no-follow is inappropriate
 // here. Repository files must never be passed to this function.

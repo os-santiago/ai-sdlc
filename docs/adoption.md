@@ -66,8 +66,10 @@ With the bundled Codex CLI, run the same command without
 
 A slow model, for example a local model on an integrated GPU, can run out of
 the default generation budget of 600 seconds and 24 tool steps. Add
-`--generation-seconds 900` (600-900) and `--generation-steps 32` (24-32) to
-the first installation, and repeat them on every later run of the same command.
+`--generation-seconds 900` (600-900) to the first installation and, with an
+OpenAI-compatible endpoint only, `--generation-steps 32` (24-32). Repeat them
+on every later run of the same command; changing them afterwards requires a
+reinstallation.
 See [selecting the generation budget](operations/candidate-runtime.md#selecting-the-generation-budget).
 
 The first run creates the native merge rule on GitHub, then stops and prints

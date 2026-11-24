@@ -183,7 +183,7 @@ and reads the prompt at about 250-500 tokens per second, so a single call can
 take minutes. The candidate and verification installations accept two options:
 
 ```bash
-./install.sh local ... --generation-seconds 900 --generation-steps 32
+./install.sh local ... --model-upstream upstream.json --generation-seconds 900 --generation-steps 32
 ```
 
 `--generation-seconds` (600-900, default 600) sets the profile's `maxSeconds`,
@@ -194,38 +194,58 @@ configuration, so they are part of the profile digest that every signed
 command binds. Without the options, the configuration, its digest, the chart
 render and every compiled workload are byte-identical to earlier releases.
 
-The provider-call ledger follows the model path:
+The provider-call ledger follows the model path, and so does the step range:
 
-- With the bundled Codex adapter, the allocation stays at 16 calls and its byte
-  quotas at any step budget. Steps count tools, and one model response can
-  request several, so 16 calls do not cap a 32-step run at 16 steps. Raising the
-  Codex provider quota is a separate reviewed decision, not a side effect of
-  this option.
-- With a [model upstream](model-gateway-adapters.md), the allocation already
-  derives from the steps: one call per step, with the response limit reserved
-  per call (32 calls and 8 MiB at 32 steps).
+- With a [model upstream](model-gateway-adapters.md), the allocation derives
+  from the steps: one call per step, with the response limit reserved per call
+  (32 calls and 8 MiB at 32 steps). Any step budget from 24 to 32 is accepted.
+- With the bundled Codex adapter, the allocation stays at its reviewed 16 calls
+  and byte quotas. Reaching 32 tool steps within 16 calls needs two or more
+  tools per response on average, so the call ledger, not the step budget, would
+  usually end the run: a larger step budget would only look larger. The
+  installer therefore refuses `--generation-steps` above 24 without
+  `--model-upstream`. `--generation-seconds` is accepted on both paths. Raising
+  the Codex provider quota is a separate reviewed decision.
 
-The budget fits the existing timing envelope. The lifecycle claim is
-`maxSeconds` plus a fixed 120 seconds for the executor Pod's setup, source
-transfer and candidate capture, which is 1,020 seconds at 900 and matches the
-executor Pod's `activeDeadlineSeconds`. The signed execution command lived 20
-minutes, sized for 600 seconds: 1,200 - 720 leaves 480 seconds for queueing,
-preparation and the verification handoff, which inherits the command's expiry.
-At 900 seconds the same 20 minutes would leave only 180 seconds, so the command
-lifetime, and the worker's bound on one poll, grow by the seconds above 600:
-25 minutes at 900 (1,500 - 1,020 = 480). The default budget keeps exactly 20
-minutes. A [review repair](review-repair.md) uses the original command's
-remaining time, as before. A longer budget also spends more model time on a
-failed attempt.
+#### Timing envelope
 
-SCC itself receives a shorter `--max-seconds` than the launcher's kill at
-`maxSeconds`. SCC checks its time budget only before each model call and never
-interrupts one in flight. Its deadline is therefore one call window plus its
-15-second provider-wait slack earlier, capped at an eighth of the budget: 525
-seconds for the default profile (60 s window), 825 at 900 seconds, and 788 at 900
-seconds with a 330-second window. The last call it starts can usually answer
-before the kill, and SCC then stops with exit 22 and its summary instead of being
-killed with exit 124. See [executor failure diagnostics](executor-failure-diagnostics.md).
+All bounds below keep their original values at the default budget and grow
+second for second with the seconds above 600:
+
+| Bound | Default (600 s) | At 900 s | Margin it keeps |
+| --- | --- | --- | --- |
+| Lifecycle claim: `maxSeconds` + 120 s for Pod setup, source transfer and candidate capture | 720 s | 1,020 s | 120 s beyond generation |
+| Executor Pod `activeDeadlineSeconds` | 1,020 s | 1,320 s | 300 s beyond the claim |
+| Launcher's absolute bound from process start | 980 s | 1,280 s | 380 s beyond `maxSeconds`; ends 40 s before the Pod deadline |
+| Signed execution command and the worker's bound on one poll | 20 min | 25 min | 480 s beyond the claim for queueing, preparation and the verification handoff |
+
+Before this option, the Pod deadline (1,020 s) and the launcher's bound (980 s)
+were fixed. Left fixed at 900 s, the claim would have reached the Pod deadline
+with no margin, and the launcher would have kept only 80 s for its 60-second
+start wait, 20-second baseline and source verification, so a slow start would
+have killed a run that the claim still allowed. Growing both keeps the margins
+of the default. The claim remains the binding limit: it covers setup, the whole
+generation and capture, and the worker stops observing at its end, so the
+longer Pod and launcher bounds only backstop a stalled Pod and never extend
+the time the runtime grants. The command lifetime stays far below its one-hour
+verification limit. A [review repair](review-repair.md) uses the original
+command's remaining time, as before. A longer budget also spends more model
+time on a failed attempt.
+
+#### SCC ends before the launcher's kill
+
+The launcher kills SCC at `maxSeconds`. SCC checks its own time budget only
+before each model call and never interrupts one in flight, so with the same
+deadline a call that is still running at `maxSeconds` is killed with exit 124.
+Above the default, SCC therefore receives a shorter `--max-seconds`: one call
+window plus its 15-second provider-wait slack earlier, capped at an eighth of
+the budget and taken only from the seconds above 600. The last call it starts
+can usually answer before the kill, and SCC then stops with exit 22 and its
+summary. Examples: 600 s (default) keeps exactly 600, as before; 650 s gives
+600; 700 s gives 625; 900 s gives 825; and 900 s with a 330-second call window
+gives 788. SCC never receives less than the 600 seconds it had before. To make
+time-outs end gracefully, select a budget at least one call window plus 15
+seconds above 600. See [executor failure diagnostics](executor-failure-diagnostics.md).
 
 ### Existing installations
 
@@ -237,5 +257,9 @@ verification reconciliation reads the installed execution configuration first
 and rejects a different tool budget or generation time before changing runtime
 resources or credentials. Repeat the recorded `--generation-seconds` and
 `--generation-steps` on every reconciliation; omitting them never resets an
-installed budget to the default. Missing configuration permits first-time setup; an API error,
+installed budget to the default. No runtime transition changes a selected
+generation budget yet: changing it on an existing installation requires a
+reinstallation. The closed 16-to-24-step transition in
+[image-lock upgrades](image-lock-upgrades.md) applies only to its original
+source and carries the recorded generation time unchanged. Missing configuration permits first-time setup; an API error,
 malformed configuration or duplicate JSON field does not count as absence.

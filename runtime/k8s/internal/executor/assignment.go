@@ -78,21 +78,52 @@ func (p Profile) CallWindow() time.Duration {
 	return time.Duration(p.CallSeconds) * time.Second
 }
 
-// SCCSeconds is the generation budget handed to SCC, shorter than the
-// launcher's kill at MaxSeconds. SCC checks its time budget only before each
-// model call and never interrupts one in flight, so its deadline is one call
-// window plus SCC's 15 s provider-wait slack earlier: the last call it starts
-// can still answer (or time out at the mailbox), and SCC then ends gracefully
-// with exit 22 and its summary instead of being killed with exit 124. The
-// margin is capped at an eighth of the budget, so a slow model's long window
-// cannot consume the run. Reviewer profiles keep their original budget.
+// BaseSeconds is the default generation budget the fixed executor bounds
+// were sized for. Every bound below equals its original value at or below it.
+const BaseSeconds = 600
+
+// extraSeconds is the reviewed generation time above BaseSeconds (0-300).
+func (p Profile) extraSeconds() int {
+	return max(0, min(p.MaxSeconds, 900)-BaseSeconds)
+}
+
+// SCCSeconds is the generation budget handed to SCC. SCC checks its time budget
+// only before each model call and never interrupts one in flight, so a
+// deadline one call window plus SCC's 15 s provider-wait slack before the
+// launcher's kill at MaxSeconds lets the last call it starts answer (or time out
+// at the mailbox); SCC then ends gracefully with exit 22 and its summary instead
+// of being killed with exit 124. The margin comes only from seconds above the
+// 600 s default and is capped at an eighth of the budget: the default profile
+// gives SCC exactly the 600 s it had before, and a larger budget never gives
+// SCC less than that. Reviewer profiles keep their original budget.
 func SCCSeconds(p Profile) int {
 	if p.Version != ProfileVersion {
 		return p.MaxSeconds
 	}
-	margin := min(int((p.CallWindow()+15*time.Second)/time.Second), p.MaxSeconds/8)
+	margin := min(int((p.CallWindow()+15*time.Second)/time.Second), p.MaxSeconds/8, p.extraSeconds())
 	return p.MaxSeconds - margin
 }
+
+// PodDeadlineSeconds is the executor Pod's activeDeadlineSeconds: the original
+// 1,020 s plus the generation seconds above 600 (at most 1,320 s at 900). The
+// Pod therefore keeps the same 300 s beyond the lifecycle claim (MaxSeconds
+// plus 120 s) at every reviewed budget, and the default workload is unchanged.
+func PodDeadlineSeconds(p Profile) int {
+	return 1020 + p.extraSeconds()
+}
+
+// ProcessSeconds is the launcher's absolute bound from process start: the
+// original 980 s plus the generation seconds above 600 (at most 1,280 s). It
+// keeps 380 s beyond MaxSeconds for the bounded start wait (60 s), baseline
+// (20 s), source verification and SCC exit, and always ends 40 s before the
+// Pod deadline.
+func ProcessSeconds(p Profile) int {
+	return 980 + p.extraSeconds()
+}
+
+// DefaultProcessSeconds bounds the launcher before its reviewed profile has
+// been read, and whenever that profile cannot be read (the run then fails).
+const DefaultProcessSeconds = 980
 
 func strictBound(raw []byte, expected string, maximum int, keys []string, value any) error {
 	if len(raw) == 0 || len(raw) > maximum || !utf8.Valid(raw) || !workspacebundle.ValidDigest(expected) || workspacebundle.Digest(raw) != expected || authority.DecodeStrict(raw, value) != nil {

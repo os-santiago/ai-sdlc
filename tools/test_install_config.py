@@ -107,11 +107,12 @@ class InstallationConfigurationTests(unittest.TestCase):
         candidate['images'] = str((install.ROOT / 'examples' / candidate['images']).resolve())
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'install.json'
-            selected = dict(candidate, generationSeconds=900, generationSteps=32)
+            jsonschema.validate(dict(candidate, generationSeconds=900, generationSteps=32), schema)
+            selected = dict(candidate, generationSeconds=900, generationSteps=24)
             jsonschema.validate(selected, schema)
             path.write_text(json.dumps(selected))
             values, digest = install_config.load(path)
-            self.assertEqual((values['generation_seconds'], values['generation_steps']), (900, 32))
+            self.assertEqual((values['generation_seconds'], values['generation_steps']), (900, 24))
             path.write_text(json.dumps(candidate))
             self.assertNotEqual(install_config.load(path)[1], digest)
             self.assertNotIn('generation_seconds', install_config.load(path)[0])
@@ -124,7 +125,14 @@ class InstallationConfigurationTests(unittest.TestCase):
                  contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(install.main(['plan', '--config', str(path)]), 0)
             profile = json.loads(rendered[0]['candidate']['configJSON'])['profile']
-            self.assertEqual((profile['maxSeconds'], profile['maxSteps']), (900, 32))
+            self.assertEqual((profile['maxSeconds'], profile['maxSteps']), (900, 24))
+            # More than 24 steps needs a model upstream; the Codex path refuses before tools.
+            path.write_text(json.dumps(dict(candidate, generationSteps=32)))
+            with patch.object(install, 'tools') as tools:
+                with self.assertRaisesRegex(ValueError, 'requires --model-upstream'):
+                    install.main(['plan', '--config', str(path)])
+                tools.assert_not_called()
+            path.write_text(json.dumps(selected))
             with patch.object(install, 'tools') as tools:
                 with self.assertRaisesRegex(ValueError, 'conflicts'):
                     install.main(['local', '--config', str(path), '--generation-seconds', '600'])

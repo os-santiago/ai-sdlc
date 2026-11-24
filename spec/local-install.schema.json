@@ -92,7 +92,7 @@
       "type": "integer",
       "minimum": 24,
       "maximum": 32,
-      "description": "Generation SCC tool-step budget, recorded in the execution configuration; defaults to 24. Requires the candidate or verification profile."
+      "description": "Generation SCC tool-step budget, recorded in the execution configuration; defaults to 24. Requires the candidate or verification profile; above 24 also requires the --model-upstream installation option."
     }
   },
   "allOf": [

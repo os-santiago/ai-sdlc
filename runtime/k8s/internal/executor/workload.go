@@ -74,7 +74,7 @@ func Compile(namespace, workerImage, mailboxImage string, assignmentRaw, profile
 		mailbox["command"] = append(mailbox["command"].([]string), "--wait-seconds", fmt.Sprint(p.CallSeconds))
 	}
 	pod := map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": metadata(name), "spec": map[string]any{
-		"runtimeClassName": "ai-sdlc-offline", "automountServiceAccountToken": false, "enableServiceLinks": false, "restartPolicy": "Never", "activeDeadlineSeconds": 1020, "terminationGracePeriodSeconds": 1,
+		"runtimeClassName": "ai-sdlc-offline", "automountServiceAccountToken": false, "enableServiceLinks": false, "restartPolicy": "Never", "activeDeadlineSeconds": PodDeadlineSeconds(p), "terminationGracePeriodSeconds": 1,
 		"hostNetwork": false, "hostPID": false, "hostIPC": false, "shareProcessNamespace": false,
 		"securityContext": map[string]any{"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000, "seccompProfile": map[string]any{"type": "RuntimeDefault"}},
 		"volumes": []any{
