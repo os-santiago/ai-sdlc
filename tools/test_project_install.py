@@ -65,6 +65,9 @@ class ProjectManifestInstallTests(unittest.TestCase):
         values = project_install.bind(policy, compiled)
         self.assertEqual(policy['projectSHA256'], 'b' * 64)
         self.assertEqual(values, {'manifestJSON': '{}', 'verifierQuota': {'requests.cpu': '810m'}})
+        # A generation toolchain also sizes the executor namespace.
+        sized = project_install.bind({}, dict(compiled, executorQuota={'limits.memory': '6Gi'}))
+        self.assertEqual(sized['executorQuota'], {'limits.memory': '6Gi'})
         with self.assertRaises(ValueError):
             project_install.bind({'projectSHA256': 'c' * 64}, compiled)
 

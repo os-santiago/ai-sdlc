@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const toolchainImage = "docker.io/library/golang@sha256:ea30e25680a5470bac02b08bb0e0a735fb75bd0ab7d431b9b95ee0abef362586"
@@ -305,5 +306,83 @@ func TestPrepareToolchainRefusesShadowedWorkerTools(t *testing.T) {
 			t.Fatal("shadowed worker tool accepted:", tool)
 		}
 		_ = os.Remove(path)
+	}
+}
+
+// podQuota is what a ResourceQuota charges for a pod: per resource, the
+// larger of the containers' sum and the largest init container.
+func podQuota(t *testing.T, pod map[string]any) map[string]resource.Quantity {
+	t.Helper()
+	charge := map[string]resource.Quantity{}
+	spec := pod["spec"].(map[string]any)
+	add := func(containers []any, initContainers bool) {
+		for _, c := range containers {
+			resources := c.(map[string]any)["resources"].(map[string]any)
+			for _, kind := range []string{"requests", "limits"} {
+				for name, value := range resources[kind].(map[string]any) {
+					if name == "ephemeral-storage" {
+						continue
+					}
+					key, q := kind+"."+name, resource.MustParse(value.(string))
+					current := charge[key]
+					if initContainers {
+						if q.Cmp(current) > 0 {
+							charge["init."+key] = q
+						}
+						continue
+					}
+					current.Add(q)
+					charge[key] = current
+				}
+			}
+		}
+	}
+	add(spec["containers"].([]any), false)
+	if inits, ok := spec["initContainers"].([]any); ok {
+		add(inits, true)
+	}
+	for key, q := range charge {
+		if after, ok := strings.CutPrefix(key, "init."); ok {
+			if q.Cmp(charge[after]) > 0 {
+				charge[after] = q
+			}
+			delete(charge, key)
+		}
+	}
+	return charge
+}
+
+func TestToolchainExecutorQuotaGrowsByTheToolchainAdditions(t *testing.T) {
+	now := time.Now()
+	base, err := compileFixture(t, now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc, err := compileFixture(t, now, func(a *Assignment, _ *Profile) { a.Workspace = WorkspaceOfflineTests; a.Toolchain = toolchainFixture() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The chart's original executor quota.
+	original := map[string]string{"requests.cpu": "1", "requests.memory": "1Gi", "limits.cpu": "6", "limits.memory": "4Gi"}
+	baseCharge, toolchainCharge := podQuota(t, base.workload.Pod), podQuota(t, tc.workload.Pod)
+	for key, value := range ToolchainExecutorQuota() {
+		quota, before := resource.MustParse(value), resource.MustParse(original[key])
+		perPod := toolchainCharge[key]
+		delta := perPod.DeepCopy()
+		delta.Sub(baseCharge[key])
+		total := before.DeepCopy()
+		for i := 0; i < ExecutorPods; i++ {
+			total.Add(delta)
+		}
+		if quota.Cmp(total) != 0 {
+			t.Fatal("quota does not grow by exactly the toolchain additions", key, quota.String(), total.String())
+		}
+		need := perPod.DeepCopy()
+		for i := 1; i < ExecutorPods; i++ {
+			need.Add(perPod)
+		}
+		if quota.Cmp(need) < 0 {
+			t.Fatal("quota does not fit four toolchain pods", key)
+		}
 	}
 }

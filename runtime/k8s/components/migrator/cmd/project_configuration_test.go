@@ -36,6 +36,21 @@ func TestProjectInstallationCompilerBindsOnlyTheInstallationRepository(t *testin
 	if err != nil || parsed.Digest() != result.ManifestSHA256 || strings.Contains(out.String(), `\u00`) {
 		t.Fatal("canonical manifest with shell metacharacters must round-trip", err, out.String())
 	}
+	if strings.Contains(out.String(), "executorQuota") {
+		t.Fatal("executor quota without a generation toolchain")
+	}
+	manifest["generation"] = map[string]any{"toolchain": map[string]any{"root": "/usr/local/go", "path": []string{"bin"}}}
+	raw, _ = json.Marshal(map[string]any{"policy": m.Policy, "manifest": manifest})
+	out.Reset()
+	if err := compileProjectInstallation(bytes.NewReader(raw), &out); err != nil {
+		t.Fatal(err)
+	}
+	var sized struct {
+		ExecutorQuota map[string]string `json:"executorQuota"`
+	}
+	if json.Unmarshal(out.Bytes(), &sized) != nil || sized.ExecutorQuota["limits.memory"] != "6Gi" || sized.ExecutorQuota["requests.memory"] != "1Gi" || len(sized.ExecutorQuota) != 4 {
+		t.Fatal("toolchain executor quota", out.String())
+	}
 	manifest["repository"] = "example/other"
 	raw, _ = json.Marshal(map[string]any{"policy": m.Policy, "manifest": manifest})
 	if compileProjectInstallation(bytes.NewReader(raw), &bytes.Buffer{}) == nil {

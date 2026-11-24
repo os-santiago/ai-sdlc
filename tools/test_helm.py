@@ -408,6 +408,20 @@ class ProjectManifestChartTests(unittest.TestCase):
             file.flush()
             self.assertNotEqual(tests.render(*base, '-f', file.name).returncode, 0)
 
+    def test_executor_quota_grows_only_with_a_generation_toolchain(self):
+        tests = ChartTests()
+        def executor_hard(values):
+            rendered, docs = tests.sandbox_docs(values)
+            self.assertEqual(rendered.returncode, 0, rendered.stderr)
+            return next(d for d in docs if d['kind'] == 'ResourceQuota' and d['metadata']['name'] == 'executor-bounds')['spec']['hard']
+        original = {'pods': '4', 'configmaps': '8', 'requests.cpu': '1', 'requests.memory': '1Gi', 'limits.cpu': '6', 'limits.memory': '4Gi'}
+        self.assertEqual(executor_hard({}), original)
+        toolchain = {'requests.cpu': '1', 'requests.memory': '1Gi', 'limits.cpu': '6', 'limits.memory': '6Gi'}
+        self.assertEqual(executor_hard({'project': {'executorQuota': toolchain}}), dict(original, **{'limits.memory': '6Gi'}))
+        # The RuntimeClass overhead (#769) composes: four pods' overhead is added on top.
+        hard = executor_hard({'project': {'executorQuota': toolchain}, 'sandbox': {'podOverhead': {'cpu': '100m', 'memory': '64Mi'}}})
+        self.assertEqual(hard, {'pods': '4', 'configmaps': '8', 'requests.cpu': '1400m', 'requests.memory': '1280Mi', 'limits.cpu': '6400m', 'limits.memory': '6400Mi'})
+        self.assertNotEqual(tests.sandbox_docs({'project': {'executorQuota': dict(toolchain, **{'limits.memory': '6Gi; rm'})}})[0].returncode, 0)
 
     def test_publication_accepts_only_the_policy_bound_manifest_repository(self):
         tests = ChartTests()

@@ -149,3 +149,16 @@ func toolchainVolumes() []any {
 		map[string]any{"name": "runner", "emptyDir": map[string]any{"sizeLimit": runnerVolume}},
 	}
 }
+
+// ExecutorPods is the executor namespace's pod quota.
+const ExecutorPods = 4
+
+// ToolchainExecutorQuota is the executor namespace ResourceQuota for an
+// installation whose manifest declares a generation toolchain: the default
+// quota grown by exactly the toolchain workload's additions for each of the
+// four pods. Only the worker's memory limit grows (512Mi); the init
+// containers' effective requests and limits stay below the worker and
+// mailbox sum, and the quota bounds no ephemeral storage.
+func ToolchainExecutorQuota() map[string]string {
+	return map[string]string{"requests.cpu": "1", "requests.memory": "1Gi", "limits.cpu": "6", "limits.memory": "6Gi"}
+}
