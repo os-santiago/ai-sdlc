@@ -11,10 +11,10 @@ with recorded evidence, not by calendar.
 | Area | State | Evidence |
 |---|---|---|
 | Release | `v0.1.0-alpha.1` pre-release | [notes](v0.1.0-alpha.1.md) |
-| Inner loop (issue label → merged pull request) | Autonomous end to end. 70–90% of issues delivered within two attempts on one sample Go repository with an agent-CLI model service. Every stop names its cause. | [batteries 8–11](../evidence/2026-11-23-evaluation-batteries-8-11.md), [12–13](../evidence/2026-11-23-evaluation-batteries-12-13.md) |
-| Main failure causes | The generator cannot run the tests (#745); the fixed generation budget (#750); the transport between the controllers and the sandbox pods | the same batteries |
-| Local model | Works only with specific server settings (f16 KV cache, 32k context, one slot); its delivery rate is not yet measured | batteries 14–17 |
-| Outer loop (build → release → deploy) | Fixture grade for one reference project | [capabilities](../capabilities.md) |
+| Inner loop (issue label → merged pull request) | Autonomous end to end. 70–90% of issues delivered within two attempts in batteries 8, 9, 11 and 13 (fresh installations), on one sample Go repository with an agent-CLI model service. Batteries 10 and 12 degraded from an intake freshness decay, fixed in #753. Every stop names its cause. | [batteries 8–11](../evidence/2026-11-23-evaluation-batteries-8-11.md), [12–13](../evidence/2026-11-23-evaluation-batteries-12-13.md) |
+| Remaining failure causes | The generator cannot run the tests (#745); the fixed generation budget (#750); the transport between the controllers and the sandbox pods. The largest class by count, the intake freshness decay, is fixed (#753). | the same batteries |
+| Local model | On Vulkan, needed an f16 KV cache, a 32k context and one slot to avoid a long-context numerical instability; its delivery rate is not yet measured | [audit, P2 session evidence](../architecture/principles-audit-2026-11-24.md) |
+| Outer loop (build → release → deploy) | Project-specific: build, provenance and deploy work only for the reference project (M3) | [capabilities](../capabilities.md) |
 | Platforms | Local kind supported. OpenShift Local delivered once without a kernel sandbox. | [OpenShift](../operations/openshift.md) |
 | Principle maturity | P1 3, P2 2, P3 3, P4 2, P5 2 | [audit](../architecture/principles-audit-2026-11-24.md) |
 
@@ -26,8 +26,9 @@ Items are ranked by impact on a functional, stable product.
 - **Installable:** someone else can run it.
 - **Stable:** it keeps working over time and across upgrades.
 
-The outer loop stays on the existing v1.1 track (M3). GA covers the inner
-loop with production-grade installation and operation.
+The outer loop stays on the existing v1.1 track (M3), together with
+produced-artifact trust (audit gap 4.6: #455, #574, #439, #525). GA covers
+the inner loop with production-grade installation and operation.
 
 ### Beta: functional, safe and installable by early adopters
 
@@ -39,8 +40,9 @@ Ordered by impact.
 | B2 | Configurable generation budget; staggered gateway benchmarks | Budget, timeout and contention stops, worse on local models | #750, #758 |
 | B3 | Sandbox: consume the platform `RuntimeClass` as a value, verified in preflight; refuse autonomy without it | Safe execution of generated code on any cluster | 5.1 |
 | B4 | Independent review identity; merge needs a co-signature | Autonomy cannot approve or merge its own work | 1.1, 1.2 |
-| B5 | Signed runtime images verified by the installer; pinned bases; vulnerability gate | Adopters can trust what they install | 4.1, 4.4, 4.5 |
-| B6 | Self-contained, published Helm chart; generic Kubernetes path; external Postgres with TLS | Installable without the repository's local tooling | 5.2, 5.3, 5.5 |
+| B5 | Signed runtime images verified by the installer; pinned bases; vulnerability gate (govulncheck, image scan) | Adopters can trust what they install | 4.1, 4.4, 4.5, 3.7 (part) |
+| B6 | Self-contained, published Helm chart; generic Kubernetes path; external Postgres with TLS | Installable without the repository's local tooling | 5.2, 5.3, 5.5; #430, #431, #432, #434 |
+| B6b | Model upstream by FQDN over HTTPS with a credential, so a hosted model can be configured when an API key is available | A second model path that adopters can choose | 5.7 (part) |
 | B7 | Evaluation harness v1 (several repositories, pass@k with intervals, reviewer confusion matrix) | Rates that predict adoption; the gate for model changes | 2.1 |
 | B8 | Candidate quality and security baseline in the merge gate | Merged changes meet a minimum standard | 3.3 |
 | B9 | Close the issue from the merged pull request; truthful component docs; decide the dead contracts | A complete, honestly documented inner loop | #715, 1.4, 1.6, 4.7 |
@@ -51,14 +53,15 @@ Ordered by impact.
 | # | Item | Audit gaps / issues |
 |---|---|---|
 | R1 | Operator `v1beta1` (`AISDLCInstallation`) rendering the chart; OLM `candidate` channel | 5.2, 5.4 |
-| R2 | Generic upgrade and rollback; uninstall that keeps data; doctor | 5.4, 5.6, #435, #441, #443 |
+| R2 | Generic upgrade and rollback; uninstall that keeps data; tested backup and restore; doctor | 5.4, 5.6, #435, #441, #442, #443 |
 | R3 | Database high availability by default; leader election with standbys and PDBs | 3.1, 3.5 |
 | R4 | Traces and alerts with correlation IDs | 3.2, 3.7 |
 | R5 | Admission policies as chart templates; required image signature policy for autonomous profiles; signed SLSA provenance verified at install | 3.4, 4.2, 4.3 |
 | R6 | Split the release manager into publisher, merge gate and release coordinator | 1.3 |
 | R7 | Predictive in shadow: budgets, timeouts and retry value from recorded calls and outcomes | 2.3, 2.4 |
 | R8 | Remove legacy handlers; split the toolkit image; predictive role in the A-Dev profile | 1.5, 1.7, 2.7 |
-| R9 | Relax local-topology assumptions (FQDN model endpoint, Ingress or Gateway API, namespaces) | 5.7 |
+| R9 | Relax the remaining local-topology assumptions (Ingress or Gateway API, configurable namespaces) | 5.7 |
+| R10 | Threat model for the runtime and its autonomy boundaries, reviewed | P3, P4 |
 
 ### General Availability: supported
 
@@ -77,8 +80,13 @@ Ordered by impact.
 **Functional:**
 - The evaluation harness reports **≥ 80%** of issues delivered within two
   attempts, with a 95% interval lower bound of **≥ 70%**.
-- This holds on **two repositories in different languages**, with **two
-  model paths**: a hosted model and a local model.
+- The rate is measured **per cell**, each cell being one repository and one
+  model path. Each cell needs at least 60 issues. A pooled rate does not
+  count.
+- It holds on **two repositories in different languages**, with **two model
+  paths**: a model served on local hardware (OpenAI-compatible server), and a
+  second path, either the agent-CLI service or a hosted API when an API key
+  is available (B6b).
 
 **Safe:**
 - Generated code always runs in a kernel sandbox, and preflight refuses
@@ -89,6 +97,13 @@ Ordered by impact.
 
 **Installable:** the published chart installs on kind and on OpenShift with
 Kata, following the documentation, without the repository's local tooling.
+
+**Environment dependencies:**
+- Kata needs a full OpenShift cluster; OpenShift Local cannot install it.
+- A hosted model path needs an API key.
+
+If either is unavailable at the gate, the Beta notes record it as an open
+condition. It is not silently waived.
 
 **Truthful:** the docs match the code (component table checked in CI). The
 release notes state every known limit.
@@ -101,8 +116,9 @@ release notes state every known limit.
 - No open release-blocking defect.
 
 **Stable:**
-- A **7-day soak** under continuous delivery with no degradation in rates or
-  latency, and no manual intervention.
+- A **7-day soak** under continuous delivery with no manual intervention.
+  Rates stay within the Beta interval, and median model-call latency stays
+  within 20% of the first day.
 - Upgrade from the previous beta, and rollback, both tested.
 
 **Operable:** the operator installs and upgrades through OLM. Metrics,
