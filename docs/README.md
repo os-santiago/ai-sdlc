@@ -8,6 +8,8 @@ Start here:
 - [Capability matrix](capabilities.md): what is generic, project-specific or not
   yet proven.
 - [Roadmap](roadmap.md): the path to an adoptable v1.
+- [Release plan](releases/release-plan.md): where AI-SDLC stands and the exit
+  criteria for Beta, Release Candidate and General Availability.
 - [Latest end-to-end evidence](evidence/2026-11-20-issue-only-e2e.md).
 - [Runtime upgrades and installation details](operations/runtime-upgrades.md).
 
