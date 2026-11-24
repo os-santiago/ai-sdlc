@@ -25,7 +25,8 @@ import install_images
 import install_upgrade
 import model_upstream_runtime_upgrade as upstream_upgrade
 from model_upstream_runtime_upgrade import (CompletedRepairSource, ModelUpstreamUpgrade, gateway_values, phase_targets,
-                                            publication, publication_lock, validate_upstream, without_publication)
+                                            publication, publication_lock, recorded_answer_tokens, validate_upstream,
+                                            without_publication)
 from review_feedback_runtime_upgrade import exact_local_publication
 import upgrade_backup_data as data
 
@@ -36,7 +37,7 @@ def targets(source, selection, upstream, approvals, render_source, render_target
     """Images and renewed approvals only: the installed model upstream and
     every other installation value are unchanged (closed delta)."""
     upstream = validate_upstream(upstream)
-    if source['values'].get('modelGateway') != gateway_values(upstream):
+    if source['values'].get('modelGateway') != gateway_values(upstream, recorded_answer_tokens(source['values'])):
         raise ValueError('Release refresh requires the exact recorded model upstream')
     values, active = publication(source, selection, approvals, render_source, render_target, now, browser_ca_uid,
                                  'model upstream')

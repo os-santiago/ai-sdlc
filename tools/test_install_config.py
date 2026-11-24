@@ -156,6 +156,60 @@ class InstallationConfigurationTests(unittest.TestCase):
                     with self.subTest(schema=config), self.assertRaises(jsonschema.ValidationError):
                         jsonschema.validate(config, schema)
 
+    def test_answer_token_bound_is_recorded_bounded_and_candidate_only(self):
+        import jsonschema
+        schema = json.loads((install.ROOT / 'spec/local-install.schema.json').read_text())
+        candidate = json.loads((install.ROOT / 'examples/homedir-candidate.local-install.json').read_text())
+        candidate['images'] = str((install.ROOT / 'examples' / candidate['images']).resolve())
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'install.json'
+            upstream = Path(tmp) / 'upstream.json'
+            upstream.write_text(json.dumps({'adapter': 'openai', 'url': 'http://10.89.0.1:18090/v1/chat/completions',
+                                            'model': 'local-model', 'cidr': '10.89.0.1/32', 'port': 18090,
+                                            'seconds': 300, 'directAnswers': True, 'callSeconds': 330,
+                                            'reviewCallSeconds': 170, 'credentialSecret': ''}))
+            selected = dict(candidate, generationAnswerTokens=8192)
+            jsonschema.validate(selected, schema)
+            path.write_text(json.dumps(selected))
+            values, digest = install_config.load(path)
+            self.assertEqual(values['generation_answer_tokens'], 8192)
+            path.write_text(json.dumps(candidate))
+            self.assertNotEqual(install_config.load(path)[1], digest)
+            self.assertNotIn('generation_answer_tokens', install_config.load(path)[0])
+            # The plan renders the recorded bound with a model upstream.
+            path.write_text(json.dumps(selected))
+            rendered = []
+            def run(command, **kwargs):
+                rendered.append(json.loads(Path(command[-1]).read_text()))
+            with patch.object(install, 'tools', return_value={'helm': 'helm'}), patch.object(install, 'run', side_effect=run), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(install.main(['plan', '--config', str(path), '--model-upstream', str(upstream)]), 0)
+            self.assertEqual(json.loads(rendered[0]['candidate']['configJSON'])['profile']['maxTokens'], 8192)
+            self.assertEqual(rendered[0]['modelGateway']['benchmark']['completionTokens'], 8192)
+            # Above 4096 needs a model upstream; the Codex path refuses before tools.
+            with patch.object(install, 'tools') as tools:
+                with self.assertRaisesRegex(ValueError, 'requires --model-upstream'):
+                    install.main(['plan', '--config', str(path)])
+                with self.assertRaisesRegex(ValueError, 'conflicts'):
+                    install.main(['local', '--config', str(path), '--generation-answer-tokens', '4096'])
+                tools.assert_not_called()
+            # Status addresses the same scope without the plan/local-only option.
+            with patch.object(install, 'tools', return_value={'helm': 'helm', 'kind': 'kind', 'kubectl': 'kubectl'}), \
+                 patch.object(install, 'run', side_effect=ValueError('stop at cluster access')):
+                with self.assertRaisesRegex(ValueError, 'stop at cluster access'):
+                    install.main(['status', '--config', str(path)])
+            invalid = [dict(candidate, generationAnswerTokens=4095), dict(candidate, generationAnswerTokens=8193),
+                       dict(candidate, generationAnswerTokens=True), dict(candidate, generationAnswerTokens='8192'),
+                       dict(candidate, generationAnswerTokens=8192.0), dict(self.fixture, generationAnswerTokens=4096)]
+            for config in invalid:
+                path.write_text(json.dumps(config))
+                with self.subTest(config=config), self.assertRaises(ValueError):
+                    install_config.load(path)
+                # JSON Schema accepts 8192.0 as an integer; the parser rejects it.
+                if not isinstance(config.get('generationAnswerTokens'), float):
+                    with self.subTest(schema=config), self.assertRaises(jsonschema.ValidationError):
+                        jsonschema.validate(config, schema)
+
 
 if __name__ == '__main__':
     unittest.main()

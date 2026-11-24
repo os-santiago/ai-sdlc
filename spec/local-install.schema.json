@@ -93,6 +93,12 @@
       "minimum": 24,
       "maximum": 32,
       "description": "Generation SCC tool-step budget, recorded in the execution configuration; defaults to 24. Requires the candidate or verification profile; above 24 also requires the --model-upstream installation option."
+    },
+    "generationAnswerTokens": {
+      "type": "integer",
+      "minimum": 4096,
+      "maximum": 8192,
+      "description": "Requested output tokens per generator model answer (the profile's maxTokens), recorded in the execution configuration; defaults to 4096. Requires the candidate or verification profile; above 4096 also requires the --model-upstream installation option."
     }
   },
   "allOf": [
@@ -107,6 +113,11 @@
           {
             "required": [
               "generationSteps"
+            ]
+          },
+          {
+            "required": [
+              "generationAnswerTokens"
             ]
           }
         ]

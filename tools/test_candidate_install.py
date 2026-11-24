@@ -1,3 +1,6 @@
+import contextlib
+import copy
+import io
 import json
 import os
 from pathlib import Path
@@ -207,6 +210,100 @@ class CandidateInstallTests(unittest.TestCase):
             config['profile']['maxSeconds'] = bad
             configmap = json.dumps({'data': {'config.json': json.dumps(config)}})
             with self.subTest(maxSeconds=bad), patch.object(install, 'run', return_value=subprocess.CompletedProcess([], 0, configmap)), \
+                 self.assertRaisesRegex(ValueError, 'malformed'):
+                candidate_install.require_unchanged_tool_budget(['kubectl'], default)
+
+    def test_answer_token_default_keeps_the_reviewed_configuration(self):
+        lock_path = install.LOCAL / 'images.lock.json'
+        lock = install.image_lock(lock_path)
+        self.assertEqual(candidate_install.answer_tokens(), 4096)
+        for kwargs in ({}, {'verification': True, 'review': True, 'repair': True},
+                       {'verification': True, 'review': True, 'model_upstream': True, 'generation_steps': 32}):
+            default = candidate_install.desired_values(install.ROOT, lock_path, lock, **kwargs)
+            explicit = candidate_install.desired_values(install.ROOT, lock_path, lock, generation_answer_tokens=4096, **kwargs)
+            # Byte-identical configuration, so default installations keep their digests.
+            self.assertEqual(json.dumps(default, sort_keys=True), json.dumps(explicit, sort_keys=True))
+            self.assertEqual(json.loads(default['candidate']['configJSON'])['profile']['maxTokens'], 4096)
+
+    def test_selected_answer_tokens_are_recorded_and_bounded(self):
+        lock_path = install.LOCAL / 'images.lock.json'
+        lock = install.image_lock(lock_path)
+        default = candidate_install.desired_values(install.ROOT, lock_path, lock, verification=True, review=True,
+                                                   model_upstream=True)
+        values = candidate_install.desired_values(install.ROOT, lock_path, lock, verification=True, review=True,
+                                                  model_upstream=True, generation_answer_tokens=8192)
+        config = json.loads(values['candidate']['configJSON'])
+        self.assertEqual(config['profile']['maxTokens'], 8192)
+        # Only the generator's answer bound changes: reviewers keep their default.
+        changed = copy.deepcopy(config)
+        changed['profile']['maxTokens'] = 4096
+        self.assertEqual(changed, json.loads(default['candidate']['configJSON']))
+        self.assertEqual(values['review'], default['review'])
+        self.assertEqual(json.loads(values['review']['configJSON'])['profile']['maxTokens'], 4096)
+        # The bundled Codex adapter never applies the bound: above 4096 is refused there.
+        for tokens in (4097, 8192):
+            with self.subTest(codex_tokens=tokens), self.assertRaisesRegex(ValueError, 'requires --model-upstream'):
+                candidate_install.desired_values(install.ROOT, lock_path, lock, generation_answer_tokens=tokens)
+        for tokens in (4095, 8193, 0, -4096, True, '8192', 8192.0):
+            with self.subTest(tokens=tokens), self.assertRaises(ValueError):
+                candidate_install.desired_values(install.ROOT, lock_path, lock, model_upstream=True,
+                                                 generation_answer_tokens=tokens)
+
+    def test_answer_token_option_is_validated_before_tools(self):
+        base = ['plan', '--profile', 'candidate']
+        invalid = [base + ['--generation-answer-tokens', '4095'], base + ['--generation-answer-tokens', '8193'],
+                   base + ['--generation-answer-tokens', '8192'],
+                   ['plan', '--profile', 'shadow', '--generation-answer-tokens', '4096'],
+                   ['plan', '--generation-answer-tokens', '4096'],
+                   ['status', '--generation-answer-tokens', '4096'],
+                   ['credentials', '--generation-answer-tokens', '4096', '--github-auth', 'gh-cli']]
+        with patch.object(install, 'tools') as tools:
+            for argv in invalid:
+                with self.subTest(argv=argv), self.assertRaises(ValueError):
+                    install.main(argv)
+            tools.assert_not_called()
+        with patch.object(install, 'tools') as tools, patch('sys.stderr'), self.assertRaises(SystemExit):
+            install.main(base + ['--generation-answer-tokens', 'long'])
+        tools.assert_not_called()
+
+    def test_selected_answer_tokens_reach_the_rendered_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            upstream = Path(directory) / 'upstream.json'
+            upstream.write_text(json.dumps({'adapter': 'openai', 'url': 'http://10.89.0.1:18090/v1/chat/completions',
+                                            'model': 'local-model', 'cidr': '10.89.0.1/32', 'port': 18090,
+                                            'seconds': 300, 'directAnswers': True, 'callSeconds': 330,
+                                            'reviewCallSeconds': 170, 'credentialSecret': ''}))
+            rendered = []
+            def run(command, **kwargs):
+                rendered.append(json.loads(Path(command[-1]).read_text()))
+            with patch.object(install, 'tools', return_value={'helm': 'helm'}), patch.object(install, 'run', side_effect=run), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(install.main(['plan', '--profile', 'candidate', '--model-upstream', str(upstream),
+                                               '--generation-answer-tokens', '8192']), 0)
+        self.assertEqual(json.loads(rendered[0]['candidate']['configJSON'])['profile']['maxTokens'], 8192)
+        self.assertEqual(rendered[0]['modelGateway']['benchmark'], {'promptTokens': 16384, 'completionTokens': 8192})
+
+    def test_reconciliation_keeps_the_recorded_answer_tokens(self):
+        lock_path = install.LOCAL / 'images.lock.json'
+        lock = install.image_lock(lock_path)
+        recorded = candidate_install.desired_values(install.ROOT, lock_path, lock, model_upstream=True,
+                                                    generation_answer_tokens=8192)
+        default = candidate_install.desired_values(install.ROOT, lock_path, lock, model_upstream=True)
+        configmap = json.dumps({'data': {'config.json': recorded['candidate']['configJSON']}})
+        with patch.object(install, 'run', return_value=subprocess.CompletedProcess([], 0, configmap)):
+            candidate_install.require_unchanged_tool_budget(['kubectl'], recorded)
+            # Omitting --generation-answer-tokens would reset 8192 to 4096: refused.
+            with self.assertRaisesRegex(ValueError, 'answer-token bound differs.*requires a reinstallation'):
+                candidate_install.require_unchanged_tool_budget(['kubectl'], default)
+        configmap = json.dumps({'data': {'config.json': default['candidate']['configJSON']}})
+        with patch.object(install, 'run', return_value=subprocess.CompletedProcess([], 0, configmap)):
+            with self.assertRaisesRegex(ValueError, 'answer-token bound differs.*requires a reinstallation'):
+                candidate_install.require_unchanged_tool_budget(['kubectl'], recorded)
+        for bad in (0, 8193, True, '4096', None):
+            config = json.loads(default['candidate']['configJSON'])
+            config['profile']['maxTokens'] = bad
+            configmap = json.dumps({'data': {'config.json': json.dumps(config)}})
+            with self.subTest(maxTokens=bad), patch.object(install, 'run', return_value=subprocess.CompletedProcess([], 0, configmap)), \
                  self.assertRaisesRegex(ValueError, 'malformed'):
                 candidate_install.require_unchanged_tool_budget(['kubectl'], default)
 

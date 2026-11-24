@@ -69,6 +69,21 @@ class RefreshTargets(unittest.TestCase):
         with self.assertRaises(ValueError):
             run_targets(upstream_document=dict(MAAS, adapter='agent-cli'))
 
+    def test_the_recorded_answer_bound_and_its_benchmark_are_inherited(self):
+        source = installed()
+        candidate = json.loads(source['values']['candidate']['configJSON'])
+        candidate['profile']['maxTokens'] = 8192
+        source['values']['candidate']['configJSON'] = json.dumps(candidate, sort_keys=True)
+        # The gateway recorded at installation follows the recorded bound.
+        source['values']['modelGateway'] = upstream.gateway_values(MAAS, 8192)
+        active = run_targets(source)['active']['values']
+        self.assertEqual(active['modelGateway'], source['values']['modelGateway'])
+        self.assertEqual(json.loads(active['candidate']['configJSON'])['profile']['maxTokens'], 8192)
+        # A benchmark envelope that no longer matches the bound is refused.
+        source['values']['modelGateway'] = upstream.gateway_values(MAAS)
+        with self.assertRaisesRegex(ValueError, 'exact recorded model upstream'):
+            run_targets(source)
+
     def test_render_rotation_and_approval_guards_are_shared(self):
         with self.assertRaisesRegex(ValueError, 'identically'):
             run_targets(render_target=lambda v: ['changed'])
