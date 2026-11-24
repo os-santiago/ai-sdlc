@@ -53,7 +53,7 @@ jobs:
           done
           git init -q "$RUNNER_TEMP/homedir-source"
           git -C "$RUNNER_TEMP/homedir-source" fetch -q --depth 1 https://github.com/os-santiago/homedir.git 0622cdaeb59a11a27bd5f3d7e18183c401a5e412
-      - uses: actions/setup-go@802e89cd7394b98352d79117a8b463bbfc2fdacf
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5
         with:
           go-version-file: runtime/k8s/go.mod
           cache-dependency-path: runtime/k8s/go.sum

@@ -218,7 +218,7 @@ jobs:
           export AI_SDLC_TEST_ORACLE_PROVIDER=docker
           export AI_SDLC_TEST_HOMEDIR_SOURCE="$RUNNER_TEMP/homedir-source"
           python3 -m unittest discover -s tools -p test_generative_pilot.py -v
-      - uses: actions/setup-go@802e89cd7394b98352d79117a8b463bbfc2fdacf
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5
         if: matrix.group != 'executor'
         with:
           go-version-file: runtime/k8s/go.mod
