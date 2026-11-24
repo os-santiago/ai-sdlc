@@ -295,6 +295,31 @@ func TestToolchainInitContainerIDsAreStable(t *testing.T) {
 	if session, err := r.WaitRunning(context.Background(), "22222222-2222-4222-8222-222222222222"); err == nil || session != nil {
 		t.Fatal("replaced init container accepted during start")
 	}
+	// Once an init container has been observed, every later poll must still
+	// report it: an empty list or a return to waiting refuses the pod.
+	for name, edit := range map[string]func(*core.Pod){
+		"empty": func(p *core.Pod) { p.Status.InitContainerStatuses = nil },
+		"waiting": func(p *core.Pod) {
+			waitingInit(&p.Status.InitContainerStatuses[0], "PodInitializing")
+			waitingInit(&p.Status.InitContainerStatuses[1], "PodInitializing")
+		},
+		"copy-reset": func(p *core.Pod) { waitingInit(&p.Status.InitContainerStatuses[1], "PodInitializing") },
+	} {
+		t.Run("disappears-"+name, func(t *testing.T) {
+			r, _, _, calls := toolchainResources(t, func(n int32, pod *core.Pod) {
+				initializing(pod)
+				switch n {
+				case 1:
+					runningInit(&pod.Status.InitContainerStatuses[1])
+				default:
+					edit(pod)
+				}
+			})
+			if session, err := r.WaitRunning(context.Background(), "22222222-2222-4222-8222-222222222222"); err == nil || session != nil || calls.Load() != 2 {
+				t.Fatal("init container vanished during start and was accepted", err, calls.Load())
+			}
+		})
+	}
 	// The session's own baseline must be the init containers readiness saw.
 	r, _, _, _ = toolchainResources(t, func(n int32, pod *core.Pod) {
 		if n == 2 {

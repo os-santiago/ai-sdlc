@@ -19,7 +19,8 @@ import (
 //     termination;
 //   - a container starts only after every earlier one exited 0, and later
 //     ones wait (PodInitializing or ContainerCreating, with no container ID);
-//   - a container ID, once observed, never changes;
+//   - a container ID, once observed, never changes, and the container stays
+//     in later observations (an empty list is valid only before the first);
 //   - a running pod has every init container terminated with exit code 0,
 //     no signal, and the same container ID in its state.
 //
@@ -93,13 +94,17 @@ func observeInit(expected []core.Container, statuses []core.ContainerStatus, req
 	return progress, nil
 }
 
-// stableInit requires every container ID seen earlier to be unchanged, and
-// records new ones.
+// stableInit requires every init container seen earlier to be observed
+// again with the same container ID, and records new ones. A container that
+// disappears (including an empty status list after the first observation)
+// or goes back to waiting refuses the pod.
 func stableInit(seen map[string]instance, current map[string]instance) bool {
-	for name, observed := range current {
-		if previous, ok := seen[name]; ok && previous.ID != observed.ID {
+	for name, previous := range seen {
+		if observed, ok := current[name]; !ok || observed.ID != previous.ID {
 			return false
 		}
+	}
+	for name, observed := range current {
 		seen[name] = observed
 	}
 	return true
