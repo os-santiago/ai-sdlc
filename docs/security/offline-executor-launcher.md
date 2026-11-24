@@ -112,7 +112,10 @@ Fixture issue numbers and candidate files are synthetic and are never published
 as product improvements or releases.
 
 The worker image has Node and Git, not every target project's toolchain or
-network-fetched dependencies.
+network-fetched dependencies. This fixture does not prove Java/Maven validation,
+provider-backed generation, live admission, durable job supervision, candidate
+review, Konflux/SLSA promotion or deployment. Those require separate reviewed
+components and real evidence before autonomous delivery is enabled.
 
 ## Optional generation toolchain (issue #745)
 
@@ -150,7 +153,4 @@ The trusted controller accepts exactly the compiled init sequence. Readiness
 and every later observation require the compiled init containers, in order,
 running their pinned images, never restarted, exited 0 and with unchanged
 container IDs. Any other init status refuses the pod. A failed copy is named
-with a bounded `readiness-toolchain-*` stop. This fixture does not prove Java/Maven validation,
-provider-backed generation, live admission, durable job supervision, candidate
-review, Konflux/SLSA promotion or deployment. Those require separate reviewed
-components and real evidence before autonomous delivery is enabled.
+with a bounded `readiness-toolchain-*` stop.
