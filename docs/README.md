@@ -2,6 +2,9 @@
 
 Start here:
 
+- [Strategic principles](architecture/strategic-principles.md): the five
+  architectural commitments every component and change is judged against, and
+  the [principles audit and development plan](architecture/principles-audit-2026-11-24.md).
 - [Capability matrix](capabilities.md): what is generic, project-specific or not
   yet proven.
 - [Roadmap](roadmap.md): the path to an adoptable v1.
