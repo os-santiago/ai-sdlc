@@ -157,6 +157,30 @@ func (g Generation) validate() error {
 	return g.Toolchain.validate()
 }
 
+// Validate reports whether t is a valid toolchain declaration. The executor
+// rechecks the copy of it that an assignment carries.
+func (t Toolchain) Validate() error { return t.validate() }
+
+// ValidEnv reports whether env is a valid Verification.Env.
+func ValidEnv(env map[string]string) bool { return validEnv(env) }
+
+// ValidCommand reports whether command and workingDir are a valid
+// Verification.Command and Verification.WorkingDir.
+func ValidCommand(command []string, workingDir string) bool {
+	if len(command) == 0 || len(command) > 32 || (workingDir != "" && cleanPath(workingDir) != nil) {
+		return false
+	}
+	for _, arg := range command {
+		if arg == "" || len(arg) > 1024 || strings.IndexFunc(arg, hiddenRune) >= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidImage reports whether image is a pinned verification image reference.
+func ValidImage(image string) bool { return pinnedImage.MatchString(image) }
+
 func (t Toolchain) validate() error {
 	if ValidateToolchainRoot(t.Root) != nil || len(t.Path) == 0 || len(t.Path) > MaxToolchainPath {
 		return ErrManifest
@@ -367,12 +391,7 @@ func (v Verification) validate() error {
 			return ErrManifest
 		}
 	}
-	for _, arg := range v.Command {
-		if arg == "" || len(arg) > 1024 || strings.IndexFunc(arg, hiddenRune) >= 0 {
-			return ErrManifest
-		}
-	}
-	if v.WorkingDir != "" && cleanPath(v.WorkingDir) != nil {
+	if !ValidCommand(v.Command, v.WorkingDir) {
 		return ErrManifest
 	}
 	if v.Result.JUnitPath != "" && cleanPath(v.Result.JUnitPath) != nil {

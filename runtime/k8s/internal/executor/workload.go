@@ -60,6 +60,10 @@ func Compile(namespace, workerImage, mailboxImage, runtimeClass string, assignme
 	if a.Repair != nil && (p.Version != ProfileVersion || p.MaxRepairs != 1) {
 		return Workload{}, ErrInvalid
 	}
+	// A reviewer never runs the repository's tests.
+	if a.Toolchain != nil && p.Version != ProfileVersion {
+		return Workload{}, ErrInvalid
+	}
 	if len(adevRaw) == 0 || len(adevRaw) > 64*1024 || workspacebundle.Digest(adevRaw) != p.ADevSHA256 {
 		return Workload{}, ErrInvalid
 	}
@@ -70,7 +74,7 @@ func Compile(namespace, workerImage, mailboxImage, runtimeClass string, assignme
 		return map[string]any{"name": n, "namespace": namespace, "labels": labels, "annotations": map[string]any{"ai-sdlc.io/assignment-sha256": digest, "ai-sdlc.io/authority-revision": a.AuthorityRevision}}
 	}
 	config := map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": metadata(configName), "immutable": true, "data": map[string]any{
-		"assignment.json": string(assignmentRaw), "profile.json": string(profileRaw), "adev-profile.yaml": string(adevRaw), "scc-config.json": string(SCCConfiguration(p)),
+		"assignment.json": string(assignmentRaw), "profile.json": string(profileRaw), "adev-profile.yaml": string(adevRaw), "scc-config.json": string(SCCConfiguration(p, a.Toolchain)),
 	}}
 	security := map[string]any{"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "readOnlyRootFilesystem": true, "allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []string{"ALL"}}}
 	workspace := map[string]any{"name": "workspace", "mountPath": "/workspaces"}
@@ -111,6 +115,20 @@ func Compile(namespace, workerImage, mailboxImage, runtimeClass string, assignme
 		}
 		spec := pod["spec"].(map[string]any)
 		spec["volumes"] = append(spec["volumes"].([]any), map[string]any{"name": "review-state", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "16Mi"}})
+	}
+	if a.Toolchain != nil {
+		// The toolchain is copied before the worker starts and mounted
+		// read-only; the scratch volume holds TMPDIR and build caches. The
+		// worker's disk limit covers the pod's disk volumes, so the pod is
+		// evicted predictably when their sum is exceeded.
+		worker["resources"] = map[string]any{"requests": map[string]any{"cpu": "100m", "memory": "128Mi"}, "limits": map[string]any{"cpu": "1", "memory": toolchainMemory, "ephemeral-storage": toolchainStorage}}
+		worker["volumeMounts"] = append(worker["volumeMounts"].([]any),
+			map[string]any{"name": "toolchain", "mountPath": ToolchainMount, "readOnly": true},
+			map[string]any{"name": "scratch", "mountPath": ScratchDirectory})
+		spec := pod["spec"].(map[string]any)
+		spec["volumes"] = append(spec["volumes"].([]any), toolchainVolumes()...)
+		spec["initContainers"] = toolchainInitContainers(a.Toolchain, mailboxImage, security)
+		spec["activeDeadlineSeconds"] = PodDeadlineSeconds(p) + ToolchainStartSeconds
 	}
 	// JSON round-trip also gives independent objects; callers cannot accidentally
 	// mutate shared nested maps through a sibling container/config-map object.

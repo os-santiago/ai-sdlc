@@ -190,6 +190,7 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 		AuthorityRevision: c.AuthorityRevision, IssueNumbers: []int{c.IssueNumber}, Title: snapshot.Issue.Title, Body: snapshot.Issue.Body,
 		AcceptanceCriteria: normalizedevent.ExtractAcceptanceCriteria(snapshot.Issue.Body), ExpiresAt: c.ExpiresAt}
 	assignment.Workspace = WorkspaceFor(c.Repository)
+	assignment.Toolchain = ToolchainFor(c.Repository)
 	var parent store.VerificationCandidate
 	if c.Repair != nil {
 		a, p, e := repairPreparation(ctx, db, in.Policy, c)
@@ -260,4 +261,28 @@ func WorkspaceFor(repository string) string {
 		return ""
 	}
 	return executor.WorkspaceOfflineTests
+}
+
+// ToolchainFor returns the generation toolchain a repository's reviewed
+// manifest declares, or nil. The image is the verifier's pinned image, so the
+// generator runs the same toolchain as verification. PATH and the variables
+// the launcher reserves are not passed: the worker's PATH is rebuilt from the
+// declared directories.
+func ToolchainFor(repository string) *executor.Toolchain {
+	m, ok := project.Lookup(repository)
+	if !ok || m.Verification == nil || m.Generation == nil || m.Generation.Toolchain == nil {
+		return nil
+	}
+	v, t := m.Verification, m.Generation.Toolchain
+	toolchain := &executor.Toolchain{Image: v.Image, Root: t.Root, Path: append([]string(nil), t.Path...),
+		Command: append([]string(nil), v.Command...), WorkingDir: v.WorkingDir}
+	for name, value := range v.Env {
+		if executor.ToolchainEnvAllowed(name) {
+			if toolchain.Env == nil {
+				toolchain.Env = map[string]string{}
+			}
+			toolchain.Env[name] = value
+		}
+	}
+	return toolchain
 }
