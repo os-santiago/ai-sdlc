@@ -171,6 +171,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ctx.Done():
+			if r.Context().Err() != nil {
+				// The client left (for example its own timer ended); the log
+				// must not blame the exchange deadline.
+				fail(504, "client_gone")
+				return
+			}
 			fail(504, "mailbox_deadline")
 			return
 		case <-commit.C:
