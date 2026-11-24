@@ -190,9 +190,14 @@ class RunRetryTests(unittest.TestCase):
         self.assertEqual((len(calls), sleep.call_count), (3, 2))
         def failing(args, **kwargs):
             raise run_battery.subprocess.TimeoutExpired(args, 120)
-        with mock.patch('run_battery.subprocess.run', side_effect=failing), mock.patch('run_battery.time.sleep'):
+        with mock.patch('run_battery.subprocess.run', side_effect=failing) as runs, mock.patch('run_battery.time.sleep') as sleep:
             with self.assertRaises(run_battery.subprocess.TimeoutExpired):
                 run_battery.run(['gh', 'x'])
+        self.assertEqual((runs.call_count, [c.args[0] for c in sleep.call_args_list]), (4, [5, 15, 45]))
+        with mock.patch('run_battery.subprocess.run', side_effect=failing) as runs, mock.patch('run_battery.time.sleep') as sleep:
+            with self.assertRaises(run_battery.subprocess.TimeoutExpired):
+                run_battery.run(['kubectl', 'logs'], retry=False)
+        self.assertEqual((runs.call_count, sleep.call_count), (1, 0))
 
 if __name__ == '__main__':
     unittest.main()

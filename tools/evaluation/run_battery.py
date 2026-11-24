@@ -40,11 +40,11 @@ TERMINAL_CLEANUP = "(l.cleanup_state='uncertain' OR (l.cleanup_state='pending' A
 RETRY_DELAYS = (5, 15, 45)
 
 
-def run(args, **kwargs):
+def run(args, retry=True, **kwargs):
     """Runs a read-only observation command. A transient failure (a forge
     or cluster API blip, a timeout) is retried with backoff, so one blip does
     not abort a battery of many hours; the last failure is raised."""
-    for delay in RETRY_DELAYS + (None,):
+    for delay in (RETRY_DELAYS if retry else ()) + (None,):
         try:
             return subprocess.run(args, check=True, capture_output=True, text=True, timeout=120, **kwargs).stdout
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
@@ -66,7 +66,8 @@ class Runtime:
         lines = []
         for deployment, container in (('ai-sdlc-worker', 'worker'), ('ai-sdlc-verifier', 'verifier')):
             try:
-                out = run(self.base + ['logs', 'deploy/' + deployment, '-c', container, '--since-time=' + since])
+                # Diagnostics are best effort: no retry ladder, a failure is skipped.
+                out = run(self.base + ['logs', 'deploy/' + deployment, '-c', container, '--since-time=' + since], retry=False)
             except subprocess.SubprocessError:
                 continue
             lines += sorted({line.split(' ', 2)[-1] for line in out.splitlines() if 'stopped safely' in line})
