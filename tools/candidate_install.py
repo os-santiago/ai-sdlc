@@ -46,7 +46,19 @@ def require_unchanged_tool_budget(kubectl, desired):
         raise ValueError('Installed model budget differs; use a reviewed runtime transition before reconciliation')
 
 
-def desired_values(root, image_lock_path, lock, verification=False, review=False, publication=False, merge=False, repair=False):
+DEFAULT_RUNTIME_CLASS = 'ai-sdlc-offline'
+_RUNTIME_CLASS = re.compile(r'[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*')
+
+
+def validate_runtime_class(name):
+    """A Kubernetes RuntimeClass name (DNS-1123 subdomain); never empty."""
+    if not isinstance(name, str) or len(name) > 253 or not _RUNTIME_CLASS.fullmatch(name):
+        raise ValueError('Invalid sandbox RuntimeClass name; use a DNS-1123 subdomain such as gvisor or kata')
+    return name
+
+
+def desired_values(root, image_lock_path, lock, verification=False, review=False, publication=False, merge=False, repair=False,
+                   runtime_class=DEFAULT_RUNTIME_CLASS):
     if type(repair) is not bool or (repair and not review):
         raise ValueError("Review repair requires explicit independent review")
     if merge and not publication:
@@ -82,7 +94,14 @@ def desired_values(root, image_lock_path, lock, verification=False, review=False
                             'MailboxImage': lock['image']['repository'] + '@' + images['model-mailbox']['digest']},
               'model': {'Limits': {'Calls': 16, 'InputBytes': 2097152, 'OutputBytes': 4194304},
                         'ResponseLimit': 262144}}
+    # The sandbox RuntimeClass is written only when it differs from the default,
+    # so default installations keep byte-identical configuration documents.
+    custom_runtime_class = validate_runtime_class(runtime_class) != DEFAULT_RUNTIME_CLASS
+    if custom_runtime_class:
+        config['placement']['RuntimeClass'] = runtime_class
     result = {'candidate': {'configJSON': json.dumps(config, sort_keys=True), 'apiServerCIDRs': []}}
+    if custom_runtime_class:
+        result['sandbox'] = {'runtimeClassName': runtime_class}
     if verification:
         item = images.get('verifier', {})
         value = item.get('digest')
@@ -96,6 +115,8 @@ def desired_values(root, image_lock_path, lock, verification=False, review=False
         review_config = {'version': 'ai-sdlc.independent-review-runtime/v1', 'profile': review_profile,
                          'aDev': adev, 'workerImage': config['placement']['WorkerImage'],
                          'mailboxImage': config['placement']['MailboxImage']}
+        if custom_runtime_class:
+            review_config['runtimeClass'] = runtime_class
         result['review'] = {'enabled': True, 'configJSON': json.dumps(review_config, sort_keys=True)}
     if repair:
         config['profile']['maxRepairs'] = 1

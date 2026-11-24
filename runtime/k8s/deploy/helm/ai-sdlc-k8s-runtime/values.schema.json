@@ -790,6 +790,22 @@
         }
       }
     },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtimeClassName"
+      ],
+      "properties": {
+        "runtimeClassName": {
+          "description": "Kubernetes RuntimeClass (DNS-1123 subdomain) every executor, reviewer and verification pod runs in.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+        }
+      }
+    },
     "verifier": {
       "type": "object",
       "additionalProperties": false,

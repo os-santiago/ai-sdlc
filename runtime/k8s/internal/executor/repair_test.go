@@ -91,7 +91,7 @@ func TestRepairWorkloadKeepsToolAndCallLimitsIndependent(t *testing.T) {
 		a.TreeSHA256 = a.Repair.Reference.ParentTreeSHA256
 		a.ProfileSHA256 = workspacebundle.Digest(profile)
 		assignment, _ := json.Marshal(a)
-		workload, err := Compile("fixture", image, image, assignment, profile, adev, now)
+		workload, err := Compile("fixture", image, image, DefaultRuntimeClass, assignment, profile, adev, now)
 		if err != nil {
 			t.Fatal("independent bounds rejected", err)
 		}
@@ -103,7 +103,7 @@ func TestRepairWorkloadKeepsToolAndCallLimitsIndependent(t *testing.T) {
 		profile, _ = json.Marshal(p)
 		a.ProfileSHA256 = workspacebundle.Digest(profile)
 		assignment, _ = json.Marshal(a)
-		if _, err = Compile("fixture", image, image, assignment, profile, adev, now); err == nil {
+		if _, err = Compile("fixture", image, image, DefaultRuntimeClass, assignment, profile, adev, now); err == nil {
 			t.Fatal("repair without original opt-in")
 		}
 	}

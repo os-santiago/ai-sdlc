@@ -24,7 +24,7 @@ func TestReviewerCannotUseGenerationAuthorityOrWritableSource(t *testing.T) {
 	a.ProfileSHA256 = workspacebundle.Digest(raw)
 	assignment, _ := json.Marshal(a)
 	image := "localhost/ai-sdlc-worker@sha256:" + strings.Repeat("a", 64)
-	w, e := Compile("fixture", image, image, assignment, raw, adev, time.Now())
+	w, e := Compile("fixture", image, image, DefaultRuntimeClass, assignment, raw, adev, time.Now())
 	if e != nil {
 		t.Fatal(e)
 	}

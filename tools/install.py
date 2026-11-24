@@ -429,6 +429,7 @@ def _main(argv, stack):
     parser.add_argument('--codex-auth-file', type=Path, help='Explicit local Codex authentication source for the candidate sidecar Secret')
     parser.add_argument('--refresh-model-credential', action='store_true')
     parser.add_argument('--model-upstream', type=Path, help='Reviewed OpenAI-compatible model service document (see docs/operations/model-gateway-adapters.md)')
+    parser.add_argument('--runtime-class', help='Existing sandbox RuntimeClass for executor, reviewer and verification pods (for example kata); --platform openshift with the candidate or verification profile. kind installs and uses ai-sdlc-offline')
     parser.add_argument('--project-manifest', type=Path, help='Reviewed ai-sdlc.project/v1 manifest for a repository that is not a built-in reference')
     args = parser.parse_args(argv)
     if args.command not in ('plan','local','status','tools','host','credentials','sandbox'):
@@ -460,6 +461,12 @@ def _main(argv, stack):
             raise ValueError('Release configuration requires prepared mode, approved target, published deployer pins and installed browser profile')
     konflux_runtime_install.validate_options(args)
     openshift_install.validate_options(args)
+    if args.runtime_class is not None:
+        import candidate_install
+        candidate_install.validate_runtime_class(args.runtime_class)
+        if args.command not in ('plan', 'local') or args.profile not in ('candidate', 'verification'):
+            raise ValueError('--runtime-class requires plan or local with the candidate or verification profile')
+    runtime_class = args.runtime_class or 'ai-sdlc-offline'
     if args.merge and not args.publication:
         raise ValueError('Merge requires explicit verified publication')
     if args.merge is not None and args.command not in ('plan', 'local', 'status', 'credentials', 'sandbox'):
@@ -516,7 +523,7 @@ def _main(argv, stack):
     execution_values = None
     if args.profile in ('candidate', 'verification'):
         import candidate_install
-        execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images), verification=args.profile == "verification", review=bool(args.independent_review), publication=bool(args.publication), merge=bool(args.merge), repair=bool(args.review_repair))
+        execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images), verification=args.profile == "verification", review=bool(args.independent_review), publication=bool(args.publication), merge=bool(args.merge), repair=bool(args.review_repair), runtime_class=runtime_class)
         if args.model_upstream is not None:
             candidate_install.apply_model_upstream(execution_values, args.model_upstream)
     elif args.model_upstream is not None:
@@ -643,7 +650,7 @@ def _main(argv, stack):
     # kind's node readiness alone does not establish service networking or
     # dynamic storage. Fail here before consuming the bounded migration window.
     if openshift:
-        openshift_install.preflight(run, kubectl, sandbox=args.profile in ('candidate', 'verification'))
+        openshift_install.preflight(run, kubectl, sandbox=args.profile in ('candidate', 'verification'), runtime_class=runtime_class)
     else:
         run(kubectl + ['wait', '--for=condition=Ready', 'pods', '--all', '-n', 'kube-system',
                        '--timeout', args.timeout])

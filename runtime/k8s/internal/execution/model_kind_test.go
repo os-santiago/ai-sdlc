@@ -101,7 +101,7 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 		in, e := load(ctx)
 		return in, input.Placement, e
 	}
-	workload, err := executor.Compile(input.Placement.Namespace, input.Placement.WorkerImage, input.Placement.MailboxImage, prepared.Assignment(), prepared.Profile(), prepared.ADev(), time.Now())
+	workload, err := executor.Compile(input.Placement.Namespace, input.Placement.WorkerImage, input.Placement.MailboxImage, input.Placement.SandboxRuntimeClass(), prepared.Assignment(), prepared.Profile(), prepared.ADev(), time.Now())
 	if err != nil {
 		t.Fatal("fixed workload plan")
 	}

@@ -41,7 +41,7 @@ func PlanResources(client *Client, b Binding) (*Resources, error) {
 	b.Assignment = append([]byte(nil), b.Assignment...)
 	b.Profile = append([]byte(nil), b.Profile...)
 	b.ADev = append([]byte(nil), b.ADev...)
-	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.Assignment, b.Profile, b.ADev, time.Now())
+	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.RuntimeClass, b.Assignment, b.Profile, b.ADev, time.Now())
 	if err != nil {
 		return nil, ErrTransport
 	}

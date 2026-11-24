@@ -228,6 +228,48 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(set(routes), {'admit-issue', 'plan-admission', 'execute-work', 'verify-artifact'})
         self.assertEqual(routes['verify-artifact'], 'http://ai-sdlc-verifier:8087/internal/verify-artifact')
 
+    def sandbox_docs(self, values=None):
+        values = dict(values or {}, runtime={'mode': 'verification'}, verifier={'digest': 'sha256:' + 'a' * 64})
+        result = self.render_build(values)
+        return result, [d for d in yaml.safe_load_all(result.stdout) if d] if result.returncode == 0 else []
+
+    def test_sandbox_runtime_class_preflight_is_one_read_only_name(self):
+        result, docs = self.sandbox_docs()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        role = next(d for d in docs if d['kind'] == 'ClusterRole' and d['metadata']['name'] == 'ai-sdlc-sandbox-runtime-class')
+        self.assertEqual(role['rules'], [{'apiGroups': ['node.k8s.io'], 'resources': ['runtimeclasses'],
+                                          'resourceNames': ['ai-sdlc-offline'], 'verbs': ['get']}])
+        binding = next(d for d in docs if d['kind'] == 'ClusterRoleBinding' and d['metadata']['name'] == 'ai-sdlc-sandbox-runtime-class')
+        self.assertEqual(binding['roleRef'], {'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'ClusterRole', 'name': 'ai-sdlc-sandbox-runtime-class'})
+        self.assertEqual({(s['name'], s['namespace']) for s in binding['subjects']},
+                         {('ai-sdlc-execution-controller', 'ai-sdlc-runtime'), ('ai-sdlc-verification-controller', 'ai-sdlc-runtime')})
+        # Candidate binds only the worker; maintenance creates no sandbox pods.
+        candidate = self.render('-f', str(ROOT / 'runtime/k8s/deploy/local/profiles/candidate.json'))
+        self.assertEqual(candidate.returncode, 0, candidate.stderr)
+        binding = next(d for d in yaml.safe_load_all(candidate.stdout) if d and d['kind'] == 'ClusterRoleBinding' and d['metadata']['name'] == 'ai-sdlc-sandbox-runtime-class')
+        self.assertEqual([s['name'] for s in binding['subjects']], ['ai-sdlc-execution-controller'])
+        maintenance = self.render()
+        self.assertEqual(maintenance.returncode, 0, maintenance.stderr)
+        self.assertNotIn('sandbox-runtime-class', maintenance.stdout)
+
+    def test_configured_sandbox_runtime_class_must_match_installed_documents(self):
+        kata = {'candidate': {'configJSON': json.dumps({'placement': {'RuntimeClass': 'kata'}})}}
+        default = {'candidate': {'configJSON': json.dumps({'placement': {}})}}
+        result, docs = self.sandbox_docs(dict(kata, sandbox={'runtimeClassName': 'kata'},
+                                              review={'enabled': True, 'configJSON': json.dumps({'runtimeClass': 'kata'})}))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        role = next(d for d in docs if d['kind'] == 'ClusterRole' and d['metadata']['name'] == 'ai-sdlc-sandbox-runtime-class')
+        self.assertEqual(role['rules'][0]['resourceNames'], ['kata'])
+        # Default documents omit the class; they match only the default value.
+        result = self.sandbox_docs(dict(default, review={'enabled': True, 'configJSON': '{}'}))[0]
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for values in (dict(default, sandbox={'runtimeClassName': 'kata'}), kata,
+                       dict(kata, sandbox={'runtimeClassName': 'kata'}, review={'enabled': True, 'configJSON': '{}'}),
+                       {'sandbox': {'runtimeClassName': 'Kata'}}, {'sandbox': {'runtimeClassName': 'kata/../x'}},
+                       {'sandbox': {'runtimeClassName': ''}}, {'sandbox': {'runtimeClassName': None}}):
+            with self.subTest(values=values):
+                self.assertNotEqual(self.sandbox_docs(values)[0].returncode, 0)
+
     def test_openshift_profile_binds_only_nonroot_scc_and_sets_platform(self):
         base = ['--set', 'runtime.mode=verification', '--set', 'verifier.digest=sha256:' + 'a' * 64]
         plain = [d for d in yaml.safe_load_all(self.render(*base).stdout) if d]

@@ -37,6 +37,10 @@ func TestRealKubernetesMailboxFixture(t *testing.T) {
 	if err != nil || len(raw) > 256*1024 || json.Unmarshal(raw, &input) != nil {
 		t.Fatal("invalid private fixture input")
 	}
+	// The local kind fixtures use the installer's default sandbox class.
+	if input.Binding.RuntimeClass == "" {
+		input.Binding.RuntimeClass = executor.DefaultRuntimeClass
+	}
 	client, err := NewClient(input.Config)
 	if err != nil {
 		t.Fatal("fixture client rejected")

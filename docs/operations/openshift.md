@@ -63,8 +63,12 @@ Without the value, nothing changes on other Kubernetes distributions.
 
 ## Sandbox runtime
 
-Executor and verification pods use the `ai-sdlc-offline` RuntimeClass. On kind
-its handler is gVisor (`runsc`) under containerd, with networking disabled.
+Executor, reviewer and verification pods use the configured sandbox
+RuntimeClass, `ai-sdlc-offline` by default
+([per-platform classes](../security/offline-executor-runtime.md#sandbox-runtimeclass-per-platform)).
+On kind its handler is gVisor (`runsc`) under containerd, with networking
+disabled. On OpenShift, select the installed class with `--runtime-class`, for
+example `kata` for OpenShift sandboxed containers.
 
 On CRI-O, the same pinned `runsc` release was registered as a runtime handler
 and failed in three ways:
@@ -79,8 +83,8 @@ and failed in three ways:
 
 gVisor under CRI-O is therefore not a working sandbox on OpenShift today. The
 supported sandbox runtime there is OpenShift sandboxed containers (Kata). The
-next M5 step is to evaluate it as the `ai-sdlc-offline` handler, together with
-the namespace's deny-all NetworkPolicy.
+next M5 step is to evaluate it as the sandbox class (`--runtime-class kata`),
+together with the namespace's deny-all NetworkPolicy.
 
 OpenShift sandboxed containers 1.13 was tried on OpenShift Local 5.0. The
 host has nested virtualization (AMD), and the operator installed. However,
@@ -103,7 +107,8 @@ generations that way outside a disposable cluster.
 The administrator prepares the cluster:
 
 - a default StorageClass;
-- the `ai-sdlc-offline` RuntimeClass for the sandbox runtime (see above);
+- the sandbox RuntimeClass (see above): its name is passed with
+  `--runtime-class NAME`, and defaults to `ai-sdlc-offline`;
 - a kubeconfig context allowed to create namespaces, RBAC and workloads.
 
 The installing host still needs Docker or Podman, which generate the
@@ -117,7 +122,8 @@ Then the installer targets that context instead of creating a kind cluster:
   --cluster my-openshift --repository OWNER/REPO --environment ai-sdlc-production \
   --profile verification --independent-review --publication --merge --review-repair \
   --github-auth gh-cli --codex-auth-file ~/.codex/auth.json \
-  --model-upstream upstream.json --project-manifest manifest.json
+  --model-upstream upstream.json --project-manifest manifest.json \
+  --runtime-class kata
 ```
 
 On first install the installer records the cluster's UID and the context in
@@ -125,8 +131,9 @@ its state directory, and it refuses a different cluster or context for that
 `--cluster` name later. Use a `--cluster` name of its own: the installer
 refuses a state directory that belongs to a kind or Konflux installation, and
 it records nothing for a cluster without the OpenShift security API. Before any change it checks three things: the
-OpenShift security API, a default StorageClass, and the RuntimeClass when the
-profile runs generations. It never installs a node runtime. It renders the
+OpenShift security API, a default StorageClass, and the selected RuntimeClass
+when the profile runs generations. It never installs a node runtime. The
+worker and the verifier repeat the RuntimeClass check before they become ready. It renders the
 chart with `openshift.enabled=true`.
 
 The model endpoint must be reachable from the cluster's pods at a literal

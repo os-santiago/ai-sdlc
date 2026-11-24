@@ -154,7 +154,7 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 	ctx, cancel := context.WithDeadline(ctx, l.durable.Claim.Until)
 	defer cancel()
 	stage = "resources"
-	resources, err = podtransport.PlanResources(client, podtransport.Binding{Namespace: l.placement.Namespace, WorkerImage: l.placement.WorkerImage, MailboxImage: l.placement.MailboxImage, Assignment: prepared.Assignment(), Profile: prepared.Profile(), ADev: prepared.ADev()})
+	resources, err = podtransport.PlanResources(client, podtransport.Binding{Namespace: l.placement.Namespace, WorkerImage: l.placement.WorkerImage, MailboxImage: l.placement.MailboxImage, RuntimeClass: l.placement.SandboxRuntimeClass(), Assignment: prepared.Assignment(), Profile: prepared.Profile(), ADev: prepared.ADev()})
 	if err != nil {
 		return record, ControllerError{stage}
 	}

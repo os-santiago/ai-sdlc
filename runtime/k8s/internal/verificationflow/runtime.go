@@ -20,6 +20,8 @@ type Runtime struct {
 	Image  string
 	// MailboxImage carries the repository-tests runner and transfer helper.
 	MailboxImage string
+	// RuntimeClass is the installed sandbox RuntimeClass for verification pods.
+	RuntimeClass string
 }
 
 func (r Runtime) PollOnce(ctx context.Context) (string, error) {
@@ -80,7 +82,7 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		}
 		return "rejected", nil
 	}
-	if _, err = RunWithMailbox(ctx, r.DB, r.Load, id, r.Client, r.Image, r.MailboxImage); err != nil {
+	if _, err = RunWithMailbox(ctx, r.DB, r.Load, id, r.Client, r.Image, r.MailboxImage, r.RuntimeClass); err != nil {
 		return "stopped", err
 	}
 	return "behavior-verified", nil

@@ -2,9 +2,10 @@
 
 The installer never creates, deletes or reconfigures the cluster or its nodes.
 It records the cluster's identity on first use and refuses a different
-cluster later. The administrator provides, beforehand, the namespaces' sandbox
-runtime as the `ai-sdlc-offline` RuntimeClass and a default StorageClass. See
-docs/operations/openshift.md.
+cluster later. The administrator provides, beforehand, the sandbox runtime as
+a RuntimeClass (the platform's standard class, such as `kata` for OpenShift
+sandboxed containers, selected with --runtime-class; `ai-sdlc-offline` by
+default) and a default StorageClass. See docs/operations/openshift.md.
 """
 import json
 import os
@@ -16,9 +17,13 @@ OTHER_MARKERS = ('ownership.json', 'konflux-ownership.json')
 
 
 def validate_options(args):
+    runtime_class = getattr(args, 'runtime_class', None)
     if args.platform != 'openshift':
         if args.kubeconfig is not None or args.context is not None:
             raise ValueError('--kubeconfig and --context select an existing OpenShift cluster; use --platform openshift')
+        # kind and Konflux install and use their own ai-sdlc-offline class.
+        if runtime_class not in (None, 'ai-sdlc-offline'):
+            raise ValueError('--runtime-class selects a platform sandbox RuntimeClass; use --platform openshift (kind installs ai-sdlc-offline)')
         return
     if args.kubeconfig is None or args.context is None:
         raise ValueError('OpenShift installation requires an explicit --kubeconfig and --context')
@@ -70,7 +75,7 @@ def connect(run, binaries, state, args):
     return kubeconfig, kubectl, cluster_uid, True
 
 
-def preflight(run, kubectl, sandbox):
+def preflight(run, kubectl, sandbox, runtime_class='ai-sdlc-offline'):
     """Fail before any change when the cluster lacks what the runtime needs."""
     groups = run(kubectl + ['api-versions'], capture_output=True).stdout.split()
     if 'security.openshift.io/v1' not in groups:
@@ -79,8 +84,8 @@ def preflight(run, kubectl, sandbox):
     if not any(c.get('metadata', {}).get('annotations', {}).get('storageclass.kubernetes.io/is-default-class') == 'true' for c in classes):
         raise ValueError('OpenShift installation requires a default StorageClass')
     if sandbox:
-        result = run(kubectl + ['get', 'runtimeclass', 'ai-sdlc-offline', '-o', 'json'], capture_output=True, check=False)
+        result = run(kubectl + ['get', 'runtimeclass', runtime_class, '-o', 'json'], capture_output=True, check=False)
         if result.returncode != 0:
-            raise ValueError('Provide the sandbox runtime as RuntimeClass ai-sdlc-offline before installing (docs/operations/openshift.md)')
+            raise ValueError('Provide the sandbox runtime as RuntimeClass ' + runtime_class + ' before installing, or select the installed class with --runtime-class (docs/operations/openshift.md)')
         return json.loads(result.stdout).get('handler', '')
     return ''

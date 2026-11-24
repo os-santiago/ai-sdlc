@@ -21,6 +21,15 @@ candidate:
   apiServerCIDRs: []
 verifier:
   digest: ""
+# Sandbox RuntimeClass for every executor, reviewer and verification pod. Use
+# the platform's standard sandbox class (for example gvisor on GKE Sandbox,
+# kata on OpenShift sandboxed containers, kata-mshv-vm-isolation on AKS Pod
+# Sandboxing). The local kind installer creates ai-sdlc-offline. Controllers
+# verify the class exists before they become ready; there is no unsandboxed
+# fallback. The installer writes the same name into the execution and review
+# configuration documents; the chart rejects a mismatch.
+sandbox:
+  runtimeClassName: ai-sdlc-offline
 intake:
   configJSON: ""
   credentialSecret: ai-sdlc-github-client

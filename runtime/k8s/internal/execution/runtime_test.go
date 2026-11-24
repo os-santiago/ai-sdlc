@@ -3,6 +3,9 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,7 +22,7 @@ func runtimeFixture() RuntimeConfig {
 func TestRuntimeRejectsUnsafeInstallationInputs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "runtime.json")
 	for name, mutate := range map[string]func(*RuntimeConfig){
-		"valid": func(*RuntimeConfig) {}, "mutable image": func(c *RuntimeConfig) { c.Placement.WorkerImage = "image:latest" }, "control namespace": func(c *RuntimeConfig) { c.Placement.Namespace = "ai-sdlc-runtime" }, "unsupported model": func(c *RuntimeConfig) { c.Profile.Model = "other" }, "doctrine substitution": func(c *RuntimeConfig) { c.ADev = "changed" }, "unbounded calls": func(c *RuntimeConfig) { c.Model.Limits.Calls = 1000 },
+		"valid": func(*RuntimeConfig) {}, "mutable image": func(c *RuntimeConfig) { c.Placement.WorkerImage = "image:latest" }, "control namespace": func(c *RuntimeConfig) { c.Placement.Namespace = "ai-sdlc-runtime" }, "unsupported model": func(c *RuntimeConfig) { c.Profile.Model = "other" }, "doctrine substitution": func(c *RuntimeConfig) { c.ADev = "changed" }, "unbounded calls": func(c *RuntimeConfig) { c.Model.Limits.Calls = 1000 }, "invalid runtime class": func(c *RuntimeConfig) { c.Placement.RuntimeClass = "Kata/../runc" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := runtimeFixture()
@@ -39,6 +42,32 @@ func TestRuntimeRejectsUnsafeInstallationInputs(t *testing.T) {
 	_ = os.WriteFile(path, raw, 0600)
 	if _, _, e := LoadRuntime(path); e == nil {
 		t.Fatal("duplicate configuration accepted")
+	}
+}
+func TestRuntimeCarriesInstalledSandboxRuntimeClass(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime.json")
+	// The default document is unchanged: no runtime class field is written,
+	// and the executor still runs in the installer's default class.
+	c := runtimeFixture()
+	raw, _ := json.Marshal(c)
+	if strings.Contains(string(raw), "RuntimeClass") {
+		t.Fatal("default placement changed its installed bytes")
+	}
+	if e := os.WriteFile(path, raw, 0600); e != nil {
+		t.Fatal(e)
+	}
+	loaded, _, e := LoadRuntime(path)
+	if e != nil || loaded.Placement.SandboxRuntimeClass() != executor.DefaultRuntimeClass {
+		t.Fatal("default sandbox runtime class not used", e)
+	}
+	c.Placement.RuntimeClass = "kata-mshv-vm-isolation"
+	raw, _ = json.Marshal(c)
+	if e := os.WriteFile(path, raw, 0600); e != nil {
+		t.Fatal(e)
+	}
+	loaded, _, e = LoadRuntime(path)
+	if e != nil || loaded.Placement.SandboxRuntimeClass() != "kata-mshv-vm-isolation" {
+		t.Fatal("configured sandbox runtime class not loaded", e)
 	}
 }
 func TestCandidatePrivilegesAreLeastPrivilegeAndRevocable(t *testing.T) {
@@ -119,5 +148,44 @@ func TestExecutionQueueExpiresWithoutClaimOrRetry(t *testing.T) {
 	}
 	if f.Count(t, `SELECT count(*) FROM execution_requests WHERE state='stopped' AND stop_reason='expired' AND claim_token IS NULL`) != 1 {
 		t.Fatal("expiry did not preserve no-claim evidence")
+	}
+}
+
+func TestCheckSandboxReadsOnlyTheInstalledRuntimeClass(t *testing.T) {
+	var requested []string
+	present := "kata"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.Method+" "+r.URL.Path)
+		if r.Method != http.MethodGet || r.URL.Path != "/apis/node.k8s.io/v1/runtimeclasses/"+present {
+			w.WriteHeader(404)
+			return
+		}
+		w.Write([]byte(`{"kind":"RuntimeClass","apiVersion":"node.k8s.io/v1","metadata":{"name":"` + present + `"},"handler":"kata"}`))
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	write := func(name string, raw []byte) string {
+		path := filepath.Join(root, name)
+		if e := os.WriteFile(path, raw, 0600); e != nil {
+			t.Fatal(e)
+		}
+		return path
+	}
+	c := runtimeFixture()
+	c.Placement.RuntimeClass = "kata"
+	raw, _ := json.Marshal(c)
+	r := Runtime{ConfigPath: write("runtime.json", raw), TokenPath: write("token", []byte(strings.Repeat("x", 32))),
+		CAPath: write("ca", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})), APIServer: server.URL}
+	if e := r.CheckSandbox(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+	// The default configuration names ai-sdlc-offline, which is absent here.
+	raw, _ = json.Marshal(runtimeFixture())
+	write("runtime.json", raw)
+	if e := r.CheckSandbox(context.Background()); e == nil {
+		t.Fatal("missing sandbox runtime class accepted")
+	}
+	if len(requested) != 2 || requested[0] != "GET /apis/node.k8s.io/v1/runtimeclasses/kata" || requested[1] != "GET /apis/node.k8s.io/v1/runtimeclasses/ai-sdlc-offline" {
+		t.Fatal("unexpected API requests", requested)
 	}
 }

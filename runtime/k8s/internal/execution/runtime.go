@@ -49,7 +49,7 @@ func LoadRuntime(path string) (RuntimeConfig, []byte, error) {
 	if _, e = executor.ParseProfile(profile, workspacebundle.Digest(profile)); e != nil || c.Profile.ADevSHA256 != workspacebundle.Digest([]byte(c.ADev)) {
 		return c, nil, ErrAuthority
 	}
-	if c.Placement.Namespace != "ai-sdlc-executors" || c.Profile.Model != "codex-cli" || executor.ValidatePlacement(c.Placement.Namespace, c.Placement.WorkerImage, c.Placement.MailboxImage) != nil {
+	if c.Placement.Namespace != "ai-sdlc-executors" || c.Profile.Model != "codex-cli" || executor.ValidatePlacement(c.Placement.Namespace, c.Placement.WorkerImage, c.Placement.MailboxImage) != nil || (c.Placement.RuntimeClass != "" && !executor.ValidRuntimeClass(c.Placement.RuntimeClass)) {
 		return c, nil, ErrAuthority
 	}
 	// Immutable placement identities are checked before any queue operation.
@@ -208,6 +208,28 @@ func (r Runtime) Ready(ctx context.Context) error {
 		return ErrAuthority
 	}
 	return provider.CheckGateway(ctx)
+}
+
+// CheckSandbox observes, read-only, that the installed sandbox RuntimeClass
+// exists. The worker is not ready and claims no work until it does.
+func (r Runtime) CheckSandbox(ctx context.Context) error {
+	config, _, e := LoadRuntime(r.ConfigPath)
+	if e != nil {
+		return ErrAuthority
+	}
+	token, e := ReadBounded(r.TokenPath, 8192)
+	if e != nil {
+		return ErrAuthority
+	}
+	ca, e := ReadBounded(r.CAPath, 65536)
+	if e != nil {
+		return ErrAuthority
+	}
+	client, e := podtransport.NewClient(podtransport.Config{APIServer: r.APIServer, CA: ca, BearerToken: string(token)})
+	if e != nil {
+		return ErrAuthority
+	}
+	return client.CheckRuntimeClass(ctx, config.Placement.SandboxRuntimeClass())
 }
 
 // benchmarked admits the model when the gateway's measured timeout fits.

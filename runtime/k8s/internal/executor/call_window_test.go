@@ -58,7 +58,7 @@ func TestCallWindowReachesSCCAndTheMailbox(t *testing.T) {
 		a := assignmentFixture(now)
 		a.ProfileSHA256 = workspacebundle.Digest(profile)
 		assignment, _ := json.Marshal(a)
-		w, err := Compile("fixture", image, image, assignment, profile, adev, now)
+		w, err := Compile("fixture", image, image, DefaultRuntimeClass, assignment, profile, adev, now)
 		if err != nil {
 			t.Fatal(err)
 		}

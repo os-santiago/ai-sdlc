@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repositorytests"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
@@ -29,7 +30,7 @@ func testsFixturePod() (repositorytests.Pod, []byte) {
 	raw, _ := workspacebundle.Encode(b)
 	tree, _ := b.TreeDigest()
 	return repositorytests.Pod{Namespace: VerifierNamespace,
-		MailboxImage: "registry.example/mailbox@sha256:" + strings.Repeat("2", 64), WorkItemID: "11111111-1111-4111-8111-111111111111",
+		MailboxImage: "registry.example/mailbox@sha256:" + strings.Repeat("2", 64), RuntimeClass: executor.DefaultRuntimeClass, WorkItemID: "11111111-1111-4111-8111-111111111111",
 		VerificationID: "verification-" + strings.Repeat("9", 64), Run: repositorytests.RunCandidate, SourceSHA: b.SourceSHA, TreeSHA256: tree,
 		Verification: project.Verification{Image: "registry.example/go@sha256:" + strings.Repeat("3", 64), Command: []string{"go", "test", "./..."},
 			TimeoutSeconds: 30, CPU: "1", Memory: "1Gi", EphemeralStorage: "1Gi", Network: "none", Result: project.Result{ExitCode: true},

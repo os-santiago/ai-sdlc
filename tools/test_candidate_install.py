@@ -92,6 +92,25 @@ class CandidateInstallTests(unittest.TestCase):
         for forbidden in ('token', 'password', 'credential', 'command', 'shell'):
             self.assertNotIn('"' + forbidden + '"', values['candidate']['configJSON'])
 
+    def test_sandbox_runtime_class_is_written_only_when_not_default(self):
+        lock_path = install.LOCAL / 'images.lock.json'
+        lock = install.image_lock(lock_path)
+        default = candidate_install.desired_values(install.ROOT, lock_path, lock, verification=True, review=True)
+        explicit = candidate_install.desired_values(install.ROOT, lock_path, lock, verification=True, review=True,
+                                                    runtime_class='ai-sdlc-offline')
+        # Default installations keep byte-identical configuration documents.
+        self.assertEqual(default, explicit)
+        self.assertNotIn('sandbox', default)
+        self.assertNotIn('RuntimeClass', default['candidate']['configJSON'])
+        self.assertNotIn('runtimeClass', default['review']['configJSON'])
+        kata = candidate_install.desired_values(install.ROOT, lock_path, lock, verification=True, review=True, runtime_class='kata')
+        self.assertEqual(kata['sandbox'], {'runtimeClassName': 'kata'})
+        self.assertEqual(json.loads(kata['candidate']['configJSON'])['placement']['RuntimeClass'], 'kata')
+        self.assertEqual(json.loads(kata['review']['configJSON'])['runtimeClass'], 'kata')
+        for bad in ('', 'Kata', 'kata/../runc', '-kata', 'a' * 254, None):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                candidate_install.desired_values(install.ROOT, lock_path, lock, runtime_class=bad)
+
     def test_mismatched_publication_cannot_supply_executor(self):
         lock = install.image_lock(install.LOCAL / 'images.lock.json')
         evidence = json.loads((install.LOCAL / 'images.evidence.json').read_text())

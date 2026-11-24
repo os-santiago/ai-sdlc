@@ -23,11 +23,11 @@ type VerificationResults struct{ Baseline, Candidate, Reference []byte }
 
 var verificationRoles = []string{"baseline", "candidate", "reference", "tests"}
 
-func PlanVerification(client *Client, c verification.Command, in verification.Inputs, image string) (*VerificationResources, error) {
+func PlanVerification(client *Client, c verification.Command, in verification.Inputs, image, runtimeClass string) (*VerificationResources, error) {
 	if client == nil || client.http == nil || client.config == nil {
 		return nil, ErrTransport
 	}
-	w, err := verification.Compile(c, in, image, time.Now())
+	w, err := verification.Compile(c, in, image, runtimeClass, time.Now())
 	if err != nil {
 		return nil, ErrTransport
 	}

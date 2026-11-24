@@ -26,7 +26,9 @@ var imageIDPattern = regexp.MustCompile(`^([a-zA-Z0-9][a-zA-Z0-9./:_-]*@)?sha256
 // signed execution authority and durable lifecycle ownership remain caller duties.
 type Binding struct {
 	Namespace, WorkerImage, MailboxImage, PodUID string
-	Assignment, Profile, ADev                    []byte
+	// RuntimeClass is the installation's sandbox RuntimeClass; it is required.
+	RuntimeClass              string
+	Assignment, Profile, ADev []byte
 }
 
 type instance struct{ ID, ImageID, Image string }
@@ -55,7 +57,7 @@ func Bind(ctx context.Context, c *Client, b Binding) (*Session, error) {
 	b.Assignment = append([]byte(nil), b.Assignment...)
 	b.Profile = append([]byte(nil), b.Profile...)
 	b.ADev = append([]byte(nil), b.ADev...)
-	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.Assignment, b.Profile, b.ADev, time.Now())
+	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.RuntimeClass, b.Assignment, b.Profile, b.ADev, time.Now())
 	if err != nil {
 		return nil, ErrTransport
 	}

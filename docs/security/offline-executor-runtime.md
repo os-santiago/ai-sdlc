@@ -45,6 +45,41 @@ The successful report is written to
 source/configuration identities, RuntimeClass UID and probe Pod UID. It is the
 last successful observation, not continuously renewed authorization to execute.
 
+## Sandbox RuntimeClass per platform
+
+Executor, reviewer, verification and repository-tests pods run in one
+configured RuntimeClass. AI-SDLC consumes the platform's standard sandbox
+class; it installs its own class only on kind. The name is installation
+configuration, never request or model content: the chart value
+`sandbox.runtimeClassName` (default `ai-sdlc-offline`) and the matching
+`placement.RuntimeClass` (execution) and `runtimeClass` (review) fields that
+the installer writes only when the name differs from the default. The chart
+rejects a mismatch, and the controllers reject a name that is not a DNS-1123
+subdomain.
+
+| Platform | RuntimeClass |
+|---|---|
+| GKE Sandbox | `gvisor` |
+| OpenShift sandboxed containers | `kata` |
+| AKS Pod Sandboxing | `kata-mshv-vm-isolation` |
+| EKS | Kata on bare-metal node groups |
+| kind | `ai-sdlc-offline` (installed by the installer) |
+
+The worker and the verifier check, read-only, that the configured class exists
+(`get` on that one `runtimeclasses.node.k8s.io` name, granted by a chart
+ClusterRole). Until it does they stay not ready, claim no work and log
+`sandbox runtime class unavailable` once. There is no fallback to running
+without the sandbox. On OpenShift, select the class with
+`./install.sh local --platform openshift --runtime-class kata ...`; the
+installer checks it exists before any change. On kind the installer keeps
+installing and using `ai-sdlc-offline`.
+
+The `network=none` property below belongs to the kind handler. On another
+platform the namespaces' deny-all NetworkPolicy, enforced by the platform's
+CNI, is the network boundary, and the platform's class provides the kernel
+boundary. Evaluate the platform's sandbox before running untrusted
+generations on it.
+
 ## Why an offline runtime
 
 Standard NetworkPolicy still provides defense in depth, but a one-time

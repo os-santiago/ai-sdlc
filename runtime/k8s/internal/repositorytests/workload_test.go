@@ -6,12 +6,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 )
 
 func testPod() Pod {
 	return Pod{Namespace: "ai-sdlc",
-		MailboxImage: "registry.example/mailbox@sha256:" + strings.Repeat("b", 64), WorkItemID: "11111111-1111-4111-8111-111111111111",
+		MailboxImage: "registry.example/mailbox@sha256:" + strings.Repeat("b", 64), RuntimeClass: executor.DefaultRuntimeClass, WorkItemID: "11111111-1111-4111-8111-111111111111",
 		VerificationID: "verification-" + strings.Repeat("9", 64), Run: RunCross, SourceSHA: strings.Repeat("c", 40), TreeSHA256: strings.Repeat("d", 64),
 		Verification: project.Verification{Image: "registry.example/go@sha256:" + strings.Repeat("e", 64), Command: []string{"go", "test", "./...", "$(POD_UID)"},
 			TimeoutSeconds: 300, CPU: "1", Memory: "1Gi", EphemeralStorage: "1Gi", Network: "none", Result: project.Result{ExitCode: true},
@@ -98,6 +99,8 @@ func TestCompilePodRefusesInvalidInput(t *testing.T) {
 		"writable PATH":  func(p *Pod) { p.Verification.Env = map[string]string{"PATH": "/workspaces/repository/bin:/usr/bin"} },
 		"scratch PATH":   func(p *Pod) { p.Verification.Env = map[string]string{"PATH": "/usr/bin:/tmp"} },
 		"loader env":     func(p *Pod) { p.Verification.Env = map[string]string{"LD_PRELOAD": "/x.so"} },
+		"no sandbox":     func(p *Pod) { p.RuntimeClass = "" },
+		"bad sandbox":    func(p *Pod) { p.RuntimeClass = "Kata" },
 	}
 	for name, mutate := range mutations {
 		p := testPod()
@@ -105,6 +108,19 @@ func TestCompilePodRefusesInvalidInput(t *testing.T) {
 		if _, err := CompilePod(p); err == nil {
 			t.Fatal("accepted", name)
 		}
+	}
+}
+
+func TestCompilePodUsesInstalledSandboxRuntimeClass(t *testing.T) {
+	p := testPod()
+	w, err := CompilePod(p)
+	if err != nil || w.Pod["spec"].(map[string]any)["runtimeClassName"] != "ai-sdlc-offline" {
+		t.Fatal("default sandbox runtime class changed", err)
+	}
+	p.RuntimeClass = "gvisor"
+	w, err = CompilePod(p)
+	if err != nil || w.Pod["spec"].(map[string]any)["runtimeClassName"] != "gvisor" {
+		t.Fatal("configured sandbox runtime class not used", err)
 	}
 }
 
