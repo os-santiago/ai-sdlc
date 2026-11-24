@@ -194,9 +194,6 @@
         "databaseURLSecret"
       ]
     },
-    "engine": {
-      "type": "string"
-    },
     "modelProvider": {
       "type": "object",
       "additionalProperties": false,
@@ -1145,7 +1142,6 @@
     "logLevel",
     "contract",
     "postgres",
-    "engine",
     "modelProvider",
     "components",
     "networkPolicy",
