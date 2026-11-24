@@ -37,7 +37,7 @@ type TestsRun struct {
 
 // PlanTestsRun compiles the run and checks, before any effect, that source is
 // a valid bundle of exactly the pod's source revision and tree.
-func PlanTestsRun(client *Client, p repositorytests.Pod, source []byte, expires time.Time) (*TestsRun, error) {
+func PlanTestsRun(client *Client, p repositorytests.Pod, admission RuntimeClassAdmission, source []byte, expires time.Time) (*TestsRun, error) {
 	if client == nil || client.http == nil || client.config == nil || p.Namespace != VerifierNamespace ||
 		len(source) == 0 || len(source) > workspacebundle.MaxWireBytes || !time.Now().Before(expires) {
 		return nil, ErrTransport
@@ -54,7 +54,7 @@ func PlanTestsRun(client *Client, p repositorytests.Pod, source []byte, expires 
 	if err != nil {
 		return nil, ErrTransport
 	}
-	t := &TestsRun{resources: &Resources{client: client, binding: Binding{Namespace: p.Namespace}, expires: expires},
+	t := &TestsRun{resources: &Resources{client: client, binding: Binding{Namespace: p.Namespace, RuntimeClass: p.RuntimeClass, Admission: admission}, expires: expires},
 		run: p.Run, sourceSHA: p.SourceSHA, treeSHA: p.TreeSHA256, source: source, runs: repositorytests.Repetitions(p.Run, p.Verification),
 		timeout: time.Duration(p.Verification.TimeoutSeconds) * time.Second}
 	config, _ := json.Marshal(w.ConfigMap)
@@ -117,7 +117,7 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 		return testsObservation{}, err
 	}
 	var pod core.Pod
-	if status != 200 || authority.DecodeStrict(raw, &pod) != nil || !exactPodTemplate(pod, r.pod, uid) || len(pod.Status.EphemeralContainerStatuses) != 0 ||
+	if status != 200 || authority.DecodeStrict(raw, &pod) != nil || !exactPodTemplate(pod, r.pod, uid, r.binding.Admission) || len(pod.Status.EphemeralContainerStatuses) != 0 ||
 		len(pod.Status.InitContainerStatuses) > 2 || len(pod.Status.ContainerStatuses) > 1 {
 		return testsObservation{}, ErrTransport
 	}

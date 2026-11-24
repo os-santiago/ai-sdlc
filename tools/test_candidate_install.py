@@ -111,6 +111,21 @@ class CandidateInstallTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 candidate_install.desired_values(install.ROOT, lock_path, lock, runtime_class=bad)
 
+    def test_reinstall_never_switches_the_installed_runtime_class_implicitly(self):
+        def installed(config):
+            raw = '' if config is None else json.dumps({'data': {'config.json': json.dumps(config)}})
+            return patch.object(install, 'run', return_value=subprocess.CompletedProcess([], 0, raw))
+        kata = {'placement': {'Namespace': 'ai-sdlc-executors', 'RuntimeClass': 'kata'}}
+        default = {'placement': {'Namespace': 'ai-sdlc-executors'}}
+        for config, explicit in ((None, None), (default, None), (default, 'kata'), (kata, 'kata'), (kata, 'gvisor'), (kata, 'ai-sdlc-offline')):
+            with self.subTest(config=config, explicit=explicit), installed(config):
+                candidate_install.require_runtime_class(['kubectl'], explicit)
+        with installed(kata), self.assertRaisesRegex(ValueError, 'pass --runtime-class kata'):
+            candidate_install.require_runtime_class(['kubectl'], None)
+        for bad in ([], {'placement': []}, {'placement': {'RuntimeClass': 7}}):
+            with self.subTest(bad=bad), installed(bad), self.assertRaisesRegex(ValueError, 'malformed'):
+                candidate_install.require_runtime_class(['kubectl'], None)
+
     def test_mismatched_publication_cannot_supply_executor(self):
         lock = install.image_lock(install.LOCAL / 'images.lock.json')
         evidence = json.loads((install.LOCAL / 'images.evidence.json').read_text())

@@ -133,7 +133,10 @@ refuses a state directory that belongs to a kind or Konflux installation, and
 it records nothing for a cluster without the OpenShift security API. Before any change it checks three things: the
 OpenShift security API, a default StorageClass, and the selected RuntimeClass
 when the profile runs generations. It never installs a node runtime. The
-worker and the verifier repeat the RuntimeClass check before they become ready. It renders the
+worker and the verifier repeat the RuntimeClass check before they become ready
+and before each claim. The installer sets the quota headroom for the class's
+pod overhead (Kata declares one) from the class itself, and a later reinstall
+must repeat `--runtime-class` to keep a non-default class. It renders the
 chart with `openshift.enabled=true`.
 
 The model endpoint must be reachable from the cluster's pods at a literal

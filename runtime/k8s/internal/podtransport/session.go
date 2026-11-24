@@ -27,7 +27,10 @@ var imageIDPattern = regexp.MustCompile(`^([a-zA-Z0-9][a-zA-Z0-9./:_-]*@)?sha256
 type Binding struct {
 	Namespace, WorkerImage, MailboxImage, PodUID string
 	// RuntimeClass is the installation's sandbox RuntimeClass; it is required.
+	// Admission is what that class's admission adds to each pod, as observed by
+	// the preflight; the observed pod must equal the template plus exactly that.
 	RuntimeClass              string
+	Admission                 RuntimeClassAdmission
 	Assignment, Profile, ADev []byte
 }
 
@@ -81,6 +84,9 @@ func Bind(ctx context.Context, c *Client, b Binding) (*Session, error) {
 		return nil, ErrTransport
 	}
 	applyDefaults(&s.expected.Spec)
+	if !applyAdmission(&s.expected.Spec, b.Admission) {
+		return nil, ErrTransport
+	}
 	observed, err := s.observe(ctx, false)
 	if err != nil {
 		return nil, err
@@ -186,6 +192,7 @@ func (s *Session) inspect(ctx context.Context, allowWorkerExit bool) (observatio
 	// Scheduling selects nodeName. Every other specification field must match
 	// the compiled template plus the exact supported API defaults above.
 	pod.Spec.NodeName = ""
+	canonicalTolerations(&pod.Spec)
 	if !equality.Semantic.DeepEqual(pod.Spec, s.expected.Spec) || len(pod.Status.ContainerStatuses) != 2 || len(pod.Status.InitContainerStatuses) != 0 || len(pod.Status.EphemeralContainerStatuses) != 0 {
 		return observation{}, ErrTransport
 	}

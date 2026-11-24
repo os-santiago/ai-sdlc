@@ -23,7 +23,7 @@ type VerificationResults struct{ Baseline, Candidate, Reference []byte }
 
 var verificationRoles = []string{"baseline", "candidate", "reference", "tests"}
 
-func PlanVerification(client *Client, c verification.Command, in verification.Inputs, image, runtimeClass string) (*VerificationResources, error) {
+func PlanVerification(client *Client, c verification.Command, in verification.Inputs, image, runtimeClass string, admission RuntimeClassAdmission) (*VerificationResources, error) {
 	if client == nil || client.http == nil || client.config == nil {
 		return nil, ErrTransport
 	}
@@ -33,7 +33,7 @@ func PlanVerification(client *Client, c verification.Command, in verification.In
 	}
 	v := &VerificationResources{resources: map[string]*Resources{}}
 	for _, kind := range verificationRoles {
-		r := &Resources{client: client, binding: Binding{Namespace: "ai-sdlc-verifiers"}, expires: time.UnixMilli(c.ExpiresAt)}
+		r := &Resources{client: client, binding: Binding{Namespace: "ai-sdlc-verifiers", RuntimeClass: runtimeClass, Admission: admission}, expires: time.UnixMilli(c.ExpiresAt)}
 		raw, _ := json.Marshal(w.ConfigMap)
 		if authority.DecodeStrict(raw, &r.config) != nil {
 			return nil, ErrTransport
@@ -156,7 +156,7 @@ func (v *VerificationResources) observe(ctx context.Context, kind, uid string) (
 		return false, instance{}, ErrTransport
 	}
 	var pod core.Pod
-	if authority.DecodeStrict(raw, &pod) != nil || !exactPodTemplate(pod, r.pod, uid) {
+	if authority.DecodeStrict(raw, &pod) != nil || !exactPodTemplate(pod, r.pod, uid, r.binding.Admission) {
 		return false, instance{}, ErrTransport
 	}
 	if pod.Status.Phase == core.PodPending || pod.Status.Phase == core.PodRunning {

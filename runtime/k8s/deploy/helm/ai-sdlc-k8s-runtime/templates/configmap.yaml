@@ -53,6 +53,14 @@ data:
   AI_SDLC_RELAY_ROUTES: {{ $routes | toJson | quote }}
   {{- if has .Values.runtime.mode (list "candidate" "verification") }}
   AI_SDLC_EXECUTION_CONFIG_PATH: /etc/ai-sdlc/execution/config.json
+  {{- with .Values.sandbox.podOverhead }}
+  {{- if .cpu }}
+  AI_SDLC_SANDBOX_POD_OVERHEAD_CPU: {{ .cpu | quote }}
+  {{- end }}
+  {{- if .memory }}
+  AI_SDLC_SANDBOX_POD_OVERHEAD_MEMORY: {{ .memory | quote }}
+  {{- end }}
+  {{- end }}
   {{- end }}
   AI_SDLC_CONTRACT_PATH: /etc/ai-sdlc/contract/.ai-sdlc.yaml
 ---

@@ -270,6 +270,32 @@ class ChartTests(unittest.TestCase):
             with self.subTest(values=values):
                 self.assertNotEqual(self.sandbox_docs(values)[0].returncode, 0)
 
+    def test_sandbox_pod_overhead_adds_exact_quota_headroom(self):
+        result, docs = self.sandbox_docs({'review': {'enabled': True, 'configJSON': '{}'},
+                                          'sandbox': {'podOverhead': {'cpu': '250m', 'memory': '350Mi'}}})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        quotas = {d['metadata']['name']: d['spec']['hard'] for d in docs if d['kind'] == 'ResourceQuota'}
+        self.assertEqual(quotas['executor-bounds'], {'pods': '4', 'configmaps': '8', 'requests.cpu': '2000m', 'requests.memory': '2424Mi', 'limits.cpu': '7000m', 'limits.memory': '5496Mi'})
+        self.assertEqual(quotas['verifier-bounds'], {'pods': '4', 'configmaps': '4', 'requests.cpu': '2000m', 'requests.memory': '2424Mi', 'limits.cpu': '5000m', 'limits.memory': '3448Mi'})
+        self.assertEqual(quotas['reviewer-bounds'], {'pods': '2', 'configmaps': '4', 'requests.cpu': '1500m', 'requests.memory': '1724Mi', 'limits.cpu': '4500m', 'limits.memory': '2748Mi'})
+        config = next(d['data'] for d in docs if d['kind'] == 'ConfigMap' and 'AI_SDLC_RUNTIME_MODE' in d.get('data', {}))
+        self.assertEqual((config['AI_SDLC_SANDBOX_POD_OVERHEAD_CPU'], config['AI_SDLC_SANDBOX_POD_OVERHEAD_MEMORY']), ('250m', '350Mi'))
+        # A project quota is extended too; without an overhead nothing changes.
+        project = {'requests.cpu': '1500m', 'requests.memory': '3Gi', 'limits.cpu': '6', 'limits.memory': '6Gi'}
+        result, docs = self.sandbox_docs({'project': {'verifierQuota': project}, 'sandbox': {'podOverhead': {'cpu': '100m', 'memory': ''}}})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        hard = next(d['spec']['hard'] for d in docs if d['kind'] == 'ResourceQuota' and d['metadata']['name'] == 'verifier-bounds')
+        self.assertEqual(hard, {'pods': '4', 'configmaps': '4', 'requests.cpu': '1900m', 'requests.memory': '3072Mi', 'limits.cpu': '6400m', 'limits.memory': '6144Mi'})
+        result, docs = self.sandbox_docs()
+        self.assertNotIn('SANDBOX_POD_OVERHEAD', result.stdout)
+        hard = next(d['spec']['hard'] for d in docs if d['kind'] == 'ResourceQuota' and d['metadata']['name'] == 'executor-bounds')
+        self.assertEqual(hard['requests.cpu'], '1')
+        for values in ({'sandbox': {'podOverhead': {'cpu': '0.25'}}}, {'sandbox': {'podOverhead': {'memory': '1Gi'}}},
+                       {'sandbox': {'podOverhead': {'cpu': '100m', 'other': '1'}}},
+                       {'project': {'verifierQuota': dict(project, **{'requests.memory': '3G'})}, 'sandbox': {'podOverhead': {'memory': '10Mi'}}}):
+            with self.subTest(values=values):
+                self.assertNotEqual(self.sandbox_docs(values)[0].returncode, 0)
+
     def test_openshift_profile_binds_only_nonroot_scc_and_sets_platform(self):
         base = ['--set', 'runtime.mode=verification', '--set', 'verifier.digest=sha256:' + 'a' * 64]
         plain = [d for d in yaml.safe_load_all(self.render(*base).stdout) if d]

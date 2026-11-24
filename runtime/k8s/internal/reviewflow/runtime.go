@@ -16,6 +16,9 @@ type Runtime struct {
 	Policy verificationflow.PolicyLoader
 	Load   Loader
 	Client *podtransport.Client
+	// SandboxCheck observes the reviewer sandbox RuntimeClass before a review
+	// is claimed. Nil uses the read-only API preflight; only fixtures replace it.
+	SandboxCheck func(context.Context, *podtransport.Client, string) (podtransport.RuntimeClassAdmission, error)
 }
 
 // VerificationMayProceed keeps independent queues moving only when review has
@@ -113,7 +116,23 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		}
 		return "rejected", nil
 	}
-	if _, e = Run(ctx, r.DB, r.Policy, r.Load, id, r.Client); e != nil {
+	// Cleanup and rejection above always run; claiming the review and creating
+	// its pod require the sandbox class, observed now with this poll's client.
+	config, e := loadConfiguration(ctx, r.Load)
+	if e != nil {
+		return "", ControllerError{Stage: "configuration"}
+	}
+	check := r.SandboxCheck
+	if check == nil {
+		check = func(ctx context.Context, c *podtransport.Client, class string) (podtransport.RuntimeClassAdmission, error) {
+			return c.CheckRuntimeClass(ctx, class)
+		}
+	}
+	sandbox := Sandbox{RuntimeClass: config.SandboxRuntimeClass()}
+	if sandbox.Admission, e = check(ctx, r.Client, sandbox.RuntimeClass); e != nil {
+		return "sandbox-runtime-class-unavailable", ControllerError{Stage: "sandbox-runtime-class"}
+	}
+	if _, e = Run(ctx, r.DB, r.Policy, r.Load, id, r.Client, sandbox); e != nil {
 		return "stopped", e
 	}
 	return "review-passed", nil

@@ -614,6 +614,7 @@ def _main(argv, stack):
         else:
             check_ownership(marker, args.cluster, provider, cluster_uid)
     if args.command == 'local' and execution_values is not None:
+        candidate_install.require_runtime_class(kubectl, args.runtime_class)
         candidate_install.require_unchanged_tool_budget(kubectl, execution_values)
     if not created and args.platform == 'konflux':
         konflux_runtime_install.namespace(run, kubectl, state, cluster_uid, create=args.command == 'local')
@@ -651,6 +652,11 @@ def _main(argv, stack):
     # dynamic storage. Fail here before consuming the bounded migration window.
     if openshift:
         openshift_install.preflight(run, kubectl, sandbox=args.profile in ('candidate', 'verification'), runtime_class=runtime_class)
+        if execution_values is not None:
+            # Quota headroom for the class's pod overhead (Kata declares one).
+            overhead = openshift_install.pod_overhead(run, kubectl, runtime_class)
+            if overhead:
+                execution_values.setdefault('sandbox', {'runtimeClassName': runtime_class})['podOverhead'] = overhead
     else:
         run(kubectl + ['wait', '--for=condition=Ready', 'pods', '--all', '-n', 'kube-system',
                        '--timeout', args.timeout])

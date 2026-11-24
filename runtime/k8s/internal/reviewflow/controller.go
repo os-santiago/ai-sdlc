@@ -41,12 +41,20 @@ type Proof struct {
 	PublicationAuthorized bool   `json:"publicationAuthorized"`
 }
 
+// Sandbox is the reviewer RuntimeClass the caller verified, with what its
+// admission adds to each pod. The review runs only if its configuration still
+// names that class.
+type Sandbox struct {
+	RuntimeClass string
+	Admission    podtransport.RuntimeClassAdmission
+}
+
 // Run takes only an existing verification identifier from the trusted queue.
 // It has no external claim/advance endpoint and never publishes or merges code.
-func Run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader, load Loader, id string, client *podtransport.Client) (Proof, error) {
-	return run(ctx, db, policy, load, id, client, fetchSource)
+func Run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader, load Loader, id string, client *podtransport.Client, sandbox Sandbox) (Proof, error) {
+	return run(ctx, db, policy, load, id, client, sandbox, fetchSource)
 }
-func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader, load Loader, id string, client *podtransport.Client, fetch sourceLoader) (proof Proof, err error) {
+func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader, load Loader, id string, client *podtransport.Client, sandbox Sandbox, fetch sourceLoader) (proof Proof, err error) {
 	if db == nil || policy == nil || load == nil || client == nil {
 		return proof, ControllerError{Stage: "configuration"}
 	}
@@ -68,6 +76,10 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	if p.config.RequireGatewayProfile && gatewayProfileFits(ctx, provider, p.config.Profile) != nil {
 		return proof, ControllerError{Stage: "gateway-profile-unfit"}
 	}
+	if p.binding.RuntimeClass != sandbox.RuntimeClass {
+		return proof, ControllerError{Stage: "sandbox-runtime-class"}
+	}
+	p.binding.Admission = sandbox.Admission
 	resources, e := podtransport.PlanResources(client, p.binding)
 	if e != nil {
 		return proof, ControllerError{Stage: "template"}

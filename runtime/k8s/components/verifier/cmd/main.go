@@ -84,8 +84,9 @@ func main() {
 		return podtransport.NewClient(podtransport.Config{APIServer: "https://kubernetes.default.svc", CA: ca, BearerToken: string(token)})
 	}
 	// Verification and reviewer pods run only in the installed sandbox
-	// RuntimeClass. Without it the verifier is not ready and claims no work.
-	sandbox := &bootstrap.SandboxGate{}
+	// RuntimeClass. Without it the verifier is not ready; each poll repeats the
+	// check before it claims work, while cleanup and handoffs keep running.
+	sandbox := &bootstrap.SandboxGate{Known: []error{podtransport.ErrRuntimeClassOverhead, podtransport.ErrRuntimeClassScheduling}}
 	sandboxPreflight := func(ctx context.Context) error {
 		config, _, err := execution.LoadRuntime(os.Getenv("AI_SDLC_EXECUTION_CONFIG_PATH"))
 		if err != nil {
@@ -95,14 +96,15 @@ func main() {
 		if err != nil {
 			return err
 		}
-		if err := client.CheckRuntimeClass(ctx, config.Placement.SandboxRuntimeClass()); err != nil || !reviewEnabled {
+		if _, err := client.CheckRuntimeClass(ctx, config.Placement.SandboxRuntimeClass()); err != nil || !reviewEnabled {
 			return err
 		}
 		review, err := reviewflow.LoadPublicInstalled("/etc/ai-sdlc/review/config.json")
 		if err != nil {
 			return err
 		}
-		return client.CheckRuntimeClass(ctx, review.SandboxRuntimeClass())
+		_, err = client.CheckRuntimeClass(ctx, review.SandboxRuntimeClass())
+		return err
 	}
 
 	ready := func(ctx context.Context) error {
@@ -144,9 +146,6 @@ func main() {
 		}
 		client, err := kubernetes()
 		if err != nil {
-			return
-		}
-		if sandbox.Check(ctx, sandboxPreflight) != nil {
 			return
 		}
 		// Recheck the complete installation config, including pinned images, before every effect.

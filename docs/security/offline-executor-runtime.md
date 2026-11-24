@@ -67,12 +67,41 @@ subdomain.
 
 The worker and the verifier check, read-only, that the configured class exists
 (`get` on that one `runtimeclasses.node.k8s.io` name, granted by a chart
-ClusterRole). Until it does they stay not ready, claim no work and log
-`sandbox runtime class unavailable` once. There is no fallback to running
-without the sandbox. On OpenShift, select the class with
+ClusterRole). Until it does they are not ready and log
+`sandbox runtime class unavailable` once. Each poll repeats the check, with
+the configuration and client it then uses, immediately before it claims work
+or creates a pod; expiry, cleanup, rejection and handoff of already approved
+work keep running. There is no fallback to running without the sandbox.
+
+RuntimeClass admission adds the class's `overhead.podFixed` as the pod's
+`spec.overhead` and merges the class's `scheduling` nodeSelector and
+tolerations. The preflight returns exactly those additions and every pod is
+compared with its compiled template plus exactly them; any other added or
+changed field still fails. Tolerations that subsume each other or the API
+defaults are refused (`sandbox runtime class scheduling unsupported`), so the
+merge is an exact union.
+
+Pod overhead counts against each sandbox namespace's ResourceQuota. Set
+`sandbox.podOverhead` (whole millicores and Mi) to grow every sandbox quota by
+that overhead for each pod it admits. The controllers refuse a class whose
+overhead exceeds the declared headroom (`sandbox runtime class overhead
+exceeds quota headroom`); with no headroom only a class without overhead is
+used. On OpenShift the installer reads the class's overhead and sets the
+headroom, rounded up.
+
+On OpenShift, select the class with
 `./install.sh local --platform openshift --runtime-class kata ...`; the
-installer checks it exists before any change. On kind the installer keeps
-installing and using `ai-sdlc-offline`.
+installer checks it exists before any change. A later reinstall without
+`--runtime-class` refuses to switch an installation that uses another class
+back to the default; name the class explicitly to keep or change it. On kind
+the installer keeps installing and using `ai-sdlc-offline`.
+
+Known limitations: the preflight accepts any handler, because the handler
+belongs to the platform; choosing a real sandbox class is the installer's
+responsibility. The chart compares the class field names case-sensitively
+(`placement.RuntimeClass`, `runtimeClass`), while the runtime's strict JSON
+decoding matches field names case-insensitively; the installer always writes
+the documented spelling.
 
 The `network=none` property below belongs to the kind handler. On another
 platform the namespaces' deny-all NetworkPolicy, enforced by the platform's

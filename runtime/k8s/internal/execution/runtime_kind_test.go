@@ -161,7 +161,7 @@ func TestRealCandidateRuntimeFixture(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	runtime := Runtime{Component: component, ConfigPath: filepath.Join(root, "runtime"), IntakePath: filepath.Join(root, "intake"), TokenPath: filepath.Join(root, "token"), CAPath: filepath.Join(root, "ca"), GatewayTokenPath: filepath.Join(root, "model"), APIServer: in.Config.APIServer, ProviderEndpoint: server.URL + "/v1/chat/completions"}
+	runtime := Runtime{SandboxCheck: fixtureSandbox, Component: component, ConfigPath: filepath.Join(root, "runtime"), IntakePath: filepath.Join(root, "intake"), TokenPath: filepath.Join(root, "token"), CAPath: filepath.Join(root, "ca"), GatewayTokenPath: filepath.Join(root, "model"), APIServer: in.Config.APIServer, ProviderEndpoint: server.URL + "/v1/chat/completions"}
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 	// CI's read-only identity stays in the trusted test process. It is never
@@ -244,7 +244,7 @@ func TestRealCandidateRecoveryFixture(t *testing.T) {
 	write("runtime", raw)
 	write("token", []byte(in.Config.BearerToken))
 	write("ca", in.Config.CA)
-	runtime := Runtime{Component: &bootstrap.Component{Name: "worker", DB: db, PolicyPath: filepath.Join(root, "no-new-work-authority")}, ConfigPath: filepath.Join(root, "runtime"), TokenPath: filepath.Join(root, "token"), CAPath: filepath.Join(root, "ca"), APIServer: in.Config.APIServer}
+	runtime := Runtime{SandboxCheck: fixtureSandbox, Component: &bootstrap.Component{Name: "worker", DB: db, PolicyPath: filepath.Join(root, "no-new-work-authority")}, ConfigPath: filepath.Join(root, "runtime"), TokenPath: filepath.Join(root, "token"), CAPath: filepath.Join(root, "ca"), APIServer: in.Config.APIServer}
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 	var initial int
@@ -280,4 +280,12 @@ func TestRealCandidateRecoveryFixture(t *testing.T) {
 	if os.WriteFile(in.ReportFile, report, 0600) != nil {
 		t.Fatal("report")
 	}
+}
+
+// fixtureSandbox stands in for the cluster-scoped RuntimeClass preflight: the
+// kind fixture identities are namespaced, like the controllers' pod RBAC, and
+// the fixture class has no admission additions. The preflight itself is unit
+// tested in podtransport.
+func fixtureSandbox(context.Context, *podtransport.Client, string) (podtransport.RuntimeClassAdmission, error) {
+	return podtransport.RuntimeClassAdmission{}, nil
 }

@@ -73,7 +73,7 @@ func TestRealVerificationTransportFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal("fixture client")
 	}
-	v, err := PlanVerification(client, c, inputs, in.Image, executor.DefaultRuntimeClass)
+	v, err := PlanVerification(client, c, inputs, in.Image, executor.DefaultRuntimeClass, RuntimeClassAdmission{})
 	if err != nil {
 		t.Fatal("transport plan")
 	}
