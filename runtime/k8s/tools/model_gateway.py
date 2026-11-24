@@ -34,6 +34,16 @@ ATTEMPTS = 5
 # attempt usually fails fast; the rollout convergence window (300 s) bounds a
 # gateway that keeps failing, which then stays unready (fail closed).
 RETRY_SECONDS = (5, 25)
+# Bounded random delay before the first attempt (issue #758). The worker and
+# verifier gateways start together; with one shared single-slot model the
+# second benchmark would wait behind the first and measure about half the
+# rate. Spreading the starts makes an overlap unlikely; 0 disables it.
+STAGGER_ENV = "AI_SDLC_MODEL_BENCHMARK_STAGGER_SECONDS"
+STAGGER_DEFAULT = "30"
+STAGGER_MAX = 120
+# A profile whose timeout exceeds this share of the ceiling may be inflated by
+# a concurrent benchmark: measure once more and keep the faster profile.
+RECHECK_FRACTION = 0.8
 # The broker's remaining wait for this call (modelbroker.CallSecondsHeader).
 CALL_SECONDS_HEADER = "X-AI-SDLC-Call-Seconds"
 
@@ -162,9 +172,42 @@ def envelope(environ=os.environ):
     return values
 
 
-def run_benchmark(server, prompt_tokens, completion_tokens, attempts=ATTEMPTS, pause=RETRY_SECONDS):
+def stagger_seconds(environ=os.environ):
+    """The upper bound of the random delay before the first benchmark attempt."""
+    raw = environ.get(STAGGER_ENV, STAGGER_DEFAULT)
+    if not raw.isascii() or not raw.isdigit() or not 0 <= int(raw) <= STAGGER_MAX:
+        raise RuntimeError("model benchmark stagger invalid")
+    return int(raw)
+
+
+def _pause(pause):
+    time.sleep(random.uniform(*pause) if isinstance(pause, (tuple, list)) else pause)
+
+
+def _recheck(server, profile, prompt_tokens, completion_tokens, pause):
+    """One more measurement when the profile is close to the ceiling; the faster
+    profile wins. A failed recheck keeps the first profile."""
+    if profile["timeoutSeconds"] <= RECHECK_FRACTION * server.adapter.seconds:
+        return profile
+    print(json.dumps({"event": "model-benchmark-recheck", "timeoutSeconds": profile["timeoutSeconds"]}), flush=True)
+    _pause(pause)
+    try:
+        second = benchmark(server.adapter, server.adapter.seconds, prompt_tokens, completion_tokens)
+    except BenchmarkFailed as failure:
+        print(json.dumps({"event": "model-benchmark-recheck-failed", "reason": str(failure)}), flush=True)
+        return profile
+    return second if second["timeoutSeconds"] < profile["timeoutSeconds"] else profile
+
+
+def run_benchmark(server, prompt_tokens, completion_tokens, attempts=ATTEMPTS, pause=RETRY_SECONDS, stagger=0):
     """Benchmarks with a bounded number of attempts (a model may still be
-    loading). Returns the profile, or None after the last failure."""
+    loading). Returns the profile, or None after the last failure.
+
+    ``stagger`` bounds a random delay before the first attempt, so gateways
+    sharing one upstream rarely measure each other's load. A first profile
+    near the ceiling is measured once more (``_recheck``)."""
+    if stagger > 0:
+        time.sleep(random.uniform(0, stagger))
     for attempt in range(attempts):
         try:
             profile = benchmark(server.adapter, server.adapter.seconds, prompt_tokens, completion_tokens)
@@ -173,8 +216,9 @@ def run_benchmark(server, prompt_tokens, completion_tokens, attempts=ATTEMPTS, p
             if attempt + 1 < attempts:
                 # Randomized backoff: gateways sharing one upstream start
                 # together and would otherwise measure each other's load.
-                time.sleep(random.uniform(*pause) if isinstance(pause, (tuple, list)) else pause)
+                _pause(pause)
             continue
+        profile = _recheck(server, profile, prompt_tokens, completion_tokens, pause)
         print(json.dumps({"event": "model-benchmark", "profile": profile}), flush=True)
         server.profile = profile
         return profile
@@ -186,9 +230,10 @@ def main():
         raise RuntimeError("model client identity unavailable")
     adapter = adapter_from_environ()
     prompt_tokens, completion_tokens = envelope()
+    stagger = stagger_seconds()
     server = GatewayServer(("127.0.0.1", 8787), GatewayHandler, adapter)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    if run_benchmark(server, prompt_tokens, completion_tokens) is None:
+    if run_benchmark(server, prompt_tokens, completion_tokens, stagger=stagger) is None:
         # Never ready with an unmeasured model; the restart is the signal.
         server.shutdown()
         sys.exit(1)
