@@ -76,5 +76,11 @@ for example `model-publication-helper-exit-124`:
 If the controller's own exec deadline ends first, the stop is
 `model-publication-helper-transport` instead.
 
+A code 1 after a call that took about 300 s usually means SCC had already
+abandoned the request, so the mailbox removed it before the broker published.
+Before the mailbox kept long calls active, Node's `fetch` gave up after 300 s
+without response headers; see
+[calls longer than 300 seconds](../security/offline-model-mailbox.md#calls-longer-than-300-seconds).
+
 As with every publication failure, the call stays uncertain and is never
 retried by this diagnostic.
