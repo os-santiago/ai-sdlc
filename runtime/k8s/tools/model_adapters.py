@@ -11,7 +11,9 @@ adapter selected by the installation:
   anthropic  the Anthropic Messages API (or a compatible proxy)
 
 Adapters never execute tools: proposed calls are normalized and bounded by
-``assistant_message`` and executed only by SCC. An adapter receives only the
+``assistant_message`` and executed only by SCC. The hunk counts of proposed
+``edit_file`` patches, redundant metadata models often get wrong, are then
+recomputed from the hunk bodies (``recount_edit_patches``). An adapter receives only the
 validated messages and tool schemas, plus the single upstream URL, model alias
 and optional credential the installation configured. Adding a provider means
 adding one class to ``ADAPTERS``; the gateway, worker and chart are unchanged.
@@ -42,6 +44,15 @@ MODEL_ALIAS = re.compile(r"[A-Za-z0-9._:/-]{1,128}\Z")
 # Some models emit an inline reasoning block even with thinking disabled.
 THINK = re.compile(r"\A\s*<think>.*?</think>\s*", re.S)
 MAX_CREDENTIAL_BYTES = 4096
+# Hunk-count repair (``recount_edit_patches``). The tool-argument bound of
+# ``assistant_message`` is 32 KiB, so this never skips a call it admitted.
+EDIT_TOOL = "edit_file"
+MAX_EDIT_ARGUMENT_BYTES = 32 * 1024
+MAX_EDIT_HUNKS = 512
+# SCC's own header check; starts and counts are bounded to nine digits.
+HUNK_HEADER = re.compile(r"@@ -(\d{1,9})(?:,(\d{1,9}))? \+(\d{1,9})(?:,(\d{1,9}))? @@((?: .*)?)\Z", re.A | re.S)
+FILE_HEADER = re.compile(r"(?:---|\+\+\+)\s")
+NO_NEWLINE = "\\ No newline at end of file"
 
 
 @dataclass
@@ -52,6 +63,121 @@ class Completion:
     completion_tokens: int = 0
     estimated: bool = True
     usage: dict = field(default_factory=dict)
+    edit_patches_recounted: int = 0
+
+
+def _hunks(lines):
+    """One pass over a patch's lines: each hunk's header match and its counted
+    body (old, new, trailing blank lines). ``None`` when anything is ambiguous."""
+    hunks, preamble_headers, current = [], 0, None
+    for index, line in enumerate(lines):
+        if line.startswith("@@"):
+            match = HUNK_HEADER.match(line)
+            if match is None or len(hunks) == MAX_EDIT_HUNKS:
+                return None
+            current = {"index": index, "match": match, "old": 0, "new": 0, "blank": 0}
+            hunks.append(current)
+        elif current is None:
+            # Before the first hunk: optional metadata and one file's header.
+            preamble_headers += bool(FILE_HEADER.match(line))
+        elif line == "":
+            current["blank"] += 1
+        elif line[0] == "\\":
+            if line != NO_NEWLINE or current["blank"]:
+                return None
+        elif line[0] not in " +-":
+            return None
+        elif line.startswith("--- ") and index + 1 < len(lines) and lines[index + 1].startswith("+++ "):
+            return None  # a second file's header
+        else:
+            # Blank lines followed by more body are context lines.
+            current["old"] += current["blank"] + (line[0] != "+")
+            current["new"] += current["blank"] + (line[0] != "-")
+            current["blank"] = 0
+    if not hunks or preamble_headers > 2:
+        return None
+    return hunks
+
+
+def recount_patch(patch):
+    """Returns ``patch`` with its hunk headers' counts recomputed from the hunk
+    bodies, or ``None`` when nothing needs repair or anything is ambiguous.
+
+    The counts are redundant metadata: SCC's parser (jsdiff ``parsePatch`` and
+    a strict header check) reads exactly as many body lines as they declare,
+    so a wrong count makes a correct edit unusable. Context lines (' ', or a
+    bare empty line, a common model omission) count on both sides, '-' on the
+    old side, '+' on the new side, the no-newline marker on neither. Starts,
+    section text and every other line are kept byte for byte. Blank lines
+    ending a hunk are counted only when the declared counts already include
+    them: the parser skips them otherwise, and context after the last change
+    never alters the result.
+
+    ``None`` (leave the patch unchanged) when: the patch is over the bound or
+    holds a carriage return; it has no hunk or more than one file; a line
+    starting with ``@@`` is not a well-formed header; a body line has an
+    unknown prefix or is an unknown backslash line; a hunk counts no line;
+    the declared counts are already consistent; or a recount would change
+    whether a side is empty (which changes the meaning of its start) or
+    contradict a start of 0. Linear in the patch size."""
+    if (not isinstance(patch, str) or len(patch.encode()) > MAX_EDIT_ARGUMENT_BYTES
+            or "\r" in patch):
+        return None
+    lines = patch.split("\n")
+    if lines[-1] == "":
+        lines.pop()  # the patch's final newline, not an empty line
+    hunks = _hunks(lines)
+    if hunks is None:
+        return None
+    headers = {}
+    for hunk in hunks:
+        match, old, new = hunk["match"], hunk["old"], hunk["new"]
+        old_start, new_start = int(match.group(1)), int(match.group(3))
+        declared_old = int(match.group(2)) if match.group(2) is not None else 1
+        declared_new = int(match.group(4)) if match.group(4) is not None else 1
+        if old == 0 and new == 0:
+            return None
+        surplus = declared_old - old
+        if surplus == declared_new - new and 0 <= surplus <= hunk["blank"]:
+            continue  # consistent: the parser reads `surplus` trailing blanks
+        if ((old == 0) != (declared_old == 0) or (new == 0) != (declared_new == 0)
+                or (old_start == 0 and old != 0) or (new_start == 0 and new != 0)):
+            return None
+        headers[hunk["index"]] = "@@ -%d,%d +%d,%d @@%s" % (old_start, old, new_start, new, match.group(5))
+    if not headers:
+        return None
+    for index, header in headers.items():
+        lines[index] = header
+    return "\n".join(lines) + ("\n" if patch.endswith("\n") else "")
+
+
+def recount_edit_patches(message):
+    """Repairs the hunk counts of ``edit_file`` proposals in a bounded assistant
+    message, in place, and returns how many calls were repaired. Every other
+    call, and every call whose patch is not repaired, keeps its exact argument
+    bytes; a repaired call keeps all its other keys and values."""
+    repaired = 0
+    for call in message.get("tool_calls") or []:
+        function = call.get("function") if isinstance(call, dict) else None
+        if not isinstance(function, dict) or function.get("name") != EDIT_TOOL:
+            continue
+        raw = function.get("arguments")
+        if not isinstance(raw, str) or len(raw.encode()) > MAX_EDIT_ARGUMENT_BYTES:
+            continue
+        try:
+            arguments = json.loads(raw)
+        except (ValueError, RecursionError):
+            continue
+        patch = recount_patch(arguments.get("patch")) if isinstance(arguments, dict) else None
+        if patch is None:
+            continue
+        arguments["patch"] = patch
+        encoded = json.dumps(arguments, ensure_ascii=False)
+        if len(encoded.encode()) > MAX_EDIT_ARGUMENT_BYTES:
+            continue
+        function["arguments"] = encoded
+        repaired += 1
+    return repaired
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -217,9 +343,13 @@ class Adapter:
         validate_parameters(request, names)
         self.truncation_ok = probe
         try:
-            return self.backend(request, messages, tools, names, tokens, seconds or self.seconds)
+            completion = self.backend(request, messages, tools, names, tokens, seconds or self.seconds)
         finally:
             self.truncation_ok = False
+        # Every adapter's message is normalized here, before the gateway
+        # returns it and so before the broker records or digests anything.
+        completion.edit_patches_recounted = recount_edit_patches(completion.message)
+        return completion
 
     truncation_ok = False
 
