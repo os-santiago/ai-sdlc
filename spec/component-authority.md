@@ -5,6 +5,10 @@ prompt, model response or generated file is data, never a component identity.
 The reviewed installation supplies the [policy schema](component-authority.schema.json).
 The [frozen example](fixtures/component-authority.v1.json) contains synthetic
 public keys; it is not an installation identity or an activation configuration.
+The [denial fixtures](fixtures/component-authority.deny.v1.json) are the
+machine-readable allow/deny corpus — forged actors, cross-repository commands,
+privilege escalation, freeze and every allowed transition — executed by the
+authority package tests against its [fixture schema](component-authority-denials.schema.json).
 
 ## Capability boundary
 
