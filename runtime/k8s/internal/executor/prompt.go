@@ -150,6 +150,14 @@ If it fails, fix your change (or your new tests) and run it again until it
 passes. Remove any file the command creates that is not part of your change.
 The same command then runs in independent offline verification, which requires
 a test that fails on the current code and passes with your change.
+Your tool calls are limited to a fixed number of steps for the whole task, and
+the attempt fails when they run out. Spend them on the change: read only what
+you need, and do not repeat a search or rerun the test command with extra
+flags, filters or separate build or lint steps when the test command already
+answers the question (re-reading a file after a refused edit is not a repeat).
+Once the test command passes, runs your new tests, and you have removed any
+file the command created that is not part of your change, stop calling tools
+and finish with a short summary.
 `, directory, strings.Join(quoted, " "))
 }
 

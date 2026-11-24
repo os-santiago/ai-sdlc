@@ -267,6 +267,11 @@ func TestToolchainPromptNamesTheReviewedTestCommand(t *testing.T) {
 	if command < 0 || untrusted < 0 || command > untrusted || strings.Contains(prompt, "no build toolchain") || !strings.Contains(prompt, "from the repository root:") {
 		t.Fatal("toolchain guidance", prompt)
 	}
+	for _, rule := range []string{"limited to a fixed number of steps", "do not repeat a search", "re-reading a file after a refused edit is not a repeat", "runs your new tests, and you have removed any file the command created that is not part of your change", "stop calling tools and finish"} {
+		if !strings.Contains(strings.Join(strings.Fields(prompt), " "), rule) {
+			t.Fatal("step budget guidance missing", rule)
+		}
+	}
 	a.Toolchain.Command = []string{"sh", "-c", "go test ./... && echo 'ok'"}
 	a.Toolchain.WorkingDir = "service"
 	prompt = BuildPrompt(a, "policy")
@@ -274,7 +279,7 @@ func TestToolchainPromptNamesTheReviewedTestCommand(t *testing.T) {
 		t.Fatal("quoted command", prompt)
 	}
 	a.Toolchain = nil
-	if !strings.Contains(BuildPrompt(a, "policy"), "no build toolchain") {
+	if p := BuildPrompt(a, "policy"); !strings.Contains(p, "no build toolchain") || strings.Contains(p, "fixed number of steps") {
 		t.Fatal("offline guidance without a toolchain")
 	}
 }
