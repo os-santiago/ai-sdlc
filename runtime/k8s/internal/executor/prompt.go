@@ -152,10 +152,11 @@ The same command then runs in independent offline verification, which requires
 a test that fails on the current code and passes with your change.
 Your tool calls are limited to a fixed number of steps for the whole task, and
 the attempt fails when they run out. Spend them on the change: read only what
-you need, and do not repeat a search or run variants of the same command (-v,
--run, build, vet) when the test command already answers the question. As soon
-as the test command passes with your new tests, stop calling tools and finish
-with a short summary.
+you need, and do not repeat a search or rerun the test command with extra
+flags, filters or separate build or lint steps when the test command already
+answers the question (re-reading a file after a refused edit is not a repeat).
+Once the test command passes, runs your new tests, and you have removed any
+file it created, stop calling tools and finish with a short summary.
 `, directory, strings.Join(quoted, " "))
 }
 
