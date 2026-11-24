@@ -81,9 +81,47 @@
     "reviewRepair": {
       "type": "boolean",
       "description": "Allow at most one repair from original unused generation capacity; disabled by default."
+    },
+    "generationSeconds": {
+      "type": "integer",
+      "minimum": 600,
+      "maximum": 900,
+      "description": "Generation time budget in seconds, recorded in the execution configuration; defaults to 600. Requires the candidate or verification profile."
+    },
+    "generationSteps": {
+      "type": "integer",
+      "minimum": 24,
+      "maximum": 32,
+      "description": "Generation SCC tool-step budget, recorded in the execution configuration; defaults to 24. Requires the candidate or verification profile; above 24 also requires the --model-upstream installation option."
     }
   },
   "allOf": [
+    {
+      "if": {
+        "anyOf": [
+          {
+            "required": [
+              "generationSeconds"
+            ]
+          },
+          {
+            "required": [
+              "generationSteps"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "profile": {
+            "enum": [
+              "candidate",
+              "verification"
+            ]
+          }
+        }
+      }
+    },
     {
       "if": {
         "required": [

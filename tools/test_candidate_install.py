@@ -126,6 +126,87 @@ class CandidateInstallTests(unittest.TestCase):
             with self.subTest(bad=bad), installed(bad), self.assertRaisesRegex(ValueError, 'malformed'):
                 candidate_install.require_runtime_class(['kubectl'], None)
 
+    def test_generation_budget_defaults_are_the_reviewed_profile(self):
+        lock_path = install.LOCAL / 'images.lock.json'
+        lock = install.image_lock(lock_path)
+        self.assertEqual(candidate_install.generation_budget(), (600, 24))
+        for kwargs in ({}, {'verification': True, 'review': True, 'repair': True}):
+            default = candidate_install.desired_values(install.ROOT, lock_path, lock, **kwargs)
+            explicit = candidate_install.desired_values(install.ROOT, lock_path, lock, generation_seconds=600,
+                                                        generation_steps=24, **kwargs)
+            # Byte-identical configuration, so default installations keep their digests.
+            self.assertEqual(json.dumps(default, sort_keys=True), json.dumps(explicit, sort_keys=True))
+            profile = json.loads(default['candidate']['configJSON'])['profile']
+            self.assertEqual(set(profile) - {'maxRepairs'},
+                             {'version', 'model', 'maxSteps', 'maxSeconds', 'maxTokens', 'aDevSHA256'})
+            self.assertEqual((profile['maxSeconds'], profile['maxSteps']), (600, 24))
+
+    def test_selected_generation_budget_is_recorded_and_bounded(self):
+        lock_path = install.LOCAL / 'images.lock.json'
+        lock = install.image_lock(lock_path)
+        values = candidate_install.desired_values(install.ROOT, lock_path, lock, verification=True, review=True,
+                                                  generation_seconds=900, generation_steps=32, model_upstream=True)
+        config = json.loads(values['candidate']['configJSON'])
+        self.assertEqual((config['profile']['maxSeconds'], config['profile']['maxSteps']), (900, 32))
+        # The bundled Codex path keeps 24 steps and its 16-call provider quota:
+        # more steps than its ledger can reach are refused, not recorded.
+        codex = json.loads(candidate_install.desired_values(install.ROOT, lock_path, lock, generation_seconds=900)['candidate']['configJSON'])
+        self.assertEqual((codex['profile']['maxSeconds'], codex['profile']['maxSteps']), (900, 24))
+        self.assertEqual(codex['model'], {'Limits': {'Calls': 16, 'InputBytes': 2097152, 'OutputBytes': 4194304},
+                                          'ResponseLimit': 262144})
+        for steps in (25, 32):
+            with self.subTest(codex_steps=steps), self.assertRaisesRegex(ValueError, 'requires --model-upstream'):
+                candidate_install.desired_values(install.ROOT, lock_path, lock, generation_steps=steps)
+        review = json.loads(values['review']['configJSON'])['profile']
+        self.assertEqual((review['maxSeconds'], review['maxSteps']), (180, 8))
+        for seconds, steps in ((599, 24), (901, 24), (600, 23), (600, 33), (True, 24), (600, False),
+                               ('900', 24), (600, 24.0), (0, 24), (-600, 24)):
+            with self.subTest(seconds=seconds, steps=steps), self.assertRaises(ValueError):
+                candidate_install.desired_values(install.ROOT, lock_path, lock, generation_seconds=seconds,
+                                                 generation_steps=steps, model_upstream=True)
+
+    def test_generation_budget_option_is_validated_before_tools(self):
+        base = ['plan', '--profile', 'candidate']
+        invalid = [base + ['--generation-seconds', '599'], base + ['--generation-seconds', '901'],
+                   base + ['--generation-steps', '23'], base + ['--generation-steps', '33'],
+                   base + ['--generation-steps', '25'], base + ['--generation-seconds', '900', '--generation-steps', '32'],
+                   ['plan', '--profile', 'shadow', '--generation-seconds', '900'],
+                   ['plan', '--generation-steps', '32'],
+                   ['status', '--generation-seconds', '900'], ['credentials', '--generation-steps', '32',
+                                                                '--github-auth', 'gh-cli']]
+        with patch.object(install, 'tools') as tools:
+            for argv in invalid:
+                with self.subTest(argv=argv), self.assertRaises(ValueError):
+                    install.main(argv)
+            tools.assert_not_called()
+        with patch.object(install, 'tools') as tools, patch('sys.stderr'), self.assertRaises(SystemExit):
+            install.main(base + ['--generation-seconds', 'slow'])
+        tools.assert_not_called()
+
+    def test_reconciliation_keeps_the_recorded_generation_time(self):
+        lock_path = install.LOCAL / 'images.lock.json'
+        lock = install.image_lock(lock_path)
+        recorded = candidate_install.desired_values(install.ROOT, lock_path, lock, generation_seconds=900)
+        default = candidate_install.desired_values(install.ROOT, lock_path, lock)
+        configmap = json.dumps({'data': {'config.json': recorded['candidate']['configJSON']}})
+        with patch.object(install, 'run', return_value=subprocess.CompletedProcess([], 0, configmap)):
+            candidate_install.require_unchanged_tool_budget(['kubectl'], recorded)
+            # Omitting --generation-seconds would reset 900 s to 600 s: refused.
+            with self.assertRaisesRegex(ValueError, 'generation time budget differs.*requires a reinstallation'):
+                candidate_install.require_unchanged_tool_budget(['kubectl'], default)
+        stepped = candidate_install.desired_values(install.ROOT, lock_path, lock, generation_steps=32, model_upstream=True)
+        configmap = json.dumps({'data': {'config.json': stepped['candidate']['configJSON']}})
+        with patch.object(install, 'run', return_value=subprocess.CompletedProcess([], 0, configmap)):
+            with self.assertRaisesRegex(ValueError, 'tool budget differs.*requires a reinstallation'):
+                candidate_install.require_unchanged_tool_budget(['kubectl'], default)
+        for bad in (0, 901, True, '600', None):
+            config = json.loads(default['candidate']['configJSON'])
+            config['profile']['maxSeconds'] = bad
+            configmap = json.dumps({'data': {'config.json': json.dumps(config)}})
+            with self.subTest(maxSeconds=bad), patch.object(install, 'run', return_value=subprocess.CompletedProcess([], 0, configmap)), \
+                 self.assertRaisesRegex(ValueError, 'malformed'):
+                candidate_install.require_unchanged_tool_budget(['kubectl'], default)
+
     def test_mismatched_publication_cannot_supply_executor(self):
         lock = install.image_lock(install.LOCAL / 'images.lock.json')
         evidence = json.loads((install.LOCAL / 'images.evidence.json').read_text())

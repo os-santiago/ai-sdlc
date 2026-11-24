@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -21,8 +22,15 @@ import (
 )
 
 func TestCandidatePlanningEmitsOnlyBoundSignedExecution(t *testing.T) {
-	for _, risk := range []string{"low", "medium"} {
-		t.Run(risk, func(t *testing.T) {
+	// The signed command lives 20 minutes for the default budget and grows
+	// with a larger reviewed generation budget (at most 25 minutes at 900 s).
+	for _, tc := range []struct {
+		risk     string
+		seconds  int
+		lifetime time.Duration
+	}{{"low", 60, 20 * time.Minute}, {"medium", 60, 20 * time.Minute}, {"low", 900, 25 * time.Minute}} {
+		risk := tc.risk
+		t.Run(risk+"-"+strconv.Itoa(tc.seconds), func(t *testing.T) {
 			f := testsupport.New(t)
 			t.Setenv("AI_SDLC_RUNTIME_MODE", "candidate")
 			f.Material.Policy.Autonomy = "auto-pr"
@@ -38,7 +46,7 @@ func TestCandidatePlanningEmitsOnlyBoundSignedExecution(t *testing.T) {
 			if e := os.WriteFile(component.PolicyPath, raw, 0600); e != nil {
 				t.Fatal(e)
 			}
-			c := execution.RuntimeConfig{Version: "ai-sdlc.candidate-runtime/v1", ADev: "doctrine", Profile: executor.Profile{Version: executor.ProfileVersion, Model: "codex-cli", MaxSteps: 4, MaxSeconds: 60, MaxTokens: 1024, ADevSHA256: workspacebundle.Digest([]byte("doctrine"))}, Placement: execution.Placement{Namespace: "ai-sdlc-executors", WorkerImage: "example/worker@sha256:" + strings.Repeat("a", 64), MailboxImage: "example/mailbox@sha256:" + strings.Repeat("b", 64)}, Model: execution.ModelPolicy{Limits: store.ModelLimits{Calls: 4, InputBytes: 131072, OutputBytes: 1048576}, ResponseLimit: 262144}}
+			c := execution.RuntimeConfig{Version: "ai-sdlc.candidate-runtime/v1", ADev: "doctrine", Profile: executor.Profile{Version: executor.ProfileVersion, Model: "codex-cli", MaxSteps: 4, MaxSeconds: tc.seconds, MaxTokens: 1024, ADevSHA256: workspacebundle.Digest([]byte("doctrine"))}, Placement: execution.Placement{Namespace: "ai-sdlc-executors", WorkerImage: "example/worker@sha256:" + strings.Repeat("a", 64), MailboxImage: "example/mailbox@sha256:" + strings.Repeat("b", 64)}, Model: execution.ModelPolicy{Limits: store.ModelLimits{Calls: 4, InputBytes: 131072, OutputBytes: 1048576}, ResponseLimit: 262144}}
 			path := filepath.Join(t.TempDir(), "runtime.json")
 			raw, _ = json.Marshal(c)
 			if e := os.WriteFile(path, raw, 0600); e != nil {
@@ -78,6 +86,9 @@ func TestCandidatePlanningEmitsOnlyBoundSignedExecution(t *testing.T) {
 			command, e := execution.Verify(f.Material.Policy, r, payload, time.Now())
 			if e != nil || command.SourceSHA != admission.Snapshot.BaseSHA || command.Generation != 1 || command.Attempt != 1 || command.AdmissionID != admission.ID() {
 				t.Fatal("dispatch lost signed bindings", e)
+			}
+			if remaining := time.Until(time.UnixMilli(command.ExpiresAt)); remaining > tc.lifetime || remaining < tc.lifetime-time.Minute {
+				t.Fatal("signed command lifetime", remaining)
 			}
 		})
 	}

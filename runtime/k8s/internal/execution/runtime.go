@@ -74,12 +74,14 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if r.Component == nil || r.Component.DB == nil || r.Component.Name != "worker" {
 		return "", ErrAuthority
 	}
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
-	defer cancel()
 	config, _, err := LoadRuntime(r.ConfigPath)
 	if err != nil {
 		return "", err
 	}
+	// The poll covers preparation and the whole executor lifecycle; it grows
+	// with the reviewed generation budget exactly like the signed command.
+	ctx, cancel := context.WithTimeout(ctx, CommandLifetime(config.Profile.MaxSeconds))
+	defer cancel()
 	original, _ := json.Marshal(config)
 	load := func(ctx context.Context) (PreparationInputs, Placement, error) {
 		p, _, e := r.Component.Authority()

@@ -49,8 +49,8 @@ the same way: one private HTTP completions endpoint whose URL, `/32` CIDR and
 port agree, bounded `seconds`, and the per-call windows `callSeconds` (executor)
 and `reviewCallSeconds` (reviewer). An installation-time `credentialSecret` is
 not supported yet; the service's client allowlist controls access. With an upstream, the generation
-budget allows one model call per SCC step (24 calls, 6 MiB of reserved output,
-4 MiB of input). The flag is
+budget allows one model call per SCC step (24 calls and 6 MiB of reserved output
+by default, 32 calls and 8 MiB with `--generation-steps 32`; 4 MiB of input). The flag is
 chosen once: reconciling the installation with a different (or no) upstream is
 refused, and a change goes through a reviewed runtime transition. Until the
 installer stops requiring it, a Codex credential is still requested.
