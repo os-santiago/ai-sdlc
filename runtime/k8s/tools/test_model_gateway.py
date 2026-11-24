@@ -372,6 +372,13 @@ class StreamingTests(unittest.TestCase):
         for reply in (stream(chunk(content="par", role="assistant"), chunk(finish="length")),
                       stream(chunk(content="x"), {"error": {"code": 500, "message": "boom"}}, done=False),
                       stream(chunk(content="cut off"), done=False),
+                      # [DONE] without a finish reason is not a complete answer.
+                      stream(chunk(content="no finish", role="assistant")),
+                      # Rejected SSE framings: empty data, a chunk split over two
+                      # data lines, and bare-CR line ends.
+                      b"data:\n\n" + stream(chunk(content="x"), chunk(finish="stop")),
+                      b'data: {"choices": [{"index": 0,\ndata: "delta": {"content": "x"}}]}\n\n' + stream(chunk(finish="stop")),
+                      stream(chunk(content="x"), chunk(finish="stop")).replace(b"\n", b"\r"),
                       stream(chunk(calls=[{"index": 0, "function": {"name": "run_shell", "arguments": "{}"}}]), chunk(finish="tool_calls")),
                       stream(chunk(calls=[{"index": 8, "function": {"name": "read_file", "arguments": "{}"}}])),
                       b"data: {not json\n\n",
@@ -392,6 +399,33 @@ class StreamingTests(unittest.TestCase):
                 classes.append(model_gateway.failure_class(error))
         self.assertEqual(classes, ["truncated", "backend", "oversized"])
 
+    def test_reasoning_fields_are_watched_and_lone_surrogates_judged_as_before(self):
+        # vLLM streams reasoning as "reasoning", llama.cpp as "reasoning_content".
+        for key in ("reasoning", "reasoning_content"):
+            def looping(_body, key=key):
+                for _ in range(5000):
+                    yield sse_event({"choices": [{"index": 0, "delta": {key: "?"}, "finish_reason": None}]})
+            SSEUpstream.seen, SSEUpstream.script = [], [looping]
+            with self.subTest(key=key), self.assertRaises(adapters.DegenerateCompletion):
+                self.adapter().complete(REQUEST)
+        # Reasoning text is never returned.
+        SSEUpstream.script = [stream({"choices": [{"index": 0, "delta": {"reasoning": "plan"}}]}, chunk(content="Done."), chunk(finish="stop"))]
+        self.assertEqual(self.adapter().complete(REQUEST).message["content"], "Done.")
+        # A lone surrogate reaches the same check as in a JSON answer, with the same outcome.
+        raw = b'data: {"choices": [{"index": 0, "delta": {"content": "x\\ud800"}}]}\n\n' + stream(chunk(finish="stop"))
+        SSEUpstream.script = [raw]
+        with self.assertRaises(ValueError) as streamed:
+            self.adapter().complete(REQUEST)
+        upstream = HTTPServer(("127.0.0.1", 0), FakeUpstream)
+        threading.Thread(target=upstream.serve_forever, daemon=True).start()
+        self.addCleanup(upstream.server_close)
+        self.addCleanup(upstream.shutdown)
+        FakeUpstream.reply = (200, b'{"choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "x\\ud800"}}]}', {})
+        with self.assertRaises(ValueError) as plain:
+            adapters.OpenAIAdapter("http://127.0.0.1:%d/v1/chat/completions" % upstream.server_address[1], "m", 30).complete(REQUEST)
+        self.assertEqual(type(streamed.exception), type(plain.exception))
+        self.assertNotIsInstance(streamed.exception, adapters.DegenerateCompletion)
+
     def test_truncation_is_refused_except_for_benchmark_probes(self):
         SSEUpstream.script = [stream(chunk(content="1 2 3", role="assistant"), chunk(finish="length", usage={"prompt_tokens": 5, "completion_tokens": 3}))]
         with self.assertRaisesRegex(ValueError, "truncated"):
@@ -402,7 +436,9 @@ class StreamingTests(unittest.TestCase):
     def test_legitimate_code_with_long_separators_is_not_flagged(self):
         code = ("// " + "-" * 300 + "\n" + "=" * 1000 + "\n# " + "#" * 400 + "\n/" + "*" * 600 + "/\n"
                 + "x = 1  " + " " * 3000 + "\n" + "\n" * 600 + "    " * 300 + "return 0\n"
-                + "-" * 1023 + "\n" + "- " * 500 + "\n" + "| --- " * 150 + "|\n" + "0, " * 160 + "\n")
+                + "-" * 1023 + "\n" + "- " * 500 + "\n" + "| --- " * 150 + "|\n" + "0, " * 160 + "\n"
+                + "ZERO = \"" + "A" * 256 + "\"\n" + "MASK = 0x" + "ff" * 128 + "\n" + "# " + "─" * 300 + "\n"
+                + "DATA = [" + "0," * 255 + "0]\n" + "|---" * 128 + "|\n")
         arguments = json.dumps({"path": "src/" + "a" * 200 + ".c"})
         events = [chunk(content=code[i:i + 7], role="assistant" if not i else None) for i in range(0, len(code), 7)]
         events += [chunk(calls=[{"index": 0, "id": "c", "type": "function", "function": {"name": "read_file", "arguments": arguments}}]), chunk(finish="tool_calls")]
@@ -413,10 +449,16 @@ class StreamingTests(unittest.TestCase):
 
     def test_guard_thresholds(self):
         guard = adapters.DegenerateGuard
-        flagged = ["?" * 256, "ok " + "?" * 256, "ab" * 256, "abc" * 171, "¿?" * 256, "-" * 1024, "=" * 1024,
-                   "- " * 512, "ab\n" + "xy" * 256]
-        clean = ["?" * 255, "ab" * 255, "-" * 1023, "=" * 1023, "- " * 511, " " * 5000, "\n" * 5000, "\t" * 5000,
-                 ("?" * 200 + "\n") * 10, ("ab" * 200 + "\\n") * 5, "abcde" * 300, "the same words " * 100]
+        flagged = ["?" * 256, "ok " + "?" * 256, "G" * 512, "a" * 512, "0" * 512, "ab" * 512, "abc" * 342, "¿?" * 512,
+                   "-" * 1024, "=" * 1024, "|" * 1024, "─" * 1024, "- " * 512, "|---" * 256, "0," * 512,
+                   "ab\n" + "xy" * 512]
+        clean = ["?" * 255, "G" * 511, "-" * 1023, "=" * 1023, "- " * 511, " " * 5000, "\n" * 5000, "\t" * 5000,
+                 ("?" * 200 + "\n") * 10, ("ab" * 600 + "\\n") * 2, "abcde" * 300, "the same words " * 100,
+                 # One-line data and drawings the audit found: base64 of 192 zero
+                 # bytes, hex of zeros and ff, a written-out "a" * 256, a minified
+                 # list of 256 zeros, box-drawing and table rules.
+                 "\"" + "A" * 256 + "\"", "0" * 256, "ff" * 128, "\"" + "a" * 256 + "\"", "[" + "0," * 255 + "0]",
+                 "─" * 256, "═" * 1023, "│║┄┈" * 200, "|---" * 128, "ab" * 511]
         for text in flagged:
             with self.subTest(flagged=text[:20]):
                 self.assertTrue(guard().feed("content", text))

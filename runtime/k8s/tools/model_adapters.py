@@ -222,29 +222,36 @@ class DegenerateGuard:
     streams, from a bounded tail of each generated text (the content, any
     reasoning text, and each tool call's arguments, kept separately).
 
-    Observed fault: a local GPU backend turned the content into ``?`` repeated
-    until ``max_tokens``. A text is degenerate when it ends with:
+    Observed fault: a local GPU backend turned the content into ``?`` (and, in
+    another capture, ``G``) repeated until ``max_tokens``. A text is
+    degenerate when it ends with:
 
-      * one non-whitespace character repeated ``RUN`` (256) times; or
+      * one non-whitespace character repeated: 256 times (``RUN``, e.g.
+        ``?``), 512 times for an ASCII letter or digit (``ALNUM_RUN``), 1,024
+        times for a separator (``SEPARATOR_RUN``); or
       * a unit of 2 to 4 characters, not only whitespace, repeated over the
-        last ``WINDOW`` (512) characters with no line break in them.
+        last ``WINDOW`` (1,024) characters with no line break in them.
 
-    Code and prose repeat, so the bounds are chosen above what source can
-    plausibly hold on one line: a line break (a raw newline, or the ``\n``
-    escape inside JSON tool arguments) clears both checks, so a separator line
-    of any length followed by a newline never accumulates. Separator
-    characters (``-=#*/_~.+``), and units made only of them and spaces, need
-    ``SEPARATOR_RUN``/``SEPARATOR_WINDOW`` (1024): a 1,024-character rule
-    without a line break is not plausible source, and waiting longer for them
-    costs a few seconds against minutes of corrupted output. Runs of whitespace
-    are never flagged (indentation and alignment repeat legitimately). Each
-    check is a constant amount of work per streamed delta."""
+    Code and data repeat, so the bounds are chosen above what one line of
+    source plausibly holds. A line break (a raw newline, or the ``\n`` escape
+    inside JSON tool arguments) clears both checks, so a separator line of any
+    length followed by a newline never accumulates. Letters and digits get 512
+    because one-line data literals repeat them: base64 of zero bytes
+    (``AAAA``), hex of zeros or ``ff``, a ``"a" * n`` literal written out; the
+    cost is that a letter loop (the observed ``G``) is stopped after 512
+    single-character tokens instead of 256. Separators (``-=#*/_~.+|`` and
+    the Unicode box-drawing block, e.g. ``─═│║┄┈``) get 1,024: comment rules
+    and table borders. Units get 1,024 so minified literals (``0,`` repeated,
+    ``|---`` table rules) up to that length pass. Runs of whitespace are never
+    flagged (indentation and alignment repeat legitimately). Each check is a
+    constant amount of work per streamed delta."""
     RUN = 256
-    WINDOW = 512
+    ALNUM_RUN = 512
     SEPARATOR_RUN = 1024
-    SEPARATOR_WINDOW = 1024
+    WINDOW = 1024
     UNITS = (2, 3, 4)
-    SEPARATORS = frozenset("-=#*/_~.+")
+    SEPARATORS = frozenset("-=#*/_~.+|") | frozenset(map(chr, range(0x2500, 0x2580)))
+    ALNUM = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
     KEEP = 1024
 
     def __init__(self):
@@ -265,17 +272,19 @@ class DegenerateGuard:
             return False
         if not last.isspace():
             run = len(tail) - len(tail.rstrip(last))
-            if run >= (cls.SEPARATOR_RUN if last in cls.SEPARATORS else cls.RUN):
+            bound = cls.SEPARATOR_RUN if last in cls.SEPARATORS else cls.ALNUM_RUN if last in cls.ALNUM else cls.RUN
+            if run >= bound:
                 return True
+        if len(tail) < cls.WINDOW:
+            return False
+        window = tail[-cls.WINDOW:]
+        if "\n" in window or "\\n" in window:
+            return False
         for size in cls.UNITS:
             unit = tail[-size:]
             if not unit.strip() or len(set(unit)) == 1:
                 continue  # whitespace, or a single character (checked above)
-            width = cls.SEPARATOR_WINDOW if set(unit) <= cls.SEPARATORS | {" "} else cls.WINDOW
-            if len(tail) < width:
-                continue
-            window = tail[-width:]
-            if "\n" not in window and "\\n" not in window and window[size:] == window[:-size]:
+            if window[size:] == window[:-size]:
                 return True
         return False
 
@@ -460,7 +469,9 @@ class _Stream:
         self.finish, self.usage, self.done, self.size = None, None, False, 0
 
     def keep(self, channel, text):
-        self.size += len(text.encode())
+        # A lone surrogate (a JSON "\ud800" escape) is counted, not refused
+        # here: assistant_message judges it exactly as for a JSON answer.
+        self.size += len(text.encode("utf-8", "surrogatepass"))
         if self.size > MAX_RESPONSE_BYTES:
             raise _Stop(ValueError("completion response exceeded bound"))
         if self.guard.feed(channel, text):
@@ -468,7 +479,11 @@ class _Stream:
 
     def line(self, line):
         """One SSE line. Comments (``:``, keep-alive pings), blank lines and
-        other fields are skipped; ``[DONE]`` ends the stream."""
+        other fields are skipped; ``[DONE]`` ends the stream. Each ``data:``
+        line must hold one whole JSON chunk, as OpenAI-compatible servers send
+        it: an empty ``data:``, an event split over several ``data:`` lines,
+        or lines ended by a bare CR (never split) fail closed as ``invalid``
+        (or ``oversized`` past the line bound)."""
         line = line.rstrip(b"\r")
         if not line.startswith(b"data:"):
             return
@@ -499,14 +514,16 @@ class _Stream:
             delta = choice.get("delta") or {}
             if choice.get("index", 0) != 0 or not isinstance(delta, dict) or delta.get("role", "assistant") not in ("assistant", None):
                 raise _Stop(ValueError("invalid completion"))
-            for key, channel in (("content", "content"), ("reasoning_content", "reasoning")):
+            # Reasoning text (llama.cpp ``reasoning_content``, vLLM ``reasoning``)
+            # is watched, never kept.
+            for key, channel in (("content", "content"), ("reasoning_content", "reasoning"), ("reasoning", "reasoning")):
                 text = delta.get(key)
                 if text is not None and not isinstance(text, str):
                     raise _Stop(ValueError("invalid completion"))
                 if key == "content" and text:
                     self.keep(channel, text)
                     self.content.append(text)
-                elif text and self.guard.feed(channel, text):  # watched, never kept
+                elif text and self.guard.feed(channel, text):
                     raise _Stop(DegenerateCompletion())
             for call in delta.get("tool_calls") or []:
                 self.call(call)
@@ -559,9 +576,10 @@ class _Stream:
         return self
 
     def answer(self):
-        """The assembled answer in the non-streaming shape. A stream that ended
-        with neither a finish reason nor ``[DONE]`` was cut off."""
-        if not self.done and self.finish is None:
+        """The assembled answer in the non-streaming shape. Every finished
+        stream reports a finish reason; one without it (even after ``[DONE]``)
+        was cut off or is malformed, and is never taken as complete."""
+        if self.finish is None:
             raise RuntimeError("completion backend failed")
         message = {"role": "assistant", "content": "".join(self.content)}
         if self.calls:

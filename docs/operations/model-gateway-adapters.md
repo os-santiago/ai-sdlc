@@ -207,37 +207,61 @@ streamed request with the same answer framed as events.
 The gateway's own answer to its caller is unchanged and never streamed.
 
 Streaming adds bounds of its own: 8 MiB of raw events (an 8,192-token answer
-streams about 2.5 MiB from llama.cpp), 256 KiB per event line, 256 KiB of
+streams about 2.1 MB from llama.cpp), 256 KiB per event line, 256 KiB of
 assembled text and at most 8 tool-call indices. A mid-stream error event is a
-`backend` failure, and so is a stream cut off with neither a finish reason nor
-`[DONE]`.
+`backend` failure, and so is a stream without a finish reason, even one that
+ends with `[DONE]`: like a non-streaming answer, only a reported finish
+completes it. Each `data:` line must hold one whole JSON chunk, as
+OpenAI-compatible servers send it. An empty `data:`, a chunk split over several
+`data:` lines, and lines ended by a bare CR fail closed (`invalid`, or
+`oversized` past the line bound). Reasoning deltas (`reasoning_content` from
+llama.cpp, `reasoning` from vLLM) are watched by the guard and never returned.
+A lone surrogate in a delta is judged by the same message check as in a JSON
+answer, with the same outcome.
 
 While the answer streams, a guard watches the end of each generated text
 separately: the content, any reasoning text, and each tool call's arguments.
 A text is **degenerate** when it ends with:
 
-| Pattern | Bound | Separator bound |
-|---|---|---|
-| One non-whitespace character repeated | 256 characters | 1,024 |
-| A unit of 2–4 characters (not only whitespace) repeated, with no line break | the last 512 characters | the last 1,024 |
+| Pattern | Bound |
+|---|---|
+| One non-whitespace character repeated: an ASCII letter or digit | 512 characters |
+| One separator character repeated (`-=#*/_~.+\|` and box drawing such as `─═│║┄┈`) | 1,024 characters |
+| Any other non-whitespace character repeated (for example `?`) | 256 characters |
+| A unit of 2–4 characters (not only whitespace) repeated, with no line break | the last 1,024 characters |
 
-Code and prose repeat, so the bounds sit above what source plausibly holds on
-one line:
+Code and data repeat, so the bounds sit above what one line of source
+plausibly holds:
 
 - **A line break clears both checks.** A raw newline counts, and so does the
   `\n` escape inside JSON tool arguments. A separator line of any length that
   ends with a newline never accumulates, and a run of repeated lines is never
   flagged.
+- **Letters and digits get 512.** One-line data literals repeat them: base64
+  of zero bytes (`AAAA…`; 192 zero bytes are 256 characters), hex of zeros or
+  `ff`, or a written-out `"a" * 256`. Below 512 these pass: base64 of up to 383
+  zero bytes, hex of up to 255 bytes. The cost is detection time for a letter
+  loop. The `G` loop observed on the GPU (one character per token) is stopped
+  after 512 tokens instead of 256, about 8 s more at 30 tokens/s, against 8,192
+  tokens and minutes uncaught. The observed `?` loop keeps the 256 bound.
 - **Separators get 1,024.** These are runs of `-`, `=`, `#`, `*`, `/`, `_`,
-  `~`, `.` or `+`, and units made only of those and spaces (`- `, `-=`). Comment
-  rules and banners are usually 80–120 characters. A 1,024-character rule with
-  no line break is not plausible source, and the higher bound costs a few
-  seconds against minutes of corrupted output.
+  `~`, `.`, `+` or `|`, and the Unicode box-drawing block. Comment rules,
+  banners and box-drawn tables are usually 80–120 characters, and a
+  1,024-character rule with no line break is not plausible source.
+- **Units get 1,024.** Minified literals repeat 2–4 character units: `0,` in
+  a list of up to 512 zeros, or `|---` in a markdown table rule of up to 256
+  columns. A 2–4 character loop is stopped a few seconds later than with a
+  512-character window.
 - **Whitespace is never flagged.** Runs of spaces, tabs or newlines, and units
   made only of whitespace, repeat legitimately in indentation and alignment.
 - **Units are 2–4 characters.** A longer period (`abcde`) or repeated words
   are not checked. The guard targets token-level corruption, not a model that
   repeats sentences.
+
+Still flagged, by design: a single line holding at least 512 of the same letter
+or digit, 256 of another symbol, or 1,024 characters of one 2–4 character
+unit. Base64 of 384 or more zero bytes on one line is the most plausible
+legitimate case. Such an answer fails as `degenerate` after its one retry.
 
 The check is a constant amount of work per streamed delta (a bounded
 1,024-character tail per text).
