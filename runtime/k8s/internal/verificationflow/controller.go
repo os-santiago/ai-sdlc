@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repositorytests"
@@ -82,13 +83,16 @@ func ValidBehaviorProof(b BehaviorProof, c verification.Command) bool {
 
 // Run consumes only an already signed durable inbox identifier. It never
 // accepts arbitrary commands, adopts claims, invokes a model, or publishes code.
+// Its pods run in the default sandbox RuntimeClass.
 func Run(ctx context.Context, db *store.DB, load PolicyLoader, id string, client *podtransport.Client, image string) (proof BehaviorProof, err error) {
-	return RunWithMailbox(ctx, db, load, id, client, image, "")
+	return RunWithMailbox(ctx, db, load, id, client, image, "", executor.DefaultRuntimeClass, podtransport.RuntimeClassAdmission{})
 }
 
 // RunWithMailbox also receives the installation's pinned mailbox image, which
-// carries the repository-tests runner and transfer helper.
-func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id string, client *podtransport.Client, image, mailboxImage string) (proof BehaviorProof, err error) {
+// carries the repository-tests runner and transfer helper, and the installed
+// sandbox RuntimeClass every verification pod runs in, with what the preflight
+// observed that class's admission adds to each pod.
+func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id string, client *podtransport.Client, image, mailboxImage, runtimeClass string, admission podtransport.RuntimeClassAdmission) (proof BehaviorProof, err error) {
 	if db == nil || load == nil || client == nil {
 		return proof, ControllerError{"configuration"}
 	}
@@ -272,9 +276,9 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 			if e != nil || treeErr != nil {
 				return proof, ControllerError{stage}
 			}
-			p := repositorytests.Pod{Namespace: podtransport.VerifierNamespace, MailboxImage: mailboxImage, VerificationID: c.ID(), WorkItemID: c.WorkItemID,
+			p := repositorytests.Pod{Namespace: podtransport.VerifierNamespace, MailboxImage: mailboxImage, RuntimeClass: runtimeClass, VerificationID: c.ID(), WorkItemID: c.WorkItemID,
 				Run: run, SourceSHA: c.SourceSHA, TreeSHA256: tree, Verification: v}
-			planned, e := podtransport.PlanTestsRun(client, p, raw, time.UnixMilli(c.ExpiresAt))
+			planned, e := podtransport.PlanTestsRun(client, p, admission, raw, time.UnixMilli(c.ExpiresAt))
 			if e != nil {
 				return proof, ControllerError{stage}
 			}
@@ -398,7 +402,7 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		}
 		return proof, nil
 	}
-	resources, e = podtransport.PlanVerification(client, c, inputs, image)
+	resources, e = podtransport.PlanVerification(client, c, inputs, image, runtimeClass, admission)
 	if e != nil {
 		return proof, ControllerError{stage}
 	}

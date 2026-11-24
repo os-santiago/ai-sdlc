@@ -32,7 +32,7 @@ func newLifecycleFixture(t *testing.T, configure ...func(*fixture)) *lifecycleFi
 	if err != nil {
 		t.Fatal(err)
 	}
-	placement := Placement{"fixture", "example.invalid/worker@sha256:" + strings.Repeat("a", 64), "example.invalid/mailbox@sha256:" + strings.Repeat("b", 64)}
+	placement := Placement{"fixture", "example.invalid/worker@sha256:" + strings.Repeat("a", 64), "example.invalid/mailbox@sha256:" + strings.Repeat("b", 64), ""}
 	if f.placementOverride != nil {
 		placement = *f.placementOverride
 	}

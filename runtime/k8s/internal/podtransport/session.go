@@ -26,7 +26,12 @@ var imageIDPattern = regexp.MustCompile(`^([a-zA-Z0-9][a-zA-Z0-9./:_-]*@)?sha256
 // signed execution authority and durable lifecycle ownership remain caller duties.
 type Binding struct {
 	Namespace, WorkerImage, MailboxImage, PodUID string
-	Assignment, Profile, ADev                    []byte
+	// RuntimeClass is the installation's sandbox RuntimeClass; it is required.
+	// Admission is what that class's admission adds to each pod, as observed by
+	// the preflight; the observed pod must equal the template plus exactly that.
+	RuntimeClass              string
+	Admission                 RuntimeClassAdmission
+	Assignment, Profile, ADev []byte
 }
 
 type instance struct{ ID, ImageID, Image string }
@@ -55,7 +60,7 @@ func Bind(ctx context.Context, c *Client, b Binding) (*Session, error) {
 	b.Assignment = append([]byte(nil), b.Assignment...)
 	b.Profile = append([]byte(nil), b.Profile...)
 	b.ADev = append([]byte(nil), b.ADev...)
-	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.Assignment, b.Profile, b.ADev, time.Now())
+	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.RuntimeClass, b.Assignment, b.Profile, b.ADev, time.Now())
 	if err != nil {
 		return nil, ErrTransport
 	}
@@ -79,6 +84,9 @@ func Bind(ctx context.Context, c *Client, b Binding) (*Session, error) {
 		return nil, ErrTransport
 	}
 	applyDefaults(&s.expected.Spec)
+	if !applyAdmission(&s.expected.Spec, b.Admission) {
+		return nil, ErrTransport
+	}
 	observed, err := s.observe(ctx, false)
 	if err != nil {
 		return nil, err
@@ -184,6 +192,7 @@ func (s *Session) inspect(ctx context.Context, allowWorkerExit bool) (observatio
 	// Scheduling selects nodeName. Every other specification field must match
 	// the compiled template plus the exact supported API defaults above.
 	pod.Spec.NodeName = ""
+	canonicalTolerations(&pod.Spec)
 	if !equality.Semantic.DeepEqual(pod.Spec, s.expected.Spec) || len(pod.Status.ContainerStatuses) != 2 || len(pod.Status.InitContainerStatuses) != 0 || len(pod.Status.EphemeralContainerStatuses) != 0 {
 		return observation{}, ErrTransport
 	}

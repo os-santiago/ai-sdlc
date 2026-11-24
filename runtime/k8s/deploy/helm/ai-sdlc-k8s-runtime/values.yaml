@@ -21,6 +21,21 @@ candidate:
   apiServerCIDRs: []
 verifier:
   digest: ""
+# Sandbox RuntimeClass for every executor, reviewer and verification pod. Use
+# the platform's standard sandbox class (for example gvisor on GKE Sandbox,
+# kata on OpenShift sandboxed containers, kata-mshv-vm-isolation on AKS Pod
+# Sandboxing). The local kind installer creates ai-sdlc-offline. Controllers
+# verify the class exists before they become ready; there is no unsandboxed
+# fallback. The installer writes the same name into the execution and review
+# configuration documents; the chart rejects a mismatch. The class's
+# scheduling (nodeSelector, tolerations) is accepted as admission adds it.
+sandbox:
+  runtimeClassName: ai-sdlc-offline
+  # Per-pod overhead headroom for a class with overhead.podFixed (Kata adds
+  # one, for example cpu 250m and memory 350Mi). Each sandbox namespace quota
+  # grows by it for every pod it admits, and the controllers refuse a class
+  # whose overhead exceeds it. Empty: only a class without overhead is used.
+  podOverhead: {cpu: "", memory: ""}
 intake:
   configJSON: ""
   credentialSecret: ai-sdlc-github-client

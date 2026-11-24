@@ -122,6 +122,31 @@ class InstallerBoundaryTests(unittest.TestCase):
                 with self.assertRaises(ValueError): installer.main(args)
                 tools.assert_not_called()
 
+    def test_invalid_runtime_class_scope_never_runs_tools(self):
+        openshift = ['--platform', 'openshift', '--kubeconfig', 'k', '--context', 'admin']
+        for args in (['plan', '--profile', 'candidate', '--runtime-class', 'kata'],
+                     ['plan', '--profile', 'maintenance', '--runtime-class', 'ai-sdlc-offline'],
+                     ['plan', '--profile', 'candidate', '--runtime-class', 'Kata/../runc', *openshift],
+                     ['plan', '--profile', 'shadow', '--runtime-class', 'kata', *openshift],
+                     ['status', '--runtime-class', 'kata', *openshift]):
+            with self.subTest(args=args), patch.object(installer, 'tools') as tools:
+                with self.assertRaises(ValueError): installer.main(args)
+                tools.assert_not_called()
+
+    def test_openshift_runtime_class_reaches_rendered_configuration(self):
+        rendered = []
+        def run(command, **kwargs):
+            values = [str(command[i + 1]) for i, arg in enumerate(command) if arg == '-f']
+            rendered.append(json.loads(Path(values[-1]).read_text()))
+            return subprocess.CompletedProcess(command, 0, '')
+        with patch.object(installer, 'tools', return_value={'helm': 'helm'}), patch.object(installer, 'run', side_effect=run):
+            self.assertEqual(installer.main(['plan', '--profile', 'verification', '--independent-review', '--runtime-class', 'kata',
+                                             '--platform', 'openshift', '--kubeconfig', 'k', '--context', 'admin']), 0)
+        values = rendered[-1]
+        self.assertEqual(values['sandbox'], {'runtimeClassName': 'kata'})
+        self.assertEqual(json.loads(values['candidate']['configJSON'])['placement']['RuntimeClass'], 'kata')
+        self.assertEqual(json.loads(values['review']['configJSON'])['runtimeClass'], 'kata')
+
     def test_corrupt_download_never_becomes_executable(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(installer.platform, 'system', return_value='Linux'), patch.object(installer.platform, 'machine', return_value='x86_64'), patch.object(installer.urllib.request, 'urlopen') as request:

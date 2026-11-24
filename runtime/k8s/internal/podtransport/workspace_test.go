@@ -34,7 +34,7 @@ func workspaceBinding(t *testing.T) (Binding, core.Pod, []byte) {
 	}
 	a.TreeSHA256, _ = bundle.TreeDigest()
 	b.Assignment, _ = json.Marshal(a)
-	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.Assignment, b.Profile, b.ADev, time.Now())
+	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.RuntimeClass, b.Assignment, b.Profile, b.ADev, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

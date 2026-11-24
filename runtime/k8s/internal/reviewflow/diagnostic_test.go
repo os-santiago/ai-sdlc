@@ -9,6 +9,7 @@ import (
 func TestReviewDiagnosticStageIsBounded(t *testing.T) {
 	for err, want := range map[error]string{
 		ControllerError{Stage: "readiness"}:                         "readiness",
+		ControllerError{Stage: "sandbox-runtime-class"}:             "sandbox-runtime-class",
 		fmt.Errorf("wrapped: %w", ControllerError{Stage: "pod"}):    "pod",
 		ControllerError{Stage: "sensitive-fixture"}:                 "unknown",
 		errors.New("sensitive-fixture"):                             "unknown",

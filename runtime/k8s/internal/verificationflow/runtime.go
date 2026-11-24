@@ -20,6 +20,17 @@ type Runtime struct {
 	Image  string
 	// MailboxImage carries the repository-tests runner and transfer helper.
 	MailboxImage string
+	// RuntimeClass is the installed sandbox RuntimeClass for verification pods.
+	RuntimeClass string
+}
+
+// SandboxUnavailable reports that a poll stopped only because the sandbox
+// RuntimeClass check failed. That check runs after expiry, cleanup and
+// rejection completed and before any claim, so handoff of approved work may
+// still proceed in the same cycle.
+func SandboxUnavailable(err error) bool {
+	var stopped ControllerError
+	return errors.As(err, &stopped) && stopped.Stage == "sandbox-runtime-class"
 }
 
 func (r Runtime) PollOnce(ctx context.Context) (string, error) {
@@ -80,7 +91,14 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		}
 		return "rejected", nil
 	}
-	if _, err = RunWithMailbox(ctx, r.DB, r.Load, id, r.Client, r.Image, r.MailboxImage); err != nil {
+	// Expiry, cleanup and rejection above always run; claiming the work and
+	// creating its pods require the sandbox class, observed now with this
+	// poll's client.
+	admission, err := r.Client.CheckRuntimeClass(ctx, r.RuntimeClass)
+	if err != nil {
+		return "sandbox-runtime-class-unavailable", ControllerError{"sandbox-runtime-class"}
+	}
+	if _, err = RunWithMailbox(ctx, r.DB, r.Load, id, r.Client, r.Image, r.MailboxImage, r.RuntimeClass, admission); err != nil {
 		return "stopped", err
 	}
 	return "behavior-verified", nil

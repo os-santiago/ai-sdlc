@@ -15,6 +15,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+import fixture_runtime_class
 from network_probe import cleanup_namespace
 from verify_candidate_runtime import verify as verify_candidate
 from verify_pod_transport import TransportFixture
@@ -26,6 +27,7 @@ def controller(kubectl, base, name, execute):
     namespace = 'ai-sdlc-' + name
     uid = None
     nonce = secrets.token_hex(16)
+    sandbox_grant = fixture_runtime_class.new_nonce()
     def raw_command(args, value=None, timeout=65):
         result = subprocess.run(kubectl + args, input=wire(value) if isinstance(value, dict) else value,
                                 capture_output=True, timeout=timeout)
@@ -63,6 +65,8 @@ def controller(kubectl, base, name, execute):
             {'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'RoleBinding', 'metadata': {'name': name, 'namespace': namespace},
              'roleRef': {'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'Role', 'name': name},
              'subjects': [{'kind': 'ServiceAccount', 'name': name, 'namespace': namespace}]}]})
+        # The controller's sandbox preflight reads only the fixture RuntimeClass.
+        fixture_runtime_class.grant(command, sandbox_grant, [(namespace, name)])
         token = command(['create', 'token', name, '-n', namespace, '--duration=10m']).decode().strip()
         guard()
         yield dict(APIServer=base['APIServer'], CA=base['CA'], BearerToken=token)
@@ -72,8 +76,11 @@ def controller(kubectl, base, name, execute):
             if any(item['metadata']['name'] != 'kube-root-ca.crt' for item in observed):
                 raise ValueError('Repair composition controller resources were not retired')
     finally:
-        if uid:
-            cleanup_namespace(raw_command, namespace, uid)
+        try:
+            fixture_runtime_class.revoke(raw_command, sandbox_grant)
+        finally:
+            if uid:
+                cleanup_namespace(raw_command, namespace, uid)
 
 
 def verify(kubectl, worker, mailbox, binary, verifier_image, repository, source_sha, candidate_directory):

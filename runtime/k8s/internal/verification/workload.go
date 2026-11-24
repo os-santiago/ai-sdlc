@@ -16,8 +16,10 @@ type Workload struct {
 	Pods                     map[string]map[string]any
 }
 
-func Compile(c Command, in Inputs, image string, now time.Time) (Workload, error) {
-	if executor.ValidatePlacement("ai-sdlc-verifiers", image, image) != nil || !ValidRecipe(c.Repository, c.Recipe) || c.RecipeRevision != RevisionForRecipe(c.Recipe) || !time.UnixMilli(c.ExpiresAt).After(now) || c.SourceSHA != in.delta.SourceSHA || c.CandidateTreeSHA256 != in.delta.CandidateTreeSHA256 {
+// Compile renders the verification pods in the installation's sandbox
+// RuntimeClass, supplied by the trusted controller from installed config.
+func Compile(c Command, in Inputs, image, runtimeClass string, now time.Time) (Workload, error) {
+	if executor.ValidatePlacement("ai-sdlc-verifiers", image, image) != nil || !executor.ValidRuntimeClass(runtimeClass) || !ValidRecipe(c.Repository, c.Recipe) || c.RecipeRevision != RevisionForRecipe(c.Recipe) || !time.UnixMilli(c.ExpiresAt).After(now) || c.SourceSHA != in.delta.SourceSHA || c.CandidateTreeSHA256 != in.delta.CandidateTreeSHA256 {
 		return Workload{}, ErrVerification
 	}
 	delta, err := candidate.Encode(in.delta)
@@ -98,7 +100,7 @@ func Compile(c Command, in Inputs, image string, now time.Time) (Workload, error
 	}
 	pods := map[string]map[string]any{}
 	for i, kind := range []string{"baseline", "candidate", "reference", "tests"} {
-		pod := map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": metadata(name + "-" + kind), "spec": map[string]any{"runtimeClassName": "ai-sdlc-offline", "automountServiceAccountToken": false, "enableServiceLinks": false, "restartPolicy": "Never", "activeDeadlineSeconds": 60, "terminationGracePeriodSeconds": 1, "hostNetwork": false, "hostPID": false, "hostIPC": false, "shareProcessNamespace": false,
+		pod := map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": metadata(name + "-" + kind), "spec": map[string]any{"runtimeClassName": runtimeClass, "automountServiceAccountToken": false, "enableServiceLinks": false, "restartPolicy": "Never", "activeDeadlineSeconds": 60, "terminationGracePeriodSeconds": 1, "hostNetwork": false, "hostPID": false, "hostIPC": false, "shareProcessNamespace": false,
 			"securityContext": map[string]any{"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000, "seccompProfile": map[string]any{"type": "RuntimeDefault"}}, "volumes": []any{volumes[i]}, "containers": []any{containers[i]}}}
 		pods[kind] = pod
 	}

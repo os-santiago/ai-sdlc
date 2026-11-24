@@ -92,6 +92,43 @@ class CandidateInstallTests(unittest.TestCase):
         for forbidden in ('token', 'password', 'credential', 'command', 'shell'):
             self.assertNotIn('"' + forbidden + '"', values['candidate']['configJSON'])
 
+    def test_sandbox_runtime_class_is_written_only_when_not_default(self):
+        lock_path = install.LOCAL / 'images.lock.json'
+        lock = install.image_lock(lock_path)
+        default = candidate_install.desired_values(install.ROOT, lock_path, lock, verification=True, review=True)
+        explicit = candidate_install.desired_values(install.ROOT, lock_path, lock, verification=True, review=True,
+                                                    runtime_class='ai-sdlc-offline')
+        # Default installations keep byte-identical configuration documents.
+        self.assertEqual(default, explicit)
+        self.assertNotIn('sandbox', default)
+        self.assertNotIn('RuntimeClass', default['candidate']['configJSON'])
+        self.assertNotIn('runtimeClass', default['review']['configJSON'])
+        kata = candidate_install.desired_values(install.ROOT, lock_path, lock, verification=True, review=True, runtime_class='kata')
+        self.assertEqual(kata['sandbox'], {'runtimeClassName': 'kata'})
+        self.assertEqual(json.loads(kata['candidate']['configJSON'])['placement']['RuntimeClass'], 'kata')
+        self.assertEqual(json.loads(kata['review']['configJSON'])['runtimeClass'], 'kata')
+        for bad in ('', 'Kata', 'kata/../runc', '-kata', 'a' * 254, None):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                candidate_install.desired_values(install.ROOT, lock_path, lock, runtime_class=bad)
+
+    def test_reinstall_never_switches_the_installed_runtime_class_implicitly(self):
+        def installed(config):
+            raw = '' if config is None else json.dumps({'data': {'config.json': json.dumps(config)}})
+            return patch.object(install, 'run', return_value=subprocess.CompletedProcess([], 0, raw))
+        kata = {'placement': {'Namespace': 'ai-sdlc-executors', 'RuntimeClass': 'kata'}}
+        default = {'placement': {'Namespace': 'ai-sdlc-executors'}}
+        for config, explicit in ((None, None), (default, None), (default, 'kata'), (kata, 'kata'), (kata, 'gvisor'), (kata, 'ai-sdlc-offline')):
+            with self.subTest(config=config, explicit=explicit), installed(config):
+                candidate_install.require_runtime_class(['kubectl'], explicit)
+        # The runtime reads the field names case-insensitively; so does the guard.
+        for spelled in (kata, {'placement': {'runtimeClass': 'kata'}}, {'Placement': {'RUNTIMECLASS': 'kata'}}):
+            with self.subTest(spelled=spelled), installed(spelled), self.assertRaisesRegex(ValueError, 'pass --runtime-class kata'):
+                candidate_install.require_runtime_class(['kubectl'], None)
+        for bad in ([], {'placement': []}, {'placement': {'RuntimeClass': 7}},
+                    {'placement': {'RuntimeClass': 'kata', 'runtimeClass': 'kata'}}, {'placement': {}, 'Placement': {}}):
+            with self.subTest(bad=bad), installed(bad), self.assertRaisesRegex(ValueError, 'malformed'):
+                candidate_install.require_runtime_class(['kubectl'], None)
+
     def test_generation_budget_defaults_are_the_reviewed_profile(self):
         lock_path = install.LOCAL / 'images.lock.json'
         lock = install.image_lock(lock_path)

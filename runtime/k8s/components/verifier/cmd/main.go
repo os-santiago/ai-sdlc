@@ -72,11 +72,49 @@ func main() {
 		}
 	}
 
+	kubernetes := func() (*podtransport.Client, error) {
+		token, err := execution.ReadBounded("/var/run/ai-sdlc/kubernetes/token", 8192)
+		if err != nil {
+			return nil, err
+		}
+		ca, err := execution.ReadBounded("/var/run/ai-sdlc/kubernetes/ca.crt", 65536)
+		if err != nil {
+			return nil, err
+		}
+		return podtransport.NewClient(podtransport.Config{APIServer: "https://kubernetes.default.svc", CA: ca, BearerToken: string(token)})
+	}
+	// Verification and reviewer pods run only in the installed sandbox
+	// RuntimeClass. Without it the verifier is not ready; each poll repeats the
+	// check before it claims work, while cleanup and handoffs keep running.
+	sandbox := &bootstrap.SandboxGate{Known: []error{podtransport.ErrRuntimeClassOverhead, podtransport.ErrRuntimeClassScheduling}}
+	sandboxPreflight := func(ctx context.Context) error {
+		config, _, err := execution.LoadRuntime(os.Getenv("AI_SDLC_EXECUTION_CONFIG_PATH"))
+		if err != nil {
+			return err
+		}
+		client, err := kubernetes()
+		if err != nil {
+			return err
+		}
+		if _, err := client.CheckRuntimeClass(ctx, config.Placement.SandboxRuntimeClass()); err != nil || !reviewEnabled {
+			return err
+		}
+		review, err := reviewflow.LoadPublicInstalled("/etc/ai-sdlc/review/config.json")
+		if err != nil {
+			return err
+		}
+		_, err = client.CheckRuntimeClass(ctx, review.SandboxRuntimeClass())
+		return err
+	}
+
 	ready := func(ctx context.Context) error {
 		if err := c.Ready(ctx); err != nil {
 			return err
 		}
 		if _, _, _, err := newLoader("")(); err != nil {
+			return err
+		}
+		if err := sandbox.Check(ctx, sandboxPreflight); err != nil {
 			return err
 		}
 		blocked, err := c.DB.VerificationCleanupBlocked(ctx)
@@ -106,21 +144,13 @@ func main() {
 			log.Print("verification configuration unavailable")
 			return
 		}
-		token, err := execution.ReadBounded("/var/run/ai-sdlc/kubernetes/token", 8192)
-		if err != nil {
-			return
-		}
-		ca, err := execution.ReadBounded("/var/run/ai-sdlc/kubernetes/ca.crt", 65536)
-		if err != nil {
-			return
-		}
-		client, err := podtransport.NewClient(podtransport.Config{APIServer: "https://kubernetes.default.svc", CA: ca, BearerToken: string(token)})
+		client, err := kubernetes()
 		if err != nil {
 			return
 		}
 		// Recheck the complete installation config, including pinned images, before every effect.
 		sealed, _ := json.Marshal(config)
-		r := verificationflow.Runtime{DB: c.DB, Load: newLoader(workspacebundle.Digest(sealed)), Client: client, Image: config.Placement.WorkerImage, MailboxImage: config.Placement.MailboxImage}
+		r := verificationflow.Runtime{DB: c.DB, Load: newLoader(workspacebundle.Digest(sealed)), Client: client, Image: config.Placement.WorkerImage, MailboxImage: config.Placement.MailboxImage, RuntimeClass: config.Placement.SandboxRuntimeClass()}
 		var reviewPoll queuePoll
 		if reviewEnabled {
 			review := reviewflow.Runtime{DB: c.DB, Policy: r.Load, Load: loadReview, Client: client}

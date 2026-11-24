@@ -13,7 +13,22 @@ import (
 )
 
 // Placement is reviewed installation configuration, never issue/model content.
-type Placement struct{ Namespace, WorkerImage, MailboxImage string }
+// RuntimeClass names the platform's sandbox RuntimeClass; it is omitted from
+// the installed document when the installation uses the default, so default
+// configurations keep their exact bytes and digests.
+type Placement struct {
+	Namespace, WorkerImage, MailboxImage string
+	RuntimeClass                         string `json:",omitempty"`
+}
+
+// SandboxRuntimeClass is the RuntimeClass every executor pod runs in.
+func (p Placement) SandboxRuntimeClass() string {
+	if p.RuntimeClass == "" {
+		return executor.DefaultRuntimeClass
+	}
+	return p.RuntimeClass
+}
+
 type LifecycleLoader func(context.Context) (PreparationInputs, Placement, error)
 
 // Lifecycle is an in-process, nonrenewable owner. There is deliberately no
@@ -50,7 +65,7 @@ func lifecycleInputs(load LifecycleLoader, placement Placement) PreparationLoade
 	}
 }
 func lifecycleBinding(p Prepared, placement Placement) (store.LifecycleBinding, executor.Workload, error) {
-	w, err := executor.Compile(placement.Namespace, placement.WorkerImage, placement.MailboxImage, p.assignment, p.profile, p.adev, time.Now())
+	w, err := executor.Compile(placement.Namespace, placement.WorkerImage, placement.MailboxImage, placement.SandboxRuntimeClass(), p.assignment, p.profile, p.adev, time.Now())
 	if err != nil {
 		return store.LifecycleBinding{}, executor.Workload{}, ErrAuthority
 	}

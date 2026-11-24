@@ -34,6 +34,10 @@ func TestRealReadonlyReviewerFixture(t *testing.T) {
 	if err != nil || len(raw) > 256*1024 || json.Unmarshal(raw, &in) != nil {
 		t.Fatal("fixture input")
 	}
+	// The local kind fixtures use the installer's default sandbox class.
+	if in.Binding.RuntimeClass == "" {
+		in.Binding.RuntimeClass = executor.DefaultRuntimeClass
+	}
 	budget := strings.HasPrefix(in.Scenario, "budget-")
 	verdict := strings.TrimPrefix(in.Scenario, "budget-")
 	switch in.Scenario {

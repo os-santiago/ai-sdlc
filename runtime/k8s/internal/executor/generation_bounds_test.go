@@ -21,7 +21,7 @@ func compiledFixture(t *testing.T, maxSeconds int) ([]byte, []byte, map[string]a
 	a.ProfileSHA256 = workspacebundle.Digest(profile)
 	assignment, _ := json.Marshal(a)
 	image := "quay.io/os-santiago/ai-sdlc@sha256:" + strings.Repeat("a", 64)
-	workload, err := Compile("fixture", image, image, assignment, profile, adev, now)
+	workload, err := Compile("fixture", image, image, DefaultRuntimeClass, assignment, profile, adev, now)
 	if err != nil {
 		t.Fatal(err)
 	}

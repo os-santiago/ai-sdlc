@@ -11,6 +11,19 @@ import (
 
 var namespacePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 var imagePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9./:_-]*@sha256:[a-f0-9]{64}$`)
+var runtimeClassPattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
+
+// DefaultRuntimeClass is the sandbox RuntimeClass the local kind installer
+// provides. Other platforms configure their standard sandbox class instead
+// (for example gvisor or kata); there is no unsandboxed alternative.
+const DefaultRuntimeClass = "ai-sdlc-offline"
+
+// ValidRuntimeClass accepts a Kubernetes RuntimeClass name (DNS-1123
+// subdomain). The name is installation configuration, never request or model
+// content; an empty name is rejected rather than meaning "no sandbox".
+func ValidRuntimeClass(name string) bool {
+	return len(name) <= 253 && runtimeClassPattern.MatchString(name)
+}
 
 // Workload is a pure compiler output. No API client, admission decision, RBAC or
 // provider authority is created here. A trusted controller must bind this exact
@@ -28,8 +41,11 @@ func ValidatePlacement(namespace, workerImage, mailboxImage string) error {
 	return nil
 }
 
-func Compile(namespace, workerImage, mailboxImage string, assignmentRaw, profileRaw, adevRaw []byte, now time.Time) (Workload, error) {
-	if ValidatePlacement(namespace, workerImage, mailboxImage) != nil {
+// Compile renders the executor workload in the installation's sandbox
+// RuntimeClass; the trusted controller supplies runtimeClass from its loaded
+// installation configuration.
+func Compile(namespace, workerImage, mailboxImage, runtimeClass string, assignmentRaw, profileRaw, adevRaw []byte, now time.Time) (Workload, error) {
+	if ValidatePlacement(namespace, workerImage, mailboxImage) != nil || !ValidRuntimeClass(runtimeClass) {
 		return Workload{}, ErrInvalid
 	}
 	digest := workspacebundle.Digest(assignmentRaw)
@@ -74,7 +90,7 @@ func Compile(namespace, workerImage, mailboxImage string, assignmentRaw, profile
 		mailbox["command"] = append(mailbox["command"].([]string), "--wait-seconds", fmt.Sprint(p.CallSeconds))
 	}
 	pod := map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": metadata(name), "spec": map[string]any{
-		"runtimeClassName": "ai-sdlc-offline", "automountServiceAccountToken": false, "enableServiceLinks": false, "restartPolicy": "Never", "activeDeadlineSeconds": PodDeadlineSeconds(p), "terminationGracePeriodSeconds": 1,
+		"runtimeClassName": runtimeClass, "automountServiceAccountToken": false, "enableServiceLinks": false, "restartPolicy": "Never", "activeDeadlineSeconds": PodDeadlineSeconds(p), "terminationGracePeriodSeconds": 1,
 		"hostNetwork": false, "hostPID": false, "hostIPC": false, "shareProcessNamespace": false,
 		"securityContext": map[string]any{"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000, "seccompProfile": map[string]any{"type": "RuntimeDefault"}},
 		"volumes": []any{

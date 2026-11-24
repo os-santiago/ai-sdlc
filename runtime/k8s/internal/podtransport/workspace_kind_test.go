@@ -31,6 +31,10 @@ func TestRealWorkspaceLifecycleFixture(t *testing.T) {
 	if err != nil || len(raw) > 256*1024 || json.Unmarshal(raw, &input) != nil {
 		t.Fatal("private workspace fixture input")
 	}
+	// The local kind fixtures use the installer's default sandbox class.
+	if input.Binding.RuntimeClass == "" {
+		input.Binding.RuntimeClass = executor.DefaultRuntimeClass
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Second)
 	defer cancel()
 	client, err := NewClient(input.Config)

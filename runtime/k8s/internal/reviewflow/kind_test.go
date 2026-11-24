@@ -17,6 +17,7 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/delivery"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
@@ -136,7 +137,7 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 	if e != nil {
 		t.Fatal("behavior Kubernetes")
 	}
-	verifier := verificationflow.Runtime{DB: db, Load: policy, Client: client, Image: in.Image}
+	verifier := verificationflow.Runtime{DB: db, Load: policy, Client: client, Image: in.Image, RuntimeClass: executor.DefaultRuntimeClass}
 	if state, e := verifier.PollOnce(ctx); e != nil || state != "behavior-verified" {
 		t.Fatal("behavior prerequisite", state, e)
 	}

@@ -133,3 +133,71 @@ pod port, so kube-system:53 never applies there.
       podSelector: {matchLabels: {dns.operator.openshift.io/daemonset-dns: default}}
   ports: [{protocol: UDP, port: 5353}, {protocol: TCP, port: 5353}]
 {{- end }}
+
+{{/*
+Sandbox pod overhead headroom. RuntimeClass admission adds the class's
+overhead.podFixed to every pod, and ResourceQuota counts it. When
+sandbox.podOverhead is set, each sandbox namespace quota grows by that overhead
+for every pod it admits; the worker and verifier refuse a class whose overhead
+exceeds it. Input: dict "root" $ "pods" N "quota" (dict of the four fields).
+Without an overhead the caller renders its original quota unchanged.
+*/}}
+{{- define "ai-sdlc-k8s-runtime.sandboxQuota" -}}
+{{- $o := .root.Values.sandbox.podOverhead | default dict -}}
+{{- $cpu := mul .pods (trimSuffix "m" ($o.cpu | default "0m") | atoi) -}}
+{{- $mem := mul .pods (trimSuffix "Mi" ($o.memory | default "0Mi") | atoi) -}}
+{{- $out := list -}}
+{{- range $key := list "requests.cpu" "requests.memory" "limits.cpu" "limits.memory" -}}
+{{- $q := toString (index $.quota $key) -}}
+{{- if hasSuffix ".cpu" $key -}}
+{{- $m := 0 -}}
+{{- if regexMatch "^[0-9]+m$" $q -}}{{- $m = trimSuffix "m" $q | atoi -}}
+{{- else if regexMatch "^[0-9]+$" $q -}}{{- $m = mul (atoi $q) 1000 -}}
+{{- else -}}{{- fail (printf "quota %s %s must be whole cores or millicores to add sandbox.podOverhead" $key $q) -}}{{- end -}}
+{{- $out = append $out (printf "%s: %q" $key (printf "%dm" (add $m $cpu))) -}}
+{{- else -}}
+{{- $mi := 0 -}}
+{{- if regexMatch "^[0-9]+Mi$" $q -}}{{- $mi = trimSuffix "Mi" $q | atoi -}}
+{{- else if regexMatch "^[0-9]+Gi$" $q -}}{{- $mi = mul (trimSuffix "Gi" $q | atoi) 1024 -}}
+{{- else -}}{{- fail (printf "quota %s %s must be whole Mi or Gi to add sandbox.podOverhead" $key $q) -}}{{- end -}}
+{{- $out = append $out (printf "%s: %q" $key (printf "%dMi" (add $mi $mem))) -}}
+{{- end -}}
+{{- end -}}
+{{- join ", " $out -}}
+{{- end -}}
+
+{{- define "ai-sdlc-k8s-runtime.sandboxOverheadSet" -}}
+{{- $o := .Values.sandbox.podOverhead | default dict -}}
+{{- if or $o.cpu $o.memory }}true{{ end -}}
+{{- end -}}
+
+{{/*
+The sandbox RuntimeClass a configuration document selects, matching the field
+name case-insensitively as the runtime's JSON decoding does. Absent means the
+default; more than one spelling fails. Input: dict "doc" map "field" label.
+*/}}
+{{- define "ai-sdlc-k8s-runtime.sandboxClassField" -}}
+{{- $found := list -}}
+{{- range $key, $value := .doc -}}
+{{- if eq (lower $key) "runtimeclass" -}}{{- $found = append $found $value -}}{{- end -}}
+{{- end -}}
+{{- if gt (len $found) 1 -}}{{- fail (printf "the %s field appears more than once with different capitalization" .field) -}}{{- end -}}
+{{- if $found -}}{{- first $found | default "ai-sdlc-offline" -}}{{- else -}}ai-sdlc-offline{{- end -}}
+{{- end -}}
+
+{{/*
+The execution configuration's placement object as JSON, matching the field
+name case-insensitively as the runtime does. Absent means an empty object;
+more than one spelling fails. Input: the decoded configuration document.
+*/}}
+{{- define "ai-sdlc-k8s-runtime.placementField" -}}
+{{- $found := list -}}
+{{- range $key, $value := . -}}
+{{- if eq (lower $key) "placement" -}}{{- $found = append $found $value -}}{{- end -}}
+{{- end -}}
+{{- if gt (len $found) 1 -}}{{- fail "the execution configuration placement field appears more than once with different capitalization" -}}{{- end -}}
+{{- $placement := dict -}}
+{{- if $found -}}{{- if not (kindIs "invalid" (first $found)) -}}{{- $placement = first $found -}}{{- end -}}{{- end -}}
+{{- if not (kindIs "map" $placement) -}}{{- fail "the execution configuration placement must be an object" -}}{{- end -}}
+{{- toJson $placement -}}
+{{- end -}}

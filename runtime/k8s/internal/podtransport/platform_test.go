@@ -107,15 +107,15 @@ func TestExactPodTemplateUnderOpenShiftProfile(t *testing.T) {
 	admitted := openShiftAdmitted(expected)
 	applyDefaults(&admitted.Spec)
 	withPlatform(t, false)
-	if exactPodTemplate(admitted, expected, "") {
+	if exactPodTemplate(admitted, expected, "", RuntimeClassAdmission{}) {
 		t.Fatal("OpenShift admission accepted without the profile")
 	}
 	withPlatform(t, true)
-	if !exactPodTemplate(admitted, expected, "") {
+	if !exactPodTemplate(admitted, expected, "", RuntimeClassAdmission{}) {
 		t.Fatal("admitted pod rejected under the profile")
 	}
 	admitted.Spec.HostNetwork = true
-	if exactPodTemplate(admitted, expected, "") {
+	if exactPodTemplate(admitted, expected, "", RuntimeClassAdmission{}) {
 		t.Fatal("changed spec accepted under the profile")
 	}
 }

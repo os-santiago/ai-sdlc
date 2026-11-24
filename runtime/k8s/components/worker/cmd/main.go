@@ -6,6 +6,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/delivery"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/execution"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 	"log"
 	"net/http"
@@ -39,8 +40,15 @@ func main() {
 			mux.Handle("POST /internal/execute-work", inbox.Handler(component.Authority, "execute-work", "/internal/execute-work", execution.Effect(func() (authority.Policy, error) { p, _, e := component.Authority(); return p, e })))
 		})
 		runtime := execution.Runtime{SourceCache: sourcefetch.NewCache(), Component: component, ConfigPath: path, IntakePath: os.Getenv("AI_SDLC_INTAKE_CONFIG_PATH"), APIServer: "https://kubernetes.default.svc", TokenPath: "/var/run/ai-sdlc/kubernetes/token", CAPath: "/var/run/ai-sdlc/kubernetes/ca.crt", GatewayTokenPath: "/var/run/ai-sdlc/model/token", ProviderTimeoutSeconds: gatewaySeconds, AdoptGatewayProfile: os.Getenv("AI_SDLC_MODEL_GATEWAY_PROFILE") == "benchmark"}
+		// Executor pods run only in the installed sandbox RuntimeClass. Without
+		// it the worker is not ready, and each poll refuses to claim work while
+		// cleanup still runs; it never runs unsandboxed.
+		sandbox := &bootstrap.SandboxGate{Known: []error{podtransport.ErrRuntimeClassOverhead, podtransport.ErrRuntimeClassScheduling}}
 		ready = func(ctx context.Context) error {
 			if e := component.Ready(ctx); e != nil {
+				return e
+			}
+			if e := sandbox.Check(ctx, runtime.CheckSandbox); e != nil {
 				return e
 			}
 			return runtime.Ready(ctx)

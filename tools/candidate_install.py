@@ -31,13 +31,13 @@ def generation_budget(seconds=None, steps=None, model_upstream=False):
     return seconds, steps
 
 
-def require_unchanged_tool_budget(kubectl, desired):
-    """Ordinary reconciliation cannot silently change an installed SCC budget."""
+def installed_execution_config(kubectl):
+    """The installed execution configuration document, or None before the first."""
     import install
     result = install.run(kubectl + ['--request-timeout=10s', 'get', 'configmap', 'ai-sdlc-execution',
         '-n', install.NAMESPACE, '--ignore-not-found', '-o', 'json'], capture_output=True, timeout=15)
     if not result.stdout.strip():
-        return  # First candidate configuration, including maintenance promotion.
+        return None
     def unique_object(pairs):
         result = dict(pairs)
         if len(result) != len(pairs):
@@ -51,6 +51,44 @@ def require_unchanged_tool_budget(kubectl, desired):
         if not isinstance(raw, str) or len(raw.encode()) > 262144:
             raise ValueError()
         config = json.loads(raw, object_pairs_hook=unique_object)
+        if not isinstance(config, dict):
+            raise ValueError()
+    except (KeyError, TypeError, ValueError):
+        raise ValueError('Installed execution configuration is malformed; preserve it for review') from None
+    return config
+
+
+def _field(document, name, default):
+    """A field matched case-insensitively; more than one spelling is malformed."""
+    values = [value for key, value in document.items() if key.lower() == name.lower()]
+    if len(values) > 1:
+        raise ValueError('Installed execution configuration is malformed; preserve it for review')
+    return values[0] if values else default
+
+
+def require_runtime_class(kubectl, explicit):
+    """A reinstall keeps the installed sandbox RuntimeClass unless the operator
+    names a class explicitly; omitting --runtime-class never silently switches
+    an installation back to ai-sdlc-offline."""
+    config = installed_execution_config(kubectl)
+    if config is None:
+        return
+    # The runtime matches JSON field names case-insensitively; so does this guard.
+    placement = _field(config, 'placement', {})
+    installed = _field(placement, 'RuntimeClass', DEFAULT_RUNTIME_CLASS) if isinstance(placement, dict) else None
+    if not isinstance(installed, str):
+        raise ValueError('Installed execution configuration is malformed; preserve it for review')
+    if explicit is None and installed != DEFAULT_RUNTIME_CLASS:
+        raise ValueError('The installation uses sandbox RuntimeClass ' + validate_runtime_class(installed)
+                         + '; pass --runtime-class ' + installed + ' to keep it, or another name to change it explicitly')
+
+
+def require_unchanged_tool_budget(kubectl, desired):
+    """Ordinary reconciliation cannot silently change an installed SCC budget."""
+    config = installed_execution_config(kubectl)
+    if config is None:
+        return  # First candidate configuration, including maintenance promotion.
+    try:
         profile = config['profile']
         steps, seconds = profile['maxSteps'], profile['maxSeconds']
         if (config['version'] != 'ai-sdlc.candidate-runtime/v1'
@@ -78,8 +116,19 @@ def require_unchanged_tool_budget(kubectl, desired):
         raise ValueError('Installed model budget differs; use a reviewed runtime transition before reconciliation')
 
 
+DEFAULT_RUNTIME_CLASS = 'ai-sdlc-offline'
+_RUNTIME_CLASS = re.compile(r'[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*')
+
+
+def validate_runtime_class(name):
+    """A Kubernetes RuntimeClass name (DNS-1123 subdomain); never empty."""
+    if not isinstance(name, str) or len(name) > 253 or not _RUNTIME_CLASS.fullmatch(name):
+        raise ValueError('Invalid sandbox RuntimeClass name; use a DNS-1123 subdomain such as gvisor or kata')
+    return name
+
+
 def desired_values(root, image_lock_path, lock, verification=False, review=False, publication=False, merge=False, repair=False,
-                   generation_seconds=None, generation_steps=None, model_upstream=False):
+                   generation_seconds=None, generation_steps=None, model_upstream=False, runtime_class=DEFAULT_RUNTIME_CLASS):
     seconds, steps = generation_budget(generation_seconds, generation_steps, model_upstream)
     if type(repair) is not bool or (repair and not review):
         raise ValueError("Review repair requires explicit independent review")
@@ -119,7 +168,14 @@ def desired_values(root, image_lock_path, lock, verification=False, review=False
               # A model upstream derives its calls from steps instead.
               'model': {'Limits': {'Calls': 16, 'InputBytes': 2097152, 'OutputBytes': 4194304},
                         'ResponseLimit': 262144}}
+    # The sandbox RuntimeClass is written only when it differs from the default,
+    # so default installations keep byte-identical configuration documents.
+    custom_runtime_class = validate_runtime_class(runtime_class) != DEFAULT_RUNTIME_CLASS
+    if custom_runtime_class:
+        config['placement']['RuntimeClass'] = runtime_class
     result = {'candidate': {'configJSON': json.dumps(config, sort_keys=True), 'apiServerCIDRs': []}}
+    if custom_runtime_class:
+        result['sandbox'] = {'runtimeClassName': runtime_class}
     if verification:
         item = images.get('verifier', {})
         value = item.get('digest')
@@ -133,6 +189,8 @@ def desired_values(root, image_lock_path, lock, verification=False, review=False
         review_config = {'version': 'ai-sdlc.independent-review-runtime/v1', 'profile': review_profile,
                          'aDev': adev, 'workerImage': config['placement']['WorkerImage'],
                          'mailboxImage': config['placement']['MailboxImage']}
+        if custom_runtime_class:
+            review_config['runtimeClass'] = runtime_class
         result['review'] = {'enabled': True, 'configJSON': json.dumps(review_config, sort_keys=True)}
     if repair:
         config['profile']['maxRepairs'] = 1

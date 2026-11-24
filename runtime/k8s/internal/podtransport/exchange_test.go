@@ -29,8 +29,8 @@ func bindingFixture(t *testing.T) (Binding, core.Pod, modelmailbox.Envelope) {
 	profile, _ := json.Marshal(executor.Profile{Version: executor.ProfileVersion, Model: "fixture-model", MaxSteps: 4, MaxSeconds: 45, MaxTokens: 2048, ADevSHA256: modelmailbox.Digest(adev)})
 	a := executor.Assignment{Version: executor.AssignmentVersion, WorkItemID: "11111111-1111-4111-8111-111111111111", Attempt: 1, Repository: "fixture/product", SourceSHA: strings.Repeat("a", 40), TreeSHA256: strings.Repeat("b", 64), ProfileSHA256: modelmailbox.Digest(profile), AuthorityRevision: strings.Repeat("c", 64), IssueNumbers: []int{1}, Title: "Component fixture", Body: "Synthetic issue only", AcceptanceCriteria: []string{"No live work"}, ExpiresAt: time.Now().Add(time.Minute).UnixMilli()}
 	assignment, _ := json.Marshal(a)
-	b := Binding{Namespace: "fixture", WorkerImage: "fixture/worker@sha256:" + strings.Repeat("a", 64), MailboxImage: "fixture/mailbox@sha256:" + strings.Repeat("b", 64), PodUID: "22222222-2222-4222-8222-222222222222", Assignment: assignment, Profile: profile, ADev: adev}
-	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.Assignment, b.Profile, b.ADev, time.Now())
+	b := Binding{Namespace: "fixture", WorkerImage: "fixture/worker@sha256:" + strings.Repeat("a", 64), MailboxImage: "fixture/mailbox@sha256:" + strings.Repeat("b", 64), PodUID: "22222222-2222-4222-8222-222222222222", RuntimeClass: executor.DefaultRuntimeClass, Assignment: assignment, Profile: profile, ADev: adev}
+	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.RuntimeClass, b.Assignment, b.Profile, b.ADev, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

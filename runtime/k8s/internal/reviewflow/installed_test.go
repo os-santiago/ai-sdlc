@@ -71,3 +71,34 @@ func TestInstalledReviewConfigRejectsEndpointAndGenerationPurpose(t *testing.T) 
 		t.Fatal("endpoint override accepted")
 	}
 }
+
+func TestInstalledReviewConfigCarriesSandboxRuntimeClass(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	adev := "bounded independent review"
+	c := InstalledConfiguration{Version: "ai-sdlc.independent-review-runtime/v1", ADev: adev, WorkerImage: "quay.io/os-santiago/ai-sdlc@sha256:" + strings.Repeat("a", 64), MailboxImage: "quay.io/os-santiago/ai-sdlc@sha256:" + strings.Repeat("b", 64), Profile: executor.Profile{Version: executor.ReviewProfileVersion, Model: "codex-cli", MaxSteps: 8, MaxSeconds: 180, MaxTokens: 4096, ADevSHA256: authority.Digest([]byte(adev))}}
+	load := func() (Configuration, error) {
+		b, _ := json.Marshal(c)
+		if e := os.WriteFile(configPath, b, 0600); e != nil {
+			t.Fatal(e)
+		}
+		return LoadPublicInstalled(configPath)
+	}
+	base, e := load()
+	if e != nil || base.SandboxRuntimeClass() != executor.DefaultRuntimeClass {
+		t.Fatal("default reviewer sandbox changed", e)
+	}
+	// Default installations keep their published configuration digest.
+	raw, _ := json.Marshal(base)
+	if strings.Contains(string(raw), "RuntimeClass") {
+		t.Fatal("default review configuration digest changed")
+	}
+	c.RuntimeClass = "kata"
+	configured, e := load()
+	if e != nil || configured.SandboxRuntimeClass() != "kata" || configured.Digest() == base.Digest() {
+		t.Fatal("configured reviewer sandbox not bound", e)
+	}
+	c.RuntimeClass = "Kata/../runc"
+	if _, e := load(); e == nil {
+		t.Fatal("invalid reviewer sandbox accepted")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
@@ -72,7 +73,7 @@ func TestRealVerificationTransportFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal("fixture client")
 	}
-	v, err := PlanVerification(client, c, inputs, in.Image)
+	v, err := PlanVerification(client, c, inputs, in.Image, executor.DefaultRuntimeClass, RuntimeClassAdmission{})
 	if err != nil {
 		t.Fatal("transport plan")
 	}

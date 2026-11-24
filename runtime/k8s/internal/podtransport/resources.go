@@ -41,7 +41,7 @@ func PlanResources(client *Client, b Binding) (*Resources, error) {
 	b.Assignment = append([]byte(nil), b.Assignment...)
 	b.Profile = append([]byte(nil), b.Profile...)
 	b.ADev = append([]byte(nil), b.ADev...)
-	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.Assignment, b.Profile, b.ADev, time.Now())
+	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.RuntimeClass, b.Assignment, b.Profile, b.ADev, time.Now())
 	if err != nil {
 		return nil, ErrTransport
 	}
@@ -109,15 +109,26 @@ func (r *Resources) checkConfig(raw []byte, uid string) (string, error) {
 	}
 	return string(actual.UID), nil
 }
-func exactPodTemplate(actual, expected core.Pod, uid string) bool {
+
+// exactPodTemplate compares an observed pod with its compiled template plus
+// the exact API defaults and the RuntimeClass admission additions. Any other
+// difference, including any other added field, fails.
+func exactPodTemplate(actual, expected core.Pod, uid string, admission RuntimeClassAdmission) bool {
+	// The platform normalization sees the template with the defaults and the
+	// class additions, so a toleration the class declares is never removed
+	// as an OpenShift addition.
+	expected = *expected.DeepCopy()
+	applyDefaults(&expected.Spec)
+	if !applyAdmission(&expected.Spec, admission) {
+		return false
+	}
 	actual = platformObserved(actual, expected)
 	if actual.APIVersion != "v1" || actual.Kind != "Pod" || !exactMetadata(actual.ObjectMeta, expected.ObjectMeta, uid) {
 		return false
 	}
-	expected = *expected.DeepCopy()
-	applyDefaults(&expected.Spec)
 	actual = *actual.DeepCopy()
 	actual.Spec.NodeName = ""
+	canonicalTolerations(&actual.Spec)
 	return equality.Semantic.DeepEqual(actual.Spec, expected.Spec)
 }
 func (r *Resources) getConfig(ctx context.Context, uid string) error {
@@ -182,7 +193,7 @@ func (r *Resources) CreatePodObserved(ctx context.Context, configUID string) (st
 	if resourceUID.MatchString(string(pod.UID)) {
 		created = string(pod.UID)
 	}
-	if !exactPodTemplate(pod, r.pod, "") || (pod.Status.Phase != core.PodPending && pod.Status.Phase != core.PodRunning) {
+	if !exactPodTemplate(pod, r.pod, "", r.binding.Admission) || (pod.Status.Phase != core.PodPending && pod.Status.Phase != core.PodRunning) {
 		return created, ErrTransport
 	}
 	if err = r.getConfig(ctx, configUID); err != nil {
@@ -213,7 +224,7 @@ func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, erro
 			return nil, ErrTransport
 		}
 		var pod core.Pod
-		if authority.DecodeStrict(raw, &pod) != nil || !exactPodTemplate(pod, r.pod, uid) {
+		if authority.DecodeStrict(raw, &pod) != nil || !exactPodTemplate(pod, r.pod, uid, r.binding.Admission) {
 			return nil, ErrTransport
 		}
 		if pod.Status.Phase != core.PodPending && pod.Status.Phase != core.PodRunning {

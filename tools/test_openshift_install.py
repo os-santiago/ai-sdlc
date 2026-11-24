@@ -38,6 +38,13 @@ class OptionTests(unittest.TestCase):
             openshift_install.validate_options(args(kubeconfig=None))
         with self.assertRaises(ValueError):
             openshift_install.validate_options(args(kubeconfig=Path('k'), command='sandbox'))
+
+    def test_runtime_class_selects_an_existing_openshift_class_only(self):
+        openshift_install.validate_options(args(kubeconfig=Path('k'), runtime_class='kata'))
+        # kind and Konflux install and use their own ai-sdlc-offline class.
+        openshift_install.validate_options(args(platform='kind', context=None, runtime_class='ai-sdlc-offline'))
+        with self.assertRaises(ValueError):
+            openshift_install.validate_options(args(platform='kind', context=None, runtime_class='kata'))
         openshift_install.validate_options(args(kubeconfig=Path('k')))
 
 
@@ -110,6 +117,27 @@ class PreflightTests(unittest.TestCase):
                            ('get runtimeclass ai-sdlc-offline', (1, ''))):
             with self.subTest(missing=key), self.assertRaises(ValueError):
                 openshift_install.preflight(FakeRun(dict(ok, **{key: value})), ['kubectl'], sandbox=True)
+
+    def test_checks_the_selected_runtime_class(self):
+        ok = {'api-versions': (0, 'v1\nsecurity.openshift.io/v1\n'), 'get storageclass': (0, self.storage),
+              'get runtimeclass kata ': (0, json.dumps({'handler': 'kata'}))}
+        run = FakeRun(ok)
+        self.assertEqual(openshift_install.preflight(run, ['kubectl'], sandbox=True, runtime_class='kata'), 'kata')
+        self.assertFalse([c for c in run.calls if 'ai-sdlc-offline' in c])
+        with self.assertRaisesRegex(ValueError, 'RuntimeClass kata'):
+            openshift_install.preflight(FakeRun(dict(ok, **{'get runtimeclass kata ': (1, '')})), ['kubectl'], sandbox=True, runtime_class='kata')
+
+    def test_pod_overhead_becomes_rounded_up_quota_headroom(self):
+        def overhead(fixed):
+            body = {'handler': 'kata'} if fixed is None else {'handler': 'kata', 'overhead': {'podFixed': fixed}}
+            return openshift_install.pod_overhead(FakeRun({'get runtimeclass kata ': (0, json.dumps(body))}), ['kubectl'], 'kata')
+        self.assertEqual(overhead(None), {})
+        self.assertEqual(overhead({'cpu': '250m', 'memory': '350Mi'}), {'cpu': '250m', 'memory': '350Mi'})
+        self.assertEqual(overhead({'cpu': '0.25', 'memory': '367001601'}), {'cpu': '250m', 'memory': '351Mi'})
+        self.assertEqual(overhead({'memory': '1Gi'}), {'memory': '1024Mi'})
+        for bad in ({'ephemeral-storage': '1Mi'}, {'cpu': '-1'}, {'memory': '1Ei'}, {'cpu': '2000'}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                overhead(bad)
 
     def test_no_sandbox_check_without_execution(self):
         run = FakeRun({'api-versions': (0, 'security.openshift.io/v1'), 'get storageclass': (0, self.storage)})

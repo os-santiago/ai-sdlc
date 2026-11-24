@@ -49,7 +49,7 @@ func LoadRuntime(path string) (RuntimeConfig, []byte, error) {
 	if _, e = executor.ParseProfile(profile, workspacebundle.Digest(profile)); e != nil || c.Profile.ADevSHA256 != workspacebundle.Digest([]byte(c.ADev)) {
 		return c, nil, ErrAuthority
 	}
-	if c.Placement.Namespace != "ai-sdlc-executors" || c.Profile.Model != "codex-cli" || executor.ValidatePlacement(c.Placement.Namespace, c.Placement.WorkerImage, c.Placement.MailboxImage) != nil {
+	if c.Placement.Namespace != "ai-sdlc-executors" || c.Profile.Model != "codex-cli" || executor.ValidatePlacement(c.Placement.Namespace, c.Placement.WorkerImage, c.Placement.MailboxImage) != nil || (c.Placement.RuntimeClass != "" && !executor.ValidRuntimeClass(c.Placement.RuntimeClass)) {
 		return c, nil, ErrAuthority
 	}
 	// Immutable placement identities are checked before any queue operation.
@@ -162,6 +162,13 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if provider, e = r.benchmarked(ctx, provider, config.Profile.CallWindow()); e != nil {
 		return "model-gateway-profile-unavailable-or-unfit", ErrAuthority
 	}
+	// Cleanup and handoff above always run; only claiming new work and
+	// creating pods require the sandbox class, checked with this poll's
+	// sealed configuration and client so the verified class is the one used.
+	admission, e := client.CheckRuntimeClass(ctx, config.Placement.SandboxRuntimeClass())
+	if e != nil {
+		return "sandbox-runtime-class-unavailable", ControllerError{"sandbox-runtime-class"}
+	}
 	id, e := r.Component.DB.NextExecution(ctx)
 	if e != nil || id == "" {
 		return "", e
@@ -189,7 +196,7 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if e != nil {
 		return "stopped", e
 	}
-	_, e = RunController(ctx, r.Component.DB, load, prep, client, provider, func(ctx context.Context) (ModelPolicy, error) { _, _, e := load(ctx); return config.Model, e })
+	_, e = RunController(ctx, r.Component.DB, load, prep, client, admission, provider, func(ctx context.Context) (ModelPolicy, error) { _, _, e := load(ctx); return config.Model, e })
 	if e != nil {
 		return "stopped", e
 	}
@@ -210,6 +217,29 @@ func (r Runtime) Ready(ctx context.Context) error {
 		return ErrAuthority
 	}
 	return provider.CheckGateway(ctx)
+}
+
+// CheckSandbox observes, read-only, that the installed sandbox RuntimeClass
+// exists. The worker is not ready and claims no work until it does.
+func (r Runtime) CheckSandbox(ctx context.Context) error {
+	config, _, e := LoadRuntime(r.ConfigPath)
+	if e != nil {
+		return ErrAuthority
+	}
+	token, e := ReadBounded(r.TokenPath, 8192)
+	if e != nil {
+		return ErrAuthority
+	}
+	ca, e := ReadBounded(r.CAPath, 65536)
+	if e != nil {
+		return ErrAuthority
+	}
+	client, e := podtransport.NewClient(podtransport.Config{APIServer: r.APIServer, CA: ca, BearerToken: string(token)})
+	if e != nil {
+		return ErrAuthority
+	}
+	_, e = client.CheckRuntimeClass(ctx, config.Placement.SandboxRuntimeClass())
+	return e
 }
 
 // benchmarked admits the model when the gateway's measured timeout fits.

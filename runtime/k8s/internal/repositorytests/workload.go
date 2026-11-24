@@ -8,6 +8,7 @@ import (
 	"regexp"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -75,6 +76,7 @@ func Repetitions(run string, v project.Verification) int {
 type Pod struct {
 	Namespace      string
 	MailboxImage   string // provides the static runner (copied by an init container) and workspace-transfer
+	RuntimeClass   string // installation sandbox RuntimeClass; required
 	VerificationID string // verification-<sha256> of the signed command
 	WorkItemID     string
 	Run            string // RunNames
@@ -102,7 +104,7 @@ type Workload struct {
 
 func (p Pod) validate() error {
 	if config, _ := p.Names(); config == "" || !namespacePattern.MatchString(p.Namespace) || len(p.MailboxImage) > 512 ||
-		!imagePattern.MatchString(p.MailboxImage) ||
+		!imagePattern.MatchString(p.MailboxImage) || !executor.ValidRuntimeClass(p.RuntimeClass) ||
 		!uuidPattern.MatchString(p.WorkItemID) ||
 		!workspacebundle.ValidSourceSHA(p.SourceSHA) || !workspacebundle.ValidDigest(p.TreeSHA256) ||
 		p.Verification.Validate() != nil {
@@ -177,7 +179,7 @@ func CompilePod(p Pod) (Workload, error) {
 			map[string]any{"name": "runner", "mountPath": "/runner", "readOnly": true},
 			map[string]any{"name": "settings", "mountPath": SettingsDirectory, "readOnly": true}}}
 	pod := map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": name, "namespace": p.Namespace, "labels": labels, "annotations": podAnnotations}, "spec": map[string]any{
-		"runtimeClassName": "ai-sdlc-offline", "automountServiceAccountToken": false, "enableServiceLinks": false, "restartPolicy": "Never",
+		"runtimeClassName": p.RuntimeClass, "automountServiceAccountToken": false, "enableServiceLinks": false, "restartPolicy": "Never",
 		"activeDeadlineSeconds": DeadlineSeconds(p.Run, p.Verification), "terminationGracePeriodSeconds": 1,
 		"hostNetwork": false, "hostPID": false, "hostIPC": false, "shareProcessNamespace": false,
 		"securityContext": map[string]any{"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000, "seccompProfile": map[string]any{"type": "RuntimeDefault"}},
