@@ -1,4 +1,3 @@
-import base64
 import copy
 import hashlib
 import io
@@ -184,7 +183,7 @@ class ImageResolutionTests(unittest.TestCase):
         class API:
             def get(self, path):
                 return responses[path]
-        lock, evidence = images.resolve(API(), RUN, SHA)
+        lock, evidence = images.resolve(API(), RUN, SHA, verify=False)
         self.assertEqual(set(lock), {'image', 'components', 'migrator'})
         self.assertEqual(set(lock['components']), set(images.COMPONENTS))
         self.assertEqual(lock['image']['tag'], SHA)
@@ -199,6 +198,29 @@ DIGEST_B = 'sha256:' + 'b' * 64
 def identities(*components):
     return {name: {'component': name, 'digest': DIGEST_B, 'repository': images.REGISTRY,
                    'revision': SHA, 'platform': 'linux/amd64'} for name in components}
+
+
+def git_responses(revision, sentinel=True):
+    """GitHub git-object responses for a commit with or without the cutover sentinel."""
+    root, github, blob = 'c' * 40, 'd' * 40, 'e' * 40
+    entries = [{'path': 'workflows', 'mode': '040000', 'type': 'tree', 'sha': 'f' * 40}]
+    if sentinel:
+        entries.append({'path': images.CUTOVER_FILE, 'mode': '100644', 'type': 'blob', 'sha': blob})
+    return {'git/commits/' + revision: json.dumps({'sha': revision, 'tree': {'sha': root}}).encode(),
+            'git/trees/' + root: json.dumps({'sha': root, 'truncated': False, 'tree': [
+                {'path': '.github', 'mode': '040000', 'type': 'tree', 'sha': github},
+                {'path': 'README.md', 'mode': '100644', 'type': 'blob', 'sha': blob}]}).encode(),
+            'git/trees/' + github: json.dumps({'sha': github, 'truncated': False, 'tree': entries}).encode()}
+
+
+class Responses:
+    def __init__(self, responses):
+        self.responses = responses
+        self.requested = []
+
+    def get(self, path):
+        self.requested.append(path)
+        return self.responses[path]
 
 
 class FakeVerifier:
@@ -288,50 +310,109 @@ class SignatureVerificationTests(unittest.TestCase):
             with self.subTest(error=error), self.assertRaises(error):
                 images.verify_publication(FakeVerifier({'verifier': error}), published, SHA)
 
-    def test_unsigned_legacy_requires_flag_and_a_revision_that_never_signed(self):
+    def test_unsigned_images_are_accepted_only_when_allowed(self):
         published = identities('worker', 'migrator')
         unsigned = {'worker': images.ImageUnsigned, 'migrator': images.ImageUnsigned}
-        legacy_workflow = b'jobs:\n  images:\n    steps: []\n'
-        signing_workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/containers.yml').read_bytes()
         with self.assertRaises(images.ImageUnsigned):
             images.verify_publication(FakeVerifier(unsigned), published, SHA)
-        result = images.verify_publication(FakeVerifier(unsigned), published, SHA, legacy_workflow)
+        result = images.verify_publication(FakeVerifier(unsigned), published, SHA, allow_unsigned=True)
         self.assertEqual(result['images'], {'worker': 'unsigned-legacy', 'migrator': 'unsigned-legacy'})
+        self.assertTrue(result['legacyAccepted'])
+        # A present but invalid signature is never downgraded to legacy.
+        for error in (images.ImageSignatureRejected, images.ImageVerificationTimeout):
+            with self.subTest(error=error), self.assertRaises(error):
+                images.verify_publication(FakeVerifier({'worker': error}), published, SHA, allow_unsigned=True)
+
+    def test_cutover_sentinel_is_read_from_the_exact_commit_tree(self):
+        with_sentinel = Responses(git_responses(SHA))
+        self.assertTrue(images.revision_signs(with_sentinel, SHA))
+        self.assertEqual(with_sentinel.requested, ['git/commits/' + SHA, 'git/trees/' + 'c' * 40, 'git/trees/' + 'd' * 40])
+        self.assertFalse(images.revision_signs(Responses(git_responses(SHA, sentinel=False)), SHA))
+        no_github = git_responses(SHA)
+        no_github['git/trees/' + 'c' * 40] = json.dumps({'sha': 'c' * 40, 'truncated': False, 'tree': []}).encode()
+        self.assertFalse(images.revision_signs(Responses(no_github), SHA))
+        # Any entry at the sentinel path counts as signing, whatever its type.
+        odd = git_responses(SHA)
+        odd['git/trees/' + 'd' * 40] = json.dumps({'sha': 'd' * 40, 'truncated': False, 'tree': [
+            {'path': images.CUTOVER_FILE, 'mode': '120000', 'type': 'blob', 'sha': 'e' * 40}]}).encode()
+        self.assertTrue(images.revision_signs(Responses(odd), SHA))
+
+        def changed(path, value):
+            responses = git_responses(SHA)
+            responses[path] = json.dumps(value).encode()
+            return Responses(responses)
+        faults = [changed('git/commits/' + SHA, {'sha': 'b' * 40, 'tree': {'sha': 'c' * 40}}),
+                  changed('git/commits/' + SHA, {'sha': SHA, 'tree': {'sha': 'main'}}),
+                  changed('git/trees/' + 'c' * 40, {'sha': 'c' * 40, 'truncated': True, 'tree': []}),
+                  changed('git/trees/' + 'c' * 40, {'sha': 'b' * 40, 'truncated': False, 'tree': []}),
+                  changed('git/trees/' + 'c' * 40, {'sha': 'c' * 40, 'truncated': False, 'tree': [
+                      {'path': '.github', 'type': 'blob', 'sha': 'd' * 40}]}),
+                  changed('git/trees/' + 'c' * 40, {'sha': 'c' * 40, 'truncated': False, 'tree': [
+                      {'path': '.github', 'type': 'tree', 'sha': 'd' * 40}, {'path': '.github', 'type': 'tree', 'sha': 'd' * 40}]})]
+        for index, api in enumerate(faults):
+            with self.subTest(fault=index), self.assertRaises(ValueError):
+                images.revision_signs(api, SHA)
+        for revision in ('main', SHA[:12], 'refs/heads/main'):
+            with self.subTest(revision=revision), self.assertRaises(ValueError):
+                images.revision_signs(Responses({}), revision)
+
+    def test_signature_verifier_applies_the_cutover(self):
+        published = identities('worker', 'migrator')
+        unsigned = {'worker': images.ImageUnsigned, 'migrator': images.ImageUnsigned}
+        legacy_api, signing_api = Responses(git_responses(SHA, sentinel=False)), Responses(git_responses(SHA))
+        # Strict by default: the sentinel is not even consulted.
+        strict = Responses({})
+        with self.assertRaises(images.ImageUnsigned):
+            images.signature_verifier(strict, SHA, False, cosign=FakeVerifier(unsigned))(published)
+        self.assertEqual(strict.requested, [])
+        result = images.signature_verifier(legacy_api, SHA, True, cosign=FakeVerifier(unsigned))(published)
+        self.assertEqual(set(result['images'].values()), {'unsigned-legacy'})
+        # Library callers: a signing revision is verified strictly.
+        with self.assertRaises(images.ImageUnsigned):
+            images.signature_verifier(signing_api, SHA, True, cosign=FakeVerifier(unsigned))(published)
+        # The operator flag on a signing revision is refused before any cosign call.
         verifier = FakeVerifier(unsigned)
         with self.assertRaises(images.UnsignedLegacyNotEligible):
-            images.verify_publication(verifier, published, SHA, signing_workflow)
+            images.signature_verifier(signing_api, SHA, True, refuse_ineligible=True, cosign=verifier)(published)
         self.assertEqual(verifier.calls, [])
-        # A present but invalid signature is never downgraded to legacy.
-        with self.assertRaises(images.ImageSignatureRejected):
-            images.verify_publication(FakeVerifier({'worker': images.ImageSignatureRejected}), published, SHA,
-                                      legacy_workflow)
+        # cosign is fetched lazily, only when verification runs.
+        with patch.object(images, 'pinned_cosign', side_effect=AssertionError('fetched eagerly')):
+            callback = images.signature_verifier(Responses({}), SHA, False)
+        with patch.object(images, 'pinned_cosign', return_value='cosign') as fetch, \
+                patch.object(images.subprocess, 'run', side_effect=completed(0)):
+            self.assertEqual(set(callback(published)['images'].values()), {'verified'})
+        fetch.assert_called_once_with()
 
-    def test_legacy_workflow_is_read_at_the_exact_revision(self):
-        content = base64.encodebytes(b'name: containers\n').decode()
-        record = {'type': 'file', 'path': images.WORKFLOW_PATH, 'encoding': 'base64', 'content': content}
-        requested = []
+    def test_resolve_requires_an_explicit_verification_decision(self):
+        with self.assertRaises(TypeError):
+            images.resolve(Responses({}), RUN, SHA)
+        for value in (None, True, 'skip'):
+            with self.subTest(verify=value), self.assertRaises(ValueError):
+                images.resolve(Responses({}), RUN, SHA, verify=value)
 
-        class API:
-            def __init__(self, value):
-                self.value = value
+    def test_every_library_caller_decides_verification(self):
+        root = Path(__file__).resolve().parent
+        callers = 0
+        for path in sorted(root.glob('*.py')):
+            if path.name in ('install_images.py', 'test_install_images.py'):
+                continue
+            text = path.read_text()
+            for match in re.finditer(r'install_images\.resolve\(', text):
+                call = text[match.start():text.index('\n\n', match.start()) if '\n\n' in text[match.start():] else len(text)]
+                callers += 1
+                with self.subTest(caller=path.name):
+                    self.assertIn('verify=install_images.signature_verifier(', call[:400])
+        self.assertGreaterEqual(callers, 12)
 
-            def get(self, path):
-                requested.append(path)
-                return json.dumps(self.value).encode()
-        self.assertEqual(images.publication_workflow(API(record), SHA), b'name: containers\n')
-        self.assertEqual(requested, ['contents/.github/workflows/containers.yml?ref=' + SHA])
-        for change in ({'type': 'dir'}, {'path': 'other.yml'}, {'encoding': 'none'}, {'content': None}):
-            with self.subTest(change=change), self.assertRaises(ValueError):
-                images.publication_workflow(API(dict(record, **change)), SHA)
-        with self.assertRaises(ValueError):
-            images.publication_workflow(API(record), 'main')
+    def test_sentinel_and_signing_workflow_stay_consistent(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / '.github/workflows/containers.yml').read_text()
+        sentinel = root / images.CUTOVER_PATH
+        self.assertEqual('cosign sign' in workflow, sentinel.is_file())
+        self.assertTrue(sentinel.is_file(), 'containers.yml signs, so the cutover sentinel must exist')
 
     def test_cli_writes_no_lock_when_a_signature_fails(self):
-        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/containers.yml').read_bytes()
-        responses = {'actions/runs/123': json.dumps(run()).encode(),
-                     'contents/.github/workflows/containers.yml?ref=' + SHA: json.dumps(
-                         {'type': 'file', 'path': images.WORKFLOW_PATH, 'encoding': 'base64',
-                          'content': base64.encodebytes(workflow).decode()}).encode()}
+        responses = {'actions/runs/123': json.dumps(run()).encode(), **git_responses(SHA)}
         catalog = {'total_count': 9, 'artifacts': []}
         for component in sorted(images.ARTIFACT_COMPONENTS):
             data, metadata = archive(component)
@@ -395,12 +476,22 @@ class SignatureVerificationTests(unittest.TestCase):
         self.assertEqual(matrices[0], matrices[1])
         self.assertTrue(images.ARTIFACT_COMPONENTS <= {name.strip() for name in matrices[0].split(',')})
         sign = workflow[workflow.index('\n  sign:\n'):]
-        images_job = workflow[:workflow.index('\n  sign:\n')]
-        self.assertNotIn('id-token', images_job.split('jobs:', 1)[1])
+        images_job = workflow[:workflow.index('\n  sign:\n')].split('jobs:', 1)[1]
+        self.assertNotIn('id-token', images_job)
         self.assertIn("if: github.event_name == 'push' && github.ref == 'refs/heads/main'", sign)
         self.assertIn('cosign sign --yes "$IMAGE"', sign)
         self.assertIn("output.write('image=' + identity['repository'] + '@' + identity['digest']", sign)
-
+        # The OIDC job runs only the first-party artifact download; SBOM
+        # generation and registry login actions stay out of it.
+        self.assertEqual(set(re.findall(r'uses: ([^@\s]+)@', sign)), {'actions/download-artifact'})
+        self.assertIn('anchore/sbom-action', images_job)
+        self.assertNotIn('docker/login-action', sign)
+        self.assertIn('--password-stdin', sign)
+        # The workflow's cosign pin is the installer's pin.
+        entry = json.loads((Path(__file__).resolve().parent / 'install-tools.lock.json').read_text())['cosign']
+        self.assertIn('COSIGN_URL: ' + entry['url'] + '\n', sign)
+        self.assertIn('COSIGN_SHA256: ' + entry['sha256'] + '\n', sign)
+        self.assertIn('sha256sum -c -', sign)
 
 if __name__ == '__main__':
     unittest.main()

@@ -86,8 +86,11 @@ def plan(source, api, source_run, source_revision, target_run, target_revision):
             raise ValueError('Explicit publication run and full source revision required')
     # Resolve each identity from the authenticated API, not a caller-edited lock.
     # This chain authenticates publication metadata; it is not SLSA attestation.
-    _, before = install_images.resolve(api, source_run, source_revision, include_build=True, include_release=True)
-    _, after = install_images.resolve(api, target_run, target_revision, include_build=True, include_release=True)
+    # Signatures are verified too; revisions without the cutover sentinel predate signing.
+    _, before = install_images.resolve(api, source_run, source_revision, include_build=True, include_release=True,
+                                       verify=install_images.signature_verifier(api, source_revision, allow_unsigned_legacy=True))
+    _, after = install_images.resolve(api, target_run, target_revision, include_build=True, include_release=True,
+                                      verify=install_images.signature_verifier(api, target_revision, allow_unsigned_legacy=True))
     if source_revision != target_revision:
         source.git('merge-base', '--is-ancestor', source_revision, target_revision)
     old = source.catalog(source_revision)

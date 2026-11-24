@@ -134,8 +134,11 @@ class BrowserApproval(ReviewFeedbackUpgrade):
                 if (len(catalog) != 36 or catalog[:35] != self.catalog
                         or catalog[-1]['filename'] != compatibility.MIGRATION):
                     raise ValueError('Reviewed schema35-compatible feedback fence required')
-                _, selected = install_images.resolve(install_images.GitHub(), run, revision,
-                    include_build=True, include_release=True, include_browser=True)
+                api = install_images.GitHub()
+                # Verify signatures; revisions without the cutover sentinel predate signing.
+                _, selected = install_images.resolve(api, run, revision,
+                    include_build=True, include_release=True, include_browser=True,
+                    verify=install_images.signature_verifier(api, revision, allow_unsigned_legacy=True))
                 self.selection = dict(selected, catalog=catalog)
                 self.directory = None
             exact_local_publication(install_upgrade.Source(install.ROOT), self.selection['revision'])

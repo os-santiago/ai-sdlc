@@ -27,7 +27,7 @@ Updated 2026-11-24.
 | B1 | Stage 1 merged: the manifest `generation.toolchain` section and the bounded copier. Stages 2–6 remain: executor init containers, pod-shape acceptance, controller and quota, kind validation with a battery, docs and prompt. | #763 |
 | B2 | Done: staggered gateway benchmarks, and the generation budget configurable at install (600–900 s, 24–32 steps; above 24 steps only with `--model-upstream`), with defaults unchanged | #762, #770 |
 | B3 | Done in code: the sandbox `RuntimeClass` is a value checked in preflight, and autonomous work stops without it. A class's declared overhead and scheduling additions are accepted exactly and checked against quota headroom. Not yet validated on a live cluster with a non-default class (Kata). Follow-ups in #771. | #769 |
-| B5 | Partial: govulncheck gate and component base images pinned by digest. In review: keyless signing of each main image digest with an SBOM attestation, and signature verification in the image-lock resolver (`install_images.py`), fail closed; the first signed main publication is not yet observed. Image scanning, attestation verification and verification at install and cluster admission remain. | #764 |
+| B5 | Partial: govulncheck gate and component base images pinned by digest. In review: keyless signing of each main image digest with an SBOM attestation, and signature verification in the image-lock resolver and the upgrade tools, fail closed; the first signed main publication is not yet observed. Image scanning, attestation verification and verification at install and cluster admission remain. | #764 |
 | Others | Not started | |
 
 ## Prioritization

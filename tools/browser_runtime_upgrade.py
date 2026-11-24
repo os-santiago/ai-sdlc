@@ -98,7 +98,10 @@ class BrowserUpgrade(ReviewerImageUpgrade):
             local=source.catalog(source.git('rev-parse','HEAD').decode().strip())
             if len(catalog)!=35 or catalog[:34]!=self.catalog or catalog[-1]['filename']!=browser_upgrade_data.MIGRATION or catalog!=local:
                 raise ValueError('Only the exact locally reviewed 34-to-35 browser bridge is supported')
-            _,publication=install_images.resolve(install_images.GitHub(),run,revision,include_build=True,include_release=True,include_browser=True)
+            api=install_images.GitHub()
+            # Verify signatures; revisions without the cutover sentinel predate signing.
+            _,publication=install_images.resolve(api,run,revision,include_build=True,include_release=True,include_browser=True,
+                                                 verify=install_images.signature_verifier(api,revision,allow_unsigned_legacy=True))
             self.selection=dict(publication,catalog=catalog)
         self.helper=(install_images.REGISTRY+'@'+self.selection['images']['migrator']['digest']) if self.selection else self.source_reviewer.helper
 

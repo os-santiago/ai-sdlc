@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Prepare reviewed installer image pins from a successful, signed main publication."""
 import argparse
-import base64
 import hashlib
 import io
 import json
@@ -27,11 +26,13 @@ MAX_RESPONSE = 1024 * 1024
 WORKFLOW_REF = 'refs/heads/main'
 CERTIFICATE_IDENTITY = 'https://github.com/' + REPOSITORY + '/.github/workflows/containers.yml@' + WORKFLOW_REF
 CERTIFICATE_ISSUER = 'https://token.actions.githubusercontent.com'
-# A revision whose containers workflow contains this step signs its images, so
-# its publication must verify. Only revisions whose workflow predates signing
-# may be accepted unsigned, and only with --allow-unsigned-legacy.
-SIGNING_STEP = b'cosign sign --yes'
-WORKFLOW_PATH = '.github/workflows/containers.yml'
+# Signing cutover sentinel. A revision whose tree contains this file (read by
+# commit, never by ref) publishes signed images and must verify. Only a
+# revision without it predates signing and may be accepted unsigned.
+CUTOVER_DIRECTORY = '.github'
+CUTOVER_FILE = 'image-signing-cutover'
+CUTOVER_PATH = CUTOVER_DIRECTORY + '/' + CUTOVER_FILE
+OBJECT = re.compile('[a-f0-9]{40}')
 VERIFY_SECONDS = 90
 VERIFY_DEADLINE = 900
 
@@ -58,7 +59,7 @@ class ImageVerificationTimeout(SignatureError):
 
 
 class UnsignedLegacyNotEligible(ValueError):
-    """--allow-unsigned-legacy was requested for a revision whose workflow signs."""
+    """--allow-unsigned-legacy was requested for a revision with the cutover sentinel."""
 
 
 def unique_object(pairs):
@@ -206,32 +207,58 @@ class Cosign:
                 raise ImageVerificationTimeout(component) from None
             if result.returncode == 0 and output.tell() < MAX_RESPONSE:
                 return
+            # cosign has no machine-readable "unsigned" status; it is recognized
+            # from cosign's message. Any other failure, including a changed
+            # message, is a rejection: it fails closed and never becomes legacy.
             errors.seek(0)
             if result.returncode != 0 and b'no signatures found' in errors.read(MAX_RESPONSE):
                 raise ImageUnsigned(component)
             raise ImageSignatureRejected(component)
 
 
-def publication_workflow(api, revision):
-    """Read the containers workflow exactly as committed at the revision."""
+def tree_entries(api, tree):
+    if not isinstance(tree, str) or not OBJECT.fullmatch(tree):
+        raise ValueError('Invalid Git tree identity')
+    record = decode(api.get('git/trees/' + tree))
+    if (not isinstance(record, dict) or record.get('sha') != tree or record.get('truncated') is not False
+            or not isinstance(record.get('tree'), list)):
+        raise ValueError('Unexpected or truncated Git tree record')
+    entries = {}
+    for entry in record['tree']:
+        if not isinstance(entry, dict) or not isinstance(entry.get('path'), str) or entry['path'] in entries:
+            raise ValueError('Invalid Git tree entry')
+        entries[entry['path']] = entry
+    return entries
+
+
+def revision_signs(api, revision):
+    """True when the exact commit carries the signing cutover sentinel."""
     if not SHA.fullmatch(revision):
-        raise ValueError('Workflow lookup requires a full source SHA')
-    record = decode(api.get('contents/' + WORKFLOW_PATH + '?ref=' + revision))
-    if (not isinstance(record, dict) or record.get('type') != 'file' or record.get('path') != WORKFLOW_PATH
-            or record.get('encoding') != 'base64' or not isinstance(record.get('content'), str)):
-        raise ValueError('Unexpected publication workflow record')
-    return base64.b64decode(record['content'], validate=False)
+        raise ValueError('Cutover lookup requires a full source SHA')
+    # Address the commit object itself: a full SHA cannot be shadowed by a
+    # branch or tag name, and the response must name that same commit.
+    commit = decode(api.get('git/commits/' + revision))
+    if not isinstance(commit, dict) or commit.get('sha') != revision or not isinstance(commit.get('tree'), dict):
+        raise ValueError('Unexpected Git commit record')
+    directory = tree_entries(api, commit['tree'].get('sha')).get(CUTOVER_DIRECTORY)
+    if directory is None:
+        return False
+    if directory.get('type') != 'tree':
+        raise ValueError('Unexpected cutover directory entry')
+    sentinel = tree_entries(api, directory.get('sha')).get(CUTOVER_FILE)
+    if sentinel is None:
+        return False
+    # Any entry at the sentinel path means the revision signs; an unexpected
+    # entry type cannot make it legacy.
+    return True
 
 
-def verify_publication(verifier, identities, revision, legacy_workflow=None):
+def verify_publication(verifier, identities, revision, allow_unsigned=False):
     """Verify every image signature; fail closed on the first failure.
 
-    legacy_workflow is the revision's containers workflow, supplied only when
-    the operator passed --allow-unsigned-legacy.
+    allow_unsigned is true only for a pre-cutover revision whose caller accepts
+    legacy images. Present but invalid signatures are never accepted.
     """
-    allow_unsigned = legacy_workflow is not None
-    if allow_unsigned and SIGNING_STEP in legacy_workflow:
-        raise UnsignedLegacyNotEligible('The revision signs its images')
     signatures = {}
     for component, identity in sorted(identities.items()):
         try:
@@ -242,17 +269,43 @@ def verify_publication(verifier, identities, revision, legacy_workflow=None):
                 raise
             signatures[component] = 'unsigned-legacy'
     return {'certificateIdentity': CERTIFICATE_IDENTITY, 'certificateIssuer': CERTIFICATE_ISSUER,
-            'workflowTrigger': 'push', 'images': signatures}
+            'workflowTrigger': 'push', 'cutoverSentinel': CUTOVER_PATH,
+            'legacyAccepted': allow_unsigned, 'images': signatures}
 
 
-def resolve(api, run_id, revision, include_build=False, include_release=False, include_browser=False, verify=None):
+def signature_verifier(api, revision, allow_unsigned_legacy, refuse_ineligible=False, cosign=None):
+    """Return a resolve() verify callback for one exact revision.
+
+    Unsigned images are accepted only when allow_unsigned_legacy is set and the
+    revision lacks the cutover sentinel. For a revision with the sentinel the
+    callback verifies strictly, or raises UnsignedLegacyNotEligible when
+    refuse_ineligible is set (the operator asked for legacy explicitly).
+    cosign is fetched lazily from the pinned tool cache on first use.
+    """
+    def verify(identities):
+        allow = False
+        if allow_unsigned_legacy:
+            signs = revision_signs(api, revision)
+            if signs and refuse_ineligible:
+                raise UnsignedLegacyNotEligible('The revision signs its images')
+            allow = not signs
+        verifier = cosign if cosign is not None else Cosign(pinned_cosign())
+        return verify_publication(verifier, identities, revision, allow)
+    return verify
+
+
+def resolve(api, run_id, revision, include_build=False, include_release=False, include_browser=False, *, verify):
+    """Resolve a publication. verify is required: a signature_verifier()
+    callback, or False only where a caller documents why it cannot verify."""
+    if verify is not False and not callable(verify):
+        raise ValueError('resolve() requires a signature verifier or an explicit verify=False')
     run = decode(api.get('actions/runs/' + str(run_id)))
     validate_run(run, run_id, revision)
     artifacts = select_artifacts(decode(api.get('actions/runs/' + str(run_id) + '/artifacts?per_page=100')), run_id, revision, include_build, include_release, include_browser)
     identities = {}
     for component, artifact in sorted(artifacts.items()):
         identities[component] = image_identity(api.get('actions/artifacts/' + str(artifact['id']) + '/zip'), artifact, component, revision)
-    signatures = verify(identities) if verify is not None else None
+    signatures = verify(identities) if verify is not False else None
     lock = {'image': {'repository': REGISTRY, 'tag': revision},
             'components': {key: {'digest': identities[component]['digest']} for key, component in COMPONENTS.items()},
             'migrator': {'digest': identities['migrator']['digest']}}
@@ -283,8 +336,8 @@ def main(argv=None):
     parser.add_argument('--revision', required=True, help='Exact reviewed source commit')
     parser.add_argument('--output', type=Path, required=True, help='New directory for image lock and evidence')
     parser.add_argument('--allow-unsigned-legacy', action='store_true',
-                        help='Accept unsigned images only for a revision whose containers workflow predates '
-                             'image signing; signatures that exist must still verify')
+                        help='Accept unsigned images only for a revision without the signing cutover sentinel ('
+                             + CUTOVER_PATH + '); signatures that exist must still verify')
     args = parser.parse_args(argv)
     if args.run <= 0 or args.run > 2**63 - 1 or not SHA.fullmatch(args.revision):
         parser.error('A positive run ID and full lowercase source SHA are required')
@@ -293,10 +346,7 @@ def main(argv=None):
     try:
         verifier = Cosign(pinned_cosign())
         api = GitHub()
-
-        def verify(identities):
-            workflow = publication_workflow(api, args.revision) if args.allow_unsigned_legacy else None
-            return verify_publication(verifier, identities, args.revision, workflow)
+        verify = signature_verifier(api, args.revision, args.allow_unsigned_legacy, refuse_ineligible=True, cosign=verifier)
         lock, evidence = resolve(api, args.run, args.revision, args.include_build, args.include_release, args.include_browser,
                                  verify=verify)
         args.output.mkdir(parents=True, mode=0o700, exist_ok=False)

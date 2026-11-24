@@ -1,13 +1,20 @@
 # containers — build the component images; on main pushes, publish and sign them.
 #
 # Publication pushes quay.io/os-santiago/ai-sdlc:<component>-<sha> and records
-# each pushed digest as an identity artifact. On push to main only, the `sign`
-# job signs every recorded digest keyless with cosign (GitHub OIDC -> Fulcio
-# short-lived certificate -> Rekor transparency log) and attaches a CycloneDX
-# SBOM attestation to the same digest. Tags are never signed. Only the `sign`
-# job may request an OIDC token. tools/install_images.py verifies the signer
-# identity (this workflow on refs/heads/main, push trigger, exact revision)
-# before it writes an installer image lock. See docs/operations/image-lock-upgrades.md.
+# each pushed digest as an identity artifact. On push to main only, the images
+# job also generates a CycloneDX SBOM of the pushed digest (third-party
+# tooling, no OIDC token) and uploads it with its SHA-256 and size. The `sign`
+# job, the only job that may request an OIDC token, then signs every recorded
+# digest keyless with cosign (GitHub OIDC -> Fulcio short-lived certificate ->
+# Rekor transparency log) and attests the checked SBOM to the same digest. It
+# runs no third-party action: only the first-party artifact download and a
+# checksum-pinned cosign binary. Tags are never signed.
+#
+# The digest the sign job signs comes from the images job's artifact in the
+# same workflow run: the same trust domain as the build, not an independent
+# measurement. tools/install_images.py verifies the signer identity (this
+# workflow on refs/heads/main, push trigger, exact revision) before it writes
+# an installer image lock. See docs/operations/image-lock-upgrades.md.
 name: containers
 on:
   pull_request:
@@ -80,9 +87,48 @@ jobs:
           path: ${{ matrix.component }}.json
           if-no-files-found: error
           retention-days: 30
+      # SBOM generation runs here, without an OIDC token, so third-party tooling
+      # (sbom-action downloads syft at run time) can never mint the signing
+      # identity. The sign job attests the file after checking digest and size.
+      - name: Generate the image SBOM
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: anchore/sbom-action@fffec3d851af758d56fee099cf3fbf8aa8779843  # v0.24.3
+        with:
+          image: quay.io/os-santiago/ai-sdlc@${{ steps.build.outputs.digest }}
+          format: cyclonedx-json
+          output-file: ${{ matrix.component }}.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Record the SBOM digest and size
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          COMPONENT: ${{ matrix.component }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          component = os.environ['COMPONENT']
+          data = pathlib.Path(component + '.cdx.json').read_bytes()
+          assert json.loads(data)['bomFormat'] == 'CycloneDX'
+          pathlib.Path(component + '.sbom.json').write_text(json.dumps({
+              'component': component, 'imageDigest': os.environ['DIGEST'],
+              'sha256': hashlib.sha256(data).hexdigest(), 'size': len(data)
+          }) + '\n')
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: sbom-${{ matrix.component }}
+          path: |
+            ${{ matrix.component }}.cdx.json
+            ${{ matrix.component }}.sbom.json
+          if-no-files-found: error
+          retention-days: 30
   sign:
     # Sign only the reviewed main publication; build/** branches publish
-    # unsigned images that the installer never accepts.
+    # unsigned images that the installer never accepts. This job holds the
+    # OIDC token, so it runs no third-party action: the first-party artifact
+    # download, a checksum-pinned cosign binary, and inline checks only.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: images
     runs-on: ubuntu-latest
@@ -100,14 +146,20 @@ jobs:
         with:
           name: ${{ matrix.component == 'browser-verifier' && 'browser-image' || matrix.component == 'deployer' && 'release-image' || (matrix.component == 'artifact-builder' || matrix.component == 'build-controller') && 'supply-chain-image' || 'image' }}-${{ matrix.component }}
           path: ${{ runner.temp }}/identity
-      - name: Read the recorded image digest
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: sbom-${{ matrix.component }}
+          path: ${{ runner.temp }}/sbom
+      - name: Check the recorded image digest and SBOM
         id: identity
         env:
           COMPONENT: ${{ matrix.component }}
           IDENTITY: ${{ runner.temp }}/identity/${{ matrix.component }}.json
+          SBOM: ${{ runner.temp }}/sbom/${{ matrix.component }}.cdx.json
+          SBOM_RECORD: ${{ runner.temp }}/sbom/${{ matrix.component }}.sbom.json
         run: |
           python3 - <<'PY'
-          import json, os, re
+          import hashlib, json, os, re
           identity = json.load(open(os.environ['IDENTITY']))
           assert set(identity) == {'component', 'digest', 'repository', 'revision', 'platform'}
           assert identity['component'] == os.environ['COMPONENT']
@@ -115,32 +167,44 @@ jobs:
           assert identity['revision'] == os.environ['GITHUB_SHA']
           assert identity['platform'] == 'linux/amd64'
           assert re.fullmatch(r'sha256:[0-9a-f]{64}', identity['digest'])
+          record = json.load(open(os.environ['SBOM_RECORD']))
+          assert set(record) == {'component', 'imageDigest', 'sha256', 'size'}
+          assert record['component'] == identity['component']
+          assert record['imageDigest'] == identity['digest']
+          data = open(os.environ['SBOM'], 'rb').read()
+          assert type(record['size']) is int and 0 < record['size'] <= 64 * 1024 * 1024
+          assert len(data) == record['size']
+          assert hashlib.sha256(data).hexdigest() == record['sha256']
+          assert json.loads(data)['bomFormat'] == 'CycloneDX'
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('image=' + identity['repository'] + '@' + identity['digest'] + '\n')
           PY
-      - name: Authenticate to Quay to store signatures
-        uses: docker/login-action@d0b8297dd55199249f38268efae35fcb03f75aab
-        with:
-          registry: quay.io
-          username: ${{ secrets.QUAY_ROBOT_USERNAME }}
-          password: ${{ secrets.QUAY_ROBOT_TOKEN }}
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
-        with:
-          cosign-release: 'v3.0.6'   # same pin as tools/install-tools.lock.json
+      - name: Install the checksum-pinned cosign
+        env:
+          # Same pin as tools/install-tools.lock.json (test_install_images.py checks it).
+          COSIGN_URL: https://github.com/sigstore/cosign/releases/download/v3.0.6/cosign-linux-amd64
+          COSIGN_SHA256: c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL --proto '=https' -o "$RUNNER_TEMP/bin/cosign" "$COSIGN_URL"
+          echo "${COSIGN_SHA256}  $RUNNER_TEMP/bin/cosign" | sha256sum -c -
+          chmod 0755 "$RUNNER_TEMP/bin/cosign"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Authenticate cosign to Quay to store signatures
+        # cosign login instead of a registry login action: the robot token reaches
+        # only the already pinned cosign, through stdin, and no third-party
+        # action runs while the OIDC token is available.
+        env:
+          QUAY_USERNAME: ${{ secrets.QUAY_ROBOT_USERNAME }}
+          QUAY_TOKEN: ${{ secrets.QUAY_ROBOT_TOKEN }}
+        run: printf '%s' "$QUAY_TOKEN" | cosign login quay.io --username "$QUAY_USERNAME" --password-stdin
       - name: Sign the image digest (cosign keyless)
         env:
           IMAGE: ${{ steps.identity.outputs.image }}
         run: cosign sign --yes "$IMAGE"
-      - name: Generate the image SBOM
-        uses: anchore/sbom-action@fffec3d851af758d56fee099cf3fbf8aa8779843  # v0.24.3
-        with:
-          image: ${{ steps.identity.outputs.image }}
-          format: cyclonedx-json
-          output-file: ${{ runner.temp }}/${{ matrix.component }}.cdx.json
-          upload-artifact: false
-          upload-release-assets: false
       - name: Attest the SBOM to the image digest
         env:
           IMAGE: ${{ steps.identity.outputs.image }}
-          SBOM: ${{ runner.temp }}/${{ matrix.component }}.cdx.json
+          SBOM: ${{ runner.temp }}/sbom/${{ matrix.component }}.cdx.json
         run: cosign attest --yes --type cyclonedx --predicate "$SBOM" "$IMAGE"

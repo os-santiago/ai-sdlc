@@ -332,9 +332,9 @@ quay.io/os-santiago/ai-sdlc:<component>-<full-git-sha>
 
 The initial platform is `linux/amd64`. BuildKit produces SBOM/provenance
 attestations and a per-component image identity artifact. On pushes to `main`,
-a separate `sign` job, the only one that can request an OIDC token, signs each
-pushed digest keyless with cosign (Fulcio and Rekor), and attests a CycloneDX
-SBOM to it. `tools/install_images.py` verifies those signatures before writing
+the build job also generates a CycloneDX SBOM of each pushed digest. A separate
+`sign` job, the only one that can request an OIDC token, signs each digest
+keyless with cosign (Fulcio and Rekor) and attests the SBOM to it. `tools/install_images.py` verifies those signatures before writing
 an image lock; see [reviewed image-lock upgrades](operations/image-lock-upgrades.md#signature-verification). Publication uses
 repository secrets `QUAY_ROBOT_USERNAME` and `QUAY_ROBOT_TOKEN`, configured
 with `gh secret set`; their values must never be written into this chart.

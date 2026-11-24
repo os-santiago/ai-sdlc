@@ -29,11 +29,20 @@ artifacts fail before an installer lock is written.
 
 Before it writes any file, the resolver verifies the keyless signature of every
 resolved image digest (all nine, or up to thirteen with the `--include-*`
-options). The `sign` job of `containers.yml` signs each pushed digest on a push
-to `main` with cosign: a GitHub OIDC token yields a short-lived Fulcio
-certificate, and the signature is recorded in the Rekor transparency log. No
-long-lived signing key exists. The same job attaches a CycloneDX SBOM
-attestation to each digest. Tags are never signed or verified.
+options). On a push to `main`, the `images` job of `containers.yml` builds and
+pushes each image, records its digest, and generates a CycloneDX SBOM of that
+digest. It uploads the SBOM with its SHA-256 and size. The separate `sign` job
+is the only job that can request an OIDC token, and it runs no third-party
+action. It checks each SBOM's digest and size, then uses a checksum-pinned
+cosign to sign each digest and attest the SBOM to it. A GitHub OIDC token yields
+a short-lived Fulcio certificate, and the signature is recorded in the Rekor
+transparency log. No long-lived signing key exists. Tags are never signed or
+verified.
+
+The digest that `sign` signs comes from the `images` job's artifact in the same
+workflow run. The signature therefore attests "built and published by this
+workflow on `main` for this revision". It is not an independent measurement
+of the build.
 
 For each image the resolver runs the pinned cosign with:
 
@@ -59,30 +68,43 @@ writes any file, and names the error and component:
 
 | Error | Meaning |
 |---|---|
-| `ImageUnsigned` | The registry holds no signature for the digest. |
+| `ImageUnsigned` | The registry holds no signature for the digest. cosign has no machine-readable status for this, so it is recognized from cosign's `no signatures found` message. Any other failure, including a changed message, is reported as `ImageSignatureRejected`, which is never treated as legacy. |
 | `ImageSignatureRejected` | A signature exists but does not match the expected identity, or verification could not complete (registry, Rekor or trust root unreachable). |
 | `ImageVerificationTimeout` | One image took more than 90 seconds, or all images more than 900 seconds. |
-| `UnsignedLegacyNotEligible` | `--allow-unsigned-legacy` was passed for a revision whose workflow signs images. |
+| `UnsignedLegacyNotEligible` | `--allow-unsigned-legacy` was passed for a revision that contains the signing cutover sentinel. |
 
 `evidence.json` records the expected identity and issuer and, per component,
 `verified` or `unsigned-legacy`.
 
 #### Publications from before signing
 
-Images published before the `sign` job existed are unsigned. By default the
-resolver refuses them. An operator may pass `--allow-unsigned-legacy`
-deliberately. The resolver then reads `containers.yml` exactly as committed at
-the requested revision, through the GitHub API. If that file contains the
-signing step, the flag is refused (`UnsignedLegacyNotEligible`). Every revision
-that includes signing must therefore verify, and stripping signatures from the
+Images published before the `sign` job existed are unsigned. The cutover is
+marked by a sentinel file versioned with the workflow,
+[`.github/image-signing-cutover`](../../.github/image-signing-cutover). A
+revision that contains it publishes signed images. A unit test fails if
+`containers.yml` signs and the sentinel is missing. The resolver reads the
+sentinel from the exact commit's Git tree through the GitHub API
+(`git/commits/<sha>`, then the root tree, then `.github`). The response must
+name the same commit, and truncated trees are rejected, so no branch or tag
+name can stand in for the revision.
+
+By default, the resolver refuses unsigned images. An operator may pass
+`--allow-unsigned-legacy` deliberately. If the revision contains the sentinel,
+the flag is refused (`UnsignedLegacyNotEligible`). Every revision from the
+cutover onward must therefore verify, and stripping signatures from the
 registry cannot downgrade a signed publication. For an older revision, each
-image is still checked. An unsigned image is recorded as `unsigned-legacy`. A
+image is still checked. An unsigned image is recorded as `unsigned-legacy`; a
 signature that exists but does not verify is still rejected. Prefer a signed
 publication; the flag exists only to keep reviewed older locks reproducible.
 
-The verified SBOM attestation is not yet checked by the resolver. The upgrade
-planners that call the resolver library, and installation from an
-already-committed lock, do not yet verify signatures.
+The upgrade tools resolve publications through the same library and always
+verify signatures (`resolve()` has no default for `verify`). They apply the
+same cutover without a flag: a revision with the sentinel must verify, and an
+older one may be unsigned but never carry an invalid signature. They target
+explicit, reviewed revisions, most of which predate signing.
+
+Not yet covered: the resolver does not check the SBOM attestation, and
+installation from an already-committed lock does not verify signatures.
 
 `images.lock.json` contains the six installed services and migrator, in the
 installer's existing schema. `evidence.json` also records the model-mailbox image and the optional verifier
