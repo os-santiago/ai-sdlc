@@ -78,6 +78,22 @@ func (p Profile) CallWindow() time.Duration {
 	return time.Duration(p.CallSeconds) * time.Second
 }
 
+// SCCSeconds is the generation budget handed to SCC, shorter than the
+// launcher's kill at MaxSeconds. SCC checks its time budget only before each
+// model call and never interrupts one in flight, so its deadline is one call
+// window plus SCC's 15 s provider-wait slack earlier: the last call it starts
+// can still answer (or time out at the mailbox), and SCC then ends gracefully
+// with exit 22 and its summary instead of being killed with exit 124. The
+// margin is capped at an eighth of the budget, so a slow model's long window
+// cannot consume the run. Reviewer profiles keep their original budget.
+func SCCSeconds(p Profile) int {
+	if p.Version != ProfileVersion {
+		return p.MaxSeconds
+	}
+	margin := min(int((p.CallWindow()+15*time.Second)/time.Second), p.MaxSeconds/8)
+	return p.MaxSeconds - margin
+}
+
 func strictBound(raw []byte, expected string, maximum int, keys []string, value any) error {
 	if len(raw) == 0 || len(raw) > maximum || !utf8.Valid(raw) || !workspacebundle.ValidDigest(expected) || workspacebundle.Digest(raw) != expected || authority.DecodeStrict(raw, value) != nil {
 		return ErrInvalid

@@ -64,6 +64,12 @@ With an OpenAI-compatible endpoint:
 With the bundled Codex CLI, run the same command without
 `--model-upstream upstream.json`.
 
+A slow model, for example a local model on an integrated GPU, can run out of
+the default generation budget of 600 seconds and 24 tool steps. Add
+`--generation-seconds 900` (600-900) and `--generation-steps 32` (24-32) to
+the first installation, and repeat them on every later run of the same command.
+See [selecting the generation budget](operations/candidate-runtime.md#selecting-the-generation-budget).
+
 The first run creates the native merge rule on GitHub, then stops and prints
 its ID. Set `merge.rulesetID` in the manifest to that ID and run the same
 command again. With an OpenAI-compatible endpoint, wait until both model

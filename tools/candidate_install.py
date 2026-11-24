@@ -6,6 +6,23 @@ from pathlib import Path
 import re
 import secrets
 
+# Generation budget bounds selectable at installation. The defaults are the
+# reviewed profile; the maxima stay within the runtime's own limits (32 steps,
+# 900 s) and the lifecycle's 1,020 s ceiling (maxSeconds + 120 s).
+DEFAULT_GENERATION_SECONDS, MIN_GENERATION_SECONDS, MAX_GENERATION_SECONDS = 600, 600, 900
+DEFAULT_GENERATION_STEPS, MIN_GENERATION_STEPS, MAX_GENERATION_STEPS = 24, 24, 32
+
+
+def generation_budget(seconds=None, steps=None):
+    """Validated (seconds, steps); None selects the reviewed default."""
+    seconds = DEFAULT_GENERATION_SECONDS if seconds is None else seconds
+    steps = DEFAULT_GENERATION_STEPS if steps is None else steps
+    if type(seconds) is not int or not MIN_GENERATION_SECONDS <= seconds <= MAX_GENERATION_SECONDS:
+        raise ValueError('Generation seconds must be an integer from 600 to 900')
+    if type(steps) is not int or not MIN_GENERATION_STEPS <= steps <= MAX_GENERATION_STEPS:
+        raise ValueError('Generation steps must be an integer from 24 to 32')
+    return seconds, steps
+
 
 def require_unchanged_tool_budget(kubectl, desired):
     """Ordinary reconciliation cannot silently change an installed SCC budget."""
@@ -28,16 +45,21 @@ def require_unchanged_tool_budget(kubectl, desired):
             raise ValueError()
         config = json.loads(raw, object_pairs_hook=unique_object)
         profile = config['profile']
-        steps = profile['maxSteps']
+        steps, seconds = profile['maxSteps'], profile['maxSeconds']
         if (config['version'] != 'ai-sdlc.candidate-runtime/v1'
                 or profile['version'] != 'ai-sdlc.executor-profile/v1'
-                or type(steps) is not int or not 1 <= steps <= 32):
+                or type(steps) is not int or not 1 <= steps <= 32
+                or type(seconds) is not int or not 1 <= seconds <= 900):
             raise ValueError()
     except (KeyError, TypeError, ValueError):
         raise ValueError('Installed execution configuration is malformed; preserve it for review') from None
-    expected = json.loads(desired['candidate']['configJSON'])['profile']['maxSteps']
-    if steps != expected:
-        raise ValueError('Installed SCC tool budget differs; use a reviewed runtime transition before reconciliation')
+    expected = json.loads(desired['candidate']['configJSON'])['profile']
+    if steps != expected['maxSteps']:
+        raise ValueError('Installed SCC tool budget differs; select the recorded --generation-steps or use a reviewed runtime transition')
+    # The recorded generation time is reselected with the same
+    # --generation-seconds; omitting it never resets an installed budget.
+    if seconds != expected['maxSeconds']:
+        raise ValueError('Installed generation time budget differs; select the recorded --generation-seconds or use a reviewed runtime transition')
     # The per-call window exists exactly when a model upstream is installed, so
     # reconciliation can neither switch the model service nor change its window.
     if profile.get('callSeconds') != json.loads(desired['candidate']['configJSON'])['profile'].get('callSeconds'):
@@ -46,7 +68,9 @@ def require_unchanged_tool_budget(kubectl, desired):
         raise ValueError('Installed model budget differs; use a reviewed runtime transition before reconciliation')
 
 
-def desired_values(root, image_lock_path, lock, verification=False, review=False, publication=False, merge=False, repair=False):
+def desired_values(root, image_lock_path, lock, verification=False, review=False, publication=False, merge=False, repair=False,
+                   generation_seconds=None, generation_steps=None):
+    seconds, steps = generation_budget(generation_seconds, generation_steps)
     if type(repair) is not bool or (repair and not review):
         raise ValueError("Review repair requires explicit independent review")
     if merge and not publication:
@@ -74,12 +98,15 @@ def desired_values(root, image_lock_path, lock, verification=False, review=False
     adev = (root / 'runtime/k8s/deploy/helm/ai-sdlc-k8s-runtime/files/adev-profile.yaml').read_text()
     profile = {'version': 'ai-sdlc.executor-profile/v1', 'model': 'codex-cli',
                # SCC counts tools, including parallel calls, not model turns.
-               'maxSteps': 24, 'maxSeconds': 600, 'maxTokens': 4096,
+               'maxSteps': steps, 'maxSeconds': seconds, 'maxTokens': 4096,
                'aDevSHA256': hashlib.sha256(adev.encode()).hexdigest()}
     config = {'version': 'ai-sdlc.candidate-runtime/v1', 'profile': profile, 'aDev': adev,
               'placement': {'Namespace': 'ai-sdlc-executors',
                             'WorkerImage': lock['image']['repository'] + '@' + images['worker']['digest'],
                             'MailboxImage': lock['image']['repository'] + '@' + images['model-mailbox']['digest']},
+              # The bundled Codex adapter keeps its reviewed provider quota at
+              # any step budget: steps count tools, several per model turn.
+              # A model upstream derives its calls from steps instead.
               'model': {'Limits': {'Calls': 16, 'InputBytes': 2097152, 'OutputBytes': 4194304},
                         'ResponseLimit': 262144}}
     result = {'candidate': {'configJSON': json.dumps(config, sort_keys=True), 'apiServerCIDRs': []}}

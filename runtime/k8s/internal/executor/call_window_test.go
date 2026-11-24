@@ -3,6 +3,7 @@ package executor
 import (
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -78,5 +79,37 @@ func TestCallWindowReachesSCCAndTheMailbox(t *testing.T) {
 	model, command = compile(300)
 	if model["timeout"] != float64(315000) || !slices.Equal(command[len(command)-2:], []string{"--wait-seconds", "300"}) {
 		t.Fatal("window not propagated", model, command)
+	}
+}
+
+// SCC ends gracefully before the launcher's kill: it checks its time budget
+// only before a model call, so it stops one call window (plus its 15 s wait
+// slack) early, capped at an eighth of the budget. The launcher still kills
+// at maxSeconds, and reviewers keep their original budget.
+func TestSCCTimeBudgetEndsBeforeTheLauncherKill(t *testing.T) {
+	for _, tc := range []struct {
+		maxSeconds, callSeconds, want int
+	}{
+		{600, 0, 525},   // default profile: 60 s window + 15 s, a full call fits
+		{900, 0, 825},   // the largest installable budget with the default window
+		{600, 330, 525}, // a slow model's window is capped at an eighth (75 s)
+		{900, 330, 788}, // 112 s margin at 900 s
+		{10, 0, 9},      // tiny budgets keep almost all of their time
+	} {
+		p := profileFixture()
+		p.MaxSeconds, p.CallSeconds = tc.maxSeconds, tc.callSeconds
+		got := SCCSeconds(p)
+		if got != tc.want || got >= p.MaxSeconds {
+			t.Fatal("SCC budget", tc, got)
+		}
+		args := strings.Join(sccArguments(p, "/state/run/prompt.md", "/state"), " ")
+		if !strings.Contains(args, "--max-seconds "+strconv.Itoa(tc.want)+" ") || !strings.Contains(args, "--max-steps "+strconv.Itoa(p.MaxSteps)) {
+			t.Fatal("SCC arguments", args)
+		}
+	}
+	p := profileFixture()
+	p.Version, p.MaxSeconds = ReviewProfileVersion, 180
+	if SCCSeconds(p) != 180 || !strings.Contains(strings.Join(sccArguments(p, "/review-state/run/prompt.md", "/review-state"), " "), "--max-seconds 180 ") {
+		t.Fatal("reviewer budget changed")
 	}
 }

@@ -206,7 +206,7 @@ func Run(ctx context.Context, assignmentDigest string) int {
 }
 
 func sccArguments(p Profile, prompt, stateDirectory string) []string {
-	args := []string{"chat", "-yq", "--prompt-file", prompt, "--no-commit", "--audit-log", stateDirectory + "/run/audit.jsonl", "--summary-file", stateDirectory + "/run/summary.json", "--max-seconds", strconv.Itoa(p.MaxSeconds), "--max-steps", strconv.Itoa(p.MaxSteps)}
+	args := []string{"chat", "-yq", "--prompt-file", prompt, "--no-commit", "--audit-log", stateDirectory + "/run/audit.jsonl", "--summary-file", stateDirectory + "/run/summary.json", "--max-seconds", strconv.Itoa(SCCSeconds(p)), "--max-steps", strconv.Itoa(p.MaxSteps)}
 	if p.Version == ReviewProfileVersion {
 		args[1] = "-q"
 		args = append(args, "--role", "reviewer")

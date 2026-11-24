@@ -64,8 +64,9 @@ func signedEffect(component *bootstrap.Component, config intake.Config) delivery
 		}
 		state := Blocked
 		var profile []byte
+		var installed execution.RuntimeConfig
 		if bootstrap.CandidateAutonomy(policy) && admission.Risk == "low" {
-			_, profile, err = execution.LoadRuntime(os.Getenv("AI_SDLC_EXECUTION_CONFIG_PATH"))
+			installed, profile, err = execution.LoadRuntime(os.Getenv("AI_SDLC_EXECUTION_CONFIG_PATH"))
 			if err != nil {
 				return nil, err
 			}
@@ -84,7 +85,7 @@ func signedEffect(component *bootstrap.Component, config intake.Config) delivery
 			return nil, err
 		}
 		if state == Ready {
-			command := execution.Command{Version: execution.Version, WorkItemID: itemID, Attempt: 1, Repository: snapshot.Repository, IssueNumber: snapshot.Issue.Number, Generation: snapshot.Generation, AdmissionID: admission.ID(), SourceSHA: snapshot.BaseSHA, ProfileSHA256: workspacebundle.Digest(profile), AuthorityRevision: policy.Revision(), ExpiresAt: time.Now().Add(20 * time.Minute).UnixMilli()}
+			command := execution.Command{Version: execution.Version, WorkItemID: itemID, Attempt: 1, Repository: snapshot.Repository, IssueNumber: snapshot.Issue.Number, Generation: snapshot.Generation, AdmissionID: admission.ID(), SourceSHA: snapshot.BaseSHA, ProfileSHA256: workspacebundle.Digest(profile), AuthorityRevision: policy.Revision(), ExpiresAt: time.Now().Add(execution.CommandLifetime(installed.Profile.MaxSeconds)).UnixMilli()}
 			payload, e := json.Marshal(command)
 			if e != nil {
 				return nil, e

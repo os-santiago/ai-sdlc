@@ -25,6 +25,15 @@ the run at the profile's `maxSeconds` while the call was still in flight: the
 generation ran out of time, not a transport fault. The publication still stops
 the call as uncertain, as before.
 
+SCC receives a shorter time budget than the launcher's kill: one call window
+plus 15 seconds earlier, at most an eighth of `maxSeconds` (525 of 600 seconds
+by default). SCC checks that budget before each model call, so a run that runs
+out of time normally ends as `worker-exit workerExitCode=22`, SCC's budget
+exhaustion, with no call in flight. Code 22 also covers the step budget; both
+are failures, and partial changes are never promoted. Code 124 remains possible
+when the last call or tool outlasts the margin, for example a slow model whose
+call window is longer than the margin; the stop line above still names it.
+
 The first managed Saferus attempt on 2026-11-17 stopped before this capability
 existed. Its seven successful model HTTP responses do not explain its nonzero
 executor exit, and cleanup removed the transient diagnostic files. This change

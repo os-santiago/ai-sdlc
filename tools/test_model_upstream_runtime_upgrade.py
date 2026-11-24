@@ -94,6 +94,14 @@ class Targets(unittest.TestCase):
         self.assertEqual(active['verifier']['digest'], DIGEST('b'))
         self.assertEqual(active['intake'], {'paused': False})
 
+    def test_a_recorded_generation_budget_is_inherited_unchanged(self):
+        source = self.source()
+        candidate = json.loads(source['values']['candidate']['configJSON'])
+        candidate['profile'].update(maxSeconds=900, maxSteps=32)
+        source['values']['candidate']['configJSON'] = json.dumps(candidate)
+        profile = json.loads(self.run_targets(source)['active']['values']['candidate']['configJSON'])['profile']
+        self.assertEqual((profile['maxSeconds'], profile['maxSteps'], profile['callSeconds']), (900, 32, 330))
+
     def test_target_chart_must_render_the_unchanged_installation_identically(self):
         with self.assertRaisesRegex(ValueError, 'identically'):
             self.run_targets(render_target=lambda v: ['changed'])

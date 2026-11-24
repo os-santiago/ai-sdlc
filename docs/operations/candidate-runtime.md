@@ -145,10 +145,11 @@ resources. It does not establish the cause of the separate Homedir #1581 failure
 ### Tool steps and provider calls are different budgets
 
 The installed generator profile uses 24 SCC tool steps, 600 seconds and 4,096
-requested output tokens per response. Its separate durable model allocation
-still permits at most 16 calls, 2 MiB cumulative input, 4 MiB cumulative response
-reservations and 256 KiB per response. Increasing tool steps does not increase
-these provider limits. The independent reviewer retains its existing profile.
+requested output tokens per response by default. Its separate durable model
+allocation still permits at most 16 calls, 2 MiB cumulative input, 4 MiB
+cumulative response reservations and 256 KiB per response. Increasing tool steps
+does not increase these provider limits. The independent reviewer retains its
+existing profile.
 
 SCC counts individual tools, including tools in the same response, and checks its
 step limit between batches. A 16-step run can therefore stop after six model
@@ -174,11 +175,67 @@ candidate creation. Its original 600-second bound was not reached and its fixed
 environment supplied no total-token limit; tool-budget exhaustion is inferred
 from those observations, not a budget dimension retained by the controller.
 
+### Selecting the generation budget
+
+A slow model endpoint can need more time than the default 600 seconds. A local
+model on an integrated GPU, for example, generates about 20-30 tokens per second
+and reads the prompt at about 250-500 tokens per second, so a single call can
+take minutes. The candidate and verification installations accept two options:
+
+```bash
+./install.sh local ... --generation-seconds 900 --generation-steps 32
+```
+
+`--generation-seconds` (600-900, default 600) sets the profile's `maxSeconds`,
+and `--generation-steps` (24-32, default 24) sets its `maxSteps`. A local
+installation configuration can record the same choice as `generationSeconds`
+and `generationSteps`. The values are written into the reviewed execution
+configuration, so they are part of the profile digest that every signed
+command binds. Without the options, the configuration, its digest, the chart
+render and every compiled workload are byte-identical to earlier releases.
+
+The provider-call ledger follows the model path:
+
+- With the bundled Codex adapter, the allocation stays at 16 calls and its byte
+  quotas at any step budget. Steps count tools, and one model response can
+  request several, so 16 calls do not cap a 32-step run at 16 steps. Raising the
+  Codex provider quota is a separate reviewed decision, not a side effect of
+  this option.
+- With a [model upstream](model-gateway-adapters.md), the allocation already
+  derives from the steps: one call per step, with the response limit reserved
+  per call (32 calls and 8 MiB at 32 steps).
+
+The budget fits the existing timing envelope. The lifecycle claim is
+`maxSeconds` plus a fixed 120 seconds for the executor Pod's setup, source
+transfer and candidate capture, which is 1,020 seconds at 900 and matches the
+executor Pod's `activeDeadlineSeconds`. The signed execution command lived 20
+minutes, sized for 600 seconds: 1,200 - 720 leaves 480 seconds for queueing,
+preparation and the verification handoff, which inherits the command's expiry.
+At 900 seconds the same 20 minutes would leave only 180 seconds, so the command
+lifetime, and the worker's bound on one poll, grow by the seconds above 600:
+25 minutes at 900 (1,500 - 1,020 = 480). The default budget keeps exactly 20
+minutes. A [review repair](review-repair.md) uses the original command's
+remaining time, as before. A longer budget also spends more model time on a
+failed attempt.
+
+SCC itself receives a shorter `--max-seconds` than the launcher's kill at
+`maxSeconds`. SCC checks its time budget only before each model call and never
+interrupts one in flight. Its deadline is therefore one call window plus its
+15-second provider-wait slack earlier, capped at an eighth of the budget: 525
+seconds for the default profile (60 s window), 825 at 900 seconds, and 788 at 900
+seconds with a 330-second window. The last call it starts can usually answer
+before the kill, and SCC then stops with exit 22 and its summary instead of being
+killed with exit 124. See [executor failure diagnostics](executor-failure-diagnostics.md).
+
+### Existing installations
+
 This default applies to newly configured installations. Existing installations
 must use a reviewed configuration transition that preserves their history and
 original authority. An image-only diagnostic upgrade does not authorize changing
 the executor profile or replaying a failed execution. Ordinary candidate or
 verification reconciliation reads the installed execution configuration first
-and rejects a different tool budget before changing runtime resources or
-credentials. Missing configuration permits first-time setup; an API error,
+and rejects a different tool budget or generation time before changing runtime
+resources or credentials. Repeat the recorded `--generation-seconds` and
+`--generation-steps` on every reconciliation; omitting them never resets an
+installed budget to the default. Missing configuration permits first-time setup; an API error,
 malformed configuration or duplicate JSON field does not count as absence.
