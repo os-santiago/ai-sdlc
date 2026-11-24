@@ -18,6 +18,7 @@ never read from the target repository, an issue or model output.
 | `publication` | Allow and deny path globs, file and byte limits |
 | `merge` | Ruleset, required checks, strict checks, resolved threads, human approvals |
 | `recipes` | Optional reviewed verification plug-ins (the per-issue oracles of the references) |
+| `generation` | Optional. `toolchain.root` names a self-contained toolchain inside the verification image and `toolchain.path` the directories under it for the generation worker's `PATH`. Requires `verification`; omitted when absent, so existing digests do not change |
 
 **Parsing:**
 - strict: unknown fields and duplicate keys are refused, object keys must be
