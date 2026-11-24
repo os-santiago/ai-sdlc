@@ -292,6 +292,12 @@ func (s *Session) Publish(ctx context.Context, e modelmailbox.Envelope) (err err
 	}
 	stage = "helper-exit"
 	if code != 0 {
+		// The mailbox helper's bounded exit code (1-255) names the cause class:
+		// 124 its 5 s deadline or a termination signal, 3 a vanished staging
+		// file, 1 any other refusal (see executor-failure-diagnostics.md).
+		if code > 0 && code <= 255 {
+			stage = "helper-exit-" + strconv.Itoa(code)
+		}
 		return ErrTransport
 	}
 	stage = "receipt"

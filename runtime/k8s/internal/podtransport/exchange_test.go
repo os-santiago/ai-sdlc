@@ -202,6 +202,10 @@ func TestPublicationRequiresExplicitBoundedStatusAndReceipt(t *testing.T) {
 			if kind == "permission-denied" && !errors.Is(err, ErrPermission) {
 				t.Fatal("forbidden status was not recognized")
 			}
+			var staged interface{ PublicationStage() string }
+			if kind == "helper-failure" && (!errors.As(err, &staged) || staged.PublicationStage() != "helper-exit-1") {
+				t.Fatalf("helper exit code not named: %v", err)
+			}
 			if upgrades.Load() != 1 || time.Since(start) > time.Second {
 				t.Fatal("transport replayed or failed to bound fixture")
 			}
