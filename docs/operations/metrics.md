@@ -15,12 +15,15 @@ library only, so no dependency was added.
 
 - **Component port.** `/metrics` is served on the component's `http` port,
   next to `/healthz` and `/readyz`, in every runtime mode, maintenance
-  included. It is read-only: `GET` and `HEAD` only. The chart's
-  NetworkPolicy admits that port only from the relay, so nothing else can
-  scrape it there. Use it for debugging with `kubectl port-forward`.
+  included. It is read-only: `GET` (and `HEAD` outside maintenance mode,
+  where the maintenance boundary refuses every method but `GET`). With
+  `networkPolicy.enabled`, the chart's NetworkPolicy admits that port only
+  from the relay, so nothing else can scrape it there; with it disabled, the
+  components are not isolated and the port is reachable from any pod. Use it
+  for debugging with `kubectl port-forward`.
 - **Metrics listener.** With `metrics.enabled`, each component also listens
   on `metrics.port` (default 9090), and that listener serves **only**
-  `GET /metrics`. A separate NetworkPolicy admits the `metrics.scrapeFrom`
+  `GET /metrics` (Go's pattern matching also answers `HEAD`). A separate NetworkPolicy admits the `metrics.scrapeFrom`
   peers to that port alone. A scraper therefore never reaches a component's
   delivery routes (`/internal/...`), which a shared port would expose to it,
   even though those routes check signatures.
@@ -154,7 +157,9 @@ to each runtime Deployment, so those pods restart once. It also adds the
 policy already isolates for ingress, so it adds the metrics port and nothing
 else. The chart refuses an empty `scrapeFrom`, because a NetworkPolicy rule
 with no peers admits every source. It also refuses a `port` that collides with
-a component or sidecar port.
+a component or sidecar port. It cannot judge a peer's breadth: an entry such as
+`{namespaceSelector: {}}` admits every pod in every namespace, so name the
+monitoring namespace and pods explicitly.
 
 ### kind
 
