@@ -338,10 +338,20 @@ func TestCheckRuntimeClassNamesEveryReason(t *testing.T) {
 		"forbidden":    {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(403) }, RuntimeClassForbidden, false, 1},
 		"unauthorized": {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(401) }, RuntimeClassForbidden, false, 1},
 		"teapot":       {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(418) }, RuntimeClassInvalid, false, 1},
-		"throttled":    {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(429) }, RuntimeClassThrottled, true, 3},
-		"server":       {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }, RuntimeClassServerError, true, 3},
-		"unavailable":  {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(503) }, RuntimeClassServerError, true, 3},
-		"gateway":      {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(504) }, RuntimeClassServerError, true, 3},
+		"forbidden, truncated body": {func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "100")
+			w.WriteHeader(403)
+			w.Write([]byte(`{"kind":`))
+		}, RuntimeClassForbidden, false, 1},
+		"missing, truncated body": {func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "100")
+			w.WriteHeader(404)
+			w.Write([]byte(`{"kind":`))
+		}, RuntimeClassNotFound, false, 1},
+		"throttled":   {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(429) }, RuntimeClassThrottled, true, 3},
+		"server":      {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }, RuntimeClassServerError, true, 3},
+		"unavailable": {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(503) }, RuntimeClassServerError, true, 3},
+		"gateway":     {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(504) }, RuntimeClassServerError, true, 3},
 		"no handler": {func(w http.ResponseWriter, _ *http.Request) {
 			w.Write([]byte(`{"kind":"RuntimeClass","metadata":{"name":"kata"}}`))
 		}, RuntimeClassNoHandler, false, 1},

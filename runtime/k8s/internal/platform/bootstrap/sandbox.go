@@ -44,6 +44,9 @@ type SandboxGate struct {
 	Classify func(error) (reason string, unknown bool)
 	Grace    time.Duration
 
+	// checkMu serializes whole checks, so each read and the state update it
+	// causes apply as one step and an older read cannot land after a newer one.
+	checkMu   sync.Mutex
 	mu        sync.Mutex
 	line      string
 	identity  string    // identity of the last available observation
@@ -53,6 +56,8 @@ type SandboxGate struct {
 }
 
 func (g *SandboxGate) Check(ctx context.Context, preflight func(context.Context) (string, error)) error {
+	g.checkMu.Lock()
+	defer g.checkMu.Unlock()
 	clock := g.now
 	if clock == nil {
 		clock = time.Now

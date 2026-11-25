@@ -238,16 +238,20 @@ func (c *Client) readRuntimeClass(ctx context.Context, name string) (RuntimeClas
 		return RuntimeClassAdmission{}, classFailure(RuntimeClassTransport)
 	}
 	defer response.Body.Close()
+	// Definite statuses are classified before the body is read, so an
+	// interrupted error body cannot turn a refusal into a transient failure.
+	switch {
+	case response.StatusCode == http.StatusNotFound:
+		return RuntimeClassAdmission{}, classFailure(RuntimeClassNotFound)
+	case response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden:
+		return RuntimeClassAdmission{}, classFailure(RuntimeClassForbidden)
+	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxRuntimeClassBytes+1))
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return RuntimeClassAdmission{}, classFailure(RuntimeClassTimeout)
 	case err != nil:
 		return RuntimeClassAdmission{}, classFailure(RuntimeClassTransport)
-	case response.StatusCode == http.StatusNotFound:
-		return RuntimeClassAdmission{}, classFailure(RuntimeClassNotFound)
-	case response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden:
-		return RuntimeClassAdmission{}, classFailure(RuntimeClassForbidden)
 	case response.StatusCode == http.StatusTooManyRequests:
 		return RuntimeClassAdmission{}, classFailure(RuntimeClassThrottled)
 	case response.StatusCode >= 500 && response.StatusCode <= 599:
