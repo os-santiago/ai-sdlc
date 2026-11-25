@@ -116,7 +116,12 @@ A successful marker acknowledgement is not proof of successful SCC execution.
 before and after `/workspace-transfer export`. The exit code must remain the
 same. It returns bounded, decoded candidate bytes through a copying accessor.
 Nonzero worker exits are retained for diagnostics, never accepted as successful
-software. A valid bundle and zero exit still require independent validation,
+software. One nonzero code is exported and captured for verification: the
+launcher's step-budget exit 25, only after the controller has retained its
+worker-exit observation for the same Pod and only when the workspace holds a
+change, through the same capture bounds as exit zero. It is not success either:
+the same independent verification and review decide. See
+[step-budget exit 25](../operations/executor-failure-diagnostics.md#step-budget-exit-25). A valid bundle and zero exit still require independent validation,
 review and release policy. A new session cannot bind an already terminated
 worker; durable recovery/reconciliation is not implemented by this library.
 

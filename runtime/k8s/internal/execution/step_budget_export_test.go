@@ -212,3 +212,27 @@ func TestCaptureAcceptsOnlyAnObservedStepBudgetReceipt(t *testing.T) {
 		})
 	}
 }
+
+// Unchanged compares only trees, with no clock: an export equal to the
+// original source or to the workspace's starting tree (a repair's rejected
+// candidate) is unchanged; any other tree, or an undecodable export, is not.
+func TestUnchangedComparesTheStartingTrees(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	encode := func(content string) []byte {
+		raw, err := workspacebundle.Encode(workspacebundle.Bundle{Version: workspacebundle.Version, SourceSHA: sha, Files: []workspacebundle.File{{Path: "file.txt", Mode: 0644, Data: []byte(content)}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	original, parent, changed := encode("original\n"), encode("rejected candidate\n"), encode("repaired\n")
+	l := &Lifecycle{prepared: Prepared{originalSource: original, source: parent}}
+	for name, tc := range map[string]struct {
+		raw  []byte
+		want bool
+	}{"original": {original, true}, "parent": {parent, true}, "changed": {changed, false}, "undecodable": {[]byte("{}"), false}, "empty": {nil, false}} {
+		if l.Unchanged(tc.raw) != tc.want {
+			t.Fatal(name)
+		}
+	}
+}

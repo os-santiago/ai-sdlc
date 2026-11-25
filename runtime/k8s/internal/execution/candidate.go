@@ -92,10 +92,11 @@ func (l *Lifecycle) CaptureCandidate(ctx context.Context, exported []byte) (reco
 }
 
 // Unchanged reports whether an exported workspace carries no change to keep:
-// its tree equals the original source tree or, for a repair, the rejected
-// candidate's tree it started from. It reads only the bounded export and the
-// prepared inputs; an export it cannot decode is not unchanged, so capture
-// refuses it with the same checks as any other.
+// its tree equals the original source tree or the tree the agent's workspace
+// started from (for a repair, the rejected candidate's tree). It reads only
+// the bounded export and the prepared inputs, and depends on no clock. An
+// export it cannot decode is not unchanged, so capture refuses it with the
+// same checks as any other.
 func (l *Lifecycle) Unchanged(exported []byte) bool {
 	if l == nil || len(exported) < 1 || len(exported) > workspacebundle.MaxWireBytes {
 		return false
@@ -108,13 +109,12 @@ func (l *Lifecycle) Unchanged(exported []byte) bool {
 	if err != nil {
 		return false
 	}
-	source, err := workspacebundle.Decode(l.prepared.originalSource)
-	if err != nil {
-		return false
+	for _, raw := range [][]byte{l.prepared.originalSource, l.prepared.source} {
+		if base, e := workspacebundle.Decode(raw); e == nil {
+			if digest, e := base.TreeDigest(); e == nil && digest == tree {
+				return true
+			}
+		}
 	}
-	if original, e := source.TreeDigest(); e == nil && original == tree {
-		return true
-	}
-	assignment, err := executor.ParseAssignment(l.prepared.assignment, workspacebundle.Digest(l.prepared.assignment), time.Now())
-	return err == nil && assignment.Repair != nil && assignment.Repair.Reference.ParentTreeSHA256 == tree
+	return false
 }

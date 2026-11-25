@@ -59,9 +59,9 @@ attempt, not an automatic replay.
    The controller must independently compare them with trusted source and apply
    review, test, security, performance and release gates. Exit zero alone never
    means the candidate is accepted or ready for release, and neither does the
-   launcher's step-budget exit 25, which it derives from its own monotonic clock
-   (SCC exit 22 strictly before SCC's time budget elapsed), never from SCC's
-   output or summary files. See
+   launcher's step-budget exit 25, which it derives from its own clocks (SCC
+   exit 22 while both its monotonic and wall-clock readings are strictly below
+   SCC's time budget), never from SCC's output or summary files. See
    [step-budget exit 25](../operations/executor-failure-diagnostics.md#step-budget-exit-25).
 
 The canonical tree digest includes the source commit and every sorted UTF-8 path,

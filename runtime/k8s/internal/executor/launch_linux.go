@@ -203,7 +203,10 @@ func Run(ctx context.Context, assignmentDigest string) int {
 	}
 	started := time.Now()
 	err = runBounded(runCtx, "/usr/local/bin/scc", WorkspaceDirectory+"/repository", env, args)
-	elapsed := time.Since(started)
+	// SCC measures its time budget on the wall clock; the monotonic reading
+	// stops during a host suspend, and the wall clock can be stepped. Both
+	// are kept and the classification uses the larger.
+	monotonic, wall := time.Since(started), time.Now().Round(0).Sub(started.Round(0))
 	if err == nil {
 		if p.Version == ReviewProfileVersion && VerifySource(WorkspaceDirectory, a) != nil {
 			return 1
@@ -217,7 +220,7 @@ func Run(ctx context.Context, assignmentDigest string) int {
 		}
 		switch exit.ExitCode() {
 		case 22:
-			return budgetExitCode(p, elapsed)
+			return budgetExitCode(p, monotonic, wall)
 		case 10, 20, 21, 23:
 			return exit.ExitCode()
 		}

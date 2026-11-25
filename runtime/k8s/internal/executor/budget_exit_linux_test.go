@@ -7,7 +7,7 @@ import (
 )
 
 // SCC's exit 22 becomes the launcher's step-budget code only when the
-// launcher's own clock shows that SCC's time budget cannot have ended.
+// launcher's own clocks show that SCC's time budget cannot have ended.
 func TestBudgetExitCodeSeparatesTheStepBudgetByElapsedTime(t *testing.T) {
 	generator := profileFixture()
 	generator.MaxSeconds = 900 // SCC receives 825 s with the default call window.
@@ -29,14 +29,32 @@ func TestBudgetExitCodeSeparatesTheStepBudgetByElapsedTime(t *testing.T) {
 		{"negative elapsed", generator, -time.Second, 22},
 		{"reviewer", review, time.Second, 22},
 	} {
-		if got := budgetExitCode(tc.p, tc.elapsed); got != tc.want {
+		if got := budgetExitCode(tc.p, tc.elapsed, tc.elapsed); got != tc.want {
+			t.Fatal(tc.name, got)
+		}
+	}
+	// The larger reading decides: a wall clock at or past the budget (a
+	// stepped clock, or a suspend the monotonic clock did not count) keeps 22,
+	// and so does a monotonic reading past it with the wall clock stepped back.
+	for _, tc := range []struct {
+		name            string
+		monotonic, wall time.Duration
+		want            int
+	}{
+		{"wall at the budget", 4 * time.Minute, 825 * time.Second, 22},
+		{"wall past the budget", 4 * time.Minute, 20 * time.Minute, 22},
+		{"monotonic past, wall stepped back", 830 * time.Second, 4 * time.Minute, 22},
+		{"wall stepped back, monotonic early", 4 * time.Minute, -time.Hour, StepBudgetExitCode},
+		{"both early", 4 * time.Minute, 4*time.Minute + time.Second, StepBudgetExitCode},
+	} {
+		if got := budgetExitCode(generator, tc.monotonic, tc.wall); got != tc.want {
 			t.Fatal(tc.name, got)
 		}
 	}
 	// A repair shortens MaxSeconds before SCC starts; the bound follows it.
 	repair := profileFixture()
 	repair.MaxSeconds = 120
-	if budgetExitCode(repair, 119*time.Second) != StepBudgetExitCode || budgetExitCode(repair, 120*time.Second) != 22 {
+	if budgetExitCode(repair, 119*time.Second, 119*time.Second) != StepBudgetExitCode || budgetExitCode(repair, 119*time.Second, 120*time.Second) != 22 {
 		t.Fatal("shortened budget")
 	}
 }

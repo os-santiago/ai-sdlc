@@ -11,6 +11,10 @@ The worker can insert identity/code fields and read this table. It cannot supply
 the database observation time, update or delete a diagnostic. Identical repeated
 observations retain the original timestamp; contradictory observations reject.
 No failure observation grants a candidate, retry, claim renewal or release.
+One observation is also a precondition: a candidate after the
+[step-budget exit](#step-budget-exit-25) is captured only when its code-25 row
+exists for the same request and Pod. The row still grants nothing by itself;
+the comment in migration 0034 predates this and migrations are not edited.
 
 `workerExitCode` is the observed launcher exit code. The launcher can collapse
 several SCC errors to code 1, so this does not always identify the underlying SCC
@@ -42,17 +46,21 @@ the stop line above still names it.
 #### Step-budget exit 25
 
 SCC ends a generation with exit 22 (`BUDGET_EXCEEDED`) when it runs out of its
-time budget or its tool-step budget. The launcher tells them apart from a fact
+time budget or its tool-step budget. The launcher tells them apart from facts
 it measures itself, never from SCC's output, summary or audit log, which the
 generated tools can write:
 
 - The pinned SCC checks its time budget before its step budget, before every
-  model call, and measures it from its own start, which is later than the
-  launcher's clock starts. The launcher configures no token budget, so time
-  and steps are the only budgets that end a generation run.
-- If SCC exits 22 strictly before its time budget (`--max-seconds`, above) has
-  elapsed on the launcher's monotonic clock, the time budget cannot have ended
-  it: the launcher exits **25**, the step budget.
+  model call, on the wall clock (`Date.now()`), measured from its own start,
+  which is later than the launcher's clock starts. The launcher configures no
+  token budget, so time and steps are the only budgets that end a generation
+  run.
+- The launcher reads SCC's run on its monotonic clock and on the wall clock.
+  The monotonic clock stops while a host or VM is suspended, and the wall
+  clock can be stepped (NTP), so it compares the larger reading.
+- If SCC exits 22 while both readings are strictly below its time budget
+  (`--max-seconds`, above), the time budget cannot have ended it: the launcher
+  exits **25**, the step budget.
 - At or after that point the cause is ambiguous, because a step budget reached
   at the deadline looks the same, so the launcher keeps **22**. A time-out
   therefore stays exit 22 and stops before export, as before. Reviewer runs
