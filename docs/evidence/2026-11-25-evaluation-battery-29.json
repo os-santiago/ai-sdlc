@@ -1,0 +1,300 @@
+{
+  "schemaVersion": 2,
+  "repository": "os-santiago/ai-sdlc-sample",
+  "attemptBudget": 2,
+  "cell": {
+    "repository": "os-santiago/ai-sdlc-sample",
+    "modelPath": "local-llama"
+  },
+  "installation": {
+    "imageLockDigest": "sha256:600d4c30e65c65eacc296d3f7edcf39154162bdbbb74d0aade71c423606b6e30",
+    "images": {
+      "ai-sdlc-admission-controller": "quay.io/os-santiago/ai-sdlc@sha256:62d7402d4280432c6edc122156f312b6b1d14b275cd285c6225daa81690b7243",
+      "ai-sdlc-intake": "quay.io/os-santiago/ai-sdlc@sha256:83f17a5aad7c4b87adaeaad07850e8d689028ced3c17bdc54b1b06238b11026d",
+      "ai-sdlc-orchestrator": "quay.io/os-santiago/ai-sdlc@sha256:b0fe2b408b0d1862627b46bb93698cc5bf589c7545598f5a1e021c306e0f84eb",
+      "ai-sdlc-relay": "quay.io/os-santiago/ai-sdlc@sha256:6a8b602de93e0d5f7714d10d3e2182654a4a0cde36289c79dc048db4899b3132",
+      "ai-sdlc-release-manager": "quay.io/os-santiago/ai-sdlc@sha256:6745bc507b4aaf23ff7b811457a37bd4e4344198a01ae042e8e3477a81b39cb8",
+      "ai-sdlc-verifier": "quay.io/os-santiago/ai-sdlc@sha256:71dbc1ab841585f2ac4b42dcef3b62a061af12fbb8d6684731e72d1f8bc6218f",
+      "ai-sdlc-worker": "quay.io/os-santiago/ai-sdlc@sha256:46f9a942c048191d8b49887f3a1c3e9696d0031821284d5c4fac0a62a20723a2"
+    },
+    "revision": "b7c12ae66409ecccc37696f8342a30d6e5774da4"
+  },
+  "issues": [
+    {
+      "issue": 185,
+      "attempts": [
+        {
+          "issue": 185,
+          "startedAt": "2026-11-25T12:53:58Z",
+          "outcome": "success",
+          "pullRequest": 201,
+          "seconds": 730,
+          "modelCalls": 17,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 186,
+      "attempts": [
+        {
+          "issue": 186,
+          "startedAt": "2026-11-25T13:06:55Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 418,
+          "modelCalls": 13,
+          "stageReached": "execution",
+          "reviews": [],
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-provider cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 186,
+          "startedAt": "2026-11-25T13:14:36Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 654,
+          "modelCalls": 6,
+          "stageReached": "execution",
+          "reviews": [],
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-provider cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 187,
+      "attempts": [
+        {
+          "issue": 187,
+          "startedAt": "2026-11-25T13:26:15Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 341,
+          "modelCalls": 16,
+          "stageReached": "execution",
+          "reviews": [],
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-authorization-publication-snapshot cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 187,
+          "startedAt": "2026-11-25T13:32:40Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 854,
+          "modelCalls": 22,
+          "stageReached": "execution",
+          "reviews": [],
+          "diagnostics": [
+            "candidate reconciliation stopped safely: worker-exit cleanupPending=false workerExitCode=22 failureRecorded=true"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 188,
+      "attempts": [
+        {
+          "issue": 188,
+          "startedAt": "2026-11-25T13:47:39Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 603,
+          "modelCalls": 32,
+          "stageReached": "execution",
+          "reviews": [],
+          "diagnostics": [
+            "candidate reconciliation stopped safely: worker-exit cleanupPending=false workerExitCode=25 failureRecorded=true"
+          ]
+        },
+        {
+          "issue": 188,
+          "startedAt": "2026-11-25T13:58:26Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 47,
+          "modelCalls": 0,
+          "stageReached": "execution",
+          "reviews": [],
+          "diagnostics": [
+            "candidate reconciliation stopped safely: readiness-request cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 189,
+      "attempts": [
+        {
+          "issue": 189,
+          "startedAt": "2026-11-25T13:59:58Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 1128,
+          "modelCalls": 16,
+          "stageReached": "execution",
+          "reviews": [],
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-provider cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 189,
+          "startedAt": "2026-11-25T14:19:30Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 859,
+          "modelCalls": 28,
+          "stageReached": "execution",
+          "reviews": [],
+          "diagnostics": [
+            "candidate reconciliation stopped safely: worker-exit cleanupPending=false workerExitCode=22 failureRecorded=true"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 190,
+      "attempts": [
+        {
+          "issue": 190,
+          "startedAt": "2026-11-25T14:34:35Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 368,
+          "modelCalls": 13,
+          "stageReached": "execution",
+          "reviews": [],
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-authorization-publication-snapshot cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 190,
+          "startedAt": "2026-11-25T14:41:26Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 864,
+          "modelCalls": 25,
+          "stageReached": "execution",
+          "reviews": [],
+          "diagnostics": [
+            "candidate reconciliation stopped safely: worker-exit cleanupPending=false workerExitCode=22 failureRecorded=true"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 191,
+      "attempts": [
+        {
+          "issue": 191,
+          "startedAt": "2026-11-25T14:56:35Z",
+          "outcome": "success",
+          "pullRequest": 202,
+          "seconds": 774,
+          "modelCalls": 32,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 192,
+      "attempts": [
+        {
+          "issue": 192,
+          "startedAt": "2026-11-25T15:10:14Z",
+          "outcome": "success",
+          "pullRequest": 203,
+          "seconds": 475,
+          "modelCalls": 12,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 193,
+      "attempts": [
+        {
+          "issue": 193,
+          "startedAt": "2026-11-25T15:18:53Z",
+          "outcome": "success",
+          "pullRequest": 204,
+          "seconds": 517,
+          "modelCalls": 12,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 194,
+      "attempts": [
+        {
+          "issue": 194,
+          "startedAt": "2026-11-25T15:28:15Z",
+          "outcome": "success",
+          "pullRequest": 205,
+          "seconds": 841,
+          "modelCalls": 21,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    }
+  ],
+  "inProgress": [
+    {
+      "issue": 195,
+      "startedAt": "2026-11-25T15:43:01Z",
+      "outcome": "failure",
+      "stage": "execution",
+      "reason": "uncertain",
+      "seconds": 72,
+      "modelCalls": 0,
+      "stageReached": "execution",
+      "reviews": [],
+      "diagnostics": [
+        "candidate reconciliation stopped safely: readiness-request cleanupPending=false workerExitCode=0 failureRecorded=false"
+      ]
+    }
+  ]
+}
