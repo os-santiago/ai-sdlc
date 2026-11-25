@@ -127,8 +127,9 @@ func Export(parent, sourceSHA string) (Bundle, error) {
 				}
 				child, e := unix.Openat(dir, entry, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 				if e != nil {
-					if errors.Is(e, unix.ELOOP) {
-						return exportRefused{ExportNode} // a symbolic link
+					// ELOOP: a symbolic link (O_NOFOLLOW); ENXIO: a UNIX socket.
+					if errors.Is(e, unix.ELOOP) || errors.Is(e, unix.ENXIO) {
+						return exportRefused{ExportNode}
 					}
 					return ErrInvalid
 				}
