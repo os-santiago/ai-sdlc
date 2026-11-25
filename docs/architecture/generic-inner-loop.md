@@ -14,7 +14,7 @@ never read from the target repository, an issue or model output.
 | Section | Content |
 |---|---|
 | `repository`, `baseBranch` | Lowercase GitHub repository and target branch |
-| `verification` | Pinned toolchain image (`repo@sha256:`), argv test command, working directory, timeout, resources, `network: none`, exit code and optional JUnit report, repeat count, test globs, harness globs, reviewed toolchain environment |
+| `verification` | Pinned toolchain image (`repo@sha256:`), argv test command, working directory, timeout, resources, `network: none`, exit code and optional JUnit report, repeat count, test globs, harness globs, reviewed toolchain environment, optional static analysis commands (`analysis`, omitted when absent) |
 | `publication` | Allow and deny path globs, file and byte limits |
 | `merge` | Ruleset, required checks, strict checks, resolved threads, human approvals |
 | `recipes` | Optional reviewed verification plug-ins (the per-issue oracles of the references) |
@@ -75,6 +75,12 @@ identity.
 | `regression` | With a report, a test that passed on the baseline no longer passes |
 | `baseline-failing` | Without a report, the baseline fails |
 | `no-failing-test` | No test fails explicitly on the base code and passes on the candidate |
+| `candidate-analysis` | With the optional `verification.analysis`, an analysis command that passes on the baseline fails on the candidate |
+
+Before any run, the verifier also refuses a candidate whose added lines hold
+a high-confidence credential (`refused-candidate-secret`). That check and the
+optional static analysis form the
+[candidate quality and security baseline](candidate-quality-baseline.md).
 
 A decision without a per-test report is marked **weak**, so the independent
 reviewer judges whether the tests exercise the requested behaviour. The

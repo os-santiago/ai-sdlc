@@ -23,7 +23,9 @@ import (
 const Recipe = "repository-tests/v1"
 
 // RulesVersion names the decision rules below; a change to them must change
-// it, so commands signed under the old rules no longer verify.
+// it, so commands signed under the old rules no longer verify. The analysis
+// rule did not change it: it applies only to manifests with analysis, whose
+// new manifest digest the signed authority revision already binds.
 const RulesVersion = "decide/v1"
 
 // Bounds of one runner result line.
