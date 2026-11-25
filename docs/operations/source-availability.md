@@ -95,8 +95,13 @@ upgrade:
 3. `./install.sh local --profile verification ...` finds an owned, valid
    Secret and sets `verifier.sourceCredential: true`. It never creates,
    imports or prints the token, and it refuses a Secret without the
-   installation's annotation or with any other shape. A chart-only
-   installation sets `verifier.sourceCredential: true` itself.
+   installation's annotation or with any other shape. The prepared
+   (`--configure-prepared`) transition does the same through its guarded
+   reader. The Secret must exist before that transition begins: it is
+   recorded with the other original credentials and must stay unchanged
+   until the transition completes, and one that appears mid-transition is
+   refused. A chart-only installation sets `verifier.sourceCredential: true`
+   itself.
 
 The upgrade tools carry the recorded value: an installation recorded without
 it renders exactly as before; one recorded with it keeps the mount.
