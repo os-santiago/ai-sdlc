@@ -66,11 +66,10 @@ func main() {
 // writes one bounded result line per run to stdout. It opens no database,
 // network or cluster connection and loads no signing identity.
 //
-// With the analyze argument (only for settings with analysis) it first runs
-// the analysis commands on their own copy of the verified tree, made with
-// the other copies before any repository code runs and analysed before any
-// test runs, so no test can alter what is analysed. Their exit codes go on
-// the first result line.
+// With the analyze argument (only for settings with analysis) it then runs
+// the analysis commands, after every test run has finished and its result
+// is fixed, on a fresh copy of the verified tree written from memory. Their
+// exit codes go on the first result line.
 //
 //	repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs> [analyze]
 func runRepositoryTests(ctx context.Context, args []string, out io.Writer, parent, uidPath string) error {
@@ -118,49 +117,50 @@ func runRepositoryTests(ctx context.Context, args []string, out io.Writer, paren
 	// before any repository code runs. A run can still alter later copies;
 	// that can only make the repetitions disagree, which fails as uncertain.
 	workspaces := []string{filepath.Join(parent, "repository")}
-	analysisWorkspace := ""
+	var tree workspacebundle.Bundle
 	if runs > 1 || analyze {
-		tree, err := workspacebundle.Export(parent, args[2])
-		if err != nil {
+		if tree, err = workspacebundle.Export(parent, args[2]); err != nil {
 			return errors.New("imported tree does not match")
 		}
-		copyTree := func(name string) (string, error) {
-			copyParent := filepath.Join(args[1], ".runs", name)
-			if os.MkdirAll(copyParent, 0o700) != nil || workspacebundle.Import(copyParent, tree) != nil {
-				return "", errors.New("run copy failed")
-			}
-			return filepath.Join(copyParent, "repository"), nil
-		}
 		for i := 2; i <= runs; i++ {
-			workspace, err := copyTree(strconv.Itoa(i))
-			if err != nil {
-				return err
+			copyParent := filepath.Join(args[1], ".runs", strconv.Itoa(i))
+			if os.MkdirAll(copyParent, 0o700) != nil || workspacebundle.Import(copyParent, tree) != nil {
+				return errors.New("run copy failed")
 			}
-			workspaces = append(workspaces, workspace)
-		}
-		if analyze {
-			if analysisWorkspace, err = copyTree("analysis"); err != nil {
-				return err
-			}
+			workspaces = append(workspaces, filepath.Join(copyParent, "repository"))
 		}
 	}
-	var analysis []int
-	if analyze {
-		runner := repositorytests.Runner{Verification: v, Workspace: analysisWorkspace, Scratch: args[1], ReapAll: os.Getpid() == 1}
-		if analysis, err = runner.Analyze(ctx); err != nil {
-			return err
-		}
-	}
-	var lines []byte
-	for i, workspace := range workspaces {
+	// The tests are the primary evidence: every run completes and its result
+	// is fixed in this non-dumpable process's memory before any analysis
+	// command starts, so nothing an analyzer does (even one that runs
+	// repository code) can change the trees the tests ran on or their
+	// results.
+	results := make([]repositorytests.Run, 0, len(workspaces))
+	for _, workspace := range workspaces {
 		runner := repositorytests.Runner{Verification: v, Workspace: workspace, Scratch: args[1], ReapAll: os.Getpid() == 1}
 		result, err := runner.Run(ctx)
 		if err != nil {
 			return err
 		}
-		if i == 0 {
-			result.Analysis = analysis
+		results = append(results, result)
+	}
+	if analyze {
+		// The analysed tree is written only now, from the verified tree held
+		// in memory since before any repository code ran, into a new
+		// directory with an unpredictable name: no test could have prepared
+		// or altered it. The residual risks (state the tests left in the
+		// scratch HOME, such as tool caches) are documented with the design.
+		analysisParent, err := os.MkdirTemp(args[1], "analysis-")
+		if err != nil || workspacebundle.Import(analysisParent, tree) != nil {
+			return errors.New("analysis copy failed")
 		}
+		runner := repositorytests.Runner{Verification: v, Workspace: filepath.Join(analysisParent, "repository"), Scratch: args[1], ReapAll: os.Getpid() == 1}
+		if results[0].Analysis, err = runner.Analyze(ctx); err != nil {
+			return err
+		}
+	}
+	var lines []byte
+	for _, result := range results {
 		lines = append(append(lines, result.Encode()...), '\n')
 	}
 	// One write after every run, so a failure leaves no partial result set.
