@@ -338,7 +338,8 @@
               "type": "string"
             },
             "size": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1
             },
             "storageClass": {
               "type": "string"

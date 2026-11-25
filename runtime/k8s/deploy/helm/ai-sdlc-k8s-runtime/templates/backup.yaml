@@ -91,6 +91,7 @@ spec:
                     secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" . }}, key: {{ include "ai-sdlc-k8s-runtime.databaseSecretKey" . }}}
                 - {name: BACKUP_DIR, value: /backup}
                 - {name: BACKUP_RETENTION, value: {{ int .Values.backup.retention | quote }}}
+                - {name: BACKUP_LOCK_STALE_SECONDS, value: {{ int .Values.backup.activeDeadlineSeconds | quote }}}
                 - {name: HOME, value: /tmp}
               securityContext:
                 allowPrivilegeEscalation: false

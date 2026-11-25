@@ -4,6 +4,7 @@ The chart tests render the chart with the pinned Helm. The script tests run
 files/backup.sh under /bin/sh with stub pg_dump and pg_restore commands, so
 they need no database, container runtime or cluster.
 """
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import re
 import stat
 import subprocess
 import tempfile
+import time
 import unittest
 
 import yaml
@@ -83,6 +85,8 @@ class BackupChartTests(unittest.TestCase):
         self.assertEqual(container['args'], [SCRIPT.read_text()])
         env = {e['name']: e for e in container['env']}
         self.assertEqual(env['BACKUP_RETENTION']['value'], '7')
+        # No run outlives the Job deadline, so an older volume lock is stale.
+        self.assertEqual(env['BACKUP_LOCK_STALE_SECONDS']['value'], '3600')
         self.assertEqual(env['BACKUP_DIR']['value'], '/backup')
         self.assertEqual(container['resources'], values['backup']['resources'])
         self.assertEqual({m['mountPath']: m['name'] for m in container['volumeMounts']}, {'/backup': 'backup', '/tmp': 'tmp'})
@@ -237,22 +241,37 @@ class BackupChartTests(unittest.TestCase):
 
 
 STUB_PG_DUMP = r'''#!/bin/sh
-# Records what the backup script passes, then writes a fake custom-format archive.
+# Records what the backup script passes, then writes a fake archive. A
+# complete fake archive starts with PGDMP and ends with an END line.
 printf '%s\n' "$@" > "$STUB_LOG.argv"
 printf '%s' "${PGPASSWORD-<unset>}" > "$STUB_LOG.password"
 [ -z "${STUB_DUMP_FAIL:-}" ] || exit 1
+[ -z "${STUB_SLEEP:-}" ] || sleep "$STUB_SLEEP"
 for arg in "$@"; do
   case "$arg" in --file=*) file="${arg#--file=}" ;; esac
 done
-printf 'PGDMP fake archive\n' > "$file"
+if [ -n "${STUB_TRUNCATE:-}" ]; then
+  printf 'PGDMP fake archive\n' > "$file"
+else
+  printf 'PGDMP fake archive\nEND\n' > "$file"
+fi
 '''
 
 STUB_PG_RESTORE = r'''#!/bin/sh
-if [ "$1" = --list ]; then
-  [ -z "${STUB_RESTORE_FAIL:-}" ] || exit 1
-  head -c 5 "$2" | grep -q PGDMP
-  exit
-fi
+# --list reads only the header, like the real table of contents at the start
+# of a custom-format archive. --file=/dev/null reads to the end.
+case "$1" in
+  --list)
+    [ -z "${STUB_RESTORE_FAIL:-}" ] || exit 1
+    head -c 5 "$2" | grep -q PGDMP
+    exit
+    ;;
+  --file=/dev/null)
+    [ -z "${STUB_RESTORE_FAIL:-}" ] || exit 1
+    head -c 5 "$2" | grep -q PGDMP && [ "$(tail -n 1 "$2")" = END ]
+    exit
+    ;;
+esac
 printf '%s\n' "$@" > "$STUB_LOG.restore"
 printf '%s' "${PGPASSWORD-<unset>}" > "$STUB_LOG.restore-password"
 [ -z "${STUB_APPLY_FAIL:-}" ]
@@ -263,6 +282,9 @@ printf '%s\n' "$@" > "$STUB_LOG.psql"
 [ -z "${STUB_PSQL_FAIL:-}" ] || exit 2
 echo "${STUB_SESSIONS:-0}"
 '''
+
+COMPLETE = 'PGDMP fake archive\nEND\n'
+LOCK = '.ai-sdlc-backup.lock'
 
 
 class BackupScriptTests(unittest.TestCase):
@@ -282,119 +304,244 @@ class BackupScriptTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def run_backup(self, url='postgresql://ai_sdlc:%s@ai-sdlc-postgres:5432/ai_sdlc?sslmode=disable' % FAKE_PASSWORD,
-                   retention='3', **extra):
+    def environment(self, url, retention, extra):
         env = {'PATH': '%s:%s' % (self.bin, os.environ.get('PATH', '/usr/bin:/bin')), 'BACKUP_DIR': str(self.dir),
                'BACKUP_RETENTION': retention, 'DATABASE_URL': url, 'STUB_LOG': str(self.log)}
         env.update(extra)
-        result = subprocess.run(['/bin/sh', '-c', SCRIPT.read_text()], env=env, capture_output=True, text=True, timeout=60)
-        self.assertNotIn(FAKE_PASSWORD, result.stdout + result.stderr)
+        return env
+
+    def stub_log(self, suffix):
+        path = Path(str(self.log) + suffix)
+        return path.read_text() if path.exists() else None
+
+    def assert_no_secret_leaked(self, result, secrets):
+        """No secret in the output, or in any command line a stub received."""
+        argv = '\n'.join(self.stub_log(s) or '' for s in ('.argv', '.restore', '.psql'))
+        for secret in secrets:
+            self.assertNotIn(secret, result.stdout + result.stderr)
+            self.assertNotIn(secret, argv)
+
+    def run_backup(self, url='postgresql://ai_sdlc:%s@ai-sdlc-postgres:5432/ai_sdlc?sslmode=disable' % FAKE_PASSWORD,
+                   retention='3', secrets=(FAKE_PASSWORD,), **extra):
+        result = subprocess.run(['/bin/sh', '-c', SCRIPT.read_text()], env=self.environment(url, retention, extra),
+                                capture_output=True, text=True, timeout=60)
+        self.assert_no_secret_leaked(result, secrets)
         return result
 
     def backups(self):
         return sorted(p.name for p in self.dir.iterdir())
 
+    def dumps(self):
+        return [name for name in self.backups() if BACKUP_NAME.match(name)]
+
     def test_writes_one_timestamped_archive_and_keeps_the_password_off_the_command_line(self):
         result = self.run_backup()
         self.assertEqual(result.returncode, 0, result.stderr)
-        files = self.backups()
-        self.assertEqual(len(files), 1, files)
-        self.assertRegex(files[0], BACKUP_NAME)
-        self.assertEqual((self.dir / files[0]).read_text(), 'PGDMP fake archive\n')
-        self.assertEqual(stat.S_IMODE((self.dir / files[0]).stat().st_mode), 0o600)
-        argv = Path(str(self.log) + '.argv').read_text().splitlines()
+        name, = self.dumps()
+        self.assertEqual(self.backups(), [name, name + '.sha256'])
+        self.assertEqual((self.dir / name).read_text(), COMPLETE)
+        digest = hashlib.sha256(COMPLETE.encode()).hexdigest()
+        self.assertEqual((self.dir / (name + '.sha256')).read_text(), '%s  %s\n' % (digest, name))
+        # Owner read-write, fsGroup read, nobody else.
+        for file in (name, name + '.sha256'):
+            self.assertEqual(stat.S_IMODE((self.dir / file).stat().st_mode), 0o640)
+        argv = self.stub_log('.argv').splitlines()
         self.assertEqual(argv[:2], ['--format=custom', '--no-password'])
         self.assertEqual(argv[-1], '--dbname=postgresql://ai_sdlc@ai-sdlc-postgres:5432/ai_sdlc?sslmode=disable')
         # The dump is written to a hidden temporary name, then renamed.
         self.assertRegex(argv[2], r'^--file=%s/\.ai-sdlc-[0-9]{8}T[0-9]{6}Z\.dump\.partial$' % re.escape(str(self.dir)))
-        self.assertNotIn(FAKE_PASSWORD, '\n'.join(argv))
-        self.assertEqual(Path(str(self.log) + '.password').read_text(), FAKE_PASSWORD)
+        self.assertEqual(self.stub_log('.password'), FAKE_PASSWORD)
+        self.assertFalse((self.dir / LOCK).exists())
 
     def test_prunes_to_the_newest_retention_and_ignores_other_files(self):
         old = ['ai-sdlc-20260101T000000Z.dump', 'ai-sdlc-20260102T000000Z.dump', 'ai-sdlc-20260103T000000Z.dump',
                'ai-sdlc-20260104T000000Z.dump']
-        for name in old + ['notes.txt', 'ai-sdlc-manual.dump']:
+        for name in old:
+            (self.dir / name).write_text(COMPLETE)
+            (self.dir / (name + '.sha256')).write_text('x')
+        for name in ('notes.txt', 'ai-sdlc-manual.dump'):
             (self.dir / name).write_text('x')
         (self.dir / '.ai-sdlc-20260105T000000Z.dump.partial').write_text('half')
+        (self.dir / '.ai-sdlc-20260105T000000Z.dump.sha256.partial').write_text('half')
         result = self.run_backup(retention='2')
         self.assertEqual(result.returncode, 0, result.stderr)
-        files = self.backups()
-        new = [f for f in files if BACKUP_NAME.match(f) and f not in old]
-        self.assertEqual(len(new), 1)
-        self.assertEqual(files, sorted(['ai-sdlc-20260104T000000Z.dump', new[0], 'notes.txt', 'ai-sdlc-manual.dump']))
+        new, = [f for f in self.dumps() if f not in old]
+        self.assertEqual(self.backups(), sorted(['ai-sdlc-20260104T000000Z.dump', 'ai-sdlc-20260104T000000Z.dump.sha256',
+                                                 new, new + '.sha256', 'notes.txt', 'ai-sdlc-manual.dump']))
         for name in old[:3]:
             self.assertIn('pruned ' + name, result.stdout)
 
-    def test_a_failed_dump_leaves_no_file_and_prunes_nothing(self):
+    def test_prune_never_deletes_this_runs_backup_when_the_clock_went_back(self):
+        future = ['ai-sdlc-20990101T000000Z.dump', 'ai-sdlc-20990102T000000Z.dump']
+        for name in future:
+            (self.dir / name).write_text(COMPLETE)
+        for retention, kept in (('2', future[1:]), ('1', [])):
+            with self.subTest(retention=retention):
+                result = self.run_backup(retention=retention)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                current = self.dumps()
+                newest = [f for f in current if f not in future]
+                self.assertEqual(len(newest), 1)
+                self.assertEqual(current, sorted(newest + kept))
+                for old in newest:
+                    (self.dir / old).unlink()
+                    (self.dir / (old + '.sha256')).unlink()
+
+    def test_a_failed_or_truncated_dump_leaves_no_file_and_prunes_nothing(self):
         existing = ['ai-sdlc-20260101T000000Z.dump', 'ai-sdlc-20260102T000000Z.dump']
         for name in existing:
-            (self.dir / name).write_text('x')
-        for flag in ('STUB_DUMP_FAIL', 'STUB_RESTORE_FAIL'):
+            (self.dir / name).write_text(COMPLETE)
+        for flag, message in (('STUB_DUMP_FAIL', 'pg_dump failed'), ('STUB_RESTORE_FAIL', 'incomplete or unreadable'),
+                              ('STUB_TRUNCATE', 'incomplete or unreadable')):
             with self.subTest(flag=flag):
                 result = self.run_backup(retention='1', **{flag: '1'})
                 self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
                 self.assertIn('no backup was written', result.stderr)
                 self.assertEqual(self.backups(), existing)
 
     def test_url_forms(self):
-        cases = {
-            'postgres://owner:%s@db.example:6543/app' % FAKE_PASSWORD: '--dbname=postgres://owner@db.example:6543/app',
-            'postgresql://owner:%s@db.example/app?sslmode=verify-full&sslrootcert=/etc/ca.crt' % FAKE_PASSWORD:
-                '--dbname=postgresql://owner@db.example/app?sslmode=verify-full&sslrootcert=/etc/ca.crt',
-            'postgresql://owner@db.example/app': '--dbname=postgresql://owner@db.example/app',
-        }
-        for url, expected in cases.items():
-            with self.subTest(url=expected):
+        secret = 'Fixture-Secret-0123456789'
+        cases = [
+            ('postgres://owner:%s@db.example:6543/app' % secret, '--dbname=postgres://owner@db.example:6543/app', secret),
+            ('postgresql://owner:%s@db.example/app?sslmode=verify-full&sslrootcert=/etc/ca.crt' % secret,
+             '--dbname=postgresql://owner@db.example/app?sslmode=verify-full&sslrootcert=/etc/ca.crt', secret),
+            # Percent-encoded reserved characters are decoded into PGPASSWORD.
+            ('postgresql://owner:a%2Fb%40c%3Ad%25e%3Ff%23g%20h-' + secret + '@db.example/app',
+             '--dbname=postgresql://owner@db.example/app', 'a/b@c:d%e?f#g h-' + secret),
+            # Raw "@", ":", "?" and "#" in the password are accepted.
+            ('postgresql://owner:p@ss:w?rd#-%s@db.example/app' % secret, '--dbname=postgresql://owner@db.example/app',
+             'p@ss:w?rd#-' + secret),
+            ('postgresql://owner:%s@db.example?sslmode=require' % secret, '--dbname=postgresql://owner@db.example?sslmode=require',
+             secret),
+            ('postgresql://owner@db.example/app', '--dbname=postgresql://owner@db.example/app', '<unset>'),
+        ]
+        for url, expected, password in cases:
+            with self.subTest(url=expected, password=password != '<unset>'):
                 for old in self.dir.iterdir():
                     old.unlink()
-                result = self.run_backup(url=url)
+                result = self.run_backup(url=url, secrets=(secret, password) if password != '<unset>' else (secret,))
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(Path(str(self.log) + '.argv').read_text().splitlines()[-1], expected)
-        self.assertEqual(Path(str(self.log) + '.password').read_text(), '<unset>')
+                self.assertEqual(self.stub_log('.argv').splitlines()[-1], expected)
+                self.assertEqual(self.stub_log('.password'), password)
 
     def test_refuses_bad_inputs_without_echoing_them(self):
-        for env in ({'url': 'mysql://u:%s@h/d' % FAKE_PASSWORD}, {'url': 'postgresql://u:%s%%21@h/d' % FAKE_PASSWORD},
-                    {'url': 'postgresql:///d'}, {'retention': '0'}, {'retention': '-1'}, {'retention': 'seven'},
-                    {'retention': '07'}, {'BACKUP_DIR': str(self.dir / 'missing')}):
+        secret = 'Fixture-Secret-0123456789'
+        cases = [
+            ({'url': 'mysql://u:%s@h/d' % secret}, 'postgresql:// URL'),
+            # A raw "/" would leave the password in the URL passed to pg_dump.
+            ({'url': 'postgresql://owner:abc/%s@h:5432/d' % secret}, "raw '/'"),
+            ({'url': 'postgresql://owner:%s/x@h/d' % secret}, "raw '/'"),
+            ({'url': 'postgresql://owner@h/d?sslmode=require&password=%s' % secret}, 'password query parameter'),
+            ({'url': 'postgresql://owner@h/d?PASSWORD=%s' % secret}, 'password query parameter'),
+            ({'url': 'postgresql://owner@h?password=%s' % secret}, 'password query parameter'),
+            ({'url': 'postgresql://owner:%s%%2@h/d' % secret}, 'invalid percent escape'),
+            ({'url': 'postgresql://owner:%s%%zz@h/d' % secret}, 'invalid percent escape'),
+            ({'url': 'postgresql://owner:%s%%00@h/d' % secret}, 'encoded NUL'),
+            ({'url': 'postgresql:///d'}, 'no host'),
+            ({'url': 'postgresql://owner:%s@/d' % secret}, 'no host'),
+            ({'retention': '0'}, 'BACKUP_RETENTION'), ({'retention': '-1'}, 'BACKUP_RETENTION'),
+            ({'retention': 'seven'}, 'BACKUP_RETENTION'), ({'retention': '07'}, 'BACKUP_RETENTION'),
+            ({'BACKUP_LOCK_STALE_SECONDS': 'x'}, 'BACKUP_LOCK_STALE_SECONDS'),
+            ({'BACKUP_DIR': str(self.dir / 'missing')}, 'missing'),
+        ]
+        for env, message in cases:
             with self.subTest(env=env):
-                result = self.run_backup(**env)
+                result = self.run_backup(secrets=(secret, 'abc/' + secret, secret[:12]), **env)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertTrue(result.stderr.startswith('backup: '), result.stderr)
+                self.assertIn(message, result.stderr)
                 self.assertEqual(self.backups(), [])
+                self.assertIsNone(self.stub_log('.argv'), 'pg_dump ran')
+
+    def test_a_held_lock_refuses_and_leaves_the_other_runs_files(self):
+        lock = self.dir / LOCK
+        lock.mkdir()
+        partial = self.dir / '.ai-sdlc-20260105T000000Z.dump.partial'
+        partial.write_text('in progress')
+        result = self.run_backup()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('holds the volume lock', result.stderr)
+        self.assertTrue(lock.is_dir())
+        self.assertEqual(partial.read_text(), 'in progress')
+        self.assertIsNone(self.stub_log('.argv'))
+        # A restore takes the same lock.
+        (self.dir / 'ai-sdlc-20260101T000000Z.dump').write_text(COMPLETE)
+        restore = self.run_backup(RESTORE_FILE='ai-sdlc-20260101T000000Z.dump')
+        self.assertIn('holds the volume lock', restore.stderr)
+        self.assertIsNone(self.stub_log('.restore'))
+
+    def test_a_stale_lock_is_removed_and_every_exit_releases_the_lock(self):
+        lock = self.dir / LOCK
+        lock.mkdir()
+        old = time.time() - 120
+        os.utime(lock, (old, old))
+        result = self.run_backup(BACKUP_LOCK_STALE_SECONDS='60')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('removing a lock older than 60 seconds', result.stdout)
+        self.assertFalse(lock.exists())
+        failed = self.run_backup(STUB_DUMP_FAIL='1')
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertFalse(lock.exists())
+
+    def test_concurrent_runs_never_share_the_volume(self):
+        env = self.environment('postgresql://ai_sdlc:%s@h/d' % FAKE_PASSWORD, '5', {'STUB_SLEEP': '3'})
+        first = subprocess.Popen(['/bin/sh', '-c', SCRIPT.read_text()], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        deadline = time.time() + 10
+        while not (self.dir / LOCK).exists() and time.time() < deadline:
+            time.sleep(0.05)
+        second = subprocess.run(['/bin/sh', '-c', SCRIPT.read_text()], env=dict(env, STUB_SLEEP=''),
+                                capture_output=True, text=True, timeout=60)
+        out, err = first.communicate(timeout=60)
+        self.assertEqual(first.returncode, 0, err)
+        self.assertNotEqual(second.returncode, 0)
+        self.assertIn('holds the volume lock', second.stderr)
+        self.assertEqual(len(self.dumps()), 1)
+        self.assertFalse((self.dir / LOCK).exists())
 
     def test_restore_replaces_the_database_in_one_transaction_only_when_no_component_is_connected(self):
         name = 'ai-sdlc-20260101T000000Z.dump'
-        (self.dir / name).write_text('PGDMP fake archive\n')
-        (self.dir / 'ai-sdlc-20251231T000000Z.dump').write_text('PGDMP older\n')
+        (self.dir / name).write_text(COMPLETE)
+        (self.dir / (name + '.sha256')).write_text('%s  %s\n' % (hashlib.sha256(COMPLETE.encode()).hexdigest(), name))
+        (self.dir / 'ai-sdlc-20251231T000000Z.dump').write_text(COMPLETE)
         result = self.run_backup(retention='1', RESTORE_FILE=name)
         self.assertEqual(result.returncode, 0, result.stderr)
-        argv = Path(str(self.log) + '.restore').read_text().splitlines()
+        argv = self.stub_log('.restore').splitlines()
         self.assertEqual(argv, ['--clean', '--if-exists', '--no-owner', '--single-transaction', '--exit-on-error', '--no-password',
                                 '--dbname=postgresql://ai_sdlc@ai-sdlc-postgres:5432/ai_sdlc?sslmode=disable', str(self.dir / name)])
-        self.assertEqual(Path(str(self.log) + '.restore-password').read_text(), FAKE_PASSWORD)
-        self.assertNotIn(FAKE_PASSWORD, Path(str(self.log) + '.psql').read_text())
-        # A restore neither writes a backup nor prunes one.
-        self.assertEqual(self.backups(), ['ai-sdlc-20251231T000000Z.dump', name])
-        self.assertFalse(Path(str(self.log) + '.argv').exists())
+        self.assertEqual(self.stub_log('.restore-password'), FAKE_PASSWORD)
+        # A restore neither writes a backup nor prunes one, and releases the lock.
+        self.assertEqual(self.backups(), ['ai-sdlc-20251231T000000Z.dump', name, name + '.sha256'])
+        self.assertIsNone(self.stub_log('.argv'))
+        (self.dir / 'ai-sdlc-20260102T000000Z.dump').write_text('PGDMP truncated\n')
+        (self.dir / 'ai-sdlc-20260103T000000Z.dump').write_text(COMPLETE)
+        (self.dir / 'ai-sdlc-20260103T000000Z.dump.sha256').write_text('%s  ai-sdlc-20260103T000000Z.dump\n' % ('0' * 64))
         for extra, message in (({'STUB_SESSIONS': '2'}, 'scale the components to zero first'),
                                ({'STUB_PSQL_FAIL': '1'}, 'cannot connect'),
                                ({'STUB_APPLY_FAIL': '1'}, 'rolled back'),
                                ({'STUB_RESTORE_FAIL': '1'}, 'unreadable'),
-                               ({'RESTORE_FILE': 'ai-sdlc-20260102T000000Z.dump'}, 'not on the backup volume'),
-                               ({'RESTORE_FILE': '../etc/passwd'}, 'must name a backup file')):
+                               ({'RESTORE_FILE': 'ai-sdlc-20260102T000000Z.dump'}, 'incomplete'),
+                               ({'RESTORE_FILE': 'ai-sdlc-20260103T000000Z.dump'}, 'does not match its checksum'),
+                               ({'RESTORE_FILE': 'ai-sdlc-20260104T000000Z.dump'}, 'not on the backup volume'),
+                               ({'RESTORE_FILE': '../etc/passwd'}, 'must name a backup file'),
+                               ({'RESTORE_FILE': 'x/' + name}, 'must name a backup file'),
+                               ({'RESTORE_FILE': name + '\nfoo'}, 'must name a backup file'),
+                               ({'RESTORE_FILE': 'foo\n' + name}, 'must name a backup file')):
             with self.subTest(extra=extra):
                 Path(str(self.log) + '.restore').unlink(missing_ok=True)
                 result = self.run_backup(**dict({'RESTORE_FILE': name}, **extra))
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(message, result.stderr)
+                self.assertFalse((self.dir / LOCK).exists())
                 if 'STUB_APPLY_FAIL' not in extra:
-                    self.assertFalse(Path(str(self.log) + '.restore').exists())
+                    self.assertIsNone(self.stub_log('.restore'))
 
     def test_runbook_covers_the_required_procedures(self):
         text = RUNBOOK.read_text()
-        for phrase in ('backup.enabled', 'pg_restore --list', '--replicas=0', 'row-level security', 'not backed up',
-                       'Test the restore'):
+        for phrase in ('backup.enabled', 'pg_restore --list', 'pg_restore --file=/dev/null', '--replicas=0',
+                       'row-level security', 'not backed up', 'Test the restore', '<fullname>-backup', '5432'):
             self.assertIn(phrase, text)
+        self.assertNotIn('two runs never overlap', text)
         self.assertNotRegex(text, r'postgresql://[^:\s]+:(?!\$\{?password|<password>)[A-Za-z0-9_-]{16,}@')
 
 
