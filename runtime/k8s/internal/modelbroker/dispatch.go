@@ -51,6 +51,13 @@ type Result struct {
 // refused only because its issue evidence is stale.
 var staleEvidenceRetry = 3 * time.Second
 
+// minimumProviderTime is the provider time a stale-evidence wait leaves before
+// reservation or dispatch: 30 seconds, the provider's default completion
+// timeout and the smallest one an installation may select. A wait that would
+// leave less refuses as before instead of spending a reserved or claimed call
+// that cannot be answered in time; a check without a wait is not affected.
+const minimumProviderTime = 30 * time.Second
+
 // authorizeWaiting is authorize, except that a refusal at snapshot-stale (the
 // issue evidence is unchanged but older than its window, for example after one
 // incomplete intake scan) is checked again until the refusal's own bound, the
@@ -167,7 +174,7 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 	}
 	stage = "authorization-reservation"
 	mailboxDeadline := time.UnixMilli(request.ExpiresAt).Add(-15 * time.Second)
-	until, err := d.authorizeWaiting(ctx, scope, mailboxDeadline)
+	until, err := d.authorizeWaiting(ctx, scope, mailboxDeadline.Add(-minimumProviderTime))
 	if err != nil {
 		stage = refusedStage(stage, err)
 		return result, ErrRejected
@@ -206,12 +213,13 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 		return result, ErrNotClaimed
 	}
 	stage = "authorization-dispatch"
-	// A stale-evidence wait ends before the call's own deadline below.
+	// A stale-evidence wait leaves the provider at least minimumProviderTime
+	// before the call's own deadline below.
 	callDeadline := claim.Call.ExpiresAt.Add(-15 * time.Second)
 	if mailboxDeadline.Before(callDeadline) {
 		callDeadline = mailboxDeadline
 	}
-	until, err = d.authorizeWaiting(ctx, scope, callDeadline)
+	until, err = d.authorizeWaiting(ctx, scope, callDeadline.Add(-minimumProviderTime))
 	if err != nil {
 		stage = refusedStage(stage, err)
 		d.abandon(ctx, ref)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 
@@ -166,15 +167,21 @@ func (l *Lifecycle) proofPhase(ctx context.Context) (executor.Workload, string, 
 		return lifecycleInputs(l.load, l.placement)(ctx)
 	}
 	c, _, in, err := preparationProofStatus(ctx, l.db, load, l.prepared.claim, status)
-	if err != nil {
+	// Stale evidence still runs the prepared and binding checks, so a changed
+	// placement refuses at once by its own step instead of waiting as stale.
+	var stale staleEvidence
+	if err != nil && !errors.As(err, &stale) {
 		return executor.Workload{}, "", err
 	}
 	if !samePrepared(l.prepared, c, in) {
 		return executor.Workload{}, "", authorityStop("prepared")
 	}
-	binding, w, err := lifecycleBinding(l.prepared, l.placement)
-	if err != nil || binding != l.durable.Binding {
+	binding, w, bindErr := lifecycleBinding(l.prepared, l.placement)
+	if bindErr != nil || binding != l.durable.Binding {
 		return executor.Workload{}, "", authorityStop("binding")
+	}
+	if err != nil {
+		return executor.Workload{}, "", err
 	}
 	return w, phase, nil
 }
