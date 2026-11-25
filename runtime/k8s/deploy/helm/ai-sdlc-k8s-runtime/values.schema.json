@@ -842,6 +842,9 @@
         "configJSON": {
           "type": "string",
           "maxLength": 131072
+        },
+        "narrowModelTools": {
+          "type": "boolean"
         }
       }
     },

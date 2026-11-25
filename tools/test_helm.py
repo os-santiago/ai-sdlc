@@ -310,6 +310,39 @@ class ChartTests(unittest.TestCase):
             with self.subTest(values=values):
                 self.assertNotEqual(self.sandbox_docs(values)[0].returncode, 0)
 
+    def test_review_gateway_tool_allowlist_renders_only_when_set_and_review_is_enabled(self):
+        upstream = {'adapter': 'openai', 'upstream': {'url': 'http://192.0.2.10:8080', 'model': 'qwen3-coder', 'cidr': '192.0.2.10/32'}}
+        review = {'enabled': True, 'configJSON': '{}'}
+        def env(docs, deployment, container):
+            pod = next(d for d in docs if d['kind'] == 'Deployment' and d['metadata']['name'] == deployment)['spec']['template']['spec']
+            return {e['name']: e.get('value') for e in next(c for c in pod['containers'] if c['name'] == container).get('env', [])}
+        for gateway in ({}, {'modelGateway': upstream}):
+            with self.subTest(adapter=gateway.get('modelGateway', {}).get('adapter', 'agent-cli')):
+                before, _ = self.sandbox_docs(dict(gateway, review=review))
+                self.assertEqual(before.returncode, 0, before.stderr)
+                self.assertNotIn('AI_SDLC_MODEL_GATEWAY_TOOLS', before.stdout)
+                off, _ = self.sandbox_docs(dict(gateway, review=dict(review, narrowModelTools=False)))
+                self.assertEqual(off.stdout, before.stdout)
+                on, docs = self.sandbox_docs(dict(gateway, review=dict(review, narrowModelTools=True)))
+                self.assertEqual(on.returncode, 0, on.stderr)
+                self.assertEqual(env(docs, 'ai-sdlc-verifier', 'model-gateway')['AI_SDLC_MODEL_GATEWAY_TOOLS'],
+                                 'read_file,list_dir,search_text,code_query')
+                # Only the review gateway: the generation gateway and every other container are unchanged.
+                self.assertEqual(on.stdout.count('AI_SDLC_MODEL_GATEWAY_TOOLS'), 1)
+                self.assertNotIn('AI_SDLC_MODEL_GATEWAY_TOOLS', env(docs, 'ai-sdlc-worker', 'model-gateway'))
+                strip = lambda text: text.replace('\n            - {name: AI_SDLC_MODEL_GATEWAY_TOOLS, value: "read_file,list_dir,search_text,code_query"}', '')
+                self.assertEqual(strip(on.stdout), before.stdout)
+                # Without independent review there is no review gateway; the setting renders nothing.
+                plain, _ = self.sandbox_docs(gateway)
+                ignored, _ = self.sandbox_docs(dict(gateway, review={'enabled': False, 'configJSON': '', 'narrowModelTools': True}))
+                self.assertEqual((plain.returncode, ignored.stdout), (0, plain.stdout))
+        self.assertNotEqual(self.sandbox_docs({'review': dict(review, narrowModelTools='yes')})[0].returncode, 0)
+        for profile in ('maintenance', 'shadow', 'candidate', 'verification'):
+            rendered = self.render('-f', str(ROOT / 'runtime/k8s/deploy/local/profiles' / (profile + '.json')),
+                                   '--set', 'verifier.digest=sha256:' + 'a' * 64)
+            self.assertEqual(rendered.returncode, 0, rendered.stderr)
+            self.assertNotIn('AI_SDLC_MODEL_GATEWAY_TOOLS', rendered.stdout)
+
     def test_openshift_profile_binds_only_nonroot_scc_and_sets_platform(self):
         base = ['--set', 'runtime.mode=verification', '--set', 'verifier.digest=sha256:' + 'a' * 64]
         plain = [d for d in yaml.safe_load_all(self.render(*base).stdout) if d]

@@ -81,6 +81,52 @@ def validate_request(request, model="codex-cli"):
     return messages, tools, names, tokens
 
 
+TOOLS_ENV = "AI_SDLC_MODEL_GATEWAY_TOOLS"
+
+
+def tool_allowlist(environ=os.environ):
+    """The installation's tool allowlist for this gateway, or None (no narrowing).
+
+    Only the independent-review gateway sets it: the chart renders exactly the
+    tools the broker's review response policy accepts. A present but empty,
+    malformed or repeated list refuses to start (fail closed)."""
+    raw = environ.get(TOOLS_ENV)
+    if raw is None:
+        return None
+    names = raw.split(",")
+    if len(names) > 64 or any(not NAME.fullmatch(name) for name in names) or len(set(names)) != len(names):
+        raise RuntimeError("model gateway tool allowlist invalid")
+    return frozenset(names)
+
+
+def narrow_tools(request, allowed):
+    """Removes every tool definition outside ``allowed`` before the model sees it.
+
+    Returns ``(request, withheld)``. Without an allowlist the request is returned
+    unchanged. The request is validated first with the shared contract, so a
+    malformed tools array is refused exactly as before. The remaining tools keep
+    their order; no tool is ever added. A ``tool_choice`` naming a removed tool,
+    or ``required`` with no tool left, is refused rather than rewritten. The
+    caller's request is never mutated."""
+    if allowed is None:
+        return request, 0
+    validate_request(request)
+    if "tools" not in request:
+        return request, 0
+    kept = [tool for tool in request["tools"] if tool["function"]["name"] in allowed]
+    choice = request.get("tool_choice")
+    if isinstance(choice, dict):
+        function = choice.get("function")
+        name = function.get("name") if isinstance(function, dict) else None
+        if name not in {tool["function"]["name"] for tool in kept}:
+            raise ValueError("invalid tool choice: tool withheld by the gateway")
+    if choice == "required" and not kept:
+        raise ValueError("invalid tool choice: no tool remains after narrowing")
+    narrowed = dict(request)
+    narrowed["tools"] = kept
+    return narrowed, len(request["tools"]) - len(kept)
+
+
 def assistant_message(content, proposed, names):
     """Shared, bounded OpenAI assistant message; proposals are never executed here."""
     if (not isinstance(content, str) or len(content.encode()) > 64 * 1024

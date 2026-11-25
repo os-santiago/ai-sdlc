@@ -13,6 +13,11 @@ timeout, is served at ``/v1/gateway/profile`` to the authenticated caller, which
 uses it to admit the model. Each upstream call may run up to the configured
 ceiling, bounded by the caller's remaining wait. No generated source,
 database URI, Kubernetes token or forge credential is read here.
+
+An installation may narrow the tools the model is offered
+(``AI_SDLC_MODEL_GATEWAY_TOOLS``, set by the chart only on the independent
+review gateway): definitions outside the allowlist are removed before the
+adapter runs, and a proposal for a removed tool is refused as unknown.
 """
 import hmac
 import json
@@ -24,7 +29,7 @@ import time
 from http.server import HTTPServer
 from socketserver import ThreadingMixIn
 
-from codexcli_openai_wrapper import Handler
+from codexcli_openai_wrapper import Handler, narrow_tools, tool_allowlist
 from model_adapters import adapter_from_environ
 from model_benchmark import BenchmarkFailed, benchmark
 
@@ -49,11 +54,13 @@ CALL_SECONDS_HEADER = "X-AI-SDLC-Call-Seconds"
 
 
 def log_call(outcome, started, seconds, reason=None, prompt=None, completion=None, estimated=None, recounted=0,
-             degenerate_retries=0):
+             degenerate_retries=0, withheld=0):
     """One bounded event per completion: outcome, duration, the call budget,
-    token counts, how many edit_file patches had their hunk counts repaired
-    and, when the degenerate-output guard fired, how many retries it spent
-    (``degenerateRetries``, 0 or 1). Never request or response content.
+    token counts, how many edit_file patches had their hunk counts repaired,
+    when the degenerate-output guard fired, how many retries it spent
+    (``degenerateRetries``, 0 or 1) and, when the installation narrows the
+    tools, how many tool definitions the model did not see (``toolsWithheld``).
+    Never request or response content, nor tool names.
     Logging never changes the response: a failed write is ignored."""
     event = {"event": "model-call", "outcome": outcome, "seconds": round(time.monotonic() - started, 1), "budgetSeconds": seconds}
     if reason is not None:
@@ -65,6 +72,8 @@ def log_call(outcome, started, seconds, reason=None, prompt=None, completion=Non
         event["editPatchesRecounted"] = recounted
     if type(degenerate_retries) is int and 0 <= degenerate_retries <= 1 and (degenerate_retries or reason == "degenerate"):
         event["degenerateRetries"] = degenerate_retries
+    if type(withheld) is int and 0 < withheld <= 64:
+        event["toolsWithheld"] = withheld
     try:
         print(json.dumps(event), flush=True)
     except (OSError, ValueError):
@@ -107,15 +116,20 @@ class GatewayHandler(Handler):
             raise RuntimeError("model gateway not benchmarked")
         seconds = self.call_seconds(profile)
         started = time.monotonic()
+        withheld = 0
         try:
+            # The installation's tool allowlist (review gateway only) narrows
+            # what the model is offered; the broker's own records and policy
+            # are unchanged. Proposals for a withheld tool are then unknown.
+            request, withheld = narrow_tools(request, self.server.tools)
             completion = self.server.adapter.complete(request, seconds)
         except Exception as error:
             log_call("failed", started, seconds, reason=failure_class(error),
-                     degenerate_retries=getattr(error, "degenerate_retries", 0))
+                     degenerate_retries=getattr(error, "degenerate_retries", 0), withheld=withheld)
             raise
         log_call("ok", started, seconds, prompt=completion.prompt_tokens, completion=completion.completion_tokens, estimated=completion.estimated,
                  recounted=getattr(completion, "edit_patches_recounted", 0),
-                 degenerate_retries=getattr(completion, "degenerate_retries", 0))
+                 degenerate_retries=getattr(completion, "degenerate_retries", 0), withheld=withheld)
         return completion.message
 
     def call_seconds(self, profile):
@@ -165,8 +179,9 @@ class GatewayHandler(Handler):
 class GatewayServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, handler, adapter):
+    def __init__(self, address, handler, adapter, tools=None):
         self.adapter = adapter
+        self.tools = tools
         self.profile = None
         self.model_slot = threading.BoundedSemaphore(1)
         super().__init__(address, handler)
@@ -240,9 +255,12 @@ def main():
     if len(os.environ.get("CODEX_WRAPPER_TOKEN", "")) < 32:
         raise RuntimeError("model client identity unavailable")
     adapter = adapter_from_environ()
+    tools = tool_allowlist()
     prompt_tokens, completion_tokens = envelope()
     stagger = stagger_seconds()
-    server = GatewayServer(("127.0.0.1", 8787), GatewayHandler, adapter)
+    if tools is not None:
+        print(json.dumps({"event": "model-gateway-tools", "allowed": sorted(tools)}), flush=True)
+    server = GatewayServer(("127.0.0.1", 8787), GatewayHandler, adapter, tools)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     if run_benchmark(server, prompt_tokens, completion_tokens, stagger=stagger) is None:
         # Never ready with an unmeasured model; the restart is the signal.

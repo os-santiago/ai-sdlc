@@ -95,6 +95,14 @@ class CandidateInstallTests(unittest.TestCase):
         for forbidden in ('token', 'password', 'credential', 'command', 'shell'):
             self.assertNotIn('"' + forbidden + '"', values['candidate']['configJSON'])
 
+    def test_independent_review_installs_narrow_the_reviewer_model_tools(self):
+        lock_path = install.LOCAL / 'images.lock.json'
+        lock = install.image_lock(lock_path)
+        values = candidate_install.desired_values(install.ROOT, lock_path, lock, verification=True, review=True)
+        self.assertEqual(set(values['review']), {'enabled', 'configJSON', 'narrowModelTools'})
+        self.assertIs(values['review']['narrowModelTools'], True)
+        self.assertNotIn('review', candidate_install.desired_values(install.ROOT, lock_path, lock, verification=True))
+
     def test_sandbox_runtime_class_is_written_only_when_not_default(self):
         lock_path = install.LOCAL / 'images.lock.json'
         lock = install.image_lock(lock_path)

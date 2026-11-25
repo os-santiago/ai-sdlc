@@ -140,6 +140,11 @@ openshift:
 review:
   enabled: false
   configJSON: ""
+  # Offer the reviewer model only the read-only tools the review response
+  # policy accepts (the verifier's model gateway removes every other tool
+  # definition). The installer sets it for new installations; absent or false
+  # keeps the earlier rendering, so recorded installations render unchanged.
+  narrowModelTools: false
 
 publication:
   enabled: false

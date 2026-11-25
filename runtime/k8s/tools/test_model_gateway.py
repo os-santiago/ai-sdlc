@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
+import codexcli_openai_wrapper as wrapper
 import model_adapters as adapters
 import model_benchmark
 import model_gateway
@@ -908,6 +909,150 @@ class GatewayTests(unittest.TestCase):
         for bad in ({"AI_SDLC_MODEL_BENCHMARK_PROMPT_TOKENS": "1"}, {"AI_SDLC_MODEL_BENCHMARK_COMPLETION_TOKENS": "x"}):
             with self.subTest(bad=bad), self.assertRaises(RuntimeError):
                 model_gateway.envelope(bad)
+
+
+def tool(name):
+    return {"type": "function", "function": {"name": name, "description": name,
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}}
+
+
+SCC_TOOLS = [tool(name) for name in ("read_file", "write_file", "edit_file", "list_dir", "search_text", "run_shell",
+                                     "web_fetch", "memory_read", "memory_write", "git", "code_query", "mcp_validate",
+                                     "repo_probe")]
+REVIEW_TOOLS = frozenset({"read_file", "list_dir", "search_text", "code_query"})
+REVIEW_REQUEST = {"model": "codex-cli", "messages": [{"role": "user", "content": "Review"}], "tools": SCC_TOOLS}
+
+
+class ToolNarrowingTests(unittest.TestCase):
+    def test_allowlist_is_optional_and_strictly_parsed(self):
+        self.assertIsNone(wrapper.tool_allowlist({}))
+        self.assertEqual(wrapper.tool_allowlist({wrapper.TOOLS_ENV: "read_file,list_dir,search_text,code_query"}), REVIEW_TOOLS)
+        for bad in ("", ",", "read_file,", "read_file,read_file", "read file", "1tool", ",".join("t%d" % i for i in range(65))):
+            with self.subTest(bad=bad[:40]), self.assertRaises(RuntimeError):
+                wrapper.tool_allowlist({wrapper.TOOLS_ENV: bad})
+
+    def test_without_an_allowlist_the_request_is_untouched(self):
+        request = dict(REVIEW_REQUEST)
+        narrowed, withheld = wrapper.narrow_tools(request, None)
+        self.assertIs(narrowed, request)
+        self.assertEqual(withheld, 0)
+        # Even a malformed request passes through unchanged, to be refused later as before.
+        malformed = {"tools": "x"}
+        self.assertIs(wrapper.narrow_tools(malformed, None)[0], malformed)
+
+    def test_only_allowlisted_tools_remain_in_request_order_and_none_is_added(self):
+        reordered = dict(REVIEW_REQUEST, tools=list(reversed(SCC_TOOLS)))
+        for request in (REVIEW_REQUEST, reordered):
+            original = json.dumps(request, sort_keys=True)
+            narrowed, withheld = wrapper.narrow_tools(request, REVIEW_TOOLS)
+            names = [t["function"]["name"] for t in narrowed["tools"]]
+            self.assertEqual(names, [t["function"]["name"] for t in request["tools"] if t["function"]["name"] in REVIEW_TOOLS])
+            self.assertEqual(withheld, len(SCC_TOOLS) - 4)
+            self.assertEqual(json.dumps(request, sort_keys=True), original)
+            self.assertEqual({k: v for k, v in narrowed.items() if k != "tools"}, {k: v for k, v in request.items() if k != "tools"})
+            # Definitions that remain are passed through byte for byte.
+            self.assertTrue(all(t in request["tools"] for t in narrowed["tools"]))
+        partial = dict(REVIEW_REQUEST, tools=[tool("read_file"), tool("run_shell")])
+        self.assertEqual([t["function"]["name"] for t in wrapper.narrow_tools(partial, REVIEW_TOOLS)[0]["tools"]], ["read_file"])
+        toolless = {"model": "codex-cli", "messages": REVIEW_REQUEST["messages"]}
+        self.assertEqual(wrapper.narrow_tools(toolless, REVIEW_TOOLS), (toolless, 0))
+
+    def test_tool_choice_for_a_withheld_tool_is_refused(self):
+        for choice in ({"type": "function", "function": {"name": "run_shell"}},
+                       {"type": "function", "function": {"name": "not_offered"}},
+                       {"type": "function", "function": "run_shell"}):
+            with self.subTest(choice=choice), self.assertRaises(ValueError):
+                wrapper.narrow_tools(dict(REVIEW_REQUEST, tool_choice=choice), REVIEW_TOOLS)
+        with self.assertRaises(ValueError):
+            wrapper.narrow_tools(dict(REVIEW_REQUEST, tools=[tool("run_shell")], tool_choice="required"), REVIEW_TOOLS)
+        kept = {"type": "function", "function": {"name": "read_file"}}
+        for choice in (kept, "auto", "none", "required"):
+            narrowed, _ = wrapper.narrow_tools(dict(REVIEW_REQUEST, tool_choice=choice), REVIEW_TOOLS)
+            self.assertEqual(narrowed["tool_choice"], choice)
+
+    def test_malformed_tools_are_refused_as_before(self):
+        for bad in (dict(REVIEW_REQUEST, tools="read_file"), dict(REVIEW_REQUEST, tools=[{"type": "function"}]),
+                    dict(REVIEW_REQUEST, tools=[tool("read_file"), tool("read_file")]),
+                    dict(REVIEW_REQUEST, tools=[{"type": "other", "function": {"name": "read_file"}}]),
+                    dict(REVIEW_REQUEST, tools=[tool("run_shell")] * 65)):
+            with self.subTest(bad=str(bad["tools"])[:40]):
+                with self.assertRaises(ValueError):
+                    wrapper.narrow_tools(bad, REVIEW_TOOLS)
+                with self.assertRaises(ValueError):
+                    wrapper.validate_request(bad)
+
+
+class ReviewGatewayTests(unittest.TestCase):
+    """The gateway with the review allowlist: the adapter sees only allowed tools."""
+    call = GatewayTests.call
+
+    def setUp(self):
+        GatewayTests.setUp(self)
+        self.addCleanup(GatewayTests.tearDown, self)
+        self.server.tools = REVIEW_TOOLS
+        original = model_benchmark.time.monotonic
+        model_benchmark.time.monotonic = lambda: self.clock[0]
+        try:
+            model_gateway.run_benchmark(self.server, 16384, 4096, attempts=1)
+        finally:
+            model_benchmark.time.monotonic = original
+        self.seen = []
+        real = self.adapter.complete
+        def recording(request, seconds=None, probe=False):
+            self.seen.append(request)
+            return real(request, seconds, probe)
+        self.adapter.complete = recording
+
+    def test_upstream_sees_only_allowlisted_tools_and_the_event_counts_the_rest(self):
+        import contextlib, io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            status, answer = self.call("/v1/chat/completions", REVIEW_REQUEST)
+        self.assertEqual(status, 200)
+        self.assertEqual(answer["choices"][0]["message"]["tool_calls"][0]["function"]["name"], "read_file")
+        self.assertEqual([t["function"]["name"] for t in self.seen[0]["tools"]], ["read_file", "list_dir", "search_text", "code_query"])
+        event = [json.loads(line) for line in out.getvalue().splitlines() if '"model-call"' in line][0]
+        self.assertEqual(event["toolsWithheld"], 9)
+        self.assertNotIn("run_shell", out.getvalue())
+
+    def test_withheld_tool_choice_is_refused_before_the_model_and_logged(self):
+        import contextlib, io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            status, _ = self.call("/v1/chat/completions",
+                                  dict(REVIEW_REQUEST, tool_choice={"type": "function", "function": {"name": "run_shell"}}))
+        self.assertEqual(status, 400)
+        self.assertEqual(self.seen, [])
+        event = [json.loads(line) for line in out.getvalue().splitlines() if '"model-call"' in line][0]
+        self.assertEqual((event["outcome"], event["reason"]), ("failed", "invalid"))
+
+    def test_a_proposal_for_a_withheld_tool_is_unknown(self):
+        def shell(request, seconds=None, probe=False):
+            names = {t["function"]["name"] for t in request["tools"]}
+            message = adapters.assistant_message("", [{"name": "run_shell", "arguments": "{}"}], names)
+            return adapters.Completion(message, 1, 1, False)
+        self.adapter.complete = shell
+        self.assertEqual(self.call("/v1/chat/completions", REVIEW_REQUEST)[0], 400)
+
+    def test_requests_without_tools_are_unchanged(self):
+        request = {"model": "codex-cli", "messages": REVIEW_REQUEST["messages"]}
+        self.assertEqual(self.call("/v1/chat/completions", request)[0], 200)
+        self.assertEqual(self.seen, [request])
+
+
+class OpenAIUpstreamNarrowingTests(UpstreamCase):
+    def test_the_openai_upstream_payload_carries_only_the_narrowed_tools(self):
+        FakeUpstream.reply = (200, openai_reply(calls=READ_CALL), {})
+        adapter = adapters.OpenAIAdapter(self.base + "/v1/chat/completions", "qwen3-coder", 5)
+        narrowed, _ = wrapper.narrow_tools(dict(REVIEW_REQUEST, tool_choice="auto"), REVIEW_TOOLS)
+        adapter.complete(narrowed)
+        sent = FakeUpstream.seen[0][2]
+        self.assertEqual([t["function"]["name"] for t in sent["tools"]], ["read_file", "list_dir", "search_text", "code_query"])
+        self.assertEqual(sent["tool_choice"], "auto")
+        FakeUpstream.reply = (200, openai_reply(calls=[{"id": "y", "type": "function",
+                                                        "function": {"name": "run_shell", "arguments": "{}"}}]), {})
+        with self.assertRaises(ValueError):
+            adapter.complete(narrowed)
 
 
 @unittest.skipUnless(os.environ.get("AI_SDLC_TEST_MODEL_UPSTREAM"), "requires a real OpenAI-compatible upstream")

@@ -223,7 +223,11 @@ def desired_values(root, image_lock_path, lock, verification=False, review=False
                          'mailboxImage': config['placement']['MailboxImage']}
         if custom_runtime_class:
             review_config['runtimeClass'] = runtime_class
-        result['review'] = {'enabled': True, 'configJSON': json.dumps(review_config, sort_keys=True)}
+        # The review gateway offers the reviewer model only the read-only tools
+        # the review response policy accepts. Installations recorded before
+        # this setting omit it and keep rendering exactly as installed.
+        result['review'] = {'enabled': True, 'configJSON': json.dumps(review_config, sort_keys=True),
+                            'narrowModelTools': True}
     if repair:
         config['profile']['maxRepairs'] = 1
         result['candidate']['configJSON'] = json.dumps(config, sort_keys=True)
