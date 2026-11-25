@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -86,25 +87,35 @@ func main() {
 	// Verification and reviewer pods run only in the installed sandbox
 	// RuntimeClass. Without it the verifier is not ready; each poll repeats the
 	// check before it claims work, while cleanup and handoffs keep running.
-	sandbox := &bootstrap.SandboxGate{Known: []error{podtransport.ErrRuntimeClassOverhead, podtransport.ErrRuntimeClassScheduling}}
-	sandboxPreflight := func(ctx context.Context) error {
+	// A transient (unknown) read within the grace keeps readiness only; each
+	// claim still needs a successful read in its poll.
+	sandbox := &bootstrap.SandboxGate{Classify: podtransport.ClassifyRuntimeClass, Grace: bootstrap.SandboxGrace}
+	// The identity is the class name(s) read, so the grace never covers a
+	// changed configuration.
+	sandboxPreflight := func(ctx context.Context) (string, error) {
 		config, _, err := execution.LoadRuntime(os.Getenv("AI_SDLC_EXECUTION_CONFIG_PATH"))
 		if err != nil {
-			return err
+			return "", err
 		}
+		classes := []string{config.Placement.SandboxRuntimeClass()}
+		if reviewEnabled {
+			review, err := reviewflow.LoadPublicInstalled("/etc/ai-sdlc/review/config.json")
+			if err != nil {
+				return "", err
+			}
+			classes = append(classes, review.SandboxRuntimeClass())
+		}
+		identity := strings.Join(classes, " ")
 		client, err := kubernetes()
 		if err != nil {
-			return err
+			return identity, err
 		}
-		if _, err := client.CheckRuntimeClass(ctx, config.Placement.SandboxRuntimeClass()); err != nil || !reviewEnabled {
-			return err
+		for _, class := range classes {
+			if _, err := client.CheckRuntimeClass(ctx, class); err != nil {
+				return identity, err
+			}
 		}
-		review, err := reviewflow.LoadPublicInstalled("/etc/ai-sdlc/review/config.json")
-		if err != nil {
-			return err
-		}
-		_, err = client.CheckRuntimeClass(ctx, review.SandboxRuntimeClass())
-		return err
+		return identity, nil
 	}
 
 	ready := func(ctx context.Context) error {

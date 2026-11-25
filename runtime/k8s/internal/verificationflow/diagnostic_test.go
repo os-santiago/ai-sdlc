@@ -1,11 +1,18 @@
 package verificationflow
 
 import (
+	"context"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"regexp"
+	"strings"
 	"testing"
+
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 )
 
 func TestDiagnosticsNeverIncludeUntrustedErrors(t *testing.T) {
@@ -106,5 +113,58 @@ func TestDiagnosticStageNamesAMissingSandboxRuntimeClass(t *testing.T) {
 	}
 	if got := DiagnosticStage(ControllerError{"sandbox-other"}); got != "unknown" {
 		t.Fatal(got)
+	}
+}
+
+// failedCheck is a RuntimeClass check failure with a reason, as
+// podtransport.CheckRuntimeClass returns it.
+func failedCheck(t *testing.T, status int) error {
+	t.Helper()
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) }))
+	defer server.Close()
+	client, err := podtransport.NewClient(podtransport.Config{APIServer: server.URL, CA: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), BearerToken: strings.Repeat("x", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.CheckRuntimeClass(context.Background(), "kata")
+	return err
+}
+
+func TestDiagnosticNamesTheRuntimeClassReasonAndKeepsTheStop(t *testing.T) {
+	check := failedCheck(t, 404)
+	err := podtransport.WithRuntimeClassReason(ControllerError{"sandbox-runtime-class"}, check)
+	if got := DiagnosticStage(err); got != "sandbox-runtime-class-not-found" {
+		t.Fatal(got)
+	}
+	// Handoff after a refused claim still proceeds exactly as before.
+	if !SandboxUnavailable(err) || !SandboxUnavailable(ControllerError{"sandbox-runtime-class"}) {
+		t.Fatal("sandbox stop no longer recognized")
+	}
+	// A reason never attaches to another stage.
+	if got := DiagnosticStage(podtransport.WithRuntimeClassReason(ControllerError{"queue"}, check)); got != "queue" {
+		t.Fatal(got)
+	}
+}
+
+func TestDiagnosticNamesTheRepositoryTestsStep(t *testing.T) {
+	for _, stage := range []string{
+		"runs-deadline", "runs-renew", "runs-context", "candidate-import-renew", "candidate-import-fence", "candidate-unimported-success",
+		"tests-observe-request", "baseline-observe-container", "candidate-import-transfer-timeout", "candidate-import-before-observe-request",
+		"candidate-ready-after-state", "candidate-import-receipt",
+	} {
+		if got := DiagnosticStage(ControllerError{stage}); got != stage {
+			t.Fatal("step not named", stage, got)
+		}
+		if got := DiagnosticStage(cleanupAfter{cause: ControllerError{"cleanup"}, stage: stage}); got != "cleanup-after-"+stage {
+			t.Fatal("step lost after a failed cleanup", stage, got)
+		}
+	}
+	for _, stage := range []string{"candidate-renew", "candidate-deadline", "runs-other", "reference-import-renew", "config-observe-request", "candidate-observe-other", "candidate-sensitive", "results-renew"} {
+		if got := DiagnosticStage(ControllerError{stage}); got != "unknown" {
+			t.Fatal("unbounded step named", stage, got)
+		}
+	}
+	if testsStage("candidate", errors.New("other")) != "candidate" {
+		t.Fatal("unrefined stage changed")
 	}
 }

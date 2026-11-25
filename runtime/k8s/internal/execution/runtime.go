@@ -171,9 +171,11 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	// Cleanup and handoff above always run; only claiming new work and
 	// creating pods require the sandbox class, checked with this poll's
 	// sealed configuration and client so the verified class is the one used.
+	// An unknown class (a transient API failure) refuses the claim too; it
+	// is only named differently.
 	admission, e := client.CheckRuntimeClass(ctx, config.Placement.SandboxRuntimeClass())
 	if e != nil {
-		return "sandbox-runtime-class-unavailable", ControllerError{"sandbox-runtime-class"}
+		return sandboxState(e), podtransport.WithRuntimeClassReason(ControllerError{"sandbox-runtime-class"}, e)
 	}
 	id, e := r.Component.DB.NextExecution(ctx)
 	if e != nil || id == "" {
@@ -213,6 +215,14 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	return "candidate-captured", nil
 }
 
+// sandboxState names a poll refused before its claim by the class check.
+func sandboxState(e error) string {
+	if podtransport.RuntimeClassUnknown(e) {
+		return "sandbox-runtime-class-unknown"
+	}
+	return "sandbox-runtime-class-unavailable"
+}
+
 // Ready observes prerequisites only; it never claims work or invokes a model.
 func (r Runtime) Ready(ctx context.Context) error {
 	if _, _, e := LoadRuntime(r.ConfigPath); e != nil {
@@ -230,26 +240,29 @@ func (r Runtime) Ready(ctx context.Context) error {
 }
 
 // CheckSandbox observes, read-only, that the installed sandbox RuntimeClass
-// exists. The worker is not ready and claims no work until it does.
-func (r Runtime) CheckSandbox(ctx context.Context) error {
+// exists. The worker is not ready and claims no work until it does. It
+// returns the class name it read (the gate's identity), even when the read
+// failed; "" when the configuration could not be loaded.
+func (r Runtime) CheckSandbox(ctx context.Context) (string, error) {
 	config, _, e := LoadRuntime(r.ConfigPath)
 	if e != nil {
-		return ErrAuthority
+		return "", ErrAuthority
 	}
+	name := config.Placement.SandboxRuntimeClass()
 	token, e := ReadBounded(r.TokenPath, 8192)
 	if e != nil {
-		return ErrAuthority
+		return name, ErrAuthority
 	}
 	ca, e := ReadBounded(r.CAPath, 65536)
 	if e != nil {
-		return ErrAuthority
+		return name, ErrAuthority
 	}
 	client, e := podtransport.NewClient(podtransport.Config{APIServer: r.APIServer, CA: ca, BearerToken: string(token)})
 	if e != nil {
-		return ErrAuthority
+		return name, ErrAuthority
 	}
-	_, e = client.CheckRuntimeClass(ctx, config.Placement.SandboxRuntimeClass())
-	return e
+	_, e = client.CheckRuntimeClass(ctx, name)
+	return name, e
 }
 
 // benchmarked admits the model when the gateway's measured timeout fits.

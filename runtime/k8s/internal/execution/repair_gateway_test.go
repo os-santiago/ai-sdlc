@@ -81,7 +81,7 @@ func pollUnavailableGateway(t *testing.T, f execution.RepairFixtureForTest, sand
 	if gatewayCalls.Load() == 0 || apiCalls.Load() != 0 {
 		t.Fatal("fixture did not reach unavailable gateway without Kubernetes effects", gatewayCalls.Load(), apiCalls.Load())
 	}
-	if sandboxMissing && (classReads.Load() != 1 || execution.DiagnosticStage(e) != "sandbox-runtime-class") {
+	if sandboxMissing && (classReads.Load() != 1 || execution.DiagnosticStage(e) != "sandbox-runtime-class-not-found") {
 		t.Fatal("missing sandbox class did not stop the claim", classReads.Load(), execution.DiagnosticStage(e))
 	}
 	if !sandboxMissing && classReads.Load() != 0 {

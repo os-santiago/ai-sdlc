@@ -317,3 +317,178 @@ func TestSessionBindAcceptsExactlyTheObservedClassAdditions(t *testing.T) {
 		})
 	}
 }
+
+// fastRuntimeClassRetries shortens the bounded retry for a test.
+func fastRuntimeClassRetries(t *testing.T, budget, attempt time.Duration) {
+	t.Helper()
+	b, a, backoffs := runtimeClassBudget, runtimeClassAttempt, runtimeClassBackoffs
+	runtimeClassBudget, runtimeClassAttempt, runtimeClassBackoffs = budget, attempt, []time.Duration{time.Millisecond, 2 * time.Millisecond}
+	t.Cleanup(func() { runtimeClassBudget, runtimeClassAttempt, runtimeClassBackoffs = b, a, backoffs })
+}
+
+func TestCheckRuntimeClassNamesEveryReason(t *testing.T) {
+	fastRuntimeClassRetries(t, 5*time.Second, 2*time.Second)
+	for label, c := range map[string]struct {
+		handler func(http.ResponseWriter, *http.Request)
+		reason  string
+		unknown bool
+		calls   int32
+	}{
+		"missing":      {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(404) }, RuntimeClassNotFound, false, 1},
+		"forbidden":    {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(403) }, RuntimeClassForbidden, false, 1},
+		"unauthorized": {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(401) }, RuntimeClassForbidden, false, 1},
+		"teapot":       {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(418) }, RuntimeClassInvalid, false, 1},
+		"throttled":    {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(429) }, RuntimeClassThrottled, true, 3},
+		"server":       {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }, RuntimeClassServerError, true, 3},
+		"unavailable":  {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(503) }, RuntimeClassServerError, true, 3},
+		"gateway":      {func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(504) }, RuntimeClassServerError, true, 3},
+		"no handler": {func(w http.ResponseWriter, _ *http.Request) {
+			w.Write([]byte(`{"kind":"RuntimeClass","metadata":{"name":"kata"}}`))
+		}, RuntimeClassNoHandler, false, 1},
+		"terminating": {func(w http.ResponseWriter, _ *http.Request) {
+			w.Write([]byte(`{"kind":"RuntimeClass","metadata":{"name":"kata","deletionTimestamp":"2026-01-01T00:00:00Z"},"handler":"kata"}`))
+		}, RuntimeClassTerminating, false, 1},
+		"terminating without handler": {func(w http.ResponseWriter, _ *http.Request) {
+			w.Write([]byte(`{"kind":"RuntimeClass","metadata":{"name":"kata","deletionTimestamp":"2026-01-01T00:00:00Z"}}`))
+		}, RuntimeClassTerminating, false, 1},
+		"other name": {func(w http.ResponseWriter, _ *http.Request) {
+			w.Write([]byte(`{"kind":"RuntimeClass","metadata":{"name":"runc"},"handler":"runc"}`))
+		}, RuntimeClassInvalid, false, 1},
+		"malformed": {func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte(`{"kind":`)) }, RuntimeClassInvalid, false, 1},
+		"oversized": {func(w http.ResponseWriter, _ *http.Request) {
+			w.Write([]byte(`{"kind":"RuntimeClass","metadata":{"name":"kata","annotations":{"a":"` + strings.Repeat("x", maxRuntimeClassBytes) + `"}},"handler":"kata"}`))
+		}, RuntimeClassInvalid, false, 1},
+		"overhead": {func(w http.ResponseWriter, _ *http.Request) {
+			w.Write([]byte(`{"kind":"RuntimeClass","metadata":{"name":"kata"},"handler":"kata","overhead":{"podFixed":{"cpu":"250m"}}}`))
+		}, RuntimeClassOverhead, false, 1},
+		"connection lost": {func(w http.ResponseWriter, _ *http.Request) {
+			if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+				conn.Close()
+			}
+		}, RuntimeClassTransport, true, 3},
+	} {
+		client, calls := runtimeClassServer(t, c.handler)
+		_, err := client.CheckRuntimeClass(context.Background(), "kata")
+		if err == nil || RuntimeClassReason(err) != c.reason || RuntimeClassUnknown(err) != c.unknown || !KnownRuntimeClassReason(c.reason) {
+			t.Fatal(label, "reason", RuntimeClassReason(err), RuntimeClassUnknown(err), err)
+		}
+		// Callers decide exactly as before.
+		if c.reason == RuntimeClassOverhead {
+			if !errors.Is(err, ErrRuntimeClassOverhead) {
+				t.Fatal(label, "overhead no longer named")
+			}
+		} else if !errors.Is(err, ErrRuntimeClassUnavailable) {
+			t.Fatal(label, "no longer unavailable")
+		}
+		// Only a transient failure is retried, and boundedly.
+		if calls.Load() != c.calls {
+			t.Fatal(label, "reads", calls.Load())
+		}
+		if reason, unknown := ClassifyRuntimeClass(err); reason != c.reason || unknown != c.unknown {
+			t.Fatal(label, "classification")
+		}
+	}
+	var nilClient *Client
+	if _, err := nilClient.CheckRuntimeClass(context.Background(), "kata"); RuntimeClassReason(err) != RuntimeClassConfiguration || RuntimeClassUnknown(err) {
+		t.Fatal("nil client reason", err)
+	}
+	client, calls := runtimeClassServer(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	if _, err := client.CheckRuntimeClass(context.Background(), "Kata"); RuntimeClassReason(err) != RuntimeClassConfiguration || calls.Load() != 0 {
+		t.Fatal("invalid name reason", err)
+	}
+	if _, err := client.CheckRuntimeClass(context.Background(), "kata"); RuntimeClassReason(err) != RuntimeClassInvalid {
+		t.Fatal("empty body reason", err)
+	}
+	for _, err := range []error{nil, errors.New("sandbox runtime class unavailable"), ErrRuntimeClassUnavailable, runtimeClassError{reason: "<api detail>", cause: ErrRuntimeClassUnavailable}} {
+		if RuntimeClassReason(err) != "" || RuntimeClassUnknown(err) {
+			t.Fatal("unclassified error named", err)
+		}
+	}
+	if RuntimeClassReason(ErrRuntimeClassScheduling) != RuntimeClassScheduling {
+		t.Fatal("scheduling not named")
+	}
+	for _, reason := range []string{"", "Timeout", "not found", "unknown", "<api detail>"} {
+		if KnownRuntimeClassReason(reason) {
+			t.Fatal("unbounded reason accepted", reason)
+		}
+	}
+}
+
+func TestCheckRuntimeClassRetriesATransientReadWithinOneCheck(t *testing.T) {
+	fastRuntimeClassRetries(t, 5*time.Second, 2*time.Second)
+	for _, status := range []int{429, 500, 503} {
+		var reads atomic.Int32
+		client, calls := runtimeClassServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			if reads.Add(1) < 3 {
+				w.WriteHeader(status)
+				return
+			}
+			w.Write([]byte(`{"kind":"RuntimeClass","metadata":{"name":"kata"},"handler":"kata","scheduling":{"nodeSelector":{"sandbox":"true"}}}`))
+		})
+		admission, err := client.CheckRuntimeClass(context.Background(), "kata")
+		if err != nil || admission.NodeSelector["sandbox"] != "true" || calls.Load() != 3 {
+			t.Fatal("transient read not retried", status, err, calls.Load())
+		}
+	}
+	// A definite answer after a transient one is final.
+	var reads atomic.Int32
+	client, calls := runtimeClassServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		if reads.Add(1) == 1 {
+			w.WriteHeader(503)
+			return
+		}
+		w.WriteHeader(404)
+	})
+	if _, err := client.CheckRuntimeClass(context.Background(), "kata"); RuntimeClassReason(err) != RuntimeClassNotFound || calls.Load() != 2 {
+		t.Fatal("definite answer retried or misnamed", err, calls.Load())
+	}
+}
+
+func TestCheckRuntimeClassTimeoutIsUnknownAndBounded(t *testing.T) {
+	fastRuntimeClassRetries(t, 400*time.Millisecond, 50*time.Millisecond)
+	release := make(chan struct{})
+	defer close(release)
+	client, calls := runtimeClassServer(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	})
+	started := time.Now()
+	_, err := client.CheckRuntimeClass(context.Background(), "kata")
+	if RuntimeClassReason(err) != RuntimeClassTimeout || !RuntimeClassUnknown(err) || !errors.Is(err, ErrRuntimeClassUnavailable) {
+		t.Fatal("slow read not unknown", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second || calls.Load() != 3 {
+		t.Fatal("retry not bounded", elapsed, calls.Load())
+	}
+	// The caller's deadline bounds the whole check, as a readiness probe's does.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started = time.Now()
+	if _, err := client.CheckRuntimeClass(ctx, "kata"); RuntimeClassReason(err) != RuntimeClassTimeout || time.Since(started) > 300*time.Millisecond {
+		t.Fatal("caller deadline not honoured", err, time.Since(started))
+	}
+	canceled, stop := context.WithCancel(context.Background())
+	stop()
+	before := calls.Load()
+	if _, err := client.CheckRuntimeClass(canceled, "kata"); RuntimeClassReason(err) != RuntimeClassTimeout || calls.Load() != before {
+		t.Fatal("canceled check read the class", err)
+	}
+}
+
+func TestRuntimeClassStopKeepsTheControllerStop(t *testing.T) {
+	base := errors.New("verification stopped at sandbox-runtime-class")
+	client, _ := runtimeClassServer(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(404) })
+	_, check := client.CheckRuntimeClass(context.Background(), "kata")
+	wrapped := WithRuntimeClassReason(base, check)
+	if !errors.Is(wrapped, base) || wrapped.Error() != base.Error() || RuntimeClassStopReason(wrapped) != RuntimeClassNotFound {
+		t.Fatal("stop changed", wrapped)
+	}
+	if WithRuntimeClassReason(base, errors.New("other")) != base || RuntimeClassStopReason(base) != "" {
+		t.Fatal("unclassified check attached a reason")
+	}
+	if RuntimeClassStopReason(runtimeClassStop{stop: base, reason: "<api detail>"}) != "" {
+		t.Fatal("unbounded stop reason returned")
+	}
+}

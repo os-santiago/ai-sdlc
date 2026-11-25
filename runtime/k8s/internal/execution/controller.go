@@ -82,6 +82,11 @@ func DiagnosticStage(err error) string {
 	if !errors.As(err, &stopped) {
 		return "authority-or-storage"
 	}
+	if stopped.Stage == "sandbox-runtime-class" {
+		if reason := podtransport.RuntimeClassStopReason(err); reason != "" {
+			return stopped.Stage + "-" + reason
+		}
+	}
 	switch stopped.Stage {
 	case "source-preflight-authority", "sandbox-runtime-class", "source-rate-limited", "source-unavailable", "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "execution-authority", "execution-observe", "execution-read", "execution-sequence", "execution-exit-race", "worker-exit", "export", "capture", "cleanup", "cleanup-pod", "cleanup-config", "cleanup-confirm":
 		return stopped.Stage

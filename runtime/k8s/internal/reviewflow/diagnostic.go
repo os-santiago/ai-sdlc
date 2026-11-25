@@ -14,6 +14,9 @@ import (
 func DiagnosticStage(err error) string {
 	var stopped ControllerError
 	if errors.As(err, &stopped) {
+		if reason := podtransport.RuntimeClassStopReason(err); stopped.Stage == "sandbox-runtime-class" && reason != "" {
+			return stopped.Stage + "-" + reason
+		}
 		if strings.HasPrefix(stopped.Stage, "model-") {
 			detail := strings.TrimPrefix(stopped.Stage, "model-")
 			if step, ok := strings.CutPrefix(detail, "mailbox-read-"); ok && podtransport.KnownReadStep(step) {

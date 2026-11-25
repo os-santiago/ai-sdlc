@@ -31,6 +31,10 @@ inside this library.
 `WaitRunning` polls only the compiled Pod name and expected UID for at most
 30 seconds. Pending scheduling and initial `ContainerCreating`/`PodInitializing` states are
 allowed within that bound, including when the Pod phase is already Running.
+A container the runtime has created but not yet started, which the kubelet
+reports as waiting with its container ID and no reason, is allowed only in
+sequence (init containers in order, then the worker and mailbox) and only
+until it is observed started; its container ID is then fixed.
 Both original containers must actually be Running before binding; restarts,
 terminated containers and other waiting reasons are rejected. Replacement,
 mutated templates, deletion or terminal Pod phases fail. Once Running is

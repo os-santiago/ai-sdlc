@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 )
 
@@ -26,6 +27,9 @@ func DiagnosticStage(err error) string {
 	}
 	var controlled ControllerError
 	if errors.As(err, &controlled) && knownStage(controlled.Stage) {
+		if reason := podtransport.RuntimeClassStopReason(err); controlled.Stage == "sandbox-runtime-class" && reason != "" {
+			return controlled.Stage + "-" + reason
+		}
 		return controlled.Stage
 	}
 	// A refusal is a correct verdict on the candidate, not a controller
@@ -64,8 +68,19 @@ func createStage(stage string, err error) string {
 	return stage
 }
 
+// testsStage refines a repository-tests run stage with the bounded
+// observation or import step that failed, for example
+// candidate-import-transfer-timeout.
+func testsStage(stage string, err error) string {
+	if step := podtransport.TestsStep(err); step != "" {
+		return stage + "-" + step
+	}
+	return stage
+}
+
 func knownStage(stage string) bool {
-	if stage == "source-rate-limited" || stage == "sandbox-runtime-class" {
+	switch stage {
+	case "source-rate-limited", "sandbox-runtime-class", "runs-deadline", "runs-renew", "runs-context":
 		return true
 	}
 	if base, step, ok := strings.Cut(stage, "-"); ok {
@@ -75,6 +90,15 @@ func knownStage(stage string) bool {
 			case "fence", "ledger", "create", "acknowledge":
 				return true
 			}
+		}
+		switch base {
+		case "baseline", "candidate", "tests":
+			// Repository-tests run steps.
+			switch step {
+			case "import-renew", "import-fence", "unimported-success":
+				return true
+			}
+			return podtransport.KnownTestsStep(step)
 		}
 		return false
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -89,6 +90,21 @@ func (c *testsCluster) current(t *TestsRun) core.Pod {
 		pod.Status.Phase = core.PodPending
 		pod.Status.InitContainerStatuses = []core.ContainerStatus{install, c.status("transfer", init[1].Image, "b", running)}
 		pod.Status.ContainerStatuses = []core.ContainerStatus{c.status("tests", tests.Image, "", creating)}
+	case "transfer-created", "tests-created", "tests-created-error":
+		// The kubelet's created-but-not-started status: waiting with the
+		// container ID and no reason (the image ID may still be empty).
+		created := core.ContainerState{Waiting: &core.ContainerStateWaiting{}}
+		pod.Status.Phase = core.PodPending
+		pod.Status.InitContainerStatuses = []core.ContainerStatus{install, c.status("transfer", init[1].Image, "b", running)}
+		pod.Status.ContainerStatuses = []core.ContainerStatus{c.status("tests", tests.Image, "c", created)}
+		if c.state == "transfer-created" {
+			pod.Status.InitContainerStatuses[1] = c.status("transfer", init[1].Image, "b", created)
+			pod.Status.InitContainerStatuses[1].ImageID = ""
+			pod.Status.ContainerStatuses = []core.ContainerStatus{c.status("tests", tests.Image, "", creating)}
+		}
+		if c.state == "tests-created-error" {
+			pod.Status.ContainerStatuses[0].State.Waiting.Reason = "CreateContainerError"
+		}
 	case "running":
 		pod.Status.Phase = core.PodRunning
 		pod.Status.InitContainerStatuses = []core.ContainerStatus{install, c.status("transfer", init[1].Image, "b", running)}
@@ -311,5 +327,134 @@ func TestPlanTestsRunRefusesAnotherTreeOrNamespace(t *testing.T) {
 	}
 	if _, err := PlanTestsRun(client, p, RuntimeClassAdmission{}, source, time.Now().Add(-time.Second)); err == nil {
 		t.Fatal("an expired run accepted")
+	}
+}
+
+func TestTestsRunNamesTheStepThatStopped(t *testing.T) {
+	p, source := testsFixturePod()
+	honest := honestReply(p, source)
+	step := func(t *testing.T, err error, want string) {
+		t.Helper()
+		if err == nil || !errors.Is(err, ErrTransport) || TestsStep(err) != want || !KnownTestsStep(want) {
+			t.Fatal("step", TestsStep(err), "want", want, err)
+		}
+	}
+	t.Run("observe-uid", func(t *testing.T) {
+		run := testsServer(t, &testsCluster{state: "running", reply: honest})
+		_, err := run.Status(context.Background(), "not-a-uid")
+		step(t, err, "observe-uid")
+	})
+	t.Run("observe-phase", func(t *testing.T) {
+		run := testsServer(t, &testsCluster{state: "failed", reply: honest})
+		_, err := run.Status(context.Background(), testsPodUID)
+		step(t, err, "observe-phase")
+	})
+	t.Run("import-before-state", func(t *testing.T) {
+		run := testsServer(t, &testsCluster{state: "pending", reply: honest})
+		step(t, run.Import(context.Background(), testsPodUID), "import-before-state")
+		// Import runs at most once.
+		step(t, run.Import(context.Background(), testsPodUID), "import-repeat")
+	})
+	t.Run("import-before-observe-phase", func(t *testing.T) {
+		run := testsServer(t, &testsCluster{state: "failed", reply: honest})
+		step(t, run.Import(context.Background(), testsPodUID), "import-before-observe-phase")
+	})
+	t.Run("import-receipt", func(t *testing.T) {
+		run := testsServer(t, &testsCluster{state: "running", reply: func(command []string) (string, bool) {
+			if command[1] == "import" {
+				return `{"imported":false}`, true
+			}
+			return "", true
+		}})
+		step(t, run.Import(context.Background(), testsPodUID), "import-receipt")
+	})
+	t.Run("import-after-state", func(t *testing.T) {
+		c := &testsCluster{state: "running", reply: honest}
+		c.onExec = func(command []string) {
+			c.mu.Lock()
+			c.state = "pending"
+			c.mu.Unlock()
+		}
+		run := testsServer(t, c)
+		step(t, run.Import(context.Background(), testsPodUID), "import-after-state")
+	})
+	// Output from ready exceeds its zero output bound: the exchange fails.
+	t.Run("ready-transfer-request", func(t *testing.T) {
+		run := testsServer(t, &testsCluster{state: "running", reply: func(command []string) (string, bool) {
+			if command[1] == "ready" {
+				return "unexpected", true
+			}
+			return honest(command)
+		}})
+		step(t, run.Import(context.Background(), testsPodUID), "ready-transfer-request")
+	})
+	t.Run("ready-after-observe-phase", func(t *testing.T) {
+		c := &testsCluster{state: "running", reply: honest}
+		c.onExec = func(command []string) {
+			if command[1] == "ready" {
+				c.mu.Lock()
+				c.state = "failed"
+				c.mu.Unlock()
+			}
+		}
+		run := testsServer(t, c)
+		step(t, run.Import(context.Background(), testsPodUID), "ready-after-observe-phase")
+	})
+}
+
+func TestTestsStepsAreBounded(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for want, err := range map[string]error{
+		"import-transfer-permission":     testsFailure(exchangeStep("import-transfer", context.Background(), ErrPermission), ErrPermission),
+		"import-transfer-timeout":        testsFailure(exchangeStep("import-transfer", canceled, ErrTransport), ErrTransport),
+		"ready-transfer-request":         testsFailure(exchangeStep("ready-transfer", context.Background(), ErrTransport), ErrTransport),
+		"import-before-observe-request":  importFailure("import-before", testsFailure(requestStep("observe", ErrTransport), ErrTransport)),
+		"ready-after-observe-permission": importFailure("ready-after", testsFailure(requestStep("observe", ErrPermission), ErrPermission)),
+	} {
+		if TestsStep(err) != want {
+			t.Fatal("step", TestsStep(err), want)
+		}
+	}
+	// Import still stops with ErrTransport, as it always has.
+	if err := importFailure("ready-after", testsFailure("observe-permission", ErrPermission)); !errors.Is(err, ErrTransport) || errors.Is(err, ErrPermission) {
+		t.Fatal("import stop changed", err)
+	}
+	if err := testsFailure("observe-permission", ErrPermission); !errors.Is(err, ErrPermission) {
+		t.Fatal("observation cause lost", err)
+	}
+	for _, step := range []string{"", "observe", "observe-other", "import-before-observe-uid-x", "ready-transfer-exit", "candidate-observe-request", "import-transfer"} {
+		if KnownTestsStep(step) || TestsStep(testsFailure(step, ErrTransport)) != "" {
+			t.Fatal("unbounded step accepted", step)
+		}
+	}
+}
+
+func TestTestsRunAcceptsTheKubeletCreatedState(t *testing.T) {
+	p, source := testsFixturePod()
+	c := &testsCluster{state: "transfer-created", reply: honestReply(p, source), log: strings.Repeat(`{"exitCode":0}`+"\n", 2)}
+	run := testsServer(t, c)
+	for _, state := range []string{"transfer-created", "tests-created"} {
+		c.mu.Lock()
+		c.state = state
+		c.mu.Unlock()
+		if status, err := run.Status(context.Background(), testsPodUID); err != nil || status.Ready || status.Succeeded {
+			t.Fatal("created container refused or taken as ready", state, err)
+		}
+	}
+	go func() {
+		time.Sleep(400 * time.Millisecond)
+		c.mu.Lock()
+		c.state = "running"
+		c.mu.Unlock()
+	}()
+	if err := run.Prepare(context.Background(), testsPodUID); err != nil {
+		t.Fatal("a created tests container failed Prepare", err)
+	}
+	// A waiting container with an ID and a reason is a failed start.
+	c2 := &testsCluster{state: "tests-created-error", reply: honestReply(p, source)}
+	run2 := testsServer(t, c2)
+	if _, err := run2.Status(context.Background(), testsPodUID); !errors.Is(err, ErrTransport) || TestsStep(err) != "observe-container" {
+		t.Fatal("failed start accepted", err)
 	}
 }

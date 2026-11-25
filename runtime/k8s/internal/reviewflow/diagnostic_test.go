@@ -1,9 +1,16 @@
 package reviewflow
 
 import (
+	"context"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 )
 
 func TestReviewDiagnosticStageIsBounded(t *testing.T) {
@@ -41,5 +48,25 @@ func TestReviewDiagnosticStageIsBounded(t *testing.T) {
 func TestSourceRateLimitStillStopsAsARejectedPreparation(t *testing.T) {
 	if !errors.Is(errSourceRateLimited, ErrReview) {
 		t.Fatal("a rate-limited preparation must stop like any other")
+	}
+}
+
+func TestReviewDiagnosticNamesTheRuntimeClassReason(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"kind":"RuntimeClass","metadata":{"name":"kata"}}`))
+	}))
+	defer server.Close()
+	client, err := podtransport.NewClient(podtransport.Config{APIServer: server.URL, CA: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), BearerToken: strings.Repeat("x", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, check := client.CheckRuntimeClass(context.Background(), "kata")
+	stopped := podtransport.WithRuntimeClassReason(ControllerError{Stage: "sandbox-runtime-class"}, check)
+	if got := DiagnosticStage(stopped); got != "sandbox-runtime-class-no-handler" {
+		t.Fatal(got)
+	}
+	// Verification still proceeds after a review refused before its claim.
+	if !VerificationMayProceed("sandbox-runtime-class-unavailable", stopped) {
+		t.Fatal("sandbox stop no longer recognized")
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
@@ -176,14 +177,14 @@ func TestCheckSandboxReadsOnlyTheInstalledRuntimeClass(t *testing.T) {
 	raw, _ := json.Marshal(c)
 	r := Runtime{ConfigPath: write("runtime.json", raw), TokenPath: write("token", []byte(strings.Repeat("x", 32))),
 		CAPath: write("ca", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})), APIServer: server.URL}
-	if e := r.CheckSandbox(context.Background()); e != nil {
-		t.Fatal(e)
+	if name, e := r.CheckSandbox(context.Background()); e != nil || name != "kata" {
+		t.Fatal(name, e)
 	}
 	// The default configuration names ai-sdlc-offline, which is absent here.
 	raw, _ = json.Marshal(runtimeFixture())
 	write("runtime.json", raw)
-	if e := r.CheckSandbox(context.Background()); e == nil {
-		t.Fatal("missing sandbox runtime class accepted")
+	if name, e := r.CheckSandbox(context.Background()); e == nil || name != "ai-sdlc-offline" || podtransport.RuntimeClassReason(e) != podtransport.RuntimeClassNotFound || podtransport.RuntimeClassUnknown(e) {
+		t.Fatal("missing sandbox runtime class accepted or misnamed", name, e)
 	}
 	if len(requested) != 2 || requested[0] != "GET /apis/node.k8s.io/v1/runtimeclasses/kata" || requested[1] != "GET /apis/node.k8s.io/v1/runtimeclasses/ai-sdlc-offline" {
 		t.Fatal("unexpected API requests", requested)

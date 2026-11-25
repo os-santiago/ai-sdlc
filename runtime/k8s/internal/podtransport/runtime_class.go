@@ -68,22 +68,163 @@ type RuntimeClassAdmission struct {
 	Tolerations  []core.Toleration
 }
 
-// CheckRuntimeClass reads one cluster-scoped RuntimeClass by name. It is a
-// single bounded GET with the client's identity: it never creates, changes or
-// lists runtime classes. The class must exist, carry a handler and not be
-// terminating. The handler belongs to the platform, so any standard sandbox
-// (gVisor, Kata, GKE Sandbox, AKS Pod Sandboxing) is accepted. It returns what
-// admission adds to the class's pods, so each pod is still compared exactly
-// with its compiled template plus those additions.
+// Bounded retry of transient RuntimeClass reads within one check. Variables
+// only so tests can shorten them.
+var (
+	runtimeClassBudget   = 5 * time.Second
+	runtimeClassAttempt  = 2 * time.Second
+	runtimeClassBackoffs = []time.Duration{200 * time.Millisecond, 400 * time.Millisecond}
+)
+
+// RuntimeClass check reasons. Each failed check names exactly one. The first
+// four are transient (the class is unknown, not absent); the rest are
+// definite observations or refusals.
+const (
+	RuntimeClassTimeout       = "timeout"       // the read or its caller's deadline expired
+	RuntimeClassTransport     = "transport"     // no response (connection refused, reset, TLS)
+	RuntimeClassThrottled     = "throttled"     // HTTP 429
+	RuntimeClassServerError   = "server-error"  // HTTP 5xx
+	RuntimeClassNotFound      = "not-found"     // HTTP 404
+	RuntimeClassForbidden     = "forbidden"     // HTTP 401 or 403
+	RuntimeClassNoHandler     = "no-handler"    // the class has no handler
+	RuntimeClassTerminating   = "terminating"   // the class is being deleted
+	RuntimeClassInvalid       = "invalid"       // another status, oversized, malformed or another identity
+	RuntimeClassOverhead      = "overhead"      // ErrRuntimeClassOverhead
+	RuntimeClassScheduling    = "scheduling"    // ErrRuntimeClassScheduling
+	RuntimeClassConfiguration = "configuration" // no client or an invalid class name
+)
+
+// runtimeClassError names why a check failed. It unwraps to the error the
+// check always returned (ErrRuntimeClassUnavailable, ErrRuntimeClassOverhead
+// or ErrRuntimeClassScheduling), so every caller decides exactly as before.
+type runtimeClassError struct {
+	reason string
+	cause  error
+}
+
+func (e runtimeClassError) Error() string { return e.cause.Error() }
+func (e runtimeClassError) Unwrap() error { return e.cause }
+
+func classFailure(reason string) error {
+	return runtimeClassError{reason: reason, cause: ErrRuntimeClassUnavailable}
+}
+
+// RuntimeClassReason returns the bounded reason a check failed, or "" for an
+// error CheckRuntimeClass did not return.
+func RuntimeClassReason(err error) string {
+	var failed runtimeClassError
+	if errors.As(err, &failed) && KnownRuntimeClassReason(failed.reason) {
+		return failed.reason
+	}
+	switch {
+	case errors.Is(err, ErrRuntimeClassOverhead):
+		return RuntimeClassOverhead
+	case errors.Is(err, ErrRuntimeClassScheduling):
+		return RuntimeClassScheduling
+	}
+	return ""
+}
+
+// RuntimeClassUnknown reports that a check failed only transiently: the API
+// server did not answer in time or answered with 429 or 5xx. The class is
+// then unknown, never available: a caller still refuses new work.
+func RuntimeClassUnknown(err error) bool {
+	switch RuntimeClassReason(err) {
+	case RuntimeClassTimeout, RuntimeClassTransport, RuntimeClassThrottled, RuntimeClassServerError:
+		return true
+	}
+	return false
+}
+
+// ClassifyRuntimeClass returns RuntimeClassReason and RuntimeClassUnknown
+// together, the shape a readiness gate consumes.
+func ClassifyRuntimeClass(err error) (reason string, unknown bool) {
+	return RuntimeClassReason(err), RuntimeClassUnknown(err)
+}
+
+// runtimeClassStop is a controller's stop before a claim because the class
+// check failed. It unwraps to the controller's own stop error, so every
+// caller decides exactly as before; the reason only refines the diagnostic.
+type runtimeClassStop struct {
+	stop   error
+	reason string
+}
+
+func (e runtimeClassStop) Error() string { return e.stop.Error() }
+func (e runtimeClassStop) Unwrap() error { return e.stop }
+
+// WithRuntimeClassReason attaches the failed check's bounded reason to stop.
+func WithRuntimeClassReason(stop, check error) error {
+	if reason := RuntimeClassReason(check); reason != "" {
+		return runtimeClassStop{stop: stop, reason: reason}
+	}
+	return stop
+}
+
+// RuntimeClassStopReason returns the reason WithRuntimeClassReason attached,
+// or "".
+func RuntimeClassStopReason(err error) string {
+	var stopped runtimeClassStop
+	if errors.As(err, &stopped) && KnownRuntimeClassReason(stopped.reason) {
+		return stopped.reason
+	}
+	return ""
+}
+
+// KnownRuntimeClassReason reports whether reason is one RuntimeClassReason
+// can return, so a diagnostic allowlist stays bounded.
+func KnownRuntimeClassReason(reason string) bool {
+	switch reason {
+	case RuntimeClassTimeout, RuntimeClassTransport, RuntimeClassThrottled, RuntimeClassServerError, RuntimeClassNotFound, RuntimeClassForbidden,
+		RuntimeClassNoHandler, RuntimeClassTerminating, RuntimeClassInvalid, RuntimeClassOverhead, RuntimeClassScheduling, RuntimeClassConfiguration:
+		return true
+	}
+	return false
+}
+
+// CheckRuntimeClass reads one cluster-scoped RuntimeClass by name with the
+// client's identity: it never creates, changes or lists runtime classes. The
+// class must exist, carry a handler and not be terminating. The handler
+// belongs to the platform, so any standard sandbox (gVisor, Kata, GKE
+// Sandbox, AKS Pod Sandboxing) is accepted. It returns what admission adds to
+// the class's pods, so each pod is still compared exactly with its compiled
+// template plus those additions.
+//
+// A transient failure (timeout, no response, 429 or 5xx) is retried with a
+// short bounded backoff inside the same check, within 5 s and the caller's
+// deadline; a definite answer (404, no handler, terminating, refused
+// overhead or scheduling) is returned at once. A check that still fails
+// names its reason (RuntimeClassReason) and never reports the class
+// available.
 func (c *Client) CheckRuntimeClass(ctx context.Context, name string) (RuntimeClassAdmission, error) {
 	if c == nil || c.http == nil || c.config == nil || !executor.ValidRuntimeClass(name) {
-		return RuntimeClassAdmission{}, ErrRuntimeClassUnavailable
+		return RuntimeClassAdmission{}, classFailure(RuntimeClassConfiguration)
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, runtimeClassBudget)
+	defer cancel()
+	for attempt := 0; ; attempt++ {
+		admission, err := c.readRuntimeClass(ctx, name)
+		if err == nil || !RuntimeClassUnknown(err) || attempt >= len(runtimeClassBackoffs) {
+			return admission, err
+		}
+		select {
+		case <-ctx.Done():
+			return RuntimeClassAdmission{}, classFailure(RuntimeClassTimeout)
+		case <-time.After(runtimeClassBackoffs[attempt]):
+		}
+	}
+}
+
+// readRuntimeClass is one bounded GET of the class.
+func (c *Client) readRuntimeClass(ctx context.Context, name string) (RuntimeClassAdmission, error) {
+	if ctx.Err() != nil {
+		return RuntimeClassAdmission{}, classFailure(RuntimeClassTimeout)
+	}
+	ctx, cancel := context.WithTimeout(ctx, runtimeClassAttempt)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/apis/node.k8s.io/v1/runtimeclasses/"+name, nil)
 	if err != nil {
-		return RuntimeClassAdmission{}, ErrRuntimeClassUnavailable
+		return RuntimeClassAdmission{}, classFailure(RuntimeClassConfiguration)
 	}
 	req.Header.Set("Accept", "application/json")
 	if c.config.BearerToken != "" {
@@ -91,18 +232,39 @@ func (c *Client) CheckRuntimeClass(ctx context.Context, name string) (RuntimeCla
 	}
 	response, err := c.http.Do(req)
 	if err != nil {
-		return RuntimeClassAdmission{}, ErrRuntimeClassUnavailable
+		if ctx.Err() != nil {
+			return RuntimeClassAdmission{}, classFailure(RuntimeClassTimeout)
+		}
+		return RuntimeClassAdmission{}, classFailure(RuntimeClassTransport)
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxRuntimeClassBytes+1))
-	if err != nil || response.StatusCode != http.StatusOK || len(raw) > maxRuntimeClassBytes {
-		return RuntimeClassAdmission{}, ErrRuntimeClassUnavailable
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return RuntimeClassAdmission{}, classFailure(RuntimeClassTimeout)
+	case err != nil:
+		return RuntimeClassAdmission{}, classFailure(RuntimeClassTransport)
+	case response.StatusCode == http.StatusNotFound:
+		return RuntimeClassAdmission{}, classFailure(RuntimeClassNotFound)
+	case response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden:
+		return RuntimeClassAdmission{}, classFailure(RuntimeClassForbidden)
+	case response.StatusCode == http.StatusTooManyRequests:
+		return RuntimeClassAdmission{}, classFailure(RuntimeClassThrottled)
+	case response.StatusCode >= 500 && response.StatusCode <= 599:
+		return RuntimeClassAdmission{}, classFailure(RuntimeClassServerError)
+	case response.StatusCode != http.StatusOK || len(raw) > maxRuntimeClassBytes:
+		return RuntimeClassAdmission{}, classFailure(RuntimeClassInvalid)
 	}
 	// Server-populated fields vary by platform, so this decode is not strict;
 	// only identity, handler, lifecycle, overhead and scheduling are used.
 	var class node.RuntimeClass
-	if json.Unmarshal(raw, &class) != nil || class.Kind != "RuntimeClass" || class.Name != name || class.Handler == "" || class.DeletionTimestamp != nil {
-		return RuntimeClassAdmission{}, ErrRuntimeClassUnavailable
+	switch {
+	case json.Unmarshal(raw, &class) != nil || class.Kind != "RuntimeClass" || class.Name != name:
+		return RuntimeClassAdmission{}, classFailure(RuntimeClassInvalid)
+	case class.DeletionTimestamp != nil:
+		return RuntimeClassAdmission{}, classFailure(RuntimeClassTerminating)
+	case class.Handler == "":
+		return RuntimeClassAdmission{}, classFailure(RuntimeClassNoHandler)
 	}
 	return admissionOf(class, declaredOverhead)
 }
