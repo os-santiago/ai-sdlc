@@ -30,7 +30,7 @@ The merge gate does not need a new evidence field.
   other refusal: the request fails with reason `comparison-failed`, under a
   live claim and current authority. No database migration is needed.
 - **The secret scan is bound into signed evidence.** The `repository-tests/v1`
-  recipe revision now hashes `secretscan.Version` (`secret-scan/v1`) along with
+  recipe revision now hashes `secretscan.Version` (`secret-scan/v2`) along with
   the decision rules. The verification command signs that revision. The
   verifier, the publication command and the published-proof check all
   compare it with their own build. The merge controller runs that
@@ -65,8 +65,11 @@ Package `runtime/k8s/internal/secretscan`. It is deterministic and offline:
 - a new file is all added lines;
 - a deleted file adds nothing;
 - moving or keeping existing text never refuses a candidate;
-- a new key under an existing PEM header line is still found, by its new
-  body line.
+- a private key block counts as new when its header or any of its body
+  lines is new. A replaced key that keeps the header and the first body line
+  is still found: unencrypted OpenSSH keys of one type share their encoding
+  prefix. Only a block left fully intact is existing text (`secret-scan/v2`;
+  v1 checked only the first body line).
 
 The input is bounded by the candidate delta limits (64 changes, 2 MiB
 encoded).
@@ -130,10 +133,24 @@ not match the test sources.
 - The commands run in the same pinned toolchain image, offline, with the
   same working directory, fixed environment, reviewed `env` and discarded
   output as the tests. No new image or network is involved.
-- They run in the baseline and candidate pods, not in the cross run. The
-  runner makes their own copy of the verified tree with the other copies,
-  before any repository code runs. It runs the analysis before any test, so
-  no test can alter what is analysed.
+- They run in the baseline and candidate pods, not in the cross run.
+- **The test evidence comes first.** The runner starts the analysis only
+  after every test run has finished. By then each test result is fixed in
+  the runner's memory: the runner is non-dumpable, so same-user code can
+  neither trace it nor read it. Nothing an analyzer does, even one that runs
+  repository code and rewrites the original tree and every copy, can change
+  the trees the tests ran on or their results. A test checks exactly this
+  with a hostile analyzer.
+- **The analysed tree is fresh.** It is written only after the tests, from
+  the verified tree the runner has held in memory since before any
+  repository code ran. It goes into a new directory with an unpredictable
+  name, so no test can have prepared or altered it.
+- **Residual risk.** Analysis is an optional, secondary gate. Within the
+  candidate pod, the candidate's tests run before the analysis, as the same
+  user, with the same scratch `HOME`. State they leave there, such as a
+  poisoned tool cache, could influence the candidate's analysis result. It
+  can never influence the test evidence. The baseline's analysis runs in a
+  separate pod on the base code, which candidate code never touches.
 - Each command's exit code goes on the first result line. A timeout is 124;
   a command that could not run, or was not found on the reviewed `PATH`, is
   125. The pod deadline and the result wait grow by commands × timeout.
@@ -256,6 +273,10 @@ Two facts limit today's exposure:
 
 ## What remains for B8
 
+- A separate analysis pod, created only after the test pods complete,
+  without their volumes or scratch, so the candidate's tests cannot affect
+  their own analysis at all. It needs a fourth run kind in the effect ledger
+  and the controller, and a quota for a fourth pod.
 - Dependency scanning, as designed above.
 - A managed SAST rule set beyond what a repository declares, for example a
   pinned Semgrep or CodeQL image with a reviewed rule pack. The analysis
