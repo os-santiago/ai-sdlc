@@ -3,7 +3,9 @@ package workspacebundle
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -152,7 +154,7 @@ func (ioRepeatReader) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 func TestExportRejectsHostileNodes(t *testing.T) {
-	for _, kind := range []string{"symlink-out", "symlink-in", "hardlink", "fifo", "large", "special-mode", "nested-git", "directory-link"} {
+	for _, kind := range []string{"symlink-out", "symlink-in", "hardlink", "fifo", "large", "special-mode", "nested-git", "directory-link", "socket"} {
 		t.Run(kind, func(t *testing.T) {
 			parent := t.TempDir()
 			b := fixture()
@@ -182,12 +184,26 @@ func TestExportRejectsHostileNodes(t *testing.T) {
 				e = os.Mkdir(filepath.Join(root, "nested", ".git"), 0700)
 			case "directory-link":
 				e = os.Symlink("nested", filepath.Join(root, "malicious"))
+			case "socket":
+				var l net.Listener
+				l, e = net.Listen("unix", filepath.Join(root, "malicious"))
+				if e == nil {
+					defer l.Close()
+				}
 			}
 			if e != nil {
 				t.Fatal(e)
 			}
-			if _, e = Export(parent, b.SourceSHA); e == nil {
+			_, e = Export(parent, b.SourceSHA)
+			if e == nil || !errors.Is(e, ErrInvalid) {
 				t.Fatalf("export accepted %s", kind)
+			}
+			// Each refusal carries its bounded reason (battery 31 lost a
+			// candidate at a bare helper exit 1).
+			want := map[string]ExportReason{"symlink-out": ExportNode, "symlink-in": ExportNode, "hardlink": ExportNode, "fifo": ExportNode,
+				"large": ExportFileSize, "special-mode": ExportNode, "nested-git": ExportPath, "directory-link": ExportNode, "socket": ExportNode}[kind]
+			if got := RefusalReason(e); got != want {
+				t.Fatalf("%s refused with reason %d, want %d", kind, got, want)
 			}
 			actual, e := os.ReadFile(outside)
 			if e != nil || string(actual) != "not in workspace" {

@@ -155,14 +155,17 @@ walk('');console.log(JSON.stringify(out));"""))
         initial_export = json.loads(helper('export'))
         if identities(initial_export) != identities(bundle):
             raise ValueError('Initial export differs: observed files=' + str(len(initial_export['files'])) + ', expected=' + str(len(bundle['files'])))
+        # Each refused export exits with its bounded reason
+        # (workspacebundle.ExportReason): 4 a link or special node, 5 one file
+        # over the size limit.
         hostile = [
-            "fs.symlinkSync('/etc/passwd',p)",
-            "fs.symlinkSync('/workspaces/repository',p)",
-            "fs.writeFileSync('/workspaces/outside','private fixture');fs.linkSync('/workspaces/outside',p)",
-            "require('child_process').execFileSync('mkfifo',[p])",
-            "fs.writeFileSync(p,'');fs.truncateSync(p,4*1024*1024+1)",
+            ("fs.symlinkSync('/etc/passwd',p)", 4),
+            ("fs.symlinkSync('/workspaces/repository',p)", 4),
+            ("fs.writeFileSync('/workspaces/outside','private fixture');fs.linkSync('/workspaces/outside',p)", 4),
+            ("require('child_process').execFileSync('mkfifo',[p])", None),
+            ("fs.writeFileSync(p,'');fs.truncateSync(p,4*1024*1024+1)", 5),
         ]
-        for index, setup in enumerate(hostile):
+        for index, (setup, refused) in enumerate(hostile):
             node("const fs=require('fs'),p='/workspaces/repository/unsafe-fixture';" + setup)
             if index == 3:
                 # gVisor denies host FIFOs and creates a synthetic FIFO in the
@@ -175,7 +178,7 @@ walk('');console.log(JSON.stringify(out));"""))
                 if identities(fifo_view) != identities(bundle):
                     raise ValueError('Executor-local FIFO changed the exported regular-file tree')
             else:
-                helper('export', expected=1)
+                helper('export', expected=refused)
             node("require('fs').unlinkSync('/workspaces/repository/unsafe-fixture')")
         # Deterministic component mutations in a new fixture-only directory.
         # No Homedir source file or live issue is modified by this test.

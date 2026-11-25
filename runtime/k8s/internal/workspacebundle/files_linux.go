@@ -1,6 +1,7 @@
 package workspacebundle
 
 import (
+	"errors"
 	"io"
 	"os"
 	"sort"
@@ -118,11 +119,18 @@ func Export(parent, sourceSHA string) (Bundle, error) {
 				if prefix != "" {
 					name = prefix + "/" + name
 				}
-				if nodes > MaxNodes || !ValidPath(name) {
-					return ErrInvalid
+				if nodes > MaxNodes {
+					return exportRefused{ExportTooMany}
+				}
+				if !ValidPath(name) {
+					return exportRefused{ExportPath}
 				}
 				child, e := unix.Openat(dir, entry, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 				if e != nil {
+					// ELOOP: a symbolic link (O_NOFOLLOW); ENXIO: a UNIX socket.
+					if errors.Is(e, unix.ELOOP) || errors.Is(e, unix.ENXIO) {
+						return exportRefused{ExportNode}
+					}
 					return ErrInvalid
 				}
 				var st unix.Stat_t
@@ -138,9 +146,17 @@ func Export(parent, sourceSHA string) (Bundle, error) {
 						return e
 					}
 				case unix.S_IFREG:
-					if len(b.Files) >= MaxFiles || st.Nlink != 1 || st.Size < 0 || st.Size > MaxFileBytes || st.Mode&07000 != 0 {
+					if len(b.Files) >= MaxFiles {
 						unix.Close(child)
-						return ErrInvalid
+						return exportRefused{ExportTooMany}
+					}
+					if st.Nlink != 1 || st.Mode&07000 != 0 {
+						unix.Close(child)
+						return exportRefused{ExportNode}
+					}
+					if st.Size < 0 || st.Size > MaxFileBytes {
+						unix.Close(child)
+						return exportRefused{ExportFileSize}
 					}
 					f := os.NewFile(uintptr(child), "workspace-file")
 					data, e := io.ReadAll(io.LimitReader(f, MaxFileBytes+1))
@@ -152,7 +168,7 @@ func Export(parent, sourceSHA string) (Bundle, error) {
 					}
 					total += len(data)
 					if total > MaxContentBytes {
-						return ErrInvalid
+						return exportRefused{ExportTotalSize}
 					}
 					mode := uint32(0644)
 					if st.Mode&0100 != 0 {
@@ -161,7 +177,7 @@ func Export(parent, sourceSHA string) (Bundle, error) {
 					b.Files = append(b.Files, File{Path: name, Mode: mode, Data: data})
 				default:
 					unix.Close(child)
-					return ErrInvalid
+					return exportRefused{ExportNode}
 				}
 			}
 			if e == io.EOF {
@@ -170,7 +186,11 @@ func Export(parent, sourceSHA string) (Bundle, error) {
 		}
 		return nil
 	}
-	if walk(root, "") != nil {
+	if e := walk(root, ""); e != nil {
+		var refused exportRefused
+		if errors.As(e, &refused) {
+			return Bundle{}, refused
+		}
 		return Bundle{}, ErrInvalid
 	}
 	sort.Slice(b.Files, func(i, j int) bool { return b.Files[i].Path < b.Files[j].Path })
@@ -179,4 +199,39 @@ func Export(parent, sourceSHA string) (Bundle, error) {
 
 func sameFileState(a, b unix.Stat_t) bool {
 	return a.Dev == b.Dev && a.Ino == b.Ino && a.Mode == b.Mode && a.Nlink == b.Nlink && a.Uid == b.Uid && a.Gid == b.Gid && a.Size == b.Size && a.Mtim == b.Mtim && a.Ctim == b.Ctim
+}
+
+// ExportReason names why Export refused a workspace. Every reason is still
+// ErrInvalid; the reason only lets the export helper exit with a bounded code
+// (evaluation battery 31 lost a finished candidate at export-helper-exit-1,
+// and nothing said which rule refused it).
+type ExportReason int
+
+const (
+	// ExportPath: a path outside the bundle's path rules (ValidPath).
+	ExportPath ExportReason = iota + 3
+	// ExportNode: a link, a hard link, a special node or a file with setuid,
+	// setgid or sticky bits.
+	ExportNode
+	// ExportFileSize: one file over MaxFileBytes, for example a compiled
+	// test binary left in the workspace.
+	ExportFileSize
+	// ExportTotalSize: the content over MaxContentBytes.
+	ExportTotalSize
+	// ExportTooMany: over MaxNodes entries or MaxFiles files.
+	ExportTooMany
+)
+
+type exportRefused struct{ reason ExportReason }
+
+func (e exportRefused) Error() string { return ErrInvalid.Error() }
+func (e exportRefused) Unwrap() error { return ErrInvalid }
+
+// RefusalReason returns why Export refused, or 0 for any other error.
+func RefusalReason(err error) ExportReason {
+	var refused exportRefused
+	if errors.As(err, &refused) {
+		return refused.reason
+	}
+	return 0
 }

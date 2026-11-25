@@ -135,6 +135,11 @@ func main() {
 		os.Exit(124)
 	}
 	if err != nil {
+		// A refused export exits with its bounded reason (3 to 7, see
+		// workspacebundle.ExportReason); any other failure stays 1.
+		if reason := workspacebundle.RefusalReason(err); reason != 0 {
+			os.Exit(int(reason))
+		}
 		os.Exit(1)
 	}
 }
