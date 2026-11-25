@@ -271,9 +271,6 @@ class RunRetryTests(unittest.TestCase):
                 run_battery.run(['kubectl', 'logs'], retry=False)
         self.assertEqual((runs.call_count, sleep.call_count), (1, 0))
 
-if __name__ == '__main__':
-    unittest.main()
-
 
 class ForgeLabelRetryTest(unittest.TestCase):
     """A transient forge failure while labeling is retried (battery 29 aborted
@@ -305,3 +302,6 @@ class ForgeLabelRetryTest(unittest.TestCase):
                 mock.patch.object(run_battery.time, 'sleep'):
             self.forge().label(195, True)
         self.assertEqual(run.call_count, 2)
+
+if __name__ == '__main__':
+    unittest.main()

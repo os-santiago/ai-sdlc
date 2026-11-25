@@ -221,8 +221,10 @@ def attempt(runtime, github, issue, timeout):
     time.sleep(40)
     before = runtime.snapshot(issue)
     since = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-    started = time.monotonic()
     github.label(issue, True)
+    # The attempt's budget and its reported seconds start once the label is
+    # on: a label edit retried through a forge outage is not runtime time.
+    started = time.monotonic()
     result = {'issue': issue, 'startedAt': since}
     # Verifications are compared per execution: a repair execution that stops
     # after an earlier verification in the same attempt is still a failure.
