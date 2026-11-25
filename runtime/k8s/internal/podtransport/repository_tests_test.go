@@ -48,6 +48,11 @@ type testsCluster struct {
 	execs  [][]string
 	reply  func(command []string) (string, bool)
 	onExec func(command []string)
+	// podFault, when set, answers the n-th pod GET (from 1): -1 drops the
+	// connection, -2 serves the pod after 3.5 s, another non-zero value is
+	// written as the status, 0 serves the pod.
+	podFault func(n int) int
+	podGets  int
 }
 
 func (c *testsCluster) status(name, image, id string, state core.ContainerState) core.ContainerStatus {
@@ -162,6 +167,24 @@ func testsServer(t *testing.T, c *testsCluster) *TestsRun {
 			out, ok := c.reply(command)
 			workspaceReply(conn, []byte(out), ok)
 		default:
+			if c.podFault != nil {
+				c.mu.Lock()
+				c.podGets++
+				n := c.podGets
+				c.mu.Unlock()
+				switch fault := c.podFault(n); {
+				case fault == -2:
+					time.Sleep(3500 * time.Millisecond) // slow but valid answer
+				case fault == -1:
+					if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+						_ = conn.Close()
+					}
+					return
+				case fault != 0:
+					w.WriteHeader(fault)
+					return
+				}
+			}
 			writeResource(w, 200, c.current(run))
 		}
 	}))
@@ -456,5 +479,59 @@ func TestTestsRunAcceptsTheKubeletCreatedState(t *testing.T) {
 	run2 := testsServer(t, c2)
 	if _, err := run2.Status(context.Background(), testsPodUID); !errors.Is(err, ErrTransport) || TestsStep(err) != "observe-container" {
 		t.Fatal("failed start accepted", err)
+	}
+}
+
+// One dropped connection or 429/5xx answer while observing the pod is
+// repeated within the observation's bound (evaluation battery 28 stopped a
+// verification at baseline-observe-request); a refusal is not, and a
+// persistent failure is still named observe-request.
+func TestTestsRunObservationRetriesTransientFailures(t *testing.T) {
+	p, source := testsFixturePod()
+	honest := honestReply(p, source)
+	for _, which := range []string{"dropped", "503", "429", "slow", "forbidden", "always-dropped"} {
+		t.Run(which, func(t *testing.T) {
+			c := &testsCluster{state: "running", reply: honest, podFault: func(n int) int {
+				switch {
+				case which == "slow" && n == 1:
+					return -2
+				case which == "always-dropped", which == "dropped" && n == 1:
+					return -1
+				case which == "503" && n == 1:
+					return 503
+				case which == "429" && n == 1:
+					return 429
+				case which == "forbidden":
+					return 403
+				}
+				return 0
+			}}
+			run := testsServer(t, c)
+			started := time.Now()
+			status, err := run.Status(context.Background(), testsPodUID)
+			if time.Since(started) > observeRetryWindow+6*time.Second {
+				t.Fatal("observation exceeded its bound")
+			}
+			switch which {
+			case "forbidden":
+				if TestsStep(err) != "observe-permission" || c.podGets != 1 {
+					t.Fatalf("refusal retried or misnamed: %q gets=%d", TestsStep(err), c.podGets)
+				}
+			case "always-dropped":
+				if TestsStep(err) != "observe-request" || c.podGets < 2 {
+					t.Fatalf("persistent failure %q gets=%d", TestsStep(err), c.podGets)
+				}
+			case "slow":
+				// A slow answer within request's own 5 s bound is not cut
+				// short by the retry window.
+				if err != nil || !status.Ready || c.podGets != 1 {
+					t.Fatalf("slow valid answer refused: %v gets=%d", err, c.podGets)
+				}
+			default:
+				if err != nil || !status.Ready {
+					t.Fatalf("transient failure not retried: %v", err)
+				}
+			}
+		})
 	}
 }

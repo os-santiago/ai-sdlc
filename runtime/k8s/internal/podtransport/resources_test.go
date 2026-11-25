@@ -547,3 +547,42 @@ func TestResourceRemovalRetriesTransientFailures(t *testing.T) {
 		})
 	}
 }
+
+// A dropped connection or a 503 while waiting for the pod is repeated within
+// the read's bound (battery 28 stopped an attempt at readiness-request); a
+// refusal is named at once.
+func TestResourceReadinessRetriesTransientReads(t *testing.T) {
+	for _, which := range []string{"dropped", "503", "forbidden"} {
+		t.Run(which, func(t *testing.T) {
+			var reads atomic.Int32
+			r, _ := resourcesFixture(t, func(_ *Resources, pod core.Pod, w http.ResponseWriter, _ *http.Request) {
+				n := reads.Add(1)
+				switch {
+				case which == "forbidden":
+					w.WriteHeader(403)
+					return
+				case which == "dropped" && n == 1:
+					if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+						_ = conn.Close()
+					}
+					return
+				case which == "503" && n == 1:
+					w.WriteHeader(503)
+					return
+				}
+				writeResource(w, 200, pod)
+			})
+			_, pod, _ := bindingFixture(t)
+			session, err := r.WaitRunning(context.Background(), string(pod.UID))
+			if which == "forbidden" {
+				if err == nil || ReadinessStep(err) != "permission" || reads.Load() != 1 {
+					t.Fatalf("refusal retried or misnamed: %q reads=%d", ReadinessStep(err), reads.Load())
+				}
+				return
+			}
+			if err != nil || session == nil || reads.Load() < 2 {
+				t.Fatalf("transient read not retried: %v reads=%d", err, reads.Load())
+			}
+		})
+	}
+}

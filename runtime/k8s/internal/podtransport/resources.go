@@ -132,7 +132,7 @@ func exactPodTemplate(actual, expected core.Pod, uid string, admission RuntimeCl
 	return equality.Semantic.DeepEqual(actual.Spec, expected.Spec)
 }
 func (r *Resources) getConfig(ctx context.Context, uid string) error {
-	raw, status, err := r.request(ctx, http.MethodGet, "configmaps", r.config.Name, nil, false)
+	raw, status, err := r.getTransient(ctx, "configmaps", r.config.Name)
 	if err != nil {
 		return err
 	}
@@ -220,7 +220,7 @@ func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, erro
 	// container IDs, once observed (created or running), are held too.
 	seen, started, mainIDs := map[string]instance{}, map[string]bool{}, map[string]string{}
 	for {
-		raw, status, err := r.request(ctx, http.MethodGet, "pods", r.pod.Name, nil, false)
+		raw, status, err := r.readPod(ctx)
 		if err != nil {
 			step := "request"
 			switch {
@@ -435,6 +435,43 @@ func (r *Resources) remove(ctx context.Context, kind, name, uid string) error {
 		case <-ctx.Done():
 			return removalError{"observe-timeout", ErrTransport}
 		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+// observeRetryWindow bounds when a read may start another attempt after a
+// dropped connection or a throttled/unavailable API server answer. Each
+// attempt keeps request's own 5-second bound, so a slow but valid answer is
+// never cut short by the retry window.
+const observeRetryWindow = 3 * time.Second
+
+// readPod is one read of the planned pod (see getTransient).
+func (r *Resources) readPod(ctx context.Context) ([]byte, int, error) {
+	return r.getTransient(ctx, "pods", r.pod.Name)
+}
+
+// getTransient is one GET of a planned object. A transport failure or a
+// 429/5xx answer starts another attempt while observeRetryWindow lasts:
+// evaluation batteries 27 and 28 stopped attempts at readiness-request and
+// baseline-observe-request after one failed GET. A permission refusal and
+// every other answer are returned at once, and nothing is retried once the
+// assignment has expired. A GET never changes the object, so repeating it is
+// safe.
+func (r *Resources) getTransient(ctx context.Context, kind, name string) ([]byte, int, error) {
+	return retryTransient(ctx, r.expires, func() ([]byte, int, error) {
+		return r.request(ctx, http.MethodGet, kind, name, nil, false)
+	})
+}
+
+// retryTransient runs read until it returns a non-transient outcome, the retry
+// window closes, the expiry passes or ctx ends.
+func retryTransient(ctx context.Context, expires time.Time, read func() ([]byte, int, error)) ([]byte, int, error) {
+	last := time.Now().Add(observeRetryWindow)
+	for {
+		raw, status, err := read()
+		transient := (err != nil && !errors.Is(err, ErrPermission)) || (err == nil && transientStatus(status))
+		if !transient || !time.Now().Before(last) || !time.Now().Before(expires) || !retryRemoval(ctx) {
+			return raw, status, err
 		}
 	}
 }

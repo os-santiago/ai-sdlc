@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"net/url"
 	"regexp"
 	"time"
@@ -115,7 +114,7 @@ type testsObservation struct {
 // with exit code 0. Anything else (a failed run included) is an error.
 func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, error) {
 	r := t.resources
-	raw, status, err := r.request(ctx, http.MethodGet, "pods", r.pod.Name, nil, false)
+	raw, status, err := r.readPod(ctx)
 	if err != nil {
 		return testsObservation{}, testsFailure(requestStep("observe", err), err)
 	}

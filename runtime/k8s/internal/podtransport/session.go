@@ -155,15 +155,17 @@ func (s *Session) observe(ctx context.Context, allowWorkerExit bool) (map[string
 	return observed.instances, err
 }
 
-func (s *Session) inspect(ctx context.Context, allowWorkerExit bool) (observation, error) {
+// readPod is one GET of the session's pod within request's 5-second bound.
+// A 403 is ErrPermission; any other failure is ErrTransport.
+func (s *Session) readPod(ctx context.Context) ([]byte, int, error) {
 	if !time.Now().Before(s.expires) {
-		return observation{}, ErrTransport
+		return nil, 0, ErrTransport
 	}
 	ctx, cancel := context.WithDeadline(ctx, minDeadline(time.Now().Add(5*time.Second), s.expires))
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.podURL(), nil)
 	if err != nil {
-		return observation{}, ErrTransport
+		return nil, 0, ErrTransport
 	}
 	req.Header.Set("Accept", "application/json")
 	if s.client.config.BearerToken != "" {
@@ -171,18 +173,32 @@ func (s *Session) inspect(ctx context.Context, allowWorkerExit bool) (observatio
 	}
 	response, err := s.client.http.Do(req)
 	if err != nil {
-		return observation{}, ErrTransport
+		return nil, 0, ErrTransport
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusForbidden {
-		return observation{}, ErrPermission
-	}
-	if response.StatusCode != 200 {
-		return observation{}, ErrTransport
+		return nil, response.StatusCode, ErrPermission
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxPodBytes+1))
+	if err != nil || ctx.Err() != nil {
+		return nil, 0, ErrTransport
+	}
+	return raw, response.StatusCode, nil
+}
+
+func (s *Session) inspect(ctx context.Context, allowWorkerExit bool) (observation, error) {
+	if !time.Now().Before(s.expires) {
+		return observation{}, ErrTransport
+	}
+	raw, status, err := retryTransient(ctx, s.expires, func() ([]byte, int, error) { return s.readPod(ctx) })
+	if err != nil {
+		return observation{}, err
+	}
+	if status != 200 {
+		return observation{}, ErrTransport
+	}
 	var pod core.Pod
-	if err != nil || len(raw) > maxPodBytes || authority.DecodeStrict(raw, &pod) != nil {
+	if len(raw) > maxPodBytes || authority.DecodeStrict(raw, &pod) != nil {
 		return observation{}, ErrTransport
 	}
 	pod = platformObserved(pod, s.expected)
