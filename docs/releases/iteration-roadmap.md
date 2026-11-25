@@ -56,7 +56,7 @@ The same loop produced every result so far:
 | Decision | Reason |
 |---|---|
 | A local model behind an OpenAI-compatible gateway | The only model path available; it also proves the system works without a vendor API |
-| ROCm/HIP with a 1,024-token micro-batch, not Vulkan, on the reference iGPU | Vulkan corrupted output intermittently; HIP with this setting stayed clean in repeated replays, and a restart clears a corrupted process (operator evaluation; evidence document pending) |
+| ROCm/HIP with a 1,024-token micro-batch, not Vulkan, on the reference iGPU | Vulkan corrupted output intermittently; HIP with this setting stayed clean in repeated replays, and a restart clears a corrupted process ([batteries 19–24](../evidence/2026-11-25-local-model-batteries-19-24.md)) |
 | The generator gets the manifest's own toolchain (B1) | Refused candidates mostly failed their own tests; running them before export is the cheapest fix |
 | Configurable generation budget and answer bound (B2) | Slow local models need more time and longer answers; defaults stay byte-identical |
 | The sandbox `RuntimeClass` is a checked value (B3) | Portable sandboxing across kind, OpenShift (Kata) and managed clouds |
@@ -68,9 +68,10 @@ The same loop produced every result so far:
 - **Stage:** late Alpha. Sandbox and signing items are in progress; the separate
   review authority (B4), signature verification at install and Kata validation
   remain. The progress table is in the [release plan](release-plan.md#progress).
-- **Functional:** on the local model, one issue went from label to a merged
-  pull request with no human step in battery 24 (operator evaluation; a single
-  observation, not a rate; an evidence document is pending). Remaining
+- **Functional:** on the local model, three of ten issues went from label to a
+  merged pull request with no human step in battery 24 (30% [10.8%, 60.3%], a
+  first measurement, not yet gate evidence;
+  [batteries 19–24](../evidence/2026-11-25-local-model-batteries-19-24.md)). Remaining
   attempts mostly fail on model capability: candidates whose tests fail, or
   steps running out. The independent reviewer's final answer sometimes misses
   the strict verdict format.
@@ -91,8 +92,7 @@ above.
    Record rates per issue and per stop class.
 3. Close the issue from the merged pull request for manifest repositories (B9,
    open pull request #715).
-4. Add the evidence document for batteries 19–24, the GPU backend decision
-   and the first signed publication, and keep it current.
+4. Keep the evaluation evidence current ([batteries 19–24](../evidence/2026-11-25-local-model-batteries-19-24.md)).
 
 ### Iteration 2: the second cell and the evaluation harness
 
