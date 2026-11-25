@@ -41,6 +41,12 @@ The pinned SCC may use one final model call after exactly eight inspection tools
 with `tools=[]` and `tool_choice=none`. This consumes the existing call, time and
 token budgets; it grants no ninth tool. Additional tools, ambiguous markers
 (including `VERDICT = ...`), missing verdicts and exhausted budgets fail closed.
+Independently of SCC, the review broker sends the profile's last permitted turn
+with `tool_choice: "none"` and a fixed request for the final verdict, refuses a
+tool call there, and names a request beyond the budget
+`model-request-turn-budget`; see
+[final turn: no tool calls](review-model-guard.md#final-turn-no-tool-calls). The
+prompt states that the last turn allows no tool calls.
 An explicit `request_changes` remains exit 10 even when its explanation says
 that the implementation is blocked or not actionable; it remains a rejection.
 

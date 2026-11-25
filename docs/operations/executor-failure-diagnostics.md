@@ -231,6 +231,26 @@ unchanged.
 step existed, stale evidence was reported as `snapshot` by the broker and as
 `execution-authority` by the generation loop.
 
+## Review request stops
+
+The independent review broker refuses a reviewer model request before any
+reservation or provider call, and names the reason:
+
+| Stop line | Meaning |
+|---|---|
+| `independent review stopped safely: model-request-binding` | The request does not bind: an unreadable or changed reviewer profile, a mailbox envelope for another attempt or with a wrong digest, a model or `max_tokens` outside the signed profile, a gap in the recorded turns, or a request after a final verdict |
+| `independent review stopped safely: model-request-turn-budget` | The request binds, but its sequence is beyond the signed profile's `maxSteps` (at most 8): the reviewer spent its turns without a final verdict |
+
+The broker sends the last permitted turn (`sequence == maxSteps`, from turn 2)
+with [`tool_choice: "none"`](review-model-guard.md#final-turn-no-tool-calls)
+and refuses a tool call there as `model-response-policy`, as it does an
+answer without a valid verdict line. A well-behaved reviewer therefore never
+reaches `model-request-turn-budget`; it appears with a worker that sends
+another request regardless, or with a controller image older than this
+change. Before this stop had its own name, it was reported as
+`model-request-binding` (battery 31, issue 227). Like every review stop, it
+fails the run without replay.
+
 ## Readiness stops
 
 An attempt that stops before the executor runs logs a `readiness` stage. A

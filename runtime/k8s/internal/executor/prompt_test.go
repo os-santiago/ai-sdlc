@@ -56,7 +56,7 @@ func TestPromptAsksForTargetedEditsWithinTheAnswerBound(t *testing.T) {
 
 func TestReviewPromptStatesTheTurnBudget(t *testing.T) {
 	p := strings.Join(strings.Fields(BuildReviewPrompt(Assignment{Repository: "owner/repo", IssueNumbers: []int{1}}, "policy", 8)), " ")
-	for _, rule := range []string{"at most 8 model turns in total, including the final answer", "Request several reads in one turn (up to 4)", "give the final answer before the budget ends"} {
+	for _, rule := range []string{"at most 8 model turns in total, including the final answer", "Request several reads in one turn (up to 4)", "give the final answer before the budget ends", "Your last turn allows no tool calls, so it must be the final answer."} {
 		if !strings.Contains(p, rule) {
 			t.Fatal("turn budget guidance missing", rule)
 		}

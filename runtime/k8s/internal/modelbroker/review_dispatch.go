@@ -1,11 +1,13 @@
 package modelbroker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"time"
 
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
@@ -86,8 +88,28 @@ func (d ReviewDispatcher) DeliverReview(ctx context.Context, c store.ReviewClaim
 	stage = "request-binding"
 	profile, err := executor.ParseReviewProfile(profileRaw, run.ProfileDigest)
 	id := modelmailbox.Identity{Attempt: fmt.Sprintf("%s-1", run.WorkItem), PodUID: request.PodUID}
-	if err != nil || request.Sequence > uint64(profile.MaxSteps) || request.Validate(id, "request") != nil || (modelmailbox.RequestLimits{Model: profile.Model, MaxTokens: profile.MaxTokens}).Validate(request.Payload) != nil {
+	limits := modelmailbox.RequestLimits{Model: profile.Model, MaxTokens: profile.MaxTokens}
+	if err != nil || request.Validate(id, "request") != nil || limits.Validate(request.Payload) != nil {
 		return result, ErrRejected
+	}
+	// A well-bound request beyond the signed profile's turn budget is named
+	// apart from binding failures: the reviewer ran out of turns. It is
+	// refused before any journal read, reservation or provider call.
+	if request.Sequence > uint64(profile.MaxSteps) {
+		stage = "request-turn-budget"
+		return result, ErrRejected
+	}
+	// sent is what the provider receives and what the journal records. On the
+	// last permitted turn the broker sets tool_choice "none", so the model must
+	// answer; the mailbox reply still binds the worker's own request digest.
+	// The journal keeps only the sent digest: the worker's digest of that turn
+	// stays in the mailbox envelope, and earlier turns record it unchanged.
+	sent := request.Payload
+	if finalReviewTurn(request.Sequence, profile.MaxSteps) {
+		sent, err = finalReviewTurnPayload(request.Payload)
+		if err != nil || len(sent) > modelmailbox.MaxRequestBytes || limits.Validate(sent) != nil {
+			return result, ErrRejected
+		}
 	}
 	// Previous final verdicts end the conversation; source cannot solicit another
 	// response after seeing an unfavorable answer. DB checks contiguous handoffs.
@@ -122,7 +144,7 @@ func (d ReviewDispatcher) DeliverReview(ctx context.Context, c store.ReviewClaim
 	ctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	stage = "reservation"
-	call, err := d.DB.BeginReviewModelCall(ctx, c, request.PodUID, int(request.Sequence), request.Payload)
+	call, err := d.DB.BeginReviewModelCall(ctx, c, request.PodUID, int(request.Sequence), sent)
 	if err != nil {
 		return result, ErrUncertain
 	}
@@ -134,14 +156,16 @@ func (d ReviewDispatcher) DeliverReview(ctx context.Context, c store.ReviewClaim
 	callCtx, cancelCall := context.WithDeadline(ctx, until)
 	stage = "provider"
 	result.DispatchAttempted = true
-	response, err := d.Provider.observedInvoke(callCtx, "reviewer", request.Payload, 32768)
+	response, err := d.Provider.observedInvoke(callCtx, "reviewer", sent, 32768)
 	cancelCall()
 	if err != nil {
 		return result, ErrUncertain
 	}
 	stage = "response-policy"
 	observation, err := ObserveReviewResponse(response, profile.Model)
-	if err != nil || (request.Sequence == 1 && observation.Verdict != "") {
+	// The last permitted turn must be the verdict: a tool proposal there could
+	// only lead to a refused request, so it is refused now.
+	if err != nil || (request.Sequence == 1 && observation.Verdict != "") || (finalReviewTurn(request.Sequence, profile.MaxSteps) && observation.Verdict == "") {
 		return result, ErrRejected
 	}
 	observationRaw, err := json.Marshal(observation)
@@ -195,4 +219,66 @@ func (d ReviewDispatcher) DeliverReview(ctx context.Context, c store.ReviewClaim
 	}
 	result.HandoffConfirmed = true
 	return result, nil
+}
+
+// ReviewFinalTurnNote is the broker's fixed instruction on the last permitted
+// review turn. It carries no source, model or repository content.
+const ReviewFinalTurnNote = "This is your last turn: give the final verdict now in the required format."
+
+// finalReviewTurn reports whether sequence is the last turn the signed review
+// profile permits. The first turn never qualifies: it must read the candidate,
+// and the response policy refuses a verdict there.
+func finalReviewTurn(sequence uint64, maxSteps int) bool {
+	return maxSteps > 1 && sequence == uint64(maxSteps)
+}
+
+// finalReviewTurnPayload sets tool_choice "none" on an already validated chat
+// request and appends ReviewFinalTurnNote as a last user message. The tool
+// definitions stay: the history holds tool calls and results, and providers
+// such as the Messages API refuse tool blocks without tool definitions. A
+// request without tools carries no tool_choice. Every other field and
+// message keeps its JSON value; nothing is added beyond the note.
+func finalReviewTurnPayload(raw []byte) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if authority.DecodeStrict(raw, &fields) != nil || fields == nil {
+		return nil, ErrRejected
+	}
+	var messages []json.RawMessage
+	if authority.DecodeStrict(fields["messages"], &messages) != nil || len(messages) == 0 {
+		return nil, ErrRejected
+	}
+	var tools []json.RawMessage
+	if value, ok := fields["tools"]; ok && authority.DecodeStrict(value, &tools) != nil {
+		return nil, ErrRejected
+	}
+	note, err := encodeVerbatim(struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}{"user", ReviewFinalTurnNote})
+	if err != nil {
+		return nil, ErrRejected
+	}
+	delete(fields, "tool_choice")
+	if len(tools) > 0 {
+		fields["tool_choice"] = json.RawMessage(`"none"`)
+	}
+	if fields["messages"], err = encodeVerbatim(append(messages, note)); err != nil {
+		return nil, ErrRejected
+	}
+	if raw, err = encodeVerbatim(fields); err != nil {
+		return nil, ErrRejected
+	}
+	return raw, nil
+}
+
+// encodeVerbatim is json.Marshal without HTML escaping, so embedded JSON
+// values keep their text apart from insignificant whitespace.
+func encodeVerbatim(value any) ([]byte, error) {
+	var out bytes.Buffer
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), nil
 }
