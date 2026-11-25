@@ -32,6 +32,7 @@ type TestsRun struct {
 	treeSHA   string
 	source    []byte
 	timeout   time.Duration
+	analysis  time.Duration // the run's analysis commands, 0 without
 	runs      int
 	imported  bool
 	tests     string // container ID of the tests container seen by Import
@@ -58,7 +59,7 @@ func PlanTestsRun(client *Client, p repositorytests.Pod, admission RuntimeClassA
 	}
 	t := &TestsRun{resources: &Resources{client: client, binding: Binding{Namespace: p.Namespace, RuntimeClass: p.RuntimeClass, Admission: admission}, expires: expires},
 		run: p.Run, sourceSHA: p.SourceSHA, treeSHA: p.TreeSHA256, source: source, runs: repositorytests.Repetitions(p.Run, p.Verification),
-		timeout: time.Duration(p.Verification.TimeoutSeconds) * time.Second}
+		timeout: time.Duration(p.Verification.TimeoutSeconds) * time.Second, analysis: time.Duration(repositorytests.AnalysisSeconds(p.Run, p.Verification)) * time.Second}
 	config, _ := json.Marshal(w.ConfigMap)
 	pod, _ := json.Marshal(w.Pod)
 	if authority.DecodeStrict(config, &t.resources.config) != nil || authority.DecodeStrict(pod, &t.resources.pod) != nil {
@@ -318,7 +319,7 @@ func (t *TestsRun) ReadResult(ctx context.Context, uid string) ([]repositorytest
 	if t == nil || t.tests == "" || !resourceUID.MatchString(uid) {
 		return nil, nil, ErrTransport
 	}
-	deadline := time.Now().Add(time.Duration(t.runs)*t.timeout + repositorytests.MarginSeconds*time.Second)
+	deadline := time.Now().Add(time.Duration(t.runs)*t.timeout + t.analysis + repositorytests.MarginSeconds*time.Second)
 	if _, err := t.poll(ctx, uid, deadline, func(o testsObservation) bool { return o.phase == core.PodSucceeded }); err != nil {
 		return nil, nil, err
 	}

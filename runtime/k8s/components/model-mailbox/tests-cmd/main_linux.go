@@ -31,7 +31,7 @@ const (
 // runs inside the repository's pinned toolchain image:
 //
 //	repository-tests install <dest>
-//	repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs>
+//	repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs> [analyze]
 //
 // The same binary, run inside the pinned toolchain image, copies a reviewed
 // toolchain root into a volume for the generation worker:
@@ -66,10 +66,16 @@ func main() {
 // writes one bounded result line per run to stdout. It opens no database,
 // network or cluster connection and loads no signing identity.
 //
-//	repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs>
+// With the analyze argument (only for settings with analysis) it then runs
+// the analysis commands, after every test run has finished and its result
+// is fixed, on a fresh copy of the verified tree written from memory. Their
+// exit codes go on the first result line.
+//
+//	repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs> [analyze]
 func runRepositoryTests(ctx context.Context, args []string, out io.Writer, parent, uidPath string) error {
-	if len(args) != 5 || len(args[4]) != 1 || args[4][0] < '1' || args[4][0] > '3' {
-		return errors.New("usage: repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs 1-3>")
+	analyze := len(args) == 6 && args[5] == repositorytests.AnalyzeArgument
+	if (len(args) != 5 && !analyze) || len(args[4]) != 1 || args[4][0] < '1' || args[4][0] > '3' {
+		return errors.New("usage: repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs 1-3> [analyze]")
 	}
 	runs := int(args[4][0] - '0')
 	f, err := os.Open(args[0])
@@ -85,7 +91,7 @@ func runRepositoryTests(ctx context.Context, args []string, out io.Writer, paren
 	if authority.DecodeStrict(raw, &v) != nil {
 		return errors.New("invalid verification settings")
 	}
-	if v.Validate() != nil || (runs != 1 && runs != v.Repeat) {
+	if v.Validate() != nil || (runs != 1 && runs != v.Repeat) || (analyze && v.Analysis == nil) {
 		return errors.New("invalid verification settings")
 	}
 	uid, err := readUID(uidPath)
@@ -111,9 +117,9 @@ func runRepositoryTests(ctx context.Context, args []string, out io.Writer, paren
 	// before any repository code runs. A run can still alter later copies;
 	// that can only make the repetitions disagree, which fails as uncertain.
 	workspaces := []string{filepath.Join(parent, "repository")}
-	if runs > 1 {
-		tree, err := workspacebundle.Export(parent, args[2])
-		if err != nil {
+	var tree workspacebundle.Bundle
+	if runs > 1 || analyze {
+		if tree, err = workspacebundle.Export(parent, args[2]); err != nil {
 			return errors.New("imported tree does not match")
 		}
 		for i := 2; i <= runs; i++ {
@@ -124,13 +130,37 @@ func runRepositoryTests(ctx context.Context, args []string, out io.Writer, paren
 			workspaces = append(workspaces, filepath.Join(copyParent, "repository"))
 		}
 	}
-	var lines []byte
+	// The tests are the primary evidence: every run completes and its result
+	// is fixed in this non-dumpable process's memory before any analysis
+	// command starts, so nothing an analyzer does (even one that runs
+	// repository code) can change the trees the tests ran on or their
+	// results.
+	results := make([]repositorytests.Run, 0, len(workspaces))
 	for _, workspace := range workspaces {
 		runner := repositorytests.Runner{Verification: v, Workspace: workspace, Scratch: args[1], ReapAll: os.Getpid() == 1}
 		result, err := runner.Run(ctx)
 		if err != nil {
 			return err
 		}
+		results = append(results, result)
+	}
+	if analyze {
+		// The analysed tree is written only now, from the verified tree held
+		// in memory since before any repository code ran, into a new
+		// directory with an unpredictable name: no test could have prepared
+		// or altered it. The residual risks (state the tests left in the
+		// scratch HOME, such as tool caches) are documented with the design.
+		analysisParent, err := os.MkdirTemp(args[1], "analysis-")
+		if err != nil || workspacebundle.Import(analysisParent, tree) != nil {
+			return errors.New("analysis copy failed")
+		}
+		runner := repositorytests.Runner{Verification: v, Workspace: filepath.Join(analysisParent, "repository"), Scratch: args[1], ReapAll: os.Getpid() == 1}
+		if results[0].Analysis, err = runner.Analyze(ctx); err != nil {
+			return err
+		}
+	}
+	var lines []byte
+	for _, result := range results {
 		lines = append(append(lines, result.Encode()...), '\n')
 	}
 	// One write after every run, so a failure leaves no partial result set.

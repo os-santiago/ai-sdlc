@@ -9,6 +9,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 )
 
 func TestReviewProofRequiresExactEvidenceAndCleanup(t *testing.T) { reviewProofFixture(t, false) }
@@ -111,7 +112,7 @@ func reviewProofFixture(t *testing.T, installed bool, configure ...func(*fixture
 	if db.FinishReview(ctx, c, encode()) == nil {
 		t.Fatal("review proof replay")
 	}
-	if next, e := db.NextVerifiedForReview(ctx); e != nil || next != "" {
+	if next, e := db.NextVerifiedForReview(ctx, verification.CurrentRecipeRevision(f.Material.Policy.Repository)); e != nil || next != "" {
 		t.Fatal("completed review requeued")
 	}
 	return f, db, r
@@ -124,13 +125,21 @@ func TestReviewSelectionSkipsSupersededIssueWithoutMutatingProof(t *testing.T) {
 	if _, e := f.Admin.Pool.Exec(`DELETE FROM review_runs WHERE id=$1`, r.ID); e != nil {
 		t.Fatal(e)
 	}
-	if next, e := db.NextVerifiedForReview(ctx); e != nil || next != r.VerificationID {
+	if next, e := db.NextVerifiedForReview(ctx, verification.CurrentRecipeRevision(f.Material.Policy.Repository)); e != nil || next != r.VerificationID {
 		t.Fatal("initial selection", next, e)
+	}
+	// A verification signed under an earlier recipe revision (an upgrade
+	// changed the rules) is skipped instead of being selected on every poll.
+	if next, e := db.NextVerifiedForReview(ctx, strings.Repeat("e", 64)); e != nil || next != "" {
+		t.Fatal("earlier recipe revision blocked selection", next, e)
+	}
+	if _, e := db.NextVerifiedForReview(ctx, ""); e == nil {
+		t.Fatal("selection without a recipe revision accepted")
 	}
 	if _, e := f.Admin.Pool.Exec(`UPDATE intake_heads SET generation=generation+1`); e != nil {
 		t.Fatal(e)
 	}
-	if next, e := db.NextVerifiedForReview(ctx); e != nil || next != "" {
+	if next, e := db.NextVerifiedForReview(ctx, verification.CurrentRecipeRevision(f.Material.Policy.Repository)); e != nil || next != "" {
 		t.Fatal("obsolete issue blocked selection", next, e)
 	}
 	var state string
@@ -140,7 +149,7 @@ func TestReviewSelectionSkipsSupersededIssueWithoutMutatingProof(t *testing.T) {
 	if _, e := f.Admin.Pool.Exec(`REVOKE SELECT(repository,issue_number,generation,content_key) ON intake_heads FROM aisdlc_verifier`); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := db.NextVerifiedForReview(ctx); e == nil {
+	if _, e := db.NextVerifiedForReview(ctx, verification.CurrentRecipeRevision(f.Material.Policy.Repository)); e == nil {
 		t.Fatal("unavailable observation treated as permanent rejection")
 	}
 }

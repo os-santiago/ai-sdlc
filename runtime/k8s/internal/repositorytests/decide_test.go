@@ -160,3 +160,112 @@ func TestWeakDecisionsIgnoreTimeoutsAndUnrunnableCrossRuns(t *testing.T) {
 		}
 	}
 }
+
+func withAnalysis(v project.Verification, commands int) project.Verification {
+	v.Analysis = &project.Analysis{Commands: make([][]string, commands), TimeoutSeconds: 60}
+	for i := range v.Analysis.Commands {
+		v.Analysis.Commands[i] = []string{"lint", strconv.Itoa(i)}
+	}
+	return v
+}
+
+func analysed(r Run, codes ...int) Run {
+	r.Analysis = codes
+	return r
+}
+
+func TestAnalysisRefusesOnlyNewFailures(t *testing.T) {
+	for _, report := range []bool{true, false} {
+		v := withAnalysis(verification(report, 2), 3)
+		c := runs(2, candidate)
+		c[0] = analysed(candidate, 0, 1, 2)
+		b := baseline
+		if !report {
+			b = Run{ExitCode: 0}
+		}
+		// Command 0 passes on both; 1 fails on both (no signal); 2 newly fails.
+		d := Decide(v, Evidence{Baseline: analysed(b, 0, 1, 0), Cross: cross, Candidate: c, Changes: changes})
+		if d.Passed || d.Reason != "candidate-analysis" || d.Summary.AnalysisCommands != 3 || d.Summary.AnalysisBaselineFailing != 1 || d.Summary.AnalysisNewFailures != 1 {
+			t.Fatal("new analysis failure", report, d)
+		}
+		// A candidate that fixes the baseline's finding and adds none passes.
+		c[0] = analysed(candidate, 0, 0, 0)
+		d = Decide(v, Evidence{Baseline: analysed(b, 0, 1, 0), Cross: cross, Candidate: c, Changes: changes})
+		if !d.Passed || d.Reason != "" || d.Summary.AnalysisBaselineFailing != 1 || d.Summary.AnalysisNewFailures != 0 {
+			t.Fatal("clean candidate", report, d)
+		}
+		// A timeout (124) or an analyzer that could not run (125) on the
+		// candidate, after a clean baseline, is a new failure too.
+		for _, code := range []int{124, 125} {
+			c[0] = analysed(candidate, code, 0, 0)
+			if d := Decide(v, Evidence{Baseline: analysed(b, 0, 0, 0), Cross: cross, Candidate: c, Changes: changes}); d.Reason != "candidate-analysis" {
+				t.Fatal("analysis exit", code, d)
+			}
+		}
+	}
+}
+
+func TestAnalysisNeverMasksAnEarlierTestRefusal(t *testing.T) {
+	v := withAnalysis(verification(true, 2), 1)
+	failed := runs(2, Run{ExitCode: 1, Tests: candidate.Tests})
+	failed[0] = analysed(failed[0], 1)
+	d := Decide(v, Evidence{Baseline: analysed(baseline, 0), Cross: cross, Candidate: failed, Changes: changes})
+	if d.Reason != "candidate-failed" || d.Summary.AnalysisNewFailures != 1 {
+		t.Fatal("test refusal must come first", d)
+	}
+}
+
+func TestAnalysisEvidenceMustMatchTheSettings(t *testing.T) {
+	with := withAnalysis(verification(true, 2), 2)
+	ok := runs(2, candidate)
+	ok[0] = analysed(candidate, 0, 0)
+	repeated := runs(2, analysed(candidate, 0, 0))
+	for name, c := range map[string]struct {
+		v project.Verification
+		e Evidence
+	}{
+		"missing on the baseline":   {with, Evidence{Baseline: baseline, Cross: cross, Candidate: ok, Changes: changes}},
+		"missing on the candidate":  {with, Evidence{Baseline: analysed(baseline, 0, 0), Cross: cross, Candidate: runs(2, candidate), Changes: changes}},
+		"too few codes":             {with, Evidence{Baseline: analysed(baseline, 0), Cross: cross, Candidate: ok, Changes: changes}},
+		"on the cross run":          {with, Evidence{Baseline: analysed(baseline, 0, 0), Cross: analysed(cross, 0, 0), Candidate: ok, Changes: changes}},
+		"on a repetition":           {with, Evidence{Baseline: analysed(baseline, 0, 0), Cross: cross, Candidate: repeated, Changes: changes}},
+		"without analysis settings": {verification(true, 2), Evidence{Baseline: analysed(baseline, 0, 0), Cross: cross, Candidate: ok, Changes: changes}},
+	} {
+		if d := Decide(c.v, c.e); d.Passed || d.Reason != "incomplete-evidence" {
+			t.Fatal(name, d)
+		}
+	}
+	if d := Decide(with, Evidence{Baseline: analysed(baseline, 0, 0), Cross: cross, Candidate: ok, Changes: changes}); !d.Passed {
+		t.Fatal("matching evidence", d)
+	}
+}
+
+// Without analysis the summary encodes exactly as before, so decision digests
+// and proofs of existing manifests are unchanged.
+func TestSummaryWithoutAnalysisIsUnchanged(t *testing.T) {
+	d := Decide(verification(true, 2), Evidence{Baseline: baseline, Cross: cross, Candidate: runs(2, candidate), Changes: changes})
+	raw, _ := json.Marshal(d)
+	if strings.Contains(string(raw), "analysis") {
+		t.Fatal("absent analysis encoded", string(raw))
+	}
+	if string(candidate.Encode()) != `{"exitCode":0,"tests":{"`+id("a")+`":"pass","`+id("b")+`":"pass"}}` {
+		t.Fatal("result line changed", string(candidate.Encode()))
+	}
+}
+
+func TestParseRunBoundsAnalysisCodes(t *testing.T) {
+	if r, err := ParseRun([]byte(`{"exitCode":0,"analysis":[0,1,124,255]}`)); err != nil || len(r.Analysis) != 4 {
+		t.Fatal("valid analysis codes", r, err)
+	}
+	for _, bad := range []string{
+		`{"exitCode":0,"analysis":[0,0,0,0,0]}`,
+		`{"exitCode":0,"analysis":[256]}`,
+		`{"exitCode":0,"analysis":[-1]}`,
+		`{"exitCode":0,"analysis":["0"]}`,
+		`{"exitCode":0,"analysis":{}}`,
+	} {
+		if _, err := ParseRun([]byte(bad)); err == nil {
+			t.Fatal("accepted", bad)
+		}
+	}
+}

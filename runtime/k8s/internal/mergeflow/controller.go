@@ -16,6 +16,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publication"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
 )
 
@@ -82,7 +83,7 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		if e != nil {
 			return "", ErrMerge
 		}
-		publicationID, e := r.DB.NextMergePublication(ctx, store.MergeSelection{AuthorityRevision: p.Revision(), IntakeConfiguration: intake.Digest(), ExecutionProfile: profile, ReviewProfile: review.Profile, ReviewConfiguration: review.Configuration})
+		publicationID, e := r.DB.NextMergePublication(ctx, store.MergeSelection{AuthorityRevision: p.Revision(), IntakeConfiguration: intake.Digest(), ExecutionProfile: profile, ReviewProfile: review.Profile, ReviewConfiguration: review.Configuration, RecipeRevision: verification.CurrentRecipeRevision(p.Repository)})
 		if e != nil {
 			return "", ErrMerge
 		}

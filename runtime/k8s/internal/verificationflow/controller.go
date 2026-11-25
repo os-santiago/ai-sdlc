@@ -11,6 +11,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repositorytests"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/secretscan"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
@@ -44,9 +45,18 @@ const (
 	BehaviorProofV2 = "ai-sdlc.behavior-proof/v2"
 )
 
-// DecisionError is a verified refusal by the repository-tests rules: the
-// runs completed and the decision is the reason, not an uncertainty.
-type DecisionError struct{ Reason string }
+// DecisionError is a verified refusal of the candidate: the repository-tests
+// rules decided after their runs completed, or the candidate baseline refused
+// it before any run. The reason is the decision, not an uncertainty.
+type DecisionError struct {
+	Reason string
+	// Secret is set only for the "candidate-secret" refusal. It names the
+	// rule and path class, never the matched text or the path.
+	Secret secretscan.Finding
+}
+
+// SecretRefusal is the reason of a candidate that adds a credential.
+const SecretRefusal = "candidate-secret"
 
 func (e DecisionError) Error() string { return "verification refused: " + e.Reason }
 
@@ -253,6 +263,17 @@ func runWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 	inputs, e := verification.Prepare(c.Repository, c.Recipe, snapshot.Issue.Body, source, record.Delta)
 	if e != nil {
 		return proof, ControllerError{stage}
+	}
+	// The candidate baseline runs before any pod exists, so a candidate that
+	// adds a credential is refused without running its code, and the
+	// independent reviewer never receives it. Only the finding's rule and
+	// path class leave the scanner.
+	if refused := candidateBaseline(source, inputs.Delta()); refused != nil {
+		// A refusal is recorded only under current authority.
+		if fence() != nil {
+			return proof, ControllerError{"authority"}
+		}
+		return proof, refused
 	}
 	if c.Recipe == repositorytests.Recipe {
 		// The settings come from the manifest the current policy binds; the

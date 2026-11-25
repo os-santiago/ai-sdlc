@@ -15,6 +15,19 @@ const LifetimeTest = "tests/ttl.test.mjs"
 const LifetimeBrowser = "tools/verify_browser.py"
 const LifetimeMarker = "AI-SDLC validation recipe: " + LifetimeRecipe
 
+// CurrentRecipeRevision is the recipe revision this build signs and accepts
+// for the repository, or "" when the repository has no recipe. Queue
+// selectors use it to skip historical work signed under another revision
+// (for example before an upgrade changed the rules), which no current proof
+// check would accept.
+func CurrentRecipeRevision(repository string) string {
+	recipe := RecipeForRepository(repository)
+	if recipe == "" {
+		return ""
+	}
+	return RevisionForRecipe(recipe)
+}
+
 func RecipeForRepository(repository string) string {
 	switch repository {
 	case project.Homedir:

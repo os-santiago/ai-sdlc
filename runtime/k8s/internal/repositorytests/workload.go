@@ -124,9 +124,29 @@ func Settings(v project.Verification) ([]byte, error) {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
-// DeadlineSeconds is the pod's hard deadline for a test timeout.
+// AnalyzeArgument is the runner's optional last argument for a run that also
+// executes the manifest's analysis commands.
+const AnalyzeArgument = "analyze"
+
+// Analyzes reports whether a run executes the manifest's analysis commands:
+// the baseline and the candidate do, so only new findings refuse; the cross
+// run (old code, new tests) does not.
+func Analyzes(run string, v project.Verification) bool {
+	return v.Analysis != nil && (run == RunBaseline || run == RunCandidate)
+}
+
+// AnalysisSeconds is the time a run's analysis commands may take, 0 without.
+func AnalysisSeconds(run string, v project.Verification) int {
+	if !Analyzes(run, v) {
+		return 0
+	}
+	return len(v.Analysis.Commands) * v.Analysis.TimeoutSeconds
+}
+
+// DeadlineSeconds is the pod's hard deadline for a test timeout and, with
+// analysis, the analysis timeouts.
 func DeadlineSeconds(run string, v project.Verification) int {
-	return PullSeconds + ReadySeconds + Repetitions(run, v)*v.TimeoutSeconds + MarginSeconds
+	return PullSeconds + ReadySeconds + Repetitions(run, v)*v.TimeoutSeconds + AnalysisSeconds(run, v) + MarginSeconds
 }
 
 // CompilePod renders one offline run. The repository's command is never in
@@ -171,8 +191,14 @@ func CompilePod(p Pod) (Workload, error) {
 	disk.Add(resource.MustParse(workspaceVolume))
 	disk.Add(resource.MustParse(runnerVolume))
 	quota := map[string]any{"cpu": p.Verification.CPU, "memory": p.Verification.Memory, "ephemeral-storage": disk.String()}
+	command := []string{RunnerPath, "run", SettingsDirectory + "/verification.json", ScratchDirectory, p.SourceSHA, p.TreeSHA256, fmt.Sprint(Repetitions(p.Run, p.Verification))}
+	if Analyzes(p.Run, p.Verification) {
+		// Only manifests with analysis add the argument, so every other pod
+		// renders exactly as before.
+		command = append(command, AnalyzeArgument)
+	}
 	tests := map[string]any{"name": "tests", "image": p.Verification.Image, "imagePullPolicy": "IfNotPresent",
-		"command":         []string{RunnerPath, "run", SettingsDirectory + "/verification.json", ScratchDirectory, p.SourceSHA, p.TreeSHA256, fmt.Sprint(Repetitions(p.Run, p.Verification))},
+		"command":         command,
 		"securityContext": security, "resources": map[string]any{"requests": quota, "limits": quota},
 		"volumeMounts": []any{workspace, identity,
 			map[string]any{"name": "scratch", "mountPath": ScratchDirectory},

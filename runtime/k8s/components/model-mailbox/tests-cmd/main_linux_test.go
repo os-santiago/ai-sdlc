@@ -179,3 +179,105 @@ func TestPodIdentityMustBeSmallAndPresent(t *testing.T) {
 		t.Fatal("oversized identity accepted")
 	}
 }
+
+func TestAnalysisRunsOnAPristineTreeAndReportsOnTheFirstLine(t *testing.T) {
+	v := settings()
+	v.Repeat = 2
+	// Each test run dirties its tree and plants files where an analysis copy
+	// used to live; the first analysis command must still see a pristine
+	// tree, and the second always fails.
+	v.Command = []string{"/bin/sh", "-c", `test ! -e dirty && touch dirty && mkdir -p "$TMPDIR/.runs/analysis/repository" && touch "$TMPDIR/.runs/analysis/repository/dirty" && exit 5`}
+	v.Analysis = &project.Analysis{Commands: [][]string{
+		{"/bin/sh", "-c", "test -f go.mod && test ! -e dirty && touch dirty"},
+		{"/bin/sh", "-c", "exit 3"},
+	}, TimeoutSeconds: 30}
+	p := newTestsPod(t, v)
+	p.ready(t)
+	args := append(p.args(), repositorytests.AnalyzeArgument)
+	args[4] = "2"
+	var out bytes.Buffer
+	if err := runRepositoryTests(context.Background(), args, &out, p.parent, p.uidPath); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatal("one line per run", out.String())
+	}
+	for i, line := range lines {
+		run, err := repositorytests.ParseRun([]byte(line))
+		if err != nil || run.ExitCode != 5 {
+			t.Fatal("a run did not see a fresh tree", line, err)
+		}
+		if want := []int{0, 3}; i == 0 && (len(run.Analysis) != 2 || run.Analysis[0] != want[0] || run.Analysis[1] != want[1]) {
+			t.Fatal("analysis exit codes", line)
+		}
+		if i > 0 && run.Analysis != nil {
+			t.Fatal("analysis reported on a repetition", line)
+		}
+	}
+}
+
+func TestAnalyzeArgumentRequiresAnalysisSettings(t *testing.T) {
+	p := newTestsPod(t, settings())
+	p.ready(t)
+	for _, extra := range []string{repositorytests.AnalyzeArgument, "lint"} {
+		if err := runRepositoryTests(context.Background(), append(p.args(), extra), &bytes.Buffer{}, p.parent, p.uidPath); err == nil {
+			t.Fatal("accepted", extra)
+		}
+	}
+	v := settings()
+	v.Analysis = &project.Analysis{Commands: [][]string{{"/bin/sh", "-c", "exit 0"}}, TimeoutSeconds: 30}
+	p = newTestsPod(t, v)
+	p.ready(t)
+	if err := runRepositoryTests(context.Background(), append(p.args(), "lint"), &bytes.Buffer{}, p.parent, p.uidPath); err == nil {
+		t.Fatal("accepted an unknown argument")
+	}
+	// Without the argument (the cross run) analysis settings run no analysis.
+	var out bytes.Buffer
+	if err := runRepositoryTests(context.Background(), p.args(), &out, p.parent, p.uidPath); err != nil {
+		t.Fatal(err)
+	}
+	if run, err := repositorytests.ParseRun(bytes.TrimSuffix(out.Bytes(), []byte("\n"))); err != nil || run.Analysis != nil {
+		t.Fatal("analysis ran without the argument", out.String(), err)
+	}
+}
+
+// An analyzer that runs repository code and tries to rewrite the original
+// tree and every copy runs only after the tests finished: the test evidence
+// is exactly what the tests produced on pristine trees.
+func TestAnalysisCannotAlterTheTestEvidence(t *testing.T) {
+	v := settings()
+	v.Repeat = 3
+	v.Command = []string{"/bin/sh", "-c", "test ! -e tampered && test ! -e dirty && touch dirty && exit 5"}
+	tamper := `for d in "` + "%s" + `/repository" "$TMPDIR"/.runs/*/repository; do touch "$d/tampered"; echo broken > "$d/go.mod"; done`
+	p := newTestsPod(t, v)
+	v.Analysis = &project.Analysis{Commands: [][]string{{"/bin/sh", "-c", strings.Replace(tamper, "%s", p.parent, 1)}}, TimeoutSeconds: 30}
+	raw, _ := json.Marshal(v)
+	if err := os.WriteFile(p.settings, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.ready(t)
+	args := append(p.args(), repositorytests.AnalyzeArgument)
+	args[4] = "3"
+	var out bytes.Buffer
+	if err := runRepositoryTests(context.Background(), args, &out, p.parent, p.uidPath); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatal("one line per run", out.String())
+	}
+	for i, line := range lines {
+		run, err := repositorytests.ParseRun([]byte(line))
+		if err != nil || run.ExitCode != 5 {
+			t.Fatal("test evidence changed by the analyzer", i, line, err)
+		}
+		if i == 0 && (len(run.Analysis) != 1 || run.Analysis[0] != 0) {
+			t.Fatal("analysis result", line)
+		}
+	}
+	// The analyzer did run, and did tamper with the trees, after the tests.
+	if raw, err := os.ReadFile(filepath.Join(p.parent, "repository", "go.mod")); err != nil || string(raw) != "broken\n" {
+		t.Fatal("the hostile analyzer did not run after the tests", string(raw), err)
+	}
+}

@@ -388,3 +388,73 @@ func TestRelocateToolchainValueMapsWholeEntriesUnderTheRoot(t *testing.T) {
 		t.Fatal("GOROOT under the root refused", err)
 	}
 }
+
+func withAnalysis() Manifest {
+	m := generic()
+	m.Verification.Analysis = &Analysis{Commands: [][]string{{"go", "vet", "./..."}}, TimeoutSeconds: 120}
+	return m
+}
+
+func TestAnalysisRoundTripsAndChangesOnlyOptedInDigests(t *testing.T) {
+	m := withAnalysis()
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseManifest(m.Canonical())
+	if err != nil || parsed.Digest() != m.Digest() || parsed.Verification.AnalysisCommands() != 1 {
+		t.Fatal("round trip", err)
+	}
+	if m.Digest() == generic().Digest() || !strings.Contains(string(m.Canonical()), `"analysis":{"commands":[["go","vet","./..."]],"timeoutSeconds":120}`) {
+		t.Fatal("analysis must be bound into the canonical form", string(m.Canonical()))
+	}
+	if generic().Verification.AnalysisCommands() != 0 || strings.Contains(string(generic().Canonical()), "analysis") {
+		t.Fatal("absent analysis section is encoded")
+	}
+	for _, bad := range []string{
+		strings.Replace(string(m.Canonical()), `"commands"`, `"extra":1,"commands"`, 1),
+		strings.Replace(string(m.Canonical()), `"timeoutSeconds":120}`, `"timeoutSeconds":120,"timeoutSeconds":60}`, 1),
+		strings.Replace(string(m.Canonical()), `[["go","vet","./..."]]`, `null`, 1),
+		strings.Replace(string(m.Canonical()), `[["go","vet","./..."]]`, `["go vet ./..."]`, 1),
+	} {
+		if _, err := ParseManifest([]byte(bad)); err == nil {
+			t.Fatal("accepted", bad)
+		}
+	}
+}
+
+func TestInvalidAnalysisSectionsAreRefused(t *testing.T) {
+	five := [][]string{{"a"}, {"b"}, {"c"}, {"d"}, {"e"}}
+	for name, change := range map[string]func(*Analysis){
+		"no commands":     func(a *Analysis) { a.Commands = nil },
+		"too many":        func(a *Analysis) { a.Commands = five },
+		"empty command":   func(a *Analysis) { a.Commands = [][]string{{}} },
+		"empty argument":  func(a *Analysis) { a.Commands = [][]string{{"go", ""}} },
+		"hidden rune":     func(a *Analysis) { a.Commands = [][]string{{"go", "vet\u202e"}} },
+		"long argument":   func(a *Analysis) { a.Commands = [][]string{{"go", strings.Repeat("x", 1025)}} },
+		"many arguments":  func(a *Analysis) { a.Commands = [][]string{make([]string, 33)} },
+		"short timeout":   func(a *Analysis) { a.TimeoutSeconds = MinAnalysisTimeoutSeconds - 1 },
+		"long timeout":    func(a *Analysis) { a.TimeoutSeconds = MaxAnalysisTimeoutSeconds + 1 },
+		"missing timeout": func(a *Analysis) { a.TimeoutSeconds = 0 },
+		"long total": func(a *Analysis) {
+			a.Commands = [][]string{{"a"}, {"b"}, {"c"}}
+			a.TimeoutSeconds = MaxAnalysisTotalSeconds/3 + 1
+		},
+	} {
+		m := withAnalysis()
+		change(m.Verification.Analysis)
+		if m.Validate() == nil || m.Verification.Validate() == nil {
+			t.Fatal("accepted", name)
+		}
+	}
+	m := withAnalysis()
+	m.Verification.Analysis.Commands = [][]string{{"go", "vet", "./..."}, {"staticcheck", "./..."}, {"a"}, {"b"}}
+	m.Verification.Analysis.TimeoutSeconds = MaxAnalysisTotalSeconds / MaxAnalysisCommands
+	if err := m.Validate(); err != nil {
+		t.Fatal("refused the most commands at the largest total", err)
+	}
+	m.Verification.Analysis.Commands = [][]string{{"go", "vet", "./..."}}
+	m.Verification.Analysis.TimeoutSeconds = MaxAnalysisTimeoutSeconds
+	if err := m.Validate(); err != nil {
+		t.Fatal("refused the longest single command", err)
+	}
+}

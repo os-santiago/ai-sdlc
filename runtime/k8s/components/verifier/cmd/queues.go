@@ -35,7 +35,13 @@ func reconcileQueues(ctx context.Context, review, verify queuePoll, handoff func
 	if err != nil {
 		stage := verificationflow.DiagnosticStage(err)
 		metrics.Stop("verifier", "verification", stage)
-		log.Print("verification reconciliation stopped safely: " + stage)
+		// A secret refusal also names its rule and path class (bounded
+		// constants); the metric keeps the stage alone.
+		line := stage
+		if detail := verificationflow.RefusalDetail(err); detail != "" {
+			line += " " + detail
+		}
+		log.Print("verification reconciliation stopped safely: " + line)
 		// A missing sandbox class stops only new claims; cleanup already
 		// completed, so approved work is still handed off.
 		if !verificationflow.SandboxUnavailable(err) {
