@@ -174,7 +174,9 @@ func (r *Resources) CreatePodObserved(ctx context.Context, configUID string) (st
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	if err := r.getConfig(ctx, configUID); err != nil {
+	// A retry of this read must leave the POST its full bound: a POST cut short
+	// could create a pod whose UID is never learned.
+	if err := r.getConfig(withReadReserve(ctx, readAttemptBound+time.Second), configUID); err != nil {
 		return "", err
 	}
 	raw, _ := json.Marshal(r.pod)
@@ -463,18 +465,53 @@ func (r *Resources) getTransient(ctx context.Context, kind, name string) ([]byte
 	})
 }
 
-// retryTransient runs read until it returns a non-transient outcome, the retry
-// window closes, the expiry passes or ctx ends.
+// minReadAttempts is how many attempts a transient read always gets, however
+// long each took. An attempt that timed out after request's 5-second bound
+// used up observeRetryWindow on its own; evaluation battery 29 still stopped
+// at readiness-request that way, after the window-only retry of #800.
+const minReadAttempts = 3
+
+// readReserveKey carries, in a read's context, the time a caller keeps for
+// the steps after the read (see withReadReserve).
+type readReserveKey struct{}
+
+// A reserve needs a ctx with a deadline: without one, a reserved read never
+// retries (it cannot prove the reserve would still fit).
+//
+// withReadReserve marks ctx so that a transient read retries only while at
+// least reserve remains for the caller's next steps after the retry: the
+// first attempt is unchanged, but no retry may starve, for example, a pod
+// POST that needs its own 5 s or an exchange that shares the same budget.
+func withReadReserve(ctx context.Context, reserve time.Duration) context.Context {
+	return context.WithValue(ctx, readReserveKey{}, reserve)
+}
+
+// retryTransient runs read until it returns a non-transient outcome. Another
+// attempt starts while observeRetryWindow lasts (quick failures such as a
+// refused connection) or until minReadAttempts attempts were made (slow
+// failures such as a timeout), and never after the expiry or once ctx has no
+// room for the pause. With a read reserve, a retry starts only when the
+// reserve plus a full attempt still fit before ctx's deadline. Each attempt
+// keeps its own bound and the caller's ctx.
 func retryTransient(ctx context.Context, expires time.Time, read func() ([]byte, int, error)) ([]byte, int, error) {
 	last := time.Now().Add(observeRetryWindow)
-	for {
+	reserve, _ := ctx.Value(readReserveKey{}).(time.Duration)
+	for attempts := 1; ; attempts++ {
 		raw, status, err := read()
 		transient := (err != nil && !errors.Is(err, ErrPermission)) || (err == nil && transientStatus(status))
-		if !transient || !time.Now().Before(last) || !time.Now().Before(expires) || !retryRemoval(ctx) {
+		more := time.Now().Before(last) || attempts < minReadAttempts
+		if reserve > 0 {
+			deadline, ok := ctx.Deadline()
+			more = more && ok && time.Until(deadline) >= reserve+readAttemptBound+250*time.Millisecond
+		}
+		if !transient || !more || !time.Now().Before(expires) || !retryRemoval(ctx) {
 			return raw, status, err
 		}
 	}
 }
+
+// readAttemptBound is request's own bound for one attempt.
+const readAttemptBound = 5 * time.Second
 
 // transientStatus is an API server answer worth repeating within the removal
 // bound: throttling or a temporarily unavailable server.

@@ -26,7 +26,8 @@ func (s *Session) ExportReview(ctx context.Context) (Review, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	before, err := s.inspect(ctx, true)
+	// A retry must leave the review exchange and the second inspect their time.
+	before, err := s.inspect(withReadReserve(ctx, 2*readAttemptBound), true)
 	if err != nil || before.workerExitCode == nil || *before.workerExitCode != 10 {
 		return Review{}, ErrTransport
 	}

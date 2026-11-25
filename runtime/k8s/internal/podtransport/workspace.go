@@ -67,7 +67,7 @@ func (s *Session) ImportSource(ctx context.Context, source []byte) error {
 	if err != nil || tree != s.treeSHA {
 		return ErrTransport
 	}
-	if _, err = s.observe(ctx, false); err != nil {
+	if _, err = s.observe(withReadReserve(ctx, 30*time.Second+readAttemptBound), false); err != nil {
 		return err
 	}
 	raw, code, err := s.exchangeFixed(ctx, helperOperation{
@@ -102,7 +102,7 @@ func (s *Session) Start(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	if _, err := s.observe(ctx, false); err != nil {
+	if _, err := s.observe(withReadReserve(ctx, readAttemptBound+time.Second), false); err != nil {
 		return err
 	}
 	raw, code, err := s.exchangeFixed(ctx, helperOperation{
@@ -128,7 +128,7 @@ func (s *Session) ExportCandidate(ctx context.Context) (Candidate, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
 	defer cancel()
-	before, err := s.inspect(ctx, true)
+	before, err := s.inspect(withReadReserve(ctx, 30*time.Second+readAttemptBound), true)
 	if err != nil {
 		return Candidate{}, err
 	}

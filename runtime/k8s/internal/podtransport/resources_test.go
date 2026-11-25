@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -584,5 +585,72 @@ func TestResourceReadinessRetriesTransientReads(t *testing.T) {
 				t.Fatalf("transient read not retried: %v reads=%d", err, reads.Load())
 			}
 		})
+	}
+}
+
+// A read reserve keeps a retry from starving the caller's next step (audit of
+// #805): with too little room for the reserve plus a full attempt, a
+// transient failure is returned after the first attempt; without a reserve,
+// or with room for it, the read retries.
+func TestReadReserveLimitsRetries(t *testing.T) {
+	failing := func(calls *int) func() ([]byte, int, error) {
+		return func() ([]byte, int, error) {
+			*calls++
+			return nil, 0, ErrTransport
+		}
+	}
+	expires := time.Now().Add(time.Minute)
+	for _, tc := range []struct {
+		name    string
+		budget  time.Duration
+		reserve time.Duration
+		retried bool
+	}{
+		{"no-reserve", 2 * time.Second, 0, true},
+		{"reserve-too-large", 5 * time.Second, 10 * time.Second, false},
+		{"room-for-reserve", 20 * time.Second, time.Second, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), tc.budget)
+			defer cancel()
+			if tc.reserve > 0 {
+				ctx = withReadReserve(ctx, tc.reserve)
+			}
+			calls := 0
+			if _, _, err := retryTransient(ctx, expires, failing(&calls)); err == nil {
+				t.Fatal("failure hidden")
+			}
+			if (calls > 1) != tc.retried {
+				t.Fatalf("calls=%d, want retried=%v", calls, tc.retried)
+			}
+		})
+	}
+}
+
+// Every read that shares its budget with a side-effecting or long step that
+// follows keeps a reserve (audits of #805): the first ConfigMap read before
+// the pod POST, the start and import observations, the candidate and review
+// export observations, and the publication observation.
+func TestReadReserveCallSites(t *testing.T) {
+	want := map[string][]string{
+		"resources.go": {"r.getConfig(withReadReserve(ctx, readAttemptBound+time.Second), configUID)"},
+		"workspace.go": {
+			"s.observe(withReadReserve(ctx, 30*time.Second+readAttemptBound), false)",
+			"s.observe(withReadReserve(ctx, readAttemptBound+time.Second), false)",
+			"s.inspect(withReadReserve(ctx, 30*time.Second+readAttemptBound), true)",
+		},
+		"exchange.go": {"s.inspect(withReadReserve(ctx, 2*readAttemptBound), true)"},
+		"review.go":   {"s.inspect(withReadReserve(ctx, 2*readAttemptBound), true)"},
+	}
+	for file, sites := range want {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, site := range sites {
+			if !strings.Contains(string(raw), site) {
+				t.Errorf("%s lost the read reserve %q", file, site)
+			}
+		}
 	}
 }
