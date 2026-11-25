@@ -236,3 +236,14 @@ func TestReadStopNamesTheBoundedReadStep(t *testing.T) {
 		t.Fatal("unbounded read step")
 	}
 }
+
+func TestExportStopNamesTheBoundedExportStep(t *testing.T) {
+	for _, stage := range []string{"export", "export-before", "export-helper-exit-2", "export-decode", "export-after-identity"} {
+		if got := DiagnosticStage(ControllerError{stage}); got != stage {
+			t.Fatalf("%s: %q", stage, got)
+		}
+	}
+	if DiagnosticStage(ControllerError{"export-sensitive"}) != "unknown" {
+		t.Fatal("unbounded export step")
+	}
+}

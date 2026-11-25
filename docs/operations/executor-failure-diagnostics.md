@@ -314,6 +314,27 @@ A waiting status with a container ID and any reason (for example
 is every other rule above. The repository-tests observation of the verifier
 accepts the same created state as waiting.
 
+## Candidate export stops
+
+After the generator's worker exits (exit 0, or the step-budget exit), the
+controller exports its workspace. A failed export used to stop as a bare
+`export`. It now names the step:
+
+| Stop | Meaning |
+|---|---|
+| `export-before` | The observation before the export failed (a transport or permission error). |
+| `export-before-running` | The worker was not terminated when the export began. |
+| `export-helper-transport` | The export helper exchange failed. |
+| `export-helper-exit-N` | The export helper exited with code N (1 to 255). |
+| `export-decode` | The exported bundle was invalid or bound to another source. |
+| `export-after` | The observation after the export failed. |
+| `export-after-identity` | The worker's exit changed between the two observations. |
+
+The export has a 46-second budget. The first observation keeps 35 seconds for
+the 30-second export and the observation after it, so a quick failure of the
+first observation can still be retried for about 5 seconds instead of losing a
+finished candidate.
+
 ## Verification transport stops
 
 The verifier logs `verification reconciliation stopped safely: <stage>`. For
