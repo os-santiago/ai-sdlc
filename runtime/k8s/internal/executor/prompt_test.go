@@ -17,7 +17,7 @@ func TestPromptIncludesIssueWithoutLiteralClosingFence(t *testing.T) {
 // (modelbroker.ObserveReviewResponse and reviewresult.Verdict): an answer
 // outside them is refused and the review stops as uncertain.
 func TestReviewPromptStatesTheGuardedContract(t *testing.T) {
-	p := BuildReviewPrompt(Assignment{Repository: "owner/repo", IssueNumbers: []int{1}}, "policy")
+	p := BuildReviewPrompt(Assignment{Repository: "owner/repo", IssueNumbers: []int{1}}, "policy", 8)
 	for _, rule := range []string{
 		"at most 4 tool calls per turn",
 		"no verdict in a turn that\n  requests tools",
@@ -51,5 +51,17 @@ func TestPromptAsksForTargetedEditsWithinTheAnswerBound(t *testing.T) {
 	}
 	if strings.Index(p, "edit_file") > strings.Index(p, "<untrusted-issue-data>") {
 		t.Fatal("edit guidance must be trusted context, before the issue data")
+	}
+}
+
+func TestReviewPromptStatesTheTurnBudget(t *testing.T) {
+	p := strings.Join(strings.Fields(BuildReviewPrompt(Assignment{Repository: "owner/repo", IssueNumbers: []int{1}}, "policy", 8)), " ")
+	for _, rule := range []string{"at most 8 model turns in total, including the final answer", "Request several reads in one turn (up to 4)", "give the final answer before the budget ends"} {
+		if !strings.Contains(p, rule) {
+			t.Fatal("turn budget guidance missing", rule)
+		}
+	}
+	if strings.Index(p, "at most 8 model turns") > strings.Index(p, "<untrusted-review-data>") {
+		t.Fatal("budget guidance must precede untrusted data")
 	}
 }

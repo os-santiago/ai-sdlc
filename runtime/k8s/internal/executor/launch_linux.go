@@ -174,7 +174,7 @@ func Run(ctx context.Context, assignmentDigest string) int {
 	prompt := stateDirectory + "/run/prompt.md"
 	promptText := BuildPrompt(a, policy)
 	if p.Version == ReviewProfileVersion {
-		promptText = BuildReviewPrompt(a, policy)
+		promptText = BuildReviewPrompt(a, policy, p.MaxSteps)
 	}
 	if os.WriteFile(prompt, []byte(promptText), 0600) != nil {
 		return 1
