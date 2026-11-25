@@ -244,6 +244,5 @@ the runtime namespace.
 
 - Lease expiries, gate denials and budget consumption (audit gap 3.2).
 - Traces with correlation IDs, alert rules and dashboards (R4).
-- Scheduled database backup, the other half of B10.
 - No end-to-end scrape has been recorded on a live cluster yet; the chart
   output and the endpoints are covered by tests only.

@@ -8,14 +8,19 @@ spec:
   podSelector:
     matchLabels:
       {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
-    {{- if .Values.build.enabled }}
+    {{- if or .Values.build.enabled .Values.backup.enabled }}
     matchExpressions:
+      {{- if .Values.build.enabled }}
       - {key: app.kubernetes.io/component, operator: NotIn, values: [build-controller]}
       {{- if .Values.release.enabled }}
       - {key: app.kubernetes.io/component, operator: NotIn, values: [deployer]}
       {{- end }}
       {{- if .Values.provenance.enabled }}
       - {key: app.kubernetes.io/component, operator: NotIn, values: [provenance-verifier]}
+      {{- end }}
+      {{- end }}
+      {{- if .Values.backup.enabled }}
+      - {key: app.kubernetes.io/component, operator: NotIn, values: [backup]}
       {{- end }}
     {{- end }}
   policyTypes: [Ingress, Egress]

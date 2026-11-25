@@ -16,6 +16,8 @@ Start here:
 - [Runtime upgrades and installation details](operations/runtime-upgrades.md).
 - [Runtime metrics](operations/metrics.md): queue depth, safe stops, model
   calls and deliveries, and how to scrape them.
+- [Database backup and restore](operations/backup-and-restore.md): the
+  opt-in scheduled backup, checking a backup, and restoring it.
 
 Current operational documentation lives with the Kubernetes/OpenShift runtime:
 
