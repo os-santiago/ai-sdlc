@@ -16,7 +16,7 @@ Start from [`examples/ai-sdlc-sample.project.json`](../../examples/ai-sdlc-sampl
 | `verification.command` | The test command as an argument list, run from the repository root |
 | `verification.result` | `exitCode: true`, plus an optional JUnit `junitPath` for per-test evidence. Without a report the decision is *weak* and the reviewer must judge it |
 | `verification.testGlobs` | The files that count as tests |
-| `verification.harnessGlobs` | Files a candidate may not change (build, dependency and test configuration) |
+| `verification.harnessGlobs` | Files a candidate may not change (build, dependency and test configuration, and the configuration of any `verification.analysis` tool, such as `.golangci.yml`, so a candidate cannot switch off its own analysis) |
 | `verification.env` | Optional reviewed toolchain variables, for example `GOTOOLCHAIN=local` |
 | `verification.analysis` | Optional static analysis: up to 4 argv `commands` and one `timeoutSeconds` (10–300, at most 600 in total), for example `{"commands": [["go", "vet", "./..."]], "timeoutSeconds": 120}`. They run offline in `verification.image`, on the baseline and on the candidate. A command that passes on the baseline and fails on the candidate refuses it (`refused-candidate-analysis`). See the [candidate baseline](../architecture/candidate-quality-baseline.md#static-analysis) |
 | `publication` | The paths a candidate may change, and the file and size limits |

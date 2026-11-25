@@ -48,8 +48,11 @@ The merge gate does not need a new evidence field.
 
   The reviewer sees the same summary.
 
-The reference recipes (Homedir, Saferus) are scanned too. Their recipe
-revisions hash their reviewed oracle files and do not bind the scan version.
+Only `repository-tests/v1`, the recipe every manifest repository uses,
+binds the scan version. The reference recipes (Homedir, Saferus) are
+fixed demonstration oracles. Their candidates are scanned too, but their
+recipe revisions hash only their reviewed oracle files, so a proof from them
+does not attest that the scan ran.
 
 ## Secret scanning
 
@@ -150,6 +153,23 @@ not match the test sources.
 - **Choosing commands.** Prefer analyzers that do not execute repository
   code (`go vet`, linters). An analyzer that runs repository code has the
   same known limits as the tests.
+- **Protect the analyzer's configuration.** A candidate can switch off its
+  own analysis by changing the analyzer's configuration, for example
+  `.golangci.yml`, an ESLint or Ruff configuration, or a `Makefile` target
+  the command calls. List those files in `verification.harnessGlobs`, so a
+  candidate that changes them is refused as `harness-changed`. In-source
+  suppressions, such as `//nolint` or `eslint-disable` comments, cannot be
+  refused by path. They are visible in the delta the independent reviewer
+  reads, and the reviewer should treat a new suppression as a finding.
+- **Time budget.** Analysis runs inside the same 30-minute verification
+  command window as the tests (`MaxCommandAge`). The candidate pod needs
+  about `repeat × timeoutSeconds + commands × analysis timeout`, plus up to
+  300 s for image pulls and the ready wait. The manifest rules bound analysis
+  to 600 s, but they do not check the sum against the window: a manifest
+  near the test limits (for example `repeat: 3` with a 600 s timeout)
+  already exceeds it without analysis. Keep the total well inside 30
+  minutes. Otherwise the run stops at `runs-context` or `runs-deadline`,
+  which is never a pass.
 
 ## Upgrade and default behaviour
 
@@ -165,13 +185,26 @@ not match the test sources.
   opt-in would leave the default installation without the baseline that P3
   requires.
 - **In-flight work.** The `repository-tests/v1` recipe revision changes.
-  Work in flight at upgrade under the previous version stops safely, and its
-  work item takes the usual path:
-  - a verification command still queued is rejected when polled;
-  - a verified candidate not yet published is not published;
-  - a published pull request not yet merged is not merged by the runtime.
+  Work signed under the previous revision can never pass the current proof
+  checks. Every queue skips or rejects it, so it cannot block newer work:
+  - a queued verification command is rejected when polled;
+  - review selection and publication handoff skip a passed verification
+    whose command names another revision;
+  - merge selection skips a published pull request whose verification
+    command names another revision. Before this, such a pull request would
+    have been selected first on every tick and denied
+    (`merge-authority-denied`), blocking every later merge.
 
-  Drain the inner loop before upgrading to avoid these stops: no queued
+  Selection only filters. It never changes historical evidence and grants
+  no authority. A queued review or publication request under the old
+  revision fails its proof check and lapses at its expiry, which is at most
+  the 30-minute command window.
+
+  **Recovery.** A skipped pull request stays open, unmerged, with its work
+  item still running, as for any other obsolete publication (see the
+  [merge installation guide](../operations/merge-installation.md)). Close
+  the pull request by hand; delivering the change needs a fresh eligible
+  issue. To avoid this, drain the inner loop before upgrading: no queued
   verification and no open runtime pull request.
 - **Matching runner.** The runner that executes analysis ships in the
   model-mailbox image, which the installer pins from the same revision as
