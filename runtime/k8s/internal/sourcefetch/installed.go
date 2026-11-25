@@ -2,6 +2,7 @@ package sourcefetch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -114,6 +115,17 @@ func loadCredential(path, repository string) (string, error) {
 	raw, err := io.ReadAll(io.LimitReader(file, maxCredentialBytes+1))
 	if err != nil || len(raw) == 0 || len(raw) > maxCredentialBytes {
 		return "", errCredentialInvalid
+	}
+	// Go matches JSON keys to fields case-insensitively; require the exact
+	// keys too, as the installer does, so both accept the same documents.
+	var keys map[string]json.RawMessage
+	if json.Unmarshal(raw, &keys) != nil || len(keys) != 5 {
+		return "", errCredentialInvalid
+	}
+	for _, key := range []string{"version", "host", "repository", "access", "token"} {
+		if _, ok := keys[key]; !ok {
+			return "", errCredentialInvalid
+		}
 	}
 	var document installedCredential
 	if authority.DecodeStrict(raw, &document) != nil || document.Version != CredentialVersion ||

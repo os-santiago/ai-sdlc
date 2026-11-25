@@ -98,7 +98,8 @@ outside the release namespace.
 - `token` (model clients): 32 to 128 characters of `[A-Za-z0-9_-]`.
 - `credential.json` (source reader): `{"version": 1, "host": "github.com",
   "repository": "<owner>/<name>", "access": "read", "token": "<token>"}`, at
-  most 8 KiB, no other field. `repository` must equal the policy's repository
+  most 8 KiB, no other field. Keys are matched exactly (case-sensitive) by
+  both the installer and the verifier. `repository` must equal the policy's repository
   exactly; `token` is 20 to 4096 characters of `[A-Za-z0-9_.-]`. Use a token
   that can only read that one repository, for example a fine-grained personal
   access token restricted to it with only the *Contents: read* permission (and

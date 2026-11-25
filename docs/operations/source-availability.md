@@ -12,7 +12,8 @@ is introduced. Current policy, issue admission, profile and A-Dev context are
 checked before and after source acquisition; claim and preparation revalidate
 again before any workload effect.
 
-HTTP 403 with exhausted quota or a `Retry-After` (GitHub's secondary limit) and
+HTTP 403 with exhausted quota, a `Retry-After` or a "secondary rate limit" message
+(GitHub's secondary limit) and
 HTTP 429 are reported as `source-rate-limited`.
 Bounded `Retry-After` or rate reset metadata suppress repeated anonymous requests
 across source keys; other unavailable reads back off ten seconds for that key.
@@ -126,9 +127,22 @@ Secret.
 
 Replace the token in the Secret; the next poll uses it without a restart.
 
+Two rarer cases:
+
+- The pre-claim check and the fetch read the file separately. A Secret
+  rotated into a bad state between the two makes the fetch stop at
+  `source-credential-invalid` after the claim, so that one attempt ends.
+- The Secret volume is not `optional`. If the Secret is deleted while
+  `verifier.sourceCredential` is `true`, a restarted or rescheduled verifier
+  Pod stays in `ContainerCreating` until the Secret exists again or the value
+  is set back to `false`. This fails safe: nothing reads source anonymously.
+
 A rate limit on the credential's own quota still stops at the
-`source-rate-limited` names above. GitHub's secondary rate limit (403 or 429
-with `Retry-After`) is classified as a rate limit too, not as a rejection.
+`source-rate-limited` names above. GitHub's secondary rate limit is
+classified as a rate limit too, not as a rejection: a 403 or 429 with
+`Retry-After`, or a 403 whose message contains "secondary rate limit" (case
+ignored; at most 4 KiB of the error body is searched for that phrase, and the
+body is never logged or returned).
 
 ## Conformance source authentication
 

@@ -1,9 +1,11 @@
 package sourcefetch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -37,13 +39,27 @@ func (c *Client) responseError(response *http.Response) error {
 // errNetwork marks a request that failed before any HTTP response.
 var errNetwork = fmt.Errorf("source request did not complete: %w", ErrSource)
 
+// maxErrorBodyBytes bounds the error body read to recognize a secondary
+// rate limit. The body is only searched for one fixed phrase: it is never
+// logged, returned or stored.
+const maxErrorBodyBytes = 4096
+
+func secondaryRateLimit(response *http.Response) bool {
+	if response.Body == nil {
+		return false
+	}
+	raw, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBodyBytes))
+	return bytes.Contains(bytes.ToLower(raw), []byte("secondary rate limit"))
+}
+
 func httpSourceError(response *http.Response) error {
 	now := time.Now()
 	retry := now.Add(10 * time.Second)
 	// GitHub reports both its primary limit (remaining quota 0) and its
-	// secondary limit (a Retry-After) as 403 or 429.
+	// secondary limit (a Retry-After, or only the phrase in the message) as
+	// 403 or 429.
 	limited := response.StatusCode == 429 || response.StatusCode == 403 &&
-		(response.Header.Get("X-RateLimit-Remaining") == "0" || response.Header.Get("Retry-After") != "")
+		(response.Header.Get("X-RateLimit-Remaining") == "0" || response.Header.Get("Retry-After") != "" || secondaryRateLimit(response))
 	if limited {
 		retry = now.Add(time.Minute)
 		if seconds, e := strconv.ParseInt(response.Header.Get("Retry-After"), 10, 64); e == nil && seconds >= 5 && seconds <= 3600 {

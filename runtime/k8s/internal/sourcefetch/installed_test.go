@@ -67,6 +67,10 @@ func newFakeForge(t *testing.T) *fakeForge {
 			}
 			w.WriteHeader(status)
 			// A provider body must never reach an error.
+			if headers["X-Fixture-Body"] == "secondary" {
+				fmt.Fprint(w, `{"message":"You have exceeded a Secondary Rate Limit. Please wait. `+r.Header.Get("Authorization")+`"}`)
+				return
+			}
 			fmt.Fprint(w, `{"message":"Bad credentials `+r.Header.Get("Authorization")+`"}`)
 			return
 		}
@@ -167,6 +171,8 @@ func TestRejectedCredentialIsANamedStopWithoutAnonymousFallback(t *testing.T) {
 		{"secondary-rate-limit", 403, map[string]string{"Retry-After": "30"}, false, true},
 		{"too-many-requests", 429, nil, false, true},
 		{"not-found", 404, nil, false, false},
+		// GitHub may name a secondary limit only in the message, with quota left.
+		{"secondary-rate-limit-message", 403, map[string]string{"X-RateLimit-Remaining": "4999", "X-Fixture-Body": "secondary"}, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			forge := newFakeForge(t)
@@ -186,18 +192,33 @@ func TestRejectedCredentialIsANamedStopWithoutAnonymousFallback(t *testing.T) {
 			if len(api) != 1 || api[0] != "Bearer "+fakeReadToken || len(archive) != 0 {
 				t.Fatalf("fallback or retry after refusal: api=%q archive=%d", api, len(archive))
 			}
-			if strings.Contains(err.Error(), fakeReadToken) || strings.Contains(err.Error(), "Bad credentials") {
+			if strings.Contains(err.Error(), fakeReadToken) || strings.Contains(err.Error(), "Bad credentials") || strings.Contains(strings.ToLower(err.Error()), "secondary") {
 				t.Fatal("credential or provider body in error")
 			}
 		})
 	}
-	// Without a credential the same statuses stay availability failures.
-	forge := newFakeForge(t)
-	forge.apiStatus = 401
-	client, _ := New("fixture/product", "")
-	forge.point(client)
-	if _, err := client.Fetch(context.Background(), testSHA); err == nil || CredentialRejected(err) {
-		t.Fatal("anonymous refusal named as a credential stop")
+	// Without a credential the same statuses stay availability failures, and
+	// a secondary limit named only in the message is still a rate limit.
+	for _, tc := range []struct {
+		status  int
+		headers map[string]string
+		limited bool
+	}{
+		{401, nil, false},
+		{403, nil, false},
+		{403, map[string]string{"X-RateLimit-Remaining": "59", "X-Fixture-Body": "secondary"}, true},
+	} {
+		forge := newFakeForge(t)
+		forge.apiStatus, forge.apiHeaders = tc.status, tc.headers
+		client, _ := New("fixture/product", "")
+		forge.point(client)
+		_, err := client.Fetch(context.Background(), testSHA)
+		if err == nil || CredentialRejected(err) || RateLimited(err) != tc.limited {
+			t.Fatalf("anonymous %d misclassified: %v", tc.status, err)
+		}
+		if api, _ := forge.calls(); len(api) != 1 || api[0] != "" {
+			t.Fatal("anonymous refusal retried or authenticated")
+		}
 	}
 }
 
@@ -228,6 +249,9 @@ func TestInvalidInstalledCredentialStopsBeforeAnyRead(t *testing.T) {
 		"oversized":        []byte(strings.Repeat(" ", maxCredentialBytes+1)),
 		"empty":            []byte{},
 		"not-json":         []byte(fakeReadToken),
+		// Go would match these keys case-insensitively; the installer would not.
+		"case-variant-key": []byte(`{"version":1,"host":"github.com","repository":"fixture/product","access":"read","Token":"` + fakeReadToken + `"}`),
+		"extra-case-key":   []byte(`{"version":1,"host":"github.com","repository":"fixture/product","access":"read","token":"` + fakeReadToken + `","TOKEN":"` + fakeReadToken + `"}`),
 	}
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
