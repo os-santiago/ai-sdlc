@@ -355,6 +355,15 @@ def _call_target(call):
     return (function["name"], path) if path is not None else (None, None)
 
 
+def correction_text(path):
+    """The fixed correction for ``path``: the path is bounded, its
+    non-printable characters replaced, and it is quoted as a JSON string so
+    it reads as data, never as instructions."""
+    shown = "".join(c if c.isprintable() else "?" for c in path[:MAX_CORRECTION_PATH_CHARS])
+    shown += "..." if len(path) > MAX_CORRECTION_PATH_CHARS else ""
+    return CORRECTION % json.dumps(shown, ensure_ascii=False)
+
+
 class _Call:
     """What one ``complete`` shares across its upstream attempts: one deadline,
     one degenerate-retry allowance, and the rewrite guard while it may still
@@ -381,8 +390,8 @@ class RewriteGuard:
     it. A ``write_file`` to a new path, or to a path the model itself created
     earlier, is never refused. Paths are compared after ``guard_path``."""
 
-    def __init__(self, request, messages, deadline):
-        self.request, self.deadline = request, deadline
+    def __init__(self, request, messages, deadline, can_retry=True):
+        self.request, self.deadline, self.can_retry = request, deadline, can_retry
         self.existing = self.preexisting(messages)
         self.scanned = set()
         self.retries = {}
@@ -398,7 +407,9 @@ class RewriteGuard:
             calls = message.get("tool_calls") if message.get("role") == "assistant" else None
             for call in calls if isinstance(calls, list) else []:
                 name, path = _call_target(call)
-                if name in (READ_TOOL, EDIT_TOOL) and path not in created and RewriteGuard.opened(results.get(call.get("id"))):
+                call_id = call.get("id") if name is not None else None
+                result = results.get(call_id) if isinstance(call_id, str) else None
+                if name in (READ_TOOL, EDIT_TOOL) and path not in created and RewriteGuard.opened(result):
                     existing.add(path)
                 elif name == WRITE_TOOL and path not in existing:
                     created.add(path)
@@ -424,13 +435,12 @@ class RewriteGuard:
     def retry(self, path):
         """The validated retry request for ``path``, or ``None`` when the
         corrected request leaves the contract (too many messages or bytes)
-        or too little of the call budget remains."""
-        if self.deadline - time.monotonic() < REWRITE_RETRY_MIN_SECONDS:
+        or too little of the call budget remains, or the adapter cannot keep
+        a retry inside the deadline."""
+        if not self.can_retry or self.deadline - time.monotonic() < REWRITE_RETRY_MIN_SECONDS:
             return None
         if path not in self.retries:
-            shown = "".join(c if c.isprintable() else "?" for c in path[:MAX_CORRECTION_PATH_CHARS])
-            shown += "..." if len(path) > MAX_CORRECTION_PATH_CHARS else ""
-            request = dict(self.request, messages=list(self.request["messages"]) + [{"role": "user", "content": CORRECTION % shown}])
+            request = dict(self.request, messages=list(self.request["messages"]) + [{"role": "user", "content": correction_text(path)}])
             try:
                 validate_request(request)
             except ValueError:
@@ -747,7 +757,10 @@ class _Stream:
                 self.keep(("arguments", index), value)
                 entry["arguments"] += value
         if self.rewrite is not None:
-            path = self.rewrite.streamed(index, entry["name"], entry["arguments"])
+            try:
+                path = self.rewrite.streamed(index, entry["name"], entry["arguments"])
+            except Exception:
+                path, self.rewrite = None, None  # the guard never fails a stream
             if path is not None:
                 raise _Stop(RewriteRefused(path))
 
@@ -838,14 +851,23 @@ class Adapter:
         the refused path is known, the others judge the final message. A
         retry that rewrites again is returned unchanged (fail open) and
         counted in ``rewrite_passed``, as is a refused answer when no retry
-        fits. One degenerate retry is shared by all attempts."""
+        fits. When a refused final message was complete and its retry fails,
+        that first answer is returned the same way; a stream stopped early
+        has no complete answer, so there the retry's failure is the call's.
+        A guard that cannot judge the request is disabled for the call. One
+        degenerate retry is shared by all attempts."""
         messages, tools, names, tokens = validate_request(request)
         validate_parameters(request, names)
         call = _Call(time.monotonic() + (seconds or self.seconds))
+        guard = None
         # Inert when write_file is not offered (a narrowed review gateway).
-        guard = (RewriteGuard(request, messages, call.deadline)
-                 if self.rewrite_guard and not probe and WRITE_TOOL in names else None)
+        if self.rewrite_guard and not probe and WRITE_TOOL in names:
+            try:
+                guard = RewriteGuard(request, messages, call.deadline, can_retry=self.honors_deadline)
+            except Exception:
+                guard = None  # never fail a call because the guard could not judge it
         retries = passed = 0
+        kept = None  # a complete answer refused on its final message
         self.truncation_ok, self._call = probe, call
         try:
             while True:
@@ -858,12 +880,20 @@ class Adapter:
                     request, retries = guard.retries[refused.path], retries + 1
                     messages, tools, names, tokens = validate_request(request)
                     continue
-                path = guard.refused(completion.message) if guard is not None else None
-                retry = guard.retry(path) if path is not None and retries < REWRITE_RETRIES else None
+                except Exception:
+                    if kept is None:
+                        raise
+                    completion, passed = kept, 1  # fail open: no worse than without the guard
+                    break
+                try:
+                    path = guard.refused(completion.message) if guard is not None else None
+                    retry = guard.retry(path) if path is not None and retries < REWRITE_RETRIES else None
+                except Exception:
+                    guard, path, retry = None, None, None
                 if retry is None:
                     passed = int(path is not None)
                     break
-                request, retries = retry, retries + 1
+                kept, request, retries = completion, retry, retries + 1
                 messages, tools, names, tokens = validate_request(request)
         except Exception as error:
             error.degenerate_retries, error.rewrite_retries = call.degenerate_retries, retries
@@ -879,6 +909,10 @@ class Adapter:
 
     truncation_ok = False
     _call = None
+    # Whether ``backend`` keeps to the ``seconds`` it is given. An adapter
+    # that does not could overrun the call's deadline on a rewrite retry, so
+    # its refused rewrites are passed through instead of retried.
+    honors_deadline = True
 
     def backend(self, request, messages, tools, names, tokens, seconds):
         raise NotImplementedError
@@ -888,6 +922,8 @@ class AgentCLIAdapter(Adapter):
     """A local agent CLI acting only as a completion model (no tool execution)."""
     name = "agent-cli"
     reports_usage = False
+    # The CLI backend runs on its own fixed timeout (24 s), not ``seconds``.
+    honors_deadline = False
 
     def backend(self, request, messages, tools, names, tokens, seconds):
         from codexcli_openai_wrapper import complete

@@ -51,7 +51,7 @@ READ_EXISTING = conversation(assistant(("r1", "read_file", {"path": "./" + EXIST
 
 
 def correction(path):
-    return {"role": "user", "content": adapters.CORRECTION % path}
+    return {"role": "user", "content": adapters.correction_text(path)}
 
 
 def write_deltas(path, chunks=1, delay=0.0, call_id="w"):
@@ -260,6 +260,34 @@ class StreamingRewriteTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 3)
         self.assertEqual((caught.exception.rewrite_retries, len(base.SSEUpstream.seen)), (1, 2))
 
+    def test_a_failed_retry_after_an_early_stop_fails_the_call(self):
+        # The stopped stream left no complete answer to fall back to.
+        failed = base.stream(base.chunk(content="x"), {"error": {"code": 500, "message": "boom"}}, done=False)
+        base.SSEUpstream.script = [slow_rewrite, failed]
+        with self.assertRaisesRegex(RuntimeError, "completion backend failed") as caught:
+            self.adapter().complete(READ_EXISTING)
+        self.assertEqual((caught.exception.rewrite_retries, len(base.SSEUpstream.seen)), (1, 2))
+
+    def test_odd_history_or_a_failing_guard_never_fails_the_call(self):
+        odd = conversation({"role": "assistant", "content": "", "tool_calls": [
+            {"id": ["r1"], "type": "function", "function": {"name": "read_file", "arguments": json.dumps({"path": EXISTING})}},
+            {"id": {"r": 2}, "type": "function", "function": {"name": "edit_file", "arguments": json.dumps({"path": EXISTING})}}]},
+            result("r1", TEST_SOURCE))
+        self.assertEqual(adapters.RewriteGuard.preexisting(adapters.validate_request(odd)[0]), frozenset())
+        base.SSEUpstream.script = [rewrite()]
+        completion = self.adapter().complete(odd)
+        self.assertEqual((completion.rewrite_retries, completion.rewrite_passed, len(base.SSEUpstream.seen)), (0, 0, 1))
+        # A guard step that raises is disabled; a failing stream check still
+        # leaves the final-message check, which here retries.
+        for targets, expected in ((("preexisting",), (0, 1)), (("streamed", "refused"), (0, 1)), (("streamed",), (1, 2))):
+            with self.subTest(targets=targets), contextlib.ExitStack() as stack:
+                for target in targets:
+                    stack.enter_context(unittest.mock.patch.object(adapters.RewriteGuard, target, side_effect=TypeError("boom")))
+                base.SSEUpstream.seen, base.SSEUpstream.script = [], [rewrite()]
+                completion = self.adapter().complete(READ_EXISTING)
+                self.assertEqual(self.names(completion), ["write_file"])
+                self.assertEqual((completion.rewrite_retries, len(base.SSEUpstream.seen)), expected)
+
     def test_a_correction_that_would_leave_the_contract_is_not_sent(self):
         # 256 messages is the contract's limit: no room for the correction.
         full = dict(READ_EXISTING, messages=READ_EXISTING["messages"] + [{"role": "user", "content": "more"}] * (256 - len(READ_EXISTING["messages"])))
@@ -289,7 +317,7 @@ class NonStreamingRewriteTests(base.UpstreamCase):
         self.assertEqual(completion.message["tool_calls"][0]["function"]["name"], "edit_file")
         self.assertEqual((completion.rewrite_retries, completion.rewrite_passed, len(base.FakeUpstream.seen)), (1, 0, 2))
         last = base.FakeUpstream.seen[1][2]["messages"][-1]
-        self.assertEqual(last["content"][-1], {"type": "text", "text": adapters.CORRECTION % EXISTING})
+        self.assertEqual(last["content"][-1], {"type": "text", "text": adapters.correction_text(EXISTING)})
 
     def test_openai_json_answer_rewriting_twice_is_passed_through(self):
         call = [{"id": "w", "type": "function", "function": {"name": "write_file",
@@ -299,17 +327,29 @@ class NonStreamingRewriteTests(base.UpstreamCase):
         self.assertEqual((completion.rewrite_retries, completion.rewrite_passed, len(base.FakeUpstream.seen)), (1, 1, 2))
         self.assertEqual(base.FakeUpstream.seen[1][2]["messages"][-1], correction(EXISTING))
 
-    def test_agent_cli_retry_sends_the_corrected_request(self):
+    def test_agent_cli_ignores_the_deadline_so_its_rewrite_is_passed_through(self):
         seen = []
         def complete(request):
             seen.append(request)
-            name = "write_file" if len(seen) == 1 else "edit_file"
             return {"role": "assistant", "content": "", "tool_calls": [
-                {"id": "c", "type": "function", "function": {"name": name, "arguments": json.dumps({"path": EXISTING, "patch": "p"})}}]}
+                {"id": "c", "type": "function", "function": {"name": "write_file", "arguments": json.dumps({"path": EXISTING, "content": "x"})}}]}
         with unittest.mock.patch("codexcli_openai_wrapper.complete", complete):
-            completion = adapters.AgentCLIAdapter(seconds=30).complete(READ_EXISTING)
-        self.assertEqual((completion.rewrite_retries, len(seen)), (1, 2))
-        self.assertEqual(seen[1]["messages"], READ_EXISTING["messages"] + [correction(EXISTING)])
+            completion = adapters.AgentCLIAdapter(seconds=300).complete(READ_EXISTING)
+        self.assertEqual((completion.rewrite_retries, completion.rewrite_passed, len(seen)), (0, 1, 1))
+
+    def test_a_failed_retry_returns_the_complete_refused_answer(self):
+        call = [{"id": "w", "type": "function", "function": {"name": "write_file",
+                 "arguments": json.dumps({"path": EXISTING, "content": "x"})}}]
+        for failure in ((500, {"error": "x"}, {}), (200, base.openai_reply(content="par") | {"choices": [
+                {"index": 0, "finish_reason": "length", "message": {"role": "assistant", "content": "par"}}]}, {})):
+            with self.subTest(status=failure[0]):
+                base.FakeUpstream.seen = []
+                base.FakeUpstream.reply = lambda _body, failure=failure: (200, base.openai_reply(calls=call), {}) \
+                    if len(base.FakeUpstream.seen) == 1 else failure
+                completion = adapters.OpenAIAdapter(self.base + "/v1/chat/completions", "m", 30).complete(READ_EXISTING)
+                self.assertEqual(len(base.FakeUpstream.seen), 2)
+                self.assertEqual((completion.rewrite_retries, completion.rewrite_passed), (1, 1))
+                self.assertEqual(json.loads(completion.message["tool_calls"][0]["function"]["arguments"])["path"], EXISTING)
 
 
 class ConfigurationAndLoggingTests(unittest.TestCase):

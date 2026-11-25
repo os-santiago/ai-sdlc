@@ -374,7 +374,14 @@ after removing `.` segments (a leading `./`) and repeated `/`. Nothing else
 is resolved.
 
 A `write_file` to a new path, or to a path the model created earlier in the
-conversation, is never refused. Neither is `edit_file`.
+conversation with `write_file`, is never refused. Neither is `edit_file`. A
+file the model created with `edit_file` (a patch from `/dev/null`) looks like
+an edited, pre-existing file: a later `write_file` to it is refused once and
+recovers on the retry.
+
+The guard never fails a call itself. A history it cannot judge (for example a
+tool call id that is not a string) is ignored, and any error inside the guard
+turns it off for that call.
 
 - **Detection.** The `openai` adapter checks each streamed tool call. As soon
   as a `write_file` call's `path` value is complete and names a pre-existing
@@ -385,15 +392,26 @@ conversation, is never refused. Neither is `edit_file`.
   check the final message the same way.
 - **Retry.** The gateway sends the same request once more with one user
   message appended:
-  `write_file on the existing file <path> was refused: it would replace the
+  `write_file on the existing file "<path>" was refused: it would replace the
   whole file and drop what you do not repeat. Change it with edit_file (a
-  unified diff), or put new code and new tests in a new file.` The path text
-  is cut at 200 characters. The retry shares the call's deadline and its one
-  degenerate retry, and needs at least 10 s of the budget left.
+  unified diff), or put new code and new tests in a new file.` The path is
+  cut at 200 characters and quoted as a JSON string, so it reads as data. The
+  retry shares the call's deadline and its one degenerate retry, and needs at
+  least 10 s of the budget left. The `agent-cli` adapter runs on its own fixed
+  backend timeout (24 s), not the call's deadline, so it never retries: its
+  refused rewrite is passed through.
 - **Fail open.** If the retry proposes a rewrite again, its answer is returned
-  unchanged. So is a refused answer when no retry fits: too little budget, or
-  a corrected request that would exceed the request contract (256 messages).
-  The result is never worse than without the guard. The event records it.
+  unchanged. So is a refused answer when no retry fits: too little budget, an
+  adapter that cannot keep the deadline, or a corrected request that would
+  exceed the request contract (256 messages). When the refusal came from a
+  complete final message and the retry then fails (deadline, `degenerate`,
+  `truncated`, upstream error), that first answer is returned unchanged. In
+  these cases the result is never worse than without the guard, and the event
+  records `rewritePassed`.
+- **Early stop.** A stream stopped at its path has no complete first answer.
+  If its retry fails, the call fails with the retry's reason. The first answer
+  would have been the refused rewrite, which is the answer the guard exists to
+  prevent.
 
 `AI_SDLC_MODEL_GATEWAY_REWRITE_GUARD` (`true` or `false`, default `true`)
 turns the guard on or off. Any other value refuses to start. The chart sets
@@ -428,9 +446,10 @@ absent otherwise:
 
 When the [rewrite guard](#rewrite-guard) refused an answer and retried, the
 event carries `"rewriteRetries": 1`, also on a failure of the retry. When a
-refused rewrite was returned unchanged (the retry rewrote again, or no retry
-fitted), it carries `"rewritePassed": 1`. Both are absent otherwise. They are
-counts only, never paths or content.
+refused rewrite was returned unchanged, it carries `"rewritePassed": 1`: the
+retry rewrote again, the retry failed after a complete first answer, or no
+retry fitted. Both are absent otherwise. They are counts only, never paths or
+content.
 
 On the review gateway with a [tool allowlist](#review-tool-allowlist), every
 event also carries `"toolsWithheld": N` when the request offered tools outside
