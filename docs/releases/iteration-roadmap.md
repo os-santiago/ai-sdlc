@@ -87,12 +87,23 @@ above.
 
 1. Finish battery 24. Capture any reviewer final answer that is refused, and
    fix the cause deterministically (guidance or a bounded format repair that
-   never changes the verdict).
+   never changes the verdict). Done: review tool narrowing and turn budget.
 2. Run repeated batteries until each cell has enough issues for an interval.
    Record rates per issue and per stop class.
 3. Close the issue from the merged pull request for manifest repositories (B9,
-   open pull request #715).
+   #715). Done.
 4. Keep the evaluation evidence current ([batteries 19–24](../evidence/2026-11-25-local-model-batteries-19-24.md)).
+5. Find the cause of each dominant stop by reproducing one stopped attempt,
+   not from its stop name alone. On 2026-11-25, applying one refused candidate
+   locally showed a whole-file rewrite of a large test file. The fix is a
+   gateway guard (#797). Single failed API reads on a loaded cluster are now
+   retried within bounds (#799, #800), and repeated source reads no longer
+   exhaust the forge's anonymous quota (#802).
+
+**Learned:** guidance alone did not change the model's behaviour (the rewrite
+rule was already in the prompt). Mechanical limits at the tool-call boundary
+did. Each change got an independent audit, and every audit found a real
+defect before merge.
 
 ### Iteration 2: the second cell and the evaluation harness
 
