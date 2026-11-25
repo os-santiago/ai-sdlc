@@ -1,0 +1,152 @@
+{{- if .Values.backup.enabled }}
+{{- /* Scheduled database backup (docs/operations/backup-and-restore.md). The
+CronJob reads the bootstrap owner's URL from the database Secret, the same
+reference the migrator uses, and never receives a secret value through Helm
+values. files/backup.sh splits the password into PGPASSWORD, so it never
+reaches a command line. */}}
+{{- $image := .Values.backup.image | default .Values.postgres.local.image }}
+{{- if not (regexMatch "^[^\\s@]+@sha256:[0-9a-f]{64}$" $image) }}
+{{- fail "backup.image (or postgres.local.image when it is empty) must be pinned by digest" }}
+{{- end }}
+{{- $claim := .Values.backup.storage.existingClaim | default (printf "%s-backup" (include "ai-sdlc-k8s-runtime.fullname" .)) }}
+{{- if not .Values.backup.storage.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $claim }}
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+  annotations:
+    # Backups outlive the release: helm uninstall leaves this claim.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.backup.storage.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests: {storage: {{ .Values.backup.storage.size | quote }}}
+---
+{{- end }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-backup
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  {{- with .Values.backup.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ int .Values.backup.startingDeadlineSeconds }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 8 }}
+        app.kubernetes.io/component: backup
+    spec:
+      backoffLimit: {{ int .Values.backup.backoffLimit }}
+      activeDeadlineSeconds: {{ int .Values.backup.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: backup
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          enableServiceLinks: false
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            runAsNonRoot: true
+            {{- if not .Values.openshift.enabled }}
+            # The PostgreSQL image's postgres user. On OpenShift, restricted-v2
+            # assigns the UID and fsGroup from the namespace range instead.
+            runAsUser: 70
+            runAsGroup: 70
+            fsGroup: 70
+            {{- end }}
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: backup
+              image: {{ $image | quote }}
+              imagePullPolicy: IfNotPresent
+              command: [/bin/sh, -c]
+              args:
+                - |
+                  {{- .Files.Get "files/backup.sh" | nindent 18 }}
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef: {name: {{ include "ai-sdlc-k8s-runtime.databaseSecretName" . }}, key: {{ include "ai-sdlc-k8s-runtime.databaseSecretKey" . }}}
+                - {name: BACKUP_MODE, value: backup}
+                - {name: BACKUP_DIR, value: /backup}
+                - {name: BACKUP_RETENTION, value: {{ int .Values.backup.retention | quote }}}
+                - {name: BACKUP_LOCK_STALE_SECONDS, value: {{ int .Values.backup.activeDeadlineSeconds | quote }}}
+                - {name: HOME, value: /tmp}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: {drop: [ALL]}
+                readOnlyRootFilesystem: true
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+              volumeMounts:
+                - {name: backup, mountPath: /backup}
+                - {name: tmp, mountPath: /tmp}
+          volumes:
+            - name: backup
+              persistentVolumeClaim: {claimName: {{ $claim }}}
+            - {name: tmp, emptyDir: {sizeLimit: 64Mi}}
+{{- if .Values.networkPolicy.enabled }}
+---
+# The backup pod accepts no traffic and reaches only DNS and the database:
+# the bundled PostgreSQL pod, or networkPolicy.databaseEgressCIDRs for an
+# external one, on the same port the components use. The internal policy
+# excludes this pod, so it does not gain the components' other peers.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-backup
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backup
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+{{- if .Values.openshift.enabled }}
+    {{- include "ai-sdlc-k8s-runtime.openshiftDNSEgress" . | nindent 4 }}
+{{- else }}
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+{{- end }}
+    {{- if .Values.postgres.local.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: postgres
+      ports: [{protocol: TCP, port: 5432}]
+    {{- end }}
+    {{- range .Values.networkPolicy.databaseEgressCIDRs }}
+    - to: [{ipBlock: {cidr: {{ . | quote }}}}]
+      ports: [{protocol: TCP, port: 5432}]
+    {{- end }}
+{{- end }}
+{{- end }}

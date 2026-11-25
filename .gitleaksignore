@@ -32,3 +32,8 @@ e230101d596e7639432a8198639f74cc6dd656f0:tools/verify_build_admission.py:generic
 # in the candidate secret scanner's false-positive test (B8); current
 # sources split it further so no detector matches.
 164eb32bcc20bf646df36dd679bdebac09e5875f:runtime/k8s/internal/secretscan/scan_test.go:generic-api-key:103
+
+# Synthetic URL marker in the backup script tests (PR #798, B10); current
+# sources build it from parts so no detector matches.
+7efa63c7a5e57844134903ea369d93bc87e98093:tools/test_helm_chart_backup.py:generic-api-key:404
+7efa63c7a5e57844134903ea369d93bc87e98093:tools/test_helm_chart_backup.py:generic-api-key:429

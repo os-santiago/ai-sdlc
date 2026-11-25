@@ -21,7 +21,7 @@ from test_helm import CHART, HELM
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / 'docs/operations/helm-chart-secret-contract.md'
 UPSTREAM_SECRET = 'fixture-model-upstream'
-WORKLOADS = ('Deployment', 'StatefulSet', 'Job')
+WORKLOADS = ('Deployment', 'StatefulSet', 'Job', 'CronJob')
 
 # Every templated Secret name expression in the chart source and the contract
 # row it renders. A literal name must appear in the contract table itself.
@@ -91,7 +91,8 @@ def secret_references(docs):
     for doc in docs:
         if doc['kind'] not in WORKLOADS:
             continue
-        pod = doc['spec']['template']['spec']
+        workload = doc['spec']['jobTemplate']['spec'] if doc['kind'] == 'CronJob' else doc['spec']
+        pod = workload['template']['spec']
         secret_volumes = {}
         for volume in pod.get('volumes', []):
             if 'secret' in volume:
@@ -166,8 +167,10 @@ class SecretContractTests(unittest.TestCase):
         source = copy.deepcopy(maximal)
         source['verifier']['sourceCredential'] = True
         cls.renderings = {}
+        backup = dict(copy.deepcopy(maximal), backup={'enabled': True})
         for name, values in [('maintenance', {}), ('shadow', {'runtime': {'mode': 'shadow'}}),
-                             ('maximal', maximal), ('upstream', upstream), ('source-credential', source)]:
+                             ('maximal', maximal), ('upstream', upstream), ('source-credential', source),
+                             ('backup', backup)]:
             result = chart.render_build(values)
             if result.returncode != 0:
                 raise AssertionError(name + ': ' + result.stderr)

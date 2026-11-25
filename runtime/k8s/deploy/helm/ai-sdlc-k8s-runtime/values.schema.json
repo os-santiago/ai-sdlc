@@ -301,6 +301,125 @@
         "databaseURLSecret"
       ]
     },
+    "backup": {
+      "description": "Scheduled pg_dump of the runtime database to a volume; off by default (renders nothing). See docs/operations/backup-and-restore.md.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "schedule": {
+          "description": "Cron schedule of the backup, five fields.",
+          "type": "string",
+          "pattern": "^\\S+( \\S+){4}$"
+        },
+        "timeZone": {
+          "description": "IANA time zone of the schedule; empty uses the controller's.",
+          "type": "string"
+        },
+        "retention": {
+          "description": "Complete backups kept on the volume.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "image": {
+          "description": "pg_dump image pinned by digest; empty uses postgres.local.image.",
+          "type": "string",
+          "pattern": "^$|^[^\\s@]+@sha256:[0-9a-f]{64}$"
+        },
+        "storage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingClaim": {
+              "description": "Existing PersistentVolumeClaim; empty creates <fullname>-backup.",
+              "type": "string"
+            },
+            "size": {
+              "type": "string",
+              "minLength": 1
+            },
+            "storageClass": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "existingClaim",
+            "size",
+            "storageClass"
+          ]
+        },
+        "startingDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 10
+        },
+        "backoffLimit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "activeDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 60
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "requests": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "cpu": {
+                  "type": "string"
+                },
+                "memory": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "cpu",
+                "memory"
+              ]
+            },
+            "limits": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "cpu": {
+                  "type": "string"
+                },
+                "memory": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "cpu",
+                "memory"
+              ]
+            }
+          },
+          "required": [
+            "requests",
+            "limits"
+          ]
+        }
+      },
+      "required": [
+        "enabled",
+        "schedule",
+        "timeZone",
+        "retention",
+        "image",
+        "storage",
+        "startingDeadlineSeconds",
+        "backoffLimit",
+        "activeDeadlineSeconds",
+        "resources"
+      ]
+    },
     "engine": {
       "type": "string"
     },

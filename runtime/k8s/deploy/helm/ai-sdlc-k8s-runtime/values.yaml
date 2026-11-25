@@ -102,6 +102,39 @@ postgres:
     instances: 1
     storageSize: 1Gi
   databaseURLSecret: {name: ai-sdlc-postgres-app, key: uri}
+# Scheduled database backup (docs/operations/backup-and-restore.md). Off by
+# default: nothing below renders and recorded installations render unchanged.
+# Enabled, a CronJob runs pg_dump --format=custom as the bootstrap owner, read
+# from the database Secret (postgres.databaseURLSecret or the CloudNativePG
+# <clusterName>-app Secret), against the same database the components use,
+# bundled or external. Each run writes one timestamped file to the backup
+# volume and keeps the newest retention files.
+backup:
+  enabled: false
+  # Cron schedule, interpreted in timeZone.
+  schedule: "17 2 * * *"
+  timeZone: Etc/UTC
+  # Complete backups kept on the volume; older ones are deleted after a
+  # successful run.
+  retention: 7
+  # pg_dump image, pinned by digest. Empty uses postgres.local.image, so
+  # pg_dump matches the bundled server's major version. For an external
+  # server, use an image whose pg_dump major version is the same or newer.
+  image: ""
+  storage:
+    # An existing PersistentVolumeClaim. Empty creates <fullname>-backup with
+    # size and storageClass; Helm keeps it on uninstall.
+    existingClaim: ""
+    size: 5Gi
+    storageClass: ""
+  # A run that cannot start within this many seconds of its schedule is skipped.
+  startingDeadlineSeconds: 600
+  # Retries of a failed run, and the deadline of one run with its retries.
+  backoffLimit: 1
+  activeDeadlineSeconds: 3600
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: "1", memory: 512Mi}
 # Maintenance never invokes this engine or loads a model credential.
 engine: scc
 modelProvider:
