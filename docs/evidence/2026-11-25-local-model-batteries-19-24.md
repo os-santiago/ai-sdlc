@@ -14,7 +14,7 @@ This complements the
 | Battery | Installation | Result | Dominant stop |
 |---|---|---|---|
 | 19 | HIP backend, 300 s call ceiling | stopped early | calls over the ceiling |
-| 20 | plus a 570 s call ceiling and 8,192-token answers | partial | whole-file rewrites; publication helper exit after 300 s calls |
+| 20 | plus a 570 s call ceiling | partial | whole-file rewrites; publication helper exit after 300 s calls |
 | 21 | plus the manifest toolchain (#773) | partial | refused patches, whole-file rewrites |
 | 22 | plus hunk-count repair (#777) and the answer bound (#778) | partial | publication after calls over 300 s |
 | 23 | plus the streaming guard (#779) and the mailbox keepalive (#781) | partial: first candidates reach verification and review | steps run out; reviewer offered forbidden tools |
@@ -70,9 +70,9 @@ Batteries 19–23 were stopped as soon as their dominant stop was understood, so
    all 13 image digests keyless. The resolver verified the 9 locked images
    with no legacy exception, bound to the main push workflow and the exact
    revision (#783).
-8. **Transient transport stops.** These were `readiness`, `candidate` and
-   `cleanup-after-baseline`, coinciding with brief RuntimeClass read failures.
-   They are tracked in #790.
+8. **Transient transport stops.** `readiness` and `candidate` (tracked in
+   #790), and `cleanup-after-baseline`. Some coincided with brief RuntimeClass
+   read failures.
 
 ## Evaluation-only infrastructure
 
