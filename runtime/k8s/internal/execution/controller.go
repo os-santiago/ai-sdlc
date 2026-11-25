@@ -105,6 +105,9 @@ func DiagnosticStage(err error) string {
 	if detail, ok := strings.CutPrefix(stopped.Stage, "execution-read-"); ok && podtransport.KnownReadStep(detail) {
 		return stopped.Stage
 	}
+	if detail, ok := strings.CutPrefix(stopped.Stage, "export-"); ok && podtransport.KnownExportStep(detail) {
+		return stopped.Stage
+	}
 	return "unknown"
 }
 
@@ -279,6 +282,9 @@ func finishGeneration(ctx context.Context, db *store.DB, l *Lifecycle, end gener
 		exported = raw
 		return store.LifecycleResult{UID: in.PodUID, Digest: workspacebundle.Digest(raw), Bytes: len(raw), ExitCode: &code}, e
 	}); err != nil {
+		if step := podtransport.ExportStep(err); podtransport.KnownExportStep(step) {
+			*stage = "export-" + step
+		}
 		return record, ControllerError{*stage}
 	}
 	if stepBudget && l.Unchanged(exported) {

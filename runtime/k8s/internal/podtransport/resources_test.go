@@ -654,3 +654,25 @@ func TestReadReserveCallSites(t *testing.T) {
 		}
 	}
 }
+
+// Each export failure is named by a bounded step (battery 30 lost a candidate
+// at a bare "export"); the error still unwraps to the transport error.
+func TestExportStepsAreBounded(t *testing.T) {
+	for _, step := range []string{"before", "before-running", "helper-transport", "helper-exit-1", "helper-exit-255", "helper-exit", "decode", "after", "after-identity"} {
+		if !KnownExportStep(step) {
+			t.Errorf("%q not known", step)
+		}
+	}
+	for _, step := range []string{"", "helper-exit-0", "helper-exit-256", "export", "before-x"} {
+		if KnownExportStep(step) {
+			t.Errorf("%q accepted", step)
+		}
+	}
+	if helperExitStep(3) != "helper-exit-3" || helperExitStep(0) != "helper-exit" || helperExitStep(300) != "helper-exit" {
+		t.Fatal("helper exit step")
+	}
+	err := exportFailure("decode", ErrTransport)
+	if ExportStep(err) != "decode" || !errors.Is(err, ErrTransport) {
+		t.Fatal("export step lost or hides the transport error")
+	}
+}
