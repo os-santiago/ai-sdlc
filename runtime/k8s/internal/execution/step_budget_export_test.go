@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"strings"
 	"testing"
 
@@ -20,6 +21,7 @@ type fakeEnd struct {
 	observeErr     error
 	raw            []byte
 	exports        int
+	exportErr      error
 }
 
 func (e *fakeEnd) WorkerFailure(context.Context) (string, string, int32, error) {
@@ -28,6 +30,9 @@ func (e *fakeEnd) WorkerFailure(context.Context) (string, string, int32, error) 
 
 func (e *fakeEnd) Export(context.Context) ([]byte, int32, error) {
 	e.exports++
+	if e.exportErr != nil {
+		return nil, e.code, e.exportErr
+	}
 	return e.raw, e.code, nil
 }
 
@@ -234,5 +239,18 @@ func TestUnchangedComparesTheStartingTrees(t *testing.T) {
 		if l.Unchanged(tc.raw) != tc.want {
 			t.Fatal(name)
 		}
+	}
+}
+
+// A failed export through the real lifecycle effect keeps its named step
+// (audit of #810: RunEffect replaces the operation's error).
+func TestFailedExportNamesItsStep(t *testing.T) {
+	f, l, _, raw, pod := exitedWorkerFixture(t)
+	candidatePrivileges(t, f.preparationFixture.fixture)
+	end := &fakeEnd{pod: pod, container: "containerd://" + strings.Repeat("b", 64), raw: raw, exportErr: podtransport.ExportFailureForTest("before")}
+	stage := "execution"
+	_, err := finishGeneration(context.Background(), f.db, l, end, nil, &stage)
+	if err == nil || stage != "export-before" || DiagnosticStage(err) != "export-before" {
+		t.Fatalf("stage %q diagnostic %q err %v", stage, DiagnosticStage(err), err)
 	}
 }

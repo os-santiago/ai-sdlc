@@ -189,6 +189,10 @@ func helperExitStep(code int) string {
 
 var exportSteps = regexp.MustCompile(`^(before|before-running|helper-transport|helper-exit(-([1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))?|decode|after|after-identity)$`)
 
+// ExportFailureForTest builds a named export failure for other packages'
+// tests; production code never calls it.
+func ExportFailureForTest(step string) error { return exportFailure(step, ErrTransport) }
+
 // ExportStep returns the named export step, or "" for any other error.
 func ExportStep(err error) string {
 	var failed exportError
