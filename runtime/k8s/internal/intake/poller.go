@@ -120,10 +120,10 @@ func (p Poller) PollOnce(ctx context.Context, now time.Time) (int, error) {
 	}
 	result, finishErr := p.DB.Pool.ExecContext(finishCtx, `UPDATE intake_cursors SET watermark=CASE WHEN $1 THEN $2 ELSE watermark END,next_poll=$3,failures=$4,lease_token=NULL,lease_until=NULL WHERE repository=$5 AND config_digest=$6 AND lease_token=$7 AND lease_until>now()`, scanErr == nil, now, time.Now().Add(delay), failures, p.Config.Repository, p.Config.Digest(), reserved.token)
 	if finishErr != nil {
-		return count, errors.New("intake cursor completion failed")
+		return count, scanFailure("cursor-completion", errors.New("intake cursor completion failed"))
 	}
 	if n, err := result.RowsAffected(); err != nil || n != 1 {
-		return count, errors.New("intake cursor lease lost")
+		return count, scanFailure("cursor-lease", errors.New("intake cursor lease lost"))
 	}
 	return count, scanErr
 }
@@ -133,7 +133,7 @@ func (p Poller) scan(ctx context.Context, reserved lease) (int, error) {
 	for page := 1; page <= p.Config.MaxPages; page++ {
 		issues, err := p.Source.Issues(ctx, time.Time{}, page)
 		if err != nil {
-			return count, err
+			return count, scanFailure("list", err)
 		}
 		for _, listed := range issues {
 			if listed.IsPR() {
@@ -141,7 +141,7 @@ func (p Poller) scan(ctx context.Context, reserved lease) (int, error) {
 			}
 			var tracked bool
 			if err := p.DB.Pool.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM intake_revisions WHERE repository=$1 AND issue_number=$2)`, p.Config.Repository, listed.Number).Scan(&tracked); err != nil {
-				return count, errors.New("intake revision lookup failed")
+				return count, scanFailure("revision-lookup", errors.New("intake revision lookup failed"))
 			}
 			if !tracked && (!listed.HasLabel(p.Config.TriggerLabel) || listed.State != "open") {
 				continue
@@ -149,7 +149,7 @@ func (p Poller) scan(ctx context.Context, reserved lease) (int, error) {
 			if tracked && (!listed.HasLabel(p.Config.TriggerLabel) || listed.State != "open") {
 				unchanged, err := p.unchangedIneligible(ctx, listed)
 				if err != nil {
-					return count, err
+					return count, scanFailure("ineligible-check", err)
 				}
 				if unchanged {
 					continue
@@ -160,14 +160,14 @@ func (p Poller) scan(ctx context.Context, reserved lease) (int, error) {
 			observedAt := time.Now().UTC()
 			snapshot, err := p.snapshot(ctx, listed.Number)
 			if err != nil {
-				return count, err
+				return count, scanFailure("snapshot", err)
 			}
 			if !snapshot.Eligible && !tracked {
 				continue
 			}
 			created, err := p.record(ctx, snapshot, reserved.token, observedAt)
 			if err != nil {
-				return count, err
+				return count, scanFailure("record", err)
 			}
 			if created {
 				count++
@@ -177,7 +177,7 @@ func (p Poller) scan(ctx context.Context, reserved lease) (int, error) {
 			return count, nil
 		}
 	}
-	return count, errors.New("intake pagination bound exceeded; watermark retained")
+	return count, scanFailure("pagination", errors.New("intake pagination bound exceeded; watermark retained"))
 }
 
 // unchangedIneligible reports whether a tracked issue that cannot be eligible
@@ -336,4 +336,51 @@ func (p Poller) record(ctx context.Context, snapshot Snapshot, leaseToken string
 		return false, errors.New("intake atomic persistence failed")
 	}
 	return created, nil
+}
+
+// scanError names the bounded scan step that failed, so an incomplete scan's
+// log line says where it stopped (evaluation battery 29: two incomplete scans
+// in two hours each aged the intake evidence past its window, and the log
+// named neither cause). It unwraps to the original error, so callers and the
+// Retry-After backoff see the same error as before.
+type scanError struct {
+	step  string
+	cause error
+}
+
+func (e scanError) Error() string { return "intake scan stopped at " + e.step }
+func (e scanError) Unwrap() error { return e.cause }
+
+func scanFailure(step string, err error) error { return scanError{step: step, cause: err} }
+
+// ScanStep returns a bounded description of why a scan was incomplete: its
+// step, a GitHub status class when the forge refused, and "timeout" when the
+// scan's 90-second bound ended. It never includes a response body, a URL or
+// an issue's content.
+func ScanStep(err error) string {
+	if err == nil {
+		return ""
+	}
+	step := "other"
+	var failed scanError
+	if errors.As(err, &failed) {
+		step = failed.step
+	}
+	var api *forge.APIError
+	switch {
+	case errors.As(err, &api):
+		class := "other"
+		switch {
+		case api.Status == 403 || api.Status == 429:
+			class = strconv.Itoa(api.Status)
+		case api.Status >= 500 && api.Status <= 599:
+			class = "5xx"
+		case api.Status >= 400 && api.Status <= 499:
+			class = "4xx"
+		}
+		step += "-status-" + class
+	case errors.Is(err, context.DeadlineExceeded):
+		step += "-timeout"
+	}
+	return step
 }

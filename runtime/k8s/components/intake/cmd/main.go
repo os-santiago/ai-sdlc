@@ -43,7 +43,7 @@ func main() {
 			}
 			poller := intake.Poller{DB: component.DB, Config: config, Source: client, Authority: component.Authority}
 			if n, err := poller.PollOnce(ctx, time.Now()); err != nil {
-				log.Print("intake scan incomplete; cursor retained")
+				log.Printf("intake scan incomplete at %s; cursor retained", intake.ScanStep(err))
 			} else if n > 0 {
 				log.Printf("intake recorded %d issue transitions", n)
 			}
