@@ -164,10 +164,23 @@ class GitHub:
         self.repository = repository
 
     def label(self, issue, add):
+        """Adds or removes the trigger label. A transient forge failure is
+        retried with the same backoff as observations: battery 29 aborted
+        after many hours when one label edit met a GitHub API outage.
+        Editing a label is idempotent, so repeating it is safe."""
         flag = '--add-label' if add else '--remove-label'
-        result = subprocess.run(['gh', 'issue', 'edit', str(issue), '--repo', self.repository, flag, LABEL],
-                                capture_output=True, text=True, timeout=60)
-        if add and result.returncode != 0:
+        for delay in RETRY_DELAYS + (None,):
+            try:
+                result = subprocess.run(['gh', 'issue', 'edit', str(issue), '--repo', self.repository, flag, LABEL],
+                                        capture_output=True, text=True, timeout=60)
+                if result.returncode == 0:
+                    return
+            except subprocess.TimeoutExpired:
+                pass
+            if delay is None:
+                break
+            time.sleep(delay)
+        if add:
             raise RuntimeError('could not add the trigger label to issue %d' % issue)
 
     def merged_pull(self, issue, since):
@@ -208,8 +221,10 @@ def attempt(runtime, github, issue, timeout):
     time.sleep(40)
     before = runtime.snapshot(issue)
     since = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-    started = time.monotonic()
     github.label(issue, True)
+    # The attempt's budget and its reported seconds start once the label is
+    # on: a label edit retried through a forge outage is not runtime time.
+    started = time.monotonic()
     result = {'issue': issue, 'startedAt': since}
     # Verifications are compared per execution: a repair execution that stops
     # after an earlier verification in the same attempt is still a failure.
