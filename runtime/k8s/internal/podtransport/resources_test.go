@@ -586,3 +586,42 @@ func TestResourceReadinessRetriesTransientReads(t *testing.T) {
 		})
 	}
 }
+
+// A read reserve keeps a retry from starving the caller's next step (audit of
+// #805): with too little room for the reserve plus a full attempt, a
+// transient failure is returned after the first attempt; without a reserve,
+// or with room for it, the read retries.
+func TestReadReserveLimitsRetries(t *testing.T) {
+	failing := func(calls *int) func() ([]byte, int, error) {
+		return func() ([]byte, int, error) {
+			*calls++
+			return nil, 0, ErrTransport
+		}
+	}
+	expires := time.Now().Add(time.Minute)
+	for _, tc := range []struct {
+		name    string
+		budget  time.Duration
+		reserve time.Duration
+		retried bool
+	}{
+		{"no-reserve", 2 * time.Second, 0, true},
+		{"reserve-too-large", 5 * time.Second, 10 * time.Second, false},
+		{"room-for-reserve", 20 * time.Second, time.Second, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), tc.budget)
+			defer cancel()
+			if tc.reserve > 0 {
+				ctx = withReadReserve(ctx, tc.reserve)
+			}
+			calls := 0
+			if _, _, err := retryTransient(ctx, expires, failing(&calls)); err == nil {
+				t.Fatal("failure hidden")
+			}
+			if (calls > 1) != tc.retried {
+				t.Fatalf("calls=%d, want retried=%v", calls, tc.retried)
+			}
+		})
+	}
+}

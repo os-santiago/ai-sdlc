@@ -274,8 +274,10 @@ func (s *Session) Publish(ctx context.Context, e modelmailbox.Envelope) (err err
 	// One observation that also reports a terminated worker: publication is
 	// refused exactly as before, and an exit of the pinned worker instance
 	// (for example 124 when the launcher's run budget ended while this call
-	// was in flight) is named by its bounded exit code.
-	observed, err := s.inspect(ctx, true)
+	// was in flight) is named by its bounded exit code. A retry of this read
+	// must leave the respond exchange and the after-observation their time, or
+	// a clean refusal before anything was sent would become an ambiguous one.
+	observed, err := s.inspect(withReadReserve(ctx, 2*readAttemptBound), true)
 	if err != nil {
 		return err
 	}
