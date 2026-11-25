@@ -472,7 +472,7 @@ func TestRemovalStepsAreBounded(t *testing.T) {
 // within the same bound (evaluation battery 27 stopped a review at
 // cleanup-config-observe-request after one failed GET); a refusal is not.
 func TestResourceRemovalRetriesTransientFailures(t *testing.T) {
-	for _, which := range []string{"delete-503", "delete-dropped", "observe-dropped", "observe-503", "observe-forbidden", "observe-always-dropped"} {
+	for _, which := range []string{"delete-503", "delete-429", "delete-dropped", "observe-dropped", "observe-503", "observe-502", "observe-forbidden", "delete-forbidden", "delete-always-503", "observe-always-dropped"} {
 		t.Run(which, func(t *testing.T) {
 			var deletes, gets atomic.Int32
 			drop := func(w http.ResponseWriter) {
@@ -485,8 +485,12 @@ func TestResourceRemovalRetriesTransientFailures(t *testing.T) {
 				if request.Method == "DELETE" {
 					n := deletes.Add(1)
 					switch {
-					case which == "delete-503" && n == 1:
+					case which == "delete-503" && n == 1, which == "delete-always-503":
 						w.WriteHeader(503)
+					case which == "delete-429" && n == 1:
+						w.WriteHeader(429)
+					case which == "delete-forbidden":
+						w.WriteHeader(403)
 					case which == "delete-dropped" && n == 1:
 						drop(w)
 					default:
@@ -500,6 +504,8 @@ func TestResourceRemovalRetriesTransientFailures(t *testing.T) {
 					drop(w)
 				case which == "observe-503" && n == 1:
 					w.WriteHeader(503)
+				case which == "observe-502" && n == 1:
+					w.WriteHeader(502)
 				case which == "observe-forbidden":
 					w.WriteHeader(403)
 				default:
@@ -508,8 +514,20 @@ func TestResourceRemovalRetriesTransientFailures(t *testing.T) {
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
+			started := time.Now()
 			err := r.DeleteConfig(ctx, fixtureConfigUID)
+			if time.Since(started) > 3*time.Second {
+				t.Fatal("removal exceeded its bound")
+			}
 			switch which {
+			case "delete-forbidden":
+				if RemovalStep(err) != "delete-permission" || deletes.Load() != 1 || gets.Load() != 0 {
+					t.Fatalf("delete refusal retried or misnamed: %v deletes=%d", err, deletes.Load())
+				}
+			case "delete-always-503":
+				if RemovalStep(err) != "delete-status-503" || deletes.Load() < 2 || gets.Load() != 0 {
+					t.Fatalf("persistent delete failure %q deletes=%d", RemovalStep(err), deletes.Load())
+				}
 			case "observe-forbidden":
 				if RemovalStep(err) != "observe-permission" || gets.Load() != 1 {
 					t.Fatalf("refusal retried or misnamed: %v gets=%d", err, gets.Load())
