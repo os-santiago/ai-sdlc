@@ -124,9 +124,10 @@ func (c *Cache) Fetch(ctx context.Context, repository, sha string) (workspacebun
 		return workspacebundle.Bundle{}, c.failure
 	}
 	bundle, e := c.fetch(ctx, repository, sha)
-	if e != nil && CredentialInvalid(e) {
-		// A local credential file problem made no forge request: caching it
-		// saves no quota and would only outlive a rotation.
+	if e != nil && (CredentialInvalid(e) || CredentialRejected(e)) {
+		// A credential failure is never cached: an invalid file made no
+		// forge request, and a rejection costs one authenticated request per
+		// read. Caching either would outlive a rotated Secret.
 		return workspacebundle.Bundle{}, e
 	}
 	if e != nil {
