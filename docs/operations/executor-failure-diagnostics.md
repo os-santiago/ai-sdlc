@@ -184,22 +184,36 @@ then `snapshot-stale`.
 
 | Where | Checks every | Also ends | Stop when the wait ends |
 |---|---|---|---|
-| Broker, `reservation` check | 3 s | 30 s plus 15 s before the mailbox request expires | `model-authorization-reservation-snapshot-stale` |
-| Broker, `dispatch` check | 3 s | 30 s before the call deadline (the call's or mailbox's expiry less 15 s) | `model-authorization-dispatch-snapshot-stale` |
+| Broker, `reservation` check | 3 s | 35 s plus 15 s before the mailbox request expires | `model-authorization-reservation-snapshot-stale` |
+| Broker, `dispatch` check | 3 s | 35 s before the call deadline (the call's or mailbox's expiry less 15 s) | `model-authorization-dispatch-snapshot-stale` |
 | Broker, `publication` check | 3 s | 10 s before the mailbox request expires | `model-authorization-publication-snapshot-stale` |
 | Generation loop, between model calls | 100 ms | the claim | `execution-authority-snapshot-stale` |
 
-Every wait also ends at the claim and model scope expiry. The 30 seconds kept
-before reservation and dispatch is the provider's default completion timeout
-and the smallest one an installation may select: a wait that would leave less
-refuses instead of reserving or claiming a call that cannot be answered in
-time. A check that passes without waiting is not affected. While the
-generation loop waits it neither reads nor delivers model requests.
+Every wait also ends at the claim and model scope expiry. Before reservation
+and dispatch the broker keeps 30 seconds for the provider, the provider's
+default completion timeout and the smallest one an installation may select,
+plus 5 seconds for the last authorization check (its own bound): a wait that
+would leave less refuses instead of reserving or claiming a call that cannot
+be answered in time. A check that passes without waiting is not affected.
+While the generation loop waits it neither observes the worker nor reads or
+delivers model requests.
+
+A request still waits in the mailbox while the generation loop waits, so it
+can age. The broker therefore refuses a request with less than those 35
+seconds left before its mailbox deadline (its expiry less 15 s) as
+`model-provider-time`, after the reservation check and before anything is
+reserved: no call is spent, and the stop is not a provider failure. The
+30 seconds are fixed, not the gateway's configured completion timeout: that
+timeout is a maximum, a fast model answers well within it, and using it as a
+minimum would refuse most calls. The 30 seconds are not a guarantee that a
+slow model answers in time; the call keeps its own deadline as before. The
+database reservation and claim between the check and the provider call take
+part of the 5-second margin.
 
 Each wait starts at its own first stale refusal, so on one call the waits can
 add up: at most 90 s each at reservation, dispatch and publication, 270 s in
 all with the installed configuration, still inside the call's mailbox window
-(the reservation and dispatch waits end at least 45 s and 30 s before their
+(the reservation and dispatch waits end at least 50 s and 35 s before their
 deadlines, the publication wait 10 s before the mailbox expires). The
 generation loop can wait another 90 s per stale period between calls. All
 waits spend the run's own time budget; none extends the claim, scope, call or

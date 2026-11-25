@@ -114,6 +114,9 @@ func TestStaleEvidenceStopIsBoundedAndReported(t *testing.T) {
 	if DiagnosticStage(ControllerError{"model-authorization-publication-snapshot-stale"}) != "model-authorization-publication-snapshot-stale" {
 		t.Fatal("execution diagnostic drops snapshot-stale")
 	}
+	if DiagnosticStage(ControllerError{"model-provider-time"}) != "model-provider-time" {
+		t.Fatal("execution diagnostic drops provider-time")
+	}
 }
 
 // Only the worker's reader returns stale evidence (to refuse a changed snapshot
@@ -208,7 +211,15 @@ func staleThen(wait time.Duration, stale int, after error, checks *int) func(con
 func TestDriveModelWaitsForStaleEvidenceToBecomeFresh(t *testing.T) {
 	s := &driverSession{requests: []modelmailbox.Envelope{req(1), req(1)}, exitAfter: 2}
 	checks, calls := 0, 0
-	err := driveModel(context.Background(), s, staleThen(time.Second, 3, nil, &checks), func(context.Context, modelmailbox.Envelope) error {
+	stale := staleThen(time.Second, 3, nil, &checks)
+	authorize := func(ctx context.Context) error {
+		// No worker observation or request read happens while stale.
+		if checks < 4 && (s.read != 0 || s.exits != 0) {
+			t.Errorf("observed while stale: reads=%d exits=%d", s.read, s.exits)
+		}
+		return stale(ctx)
+	}
+	err := driveModel(context.Background(), s, authorize, func(context.Context, modelmailbox.Envelope) error {
 		if checks <= 3 {
 			t.Error("delivered while evidence was stale")
 		}
@@ -232,8 +243,8 @@ func TestDriveModelStaleEvidenceThatStaysStaleStopsByName(t *testing.T) {
 	if !errors.Is(err, ErrAuthority) || !errors.As(err, &stopped) || stopped.stage != "execution-authority-snapshot-stale" || DiagnosticStage(ControllerError{stopped.stage}) != stopped.stage {
 		t.Fatalf("stale evidence not stopped by name: %v", err)
 	}
-	if took := time.Since(started); took < 250*time.Millisecond || took > 3*time.Second || checks < 2 || s.read != 0 {
-		t.Fatalf("wait not bounded by the refusal: took=%v checks=%d reads=%d", took, checks, s.read)
+	if took := time.Since(started); took < 250*time.Millisecond || took > 3*time.Second || checks < 2 || s.read != 0 || s.exits != 0 {
+		t.Fatalf("wait not bounded by the refusal, or observed while stale: took=%v checks=%d reads=%d exits=%d", took, checks, s.read, s.exits)
 	}
 }
 

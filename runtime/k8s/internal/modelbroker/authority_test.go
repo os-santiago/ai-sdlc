@@ -301,16 +301,55 @@ func TestBrokerChangedSnapshotRefusesWithoutWaiting(t *testing.T) {
 	}
 }
 
-// A reservation wait leaves the provider minimumProviderTime before the
-// mailbox deadline (its expiry less 15 s), even with an hour-long bound. When
-// less than that remains it does not wait at all, and nothing is reserved.
+// A request that aged in the mailbox (the generation loop waited for fresh
+// evidence before delivering it) is refused as provider-time, before anything
+// is reserved, when the provider would be left less than minimumProviderTime,
+// even though current authority passes on the first check.
+func TestBrokerRefusesAnAgedRequestWithoutSpendingACall(t *testing.T) {
+	for name, tc := range map[string]struct {
+		remaining time.Duration
+		refused   bool
+	}{
+		"aged":   {15*time.Second + providerReserve - time.Second, true},
+		"enough": {15*time.Second + providerReserve + 2*time.Second, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var invoked atomic.Int32
+			d, a, profile, request := brokerFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				invoked.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(completionBody)
+			}, publisherFunc(func(context.Context, modelmailbox.Envelope) error { return nil }))
+			request.ExpiresAt = time.Now().Add(tc.remaining).UnixMilli()
+			result, err := d.Deliver(context.Background(), a.ID, profile, request)
+			if !tc.refused {
+				if err != nil || !result.HandoffConfirmed || invoked.Load() != 1 {
+					t.Fatalf("request with enough time refused: err=%v stage=%q", err, result.FailureStage)
+				}
+				return
+			}
+			if !errors.Is(err, ErrRejected) || result.FailureStage != "provider-time" || SafeFailureStage("provider-time") != "provider-time" || result.DispatchAttempted || invoked.Load() != 0 {
+				t.Fatalf("aged request not refused by name: err=%v stage=%q", err, result.FailureStage)
+			}
+			var count int
+			if err := d.DB.Pool.QueryRow(`SELECT count(*) FROM model_calls WHERE allocation_id=$1`, a.ID).Scan(&count); err != nil || count != 0 {
+				t.Fatal("an aged request spent a call")
+			}
+		})
+	}
+}
+
+// A reservation wait leaves the last check and the provider providerReserve
+// before the mailbox deadline (its expiry less 15 s), even with an hour-long
+// bound. When less than that remains it does not wait at all, and nothing is
+// reserved.
 func TestBrokerStaleEvidenceWaitLeavesProviderTime(t *testing.T) {
 	for name, tc := range map[string]struct {
 		remaining time.Duration
 		waits     bool
 	}{
-		"ends-before-the-mailbox": {15*time.Second + minimumProviderTime + 300*time.Millisecond, true},
-		"too-late-to-wait":        {15*time.Second + minimumProviderTime - time.Second, false},
+		"ends-before-the-mailbox": {15*time.Second + providerReserve + 300*time.Millisecond, true},
+		"too-late-to-wait":        {15*time.Second + providerReserve - time.Second, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fastStaleEvidenceRetry(t)

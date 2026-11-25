@@ -51,12 +51,25 @@ type Result struct {
 // refused only because its issue evidence is stale.
 var staleEvidenceRetry = 3 * time.Second
 
-// minimumProviderTime is the provider time a stale-evidence wait leaves before
-// reservation or dispatch: 30 seconds, the provider's default completion
-// timeout and the smallest one an installation may select. A wait that would
-// leave less refuses as before instead of spending a reserved or claimed call
-// that cannot be answered in time; a check without a wait is not affected.
+// minimumProviderTime is the provider time the broker keeps before a call is
+// reserved or dispatched: 30 seconds, the provider's default completion
+// timeout and the smallest one an installation may select. It is fixed rather
+// than the gateway's configured timeout, which is a maximum: a fast model
+// answers well within it, and using it as a minimum would refuse most calls.
+// A request with less left (for example one that aged in the mailbox while
+// authority waited for fresh evidence) is refused before reservation, and a
+// stale-evidence wait that would leave less refuses instead of reserving or
+// claiming a call that cannot be answered in time.
 const minimumProviderTime = 30 * time.Second
+
+// authorizationBound bounds one authorization check. A wait that ends at a
+// deadline less minimumProviderTime and this bound still leaves the provider
+// minimumProviderTime after its last check.
+const authorizationBound = 5 * time.Second
+
+// providerReserve is the time before a deadline that a stale-evidence wait
+// and the reservation keep for the last authorization check and the provider.
+const providerReserve = minimumProviderTime + authorizationBound
 
 // authorizeWaiting is authorize, except that a refusal at snapshot-stale (the
 // issue evidence is unchanged but older than its window, for example after one
@@ -98,7 +111,7 @@ func (d Dispatcher) authorizeWaiting(ctx context.Context, scope store.ModelScope
 // snapshot-stale refusal may be waited for, as the authority bounds it; that
 // is zero for every other result.
 func (d Dispatcher) authorizeOnce(ctx context.Context, scope store.ModelScope) (until time.Time, wait time.Duration, err error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, authorizationBound)
 	defer cancel()
 	defer func() {
 		if recover() != nil {
@@ -174,9 +187,16 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 	}
 	stage = "authorization-reservation"
 	mailboxDeadline := time.UnixMilli(request.ExpiresAt).Add(-15 * time.Second)
-	until, err := d.authorizeWaiting(ctx, scope, mailboxDeadline.Add(-minimumProviderTime))
+	until, err := d.authorizeWaiting(ctx, scope, mailboxDeadline.Add(-providerReserve))
 	if err != nil {
 		stage = refusedStage(stage, err)
+		return result, ErrRejected
+	}
+	// A request that aged in the mailbox (for example while the generation
+	// loop waited for fresh issue evidence) is refused before anything is
+	// reserved when the provider would be left less than minimumProviderTime.
+	stage = "provider-time"
+	if time.Until(mailboxDeadline) < providerReserve {
 		return result, ErrRejected
 	}
 	ctx, cancelAuthority := context.WithDeadline(ctx, until)
@@ -213,13 +233,13 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 		return result, ErrNotClaimed
 	}
 	stage = "authorization-dispatch"
-	// A stale-evidence wait leaves the provider at least minimumProviderTime
-	// before the call's own deadline below.
+	// A stale-evidence wait leaves the last check and the provider
+	// providerReserve before the call's own deadline below.
 	callDeadline := claim.Call.ExpiresAt.Add(-15 * time.Second)
 	if mailboxDeadline.Before(callDeadline) {
 		callDeadline = mailboxDeadline
 	}
-	until, err = d.authorizeWaiting(ctx, scope, callDeadline.Add(-minimumProviderTime))
+	until, err = d.authorizeWaiting(ctx, scope, callDeadline.Add(-providerReserve))
 	if err != nil {
 		stage = refusedStage(stage, err)
 		d.abandon(ctx, ref)
@@ -324,7 +344,7 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 // request content or a command. It can safely be emitted by the controller.
 func SafeFailureStage(stage string) string {
 	switch stage {
-	case "configuration", "scope", "request-binding", "authorization-reservation", "reservation", "claim", "authorization-dispatch", "deadline", "provider", "completion-commit", "response-envelope", "authorization-publication", "publication", "acknowledgement", "publication-envelope", "publication-encoding", "publication-before-observation", "publication-helper-transport", "publication-helper-exit", "publication-receipt", "publication-after-observation", "publication-response-mutation", "publication-expired", "publication-unknown":
+	case "configuration", "scope", "request-binding", "authorization-reservation", "provider-time", "reservation", "claim", "authorization-dispatch", "deadline", "provider", "completion-commit", "response-envelope", "authorization-publication", "publication", "acknowledgement", "publication-envelope", "publication-encoding", "publication-before-observation", "publication-helper-transport", "publication-helper-exit", "publication-receipt", "publication-after-observation", "publication-response-mutation", "publication-expired", "publication-unknown":
 		return stage
 	}
 	if publicationWorkerExit.MatchString(stage) || publicationHelperExit.MatchString(stage) || authorizationRefusalStage.MatchString(stage) {
