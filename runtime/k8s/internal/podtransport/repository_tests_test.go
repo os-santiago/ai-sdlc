@@ -49,7 +49,8 @@ type testsCluster struct {
 	reply  func(command []string) (string, bool)
 	onExec func(command []string)
 	// podFault, when set, answers the n-th pod GET (from 1): -1 drops the
-	// connection, -2 serves the pod after 3.5 s, another non-zero value is
+	// connection, -2 serves the pod after 3.5 s, -3 answers nothing within
+	// request's 5 s bound, another non-zero value is
 	// written as the status, 0 serves the pod.
 	podFault func(n int) int
 	podGets  int
@@ -175,6 +176,9 @@ func testsServer(t *testing.T, c *testsCluster) *TestsRun {
 				switch fault := c.podFault(n); {
 				case fault == -2:
 					time.Sleep(3500 * time.Millisecond) // slow but valid answer
+				case fault == -3:
+					time.Sleep(6 * time.Second) // past request's 5 s bound: the attempt times out
+					return
 				case fault == -1:
 					if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
 						_ = conn.Close()
@@ -489,12 +493,14 @@ func TestTestsRunAcceptsTheKubeletCreatedState(t *testing.T) {
 func TestTestsRunObservationRetriesTransientFailures(t *testing.T) {
 	p, source := testsFixturePod()
 	honest := honestReply(p, source)
-	for _, which := range []string{"dropped", "503", "429", "slow", "forbidden", "always-dropped"} {
+	for _, which := range []string{"dropped", "503", "429", "slow", "timeout", "forbidden", "always-dropped"} {
 		t.Run(which, func(t *testing.T) {
 			c := &testsCluster{state: "running", reply: honest, podFault: func(n int) int {
 				switch {
 				case which == "slow" && n == 1:
 					return -2
+				case which == "timeout" && n == 1:
+					return -3
 				case which == "always-dropped", which == "dropped" && n == 1:
 					return -1
 				case which == "503" && n == 1:
@@ -520,6 +526,12 @@ func TestTestsRunObservationRetriesTransientFailures(t *testing.T) {
 			case "always-dropped":
 				if TestsStep(err) != "observe-request" || c.podGets < 2 {
 					t.Fatalf("persistent failure %q gets=%d", TestsStep(err), c.podGets)
+				}
+			case "timeout":
+				// A timed-out attempt used up the window on its own; the
+				// read still gets another attempt (battery 29).
+				if err != nil || !status.Ready || c.podGets != 2 {
+					t.Fatalf("timed-out read not retried: %v gets=%d", err, c.podGets)
 				}
 			case "slow":
 				// A slow answer within request's own 5 s bound is not cut
