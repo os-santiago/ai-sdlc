@@ -435,6 +435,7 @@ class _CopyWatch:
         self.target, self.sources = target, sources
         self.seen = set()
         self.matched = dict.fromkeys(sources, 0)
+        self.lines = {source: set() for source in sources}  # the matched lines themselves
 
     def add(self, line):
         line = copy_line(line)
@@ -444,6 +445,7 @@ class _CopyWatch:
         for source, lines in self.sources.items():
             if line in lines:
                 self.matched[source] += 1
+                self.lines[source].add(line)
         if len(self.seen) < COPY_MIN_LINES:
             return None
         for source in sorted(self.sources):
@@ -629,20 +631,51 @@ class RewriteGuard:
     def refused(self, message):
         """The first refusal a final message holds, or ``None``."""
         calls = [_call_arguments(call) for call in message.get("tool_calls") or []]
-        edited = {path for name, path, _ in calls if name == EDIT_TOOL}
         for name, path, arguments in calls:
             if name != WRITE_TOOL:
                 continue
             if path in self.existing:
                 return Refusal("rewrite", path, None)
-            watch = self.watch(path, edited)
             content = arguments.get("content")
-            if watch is not None and isinstance(content, str):
-                for line in content.split("\n"):
-                    source = watch.add(line)
-                    if source is not None:
-                        return Refusal("copy", path, source)
+            moved = set()
+            while isinstance(content, str):
+                watch = self.watch(path, moved)
+                source = self.copied(watch, content) if watch is not None else None
+                if source is None:
+                    break
+                if not self.removes(calls, source, watch.lines[source]):
+                    return Refusal("copy", path, source)
+                moved.add(source)  # a move or split: judge the other sources
         return None
+
+    @staticmethod
+    def copied(watch, content):
+        """The source ``content`` copies, judged on its lines in order and
+        refused at the first prefix that qualifies, as while streaming."""
+        for line in content.split("\n"):
+            source = watch.add(line)
+            if source is not None:
+                return source
+        return None
+
+    @staticmethod
+    def removes(calls, source, copied):
+        """Whether an ``edit_file`` on ``source`` among ``calls`` removes the
+        copied lines: the removal half of a move or split. Its removed lines
+        ("-", not the "---" file header) must cover at least
+        ``COPY_MIN_MATCHED`` of the copied lines, or half of them."""
+        removed = set()
+        for name, path, arguments in calls:
+            patch = arguments.get("patch") if name == EDIT_TOOL and path == source else None
+            if not isinstance(patch, str):
+                continue
+            for line in patch.split("\n"):
+                if line.startswith("-") and not line.startswith("--- ") and line != "---":
+                    normalized = copy_line(line[1:])
+                    if normalized is not None:
+                        removed.add(normalized)
+        covered = len(removed & copied)
+        return covered > 0 and (covered >= COPY_MIN_MATCHED or 2 * covered >= len(copied))
 
     def retry(self, refusal):
         """The validated retry request for ``refusal``, or ``None`` when the

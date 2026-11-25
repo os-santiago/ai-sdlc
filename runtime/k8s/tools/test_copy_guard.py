@@ -42,6 +42,19 @@ SOURCE = "\n".join(SOURCE_LINES)
 LEGIT_LINES = HEADER + table_test("Capitalize", 18) + table_test("SnakeCase", 18)
 
 
+def unified(removed, added=(), start=8):
+    """One edit_file patch on the existing test file."""
+    return "--- a/%s\n+++ b/%s\n@@ -%d,%d +%d,%d @@\n%s" % (
+        EXISTING, EXISTING, start, len(removed), start, len(added),
+        "".join("-" + line + "\n" for line in removed) + "".join("+" + line + "\n" for line in added))
+
+
+# The removal half of a move: the tests leave the existing file.
+REMOVAL = unified(SOURCE_LINES[7:])
+# An additive one-line edit: nothing leaves the existing file.
+ADDITION = unified([], ["// See textutil_test_new.go."])
+
+
 def scc_read(text, offset=1, limit=None):
     """SCC's read_file result, as src/tools/read-file.ts builds it: the raw
     lines (no line numbers) from ``offset``, then a note after a blank line."""
@@ -126,6 +139,14 @@ class CopyRules(unittest.TestCase):
         for line in ("}", "\t})", "", '"os"', ")", "\t}{"):
             self.assertIsNone(adapters.copy_line(line))
         self.assertEqual(adapters.copy_line("  if  got != tt.want {\t"), "if got != tt.want {")
+
+    def test_the_bounds_are_a_prefix_rule(self):
+        copied = [line for line in SOURCE_LINES if adapters.copy_line(line)][:adapters.COPY_MIN_LINES]
+        fresh = ["\tassertNewBehavior(t, %d, \"case %d\")" % (i, i) for i in range(60)]
+        # Copied lines first: refused at line 40, whatever follows.
+        self.assertEqual(self.guard().refused(self.message(copied + fresh)), copy_refusal())
+        # New lines first: under 60% at every point, so it passes.
+        self.assertIsNone(self.guard().refused(self.message(fresh + copied)))
 
     def test_a_small_new_file_below_the_line_bound_passes(self):
         small = [line for line in SOURCE_LINES if adapters.copy_line(line)][:adapters.COPY_MIN_LINES - 1]
@@ -269,7 +290,7 @@ class StreamingCopyTests(unittest.TestCase):
     def test_a_streamed_move_is_left_to_the_final_message(self):
         edit_first = base.stream(
             base.chunk(calls=[{"index": 0, "id": "e", "type": "function", "function": {
-                "name": "edit_file", "arguments": json.dumps({"path": EXISTING, "patch": "p"})}}]),
+                "name": "edit_file", "arguments": json.dumps({"path": EXISTING, "patch": REMOVAL})}}]),
             base.chunk(calls=[{"index": 1, "id": "w", "type": "function", "function": {
                 "name": "write_file", "arguments": json.dumps({"path": NEW, "content": SOURCE})[:-1]}}]),
             base.chunk(calls=[{"index": 1, "function": {"arguments": "}"}}]),
@@ -322,18 +343,39 @@ class MoveTests(base.UpstreamCase):
         return {"id": name, "type": "function", "function": {"name": name, "arguments": json.dumps(dict(arguments))}}
 
     def test_a_move_with_its_removal_in_the_same_answer_is_not_a_copy(self):
-        move = [self.call("write_file", path=NEW, content=SOURCE), self.call("edit_file", path="./" + EXISTING, patch="p")]
+        move = [self.call("write_file", path=NEW, content=SOURCE), self.call("edit_file", path="./" + EXISTING, patch=REMOVAL)]
         base.FakeUpstream.reply = (200, base.openai_reply(calls=move), {})
         completion = adapters.OpenAIAdapter(self.base + "/v1/chat/completions", "m", 30).complete(READ)
         self.assertEqual((completion.copy_retries, completion.copy_passed, len(base.FakeUpstream.seen)), (0, 0, 1))
         # An edit of another file is no move.
         base.FakeUpstream.seen = []
-        other = [move[0], self.call("edit_file", path="textutil/textutil.go", patch="p")]
+        other = [move[0], self.call("edit_file", path="textutil/textutil.go", patch=REMOVAL)]
         replies = [(200, base.openai_reply(calls=other), {}), (200, base.openai_reply(calls=move), {})]
         base.FakeUpstream.reply = lambda _body: replies[len(base.FakeUpstream.seen) - 1]
         completion = adapters.OpenAIAdapter(self.base + "/v1/chat/completions", "m", 30).complete(READ)
         self.assertEqual((completion.copy_retries, completion.copy_passed, len(base.FakeUpstream.seen)), (1, 0, 2))
+        # An edit of the source that removes too little of the copy is no move.
+        for patch in (ADDITION, unified(SOURCE_LINES[7:17]),
+                      "--- a/x\n+++ b/x\n" + "".join("+" + line + "\n" for line in SOURCE_LINES[7:])):
+            with self.subTest(patch=patch[:60]):
+                base.FakeUpstream.seen = []
+                base.FakeUpstream.reply = (200, base.openai_reply(calls=[move[0], self.call("edit_file", path=EXISTING, patch=patch)]), {})
+                completion = adapters.OpenAIAdapter(self.base + "/v1/chat/completions", "m", 30).complete(READ)
+                self.assertEqual((completion.copy_retries, completion.copy_passed, len(base.FakeUpstream.seen)), (1, 1, 2))
+        # Removing about half of the copied lines is enough.
+        guard = adapters.RewriteGuard(READ, adapters.validate_request(READ)[0], time.monotonic() + 60)
+        watch = guard.watch(NEW)
+        source = guard.copied(watch, SOURCE)
+        copied = sorted(watch.lines[source])
+        half = [line for line in SOURCE_LINES if adapters.copy_line(line) in copied[:len(copied) // 2 + 1]]
+        calls = [("edit_file", EXISTING, {"patch": unified(half)})]
+        self.assertTrue(guard.removes(calls, EXISTING, watch.lines[source]))
+        self.assertFalse(guard.removes(calls, "textutil/other.go", watch.lines[source]))
         # The correction names moving as the legitimate exception.
+        base.FakeUpstream.seen = []
+        replies = [(200, base.openai_reply(calls=other), {}), (200, base.openai_reply(calls=move), {})]
+        base.FakeUpstream.reply = lambda _body: replies[len(base.FakeUpstream.seen) - 1]
+        adapters.OpenAIAdapter(self.base + "/v1/chat/completions", "m", 30).complete(READ)
         text = base.FakeUpstream.seen[1][2]["messages"][-1]["content"]
         self.assertIn("unless the issue asks you to move it", text)
         self.assertIn("remove it from %s with edit_file" % json.dumps(EXISTING), text)

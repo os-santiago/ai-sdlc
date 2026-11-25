@@ -450,15 +450,27 @@ clause, imports and the lines of the table-test shape (`tests := []struct {`,
 neighbours: 10 distinct lines in the test fixture, 19% of a 52-line file. A
 file under 40 distinct non-trivial lines is never judged. A copy matches
 nearly every line. The check is linear in the streamed content and stops
-after 4,096 distinct lines. A new file that copies a little and adds much
-(under 60% repeated) passes.
+after 4,096 distinct lines.
 
-A move or a split repeats content legitimately. When the same answer also
-proposes an `edit_file` on the source (the removal half of the move), the copy
-is not refused. While streaming, the gateway sees only the calls that came
-before: an `edit_file` sent first leaves the copy to the final message, which
-then passes it. An `edit_file` sent after the copy arrives too late. The copy
-is refused once, and the correction asks for the removal in the same answer.
+The bounds are judged on the content seen so far, line by line, and the first
+point where they hold refuses the file. This is a prefix rule. A file that
+starts with 40 copied lines is refused at line 40, even if 60 new lines would
+follow. A file that copies a little after much new content (under 60% at
+every point) passes. The final-message check applies the same rule to the
+whole content in order, so a streamed answer and a non-streamed one get the
+same verdict. The rule fits the observed fault: the copy came first, and
+stopping it there saves the generation.
+
+A move or a split repeats content legitimately. The copy is not refused when
+the same answer also proposes an `edit_file` on the source that removes the
+copied lines (the removal half of the move). Its removed lines (`-`, not the
+`---` header) must cover at least 30 of the copied lines, or half of them,
+after the same line normalization. An additive edit, or one that removes a
+few lines, does not exempt a copy. While streaming, the gateway sees only the
+calls that came before. An `edit_file` on the source sent first leaves the
+decision to the final message, which then judges the removal. An `edit_file`
+sent after the copy arrives too late. The copy is refused once, and the
+correction asks for the removal in the same answer.
 
 - **Detection.** The `openai` adapter decodes the streamed `content` string as
   it arrives and stops the stream as soon as the content qualifies. Each
