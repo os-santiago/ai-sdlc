@@ -516,21 +516,22 @@ guard's move check. Before the first hunk header (`@@`) every line is
 preamble, so the `---`/`+++` file headers never count. Inside hunks every
 line starting with `-` is a removed line, including a removed `-- comment`
 (written `--- comment`). Every line starting with `+` is an added one. A
-`---` line followed by a `+++` line and a hunk header starts the next file of
-a multi-file patch, which SCC refuses anyway, and counting starts again.
+multi-file patch, which SCC refuses anyway, is counted as one: its later
+headers cannot be told apart from such lines.
 
 The guard judges the model's edits of one file together. It adds up every
 `edit_file` on the file in the answer, and the successful `edit_file` calls
 on it since its latest read. Those come from the request's history, matched
 to their results by call id. A call with an error result, or with no result,
-changed nothing. The battery 30 candidate deleted the file in several
+changed nothing. Only a read that gives the total starts the count again. The battery 30 candidate deleted the file in several
 patches, and each one alone could pass.
 
 The edits are destructive when they remove:
 
 - at least 30 lines,
 - at least 40% of the file's known lines (from its latest read), and
-- at least 30 more lines than they add.
+- at least 30 more lines than they add, counting only non-trivial added
+  lines, so blank-line padding never offsets a deletion.
 
 A removed line that the same edits add back is not counted on either side,
 so moving a block within the file (removed in one hunk, added in another, or
@@ -550,16 +551,18 @@ The removal half of a move to another file is not destructive. That holds
 when the same answer also writes another file holding at least half of the
 removed lines.
 
-- **Detection.** The `openai` adapter decodes the streamed `patch` and stops
-  the stream at the first completed hunk that makes the file's edits
-  destructive, on top of earlier edits and completed edits of the file
-  earlier in the stream. Hunks are judged whole because a hunk's added lines
-  follow its removed ones. While streaming, removed lines that a later hunk
-  adds back are still counted, because that needs the whole patch. A
-  streamed reorder within the file is therefore stopped once, and its retry
-  passes on its final message. A destructive patch after a `write_file` in
-  the same answer is left to the final message, which judges a possible
-  move. Every final message is judged on its whole patches.
+- **Detection.** The `openai` adapter decodes the streamed `patch`. It
+  counts on top of earlier edits of the file and completed edits of it
+  earlier in the stream. A pure deletion cannot be a move. So the stream is
+  stopped at the first completed hunk that makes the edits destructive, but
+  only while the patch has added no non-trivial line and the next hunk's
+  header declares fewer new lines than old ones. Otherwise the judgment
+  waits for the end of the patch, where a block that comes back is
+  discounted as on the final message. A streamed reorder within the file
+  therefore passes without a retry. Hunks are judged whole because a hunk's
+  added lines follow its removed ones. A destructive patch after a
+  `write_file` in the same answer is left to the final message, which judges
+  a possible move. Every final message is judged on its whole patches.
 - **Retry.** The same single shared guard retry, with this correction:
   `edit_file on "<path>" was refused: your edits delete N of its M lines.
   Keep existing code and tests; change only the lines the issue needs, and

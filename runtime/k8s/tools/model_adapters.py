@@ -446,47 +446,35 @@ class PatchLines:
     header ("@@") every line is preamble, so the "---"/"+++" file headers
     are never counted. Inside hunks every line starting with "-" is a removed
     line, including "-- x" and "--- x" (a removed line that itself starts
-    with "-- "), and every line starting with "+" an added one. A "---" line
-    followed by a "+++" line and a hunk header is the next file's header in a
-    multi-file patch (which SCC refuses): counting starts again there.
-    ``feed`` returns True when a line starts a hunk after an earlier one: the
-    earlier hunk is complete. ``close`` ends the patch."""
+    with "-- "), and every line starting with "+" an added one. A multi-file
+    patch (which SCC refuses) is counted as one: its later headers are
+    indistinguishable from such lines. ``meaningful`` counts the added lines
+    that are not trivial (``copy_line``), so blank-line padding never offsets
+    removals. ``feed`` returns True when a line starts a hunk after an
+    earlier one: the earlier hunk is complete."""
     def __init__(self):
-        self.in_hunk, self.removed, self.added = False, 0, 0
-        self.removed_lines, self.added_lines, self.pending = [], [], []
+        self.in_hunk, self.removed, self.added, self.meaningful = False, 0, 0, 0
+        self.removed_lines, self.added_lines = [], []
 
-    def _count(self, line):
+    def close(self):
+        """Ends the patch (nothing is pending)."""
+
+    def feed(self, line):
+        if line.startswith("@@"):
+            completed, self.in_hunk = self.in_hunk, True
+            return completed
+        if not self.in_hunk:
+            return False
         if line.startswith("-"):
             self.removed += 1
             if len(self.removed_lines) < COPY_MAX_LINES:
                 self.removed_lines.append(line[1:])
         elif line.startswith("+"):
             self.added += 1
+            if copy_line(line[1:]) is not None:
+                self.meaningful += 1
             if len(self.added_lines) < COPY_MAX_LINES:
                 self.added_lines.append(line[1:])
-
-    def close(self):
-        for line in self.pending:
-            self._count(line)
-        self.pending = []
-
-    def feed(self, line):
-        if self.pending:
-            if len(self.pending) == 1 and line.startswith("+++ "):
-                self.pending.append(line)
-                return False
-            if len(self.pending) == 2 and line.startswith("@@"):
-                self.__init__()  # the next file of a multi-file patch
-                self.in_hunk = True
-                return False
-            self.close()
-        if line.startswith("@@"):
-            completed, self.in_hunk = self.in_hunk, True
-            return completed
-        if self.in_hunk and line.startswith("--- "):
-            self.pending = [line]  # a removed line, or the next file's header
-        elif self.in_hunk:
-            self._count(line)
         return False
 
 
@@ -507,7 +495,7 @@ def moved_within(removed_lines, added_lines):
 
 
 def patch_counts(patches, lines=None):
-    """(removed, added) lines of ``patches`` taken together, after
+    """(removed, meaningful added) lines of ``patches`` taken together, after
     discounting removed lines that come back as added ones (a block moved
     within the file). ``lines``, when given, collects the removed lines."""
     removed, added = [], []
@@ -516,10 +504,9 @@ def patch_counts(patches, lines=None):
         parsed = PatchLines()
         for line in patch.split("\n"):
             parsed.feed(line)
-        parsed.close()
         removed += parsed.removed_lines
         added += parsed.added_lines
-        removed_count, added_count = removed_count + parsed.removed, added_count + parsed.added
+        removed_count, added_count = removed_count + parsed.removed, added_count + parsed.meaningful
     if lines is not None:
         lines.extend(removed)
     moved = moved_within(removed, added)
@@ -527,7 +514,7 @@ def patch_counts(patches, lines=None):
 
 
 def destructive(removed, added, total):
-    """The ``DELETE_*`` bounds on removed and added line counts."""
+    """The ``DELETE_*`` bounds on removed and meaningful added line counts."""
     return (removed >= DELETE_MIN_LINES and removed >= DELETE_FRACTION * total
             and removed - added >= DELETE_MIN_NET)
 
@@ -535,27 +522,50 @@ def destructive(removed, added, total):
 class _DeleteWatch:
     """Judges one streamed ``edit_file`` patch on a file of ``total`` known
     lines, on top of ``base`` (removed, added) lines of the model's other
-    edits of the file since its latest read and earlier in this answer:
-    ``line`` and ``end`` return (removed, total) once the edits become
-    destructive at a completed hunk (see ``DELETE_*``). Hunks are judged
-    whole because a hunk's added lines follow its removed ones. Only an
-    answer that makes the file's edits destructive is refused; once they
-    already are, later answers are not refused again."""
+    edits of the file since its latest read and earlier in this answer.
+
+    ``line`` returns (removed, total) at a completed hunk only while the
+    patch has added no meaningful line and the next hunk's header declares
+    fewer new lines than old ones: a pure deletion cannot be a move, so it is
+    stopped early. Otherwise the judgment waits for ``end``, which
+    discounts removed lines that come back as added ones (``moved_within``),
+    as the final message does. Hunks are judged whole because a hunk's added
+    lines follow its removed ones. Only an answer that makes the file's edits
+    destructive is refused; once they already are, later answers are not."""
     def __init__(self, target, total, base=(0, 0)):
         self.target, self.total, self.base, self.patch = target, total, base, PatchLines()
 
-    def verdict(self):
-        removed, added = self.base[0] + self.patch.removed, self.base[1] + self.patch.added
+    def counts(self, moved=0):
+        """The patch's (removed, meaningful added) lines, less ``moved``."""
+        return self.patch.removed - moved, self.patch.meaningful - moved
+
+    def verdict(self, counts):
+        removed, added = self.base[0] + counts[0], self.base[1] + counts[1]
         if destructive(removed, added, self.total) and not destructive(*self.base, self.total):
             return removed, self.total
         return None
 
     def line(self, line):
-        return self.verdict() if self.patch.feed(line) else None
+        if self.patch.feed(line) and self.patch.meaningful == 0 and not self.may_add(line):
+            return self.verdict(self.counts())
+        return None
+
+    @staticmethod
+    def may_add(header):
+        """Whether the hunk ``header`` starts may add lines (it declares at
+        least as many new lines as old ones, or cannot be read): the removed
+        block may come back there, so the judgment waits for the end."""
+        match = HUNK_HEADER.match(header)
+        if match is None:
+            return True
+        old = int(match.group(2)) if match.group(2) is not None else 1
+        new = int(match.group(4)) if match.group(4) is not None else 1
+        return new >= old
 
     def end(self):
-        self.patch.close()
-        return self.verdict() if self.patch.in_hunk else None
+        if not self.patch.in_hunk:
+            return None
+        return self.verdict(self.counts(moved_within(self.patch.removed_lines, self.patch.added_lines)))
 
 
 def copy_line(line):
@@ -765,15 +775,16 @@ class RewriteGuard:
 
     @staticmethod
     def edits_since_read(messages):
-        """(removed, added) lines of each read file's successful ``edit_file``
-        calls since its latest successful read, matched to their results by
+        """(removed, meaningful added) lines of each read file's successful
+        ``edit_file`` calls since its latest read with a total, matched to their results by
         call id. A removed line that comes back as an added line of the same
         patch (a block moved within the file) is not counted on either side.
         A call without a result, or with an error result, changed nothing."""
         edits, read = {}, set()
         for name, path, arguments, result in RewriteGuard._calls(messages, RewriteGuard._results(messages)):
             succeeded = isinstance(result, str) and not result.startswith(TOOL_ERROR_PREFIXES)
-            if name == READ_TOOL and succeeded:
+            if name == READ_TOOL and succeeded and READ_TOTAL.search(result):
+                # Only a read that gives the total restarts the count against it.
                 read.add(path)
                 edits[path] = (0, 0)
             elif name == EDIT_TOOL and succeeded and path in read and isinstance(arguments.get("patch"), str):
@@ -983,9 +994,9 @@ class RewriteGuard:
         """A streamed ``edit_file``: its patch is judged at each completed
         hunk, once its path is a read file of known length, on top of the
         model's earlier edits of the file since its latest read and the
-        completed edits of it earlier in this stream. Removed lines that a
-        later hunk adds back are not discounted here: that needs the whole
-        patch, which the final message has."""
+        completed edits of it earlier in this stream. A pure deletion is
+        stopped at its hunk; a patch that also adds code is judged at its end
+        (see ``_DeleteWatch``)."""
         if state is None:
             match = STREAMED_PATH.match(arguments[:REWRITE_SCAN_CHARS])
             if match is None:
@@ -1019,7 +1030,8 @@ class RewriteGuard:
                 return self._stop(index, Refusal("delete", watch.target, verdict))
             self.streams[index] = None
             done = self.stream_edits.get(watch.target, (0, 0))
-            self.stream_edits[watch.target] = (done[0] + watch.patch.removed, done[1] + watch.patch.added)
+            counts = watch.counts(moved_within(watch.patch.removed_lines, watch.patch.added_lines))
+            self.stream_edits[watch.target] = (done[0] + counts[0], done[1] + counts[1])
         return None
 
 

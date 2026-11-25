@@ -77,7 +77,10 @@ def streamed_edit(lines, path=KV, extra=0, delay=0.0):
 
 
 # About 20 s if read to the end; the guard must stop it at its second hunk.
-SLOW_DESTRUCTIVE = streamed_edit(DESTRUCTIVE, extra=10000, delay=0.002)
+# A pure deletion cannot be a move: while streaming it is stopped at its
+# first completed hunk (here about 20 s early).
+PURE_DELETION = patch(hunk(7, KV_LINES[6:126]), hunk(150, KV_LINES[149:151]))
+SLOW_DESTRUCTIVE = streamed_edit(PURE_DELETION, extra=10000, delay=0.002)
 FAST_DESTRUCTIVE = streamed_edit(DESTRUCTIVE)
 SMALL_EDIT = streamed_edit(SMALL)
 # The final message judges the whole patch: 122 removed lines, less those
@@ -206,6 +209,19 @@ class CumulativeDeleteTests(unittest.TestCase):
         done = rg.conversation(*(READ_HUNDRED["messages"][2:] + edits((0, ok), (30, ok), (60, ok))))
         self.assertIsNone(self.guard(done).refused(self.message(patch(hunk(90, HUNDRED[89:91])))))
 
+    def test_blank_line_padding_does_not_offset_removals(self):
+        padded = patch(hunk(11, HUNDRED[10:70], [""] * 60))
+        self.assertEqual(adapters.patch_counts(["\n".join(padded)]), (60, 0))
+        self.assertEqual(self.guard(READ_HUNDRED).refused(self.message(padded)), adapters.Refusal("delete", KV, (60, 100)))
+
+    def test_a_read_without_the_note_does_not_restart_the_count(self):
+        ok = "Patch applied successfully: " + KV
+        turns = READ_HUNDRED["messages"][2:] + [
+            rg.assistant(("e1", "edit_file", {"path": KV, "patch": "\n".join(self.deletion(0))})), rg.result("e1", ok),
+            rg.assistant(("r2", "read_file", {"path": KV})), rg.result("r2", "\n".join(HUNDRED[15:]))]
+        guard = self.guard(rg.conversation(*turns))
+        self.assertEqual((guard.edits, guard.totals), ({KV: (15, 0)}, {KV: 100}))
+
     def test_a_block_moved_within_the_file_is_not_destructive(self):
         block = HUNDRED[10:50]
         move = patch(hunk(11, block), hunk(90, [], block))
@@ -220,12 +236,14 @@ class CumulativeDeleteTests(unittest.TestCase):
         self.assertIn("your edits delete 75 of its 100 lines", text)
         self.assertIn("unless the issue asks you to move or remove it", text)
 
-    def test_a_multi_file_patch_starts_counting_again_at_each_file(self):
+    def test_a_multi_file_patch_is_counted_as_one(self):
+        # SCC refuses it; its later headers read as a removed and an added line.
         lines = adapters.PatchLines()
         for line in ["--- a/x", "+++ b/x", "@@ -1,2 +1,0 @@", "-one", "-two", "--- a/y", "+++ b/y", "@@ -1,1 +1,1 @@", "-three", "+four"]:
             lines.feed(line)
         lines.close()
-        self.assertEqual((lines.removed, lines.added, lines.removed_lines), (1, 1, ["three"]))
+        self.assertEqual((lines.removed, lines.added, lines.meaningful), (4, 2, 1))
+        self.assertEqual(lines.removed_lines, ["one", "two", "-- a/y", "three"])
         # A removed "-- x" line not followed by a file header still counts.
         lines = adapters.PatchLines()
         for line in ["@@ -1,2 +1,1 @@", "--- old rule", "+-- new rule", "--- last"]:
@@ -316,13 +334,17 @@ class StreamingDeleteTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 5)
         self.assertEqual(self.counts(completion), (1, 0, 0, 0, 0, 0))
         self.assertEqual(base.SSEUpstream.seen[1]["messages"][-1], delete_correction(45, 100))
-        # A reorder: stopped at its first hunk while streaming, then judged
-        # whole on the retry's final message, where it passes.
+        # A reorder: the next hunk declares added lines, so the judgment waits
+        # for the patch's end, where the block comes back: no retry.
         block = HUNDRED[10:50]
         reorder = streamed_edit(patch(hunk(11, block), hunk(90, [], block)))
-        base.SSEUpstream.seen, base.SSEUpstream.script = [], [reorder, reorder]
+        base.SSEUpstream.seen, base.SSEUpstream.script = [], [reorder]
         completion = self.adapter().complete(READ_HUNDRED)
-        self.assertEqual((len(base.SSEUpstream.seen), self.counts(completion)), (2, (1, 0, 0, 0, 0, 0)))
+        self.assertEqual((len(base.SSEUpstream.seen), self.counts(completion)), (1, (0, 0, 0, 0, 0, 0)))
+        # Moved upward (added first), too.
+        base.SSEUpstream.seen, base.SSEUpstream.script = [], [streamed_edit(patch(hunk(1, [], block), hunk(51, block)))]
+        completion = self.adapter().complete(READ_HUNDRED)
+        self.assertEqual((len(base.SSEUpstream.seen), self.counts(completion)), (1, (0, 0, 0, 0, 0, 0)))
 
     def test_each_upstream_attempt_is_judged_on_its_own_stream(self):
         def degenerate_edit(_body):
