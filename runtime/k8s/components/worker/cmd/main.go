@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/metrics"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 )
 
@@ -26,7 +27,9 @@ func main() {
 	defer component.DB.Close()
 	var routes []service.RouteRegistrar
 	ready := component.Ready
+	queues := []string{"outbox"}
 	if bootstrap.CandidateEnabled() {
+		queues = append(queues, "execution")
 		path := os.Getenv("AI_SDLC_EXECUTION_CONFIG_PATH")
 		if _, _, e := execution.LoadRuntime(path); e != nil {
 			log.Fatal("candidate configuration unavailable")
@@ -58,14 +61,14 @@ func main() {
 		stop := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
 			state, e := runtime.PollOnce(ctx)
 			if e != nil {
-				code, recorded := execution.WorkerFailureDiagnostic(e)
-				log.Print("candidate reconciliation stopped safely: " + execution.DiagnosticStage(e) + " cleanupPending=" + strconv.FormatBool(execution.CleanupPending(e)) + " workerExitCode=" + strconv.Itoa(int(code)) + " failureRecorded=" + strconv.FormatBool(recorded))
+				log.Print(candidateStopped(e))
 			} else if state != "" {
 				log.Print("candidate reconciliation: " + state)
 			}
 		})
 		defer stop()
 	}
+	defer component.StartQueueSampler(queues...)()
 	err = service.RunWithReadiness(service.Metadata{
 		Name:           "worker",
 		Responsibility: "coordinate isolated implementation attempts",
@@ -75,4 +78,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+// candidateStopped counts a stopped candidate cycle under its bounded
+// diagnostic stage and returns the log line, which names only that stage and
+// finite flags.
+func candidateStopped(e error) string {
+	code, recorded := execution.WorkerFailureDiagnostic(e)
+	stage := execution.DiagnosticStage(e)
+	metrics.Stop("worker", "candidate", stage)
+	return "candidate reconciliation stopped safely: " + stage + " cleanupPending=" + strconv.FormatBool(execution.CleanupPending(e)) + " workerExitCode=" + strconv.Itoa(int(code)) + " failureRecorded=" + strconv.FormatBool(recorded)
 }

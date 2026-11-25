@@ -1,0 +1,58 @@
+{{- if .Values.metrics.enabled }}
+{{- $port := int .Values.metrics.port }}
+{{- $taken := list 8087 8088 8089 8090 8787 }}
+{{- $all := list "verifier" "build-controller" "provenance-verifier" "deployer" }}
+{{- range .Values.components }}
+{{- $taken = append $taken (int .port) }}
+{{- $all = append $all .name }}
+{{- end }}
+{{- if has $port $taken }}
+{{- fail "metrics.port must differ from every component and sidecar port" }}
+{{- end }}
+{{- if not .Values.metrics.scrapeFrom }}
+{{- fail "metrics.scrapeFrom must name the peers allowed to scrape; an empty list would admit every source" }}
+{{- end }}
+{{- /* scrapeFrom is a guarantee only for pods some policy isolates. Without
+the internal policy the components are open to every source, so the metrics
+port could not be restricted without also closing their routes: refuse. With
+it, every selected pod is already isolated for ingress (the build controller,
+provenance verifier and deployer by their own policies), so this policy only
+adds the metrics port. */}}
+{{- if not .Values.networkPolicy.enabled }}
+{{- fail "metrics.enabled requires networkPolicy.enabled, so that only metrics.scrapeFrom can reach the metrics port" }}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-metrics
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - {key: app.kubernetes.io/component, operator: In, values: {{ toJson $all }}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:{{ toYaml .Values.metrics.scrapeFrom | nindent 8 }}
+      ports: [{protocol: TCP, port: metrics}]
+{{- if .Values.metrics.podMonitor.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - {key: app.kubernetes.io/component, operator: In, values: {{ toJson $all }}}
+  podMetricsEndpoints:
+    - {port: metrics, path: /metrics, scheme: http, interval: {{ .Values.metrics.podMonitor.interval | quote }}}
+{{- end }}
+{{- end }}

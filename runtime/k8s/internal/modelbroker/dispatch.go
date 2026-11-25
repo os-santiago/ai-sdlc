@@ -182,7 +182,7 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 	callCtx, stopCall := context.WithDeadline(ctx, deadline)
 	result.DispatchAttempted = true
 	stage = "provider"
-	response, err := d.Provider.invoke(callCtx, request.Payload, claim.Call.ResponseLimit)
+	response, err := d.Provider.observedInvoke(callCtx, "generator", request.Payload, claim.Call.ResponseLimit)
 	stopCall()
 	if err != nil {
 		d.abandon(ctx, ref)

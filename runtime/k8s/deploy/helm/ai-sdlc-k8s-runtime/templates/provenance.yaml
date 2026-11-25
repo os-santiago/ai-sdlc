@@ -70,9 +70,12 @@ spec:
             - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
           env:
             - {name: AI_SDLC_HTTP_ADDRESS, value: ":8089"}
+            {{- if .Values.metrics.enabled }}
+            - {name: AI_SDLC_METRICS_ADDRESS, value: ":{{ .Values.metrics.port }}"}
+            {{- end }}
             - name: DATABASE_URL
               valueFrom: {secretKeyRef: {name: {{ .Values.authority.databaseSecretPrefix }}-verifier, key: uri}}
-          ports: [{name: http, containerPort: 8089}]
+          ports: [{name: http, containerPort: 8089}{{ if .Values.metrics.enabled }}, {name: metrics, containerPort: {{ .Values.metrics.port }}}{{ end }}]
           readinessProbe: {httpGet: {path: /readyz, port: http}, timeoutSeconds: 5}
           livenessProbe: {httpGet: {path: /healthz, port: http}, initialDelaySeconds: 10}
           resources:

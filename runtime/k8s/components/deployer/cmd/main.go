@@ -9,6 +9,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/completionflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/deploymentflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/metrics"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/releaseflow"
@@ -88,6 +89,7 @@ func run() error {
 	}}
 	stopCompletion := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
 		if _, e := completionflow.DispatchDeployed(ctx, db, func() (releasing.Configuration, authority.Identity, error) { return mounts.Load("deployer") }); e != nil {
+			metrics.Stop("deployer", "deployment-completion-dispatch", metrics.Unclassified)
 			log.Print("deployment completion dispatch stopped safely")
 		}
 	})
@@ -95,6 +97,7 @@ func run() error {
 	stop := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
 		state, e := runtime.PollOnce(ctx)
 		if e != nil {
+			metrics.Stop("deployer", "deployment", metrics.Unclassified)
 			log.Print("deployment reconciliation stopped safely")
 		} else if state != "deployment-idle" {
 			log.Print(state)

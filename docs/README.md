@@ -14,6 +14,8 @@ Start here:
 - [Evaluation harness](operations/evaluation-harness.md): delivery rates per
   repository and model path, with 95% intervals and the Beta gate check.
 - [Runtime upgrades and installation details](operations/runtime-upgrades.md).
+- [Runtime metrics](operations/metrics.md): queue depth, safe stops, model
+  calls and deliveries, and how to scrape them.
 
 Current operational documentation lives with the Kubernetes/OpenShift runtime:
 
