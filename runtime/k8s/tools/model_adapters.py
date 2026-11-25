@@ -29,9 +29,11 @@ a whole file which existed before the conversation (``RewriteGuard``), judged
 only from the request's own messages. The ``openai`` adapter stops such a
 stream as soon as the call's path is known. It also refuses a ``write_file``
 to a new path whose content copies a file the model read (the copy guard),
-as soon as enough content has streamed, and an ``edit_file`` whose patch
-deletes much of a file the model read (the destructive-edit guard), at the
-first completed hunk that shows it. The request is then repeated with one
+as soon as enough content has streamed, and an ``edit_file`` whose patches
+delete much of a file the model read (the destructive-edit guard). Such a
+patch is stopped at a completed hunk only while it has added no non-trivial
+line and the next hunk's header declares fewer new lines than old ones;
+otherwise it is judged when it ends. The request is then repeated with one
 short correction appended, inside the same call budget; one such retry per
 call in total, and a second refusal is passed through unchanged (fail open).
 """
@@ -500,10 +502,27 @@ def moved_within(removed_lines, added_lines):
     return matched
 
 
+def net_removed(removed_lines, added_lines):
+    """The removed lines that do not come back as added lines of the same
+    file, matched one for one as ``moved_within`` matches them."""
+    added = {}
+    for line in filter(None, map(copy_line, added_lines)):
+        added[line] = added.get(line, 0) + 1
+    remaining = []
+    for line in removed_lines:
+        key = copy_line(line)
+        if key is not None and added.get(key):
+            added[key] -= 1
+        else:
+            remaining.append(line)
+    return remaining
+
+
 def patch_counts(patches, lines=None):
     """(removed, added) lines of code of ``patches`` taken together, after
     discounting removed lines that come back as added ones (a block moved
-    within the file). ``lines``, when given, collects the removed lines."""
+    within the file). ``lines``, when given, collects the removed lines that
+    remain after that discount."""
     removed, added = [], []
     removed_count = added_count = 0
     for patch in patches:
@@ -514,7 +533,7 @@ def patch_counts(patches, lines=None):
         added += parsed.added_lines
         removed_count, added_count = removed_count + parsed.meaningful_removed, added_count + parsed.meaningful
     if lines is not None:
-        lines.extend(removed)
+        lines.extend(net_removed(removed, added))
     moved = moved_within(removed, added)
     return removed_count - moved, added_count - moved
 
@@ -540,7 +559,13 @@ class _DeleteWatch:
     lines follow its removed ones. Only an answer that makes the file's edits
     destructive is refused; once they already are, later answers are not."""
     def __init__(self, target, total, base=(0, 0)):
-        self.target, self.total, self.base, self.patch = target, total, base, PatchLines()
+        # ``base`` may be a callable, read each time a hunk or the end is
+        # judged, so edits completed meanwhile in the same stream count.
+        self.target, self.total, self._base, self.patch = target, total, base, PatchLines()
+
+    @property
+    def base(self):
+        return self._base() if callable(self._base) else self._base
 
     def counts(self, moved=0):
         """The patch's (removed, added) lines of code, less ``moved``."""
@@ -786,19 +811,33 @@ class RewriteGuard:
         ``edit_file`` calls since its latest read with a total, matched to their results by
         call id. A removed line that comes back as an added line of the same
         patch (a block moved within the file) is not counted on either side.
-        A call without a result, or with an error result, changed nothing."""
+        A call without a result, or with an error result, changed nothing. The
+        removal half of a move out of the file (``moves_out``, against the
+        successful ``write_file`` calls of the same answer) is not counted."""
+        results = RewriteGuard._results(messages)
         edits, read = {}, set()
-        for name, path, arguments, result in RewriteGuard._calls(messages, RewriteGuard._results(messages)):
-            succeeded = isinstance(result, str) and not result.startswith(TOOL_ERROR_PREFIXES)
-            if name == READ_TOOL and succeeded and READ_TOTAL.search(result):
-                # Only a read that gives the total restarts the count against it.
-                read.add(path)
-                edits[path] = (0, 0)
-            elif name == EDIT_TOOL and succeeded and path in read and isinstance(arguments.get("patch"), str):
-                removed, added = patch_counts([arguments["patch"]])
-                before = edits[path]
-                edits[path] = (before[0] + removed, before[1] + added)
+        for message in messages:
+            calls = list(RewriteGuard._calls([message], results))
+            written = [(name, target, arguments) for name, target, arguments, result in calls
+                       if name == WRITE_TOOL and RewriteGuard._succeeded(result)]
+            for name, path, arguments, result in calls:
+                if name == READ_TOOL and RewriteGuard._succeeded(result) and READ_TOTAL.search(result):
+                    # Only a read that gives the total restarts the count against it.
+                    read.add(path)
+                    edits[path] = (0, 0)
+                elif (name == EDIT_TOOL and RewriteGuard._succeeded(result) and path in read
+                        and isinstance(arguments.get("patch"), str)):
+                    removed_lines = []
+                    removed, added = patch_counts([arguments["patch"]], removed_lines)
+                    if RewriteGuard.moves_out(written, path, removed_lines):
+                        removed = 0
+                    before = edits[path]
+                    edits[path] = (before[0] + removed, before[1] + added)
         return {path: counts for path, counts in edits.items() if counts != (0, 0)}
+
+    @staticmethod
+    def _succeeded(result):
+        return isinstance(result, str) and not result.startswith(TOOL_ERROR_PREFIXES)
 
     @staticmethod
     def read_totals(messages):
@@ -806,10 +845,11 @@ class RewriteGuard:
         from its latest read with SCC's note. The note gives the whole file's
         line count even for a partial read; the share of lines of code among
         the lines shown scales it, so a partial read estimates the same
-        quantity a whole read counts exactly. A read without the note gives
-        nothing: such a file is never judged."""
+        quantity a whole read counts exactly. When the latest read has no
+        note, the file is not judged."""
         totals = {}
         for path, result in RewriteGuard._reads(messages):
+            totals.pop(path, None)  # the latest read decides, with or without a note
             match = READ_TOTAL.search(result)
             if match is None:
                 continue
@@ -1024,7 +1064,9 @@ class RewriteGuard:
             if path not in self.totals:
                 self.streams[index] = None
                 return None
-            base = self.base(path, self.stream_edits.get(path, (0, 0)))
+            # Completed edits earlier in this stream, read when each hunk is
+            # judged; the current patch is added only once it completes.
+            base = lambda path=path: self.base(path, self.stream_edits.get(path, (0, 0)))
             state = self.streams[index] = [_DeleteWatch(path, self.totals[path], base), None]
         watch, patch = state
         if patch is None:

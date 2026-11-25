@@ -508,8 +508,9 @@ deleted most of it.
 The guard therefore also judges each `edit_file` on a file the model read in
 the conversation. The file's size comes from its latest successful read
 with SCC's note (`[N lines total]`, or `[R lines shown, N total. ...]` for a
-partial read, which still gives the whole file's line total). A read without
-the note, a file not read, and a file the model created are never judged.
+partial read, which still gives the whole file's line total). A file whose
+latest read has no note, a file not read, and a file the model created are
+never judged.
 
 A patch's lines are classified once, by one parser shared with the copy
 guard's move check. Before the first hunk header (`@@`) every line is
@@ -557,12 +558,17 @@ file on purpose, because the issue asks for it, costs one retry, then passes.
 
 The removal half of a move to another file is not destructive. That holds
 when the same answer also writes another file holding at least half of the
-removed lines.
+removed lines that leave the file, after discounting those the same edits add
+back within it. In the history, an earlier move out counts only when its
+`write_file` also succeeded. Such a move then adds nothing to the file's
+earlier edits, so it never makes a later real deletion look already
+destructive.
 
 - **Detection.** The `openai` adapter decodes the streamed `patch`. It
-  counts on top of earlier edits of the file and completed edits of it
-  earlier in the stream. A pure deletion cannot be a move. So the stream is
-  stopped at the first completed hunk that makes the edits destructive, but
+  counts on top of earlier edits of the file and the edits of it completed
+  earlier in the stream, read each time a hunk or the patch end is judged.
+  A pure deletion cannot be a move. So the stream is stopped at the first
+  completed hunk that makes the edits destructive, but
   only while the patch has added no non-trivial line and the next hunk's
   header declares fewer new lines than old ones. Otherwise the judgment
   waits for the end of the patch, where a block that comes back is

@@ -235,13 +235,58 @@ class CumulativeDeleteTests(unittest.TestCase):
         self.assertEqual(adapters.patch_counts(["\n".join(padded)]), (60, 0))
         self.assertEqual(self.guard(READ_HUNDRED).refused(self.message(padded)), adapters.Refusal("delete", KV, (60, 100)))
 
-    def test_a_read_without_the_note_does_not_restart_the_count(self):
+    def test_a_latest_read_without_the_note_leaves_the_file_unjudged(self):
         ok = "Patch applied successfully: " + KV
         turns = READ_HUNDRED["messages"][2:] + [
             rg.assistant(("e1", "edit_file", {"path": KV, "patch": "\n".join(self.deletion(0))})), rg.result("e1", ok),
             rg.assistant(("r2", "read_file", {"path": KV})), rg.result("r2", "\n".join(HUNDRED[15:]))]
         guard = self.guard(rg.conversation(*turns))
-        self.assertEqual((guard.edits, guard.totals), ({KV: (15, 0)}, {KV: 100}))
+        # The count is not restarted, and with no total the file is not judged.
+        self.assertEqual((guard.edits, guard.totals), ({KV: (15, 0)}, {}))
+        self.assertIsNone(guard.refused(self.message(self.deletion(30), self.deletion(60), self.deletion(80))))
+
+    def write(self, lines, path="kv/moved.go"):
+        return {"function": {"name": "write_file", "arguments": json.dumps({"path": path, "content": "\n".join(lines)})}}
+
+    def answer(self, *calls):
+        return {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c%d" % i, "type": "function", "function": call["function"]} for i, call in enumerate(calls)]}
+
+    def test_a_move_split_over_several_patches_sees_every_removal(self):
+        # Two edits of the file, each over the bounds alone, and the new file
+        # holding all their lines: a move, judged on every removal.
+        first, second = HUNDRED[0:45], HUNDRED[50:95]
+        moved = self.answer(edit_call(patch(hunk(1, first))), edit_call(patch(hunk(51, second))), self.write(first + second))
+        self.assertIsNone(self.guard(READ_HUNDRED).refused(moved))
+        # Holding only the first patch's lines is under half of the removals.
+        partly = self.answer(edit_call(patch(hunk(1, first))), edit_call(patch(hunk(51, second))), self.write(first[:40]))
+        self.assertIsNotNone(self.guard(READ_HUNDRED).refused(partly))
+
+    def test_a_move_out_is_judged_on_the_removals_that_leave_the_file(self):
+        # Block A moves within the file, block B is deleted, and the new file
+        # holds A: that is no move of B out of the file.
+        a_block, b_block = HUNDRED[0:40], HUNDRED[50:90]
+        edit = patch(hunk(1, a_block), hunk(51, b_block), hunk(100, [], a_block))
+        lines = []
+        self.assertEqual(adapters.patch_counts(["\n".join(edit)], lines), (40, 0))
+        self.assertEqual(lines, b_block)
+        self.assertIsNotNone(self.guard(READ_HUNDRED).refused(self.answer(edit_call(edit), self.write(a_block))))
+        self.assertIsNone(self.guard(READ_HUNDRED).refused(self.answer(edit_call(edit), self.write(b_block))))
+
+    def test_a_successful_move_out_in_history_is_not_destructive_history(self):
+        ok = "Patch applied successfully: " + KV
+        moved = HUNDRED[0:45]
+        history = READ_HUNDRED["messages"][2:] + [
+            rg.assistant(("e1", "edit_file", {"path": KV, "patch": "\n".join(patch(hunk(1, moved)))}),
+                         ("w1", "write_file", {"path": "kv/moved.go", "content": "\n".join(moved)})),
+            rg.result("e1", ok), rg.result("w1", "File written successfully: kv/moved.go")]
+        guard = self.guard(rg.conversation(*history))
+        self.assertEqual(guard.edits, {})
+        # A later real deletion is still refused.
+        self.assertIsNotNone(guard.refused(self.message(patch(hunk(51, HUNDRED[50:95])))))
+        # If the write failed, the removal was a deletion after all.
+        failed = history[:-1] + [rg.result("w1", "[ERROR] [⚠️ Error] write_file: Permission denied")]
+        self.assertEqual(self.guard(rg.conversation(*failed)).edits, {KV: (45, 0)})
 
     def test_a_block_moved_within_the_file_is_not_destructive(self):
         block = HUNDRED[10:50]
@@ -366,6 +411,27 @@ class StreamingDeleteTests(unittest.TestCase):
         base.SSEUpstream.seen, base.SSEUpstream.script = [], [streamed_edit(patch(hunk(1, [], block), hunk(51, block)))]
         completion = self.adapter().complete(READ_HUNDRED)
         self.assertEqual((len(base.SSEUpstream.seen), self.counts(completion)), (1, (0, 0, 0, 0, 0, 0)))
+
+    def test_edits_completed_meanwhile_in_the_stream_count_toward_a_later_hunk(self):
+        # Call 0 starts first, call 1 (a 15-line deletion) completes while
+        # call 0 streams, then call 0's 30-line deletion completes a hunk:
+        # 45 of 100 together, stopped before the slow rest of call 0.
+        def interleaved(_body):
+            yield base.sse_event(base.chunk(calls=[{"index": 0, "id": "a", "type": "function", "function": {
+                "name": "edit_file", "arguments": "{\"path\": %s, \"patch\": \"@@ -41,30 +41,0 @@\\n" % json.dumps(KV)}}]))
+            yield base.sse_event(base.chunk(calls=[edit_call(patch(hunk(1, HUNDRED[0:15])), index=1, call_id="b")]))
+            for line in HUNDRED[40:70]:
+                yield base.sse_event(base.chunk(calls=[{"index": 0, "function": {"arguments": json.dumps("-" + line + "\n")[1:-1]}}]))
+            yield base.sse_event(base.chunk(calls=[{"index": 0, "function": {"arguments": "@@ -90,2 +60,1 @@\\n"}}]))
+            for _ in range(10000):
+                yield base.sse_event(base.chunk(calls=[{"index": 0, "function": {"arguments": " kept\\n"}}]))
+                time.sleep(0.002)
+        base.SSEUpstream.script = [interleaved, SMALL_EDIT]
+        started = time.monotonic()
+        completion = self.adapter().complete(READ_HUNDRED)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual(self.counts(completion), (1, 0, 0, 0, 0, 0))
+        self.assertEqual(base.SSEUpstream.seen[1]["messages"][-1], delete_correction(45, 100))
 
     def test_each_upstream_attempt_is_judged_on_its_own_stream(self):
         def degenerate_edit(_body):
