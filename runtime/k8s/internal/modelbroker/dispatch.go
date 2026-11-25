@@ -47,12 +47,55 @@ type Result struct {
 	DispatchAttempted, HandoffConfirmed bool
 }
 
-func (d Dispatcher) authorize(ctx context.Context, scope store.ModelScope) (until time.Time, err error) {
+// staleEvidenceRetry is the pause between checks while current authority is
+// refused only because its issue evidence is stale.
+var staleEvidenceRetry = 3 * time.Second
+
+// authorizeWaiting is authorize, except that a refusal at snapshot-stale (the
+// issue evidence is unchanged but older than its window, for example after one
+// incomplete intake scan) is checked again until the refusal's own bound, the
+// latest useful time, the scope or ctx ends, whichever is first. Every check is
+// a complete authorization; the first that is not snapshot-stale decides. When
+// the wait ends the refusal keeps its snapshot-stale name. Stale evidence never
+// authorizes, and a changed snapshot is refused at once by its own name.
+func (d Dispatcher) authorizeWaiting(ctx context.Context, scope store.ModelScope, latest time.Time) (time.Time, error) {
+	var waitUntil time.Time
+	for {
+		until, wait, err := d.authorizeOnce(ctx, scope)
+		if err == nil || wait <= 0 {
+			return until, err
+		}
+		if waitUntil.IsZero() {
+			waitUntil = time.Now().Add(min(wait, 2*time.Minute))
+			if latest.Before(waitUntil) {
+				waitUntil = latest
+			}
+			if scope.ExpiresAt.Before(waitUntil) {
+				waitUntil = scope.ExpiresAt
+			}
+		}
+		if !time.Now().Add(staleEvidenceRetry).Before(waitUntil) {
+			return time.Time{}, err
+		}
+		timer := time.NewTimer(staleEvidenceRetry)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return time.Time{}, err
+		case <-timer.C:
+		}
+	}
+}
+
+// authorizeOnce is one bounded authorization. It also returns how long a
+// snapshot-stale refusal may be waited for, as the authority bounds it; that
+// is zero for every other result.
+func (d Dispatcher) authorizeOnce(ctx context.Context, scope store.ModelScope) (until time.Time, wait time.Duration, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	defer func() {
 		if recover() != nil {
-			until = time.Time{}
+			until, wait = time.Time{}, 0
 			err = ErrRejected
 		}
 	}()
@@ -64,18 +107,22 @@ func (d Dispatcher) authorize(ctx context.Context, scope store.ModelScope) (unti
 		if errors.As(err, &named) && authorizationRefusalStage.MatchString("authorization-dispatch-"+named.AuthorityStep()) {
 			step = named.AuthorityStep()
 		}
-		return time.Time{}, authorizationRefusal(step)
+		var stale interface{ EvidenceWait() time.Duration }
+		if step == "snapshot-stale" && errors.As(err, &stale) {
+			wait = stale.EvidenceWait()
+		}
+		return time.Time{}, wait, authorizationRefusal(step)
 	case ctx.Err() != nil:
-		return time.Time{}, authorizationRefusal("deadline")
+		return time.Time{}, 0, authorizationRefusal("deadline")
 	case !until.After(time.Now()):
-		return time.Time{}, authorizationRefusal("claim-expired")
+		return time.Time{}, 0, authorizationRefusal("claim-expired")
 	case !scope.ExpiresAt.After(time.Now()):
-		return time.Time{}, authorizationRefusal("scope-expired")
+		return time.Time{}, 0, authorizationRefusal("scope-expired")
 	}
 	if scope.ExpiresAt.Before(until) {
 		until = scope.ExpiresAt
 	}
-	return until, nil
+	return until, 0, nil
 }
 
 func (d Dispatcher) abandon(ctx context.Context, ref store.ModelCallRef) {
@@ -119,7 +166,8 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 		return result, ErrRejected
 	}
 	stage = "authorization-reservation"
-	until, err := d.authorize(ctx, scope)
+	mailboxDeadline := time.UnixMilli(request.ExpiresAt).Add(-15 * time.Second)
+	until, err := d.authorizeWaiting(ctx, scope, mailboxDeadline)
 	if err != nil {
 		stage = refusedStage(stage, err)
 		return result, ErrRejected
@@ -158,7 +206,12 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 		return result, ErrNotClaimed
 	}
 	stage = "authorization-dispatch"
-	until, err = d.authorize(ctx, scope)
+	// A stale-evidence wait ends before the call's own deadline below.
+	callDeadline := claim.Call.ExpiresAt.Add(-15 * time.Second)
+	if mailboxDeadline.Before(callDeadline) {
+		callDeadline = mailboxDeadline
+	}
+	until, err = d.authorizeWaiting(ctx, scope, callDeadline)
 	if err != nil {
 		stage = refusedStage(stage, err)
 		d.abandon(ctx, ref)
@@ -168,10 +221,7 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 	defer stopAuthority()
 	ctx = currentCtx
 	stage = "deadline"
-	deadline := claim.Call.ExpiresAt.Add(-15 * time.Second)
-	if mailboxDeadline := time.UnixMilli(request.ExpiresAt).Add(-15 * time.Second); mailboxDeadline.Before(deadline) {
-		deadline = mailboxDeadline
-	}
+	deadline := callDeadline
 	if profileDeadline := time.Now().Add(time.Duration(profile.MaxSeconds) * time.Second); profileDeadline.Before(deadline) {
 		deadline = profileDeadline
 	}
@@ -205,7 +255,9 @@ func (d Dispatcher) Deliver(ctx context.Context, allocation string, profileRaw [
 		return result, ErrUncertain
 	}
 	stage = "authorization-publication"
-	until, err = d.authorize(ctx, scope)
+	// A stale-evidence wait leaves the publication's 5 seconds before the
+	// mailbox stops waiting.
+	until, err = d.authorizeWaiting(ctx, scope, time.UnixMilli(request.ExpiresAt).Add(-10*time.Second))
 	if err != nil {
 		stage = refusedStage(stage, err)
 		d.abandon(ctx, ref)
@@ -296,7 +348,7 @@ func refusedStage(stage string, err error) string {
 
 // The refusal steps of Dispatcher.authorize and the execution lifecycle's
 // Authorize; any other text stays unknown.
-var authorizationRefusalStage = regexp.MustCompile(`^authorization-(reservation|dispatch|publication)-(authority|deadline|claim-expired|scope-expired|busy|stopped|scope|panic|phase|model-proof|model-policy|prepared|binding|claim|claim-read|inputs|record|repair|snapshot|reload)$`)
+var authorizationRefusalStage = regexp.MustCompile(`^authorization-(reservation|dispatch|publication)-(authority|deadline|claim-expired|scope-expired|busy|stopped|scope|panic|phase|model-proof|model-policy|prepared|binding|claim|claim-read|inputs|record|repair|snapshot|snapshot-stale|reload)$`)
 
 func safePublicationStage(stage string) string {
 	switch stage {

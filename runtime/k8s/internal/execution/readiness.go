@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -46,6 +47,14 @@ func verifiedSnapshotStatus(ctx context.Context, db *store.DB, p authority.Polic
 		age = 300
 	}
 	e, err := db.ReadExecutionEvidence(ctx, c.WorkItemID, c.Repository, c.IssueNumber, age)
+	if errors.Is(err, store.ErrEvidenceStale) {
+		// Stale evidence never authorizes. A changed snapshot still refuses
+		// at once; only otherwise unchanged evidence is reported as stale.
+		if _, err := validateSnapshotEvidence(p, config, c, expectedStatus, e); err != nil {
+			return intake.Snapshot{}, ErrAuthority
+		}
+		return intake.Snapshot{}, errSnapshotStale
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrObservationUnavailable) {
 			return intake.Snapshot{}, err
@@ -54,6 +63,13 @@ func verifiedSnapshotStatus(ctx context.Context, db *store.DB, p authority.Polic
 	}
 	return validateSnapshotEvidence(p, config, c, expectedStatus, e)
 }
+
+// errSnapshotStale: the signed issue evidence is unchanged, but its intake
+// poll watermark or issue observation is older than the evidence window, for
+// example after one incomplete intake scan. A later complete scan can refresh
+// it; until then nothing is authorized.
+// It wraps ErrAuthority, so every caller that refused before still refuses.
+var errSnapshotStale = fmt.Errorf("%w: issue evidence older than the window", ErrAuthority)
 
 // CandidateSnapshot verifies current issue/admission/plan evidence for the
 // independent verifier. The original signed execution remains bounded by its

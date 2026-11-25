@@ -133,6 +133,9 @@ func preparationProofStatus(ctx context.Context, db *store.DB, load PreparationL
 		status = "running"
 	}
 	snapshot, err := verifiedSnapshotStatus(ctx, db, in.Policy, in.Intake, c, status)
+	if errors.Is(err, errSnapshotStale) {
+		return Command{}, intake.Snapshot{}, PreparationInputs{}, staleEvidence{wait: staleEvidenceWait(in.Intake.PollSeconds)}
+	}
 	if err != nil {
 		return fail("snapshot")
 	}
