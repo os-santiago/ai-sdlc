@@ -20,15 +20,16 @@ with recorded evidence, not by calendar.
 
 ## Progress
 
-Updated 2026-11-24.
+Updated 2026-11-25. The [iteration roadmap](iteration-roadmap.md) projects the next steps.
 
 | Item | State | Pull requests |
 |---|---|---|
-| B1 | Stage 1 merged: the manifest `generation.toolchain` section and the bounded copier. Stages 2–6 remain: executor init containers, pod-shape acceptance, controller and quota, kind validation with a battery, docs and prompt. | #763 |
-| B2 | Done: staggered gateway benchmarks, and the generation budget configurable at install (600–900 s, 24–32 steps; above 24 steps only with `--model-upstream`), with defaults unchanged | #762, #770 |
-| B3 | Done in code: the sandbox `RuntimeClass` is a value checked in preflight, and autonomous work stops without it. A class's declared overhead and scheduling additions are accepted exactly and checked against quota headroom. Not yet validated on a live cluster with a non-default class (Kata). Follow-ups in #771. | #769 |
-| B5 | Partial: govulncheck gate and component base images pinned by digest. In review: keyless signing of each main image digest with an SBOM attestation, and signature verification in the image-lock resolver and the upgrade tools, fail closed; the first signed main publication is not yet observed. Image scanning, attestation verification and verification at install and cluster admission remain. | #764 |
-| Others | Not started | |
+| B1 | Done: the generator copies the manifest toolchain from the pinned verification image into its sandbox and runs the test command before export. Observed working under gVisor on kind. | #763, #773 |
+| B2 | Done: staggered gateway benchmarks; generation budget (600–900 s, 24–32 steps) and per-answer token bound (4096–8192) configurable at install, defaults unchanged | #762, #770, #778 |
+| B3 | Done in code: the sandbox `RuntimeClass` is a value checked in preflight, and autonomous work stops without it. Not yet validated on a live cluster with a non-default class (Kata). Follow-ups in #771. | #769 |
+| B5 | Mostly done: govulncheck gate, base images pinned by digest, keyless signing of every main image digest with an SBOM attestation, and signature verification before an image lock is written and in the upgrade tools. The first signed publication verified end to end. Remaining: image scanning, attestation verification, verification when installing from a committed lock and at cluster admission. | #764, #783 |
+| Local model | Generation, verification and independent review on a local model behind the gateway: hunk-count repair, degenerate-output guard, long-call keepalive, review tool narrowing and step-budget guidance. First autonomous delivery observed in battery 24. | #777, #779, #781, #782, #784 |
+| Others | Not started; B9 has an open pull request (#715) | |
 
 ## Prioritization
 
