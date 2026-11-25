@@ -30,6 +30,34 @@ journal's request hash still covers the exact request the broker sent to the
 gateway, with SCC's full tool list; the narrowed upstream payload is not
 recorded. This policy is unchanged and still rejects a call to any other tool.
 
+## Final turn without tools
+
+The signed reviewer profile's `maxSteps` (at most 8) bounds the conversation.
+On the last permitted turn (`sequence == maxSteps`, from turn 2), the broker
+sends the provider the request without `tools` and `tool_choice`, followed by
+one fixed user message, `ReviewFinalTurnNote`: "This is your last turn: give
+the final verdict now in the required format." Earlier turns are sent
+unchanged. The broker decides this from the envelope sequence it has already
+bound and the signed profile, never from the model or the worker.
+
+- **Binding.** The request is bound (envelope digest, attempt, Pod, model and
+  token limits) before the change, and the changed request is checked again
+  against the same limits. The journal's request hash and input bytes record
+  the payload actually sent; the mailbox reply keeps the worker's own request
+  digest, so SCC still matches the reply to its request.
+- **Read-only.** Removing tools only narrows what the model is offered. The
+  response policy is unchanged: a tool call on the last turn is still checked
+  against the four read-only tools. The installed gateway, offered no tools,
+  already refuses any proposal on that turn (`model-provider`).
+- **Verdict.** The answer is parsed by the same policy; it must still be one
+  complete choice ending in exactly one verdict line.
+
+A request beyond `maxSteps` binds but is refused before any reservation, as
+`model-request-turn-budget` rather than `model-request-binding` (see
+[review request stops](executor-failure-diagnostics.md#review-request-stops)).
+Battery 31 (issue 227) spent all 8 turns on one read each, and its ninth
+request was refused.
+
 Independent observations retain only tool counts and final-message SHA-256 plus
 verdict. The journal binds the exact request/response hashes and handoff. A final
 verdict ends the conversation; a rejected answer cannot be followed by another

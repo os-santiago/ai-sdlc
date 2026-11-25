@@ -91,7 +91,8 @@ Do not quote alternative verdicts or infer approval from unavailable evidence.
 Your output is advisory until the external controller authenticates and binds it.
 
 You have at most %d model turns in total, including the final answer; a turn
-beyond that is refused and the review fails. Request several reads in one turn
+beyond that is refused and the review fails. Your last turn is offered no
+tools, so it must be the final answer. Request several reads in one turn
 (up to 4), read only what the change and its tests need, and give the final
 answer before the budget ends.
 
