@@ -33,6 +33,7 @@ func TestDiagnosticStageNeverLogsUnderlyingContent(t *testing.T) {
 		{ControllerError{"readiness-bind-unstable"}, "readiness-bind-unstable"},
 		{ControllerError{"readiness-init-created"}, "readiness-init-created"},
 		{ControllerError{"readiness-containers-created"}, "readiness-containers-created"},
+		{ControllerError{"readiness-containers-unstable"}, "readiness-containers-unstable"},
 		{ControllerError{"readiness-uid"}, "readiness-uid"},
 		{ControllerError{"readiness-init-private"}, "unknown"},
 		{ControllerError{"sandbox-runtime-class"}, "sandbox-runtime-class"},

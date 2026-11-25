@@ -103,6 +103,13 @@ class CandidateInstallTests(unittest.TestCase):
         self.assertIs(values['review']['narrowModelTools'], True)
         self.assertNotIn('review', candidate_install.desired_values(install.ROOT, lock_path, lock, verification=True))
 
+    def test_new_installations_set_the_readiness_probe_timeout(self):
+        lock_path = install.LOCAL / 'images.lock.json'
+        lock = install.image_lock(lock_path)
+        for kwargs in ({}, {'verification': True, 'review': True}):
+            values = candidate_install.desired_values(install.ROOT, lock_path, lock, **kwargs)
+            self.assertEqual(values['probes'], {'readinessTimeoutSeconds': 5})
+
     def test_sandbox_runtime_class_is_written_only_when_not_default(self):
         lock_path = install.LOCAL / 'images.lock.json'
         lock = install.image_lock(lock_path)

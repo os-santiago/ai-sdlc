@@ -38,7 +38,6 @@ spec:
               containerPort: 8081
           readinessProbe:
             httpGet: {path: /readyz, port: admission}
-            timeoutSeconds: 5
           livenessProbe:
             httpGet: {path: /healthz, port: admission}
           resources:
@@ -65,7 +64,6 @@ spec:
               containerPort: 8082
           readinessProbe:
             httpGet: {path: /readyz, port: orchestrator}
-            timeoutSeconds: 5
           livenessProbe:
             httpGet: {path: /healthz, port: orchestrator}
           resources:
@@ -144,7 +142,6 @@ spec:
               containerPort: 8083
           readinessProbe:
             httpGet: {path: /readyz, port: worker}
-            timeoutSeconds: 5
           livenessProbe:
             httpGet: {path: /healthz, port: worker}
           resources:
@@ -173,7 +170,6 @@ spec:
               containerPort: 8084
           readinessProbe:
             httpGet: {path: /readyz, port: release}
-            timeoutSeconds: 5
           livenessProbe:
             httpGet: {path: /healthz, port: release}
           resources:
@@ -204,7 +200,6 @@ spec:
               containerPort: 8085
           readinessProbe:
             httpGet: {path: /readyz, port: relay}
-            timeoutSeconds: 5
           livenessProbe:
             httpGet: {path: /healthz, port: relay}
           resources:

@@ -112,11 +112,22 @@ An error the gate cannot name (an unreadable configuration or service account
 token) is `unavailable: preflight`. A readiness probe whose deadline ended
 before or during the read is `unknown: timeout`.
 
-The chart sets the readiness probes' `timeoutSeconds` to 5. `/readyz` bounds
-its own checks to 3 s, and the kubelet's default of 1 s cut slow reads short. In
-evaluation battery 24 (issue #790), every `sandbox runtime class unavailable`
-line came with a `/readyz` request that ended at exactly 1.000 s. The probe had
-canceled the read; no read ever answered that the class was missing.
+The chart value `probes.readinessTimeoutSeconds` sets the readiness probes'
+`timeoutSeconds` for every runtime component. `/readyz` bounds its own checks
+to 3 s, and the kubelet's default of 1 s cut slow reads short. In evaluation
+battery 24 (issue #790), every `sandbox runtime class unavailable` line from the
+verifier came with a `/readyz` request that ended at exactly 1.000 s. The probe
+had canceled the read; no read ever answered that the class was missing.
+
+The default, 0, omits the field, so the kubelet default applies and an
+installation recorded before this setting renders byte-identically (the
+upgrade tools compare the re-render with the recorded documents). The
+installer sets 5 for new candidate and verification installations, and every
+upgrade carries the recorded value forward unchanged. To adopt it on an
+existing installation, set the value in a deliberate configuration change.
+The kustomize base (`runtime/k8s/deploy/kustomize/base`) keeps the kubelet
+default; add `timeoutSeconds: 5` to its readiness probes with an overlay patch
+if you deploy from it.
 
 RuntimeClass admission adds the class's `overhead.podFixed` as the pod's
 `spec.overhead` and merges the class's `scheduling` nodeSelector and

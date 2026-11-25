@@ -310,6 +310,42 @@ class ChartTests(unittest.TestCase):
             with self.subTest(values=values):
                 self.assertNotEqual(self.sandbox_docs(values)[0].returncode, 0)
 
+    def test_readiness_probe_timeout_renders_only_when_set(self):
+        def probes(docs):
+            return {(d['metadata']['name'], c['name']): c['readinessProbe']
+                    for d in docs if d['kind'] == 'Deployment'
+                    for c in d['spec']['template']['spec']['containers'] if 'readinessProbe' in c}
+        base = self.build_values()
+        before = self.render_build(base)
+        self.assertEqual(before.returncode, 0, before.stderr)
+        # Absent or 0: recorded installations render byte-identically, with
+        # the kubelet default timeout.
+        zero = self.render_build(dict(base, probes={'readinessTimeoutSeconds': 0}))
+        self.assertEqual(zero.stdout, before.stdout)
+        docs = [d for d in yaml.safe_load_all(before.stdout) if d]
+        self.assertTrue(probes(docs))
+        self.assertFalse(any('timeoutSeconds' in p for p in probes(docs).values()))
+        # Set: every runtime component's readiness probe (each component,
+        # the verifier and the build controller) waits that long; nothing
+        # else changes.
+        five = self.render_build(dict(base, probes={'readinessTimeoutSeconds': 5}))
+        self.assertEqual(five.returncode, 0, five.stderr)
+        set_docs = [d for d in yaml.safe_load_all(five.stdout) if d]
+        timed = probes(set_docs)
+        self.assertEqual(set(timed), set(probes(docs)))
+        self.assertIn(('ai-sdlc-verifier', 'verifier'), timed)
+        self.assertIn(('ai-sdlc-build-controller', 'build-controller'), timed)
+        self.assertIn(('ai-sdlc-worker', 'worker'), timed)
+        for key, probe in timed.items():
+            self.assertEqual(probe, dict(probes(docs)[key], timeoutSeconds=5), key)
+        strip = lambda d: [c.pop('readinessProbe', None) for x in d if x['kind'] == 'Deployment' for c in x['spec']['template']['spec']['containers']]
+        strip(docs); strip(set_docs)
+        self.assertEqual(set_docs, docs)
+        for bad in ('5', -1, 31, 1.5):
+            with self.subTest(bad=bad):
+                self.assertNotEqual(self.render_build(dict(base, probes={'readinessTimeoutSeconds': bad})).returncode, 0)
+        self.assertNotEqual(self.render_build(dict(base, probes={'other': 1})).returncode, 0)
+
     def test_review_gateway_tool_allowlist_renders_only_when_set_and_review_is_enabled(self):
         upstream = {'adapter': 'openai', 'upstream': {'url': 'http://192.0.2.10:8080', 'model': 'qwen3-coder', 'cidr': '192.0.2.10/32'}}
         review = {'enabled': True, 'configJSON': '{}'}

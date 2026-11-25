@@ -165,6 +165,7 @@ cleanup and the exact pod acceptance are unchanged:
 | `readiness-phase` | The pod left Pending/Running |
 | `readiness-containers` | A worker or mailbox container restarted, terminated or reported an unexpected state |
 | `readiness-containers-before-init` | A worker or mailbox container was created or ran before every init container completed |
+| `readiness-containers-unstable` | A worker or mailbox container observed earlier (created or running) changed its container ID or vanished |
 | `readiness-containers-created` | A worker or mailbox container reported waiting with a container ID that is not the kubelet's created state, or returned to it after running |
 | `readiness-init-count` | The init container statuses were not the compiled ones (extra, missing, or an empty list when one is required) |
 | `readiness-init-identity` | An init container was out of order, restarted or has a previous termination |
@@ -211,10 +212,17 @@ Readiness now accepts exactly that state and nothing broader:
 - an init container only when every earlier one exited 0; a worker or mailbox
   container only after the init sequence completed;
 - the created container's ID is held like any other: it must be observed
-  again with the same ID, and a container observed running or terminated is
-  never accepted as created again;
+  again with the same ID (for a worker or mailbox container too), and a
+  container observed running or terminated is never accepted as created
+  again;
 - a running pod (`Bind` and every later session observation) still requires
-  every init container terminated and both main containers running.
+  every init container terminated and both main containers running;
+- a created container whose start fails never becomes acceptable: the kubelet
+  then reports a reason (for example `RunContainerError`), a restart or a
+  failed pod, which refuses it (`readiness-init-created`,
+  `readiness-containers-created`, `readiness-init-identity` or
+  `readiness-phase`). If it simply stays created, the start budget ends at
+  `readiness-deadline`. Either way the attempt fails closed.
 
 A waiting status with a container ID and any reason (for example
 `CreateContainerError`, or `PodInitializing` with an ID) is still refused, as

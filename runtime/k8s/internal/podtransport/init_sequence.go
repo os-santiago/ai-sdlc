@@ -194,7 +194,7 @@ func initFailure(name string, terminated *core.ContainerStateTerminated) error {
 	return readinessError{step: "toolchain-failed"}
 }
 
-var readinessSteps = regexp.MustCompile(`^(toolchain-(memory|install|usage|source|link|limit|dynamic|destination|failed)|init-(count|identity|image|terminated|running|created|waiting|state|unstable)|uid|request|permission|deadline|status|template|containers|containers-before-init|containers-created|phase|bind|bind-unstable)$`)
+var readinessSteps = regexp.MustCompile(`^(toolchain-(memory|install|usage|source|link|limit|dynamic|destination|failed)|init-(count|identity|image|terminated|running|created|waiting|state|unstable)|uid|request|permission|deadline|status|template|containers|containers-before-init|containers-created|containers-unstable|phase|bind|bind-unstable)$`)
 
 // ReadinessStep returns the named readiness stop, or "" for any other error.
 func ReadinessStep(err error) string {

@@ -441,7 +441,7 @@ func TestReadinessNamesEveryOtherRefusalStep(t *testing.T) {
 	if _, err := r.WaitRunning(context.Background(), "not-a-uid"); !errors.Is(err, ErrTransport) || ReadinessStep(err) != "uid" {
 		t.Fatal("malformed pod UID not named", err)
 	}
-	for _, step := range []string{"", "init-other", "toolchain-", "readiness", "bind-x", "request-timeout", "containers-created-x"} {
+	for _, step := range []string{"", "init-other", "toolchain-", "readiness", "bind-x", "request-timeout", "containers-created-x", "containers-unstable-x"} {
 		if KnownReadinessStep(step) {
 			t.Fatal("unbounded readiness step accepted", step)
 		}
@@ -593,6 +593,36 @@ func TestKubeletCreatedStateIsAcceptedExactly(t *testing.T) {
 			}
 			createdNotStarted(&pod.Status.ContainerStatuses[1])
 		}, "containers-created", 2},
+		"main-created-replaced": {func(n int32, pod *core.Pod) {
+			pod.Status.Phase = core.PodPending
+			createdNotStarted(&pod.Status.ContainerStatuses[0])
+			if n > 1 {
+				pod.Status.ContainerStatuses[0].ContainerID = other
+			}
+		}, "containers-unstable", 2},
+		"main-created-replaced-when-started": {func(n int32, pod *core.Pod) {
+			if n == 1 {
+				pod.Status.Phase = core.PodPending
+				createdNotStarted(&pod.Status.ContainerStatuses[0])
+				pod.Status.ContainerStatuses[0].ContainerID = other
+			}
+		}, "containers-unstable", 2},
+		"main-created-then-gone": {func(n int32, pod *core.Pod) {
+			pod.Status.Phase = core.PodPending
+			if n == 1 {
+				createdNotStarted(&pod.Status.ContainerStatuses[0])
+				return
+			}
+			pod.Status.ContainerStatuses[0].State = core.ContainerState{Waiting: &core.ContainerStateWaiting{Reason: "ContainerCreating"}}
+			pod.Status.ContainerStatuses[0].ContainerID, pod.Status.ContainerStatuses[0].ImageID = "", ""
+		}, "containers-unstable", 2},
+		"main-status-vanished": {func(n int32, pod *core.Pod) {
+			pod.Status.Phase = core.PodPending
+			createdNotStarted(&pod.Status.ContainerStatuses[0])
+			if n > 1 {
+				pod.Status.ContainerStatuses = pod.Status.ContainerStatuses[1:]
+			}
+		}, "containers-unstable", 2},
 		"main-created-wrong-image": {func(_ int32, pod *core.Pod) {
 			createdNotStarted(&pod.Status.ContainerStatuses[1])
 			pod.Status.ContainerStatuses[1].ImageID = "fixture/other@sha256:" + strings.Repeat("f", 64)

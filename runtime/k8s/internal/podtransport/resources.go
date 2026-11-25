@@ -216,8 +216,9 @@ func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, erro
 	ctx, cancel := context.WithDeadline(ctx, minDeadline(time.Now().Add(startBudget(r.pod)), r.expires))
 	defer cancel()
 	// Init container IDs, once observed, must never change, and a container
-	// observed started is never again reported created.
-	seen, started := map[string]instance{}, map[string]bool{}
+	// observed started is never again reported created. Worker and mailbox
+	// container IDs, once observed (created or running), are held too.
+	seen, started, mainIDs := map[string]instance{}, map[string]bool{}, map[string]string{}
 	for {
 		raw, status, err := r.request(ctx, http.MethodGet, "pods", r.pod.Name, nil, false)
 		if err != nil {
@@ -239,7 +240,7 @@ func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, erro
 		}
 		// The init sequence is checked first, so a failed toolchain copy
 		// (which fails the pod) is named rather than a generic phase stop.
-		ready, err := r.containersReady(pod, seen, started)
+		ready, err := r.containersReady(pod, seen, started, mainIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -277,8 +278,9 @@ func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, erro
 //
 // A worker or mailbox container may be reported created but not started
 // (see createdStatus) only after the init sequence completed, and never
-// after it was observed running.
-func (r *Resources) containersReady(pod core.Pod, seen map[string]instance, everStarted map[string]bool) (bool, error) {
+// after it was observed running. A worker or mailbox container ID, once
+// observed, never changes and never disappears (containers-unstable).
+func (r *Resources) containersReady(pod core.Pod, seen map[string]instance, everStarted map[string]bool, mainIDs map[string]string) (bool, error) {
 	if len(pod.Status.ContainerStatuses) > 2 || len(pod.Status.EphemeralContainerStatuses) != 0 {
 		return false, readinessError{step: "containers"}
 	}
@@ -307,6 +309,9 @@ func (r *Resources) containersReady(pod core.Pod, seen map[string]instance, ever
 		if status.ImageID != "" && (!imageIDPattern.MatchString(status.ImageID) || !imageMatchesPin(status.Image, status.ImageID, pin)) {
 			return false, readinessError{step: "containers"}
 		}
+		if previous, ok := mainIDs[status.Name]; ok && status.ContainerID != previous {
+			return false, readinessError{step: "containers-unstable"}
+		}
 		if status.State.Running != nil && status.State.Waiting == nil {
 			if !initialized.complete {
 				return false, readinessError{step: "containers-before-init"}
@@ -315,6 +320,7 @@ func (r *Resources) containersReady(pod core.Pod, seen map[string]instance, ever
 				return false, readinessError{step: "containers"}
 			}
 			everStarted[status.Name] = true
+			mainIDs[status.Name] = status.ContainerID
 			running++
 			continue
 		}
@@ -326,10 +332,16 @@ func (r *Resources) containersReady(pod core.Pod, seen map[string]instance, ever
 			if !createdStatus(status) || everStarted[status.Name] {
 				return false, readinessError{step: "containers-created"}
 			}
+			mainIDs[status.Name] = status.ContainerID
 			continue
 		}
 		if status.State.Running != nil || status.State.Waiting == nil || status.ContainerID != "" || (status.State.Waiting.Reason != "ContainerCreating" && status.State.Waiting.Reason != "PodInitializing") {
 			return false, readinessError{step: "containers"}
+		}
+	}
+	for name := range mainIDs {
+		if !started[name] {
+			return false, readinessError{step: "containers-unstable"}
 		}
 	}
 	return running == 2, nil

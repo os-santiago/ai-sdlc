@@ -81,12 +81,11 @@ spec:
             {{- end }}
           ports:
             - {name: http, containerPort: {{ $component.port }}}
-          # /readyz bounds its own checks to 3 s; the kubelet's default 1 s
-          # timeout would cut a slow database or API read short and log it
-          # as a missing dependency.
           readinessProbe:
             httpGet: {path: /readyz, port: http}
-            timeoutSeconds: 5
+            {{- with $.Values.probes.readinessTimeoutSeconds }}
+            timeoutSeconds: {{ . }}
+            {{- end }}
           livenessProbe:
             httpGet: {path: /healthz, port: http}
             initialDelaySeconds: 10
