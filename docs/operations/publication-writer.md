@@ -24,6 +24,14 @@ its journal uncertain. The writer cannot adopt an existing branch, overwrite a
 ref, merge, release or deploy. A future merge stage must independently preserve
 `[skip release]` and validate checks, unresolved reviews and current authority.
 
+Its read-only counterpart, `internal/publication.Reader`, serves only
+[reconciliation](publication-reconciliation.md). It issues bounded `GET`
+requests to fixed tree, commit, ref and pull request list paths, with the same
+transport limits. It has no write method. The planned request bodies that
+reconciliation re-derives (`publication.Expect*`) come from the writer's own
+body builders. Each observation is therefore tied to the exact journaled request
+digest.
+
 The API mapping follows GitHub's documented [tree creation](https://docs.github.com/en/rest/git/trees#create-a-tree),
 [commit creation](https://docs.github.com/en/rest/git/commits#create-a-commit),
 [reference creation](https://docs.github.com/en/rest/git/refs#create-a-reference)

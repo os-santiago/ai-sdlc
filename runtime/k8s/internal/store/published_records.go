@@ -58,7 +58,7 @@ func readPublishedRecordAs(ctx context.Context, q Querier, id, role string) (Pub
 	for i, kind := range []string{"tree", "commit", "branch", "pull-request"} {
 		effect := effects[i]
 		raw, _ := json.Marshal(effect.Receipt)
-		if effect.Kind != kind || effect.Receipt.Kind != kind || !validPublicationReceipt(effect.Receipt) || !modelDigest.MatchString(effect.RequestDigest) || authority.Digest(raw) != effect.ReceiptDigest {
+		if effect.Kind != kind || effect.Receipt.Kind != kind || effect.Receipt.Observed || !validPublicationReceipt(effect.Receipt) || !modelDigest.MatchString(effect.RequestDigest) || authority.Digest(raw) != effect.ReceiptDigest {
 			return PublishedRecord{}, ErrExecution
 		}
 	}

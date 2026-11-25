@@ -16,6 +16,13 @@ Tree, commit, branch and PR acknowledgements are ordered and non-replayable.
 Unknown results stop publication and quarantine subsequent work. The final proof
 requires all four receipts and grants neither merge nor deployment authority.
 
+While quarantined, each poll [reconciles](publication-reconciliation.md) one
+settled uncertain effect by read-only forge observation. Exact existence records
+the receipt the call would have produced; proven absence records a known no-send.
+Anything else keeps the quarantine. The original request is closed as failed and
+never retried. The poll reports `publication-reconciled` once no uncertain effect
+remains.
+
 ## Capability boundary
 
 `AI_SDLC_PUBLICATION=true` is a trusted configuration ceiling. It requires

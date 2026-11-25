@@ -185,6 +185,10 @@ type PublicationReceipt struct {
 	SHA         string `json:"sha"`
 	Branch      string `json:"branch,omitempty"`
 	PullRequest int    `json:"pullRequest,omitempty"`
+	// Observed marks a receipt recorded by reconciliation from a read-only
+	// forge observation, not from the write's own response. It closes an
+	// uncertain effect of a failed request and never enters a published record.
+	Observed bool `json:"observed,omitempty"`
 }
 
 func validPublicationReceipt(r PublicationReceipt) bool {
@@ -232,7 +236,7 @@ func (db *DB) BeginPublicationEffect(ctx context.Context, c PublicationClaim, ki
 	return effect, nil
 }
 func (db *DB) AcknowledgePublicationEffect(ctx context.Context, effect PublicationEffect, receipt PublicationReceipt) error {
-	if receipt.Kind != effect.Kind || !validPublicationReceipt(receipt) {
+	if receipt.Kind != effect.Kind || receipt.Observed || !validPublicationReceipt(receipt) {
 		return ErrExecution
 	}
 	raw, _ := json.Marshal(receipt)
@@ -336,7 +340,7 @@ func (db *DB) FinishPublication(ctx context.Context, c PublicationClaim, proof [
 			return ErrExecution
 		}
 		for i, kind := range []string{"tree", "commit", "branch", "pull-request"} {
-			if effects[i].Kind != kind {
+			if effects[i].Kind != kind || effects[i].Receipt.Observed {
 				return ErrExecution
 			}
 		}

@@ -162,13 +162,46 @@ type commitRequest struct {
 	Committer commitPerson `json:"committer"`
 }
 
+// The request bodies below are shared with the read-only reconciler, which
+// re-derives them to prove which journaled write it observes.
+func commitBody(subject, tree, parent string, date time.Time) commitRequest {
+	person := commitPerson{"Sergio Canales", "sergio.canales.e@gmail.com", date.UTC().Format(time.RFC3339)}
+	message := subject + "\n\nSigned-off-by: Sergio Canales <sergio.canales.e@gmail.com>\n"
+	return commitRequest{message, tree, []string{parent}, person, person}
+}
+
+type refRequest struct {
+	Ref string `json:"ref"`
+	SHA string `json:"sha"`
+}
+
+func branchBody(branch, commit string) refRequest {
+	return refRequest{"refs/heads/" + branch, commit}
+}
+
+type pullRequestRequest struct {
+	Title               string `json:"title"`
+	Body                string `json:"body"`
+	Head                string `json:"head"`
+	Base                string `json:"base"`
+	Draft               bool   `json:"draft"`
+	MaintainerCanModify bool   `json:"maintainer_can_modify"`
+}
+
+// proofMarker is the line of the pull request body that carries the plan digest.
+func proofMarker(proofDigest string) string {
+	return "Publication proof SHA-256: `" + proofDigest + "`."
+}
+func pullRequestBody(repository string, issue int, title, branch, proofDigest string) pullRequestRequest {
+	return pullRequestRequest{Title: title, Body: IssueReference(repository, issue) + "\n\nAI-SDLC verified candidate.\n" + proofMarker(proofDigest) + "\nIt merges only after the repository's required checks pass.\n", Head: branch, Base: "main"}
+}
+
 func (w *Writer) CreateCommit(ctx context.Context, fence WriteFence, p TreePlan, sourceSHA string, date time.Time) (string, error) {
 	if _, e := w.validatePlan(p); e != nil || !workspacebundle.ValidSourceSHA(sourceSHA) || date.IsZero() || date.Nanosecond() != 0 || date.Before(time.Now().Add(-time.Hour)) || date.After(time.Now().Add(time.Minute)) {
 		return "", ErrPublication
 	}
-	person := commitPerson{"Sergio Canales", "sergio.canales.e@gmail.com", date.UTC().Format(time.RFC3339)}
-	message := p.CommitMessage + "\n\nSigned-off-by: Sergio Canales <sergio.canales.e@gmail.com>\n"
-	value := commitRequest{message, p.ExpectedTreeSHA, []string{sourceSHA}, person, person}
+	value := commitBody(p.CommitMessage, p.ExpectedTreeSHA, sourceSHA, date)
+	message, person := value.Message, value.Author
 	var result struct {
 		SHA     string `json:"sha"`
 		Message string `json:"message"`
@@ -190,11 +223,8 @@ func (w *Writer) CreateBranch(ctx context.Context, fence WriteFence, p TreePlan,
 	if _, e := w.validatePlan(p); e != nil || !workspacebundle.ValidSourceSHA(commit) {
 		return ErrPublication
 	}
-	ref := "refs/heads/" + p.Branch
-	value := struct {
-		Ref string `json:"ref"`
-		SHA string `json:"sha"`
-	}{ref, commit}
+	value := branchBody(p.Branch, commit)
+	ref := value.Ref
 	var result struct {
 		Ref    string `json:"ref"`
 		Object struct {
@@ -218,15 +248,7 @@ func (w *Writer) CreatePullRequest(ctx context.Context, fence WriteFence, p Tree
 	if e != nil || !workspacebundle.ValidSourceSHA(sourceSHA) || !workspacebundle.ValidSourceSHA(commit) || !workspacebundle.ValidDigest(proofDigest) {
 		return PublishedPullRequest{}, ErrPublication
 	}
-	value := struct {
-		Title               string `json:"title"`
-		Body                string `json:"body"`
-		Head                string `json:"head"`
-		Base                string `json:"base"`
-		Draft               bool   `json:"draft"`
-		MaintainerCanModify bool   `json:"maintainer_can_modify"`
-	}{
-		Title: p.CommitMessage, Body: IssueReference(w.repository, number) + "\n\nAI-SDLC verified candidate.\nPublication proof SHA-256: `" + proofDigest + "`.\nIt merges only after the repository's required checks pass.\n", Head: p.Branch, Base: "main"}
+	value := pullRequestBody(w.repository, number, p.CommitMessage, p.Branch, proofDigest)
 	type end struct {
 		Ref  string `json:"ref"`
 		SHA  string `json:"sha"`

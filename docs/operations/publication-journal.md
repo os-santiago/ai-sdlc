@@ -14,6 +14,12 @@ checked identifiers. Missing replies stop the claim; an unresolved effect blocks
 subsequent publication. A trusted no-send record is valid only before entering
 transport. HTTP errors never establish that an operation did not happen.
 
+An unresolved effect of a failed request can later be resolved only by
+[reconciliation](publication-reconciliation.md): once the claim has settled, a
+read-only forge observation re-derives the journaled request. The observation
+records either an observed receipt (the effect exists exactly) or a known no-send
+(the forge proves it absent). The request itself stays failed.
+
 Completion requires all four receipts and matching commit/branch/PR evidence.
 Its proof explicitly does not authorize merge or deployment. No model content,
 credentials or HTTP response body is stored in an effect receipt.
