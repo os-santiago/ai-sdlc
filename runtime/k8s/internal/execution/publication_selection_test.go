@@ -8,17 +8,19 @@ import (
 	"testing"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 )
 
 func TestPublicationSelectionSkipsObsoleteProofWithoutChangingEvidence(t *testing.T) {
-	for _, scenario := range []string{"authority", "intake", "execution-profile", "review-profile", "review-config", "generation", "unavailable"} {
+	for _, scenario := range []string{"authority", "intake", "execution-profile", "review-profile", "review-config", "recipe-revision", "generation", "unavailable"} {
 		t.Run(scenario, func(t *testing.T) {
 			f, db, run := reviewProofFixture(t, true)
 			ctx := context.Background()
 			if _, err := f.Admin.Pool.Exec(`GRANT SELECT ON publication_handoffs TO aisdlc_verifier`); err != nil {
 				t.Fatal(err)
 			}
-			selection := store.PublicationSelection{AuthorityRevision: f.Material.Policy.Revision(), IntakeConfiguration: f.Config.Digest(), ExecutionProfile: f.command.ProfileSHA256, ReviewProfile: run.ProfileDigest, ReviewConfiguration: run.ConfigurationDigest}
+			selection := store.PublicationSelection{AuthorityRevision: f.Material.Policy.Revision(), IntakeConfiguration: f.Config.Digest(), ExecutionProfile: f.command.ProfileSHA256, ReviewProfile: run.ProfileDigest, ReviewConfiguration: run.ConfigurationDigest,
+				RecipeRevision: verification.CurrentRecipeRevision(f.Material.Policy.Repository)}
 			before, err := db.ReadPassedReview(ctx, run.VerificationID)
 			if err != nil {
 				t.Fatal(err)
@@ -39,6 +41,8 @@ func TestPublicationSelectionSkipsObsoleteProofWithoutChangingEvidence(t *testin
 				changed.ReviewProfile = stale
 			case "review-config":
 				changed.ReviewConfiguration = stale
+			case "recipe-revision":
+				changed.RecipeRevision = stale
 			case "generation":
 				if _, err := f.Admin.Pool.Exec(`UPDATE intake_heads SET generation=generation+1 WHERE repository=$1 AND issue_number=$2`, f.command.Repository, f.command.IssueNumber); err != nil {
 					t.Fatal(err)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
 	"time"
 )
@@ -97,7 +98,16 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		}
 		id = run.VerificationID
 	} else {
-		id, e = r.DB.NextVerifiedForReview(ctx)
+		p, _, _, e := r.Policy()
+		if errors.Is(e, store.ErrObservationUnavailable) {
+			return "observation-unavailable", ControllerError{Stage: "observation"}
+		}
+		if e != nil {
+			return "", ControllerError{Stage: "authority"}
+		}
+		// Verifications signed under another recipe revision (before an
+		// upgrade) are skipped: no current proof check accepts them.
+		id, e = r.DB.NextVerifiedForReview(ctx, verification.CurrentRecipeRevision(p.Repository))
 		if e != nil {
 			return "", ControllerError{Stage: "queue"}
 		}

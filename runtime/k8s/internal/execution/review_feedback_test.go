@@ -11,6 +11,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/reviewresult"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 )
 
 func reviewFeedbackFixture(t *testing.T, ttl ...time.Duration) (*lifecycleFixture, *store.DB, store.ReviewRun, store.ReviewClaim, reviewresult.Result) {
@@ -118,7 +119,7 @@ func TestReviewFeedbackExactPrivateHistoricalRecord(t *testing.T) {
 			t.Fatal("feedback mutation permitted")
 		}
 	}
-	if next, err := db.NextVerifiedForReview(ctx); err != nil || next != "" {
+	if next, err := db.NextVerifiedForReview(ctx, verification.CurrentRecipeRevision(f.Material.Policy.Repository)); err != nil || next != "" {
 		t.Fatal("rejected review redispatched")
 	}
 	var state, reason string
