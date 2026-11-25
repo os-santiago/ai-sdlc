@@ -85,15 +85,23 @@ func (p Poller) reserve(ctx context.Context, now time.Time) (*lease, error) {
 // records successful scan time; it is deliberately not a filter on issue age.
 func (p Poller) PollOnce(ctx context.Context, now time.Time) (int, error) {
 	if _, _, err := p.current(); err != nil {
-		return 0, err
+		return 0, scanFailure("authority", err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	reserved, err := p.reserve(ctx, now)
-	if err != nil || reserved == nil {
-		return 0, err
+	if err != nil {
+		return 0, scanFailure("cursor-reserve", err)
+	}
+	if reserved == nil {
+		return 0, nil
 	}
 	count, scanErr := p.scan(ctx, *reserved)
+	// The forge client and the store replace a context error with their own
+	// text, so the scan bound is read from the scan's context itself.
+	if scanErr != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		scanErr = scanTimedOut{scanErr}
+	}
 	// Finish uses its own short timeout so a timed-out scan still persists
 	// bounded backoff. The lease predicate prevents a stale replica finishing.
 	finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -119,10 +127,17 @@ func (p Poller) PollOnce(ctx context.Context, now time.Time) (int, error) {
 		}
 	}
 	result, finishErr := p.DB.Pool.ExecContext(finishCtx, `UPDATE intake_cursors SET watermark=CASE WHEN $1 THEN $2 ELSE watermark END,next_poll=$3,failures=$4,lease_token=NULL,lease_until=NULL WHERE repository=$5 AND config_digest=$6 AND lease_token=$7 AND lease_until>now()`, scanErr == nil, now, time.Now().Add(delay), failures, p.Config.Repository, p.Config.Digest(), reserved.token)
+	// A scan failure keeps its own step even when the cursor update fails too.
 	if finishErr != nil {
+		if scanErr != nil {
+			return count, scanErr
+		}
 		return count, scanFailure("cursor-completion", errors.New("intake cursor completion failed"))
 	}
 	if n, err := result.RowsAffected(); err != nil || n != 1 {
+		if scanErr != nil {
+			return count, scanErr
+		}
 		return count, scanFailure("cursor-lease", errors.New("intake cursor lease lost"))
 	}
 	return count, scanErr
@@ -160,7 +175,7 @@ func (p Poller) scan(ctx context.Context, reserved lease) (int, error) {
 			observedAt := time.Now().UTC()
 			snapshot, err := p.snapshot(ctx, listed.Number)
 			if err != nil {
-				return count, scanFailure("snapshot", err)
+				return count, err
 			}
 			if !snapshot.Eligible && !tracked {
 				continue
@@ -235,31 +250,34 @@ func sameRequest(a, b forge.Issue) bool {
 func (p Poller) snapshot(ctx context.Context, number int) (Snapshot, error) {
 	first, err := p.Source.Issue(ctx, number)
 	if err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, scanFailure("snapshot-issue", err)
 	}
 	actor, event, err := p.Source.LabelActor(ctx, number, p.Config.TriggerLabel)
 	if err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, scanFailure("snapshot-label-actor", err)
 	}
 	last, err := p.Source.Issue(ctx, number)
 	if err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, scanFailure("snapshot-issue", err)
 	}
 	a, _ := json.Marshal(first)
 	b, _ := json.Marshal(last)
 	if authority.Digest(a) != authority.Digest(b) {
-		return Snapshot{}, errors.New("issue changed during authorization read")
+		return Snapshot{}, scanFailure("snapshot-changed", errors.New("issue changed during authorization read"))
 	}
 	snapshot := Snapshot{Version: 1, Repository: p.Config.Repository, Issue: last, ConfigDigest: p.Config.Digest(), AuthorizedActor: actor, LabelEventID: event}
 	snapshot.Eligible = last.State == "open" && last.HasLabel(p.Config.TriggerLabel) && p.Config.AllowsActor(actor) && event > 0
 	if snapshot.Eligible {
 		snapshot.BaseSHA, err = p.Source.BaseSHA(ctx, p.Config.BaseBranch)
 		if err != nil {
-			return Snapshot{}, err
+			return Snapshot{}, scanFailure("snapshot-base", err)
 		}
 	}
 	snapshot.Revision = snapshot.ContentRevision()
-	return snapshot, snapshot.validateContent(p.Config)
+	if err := snapshot.validateContent(p.Config); err != nil {
+		return Snapshot{}, scanFailure("snapshot-content", err)
+	}
+	return snapshot, nil
 }
 
 func (p Poller) record(ctx context.Context, snapshot Snapshot, leaseToken string, observedAt time.Time) (bool, error) {
@@ -353,6 +371,13 @@ func (e scanError) Unwrap() error { return e.cause }
 
 func scanFailure(step string, err error) error { return scanError{step: step, cause: err} }
 
+// scanTimedOut marks a scan failure that happened once the scan's 90-second
+// bound had ended.
+type scanTimedOut struct{ cause error }
+
+func (e scanTimedOut) Error() string { return e.cause.Error() }
+func (e scanTimedOut) Unwrap() error { return e.cause }
+
 // ScanStep returns a bounded description of why a scan was incomplete: its
 // step, a GitHub status class when the forge refused, and "timeout" when the
 // scan's 90-second bound ended. It never includes a response body, a URL or
@@ -379,7 +404,9 @@ func ScanStep(err error) string {
 			class = "4xx"
 		}
 		step += "-status-" + class
-	case errors.Is(err, context.DeadlineExceeded):
+	}
+	var timedOut scanTimedOut
+	if errors.As(err, &timedOut) || errors.Is(err, context.DeadlineExceeded) {
 		step += "-timeout"
 	}
 	return step
