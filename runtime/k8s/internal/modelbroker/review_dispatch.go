@@ -100,8 +100,10 @@ func (d ReviewDispatcher) DeliverReview(ctx context.Context, c store.ReviewClaim
 		return result, ErrRejected
 	}
 	// sent is what the provider receives and what the journal records. On the
-	// last permitted turn the broker withholds every tool, so the model must
+	// last permitted turn the broker sets tool_choice "none", so the model must
 	// answer; the mailbox reply still binds the worker's own request digest.
+	// The journal keeps only the sent digest: the worker's digest of that turn
+	// stays in the mailbox envelope, and earlier turns record it unchanged.
 	sent := request.Payload
 	if finalReviewTurn(request.Sequence, profile.MaxSteps) {
 		sent, err = finalReviewTurnPayload(request.Payload)
@@ -161,7 +163,9 @@ func (d ReviewDispatcher) DeliverReview(ctx context.Context, c store.ReviewClaim
 	}
 	stage = "response-policy"
 	observation, err := ObserveReviewResponse(response, profile.Model)
-	if err != nil || (request.Sequence == 1 && observation.Verdict != "") {
+	// The last permitted turn must be the verdict: a tool proposal there could
+	// only lead to a refused request, so it is refused now.
+	if err != nil || (request.Sequence == 1 && observation.Verdict != "") || (finalReviewTurn(request.Sequence, profile.MaxSteps) && observation.Verdict == "") {
 		return result, ErrRejected
 	}
 	observationRaw, err := json.Marshal(observation)
@@ -228,10 +232,12 @@ func finalReviewTurn(sequence uint64, maxSteps int) bool {
 	return maxSteps > 1 && sequence == uint64(maxSteps)
 }
 
-// finalReviewTurnPayload removes tools and tool_choice from an already
-// validated chat request and appends ReviewFinalTurnNote as a last user
-// message. Every other field and message keeps its JSON value; nothing is
-// added beyond the note.
+// finalReviewTurnPayload sets tool_choice "none" on an already validated chat
+// request and appends ReviewFinalTurnNote as a last user message. The tool
+// definitions stay: the history holds tool calls and results, and providers
+// such as the Messages API refuse tool blocks without tool definitions. A
+// request without tools carries no tool_choice. Every other field and
+// message keeps its JSON value; nothing is added beyond the note.
 func finalReviewTurnPayload(raw []byte) ([]byte, error) {
 	var fields map[string]json.RawMessage
 	if authority.DecodeStrict(raw, &fields) != nil || fields == nil {
@@ -241,6 +247,10 @@ func finalReviewTurnPayload(raw []byte) ([]byte, error) {
 	if authority.DecodeStrict(fields["messages"], &messages) != nil || len(messages) == 0 {
 		return nil, ErrRejected
 	}
+	var tools []json.RawMessage
+	if value, ok := fields["tools"]; ok && authority.DecodeStrict(value, &tools) != nil {
+		return nil, ErrRejected
+	}
 	note, err := encodeVerbatim(struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
@@ -248,8 +258,10 @@ func finalReviewTurnPayload(raw []byte) ([]byte, error) {
 	if err != nil {
 		return nil, ErrRejected
 	}
-	delete(fields, "tools")
 	delete(fields, "tool_choice")
+	if len(tools) > 0 {
+		fields["tool_choice"] = json.RawMessage(`"none"`)
+	}
 	if fields["messages"], err = encodeVerbatim(append(messages, note)); err != nil {
 		return nil, ErrRejected
 	}

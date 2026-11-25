@@ -1055,6 +1055,52 @@ class OpenAIUpstreamNarrowingTests(UpstreamCase):
             adapter.complete(narrowed)
 
 
+# The review broker's last permitted turn (modelbroker.finalReviewTurnPayload):
+# SCC's tools and tool history kept, tool_choice "none", and the fixed note.
+FINAL_TURN_NOTE = "This is your last turn: give the final verdict now in the required format."
+FINAL_TURN_REQUEST = dict(REVIEW_REQUEST, tool_choice="none", messages=[
+    {"role": "system", "content": "Review."},
+    {"role": "user", "content": "Review the candidate."},
+    {"role": "assistant", "content": None, "tool_calls": READ_CALL},
+    {"role": "tool", "tool_call_id": "x", "content": "# Title"},
+    {"role": "user", "content": FINAL_TURN_NOTE}])
+
+
+class FinalReviewTurnTests(UpstreamCase):
+    def test_review_gateway_keeps_tools_and_tool_choice_none(self):
+        narrowed, withheld = wrapper.narrow_tools(FINAL_TURN_REQUEST, REVIEW_TOOLS)
+        self.assertEqual((narrowed["tool_choice"], withheld), ("none", len(SCC_TOOLS) - 4))
+        self.assertEqual(narrowed["messages"], FINAL_TURN_REQUEST["messages"])
+        wrapper.validate_request(narrowed)
+
+    def test_anthropic_payload_keeps_tools_for_the_history_and_forbids_calls(self):
+        FakeUpstream.reply = (200, {"role": "assistant", "content": [{"type": "text", "text": "Fine.\nVERDICT: approve"}]}, {})
+        narrowed, _ = wrapper.narrow_tools(FINAL_TURN_REQUEST, REVIEW_TOOLS)
+        adapter = adapters.AnthropicAdapter(self.base + "/v1/messages", "claude-sonnet-5-5", 5, "key-1")
+        result = adapter.complete(narrowed)
+        self.assertEqual(result.message["content"], "Fine.\nVERDICT: approve")
+        sent = FakeUpstream.seen[0][2]
+        # The Messages API requires tool definitions while the history holds
+        # tool_use/tool_result blocks; "none" forbids a new call.
+        self.assertEqual(sent["tool_choice"], {"type": "none"})
+        self.assertEqual([t["name"] for t in sent["tools"]], ["read_file", "list_dir", "search_text", "code_query"])
+        self.assertEqual([t["role"] for t in sent["messages"]], ["user", "assistant", "user"])
+        self.assertEqual(sent["messages"][1]["content"], [{"type": "tool_use", "id": "x", "name": "read_file", "input": {"path": "README.md"}}])
+        self.assertEqual(sent["messages"][2]["content"], [{"type": "tool_result", "tool_use_id": "x", "content": "# Title"},
+                                                         {"type": "text", "text": FINAL_TURN_NOTE}])
+        used = {block["id"] for turn in sent["messages"] for block in turn["content"] if block["type"] == "tool_use"}
+        answered = {block["tool_use_id"] for turn in sent["messages"] for block in turn["content"] if block["type"] == "tool_result"}
+        self.assertEqual(used, answered)
+
+    def test_openai_payload_passes_tool_choice_none_upstream(self):
+        FakeUpstream.reply = (200, openai_reply(content="Fine.\nVERDICT: approve"), {})
+        narrowed, _ = wrapper.narrow_tools(FINAL_TURN_REQUEST, REVIEW_TOOLS)
+        adapters.OpenAIAdapter(self.base + "/v1/chat/completions", "qwen3-coder", 5).complete(narrowed)
+        sent = FakeUpstream.seen[0][2]
+        self.assertEqual((sent["tool_choice"], len(sent["tools"])), ("none", 4))
+        self.assertEqual(sent["messages"][-1], {"role": "user", "content": FINAL_TURN_NOTE})
+
+
 @unittest.skipUnless(os.environ.get("AI_SDLC_TEST_MODEL_UPSTREAM"), "requires a real OpenAI-compatible upstream")
 class RealUpstreamTests(unittest.TestCase):
     def test_real_upstream_benchmarks_and_proposes_a_valid_tool_call(self):
