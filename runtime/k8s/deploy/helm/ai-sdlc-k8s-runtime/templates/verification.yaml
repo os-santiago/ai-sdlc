@@ -221,6 +221,8 @@ spec:
             - {name: AI_SDLC_MODEL_UPSTREAM_SECONDS, value: {{ $.Values.modelGateway.upstream.seconds | quote }}}
             - {name: AI_SDLC_MODEL_ADAPTER, value: {{ $.Values.modelGateway.adapter | quote }}}
             - {name: AI_SDLC_MODEL_UPSTREAM_DIRECT_ANSWERS, value: {{ $.Values.modelGateway.upstream.directAnswers | quote }}}
+            {{- /* The reviewer never writes files: no rewrite guard. */}}
+            - {name: AI_SDLC_MODEL_GATEWAY_REWRITE_GUARD, value: "false"}
             - {name: AI_SDLC_MODEL_BENCHMARK_PROMPT_TOKENS, value: {{ $.Values.modelGateway.reviewBenchmark.promptTokens | quote }}}
             - {name: AI_SDLC_MODEL_BENCHMARK_COMPLETION_TOKENS, value: {{ $.Values.modelGateway.reviewBenchmark.completionTokens | quote }}}
             {{- if $.Values.modelGateway.upstream.credentialSecret }}
