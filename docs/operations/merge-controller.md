@@ -16,8 +16,23 @@ seconds from the observed gate. The exclusive journal further bounds every
 operation to that command. Immediately before committing a write intention, the
 controller collects the native gate again and requires unchanged PR/head/base/tree,
 protection, checks and review digests. The trusted transport sends a single
-head-conditioned merge and verifies its returned commit. Current issue/policy and
-journal fences precede acknowledgement and immutable terminal completion.
+head-conditioned merge and verifies its returned commit. Policy, configuration,
+publication-fact, gate and journal fences precede acknowledgement and immutable
+terminal completion.
+
+The current-issue check is part of every fence up to the moment the merge request
+is sent: an issue closed, edited or relabelled before then still stops the run
+without a write. After the request may have been sent (the transport's
+post-response check, the acknowledgement and the finish), the fences check
+everything except issue currency. For a repository governed by a project manifest
+the generated pull request says `Closes #N`, so the merge itself closes the issue
+and the intake records the closure as a new generation. That observation follows
+from the effect being recorded; it cannot undo the merge, so it must not report
+the merge as uncertain or leave an unacknowledged effect that quarantines every
+later merge. The claim, lease, signed authority, publication record digest,
+expected PR/head/base/tree, request digest and merge receipt are still checked,
+as other post-effect stages bind only to their own durable request and receipt.
+The built-in references keep `Refs #N`, so their issues stay open after the merge.
 
 A missing response or uncertain commit stops the original claim and quarantines
 an unacknowledged effect. Reconciliation cannot adopt that claim, repeat the write

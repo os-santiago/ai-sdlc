@@ -232,3 +232,112 @@ func TestMergeSelectionSkipsChangedConfigurationAndIssue(t *testing.T) {
 		})
 	}
 }
+
+// A manifest repository's pull request says "Closes #N", so GitHub closes the
+// issue as part of the merge and the intake records the closure as a new
+// generation. Before the merge request is sent that observation still stops
+// the run; after it may have been sent it must neither misreport the merge as
+// uncertain nor leave an incomplete effect that refuses every later claim.
+func TestMergeClosingItsIssueFinishesOnlyAfterTheSend(t *testing.T) {
+	for _, scenario := range []string{"before-send", "during-presend-gate", "after-send", "before-acknowledge", "before-finish"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := execution.NewPublishedMergeTestFixture(t)
+			ctx := context.Background()
+			closed := false
+			closeIssue := func() {
+				if !closed {
+					closed = true
+					f.RecordClosedIssueGeneration(t)
+				}
+			}
+			writes, observations := 0, 0
+			r := mergeflow.Runtime{DB: f.DB, Policy: func() (authority.Policy, intake.Config, string, error) {
+				if scenario == "before-finish" && !closed {
+					var acknowledged bool
+					if e := f.Admin.Pool.QueryRow(`SELECT EXISTS(SELECT 1 FROM merge_effects WHERE completed_at IS NOT NULL)`).Scan(&acknowledged); e != nil {
+						t.Error(e)
+					}
+					if acknowledged {
+						closeIssue()
+					}
+				}
+				return f.Policy, f.Intake, f.Profile, nil
+			}, Review: func() (publicationflow.ReviewPolicy, error) {
+				return publicationflow.ReviewPolicy{Profile: f.ReviewProfile, Configuration: f.ReviewConfiguration}, nil
+			}, Identity: func() (authority.Identity, error) { return f.Identity, nil }, GatePolicy: func() (mergegate.Policy, error) { return mergegate.PilotPolicy(), nil }}
+			r.Gates = mergeGatesFunc(func(_ context.Context, e mergegate.Expected, _ mergegate.Policy) (mergegate.Observation, error) {
+				observations++
+				if scenario == "during-presend-gate" && observations == 2 {
+					closeIssue()
+				}
+				return mergegate.Observation{Expected: e, PolicySHA256: strings.Repeat("a", 64), ChecksSHA256: strings.Repeat("b", 64), ReviewsSHA256: strings.Repeat("c", 64), Ready: true, Reasons: []string{}, ObservedAt: time.Now()}, nil
+			})
+			r.Writer = mergeWriterFunc(func(ctx context.Context, e mergegate.Expected, _ int, fence mergewriter.Fence) (mergewriter.Receipt, error) {
+				if scenario == "before-send" {
+					closeIssue()
+				}
+				if fence(ctx, strings.Repeat("f", 64)) != nil {
+					return mergewriter.Receipt{}, errors.New("presend denied")
+				}
+				writes++
+				if scenario == "after-send" {
+					closeIssue()
+				}
+				if fence(ctx, strings.Repeat("f", 64)) != nil {
+					return mergewriter.Receipt{}, errors.New("postsend denied")
+				}
+				if scenario == "before-acknowledge" {
+					closeIssue()
+				}
+				return mergewriter.Receipt{Version: "ai-sdlc.merge-receipt/v1", CommitSHA: strings.Repeat("d", 40), HeadSHA: e.HeadSHA, BaseSHA: e.BaseSHA, TreeSHA: e.TreeSHA, PullRequest: e.PullRequest}, nil
+			})
+			state, e := r.PollOnce(ctx)
+			if !closed {
+				t.Fatal("the closure was never recorded")
+			}
+			count := func(query string) int {
+				t.Helper()
+				var n int
+				if err := f.Admin.Pool.QueryRow(query).Scan(&n); err != nil {
+					t.Fatal(err)
+				}
+				return n
+			}
+			if scenario == "before-send" || scenario == "during-presend-gate" {
+				if e == nil || state != "merge-stopped" || writes != 0 {
+					t.Fatal("a closed issue was merged", state, e, writes)
+				}
+				if count(`SELECT count(*) FROM merged_records`) != 0 || count(`SELECT count(*) FROM merge_requests WHERE state='failed'`) != 1 || count(`SELECT count(*) FROM merge_effects WHERE completed_at IS NULL AND not_sent_at IS NULL`) != 0 {
+					t.Fatal("pre-send stop left an unsafe journal")
+				}
+			} else {
+				if e != nil || state != "merge-complete" || writes != 1 {
+					t.Fatal("the merge closing its issue was not recorded", state, e, writes)
+				}
+				var id string
+				if f.Admin.Pool.QueryRow(`SELECT merge_id FROM merged_records`).Scan(&id) != nil {
+					t.Fatal("missing merge fact")
+				}
+				if _, e = f.DB.ReadMergedRecord(ctx, id); e != nil {
+					t.Fatal(e)
+				}
+				if count(`SELECT count(*) FROM merge_requests WHERE state='merged'`) != 1 || count(`SELECT count(*) FROM merge_effects WHERE completed_at IS NOT NULL`) != 1 {
+					t.Fatal("merge not terminal")
+				}
+			}
+			// ClaimMerge refuses while any request is claimed or any failed request
+			// holds an effect with no receipt and no not-sent seal.
+			if count(`SELECT count(*) FROM merge_requests WHERE state='claimed'`) != 0 {
+				t.Fatal("claim left open")
+			}
+			blocked, e := store.NewMergeJournal(f.DB, func() (authority.Policy, error) { return f.Policy, nil }).MergeBlocked(ctx)
+			if e != nil || blocked {
+				t.Fatal("later merges blocked", blocked, e)
+			}
+			before := writes
+			if state, e = r.PollOnce(ctx); e != nil || state != "" || writes != before {
+				t.Fatal("the next merge poll was refused or replayed", state, e, writes)
+			}
+		})
+	}
+}

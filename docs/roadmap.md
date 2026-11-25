@@ -50,8 +50,12 @@ independent review passed.
 ([evidence](evidence/2026-11-21-generic-inner-loop-e2e.md)). Follow-ups:
 running the repository's tests inside the generator's sandbox, strong
 decisions from a JUnit report (`verification.result.junitPath` is supported;
-the evaluated repository does not emit one yet), and closing the issue from the
-generated pull request.
+the evaluated repository does not emit one yet). The generated pull request
+now closes its issue for manifest repositories (`Closes #N`); the built-in
+references keep `Refs #N` because their outer loop continues after the merge.
+The merge controller checks issue currency only until the merge request is
+sent, so the closure caused by the merge itself cannot stop or quarantine the
+merge run ([merge controller](operations/merge-controller.md)).
 
 ## M2: Repeatable operations
 

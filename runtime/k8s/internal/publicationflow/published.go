@@ -16,6 +16,22 @@ import (
 // publication time, then independently checks the current issue/configuration.
 // It never renews generation/review/publication claims or authorizes a merge.
 func CurrentPublishedProof(ctx context.Context, db *store.DB, load verificationflow.PolicyLoader, review ReviewLoader, id string) (publication.Command, store.PublishedRecord, error) {
+	return publishedProof(ctx, db, load, review, id, true)
+}
+
+// SentPublishedProof performs every check of CurrentPublishedProof except the
+// current issue snapshot. It exists only for the merge controller after its
+// single merge request may have been sent: a pull request that says
+// "Closes #N" makes GitHub close the issue as part of that merge, and the
+// intake then records the closure as a new generation. That observation is a
+// consequence of the effect being recorded, not a revocation of it, so it must
+// not turn an accomplished merge into an uncertain one. It never authorizes a
+// send; every pre-send fence uses CurrentPublishedProof.
+func SentPublishedProof(ctx context.Context, db *store.DB, load verificationflow.PolicyLoader, review ReviewLoader, id string) (publication.Command, store.PublishedRecord, error) {
+	return publishedProof(ctx, db, load, review, id, false)
+}
+
+func publishedProof(ctx context.Context, db *store.DB, load verificationflow.PolicyLoader, review ReviewLoader, id string, currentIssue bool) (publication.Command, store.PublishedRecord, error) {
 	deny := func() (publication.Command, store.PublishedRecord, error) {
 		return publication.Command{}, store.PublishedRecord{}, publication.ErrPublication
 	}
@@ -74,10 +90,12 @@ func CurrentPublishedProof(ctx context.Context, db *store.DB, load verificationf
 	if e != nil || matched != c {
 		return deny()
 	}
-	current, e := execution.PublicationSnapshot(ctx, db, p, config, generated)
-	_, selected := verification.SelectRecipe(c.Repository, current.Issue.Body)
-	if e != nil || current.Revision != c.IssueRevision || !selected {
-		return deny()
+	if currentIssue {
+		current, e := execution.PublicationSnapshot(ctx, db, p, config, generated)
+		_, selected := verification.SelectRecipe(c.Repository, current.Issue.Body)
+		if e != nil || current.Revision != c.IssueRevision || !selected {
+			return deny()
+		}
 	}
 	latest, latestConfig, latestProfile, e := load()
 	if e != nil || latest.Revision() != p.Revision() || latestConfig.Digest() != config.Digest() || latestProfile != profile || ctx.Err() != nil {
