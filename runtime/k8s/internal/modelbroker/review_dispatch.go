@@ -134,7 +134,7 @@ func (d ReviewDispatcher) DeliverReview(ctx context.Context, c store.ReviewClaim
 	callCtx, cancelCall := context.WithDeadline(ctx, until)
 	stage = "provider"
 	result.DispatchAttempted = true
-	response, err := d.Provider.invoke(callCtx, request.Payload, 32768)
+	response, err := d.Provider.observedInvoke(callCtx, "reviewer", request.Payload, 32768)
 	cancelCall()
 	if err != nil {
 		return result, ErrUncertain

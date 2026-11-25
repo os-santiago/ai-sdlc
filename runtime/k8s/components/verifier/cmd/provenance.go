@@ -10,6 +10,7 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/metrics"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/provenanceflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/releaseflow"
@@ -36,6 +37,7 @@ func runProvenance() error {
 	stop := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
 		state, e := runtime.PollOnce(ctx)
 		if e != nil {
+			metrics.Stop("provenance-verifier", "provenance", metrics.Unclassified)
 			log.Print("provenance reconciliation stopped safely")
 		} else if state != "provenance-idle" {
 			log.Print(state)
@@ -48,6 +50,7 @@ func runProvenance() error {
 				return releaseMounts.Load("verifier")
 			})
 			if err != nil {
+				metrics.Stop("provenance-verifier", "promotion-dispatch", metrics.Unclassified)
 				log.Print("verified-artifact promotion dispatch stopped safely")
 			}
 		}

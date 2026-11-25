@@ -14,6 +14,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergegate"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergewriter"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/metrics"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/productionflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
@@ -44,6 +45,7 @@ func main() {
 		metadata.Produces = append(metadata.Produces, "deploy-release", "record-production")
 	}
 	if !bootstrap.PublicationEnabled() {
+		defer c.StartQueueSampler("outbox")()
 		if e = service.RunWithReadiness(metadata, c.Ready); e != nil {
 			log.Fatal(e)
 		}
@@ -182,7 +184,9 @@ func main() {
 		}
 		r := publicationflow.Runtime{DB: c.DB, Policy: policy, Review: review, Writer: w}
 		state, e := r.PollOnce(ctx)
+		countDelivery(state)
 		if e != nil {
+			metrics.Stop("release-manager", "publication", metrics.Unclassified)
 			log.Print("publication reconciliation stopped safely")
 		} else if state != "publication-idle" {
 			log.Print("publication reconciliation: " + state)
@@ -203,6 +207,7 @@ func main() {
 		}
 		stopBuild := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
 			if _, e := buildflow.DispatchMerged(ctx, c.DB, loadBuild); e != nil {
+				metrics.Stop("release-manager", "merged-source-dispatch", metrics.Unclassified)
 				log.Print("merged-source dispatch stopped safely")
 			}
 		})
@@ -216,7 +221,9 @@ func main() {
 				return
 			}
 			state, e := r.PollOnce(ctx)
+			countDelivery(state)
 			if e != nil {
+				metrics.Stop("release-manager", "merge", metrics.Unclassified)
 				log.Print("merge reconciliation stopped safely")
 			} else if state != "" {
 				log.Print("merge reconciliation: " + state)
@@ -238,12 +245,14 @@ func main() {
 			}
 			controller := terminalflow.Controller{Journal: terminalJournal, Writer: w}
 			if _, e = controller.RunOne(ctx); e != nil {
+				metrics.Stop("release-manager", "terminal", metrics.Unclassified)
 				log.Print("terminal reconciliation stopped safely")
 			}
 		})
 		defer stopTerminal()
 		stopProduction := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
 			if _, e := productionflow.DispatchCompleted(ctx, c.DB, productionIdentity); e != nil {
+				metrics.Stop("release-manager", "production-dispatch", metrics.Unclassified)
 				log.Print("production fact dispatch stopped safely")
 			}
 		})
@@ -251,6 +260,7 @@ func main() {
 		stopRelease := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
 			state, e := (releaseflow.Runtime{DB: c.DB, Load: loadRelease}).PollOnce(ctx)
 			if e != nil {
+				metrics.Stop("release-manager", "promotion", metrics.Unclassified)
 				log.Print("promotion reconciliation stopped safely")
 			} else if state != "promotion-idle" {
 				log.Print(state)
@@ -259,11 +269,13 @@ func main() {
 				return releaseMounts.Load("release-manager")
 			})
 			if e != nil {
+				metrics.Stop("release-manager", "planned-release-dispatch", metrics.Unclassified)
 				log.Print("planned-release dispatch stopped safely")
 			}
 		})
 		defer stopRelease()
 	}
+	defer c.StartQueueSampler("outbox", "publication")()
 	e = service.RunWithReadiness(metadata, ready, func(mux *http.ServeMux) {
 		inbox := delivery.Inbox{DB: c.DB, Target: "release-manager"}
 		if bootstrap.ReleaseEnabled() {
@@ -275,4 +287,26 @@ func main() {
 	if e != nil {
 		log.Fatal(e)
 	}
+}
+
+// countDelivery counts the outcome of one claimed publication or merge
+// attempt. Idle, quarantined and other standing states are not attempts.
+func countDelivery(state string) {
+	if outcome := deliveryOutcome(state); outcome != "" {
+		metrics.Delivery(outcome)
+	}
+}
+
+func deliveryOutcome(state string) string {
+	switch state {
+	case "pull-request-published":
+		return "published"
+	case "publication-stopped":
+		return "publication-stopped"
+	case "merge-complete":
+		return "merged"
+	case "merge-stopped":
+		return "merge-stopped"
+	}
+	return ""
 }

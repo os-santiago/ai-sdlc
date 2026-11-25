@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/metrics"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/reviewflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
 )
@@ -83,5 +84,28 @@ func TestMissingSandboxClassStillHandsOffApprovedWork(t *testing.T) {
 	}, func(context.Context) (bool, error) { calls++; return true, nil })
 	if calls != 0 {
 		t.Fatal("handoff ran after a post-claim verification failure")
+	}
+}
+
+// Every "stopped safely" line is counted under its loop and the same bounded
+// stage the line names.
+func TestStoppedLoopsAreCountedUnderTheLoggedStage(t *testing.T) {
+	count := func(loop, stage string) float64 {
+		v, _ := metrics.Default.Sample("ai_sdlc_stops_total", "verifier", loop, stage)
+		return v
+	}
+	review, verification, handoff := count("review", "model-provider"), count("verification", "refused-regression"), count("publication-handoff", metrics.Unclassified)
+	reconcileQueues(context.Background(),
+		func(context.Context) (string, error) { return "", reviewflow.ControllerError{Stage: "model-provider"} },
+		func(context.Context) (string, error) { return "", nil }, nil)
+	reconcileQueues(context.Background(), nil,
+		func(context.Context) (string, error) {
+			return "", verificationflow.DecisionError{Reason: "regression"}
+		}, nil)
+	reconcileQueues(context.Background(), nil,
+		func(context.Context) (string, error) { return "", nil },
+		func(context.Context) (bool, error) { return false, errors.New("stale proof") })
+	if count("review", "model-provider") != review+1 || count("verification", "refused-regression") != verification+1 || count("publication-handoff", metrics.Unclassified) != handoff+1 {
+		t.Fatal("stop not counted under its loop and stage")
 	}
 }

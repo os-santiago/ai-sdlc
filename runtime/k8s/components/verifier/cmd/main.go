@@ -15,6 +15,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/metrics"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationflow"
@@ -188,6 +189,7 @@ func main() {
 				}
 				published, publishErr := publish(ctx)
 				if repairErr != nil {
+					metrics.Stop("verifier", "repair-handoff", metrics.Unclassified)
 					log.Print("repair handoff stopped safely")
 				}
 				return repaired || published, publishErr
@@ -196,6 +198,11 @@ func main() {
 		reconcileQueues(ctx, reviewPoll, r.PollOnce, handoff)
 	})
 	defer stop()
+	queues := []string{"outbox", "verification"}
+	if reviewEnabled {
+		queues = append(queues, "review")
+	}
+	defer c.StartQueueSampler(queues...)()
 	err = service.RunWithReadiness(service.Metadata{Name: "verifier", Responsibility: "independently verify bounded candidate behavior", Consumes: []string{"verify-artifact"}, Produces: []string{"ai-sdlc.behavior-proof/v1", "ai-sdlc.behavior-proof/v2"}}, ready, func(mux *http.ServeMux) {
 		inbox := delivery.Inbox{DB: c.DB, Target: "verifier"}
 		mux.Handle("POST /internal/verify-artifact", inbox.Handler(c.Authority, "verify-artifact", "/internal/verify-artifact", verificationflow.Effect(func() (authority.Policy, error) { p, _, e := c.Authority(); return p, e })))

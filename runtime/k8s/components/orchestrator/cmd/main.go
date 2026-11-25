@@ -54,6 +54,7 @@ func main() {
 			return component.Ready(ctx)
 		}
 	}
+	defer component.StartQueueSampler("outbox")()
 	// Legacy unsigned routes remain available to isolated Go fixtures only.
 	err = service.RunWithReadiness(service.Metadata{
 		Name:           "orchestrator",

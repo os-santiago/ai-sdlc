@@ -16,6 +16,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/building"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/delivery"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/metrics"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/provenance"
@@ -106,6 +107,7 @@ func run() error {
 	stop := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
 		state, e := runtime.PollOnce(ctx)
 		if e != nil {
+			metrics.Stop("build-controller", "build", metrics.Unclassified)
 			log.Print("build reconciliation stopped safely")
 		} else if state != "build-idle" && state != "build-other-replica" {
 			log.Print(state)

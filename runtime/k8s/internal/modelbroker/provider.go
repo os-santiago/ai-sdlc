@@ -21,6 +21,7 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/metrics"
 )
 
 var ErrProvider = errors.New("model provider request failed or exceeded a bound")
@@ -100,12 +101,48 @@ func NewProvider(config ProviderConfig) (*Provider, error) {
 // request body prevent transport retries. There is exactly one Do call here;
 // this does not prove that a failed connection reached or did not reach a server.
 func (p *Provider) invoke(ctx context.Context, request []byte, responseLimit int) ([]byte, error) {
+	raw, _, err := p.call(ctx, request, responseLimit)
+	return raw, err
+}
+
+// observedInvoke is invoke, counted in the model call metrics under role
+// with only its bounded outcome class and duration.
+func (p *Provider) observedInvoke(ctx context.Context, role string, request []byte, responseLimit int) ([]byte, error) {
+	started := time.Now()
+	raw, outcome, err := p.call(ctx, request, responseLimit)
+	metrics.ModelCall(role, outcome, time.Since(started))
+	return raw, err
+}
+
+// failedTransfer classifies a failed request or body read: the caller's
+// deadline or a transport timeout, otherwise a transport failure.
+func failedTransfer(ctx context.Context, err error) string {
+	var timeout interface{ Timeout() bool }
+	if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
+		return metrics.ModelTimeout
+	}
+	return metrics.ModelTransport
+}
+
+func statusClass(code int) string {
+	switch {
+	case code >= 400 && code < 500:
+		return metrics.ModelStatus4xx
+	case code >= 500 && code < 600:
+		return metrics.ModelStatus5xx
+	}
+	return metrics.ModelStatusOther
+}
+
+// call is one bounded gateway request. Its outcome is a fixed class from
+// internal/platform/metrics, never response or error text.
+func (p *Provider) call(ctx context.Context, request []byte, responseLimit int) ([]byte, string, error) {
 	if p == nil || p.client == nil || len(request) == 0 || len(request) > modelmailbox.MaxRequestBytes || responseLimit < 1 || responseLimit > modelmailbox.MaxResponseBytes {
-		return nil, ErrProvider
+		return nil, metrics.ModelRejected, ErrProvider
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, bytes.NewReader(request))
 	if err != nil {
-		return nil, ErrProvider
+		return nil, metrics.ModelRejected, ErrProvider
 	}
 	req.GetBody = nil
 	req.Close = true
@@ -122,16 +159,22 @@ func (p *Provider) invoke(ctx context.Context, request []byte, responseLimit int
 	}
 	response, err := p.client.Do(req)
 	if err != nil {
-		return nil, ErrProvider
+		return nil, failedTransfer(ctx, err), ErrProvider
 	}
 	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, statusClass(response.StatusCode), ErrProvider
+	}
 	media, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
-	if response.StatusCode != http.StatusOK || err != nil || media != "application/json" {
-		return nil, ErrProvider
+	if err != nil || media != "application/json" {
+		return nil, metrics.ModelInvalidResponse, ErrProvider
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, int64(responseLimit)+1))
-	if err != nil || len(raw) > responseLimit || !utf8.Valid(raw) || !json.Valid(raw) {
-		return nil, ErrProvider
+	if err != nil {
+		return nil, failedTransfer(ctx, err), ErrProvider
+	}
+	if len(raw) > responseLimit || !utf8.Valid(raw) || !json.Valid(raw) {
+		return nil, metrics.ModelInvalidResponse, ErrProvider
 	}
 	var completion struct {
 		Choices []struct {
@@ -141,14 +184,14 @@ func (p *Provider) invoke(ctx context.Context, request []byte, responseLimit int
 		} `json:"choices"`
 	}
 	if json.Unmarshal(raw, &completion) != nil || len(completion.Choices) == 0 || len(completion.Choices) > 8 {
-		return nil, ErrProvider
+		return nil, metrics.ModelInvalidResponse, ErrProvider
 	}
 	for _, choice := range completion.Choices {
 		if choice.Message.Role != "assistant" {
-			return nil, ErrProvider
+			return nil, metrics.ModelInvalidResponse, ErrProvider
 		}
 	}
-	return raw, nil
+	return raw, metrics.ModelSuccess, nil
 }
 
 // GatewayProfile reads the per-call timeout the loopback gateway derived from
