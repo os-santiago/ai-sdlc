@@ -87,7 +87,9 @@ above.
 
 1. Finish battery 24. Capture any reviewer final answer that is refused, and
    fix the cause deterministically (guidance or a bounded format repair that
-   never changes the verdict). Done: review tool narrowing and turn budget.
+   never changes the verdict). Battery 24 finished. Review tool narrowing
+   (#784) and reviewer turn-budget guidance (#793) are merged. Some reviewer
+   final answers still miss the strict verdict format.
 2. Run repeated batteries until each cell has enough issues for an interval.
    Record rates per issue and per stop class.
 3. Close the issue from the merged pull request for manifest repositories (B9,
@@ -95,15 +97,19 @@ above.
 4. Keep the evaluation evidence current ([batteries 19–24](../evidence/2026-11-25-local-model-batteries-19-24.md)).
 5. Find the cause of each dominant stop by reproducing one stopped attempt,
    not from its stop name alone. On 2026-11-25, applying one refused candidate
-   locally showed a whole-file rewrite of a large test file. The fix is a
-   gateway guard (#797). Single failed API reads on a loaded cluster are now
-   retried within bounds (#799, #800), and repeated source reads no longer
-   exhaust the forge's anonymous quota (#802).
+   locally showed a whole-file rewrite of a large test file. A gateway guard
+   now refuses such a rewrite once and retries (#797); its effect is not yet
+   measured. A single transient API failure (dropped connection, 429 or 5xx)
+   on a loaded cluster is now retried within bounds when pods and ConfigMaps
+   are read or removed (#799, #800). The verifier now reuses one cached source
+   per commit and backs off on a rate limit, so repeated reads no longer drain
+   the forge's anonymous quota (#802).
 
 **Learned:** guidance alone did not change the model's behaviour (the rewrite
 rule was already in the prompt). Mechanical limits at the tool-call boundary
-did. Each change got an independent audit, and every audit found a real
-defect before merge.
+did, for example hunk repair (#777) and tool narrowing (#784); the rewrite
+guard is not yet measured. Each change got an independent audit before merge,
+and most audits found a real defect (for example the merge race in #715).
 
 ### Iteration 2: the second cell and the evaluation harness
 
@@ -111,7 +117,8 @@ defect before merge.
    toolchain (the Beta gate needs two repositories).
 2. Evaluation harness v1 (B7): pass@k per cell with 95% intervals, a stop-class
    breakdown, and a reviewer confusion matrix.
-3. Minimal metrics and a scheduled database backup (B10).
+3. Minimal metrics and a scheduled database backup (B10). Done in code (#794,
+   #798); not yet observed on a live cluster.
 4. The component table checked in CI (B9, truthful docs).
 5. A second model path for the second cell: the agent-CLI service, or a
    hosted model over HTTPS when an API key is available (B6b).
@@ -128,8 +135,9 @@ defect before merge.
 ### Iteration 4: separation of authority and quality gates
 
 1. An independent review identity; merge requires a co-signature (B4).
-2. A candidate quality and security baseline in the merge gate (B8): static
-   analysis, dependency and secret scanning.
+2. A candidate quality and security baseline in the merge gate (B8). The
+   secret scan and optional static analysis are merged (#795). Remaining:
+   dependency scanning, a managed SAST rule pack and structured findings.
 3. The rest of B5: image scanning, attestation verification, and signature
    verification when installing from a committed lock and at admission.
 
