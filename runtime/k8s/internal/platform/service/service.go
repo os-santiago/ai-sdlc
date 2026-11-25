@@ -16,7 +16,9 @@ import (
 	"fmt"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/metrics"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -57,19 +59,7 @@ func RunWithReadiness(metadata Metadata, ready func(context.Context) error, regi
 	writeTimeout := durationOrDefault("AI_SDLC_HTTP_WRITE_TIMEOUT", 15*time.Second)
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("component", metadata.Name)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		WriteJSON(w, http.StatusOK, map[string]string{"status": "healthy"})
-	})
-	mux.Handle("GET /readyz", readiness(ready))
-	mux.HandleFunc("GET /metadata", func(w http.ResponseWriter, _ *http.Request) {
-		WriteJSON(w, http.StatusOK, metadata)
-	})
-	for _, register := range registrars {
-		if register != nil {
-			register(mux)
-		}
-	}
+	mux := routes(metadata, ready, registrars...)
 
 	// Delivery handlers will enqueue bounded work; model execution never
 	// belongs inside a control-plane HTTP request.
@@ -83,11 +73,40 @@ func RunWithReadiness(metadata Metadata, ready func(context.Context) error, regi
 		IdleTimeout:       60 * time.Second,
 	}
 
+	// An optional second listener serves only GET /metrics, so a scraper the
+	// NetworkPolicy admits to it never reaches the component's routes.
+	var metricsServer *http.Server
+	if metricsAddress := os.Getenv("AI_SDLC_METRICS_ADDRESS"); metricsAddress != "" {
+		if metricsAddress == address {
+			return errors.New("metrics address must differ from the component address")
+		}
+		listener, err := net.Listen("tcp", metricsAddress)
+		if err != nil {
+			return fmt.Errorf("metrics listener for %s unavailable", metadata.Name)
+		}
+		metricsServer = &http.Server{
+			Handler:           metricsOnly(),
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       5 * time.Second,
+			WriteTimeout:      10 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
+		go func() {
+			if err := metricsServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("metrics listener stopped")
+			}
+		}()
+		logger.Info("metrics listener started", "address", metricsAddress)
+	}
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-stop
 		logger.Info("shutdown requested")
+		if metricsServer != nil {
+			_ = metricsServer.Close()
+		}
 		_ = server.Close()
 	}()
 
@@ -99,11 +118,39 @@ func RunWithReadiness(metadata Metadata, ready func(context.Context) error, regi
 	return nil
 }
 
+// routes builds the shared observation endpoints and the component's routes.
+func routes(metadata Metadata, ready func(context.Context) error, registrars ...RouteRegistrar) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		WriteJSON(w, http.StatusOK, map[string]string{"status": "healthy"})
+	})
+	mux.Handle("GET /readyz", readiness(ready))
+	mux.HandleFunc("GET /metadata", func(w http.ResponseWriter, _ *http.Request) {
+		WriteJSON(w, http.StatusOK, metadata)
+	})
+	// Bounded counters only (internal/platform/metrics). Only the relay may
+	// reach this port; scrapers use the separate metrics listener.
+	mux.Handle("GET /metrics", metrics.Default.Handler())
+	for _, register := range registrars {
+		if register != nil {
+			register(mux)
+		}
+	}
+	return mux
+}
+
+// metricsOnly is the separate metrics listener: GET /metrics and nothing else.
+func metricsOnly() http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", metrics.Default.Handler())
+	return mux
+}
+
 // Maintenance installations expose observation only. This is not component
 // authentication: live authority enforcement is tracked separately.
 func maintenanceBoundary(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || (r.URL.Path != "/healthz" && r.URL.Path != "/readyz" && r.URL.Path != "/metadata") {
+		if r.Method != http.MethodGet || (r.URL.Path != "/healthz" && r.URL.Path != "/readyz" && r.URL.Path != "/metadata" && r.URL.Path != "/metrics") {
 			WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "runtime_in_maintenance", "delivery": "disabled"})
 			return
 		}
