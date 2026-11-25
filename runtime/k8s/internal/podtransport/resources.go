@@ -373,9 +373,22 @@ func (r *Resources) remove(ctx context.Context, kind, name, uid string) error {
 	propagation := meta.DeletePropagationBackground
 	options := meta.DeleteOptions{TypeMeta: meta.TypeMeta{APIVersion: "v1", Kind: "DeleteOptions"}, Preconditions: &meta.Preconditions{UID: &id}, GracePeriodSeconds: &grace, PropagationPolicy: &propagation}
 	input, _ := json.Marshal(options)
-	_, status, err := r.request(ctx, http.MethodDelete, kind, name, input, true)
-	if err != nil {
-		return removalError{requestStep("delete", err), err}
+	var status int
+	for {
+		var err error
+		_, status, err = r.request(ctx, http.MethodDelete, kind, name, input, true)
+		if err == nil && !transientStatus(status) {
+			break
+		}
+		// A dropped connection or an overloaded API server is retried within
+		// the same bound: the UID precondition makes a repeated DELETE safe,
+		// and a 404 proves the original is gone. A refusal is never retried.
+		if (err != nil && errors.Is(err, ErrPermission)) || !retryRemoval(ctx) {
+			if err != nil {
+				return removalError{requestStep("delete", err), err}
+			}
+			break
+		}
 	}
 	if status == 404 {
 		return nil
@@ -389,10 +402,16 @@ func (r *Resources) remove(ctx context.Context, kind, name, uid string) error {
 			if ctx.Err() != nil {
 				return removalError{"observe-timeout", err}
 			}
+			if !errors.Is(err, ErrPermission) && retryRemoval(ctx) {
+				continue
+			}
 			return removalError{requestStep("observe", err), err}
 		}
 		if status == 404 {
 			return nil
+		}
+		if transientStatus(status) && retryRemoval(ctx) {
+			continue
 		}
 		if status != 200 {
 			return removalError{"observe-status-" + statusClass(status), ErrTransport}
@@ -417,6 +436,31 @@ func (r *Resources) remove(ctx context.Context, kind, name, uid string) error {
 			return removalError{"observe-timeout", ErrTransport}
 		case <-time.After(100 * time.Millisecond):
 		}
+	}
+}
+
+// transientStatus is an API server answer worth repeating within the removal
+// bound: throttling or a temporarily unavailable server.
+func transientStatus(status int) bool {
+	switch status {
+	case 429, 500, 502, 503, 504:
+		return true
+	}
+	return false
+}
+
+// retryRemoval waits briefly before another removal request; false once the
+// removal bound has no room left for one.
+func retryRemoval(ctx context.Context) bool {
+	const pause = 250 * time.Millisecond
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < pause {
+		return false
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(pause):
+		return true
 	}
 }
 
