@@ -3,6 +3,7 @@ package workspacebundle
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -186,8 +187,16 @@ func TestExportRejectsHostileNodes(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if _, e = Export(parent, b.SourceSHA); e == nil {
+			_, e = Export(parent, b.SourceSHA)
+			if e == nil || !errors.Is(e, ErrInvalid) {
 				t.Fatalf("export accepted %s", kind)
+			}
+			// Each refusal carries its bounded reason (battery 31 lost a
+			// candidate at a bare helper exit 1).
+			want := map[string]ExportReason{"symlink-out": ExportNode, "symlink-in": ExportNode, "hardlink": ExportNode, "fifo": ExportNode,
+				"large": ExportFileSize, "special-mode": ExportNode, "nested-git": ExportPath, "directory-link": ExportNode}[kind]
+			if got := RefusalReason(e); got != want {
+				t.Fatalf("%s refused with reason %d, want %d", kind, got, want)
 			}
 			actual, e := os.ReadFile(outside)
 			if e != nil || string(actual) != "not in workspace" {

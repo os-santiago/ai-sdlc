@@ -325,7 +325,7 @@ controller exports its workspace. A failed export used to stop as a bare
 | `export-before` | The observation before the export failed (a transport or permission error). |
 | `export-before-running` | The worker was not terminated when the export began. |
 | `export-helper-transport` | The export helper exchange failed. |
-| `export-helper-exit-N` | The export helper exited with code N (1 to 255). |
+| `export-helper-exit-N` | The export helper exited with code N (1 to 255). For a refused workspace, N names the rule: 3 a path outside the bundle rules, 4 a link, hard link, special node or setuid/setgid/sticky file, 5 one file over the size limit (for example a compiled test binary left in the workspace), 6 the total content over its limit, 7 too many entries or files. Any other failure is 1, and 124 is the helper's own time limit. |
 | `export-decode` | The exported bundle was invalid or bound to another source. |
 | `export-after` | The observation after the export failed. |
 | `export-after-identity` | The worker's exit changed between the two observations. |
