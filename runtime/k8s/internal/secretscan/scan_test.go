@@ -100,7 +100,7 @@ func TestPlaceholdersExamplesAndLookalikesAreNotFindings(t *testing.T) {
 	cases := []string{
 		// Documented vendor examples.
 		"AK" + "IAIOSFODNN7" + "EXAMPLE",
-		"aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCY" + "EXAMPLEKEY",
+		"aws_secret" + "_access_key = " + "wJalrXUtnFEMI" + "/K7MDENG/bPxRfiCY" + "EXAMPLE" + "KEY",
 		// Placeholders without randomness.
 		"gh" + "p_" + strings.Repeat("x", 36),
 		"gh" + "p_" + strings.Repeat("0123", 9),
