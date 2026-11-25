@@ -9,7 +9,7 @@ from verify_review_repair_composition import controller
 
 class NamespaceCustodyTests(unittest.TestCase):
     def run_fixture(self, replace_at):
-        state = {'uid': 'owned', 'labels': {}, 'posts': 0, 'tokens': 0, 'gets': 0}
+        state = {'uid': 'owned', 'labels': {}, 'posts': 0, 'tokens': 0, 'gets': 0, 'grants': 0, 'revokes': 0}
         def run(argv, **kwargs):
             args = argv[1:]
             if args[:3] == ['create', '-f', '-']:
@@ -18,6 +18,8 @@ class NamespaceCustodyTests(unittest.TestCase):
                     state['labels'] = value['metadata']['labels']
                     return subprocess.CompletedProcess(argv, 0, json.dumps({'metadata': dict(uid='owned', labels=state['labels'])}).encode())
                 state['posts'] += 1
+                if any(item['kind'] == 'ClusterRoleBinding' for item in value.get('items', [])):
+                    state['grants'] += 1
                 if replace_at == 'before-token':
                     state['uid'] = 'replacement'
                 return subprocess.CompletedProcess(argv, 0, b'{}')
@@ -29,6 +31,9 @@ class NamespaceCustodyTests(unittest.TestCase):
             if args[:2] == ['create', 'token']:
                 state['tokens'] += 1
                 return subprocess.CompletedProcess(argv, 0, b'fixture-token')
+            if args[:2] == ['delete', 'clusterrolebinding,clusterrole']:
+                state['revokes'] += 1
+                return subprocess.CompletedProcess(argv, 0, b'')
             if args[0] == 'get':
                 return subprocess.CompletedProcess(argv, 0, b'{"items":[]}')
             raise AssertionError(args)
@@ -42,15 +47,17 @@ class NamespaceCustodyTests(unittest.TestCase):
 
     def test_replacement_before_permissions_sends_no_post_or_token(self):
         state = self.run_fixture('before-post')
-        self.assertEqual((state['posts'], state['tokens']), (0, 0))
+        self.assertEqual((state['posts'], state['tokens'], state['grants']), (0, 0, 0))
+        self.assertEqual(state['revokes'], 1)
 
     def test_replacement_after_permissions_sends_no_token(self):
         state = self.run_fixture('before-token')
-        self.assertEqual((state['posts'], state['tokens']), (1, 0))
+        self.assertEqual((state['posts'], state['tokens'], state['grants']), (1, 0, 0))
+        self.assertEqual(state['revokes'], 1)
 
     def test_replacement_after_test_cannot_accept_empty_inventory(self):
         state = self.run_fixture('after-test')
-        self.assertEqual(state['tokens'], 1)
+        self.assertEqual((state['tokens'], state['grants'], state['revokes']), (1, 1, 1))
 
 
 if __name__ == '__main__':

@@ -2,6 +2,7 @@
 import copy
 import json
 
+import candidate_install
 import initial_activation
 from runtime_upgrade_pause import pause_values
 
@@ -12,8 +13,14 @@ def targets(source, render, compile_build, *, original=False):
     profile = candidate.get('profile', {})
     if (candidate.get('version') != 'ai-sdlc.candidate-runtime/v1'
             or profile.get('version') != 'ai-sdlc.executor-profile/v1'
-            or profile.get('maxSteps') != 16 or profile.get('maxSeconds') != 600
-            or profile.get('maxTokens') != 4096
+            or profile.get('maxSteps') != 16
+            # The recorded generation time is carried through unchanged; this
+            # transition never resets a selected budget to the 600 s default.
+            or type(profile.get('maxSeconds')) is not int
+            or not candidate_install.MIN_GENERATION_SECONDS <= profile['maxSeconds'] <= candidate_install.MAX_GENERATION_SECONDS
+            # Likewise the recorded answer-token bound.
+            or type(profile.get('maxTokens')) is not int
+            or not candidate_install.MIN_ANSWER_TOKENS <= profile['maxTokens'] <= candidate_install.MAX_ANSWER_TOKENS
             or candidate.get('model') != {'Limits': {'Calls': 16, 'InputBytes': 2097152,
                 'OutputBytes': 4194304}, 'ResponseLimit': 262144}):
         raise ValueError('Original bounded 16-tool generator profile required')

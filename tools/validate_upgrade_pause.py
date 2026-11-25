@@ -68,7 +68,10 @@ def main(argv=None):
     stack_file=None
     try:
         report['stage']='publication';write_report()
-        _,publication=install_images.resolve(install_images.GitHub(),args.run,args.revision,include_build=True,include_release=True)
+        api=install_images.GitHub()
+        # Verify signatures; revisions without the cutover sentinel predate signing.
+        _,publication=install_images.resolve(api,args.run,args.revision,include_build=True,include_release=True,
+                                             verify=install_images.signature_verifier(api,args.revision,allow_unsigned_legacy=True))
         image=install_images.REGISTRY+'@'+publication['images']['migrator']['digest']
         catalog=build_runtime_install.component_call(provider,image,'describe-migrations',{})
         source=install_upgrade.Source(install.ROOT)

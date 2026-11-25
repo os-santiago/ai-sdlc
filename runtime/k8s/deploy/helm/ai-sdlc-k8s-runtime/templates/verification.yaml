@@ -14,10 +14,14 @@ apiVersion: v1
 kind: ResourceQuota
 metadata: {name: verifier-bounds, namespace: ai-sdlc-verifiers}
 spec:
+  {{- if include "ai-sdlc-k8s-runtime.sandboxOverheadSet" . }}
+  hard: {pods: "4", configmaps: "4", {{ include "ai-sdlc-k8s-runtime.sandboxQuota" (dict "root" . "pods" 4 "quota" (.Values.project.verifierQuota | default (dict "requests.cpu" "1" "requests.memory" "1Gi" "limits.cpu" "4" "limits.memory" "2Gi"))) }}}
+  {{- else }}
   {{- with .Values.project.verifierQuota }}
   hard: {pods: "4", configmaps: "4", requests.cpu: {{ index . "requests.cpu" | quote }}, requests.memory: {{ index . "requests.memory" | quote }}, limits.cpu: {{ index . "limits.cpu" | quote }}, limits.memory: {{ index . "limits.memory" | quote }}}
   {{- else }}
   hard: {pods: "4", configmaps: "4", requests.cpu: "1", requests.memory: 1Gi, limits.cpu: "4", limits.memory: 2Gi}
+  {{- end }}
   {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -193,6 +197,12 @@ spec:
           env:
             - {name: TMPDIR, value: /model-home/tmp}
             - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            {{- if .Values.review.narrowModelTools }}
+            {{- /* Exactly the tools the broker's review response policy
+                   (modelbroker.reviewArguments) and the reviewer's SCC
+                   autoApprove accept; the model is offered no other tool. */}}
+            - {name: AI_SDLC_MODEL_GATEWAY_TOOLS, value: "read_file,list_dir,search_text,code_query"}
+            {{- end }}
             {{- if ne $.Values.modelGateway.adapter "agent-cli" }}
             - {name: AI_SDLC_MODEL_UPSTREAM_URL, value: {{ required "modelGateway.upstream.url is required" $.Values.modelGateway.upstream.url | quote }}}
             - {name: AI_SDLC_MODEL_UPSTREAM_MODEL, value: {{ required "modelGateway.upstream.model is required" $.Values.modelGateway.upstream.model | quote }}}

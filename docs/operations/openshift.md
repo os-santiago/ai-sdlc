@@ -63,8 +63,12 @@ Without the value, nothing changes on other Kubernetes distributions.
 
 ## Sandbox runtime
 
-Executor and verification pods use the `ai-sdlc-offline` RuntimeClass. On kind
-its handler is gVisor (`runsc`) under containerd, with networking disabled.
+Executor, reviewer and verification pods use the configured sandbox
+RuntimeClass, `ai-sdlc-offline` by default
+([per-platform classes](../security/offline-executor-runtime.md#sandbox-runtimeclass-per-platform)).
+On kind its handler is gVisor (`runsc`) under containerd, with networking
+disabled. On OpenShift, select the installed class with `--runtime-class`, for
+example `kata` for OpenShift sandboxed containers.
 
 On CRI-O, the same pinned `runsc` release was registered as a runtime handler
 and failed in three ways:
@@ -79,8 +83,18 @@ and failed in three ways:
 
 gVisor under CRI-O is therefore not a working sandbox on OpenShift today. The
 supported sandbox runtime there is OpenShift sandboxed containers (Kata). The
-next M5 step is to evaluate it as the `ai-sdlc-offline` handler, together with
-the namespace's deny-all NetworkPolicy.
+next M5 step is to evaluate it as the sandbox class (`--runtime-class kata`),
+together with the namespace's deny-all NetworkPolicy.
+
+OpenShift sandboxed containers 1.13 was tried on OpenShift Local 5.0. The
+host has nested virtualization (AMD), and the operator installed. However,
+the `KataConfig` failed at the MachineConfig step: the node could not install
+the `kata-containers` RHCOS extension (`Packages not found: 9pfs, cloud-init,
+gvisor-tap-vsock-gvforwarder, hyperv-daemons`). OpenShift Local's trimmed
+RHCOS image does not carry the extensions content. Deleting the `KataConfig`
+returned the pool to its previous configuration. Evaluating Kata therefore
+needs an OpenShift cluster with the full RHCOS extensions, on bare metal or
+with nested virtualization.
 
 For a local compatibility evaluation only, the RuntimeClass can point to the
 default `crun` handler. That keeps the SCC, Pod Security admission, the
@@ -93,7 +107,8 @@ generations that way outside a disposable cluster.
 The administrator prepares the cluster:
 
 - a default StorageClass;
-- the `ai-sdlc-offline` RuntimeClass for the sandbox runtime (see above);
+- the sandbox RuntimeClass (see above): its name is passed with
+  `--runtime-class NAME`, and defaults to `ai-sdlc-offline`;
 - a kubeconfig context allowed to create namespaces, RBAC and workloads.
 
 The installing host still needs Docker or Podman, which generate the
@@ -107,7 +122,8 @@ Then the installer targets that context instead of creating a kind cluster:
   --cluster my-openshift --repository OWNER/REPO --environment ai-sdlc-production \
   --profile verification --independent-review --publication --merge --review-repair \
   --github-auth gh-cli --codex-auth-file ~/.codex/auth.json \
-  --model-upstream upstream.json --project-manifest manifest.json
+  --model-upstream upstream.json --project-manifest manifest.json \
+  --runtime-class kata
 ```
 
 On first install the installer records the cluster's UID and the context in
@@ -115,8 +131,12 @@ its state directory, and it refuses a different cluster or context for that
 `--cluster` name later. Use a `--cluster` name of its own: the installer
 refuses a state directory that belongs to a kind or Konflux installation, and
 it records nothing for a cluster without the OpenShift security API. Before any change it checks three things: the
-OpenShift security API, a default StorageClass, and the RuntimeClass when the
-profile runs generations. It never installs a node runtime. It renders the
+OpenShift security API, a default StorageClass, and the selected RuntimeClass
+when the profile runs generations. It never installs a node runtime. The
+worker and the verifier repeat the RuntimeClass check before they become ready
+and before each claim. The installer sets the quota headroom for the class's
+pod overhead (Kata declares one) from the class itself, and a later reinstall
+must repeat `--runtime-class` to keep a non-default class. It renders the
 chart with `openshift.enabled=true`.
 
 The model endpoint must be reachable from the cluster's pods at a literal
@@ -130,7 +150,7 @@ connection as coming from its own address.
 |---|---|
 | Fixed UID 1000 under `nonroot-v2` | Validated on OpenShift Local |
 | Exact pod comparison with OpenShift admission (`openshift.enabled`) | Validated on OpenShift Local for executor, verification and review pods (the additions above, plus the memory-pressure toleration and CRI-O image identity) |
-| Sandbox runtime | gVisor under CRI-O fails. The validated run used `crun`, which gives no kernel sandbox. Kata has not been evaluated yet |
+| Sandbox runtime | gVisor under CRI-O fails. Kata cannot install on OpenShift Local (no RHCOS extensions). The validated run used `crun`, which gives no kernel sandbox. Kata needs a full OpenShift cluster |
 | Outer-loop console rollout (`console_rollout.go`) | Not covered: it compares the production pods without the profile |
 | Installer path (`install.sh local --platform openshift`) | Shadow and full verification profiles installed on OpenShift Local |
 | End-to-end delivery on OpenShift | One issue went from label to merged pull request in 6.5 minutes on OpenShift Local ([evidence](../evidence/2026-11-22-evaluation-batteries-2-3-openshift.md)) |

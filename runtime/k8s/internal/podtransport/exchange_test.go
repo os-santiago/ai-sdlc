@@ -29,8 +29,8 @@ func bindingFixture(t *testing.T) (Binding, core.Pod, modelmailbox.Envelope) {
 	profile, _ := json.Marshal(executor.Profile{Version: executor.ProfileVersion, Model: "fixture-model", MaxSteps: 4, MaxSeconds: 45, MaxTokens: 2048, ADevSHA256: modelmailbox.Digest(adev)})
 	a := executor.Assignment{Version: executor.AssignmentVersion, WorkItemID: "11111111-1111-4111-8111-111111111111", Attempt: 1, Repository: "fixture/product", SourceSHA: strings.Repeat("a", 40), TreeSHA256: strings.Repeat("b", 64), ProfileSHA256: modelmailbox.Digest(profile), AuthorityRevision: strings.Repeat("c", 64), IssueNumbers: []int{1}, Title: "Component fixture", Body: "Synthetic issue only", AcceptanceCriteria: []string{"No live work"}, ExpiresAt: time.Now().Add(time.Minute).UnixMilli()}
 	assignment, _ := json.Marshal(a)
-	b := Binding{Namespace: "fixture", WorkerImage: "fixture/worker@sha256:" + strings.Repeat("a", 64), MailboxImage: "fixture/mailbox@sha256:" + strings.Repeat("b", 64), PodUID: "22222222-2222-4222-8222-222222222222", Assignment: assignment, Profile: profile, ADev: adev}
-	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.Assignment, b.Profile, b.ADev, time.Now())
+	b := Binding{Namespace: "fixture", WorkerImage: "fixture/worker@sha256:" + strings.Repeat("a", 64), MailboxImage: "fixture/mailbox@sha256:" + strings.Repeat("b", 64), PodUID: "22222222-2222-4222-8222-222222222222", RuntimeClass: executor.DefaultRuntimeClass, Assignment: assignment, Profile: profile, ADev: adev}
+	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.RuntimeClass, b.Assignment, b.Profile, b.ADev, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,6 +202,10 @@ func TestPublicationRequiresExplicitBoundedStatusAndReceipt(t *testing.T) {
 			if kind == "permission-denied" && !errors.Is(err, ErrPermission) {
 				t.Fatal("forbidden status was not recognized")
 			}
+			var staged interface{ PublicationStage() string }
+			if kind == "helper-failure" && (!errors.As(err, &staged) || staged.PublicationStage() != "helper-exit-1") {
+				t.Fatalf("helper exit code not named: %v", err)
+			}
 			if upgrades.Load() != 1 || time.Since(start) > time.Second {
 				t.Fatal("transport replayed or failed to bound fixture")
 			}
@@ -275,5 +279,102 @@ func TestBindingRejectsChangedPodBeforeAnyExec(t *testing.T) {
 				t.Fatal("changed Pod reached helper")
 			}
 		})
+	}
+}
+
+func TestPublicationNamesTheExitCodeOfAnAlreadyExitedWorker(t *testing.T) {
+	for _, kind := range []string{"exited", "other-terminal-id", "restarted", "running-then-forbidden"} {
+		t.Run(kind, func(t *testing.T) { publishToExitedWorker(t, kind) })
+	}
+}
+
+func publishToExitedWorker(t *testing.T, kind string) {
+	binding, pod, reply := bindingFixture(t)
+	var gets, execs atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/exec") {
+			execs.Add(1)
+			w.WriteHeader(500)
+			return
+		}
+		p := pod.DeepCopy()
+		if gets.Add(1) > 1 {
+			if kind == "running-then-forbidden" {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			// The launcher's run budget ended while the call was in flight.
+			for i := range p.Status.ContainerStatuses {
+				if status := &p.Status.ContainerStatuses[i]; status.Name == "worker" {
+					status.State = core.ContainerState{Terminated: &core.ContainerStateTerminated{ExitCode: 124, ContainerID: status.ContainerID}}
+					if kind == "other-terminal-id" {
+						status.State.Terminated.ContainerID = "containerd://" + strings.Repeat("f", 64)
+					}
+					if kind == "restarted" {
+						status.RestartCount = 1
+					}
+				}
+			}
+		}
+		raw, _ := json.Marshal(p)
+		w.Write(raw)
+	}))
+	defer server.Close()
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	c, err := NewClient(Config{APIServer: server.URL, CA: ca, BearerToken: strings.Repeat("x", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Bind(context.Background(), c, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Publish(context.Background(), reply)
+	var exited interface{ WorkerExitCode() (int32, bool) }
+	var stage interface{ PublicationStage() string }
+	if err == nil || execs.Load() != 0 || !errors.As(err, &stage) || stage.PublicationStage() != "before-observation" {
+		t.Fatalf("%s: publication not refused before any exec: %v", kind, err)
+	}
+	if gets.Load() != 2 {
+		t.Fatalf("%s: %d pod observations, want one after binding", kind, gets.Load())
+	}
+	switch kind {
+	case "exited":
+		if !errors.As(err, &exited) || !errors.Is(err, ErrTransport) {
+			t.Fatalf("exit code not carried: %v", err)
+		}
+		if code, ok := exited.WorkerExitCode(); !ok || code != 124 {
+			t.Fatalf("exit code %d %v", code, ok)
+		}
+	case "running-then-forbidden":
+		if errors.As(err, &exited) || !errors.Is(err, ErrPermission) {
+			t.Fatalf("permission failure changed: %v", err)
+		}
+	default:
+		// Only the pinned, unrestarted instance may report an exit code.
+		if errors.As(err, &exited) || !errors.Is(err, ErrTransport) {
+			t.Fatalf("%s: exit code from an unpinned instance: %v", kind, err)
+		}
+	}
+}
+
+func TestMailboxReadStepsAreNamedAndKeepTheCause(t *testing.T) {
+	for step, cause := range map[string]error{"helper-transport": ErrTransport, "helper-exit-1": ErrTransport, "envelope": ErrTransport, "before-observation": ErrPermission, "after-observation": ErrTransport} {
+		err := readFailure(step, cause)
+		if ReadStep(err) != step || !KnownReadStep(step) || !errors.Is(err, cause) {
+			t.Fatalf("%s: %v", step, err)
+		}
+	}
+	// An observed worker exit is not a read failure; callers still see it.
+	if err := readFailure("after-observation", ErrWorkerExited); err != ErrWorkerExited || ReadStep(err) != "" {
+		t.Fatal("worker exit must stay unwrapped")
+	}
+	for _, bad := range []string{"helper-exit-0", "helper-exit-256", "helper-exit-01", "sensitive"} {
+		if KnownReadStep(bad) {
+			t.Fatal(bad)
+		}
+	}
+	if ReadStep(ErrTransport) != "" {
+		t.Fatal("an unrelated error has no read step")
 	}
 }

@@ -34,7 +34,7 @@ func TestReviewExportBindsRoleTerminationIdentityAndFixedHelper(t *testing.T) {
 			}
 			a.ProfileSHA256 = modelmailbox.Digest(b.Profile)
 			b.Assignment, _ = json.Marshal(a)
-			w, e := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.Assignment, b.Profile, b.ADev, time.Now())
+			w, e := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.RuntimeClass, b.Assignment, b.Profile, b.ADev, time.Now())
 			if e != nil {
 				t.Fatal(e)
 			}

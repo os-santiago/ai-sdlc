@@ -11,6 +11,11 @@ to an OpenShift cluster, where the remaining M5 criteria are validated. Mileston
 numbers: M3 (the outer loop) was moved after M4 when the inner loop was chosen
 as the v1 core, and M5 (platform portability) was added after it. Status of each capability: [capability matrix](capabilities.md).
 
+The milestones below are sequenced against the
+[strategic principles](architecture/strategic-principles.md); the
+[principles audit](architecture/principles-audit-2026-11-24.md) maps each
+remaining gap to a phase.
+
 ## M0: Truthful positioning
 
 - Product README, capability matrix, this roadmap.

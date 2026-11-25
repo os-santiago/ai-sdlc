@@ -1,0 +1,180 @@
+{
+  "repository": "os-santiago/ai-sdlc-sample",
+  "attemptBudget": 2,
+  "issues": [
+    {
+      "issue": 119,
+      "attempts": [
+        {
+          "issue": 119,
+          "startedAt": "2026-11-23T04:17:08Z",
+          "outcome": "success",
+          "pullRequest": 129,
+          "seconds": 605,
+          "modelCalls": 17
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 120,
+      "attempts": [
+        {
+          "issue": 120,
+          "startedAt": "2026-11-23T04:27:58Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 498,
+          "modelCalls": 16,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: worker-exit cleanupPending=false workerExitCode=22 failureRecorded=true"
+          ]
+        },
+        {
+          "issue": 120,
+          "startedAt": "2026-11-23T04:36:59Z",
+          "outcome": "success",
+          "pullRequest": 130,
+          "seconds": 587,
+          "modelCalls": 18
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 121,
+      "attempts": [
+        {
+          "issue": 121,
+          "startedAt": "2026-11-23T04:47:30Z",
+          "outcome": "success",
+          "pullRequest": 131,
+          "seconds": 520,
+          "modelCalls": 14
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 122,
+      "attempts": [
+        {
+          "issue": 122,
+          "startedAt": "2026-11-23T04:56:55Z",
+          "outcome": "success",
+          "pullRequest": 132,
+          "seconds": 476,
+          "modelCalls": 12
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 123,
+      "attempts": [
+        {
+          "issue": 123,
+          "startedAt": "2026-11-23T05:05:35Z",
+          "outcome": "success",
+          "pullRequest": 133,
+          "seconds": 390,
+          "modelCalls": 13
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 124,
+      "attempts": [
+        {
+          "issue": 124,
+          "startedAt": "2026-11-23T05:12:51Z",
+          "executionStop": "uncertain",
+          "outcome": "timeout",
+          "seconds": 907,
+          "modelCalls": 10,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: cleanup-pod-observe-request cleanupPending=true workerExitCode=0 failureRecorded=false",
+            "independent review stopped safely: request-changes",
+            "repair handoff stopped safely"
+          ]
+        },
+        {
+          "issue": 124,
+          "startedAt": "2026-11-23T05:28:42Z",
+          "outcome": "failure",
+          "stage": "verification",
+          "reason": "comparison-failed",
+          "seconds": 369,
+          "modelCalls": 16,
+          "diagnostics": [
+            "verification reconciliation stopped safely: refused-candidate-failed"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 125,
+      "attempts": [
+        {
+          "issue": 125,
+          "startedAt": "2026-11-23T05:35:36Z",
+          "outcome": "success",
+          "pullRequest": 134,
+          "seconds": 648,
+          "modelCalls": 23
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 126,
+      "attempts": [
+        {
+          "issue": 126,
+          "startedAt": "2026-11-23T05:47:08Z",
+          "outcome": "success",
+          "pullRequest": 135,
+          "seconds": 417,
+          "modelCalls": 11
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 87,
+      "attempts": [
+        {
+          "issue": 87,
+          "startedAt": "2026-11-23T05:54:49Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 499,
+          "modelCalls": 16,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-provider cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 87,
+          "startedAt": "2026-11-23T06:03:52Z",
+          "outcome": "success",
+          "pullRequest": 136,
+          "seconds": 586,
+          "modelCalls": 13
+        }
+      ],
+      "success": true
+    }
+  ],
+  "summary": {
+    "issues": 9,
+    "firstAttemptSuccess": 6,
+    "successWithinBudget": 8,
+    "firstAttemptRate": 0.667,
+    "rateWithinBudget": 0.889
+  }
+}

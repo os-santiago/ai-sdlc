@@ -1,0 +1,51 @@
+{{- /*
+Sandbox RuntimeClass preflight. The worker and the verifier read only the one
+configured RuntimeClass to confirm it exists before they become ready. The
+class itself belongs to the platform (or to the local kind installer); this
+chart never creates, changes or lists runtime classes.
+*/ -}}
+{{- if has .Values.runtime.mode (list "candidate" "verification") }}
+{{- $class := .Values.sandbox.runtimeClassName }}
+{{- /* The installed documents carry the class; absence means the default. */ -}}
+{{- /* The runtime matches JSON field names case-insensitively, so every
+spelling of the class field counts, and more than one spelling is refused. */ -}}
+{{- if .Values.candidate.configJSON }}
+{{- $placement := include "ai-sdlc-k8s-runtime.placementField" (fromJson .Values.candidate.configJSON) | fromJson }}
+{{- if ne (include "ai-sdlc-k8s-runtime.sandboxClassField" (dict "doc" $placement "field" "placement RuntimeClass")) $class }}
+{{- fail "sandbox.runtimeClassName differs from the execution configuration placement RuntimeClass" }}
+{{- end }}
+{{- end }}
+{{- if and .Values.review.enabled .Values.review.configJSON }}
+{{- if ne (include "ai-sdlc-k8s-runtime.sandboxClassField" (dict "doc" (fromJson .Values.review.configJSON) "field" "review runtimeClass")) $class }}
+{{- fail "sandbox.runtimeClassName differs from the review configuration runtimeClass" }}
+{{- end }}
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-sandbox-runtime-class
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [node.k8s.io]
+    resources: [runtimeclasses]
+    resourceNames: [{{ $class | quote }}]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-sandbox-runtime-class
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: ai-sdlc-execution-controller
+    namespace: {{ .Release.Namespace }}
+  {{- if eq .Values.runtime.mode "verification" }}
+  - kind: ServiceAccount
+    name: ai-sdlc-verification-controller
+    namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  {{- end }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-sandbox-runtime-class}
+{{- end }}

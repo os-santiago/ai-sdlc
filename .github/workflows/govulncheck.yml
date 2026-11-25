@@ -1,0 +1,42 @@
+name: govulncheck
+# Fails when the runtime calls a known-vulnerable function in a dependency or
+# the Go standard library. Vulnerabilities in code the runtime never reaches are
+# reported by govulncheck but do not fail the job. The weekly run catches new
+# advisories against unchanged code.
+on:
+  pull_request:
+    paths: ['runtime/k8s/**', '.github/workflows/govulncheck.yml']
+  push:
+    branches: [main]
+    paths: ['runtime/k8s/**', '.github/workflows/govulncheck.yml']
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: govulncheck-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@802e89cd7394b98352d79117a8b463bbfc2fdacf
+        with:
+          go-version-file: runtime/k8s/go.mod
+          cache-dependency-path: runtime/k8s/go.sum
+      - name: Scan runtime for called vulnerabilities
+        working-directory: runtime/k8s
+        env:
+          # Pinned release; the module proxy download is verified against the
+          # Go checksum database. Bump deliberately.
+          GOVULNCHECK_VERSION: v1.10.0
+        run: |
+          go version
+          go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...

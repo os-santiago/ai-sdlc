@@ -26,9 +26,10 @@ def load(path):
         raise ValueError('Invalid installation configuration JSON') from exc
     fields = {'apiVersion', 'kind', 'cluster', 'provider', 'repository',
               'environment', 'profile', 'images'}
-    if not isinstance(config, dict) or set(config) - {'independentReview', 'reviewRepair', 'publication', 'merge', 'platform', 'buildBundle', 'projectManifest'} != fields:
+    budget = ('generationSeconds', 'generationSteps', 'generationAnswerTokens')
+    if not isinstance(config, dict) or set(config) - {'independentReview', 'reviewRepair', 'publication', 'merge', 'platform', 'buildBundle', 'projectManifest', *budget} != fields:
         raise ValueError('Installation configuration requires exactly the documented fields')
-    if any(not isinstance(value, str) for key, value in config.items() if key not in ('independentReview', 'reviewRepair', 'publication', 'merge')):
+    if any(not isinstance(value, str) for key, value in config.items() if key not in ('independentReview', 'reviewRepair', 'publication', 'merge', *budget)):
         raise ValueError('Installation configuration fields must be strings')
     if 'projectManifest' in config and (not config['projectManifest'] or '\x00' in config['projectManifest']
             or config['profile'] != 'verification' or config['repository'] in ('os-santiago/homedir', 'os-santiago/saferus')):
@@ -62,8 +63,17 @@ def load(path):
         raise ValueError('Publication requires verification, independent review and a reviewed repository')
     if 'merge' in config and (type(config['merge']) is not bool or (config['merge'] and config.get('publication') is not True)):
         raise ValueError('Merge requires explicit verified publication')
+    if 'generationSeconds' in config and (type(config['generationSeconds']) is not int or not 600 <= config['generationSeconds'] <= 900):
+        raise ValueError('generationSeconds must be an integer from 600 to 900')
+    if 'generationSteps' in config and (type(config['generationSteps']) is not int or not 24 <= config['generationSteps'] <= 32):
+        raise ValueError('generationSteps must be an integer from 24 to 32')
+    if 'generationAnswerTokens' in config and (type(config['generationAnswerTokens']) is not int
+                                               or not 4096 <= config['generationAnswerTokens'] <= 8192):
+        raise ValueError('generationAnswerTokens must be an integer from 4096 to 8192')
+    if any(key in config for key in budget) and config['profile'] not in ('candidate', 'verification'):
+        raise ValueError('A generation budget requires the candidate or verification profile')
     digest = 'sha256:' + hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    values = {({'independentReview': 'independent_review', 'reviewRepair': 'review_repair', 'buildBundle': 'build_bundle', 'projectManifest': 'project_manifest'}.get(key, key)): value for key, value in config.items() if key not in ('apiVersion', 'kind')}
+    values = {({'independentReview': 'independent_review', 'reviewRepair': 'review_repair', 'buildBundle': 'build_bundle', 'projectManifest': 'project_manifest', 'generationSeconds': 'generation_seconds', 'generationSteps': 'generation_steps', 'generationAnswerTokens': 'generation_answer_tokens'}.get(key, key)): value for key, value in config.items() if key not in ('apiVersion', 'kind')}
     values['images'] = (path.parent / config['images']).resolve()
     if 'buildBundle' in config:
         values['build_bundle'] = (path.parent / config['buildBundle']).resolve()
@@ -87,7 +97,7 @@ def resolve(args):
             raise ValueError('CLI option conflicts with installation configuration: ' + key)
         # Status and credential operations address the same scope without
         # changing the installed profile or requesting shadow activation.
-        if key == 'build_bundle' and args.command not in ('plan', 'local'):
+        if key in ('build_bundle', 'generation_seconds', 'generation_steps', 'generation_answer_tokens') and args.command not in ('plan', 'local'):
             continue
         if key != 'profile' or args.command in ('plan', 'local'):
             setattr(args, key, value)

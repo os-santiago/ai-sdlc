@@ -87,7 +87,7 @@ func TestControllerStopsTransferredClaimOnResourceFailures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			record, err := RunController(context.Background(), f.db, f.loadLifecycle, f.prepared, client, provider, func(context.Context) (ModelPolicy, error) {
+			record, err := RunController(context.Background(), f.db, f.loadLifecycle, f.prepared, client, podtransport.RuntimeClassAdmission{}, provider, func(context.Context) (ModelPolicy, error) {
 				t.Error("unexpected model activation")
 				return ModelPolicy{}, ErrAuthority
 			})

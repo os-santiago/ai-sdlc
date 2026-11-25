@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -187,11 +188,11 @@ func (s *Session) requestWorkerActive(ctx context.Context) error {
 
 func (s *Session) ReadRequest(ctx context.Context) (modelmailbox.Envelope, error) {
 	if err := s.requestWorkerActive(ctx); err != nil {
-		return modelmailbox.Envelope{}, err
+		return modelmailbox.Envelope{}, readFailure("before-observation", err)
 	}
 	raw, code, err := s.exchange(ctx, "read", nil)
 	if err != nil {
-		return modelmailbox.Envelope{}, err
+		return modelmailbox.Envelope{}, readFailure("helper-transport", err)
 	}
 	// Validate the helper result before observing a concurrent worker exit.
 	// An invalid envelope cannot be hidden behind a later zero exit.
@@ -199,23 +200,57 @@ func (s *Session) ReadRequest(ctx context.Context) (modelmailbox.Envelope, error
 	var e modelmailbox.Envelope
 	if !pending {
 		if code != 0 {
-			return e, ErrTransport
+			return e, readFailure("helper-exit-"+strconv.Itoa(code), ErrTransport)
 		}
 		e, err = modelmailbox.Decode(raw)
 		if err != nil || e.Validate(s.identity, "request") != nil {
-			return modelmailbox.Envelope{}, ErrTransport
+			return modelmailbox.Envelope{}, readFailure("envelope", ErrTransport)
 		}
 	}
 	if err = s.requestWorkerActive(ctx); err != nil {
 		// Preserve a validated observed request so the controller can reject
 		// unhanded sequences/rebinding even when the writer has just exited.
-		return e, err
+		return e, readFailure("after-observation", err)
 	}
 	if pending {
 		return modelmailbox.Envelope{}, modelmailbox.ErrPending
 	}
 	return e, nil
 }
+
+// readError names the bounded mailbox read step that failed. It unwraps to
+// the original error (ErrWorkerExited, ErrTransport, ErrPermission), so every
+// caller decides exactly as before; the step only refines the stop diagnostic.
+type readError struct {
+	step  string
+	cause error
+}
+
+func (e readError) Error() string    { return "mailbox read failed at " + e.step }
+func (e readError) Unwrap() error    { return e.cause }
+func (e readError) ReadStep() string { return e.step }
+
+func readFailure(step string, err error) error {
+	if errors.Is(err, ErrWorkerExited) {
+		// An observed exit is not a read failure; callers handle it.
+		return err
+	}
+	return readError{step: step, cause: err}
+}
+
+var readSteps = regexp.MustCompile(`^(before-observation|helper-transport|envelope|after-observation|helper-exit-([1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))$`)
+
+// ReadStep returns the failed mailbox read step, or "" for any other error.
+func ReadStep(err error) string {
+	var failed readError
+	if errors.As(err, &failed) && readSteps.MatchString(failed.step) {
+		return failed.step
+	}
+	return ""
+}
+
+// KnownReadStep reports whether step is one ReadStep can return.
+func KnownReadStep(step string) bool { return readSteps.MatchString(step) }
 
 // Publish implements modelbroker.Publisher. Success confirms exclusive helper
 // publication through its exact receipt; it never claims application receipt.
@@ -236,8 +271,19 @@ func (s *Session) Publish(ctx context.Context, e modelmailbox.Envelope) (err err
 		return ErrTransport
 	}
 	stage = "before-observation"
-	if _, err := s.observe(ctx, false); err != nil {
+	// One observation that also reports a terminated worker: publication is
+	// refused exactly as before, and an exit of the pinned worker instance
+	// (for example 124 when the launcher's run budget ended while this call
+	// was in flight) is named by its bounded exit code.
+	observed, err := s.inspect(ctx, true)
+	if err != nil {
 		return err
+	}
+	if observed.workerExitCode != nil {
+		if observed.workerTerminalID != observed.instances["worker"].ID {
+			return ErrTransport
+		}
+		return workerExitedError{code: *observed.workerExitCode, cause: ErrTransport}
 	}
 	stage = "helper-transport"
 	receipt, code, err := s.exchange(ctx, "respond", raw)
@@ -246,6 +292,12 @@ func (s *Session) Publish(ctx context.Context, e modelmailbox.Envelope) (err err
 	}
 	stage = "helper-exit"
 	if code != 0 {
+		// The mailbox helper's bounded exit code (1-255) names the cause class:
+		// 124 its 5 s deadline or a termination signal, 3 a vanished staging
+		// file, 1 any other refusal (see executor-failure-diagnostics.md).
+		if code > 0 && code <= 255 {
+			stage = "helper-exit-" + strconv.Itoa(code)
+		}
 		return ErrTransport
 	}
 	stage = "receipt"
@@ -258,6 +310,19 @@ func (s *Session) Publish(ctx context.Context, e modelmailbox.Envelope) (err err
 	}
 	return nil
 }
+
+// workerExitedError is a refused publication because the pinned worker
+// instance has already exited. It unwraps to ErrTransport.
+type workerExitedError struct {
+	code  int32
+	cause error
+}
+
+func (e workerExitedError) Error() string { return "worker exited before publication" }
+func (e workerExitedError) WorkerExitCode() (int32, bool) {
+	return e.code, e.code >= 0 && e.code <= 255
+}
+func (e workerExitedError) Unwrap() error { return e.cause }
 
 // Only fixed publication boundaries are surfaced; never helper stderr or API
 // exception text. Unwrap preserves the existing error classification.

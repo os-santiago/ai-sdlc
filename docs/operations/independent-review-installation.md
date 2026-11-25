@@ -22,6 +22,14 @@ account can create/read/delete review Pods and ConfigMaps or invoke their fixed
 transport helpers. It cannot mutate generation resources or read Secrets via the
 API. No publication or deployment route is added.
 
+The installer also sets `review.narrowModelTools`, so the review sidecar offers
+the reviewer model only `read_file`, `list_dir`, `search_text` and `code_query`
+(see [Review tool allowlist](model-gateway-adapters.md#review-tool-allowlist)).
+Installations created before this setting keep rendering as installed through
+the closed runtime transitions, and gain it on the next ordinary
+`./install.sh local` reconciliation; the response policy rejects any other call
+in both cases.
+
 Review uses a distinct eight-step, 180-second profile and up to eight calls. Its
 approval proof requires current signed authority, unchanged candidate source,
 matching model evidence and confirmed cleanup. An unknown create or ambiguous

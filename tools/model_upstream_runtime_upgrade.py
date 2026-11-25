@@ -20,6 +20,7 @@ import bootstrap_prepare as bootstrap
 import browser_upgrade_chart
 import build_foundation_install as files
 import build_runtime_install
+import candidate_install
 from browser_approval_window import PHASES
 from diagnostic_runtime_upgrade import advance
 import initial_activation
@@ -83,14 +84,26 @@ def validate_upstream(value):
     return copy.deepcopy(value)
 
 
-def gateway_values(upstream):
+def gateway_values(upstream, answer_tokens=candidate_install.DEFAULT_ANSWER_TOKENS):
+    """The reviewed gateway values. The worker benchmark's answer envelope is
+    the generator profile's maxTokens, so the derived per-call timeout covers
+    the longest answer the profile admits (a gateway too slow for it fails its
+    benchmark and never reports ready, instead of timing out mid-answer)."""
     upstream = validate_upstream(upstream)
+    if (type(answer_tokens) is not int
+            or not candidate_install.MIN_ANSWER_TOKENS <= answer_tokens <= candidate_install.MAX_ANSWER_TOKENS):
+        raise ValueError('Generator answer-token bound must be an integer from 4096 to 8192')
     return {'adapter': upstream['adapter'],
             'upstream': {'url': upstream['url'], 'model': upstream['model'], 'cidr': upstream['cidr'],
                          'port': upstream['port'], 'seconds': upstream['seconds'],
                          'credentialSecret': upstream['credentialSecret'], 'directAnswers': upstream['directAnswers']},
-            'benchmark': {'promptTokens': 16384, 'completionTokens': 4096},
+            'benchmark': {'promptTokens': 16384, 'completionTokens': answer_tokens},
             'reviewBenchmark': {'promptTokens': 16384, 'completionTokens': 1024}}
+
+
+def recorded_answer_tokens(values):
+    """The generator profile's recorded per-answer token bound."""
+    return json.loads(values['candidate']['configJSON'])['profile'].get('maxTokens')
 
 
 SECRET_KEYS_TEMPLATE = '{{.type}}{{range $k, $v := .data}} {{$k}}{{end}}'
@@ -242,7 +255,8 @@ def targets(source, selection, upstream, approvals, render_source, render_target
         raise ValueError('Reviewer profile without a call window required')
     review['profile']['callSeconds'] = upstream['reviewCallSeconds']
     active['review']['configJSON'] = json.dumps(review, sort_keys=True)
-    active['modelGateway'] = gateway_values(upstream)
+    # The recorded answer bound is inherited unchanged and sizes the benchmark.
+    active['modelGateway'] = gateway_values(upstream, recorded_answer_tokens(active))
     # Closed delta: nothing else in the installation values may change.
     restored = without_publication(active, values)
     restored.pop('modelGateway')
@@ -371,8 +385,11 @@ class ModelUpstreamUpgrade(ReviewRepairUpgrade):
                 catalog = source.catalog(revision)
                 if catalog != self.catalog:
                     raise ValueError('Model upstream switch cannot change the schema catalog')
-                _, publication = install_images.resolve(install_images.GitHub(), run, revision,
-                    include_build=True, include_release=True, include_browser=True)
+                api = install_images.GitHub()
+                # Verify signatures; revisions without the cutover sentinel predate signing.
+                _, publication = install_images.resolve(api, run, revision,
+                    include_build=True, include_release=True, include_browser=True,
+                    verify=install_images.signature_verifier(api, revision, allow_unsigned_legacy=True))
                 self.selection = dict(publication, catalog=catalog)
             self.helper = (install_images.REGISTRY + '@' + self.selection['images']['migrator']['digest']) if self.selection else self.source_browser.helper
             if self.selection is not None:

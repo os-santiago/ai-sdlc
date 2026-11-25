@@ -25,6 +25,9 @@ import (
 
 var ErrProvider = errors.New("model provider request failed or exceeded a bound")
 
+// CallSecondsHeader carries the caller's remaining wait to the loopback gateway.
+const CallSecondsHeader = "X-AI-SDLC-Call-Seconds"
+
 // MaxProviderTimeoutSeconds bounds an installation-selected completion timeout.
 const MaxProviderTimeoutSeconds = 600
 
@@ -109,6 +112,14 @@ func (p *Provider) invoke(ctx context.Context, request []byte, responseLimit int
 	req.Header.Set("Authorization", "Bearer "+p.token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	// The gateway bounds its upstream call by the time this caller will still
+	// wait, so it never keeps working (and holding its single model slot)
+	// after the broker has given up on the call.
+	if deadline, ok := ctx.Deadline(); ok {
+		if seconds := int(time.Until(deadline)/time.Second) - 1; seconds >= 1 {
+			req.Header.Set(CallSecondsHeader, strconv.Itoa(seconds))
+		}
+	}
 	response, err := p.client.Do(req)
 	if err != nil {
 		return nil, ErrProvider

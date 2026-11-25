@@ -15,7 +15,7 @@ When an issue's attempts end, the runner removes its trigger label, so no
 other installation watching the repository picks it up later. A failed
 attempt also records the components' own safe stop lines (for example
 `worker-exit ... workerExitCode=23`). The runner stops early, with the reason
-`runtime-blocked`, when a verification cleanup blocks all later work.
+`runtime-blocked`, when a verification cleanup or an execution cleanup that will not complete blocks all later work.
 The runner reads the runtime's database and logs through `kubectl` with the
 installation's kubeconfig; it writes nothing to the cluster.
 """
@@ -29,10 +29,28 @@ from pathlib import Path
 
 LABEL = 'ai-sdlc:shadow'
 POLL_SECONDS = 20
+# An execution cleanup that will not complete: the runtime blocks all worker
+# work until an operator acts (store.ExecutionCleanupBlocked). Normal retries
+# (pending with fewer than three attempts) are not terminal.
+# cleanup_attempts rises when an attempt is claimed, so a third attempt is only
+# terminal once its retry time (cleanup_after) has passed.
+TERMINAL_CLEANUP = "(l.cleanup_state='uncertain' OR (l.cleanup_state='pending' AND l.cleanup_attempts>=3 AND l.cleanup_after<=now()))"
 
 
-def run(args, **kwargs):
-    return subprocess.run(args, check=True, capture_output=True, text=True, timeout=120, **kwargs).stdout
+RETRY_DELAYS = (5, 15, 45)
+
+
+def run(args, retry=True, **kwargs):
+    """Runs a read-only observation command. A transient failure (a forge
+    or cluster API blip, a timeout) is retried with backoff, so one blip does
+    not abort a battery of many hours; the last failure is raised."""
+    for delay in (RETRY_DELAYS if retry else ()) + (None,):
+        try:
+            return subprocess.run(args, check=True, capture_output=True, text=True, timeout=120, **kwargs).stdout
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            if delay is None:
+                raise
+            time.sleep(delay)
 
 
 class Runtime:
@@ -48,15 +66,21 @@ class Runtime:
         lines = []
         for deployment, container in (('ai-sdlc-worker', 'worker'), ('ai-sdlc-verifier', 'verifier')):
             try:
-                out = run(self.base + ['logs', 'deploy/' + deployment, '-c', container, '--since-time=' + since])
+                # Diagnostics are best effort: no retry ladder, a failure is skipped.
+                out = run(self.base + ['logs', 'deploy/' + deployment, '-c', container, '--since-time=' + since], retry=False)
             except subprocess.SubprocessError:
                 continue
             lines += sorted({line.split(' ', 2)[-1] for line in out.splitlines() if 'stopped safely' in line})
         return lines[:10]
 
     def blocked(self):
-        """A failed verification whose cleanup is not complete blocks all later work."""
+        """A failed verification whose cleanup is not complete, or an execution
+        cleanup that will not complete, blocks all later work."""
         rows = self.sql("SELECT count(*) FROM verification_requests WHERE state='failed' AND cleanup_state<>'complete'")
+        if bool(rows) and rows[0] != '0':
+            return True
+        rows = self.sql("SELECT count(*) FROM execution_lifecycles l JOIN execution_requests r ON r.id=l.request_id "
+                        "WHERE r.state='stopped' AND " + TERMINAL_CLEANUP)
         return bool(rows) and rows[0] != '0'
 
     def snapshot(self, issue):
@@ -70,11 +94,22 @@ class Runtime:
         reviews = "FROM review_runs WHERE work_item_uuid IN (SELECT work_item_uuid %s)" % executions
         return {
             'executions': int(one('SELECT count(*) ' + executions) or 0),
-            'execution': one("SELECT state||'|'||stop_reason %s ORDER BY created_at DESC LIMIT 1" % executions),
+            'execution': one("SELECT state||'|'||stop_reason %s ORDER BY created_at DESC, id DESC LIMIT 1" % executions),
+            # A captured candidate can still be handed to verification after
+            # its execution stopped (for example after a failed pod cleanup).
+            'executionCandidate': one("SELECT count(*) FROM execution_candidates WHERE request_id=(SELECT id %s ORDER BY created_at DESC, id DESC LIMIT 1)" % executions) not in ('', '0'),
+            # The handoff can no longer happen: cleanup ended uncertain or ran
+            # out of retries, the handoff was refused, or the request expired
+            # without one.
+            'handoffImpossible': one(("SELECT count(*) FROM execution_requests r JOIN execution_lifecycles l ON l.request_id=r.id "
+                                      "WHERE r.id=(SELECT id %s ORDER BY created_at DESC, id DESC LIMIT 1) AND (" + TERMINAL_CLEANUP + " "
+                                      "OR EXISTS(SELECT 1 FROM verification_handoffs h WHERE h.candidate_id=r.id AND h.state='rejected') "
+                                      "OR (r.expires_at<=now() AND NOT EXISTS(SELECT 1 FROM verification_handoffs h WHERE h.candidate_id=r.id)))") % executions) not in ('', '0'),
+            'handoffReason': one("SELECT reason FROM verification_handoffs WHERE state='rejected' AND candidate_id=(SELECT id %s ORDER BY created_at DESC, id DESC LIMIT 1)" % executions),
             'verifications': int(one('SELECT count(*) ' + verifications) or 0),
-            'verification': one("SELECT state||'|'||reason %s ORDER BY created_at DESC LIMIT 1" % verifications),
+            'verification': one("SELECT state||'|'||reason %s ORDER BY created_at DESC, id DESC LIMIT 1" % verifications),
             'reviews': int(one('SELECT count(*) ' + reviews) or 0),
-            'review': one("SELECT state||'|'||reason %s ORDER BY created_at DESC LIMIT 1" % reviews),
+            'review': one("SELECT state||'|'||reason %s ORDER BY created_at DESC, id DESC LIMIT 1" % reviews),
             # Model calls are not keyed by issue; attempts run one at a time.
             'modelCalls': int(one('SELECT count(*) FROM model_calls') or 0),
         }
@@ -109,6 +144,9 @@ def attempt(runtime, github, issue, timeout):
     started = time.monotonic()
     github.label(issue, True)
     result = {'issue': issue, 'startedAt': since}
+    # Verifications are compared per execution: a repair execution that stops
+    # after an earlier verification in the same attempt is still a failure.
+    seen_executions, handoff_base = before['executions'], before['verifications']
     while time.monotonic() - started < timeout:
         time.sleep(POLL_SECONDS)
         merged = github.merged_pull(issue, since)
@@ -118,8 +156,25 @@ def attempt(runtime, github, issue, timeout):
         if merged:
             result.update(outcome='success', pullRequest=merged)
             break
-        if new_execution and now['execution'].startswith('stopped|') and now['execution'] != 'stopped|candidate-captured':
+        if now['executions'] != seen_executions:
+            seen_executions, handoff_base = now['executions'], now['verifications']
+        stopped = new_execution and now['execution'].startswith('stopped|') and now['execution'] != 'stopped|candidate-captured'
+        if stopped and now['verifications'] > handoff_base:
+            # Already handed off: the verification below decides.
+            result['executionStop'] = now['execution'].split('|', 1)[1]
+            stopped = False
+        elif stopped and now.get('executionCandidate') and not now.get('handoffImpossible'):
+            # The stopped execution captured a candidate: the runtime hands it
+            # to verification once its cleanup completes, so the attempt goes on.
+            result['executionStop'] = now['execution'].split('|', 1)[1]
+            stopped = False
+        captured = new_execution and now['execution'] == 'stopped|candidate-captured'
+        if stopped:
             stage = ('execution', now['execution'].split('|', 1)[1])
+        elif captured and now.get('handoffImpossible') and now['verifications'] <= handoff_base:
+            # The captured candidate will never reach verification, for
+            # example a rejected handoff (unsupported recipe, revoked).
+            stage = ('handoff', now.get('handoffReason') or 'impossible')
         elif now['verifications'] > before['verifications'] and now['verification'].startswith('failed|'):
             stage = ('verification', now['verification'].split('|', 1)[1])
         elif now['reviews'] > before['reviews'] and now['review'].startswith('failed|') and now['review'] != 'failed|request-changes':

@@ -17,6 +17,7 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/delivery"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/service"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
@@ -153,7 +154,7 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 			return in.Policy, in.Intake, in.Profile, nil
 		}
 	}
-	runtime := Runtime{DB: db, Load: load, Client: client, Image: in.Image}
+	runtime := Runtime{DB: db, Load: load, Client: client, Image: in.Image, RuntimeClass: executor.DefaultRuntimeClass}
 	if in.Scenario == "transient-policy" {
 		runtime.Load = func() (authority.Policy, intake.Config, string, error) {
 			return authority.Policy{}, intake.Config{}, "", errors.New("fixture temporary policy read failure")

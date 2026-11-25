@@ -1,6 +1,7 @@
 package sourcefetch
 
 import (
+	"archive/tar"
 	"context"
 	"encoding/json"
 	"errors"
@@ -294,5 +295,60 @@ func TestCancellationDuringBackoffStopsRetrying(t *testing.T) {
 	started := time.Now()
 	if _, err := c.Fetch(ctx, testSHA); !errors.Is(err, ErrSource) || calls.Load() != 1 || time.Since(started) > 5*time.Second {
 		t.Fatalf("cancellation must end the backoff: calls=%d", calls.Load())
+	}
+}
+
+func TestAnonymousReadSkipsTheAPIRedirect(t *testing.T) {
+	raw := archiveFixture(t, nil)
+	var apiCalls, archiveCalls atomic.Int32
+	var archiveStatus atomic.Int32
+	archive := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		archiveCalls.Add(1)
+		if r.Header.Get("Authorization") != "" || r.URL.Path != "/fixture/product/legacy.tar.gz/"+testSHA || r.URL.RawQuery != "" {
+			t.Error("unexpected anonymous archive request")
+		}
+		if status := archiveStatus.Load(); status != 0 {
+			w.WriteHeader(int(status))
+			return
+		}
+		w.Write(raw)
+	}))
+	defer archive.Close()
+	api := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiCalls.Add(1)
+		switch r.URL.Path {
+		case "/repos/fixture/product/git/commits/" + testSHA:
+			json.NewEncoder(w).Encode(map[string]any{"sha": testSHA, "tree": map[string]string{"sha": "4b825dc642cb6eb9a060e54bf8d69288fbee4904"}})
+		case "/repos/fixture/product/git/trees/4b825dc642cb6eb9a060e54bf8d69288fbee4904":
+			json.NewEncoder(w).Encode(map[string]any{"sha": "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "tree": []any{}, "truncated": false})
+		default:
+			t.Error("anonymous read reached the API tarball redirect")
+			w.WriteHeader(404)
+		}
+	}))
+	defer api.Close()
+	c, err := New("fixture/product", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.api = api.URL
+	c.archive = archive.URL
+	c.http.Transport.(*http.Transport).TLSClientConfig.RootCAs = api.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+	if _, err = c.Fetch(context.Background(), testSHA); err != nil {
+		t.Fatal(err)
+	}
+	if apiCalls.Load() != 2 || archiveCalls.Load() != 1 {
+		t.Fatalf("anonymous read: api=%d archive=%d", apiCalls.Load(), archiveCalls.Load())
+	}
+	// The archive is still verified against the manifest, and an archive host
+	// failure keeps the existing classification.
+	archiveStatus.Store(429)
+	if _, err = c.Fetch(context.Background(), testSHA); !RateLimited(err) {
+		t.Fatal("archive rate limit not classified", err)
+	}
+	archiveStatus.Store(0)
+	raw = archiveFixture(t, []*tar.Header{{Typeflag: tar.TypeReg, Name: testRoot + "README.md", Mode: 0644, Size: 3}})
+	if _, err = c.Fetch(context.Background(), testSHA); err == nil {
+		t.Fatal("an archive outside the manifest was accepted")
 	}
 }

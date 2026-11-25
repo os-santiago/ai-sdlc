@@ -45,15 +45,33 @@ func (e ControllerError) Error() string { return "execution controller stopped: 
 
 // cleanupFailure preserves the original stop cause. Cleanup failure must not
 // erase the stage that made a model call uncertain.
-type cleanupFailure struct{ cause error }
+// step names the failed cleanup step for the diagnostic when there is no
+// earlier cause, for example after a candidate was captured.
+type cleanupFailure struct {
+	cause error
+	step  string
+}
 
 func (e cleanupFailure) Error() string { return "execution cleanup incomplete" }
 func (e cleanupFailure) Unwrap() error {
 	if e.cause != nil {
 		return e.cause
 	}
+	if e.step != "" {
+		return ControllerError{e.step}
+	}
 	return ControllerError{"cleanup"}
 }
+
+// removalStage refines a cleanup step with the bounded removal step that
+// failed, for example cleanup-pod-observe-timeout.
+func removalStage(step string, err error) string {
+	if detail := podtransport.RemovalStep(err); podtransport.KnownRemovalStep(detail) {
+		return step + "-" + detail
+	}
+	return step
+}
+
 func CleanupPending(err error) bool { var failed cleanupFailure; return errors.As(err, &failed) }
 
 // DiagnosticStage returns only fixed operational categories. Never log an
@@ -64,11 +82,22 @@ func DiagnosticStage(err error) string {
 		return "authority-or-storage"
 	}
 	switch stopped.Stage {
-	case "source-preflight-authority", "source-rate-limited", "source-unavailable", "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "execution-authority", "execution-observe", "execution-read", "execution-sequence", "execution-exit-race", "worker-exit", "export", "capture", "cleanup":
+	case "source-preflight-authority", "sandbox-runtime-class", "source-rate-limited", "source-unavailable", "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "execution-authority", "execution-observe", "execution-read", "execution-sequence", "execution-exit-race", "worker-exit", "export", "capture", "cleanup", "cleanup-pod", "cleanup-config", "cleanup-confirm":
 		return stopped.Stage
 	}
 	if strings.HasPrefix(stopped.Stage, "model-") {
 		return "model-" + modelbroker.SafeFailureStage(strings.TrimPrefix(stopped.Stage, "model-"))
+	}
+	for _, step := range []string{"cleanup-pod-", "cleanup-config-"} {
+		if detail, ok := strings.CutPrefix(stopped.Stage, step); ok && podtransport.KnownRemovalStep(detail) {
+			return stopped.Stage
+		}
+	}
+	if detail, ok := strings.CutPrefix(stopped.Stage, "readiness-"); ok && podtransport.KnownReadinessStep(detail) {
+		return stopped.Stage
+	}
+	if detail, ok := strings.CutPrefix(stopped.Stage, "execution-read-"); ok && podtransport.KnownReadStep(detail) {
+		return stopped.Stage
 	}
 	return "unknown"
 }
@@ -77,7 +106,9 @@ func DiagnosticStage(err error) string {
 // candidate. Only trusted bootstrap code may supply dependencies. It does not
 // accept work from HTTP, create claims, retry/adopt executions, validate code or
 // authorize publication. A captured candidate remains unvalidated durable data.
-func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prepared Prepared, client *podtransport.Client, provider *modelbroker.Provider, model ModelPolicyLoader) (record store.CandidateRecord, err error) {
+// admission is what the preflight observed the sandbox RuntimeClass adds to
+// each pod; the zero value is a class without overhead or scheduling.
+func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prepared Prepared, client *podtransport.Client, admission podtransport.RuntimeClassAdmission, provider *modelbroker.Provider, model ModelPolicyLoader) (record store.CandidateRecord, err error) {
 	if db == nil || load == nil || client == nil || provider == nil || model == nil {
 		return record, ControllerError{"configuration"}
 	}
@@ -94,18 +125,22 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 		if resources != nil {
 			cleanup, stop := context.WithTimeout(context.Background(), 25*time.Second)
 			defer stop()
-			failed := false
+			step := ""
 			if podUID != "" {
-				failed = resources.DeletePod(cleanup, podUID) != nil
+				if e := resources.DeletePod(cleanup, podUID); e != nil {
+					step = removalStage("cleanup-pod", e)
+				}
 			}
-			if configUID != "" && resources.DeleteConfig(cleanup, configUID) != nil {
-				failed = true
+			if configUID != "" {
+				if e := resources.DeleteConfig(cleanup, configUID); e != nil && step == "" {
+					step = removalStage("cleanup-config", e)
+				}
 			}
-			if !failed && l != nil && configUID != "" && podUID != "" {
-				failed = db.ConfirmExecutionCleanup(cleanup, l.durable, configUID, podUID) != nil
+			if step == "" && l != nil && configUID != "" && podUID != "" && db.ConfirmExecutionCleanup(cleanup, l.durable, configUID, podUID) != nil {
+				step = "cleanup-confirm"
 			}
-			if failed {
-				err = cleanupFailure{cause: err}
+			if step != "" {
+				err = cleanupFailure{cause: err, step: step}
 			}
 		}
 		if err != nil {
@@ -124,7 +159,7 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 	ctx, cancel := context.WithDeadline(ctx, l.durable.Claim.Until)
 	defer cancel()
 	stage = "resources"
-	resources, err = podtransport.PlanResources(client, podtransport.Binding{Namespace: l.placement.Namespace, WorkerImage: l.placement.WorkerImage, MailboxImage: l.placement.MailboxImage, Assignment: prepared.Assignment(), Profile: prepared.Profile(), ADev: prepared.ADev()})
+	resources, err = podtransport.PlanResources(client, podtransport.Binding{Namespace: l.placement.Namespace, WorkerImage: l.placement.WorkerImage, MailboxImage: l.placement.MailboxImage, RuntimeClass: l.placement.SandboxRuntimeClass(), Admission: admission, Assignment: prepared.Assignment(), Profile: prepared.Profile(), ADev: prepared.ADev()})
 	if err != nil {
 		return record, ControllerError{stage}
 	}
@@ -147,6 +182,11 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 	stage = "readiness"
 	session, err := resources.WaitRunning(ctx, podUID)
 	if err != nil {
+		// A refused toolchain copy is named, for example
+		// readiness-toolchain-dynamic for a dynamically linked toolchain.
+		if step := podtransport.ReadinessStep(err); podtransport.KnownReadinessStep(step) {
+			stage = "readiness-" + step
+		}
 		return record, ControllerError{stage}
 	}
 	stage = "source"
@@ -247,6 +287,9 @@ func driveModel(ctx context.Context, session modelSession, authorize func(contex
 		request, err := session.ReadRequest(ctx)
 		if err != nil && !errors.Is(err, modelmailbox.ErrPending) {
 			if !errors.Is(err, podtransport.ErrWorkerExited) {
+				if step := podtransport.ReadStep(err); step != "" {
+					return driveStop{"execution-read-" + step}
+				}
 				return driveStop{"execution-read"}
 			}
 			// An observed request at exit must already have a confirmed handoff.

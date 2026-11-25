@@ -49,7 +49,7 @@ func LoadRuntime(path string) (RuntimeConfig, []byte, error) {
 	if _, e = executor.ParseProfile(profile, workspacebundle.Digest(profile)); e != nil || c.Profile.ADevSHA256 != workspacebundle.Digest([]byte(c.ADev)) {
 		return c, nil, ErrAuthority
 	}
-	if c.Placement.Namespace != "ai-sdlc-executors" || c.Profile.Model != "codex-cli" || executor.ValidatePlacement(c.Placement.Namespace, c.Placement.WorkerImage, c.Placement.MailboxImage) != nil {
+	if c.Placement.Namespace != "ai-sdlc-executors" || c.Profile.Model != "codex-cli" || executor.ValidatePlacement(c.Placement.Namespace, c.Placement.WorkerImage, c.Placement.MailboxImage) != nil || (c.Placement.RuntimeClass != "" && !executor.ValidRuntimeClass(c.Placement.RuntimeClass)) {
 		return c, nil, ErrAuthority
 	}
 	// Immutable placement identities are checked before any queue operation.
@@ -64,8 +64,8 @@ type Runtime struct {
 	ConfigPath, IntakePath, TokenPath, CAPath, GatewayTokenPath string
 	APIServer, ProviderEndpoint                                 string
 	ProviderTimeoutSeconds                                      int
-	// AdoptGatewayProfile makes every model call use the timeout the gateway
-	// derived from its startup benchmark (+30 s for the response), bounded by
+	// AdoptGatewayProfile admits the model only when the timeout the gateway
+	// derived from its startup benchmark fits the call window and
 	// ProviderTimeoutSeconds. No work is claimed until that profile exists.
 	AdoptGatewayProfile bool
 }
@@ -74,12 +74,19 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if r.Component == nil || r.Component.DB == nil || r.Component.Name != "worker" {
 		return "", ErrAuthority
 	}
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
-	defer cancel()
 	config, _, err := LoadRuntime(r.ConfigPath)
 	if err != nil {
 		return "", err
 	}
+	// The poll covers preparation and the whole executor lifecycle; it grows
+	// with the reviewed generation budget and the repository's toolchain
+	// start exactly like the signed command.
+	start := 0
+	if p, _, e := r.Component.Authority(); e == nil {
+		start = StartSecondsFor(p.Repository)
+	}
+	ctx, cancel := context.WithTimeout(ctx, CommandLifetime(config.Profile.MaxSeconds, start))
+	defer cancel()
 	original, _ := json.Marshal(config)
 	load := func(ctx context.Context) (PreparationInputs, Placement, error) {
 		p, _, e := r.Component.Authority()
@@ -160,6 +167,13 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if provider, e = r.benchmarked(ctx, provider, config.Profile.CallWindow()); e != nil {
 		return "model-gateway-profile-unavailable-or-unfit", ErrAuthority
 	}
+	// Cleanup and handoff above always run; only claiming new work and
+	// creating pods require the sandbox class, checked with this poll's
+	// sealed configuration and client so the verified class is the one used.
+	admission, e := client.CheckRuntimeClass(ctx, config.Placement.SandboxRuntimeClass())
+	if e != nil {
+		return "sandbox-runtime-class-unavailable", ControllerError{"sandbox-runtime-class"}
+	}
 	id, e := r.Component.DB.NextExecution(ctx)
 	if e != nil || id == "" {
 		return "", e
@@ -187,7 +201,7 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if e != nil {
 		return "stopped", e
 	}
-	_, e = RunController(ctx, r.Component.DB, load, prep, client, provider, func(ctx context.Context) (ModelPolicy, error) { _, _, e := load(ctx); return config.Model, e })
+	_, e = RunController(ctx, r.Component.DB, load, prep, client, admission, provider, func(ctx context.Context) (ModelPolicy, error) { _, _, e := load(ctx); return config.Model, e })
 	if e != nil {
 		return "stopped", e
 	}
@@ -210,10 +224,35 @@ func (r Runtime) Ready(ctx context.Context) error {
 	return provider.CheckGateway(ctx)
 }
 
-// benchmarked returns a provider bounded by the gateway's measured timeout.
+// CheckSandbox observes, read-only, that the installed sandbox RuntimeClass
+// exists. The worker is not ready and claims no work until it does.
+func (r Runtime) CheckSandbox(ctx context.Context) error {
+	config, _, e := LoadRuntime(r.ConfigPath)
+	if e != nil {
+		return ErrAuthority
+	}
+	token, e := ReadBounded(r.TokenPath, 8192)
+	if e != nil {
+		return ErrAuthority
+	}
+	ca, e := ReadBounded(r.CAPath, 65536)
+	if e != nil {
+		return ErrAuthority
+	}
+	client, e := podtransport.NewClient(podtransport.Config{APIServer: r.APIServer, CA: ca, BearerToken: string(token)})
+	if e != nil {
+		return ErrAuthority
+	}
+	_, e = client.CheckRuntimeClass(ctx, config.Placement.SandboxRuntimeClass())
+	return e
+}
+
+// benchmarked admits the model when the gateway's measured timeout fits.
 // The measured upstream timeout must also fit the profile's per-call window:
 // the broker stops 15 s before the window ends, so a slower model would only
-// produce uncertain calls. Such a worker claims no work (fail closed).
+// produce uncertain calls. Such a worker claims no work (fail closed). The
+// measurement admits the model; it does not shorten each call, which keeps
+// the installation's upstream ceiling (the gateway applies the same ceiling).
 func (r Runtime) benchmarked(ctx context.Context, provider *modelbroker.Provider, window time.Duration) (*modelbroker.Provider, error) {
 	if !r.AdoptGatewayProfile {
 		return provider, nil
@@ -222,7 +261,6 @@ func (r Runtime) benchmarked(ctx context.Context, provider *modelbroker.Provider
 	if e != nil || r.ProviderTimeoutSeconds == 0 || seconds+30 > r.ProviderTimeoutSeconds || time.Duration(seconds+20)*time.Second > window {
 		return nil, ErrAuthority
 	}
-	r.ProviderTimeoutSeconds = seconds + 30
 	return r.gateway()
 }
 

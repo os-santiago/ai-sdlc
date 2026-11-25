@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
@@ -32,7 +33,7 @@ func newLifecycleFixture(t *testing.T, configure ...func(*fixture)) *lifecycleFi
 	if err != nil {
 		t.Fatal(err)
 	}
-	placement := Placement{"fixture", "example.invalid/worker@sha256:" + strings.Repeat("a", 64), "example.invalid/mailbox@sha256:" + strings.Repeat("b", 64)}
+	placement := Placement{"fixture", "example.invalid/worker@sha256:" + strings.Repeat("a", 64), "example.invalid/mailbox@sha256:" + strings.Repeat("b", 64), ""}
 	if f.placementOverride != nil {
 		placement = *f.placementOverride
 	}
@@ -625,5 +626,42 @@ func TestLifecycleConcurrentCallerDoesNotWaitOrStopOwner(t *testing.T) {
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatal("concurrent loser stopped owner")
+	}
+}
+
+// A toolchain workload's start time extends the nonrenewable lifetime by
+// exactly the start the pod deadline covers; nothing else changes.
+func TestLifecycleReservationCoversTheToolchainStart(t *testing.T) {
+	f := newLifecycleFixture(t)
+	binding, _, err := lifecycleBinding(f.prepared, f.placement)
+	if err != nil || binding.StartSeconds != 0 {
+		t.Fatal("start seconds without a toolchain", binding.StartSeconds, err)
+	}
+	for _, bad := range []int{-1, store.MaxStartSeconds + 1} {
+		invalid := binding
+		invalid.StartSeconds = bad
+		if _, err := f.db.ReserveLifecycle(context.Background(), f.claim, invalid); err == nil {
+			t.Fatal("unbounded start accepted", bad)
+		}
+	}
+	// The command expiry would otherwise cap the reservation.
+	if _, err := f.Admin.Pool.Exec(`UPDATE execution_requests SET expires_at=clock_timestamp()+interval '1 hour' WHERE id=$1`, f.claim.ID); err != nil {
+		t.Fatal(err)
+	}
+	binding.StartSeconds = executor.ToolchainStartSeconds
+	before := time.Now()
+	owner, err := f.db.ReserveLifecycle(context.Background(), f.claim, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifetime := time.Duration(binding.MaxSeconds+120+executor.ToolchainStartSeconds) * time.Second
+	if owner.Claim.Until.Before(before.Add(lifetime-5*time.Second)) || owner.Claim.Until.After(time.Now().Add(lifetime+5*time.Second)) {
+		t.Fatal("reservation does not cover the toolchain start", owner.Claim.Until.Sub(before))
+	}
+}
+
+func TestLifecycleStartSecondsFollowTheToolchain(t *testing.T) {
+	if startSeconds(executor.Assignment{}) != 0 || startSeconds(executor.Assignment{Toolchain: &executor.Toolchain{}}) != executor.ToolchainStartSeconds {
+		t.Fatal("lifecycle start seconds")
 	}
 }

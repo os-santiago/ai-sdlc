@@ -2,12 +2,15 @@
 
 The installer never creates, deletes or reconfigures the cluster or its nodes.
 It records the cluster's identity on first use and refuses a different
-cluster later. The administrator provides, beforehand, the namespaces' sandbox
-runtime as the `ai-sdlc-offline` RuntimeClass and a default StorageClass. See
-docs/operations/openshift.md.
+cluster later. The administrator provides, beforehand, the sandbox runtime as
+a RuntimeClass (the platform's standard class, such as `kata` for OpenShift
+sandboxed containers, selected with --runtime-class; `ai-sdlc-offline` by
+default) and a default StorageClass. See docs/operations/openshift.md.
 """
 import json
+import math
 import os
+import re
 from pathlib import Path
 
 MARKER = 'openshift-ownership.json'
@@ -16,9 +19,13 @@ OTHER_MARKERS = ('ownership.json', 'konflux-ownership.json')
 
 
 def validate_options(args):
+    runtime_class = getattr(args, 'runtime_class', None)
     if args.platform != 'openshift':
         if args.kubeconfig is not None or args.context is not None:
             raise ValueError('--kubeconfig and --context select an existing OpenShift cluster; use --platform openshift')
+        # kind and Konflux install and use their own ai-sdlc-offline class.
+        if runtime_class not in (None, 'ai-sdlc-offline'):
+            raise ValueError('--runtime-class selects a platform sandbox RuntimeClass; use --platform openshift (kind installs ai-sdlc-offline)')
         return
     if args.kubeconfig is None or args.context is None:
         raise ValueError('OpenShift installation requires an explicit --kubeconfig and --context')
@@ -70,7 +77,7 @@ def connect(run, binaries, state, args):
     return kubeconfig, kubectl, cluster_uid, True
 
 
-def preflight(run, kubectl, sandbox):
+def preflight(run, kubectl, sandbox, runtime_class='ai-sdlc-offline'):
     """Fail before any change when the cluster lacks what the runtime needs."""
     groups = run(kubectl + ['api-versions'], capture_output=True).stdout.split()
     if 'security.openshift.io/v1' not in groups:
@@ -79,8 +86,35 @@ def preflight(run, kubectl, sandbox):
     if not any(c.get('metadata', {}).get('annotations', {}).get('storageclass.kubernetes.io/is-default-class') == 'true' for c in classes):
         raise ValueError('OpenShift installation requires a default StorageClass')
     if sandbox:
-        result = run(kubectl + ['get', 'runtimeclass', 'ai-sdlc-offline', '-o', 'json'], capture_output=True, check=False)
+        result = run(kubectl + ['get', 'runtimeclass', runtime_class, '-o', 'json'], capture_output=True, check=False)
         if result.returncode != 0:
-            raise ValueError('Provide the sandbox runtime as RuntimeClass ai-sdlc-offline before installing (docs/operations/openshift.md)')
+            raise ValueError('Provide the sandbox runtime as RuntimeClass ' + runtime_class + ' before installing, or select the installed class with --runtime-class (docs/operations/openshift.md)')
         return json.loads(result.stdout).get('handler', '')
     return ''
+
+
+_QUANTITY = re.compile(r'([0-9]+(?:\.[0-9]+)?)(m|Ki|Mi|Gi|Ti|k|M|G|T)?')
+_FACTOR = {None: 1, 'm': 0.001, 'k': 10**3, 'M': 10**6, 'G': 10**9, 'T': 10**12,
+           'Ki': 2**10, 'Mi': 2**20, 'Gi': 2**30, 'Ti': 2**40}
+
+
+def pod_overhead(run, kubectl, runtime_class):
+    """The class's overhead.podFixed as chart quota headroom, rounded up to
+    whole millicores and Mi; empty when the class declares no overhead."""
+    result = run(kubectl + ['get', 'runtimeclass', runtime_class, '-o', 'json'], capture_output=True)
+    fixed = ((json.loads(result.stdout).get('overhead') or {}).get('podFixed')) or {}
+    if not isinstance(fixed, dict) or set(fixed) - {'cpu', 'memory'}:
+        raise ValueError('RuntimeClass ' + runtime_class + ' declares an unsupported pod overhead; only cpu and memory are supported')
+    headroom = {}
+    for name, value in fixed.items():
+        match = _QUANTITY.fullmatch(str(value))
+        if not match:
+            raise ValueError('RuntimeClass ' + runtime_class + ' declares an unsupported ' + name + ' overhead quantity')
+        amount = float(match.group(1)) * _FACTOR[match.group(2)]
+        if name == 'cpu':
+            headroom['cpu'] = str(math.ceil(round(amount * 1000, 6))) + 'm'
+        else:
+            headroom['memory'] = str(math.ceil(round(amount / 2**20, 6))) + 'Mi'
+    if any(int(v[:-1] if v.endswith('m') else v[:-2]) > 999999 for v in headroom.values()):
+        raise ValueError('RuntimeClass ' + runtime_class + ' declares a pod overhead above the supported bound')
+    return {k: v for k, v in headroom.items() if v not in ('0m', '0Mi')}

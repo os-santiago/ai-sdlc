@@ -1,0 +1,152 @@
+{
+  "repository": "os-santiago/ai-sdlc-sample",
+  "attemptBudget": 2,
+  "issues": [
+    {
+      "issue": 87,
+      "attempts": [
+        {
+          "issue": 87,
+          "startedAt": "2026-11-23T02:40:59Z",
+          "outcome": "failure",
+          "stage": "verification",
+          "reason": "comparison-failed",
+          "seconds": 344,
+          "modelCalls": 11,
+          "diagnostics": [
+            "verification reconciliation stopped safely: refused-candidate-failed"
+          ]
+        },
+        {
+          "issue": 87,
+          "startedAt": "2026-11-23T02:47:26Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 683,
+          "modelCalls": 18,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-publication-before-observation cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 117,
+      "attempts": [
+        {
+          "issue": 117,
+          "startedAt": "2026-11-23T02:59:34Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 449,
+          "modelCalls": 13,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: cleanup-pod cleanupPending=true workerExitCode=0 failureRecorded=false",
+            "independent review stopped safely: cleanup-pod"
+          ]
+        },
+        {
+          "issue": 117,
+          "startedAt": "2026-11-23T03:07:45Z",
+          "outcome": "success",
+          "pullRequest": 127,
+          "seconds": 726,
+          "modelCalls": 16
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 118,
+      "attempts": [
+        {
+          "issue": 118,
+          "startedAt": "2026-11-23T03:20:36Z",
+          "outcome": "success",
+          "pullRequest": 128,
+          "seconds": 450,
+          "modelCalls": 11
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 119,
+      "attempts": [
+        {
+          "issue": 119,
+          "startedAt": "2026-11-23T03:28:50Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 534,
+          "modelCalls": 19,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-authorization-publication cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 119,
+          "startedAt": "2026-11-23T03:38:26Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 151,
+          "modelCalls": 7,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-authorization-publication cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 120,
+      "attempts": [
+        {
+          "issue": 120,
+          "startedAt": "2026-11-23T03:41:43Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 364,
+          "modelCalls": 9,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-authorization-publication cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 120,
+          "startedAt": "2026-11-23T03:48:30Z",
+          "outcome": "failure",
+          "stage": "verification",
+          "reason": "uncertain",
+          "seconds": 408,
+          "modelCalls": 17,
+          "diagnostics": [
+            "verification reconciliation stopped safely: baseline"
+          ]
+        }
+      ],
+      "success": false
+    }
+  ],
+  "inProgress": [
+    {
+      "issue": 121,
+      "startedAt": "2026-11-23T03:56:02Z",
+      "outcome": "failure",
+      "stage": "execution",
+      "reason": "uncertain",
+      "seconds": 280,
+      "modelCalls": 10,
+      "diagnostics": [
+        "candidate reconciliation stopped safely: model-authorization-publication cleanupPending=false workerExitCode=0 failureRecorded=false"
+      ]
+    }
+  ],
+  "stopped": "operator-stopped: from 03:29 UTC, four of five attempts stopped at model-authorization-publication (the fifth stopped at verification baseline); the battery was stopped to install images that name the refused check"
+}

@@ -27,7 +27,9 @@ VERSION = 'ai-sdlc.reviewer-image-upgrade/v1'
 def publication(source, api, run, revision, catalog, previous):
     if type(run) is not int or not 0 < run <= 2**63-1 or not isinstance(revision, str) or not install_images.SHA.fullmatch(revision):
         raise ValueError('Explicit publication run and immutable target revision required')
-    _, selected = install_images.resolve(api, run, revision, include_build=True, include_release=True)
+    # Verify signatures; revisions without the cutover sentinel predate signing.
+    _, selected = install_images.resolve(api, run, revision, include_build=True, include_release=True,
+                                         verify=install_images.signature_verifier(api, revision, allow_unsigned_legacy=True))
     source.git('merge-base', '--is-ancestor', previous, revision)
     if source.catalog(revision) != catalog:
         raise ValueError('Reviewer update cannot change the database catalog')

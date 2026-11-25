@@ -29,8 +29,11 @@ var ErrReview = errors.New("independent review rejected")
 
 type Configuration struct {
 	Namespace, WorkerImage, MailboxImage string
-	Profile, ADev                        []byte
-	Model                                modelbroker.ProviderConfig
+	// RuntimeClass is empty for the default sandbox class, which keeps the
+	// digest of default installations unchanged.
+	RuntimeClass  string `json:",omitempty"`
+	Profile, ADev []byte
+	Model         modelbroker.ProviderConfig
 	// RequireGatewayProfile refuses reviews unless the gateway's benchmarked
 	// timeout fits the reviewer call window. Installation-only; not digested.
 	RequireGatewayProfile bool `json:"-"`
@@ -45,9 +48,17 @@ func (c Configuration) Digest() string {
 	raw, _ := json.Marshal(c)
 	return authority.Digest(raw)
 }
+
+// SandboxRuntimeClass is the RuntimeClass every reviewer pod runs in.
+func (c Configuration) SandboxRuntimeClass() string {
+	if c.RuntimeClass == "" {
+		return executor.DefaultRuntimeClass
+	}
+	return c.RuntimeClass
+}
 func (c Configuration) Validate() error {
 	p, e := executor.ParseReviewProfile(c.Profile, authority.Digest(c.Profile))
-	if e != nil || p.MaxSteps < 2 || len(c.ADev) < 1 || len(c.ADev) > 65536 || !utf8.Valid(c.ADev) || authority.Digest(c.ADev) != p.ADevSHA256 || c.Namespace != "ai-sdlc-reviewers" {
+	if e != nil || p.MaxSteps < 2 || len(c.ADev) < 1 || len(c.ADev) > 65536 || !utf8.Valid(c.ADev) || authority.Digest(c.ADev) != p.ADevSHA256 || c.Namespace != "ai-sdlc-reviewers" || !executor.ValidRuntimeClass(c.SandboxRuntimeClass()) {
 		return ErrReview
 	}
 	if _, e = modelbroker.NewProvider(c.Model); e != nil {
@@ -79,6 +90,11 @@ type prepared struct {
 	tree    string
 	config  Configuration
 }
+
+// errSourceRateLimited is a preparation stop caused by the forge's rate
+// limit. It stops review exactly like any other preparation failure.
+var errSourceRateLimited = fmt.Errorf("review source rate limited: %w", ErrReview)
+
 type sourceLoader func(context.Context, string, string) (workspacebundle.Bundle, error)
 
 func fetchSource(ctx context.Context, repository, sha string) (workspacebundle.Bundle, error) {
@@ -112,6 +128,9 @@ func prepare(ctx context.Context, db *store.DB, policy verificationflow.PolicyLo
 	}
 	source, e := fetch(ctx, command.Repository, command.SourceSHA)
 	if e != nil {
+		if sourcefetch.RateLimited(e) {
+			return prepared{}, errSourceRateLimited
+		}
 		return prepared{}, ErrReview
 	}
 	if _, e = verification.Prepare(command.Repository, command.Recipe, snapshot.Issue.Body, source, record.Delta); e != nil {
@@ -160,7 +179,7 @@ func prepare(ctx context.Context, db *store.DB, policy verificationflow.PolicyLo
 		return prepared{}, ErrReview
 	}
 	run := store.ReviewRun{ID: store.ReviewID(id, authority.Digest(raw), a.ProfileSHA256, config.Digest(), authority.Digest(assignment)), VerificationID: id, CandidateID: command.CandidateID, WorkItem: command.WorkItemID, BehaviorDigest: authority.Digest(raw), ProfileDigest: a.ProfileSHA256, ConfigurationDigest: config.Digest(), AssignmentDigest: authority.Digest(assignment), ExpiresAt: time.UnixMilli(command.ExpiresAt)}
-	return prepared{run: run, command: command, binding: podtransport.Binding{Namespace: config.Namespace, WorkerImage: config.WorkerImage, MailboxImage: config.MailboxImage, Assignment: assignment, Profile: config.Profile, ADev: config.ADev}, source: sourceRaw, tree: treeDigest, config: config}, nil
+	return prepared{run: run, command: command, binding: podtransport.Binding{Namespace: config.Namespace, WorkerImage: config.WorkerImage, MailboxImage: config.MailboxImage, RuntimeClass: config.SandboxRuntimeClass(), Assignment: assignment, Profile: config.Profile, ADev: config.ADev}, source: sourceRaw, tree: treeDigest, config: config}, nil
 }
 
 type currentAuthority struct {

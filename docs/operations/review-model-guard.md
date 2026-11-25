@@ -22,6 +22,14 @@ and before handing them to SCC. It accepts one complete assistant choice:
 - An explicit terminal `VERDICT: approve` or `VERDICT: request_changes`, only
   after an inspection response. Implicit, duplicate or truncated verdicts fail.
 
+The model is offered only these four tools: on installations with
+`review.narrowModelTools`, the verifier's review gateway removes every other SCC
+tool definition before the upstream call (see
+[Review tool allowlist](model-gateway-adapters.md#review-tool-allowlist)). The
+journal's request hash still covers the exact request the broker sent to the
+gateway, with SCC's full tool list; the narrowed upstream payload is not
+recorded. This policy is unchanged and still rejects a call to any other tool.
+
 Independent observations retain only tool counts and final-message SHA-256 plus
 verdict. The journal binds the exact request/response hashes and handoff. A final
 verdict ends the conversation; a rejected answer cannot be followed by another

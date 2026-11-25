@@ -11,9 +11,23 @@ and then only observes.
 | `failure` | The runtime stopped the attempt; the report records the stage, the reason and the components' safe stop lines |
 | `timeout` | Neither happened within `--timeout-minutes` |
 
+An execution stop is final unless that execution captured a candidate that can
+still be handed off. After a stop following capture (for example a failed pod
+cleanup), the runtime hands the candidate to verification once cleanup
+completes; that verification, review and merge then decide the attempt, and the
+report keeps the stop as `executionStop`. The stop is final after all when the
+handoff can no longer happen: cleanup ended `uncertain` or exhausted its three
+attempts (after the last retry window), the handoff was rejected, or the
+request expired without one. A captured candidate whose handoff is rejected
+(for example `unsupported-recipe`) is a failure at stage `handoff`.
+Handoffs are compared per execution, so a repair execution that stops after an
+earlier verification is still a failure. A request for changes is not final
+either, because it leads to a repair.
+
 A failed attempt is retried up to `--attempts`. When an issue is done, the runner removes its label, so another installation watching the repository does not pick it up. The report gives the
 first-attempt rate and the rate within that budget. The runner stops with
-`runtime-blocked` when a failed verification's cleanup blocks all later work,
+`runtime-blocked` when a failed verification's cleanup, or an execution cleanup
+that will not complete, blocks all later work,
 because further attempts would only measure that block.
 
 ```bash

@@ -101,7 +101,7 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 		in, e := load(ctx)
 		return in, input.Placement, e
 	}
-	workload, err := executor.Compile(input.Placement.Namespace, input.Placement.WorkerImage, input.Placement.MailboxImage, prepared.Assignment(), prepared.Profile(), prepared.ADev(), time.Now())
+	workload, err := executor.Compile(input.Placement.Namespace, input.Placement.WorkerImage, input.Placement.MailboxImage, input.Placement.SandboxRuntimeClass(), prepared.Assignment(), prepared.Profile(), prepared.ADev(), time.Now())
 	if err != nil {
 		t.Fatal("fixed workload plan")
 	}
@@ -188,7 +188,7 @@ func TestRealLifecycleModelFixture(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	captured, err := RunController(ctx, f.db, loader, prepared, client, provider, func(context.Context) (ModelPolicy, error) {
+	captured, err := RunController(ctx, f.db, loader, prepared, client, podtransport.RuntimeClassAdmission{}, provider, func(context.Context) (ModelPolicy, error) {
 		return ModelPolicy{Limits: limits, ResponseLimit: 32 * 1024}, nil
 	})
 	if input.Scenario == "provider-failure" || input.Scenario == "cancel-provider" || strings.HasPrefix(input.Scenario, "no-change") {

@@ -6,8 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+	"os"
+	"regexp"
 )
 
 type driverSession struct {
@@ -144,5 +148,89 @@ func TestControllerNamesEachDriveStop(t *testing.T) {
 	var stopped driveStop
 	if !errors.As(err, &stopped) || stopped.stage != "execution-authority" {
 		t.Fatalf("authority: err=%v", err)
+	}
+}
+
+func TestCleanupFailureNamesTheStepWithoutAnEarlierCause(t *testing.T) {
+	if got := DiagnosticStage(cleanupFailure{step: "cleanup-pod"}); got != "cleanup-pod" {
+		t.Fatal(got)
+	}
+	if got := DiagnosticStage(cleanupFailure{cause: ControllerError{"readiness"}, step: "cleanup-pod"}); got != "readiness" {
+		t.Fatal("the earlier cause must win", got)
+	}
+	if got := DiagnosticStage(cleanupFailure{}); got != "cleanup" || !CleanupPending(cleanupFailure{step: "cleanup-config"}) {
+		t.Fatal(got)
+	}
+}
+
+func TestCleanupDiagnosticNamesTheBoundedRemovalStep(t *testing.T) {
+	for _, stage := range []string{"cleanup-pod-observe-timeout", "cleanup-config-delete-status-409", "cleanup-pod-delete-permission"} {
+		if got := DiagnosticStage(cleanupFailure{step: stage}); got != stage {
+			t.Fatalf("%s: got %q", stage, got)
+		}
+	}
+	for _, stage := range []string{"cleanup-pod-sensitive", "cleanup-config-delete-status-418", "cleanup-confirm-observe-timeout"} {
+		if got := DiagnosticStage(cleanupFailure{step: stage}); got != "unknown" {
+			t.Fatalf("%s: unbounded stage %q", stage, got)
+		}
+	}
+	if removalStage("cleanup-pod", ErrTestUnrelated) != "cleanup-pod" {
+		t.Fatal("an unrelated error keeps the plain step")
+	}
+}
+
+var ErrTestUnrelated = errors.New("unrelated")
+
+func TestAuthorityStopNamesTheCheckAndStillRefuses(t *testing.T) {
+	for _, step := range []string{"busy", "stopped", "scope", "model-policy", "snapshot", "reload", "deadline"} {
+		err := error(authorityStop(step))
+		var named interface{ AuthorityStep() string }
+		if !errors.Is(err, ErrAuthority) || !errors.As(err, &named) || named.AuthorityStep() != step {
+			t.Fatalf("%s: %v", step, err)
+		}
+	}
+	var nilLifecycle *Lifecycle
+	if _, err := nilLifecycle.Authorize(context.Background(), store.ModelScope{}); !errors.Is(err, ErrAuthority) {
+		t.Fatal("a missing lifecycle must still refuse")
+	}
+}
+
+// Every authorityStop literal in this package is a step the broker reports,
+// so the two allowlists cannot drift apart.
+func TestEveryAuthorityStepIsReportedByTheBroker(t *testing.T) {
+	steps := map[string]bool{}
+	for _, file := range []string{"model.go", "lifecycle.go", "prepare.go"} {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range regexp.MustCompile(`(?:authorityStop|fail|failLoad\(err,)\(?\s*"([a-z-]+)"\)`).FindAllStringSubmatch(string(raw), -1) {
+			steps[m[1]] = true
+		}
+	}
+	if len(steps) < 12 {
+		t.Fatalf("authority steps not found: %v", steps)
+	}
+	for step := range steps {
+		for _, at := range []string{"reservation", "dispatch", "publication"} {
+			stage := "authorization-" + at + "-" + step
+			if modelbroker.SafeFailureStage(stage) != stage {
+				t.Fatalf("broker does not report %q", stage)
+			}
+		}
+		if DiagnosticStage(ControllerError{"model-authorization-publication-" + step}) != "model-authorization-publication-"+step {
+			t.Fatalf("execution diagnostic drops %q", step)
+		}
+	}
+}
+
+func TestReadStopNamesTheBoundedReadStep(t *testing.T) {
+	for _, stage := range []string{"execution-read-helper-exit-1", "execution-read-envelope", "execution-read-after-observation"} {
+		if got := DiagnosticStage(ControllerError{stage}); got != stage {
+			t.Fatalf("%s: %q", stage, got)
+		}
+	}
+	if DiagnosticStage(ControllerError{"execution-read-sensitive"}) != "unknown" {
+		t.Fatal("unbounded read step")
 	}
 }

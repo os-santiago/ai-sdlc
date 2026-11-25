@@ -1,0 +1,153 @@
+{
+  "repository": "os-santiago/ai-sdlc-sample",
+  "attemptBudget": 2,
+  "issues": [
+    {
+      "issue": 30,
+      "attempts": [
+        {
+          "issue": 30,
+          "startedAt": "2026-11-22T11:45:32Z",
+          "outcome": "success",
+          "pullRequest": 58,
+          "seconds": 342,
+          "modelCalls": 8
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 32,
+      "attempts": [
+        {
+          "issue": 32,
+          "startedAt": "2026-11-22T11:52:00Z",
+          "outcome": "success",
+          "pullRequest": 59,
+          "seconds": 407,
+          "modelCalls": 13
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 51,
+      "attempts": [
+        {
+          "issue": 51,
+          "startedAt": "2026-11-22T11:59:31Z",
+          "outcome": "success",
+          "pullRequest": 60,
+          "seconds": 343,
+          "modelCalls": 10
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 52,
+      "attempts": [
+        {
+          "issue": 52,
+          "startedAt": "2026-11-22T12:05:58Z",
+          "outcome": "success",
+          "pullRequest": 61,
+          "seconds": 408,
+          "modelCalls": 12
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 53,
+      "attempts": [
+        {
+          "issue": 53,
+          "startedAt": "2026-11-22T12:13:30Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 324,
+          "modelCalls": 13,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-provider cleanupPending=true workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 53,
+          "startedAt": "2026-11-22T12:19:37Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 260,
+          "modelCalls": 12,
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-provider cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 54,
+      "attempts": [
+        {
+          "issue": 54,
+          "startedAt": "2026-11-22T12:24:41Z",
+          "outcome": "success",
+          "pullRequest": 62,
+          "seconds": 386,
+          "modelCalls": 11
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 55,
+      "attempts": [
+        {
+          "issue": 55,
+          "startedAt": "2026-11-22T12:31:52Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 216,
+          "modelCalls": 5,
+          "diagnostics": [
+            "independent review stopped safely: cleanup"
+          ]
+        },
+        {
+          "issue": 55,
+          "startedAt": "2026-11-22T12:36:10Z",
+          "outcome": "success",
+          "pullRequest": 63,
+          "seconds": 555,
+          "modelCalls": 17
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 56,
+      "attempts": [
+        {
+          "issue": 56,
+          "startedAt": "2026-11-22T12:46:11Z",
+          "outcome": "success",
+          "pullRequest": 64,
+          "seconds": 534,
+          "modelCalls": 16
+        }
+      ],
+      "success": true
+    }
+  ],
+  "summary": {
+    "issues": 8,
+    "firstAttemptSuccess": 6,
+    "successWithinBudget": 7,
+    "firstAttemptRate": 0.75,
+    "rateWithinBudget": 0.875
+  }
+}

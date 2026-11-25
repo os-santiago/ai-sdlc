@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"reflect"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -39,7 +41,7 @@ func PlanResources(client *Client, b Binding) (*Resources, error) {
 	b.Assignment = append([]byte(nil), b.Assignment...)
 	b.Profile = append([]byte(nil), b.Profile...)
 	b.ADev = append([]byte(nil), b.ADev...)
-	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.Assignment, b.Profile, b.ADev, time.Now())
+	w, err := executor.Compile(b.Namespace, b.WorkerImage, b.MailboxImage, b.RuntimeClass, b.Assignment, b.Profile, b.ADev, time.Now())
 	if err != nil {
 		return nil, ErrTransport
 	}
@@ -107,15 +109,26 @@ func (r *Resources) checkConfig(raw []byte, uid string) (string, error) {
 	}
 	return string(actual.UID), nil
 }
-func exactPodTemplate(actual, expected core.Pod, uid string) bool {
+
+// exactPodTemplate compares an observed pod with its compiled template plus
+// the exact API defaults and the RuntimeClass admission additions. Any other
+// difference, including any other added field, fails.
+func exactPodTemplate(actual, expected core.Pod, uid string, admission RuntimeClassAdmission) bool {
+	// The platform normalization sees the template with the defaults and the
+	// class additions, so a toleration the class declares is never removed
+	// as an OpenShift addition.
+	expected = *expected.DeepCopy()
+	applyDefaults(&expected.Spec)
+	if !applyAdmission(&expected.Spec, admission) {
+		return false
+	}
 	actual = platformObserved(actual, expected)
 	if actual.APIVersion != "v1" || actual.Kind != "Pod" || !exactMetadata(actual.ObjectMeta, expected.ObjectMeta, uid) {
 		return false
 	}
-	expected = *expected.DeepCopy()
-	applyDefaults(&expected.Spec)
 	actual = *actual.DeepCopy()
 	actual.Spec.NodeName = ""
+	canonicalTolerations(&actual.Spec)
 	return equality.Semantic.DeepEqual(actual.Spec, expected.Spec)
 }
 func (r *Resources) getConfig(ctx context.Context, uid string) error {
@@ -180,7 +193,7 @@ func (r *Resources) CreatePodObserved(ctx context.Context, configUID string) (st
 	if resourceUID.MatchString(string(pod.UID)) {
 		created = string(pod.UID)
 	}
-	if !exactPodTemplate(pod, r.pod, "") || (pod.Status.Phase != core.PodPending && pod.Status.Phase != core.PodRunning) {
+	if !exactPodTemplate(pod, r.pod, "", r.binding.Admission) || (pod.Status.Phase != core.PodPending && pod.Status.Phase != core.PodRunning) {
 		return created, ErrTransport
 	}
 	if err = r.getConfig(ctx, configUID); err != nil {
@@ -200,8 +213,10 @@ func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, erro
 	if r == nil || !resourceUID.MatchString(uid) {
 		return nil, ErrTransport
 	}
-	ctx, cancel := context.WithDeadline(ctx, minDeadline(time.Now().Add(StartBudget), r.expires))
+	ctx, cancel := context.WithDeadline(ctx, minDeadline(time.Now().Add(startBudget(r.pod)), r.expires))
 	defer cancel()
+	// Init container IDs, once observed, must never change.
+	seen := map[string]instance{}
 	for {
 		raw, status, err := r.request(ctx, http.MethodGet, "pods", r.pod.Name, nil, false)
 		if err != nil {
@@ -211,20 +226,30 @@ func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, erro
 			return nil, ErrTransport
 		}
 		var pod core.Pod
-		if authority.DecodeStrict(raw, &pod) != nil || !exactPodTemplate(pod, r.pod, uid) {
+		if authority.DecodeStrict(raw, &pod) != nil || !exactPodTemplate(pod, r.pod, uid, r.binding.Admission) {
 			return nil, ErrTransport
+		}
+		// The init sequence is checked first, so a failed toolchain copy
+		// (which fails the pod) is named rather than a generic phase stop.
+		ready, err := r.containersReady(pod, seen)
+		if err != nil {
+			return nil, err
 		}
 		if pod.Status.Phase != core.PodPending && pod.Status.Phase != core.PodRunning {
 			return nil, ErrTransport
 		}
-		ready, err := r.containersReady(pod)
-		if err != nil {
-			return nil, err
-		}
 		if ready && pod.Status.Phase == core.PodRunning {
 			b := r.binding
 			b.PodUID = uid
-			return Bind(ctx, r.client, b)
+			session, err := Bind(ctx, r.client, b)
+			if err != nil {
+				return nil, err
+			}
+			// The session's baseline is the same init containers observed here.
+			if !stableInit(seen, session.initInstances()) {
+				return nil, ErrTransport
+			}
+			return session, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -236,22 +261,31 @@ func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, erro
 
 // Only initial ContainerCreating/PodInitializing states may be polled. This
 // is not a generic retry of failed binding, restarts or unknown transport errors.
-func (r *Resources) containersReady(pod core.Pod) (bool, error) {
-	if len(pod.Status.ContainerStatuses) > 2 || len(pod.Status.InitContainerStatuses) != 0 || len(pod.Status.EphemeralContainerStatuses) != 0 {
+// The compiled init containers must progress exactly in order before any
+// worker or mailbox container starts.
+func (r *Resources) containersReady(pod core.Pod, seen map[string]instance) (bool, error) {
+	if len(pod.Status.ContainerStatuses) > 2 || len(pod.Status.EphemeralContainerStatuses) != 0 {
+		return false, ErrTransport
+	}
+	initialized, err := observeInit(r.pod.Spec.InitContainers, pod.Status.InitContainerStatuses, false)
+	if err != nil {
+		return false, err
+	}
+	if !stableInit(seen, initialized.instances) {
 		return false, ErrTransport
 	}
 	images := map[string]string{}
 	for _, container := range r.pod.Spec.Containers {
 		images[container.Name] = container.Image
 	}
-	seen := map[string]bool{}
+	started := map[string]bool{}
 	running := 0
 	for _, status := range pod.Status.ContainerStatuses {
 		pin, known := images[status.Name]
-		if !known || seen[status.Name] || status.RestartCount != 0 || status.State.Terminated != nil || status.LastTerminationState.Terminated != nil || status.LastTerminationState.Running != nil || status.LastTerminationState.Waiting != nil {
+		if !known || started[status.Name] || status.RestartCount != 0 || status.State.Terminated != nil || status.LastTerminationState.Terminated != nil || status.LastTerminationState.Running != nil || status.LastTerminationState.Waiting != nil {
 			return false, ErrTransport
 		}
-		seen[status.Name] = true
+		started[status.Name] = true
 		if len(status.Image) > 1024 || len(status.ImageID) > 1024 {
 			return false, ErrTransport
 		}
@@ -259,7 +293,7 @@ func (r *Resources) containersReady(pod core.Pod) (bool, error) {
 			return false, ErrTransport
 		}
 		if status.State.Running != nil && status.State.Waiting == nil {
-			if !containerIDPattern.MatchString(status.ContainerID) || status.ImageID == "" || status.Image == "" {
+			if !initialized.complete || !containerIDPattern.MatchString(status.ContainerID) || status.ImageID == "" || status.Image == "" {
 				return false, ErrTransport
 			}
 			running++
@@ -289,7 +323,7 @@ func (r *Resources) DeleteConfig(ctx context.Context, uid string) error {
 // UID. A successful DELETE response alone does not prove removal.
 func (r *Resources) remove(ctx context.Context, kind, name, uid string) error {
 	if !resourceUID.MatchString(uid) {
-		return ErrTransport
+		return removalError{"invalid-uid", ErrTransport}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -300,24 +334,27 @@ func (r *Resources) remove(ctx context.Context, kind, name, uid string) error {
 	input, _ := json.Marshal(options)
 	_, status, err := r.request(ctx, http.MethodDelete, kind, name, input, true)
 	if err != nil {
-		return err
+		return removalError{requestStep("delete", err), err}
 	}
 	if status == 404 {
 		return nil
 	}
 	if status != 200 && status != 202 {
-		return ErrTransport
+		return removalError{"delete-status-" + statusClass(status), ErrTransport}
 	}
 	for {
 		raw, status, err := r.request(ctx, http.MethodGet, kind, name, nil, true)
 		if err != nil {
-			return err
+			if ctx.Err() != nil {
+				return removalError{"observe-timeout", err}
+			}
+			return removalError{requestStep("observe", err), err}
 		}
 		if status == 404 {
 			return nil
 		}
 		if status != 200 {
-			return ErrTransport
+			return removalError{"observe-status-" + statusClass(status), ErrTransport}
 		}
 		var object struct {
 			meta.TypeMeta `json:",inline"`
@@ -328,13 +365,62 @@ func (r *Resources) remove(ctx context.Context, kind, name, uid string) error {
 			BinaryData    json.RawMessage `json:"binaryData,omitempty"`
 			Immutable     *bool           `json:"immutable,omitempty"`
 		}
-		if authority.DecodeStrict(raw, &object) != nil || string(object.Metadata.UID) != uid || object.Metadata.Name != name || object.Metadata.Namespace != r.binding.Namespace {
-			return ErrTransport
+		if authority.DecodeStrict(raw, &object) != nil {
+			return removalError{"observe-decode", ErrTransport}
+		}
+		if string(object.Metadata.UID) != uid || object.Metadata.Name != name || object.Metadata.Namespace != r.binding.Namespace {
+			return removalError{"observe-identity", ErrTransport}
 		}
 		select {
 		case <-ctx.Done():
-			return ErrTransport
+			return removalError{"observe-timeout", ErrTransport}
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+}
+
+// removalError names the bounded removal step that failed. It unwraps to the
+// original transport or permission error, so every caller still stops the
+// same way; the step only refines the stop diagnostic.
+type removalError struct {
+	step  string
+	cause error
+}
+
+func (e removalError) Error() string { return "resource removal failed at " + e.step }
+func (e removalError) Unwrap() error { return e.cause }
+
+// RemovalStep returns the failed removal step, or "" for any other error.
+func RemovalStep(err error) string {
+	var failed removalError
+	if errors.As(err, &failed) {
+		return failed.step
+	}
+	return ""
+}
+
+var removalSteps = regexp.MustCompile(`^(invalid-uid|(delete|observe)-(request|permission)|observe-(timeout|decode|identity)|(delete|observe)-status-(401|409|410|422|429|500|503|504|[1-5]xx|invalid))$`)
+
+// KnownRemovalStep reports whether step is one RemovalStep can return, so a
+// diagnostic allowlist stays bounded.
+func KnownRemovalStep(step string) bool { return removalSteps.MatchString(step) }
+
+func requestStep(phase string, err error) string {
+	if errors.Is(err, ErrPermission) {
+		return phase + "-permission"
+	}
+	return phase + "-request"
+}
+
+// statusClass keeps the diagnostic bounded: the exact code for the few
+// statuses a removal can plausibly see, otherwise only its class.
+func statusClass(status int) string {
+	switch status {
+	case 401, 409, 410, 422, 429, 500, 503, 504:
+		return strconv.Itoa(status)
+	}
+	if status >= 100 && status <= 599 {
+		return strconv.Itoa(status/100) + "xx"
+	}
+	return "invalid"
 }

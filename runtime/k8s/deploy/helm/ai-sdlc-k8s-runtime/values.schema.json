@@ -790,6 +790,31 @@
         }
       }
     },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtimeClassName"
+      ],
+      "properties": {
+        "runtimeClassName": {
+          "description": "Kubernetes RuntimeClass (DNS-1123 subdomain) every executor, reviewer and verification pod runs in.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+        },
+        "podOverhead": {
+          "description": "Per-pod quota headroom for the class's overhead.podFixed: whole millicores and Mi.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": {"type": "string", "pattern": "^$|^[0-9]{1,6}m$"},
+            "memory": {"type": "string", "pattern": "^$|^[0-9]{1,6}Mi$"}
+          }
+        }
+      }
+    },
     "verifier": {
       "type": "object",
       "additionalProperties": false,
@@ -817,6 +842,9 @@
         "configJSON": {
           "type": "string",
           "maxLength": 131072
+        },
+        "narrowModelTools": {
+          "type": "boolean"
         }
       }
     },

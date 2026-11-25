@@ -59,6 +59,17 @@ class RefreshTargets(unittest.TestCase):
         self.assertEqual(active['release']['browserProfileJSON'], '{"renewed": true}')
         self.assertEqual(result['source'], source)
 
+    def test_the_review_tool_allowlist_is_inherited_as_recorded(self):
+        # The refresh is a closed delta: it neither adds the setting to an
+        # installation recorded before it nor removes it from a newer one.
+        for recorded in (None, True):
+            source = installed()
+            if recorded is not None:
+                source['values']['review']['narrowModelTools'] = recorded
+            active = run_targets(source)['active']['values']
+            self.assertEqual(active['review'].get('narrowModelTools'), recorded)
+            self.assertEqual(set(active['review']), set(source['values']['review']))
+
     def test_a_different_or_missing_upstream_is_refused(self):
         source = installed()
         source['values'].pop('modelGateway')
@@ -68,6 +79,21 @@ class RefreshTargets(unittest.TestCase):
             run_targets(upstream_document=dict(MAAS, model='other'))
         with self.assertRaises(ValueError):
             run_targets(upstream_document=dict(MAAS, adapter='agent-cli'))
+
+    def test_the_recorded_answer_bound_and_its_benchmark_are_inherited(self):
+        source = installed()
+        candidate = json.loads(source['values']['candidate']['configJSON'])
+        candidate['profile']['maxTokens'] = 8192
+        source['values']['candidate']['configJSON'] = json.dumps(candidate, sort_keys=True)
+        # The gateway recorded at installation follows the recorded bound.
+        source['values']['modelGateway'] = upstream.gateway_values(MAAS, 8192)
+        active = run_targets(source)['active']['values']
+        self.assertEqual(active['modelGateway'], source['values']['modelGateway'])
+        self.assertEqual(json.loads(active['candidate']['configJSON'])['profile']['maxTokens'], 8192)
+        # A benchmark envelope that no longer matches the bound is refused.
+        source['values']['modelGateway'] = upstream.gateway_values(MAAS)
+        with self.assertRaisesRegex(ValueError, 'exact recorded model upstream'):
+            run_targets(source)
 
     def test_render_rotation_and_approval_guards_are_shared(self):
         with self.assertRaisesRegex(ValueError, 'identically'):

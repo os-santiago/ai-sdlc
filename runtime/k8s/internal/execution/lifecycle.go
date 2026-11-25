@@ -13,7 +13,22 @@ import (
 )
 
 // Placement is reviewed installation configuration, never issue/model content.
-type Placement struct{ Namespace, WorkerImage, MailboxImage string }
+// RuntimeClass names the platform's sandbox RuntimeClass; it is omitted from
+// the installed document when the installation uses the default, so default
+// configurations keep their exact bytes and digests.
+type Placement struct {
+	Namespace, WorkerImage, MailboxImage string
+	RuntimeClass                         string `json:",omitempty"`
+}
+
+// SandboxRuntimeClass is the RuntimeClass every executor pod runs in.
+func (p Placement) SandboxRuntimeClass() string {
+	if p.RuntimeClass == "" {
+		return executor.DefaultRuntimeClass
+	}
+	return p.RuntimeClass
+}
+
 type LifecycleLoader func(context.Context) (PreparationInputs, Placement, error)
 
 // Lifecycle is an in-process, nonrenewable owner. There is deliberately no
@@ -50,7 +65,7 @@ func lifecycleInputs(load LifecycleLoader, placement Placement) PreparationLoade
 	}
 }
 func lifecycleBinding(p Prepared, placement Placement) (store.LifecycleBinding, executor.Workload, error) {
-	w, err := executor.Compile(placement.Namespace, placement.WorkerImage, placement.MailboxImage, p.assignment, p.profile, p.adev, time.Now())
+	w, err := executor.Compile(placement.Namespace, placement.WorkerImage, placement.MailboxImage, placement.SandboxRuntimeClass(), p.assignment, p.profile, p.adev, time.Now())
 	if err != nil {
 		return store.LifecycleBinding{}, executor.Workload{}, ErrAuthority
 	}
@@ -67,7 +82,7 @@ func lifecycleBinding(p Prepared, placement Placement) (store.LifecycleBinding, 
 		return store.LifecycleBinding{}, executor.Workload{}, ErrAuthority
 	}
 	return store.LifecycleBinding{BindingDigest: workspacebundle.Digest(raw), SourceDigest: workspacebundle.Digest(p.source), Namespace: placement.Namespace,
-		PodName: w.Pod["metadata"].(map[string]any)["name"].(string), ConfigName: w.ConfigMap["metadata"].(map[string]any)["name"].(string), MaxSeconds: profile.MaxSeconds, SourceBytes: len(p.source)}, w, nil
+		PodName: w.Pod["metadata"].(map[string]any)["name"].(string), ConfigName: w.ConfigMap["metadata"].(map[string]any)["name"].(string), MaxSeconds: profile.MaxSeconds, SourceBytes: len(p.source), StartSeconds: startSeconds(a)}, w, nil
 }
 func samePrepared(p Prepared, c Command, in PreparationInputs) bool {
 	a, err := executor.ParseAssignment(p.assignment, workspacebundle.Digest(p.assignment), time.Now())
@@ -134,7 +149,7 @@ func (l *Lifecycle) proofPhase(ctx context.Context) (executor.Workload, string, 
 	if l.model != nil {
 		var err error
 		if phase, err = l.modelProof(ctx); err != nil {
-			return executor.Workload{}, "", ErrAuthority
+			return executor.Workload{}, "", authorityStop("model-proof")
 		}
 		status = "running"
 	}
@@ -145,18 +160,21 @@ func (l *Lifecycle) proofPhase(ctx context.Context) (executor.Workload, string, 
 		if l.model != nil {
 			current, err := l.model.load(ctx)
 			if err != nil || current != l.model.policy {
-				return PreparationInputs{}, ErrAuthority
+				return PreparationInputs{}, authorityStop("model-policy")
 			}
 		}
 		return lifecycleInputs(l.load, l.placement)(ctx)
 	}
 	c, _, in, err := preparationProofStatus(ctx, l.db, load, l.prepared.claim, status)
-	if err != nil || !samePrepared(l.prepared, c, in) {
-		return executor.Workload{}, "", ErrAuthority
+	if err != nil {
+		return executor.Workload{}, "", err
+	}
+	if !samePrepared(l.prepared, c, in) {
+		return executor.Workload{}, "", authorityStop("prepared")
 	}
 	binding, w, err := lifecycleBinding(l.prepared, l.placement)
 	if err != nil || binding != l.durable.Binding {
-		return executor.Workload{}, "", ErrAuthority
+		return executor.Workload{}, "", authorityStop("binding")
 	}
 	return w, phase, nil
 }
@@ -232,4 +250,14 @@ func (l *Lifecycle) RunEffect(ctx context.Context, kind string, operation Lifecy
 		return ErrAuthority
 	}
 	return nil
+}
+
+// startSeconds extends the nonrenewable lifetime by the toolchain start the
+// pod deadline and readiness budget already cover, so a slow toolchain pull
+// does not consume the generation budget.
+func startSeconds(a executor.Assignment) int {
+	if a.Toolchain != nil {
+		return executor.ToolchainStartSeconds
+	}
+	return 0
 }

@@ -11,6 +11,19 @@ import (
 
 var namespacePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 var imagePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9./:_-]*@sha256:[a-f0-9]{64}$`)
+var runtimeClassPattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
+
+// DefaultRuntimeClass is the sandbox RuntimeClass the local kind installer
+// provides. Other platforms configure their standard sandbox class instead
+// (for example gvisor or kata); there is no unsandboxed alternative.
+const DefaultRuntimeClass = "ai-sdlc-offline"
+
+// ValidRuntimeClass accepts a Kubernetes RuntimeClass name (DNS-1123
+// subdomain). The name is installation configuration, never request or model
+// content; an empty name is rejected rather than meaning "no sandbox".
+func ValidRuntimeClass(name string) bool {
+	return len(name) <= 253 && runtimeClassPattern.MatchString(name)
+}
 
 // Workload is a pure compiler output. No API client, admission decision, RBAC or
 // provider authority is created here. A trusted controller must bind this exact
@@ -28,8 +41,11 @@ func ValidatePlacement(namespace, workerImage, mailboxImage string) error {
 	return nil
 }
 
-func Compile(namespace, workerImage, mailboxImage string, assignmentRaw, profileRaw, adevRaw []byte, now time.Time) (Workload, error) {
-	if ValidatePlacement(namespace, workerImage, mailboxImage) != nil {
+// Compile renders the executor workload in the installation's sandbox
+// RuntimeClass; the trusted controller supplies runtimeClass from its loaded
+// installation configuration.
+func Compile(namespace, workerImage, mailboxImage, runtimeClass string, assignmentRaw, profileRaw, adevRaw []byte, now time.Time) (Workload, error) {
+	if ValidatePlacement(namespace, workerImage, mailboxImage) != nil || !ValidRuntimeClass(runtimeClass) {
 		return Workload{}, ErrInvalid
 	}
 	digest := workspacebundle.Digest(assignmentRaw)
@@ -44,6 +60,10 @@ func Compile(namespace, workerImage, mailboxImage string, assignmentRaw, profile
 	if a.Repair != nil && (p.Version != ProfileVersion || p.MaxRepairs != 1) {
 		return Workload{}, ErrInvalid
 	}
+	// A reviewer never runs the repository's tests.
+	if a.Toolchain != nil && p.Version != ProfileVersion {
+		return Workload{}, ErrInvalid
+	}
 	if len(adevRaw) == 0 || len(adevRaw) > 64*1024 || workspacebundle.Digest(adevRaw) != p.ADevSHA256 {
 		return Workload{}, ErrInvalid
 	}
@@ -54,7 +74,7 @@ func Compile(namespace, workerImage, mailboxImage string, assignmentRaw, profile
 		return map[string]any{"name": n, "namespace": namespace, "labels": labels, "annotations": map[string]any{"ai-sdlc.io/assignment-sha256": digest, "ai-sdlc.io/authority-revision": a.AuthorityRevision}}
 	}
 	config := map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": metadata(configName), "immutable": true, "data": map[string]any{
-		"assignment.json": string(assignmentRaw), "profile.json": string(profileRaw), "adev-profile.yaml": string(adevRaw), "scc-config.json": string(SCCConfiguration(p)),
+		"assignment.json": string(assignmentRaw), "profile.json": string(profileRaw), "adev-profile.yaml": string(adevRaw), "scc-config.json": string(SCCConfiguration(p, a.Toolchain)),
 	}}
 	security := map[string]any{"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "readOnlyRootFilesystem": true, "allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []string{"ALL"}}}
 	workspace := map[string]any{"name": "workspace", "mountPath": "/workspaces"}
@@ -74,7 +94,7 @@ func Compile(namespace, workerImage, mailboxImage string, assignmentRaw, profile
 		mailbox["command"] = append(mailbox["command"].([]string), "--wait-seconds", fmt.Sprint(p.CallSeconds))
 	}
 	pod := map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": metadata(name), "spec": map[string]any{
-		"runtimeClassName": "ai-sdlc-offline", "automountServiceAccountToken": false, "enableServiceLinks": false, "restartPolicy": "Never", "activeDeadlineSeconds": 1020, "terminationGracePeriodSeconds": 1,
+		"runtimeClassName": runtimeClass, "automountServiceAccountToken": false, "enableServiceLinks": false, "restartPolicy": "Never", "activeDeadlineSeconds": PodDeadlineSeconds(p), "terminationGracePeriodSeconds": 1,
 		"hostNetwork": false, "hostPID": false, "hostIPC": false, "shareProcessNamespace": false,
 		"securityContext": map[string]any{"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000, "seccompProfile": map[string]any{"type": "RuntimeDefault"}},
 		"volumes": []any{
@@ -95,6 +115,20 @@ func Compile(namespace, workerImage, mailboxImage string, assignmentRaw, profile
 		}
 		spec := pod["spec"].(map[string]any)
 		spec["volumes"] = append(spec["volumes"].([]any), map[string]any{"name": "review-state", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "16Mi"}})
+	}
+	if a.Toolchain != nil {
+		// The toolchain is copied before the worker starts and mounted
+		// read-only; the scratch volume holds TMPDIR and build caches. The
+		// worker's disk limit covers the pod's disk volumes, so the pod is
+		// evicted predictably when their sum is exceeded.
+		worker["resources"] = map[string]any{"requests": map[string]any{"cpu": "100m", "memory": "128Mi"}, "limits": map[string]any{"cpu": "1", "memory": toolchainMemory, "ephemeral-storage": toolchainStorage}}
+		worker["volumeMounts"] = append(worker["volumeMounts"].([]any),
+			map[string]any{"name": "toolchain", "mountPath": ToolchainMount, "readOnly": true},
+			map[string]any{"name": "scratch", "mountPath": ScratchDirectory})
+		spec := pod["spec"].(map[string]any)
+		spec["volumes"] = append(spec["volumes"].([]any), toolchainVolumes()...)
+		spec["initContainers"] = toolchainInitContainers(a.Toolchain, mailboxImage, security)
+		spec["activeDeadlineSeconds"] = PodDeadlineSeconds(p) + ToolchainStartSeconds
 	}
 	// JSON round-trip also gives independent objects; callers cannot accidentally
 	// mutate shared nested maps through a sibling container/config-map object.

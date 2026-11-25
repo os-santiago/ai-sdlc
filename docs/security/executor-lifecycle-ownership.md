@@ -18,8 +18,16 @@ One PostgreSQL transaction locks the preparation claim, checks actual database
 time after the lock, rotates its token and creates the unique lifecycle row.
 The new deadline is the earlier of the signed request expiry and database time
 plus the reviewed profile's `maxSeconds` plus a fixed 120-second setup/collection
-allowance. The maximum is 1,020 seconds. A unique request reservation prevents
-renewal; transaction rollback restores the original claim on conflicts.
+allowance: 720 seconds by default, at most 1,020 seconds at the 900-second
+maximum. The executor Pod's `activeDeadlineSeconds` (1,020 seconds by default)
+and the launcher's absolute bound (980 seconds) grow by the profile seconds
+above 600, to 1,320 and 1,280 seconds at 900. The Pod therefore still outlives
+the claim by 300 seconds and the launcher keeps 380 seconds beyond `maxSeconds`
+for its start wait, baseline and verification; neither extends the claim. The
+signed request lives 20 minutes for the default profile, plus the profile
+seconds above 600 (25 minutes at 900), so queueing, preparation and the
+verification handoff keep 480 seconds beyond the claim at any reviewed budget. A unique request reservation prevents renewal;
+transaction rollback restores the original claim on conflicts.
 
 The old preparation token cannot read, stop or extend the new owner's claim.
 Concurrent reservations may produce only one current owner. Lost reservation

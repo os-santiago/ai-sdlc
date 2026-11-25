@@ -31,6 +31,9 @@ func compileProjectInstallation(input io.Reader, output io.Writer) error {
 		return err
 	}
 	manifest, err := project.ParseManifest(request.Manifest)
+	if errors.Is(err, project.ErrGenerationEnv) {
+		return err
+	}
 	if err != nil || manifest.Repository != policy.Repository {
 		return errors.New("project manifest does not match the installation repository")
 	}

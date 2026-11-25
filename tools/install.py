@@ -73,10 +73,23 @@ def host_prerequisites(configure=False, proc_root=Path('/proc/sys/fs/inotify')):
     return observed
 
 
-def tools(cache):
+# Cluster tools every installation needs. cosign is pinned in the same lock but
+# fetched only by `./install.sh tools` and the image-lock resolver.
+CLUSTER_TOOLS = ('kind', 'helm', 'kubectl')
+
+
+def tool_cache():
+    return Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'ai-sdlc/tools'
+
+
+def tools(cache, names=None):
     if platform.system() != 'Linux' or platform.machine() not in ('x86_64', 'amd64'):
         raise ValueError('This release supports Linux amd64. Other platforms are not yet validated.')
     lock = json.loads((ROOT / 'tools/install-tools.lock.json').read_text())
+    if names is not None:
+        if not set(names) <= set(lock):
+            raise ValueError('Requested tool is not pinned in install-tools.lock.json')
+        lock = {name: lock[name] for name in names}
     cache.mkdir(parents=True, exist_ok=True)
     binaries = {}
     for name, entry in lock.items():
@@ -429,7 +442,11 @@ def _main(argv, stack):
     parser.add_argument('--codex-auth-file', type=Path, help='Explicit local Codex authentication source for the candidate sidecar Secret')
     parser.add_argument('--refresh-model-credential', action='store_true')
     parser.add_argument('--model-upstream', type=Path, help='Reviewed OpenAI-compatible model service document (see docs/operations/model-gateway-adapters.md)')
+    parser.add_argument('--runtime-class', help='Existing sandbox RuntimeClass for executor, reviewer and verification pods (for example kata); --platform openshift with the candidate or verification profile. kind installs and uses ai-sdlc-offline')
     parser.add_argument('--project-manifest', type=Path, help='Reviewed ai-sdlc.project/v1 manifest for a repository that is not a built-in reference')
+    parser.add_argument('--generation-seconds', type=int, help='Generation time budget in seconds (600-900, default 600); candidate or verification only, recorded in the execution configuration')
+    parser.add_argument('--generation-steps', type=int, help='Generation SCC tool-step budget (24-32, default 24; above 24 requires --model-upstream); candidate or verification only, recorded in the execution configuration')
+    parser.add_argument('--generation-answer-tokens', type=int, help='Requested output tokens per generator model answer (4096-8192, default 4096; above 4096 requires --model-upstream); candidate or verification only, recorded in the execution configuration')
     args = parser.parse_args(argv)
     if args.command not in ('plan','local','status','tools','host','credentials','sandbox'):
         raise ValueError('Delegated installer subcommands must be the first argument')
@@ -460,6 +477,12 @@ def _main(argv, stack):
             raise ValueError('Release configuration requires prepared mode, approved target, published deployer pins and installed browser profile')
     konflux_runtime_install.validate_options(args)
     openshift_install.validate_options(args)
+    if args.runtime_class is not None:
+        import candidate_install
+        candidate_install.validate_runtime_class(args.runtime_class)
+        if args.command not in ('plan', 'local') or args.profile not in ('candidate', 'verification'):
+            raise ValueError('--runtime-class requires plan or local with the candidate or verification profile')
+    runtime_class = args.runtime_class or 'ai-sdlc-offline'
     if args.merge and not args.publication:
         raise ValueError('Merge requires explicit verified publication')
     if args.merge is not None and args.command not in ('plan', 'local', 'status', 'credentials', 'sandbox'):
@@ -482,6 +505,16 @@ def _main(argv, stack):
         raise ValueError('--profile shadow/candidate/verification is valid only with plan or local')
     if (args.codex_auth_file is not None or args.refresh_model_credential) and (args.command != 'local' or args.profile not in ('candidate', 'verification')):
         raise ValueError('Model credentials are only accepted by an explicit local candidate installation')
+    if args.generation_seconds is not None or args.generation_steps is not None:
+        if args.command not in ('plan', 'local') or args.profile not in ('candidate', 'verification'):
+            raise ValueError('A generation budget requires plan or local with the candidate or verification profile')
+        import candidate_install
+        candidate_install.generation_budget(args.generation_seconds, args.generation_steps, args.model_upstream is not None)
+    if args.generation_answer_tokens is not None:
+        if args.command not in ('plan', 'local') or args.profile not in ('candidate', 'verification'):
+            raise ValueError('A generation answer-token bound requires plan or local with the candidate or verification profile')
+        import candidate_install
+        candidate_install.answer_tokens(args.generation_answer_tokens, args.model_upstream is not None)
     if args.refresh_model_credential and args.codex_auth_file is None:
         raise ValueError('Model credential refresh requires an explicit authentication file')
     if args.github_auth != 'none' and args.command not in ('plan', 'local', 'credentials'):
@@ -503,11 +536,11 @@ def _main(argv, stack):
             or any(part in ('.', '..') for part in args.repository.split('/'))
             or not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,62}', args.environment)):
         raise ValueError('Invalid authority repository or environment scope')
-    cache = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'ai-sdlc/tools'
+    cache = tool_cache()
     if args.command != 'tools':
         image_lock(args.images)
     build_bundle = build_runtime_install.load_bundle(args.build_bundle, image_lock(args.images)) if args.build_bundle is not None and not args.configure_prepared else None
-    binaries = tools(cache)
+    binaries = tools(cache) if args.command == 'tools' else tools(cache, CLUSTER_TOOLS)
     if args.command == 'tools':
         print(json.dumps(binaries, indent=2))
         return 0
@@ -516,7 +549,10 @@ def _main(argv, stack):
     execution_values = None
     if args.profile in ('candidate', 'verification'):
         import candidate_install
-        execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images), verification=args.profile == "verification", review=bool(args.independent_review), publication=bool(args.publication), merge=bool(args.merge), repair=bool(args.review_repair))
+        execution_values = candidate_install.desired_values(ROOT, args.images, image_lock(args.images), verification=args.profile == "verification", review=bool(args.independent_review), publication=bool(args.publication), merge=bool(args.merge), repair=bool(args.review_repair),
+                                                          generation_seconds=args.generation_seconds, generation_steps=args.generation_steps,
+                                                          model_upstream=args.model_upstream is not None, runtime_class=runtime_class,
+                                                          generation_answer_tokens=args.generation_answer_tokens)
         if args.model_upstream is not None:
             candidate_install.apply_model_upstream(execution_values, args.model_upstream)
     elif args.model_upstream is not None:
@@ -607,6 +643,7 @@ def _main(argv, stack):
         else:
             check_ownership(marker, args.cluster, provider, cluster_uid)
     if args.command == 'local' and execution_values is not None:
+        candidate_install.require_runtime_class(kubectl, args.runtime_class)
         candidate_install.require_unchanged_tool_budget(kubectl, execution_values)
     if not created and args.platform == 'konflux':
         konflux_runtime_install.namespace(run, kubectl, state, cluster_uid, create=args.command == 'local')
@@ -643,7 +680,12 @@ def _main(argv, stack):
     # kind's node readiness alone does not establish service networking or
     # dynamic storage. Fail here before consuming the bounded migration window.
     if openshift:
-        openshift_install.preflight(run, kubectl, sandbox=args.profile in ('candidate', 'verification'))
+        openshift_install.preflight(run, kubectl, sandbox=args.profile in ('candidate', 'verification'), runtime_class=runtime_class)
+        if execution_values is not None:
+            # Quota headroom for the class's pod overhead (Kata declares one).
+            overhead = openshift_install.pod_overhead(run, kubectl, runtime_class)
+            if overhead:
+                execution_values.setdefault('sandbox', {'runtimeClassName': runtime_class})['podOverhead'] = overhead
     else:
         run(kubectl + ['wait', '--for=condition=Ready', 'pods', '--all', '-n', 'kube-system',
                        '--timeout', args.timeout])

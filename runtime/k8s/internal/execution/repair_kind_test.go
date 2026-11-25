@@ -20,6 +20,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repairflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/reviewflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
@@ -113,6 +114,18 @@ func runRepairKind(t *testing.T, composition bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 420*time.Second)
 	defer cancel()
+	// The actual verification and review stages fetch the pinned source from
+	// the forge. Unauthenticated, shared CI runners hit the per-address rate
+	// limit and the stage stops at "source". CI's read-only identity stays in
+	// the trusted test process; it is never serialized into fixture controls,
+	// Pod specs, model prompts or reports.
+	if token := os.Getenv("AI_SDLC_TEST_SOURCE_TOKEN"); token != "" {
+		scoped, err := sourcefetch.WithReadCredential(ctx, "os-santiago/homedir", token)
+		if err != nil {
+			t.Fatal("invalid fixture source credential")
+		}
+		ctx = scoped
+	}
 	var original string
 	if e = f.Admin.Pool.QueryRow(`SELECT row_to_json(b)::text FROM model_budgets b`).Scan(&original); e != nil {
 		t.Fatal(e)
@@ -125,7 +138,7 @@ func runRepairKind(t *testing.T, composition bool) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if state, err := (verificationflow.Runtime{DB: f.Verifier, Load: policy, Client: verifierClient, Image: in.VerificationImage}).PollOnce(ctx); err != nil || state != "behavior-verified" {
+		if state, err := (verificationflow.Runtime{DB: f.Verifier, Load: policy, Client: verifierClient, Image: in.VerificationImage, RuntimeClass: in.Runtime.Placement.SandboxRuntimeClass()}).PollOnce(ctx); err != nil || state != "behavior-verified" {
 			t.Fatal("actual predecessor behavior", state, err)
 		}
 		reviewClient, err := podtransport.NewClient(in.ReviewConfig)
@@ -202,7 +215,7 @@ func runRepairKind(t *testing.T, composition bool) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	record, e := execution.RunController(ctx, f.Worker, f.LoadLifecycle, prepared, client, provider, func(context.Context) (execution.ModelPolicy, error) { return f.Runtime.Model, nil })
+	record, e := execution.RunController(ctx, f.Worker, f.LoadLifecycle, prepared, client, podtransport.RuntimeClassAdmission{}, provider, func(context.Context) (execution.ModelPolicy, error) { return f.Runtime.Model, nil })
 	if e != nil {
 		t.Fatal("actual child controller", execution.DiagnosticStage(e), "calls", calls.Load())
 	}
@@ -243,7 +256,7 @@ func runRepairKind(t *testing.T, composition bool) {
 			t.Fatal(err)
 		}
 		observeUnchangedIssue()
-		if state, err := (verificationflow.Runtime{DB: f.Verifier, Load: policy, Client: verifierClient, Image: in.VerificationImage}).PollOnce(ctx); err != nil || state != "behavior-verified" {
+		if state, err := (verificationflow.Runtime{DB: f.Verifier, Load: policy, Client: verifierClient, Image: in.VerificationImage, RuntimeClass: in.Runtime.Placement.SandboxRuntimeClass()}).PollOnce(ctx); err != nil || state != "behavior-verified" {
 			t.Fatal("actual repaired behavior", state, err)
 		}
 		reviewClient, err := podtransport.NewClient(in.ReviewConfig)

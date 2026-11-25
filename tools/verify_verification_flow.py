@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 
+import fixture_runtime_class
 from network_probe import cleanup_namespace
 from verify_candidate_runtime import verify as candidate_verify
 from verify_pod_transport import TransportFixture
@@ -20,6 +21,7 @@ def verify(kubectl, worker, mailbox, candidate_binary, verifier_binary, source_s
         changes[name] = raw.decode('utf-8')
     config = TransportFixture(kubectl, verifier_binary, False).config
     namespace, uid = 'ai-sdlc-verifiers', None
+    sandbox_grant = fixture_runtime_class.new_nonce()
 
     def command(args, value=None, timeout=45):
         result = subprocess.run(kubectl + args, input=wire(value) if isinstance(value, dict) else value,
@@ -43,6 +45,8 @@ def verify(kubectl, worker, mailbox, candidate_binary, verifier_binary, source_s
             {'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'RoleBinding', 'metadata': {'name': 'verifier', 'namespace': namespace},
              'roleRef': {'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'Role', 'name': 'verifier'},
              'subjects': [{'kind': 'ServiceAccount', 'name': 'verifier', 'namespace': namespace}]}]})
+        # The controller's sandbox preflight reads only the fixture RuntimeClass.
+        fixture_runtime_class.grant(command, sandbox_grant, [(namespace, 'verifier')])
         token = command(['create', 'token', 'verifier', '-n', namespace, '--duration=10m']).decode().strip()
         restricted = dict(APIServer=config['APIServer'], CA=config['CA'], BearerToken=token)
         result = candidate_verify(kubectl, worker, mailbox, candidate_binary, source_sha, 'verification',
@@ -54,8 +58,11 @@ def verify(kubectl, worker, mailbox, candidate_binary, verifier_binary, source_s
             if len(remaining) != expected:
                 raise ValueError('Verifier resources differ from the expected recovery outcome')
     finally:
-        if uid:
-            cleanup_namespace(lambda *args, **kwargs: command(*args, **dict(kwargs, timeout=65)), namespace, uid)
+        try:
+            fixture_runtime_class.revoke(command, sandbox_grant)
+        finally:
+            if uid:
+                cleanup_namespace(lambda *args, **kwargs: command(*args, **dict(kwargs, timeout=65)), namespace, uid)
     return dict(result, verifierNamespaceRemoved=True, verifierResourcesConfirmedRemoved=scenario != "lost-config-reply", separateServiceAccounts=True)
 
 

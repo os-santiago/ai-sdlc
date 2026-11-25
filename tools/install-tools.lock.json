@@ -17,5 +17,11 @@
     "url": "https://dl.k8s.io/release/v1.35.8/bin/linux/amd64/kubectl",
     "sha256": "874d5e72dbb819f43cff16bcd1e4f8bac5b7f2361fe1e55049b0a6c676fb0cbf",
     "binarySha256": "874d5e72dbb819f43cff16bcd1e4f8bac5b7f2361fe1e55049b0a6c676fb0cbf"
+  },
+  "cosign": {
+    "version": "3.0.6",
+    "url": "https://github.com/sigstore/cosign/releases/download/v3.0.6/cosign-linux-amd64",
+    "sha256": "c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74",
+    "binarySha256": "c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74"
   }
 }

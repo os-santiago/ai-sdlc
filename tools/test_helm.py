@@ -228,6 +228,121 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(set(routes), {'admit-issue', 'plan-admission', 'execute-work', 'verify-artifact'})
         self.assertEqual(routes['verify-artifact'], 'http://ai-sdlc-verifier:8087/internal/verify-artifact')
 
+    def sandbox_docs(self, values=None):
+        values = dict(values or {}, runtime={'mode': 'verification'}, verifier={'digest': 'sha256:' + 'a' * 64})
+        result = self.render_build(values)
+        return result, [d for d in yaml.safe_load_all(result.stdout) if d] if result.returncode == 0 else []
+
+    def test_sandbox_runtime_class_preflight_is_one_read_only_name(self):
+        result, docs = self.sandbox_docs()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        role = next(d for d in docs if d['kind'] == 'ClusterRole' and d['metadata']['name'] == 'ai-sdlc-sandbox-runtime-class')
+        self.assertEqual(role['rules'], [{'apiGroups': ['node.k8s.io'], 'resources': ['runtimeclasses'],
+                                          'resourceNames': ['ai-sdlc-offline'], 'verbs': ['get']}])
+        binding = next(d for d in docs if d['kind'] == 'ClusterRoleBinding' and d['metadata']['name'] == 'ai-sdlc-sandbox-runtime-class')
+        self.assertEqual(binding['roleRef'], {'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'ClusterRole', 'name': 'ai-sdlc-sandbox-runtime-class'})
+        self.assertEqual({(s['name'], s['namespace']) for s in binding['subjects']},
+                         {('ai-sdlc-execution-controller', 'ai-sdlc-runtime'), ('ai-sdlc-verification-controller', 'ai-sdlc-runtime')})
+        # Candidate binds only the worker; maintenance creates no sandbox pods.
+        candidate = self.render('-f', str(ROOT / 'runtime/k8s/deploy/local/profiles/candidate.json'))
+        self.assertEqual(candidate.returncode, 0, candidate.stderr)
+        binding = next(d for d in yaml.safe_load_all(candidate.stdout) if d and d['kind'] == 'ClusterRoleBinding' and d['metadata']['name'] == 'ai-sdlc-sandbox-runtime-class')
+        self.assertEqual([s['name'] for s in binding['subjects']], ['ai-sdlc-execution-controller'])
+        maintenance = self.render()
+        self.assertEqual(maintenance.returncode, 0, maintenance.stderr)
+        self.assertNotIn('sandbox-runtime-class', maintenance.stdout)
+
+    def test_configured_sandbox_runtime_class_must_match_installed_documents(self):
+        kata = {'candidate': {'configJSON': json.dumps({'placement': {'RuntimeClass': 'kata'}})}}
+        default = {'candidate': {'configJSON': json.dumps({'placement': {}})}}
+        result, docs = self.sandbox_docs(dict(kata, sandbox={'runtimeClassName': 'kata'},
+                                              review={'enabled': True, 'configJSON': json.dumps({'runtimeClass': 'kata'})}))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        role = next(d for d in docs if d['kind'] == 'ClusterRole' and d['metadata']['name'] == 'ai-sdlc-sandbox-runtime-class')
+        self.assertEqual(role['rules'][0]['resourceNames'], ['kata'])
+        # Default documents omit the class; they match only the default value.
+        result = self.sandbox_docs(dict(default, review={'enabled': True, 'configJSON': '{}'}))[0]
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # The runtime matches field names case-insensitively; so does the chart.
+        lower = {'candidate': {'configJSON': json.dumps({'placement': {'runtimeClass': 'kata'}})}}
+        result = self.sandbox_docs(dict(lower, sandbox={'runtimeClassName': 'kata'},
+                                        review={'enabled': True, 'configJSON': json.dumps({'RUNTIMECLASS': 'kata'})}))[0]
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.sandbox_docs({'candidate': {'configJSON': json.dumps({'Placement': {'RuntimeClass': 'kata'}})},
+                                    'sandbox': {'runtimeClassName': 'kata'}})[0]
+        self.assertEqual(result.returncode, 0, result.stderr)
+        both = {'candidate': {'configJSON': json.dumps({'placement': {'RuntimeClass': 'kata', 'runtimeclass': 'kata'}})}}
+        two_placements = {'candidate': {'configJSON': json.dumps({'placement': {}, 'PLACEMENT': {'RuntimeClass': 'kata'}})}}
+        for values in (lower, dict(default, review={'enabled': True, 'configJSON': json.dumps({'RuntimeClass': 'kata'})}),
+                       dict(both, sandbox={'runtimeClassName': 'kata'}),
+                       dict(two_placements, sandbox={'runtimeClassName': 'kata'}), two_placements,
+                       {'candidate': {'configJSON': json.dumps({'placement': []})}},
+                       dict(default, sandbox={'runtimeClassName': 'kata'}), kata,
+                       dict(kata, sandbox={'runtimeClassName': 'kata'}, review={'enabled': True, 'configJSON': '{}'}),
+                       {'sandbox': {'runtimeClassName': 'Kata'}}, {'sandbox': {'runtimeClassName': 'kata/../x'}},
+                       {'sandbox': {'runtimeClassName': ''}}, {'sandbox': {'runtimeClassName': None}}):
+            with self.subTest(values=values):
+                self.assertNotEqual(self.sandbox_docs(values)[0].returncode, 0)
+
+    def test_sandbox_pod_overhead_adds_exact_quota_headroom(self):
+        result, docs = self.sandbox_docs({'review': {'enabled': True, 'configJSON': '{}'},
+                                          'sandbox': {'podOverhead': {'cpu': '250m', 'memory': '350Mi'}}})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        quotas = {d['metadata']['name']: d['spec']['hard'] for d in docs if d['kind'] == 'ResourceQuota'}
+        self.assertEqual(quotas['executor-bounds'], {'pods': '4', 'configmaps': '8', 'requests.cpu': '2000m', 'requests.memory': '2424Mi', 'limits.cpu': '7000m', 'limits.memory': '5496Mi'})
+        self.assertEqual(quotas['verifier-bounds'], {'pods': '4', 'configmaps': '4', 'requests.cpu': '2000m', 'requests.memory': '2424Mi', 'limits.cpu': '5000m', 'limits.memory': '3448Mi'})
+        self.assertEqual(quotas['reviewer-bounds'], {'pods': '2', 'configmaps': '4', 'requests.cpu': '1500m', 'requests.memory': '1724Mi', 'limits.cpu': '4500m', 'limits.memory': '2748Mi'})
+        config = next(d['data'] for d in docs if d['kind'] == 'ConfigMap' and 'AI_SDLC_RUNTIME_MODE' in d.get('data', {}))
+        self.assertEqual((config['AI_SDLC_SANDBOX_POD_OVERHEAD_CPU'], config['AI_SDLC_SANDBOX_POD_OVERHEAD_MEMORY']), ('250m', '350Mi'))
+        # A project quota is extended too; without an overhead nothing changes.
+        project = {'requests.cpu': '1500m', 'requests.memory': '3Gi', 'limits.cpu': '6', 'limits.memory': '6Gi'}
+        result, docs = self.sandbox_docs({'project': {'verifierQuota': project}, 'sandbox': {'podOverhead': {'cpu': '100m', 'memory': ''}}})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        hard = next(d['spec']['hard'] for d in docs if d['kind'] == 'ResourceQuota' and d['metadata']['name'] == 'verifier-bounds')
+        self.assertEqual(hard, {'pods': '4', 'configmaps': '4', 'requests.cpu': '1900m', 'requests.memory': '3072Mi', 'limits.cpu': '6400m', 'limits.memory': '6144Mi'})
+        result, docs = self.sandbox_docs()
+        self.assertNotIn('SANDBOX_POD_OVERHEAD', result.stdout)
+        hard = next(d['spec']['hard'] for d in docs if d['kind'] == 'ResourceQuota' and d['metadata']['name'] == 'executor-bounds')
+        self.assertEqual(hard['requests.cpu'], '1')
+        for values in ({'sandbox': {'podOverhead': {'cpu': '0.25'}}}, {'sandbox': {'podOverhead': {'memory': '1Gi'}}},
+                       {'sandbox': {'podOverhead': {'cpu': '100m', 'other': '1'}}},
+                       {'project': {'verifierQuota': dict(project, **{'requests.memory': '3G'})}, 'sandbox': {'podOverhead': {'memory': '10Mi'}}}):
+            with self.subTest(values=values):
+                self.assertNotEqual(self.sandbox_docs(values)[0].returncode, 0)
+
+    def test_review_gateway_tool_allowlist_renders_only_when_set_and_review_is_enabled(self):
+        upstream = {'adapter': 'openai', 'upstream': {'url': 'http://192.0.2.10:8080', 'model': 'qwen3-coder', 'cidr': '192.0.2.10/32'}}
+        review = {'enabled': True, 'configJSON': '{}'}
+        def env(docs, deployment, container):
+            pod = next(d for d in docs if d['kind'] == 'Deployment' and d['metadata']['name'] == deployment)['spec']['template']['spec']
+            return {e['name']: e.get('value') for e in next(c for c in pod['containers'] if c['name'] == container).get('env', [])}
+        for gateway in ({}, {'modelGateway': upstream}):
+            with self.subTest(adapter=gateway.get('modelGateway', {}).get('adapter', 'agent-cli')):
+                before, _ = self.sandbox_docs(dict(gateway, review=review))
+                self.assertEqual(before.returncode, 0, before.stderr)
+                self.assertNotIn('AI_SDLC_MODEL_GATEWAY_TOOLS', before.stdout)
+                off, _ = self.sandbox_docs(dict(gateway, review=dict(review, narrowModelTools=False)))
+                self.assertEqual(off.stdout, before.stdout)
+                on, docs = self.sandbox_docs(dict(gateway, review=dict(review, narrowModelTools=True)))
+                self.assertEqual(on.returncode, 0, on.stderr)
+                self.assertEqual(env(docs, 'ai-sdlc-verifier', 'model-gateway')['AI_SDLC_MODEL_GATEWAY_TOOLS'],
+                                 'read_file,list_dir,search_text,code_query')
+                # Only the review gateway: the generation gateway and every other container are unchanged.
+                self.assertEqual(on.stdout.count('AI_SDLC_MODEL_GATEWAY_TOOLS'), 1)
+                self.assertNotIn('AI_SDLC_MODEL_GATEWAY_TOOLS', env(docs, 'ai-sdlc-worker', 'model-gateway'))
+                strip = lambda text: text.replace('\n            - {name: AI_SDLC_MODEL_GATEWAY_TOOLS, value: "read_file,list_dir,search_text,code_query"}', '')
+                self.assertEqual(strip(on.stdout), before.stdout)
+                # Without independent review there is no review gateway; the setting renders nothing.
+                plain, _ = self.sandbox_docs(gateway)
+                ignored, _ = self.sandbox_docs(dict(gateway, review={'enabled': False, 'configJSON': '', 'narrowModelTools': True}))
+                self.assertEqual((plain.returncode, ignored.stdout), (0, plain.stdout))
+        self.assertNotEqual(self.sandbox_docs({'review': dict(review, narrowModelTools='yes')})[0].returncode, 0)
+        for profile in ('maintenance', 'shadow', 'candidate', 'verification'):
+            rendered = self.render('-f', str(ROOT / 'runtime/k8s/deploy/local/profiles' / (profile + '.json')),
+                                   '--set', 'verifier.digest=sha256:' + 'a' * 64)
+            self.assertEqual(rendered.returncode, 0, rendered.stderr)
+            self.assertNotIn('AI_SDLC_MODEL_GATEWAY_TOOLS', rendered.stdout)
+
     def test_openshift_profile_binds_only_nonroot_scc_and_sets_platform(self):
         base = ['--set', 'runtime.mode=verification', '--set', 'verifier.digest=sha256:' + 'a' * 64]
         plain = [d for d in yaml.safe_load_all(self.render(*base).stdout) if d]
@@ -326,6 +441,34 @@ class ProjectManifestChartTests(unittest.TestCase):
             file.flush()
             self.assertNotEqual(tests.render(*base, '-f', file.name).returncode, 0)
 
+    def test_executor_quota_grows_only_with_a_generation_toolchain(self):
+        """The quota derives from manifestJSON itself, so an upgrade that keeps
+        an older values file can never run a toolchain pod under the old quota."""
+        tests = ChartTests()
+        def manifest(generation):
+            m = {'version': 'ai-sdlc.project/v1', 'repository': 'example/service'}
+            if generation is not None:
+                m['generation'] = generation
+            return json.dumps(m, separators=(',', ':'))
+        def executor_hard(values):
+            rendered, docs = tests.sandbox_docs(values)
+            self.assertEqual(rendered.returncode, 0, rendered.stderr)
+            return next(d for d in docs if d['kind'] == 'ResourceQuota' and d['metadata']['name'] == 'executor-bounds')['spec']['hard']
+        original = {'pods': '4', 'configmaps': '8', 'requests.cpu': '1', 'requests.memory': '1Gi', 'limits.cpu': '6', 'limits.memory': '4Gi'}
+        self.assertEqual(executor_hard({}), original)
+        self.assertEqual(executor_hard({'project': {'manifestJSON': manifest(None)}}), original)
+        toolchain = {'toolchain': {'root': '/usr/local/go', 'path': ['bin']}}
+        # executor.ToolchainExecutorQuota: four pods with 512Mi more worker memory each.
+        self.assertEqual(executor_hard({'project': {'manifestJSON': manifest(toolchain)}}), dict(original, **{'limits.memory': '6Gi'}))
+        for odd in ({}, {'toolchain': None}, {'toolchain': 'x'}):
+            self.assertEqual(executor_hard({'project': {'manifestJSON': manifest(odd)}}), original, odd)
+        # The RuntimeClass overhead (#769) composes: four pods' overhead is added on top.
+        hard = executor_hard({'project': {'manifestJSON': manifest(toolchain)}, 'sandbox': {'podOverhead': {'cpu': '100m', 'memory': '64Mi'}}})
+        self.assertEqual(hard, {'pods': '4', 'configmaps': '8', 'requests.cpu': '1400m', 'requests.memory': '1280Mi', 'limits.cpu': '6400m', 'limits.memory': '6400Mi'})
+        # A malformed or non-object manifest fails the render instead of silently sizing 4Gi.
+        for bad in ('{"version":', '[1]', '"x"', '{"generation":{"toolchain":{}}}'):
+            self.assertNotEqual(tests.sandbox_docs({'project': {'manifestJSON': bad}})[0].returncode, 0, bad)
+        self.assertNotIn('executorQuota', (ROOT / 'runtime/k8s/deploy/helm/ai-sdlc-k8s-runtime/values.yaml').read_text())
 
     def test_publication_accepts_only_the_policy_bound_manifest_repository(self):
         tests = ChartTests()

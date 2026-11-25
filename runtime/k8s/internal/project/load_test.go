@@ -2,6 +2,7 @@ package project
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,6 +141,35 @@ func TestHiddenCharactersInCommandsAreRefused(t *testing.T) {
 		manifest.Verification.Command = []string{"go", "test", "./..." + string(hidden)}
 		if manifest.Validate() == nil {
 			t.Fatalf("hidden character %U in a command accepted", hidden)
+		}
+	}
+}
+
+// Go's decoder matches keys case-insensitively, so "Generation" or "TOOLCHAIN"
+// parse to the same manifest and digest; the installed bytes must still be
+// canonical, so the chart (case-sensitive) sees the same toolchain.
+func TestInstalledManifestMustBeCanonical(t *testing.T) {
+	manifest := generic()
+	manifest.Generation = &Generation{Toolchain: &Toolchain{Root: "/usr/local/go", Path: []string{"bin"}}}
+	canonical := manifest.Canonical()
+	policy := policyFor(t, "example/service")
+	policy.ProjectSHA256 = manifest.Digest()
+	if _, err := Resolve(policy, canonical); err != nil {
+		t.Fatal("canonical manifest refused", err)
+	}
+	for _, variant := range []string{
+		strings.Replace(string(canonical), `"generation":`, `"Generation":`, 1),
+		strings.Replace(string(canonical), `"toolchain":`, `"TOOLCHAIN":`, 1),
+		strings.Replace(string(canonical), `"version":`, `"Version":`, 1),
+		string(canonical) + "\n",
+		" " + string(canonical),
+	} {
+		parsed, err := ParseManifest([]byte(variant))
+		if strings.Contains(variant, "TOOLCHAIN") && (err != nil || parsed.Digest() != manifest.Digest()) {
+			t.Fatal("fixture: Go accepts the capitalized key with the same digest", err)
+		}
+		if _, err := Resolve(policy, []byte(variant)); !errors.Is(err, ErrManifestNotCanonical) {
+			t.Fatal("non-canonical installed manifest accepted", variant[:24], err)
 		}
 	}
 }

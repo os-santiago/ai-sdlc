@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"time"
 	"unicode/utf8"
@@ -94,57 +95,72 @@ func preparationProof(ctx context.Context, db *store.DB, load PreparationLoader,
 	return preparationProofStatus(ctx, db, load, claim, "ready")
 }
 func preparationProofStatus(ctx context.Context, db *store.DB, load PreparationLoader, claim store.ExecutionClaim, status string) (Command, intake.Snapshot, PreparationInputs, error) {
-	fail := func() (Command, intake.Snapshot, PreparationInputs, error) {
-		return Command{}, intake.Snapshot{}, PreparationInputs{}, ErrAuthority
+	fail := func(step string) (Command, intake.Snapshot, PreparationInputs, error) {
+		return Command{}, intake.Snapshot{}, PreparationInputs{}, authorityStop(step)
+	}
+	// A loader that names its own refusal (for example the model policy)
+	// keeps that step; any other load failure keeps the given one.
+	failLoad := func(err error, step string) (Command, intake.Snapshot, PreparationInputs, error) {
+		var named authorityStop
+		if errors.As(err, &named) {
+			return fail(string(named))
+		}
+		return fail(step)
 	}
 	if db == nil || load == nil || ctx.Err() != nil || !claim.Until.After(time.Now()) {
-		return fail()
+		return fail("claim")
 	}
 	r, err := db.ReadClaimedExecution(ctx, claim)
 	if err != nil {
-		return fail()
+		return fail("claim-read")
 	}
 	in, err := load(ctx)
 	if err != nil {
-		return fail()
+		return failLoad(err, "inputs")
 	}
 	if len(in.Profile) == 0 || len(in.Profile) > executor.MaxProfileBytes || len(in.ADev) == 0 || len(in.ADev) > 64*1024 {
-		return fail()
+		return fail("inputs")
 	}
 	in = copyInputs(in)
 	c, err := verifyRecord(in.Policy, r)
 	if err != nil || checkInputs(in, c) != nil {
-		return fail()
+		return fail("record")
 	}
 	if c.Repair != nil {
 		if repairInputs(ctx, db, in, c) != nil {
-			return fail()
+			return fail("repair")
 		}
 		status = "running"
 	}
 	snapshot, err := verifiedSnapshotStatus(ctx, db, in.Policy, in.Intake, c, status)
 	if err != nil {
-		return fail()
+		return fail("snapshot")
 	}
 	// Reload after the bounded proof query, and check the durable token again.
 	current, err := load(ctx)
-	if err != nil || current.Policy.Revision() != in.Policy.Revision() || current.Intake.Digest() != in.Intake.Digest() ||
+	if err != nil {
+		return failLoad(err, "reload")
+	}
+	if current.Policy.Revision() != in.Policy.Revision() || current.Intake.Digest() != in.Intake.Digest() ||
 		!bytes.Equal(current.Profile, in.Profile) || !bytes.Equal(current.ADev, in.ADev) {
-		return fail()
+		return fail("reload")
 	}
 	if _, err = verifyRecord(current.Policy, r); err != nil {
-		return fail()
+		return fail("record")
 	}
 	if _, err = db.ReadClaimedExecution(ctx, claim); err != nil {
-		return fail()
+		return fail("claim-read")
 	}
 	latest, err := load(ctx)
-	if err != nil || latest.Policy.Revision() != in.Policy.Revision() || latest.Intake.Digest() != in.Intake.Digest() ||
+	if err != nil {
+		return failLoad(err, "reload")
+	}
+	if latest.Policy.Revision() != in.Policy.Revision() || latest.Intake.Digest() != in.Intake.Digest() ||
 		!bytes.Equal(latest.Profile, in.Profile) || !bytes.Equal(latest.ADev, in.ADev) || ctx.Err() != nil || !claim.Until.After(time.Now()) {
-		return fail()
+		return fail("reload")
 	}
 	if _, err = verifyRecord(latest.Policy, r); err != nil {
-		return fail()
+		return fail("record")
 	}
 	return c, snapshot, in, nil
 }
@@ -174,6 +190,7 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 		AuthorityRevision: c.AuthorityRevision, IssueNumbers: []int{c.IssueNumber}, Title: snapshot.Issue.Title, Body: snapshot.Issue.Body,
 		AcceptanceCriteria: normalizedevent.ExtractAcceptanceCriteria(snapshot.Issue.Body), ExpiresAt: c.ExpiresAt}
 	assignment.Workspace = WorkspaceFor(c.Repository)
+	assignment.Toolchain = ToolchainFor(c.Repository)
 	var parent store.VerificationCandidate
 	if c.Repair != nil {
 		a, p, e := repairPreparation(ctx, db, in.Policy, c)
@@ -244,4 +261,43 @@ func WorkspaceFor(repository string) string {
 		return ""
 	}
 	return executor.WorkspaceOfflineTests
+}
+
+// ToolchainFor returns the generation toolchain a repository's reviewed
+// manifest declares, or nil. The image is the verifier's pinned image, so the
+// generator runs the same toolchain as verification. PATH is not passed: the
+// worker's PATH is rebuilt from the declared directories. Only the toolchain
+// variables the manifest allowlists (Go, cgo and Rust names) are passed;
+// other variables stay verification-only.
+//
+// The worker mounts the copy at executor.ToolchainDirectory, not at Root, so
+// an absolute command under Root (for example /usr/local/go/bin/go) and every
+// variable entry under Root (for example GOROOT) are relocated to the copy.
+// The verifier keeps the manifest's original command and environment.
+// Manifest validation refuses any toolchain variable this cannot translate
+// or that names the writable volumes, so nothing is dropped here.
+func ToolchainFor(repository string) *executor.Toolchain {
+	m, ok := project.Lookup(repository)
+	if !ok || m.Verification == nil || m.Generation == nil || m.Generation.Toolchain == nil {
+		return nil
+	}
+	v, t := m.Verification, m.Generation.Toolchain
+	command := append([]string(nil), v.Command...)
+	command[0] = project.RelocateToolchainPath(t.Root, executor.ToolchainDirectory, command[0])
+	toolchain := &executor.Toolchain{Image: v.Image, Root: t.Root, Path: append([]string(nil), t.Path...),
+		Command: command, WorkingDir: v.WorkingDir}
+	for name, value := range v.Env {
+		if !executor.ToolchainEnvAllowed(name) {
+			continue
+		}
+		relocated, ok := project.RelocateToolchainValue(t.Root, executor.ToolchainDirectory, value)
+		if !ok || !executor.ToolchainEnvValueAllowed(relocated) {
+			continue
+		}
+		if toolchain.Env == nil {
+			toolchain.Env = map[string]string{}
+		}
+		toolchain.Env[name] = relocated
+	}
+	return toolchain
 }

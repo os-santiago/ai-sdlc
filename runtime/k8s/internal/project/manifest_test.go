@@ -2,6 +2,8 @@ package project
 
 import (
 	"encoding/json"
+	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -191,5 +193,198 @@ func TestManifestRepositoriesMatchThePublicationSchema(t *testing.T) {
 		if validRepository(repository) != ok {
 			t.Fatal(repository)
 		}
+	}
+}
+
+func withToolchain() Manifest {
+	m := generic()
+	m.Generation = &Generation{Toolchain: &Toolchain{Root: "/usr/local/go", Path: []string{"bin"}}}
+	return m
+}
+
+// Digests recorded before the optional generation section existed: adding it
+// must not change the canonical form of any manifest that omits it.
+func TestManifestDigestsWithoutGenerationAreUnchanged(t *testing.T) {
+	raw, err := os.ReadFile("../../../../examples/ai-sdlc-sample.project.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sample, err := ParseManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	homedir, _ := Builtin(Homedir)
+	saferus, _ := Builtin(Saferus)
+	for name, c := range map[string]struct{ got, want string }{
+		"sample":  {sample.Digest(), "7a7ea92f7c14d88e67bef18ed32e73a8e17552d70c3f0cafd1f1005a75e249a4"},
+		"generic": {generic().Digest(), "130030f755518f0193dfcc67a1b5dd9cad34658086af0829d0ba3db64599b7f1"},
+		"homedir": {homedir.Digest(), "03be9eb19d21eae907e037ece521db6dd2e3eabd88d5e73ce5f5893bbc4e1375"},
+		"saferus": {saferus.Digest(), "300190706040b21a35e924c79ad30891ad74381d1174511a9247605d494276c5"},
+	} {
+		if c.got != c.want {
+			t.Fatal("digest changed:", name, c.got)
+		}
+	}
+	if strings.Contains(string(generic().Canonical()), "generation") {
+		t.Fatal("absent generation section is encoded")
+	}
+}
+
+func TestGenerationToolchainRoundTripsAndChangesTheDigest(t *testing.T) {
+	m := withToolchain()
+	m.Generation.Toolchain.Path = []string{"bin", "pkg/tool/linux_amd64"}
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseManifest(m.Canonical())
+	if err != nil || parsed.Digest() != m.Digest() || parsed.Generation.Toolchain.Root != "/usr/local/go" {
+		t.Fatal("round trip", err)
+	}
+	if m.Digest() == generic().Digest() || !strings.HasSuffix(string(m.Canonical()),
+		`"generation":{"toolchain":{"root":"/usr/local/go","path":["bin","pkg/tool/linux_amd64"]}}}`) {
+		t.Fatal("generation must be bound into the canonical form", string(m.Canonical()))
+	}
+	for _, bad := range []string{
+		strings.Replace(string(m.Canonical()), `"root"`, `"extra":1,"root"`, 1),
+		strings.Replace(string(m.Canonical()), `"toolchain"`, `"image":"x","toolchain"`, 1),
+		strings.Replace(string(m.Canonical()), `"root":"/usr/local/go"`, `"root":"/usr/local/go","root":"/opt/go"`, 1),
+	} {
+		if _, err := ParseManifest([]byte(bad)); err == nil {
+			t.Fatal("accepted", bad)
+		}
+	}
+}
+
+func TestInvalidGenerationSectionsAreRefused(t *testing.T) {
+	for name, change := range map[string]func(*Manifest){
+		"no verification":   func(m *Manifest) { m.Verification = nil; m.Recipes = []Recipe{{Name: "x/v1", Marker: "none"}} },
+		"empty generation":  func(m *Manifest) { m.Generation.Toolchain = nil },
+		"relative root":     func(m *Manifest) { m.Generation.Toolchain.Root = "usr/local/go" },
+		"slash root":        func(m *Manifest) { m.Generation.Toolchain.Root = "/" },
+		"empty root":        func(m *Manifest) { m.Generation.Toolchain.Root = "" },
+		"unclean root":      func(m *Manifest) { m.Generation.Toolchain.Root = "/usr/local/../go" },
+		"dot root":          func(m *Manifest) { m.Generation.Toolchain.Root = "/usr/./go" },
+		"trailing slash":    func(m *Manifest) { m.Generation.Toolchain.Root = "/usr/local/go/" },
+		"double slash":      func(m *Manifest) { m.Generation.Toolchain.Root = "//usr/local/go" },
+		"workspaces":        func(m *Manifest) { m.Generation.Toolchain.Root = "/workspaces/go" },
+		"workspaces itself": func(m *Manifest) { m.Generation.Toolchain.Root = "/workspaces" },
+		"tmp":               func(m *Manifest) { m.Generation.Toolchain.Root = "/tmp/go" },
+		"runner":            func(m *Manifest) { m.Generation.Toolchain.Root = "/runner" },
+		"proc":              func(m *Manifest) { m.Generation.Toolchain.Root = "/proc/self/root" },
+		"sys":               func(m *Manifest) { m.Generation.Toolchain.Root = "/sys/x" },
+		"dev":               func(m *Manifest) { m.Generation.Toolchain.Root = "/dev/shm" },
+		"root charset":      func(m *Manifest) { m.Generation.Toolchain.Root = "/usr/local/go\u200c" },
+		"root length":       func(m *Manifest) { m.Generation.Toolchain.Root = "/" + strings.Repeat("a", MaxToolchainRootBytes) },
+		"no path":           func(m *Manifest) { m.Generation.Toolchain.Path = nil },
+		"absolute path":     func(m *Manifest) { m.Generation.Toolchain.Path = []string{"/bin"} },
+		"parent path":       func(m *Manifest) { m.Generation.Toolchain.Path = []string{"../bin"} },
+		"inner parent":      func(m *Manifest) { m.Generation.Toolchain.Path = []string{"bin/../../x"} },
+		"dot path":          func(m *Manifest) { m.Generation.Toolchain.Path = []string{"."} },
+		"unclean path":      func(m *Manifest) { m.Generation.Toolchain.Path = []string{"bin/"} },
+		"empty path":        func(m *Manifest) { m.Generation.Toolchain.Path = []string{""} },
+		"colon path":        func(m *Manifest) { m.Generation.Toolchain.Path = []string{"bin:/tmp"} },
+		"duplicate path":    func(m *Manifest) { m.Generation.Toolchain.Path = []string{"bin", "bin"} },
+		"too many paths":    func(m *Manifest) { m.Generation.Toolchain.Path = strings.Split("a b c d e f g h i", " ") },
+	} {
+		m := withToolchain()
+		tc := *m.Generation.Toolchain
+		m.Generation = &Generation{Toolchain: &tc}
+		change(&m)
+		if m.Validate() == nil {
+			t.Fatal("accepted invalid generation section:", name)
+		}
+	}
+	for _, root := range []string{"/usr/local/go", "/opt/toolchain", "/workspaces2/go", "/devtools", "/usr/lib/jvm"} {
+		if ValidateToolchainRoot(root) != nil {
+			t.Fatal("refused valid root", root)
+		}
+	}
+}
+
+// A toolchain variable that would point the generator at its writable
+// volumes is refused at installation with a clear error, not dropped later.
+func TestGenerationToolchainRefusesWritableEnvValues(t *testing.T) {
+	base := generic()
+	base.Generation = &Generation{Toolchain: &Toolchain{Root: "/usr/local/go", Path: []string{"bin"}}}
+	for _, env := range []map[string]string{
+		{"GOCACHE": "/workspaces/cache"},
+		{"GOFLAGS": "-modfile=/scratch/go.mod"},
+		{"GOPATH": "/go:/workspaces"},
+		{"CARGO_HOME": "/scratch"},
+	} {
+		m := base
+		v := *base.Verification
+		v.Env = env
+		m.Verification = &v
+		_, err := ParseManifest(m.Canonical())
+		if !errors.Is(err, ErrGenerationEnv) || !errors.Is(err, ErrManifest) || !strings.Contains(err.Error(), "/workspaces or /scratch") {
+			t.Fatal("writable toolchain value accepted or unnamed", env, err)
+		}
+		// Without generation.toolchain the variable is verification-only.
+		m.Generation = nil
+		if _, err := ParseManifest(m.Canonical()); err != nil {
+			t.Fatal("verification-only value refused", env, err)
+		}
+	}
+	// Names outside the allowlist are verification-only and never refused for their value.
+	m := base
+	v := *base.Verification
+	v.Env = map[string]string{"GOTOOLCHAIN": "local", "SOMETHING": "/workspaces/x"}
+	m.Verification = &v
+	if _, err := ParseManifest(m.Canonical()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGenerationEnvValueRefusesNonCanonicalPaths(t *testing.T) {
+	for _, value := range []string{"/opt/go/../../scratch", "-modfile=/srv/./x", "/srv//x", "/srv/x/"} {
+		if GenerationEnvValue(value) {
+			t.Fatal("non-canonical path accepted", value)
+		}
+	}
+	for _, value := range []string{"/srv/go:/opt/go/bin", "-mod=mod -trimpath", "local", "-ldflags=-s -w"} {
+		if !GenerationEnvValue(value) {
+			t.Fatal("canonical value refused", value)
+		}
+	}
+}
+
+func TestRelocateToolchainValueMapsWholeEntriesUnderTheRoot(t *testing.T) {
+	root, dest := "/opt/reviewed-go", "/toolchain/root"
+	for value, want := range map[string]string{
+		"/opt/reviewed-go":             "/toolchain/root",
+		"/opt/reviewed-go/pkg/tool":    "/toolchain/root/pkg/tool",
+		"/go:/opt/reviewed-go/bin":     "/go:/toolchain/root/bin",
+		"/opt/reviewed-go-old":         "/opt/reviewed-go-old",
+		"local":                        "local",
+		"-mod=mod -trimpath":           "-mod=mod -trimpath",
+		"/opt/reviewed":                "/opt/reviewed",
+		"/opt/reviewed-gopath:/srv/go": "/opt/reviewed-gopath:/srv/go",
+	} {
+		got, ok := RelocateToolchainValue(root, dest, value)
+		if !ok || got != want {
+			t.Fatal("relocation", value, got, ok)
+		}
+	}
+	for _, value := range []string{"-toolexec=/opt/reviewed-go/bin/x", "-a /opt/reviewed-go/bin", "x,/opt/reviewed-go", "-I/opt/reviewed-go/include", "-L/opt/reviewed-go/lib", "file:///opt/reviewed-go/src", "\"/opt/reviewed-go\"", "a;/opt/reviewed-go", "/opt/reviewed-go/../../scratch/cache", "/opt/reviewed-go/./bin"} {
+		if _, ok := RelocateToolchainValue(root, dest, value); ok {
+			t.Fatal("untranslatable root reference accepted", value)
+		}
+	}
+	if RelocateToolchainPath(root, dest, "/opt/reviewed-go/bin/go") != "/toolchain/root/bin/go" || RelocateToolchainPath(root, dest, "go") != "go" {
+		t.Fatal("command relocation")
+	}
+	// Validation refuses a toolchain variable whose root reference cannot be translated.
+	m := generic()
+	m.Generation = &Generation{Toolchain: &Toolchain{Root: root, Path: []string{"bin"}}}
+	v := *m.Verification
+	v.Env = map[string]string{"GOFLAGS": "-toolexec=/opt/reviewed-go/bin/x"}
+	m.Verification = &v
+	if _, err := ParseManifest(m.Canonical()); !errors.Is(err, ErrGenerationEnv) {
+		t.Fatal("untranslatable toolchain value accepted", err)
+	}
+	v.Env = map[string]string{"GOROOT": root}
+	if _, err := ParseManifest(m.Canonical()); err != nil {
+		t.Fatal("GOROOT under the root refused", err)
 	}
 }

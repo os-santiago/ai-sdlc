@@ -23,6 +23,38 @@ type Result struct {
 	FinalMessage string
 	Iterations   int
 	ReadCalls    int
+	// FinalSHA256 is SCC's digest of the final message before its secret
+	// redaction rewrote FinalMessage, when SCC reports one.
+	FinalSHA256 string
+}
+
+// WithheldFeedback replaces a request for changes whose text could not be
+// bound to the provider response. It is ai-sdlc's own fixed text: repair
+// receives only the provider's verdict, never unbound reviewer text.
+const WithheldFeedback = "The independent reviewer requested changes, but its text could not be bound to the provider response, so only the request for changes is forwarded.\nVERDICT: request_changes"
+
+// BoundFinalSHA256 is the digest a provider observation must match. SCC's
+// reported pre-redaction digest is accepted for an approval, which carries no
+// text into any later stage, and for the fixed WithheldFeedback, which carries
+// none of the reviewer's text. In both cases the verdict is still the
+// provider's. Any other request for changes must bind its exact text, because
+// repair forwards it to the generator.
+func (r Result) BoundFinalSHA256() string {
+	if r.FinalSHA256 != "" && (r.Verdict == "approve" || (r.Verdict == "request_changes" && r.FinalMessage == WithheldFeedback)) {
+		return r.FinalSHA256
+	}
+	return authority.Digest([]byte(r.FinalMessage))
+}
+
+// WithholdUnboundFeedback replaces the text of a request for changes that
+// differs from SCC's pre-redaction digest (for example after secret
+// redaction) with WithheldFeedback. The binding then still requires the
+// provider digest and verdict.
+func (r Result) WithholdUnboundFeedback() Result {
+	if r.Verdict == "request_changes" && r.FinalSHA256 != "" && authority.Digest([]byte(r.FinalMessage)) != r.FinalSHA256 {
+		r.FinalMessage = WithheldFeedback
+	}
+	return r
 }
 
 // Parse requires a single completed reviewer phase on the expected model, no
@@ -89,8 +121,18 @@ func Parse(raw []byte, model string, maxSteps int) (Result, error) {
 	if err != nil || verdict != review.Verdict {
 		return Result{}, ErrInvalid
 	}
-	return Result{verdict, message, steps, calls}, nil
+	// Optional, from SCC versions that bind the unredacted final message.
+	finalSHA256 := ""
+	if _, ok := fields["final_message_sha256"]; ok {
+		if !get("final_message_sha256", &finalSHA256) || !sha256Hex.MatchString(finalSHA256) {
+			return Result{}, ErrInvalid
+		}
+	}
+	return Result{Verdict: verdict, FinalMessage: message, Iterations: steps, ReadCalls: calls, FinalSHA256: finalSHA256}, nil
 }
+
+// sha256Hex is a lowercase hex SHA-256 digest.
+var sha256Hex = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 // verdictMarker matches SCC's reviewer marker syntax, so any second marker
 // such as "Verdict = request_changes" is refused, not just "verdict:".

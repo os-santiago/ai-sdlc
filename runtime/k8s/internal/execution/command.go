@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repair"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
@@ -33,6 +35,39 @@ type Command struct {
 	AuthorityRevision string            `json:"authorityRevision"`
 	ExpiresAt         int64             `json:"expiresAt"`
 	Repair            *repair.Reference `json:"repair,omitempty"`
+}
+
+// BaseGenerationSeconds is the generation budget the original 20-minute
+// command lifetime was sized for: 600 s of generation inside the 720 s
+// lifecycle claim (maxSeconds + 120 s), leaving 480 s for queueing,
+// preparation and the verification handoff, which inherits this expiry.
+const BaseGenerationSeconds = 600
+
+// CommandLifetime is the signed execution command's lifetime, and the worker's
+// per-poll bound, for a reviewed generation budget. A budget above 600 s
+// extends both by the same number of seconds (at most 25 minutes at the 900 s
+// maximum), so a longer generation keeps the original 480 s for preparation
+// and handoff. The default 600 s budget keeps exactly 20 minutes.
+//
+// startSeconds is the pod start a repository's generation toolchain adds to
+// the lifecycle claim (StartSecondsFor). It extends the command by the same
+// seconds, bounded by store.MaxStartSeconds, so the handoff keeps its 480 s;
+// the longest command (30 minutes) stays well under the one-hour bound every
+// command verifier enforces.
+func CommandLifetime(maxSeconds, startSeconds int) time.Duration {
+	start := time.Duration(max(0, min(startSeconds, store.MaxStartSeconds))) * time.Second
+	return 20*time.Minute + time.Duration(max(0, min(maxSeconds, 900)-BaseGenerationSeconds))*time.Second + start
+}
+
+// StartSecondsFor is the lifecycle start a repository's executor pod adds:
+// the toolchain image pull and copy when its reviewed manifest declares a
+// generation toolchain, otherwise 0. It agrees with the claim that
+// lifecycleBinding derives from the assignment.
+func StartSecondsFor(repository string) int {
+	if ToolchainFor(repository) != nil {
+		return executor.ToolchainStartSeconds
+	}
+	return 0
 }
 
 func (c Command) ID() string {

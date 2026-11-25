@@ -41,12 +41,20 @@ type Proof struct {
 	PublicationAuthorized bool   `json:"publicationAuthorized"`
 }
 
+// Sandbox is the reviewer RuntimeClass the caller verified, with what its
+// admission adds to each pod. The review runs only if its configuration still
+// names that class.
+type Sandbox struct {
+	RuntimeClass string
+	Admission    podtransport.RuntimeClassAdmission
+}
+
 // Run takes only an existing verification identifier from the trusted queue.
 // It has no external claim/advance endpoint and never publishes or merges code.
-func Run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader, load Loader, id string, client *podtransport.Client) (Proof, error) {
-	return run(ctx, db, policy, load, id, client, fetchSource)
+func Run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader, load Loader, id string, client *podtransport.Client, sandbox Sandbox) (Proof, error) {
+	return run(ctx, db, policy, load, id, client, sandbox, fetchSource)
 }
-func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader, load Loader, id string, client *podtransport.Client, fetch sourceLoader) (proof Proof, err error) {
+func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader, load Loader, id string, client *podtransport.Client, sandbox Sandbox, fetch sourceLoader) (proof Proof, err error) {
 	if db == nil || policy == nil || load == nil || client == nil {
 		return proof, ControllerError{Stage: "configuration"}
 	}
@@ -54,6 +62,9 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	defer cancel()
 	p, e := prepare(ctx, db, policy, load, id, fetch)
 	if e != nil {
+		if errors.Is(e, errSourceRateLimited) {
+			return proof, ControllerError{Stage: "preparation-source-rate-limited"}
+		}
 		return proof, ControllerError{Stage: "preparation"}
 	}
 	// Observe the authenticated sidecar before queuing or claiming authority.
@@ -65,6 +76,10 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	if p.config.RequireGatewayProfile && gatewayProfileFits(ctx, provider, p.config.Profile) != nil {
 		return proof, ControllerError{Stage: "gateway-profile-unfit"}
 	}
+	if p.binding.RuntimeClass != sandbox.RuntimeClass {
+		return proof, ControllerError{Stage: "sandbox-runtime-class"}
+	}
+	p.binding.Admission = sandbox.Admission
 	resources, e := podtransport.PlanResources(client, p.binding)
 	if e != nil {
 		return proof, ControllerError{Stage: "template"}
@@ -92,18 +107,27 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	stage := "authority"
 	configUID, podUID := "", ""
 	cleaned, cleanupAttempted := false, false
+	cleanupStage := ""
 	cleanup := func() error {
 		cleanupAttempted = true
 		cleanupCtx, stop := context.WithTimeout(context.Background(), 30*time.Second)
 		defer stop()
-		failed := false
-		if podUID != "" && resources.DeletePod(cleanupCtx, podUID) != nil {
-			failed = true
+		failed := ""
+		if podUID != "" {
+			if e := resources.DeletePod(cleanupCtx, podUID); e != nil {
+				failed = removalStage("cleanup-pod", e)
+			}
 		}
-		if configUID != "" && resources.DeleteConfig(cleanupCtx, configUID) != nil {
-			failed = true
+		if configUID != "" {
+			if e := resources.DeleteConfig(cleanupCtx, configUID); e != nil && failed == "" {
+				failed = removalStage("cleanup-config", e)
+			}
 		}
-		if failed || db.ConfirmReviewCleanup(cleanupCtx, claim) != nil {
+		if failed == "" && db.ConfirmReviewCleanup(cleanupCtx, claim) != nil {
+			failed = "cleanup-confirm"
+		}
+		if failed != "" {
+			cleanupStage = failed
 			return ErrReview
 		}
 		cleaned = true
@@ -167,7 +191,10 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 		return proof, ControllerError{Stage: stage}
 	}
 	stage = "pod"
-	if effect("pod", func() (string, string, error) { podUID, e = resources.CreatePodObserved(ctx, configUID); return podUID, "", e }) != nil {
+	if effect("pod", func() (string, string, error) {
+		podUID, e = resources.CreatePodObserved(ctx, configUID)
+		return podUID, "", e
+	}) != nil {
 		return proof, ControllerError{Stage: stage}
 	}
 	stage = "readiness"
@@ -224,19 +251,20 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	}
 	stage = "model-evidence"
 	evidence, e := db.ReadReviewModelEvidence(ctx, claim)
-	if e != nil || modelbroker.MatchReviewSummary(summary.Result(), evidence) != nil {
+	result := summary.Result().WithholdUnboundFeedback()
+	if e != nil || modelbroker.MatchReviewSummary(result, evidence) != nil {
 		return proof, ControllerError{Stage: stage}
 	}
 	stage = "cleanup"
 	if cleanup() != nil {
-		return proof, ControllerError{Stage: stage, CleanupPending: true}
+		return proof, ControllerError{Stage: cleanupStage, CleanupPending: true}
 	}
 	stage = "authority"
 	if fence(ctx) != nil {
 		return proof, ControllerError{Stage: stage}
 	}
-	if summary.Result().Verdict != "approve" {
-		if db.RejectReviewWithFeedback(ctx, claim, summary.Result()) != nil {
+	if result.Verdict != "approve" {
+		if db.RejectReviewWithFeedback(ctx, claim, result) != nil {
 			return proof, ControllerError{Stage: "rejection-commit"}
 		}
 		return proof, ControllerError{Stage: "request-changes"}
@@ -272,15 +300,23 @@ func sameRequest(a, b modelmailbox.Envelope) bool {
 	y, _ := json.Marshal(right)
 	return bytes.Equal(x, y) && bytes.Equal(a.Payload, b.Payload)
 }
+
+// drive relays the reviewer's model requests. Each stop names a bounded
+// drive step (reported as model-drive-<step>), like the execution drive; a
+// failed delivery keeps the dispatcher's own stage. Every stop still ends the
+// review the same way.
 func drive(ctx context.Context, session reviewSession, fence func(context.Context) error, deliver func(modelmailbox.Envelope) error) error {
 	var previous modelmailbox.Envelope
 	for {
-		if ctx.Err() != nil || fence(ctx) != nil {
-			return ErrReview
+		if ctx.Err() != nil {
+			return ControllerError{Stage: "drive-deadline"}
+		}
+		if fence(ctx) != nil {
+			return ControllerError{Stage: "drive-authority"}
 		}
 		code, exited, e := session.WorkerExit(ctx)
 		if e != nil {
-			return ErrReview
+			return ControllerError{Stage: "drive-observe"}
 		}
 		if exited {
 			if code != 10 || previous.Sequence < 2 {
@@ -290,25 +326,33 @@ func drive(ctx context.Context, session reviewSession, fence func(context.Contex
 		}
 		request, e := session.ReadRequest(ctx)
 		if errors.Is(e, podtransport.ErrWorkerExited) {
+			// An unhanded or substituted request at exit is a sequence breach,
+			// as in the execution drive.
 			if request.Sequence != 0 && !sameRequest(request, previous) {
-				return ErrReview
+				return ControllerError{Stage: "drive-sequence"}
 			}
 			code, exited, e = session.WorkerExit(ctx)
 			if e == nil && exited && code == 10 && previous.Sequence >= 2 {
 				return nil
 			}
-			return ErrReview
+			return ControllerError{Stage: "drive-exit-race"}
 		}
 		if e != nil && !errors.Is(e, modelmailbox.ErrPending) {
+			if step := podtransport.ReadStep(e); step != "" {
+				return ControllerError{Stage: "mailbox-read-" + step}
+			}
 			return ControllerError{Stage: "mailbox-read"}
 		}
 		if e == nil {
 			if request.Sequence == previous.Sequence && previous.Sequence > 0 {
 				if !sameRequest(request, previous) {
-					return ErrReview
+					return ControllerError{Stage: "drive-sequence"}
 				}
 			} else {
-				if request.Sequence != previous.Sequence+1 || deliver(request) != nil {
+				if request.Sequence != previous.Sequence+1 {
+					return ControllerError{Stage: "drive-sequence"}
+				}
+				if deliver(request) != nil {
 					return ErrReview
 				}
 				previous = request
@@ -319,7 +363,7 @@ func drive(ctx context.Context, session reviewSession, fence func(context.Contex
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ErrReview
+			return ControllerError{Stage: "drive-deadline"}
 		case <-timer.C:
 		}
 	}
@@ -328,6 +372,8 @@ func drive(ctx context.Context, session reviewSession, fence func(context.Contex
 // gatewayProfileFits refuses a review whose calls could not complete: the
 // gateway's benchmarked timeout plus the broker margin must fit the reviewer
 // profile's per-call window. A model slower than that would only end uncertain.
+// Admission only: each call runs up to the gateway's ceiling, bounded by the
+// broker's remaining wait that the provider sends with the request.
 func gatewayProfileFits(ctx context.Context, provider *modelbroker.Provider, profile []byte) error {
 	seconds, e := provider.GatewayProfile(ctx)
 	if e != nil {

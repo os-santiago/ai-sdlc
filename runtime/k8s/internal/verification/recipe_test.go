@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
@@ -98,7 +99,7 @@ func TestCompilerIsolatesOracleAndCandidateInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := Command{Repository: "os-santiago/homedir", CandidateID: "execution-" + strings.Repeat("a", 64), Recipe: LocaleRecipe, RecipeRevision: RecipeRevision(), SourceSHA: source.SourceSHA, CandidateTreeSHA256: inputs.delta.CandidateTreeSHA256, DeltaSHA256: workspacebundle.Digest(raw), ExpiresAt: time.Now().Add(time.Minute).UnixMilli()}
-	w, err := Compile(command, inputs, "example/runner@sha256:"+strings.Repeat("b", 64), time.Now())
+	w, err := Compile(command, inputs, "example/runner@sha256:"+strings.Repeat("b", 64), executor.DefaultRuntimeClass, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,8 +130,22 @@ func TestCompilerIsolatesOracleAndCandidateInputs(t *testing.T) {
 			}
 		}
 	}
+	sandboxed, err := Compile(command, inputs, "example/runner@sha256:"+strings.Repeat("b", 64), "gvisor", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pod := range sandboxed.Pods {
+		if pod["spec"].(map[string]any)["runtimeClassName"] != "gvisor" {
+			t.Fatal("configured sandbox runtime class not used")
+		}
+	}
+	for _, bad := range []string{"", "Kata", "../runc"} {
+		if _, err = Compile(command, inputs, "example/runner@sha256:"+strings.Repeat("b", 64), bad, time.Now()); err == nil {
+			t.Fatal("invalid sandbox runtime class compiled", bad)
+		}
+	}
 	command.DeltaSHA256 = strings.Repeat("0", 64)
-	if _, err = Compile(command, inputs, "example/runner@sha256:"+strings.Repeat("b", 64), time.Now()); err == nil {
+	if _, err = Compile(command, inputs, "example/runner@sha256:"+strings.Repeat("b", 64), executor.DefaultRuntimeClass, time.Now()); err == nil {
 		t.Fatal("different candidate compiled")
 	}
 }

@@ -127,6 +127,39 @@ func (c *Client) fetchOnce(ctx context.Context, sha string) (workspacebundle.Bun
 	return b, err, err != nil && (network || transientError(err))
 }
 
+// archiveURL returns the pinned archive location. An anonymous reader goes to
+// the fixed archive host directly: the API redirect would spend one more call
+// of the small anonymous API quota and confers no trust, because the archive
+// is verified against the commit's tree manifest either way. An authenticated
+// reader asks the API, whose redirect carries the private-archive ticket.
+func (c *Client) archiveURL(ctx context.Context, sha string) (string, error) {
+	if c.token == "" {
+		return c.archiveLocation(c.archive+"/"+c.repository+"/legacy.tar.gz/"+sha, sha)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.api+"/repos/"+c.repository+"/tarball/"+sha, nil)
+	if err != nil {
+		return "", ErrSource
+	}
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("X-GitHub-Api-Version", "2026-03-10")
+	request.Header.Set("Authorization", "Bearer "+c.token)
+	response, err := c.http.Do(request)
+	if err != nil {
+		if ctx.Err() == nil && networkFailure(err) {
+			return "", errNetwork
+		}
+		return "", ErrSource
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusFound {
+		return "", httpSourceError(response)
+	}
+	if len(response.Header.Values("Location")) != 1 {
+		return "", ErrSource
+	}
+	return c.archiveLocation(response.Header.Get("Location"), sha)
+}
+
 func (c *Client) fetchAttempt(ctx context.Context, sha string) (workspacebundle.Bundle, error, bool) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -134,36 +167,16 @@ func (c *Client) fetchAttempt(ctx context.Context, sha string) (workspacebundle.
 	if err != nil {
 		return workspacebundle.Bundle{}, err, errors.Is(err, errNetwork)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.api+"/repos/"+c.repository+"/tarball/"+sha, nil)
+	location, err := c.archiveURL(ctx, sha)
 	if err != nil {
-		return workspacebundle.Bundle{}, ErrSource, false
-	}
-	request.Header.Set("Accept", "application/vnd.github+json")
-	request.Header.Set("X-GitHub-Api-Version", "2026-03-10")
-	if c.token != "" {
-		request.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	response, err := c.http.Do(request)
-	if err != nil {
-		return workspacebundle.Bundle{}, ErrSource, ctx.Err() == nil && networkFailure(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusFound {
-		return workspacebundle.Bundle{}, httpSourceError(response), false
-	}
-	if len(response.Header.Values("Location")) != 1 {
-		return workspacebundle.Bundle{}, ErrSource, false
-	}
-	location, err := c.archiveLocation(response.Header.Get("Location"), sha)
-	if err != nil {
-		return workspacebundle.Bundle{}, ErrSource, false
+		return workspacebundle.Bundle{}, err, errors.Is(err, errNetwork)
 	}
 	// Construct a fresh request, deliberately without the API Authorization.
 	download, err := http.NewRequestWithContext(ctx, http.MethodGet, location, nil)
 	if err != nil {
 		return workspacebundle.Bundle{}, ErrSource, false
 	}
-	response, err = c.http.Do(download)
+	response, err := c.http.Do(download)
 	if err != nil {
 		return workspacebundle.Bundle{}, ErrSource, ctx.Err() == nil && networkFailure(err)
 	}

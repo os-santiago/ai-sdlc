@@ -101,8 +101,11 @@ class ReviewFeedbackUpgrade(BrowserUpgrade):
                 if (len(self.catalog) != 35 or len(catalog) != 36 or catalog[:35] != self.catalog
                         or catalog[-1]['filename'] != compatibility.MIGRATION):
                     raise ValueError('Only the exact locally reviewed 35-to-36 feedback bridge is supported')
-                _, publication = install_images.resolve(install_images.GitHub(), run, revision,
-                    include_build=True, include_release=True, include_browser=True)
+                api = install_images.GitHub()
+                # Verify signatures; revisions without the cutover sentinel predate signing.
+                _, publication = install_images.resolve(api, run, revision,
+                    include_build=True, include_release=True, include_browser=True,
+                    verify=install_images.signature_verifier(api, revision, allow_unsigned_legacy=True))
                 self.selection = dict(publication, catalog=catalog)
             self.helper = (install_images.REGISTRY + '@' + self.selection['images']['migrator']['digest']) if self.selection else self.source_browser.helper
             if self.selection is not None:

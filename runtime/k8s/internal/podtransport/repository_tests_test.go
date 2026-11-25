@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repositorytests"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
@@ -29,7 +30,7 @@ func testsFixturePod() (repositorytests.Pod, []byte) {
 	raw, _ := workspacebundle.Encode(b)
 	tree, _ := b.TreeDigest()
 	return repositorytests.Pod{Namespace: VerifierNamespace,
-		MailboxImage: "registry.example/mailbox@sha256:" + strings.Repeat("2", 64), WorkItemID: "11111111-1111-4111-8111-111111111111",
+		MailboxImage: "registry.example/mailbox@sha256:" + strings.Repeat("2", 64), RuntimeClass: executor.DefaultRuntimeClass, WorkItemID: "11111111-1111-4111-8111-111111111111",
 		VerificationID: "verification-" + strings.Repeat("9", 64), Run: repositorytests.RunCandidate, SourceSHA: b.SourceSHA, TreeSHA256: tree,
 		Verification: project.Verification{Image: "registry.example/go@sha256:" + strings.Repeat("3", 64), Command: []string{"go", "test", "./..."},
 			TimeoutSeconds: 30, CPU: "1", Memory: "1Gi", EphemeralStorage: "1Gi", Network: "none", Result: project.Result{ExitCode: true},
@@ -153,7 +154,7 @@ func testsServer(t *testing.T, c *testsCluster) *TestsRun {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err = PlanTestsRun(client, p, source, time.Now().Add(time.Minute))
+	run, err = PlanTestsRun(client, p, RuntimeClassAdmission{}, source, time.Now().Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,15 +301,15 @@ func TestPlanTestsRunRefusesAnotherTreeOrNamespace(t *testing.T) {
 	}
 	other := p
 	other.TreeSHA256 = strings.Repeat("f", 64)
-	if _, err := PlanTestsRun(client, other, source, time.Now().Add(time.Minute)); err == nil {
+	if _, err := PlanTestsRun(client, other, RuntimeClassAdmission{}, source, time.Now().Add(time.Minute)); err == nil {
 		t.Fatal("a bundle for another tree accepted")
 	}
 	other = p
 	other.Namespace = "default"
-	if _, err := PlanTestsRun(client, other, source, time.Now().Add(time.Minute)); err == nil {
+	if _, err := PlanTestsRun(client, other, RuntimeClassAdmission{}, source, time.Now().Add(time.Minute)); err == nil {
 		t.Fatal("a namespace without the deny-all policy accepted")
 	}
-	if _, err := PlanTestsRun(client, p, source, time.Now().Add(-time.Second)); err == nil {
+	if _, err := PlanTestsRun(client, p, RuntimeClassAdmission{}, source, time.Now().Add(-time.Second)); err == nil {
 		t.Fatal("an expired run accepted")
 	}
 }

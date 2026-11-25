@@ -17,6 +17,9 @@ type InstalledConfiguration struct {
 	ADev         string           `json:"aDev"`
 	WorkerImage  string           `json:"workerImage"`
 	MailboxImage string           `json:"mailboxImage"`
+	// RuntimeClass is the platform sandbox for reviewer pods; absent means
+	// the default class, so default documents are unchanged.
+	RuntimeClass string `json:"runtimeClass,omitempty"`
 }
 
 func readInstalled(path string, limit int64) ([]byte, error) {
@@ -47,7 +50,7 @@ func LoadPublicInstalled(path string) (Configuration, error) {
 		return Configuration{}, ErrReview
 	}
 	profile, _ := json.Marshal(installed.Profile)
-	c := Configuration{Namespace: "ai-sdlc-reviewers", WorkerImage: installed.WorkerImage, MailboxImage: installed.MailboxImage, Profile: profile, ADev: []byte(installed.ADev), Model: modelbroker.ProviderConfig{Endpoint: "http://127.0.0.1:8787/v1/chat/completions", AllowLoopbackHTTP: true}}
+	c := Configuration{Namespace: "ai-sdlc-reviewers", WorkerImage: installed.WorkerImage, MailboxImage: installed.MailboxImage, RuntimeClass: installed.RuntimeClass, Profile: profile, ADev: []byte(installed.ADev), Model: modelbroker.ProviderConfig{Endpoint: "http://127.0.0.1:8787/v1/chat/completions", AllowLoopbackHTTP: true}}
 	seconds, e := modelbroker.GatewayTimeoutSeconds(os.Getenv("AI_SDLC_MODEL_GATEWAY_SECONDS"))
 	if e != nil {
 		return Configuration{}, ErrReview
@@ -55,7 +58,7 @@ func LoadPublicInstalled(path string) (Configuration, error) {
 	c.Model.TimeoutSeconds = seconds
 	c.RequireGatewayProfile = os.Getenv("AI_SDLC_MODEL_GATEWAY_PROFILE") == "benchmark"
 	parsed, e := executor.ParseReviewProfile(profile, authority.Digest(profile))
-	if e != nil || parsed.MaxSteps < 2 || len(c.ADev) < 1 || len(c.ADev) > 65536 || !utf8.Valid(c.ADev) || authority.Digest(c.ADev) != parsed.ADevSHA256 || executor.ValidatePlacement(c.Namespace, c.WorkerImage, c.MailboxImage) != nil {
+	if e != nil || parsed.MaxSteps < 2 || len(c.ADev) < 1 || len(c.ADev) > 65536 || !utf8.Valid(c.ADev) || authority.Digest(c.ADev) != parsed.ADevSHA256 || executor.ValidatePlacement(c.Namespace, c.WorkerImage, c.MailboxImage) != nil || !executor.ValidRuntimeClass(c.SandboxRuntimeClass()) {
 		return Configuration{}, ErrReview
 	}
 	return c, nil

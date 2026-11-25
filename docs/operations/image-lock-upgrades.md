@@ -11,7 +11,11 @@ python3 tools/install_images.py --run RUN_ID --revision FULL_COMMIT_SHA --output
 Use Python 3 on Linux and an authenticated `gh` CLI with read access to the
 repository's Actions artifacts. Both identifiers are explicit: the tool never
 selects an implicit latest build or accepts PR/build-branch artifacts. The output
-directory must be new. The command reads GitHub and writes local files only.
+directory must be new. The command reads GitHub, the registry and the Sigstore
+transparency log, and writes local files only.
+
+Before writing anything, it verifies each image's keyless signature (see
+[Signature verification](#signature-verification)).
 
 The resolver requires all nine component identity artifacts from the same
 successful push run, exact source revision, repository, workflow and platform.
@@ -20,6 +24,87 @@ accepts one bounded JSON entry, rejects duplicate fields and checks all identity
 fields. GitHub responses have a 1 MiB file limit, 30-second request limit and
 180-second overall work limit. Missing, duplicate, expired or mismatched
 artifacts fail before an installer lock is written.
+
+### Signature verification
+
+Before it writes any file, the resolver verifies the keyless signature of every
+resolved image digest (all nine, or up to thirteen with the `--include-*`
+options). On a push to `main`, the `images` job of `containers.yml` builds and
+pushes each image, records its digest, and generates a CycloneDX SBOM of that
+digest. It uploads the SBOM with its SHA-256 and size. The separate `sign` job
+is the only job that can request an OIDC token, and it runs no third-party
+action. It checks each SBOM's digest and size, then uses a checksum-pinned
+cosign to sign each digest and attest the SBOM to it. A GitHub OIDC token yields
+a short-lived Fulcio certificate, and the signature is recorded in the Rekor
+transparency log. No long-lived signing key exists. Tags are never signed or
+verified.
+
+The digest that `sign` signs comes from the `images` job's artifact in the same
+workflow run. The signature therefore attests "built and published by this
+workflow on `main` for this revision". It is not an independent measurement
+of the build.
+
+For each image the resolver runs the pinned cosign with:
+
+| Flag | Value |
+|---|---|
+| `--certificate-identity` | `https://github.com/os-santiago/ai-sdlc/.github/workflows/containers.yml@refs/heads/main` |
+| `--certificate-oidc-issuer` | `https://token.actions.githubusercontent.com` |
+| `--certificate-github-workflow-repository` | `os-santiago/ai-sdlc` |
+| `--certificate-github-workflow-ref` | `refs/heads/main` |
+| `--certificate-github-workflow-trigger` | `push` |
+| `--certificate-github-workflow-sha` | the requested revision |
+
+The image is addressed only as `quay.io/os-santiago/ai-sdlc@sha256:...`. A
+signature from another workflow, branch, trigger or revision does not verify.
+cosign 3.0.6 is pinned with its SHA-256 in
+[`install-tools.lock.json`](../../tools/install-tools.lock.json). The resolver
+fetches it into the same checksum-verified cache as `./install.sh tools`. It is
+never taken from `PATH`. Installation commands fetch only kind, helm and
+kubectl. `./install.sh tools` fetches all four.
+
+Verification fails closed. The first failure stops the resolver before it
+writes any file, and names the error and component:
+
+| Error | Meaning |
+|---|---|
+| `ImageUnsigned` | The registry holds no signature for the digest. cosign has no machine-readable status for this, so it is recognized from cosign's `no signatures found` message. Any other failure, including a changed message, is reported as `ImageSignatureRejected`, which is never treated as legacy. |
+| `ImageSignatureRejected` | A signature exists but does not match the expected identity, or verification could not complete (registry, Rekor or trust root unreachable). |
+| `ImageVerificationTimeout` | One image took more than 90 seconds, or all images more than 900 seconds. |
+| `UnsignedLegacyNotEligible` | `--allow-unsigned-legacy` was passed for a revision that contains the signing cutover sentinel. |
+
+`evidence.json` records the expected identity and issuer and, per component,
+`verified` or `unsigned-legacy`.
+
+#### Publications from before signing
+
+Images published before the `sign` job existed are unsigned. The cutover is
+marked by a sentinel file versioned with the workflow,
+[`.github/image-signing-cutover`](../../.github/image-signing-cutover). A
+revision that contains it publishes signed images. A unit test fails if
+`containers.yml` signs and the sentinel is missing. The resolver reads the
+sentinel from the exact commit's Git tree through the GitHub API
+(`git/commits/<sha>`, then the root tree, then `.github`). The response must
+name the same commit, and truncated trees are rejected, so no branch or tag
+name can stand in for the revision.
+
+By default, the resolver refuses unsigned images. An operator may pass
+`--allow-unsigned-legacy` deliberately. If the revision contains the sentinel,
+the flag is refused (`UnsignedLegacyNotEligible`). Every revision from the
+cutover onward must therefore verify, and stripping signatures from the
+registry cannot downgrade a signed publication. For an older revision, each
+image is still checked. An unsigned image is recorded as `unsigned-legacy`; a
+signature that exists but does not verify is still rejected. Prefer a signed
+publication; the flag exists only to keep reviewed older locks reproducible.
+
+The upgrade tools resolve publications through the same library and always
+verify signatures (`resolve()` has no default for `verify`). They apply the
+same cutover without a flag: a revision with the sentinel must verify, and an
+older one may be unsigned but never carry an invalid signature. They target
+explicit, reviewed revisions, most of which predate signing.
+
+Not yet covered: the resolver does not check the SBOM attestation, and
+installation from an already-committed lock does not verify signatures.
 
 `images.lock.json` contains the six installed services and migrator, in the
 installer's existing schema. `evidence.json` also records the model-mailbox image and the optional verifier
@@ -423,8 +508,10 @@ generator profile through the same entrypoint:
 ```
 
 This closed transition changes only the generator's SCC tool-step limit from 16
-to 24. It preserves 16 provider calls, 600 seconds, 4,096 requested output tokens per
-response, every byte quota, reviewer profile, image, placement, credential and
+to 24. It preserves 16 provider calls, the recorded generation time (600 seconds
+unless the installation selected up to 900 with `--generation-seconds`), the
+recorded requested output tokens per response (4,096 unless the installation
+selected up to 8,192 with `--generation-answer-tokens`), every byte quota, reviewer profile, image, placement, credential and
 original trust expiry. The chart derives new configuration checksums for its
 controllers; no checksum is ignored during observation. Restoring the single
 candidate configuration value must reproduce the original active render exactly.

@@ -47,7 +47,10 @@ def main(argv=None):
     def save():(args.output/'report.json').write_text(json.dumps(report,sort_keys=True,indent=2)+'\n')
     try:
         source=install_upgrade.Source(install.ROOT)
-        _,publication=install_images.resolve(install_images.GitHub(),args.source_run,args.source_revision,include_build=True,include_release=True)
+        api=install_images.GitHub()
+        # Verify signatures; revisions without the cutover sentinel predate signing.
+        _,publication=install_images.resolve(api,args.source_run,args.source_revision,include_build=True,include_release=True,
+                                             verify=install_images.signature_verifier(api,args.source_revision,allow_unsigned_legacy=True))
         before=source.catalog(args.source_revision)
         folder=install.ROOT/'runtime/k8s/internal/store/migrations'
         after=[{'filename':p.name,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in sorted(folder.glob('*.sql'))]

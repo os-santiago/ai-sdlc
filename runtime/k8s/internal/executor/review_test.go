@@ -24,7 +24,7 @@ func TestReviewerCannotUseGenerationAuthorityOrWritableSource(t *testing.T) {
 	a.ProfileSHA256 = workspacebundle.Digest(raw)
 	assignment, _ := json.Marshal(a)
 	image := "localhost/ai-sdlc-worker@sha256:" + strings.Repeat("a", 64)
-	w, e := Compile("fixture", image, image, assignment, raw, adev, time.Now())
+	w, e := Compile("fixture", image, image, DefaultRuntimeClass, assignment, raw, adev, time.Now())
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -48,7 +48,7 @@ func TestReviewerCannotUseGenerationAuthorityOrWritableSource(t *testing.T) {
 		}
 	}
 	var cfg map[string]any
-	if json.Unmarshal(SCCConfiguration(p), &cfg) != nil {
+	if json.Unmarshal(SCCConfiguration(p, nil), &cfg) != nil {
 		t.Fatal("config")
 	}
 	permissions := cfg["permissions"].(map[string]any)
@@ -74,7 +74,7 @@ func TestReviewerCannotUseGenerationAuthorityOrWritableSource(t *testing.T) {
 // children only allowlisted names, so the name must be allowlisted too.
 func TestExecutorCommandsDoNotWriteBytecode(t *testing.T) {
 	var cfg map[string]any
-	if json.Unmarshal(SCCConfiguration(profileFixture()), &cfg) != nil {
+	if json.Unmarshal(SCCConfiguration(profileFixture(), nil), &cfg) != nil {
 		t.Fatal("config")
 	}
 	shell, _ := cfg["run_shell"].(map[string]any)

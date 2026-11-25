@@ -5,7 +5,7 @@ RUN go mod download
 COPY internal ./internal
 COPY components/intake ./components/intake
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/component ./components/intake/cmd
-FROM gcr.io/distroless/static:nonroot
+FROM gcr.io/distroless/static:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5
 COPY --from=build /out/component /component
 USER 1000:1000
 EXPOSE 8086

@@ -15,6 +15,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+import fixture_runtime_class
 from network_probe import cleanup_namespace
 from verify_pod_transport import TransportFixture
 from verify_verification_flow import verify as verify_behavior
@@ -64,6 +65,7 @@ def verify(kubectl, worker, mailbox, candidate_binary, review_binary, source_sha
         raise ValueError('Unsupported review scenario')
     config = TransportFixture(kubectl, review_binary, False).config
     namespace, uid = 'ai-sdlc-reviewers', None
+    sandbox_grant = fixture_runtime_class.new_nonce()
 
     def command(args, value=None, timeout=65):
         result = subprocess.run(kubectl + args, input=wire(value) if isinstance(value, dict) else value,
@@ -89,6 +91,8 @@ def verify(kubectl, worker, mailbox, candidate_binary, review_binary, source_sha
             {'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'RoleBinding', 'metadata': {'name': 'reviewer', 'namespace': namespace},
              'roleRef': {'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'Role', 'name': 'reviewer'},
              'subjects': [{'kind': 'ServiceAccount', 'name': 'reviewer', 'namespace': namespace}]}]})
+        # The controller's sandbox preflight reads only the fixture RuntimeClass.
+        fixture_runtime_class.grant(command, sandbox_grant, [(namespace, 'reviewer')])
         token = command(['create', 'token', 'reviewer', '-n', namespace, '--duration=10m']).decode().strip()
         adev = Path(__file__).resolve().parents[1].joinpath('runtime/k8s/deploy/helm/ai-sdlc-k8s-runtime/files/adev-profile.yaml').read_bytes()
         with owned_provider(scenario) as provider, tempfile.TemporaryDirectory(prefix='ai-sdlc-review-control-') as directory:
@@ -111,8 +115,11 @@ def verify(kubectl, worker, mailbox, candidate_binary, review_binary, source_sha
             os.environ.pop('AI_SDLC_REVIEW_CONTROL', None)
         else:
             os.environ['AI_SDLC_REVIEW_CONTROL'] = previous
-        if uid:
-            cleanup_namespace(command, namespace, uid)
+        try:
+            fixture_runtime_class.revoke(command, sandbox_grant)
+        finally:
+            if uid:
+                cleanup_namespace(command, namespace, uid)
     return dict(result, reviewerNamespaceRemoved=True, reviewerResourcesConfirmedRemoved=scenario != 'lost-config-reply',
                 unknownResourcePreserved=scenario == 'lost-config-reply',
                 reviewerServiceAccountSeparated=True)

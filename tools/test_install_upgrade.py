@@ -42,6 +42,8 @@ class UpgradePlanTests(unittest.TestCase):
         return self.git('rev-parse', 'HEAD')
 
     def resolve(self, api, run, revision, **kwargs):
+        # Every planned publication is signature-checked for its own revision.
+        self.assertTrue(callable(kwargs.pop('verify')))
         self.assertEqual(kwargs, {'include_build': True, 'include_release': True})
         return {}, {'runURL': 'https://github.com/os-santiago/ai-sdlc/actions/runs/'+str(run),
                     'images': {'migrator': {'digest': 'sha256:'+('1' if revision == self.before else '2')*64}}}

@@ -11,10 +11,18 @@ adapter selected by the installation:
   anthropic  the Anthropic Messages API (or a compatible proxy)
 
 Adapters never execute tools: proposed calls are normalized and bounded by
-``assistant_message`` and executed only by SCC. An adapter receives only the
+``assistant_message`` and executed only by SCC. The hunk counts of proposed
+``edit_file`` patches, redundant metadata models often get wrong, are then
+recomputed from the hunk bodies (``recount_edit_patches``). An adapter receives only the
 validated messages and tool schemas, plus the single upstream URL, model alias
 and optional credential the installation configured. Adding a provider means
 adding one class to ``ADAPTERS``; the gateway, worker and chart are unchanged.
+
+The ``openai`` adapter streams from its upstream (``stream: true``) and
+assembles the same final message the non-streaming contract returns, so it can
+stop a degenerate generation (``DegenerateGuard``) as soon as it starts,
+instead of waiting for it to run to ``max_tokens``. It then retries the same
+request at most once, inside the same call budget.
 """
 import http.client
 import ipaddress
@@ -42,6 +50,27 @@ MODEL_ALIAS = re.compile(r"[A-Za-z0-9._:/-]{1,128}\Z")
 # Some models emit an inline reasoning block even with thinking disabled.
 THINK = re.compile(r"\A\s*<think>.*?</think>\s*", re.S)
 MAX_CREDENTIAL_BYTES = 4096
+# Hunk-count repair (``recount_edit_patches``). The tool-argument bound of
+# ``assistant_message`` is 32 KiB, so this never skips a call it admitted.
+EDIT_TOOL = "edit_file"
+MAX_EDIT_ARGUMENT_BYTES = 32 * 1024
+MAX_EDIT_HUNKS = 512
+# SCC's own header check; starts and counts are bounded to nine digits.
+HUNK_HEADER = re.compile(r"@@ -(\d{1,9})(?:,(\d{1,9}))? \+(\d{1,9})(?:,(\d{1,9}))? @@((?: .*)?)\Z", re.A | re.S)
+FILE_HEADER = re.compile(r"(?:---|\+\+\+)\s")
+NO_NEWLINE = "\\ No newline at end of file"
+# Streaming (``openai`` adapter). Each SSE event carries one token or so with
+# its JSON envelope (about 300 bytes against llama.cpp), so the raw stream of a
+# 8,192-token answer is about 2.5 MiB; the assembled message keeps the
+# non-streaming bound (MAX_RESPONSE_BYTES).
+MAX_STREAM_BYTES = 32 * MAX_RESPONSE_BYTES
+MAX_STREAM_LINE_BYTES = MAX_RESPONSE_BYTES
+MAX_STREAM_CALLS = 8
+# One retry after a degenerate answer, only when at least this much of the
+# call budget remains: a shorter retry could not produce a useful answer, and
+# failing as ``degenerate`` names the cause better than a later ``deadline``.
+DEGENERATE_RETRIES = 1
+DEGENERATE_RETRY_MIN_SECONDS = 10
 
 
 @dataclass
@@ -52,6 +81,212 @@ class Completion:
     completion_tokens: int = 0
     estimated: bool = True
     usage: dict = field(default_factory=dict)
+    edit_patches_recounted: int = 0
+    degenerate_retries: int = 0
+
+
+def _hunks(lines):
+    """One pass over a patch's lines: each hunk's header match and its counted
+    body (old, new, trailing blank lines). ``None`` when anything is ambiguous."""
+    hunks, preamble_headers, current = [], 0, None
+    for index, line in enumerate(lines):
+        if line.startswith("@@"):
+            match = HUNK_HEADER.match(line)
+            if match is None or len(hunks) == MAX_EDIT_HUNKS:
+                return None
+            current = {"index": index, "match": match, "old": 0, "new": 0, "blank": 0}
+            hunks.append(current)
+        elif current is None:
+            # Before the first hunk: optional metadata and one file's header.
+            preamble_headers += bool(FILE_HEADER.match(line))
+        elif line == "":
+            current["blank"] += 1
+        elif line[0] == "\\":
+            if line != NO_NEWLINE or current["blank"]:
+                return None
+        elif line[0] not in " +-":
+            return None
+        elif FILE_HEADER.match(line):
+            # jsdiff starts a new file at any "--- " or "+++ " line; a removed
+            # "-- x" or added "++ x" line is ambiguous with it, so leave it.
+            return None
+        else:
+            # Blank lines followed by more body are context lines.
+            current["old"] += current["blank"] + (line[0] != "+")
+            current["new"] += current["blank"] + (line[0] != "-")
+            current["blank"] = 0
+    if not hunks or preamble_headers > 2:
+        return None
+    return hunks
+
+
+def recount_patch(patch):
+    """Returns ``patch`` with its hunk headers' counts recomputed from the hunk
+    bodies, or ``None`` when nothing needs repair or anything is ambiguous.
+
+    The counts are redundant metadata: SCC's parser (jsdiff ``parsePatch`` and
+    a strict header check) reads exactly as many body lines as they declare,
+    so a wrong count makes a correct edit unusable. Context lines (' ', or a
+    bare empty line, a common model omission) count on both sides, '-' on the
+    old side, '+' on the new side, the no-newline marker on neither. Starts,
+    section text and every other line are kept byte for byte. Blank lines
+    ending a hunk are counted only when the declared counts already include
+    them: the parser skips them otherwise, and context after the last change
+    never alters the result.
+
+    ``None`` (leave the patch unchanged) when: the patch is over the bound or
+    holds a carriage return; it has no hunk or more than one file; a line
+    starting with ``@@`` is not a well-formed header; a body line has an
+    unknown prefix or is an unknown backslash line; a hunk counts no line;
+    the declared counts are already consistent; or a recount would change
+    whether a side is empty (which changes the meaning of its start) or
+    contradict a start of 0. Linear in the patch size."""
+    if (not isinstance(patch, str) or len(patch.encode()) > MAX_EDIT_ARGUMENT_BYTES
+            or "\r" in patch):
+        return None
+    lines = patch.split("\n")
+    if lines[-1] == "":
+        lines.pop()  # the patch's final newline, not an empty line
+    hunks = _hunks(lines)
+    if hunks is None:
+        return None
+    headers = {}
+    for hunk in hunks:
+        match, old, new = hunk["match"], hunk["old"], hunk["new"]
+        old_start, new_start = int(match.group(1)), int(match.group(3))
+        declared_old = int(match.group(2)) if match.group(2) is not None else 1
+        declared_new = int(match.group(4)) if match.group(4) is not None else 1
+        if old == 0 and new == 0:
+            return None
+        surplus = declared_old - old
+        if surplus == declared_new - new and 0 <= surplus <= hunk["blank"]:
+            continue  # consistent: the parser reads `surplus` trailing blanks
+        if ((old == 0) != (declared_old == 0) or (new == 0) != (declared_new == 0)
+                or (old_start == 0 and old != 0) or (new_start == 0 and new != 0)):
+            return None
+        headers[hunk["index"]] = "@@ -%d,%d +%d,%d @@%s" % (old_start, old, new_start, new, match.group(5))
+    if not headers:
+        return None
+    for index, header in headers.items():
+        lines[index] = header
+    return "\n".join(lines) + ("\n" if patch.endswith("\n") else "")
+
+
+def recount_edit_patches(message):
+    """Repairs the hunk counts of ``edit_file`` proposals in a bounded assistant
+    message, in place, and returns how many calls were repaired. Every other
+    call, and every call whose patch is not repaired, keeps its exact argument
+    bytes; a repaired call keeps all its other keys and values."""
+    repaired = 0
+    for call in message.get("tool_calls") or []:
+        try:
+            repaired += _recount_call(call)
+        except Exception:  # a repair never fails the call; the call stays as sent
+            continue
+    return repaired
+
+
+def _recount_call(call):
+    """Repairs one call in place; 1 when repaired, else 0 with no change."""
+    function = call.get("function") if isinstance(call, dict) else None
+    if not isinstance(function, dict) or function.get("name") != EDIT_TOOL:
+        return 0
+    raw = function.get("arguments")
+    if not isinstance(raw, str) or len(raw.encode()) > MAX_EDIT_ARGUMENT_BYTES:
+        return 0
+    try:
+        arguments = json.loads(raw)
+    except (ValueError, RecursionError):
+        return 0
+    patch = recount_patch(arguments.get("patch")) if isinstance(arguments, dict) else None
+    if patch is None:
+        return 0
+    arguments["patch"] = patch
+    encoded = json.dumps(arguments, ensure_ascii=False)
+    if len(encoded.encode()) > MAX_EDIT_ARGUMENT_BYTES:
+        return 0
+    function["arguments"] = encoded
+    return 1
+
+
+class DegenerateCompletion(ValueError):
+    """A generation that degenerated into one repeated character or short
+    unit. ``degenerate_retries`` is how many retries were spent on it."""
+    def __init__(self, retries=0):
+        super().__init__("degenerate completion")
+        self.degenerate_retries = retries
+
+
+class DegenerateGuard:
+    r"""Detects a generation that has degenerated into repetition, while it
+    streams, from a bounded tail of each generated text (the content, any
+    reasoning text, and each tool call's arguments, kept separately).
+
+    Observed fault: a local GPU backend turned the content into ``?`` (and, in
+    another capture, ``G``) repeated until ``max_tokens``. A text is
+    degenerate when it ends with:
+
+      * one non-whitespace character repeated: 256 times (``RUN``, e.g.
+        ``?``), 512 times for an ASCII letter or digit (``ALNUM_RUN``), 1,024
+        times for a separator (``SEPARATOR_RUN``); or
+      * a unit of 2 to 4 characters, not only whitespace, repeated over the
+        last ``WINDOW`` (1,024) characters with no line break in them.
+
+    Code and data repeat, so the bounds are chosen above what one line of
+    source plausibly holds. A line break (a raw newline, or the ``\n`` escape
+    inside JSON tool arguments) clears both checks, so a separator line of any
+    length followed by a newline never accumulates. Letters and digits get 512
+    because one-line data literals repeat them: base64 of zero bytes
+    (``AAAA``), hex of zeros or ``ff``, a ``"a" * n`` literal written out; the
+    cost is that a letter loop (the observed ``G``) is stopped after 512
+    single-character tokens instead of 256. Separators (``-=#*/_~.+|`` and
+    the Unicode box-drawing block, e.g. ``─═│║┄┈``) get 1,024: comment rules
+    and table borders. Units get 1,024 so minified literals (``0,`` repeated,
+    ``|---`` table rules) up to that length pass. Runs of whitespace are never
+    flagged (indentation and alignment repeat legitimately). Each check is a
+    constant amount of work per streamed delta."""
+    RUN = 256
+    ALNUM_RUN = 512
+    SEPARATOR_RUN = 1024
+    WINDOW = 1024
+    UNITS = (2, 3, 4)
+    SEPARATORS = frozenset("-=#*/_~.+|") | frozenset(map(chr, range(0x2500, 0x2580)))
+    ALNUM = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+    KEEP = 1024
+
+    def __init__(self):
+        self.tails = {}
+
+    def feed(self, channel, text):
+        """Appends ``text`` to ``channel``; True when it is now degenerate."""
+        if not text:
+            return False
+        tail = (self.tails.get(channel, "") + text)[-self.KEEP:]
+        self.tails[channel] = tail
+        return self.degenerate(tail)
+
+    @classmethod
+    def degenerate(cls, tail):
+        last = tail[-1:]
+        if not last:
+            return False
+        if not last.isspace():
+            run = len(tail) - len(tail.rstrip(last))
+            bound = cls.SEPARATOR_RUN if last in cls.SEPARATORS else cls.ALNUM_RUN if last in cls.ALNUM else cls.RUN
+            if run >= bound:
+                return True
+        if len(tail) < cls.WINDOW:
+            return False
+        window = tail[-cls.WINDOW:]
+        if "\n" in window or "\\n" in window:
+            return False
+        for size in cls.UNITS:
+            unit = tail[-size:]
+            if not unit.strip() or len(set(unit)) == 1:
+                continue  # whitespace, or a single character (checked above)
+            if window[size:] == window[:-size]:
+                return True
+        return False
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -134,6 +369,12 @@ class _Deadline:
             for sock in self.sockets:
                 self._close(sock)
 
+    def abort(self):
+        """Disconnects now (a degenerate answer) without marking expiry."""
+        with self.lock:
+            for sock in self.sockets:
+                self._close(sock)
+
 
 def _tracked(base, deadline):
     class Connection(base):
@@ -162,35 +403,235 @@ class _HTTPS(urllib.request.HTTPSHandler):
                             context=self._context)
 
 
-def post_json(url, payload, headers, seconds):
-    """POST once with no proxy and no redirects. One total deadline covers the
-    whole call: a watchdog armed before connecting shuts the socket down."""
+class _Stop(Exception):
+    """Ends reading a response early with ``error``, which is raised as is."""
+    def __init__(self, error):
+        super().__init__()
+        self.error = error
+
+
+def _exchange(url, payload, headers, seconds, read):
+    """POST once with no proxy and no redirects, then ``read(response,
+    deadline)``. One total deadline covers the whole call: a watchdog armed
+    before connecting shuts the socket down. ``read`` ends early by raising
+    ``_Stop``; the connection is then shut down before the error is raised."""
     raw = json.dumps(payload).encode()
     call = urllib.request.Request(url, data=raw, method="POST", headers=dict(headers, **{"Content-Type": "application/json"}))
     deadline = _Deadline(seconds)
     opener = urllib.request.build_opener(_NoRedirect(), urllib.request.ProxyHandler({}), _HTTP(deadline), _HTTPS(deadline))
-    body = b""
     deadline.timer.start()
     try:
         with opener.open(call, timeout=seconds) as response:
             if response.status != 200:
                 raise RuntimeError("upstream status")
-            while len(body) <= MAX_RESPONSE_BYTES and not deadline.expired.is_set():
-                chunk = response.read1(16384)
-                if not chunk:
-                    break
-                body += chunk
+            result = read(response, deadline)
+    except _Stop as stop:
+        deadline.abort()
+        if deadline.expired.is_set():  # a body cut short by the deadline
+            raise RuntimeError("completion deadline exceeded") from None
+        raise stop.error from None
     except (urllib.error.URLError, OSError, TimeoutError, ValueError, http.client.HTTPException, AttributeError):
-        if len(body) > MAX_RESPONSE_BYTES:
-            raise ValueError("completion response exceeded bound") from None
+        if deadline.expired.is_set():
+            raise RuntimeError("completion deadline exceeded") from None
         raise RuntimeError("completion backend failed") from None
     finally:
         deadline.timer.cancel()
     if deadline.expired.is_set():
         raise RuntimeError("completion deadline exceeded")
+    return result
+
+
+def _read_body(response, deadline):
+    body = b""
+    while len(body) <= MAX_RESPONSE_BYTES and not deadline.expired.is_set():
+        chunk = response.read1(16384)
+        if not chunk:
+            break
+        body += chunk
     if len(body) > MAX_RESPONSE_BYTES:
-        raise ValueError("completion response exceeded bound")
-    return json.loads(body)
+        raise _Stop(ValueError("completion response exceeded bound"))
+    return body
+
+
+def post_json(url, payload, headers, seconds):
+    """POST once and return the bounded JSON answer (see ``_exchange``)."""
+    return json.loads(_exchange(url, payload, headers, seconds, _read_body))
+
+
+class _Stream:
+    """Assembles one streamed Chat Completions answer (``chat.completion.chunk``
+    events) into what the non-streaming answer holds: the content, the tool
+    calls (by ``index``; string fields concatenate, as the OpenAI SDKs
+    accumulate them), the last finish reason and the last usage object.
+    Every delta is fed to the guard before it is kept."""
+    def __init__(self, guard):
+        self.guard, self.content, self.calls = guard, [], {}
+        self.finish, self.usage, self.done, self.size = None, None, False, 0
+        self.data, self.data_size = [], 0  # the current event's data lines
+
+    def keep(self, channel, text):
+        # A lone surrogate (a JSON "\ud800" escape) is counted, not refused
+        # here: assistant_message judges it exactly as for a JSON answer.
+        self.size += len(text.encode("utf-8", "surrogatepass"))
+        if self.size > MAX_RESPONSE_BYTES:
+            raise _Stop(ValueError("completion response exceeded bound"))
+        if self.guard.feed(channel, text):
+            raise _Stop(DegenerateCompletion())
+
+    def line(self, line):
+        """One SSE line (its LF removed; a CR before it is removed here).
+        ``data:`` fields accumulate until a blank line ends the event, as the
+        SSE format defines: several ``data:`` lines join with a line feed, and
+        one leading space is removed from each value. Comments (``:``, such
+        as keep-alive pings) and other fields are skipped; an event without
+        data is not dispatched. Lines ended by a bare CR alone are not split,
+        so such a stream fails closed (``invalid``, or ``oversized`` past the
+        line bound)."""
+        line = line[:-1] if line.endswith(b"\r") else line
+        if not line:
+            self.dispatch()
+            return
+        field, _, value = line.partition(b":")
+        if field != b"data":
+            return  # a comment (empty field name) or a field the chunks do not use
+        value = value[1:] if value.startswith(b" ") else value
+        self.data_size += len(value) + 1
+        if self.data_size > MAX_STREAM_LINE_BYTES:
+            raise _Stop(ValueError("completion response exceeded bound"))
+        self.data.append(value)
+
+    def dispatch(self):
+        """Parses the accumulated event; ``[DONE]`` ends the stream."""
+        if not self.data:
+            return
+        data = b"\n".join(self.data)
+        self.data, self.data_size = [], 0
+        if not data.strip():
+            return  # empty data: nothing to dispatch
+        if data.strip() == b"[DONE]":
+            self.done = True
+            return
+        try:
+            chunk = json.loads(data)
+        except (ValueError, RecursionError):
+            raise _Stop(ValueError("invalid completion")) from None
+        try:
+            self.chunk(chunk)
+        except (AttributeError, TypeError):
+            raise _Stop(ValueError("invalid completion")) from None
+
+    def chunk(self, chunk):
+        if not isinstance(chunk, dict):
+            raise _Stop(ValueError("invalid completion"))
+        if "error" in chunk:  # an upstream failure reported mid-stream
+            raise _Stop(RuntimeError("completion backend failed"))
+        if isinstance(chunk.get("usage"), dict):
+            self.usage = chunk["usage"]
+        choices = chunk.get("choices") or []
+        if not isinstance(choices, list) or len(choices) > 1:
+            raise _Stop(ValueError("invalid completion"))
+        for choice in choices:
+            delta = choice.get("delta") or {}
+            if choice.get("index", 0) != 0 or not isinstance(delta, dict) or delta.get("role", "assistant") not in ("assistant", None):
+                raise _Stop(ValueError("invalid completion"))
+            # Reasoning text (llama.cpp ``reasoning_content``, vLLM ``reasoning``)
+            # is watched, never kept.
+            for key, channel in (("content", "content"), ("reasoning_content", "reasoning"), ("reasoning", "reasoning")):
+                text = delta.get(key)
+                if text is not None and not isinstance(text, str):
+                    raise _Stop(ValueError("invalid completion"))
+                if key == "content" and text:
+                    self.keep(channel, text)
+                    self.content.append(text)
+                elif text and self.guard.feed(channel, text):
+                    raise _Stop(DegenerateCompletion())
+            for call in delta.get("tool_calls") or []:
+                self.call(call)
+            if choice.get("finish_reason") is not None:
+                self.finish = choice["finish_reason"]
+
+    def call(self, call):
+        function = call.get("function") or {} if isinstance(call, dict) else None
+        index = call.get("index") if isinstance(call, dict) else None
+        if index is None and isinstance(call, dict):
+            # Servers that omit the index: a new id starts the next call.
+            new = call.get("id") and all(c["id"] != call["id"] for c in self.calls.values())
+            index = len(self.calls) if new or not self.calls else max(self.calls)
+        if (not isinstance(function, dict) or type(index) is not int or not 0 <= index < MAX_STREAM_CALLS
+                or call.get("type", "function") not in ("function", None)):
+            raise _Stop(ValueError("invalid proposed tool"))
+        entry = self.calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+        for key, value in (("id", call.get("id")), ("name", function.get("name")), ("arguments", function.get("arguments"))):
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                raise _Stop(ValueError("invalid proposed tool"))
+            if key == "id":
+                entry["id"] = entry["id"] or value
+            elif key == "name":
+                self.keep(("name", index), value)
+                entry["name"] += value
+            else:
+                self.keep(("arguments", index), value)
+                entry["arguments"] += value
+
+    def read(self, response, deadline):
+        buffer, total = b"", 0
+        while not self.done and not deadline.expired.is_set():
+            chunk = response.read1(16384)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_STREAM_BYTES:
+                raise _Stop(ValueError("completion response exceeded bound"))
+            *lines, buffer = (buffer + chunk).split(b"\n")
+            if len(buffer) > MAX_STREAM_LINE_BYTES:
+                raise _Stop(ValueError("completion response exceeded bound"))
+            for line in lines:
+                self.line(line)
+                if self.done:
+                    break
+        if not self.done:
+            # The end of the stream ends the last line and event.
+            if buffer:
+                self.line(buffer)
+            self.dispatch()
+        return self
+
+    def answer(self):
+        """The assembled answer in the non-streaming shape. Every finished
+        stream reports a finish reason; one without it (even after ``[DONE]``)
+        was cut off or is malformed, and is never taken as complete."""
+        if self.finish is None:
+            raise RuntimeError("completion backend failed")
+        message = {"role": "assistant", "content": "".join(self.content)}
+        if self.calls:
+            message["tool_calls"] = [{"id": c["id"], "type": "function", "function": {"name": c["name"] or None, "arguments": c["arguments"]}}
+                                     for _, c in sorted(self.calls.items())]
+        answer = {"choices": [{"index": 0, "message": message, "finish_reason": self.finish}]}
+        if self.usage is not None:
+            answer["usage"] = self.usage
+        return answer
+
+
+def _read_completion(response, deadline):
+    """An SSE stream is assembled while it is guarded; any other answer (a
+    server that ignored ``stream``) is read as the bounded JSON body."""
+    media = (response.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+    if media != "text/event-stream":
+        body = _read_body(response, deadline)
+        try:
+            return json.loads(body)
+        except (ValueError, RecursionError):
+            raise _Stop(ValueError("invalid completion")) from None
+    return _Stream(DegenerateGuard()).read(response, deadline)
+
+
+def post_completion(url, payload, headers, seconds):
+    """POST once and return the answer in the non-streaming shape, streamed
+    and guarded when the upstream streams (see ``_exchange``)."""
+    answer = _exchange(url, payload, headers, seconds, _read_completion)
+    return answer.answer() if isinstance(answer, _Stream) else answer
 
 
 def _count(value):
@@ -217,9 +658,13 @@ class Adapter:
         validate_parameters(request, names)
         self.truncation_ok = probe
         try:
-            return self.backend(request, messages, tools, names, tokens, seconds or self.seconds)
+            completion = self.backend(request, messages, tools, names, tokens, seconds or self.seconds)
         finally:
             self.truncation_ok = False
+        # Every adapter's message is normalized here, before the gateway
+        # returns it and so before the broker records or digests anything.
+        completion.edit_patches_recounted = recount_edit_patches(completion.message)
+        return completion
 
     truncation_ok = False
 
@@ -246,7 +691,11 @@ class OpenAIAdapter(Adapter):
     reports_usage = True
 
     def backend(self, request, messages, tools, names, tokens, seconds):
-        payload = {"model": self.model, "messages": messages, "max_tokens": tokens, "stream": False}
+        """Streams the answer and retries once, inside the same ``seconds``
+        budget, when the guard stops a degenerate generation. Any other
+        failure is returned at once: retrying it is the broker's decision."""
+        payload = {"model": self.model, "messages": messages, "max_tokens": tokens,
+                   "stream": True, "stream_options": {"include_usage": True}}
         if self.direct_answers:
             # Direct answers: reasoning traces are not part of the contract.
             # Only for servers that template thinking (llama.cpp, vLLM).
@@ -257,7 +706,26 @@ class OpenAIAdapter(Adapter):
             if key in request:
                 payload[key] = request[key]
         headers = {"Authorization": "Bearer " + self.credential} if self.credential else {}
-        answer = post_json(self.url, payload, headers, seconds)
+        deadline = time.monotonic() + seconds
+        retries = 0
+        try:
+            while True:
+                try:
+                    answer = post_completion(self.url, payload, headers, max(deadline - time.monotonic(), 0.001))
+                except DegenerateCompletion:
+                    if retries < DEGENERATE_RETRIES and deadline - time.monotonic() >= DEGENERATE_RETRY_MIN_SECONDS:
+                        retries += 1
+                        continue
+                    raise
+                completion = self.parse(answer, messages, names)
+                completion.degenerate_retries = retries
+                return completion
+        except Exception as error:
+            error.degenerate_retries = retries
+            raise
+
+    def parse(self, answer, messages, names):
+        """The bounded completion from one answer in the non-streaming shape."""
         choices = answer.get("choices") if isinstance(answer, dict) else None
         if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
             raise ValueError("invalid completion")

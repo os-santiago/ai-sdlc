@@ -12,8 +12,35 @@ The image also includes the separate hidden [workspace file-transfer helper](off
 `serve --attempt <id> --pod-uid <uid>` listens only on `127.0.0.1:8091`.
 The only model route is `POST /v1/chat/completions`; streaming is rejected.
 Requests are limited to 128 KiB, responses to 256 KiB, one outstanding request,
-32 requests per process, eight connections and a 60-second exchange deadline.
-HTTP headers, reads and idle connections also have finite bounds.
+32 requests per process, eight connections and an exchange deadline equal to
+the call window (`--wait-seconds`, 60 s by default). HTTP headers, reads, writes
+(exchange deadline + 5 s) and idle connections also have finite bounds.
+
+### Calls longer than 300 seconds
+
+SCC calls the mailbox with Node's global `fetch`. Its built-in undici
+dispatcher aborts a request whose response headers take more than 300 s
+(`headersTimeout`) or whose body is idle for 300 s (`bodyTimeout`), regardless
+of SCC's own provider timers. The worker image cannot change these defaults, so
+the mailbox keeps the connection active itself:
+
+- An answer that arrives within 240 s is written exactly as before: its own
+  status and payload bytes, with no padding.
+- If no answer has arrived after 240 s, the mailbox commits `200` with
+  `Content-Type: application/json` and writes one space every 30 s, flushing
+  each time. When the answer arrives, its payload follows the spaces. JSON
+  parsers ignore leading whitespace; SCC reads the body with `response.json()`.
+- After that commit the status can no longer change. If the exchange deadline
+  passes, the response is mismatched or unsafe, or the broker reports a non-200
+  status, the mailbox aborts the connection without the final chunk. `fetch`
+  then rejects the body read (`terminated`), which SCC classifies as a retryable
+  transport failure, the same retry class as the `502`/`504` it receives before
+  the commit. A `200` error body is not used: SCC would report it as
+  `No choices in response`, a non-retryable unknown failure.
+
+SCC's attempt timer (call window + 15 s) remains the client-side bound. The
+commit only happens for windows over 240 s (`callSeconds` above 240), so calls
+under the default 60 s window are unchanged.
 
 The server publishes `request.json` inside `/bridge`. A trusted controller can
 invoke the immutable `/model-mailbox read` helper using Kubernetes exec with

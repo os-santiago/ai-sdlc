@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path"
 	"regexp"
 	"strings"
@@ -33,6 +34,11 @@ type Manifest struct {
 	Publication  Publication   `json:"publication"`
 	Merge        Merge         `json:"merge"`
 	Recipes      []Recipe      `json:"recipes,omitempty"`
+	// Generation is optional and omitted when absent, so manifests without
+	// it keep their canonical form and digest. It is a separate section, not
+	// part of Verification, because the verifier's settings digest encodes
+	// Verification.
+	Generation *Generation `json:"generation,omitempty"`
 }
 
 // Verification runs the repository's own tests in the sandboxed verifier.
@@ -104,6 +110,196 @@ func validEnv(env map[string]string) bool {
 	return true
 }
 
+// Generation declares reviewed inputs for the generation sandbox. It requires
+// Verification: the toolchain is copied from the verifier's pinned image.
+type Generation struct {
+	Toolchain *Toolchain `json:"toolchain"`
+}
+
+// Toolchain names a self-contained toolchain inside the verification image.
+// Root is copied, bounded, into a volume the generation worker mounts
+// read-only; Path lists directories under Root to put on the worker's PATH.
+type Toolchain struct {
+	Root string   `json:"root"`
+	Path []string `json:"path"`
+}
+
+// Bounds of Toolchain.
+const (
+	MaxToolchainPath      = 8
+	MaxToolchainRootBytes = 256
+)
+
+// toolchainExcluded are directories a toolchain root may not be or be under:
+// the run's writable directories and kernel or device filesystems.
+// Runtime, credential and writable locations: a service account token or host
+// state must never be copied into a volume the generator can read.
+var toolchainExcluded = []string{"/workspaces", "/tmp", "/runner", "/proc", "/sys", "/dev", "/run", "/var/run", "/var/tmp", "/etc"}
+
+// ValidateToolchainRoot reports whether root is an absolute, clean directory
+// path in the conservative character set, other than / and outside the run's
+// writable and kernel directories.
+func ValidateToolchainRoot(root string) error {
+	if len(root) < 2 || len(root) > MaxToolchainRootBytes || root[0] != '/' || cleanPath(root[1:]) != nil {
+		return ErrManifest
+	}
+	for _, excluded := range toolchainExcluded {
+		if root == excluded || strings.HasPrefix(root, excluded+"/") {
+			return ErrManifest
+		}
+	}
+	return nil
+}
+
+func (g Generation) validate() error {
+	if g.Toolchain == nil {
+		return ErrManifest
+	}
+	return g.Toolchain.validate()
+}
+
+// generationEnvNames is the strict allowlist of verification.env names the
+// generation toolchain receives: Go's, cgo's and Rust's. They reach SCC's own
+// Node.js process as well as run_shell children, so nothing that configures
+// Node.js, OpenSSL, the C library, a shell, Python, Git, npm, SCC or the
+// launcher qualifies. Other variables stay verification-only.
+var generationEnvNames = regexp.MustCompile(`^(GO[A-Z0-9]+|CGO_[A-Z0-9_]+|CARGO_[A-Z0-9_]+|RUST[A-Z0-9_]*)$`)
+
+// writableValue matches a value that names the generation worker's writable
+// workspace or scratch volume, for example GOCACHE=/workspaces/cache or
+// GOFLAGS=-modfile=/scratch/go.mod.
+var writableValue = regexp.MustCompile(`(^|[:=, ])/(workspaces|scratch)(/|$|[:, ])`)
+
+// GenerationEnvName reports whether a verification variable reaches the
+// generation toolchain.
+func GenerationEnvName(name string) bool { return generationEnvNames.MatchString(name) }
+
+// GenerationEnvValue reports whether a value may reach the generation
+// toolchain: it must not name /workspaces or /scratch.
+func GenerationEnvValue(value string) bool {
+	if writableValue.MatchString(value) {
+		return false
+	}
+	// A path that is not in canonical form (for example /opt/go/../../scratch)
+	// could resolve to a writable volume the lexical check above misses.
+	for _, token := range pathTokens.Split(value, -1) {
+		if i := strings.IndexByte(token, '/'); i >= 0 && path.Clean(token[i:]) != token[i:] {
+			return false
+		}
+	}
+	return true
+}
+
+// pathTokens splits a value into the pieces that can hold a path: list
+// entries, flag values, words and quoted or semicolon-separated parts.
+var pathTokens = regexp.MustCompile(`[:=, \t;"']`)
+
+// namesRoot reports whether s mentions root as a whole path component: root
+// followed by the end of s or by a character that cannot continue a path
+// component name ('/', a quote, ';' and so on). "/opt/go-old" does not name
+// "/opt/go".
+func namesRoot(root, s string) bool {
+	for i := strings.Index(s, root); i >= 0; {
+		end := i + len(root)
+		if end == len(s) || !componentByte(s[end]) {
+			return true
+		}
+		next := strings.Index(s[i+1:], root)
+		if next < 0 {
+			return false
+		}
+		i += 1 + next
+	}
+	return false
+}
+
+// ErrGenerationEnv refuses a manifest with generation.toolchain whose
+// verification.env gives a toolchain variable a value under /workspaces or
+// /scratch, the generator's writable volumes.
+var ErrGenerationEnv = fmt.Errorf("%w: a verification.env variable passed to generation.toolchain (GO*, CGO_*, CARGO_*, RUST*) names /workspaces or /scratch, uses a non-canonical path, or names the toolchain root other than as a whole ':'-separated path entry", ErrManifest)
+
+// underRoot reports whether p is root or a path below it.
+func underRoot(root, p string) bool {
+	return p == root || strings.HasPrefix(p, root+"/")
+}
+
+// componentByte reports whether b can continue a path component name.
+func componentByte(b byte) bool {
+	return b == '.' || b == '_' || b == '-' || b == '+' || b == '@' || b == '~' ||
+		(b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+// RelocateToolchainPath maps a path at or below root to the same path below
+// dest, where the generation worker mounts the copy; any other path is
+// returned unchanged.
+func RelocateToolchainPath(root, dest, p string) string {
+	if !underRoot(root, p) {
+		return p
+	}
+	return dest + strings.TrimPrefix(p, root)
+}
+
+// RelocateToolchainValue maps every ':'-separated entry of value that is root
+// or lies below it to dest (GOROOT=/usr/local/go becomes the copy). ok is
+// false when value names root anywhere else (for example inside a flag such
+// as -toolexec=/usr/local/go/x), which cannot be translated safely.
+func RelocateToolchainValue(root, dest, value string) (string, bool) {
+	entries := strings.Split(value, ":")
+	for i, entry := range entries {
+		if underRoot(root, entry) {
+			if path.Clean(entry) != entry {
+				return "", false
+			}
+			entries[i] = RelocateToolchainPath(root, dest, entry)
+			continue
+		}
+		// Any other mention of root, including one attached to a flag such as
+		// -I/opt/go/include or inside a file:// URL, cannot be translated.
+		if namesRoot(root, entry) {
+			return "", false
+		}
+	}
+	return strings.Join(entries, ":"), true
+}
+
+// Validate reports whether t is a valid toolchain declaration. The executor
+// rechecks the copy of it that an assignment carries.
+func (t Toolchain) Validate() error { return t.validate() }
+
+// ValidEnv reports whether env is a valid Verification.Env.
+func ValidEnv(env map[string]string) bool { return validEnv(env) }
+
+// ValidCommand reports whether command and workingDir are a valid
+// Verification.Command and Verification.WorkingDir.
+func ValidCommand(command []string, workingDir string) bool {
+	if len(command) == 0 || len(command) > 32 || (workingDir != "" && cleanPath(workingDir) != nil) {
+		return false
+	}
+	for _, arg := range command {
+		if arg == "" || len(arg) > 1024 || strings.IndexFunc(arg, hiddenRune) >= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidImage reports whether image is a pinned verification image reference.
+func ValidImage(image string) bool { return pinnedImage.MatchString(image) }
+
+func (t Toolchain) validate() error {
+	if ValidateToolchainRoot(t.Root) != nil || len(t.Path) == 0 || len(t.Path) > MaxToolchainPath {
+		return ErrManifest
+	}
+	seen := map[string]bool{}
+	for _, dir := range t.Path {
+		if len(dir) > MaxToolchainRootBytes || cleanPath(dir) != nil || seen[dir] {
+			return ErrManifest
+		}
+		seen[dir] = true
+	}
+	return nil
+}
+
 type Result struct {
 	ExitCode  bool   `json:"exitCode"`
 	JUnitPath string `json:"junitPath,omitempty"`
@@ -171,7 +367,10 @@ func ParseManifest(raw []byte) (Manifest, error) {
 	if len(raw) == 0 || len(raw) > MaxManifestBytes || authority.DecodeStrict(raw, &m) != nil || explicitMerge(raw) != nil {
 		return Manifest{}, ErrManifest
 	}
-	if m.Validate() != nil {
+	if err := m.Validate(); err != nil {
+		if errors.Is(err, ErrGenerationEnv) {
+			return Manifest{}, ErrGenerationEnv
+		}
 		return Manifest{}, ErrManifest
 	}
 	return m, nil
@@ -250,6 +449,19 @@ func (m Manifest) Validate() error {
 	if m.Verification != nil && m.Verification.validate() != nil {
 		return ErrManifest
 	}
+	if m.Generation != nil && (m.Verification == nil || m.Generation.validate() != nil) {
+		return ErrManifest
+	}
+	if m.Generation != nil {
+		for name, value := range m.Verification.Env {
+			if !GenerationEnvName(name) {
+				continue
+			}
+			if _, ok := RelocateToolchainValue(m.Generation.Toolchain.Root, "/", value); !GenerationEnvValue(value) || !ok {
+				return ErrGenerationEnv
+			}
+		}
+	}
 	if m.Publication.validate() != nil || m.Merge.validate() != nil || len(m.Recipes) > 8 {
 		return ErrManifest
 	}
@@ -297,12 +509,7 @@ func (v Verification) validate() error {
 			return ErrManifest
 		}
 	}
-	for _, arg := range v.Command {
-		if arg == "" || len(arg) > 1024 || strings.IndexFunc(arg, hiddenRune) >= 0 {
-			return ErrManifest
-		}
-	}
-	if v.WorkingDir != "" && cleanPath(v.WorkingDir) != nil {
+	if !ValidCommand(v.Command, v.WorkingDir) {
 		return ErrManifest
 	}
 	if v.Result.JUnitPath != "" && cleanPath(v.Result.JUnitPath) != nil {

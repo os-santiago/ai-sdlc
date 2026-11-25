@@ -25,11 +25,16 @@ func run() int {
 		Assignment   string `json:"assignment"`
 		Profile      string `json:"profile"`
 		ADevProfile  string `json:"adevProfile"`
+		// RuntimeClass is optional; absent renders the default sandbox class.
+		RuntimeClass string `json:"runtimeClass,omitempty"`
 	}
 	if authority.DecodeStrict(raw, &input) != nil {
 		return 1
 	}
-	workload, err := executor.Compile(input.Namespace, input.WorkerImage, input.MailboxImage, []byte(input.Assignment), []byte(input.Profile), []byte(input.ADevProfile), time.Now())
+	if input.RuntimeClass == "" {
+		input.RuntimeClass = executor.DefaultRuntimeClass
+	}
+	workload, err := executor.Compile(input.Namespace, input.WorkerImage, input.MailboxImage, input.RuntimeClass, []byte(input.Assignment), []byte(input.Profile), []byte(input.ADevProfile), time.Now())
 	if err != nil || json.NewEncoder(os.Stdout).Encode(workload) != nil {
 		return 1
 	}
