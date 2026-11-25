@@ -21,7 +21,8 @@ adapter runs, and a proposal for a removed tool is refused as unknown.
 
 The adapters' rewrite guard (``AI_SDLC_MODEL_GATEWAY_REWRITE_GUARD``, default
 ``true``; the chart sets ``false`` on the review gateway) judges a proposed
-``write_file`` (a whole rewrite, or a new file copying a read one) only from
+``write_file`` (a whole rewrite, or a new file copying a read one) and a
+destructive ``edit_file`` (one deleting much of a read file) only from
 the request's own messages, never the workspace.
 """
 import hmac
@@ -59,14 +60,16 @@ CALL_SECONDS_HEADER = "X-AI-SDLC-Call-Seconds"
 
 
 def log_call(outcome, started, seconds, reason=None, prompt=None, completion=None, estimated=None, recounted=0,
-             degenerate_retries=0, withheld=0, rewrite_retries=0, rewrite_passed=0, copy_retries=0, copy_passed=0):
+             degenerate_retries=0, withheld=0, rewrite_retries=0, rewrite_passed=0, copy_retries=0, copy_passed=0,
+             delete_retries=0, delete_passed=0):
     """One bounded event per completion: outcome, duration, the call budget,
     token counts, how many edit_file patches had their hunk counts repaired,
     when the degenerate-output guard fired, how many retries it spent
     (``degenerateRetries``, 0 or 1), whether the rewrite guard retried a
     refused whole-file rewrite (``rewriteRetries``) or passed one through
     (``rewritePassed``), the same for a refused copy into a new file
-    (``copyRetries``, ``copyPassed``), each present only as 1, and, when the installation
+    (``copyRetries``, ``copyPassed``) and a refused destructive edit_file
+    (``deleteRetries``, ``deletePassed``), each present only as 1, and, when the installation
     narrows the tools, how many tool definitions the model did not see
     (``toolsWithheld``). Never request or response content, tool names or paths.
     Logging never changes the response: a failed write is ignored."""
@@ -81,7 +84,8 @@ def log_call(outcome, started, seconds, reason=None, prompt=None, completion=Non
     if type(degenerate_retries) is int and 0 <= degenerate_retries <= 1 and (degenerate_retries or reason == "degenerate"):
         event["degenerateRetries"] = degenerate_retries
     for key, value in (("rewriteRetries", rewrite_retries), ("rewritePassed", rewrite_passed),
-                       ("copyRetries", copy_retries), ("copyPassed", copy_passed)):
+                       ("copyRetries", copy_retries), ("copyPassed", copy_passed),
+                       ("deleteRetries", delete_retries), ("deletePassed", delete_passed)):
         if type(value) is int and value == 1:
             event[key] = value
     if type(withheld) is int and 0 < withheld <= 64:
@@ -139,7 +143,8 @@ class GatewayHandler(Handler):
             log_call("failed", started, seconds, reason=failure_class(error),
                      degenerate_retries=getattr(error, "degenerate_retries", 0), withheld=withheld,
                      rewrite_retries=getattr(error, "rewrite_retries", 0),
-                     copy_retries=getattr(error, "copy_retries", 0))
+                     copy_retries=getattr(error, "copy_retries", 0),
+                     delete_retries=getattr(error, "delete_retries", 0))
             raise
         log_call("ok", started, seconds, prompt=completion.prompt_tokens, completion=completion.completion_tokens, estimated=completion.estimated,
                  recounted=getattr(completion, "edit_patches_recounted", 0),
@@ -147,7 +152,9 @@ class GatewayHandler(Handler):
                  rewrite_retries=getattr(completion, "rewrite_retries", 0),
                  rewrite_passed=getattr(completion, "rewrite_passed", 0),
                  copy_retries=getattr(completion, "copy_retries", 0),
-                 copy_passed=getattr(completion, "copy_passed", 0))
+                 copy_passed=getattr(completion, "copy_passed", 0),
+                 delete_retries=getattr(completion, "delete_retries", 0),
+                 delete_passed=getattr(completion, "delete_passed", 0))
         return completion.message
 
     def call_seconds(self, profile):

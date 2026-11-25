@@ -463,14 +463,15 @@ stopping it there saves the generation.
 
 A move or a split repeats content legitimately. The copy is not refused when
 the same answer also proposes an `edit_file` on the source that removes the
-copied lines (the removal half of the move). Its removed lines (`-`, not the
-`---` header) must cover at least 30 of the copied lines, or half of them,
-after the same line normalization. An additive edit, or one that removes a
-few lines, does not exempt a copy. While streaming, the gateway sees only the
-calls that came before. An `edit_file` on the source sent first leaves the
-decision to the final message, which then judges the removal. An `edit_file`
-sent after the copy arrives too late. The copy is refused once, and the
-correction asks for the removal in the same answer.
+copied lines (the removal half of the move). Its removed lines (the `-`
+lines inside hunks, see [the destructive-edit guard](#destructive-edit-guard))
+must cover at least 30 of the copied lines, or half of them, after the same
+line normalization. An additive edit, or one that removes a few lines, does
+not exempt a copy. While streaming, the gateway sees only the calls that came
+before, so a streamed move costs one retry in either order. If the copy comes
+first, the copy guard stops it. If the removal comes first, the
+destructive-edit guard stops it. The correction asks for both halves in the
+same answer, and the retry, judged whole on its final message, passes.
 
 - **Detection.** The `openai` adapter decodes the streamed `content` string as
   it arrives and stops the stream as soon as the content qualifies. Each
@@ -494,6 +495,102 @@ correction asks for the removal in the same answer.
 
 The copy guard has no switch of its own: `AI_SDLC_MODEL_GATEWAY_REWRITE_GUARD`
 turns both checks on or off.
+
+## Destructive-edit guard
+
+In evaluation battery 30, with the rewrite and copy guards installed, a
+candidate for "Add kv.HasAll" failed verification. Its `kv/kv.go` went from
+6,424 to 1,663 bytes. It had lost `Equal`, `ParseInts`, `Format` and other
+functions, so the package did not compile. The model never called
+`write_file` on it. It read the file and then sent `edit_file` patches that
+deleted most of it.
+
+The guard therefore also judges each `edit_file` on a file the model read in
+the conversation. The file's size comes from its latest successful read
+with SCC's note (`[N lines total]`, or `[R lines shown, N total. ...]` for a
+partial read, which still gives the whole file's line total). A file whose
+latest read has no note, a file not read, and a file the model created are
+never judged.
+
+A patch's lines are classified once, by one parser shared with the copy
+guard's move check. Before the first hunk header (`@@`) every line is
+preamble, so the `---`/`+++` file headers never count. Inside hunks every
+line starting with `-` is a removed line, including a removed `-- comment`
+(written `--- comment`). Every line starting with `+` is an added one. A
+multi-file patch, which SCC refuses anyway, is counted as one: its later
+headers cannot be told apart from such lines.
+
+The guard judges the model's edits of one file together. It adds up every
+`edit_file` on the file in the answer, and the successful `edit_file` calls
+on it since its latest read. Those come from the request's history, matched
+to their results by call id. A call with an error result, or with no result,
+changed nothing. Only a read that gives the total starts the count again. The battery 30 candidate deleted the file in several
+patches, and each one alone could pass.
+
+All counts are lines of code: lines with at least 4 letters or digits, as
+the copy guard compares them. Braces, blank lines and short lines such as
+`)` count on no side. Counting both sides the same way keeps a same-size
+rewrite of a brace-heavy block in balance, and blank-line padding cannot
+offset removed code. The file's lines of code come from its latest read with
+SCC's note. A whole read counts them exactly. For a partial read, the note's
+line total is scaled by the share of code among the lines shown, an estimate
+of the same quantity.
+
+The edits are destructive when they remove:
+
+- at least 30 lines of code,
+- at least 40% of the file's lines of code, and
+- at least 30 more lines of code than they add.
+
+A removed line that the same edits add back is not counted on either side,
+so moving a block within the file (removed in one hunk, added in another, or
+in two `edit_file` calls) passes. Only non-trivial lines are matched this way,
+as the copy guard compares them; braces and blank lines never are. The net
+bound lets a block be replaced by a block of similar size, such as a
+rewritten function. The fraction keeps a 30-line removal in a large file out.
+A targeted fix removes a few lines.
+
+An answer is refused only when it makes the file's edits destructive. Once
+they already are, for example after an earlier refusal was passed through,
+later answers are not refused again until the file is read once more. A read
+starts the count again against its own total. Deleting a large part of a
+file on purpose, because the issue asks for it, costs one retry, then passes.
+
+The removal half of a move to another file is not destructive. That holds
+when the same answer also writes another file holding at least half of the
+removed lines that leave the file, after discounting those the same edits add
+back within it. In the history, an earlier move out counts only when its
+`write_file` also succeeded. Such a move then adds nothing to the file's
+earlier edits, so it never makes a later real deletion look already
+destructive.
+
+- **Detection.** The `openai` adapter decodes the streamed `patch`. It
+  counts on top of earlier edits of the file and the edits of it completed
+  earlier in the stream, read each time a hunk or the patch end is judged.
+  A pure deletion cannot be a move. So the stream is stopped at the first
+  completed hunk that makes the edits destructive, but
+  only while the patch has added no non-trivial line and the next hunk's
+  header declares fewer new lines than old ones. Otherwise the judgment
+  waits for the end of the patch, where a block that comes back is
+  discounted as on the final message. The early stop can still misfire: a
+  small hunk that removes more than it adds may come before the hunk that
+  adds the block back, and a model's hunk headers may be wrong. That costs
+  one retry, and the retry is judged whole on its final message. A typical
+  streamed reorder, where the block is removed and then added back in the
+  next hunk, passes without a retry. Hunks are judged whole because a hunk's
+  added lines follow its removed ones. A destructive patch after a
+  `write_file` in the same answer is left to the final message, which judges
+  a possible move. Every final message is judged on its whole patches.
+- **Retry.** The same single shared guard retry, with this correction:
+  `edit_file on "<path>" was refused: your edits delete N of its M lines of code.
+  Keep existing code and tests; change only the lines the issue needs, and
+  add new code without removing what is there, unless the issue asks you to
+  move or remove it. To move code to another file, write it there in the same
+  answer.`
+- **Fail open.** The same rules as the other guards.
+
+`AI_SDLC_MODEL_GATEWAY_REWRITE_GUARD` turns this check on or off with the
+others.
 
 ## Per-call events
 
@@ -520,9 +617,11 @@ absent otherwise:
 {"event": "model-call", "outcome": "failed", "seconds": 24.9, "budgetSeconds": 300, "reason": "degenerate", "degenerateRetries": 1}
 ```
 
-The [copy guard](#copy-guard) adds `"copyRetries": 1` and `"copyPassed": 1`
-by the same rules. One call spends at most one guard retry, so at most one of
-`rewriteRetries` and `copyRetries` is present.
+The [copy guard](#copy-guard) adds `"copyRetries": 1` and `"copyPassed": 1`,
+and the [destructive-edit guard](#destructive-edit-guard) adds
+`"deleteRetries": 1` and `"deletePassed": 1`, by the same rules. One call
+spends at most one guard retry, so at most one of `rewriteRetries`,
+`copyRetries` and `deleteRetries` is present.
 
 When the [rewrite guard](#rewrite-guard) refused an answer and retried, the
 event carries `"rewriteRetries": 1`, also on a failure of the retry. When a

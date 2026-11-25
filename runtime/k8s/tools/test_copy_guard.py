@@ -287,7 +287,7 @@ class StreamingCopyTests(unittest.TestCase):
         self.assertEqual(self.counts(completion), (0, 0, 1, 0))
         self.assertEqual(base.SSEUpstream.seen[2]["messages"][-1], rg.correction(EXISTING))
 
-    def test_a_streamed_move_is_left_to_the_final_message(self):
+    def test_a_streamed_move_with_the_edit_first_is_judged_whole_on_the_retry(self):
         edit_first = base.stream(
             base.chunk(calls=[{"index": 0, "id": "e", "type": "function", "function": {
                 "name": "edit_file", "arguments": json.dumps({"path": EXISTING, "patch": REMOVAL})}}]),
@@ -295,9 +295,12 @@ class StreamingCopyTests(unittest.TestCase):
                 "name": "write_file", "arguments": json.dumps({"path": NEW, "content": SOURCE})[:-1]}}]),
             base.chunk(calls=[{"index": 1, "function": {"arguments": "}"}}]),
             base.chunk(finish="tool_calls"))
-        base.SSEUpstream.script = [edit_first]
+        # The destructive-edit guard sees the removal before the new file and
+        # stops it once; the retry's move is judged whole and passes.
+        base.SSEUpstream.script = [edit_first, edit_first]
         completion = self.adapter().complete(READ)
-        self.assertEqual((len(base.SSEUpstream.seen), self.counts(completion)), (1, (0, 0, 0, 0)))
+        self.assertEqual((len(base.SSEUpstream.seen), self.counts(completion)), (2, (0, 0, 0, 0)))
+        self.assertEqual((completion.delete_retries, completion.delete_passed), (1, 0))
 
     def test_disabled_guard_and_a_failing_copy_check_never_refuse(self):
         base.SSEUpstream.script = [COPY]

@@ -29,7 +29,11 @@ a whole file which existed before the conversation (``RewriteGuard``), judged
 only from the request's own messages. The ``openai`` adapter stops such a
 stream as soon as the call's path is known. It also refuses a ``write_file``
 to a new path whose content copies a file the model read (the copy guard),
-as soon as enough content has streamed. The request is then repeated with one
+as soon as enough content has streamed, and an ``edit_file`` whose patches
+delete much of a file the model read (the destructive-edit guard). Such a
+patch is stopped at a completed hunk only while it has added no non-trivial
+line and the next hunk's header declares fewer new lines than old ones;
+otherwise it is judged when it ends. The request is then repeated with one
 short correction appended, inside the same call budget; one such retry per
 call in total, and a second refusal is passed through unchanged (fail open).
 """
@@ -125,6 +129,25 @@ COPY_CONTENT = re.compile(r'"content"\s*:\s*"')
 # this marker (pruneMessageHistory); the cut lines simply match nothing.
 PRUNED_NOTE = re.compile(r"\n\n\.\.\. \[Tool output of \d+ characters truncated to save context window\] \.\.\.\n\n")
 READ_NOTE = re.compile(r"\n\n\[\d+ lines (?:total|shown, \d+ total\. [^\n]*)\]\Z")
+# The same note, capturing the file's total line count.
+READ_TOTAL = re.compile(r"\n\n\[(?:(\d{1,9}) lines total|\d{1,9} lines shown, (\d{1,9}) total\. [^\n]*)\]\Z")
+# Destructive-edit guard (``destructive``). Counted in lines of code (lines
+# with at least 4 letters or digits, ``copy_line``) on every side, the model's
+# edits of a read file since its latest read are destructive when they remove
+# at least DELETE_MIN_LINES of them, at least DELETE_FRACTION of the file's
+# (SCC's read note gives the line total even for a partial read; the share of
+# code among the lines shown scales it), and at least DELETE_MIN_NET more
+# than they add. Replacing a block with a block of
+# similar size never qualifies, nor does moving a block within the file; a
+# targeted fix removes a few lines.
+DELETE_MIN_LINES = 30
+DELETE_FRACTION = 0.4
+DELETE_MIN_NET = 30
+EDIT_PATCH = re.compile(r'"patch"\s*:\s*"')
+DELETE_CORRECTION = ("edit_file on %s was refused: your edits delete %d of its %d lines of code. Keep existing code and "
+                     "tests; change only the lines the issue needs, and add new code without removing what is there, "
+                     "unless the issue asks you to move or remove it. To move code to another file, write it there "
+                     "in the same answer.")
 COPY_CORRECTION = ("write_file to %s was refused: it repeats content of %s that already exists. Write only "
                    "the new code and tests the issue asks for; never copy existing tests or code into a new file, "
                    "unless the issue asks you to move it: then also remove it from %s with edit_file in the same answer.")
@@ -144,6 +167,8 @@ class Completion:
     rewrite_passed: int = 0
     copy_retries: int = 0
     copy_passed: int = 0
+    delete_retries: int = 0
+    delete_passed: int = 0
 
 
 def _hunks(lines):
@@ -360,7 +385,8 @@ class RewriteRefused(ValueError):
         self.path = refusal.path
 
 
-# kind: "rewrite" or "copy"; source: the read file a copy repeats (or None).
+# kind: "rewrite", "copy" or "delete"; source: the read file a copy repeats,
+# (removed, total) lines for a destructive edit, or None.
 Refusal = namedtuple("Refusal", "kind path source")
 
 
@@ -412,6 +438,166 @@ def correction_text(path):
 def copy_correction_text(path, source):
     """The fixed correction for a new file ``path`` that copies ``source``."""
     return COPY_CORRECTION % (_shown(path), _shown(source), _shown(source))
+
+
+def delete_correction_text(path, removed, total):
+    """The fixed correction for a destructive edit of ``path``."""
+    return DELETE_CORRECTION % (_shown(path), removed, total)
+
+
+class PatchLines:
+    """Classifies a unified diff's lines in order. Before the first hunk
+    header ("@@") every line is preamble, so the "---"/"+++" file headers
+    are never counted. Inside hunks every line starting with "-" is a removed
+    line, including "-- x" and "--- x" (a removed line that itself starts
+    with "-- "), and every line starting with "+" an added one. A multi-file
+    patch (which SCC refuses) is counted as one: its later headers are
+    indistinguishable from such lines. ``meaningful_removed`` and
+    ``meaningful`` count the removed and added lines that are not trivial
+    (``copy_line``): the destructive-edit bounds count lines of code on both
+    sides, so neither braces nor blank-line padding tip them. ``feed`` returns True when a line starts a hunk after an
+    earlier one: the earlier hunk is complete."""
+    def __init__(self):
+        self.in_hunk, self.removed, self.added, self.meaningful = False, 0, 0, 0
+        self.meaningful_removed = 0
+        self.removed_lines, self.added_lines = [], []
+
+    def close(self):
+        """Ends the patch (nothing is pending)."""
+
+    def feed(self, line):
+        if line.startswith("@@"):
+            completed, self.in_hunk = self.in_hunk, True
+            return completed
+        if not self.in_hunk:
+            return False
+        if line.startswith("-"):
+            self.removed += 1
+            if copy_line(line[1:]) is not None:
+                self.meaningful_removed += 1
+            if len(self.removed_lines) < COPY_MAX_LINES:
+                self.removed_lines.append(line[1:])
+        elif line.startswith("+"):
+            self.added += 1
+            if copy_line(line[1:]) is not None:
+                self.meaningful += 1
+            if len(self.added_lines) < COPY_MAX_LINES:
+                self.added_lines.append(line[1:])
+        return False
+
+
+def moved_within(removed_lines, added_lines):
+    """How many removed lines come back as added lines (a block moved within
+    the same file), matched one for one as the copy guard compares lines.
+    Trivial lines (braces, blank lines) never match: any edit moves those."""
+    added = {}
+    for line in filter(None, map(copy_line, added_lines)):
+        added[line] = added.get(line, 0) + 1
+    matched = 0
+    for line in removed_lines:
+        key = copy_line(line)
+        if key is not None and added.get(key):
+            added[key] -= 1
+            matched += 1
+    return matched
+
+
+def net_removed(removed_lines, added_lines):
+    """The removed lines that do not come back as added lines of the same
+    file, matched one for one as ``moved_within`` matches them."""
+    added = {}
+    for line in filter(None, map(copy_line, added_lines)):
+        added[line] = added.get(line, 0) + 1
+    remaining = []
+    for line in removed_lines:
+        key = copy_line(line)
+        if key is not None and added.get(key):
+            added[key] -= 1
+        else:
+            remaining.append(line)
+    return remaining
+
+
+def patch_counts(patches, lines=None):
+    """(removed, added) lines of code of ``patches`` taken together, after
+    discounting removed lines that come back as added ones (a block moved
+    within the file). ``lines``, when given, collects the removed lines that
+    remain after that discount."""
+    removed, added = [], []
+    removed_count = added_count = 0
+    for patch in patches:
+        parsed = PatchLines()
+        for line in patch.split("\n"):
+            parsed.feed(line)
+        removed += parsed.removed_lines
+        added += parsed.added_lines
+        removed_count, added_count = removed_count + parsed.meaningful_removed, added_count + parsed.meaningful
+    if lines is not None:
+        lines.extend(net_removed(removed, added))
+    moved = moved_within(removed, added)
+    return removed_count - moved, added_count - moved
+
+
+def destructive(removed, added, total):
+    """The ``DELETE_*`` bounds on removed and added lines of code, against
+    the file's ``total`` lines of code."""
+    return (removed >= DELETE_MIN_LINES and removed >= DELETE_FRACTION * total
+            and removed - added >= DELETE_MIN_NET)
+
+
+class _DeleteWatch:
+    """Judges one streamed ``edit_file`` patch on a file of ``total`` known
+    lines, on top of ``base`` (removed, added) lines of the model's other
+    edits of the file since its latest read and earlier in this answer.
+
+    ``line`` returns (removed, total) at a completed hunk only while the
+    patch has added no meaningful line and the next hunk's header declares
+    fewer new lines than old ones: a pure deletion cannot be a move, so it is
+    stopped early. Otherwise the judgment waits for ``end``, which
+    discounts removed lines that come back as added ones (``moved_within``),
+    as the final message does. Hunks are judged whole because a hunk's added
+    lines follow its removed ones. Only an answer that makes the file's edits
+    destructive is refused; once they already are, later answers are not."""
+    def __init__(self, target, total, base=(0, 0)):
+        # ``base`` may be a callable, read each time a hunk or the end is
+        # judged, so edits completed meanwhile in the same stream count.
+        self.target, self.total, self._base, self.patch = target, total, base, PatchLines()
+
+    @property
+    def base(self):
+        return self._base() if callable(self._base) else self._base
+
+    def counts(self, moved=0):
+        """The patch's (removed, added) lines of code, less ``moved``."""
+        return self.patch.meaningful_removed - moved, self.patch.meaningful - moved
+
+    def verdict(self, counts):
+        removed, added = self.base[0] + counts[0], self.base[1] + counts[1]
+        if destructive(removed, added, self.total) and not destructive(*self.base, self.total):
+            return removed, self.total
+        return None
+
+    def line(self, line):
+        if self.patch.feed(line) and self.patch.meaningful == 0 and not self.may_add(line):
+            return self.verdict(self.counts())
+        return None
+
+    @staticmethod
+    def may_add(header):
+        """Whether the hunk ``header`` starts may add lines (it declares at
+        least as many new lines as old ones, or cannot be read): the removed
+        block may come back there, so the judgment waits for the end."""
+        match = HUNK_HEADER.match(header)
+        if match is None:
+            return True
+        old = int(match.group(2)) if match.group(2) is not None else 1
+        new = int(match.group(4)) if match.group(4) is not None else 1
+        return new >= old
+
+    def end(self):
+        if not self.patch.in_hunk:
+            return None
+        return self.verdict(self.counts(moved_within(self.patch.removed_lines, self.patch.added_lines)))
 
 
 def copy_line(line):
@@ -545,12 +731,24 @@ class RewriteGuard:
         self.request, self.deadline, self.can_retry = request, deadline, can_retry
         self.existing = self.preexisting(messages)
         self.reads = self.read_lines(messages) if copies else {}
+        self.totals = self.read_totals(messages) if copies else {}
+        self.edits = self.edits_since_read(messages) if copies else {}
+        self.stream_edits = {}
         self.streams = {}
         self.retries = {}
 
     def begin_stream(self):
-        """Forgets what was decided per call index in an earlier stream."""
-        self.streams = {}
+        """Forgets what was decided per call index in an earlier stream, and
+        the edits that stream proposed."""
+        self.streams, self.stream_edits = {}, {}
+
+    def base(self, path, *more):
+        """(removed, added) lines of the model's earlier edits of ``path``
+        since its latest read, plus ``more`` such pairs."""
+        removed, added = self.edits.get(path, (0, 0))
+        for extra_removed, extra_added in more:
+            removed, added = removed + extra_removed, added + extra_added
+        return removed, added
 
     @staticmethod
     def _results(messages):
@@ -581,13 +779,11 @@ class RewriteGuard:
         return frozenset(existing)
 
     @staticmethod
-    def read_lines(messages):
-        """The distinct non-trivial lines each path's successful reads hold.
-        SCC's trailing "[N lines ...]" note, and the marker SCC puts in an old
-        output it shortened, are not file content. A file the model created
-        (``write_file`` before any read or edit proved it existed) is never a
-        source."""
-        reads, existing, created = {}, set(), set()
+    def _reads(messages):
+        """(path, result) of each successful ``read_file`` in order, except of
+        a file the model created (``write_file`` before any read or edit
+        proved it existed)."""
+        existing, created = set(), set()
         for name, path, _, result in RewriteGuard._calls(messages, RewriteGuard._results(messages)):
             if name in (READ_TOOL, EDIT_TOOL) and path not in created and RewriteGuard.opened(result):
                 existing.add(path)
@@ -595,9 +791,75 @@ class RewriteGuard:
                 created.add(path)
             if (name == READ_TOOL and path not in created and isinstance(result, str)
                     and not result.startswith(TOOL_ERROR_PREFIXES)):
-                text = PRUNED_NOTE.sub("\n", READ_NOTE.sub("", result))
-                reads.setdefault(path, set()).update(copy_lines(text))
+                yield path, result
+
+    @staticmethod
+    def read_lines(messages):
+        """The distinct non-trivial lines each path's successful reads hold.
+        SCC's trailing "[N lines ...]" note, and the marker SCC puts in an old
+        output it shortened, are not file content. A file the model created
+        is never a source."""
+        reads = {}
+        for path, result in RewriteGuard._reads(messages):
+            text = PRUNED_NOTE.sub("\n", READ_NOTE.sub("", result))
+            reads.setdefault(path, set()).update(copy_lines(text))
         return {path: frozenset(lines) for path, lines in reads.items() if lines}
+
+    @staticmethod
+    def edits_since_read(messages):
+        """(removed, meaningful added) lines of each read file's successful
+        ``edit_file`` calls since its latest read with a total, matched to their results by
+        call id. A removed line that comes back as an added line of the same
+        patch (a block moved within the file) is not counted on either side.
+        A call without a result, or with an error result, changed nothing. The
+        removal half of a move out of the file (``moves_out``, against the
+        successful ``write_file`` calls of the same answer) is not counted."""
+        results = RewriteGuard._results(messages)
+        edits, read = {}, set()
+        for message in messages:
+            calls = list(RewriteGuard._calls([message], results))
+            written = [(name, target, arguments) for name, target, arguments, result in calls
+                       if name == WRITE_TOOL and RewriteGuard._succeeded(result)]
+            for name, path, arguments, result in calls:
+                if name == READ_TOOL and RewriteGuard._succeeded(result) and READ_TOTAL.search(result):
+                    # Only a read that gives the total restarts the count against it.
+                    read.add(path)
+                    edits[path] = (0, 0)
+                elif (name == EDIT_TOOL and RewriteGuard._succeeded(result) and path in read
+                        and isinstance(arguments.get("patch"), str)):
+                    removed_lines = []
+                    removed, added = patch_counts([arguments["patch"]], removed_lines)
+                    if RewriteGuard.moves_out(written, path, removed_lines):
+                        removed = 0
+                    before = edits[path]
+                    edits[path] = (before[0] + removed, before[1] + added)
+        return {path: counts for path, counts in edits.items() if counts != (0, 0)}
+
+    @staticmethod
+    def _succeeded(result):
+        return isinstance(result, str) and not result.startswith(TOOL_ERROR_PREFIXES)
+
+    @staticmethod
+    def read_totals(messages):
+        """Each read file's lines of code (non-trivial lines, ``copy_line``),
+        from its latest read with SCC's note. The note gives the whole file's
+        line count even for a partial read; the share of lines of code among
+        the lines shown scales it, so a partial read estimates the same
+        quantity a whole read counts exactly. When the latest read has no
+        note, the file is not judged."""
+        totals = {}
+        for path, result in RewriteGuard._reads(messages):
+            totals.pop(path, None)  # the latest read decides, with or without a note
+            match = READ_TOTAL.search(result)
+            if match is None:
+                continue
+            lines = int(match.group(1) or match.group(2))
+            shown = PRUNED_NOTE.sub("\n", READ_NOTE.sub("", result)).split("\n")
+            code = sum(copy_line(line) is not None for line in shown)
+            total = lines if not shown or code == len(shown) else round(lines * code / len(shown))
+            if total > 0:
+                totals[path] = total
+        return totals
 
     @staticmethod
     def opened(result):
@@ -631,6 +893,9 @@ class RewriteGuard:
     def refused(self, message):
         """The first refusal a final message holds, or ``None``."""
         calls = [_call_arguments(call) for call in message.get("tool_calls") or []]
+        refusal = self.destructive_edits(calls)
+        if refusal is not None:
+            return refusal
         for name, path, arguments in calls:
             if name != WRITE_TOOL:
                 continue
@@ -658,22 +923,52 @@ class RewriteGuard:
                 return source
         return None
 
+    def destructive_edits(self, calls):
+        """The first read file whose ``edit_file`` calls in this answer, taken
+        whole and together, on top of the model's earlier edits since its
+        latest read, make its edits destructive; the removal half of a move
+        out of the file is exempt."""
+        patches = {}
+        for name, path, arguments in calls:
+            if name == EDIT_TOOL and path in self.totals and isinstance(arguments.get("patch"), str):
+                patches.setdefault(path, []).append(arguments["patch"])
+        for path, texts in patches.items():
+            removed_lines = []
+            counts = patch_counts(texts, removed_lines)
+            base, total = self.base(path), self.totals[path]
+            removed, added = self.base(path, counts)
+            if (destructive(removed, added, total) and not destructive(*base, total)
+                    and not self.moves_out(calls, path, removed_lines)):
+                return Refusal("delete", path, (removed, total))
+        return None
+
+    @staticmethod
+    def moves_out(calls, source, removed):
+        """Whether a ``write_file`` to another path among ``calls`` holds at
+        least half of the distinct non-trivial ``removed`` lines: the patch on
+        ``source`` is then the removal half of a move or split."""
+        removed = set(filter(None, map(copy_line, removed)))
+        for name, path, arguments in calls:
+            content = arguments.get("content") if name == WRITE_TOOL and path != source else None
+            if isinstance(content, str) and removed and 2 * len(removed & copy_lines(content)) >= len(removed):
+                return True
+        return False
+
     @staticmethod
     def removes(calls, source, copied):
         """Whether an ``edit_file`` on ``source`` among ``calls`` removes the
         copied lines: the removal half of a move or split. Its removed lines
-        ("-", not the "---" file header) must cover at least
+        (inside hunks, see ``PatchLines``) must cover at least
         ``COPY_MIN_MATCHED`` of the copied lines, or half of them."""
         removed = set()
         for name, path, arguments in calls:
             patch = arguments.get("patch") if name == EDIT_TOOL and path == source else None
             if not isinstance(patch, str):
                 continue
+            lines = PatchLines()
             for line in patch.split("\n"):
-                if line.startswith("-") and not line.startswith("--- ") and line != "---":
-                    normalized = copy_line(line[1:])
-                    if normalized is not None:
-                        removed.add(normalized)
+                lines.feed(line)
+            removed.update(filter(None, map(copy_line, lines.removed_lines)))
         covered = len(removed & copied)
         return covered > 0 and (covered >= COPY_MIN_MATCHED or 2 * covered >= len(copied))
 
@@ -685,8 +980,12 @@ class RewriteGuard:
         if not self.can_retry or self.deadline - time.monotonic() < REWRITE_RETRY_MIN_SECONDS:
             return None
         if refusal not in self.retries:
-            text = (correction_text(refusal.path) if refusal.kind == "rewrite"
-                    else copy_correction_text(refusal.path, refusal.source))
+            if refusal.kind == "rewrite":
+                text = correction_text(refusal.path)
+            elif refusal.kind == "copy":
+                text = copy_correction_text(refusal.path, refusal.source)
+            else:
+                text = delete_correction_text(refusal.path, *refusal.source)
             request = dict(self.request, messages=list(self.request["messages"]) + [{"role": "user", "content": text}])
             try:
                 validate_request(request)
@@ -707,9 +1006,11 @@ class RewriteGuard:
         pre-existing file: its content is never waited for. A copy is known
         when the content streamed so far qualifies. Each call is decided
         once; what streaming cannot decide is left to the final message."""
-        if name != WRITE_TOOL or (index in self.streams and self.streams[index] is None):
+        if name not in (WRITE_TOOL, EDIT_TOOL) or (index in self.streams and self.streams[index] is None):
             return None
         state = self.streams.get(index)
+        if name == EDIT_TOOL:
+            return self._streamed_edit(index, arguments, state)
         if state is None:
             match = STREAMED_PATH.match(arguments[:REWRITE_SCAN_CHARS])
             if match is None:
@@ -741,6 +1042,52 @@ class RewriteGuard:
                 return self._stop(index, Refusal("copy", watch.target, source))
         if content.done:
             self.streams[index] = None
+        return None
+
+    def _streamed_edit(self, index, arguments, state):
+        """A streamed ``edit_file``: its patch is judged at each completed
+        hunk, once its path is a read file of known length, on top of the
+        model's earlier edits of the file since its latest read and the
+        completed edits of it earlier in this stream. A pure deletion is
+        stopped at its hunk; a patch that also adds code is judged at its end
+        (see ``_DeleteWatch``)."""
+        if state is None:
+            match = STREAMED_PATH.match(arguments[:REWRITE_SCAN_CHARS])
+            if match is None:
+                if len(arguments) >= REWRITE_SCAN_CHARS:
+                    self.streams[index] = None
+                return None
+            try:
+                path = guard_path(json.loads(match.group(1)))
+            except (ValueError, RecursionError):
+                path = None
+            if path not in self.totals:
+                self.streams[index] = None
+                return None
+            # Completed edits earlier in this stream, read when each hunk is
+            # judged; the current patch is added only once it completes.
+            base = lambda path=path: self.base(path, self.stream_edits.get(path, (0, 0)))
+            state = self.streams[index] = [_DeleteWatch(path, self.totals[path], base), None]
+        watch, patch = state
+        if patch is None:
+            start = EDIT_PATCH.search(arguments, 0, REWRITE_SCAN_CHARS)
+            if start is None:
+                if len(arguments) >= REWRITE_SCAN_CHARS:
+                    self.streams[index] = None
+                return None
+            patch = state[1] = _StreamedString(start.end())
+        for line in patch.feed(arguments):
+            verdict = watch.line(line)
+            if verdict is not None:
+                return self._stop(index, Refusal("delete", watch.target, verdict))
+        if patch.done:
+            verdict = watch.end()
+            if verdict is not None:
+                return self._stop(index, Refusal("delete", watch.target, verdict))
+            self.streams[index] = None
+            done = self.stream_edits.get(watch.target, (0, 0))
+            counts = watch.counts(moved_within(watch.patch.removed_lines, watch.patch.added_lines))
+            self.stream_edits[watch.target] = (done[0] + counts[0], done[1] + counts[1])
         return None
 
 
@@ -1045,6 +1392,9 @@ class _Stream:
             if path is not None and path.kind == "copy" and self.rewrite.moved(path.source, (
                     (c["name"], c["arguments"]) for i, c in self.calls.items() if i != index)):
                 path = None  # a move: left to the final message, which sees the whole answer
+            if path is not None and path.kind == "delete" and any(
+                    c["name"] == WRITE_TOOL for i, c in self.calls.items() if i != index):
+                path = None  # possibly a move: the final message judges the whole answer
             if path is not None:
                 raise _Stop(RewriteRefused(path))
 
@@ -1183,12 +1533,14 @@ class Adapter:
         except Exception as error:
             error.degenerate_retries = call.degenerate_retries
             error.rewrite_retries, error.copy_retries = int(retried == "rewrite"), int(retried == "copy")
+            error.delete_retries = int(retried == "delete")
             raise
         finally:
             self.truncation_ok, self._call = False, None
         completion.degenerate_retries = call.degenerate_retries
         completion.rewrite_retries, completion.rewrite_passed = int(retried == "rewrite"), int(passed == "rewrite")
         completion.copy_retries, completion.copy_passed = int(retried == "copy"), int(passed == "copy")
+        completion.delete_retries, completion.delete_passed = int(retried == "delete"), int(passed == "delete")
         # Every adapter's message is normalized here, before the gateway
         # returns it and so before the broker records or digests anything.
         completion.edit_patches_recounted = recount_edit_patches(completion.message)
