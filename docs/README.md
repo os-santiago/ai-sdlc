@@ -11,6 +11,8 @@ Start here:
 - [Release plan](releases/release-plan.md): where AI-SDLC stands and the exit
   criteria for Beta, Release Candidate and General Availability.
 - [Latest end-to-end evidence](evidence/2026-11-20-issue-only-e2e.md).
+- [Evaluation harness](operations/evaluation-harness.md): delivery rates per
+  repository and model path, with 95% intervals and the Beta gate check.
 - [Runtime upgrades and installation details](operations/runtime-upgrades.md).
 
 Current operational documentation lives with the Kubernetes/OpenShift runtime:

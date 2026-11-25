@@ -33,12 +33,42 @@ because further attempts would only measure that block.
 ```bash
 python3 tools/evaluation/run_battery.py --repository OWNER/REPO --issues 4,5,6 \
   --kubectl KUBECTL --kubeconfig KUBECONFIG --attempts 2 --timeout-minutes 15 \
+  --cell-model-path local-llama --image-lock runtime/k8s/deploy/local/images.lock.json \
   --output battery.json
 ```
+
+The report names its evaluation cell: the repository and the model path given
+with `--cell-model-path` (a short label such as `local-llama`, `agent-cli` or
+`hosted-api`). `--installation-revision` and `--image-lock` record the
+installed revision and the lock file's sha256, and the runner also records the
+installed deployments' images when it can read them. Each attempt records the
+furthest stage it reached (`stageReached`) and the review runs created during
+it (`reviews`, as `state|reason`). These fields are additive; older reports
+stay valid. The runner's database queries match the issue number and the
+repository, so an installation serving several repositories does not mix
+issues that share a number.
 
 It needs an authenticated `gh` CLI that can label issues as the installation's
 authorized actor, and a kubeconfig for the installation. It reads the
 runtime's database with `psql` through `kubectl exec`, and the worker and
 verifier logs. It writes nothing to the cluster.
 
-Tests: `cd tools/evaluation && python3 -m unittest test_run_battery`.
+## Summaries per cell
+
+`summarize.py` reads one or more reports, partial ones included, and writes a
+deterministic JSON (standard output or `--json`) and Markdown (`--markdown`)
+summary per cell: delivery rates with Wilson 95% intervals, issue-weighted
+pass@1 and pass@2, stop classes by stage and diagnostic name, reviewer verdicts
+against outcomes, and the Beta gate check, always computed on one trial per
+issue. Reports without a model path take one from
+`--model-path` or `--label REPORT=LABEL`.
+
+```bash
+python3 tools/evaluation/summarize.py docs/evidence/*-evaluation-battery-*.json \
+  --model-path agent-cli --markdown summary.md
+```
+
+The cells, dedupe rules, statistics and gate are described in the
+[evaluation harness](../../docs/operations/evaluation-harness.md).
+
+Tests: `python3 -m unittest discover -s tools/evaluation -p 'test_*.py'`.
