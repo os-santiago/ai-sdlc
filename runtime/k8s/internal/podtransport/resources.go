@@ -220,7 +220,7 @@ func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, erro
 	// container IDs, once observed (created or running), are held too.
 	seen, started, mainIDs := map[string]instance{}, map[string]bool{}, map[string]string{}
 	for {
-		raw, status, err := r.request(ctx, http.MethodGet, "pods", r.pod.Name, nil, false)
+		raw, status, err := r.readPod(ctx)
 		if err != nil {
 			step := "request"
 			switch {
@@ -435,6 +435,27 @@ func (r *Resources) remove(ctx context.Context, kind, name, uid string) error {
 		case <-ctx.Done():
 			return removalError{"observe-timeout", ErrTransport}
 		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+// observeRetryWindow bounds how long one read of the pod repeats a dropped
+// connection or a throttled/unavailable API server answer before it fails.
+const observeRetryWindow = 3 * time.Second
+
+// readPod is one GET of the planned pod. A transport failure or a 429/5xx
+// answer is repeated within observeRetryWindow: evaluation batteries 27 and
+// 28 stopped attempts at readiness-request and baseline-observe-request
+// after one failed GET. A permission refusal and every other answer are
+// returned at once. A GET never changes the pod, so repeating it is safe.
+func (r *Resources) readPod(ctx context.Context) ([]byte, int, error) {
+	ctx, cancel := context.WithTimeout(ctx, observeRetryWindow)
+	defer cancel()
+	for {
+		raw, status, err := r.request(ctx, http.MethodGet, "pods", r.pod.Name, nil, false)
+		transient := (err != nil && !errors.Is(err, ErrPermission)) || (err == nil && transientStatus(status))
+		if !transient || !retryRemoval(ctx) {
+			return raw, status, err
 		}
 	}
 }
