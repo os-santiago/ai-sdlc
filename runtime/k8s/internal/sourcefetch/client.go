@@ -152,7 +152,7 @@ func (c *Client) archiveURL(ctx context.Context, sha string) (string, error) {
 	}
 	response.Body.Close()
 	if response.StatusCode != http.StatusFound {
-		return "", httpSourceError(response)
+		return "", c.responseError(response)
 	}
 	if len(response.Header.Values("Location")) != 1 {
 		return "", ErrSource

@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 )
 
 func TestReviewDiagnosticStageIsBounded(t *testing.T) {
@@ -68,5 +71,34 @@ func TestReviewDiagnosticNamesTheRuntimeClassReason(t *testing.T) {
 	// Verification still proceeds after a review refused before its claim.
 	if !VerificationMayProceed("sandbox-runtime-class-unavailable", stopped) {
 		t.Fatal("sandbox stop no longer recognized")
+	}
+}
+
+func TestSourceCredentialFailuresAreNamedPreparationStops(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "credential.json")
+	document := `{"version":1,"host":"github.com","repository":"fixture/product","access":"write","token":"github_pat_` + strings.Repeat("F", 82) + `"}`
+	if err := os.WriteFile(path, []byte(document), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := sourcefetch.InstalledReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := Runtime{Source: reader}
+	_, err = runtime.Source.Fetch(context.Background(), "fixture/product", strings.Repeat("a", 40))
+	stop := sourceError(err)
+	if !errors.Is(stop, ErrReview) || preparationStage(stop) != "preparation-source-credential-invalid" {
+		t.Fatal("an unusable credential must stop preparation by name")
+	}
+	if strings.Contains(err.Error(), "github_pat_") || strings.Contains(stop.Error(), "github_pat_") {
+		t.Fatal("credential in error")
+	}
+	for err, stage := range map[error]string{errSourceCredentialRejected: "preparation-source-credential-rejected", errSourceRateLimited: "preparation-source-rate-limited", ErrReview: "preparation"} {
+		if !errors.Is(err, ErrReview) || preparationStage(err) != stage || DiagnosticStage(ControllerError{Stage: stage}) != stage {
+			t.Fatal(stage)
+		}
+	}
+	if sourceError(errors.New("other")) != ErrReview {
+		t.Fatal("an unclassified source failure stays a rejected preparation")
 	}
 }

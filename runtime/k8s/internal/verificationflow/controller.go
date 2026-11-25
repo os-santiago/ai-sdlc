@@ -92,7 +92,15 @@ func Run(ctx context.Context, db *store.DB, load PolicyLoader, id string, client
 // carries the repository-tests runner and transfer helper, and the installed
 // sandbox RuntimeClass every verification pod runs in, with what the preflight
 // observed that class's admission adds to each pod.
+// It reads source anonymously; Runtime.PollOnce uses the installation's reader.
 func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id string, client *podtransport.Client, image, mailboxImage, runtimeClass string, admission podtransport.RuntimeClassAdmission) (proof BehaviorProof, err error) {
+	return runWithMailbox(ctx, db, load, id, client, image, mailboxImage, runtimeClass, admission, sourcefetch.Reader{})
+}
+
+// runWithMailbox fetches the pinned source with reader: anonymously, or with
+// the installation's repository-scoped read credential, which stays in this
+// controller and never reaches a pod, ConfigMap, proof or log.
+func runWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id string, client *podtransport.Client, image, mailboxImage, runtimeClass string, admission podtransport.RuntimeClassAdmission, reader sourcefetch.Reader) (proof BehaviorProof, err error) {
 	if db == nil || load == nil || client == nil {
 		return proof, ControllerError{"configuration"}
 	}
@@ -193,17 +201,9 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		return proof, ControllerError{stage}
 	}
 	stage = "source"
-	sourceClient, e := sourcefetch.New(c.Repository, "")
+	source, e := reader.Fetch(ctx, c.Repository, c.SourceSHA)
 	if e != nil {
-		return proof, ControllerError{stage}
-	}
-	source, e := sourceClient.Fetch(ctx, c.SourceSHA)
-	if e != nil {
-		// The forge's rate limit stops the run like any other source failure;
-		// naming it tells an operator to wait or add capacity, not to debug.
-		if sourcefetch.RateLimited(e) {
-			stage = "source-rate-limited"
-		}
+		stage = sourceStage(e)
 		return proof, ControllerError{stage}
 	}
 	create := func(kind string, apply func() (string, error)) error {

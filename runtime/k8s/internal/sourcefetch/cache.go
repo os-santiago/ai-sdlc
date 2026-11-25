@@ -23,13 +23,27 @@ func (e AvailabilityError) Error() string { return "public source temporarily un
 func (e AvailabilityError) Unwrap() error { return ErrSource }
 func RateLimited(err error) bool          { var e AvailabilityError; return errors.As(err, &e) && e.rateLimited }
 
+// responseError classifies a failed API response. With a credential, HTTP 401
+// and a 403 that is not a rate limit mean the forge refused the credential: a
+// named, non-retried stop, never a fallback to an anonymous read.
+func (c *Client) responseError(response *http.Response) error {
+	err := httpSourceError(response)
+	if c.token != "" && !RateLimited(err) && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden) {
+		return errCredentialRejected
+	}
+	return err
+}
+
 // errNetwork marks a request that failed before any HTTP response.
 var errNetwork = fmt.Errorf("source request did not complete: %w", ErrSource)
 
 func httpSourceError(response *http.Response) error {
 	now := time.Now()
 	retry := now.Add(10 * time.Second)
-	limited := response.StatusCode == 429 || response.StatusCode == 403 && response.Header.Get("X-RateLimit-Remaining") == "0"
+	// GitHub reports both its primary limit (remaining quota 0) and its
+	// secondary limit (a Retry-After) as 403 or 429.
+	limited := response.StatusCode == 429 || response.StatusCode == 403 &&
+		(response.Header.Get("X-RateLimit-Remaining") == "0" || response.Header.Get("Retry-After") != "")
 	if limited {
 		retry = now.Add(time.Minute)
 		if seconds, e := strconv.ParseInt(response.Header.Get("Retry-After"), 10, 64); e == nil && seconds >= 5 && seconds <= 3600 {

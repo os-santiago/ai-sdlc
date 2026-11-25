@@ -95,14 +95,47 @@ type prepared struct {
 // limit. It stops review exactly like any other preparation failure.
 var errSourceRateLimited = fmt.Errorf("review source rate limited: %w", ErrReview)
 
+// errSourceCredentialRejected and errSourceCredentialInvalid are preparation
+// stops caused by the installation's read credential: refused by the forge,
+// or missing, malformed or bound to another repository. They stop review like
+// any other preparation failure and never fall back to an anonymous read.
+var (
+	errSourceCredentialRejected = fmt.Errorf("review source credential rejected: %w", ErrReview)
+	errSourceCredentialInvalid  = fmt.Errorf("review source credential invalid: %w", ErrReview)
+)
+
 type sourceLoader func(context.Context, string, string) (workspacebundle.Bundle, error)
 
+// fetchSource is the anonymous reader used by Run; Runtime.PollOnce passes
+// the installation's reader instead.
 func fetchSource(ctx context.Context, repository, sha string) (workspacebundle.Bundle, error) {
-	c, e := sourcefetch.New(repository, "")
-	if e != nil {
-		return workspacebundle.Bundle{}, e
+	return sourcefetch.Reader{}.Fetch(ctx, repository, sha)
+}
+
+// sourceError maps a source failure to its named preparation stop.
+func sourceError(err error) error {
+	switch {
+	case sourcefetch.RateLimited(err):
+		return errSourceRateLimited
+	case sourcefetch.CredentialRejected(err):
+		return errSourceCredentialRejected
+	case sourcefetch.CredentialInvalid(err):
+		return errSourceCredentialInvalid
 	}
-	return c.Fetch(ctx, sha)
+	return ErrReview
+}
+
+// preparationStage names a failed preparation for the stop log.
+func preparationStage(err error) string {
+	switch {
+	case errors.Is(err, errSourceRateLimited):
+		return "preparation-source-rate-limited"
+	case errors.Is(err, errSourceCredentialRejected):
+		return "preparation-source-credential-rejected"
+	case errors.Is(err, errSourceCredentialInvalid):
+		return "preparation-source-credential-invalid"
+	}
+	return "preparation"
 }
 
 // Prepare reconstructs the exact candidate before queueing review; it does not
@@ -128,10 +161,7 @@ func prepare(ctx context.Context, db *store.DB, policy verificationflow.PolicyLo
 	}
 	source, e := fetch(ctx, command.Repository, command.SourceSHA)
 	if e != nil {
-		if sourcefetch.RateLimited(e) {
-			return prepared{}, errSourceRateLimited
-		}
-		return prepared{}, ErrReview
+		return prepared{}, sourceError(e)
 	}
 	if _, e = verification.Prepare(command.Repository, command.Recipe, snapshot.Issue.Body, source, record.Delta); e != nil {
 		return prepared{}, ErrReview

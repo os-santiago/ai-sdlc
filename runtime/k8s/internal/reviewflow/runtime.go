@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
 	"time"
@@ -16,6 +17,10 @@ type Runtime struct {
 	Policy verificationflow.PolicyLoader
 	Load   Loader
 	Client *podtransport.Client
+	// Source reads the pinned source: the zero Reader is anonymous; an
+	// installed reader authenticates with the repository-scoped read
+	// credential mounted only into the verifier container, never a reviewer pod.
+	Source sourcefetch.Reader
 }
 
 // VerificationMayProceed keeps independent queues moving only when review has
@@ -129,7 +134,7 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		}
 		return state, podtransport.WithRuntimeClassReason(ControllerError{Stage: "sandbox-runtime-class"}, e)
 	}
-	if _, e = Run(ctx, r.DB, r.Policy, r.Load, id, r.Client, sandbox); e != nil {
+	if _, e = run(ctx, r.DB, r.Policy, r.Load, id, r.Client, sandbox, r.Source.Fetch); e != nil {
 		return "stopped", e
 	}
 	return "review-passed", nil

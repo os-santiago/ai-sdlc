@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 )
 
 func TestDiagnosticsNeverIncludeUntrustedErrors(t *testing.T) {
@@ -166,5 +168,34 @@ func TestDiagnosticNamesTheRepositoryTestsStep(t *testing.T) {
 	}
 	if testsStage("candidate", errors.New("other")) != "candidate" {
 		t.Fatal("unrefined stage changed")
+	}
+}
+
+func TestSourceCredentialFailuresAreNamedStops(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "credential.json")
+	// A credential bound to another repository: never used, never a fallback.
+	document := `{"version":1,"host":"github.com","repository":"other/product","access":"read","token":"github_pat_` + strings.Repeat("F", 82) + `"}`
+	if err := os.WriteFile(path, []byte(document), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := sourcefetch.InstalledReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := Runtime{Source: reader}
+	_, err = runtime.Source.Fetch(context.Background(), "fixture/product", strings.Repeat("a", 40))
+	if got := sourceStage(err); got != "source-credential-invalid" {
+		t.Fatal(got)
+	}
+	if strings.Contains(err.Error(), "github_pat_") {
+		t.Fatal("credential in error")
+	}
+	if sourceStage(errors.New("other")) != "source" {
+		t.Fatal("an unclassified source failure keeps the source stage")
+	}
+	for _, stage := range []string{"source-credential-rejected", "source-credential-invalid"} {
+		if DiagnosticStage(ControllerError{stage}) != stage || DiagnosticStage(cleanupAfter{cause: ControllerError{"cleanup"}, stage: stage}) != "cleanup-after-"+stage {
+			t.Fatal(stage)
+		}
 	}
 }
