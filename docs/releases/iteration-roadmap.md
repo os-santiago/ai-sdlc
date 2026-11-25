@@ -68,13 +68,13 @@ The same loop produced every result so far:
 - **Stage:** late Alpha. Sandbox and signing items are in progress; the separate
   review authority (B4), signature verification at install and Kata validation
   remain. The progress table is in the [release plan](release-plan.md#progress).
-- **Functional:** on the local model, three of ten issues went from label to a
-  merged pull request with no human step in battery 24 (30% [10.8%, 60.3%], a
-  first measurement, not yet gate evidence;
-  [batteries 19–24](../evidence/2026-11-25-local-model-batteries-19-24.md)). Remaining
-  attempts mostly fail on model capability: candidates whose tests fail, or
-  steps running out. The independent reviewer's final answer sometimes misses
-  the strict verdict format.
+- **Functional:** on the local model, nine of ten issues went from label to a
+  merged pull request with no human step in battery 30 (90% [59.6%, 98.2%], on
+  10 issues, not yet gate evidence;
+  [batteries 25–30](../evidence/2026-11-25-local-model-batteries-25-30.md)), up
+  from three of ten in battery 24. Remaining attempts mostly end on the
+  generation budget or on candidates whose tests fail. The independent
+  reviewer's final answer sometimes misses the strict verdict format.
 - **Not yet measured:** a delivery rate with a 95% interval per cell
   (repository × model path), which is the Beta functional gate.
 
