@@ -7,6 +7,11 @@ The optional [local Konflux environment](operations/konflux-local.md) uses
 and readiness evidence are independent of the AI-SDLC runtime installation.
 The same chart renders Kubernetes resources; installing into an existing
 remote cluster is a separate, not yet validated onboarding path (#434).
+Installing the published chart without this installer is in progress (B6):
+[Helm chart installation](operations/helm-chart-install.md) lists what only
+the installer produces today, how the chart is published and signed, and how
+to verify it; the [Secret contract](operations/helm-chart-secret-contract.md)
+lists every Secret the chart consumes.
 The installer needs Python 3.11+, Git, Internet access and a working Docker
 or Podman installation. Allow at least 4 CPUs, 6 GiB available RAM and
 15 GiB free disk for kind, PostgreSQL and image downloads. These are initial
