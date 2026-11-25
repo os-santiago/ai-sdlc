@@ -27,9 +27,11 @@ request at most once, inside the same call budget.
 Every adapter also refuses, once per call, a ``write_file`` that would replace
 a whole file which existed before the conversation (``RewriteGuard``), judged
 only from the request's own messages. The ``openai`` adapter stops such a
-stream as soon as the call's path is known. The request is then repeated with
-one short correction appended, inside the same call budget; a second rewrite
-is passed through unchanged (fail open).
+stream as soon as the call's path is known. It also refuses a ``write_file``
+to a new path whose content copies a file the model read (the copy guard),
+as soon as enough content has streamed. The request is then repeated with one
+short correction appended, inside the same call budget; one such retry per
+call in total, and a second refusal is passed through unchanged (fail open).
 """
 import http.client
 import ipaddress
@@ -41,6 +43,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import namedtuple
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -100,6 +103,31 @@ EXISTING_FILE_ERRORS = ("Patch does not match file content", "Patch produces no 
 CORRECTION = ("write_file on the existing file %s was refused: it would replace the whole file and drop "
               "what you do not repeat. Change it with edit_file (a unified diff), or put new code and new "
               "tests in a new file.")
+# Copy guard (``_CopyWatch``). A new file's content is judged on its distinct
+# non-trivial lines (whitespace runs collapsed; at least 4 letters or digits,
+# so braces, blank lines and short imports such as "os" never count). Once it
+# has at least COPY_MIN_LINES of them, it is a copy of one read file when that
+# file holds at least COPY_MIN_MATCHED of them and at least COPY_FRACTION of
+# all of them. A new test file shares its package clause, imports and a few
+# table-test lines with its neighbours (about 10 to 15 distinct lines), far
+# below both bounds; a copied file matches nearly every line.
+COPY_MIN_LINES = 40
+COPY_MIN_MATCHED = 30
+COPY_FRACTION = 0.6
+COPY_LINE_MIN_ALNUM = 4
+COPY_LINE_MAX_CHARS = 1024
+# Distinct lines tracked per streamed file; past it, the content is left alone.
+COPY_MAX_LINES = 4096
+HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+COPY_CONTENT = re.compile(r'"content"\s*:\s*"')
+# SCC's note after a read: "[N lines total]" or "[N lines shown, M total. ...]".
+# SCC shortens an old tool output to its first and last 300 characters around
+# this marker (pruneMessageHistory); the cut lines simply match nothing.
+PRUNED_NOTE = re.compile(r"\n\n\.\.\. \[Tool output of \d+ characters truncated to save context window\] \.\.\.\n\n")
+READ_NOTE = re.compile(r"\n\n\[\d+ lines (?:total|shown, \d+ total\. [^\n]*)\]\Z")
+COPY_CORRECTION = ("write_file to %s was refused: it repeats content of %s that already exists. Write only "
+                   "the new code and tests the issue asks for; never copy existing tests or code into a new file, "
+                   "unless the issue asks you to move it: then also remove it from %s with edit_file in the same answer.")
 
 
 @dataclass
@@ -114,6 +142,8 @@ class Completion:
     degenerate_retries: int = 0
     rewrite_retries: int = 0
     rewrite_passed: int = 0
+    copy_retries: int = 0
+    copy_passed: int = 0
 
 
 def _hunks(lines):
@@ -321,11 +351,17 @@ class DegenerateGuard:
 
 
 class RewriteRefused(ValueError):
-    """A proposed ``write_file`` over a file that existed before the
-    conversation, stopped while it streamed."""
-    def __init__(self, path):
+    """A proposed ``write_file`` the guard refused while it streamed: a whole
+    rewrite of a pre-existing file, or a new file copying one the model read
+    (``refusal``, a ``Refusal``)."""
+    def __init__(self, refusal):
         super().__init__("rewrite refused")
-        self.path = path
+        self.refusal = refusal
+        self.path = refusal.path
+
+
+# kind: "rewrite" or "copy"; source: the read file a copy repeats (or None).
+Refusal = namedtuple("Refusal", "kind path source")
 
 
 def guard_path(path):
@@ -340,28 +376,137 @@ def guard_path(path):
     return ("/" if path.startswith("/") else "") + "/".join(parts)
 
 
-def _call_target(call):
-    """(tool name, normalized path) of one OpenAI-shaped tool call, or
-    (None, None) when it has no usable name and path."""
+def _call_arguments(call):
+    """(tool name, normalized path, arguments) of one OpenAI-shaped tool
+    call, or (None, None, None) when it has no usable name and path."""
     function = call.get("function") if isinstance(call, dict) else None
     raw = function.get("arguments") if isinstance(function, dict) else None
     if not isinstance(raw, str) or not isinstance(function.get("name"), str):
-        return None, None
+        return None, None, None
     try:
         arguments = json.loads(raw)
     except (ValueError, RecursionError):
-        return None, None
+        return None, None, None
     path = guard_path(arguments.get("path")) if isinstance(arguments, dict) else None
-    return (function["name"], path) if path is not None else (None, None)
+    return (function["name"], path, arguments) if path is not None else (None, None, None)
+
+
+def _call_target(call):
+    """(tool name, normalized path) of one tool call, or (None, None)."""
+    return _call_arguments(call)[:2]
+
+
+def _shown(path):
+    """A path bounded, its non-printable characters replaced, and quoted as a
+    JSON string so it reads as data, never as instructions."""
+    shown = "".join(c if c.isprintable() else "?" for c in path[:MAX_CORRECTION_PATH_CHARS])
+    shown += "..." if len(path) > MAX_CORRECTION_PATH_CHARS else ""
+    return json.dumps(shown, ensure_ascii=False)
 
 
 def correction_text(path):
-    """The fixed correction for ``path``: the path is bounded, its
-    non-printable characters replaced, and it is quoted as a JSON string so
-    it reads as data, never as instructions."""
-    shown = "".join(c if c.isprintable() else "?" for c in path[:MAX_CORRECTION_PATH_CHARS])
-    shown += "..." if len(path) > MAX_CORRECTION_PATH_CHARS else ""
-    return CORRECTION % json.dumps(shown, ensure_ascii=False)
+    """The fixed correction for a refused rewrite of ``path``."""
+    return CORRECTION % _shown(path)
+
+
+def copy_correction_text(path, source):
+    """The fixed correction for a new file ``path`` that copies ``source``."""
+    return COPY_CORRECTION % (_shown(path), _shown(source), _shown(source))
+
+
+def copy_line(line):
+    """A line as the copy guard compares it: whitespace runs collapsed and the
+    ends stripped. ``None`` for a trivial line (fewer than
+    ``COPY_LINE_MIN_ALNUM`` letters or digits: braces, blank lines, ``"os"``)."""
+    line = " ".join(line[:COPY_LINE_MAX_CHARS].split())
+    return line if sum(c.isalnum() for c in line) >= COPY_LINE_MIN_ALNUM else None
+
+
+def copy_lines(text):
+    """The distinct non-trivial lines of ``text``."""
+    return {line for line in map(copy_line, text.split("\n")) if line is not None}
+
+
+class _CopyWatch:
+    """Counts, over the distinct non-trivial lines of a new file's content,
+    how many each read file already holds. ``add`` returns the source a copy
+    repeats as soon as the content qualifies (see ``COPY_*``)."""
+    def __init__(self, target, sources):
+        self.target, self.sources = target, sources
+        self.seen = set()
+        self.matched = dict.fromkeys(sources, 0)
+        self.lines = {source: set() for source in sources}  # the matched lines themselves
+
+    def add(self, line):
+        line = copy_line(line)
+        if line is None or line in self.seen or len(self.seen) >= COPY_MAX_LINES:
+            return None
+        self.seen.add(line)
+        for source, lines in self.sources.items():
+            if line in lines:
+                self.matched[source] += 1
+                self.lines[source].add(line)
+        if len(self.seen) < COPY_MIN_LINES:
+            return None
+        for source in sorted(self.sources):
+            matched = self.matched[source]
+            if matched >= COPY_MIN_MATCHED and matched >= COPY_FRACTION * len(self.seen):
+                return source
+        return None
+
+
+class _StreamedString:
+    """Decodes a JSON string value incrementally from the raw arguments of a
+    streamed call, from ``pos`` on, and returns each completed line. An
+    escape split across deltas waits for its remaining characters."""
+    ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
+
+    def __init__(self, pos):
+        self.pos, self.line, self.done = pos, [], False
+
+    def feed(self, raw):
+        lines, i, end = [], self.pos, len(raw)
+        while i < end and not self.done:
+            char = raw[i]
+            if char == '"':
+                self.done = True
+                lines.append("".join(self.line))
+                break
+            if char == "\\":
+                if i + 1 >= end:
+                    break
+                escape = raw[i + 1]
+                if escape == "u":
+                    if i + 6 > end:
+                        break
+                    digits = raw[i + 2:i + 6]
+                    if not all(c in HEX_DIGITS for c in digits):
+                        self.done = True
+                        break
+                    code, i = int(digits, 16), i + 6
+                    if 0xD800 <= code < 0xDC00:
+                        # A high surrogate pairs with a following low one.
+                        if i + 6 > end and raw.startswith("\\u"[:end - i], i):
+                            i -= 6
+                            break
+                        low = raw[i + 2:i + 6] if raw.startswith("\\u", i) else ""
+                        if len(low) == 4 and all(c in HEX_DIGITS for c in low) and 0xDC00 <= int(low, 16) < 0xE000:
+                            code, i = 0x10000 + ((code - 0xD800) << 10) + (int(low, 16) - 0xDC00), i + 6
+                    char = chr(code)
+                elif escape in self.ESCAPES:
+                    char, i = self.ESCAPES[escape], i + 2
+                else:
+                    self.done = True
+                    break
+            else:
+                i += 1
+            if char == "\n":
+                lines.append("".join(self.line))
+                self.line = []
+            elif len(self.line) < COPY_LINE_MAX_CHARS:
+                self.line.append(char)
+        self.pos = i
+        return lines
 
 
 class _Call:
@@ -375,45 +520,84 @@ class _Call:
 
 
 class RewriteGuard:
-    """Refuses a ``write_file`` that would replace a whole file which existed
-    before the conversation, so the model is asked once to edit it instead.
+    """Refuses, once per call, a ``write_file`` that either replaces a whole
+    file which existed before the conversation (a rewrite) or creates a new
+    file that copies a file the model read (a copy).
 
-    Observed fault: a local model rewrote an 834-line test file in about 100
+    Observed faults: a local model rewrote an 834-line test file in about 100
     lines with ``write_file``, dropping most of its tests and a helper; every
-    candidate for those issues then failed verification. The executor prompt
-    already forbids this; the model ignored it.
+    candidate for those issues then failed verification. Told to put new tests
+    in a new file, the same model then copied every existing test into it
+    (about 6,000 tokens, until the call's ceiling); duplicate test functions
+    do not even compile in one package.
 
     The gateway reads no workspace, so the guard decides only from the
     request's own conversation. A path existed before it when an earlier
     assistant ``read_file`` or ``edit_file`` on it succeeded (or failed only
     after SCC opened the file) before any ``write_file`` of the model created
     it. A ``write_file`` to a new path, or to a path the model itself created
-    earlier, is never refused. Paths are compared after ``guard_path``."""
+    earlier, is never refused as a rewrite. It is refused as a copy when its
+    content repeats a successful ``read_file`` result of another path (all
+    reads of one path together, partial reads included) by the ``COPY_*``
+    bounds. Paths are compared after ``guard_path``."""
 
-    def __init__(self, request, messages, deadline, can_retry=True):
+    def __init__(self, request, messages, deadline, can_retry=True, copies=True):
         self.request, self.deadline, self.can_retry = request, deadline, can_retry
         self.existing = self.preexisting(messages)
-        self.scanned = set()
+        self.reads = self.read_lines(messages) if copies else {}
+        self.streams = {}
         self.retries = {}
 
+    def begin_stream(self):
+        """Forgets what was decided per call index in an earlier stream."""
+        self.streams = {}
+
     @staticmethod
-    def preexisting(messages):
+    def _results(messages):
         results = {}
         for message in messages:
             if message.get("role") == "tool" and isinstance(message.get("tool_call_id"), str):
                 results[message["tool_call_id"]] = message.get("content") or ""
-        existing, created = set(), set()
+        return results
+
+    @staticmethod
+    def _calls(messages, results):
+        """Each assistant tool call in order: (name, path, arguments, result)."""
         for message in messages:
             calls = message.get("tool_calls") if message.get("role") == "assistant" else None
             for call in calls if isinstance(calls, list) else []:
-                name, path = _call_target(call)
+                name, path, arguments = _call_arguments(call)
                 call_id = call.get("id") if name is not None else None
-                result = results.get(call_id) if isinstance(call_id, str) else None
-                if name in (READ_TOOL, EDIT_TOOL) and path not in created and RewriteGuard.opened(result):
-                    existing.add(path)
-                elif name == WRITE_TOOL and path not in existing:
-                    created.add(path)
+                yield name, path, arguments, results.get(call_id) if isinstance(call_id, str) else None
+
+    @staticmethod
+    def preexisting(messages):
+        existing, created = set(), set()
+        for name, path, _, result in RewriteGuard._calls(messages, RewriteGuard._results(messages)):
+            if name in (READ_TOOL, EDIT_TOOL) and path not in created and RewriteGuard.opened(result):
+                existing.add(path)
+            elif name == WRITE_TOOL and path not in existing:
+                created.add(path)
         return frozenset(existing)
+
+    @staticmethod
+    def read_lines(messages):
+        """The distinct non-trivial lines each path's successful reads hold.
+        SCC's trailing "[N lines ...]" note, and the marker SCC puts in an old
+        output it shortened, are not file content. A file the model created
+        (``write_file`` before any read or edit proved it existed) is never a
+        source."""
+        reads, existing, created = {}, set(), set()
+        for name, path, _, result in RewriteGuard._calls(messages, RewriteGuard._results(messages)):
+            if name in (READ_TOOL, EDIT_TOOL) and path not in created and RewriteGuard.opened(result):
+                existing.add(path)
+            elif name == WRITE_TOOL and path not in existing:
+                created.add(path)
+            if (name == READ_TOOL and path not in created and isinstance(result, str)
+                    and not result.startswith(TOOL_ERROR_PREFIXES)):
+                text = PRUNED_NOTE.sub("\n", READ_NOTE.sub("", result))
+                reads.setdefault(path, set()).update(copy_lines(text))
+        return {path: frozenset(lines) for path, lines in reads.items() if lines}
 
     @staticmethod
     def opened(result):
@@ -424,49 +608,139 @@ class RewriteGuard:
             return True
         return any(marker in result for marker in EXISTING_FILE_ERRORS)
 
+    def watch(self, path, moved=()):
+        """A copy watch for a new file at ``path``, or ``None`` when no other
+        read file could be its source. A source in ``moved`` (edited in the
+        same answer: the removal half of a move or split) is skipped."""
+        sources = {source: lines for source, lines in self.reads.items() if source != path and source not in moved}
+        return _CopyWatch(path, sources) if sources else None
+
+    @staticmethod
+    def moved(source, calls):
+        """Whether one of ``calls`` ((name, raw arguments), possibly still
+        streaming) is an ``edit_file`` on ``source``."""
+        for name, arguments in calls:
+            match = STREAMED_PATH.match(arguments[:REWRITE_SCAN_CHARS]) if name == EDIT_TOOL else None
+            try:
+                if match is not None and guard_path(json.loads(match.group(1))) == source:
+                    return True
+            except (ValueError, RecursionError):
+                continue
+        return False
+
     def refused(self, message):
-        """The first pre-existing path a final message proposes to rewrite."""
-        for call in message.get("tool_calls") or []:
-            name, path = _call_target(call)
-            if name == WRITE_TOOL and path in self.existing:
-                return path
+        """The first refusal a final message holds, or ``None``."""
+        calls = [_call_arguments(call) for call in message.get("tool_calls") or []]
+        for name, path, arguments in calls:
+            if name != WRITE_TOOL:
+                continue
+            if path in self.existing:
+                return Refusal("rewrite", path, None)
+            content = arguments.get("content")
+            moved = set()
+            while isinstance(content, str):
+                watch = self.watch(path, moved)
+                source = self.copied(watch, content) if watch is not None else None
+                if source is None:
+                    break
+                if not self.removes(calls, source, watch.lines[source]):
+                    return Refusal("copy", path, source)
+                moved.add(source)  # a move or split: judge the other sources
         return None
 
-    def retry(self, path):
-        """The validated retry request for ``path``, or ``None`` when the
+    @staticmethod
+    def copied(watch, content):
+        """The source ``content`` copies, judged on its lines in order and
+        refused at the first prefix that qualifies, as while streaming."""
+        for line in content.split("\n"):
+            source = watch.add(line)
+            if source is not None:
+                return source
+        return None
+
+    @staticmethod
+    def removes(calls, source, copied):
+        """Whether an ``edit_file`` on ``source`` among ``calls`` removes the
+        copied lines: the removal half of a move or split. Its removed lines
+        ("-", not the "---" file header) must cover at least
+        ``COPY_MIN_MATCHED`` of the copied lines, or half of them."""
+        removed = set()
+        for name, path, arguments in calls:
+            patch = arguments.get("patch") if name == EDIT_TOOL and path == source else None
+            if not isinstance(patch, str):
+                continue
+            for line in patch.split("\n"):
+                if line.startswith("-") and not line.startswith("--- ") and line != "---":
+                    normalized = copy_line(line[1:])
+                    if normalized is not None:
+                        removed.add(normalized)
+        covered = len(removed & copied)
+        return covered > 0 and (covered >= COPY_MIN_MATCHED or 2 * covered >= len(copied))
+
+    def retry(self, refusal):
+        """The validated retry request for ``refusal``, or ``None`` when the
         corrected request leaves the contract (too many messages or bytes)
         or too little of the call budget remains, or the adapter cannot keep
         a retry inside the deadline."""
         if not self.can_retry or self.deadline - time.monotonic() < REWRITE_RETRY_MIN_SECONDS:
             return None
-        if path not in self.retries:
-            request = dict(self.request, messages=list(self.request["messages"]) + [{"role": "user", "content": correction_text(path)}])
+        if refusal not in self.retries:
+            text = (correction_text(refusal.path) if refusal.kind == "rewrite"
+                    else copy_correction_text(refusal.path, refusal.source))
+            request = dict(self.request, messages=list(self.request["messages"]) + [{"role": "user", "content": text}])
             try:
                 validate_request(request)
             except ValueError:
                 request = None
-            self.retries[path] = request
-        return self.retries[path]
+            self.retries[refusal] = request
+        return self.retries[refusal]
+
+    def _stop(self, index, refusal):
+        """Decides call ``index``; stops it only when a retry is ready."""
+        self.streams[index] = None
+        return refusal if self.retry(refusal) is not None else None
 
     def streamed(self, index, name, arguments):
-        """The path to stop the stream for, as soon as a streamed call is a
-        ``write_file`` whose complete ``path`` value is a pre-existing file
-        and a retry is still possible; otherwise ``None``. Each call is
-        decided once; its content is never waited for."""
-        if index in self.scanned or name != WRITE_TOOL:
+        """The refusal to stop the stream for, as soon as it is known and a
+        retry is possible; otherwise ``None``. A rewrite is known when a
+        streamed ``write_file`` call's complete ``path`` value is a
+        pre-existing file: its content is never waited for. A copy is known
+        when the content streamed so far qualifies. Each call is decided
+        once; what streaming cannot decide is left to the final message."""
+        if name != WRITE_TOOL or (index in self.streams and self.streams[index] is None):
             return None
-        match = STREAMED_PATH.match(arguments[:REWRITE_SCAN_CHARS])
-        if match is None:
-            if len(arguments) >= REWRITE_SCAN_CHARS:
-                self.scanned.add(index)  # left to the final message
-            return None
-        self.scanned.add(index)
-        try:
-            path = guard_path(json.loads(match.group(1)))
-        except (ValueError, RecursionError):
-            return None
-        if path in self.existing and self.retry(path) is not None:
-            return path
+        state = self.streams.get(index)
+        if state is None:
+            match = STREAMED_PATH.match(arguments[:REWRITE_SCAN_CHARS])
+            if match is None:
+                if len(arguments) >= REWRITE_SCAN_CHARS:
+                    self.streams[index] = None  # left to the final message
+                return None
+            try:
+                path = guard_path(json.loads(match.group(1)))
+            except (ValueError, RecursionError):
+                path = None
+            if path in self.existing:
+                return self._stop(index, Refusal("rewrite", path, None))
+            watch = self.watch(path) if path is not None else None
+            if watch is None:
+                self.streams[index] = None
+                return None
+            state = self.streams[index] = [watch, None]
+        watch, content = state
+        if content is None:
+            start = COPY_CONTENT.search(arguments, 0, REWRITE_SCAN_CHARS)
+            if start is None:
+                if len(arguments) >= REWRITE_SCAN_CHARS:
+                    self.streams[index] = None
+                return None
+            content = state[1] = _StreamedString(start.end())
+        for line in content.feed(arguments):
+            source = watch.add(line)
+            if source is not None:
+                return self._stop(index, Refusal("copy", watch.target, source))
+        if content.done:
+            self.streams[index] = None
         return None
 
 
@@ -648,6 +922,13 @@ class _Stream:
     guard, a tool call is also checked as its arguments arrive."""
     def __init__(self, guard, rewrite=None):
         self.guard, self.rewrite, self.content, self.calls = guard, rewrite, [], {}
+        if rewrite is not None:
+            # A new upstream attempt (a degenerate retry reuses the guard):
+            # the call indices of an earlier stream mean nothing here.
+            try:
+                rewrite.begin_stream()
+            except Exception:
+                self.rewrite = None
         self.finish, self.usage, self.done, self.size = None, None, False, 0
         self.data, self.data_size = [], 0  # the current event's data lines
 
@@ -761,6 +1042,9 @@ class _Stream:
                 path = self.rewrite.streamed(index, entry["name"], entry["arguments"])
             except Exception:
                 path, self.rewrite = None, None  # the guard never fails a stream
+            if path is not None and path.kind == "copy" and self.rewrite.moved(path.source, (
+                    (c["name"], c["arguments"]) for i, c in self.calls.items() if i != index)):
+                path = None  # a move: left to the final message, which sees the whole answer
             if path is not None:
                 raise _Stop(RewriteRefused(path))
 
@@ -845,7 +1129,8 @@ class Adapter:
         """``probe`` is used only by the startup benchmark, whose prefill and
         generation probes are truncated on purpose; SCC traffic never is.
 
-        When the rewrite guard refuses an answer (``RewriteGuard``), the same
+        When the guard refuses an answer (``RewriteGuard``: a rewrite or a
+        copy, one retry per call for both together), the same
         request is repeated once with one correction appended, inside the same
         ``seconds``: the streaming adapter stops the first answer as soon as
         the refused path is known, the others judge the final message. A
@@ -866,42 +1151,44 @@ class Adapter:
                 guard = RewriteGuard(request, messages, call.deadline, can_retry=self.honors_deadline)
             except Exception:
                 guard = None  # never fail a call because the guard could not judge it
-        retries = passed = 0
-        kept = None  # a complete answer refused on its final message
+        retried = passed = None  # the kind ("rewrite" or "copy") of a retry spent / a refusal returned
+        kept = None  # a complete answer refused on its final message, and its refusal
         self.truncation_ok, self._call = probe, call
         try:
             while True:
-                call.rewrite = guard if retries < REWRITE_RETRIES else None
+                call.rewrite = guard if retried is None else None
                 try:
                     completion = self.backend(request, messages, tools, names, tokens,
                                               max(call.deadline - time.monotonic(), 0.001))
                 except RewriteRefused as refused:
                     # A stream is stopped only once its retry request is ready.
-                    request, retries = guard.retries[refused.path], retries + 1
+                    request, retried = guard.retries[refused.refusal], refused.refusal.kind
                     messages, tools, names, tokens = validate_request(request)
                     continue
                 except Exception:
                     if kept is None:
                         raise
-                    completion, passed = kept, 1  # fail open: no worse than without the guard
-                    break
-                try:
-                    path = guard.refused(completion.message) if guard is not None else None
-                    retry = guard.retry(path) if path is not None and retries < REWRITE_RETRIES else None
-                except Exception:
-                    guard, path, retry = None, None, None
+                    (completion, refusal), retry = kept, None  # fail open: no worse than without the guard
+                else:
+                    try:
+                        refusal = guard.refused(completion.message) if guard is not None else None
+                        retry = guard.retry(refusal) if refusal is not None and retried is None else None
+                    except Exception:
+                        guard, refusal, retry = None, None, None
                 if retry is None:
-                    passed = int(path is not None)
+                    passed = refusal.kind if refusal is not None else None
                     break
-                kept, request, retries = completion, retry, retries + 1
+                kept, request, retried = (completion, refusal), retry, refusal.kind
                 messages, tools, names, tokens = validate_request(request)
         except Exception as error:
-            error.degenerate_retries, error.rewrite_retries = call.degenerate_retries, retries
+            error.degenerate_retries = call.degenerate_retries
+            error.rewrite_retries, error.copy_retries = int(retried == "rewrite"), int(retried == "copy")
             raise
         finally:
             self.truncation_ok, self._call = False, None
         completion.degenerate_retries = call.degenerate_retries
-        completion.rewrite_retries, completion.rewrite_passed = retries, passed
+        completion.rewrite_retries, completion.rewrite_passed = int(retried == "rewrite"), int(passed == "rewrite")
+        completion.copy_retries, completion.copy_passed = int(retried == "copy"), int(passed == "copy")
         # Every adapter's message is normalized here, before the gateway
         # returns it and so before the broker records or digests anything.
         completion.edit_patches_recounted = recount_edit_patches(completion.message)
