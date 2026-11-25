@@ -151,7 +151,7 @@ func (v *VerificationResources) observe(ctx context.Context, kind, uid string) (
 	if e != nil || !resourceUID.MatchString(uid) {
 		return false, instance{}, ErrTransport
 	}
-	raw, status, err := r.request(ctx, http.MethodGet, "pods", r.pod.Name, nil, false)
+	raw, status, err := r.readPod(ctx)
 	if err != nil || status != 200 {
 		return false, instance{}, ErrTransport
 	}

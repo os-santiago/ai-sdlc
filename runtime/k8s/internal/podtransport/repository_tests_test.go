@@ -49,8 +49,8 @@ type testsCluster struct {
 	reply  func(command []string) (string, bool)
 	onExec func(command []string)
 	// podFault, when set, answers the n-th pod GET (from 1): -1 drops the
-	// connection, another non-zero value is written as the status, 0 serves
-	// the pod.
+	// connection, -2 serves the pod after 3.5 s, another non-zero value is
+	// written as the status, 0 serves the pod.
 	podFault func(n int) int
 	podGets  int
 }
@@ -173,6 +173,8 @@ func testsServer(t *testing.T, c *testsCluster) *TestsRun {
 				n := c.podGets
 				c.mu.Unlock()
 				switch fault := c.podFault(n); {
+				case fault == -2:
+					time.Sleep(3500 * time.Millisecond) // slow but valid answer
 				case fault == -1:
 					if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
 						_ = conn.Close()
@@ -487,10 +489,12 @@ func TestTestsRunAcceptsTheKubeletCreatedState(t *testing.T) {
 func TestTestsRunObservationRetriesTransientFailures(t *testing.T) {
 	p, source := testsFixturePod()
 	honest := honestReply(p, source)
-	for _, which := range []string{"dropped", "503", "429", "forbidden", "always-dropped"} {
+	for _, which := range []string{"dropped", "503", "429", "slow", "forbidden", "always-dropped"} {
 		t.Run(which, func(t *testing.T) {
 			c := &testsCluster{state: "running", reply: honest, podFault: func(n int) int {
 				switch {
+				case which == "slow" && n == 1:
+					return -2
 				case which == "always-dropped", which == "dropped" && n == 1:
 					return -1
 				case which == "503" && n == 1:
@@ -505,7 +509,7 @@ func TestTestsRunObservationRetriesTransientFailures(t *testing.T) {
 			run := testsServer(t, c)
 			started := time.Now()
 			status, err := run.Status(context.Background(), testsPodUID)
-			if time.Since(started) > observeRetryWindow+2*time.Second {
+			if time.Since(started) > observeRetryWindow+6*time.Second {
 				t.Fatal("observation exceeded its bound")
 			}
 			switch which {
@@ -516,6 +520,12 @@ func TestTestsRunObservationRetriesTransientFailures(t *testing.T) {
 			case "always-dropped":
 				if TestsStep(err) != "observe-request" || c.podGets < 2 {
 					t.Fatalf("persistent failure %q gets=%d", TestsStep(err), c.podGets)
+				}
+			case "slow":
+				// A slow answer within request's own 5 s bound is not cut
+				// short by the retry window.
+				if err != nil || !status.Ready || c.podGets != 1 {
+					t.Fatalf("slow valid answer refused: %v gets=%d", err, c.podGets)
 				}
 			default:
 				if err != nil || !status.Ready {
