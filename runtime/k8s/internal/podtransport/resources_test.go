@@ -467,3 +467,65 @@ func TestRemovalStepsAreBounded(t *testing.T) {
 		t.Fatal("an unrelated error has no removal step")
 	}
 }
+
+// A dropped connection or an overloaded API server during removal is retried
+// within the same bound (evaluation battery 27 stopped a review at
+// cleanup-config-observe-request after one failed GET); a refusal is not.
+func TestResourceRemovalRetriesTransientFailures(t *testing.T) {
+	for _, which := range []string{"delete-503", "delete-dropped", "observe-dropped", "observe-503", "observe-forbidden", "observe-always-dropped"} {
+		t.Run(which, func(t *testing.T) {
+			var deletes, gets atomic.Int32
+			drop := func(w http.ResponseWriter) {
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err == nil {
+					_ = conn.Close()
+				}
+			}
+			r, _ := resourcesFixture(t, func(_ *Resources, _ core.Pod, w http.ResponseWriter, request *http.Request) {
+				if request.Method == "DELETE" {
+					n := deletes.Add(1)
+					switch {
+					case which == "delete-503" && n == 1:
+						w.WriteHeader(503)
+					case which == "delete-dropped" && n == 1:
+						drop(w)
+					default:
+						writeResource(w, 200, meta.Status{Status: "Success"})
+					}
+					return
+				}
+				n := gets.Add(1)
+				switch {
+				case which == "observe-always-dropped", which == "observe-dropped" && n == 1:
+					drop(w)
+				case which == "observe-503" && n == 1:
+					w.WriteHeader(503)
+				case which == "observe-forbidden":
+					w.WriteHeader(403)
+				default:
+					w.WriteHeader(404)
+				}
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			err := r.DeleteConfig(ctx, fixtureConfigUID)
+			switch which {
+			case "observe-forbidden":
+				if RemovalStep(err) != "observe-permission" || gets.Load() != 1 {
+					t.Fatalf("refusal retried or misnamed: %v gets=%d", err, gets.Load())
+				}
+			case "observe-always-dropped":
+				if step := RemovalStep(err); step != "observe-request" && step != "observe-timeout" {
+					t.Fatalf("persistent failure step %q", step)
+				}
+				if gets.Load() < 2 {
+					t.Fatal("transient observation failure not retried")
+				}
+			default:
+				if err != nil {
+					t.Fatalf("transient failure not retried: %v", err)
+				}
+			}
+		})
+	}
+}
