@@ -503,6 +503,22 @@ class ChartTests(unittest.TestCase):
             self.assertEqual(rendered.returncode, 0, rendered.stderr)
             self.assertNotIn('AI_SDLC_MODEL_GATEWAY_TOOLS', rendered.stdout)
 
+    def test_rewrite_guard_is_on_for_generation_and_off_for_review_gateways(self):
+        upstream = {'adapter': 'openai', 'upstream': {'url': 'http://192.0.2.10:8080', 'model': 'qwen3-coder', 'cidr': '192.0.2.10/32'}}
+        review = {'enabled': True, 'configJSON': '{}'}
+        def env(docs, deployment):
+            pod = next(d for d in docs if d['kind'] == 'Deployment' and d['metadata']['name'] == deployment)['spec']['template']['spec']
+            return {e['name']: e.get('value') for e in next(c for c in pod['containers'] if c['name'] == 'model-gateway').get('env', [])}
+        rendered, docs = self.sandbox_docs({'modelGateway': upstream, 'review': review})
+        self.assertEqual(rendered.returncode, 0, rendered.stderr)
+        self.assertEqual(env(docs, 'ai-sdlc-worker')['AI_SDLC_MODEL_GATEWAY_REWRITE_GUARD'], 'true')
+        self.assertEqual(env(docs, 'ai-sdlc-verifier')['AI_SDLC_MODEL_GATEWAY_REWRITE_GUARD'], 'false')
+        self.assertEqual(rendered.stdout.count('AI_SDLC_MODEL_GATEWAY_REWRITE_GUARD'), 2)
+        # The agent-cli gateway (codex_gateway.py) has no adapters: nothing renders.
+        cli, _ = self.sandbox_docs({'review': review})
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+        self.assertNotIn('AI_SDLC_MODEL_GATEWAY_REWRITE_GUARD', cli.stdout)
+
     def test_openshift_profile_binds_only_nonroot_scc_and_sets_platform(self):
         base = ['--set', 'runtime.mode=verification', '--set', 'verifier.digest=sha256:' + 'a' * 64]
         plain = [d for d in yaml.safe_load_all(self.render(*base).stdout) if d]

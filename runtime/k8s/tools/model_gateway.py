@@ -18,6 +18,10 @@ An installation may narrow the tools the model is offered
 (``AI_SDLC_MODEL_GATEWAY_TOOLS``, set by the chart only on the independent
 review gateway): definitions outside the allowlist are removed before the
 adapter runs, and a proposal for a removed tool is refused as unknown.
+
+The adapters' rewrite guard (``AI_SDLC_MODEL_GATEWAY_REWRITE_GUARD``, default
+``true``; the chart sets ``false`` on the review gateway) judges a proposed
+``write_file`` only from the request's own messages, never the workspace.
 """
 import hmac
 import json
@@ -54,13 +58,15 @@ CALL_SECONDS_HEADER = "X-AI-SDLC-Call-Seconds"
 
 
 def log_call(outcome, started, seconds, reason=None, prompt=None, completion=None, estimated=None, recounted=0,
-             degenerate_retries=0, withheld=0):
+             degenerate_retries=0, withheld=0, rewrite_retries=0, rewrite_passed=0):
     """One bounded event per completion: outcome, duration, the call budget,
     token counts, how many edit_file patches had their hunk counts repaired,
     when the degenerate-output guard fired, how many retries it spent
-    (``degenerateRetries``, 0 or 1) and, when the installation narrows the
-    tools, how many tool definitions the model did not see (``toolsWithheld``).
-    Never request or response content, nor tool names.
+    (``degenerateRetries``, 0 or 1), whether the rewrite guard retried a
+    refused whole-file rewrite (``rewriteRetries``) or passed one through
+    (``rewritePassed``), each present only as 1, and, when the installation
+    narrows the tools, how many tool definitions the model did not see
+    (``toolsWithheld``). Never request or response content, tool names or paths.
     Logging never changes the response: a failed write is ignored."""
     event = {"event": "model-call", "outcome": outcome, "seconds": round(time.monotonic() - started, 1), "budgetSeconds": seconds}
     if reason is not None:
@@ -72,6 +78,9 @@ def log_call(outcome, started, seconds, reason=None, prompt=None, completion=Non
         event["editPatchesRecounted"] = recounted
     if type(degenerate_retries) is int and 0 <= degenerate_retries <= 1 and (degenerate_retries or reason == "degenerate"):
         event["degenerateRetries"] = degenerate_retries
+    for key, value in (("rewriteRetries", rewrite_retries), ("rewritePassed", rewrite_passed)):
+        if type(value) is int and value == 1:
+            event[key] = value
     if type(withheld) is int and 0 < withheld <= 64:
         event["toolsWithheld"] = withheld
     try:
@@ -125,11 +134,14 @@ class GatewayHandler(Handler):
             completion = self.server.adapter.complete(request, seconds)
         except Exception as error:
             log_call("failed", started, seconds, reason=failure_class(error),
-                     degenerate_retries=getattr(error, "degenerate_retries", 0), withheld=withheld)
+                     degenerate_retries=getattr(error, "degenerate_retries", 0), withheld=withheld,
+                     rewrite_retries=getattr(error, "rewrite_retries", 0))
             raise
         log_call("ok", started, seconds, prompt=completion.prompt_tokens, completion=completion.completion_tokens, estimated=completion.estimated,
                  recounted=getattr(completion, "edit_patches_recounted", 0),
-                 degenerate_retries=getattr(completion, "degenerate_retries", 0), withheld=withheld)
+                 degenerate_retries=getattr(completion, "degenerate_retries", 0), withheld=withheld,
+                 rewrite_retries=getattr(completion, "rewrite_retries", 0),
+                 rewrite_passed=getattr(completion, "rewrite_passed", 0))
         return completion.message
 
     def call_seconds(self, profile):
