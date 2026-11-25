@@ -12,11 +12,15 @@
 {{- if not .Values.metrics.scrapeFrom }}
 {{- fail "metrics.scrapeFrom must name the peers allowed to scrape; an empty list would admit every source" }}
 {{- end }}
-{{- /* Select only pods another policy already isolates for ingress, so this
-policy only adds the metrics port: every component under the internal
-policy, and the build controller, provenance verifier and deployer, which
-always carry their own. */}}
-{{- $selected := ternary $all (list "build-controller" "provenance-verifier" "deployer") .Values.networkPolicy.enabled }}
+{{- /* scrapeFrom is a guarantee only for pods some policy isolates. Without
+the internal policy the components are open to every source, so the metrics
+port could not be restricted without also closing their routes: refuse. With
+it, every selected pod is already isolated for ingress (the build controller,
+provenance verifier and deployer by their own policies), so this policy only
+adds the metrics port. */}}
+{{- if not .Values.networkPolicy.enabled }}
+{{- fail "metrics.enabled requires networkPolicy.enabled, so that only metrics.scrapeFrom can reach the metrics port" }}
+{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -28,7 +32,7 @@ spec:
     matchLabels:
       {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
     matchExpressions:
-      - {key: app.kubernetes.io/component, operator: In, values: {{ toJson $selected }}}
+      - {key: app.kubernetes.io/component, operator: In, values: {{ toJson $all }}}
   policyTypes: [Ingress]
   ingress:
     - from:{{ toYaml .Values.metrics.scrapeFrom | nindent 8 }}

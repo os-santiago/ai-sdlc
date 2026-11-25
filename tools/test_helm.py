@@ -396,11 +396,11 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(monitored.returncode, 0, monitored.stderr)
         monitor = next(d for d in yaml.safe_load_all(monitored.stdout) if d and d['kind'] == 'PodMonitor')
         self.assertEqual(monitor['spec']['podMetricsEndpoints'], [{'port': 'metrics', 'path': '/metrics', 'scheme': 'http', 'interval': '1m'}])
-        # Without the global policy, select only pods that carry their own.
+        # Without the global policy the components are open to every source,
+        # so scrapeFrom could not be honoured: the chart refuses.
         plain = self.render_build(dict(base, networkPolicy={'enabled': False, 'databaseEgressCIDRs': []}, metrics={'enabled': True, 'scrapeFrom': [peer]}))
-        self.assertEqual(plain.returncode, 0, plain.stderr)
-        selected = next(d for d in yaml.safe_load_all(plain.stdout) if d and d['metadata']['name'] == 'ai-sdlc-metrics')
-        self.assertEqual(selected['spec']['podSelector']['matchExpressions'][0]['values'], ['build-controller', 'provenance-verifier', 'deployer'])
+        self.assertNotEqual(plain.returncode, 0)
+        self.assertIn('metrics.enabled requires networkPolicy.enabled', plain.stderr)
         # An empty peer list would admit every source; a shared port would break a component.
         for bad in ({'enabled': True}, {'enabled': True, 'scrapeFrom': [{}]}, {'enabled': True, 'scrapeFrom': [peer], 'port': 8087},
                     {'enabled': True, 'scrapeFrom': [peer], 'port': 8083}, {'enabled': True, 'scrapeFrom': [peer], 'port': 80},

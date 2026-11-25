@@ -23,10 +23,16 @@ library only, so no dependency was added.
   for debugging with `kubectl port-forward`.
 - **Metrics listener.** With `metrics.enabled`, each component also listens
   on `metrics.port` (default 9090), and that listener serves **only**
-  `GET /metrics` (Go's pattern matching also answers `HEAD`). A separate NetworkPolicy admits the `metrics.scrapeFrom`
-  peers to that port alone. A scraper therefore never reaches a component's
-  delivery routes (`/internal/...`), which a shared port would expose to it,
-  even though those routes check signatures.
+  `GET /metrics` (Go's pattern matching also answers `HEAD`). A separate
+  NetworkPolicy admits the `metrics.scrapeFrom` peers to that port alone. A
+  scraper therefore never reaches a component's delivery routes
+  (`/internal/...`), which a shared port would expose to it, even though
+  those routes check signatures. The chart requires `networkPolicy.enabled`
+  for this: NetworkPolicies are additive and only restrict pods that some
+  policy selects, so without the internal policy the metrics port could not
+  be limited to `scrapeFrom`. The restriction also depends on a network
+  plugin that enforces NetworkPolicy, and on any other policy in the
+  namespace that admits more.
 
 Scraping needs no authentication change. The endpoints carry only the bounded
 series below: no issue text, prompts, model output, repository names,
@@ -48,7 +54,20 @@ credentials or error text.
 expired. Each component reads only its own queues, with privileges its
 database role already holds. Each count reads at most 10,001 rows and is
 capped at 10,000. A queue that cannot be read is removed from the output
-rather than left at its last value, so `absent()` detects a failing sampler.
+rather than left at its last value. Check each expected queue on its own:
+`absent(ai_sdlc_queue_depth)` stays empty while any other queue is still
+reported. For example, for the verifier with independent review:
+
+```promql
+absent(ai_sdlc_queue_depth{component="verifier",stage="verification"})
+absent(ai_sdlc_queue_depth{component="verifier",stage="review"})
+absent(ai_sdlc_queue_depth{component="worker",stage="execution"})
+```
+
+Add the scrape target's labels (for example `pod` or `job`) when several
+installations share one Prometheus. The sampler logs
+`queue depth unavailable: <component> <stage>` once when a queue starts
+failing, and `queue depth restored: ...` once when it recovers.
 
 | `stage` | Component | Counts |
 |---|---|---|
@@ -93,6 +112,7 @@ the verifier). The histogram buckets are 1, 2.5, 5, 10, 20, 30, 60, 90, 120,
 |---|---|
 | `success` | A valid assistant completion |
 | `timeout` | The call deadline or a transport timeout ended the call |
+| `canceled` | The caller canceled the call before its deadline (for example on shutdown) |
 | `transport` | Connection or transport failure |
 | `status-4xx`, `status-5xx`, `status-other` | The gateway answered a non-200 status |
 | `invalid-response` | A 200 answer the broker refused (media type, size, encoding or shape) |
@@ -128,11 +148,16 @@ Expected series per component:
 |---|---|---|
 | `ai_sdlc_queue_depth` | 3 | 1 to 3 |
 | `ai_sdlc_stops_total` | 256 | Fewer than 20: one per stop class actually seen |
-| `ai_sdlc_model_calls_total` | 16 | Fewer than 8 |
-| `ai_sdlc_model_call_duration_seconds` | 16 label sets × 16 lines | Fewer than 8 label sets |
+| `ai_sdlc_model_calls_total` | 18 | Fewer than 8 |
+| `ai_sdlc_model_call_duration_seconds` | 18 label sets × 16 lines | Fewer than 8 label sets |
 | `ai_sdlc_deliveries_total` | 4 | 4 |
 
-Counters start at zero when a process starts: use `rate()` and `increase()`.
+Counters reset when a process starts: use `rate()` and `increase()`. A
+labelled series appears only at its first increment, with no earlier zero
+sample, so `increase()` does not count that first event: a single stop after
+a restart shows only as a new series with value 1. To catch it, also alert on
+series that were absent a window ago, for example
+`ai_sdlc_stops_total unless ai_sdlc_stops_total offset 10m`.
 
 ## Enabling scraping
 
@@ -153,9 +178,9 @@ metrics:
 
 Enabling metrics adds `AI_SDLC_METRICS_ADDRESS` and a `metrics` container port
 to each runtime Deployment, so those pods restart once. It also adds the
-`<release>-metrics` NetworkPolicy. That policy selects only pods that another
-policy already isolates for ingress, so it adds the metrics port and nothing
-else. The chart refuses an empty `scrapeFrom`, because a NetworkPolicy rule
+`<release>-metrics` NetworkPolicy. It requires `networkPolicy.enabled`
+(the chart refuses metrics without it), so every pod it selects is already
+isolated for ingress, and it adds the metrics port and nothing else. The chart refuses an empty `scrapeFrom`, because a NetworkPolicy rule
 with no peers admits every source. It also refuses a `port` that collides with
 a component or sidecar port. It cannot judge a peer's breadth: an entry such as
 `{namespaceSelector: {}}` admits every pod in every namespace, so name the
@@ -184,9 +209,15 @@ scrape_configs:
 `ai-sdlc-k8s-runtime` is the pod label `app.kubernetes.io/name` (the chart
 name, unless `nameOverride` is set). If
 the Prometheus Operator is installed, set `metrics.podMonitor.enabled: true`
-instead. To check by hand without enabling anything, run
-`kubectl -n ai-sdlc-runtime port-forward deploy/ai-sdlc-worker 8083`, then
-`curl -s localhost:8083/metrics`.
+instead. To check by hand without enabling anything, use the kubeconfig the
+local installer wrote (it does not change the default context; see
+[installation](../installation.md)):
+
+```bash
+kubectl --kubeconfig ~/.local/state/ai-sdlc/<cluster>/kubeconfig \
+  -n ai-sdlc-runtime port-forward deploy/ai-sdlc-worker 8083
+curl -s localhost:8083/metrics
+```
 
 ### OpenShift
 

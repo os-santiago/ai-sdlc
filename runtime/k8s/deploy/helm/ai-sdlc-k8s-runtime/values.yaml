@@ -20,7 +20,7 @@ probes: {readinessTimeoutSeconds: 0}
 # unchanged. Enabled, each runtime component also listens on port, serving
 # only GET /metrics (bounded counters, never issue or model content), and a
 # NetworkPolicy admits scrapeFrom to that port alone, never to the
-# component's routes.
+# component's routes. Requires networkPolicy.enabled.
 metrics:
   enabled: false
   port: 9090
