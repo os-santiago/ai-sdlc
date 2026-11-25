@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,7 +15,9 @@ import (
 // /metrics is served read-only on the component port in every runtime mode,
 // with only the runtime's bounded series.
 func TestMetricsServedInEveryModeWithBoundedLabels(t *testing.T) {
+	before, _ := metrics.Default.Sample("ai_sdlc_stops_total", "worker", "candidate", "model-provider")
 	metrics.Stop("worker", "candidate", "model-provider")
+	want := `ai_sdlc_stops_total{component="worker",loop="candidate",stage="model-provider"} ` + strconv.FormatFloat(before+1, 'g', -1, 64) + "\n"
 	metrics.Stop("worker", "candidate", "token sk-live-0123456789 for os-santiago/private")
 	metrics.SetQueueDepth("worker", "execution", 2)
 	label := regexp.MustCompile(`[a-z_]+="([^"]*)"`)
@@ -29,7 +32,7 @@ func TestMetricsServedInEveryModeWithBoundedLabels(t *testing.T) {
 				t.Fatal(w.Code, w.Header())
 			}
 			body := w.Body.String()
-			if !strings.Contains(body, `ai_sdlc_stops_total{component="worker",loop="candidate",stage="model-provider"} 1`) ||
+			if !strings.Contains(body, want) ||
 				!strings.Contains(body, `ai_sdlc_queue_depth{component="worker",stage="execution"} 2`) ||
 				!strings.Contains(body, "# TYPE ai_sdlc_model_call_duration_seconds histogram") {
 				t.Fatal(body)

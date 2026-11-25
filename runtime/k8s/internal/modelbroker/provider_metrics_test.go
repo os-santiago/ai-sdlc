@@ -84,6 +84,24 @@ func TestObservedInvokeCountsOneBoundedOutcomePerCall(t *testing.T) {
 			}
 		})
 	}
+	// An explicit cancellation before the deadline is not a timeout.
+	provider.client.Transport = roundTripper(func(r *http.Request) (*http.Response, error) {
+		r.Header.Set("X-Test-Case", "slow")
+		return base.RoundTrip(r)
+	})
+	canceled, _ := sample("reviewer", metrics.ModelCanceled)
+	timeouts, _ := sample("reviewer", metrics.ModelTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
+	if _, err := provider.observedInvoke(ctx, "reviewer", []byte(`{}`), 1024); err == nil {
+		t.Fatal("canceled call answered")
+	}
+	if after, _ := sample("reviewer", metrics.ModelCanceled); after != canceled+1 {
+		t.Fatal("cancellation not counted as canceled")
+	}
+	if after, _ := sample("reviewer", metrics.ModelTimeout); after != timeouts {
+		t.Fatal("cancellation counted as a timeout")
+	}
 	provider.client.Transport = base
 	calls, _ := sample("generator", metrics.ModelRejected)
 	if _, err := provider.observedInvoke(context.Background(), "generator", nil, 1024); err == nil {

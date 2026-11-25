@@ -37,6 +37,7 @@ var ModelRoles = []string{"generator", "reviewer"}
 const (
 	ModelSuccess         = "success"          // a valid assistant completion
 	ModelTimeout         = "timeout"          // the call deadline ended first
+	ModelCanceled        = "canceled"         // the caller canceled the call (for example on shutdown)
 	ModelTransport       = "transport"        // connection or transport failure
 	ModelStatus4xx       = "status-4xx"       // the gateway answered 4xx
 	ModelStatus5xx       = "status-5xx"       // the gateway answered 5xx
@@ -46,7 +47,7 @@ const (
 )
 
 // ModelOutcomes lists every model call outcome class.
-var ModelOutcomes = []string{ModelSuccess, ModelTimeout, ModelTransport, ModelStatus4xx, ModelStatus5xx, ModelStatusOther, ModelInvalidResponse, ModelRejected}
+var ModelOutcomes = []string{ModelSuccess, ModelTimeout, ModelCanceled, ModelTransport, ModelStatus4xx, ModelStatus5xx, ModelStatusOther, ModelInvalidResponse, ModelRejected}
 
 // DeliveryOutcomes are the results of one claimed publication or merge
 // attempt of the release manager. Quarantine is a standing state, not an

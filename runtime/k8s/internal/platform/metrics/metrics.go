@@ -102,10 +102,13 @@ type family struct {
 type Registry struct {
 	mu       sync.Mutex
 	families map[string]*family
+	samples  map[string]bool
 }
 
 // NewRegistry returns an empty registry.
-func NewRegistry() *Registry { return &Registry{families: map[string]*family{}} }
+func NewRegistry() *Registry {
+	return &Registry{families: map[string]*family{}, samples: map[string]bool{}}
+}
 
 // Default is the process registry that /metrics serves.
 var Default = NewRegistry()
@@ -128,17 +131,33 @@ func (r *Registry) register(name, help string, k kind, buckets []float64, labels
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.families[name]; ok {
-		panic("metrics: duplicate metric " + name)
+	// A histogram also writes name_bucket, name_sum and name_count: reserve
+	// them, so no other metric can emit a sample with the same identity.
+	names := []string{name}
+	if k == histogramKind {
+		names = append(names, name+"_bucket", name+"_sum", name+"_count")
 	}
-	f := &family{name: name, help: help, kind: k, labels: labels, buckets: append([]float64(nil), buckets...), series: map[string]*series{}}
+	for _, n := range names {
+		if r.samples[n] {
+			panic("metrics: duplicate metric " + n)
+		}
+	}
+	for _, n := range names {
+		r.samples[n] = true
+	}
+	// Own the validated labels and buckets: a caller reusing its slices
+	// cannot change the registered schema.
+	f := &family{name: name, help: help, kind: k, labels: append([]Label(nil), labels...), buckets: append([]float64(nil), buckets...), series: map[string]*series{}}
 	r.families[name] = f
 	return f
 }
 
 // get returns the series for values, creating it within MaxSeries. The caller
 // holds f.mu. A wrong number of values is a programming error and is folded
-// into the all-Other series rather than panicking in a reconciler.
+// into the all-Other series rather than panicking in a reconciler. Beyond
+// MaxSeries a counter or histogram folds a new set into the all-Other series;
+// a gauge refuses it (nil), because a folded gauge value could not be deleted
+// and would go stale.
 func (f *family) get(values []string) *series {
 	bounded := make([]string, len(f.labels))
 	for i, l := range f.labels {
@@ -152,7 +171,10 @@ func (f *family) get(values []string) *series {
 	if s, ok := f.series[key]; ok {
 		return s
 	}
-	if len(f.series) >= MaxSeries-1 {
+	if f.kind == gaugeKind && len(f.series) >= MaxSeries {
+		return nil
+	}
+	if f.kind != gaugeKind && len(f.series) >= MaxSeries-1 {
 		for i := range bounded {
 			bounded[i] = Other
 		}
@@ -204,7 +226,9 @@ func (g *Gauge) Set(v float64, values ...string) {
 		return
 	}
 	g.f.mu.Lock()
-	g.f.get(values).value = v
+	if s := g.f.get(values); s != nil {
+		s.value = v
+	}
 	g.f.mu.Unlock()
 }
 

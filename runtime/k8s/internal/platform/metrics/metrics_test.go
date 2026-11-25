@@ -260,3 +260,59 @@ func set(values ...string) map[string]bool {
 	}
 	return m
 }
+
+func TestHistogramSampleNamesAreReserved(t *testing.T) {
+	for name, register := range map[string]func(*Registry){
+		"histogram first": func(r *Registry) { r.NewHistogram("latency", "h", []float64{1}); r.NewGauge("latency_count", "h") },
+		"gauge first":     func(r *Registry) { r.NewCounter("latency_sum", "h"); r.NewHistogram("latency", "h", []float64{1}) },
+		"bucket":          func(r *Registry) { r.NewHistogram("latency", "h", []float64{1}); r.NewCounter("latency_bucket", "h") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("colliding sample name accepted")
+				}
+			}()
+			register(NewRegistry())
+		})
+	}
+	r := NewRegistry()
+	r.NewHistogram("latency", "h", []float64{1})
+	r.NewCounter("latency_total", "h") // no collision
+}
+
+func TestRegisteredLabelsAreOwned(t *testing.T) {
+	r := NewRegistry()
+	labels := []Label{OneOf("a", "x"), OneOf("b", "y")}
+	c := r.NewCounter("owned_total", "h", labels...)
+	labels[1] = OneOf("a", "y")
+	c.Inc("x", "y")
+	if !strings.Contains(render(r), `owned_total{a="x",b="y"} 1`) {
+		t.Fatal(render(r))
+	}
+}
+
+// A gauge never folds into "other": beyond MaxSeries it refuses new sets,
+// and admitted sets still update and delete.
+func TestGaugeRefusesSetsBeyondCapacity(t *testing.T) {
+	r := NewRegistry()
+	g := r.NewGauge("wide", "h", Bounded("k"))
+	for i := 0; i < MaxSeries+10; i++ {
+		g.Set(1, "k"+strconv.Itoa(i))
+	}
+	if _, ok := r.Sample("wide", Other); ok {
+		t.Fatal("gauge folded into other")
+	}
+	if _, ok := r.Sample("wide", "k"+strconv.Itoa(MaxSeries)); ok {
+		t.Fatal("gauge exceeded capacity")
+	}
+	g.Set(5, "k0")
+	if v, _ := r.Sample("wide", "k0"); v != 5 {
+		t.Fatal("admitted gauge not updated")
+	}
+	g.Delete("k0")
+	g.Set(2, "late")
+	if v, ok := r.Sample("wide", "late"); !ok || v != 2 {
+		t.Fatal("freed capacity not reused")
+	}
+}

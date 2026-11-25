@@ -114,11 +114,15 @@ func (p *Provider) observedInvoke(ctx context.Context, role string, request []by
 	return raw, err
 }
 
-// failedTransfer classifies a failed request or body read: the caller's
-// deadline or a transport timeout, otherwise a transport failure.
+// failedTransfer classifies a failed request or body read: an explicit
+// cancellation of the caller's context, the caller's deadline or a transport
+// timeout, otherwise a transport failure.
 func failedTransfer(ctx context.Context, err error) string {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return metrics.ModelCanceled
+	}
 	var timeout interface{ Timeout() bool }
-	if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
 		return metrics.ModelTimeout
 	}
 	return metrics.ModelTransport

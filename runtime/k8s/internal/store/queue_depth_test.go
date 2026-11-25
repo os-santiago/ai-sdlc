@@ -44,7 +44,13 @@ func TestQueueDepthReadsOnlyOwnQueuesUnderComponentRoles(t *testing.T) {
 			before[component+"/"+stage] = depth
 		}
 	}
-	if _, err := roles["orchestrator"].Pool.ExecContext(ctx, `INSERT INTO authorized_outbox(producer,event_id,target,operation,receipt,payload) VALUES('orchestrator',$1,'worker','execute-work','{}','\x01')`, NewID()); err != nil {
+	event := NewID()
+	// The component cannot delete outbox rows; the test owner removes this
+	// one row, even when a later assertion fails.
+	t.Cleanup(func() {
+		_, _ = db.Pool.ExecContext(context.Background(), `DELETE FROM authorized_outbox WHERE producer='orchestrator' AND event_id=$1`, event)
+	})
+	if _, err := roles["orchestrator"].Pool.ExecContext(ctx, `INSERT INTO authorized_outbox(producer,event_id,target,operation,receipt,payload) VALUES('orchestrator',$1,'worker','execute-work','{}','\x01')`, event); err != nil {
 		t.Fatal(err)
 	}
 	if depth, err := roles["orchestrator"].QueueDepth(ctx, "orchestrator", "outbox"); err != nil || depth != before["orchestrator/outbox"]+1 {
