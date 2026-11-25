@@ -13,6 +13,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
 // A fake value with the shape of a fine-grained token; never a real credential.
@@ -285,5 +288,51 @@ func TestInvalidInstalledCredentialStopsBeforeAnyRead(t *testing.T) {
 	reader, _ := InstalledReader(writeCredential(t, validCredential()))
 	if strings.Contains(fmt.Sprintf("%v %+v %#v", reader, reader, reader), fakeReadToken) || strings.Contains(logs.String(), fakeReadToken) {
 		t.Fatal("credential printed or logged")
+	}
+}
+
+// A Cached reader, shared by verification and review, reads one pinned SHA
+// once and suppresses repeated reads while the forge is rate limited
+// (evaluation battery 28: an uncached review re-downloaded the source on each
+// reconcile tick and exhausted the anonymous quota). Copies share the cache;
+// the uncached reader is unchanged.
+func TestCachedReaderReusesTheBundleAndBacksOffOnRateLimit(t *testing.T) {
+	base, err := InstalledReader("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := base.Cached()
+	copied := reader
+	var reads int
+	limited := false
+	reader.cache.fetch = func(_ context.Context, _, sha string) (workspacebundle.Bundle, error) {
+		reads++
+		if limited {
+			return workspacebundle.Bundle{}, AvailabilityError{retryAt: time.Now().Add(time.Minute), rateLimited: true}
+		}
+		return cachedFixture(sha), nil
+	}
+	for i := 0; i < 3; i++ {
+		for _, r := range []Reader{reader, copied} {
+			if b, err := r.Fetch(context.Background(), "fixture/product", testSHA); err != nil || b.SourceSHA != testSHA {
+				t.Fatal("cached read failed", err)
+			}
+		}
+	}
+	if reads != 1 {
+		t.Fatalf("pinned SHA read %d times, want 1", reads)
+	}
+	limited = true
+	other := strings.Repeat("b", 40)
+	for i := 0; i < 3; i++ {
+		if _, err := copied.Fetch(context.Background(), "fixture/product", other); !RateLimited(err) {
+			t.Fatal("rate limit not reported", err)
+		}
+	}
+	if reads != 2 {
+		t.Fatalf("rate-limited reads repeated: %d reads, want 2", reads)
+	}
+	if base.cache != nil || reader.Authenticated() != base.Authenticated() {
+		t.Fatal("Cached changed the original reader")
 	}
 }
