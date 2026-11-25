@@ -49,6 +49,13 @@ func main() {
 		log.Fatal("invalid independent review option")
 	}
 	reviewEnabled := reviewOption == "true"
+	// The optional repository-scoped read credential is mounted only into this
+	// container. Its path is fixed by the chart; its token is read per fetch
+	// and never logged, signed, stored or passed to a pod.
+	source, err := installedSource(os.Getenv)
+	if err != nil {
+		log.Fatal("invalid source credential configuration")
+	}
 	loadReview := func(ctx context.Context) (reviewflow.Configuration, error) {
 		if ctx.Err() != nil {
 			return reviewflow.Configuration{}, reviewflow.ErrReview
@@ -129,6 +136,9 @@ func main() {
 		if err := sandbox.Check(ctx, sandboxPreflight); err != nil {
 			return err
 		}
+		if err := sourceReady(source, c.Authority); err != nil {
+			return err
+		}
 		blocked, err := c.DB.VerificationCleanupBlocked(ctx)
 		if err != nil || blocked {
 			return verificationflow.ControllerError{Stage: "cleanup"}
@@ -162,10 +172,10 @@ func main() {
 		}
 		// Recheck the complete installation config, including pinned images, before every effect.
 		sealed, _ := json.Marshal(config)
-		r := verificationflow.Runtime{DB: c.DB, Load: newLoader(workspacebundle.Digest(sealed)), Client: client, Image: config.Placement.WorkerImage, MailboxImage: config.Placement.MailboxImage, RuntimeClass: config.Placement.SandboxRuntimeClass()}
+		r := verificationflow.Runtime{DB: c.DB, Load: newLoader(workspacebundle.Digest(sealed)), Client: client, Image: config.Placement.WorkerImage, MailboxImage: config.Placement.MailboxImage, RuntimeClass: config.Placement.SandboxRuntimeClass(), Source: source}
 		var reviewPoll queuePoll
 		if reviewEnabled {
-			review := reviewflow.Runtime{DB: c.DB, Policy: r.Load, Load: loadReview, Client: client}
+			review := reviewflow.Runtime{DB: c.DB, Policy: r.Load, Load: loadReview, Client: client, Source: source}
 			reviewPoll = review.PollOnce
 		}
 		var handoff func(context.Context) (bool, error)

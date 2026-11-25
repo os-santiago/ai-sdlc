@@ -163,10 +163,14 @@ class SecretContractTests(unittest.TestCase):
         upstream['modelGateway'] = {'adapter': 'openai', 'upstream': {
             'url': 'http://10.0.0.5:8080/v1', 'model': 'fixture', 'cidr': '10.0.0.5/32', 'port': 8080,
             'credentialSecret': UPSTREAM_SECRET}}
+        # The optional repository-scoped source read credential (#741).
+        source = copy.deepcopy(maximal)
+        source['verifier']['sourceCredential'] = True
         cls.renderings = {}
         backup = dict(copy.deepcopy(maximal), backup={'enabled': True})
         for name, values in [('maintenance', {}), ('shadow', {'runtime': {'mode': 'shadow'}}),
-                             ('maximal', maximal), ('upstream', upstream), ('backup', backup)]:
+                             ('maximal', maximal), ('upstream', upstream), ('source-credential', source),
+                             ('backup', backup)]:
             result = chart.render_build(values)
             if result.returncode != 0:
                 raise AssertionError(name + ': ' + result.stderr)
@@ -190,6 +194,14 @@ class SecretContractTests(unittest.TestCase):
                 if key is not None:
                     self.assertIn(key, contract[rows[0]][0], '%s: undocumented key %s of %s' % (rendering, key, secret))
         self.assertEqual(used, set(contract), 'documented Secrets that no rendering uses')
+
+    def test_source_credential_is_read_only_by_the_verifier_controller(self):
+        """The read credential is rendered only with its setting, and only into
+        the verifier Deployment, never a pod the verifier creates."""
+        for rendering, docs in self.renderings.items():
+            holders = {doc['metadata']['name'] for doc in docs if doc['kind'] in WORKLOADS
+                       and any(secret == 'ai-sdlc-source-reader' for secret, _ in secret_references([doc]))}
+            self.assertEqual(holders, {'ai-sdlc-verifier'} if rendering == 'source-credential' else set(), rendering)
 
     def test_role_secrets_cover_exactly_the_installer_identities(self):
         names = {secret for docs in self.renderings.values() for secret, _ in secret_references(docs)}

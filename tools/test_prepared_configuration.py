@@ -295,6 +295,56 @@ class PreparedCustodyTests(unittest.TestCase):
         self.config.check_secrets=lambda:(_ for _ in ()).throw(ValueError('changed original secret'))
         with self.assertRaisesRegex(ValueError,'changed original secret'):self.config.begin()
 
+    def test_supplied_source_reader_is_an_original_credential_under_custody(self):
+        # Fake, synthetic values only.
+        def secret(name,data):
+            return {'metadata':{'name':name,'uid':str(uuid.uuid4()),'annotations':{'ai-sdlc.io/cluster-uid':'fixture'}},
+                    'type':'Opaque','data':{k:base64.b64encode(v.encode()).decode() for k,v in data.items()}}
+        reader=secret('ai-sdlc-source-reader',{'credential.json':'{"synthetic":"only"}'})
+        items=[reader]
+        inventory=prepared.Configuration.__new__(prepared.Configuration)
+        inventory.kubectl=['fixture-kubectl']
+        inventory.base_run=lambda argv,**kwargs:SimpleNamespace(stdout=json.dumps({'items':copy.deepcopy(items)}))
+        observed=inventory.secret_inventory()
+        self.assertEqual(set(observed),{'ai-sdlc-source-reader'})
+        items.append(secret('ai-sdlc-unreviewed',{'token':'synthetic'}))
+        with self.assertRaisesRegex(ValueError,'Unexpected credential inventory'):inventory.secret_inventory()
+        items.pop()
+        # Recorded at begin(): it must stay unchanged for the whole transition.
+        inventory.record={'resources':{},'privateSecrets':{},'originalSecrets':observed}
+        inventory.check_secrets()
+        items[0]['data']['credential.json']=base64.b64encode(b'{"synthetic":"changed"}').decode()
+        with self.assertRaisesRegex(ValueError,'Original prepared credential changed'):inventory.check_secrets()
+        # Appearing after begin() is not adopted.
+        inventory.record['originalSecrets']={}
+        with self.assertRaisesRegex(ValueError,'Unrecorded credential appeared'):inventory.check_secrets()
+
+    def test_prepared_reference_reads_the_source_reader_through_the_guarded_installer(self):
+        valid={'version':1,'host':'github.com','repository':'os-santiago/saferus','access':'read','token':'synthetic_'+'F'*40}
+        guards=[]
+        self.config.guard=lambda **kwargs:guards.append(kwargs)
+        values={'verifier':{'digest':'sha256:'+'a'*64}}
+        with patch.object(install,'owned_secret',return_value={'credential.json':json.dumps(valid)}) as owned:
+            candidate_install.apply_source_credential(values,['kubectl'],'fixture','os-santiago/saferus',installer=self.config)
+        owned.assert_called_once_with(['kubectl'],'ai-sdlc-source-reader','fixture')
+        self.assertEqual(guards,[{}])
+        self.assertIs(values['verifier']['sourceCredential'],True)
+        with patch.object(install,'owned_secret',return_value=None):
+            absent={'verifier':{'digest':'sha256:'+'a'*64}}
+            candidate_install.apply_source_credential(absent,['kubectl'],'fixture','os-santiago/saferus',installer=self.config)
+        self.assertEqual(absent,{'verifier':{'digest':'sha256:'+'a'*64}})
+
+    def test_prepared_transition_references_the_source_reader_before_its_target(self):
+        import ast,inspect
+        body=ast.parse(inspect.getsource(prepared.install_prepared)).body[0]
+        calls=[n for n in ast.walk(body) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute)]
+        reference=[n for n in calls if n.func.attr=='apply_source_credential']
+        self.assertEqual(len(reference),1)
+        self.assertEqual([(k.arg,ast.unparse(k.value)) for k in reference[0].keywords],[('installer','config')])
+        self.assertEqual(ast.unparse(reference[0].args[0]),'execution')
+        target=next(n for n in calls if n.func.attr=='set_target')
+        self.assertLess(reference[0].lineno,target.lineno)
+
     def test_controller_revision_derivation_preserves_original_physical_profile(self):
         state=Path(self.directory.name)
         original={'version':'ai-sdlc.build-desired/v1','revision':'a'*40,'controllerDigest':'sha256:'+'a'*64,

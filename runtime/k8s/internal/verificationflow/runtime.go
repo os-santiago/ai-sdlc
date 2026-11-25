@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 )
@@ -22,6 +23,10 @@ type Runtime struct {
 	MailboxImage string
 	// RuntimeClass is the installed sandbox RuntimeClass for verification pods.
 	RuntimeClass string
+	// Source reads the pinned source: the zero Reader is anonymous; an
+	// installed reader authenticates with the repository-scoped read
+	// credential mounted only into this controller's container.
+	Source sourcefetch.Reader
 }
 
 // SandboxUnavailable reports that a poll stopped only because the sandbox
@@ -82,7 +87,8 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if id == "" {
 		return "", nil
 	}
-	if _, _, _, err = CurrentProof(ctx, r.DB, r.Load, id); err != nil {
+	command, _, _, err := CurrentProof(ctx, r.DB, r.Load, id)
+	if err != nil {
 		if errors.Is(err, store.ErrObservationUnavailable) {
 			return "observation-unavailable", ControllerError{"authority"}
 		}
@@ -103,7 +109,14 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		}
 		return state, podtransport.WithRuntimeClassReason(ControllerError{"sandbox-runtime-class"}, err)
 	}
-	if _, err = RunWithMailbox(ctx, r.DB, r.Load, id, r.Client, r.Image, r.MailboxImage, r.RuntimeClass, admission); err != nil {
+	// An installed read credential that cannot be used is an installation
+	// fault, not the delivery's: like a missing sandbox class, it refuses the
+	// claim, so no queued verification is consumed by it. (A credential the
+	// forge rejects is only observable by the fetch, after the claim.)
+	if r.Source.Check(command.Repository) != nil {
+		return "source-credential-invalid", ControllerError{"source-credential-invalid"}
+	}
+	if _, err = runWithMailbox(ctx, r.DB, r.Load, id, r.Client, r.Image, r.MailboxImage, r.RuntimeClass, admission, r.Source); err != nil {
 		return "stopped", err
 	}
 	return "behavior-verified", nil

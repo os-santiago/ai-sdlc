@@ -6,6 +6,7 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/secretscan"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 )
 
@@ -43,6 +44,23 @@ func DiagnosticStage(err error) string {
 		return "refused"
 	}
 	return "unknown"
+}
+
+// sourceStage names a source failure. Each stops the run like any other
+// source failure; the name tells an operator what to do: wait for the forge's
+// rate limit, or repair the installation's read credential (rejected by the
+// forge, or missing, malformed or bound to another repository). A credential
+// failure never falls back to an anonymous read.
+func sourceStage(err error) string {
+	switch {
+	case sourcefetch.RateLimited(err):
+		return "source-rate-limited"
+	case sourcefetch.CredentialRejected(err):
+		return "source-credential-rejected"
+	case sourcefetch.CredentialInvalid(err):
+		return "source-credential-invalid"
+	}
+	return "source"
 }
 
 // refusalReason bounds the decision reasons the log may name: the repository
@@ -95,7 +113,7 @@ func testsStage(stage string, err error) string {
 
 func knownStage(stage string) bool {
 	switch stage {
-	case "source-rate-limited", "sandbox-runtime-class", "runs-deadline", "runs-renew", "runs-context":
+	case "source-rate-limited", "source-credential-rejected", "source-credential-invalid", "sandbox-runtime-class", "runs-deadline", "runs-renew", "runs-context":
 		return true
 	}
 	if base, step, ok := strings.Cut(stage, "-"); ok {

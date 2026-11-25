@@ -54,7 +54,7 @@ func (c *Client) getJSON(ctx context.Context, suffix string, limit int) ([]byte,
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
-		return nil, httpSourceError(response)
+		return nil, c.responseError(response)
 	}
 	if response.Header.Get("Content-Encoding") != "" || response.ContentLength > int64(limit) {
 		return nil, ErrSource
