@@ -273,3 +273,35 @@ class RunRetryTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ForgeLabelRetryTest(unittest.TestCase):
+    """A transient forge failure while labeling is retried (battery 29 aborted
+    on one failed label edit during a GitHub API outage)."""
+
+    def forge(self):
+        forge = run_battery.GitHub.__new__(run_battery.GitHub)
+        forge.repository = 'fixture/product'
+        return forge
+
+    def test_a_transient_failure_is_retried(self):
+        results = [mock.Mock(returncode=1), mock.Mock(returncode=1), mock.Mock(returncode=0)]
+        with mock.patch.object(run_battery.subprocess, 'run', side_effect=results) as run, \
+                mock.patch.object(run_battery.time, 'sleep') as sleep:
+            self.forge().label(195, True)
+        self.assertEqual(run.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_a_persistent_failure_still_stops_an_add_but_not_a_remove(self):
+        with mock.patch.object(run_battery.subprocess, 'run', return_value=mock.Mock(returncode=1)), \
+                mock.patch.object(run_battery.time, 'sleep'):
+            with self.assertRaises(RuntimeError):
+                self.forge().label(195, True)
+            self.forge().label(195, False)
+
+    def test_a_timeout_is_retried(self):
+        results = [run_battery.subprocess.TimeoutExpired('gh', 60), mock.Mock(returncode=0)]
+        with mock.patch.object(run_battery.subprocess, 'run', side_effect=results) as run, \
+                mock.patch.object(run_battery.time, 'sleep'):
+            self.forge().label(195, True)
+        self.assertEqual(run.call_count, 2)

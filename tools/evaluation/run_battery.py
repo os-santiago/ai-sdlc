@@ -164,10 +164,23 @@ class GitHub:
         self.repository = repository
 
     def label(self, issue, add):
+        """Adds or removes the trigger label. A transient forge failure is
+        retried with the same backoff as observations: battery 29 aborted
+        after many hours when one label edit met a GitHub API outage.
+        Editing a label is idempotent, so repeating it is safe."""
         flag = '--add-label' if add else '--remove-label'
-        result = subprocess.run(['gh', 'issue', 'edit', str(issue), '--repo', self.repository, flag, LABEL],
-                                capture_output=True, text=True, timeout=60)
-        if add and result.returncode != 0:
+        for delay in RETRY_DELAYS + (None,):
+            try:
+                result = subprocess.run(['gh', 'issue', 'edit', str(issue), '--repo', self.repository, flag, LABEL],
+                                        capture_output=True, text=True, timeout=60)
+                if result.returncode == 0:
+                    return
+            except subprocess.TimeoutExpired:
+                pass
+            if delay is None:
+                break
+            time.sleep(delay)
+        if add:
             raise RuntimeError('could not add the trigger label to issue %d' % issue)
 
     def merged_pull(self, issue, since):
