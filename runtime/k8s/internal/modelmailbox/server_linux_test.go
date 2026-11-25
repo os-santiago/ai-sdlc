@@ -151,7 +151,9 @@ func TestHTTPInputLimits(t *testing.T) {
 func TestLinkedResponseWaitsOnlyUntilOriginalDeadline(t *testing.T) {
 	for _, transient := range []bool{false, true} {
 		t.Run(map[bool]string{false: "persistent", true: "publication-window"}[transient], func(t *testing.T) {
-			s, dir, server := setupServer(t, 200*time.Millisecond)
+			// A window well above the 50 ms staging removal keeps the
+			// publication-window case deterministic on a loaded CI runner.
+			s, dir, server := setupServer(t, 2*time.Second)
 			done := send(server, testBody)
 			request := awaitRequest(t, s)
 			response := testResponse(request)
