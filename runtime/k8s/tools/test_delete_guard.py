@@ -31,6 +31,9 @@ KV_LINES = ["package kv", "", "import (", '\t"strings"', ")", ""] + sum(
                                     "Set", "Delete", "Has", "Len", "Clone", "Invert", "Prefix")), [])
 KV_SOURCE = "\n".join(KV_LINES)
 TOTAL = len(KV_LINES)
+# The bounds count lines of code (non-trivial lines) on every side.
+CODE = lambda lines: sum(adapters.copy_line(line) is not None for line in lines)
+CODE_TOTAL = CODE(KV_LINES)
 READ_KV = rg.conversation(rg.assistant(("r1", "read_file", {"path": KV})), rg.result("r1", cg.scc_read(KV_SOURCE)))
 
 
@@ -88,7 +91,7 @@ SMALL_EDIT = streamed_edit(SMALL)
 REMOVED = adapters.patch_counts(["\n".join(DESTRUCTIVE)])[0]
 
 
-def delete_correction(removed=REMOVED, total=TOTAL, path=KV):
+def delete_correction(removed=REMOVED, total=CODE_TOTAL, path=KV):
     return {"role": "user", "content": adapters.delete_correction_text(path, removed, total)}
 
 
@@ -102,15 +105,16 @@ class DeleteRules(unittest.TestCase):
 
     def test_thresholds_separate_destructive_patches_from_legitimate_edits(self):
         guard = self.guard()
-        self.assertEqual(guard.totals, {KV: TOTAL})
-        self.assertEqual(guard.refused(self.message(edit_call(DESTRUCTIVE))), adapters.Refusal("delete", KV, (REMOVED, TOTAL)))
+        self.assertEqual(guard.totals, {KV: CODE_TOTAL})
+        self.assertEqual(guard.refused(self.message(edit_call(DESTRUCTIVE))), adapters.Refusal("delete", KV, (REMOVED, CODE_TOTAL)))
         self.assertIsNone(guard.refused(self.message(edit_call(SMALL))))
         self.assertIsNone(guard.refused(self.message(edit_call(REPLACEMENT))))
         # 29 lines removed, or 30 lines that are under 40% of a large file, pass.
         self.assertIsNone(guard.refused(self.message(edit_call(patch(hunk(7, KV_LINES[6:35]))))))
         big = rg.conversation(rg.assistant(("r1", "read_file", {"path": KV, "limit": 50})),
                               rg.result("r1", cg.scc_read("\n".join(KV_LINES * 3), limit=50)))
-        self.assertEqual(self.guard(big).totals, {KV: 3 * TOTAL})
+        # A partial read scales SCC's line total by the share of code shown.
+        self.assertEqual(self.guard(big).totals, {KV: round(3 * TOTAL * CODE(KV_LINES[:50]) / 50)})
         self.assertIsNone(self.guard(big).refused(self.message(edit_call(patch(hunk(7, KV_LINES[6:66]))))))
         self.assertIsNotNone(self.guard(big).refused(self.message(edit_call(patch(hunk(7, (KV_LINES * 3)[6:200]))))))
 
@@ -118,12 +122,14 @@ class DeleteRules(unittest.TestCase):
         partial = rg.conversation(rg.assistant(("r1", "read_file", {"path": KV, "offset": 1, "limit": 40})),
                                   rg.result("r1", cg.scc_read(KV_SOURCE, limit=40)))
         self.assertIn("lines shown", cg.scc_read(KV_SOURCE, limit=40))
-        self.assertEqual(self.guard(partial).totals, {KV: TOTAL})
+        estimate = self.guard(partial).totals[KV]
+        self.assertEqual(estimate, round(TOTAL * CODE(KV_LINES[:40]) / 40))
+        self.assertLess(abs(estimate - CODE_TOTAL), 0.1 * CODE_TOTAL)
         self.assertIsNotNone(self.guard(partial).refused(self.message(edit_call(DESTRUCTIVE))))
         # The latest read gives the total; a read without SCC's note gives none.
         later = rg.conversation(rg.assistant(("r1", "read_file", {"path": KV})), rg.result("r1", cg.scc_read(KV_SOURCE)),
                                 rg.assistant(("r2", "read_file", {"path": KV})), rg.result("r2", cg.scc_read("\n".join(KV_LINES * 2))))
-        self.assertEqual(self.guard(later).totals, {KV: 2 * TOTAL})
+        self.assertEqual(self.guard(later).totals, {KV: 2 * CODE_TOTAL})
         bare = rg.conversation(rg.assistant(("r1", "read_file", {"path": KV})), rg.result("r1", KV_SOURCE))
         self.assertEqual(self.guard(bare).totals, {})
 
@@ -209,6 +215,21 @@ class CumulativeDeleteTests(unittest.TestCase):
         done = rg.conversation(*(READ_HUNDRED["messages"][2:] + edits((0, ok), (30, ok), (60, ok))))
         self.assertIsNone(self.guard(done).refused(self.message(patch(hunk(90, HUNDRED[89:91])))))
 
+    def test_a_same_size_rewrite_of_a_brace_heavy_block_passes(self):
+        names = ["Fn%d" % i for i in range(20)]
+        lines = ["package kv", "", "import (", '\t"strings"', ")", ""] + sum((go_function(n) for n in names), [])
+        self.assertGreater(len(lines), 200)
+        rewritten = [line.replace("Fn", "Gn").replace("return true", "return len(values) > 0") for line in lines[6:111]]
+        self.assertEqual(len(rewritten), 105)
+        request = rg.conversation(rg.assistant(("r1", "read_file", {"path": KV})), rg.result("r1", cg.scc_read("\n".join(lines))))
+        guard = self.guard(request)
+        edit = patch(hunk(7, lines[6:111], rewritten))
+        removed, added = adapters.patch_counts(["\n".join(edit)])
+        self.assertEqual(removed - added, 0)  # braces and blanks count on neither side
+        self.assertIsNone(guard.refused(self.message(edit)))
+        # The same block deleted outright is refused.
+        self.assertIsNotNone(guard.refused(self.message(patch(hunk(7, lines[6:111])))))
+
     def test_blank_line_padding_does_not_offset_removals(self):
         padded = patch(hunk(11, HUNDRED[10:70], [""] * 60))
         self.assertEqual(adapters.patch_counts(["\n".join(padded)]), (60, 0))
@@ -283,7 +304,7 @@ class StreamingDeleteTests(unittest.TestCase):
         self.assertEqual(self.counts(completion), (1, 0, 0, 0, 0, 0))
         first, second = base.SSEUpstream.seen
         # The count is the completed first hunk's: 120 removed lines.
-        self.assertEqual(second["messages"], first["messages"] + [delete_correction(120)])
+        self.assertEqual(second["messages"], first["messages"] + [delete_correction(CODE(KV_LINES[6:126]))])
         self.assertIn("HasAll", json.loads(completion.message["tool_calls"][0]["function"]["arguments"])["patch"])
 
     def test_legitimate_edits_and_unread_files_pass_untouched(self):
@@ -360,7 +381,7 @@ class StreamingDeleteTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 5)
         self.assertEqual((completion.degenerate_retries, len(base.SSEUpstream.seen)), (1, 3))
         self.assertEqual(self.counts(completion), (1, 0, 0, 0, 0, 0))
-        self.assertEqual(base.SSEUpstream.seen[2]["messages"][-1], delete_correction(120))
+        self.assertEqual(base.SSEUpstream.seen[2]["messages"][-1], delete_correction(CODE(KV_LINES[6:126])))
 
 
 class FinalMessageDeleteTests(base.UpstreamCase):

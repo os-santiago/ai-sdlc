@@ -506,10 +506,10 @@ functions, so the package did not compile. The model never called
 deleted most of it.
 
 The guard therefore also judges each `edit_file` on a file the model read in
-the conversation. The file's length is the total in SCC's note on its latest
-successful read (`[N lines total]`, or `[R lines shown, N total. ...]` for a
-partial read, which still gives the whole file's total). A read without the
-note, a file not read, and a file the model created are never judged.
+the conversation. The file's size comes from its latest successful read
+with SCC's note (`[N lines total]`, or `[R lines shown, N total. ...]` for a
+partial read, which still gives the whole file's line total). A read without
+the note, a file not read, and a file the model created are never judged.
 
 A patch's lines are classified once, by one parser shared with the copy
 guard's move check. Before the first hunk header (`@@`) every line is
@@ -526,12 +526,20 @@ to their results by call id. A call with an error result, or with no result,
 changed nothing. Only a read that gives the total starts the count again. The battery 30 candidate deleted the file in several
 patches, and each one alone could pass.
 
+All counts are lines of code: lines with at least 4 letters or digits, as
+the copy guard compares them. Braces, blank lines and short lines such as
+`)` count on no side. Counting both sides the same way keeps a same-size
+rewrite of a brace-heavy block in balance, and blank-line padding cannot
+offset removed code. The file's lines of code come from its latest read with
+SCC's note. A whole read counts them exactly. For a partial read, the note's
+line total is scaled by the share of code among the lines shown, an estimate
+of the same quantity.
+
 The edits are destructive when they remove:
 
-- at least 30 lines,
-- at least 40% of the file's known lines (from its latest read), and
-- at least 30 more lines than they add, counting only non-trivial added
-  lines, so blank-line padding never offsets a deletion.
+- at least 30 lines of code,
+- at least 40% of the file's lines of code, and
+- at least 30 more lines of code than they add.
 
 A removed line that the same edits add back is not counted on either side,
 so moving a block within the file (removed in one hunk, added in another, or
@@ -558,13 +566,17 @@ removed lines.
   only while the patch has added no non-trivial line and the next hunk's
   header declares fewer new lines than old ones. Otherwise the judgment
   waits for the end of the patch, where a block that comes back is
-  discounted as on the final message. A streamed reorder within the file
-  therefore passes without a retry. Hunks are judged whole because a hunk's
+  discounted as on the final message. The early stop can still misfire: a
+  small hunk that removes more than it adds may come before the hunk that
+  adds the block back, and a model's hunk headers may be wrong. That costs
+  one retry, and the retry is judged whole on its final message. A typical
+  streamed reorder, where the block is removed and then added back in the
+  next hunk, passes without a retry. Hunks are judged whole because a hunk's
   added lines follow its removed ones. A destructive patch after a
   `write_file` in the same answer is left to the final message, which judges
   a possible move. Every final message is judged on its whole patches.
 - **Retry.** The same single shared guard retry, with this correction:
-  `edit_file on "<path>" was refused: your edits delete N of its M lines.
+  `edit_file on "<path>" was refused: your edits delete N of its M lines of code.
   Keep existing code and tests; change only the lines the issue needs, and
   add new code without removing what is there, unless the issue asks you to
   move or remove it. To move code to another file, write it there in the same

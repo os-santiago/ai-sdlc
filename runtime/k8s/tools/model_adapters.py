@@ -129,18 +129,20 @@ PRUNED_NOTE = re.compile(r"\n\n\.\.\. \[Tool output of \d+ characters truncated 
 READ_NOTE = re.compile(r"\n\n\[\d+ lines (?:total|shown, \d+ total\. [^\n]*)\]\Z")
 # The same note, capturing the file's total line count.
 READ_TOTAL = re.compile(r"\n\n\[(?:(\d{1,9}) lines total|\d{1,9} lines shown, (\d{1,9}) total\. [^\n]*)\]\Z")
-# Destructive-edit guard (``destructive``). The model's edits of a read file
-# since its latest read are destructive when they remove at least
-# DELETE_MIN_LINES lines, at least DELETE_FRACTION of the file's known lines
-# (SCC's read note gives the total even for a partial read), and at least
-# DELETE_MIN_NET more lines than they add. Replacing a block with a block of
+# Destructive-edit guard (``destructive``). Counted in lines of code (lines
+# with at least 4 letters or digits, ``copy_line``) on every side, the model's
+# edits of a read file since its latest read are destructive when they remove
+# at least DELETE_MIN_LINES of them, at least DELETE_FRACTION of the file's
+# (SCC's read note gives the line total even for a partial read; the share of
+# code among the lines shown scales it), and at least DELETE_MIN_NET more
+# than they add. Replacing a block with a block of
 # similar size never qualifies, nor does moving a block within the file; a
 # targeted fix removes a few lines.
 DELETE_MIN_LINES = 30
 DELETE_FRACTION = 0.4
 DELETE_MIN_NET = 30
 EDIT_PATCH = re.compile(r'"patch"\s*:\s*"')
-DELETE_CORRECTION = ("edit_file on %s was refused: your edits delete %d of its %d lines. Keep existing code and "
+DELETE_CORRECTION = ("edit_file on %s was refused: your edits delete %d of its %d lines of code. Keep existing code and "
                      "tests; change only the lines the issue needs, and add new code without removing what is there, "
                      "unless the issue asks you to move or remove it. To move code to another file, write it there "
                      "in the same answer.")
@@ -448,12 +450,14 @@ class PatchLines:
     line, including "-- x" and "--- x" (a removed line that itself starts
     with "-- "), and every line starting with "+" an added one. A multi-file
     patch (which SCC refuses) is counted as one: its later headers are
-    indistinguishable from such lines. ``meaningful`` counts the added lines
-    that are not trivial (``copy_line``), so blank-line padding never offsets
-    removals. ``feed`` returns True when a line starts a hunk after an
+    indistinguishable from such lines. ``meaningful_removed`` and
+    ``meaningful`` count the removed and added lines that are not trivial
+    (``copy_line``): the destructive-edit bounds count lines of code on both
+    sides, so neither braces nor blank-line padding tip them. ``feed`` returns True when a line starts a hunk after an
     earlier one: the earlier hunk is complete."""
     def __init__(self):
         self.in_hunk, self.removed, self.added, self.meaningful = False, 0, 0, 0
+        self.meaningful_removed = 0
         self.removed_lines, self.added_lines = [], []
 
     def close(self):
@@ -467,6 +471,8 @@ class PatchLines:
             return False
         if line.startswith("-"):
             self.removed += 1
+            if copy_line(line[1:]) is not None:
+                self.meaningful_removed += 1
             if len(self.removed_lines) < COPY_MAX_LINES:
                 self.removed_lines.append(line[1:])
         elif line.startswith("+"):
@@ -495,7 +501,7 @@ def moved_within(removed_lines, added_lines):
 
 
 def patch_counts(patches, lines=None):
-    """(removed, meaningful added) lines of ``patches`` taken together, after
+    """(removed, added) lines of code of ``patches`` taken together, after
     discounting removed lines that come back as added ones (a block moved
     within the file). ``lines``, when given, collects the removed lines."""
     removed, added = [], []
@@ -506,7 +512,7 @@ def patch_counts(patches, lines=None):
             parsed.feed(line)
         removed += parsed.removed_lines
         added += parsed.added_lines
-        removed_count, added_count = removed_count + parsed.removed, added_count + parsed.meaningful
+        removed_count, added_count = removed_count + parsed.meaningful_removed, added_count + parsed.meaningful
     if lines is not None:
         lines.extend(removed)
     moved = moved_within(removed, added)
@@ -514,7 +520,8 @@ def patch_counts(patches, lines=None):
 
 
 def destructive(removed, added, total):
-    """The ``DELETE_*`` bounds on removed and meaningful added line counts."""
+    """The ``DELETE_*`` bounds on removed and added lines of code, against
+    the file's ``total`` lines of code."""
     return (removed >= DELETE_MIN_LINES and removed >= DELETE_FRACTION * total
             and removed - added >= DELETE_MIN_NET)
 
@@ -536,8 +543,8 @@ class _DeleteWatch:
         self.target, self.total, self.base, self.patch = target, total, base, PatchLines()
 
     def counts(self, moved=0):
-        """The patch's (removed, meaningful added) lines, less ``moved``."""
-        return self.patch.removed - moved, self.patch.meaningful - moved
+        """The patch's (removed, added) lines of code, less ``moved``."""
+        return self.patch.meaningful_removed - moved, self.patch.meaningful - moved
 
     def verdict(self, counts):
         removed, added = self.base[0] + counts[0], self.base[1] + counts[1]
@@ -795,16 +802,23 @@ class RewriteGuard:
 
     @staticmethod
     def read_totals(messages):
-        """Each read file's total line count, from SCC's note on its latest
-        read (partial reads report the whole file's total). A read without
-        the note gives nothing: such a file is never judged."""
+        """Each read file's lines of code (non-trivial lines, ``copy_line``),
+        from its latest read with SCC's note. The note gives the whole file's
+        line count even for a partial read; the share of lines of code among
+        the lines shown scales it, so a partial read estimates the same
+        quantity a whole read counts exactly. A read without the note gives
+        nothing: such a file is never judged."""
         totals = {}
         for path, result in RewriteGuard._reads(messages):
             match = READ_TOTAL.search(result)
-            if match is not None:
-                total = int(match.group(1) or match.group(2))
-                if total > 0:
-                    totals[path] = total
+            if match is None:
+                continue
+            lines = int(match.group(1) or match.group(2))
+            shown = PRUNED_NOTE.sub("\n", READ_NOTE.sub("", result)).split("\n")
+            code = sum(copy_line(line) is not None for line in shown)
+            total = lines if not shown or code == len(shown) else round(lines * code / len(shown))
+            if total > 0:
+                totals[path] = total
         return totals
 
     @staticmethod
