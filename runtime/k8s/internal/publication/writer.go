@@ -253,7 +253,7 @@ func (w *Writer) CreatePullRequest(ctx context.Context, fence WriteFence, p Tree
 // the pull request closes the issue. The built-in references continue to
 // build, attest and deploy after the merge, so their issues stay open.
 func IssueReference(repository string, issue int) string {
-	if repository == project.Homedir || repository == project.Saferus {
+	if _, builtin := project.Builtin(repository); builtin {
 		return "Refs #" + strconv.Itoa(issue)
 	}
 	return "Closes #" + strconv.Itoa(issue)
