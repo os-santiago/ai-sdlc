@@ -105,6 +105,17 @@ class Targets(unittest.TestCase):
             self.assertEqual(active['review'].get('narrowModelTools'), recorded)
             self.assertNotIn('tools', active['modelGateway'])
 
+    def test_the_source_credential_is_inherited_as_recorded(self):
+        # Installations recorded without the source read credential never
+        # gain it; those recorded with it keep it.
+        for recorded in (None, True):
+            source = self.source()
+            source['values']['verifier'].pop('sourceCredential', None)
+            if recorded is not None:
+                source['values']['verifier']['sourceCredential'] = recorded
+            active = self.run_targets(source)['active']['values']
+            self.assertEqual(active['verifier'].get('sourceCredential'), recorded)
+
     def test_the_readiness_probe_timeout_is_inherited_as_recorded(self):
         for recorded in (None, 5):
             source = self.source()
