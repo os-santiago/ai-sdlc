@@ -515,37 +515,57 @@ A patch's lines are classified once, by one parser shared with the copy
 guard's move check. Before the first hunk header (`@@`) every line is
 preamble, so the `---`/`+++` file headers never count. Inside hunks every
 line starting with `-` is a removed line, including a removed `-- comment`
-(written `--- comment`). Every line starting with `+` is an added one.
+(written `--- comment`). Every line starting with `+` is an added one. A
+`---` line followed by a `+++` line and a hunk header starts the next file of
+a multi-file patch, which SCC refuses anyway, and counting starts again.
 
-A patch is destructive when, counted over its completed hunks in order, it
-removes:
+The guard judges the model's edits of one file together. It adds up every
+`edit_file` on the file in the answer, and the successful `edit_file` calls
+on it since its latest read. Those come from the request's history, matched
+to their results by call id. A call with an error result, or with no result,
+changed nothing. The battery 30 candidate deleted the file in several
+patches, and each one alone could pass.
+
+The edits are destructive when they remove:
 
 - at least 30 lines,
-- at least 40% of the file's known lines, and
-- at least 30 more lines than it adds.
+- at least 40% of the file's known lines (from its latest read), and
+- at least 30 more lines than they add.
 
-The net bound lets a block be replaced by a block of similar size, such as a
+A removed line that the same edits add back is not counted on either side,
+so moving a block within the file (removed in one hunk, added in another, or
+in two `edit_file` calls) passes. Only non-trivial lines are matched this way,
+as the copy guard compares them; braces and blank lines never are. The net
+bound lets a block be replaced by a block of similar size, such as a
 rewritten function. The fraction keeps a 30-line removal in a large file out.
-A targeted fix removes a few lines. Hunks are judged whole because a hunk's
-added lines follow its removed ones. Like the copy guard this is a prefix rule
-over hunks: a block removed in one hunk and added back in a later one (a
-reorder within the file) is refused once. Deleting a large part of a file on
-purpose (an issue that removes dead code) also costs one retry, then passes.
+A targeted fix removes a few lines.
 
-The removal half of a move is not destructive. That holds when the same answer
-also writes another file holding at least half of the removed lines.
+An answer is refused only when it makes the file's edits destructive. Once
+they already are, for example after an earlier refusal was passed through,
+later answers are not refused again until the file is read once more. A read
+starts the count again against its own total. Deleting a large part of a
+file on purpose, because the issue asks for it, costs one retry, then passes.
+
+The removal half of a move to another file is not destructive. That holds
+when the same answer also writes another file holding at least half of the
+removed lines.
 
 - **Detection.** The `openai` adapter decodes the streamed `patch` and stops
-  the stream at the first completed hunk that makes it destructive. A patch
-  whose last hunk makes it destructive is refused when the patch ends. While
-  streaming, a destructive patch after a `write_file` in the same answer is
-  left to the final message, which judges a possible move. Other answers are
-  judged on the final message, in the same order.
+  the stream at the first completed hunk that makes the file's edits
+  destructive, on top of earlier edits and completed edits of the file
+  earlier in the stream. Hunks are judged whole because a hunk's added lines
+  follow its removed ones. While streaming, removed lines that a later hunk
+  adds back are still counted, because that needs the whole patch. A
+  streamed reorder within the file is therefore stopped once, and its retry
+  passes on its final message. A destructive patch after a `write_file` in
+  the same answer is left to the final message, which judges a possible
+  move. Every final message is judged on its whole patches.
 - **Retry.** The same single shared guard retry, with this correction:
-  `edit_file on "<path>" was refused: the patch deletes N of its M lines. Keep
-  existing code and tests; change only the lines the issue needs, and add new
-  code without removing what is there. If the issue asks to move code, write
-  it to its new file in the same answer.` N counts the hunks judged so far.
+  `edit_file on "<path>" was refused: your edits delete N of its M lines.
+  Keep existing code and tests; change only the lines the issue needs, and
+  add new code without removing what is there, unless the issue asks you to
+  move or remove it. To move code to another file, write it there in the same
+  answer.`
 - **Fail open.** The same rules as the other guards.
 
 `AI_SDLC_MODEL_GATEWAY_REWRITE_GUARD` turns this check on or off with the

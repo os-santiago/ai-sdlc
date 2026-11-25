@@ -80,8 +80,9 @@ def streamed_edit(lines, path=KV, extra=0, delay=0.0):
 SLOW_DESTRUCTIVE = streamed_edit(DESTRUCTIVE, extra=10000, delay=0.002)
 FAST_DESTRUCTIVE = streamed_edit(DESTRUCTIVE)
 SMALL_EDIT = streamed_edit(SMALL)
-# Judged at the first completed hunk, as while streaming.
-REMOVED = 120
+# The final message judges the whole patch: 122 removed lines, less those
+# HasAll adds back (a moved "return false" and the like).
+REMOVED = adapters.patch_counts(["\n".join(DESTRUCTIVE)])[0]
 
 
 def delete_correction(removed=REMOVED, total=TOTAL, path=KV):
@@ -152,6 +153,87 @@ class DeleteRules(unittest.TestCase):
         self.assertIsNotNone(self.guard().refused(self.message(edit_call(DESTRUCTIVE), write)))
 
 
+def file_lines(count):
+    return ["\tvalue%d := compute(%d) // line %d" % (i, i, i) for i in range(count)]
+
+
+HUNDRED = file_lines(100)
+READ_HUNDRED = rg.conversation(rg.assistant(("r1", "read_file", {"path": KV})), rg.result("r1", cg.scc_read("\n".join(HUNDRED))))
+
+
+class CumulativeDeleteTests(unittest.TestCase):
+    """The battery 30 shape: several smaller patches that add up."""
+
+    def guard(self, request):
+        return adapters.RewriteGuard(request, adapters.validate_request(request)[0], time.monotonic() + 60)
+
+    def message(self, *patches):
+        return {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c%d" % i, "type": "function", "function": edit_call(lines)["function"]} for i, lines in enumerate(patches)]}
+
+    def deletion(self, start):
+        return patch(hunk(start + 1, HUNDRED[start:start + 15]))
+
+    def test_several_patches_in_one_answer_add_up(self):
+        guard = self.guard(READ_HUNDRED)
+        self.assertIsNone(guard.refused(self.message(self.deletion(0))))
+        self.assertIsNone(guard.refused(self.message(self.deletion(0), self.deletion(30))))
+        self.assertEqual(guard.refused(self.message(self.deletion(0), self.deletion(30), self.deletion(60))),
+                         adapters.Refusal("delete", KV, (45, 100)))
+
+    def test_earlier_successful_edits_since_the_read_add_up(self):
+        def edits(*results):
+            turns = []
+            for i, (start, result) in enumerate(results):
+                turns += [rg.assistant(("e%d" % i, "edit_file", {"path": KV, "patch": "\n".join(self.deletion(start))})),
+                          rg.result("e%d" % i, result)]
+            return turns
+        ok = "Patch applied successfully: " + KV
+        history = rg.conversation(*(READ_HUNDRED["messages"][2:] + edits((0, ok), (30, ok))))
+        guard = self.guard(history)
+        self.assertEqual(guard.edits, {KV: (30, 0)})
+        self.assertEqual(guard.refused(self.message(self.deletion(60))), adapters.Refusal("delete", KV, (45, 100)))
+        # Failed or unanswered edits changed nothing.
+        failed = rg.conversation(*(READ_HUNDRED["messages"][2:] + edits(
+            (0, ok), (30, "[ERROR] [⚠️ Error] edit_file: Patch does not match file content in kv/kv.go."))))
+        self.assertEqual(self.guard(failed).edits, {KV: (15, 0)})
+        self.assertIsNone(self.guard(failed).refused(self.message(self.deletion(60))))
+        # A new read starts the count again, against its own total.
+        reread = rg.conversation(*(history["messages"][2:] + [rg.assistant(("r2", "read_file", {"path": KV})),
+                                                               rg.result("r2", cg.scc_read("\n".join(HUNDRED[50:])))]))
+        self.assertEqual((self.guard(reread).edits, self.guard(reread).totals), ({}, {KV: 50}))
+        # Edits that are already destructive are not refused again.
+        done = rg.conversation(*(READ_HUNDRED["messages"][2:] + edits((0, ok), (30, ok), (60, ok))))
+        self.assertIsNone(self.guard(done).refused(self.message(patch(hunk(90, HUNDRED[89:91])))))
+
+    def test_a_block_moved_within_the_file_is_not_destructive(self):
+        block = HUNDRED[10:50]
+        move = patch(hunk(11, block), hunk(90, [], block))
+        guard = self.guard(READ_HUNDRED)
+        self.assertEqual(adapters.patch_counts(["\n".join(move)]), (0, 0))
+        self.assertIsNone(guard.refused(self.message(move)))
+        # Split over two edit_file calls of one answer, too.
+        self.assertIsNone(guard.refused(self.message(patch(hunk(11, block)), patch(hunk(90, [], block)))))
+
+    def test_the_correction_allows_requested_moves_and_removals(self):
+        text = adapters.delete_correction_text(KV, 75, 100)
+        self.assertIn("your edits delete 75 of its 100 lines", text)
+        self.assertIn("unless the issue asks you to move or remove it", text)
+
+    def test_a_multi_file_patch_starts_counting_again_at_each_file(self):
+        lines = adapters.PatchLines()
+        for line in ["--- a/x", "+++ b/x", "@@ -1,2 +1,0 @@", "-one", "-two", "--- a/y", "+++ b/y", "@@ -1,1 +1,1 @@", "-three", "+four"]:
+            lines.feed(line)
+        lines.close()
+        self.assertEqual((lines.removed, lines.added, lines.removed_lines), (1, 1, ["three"]))
+        # A removed "-- x" line not followed by a file header still counts.
+        lines = adapters.PatchLines()
+        for line in ["@@ -1,2 +1,1 @@", "--- old rule", "+-- new rule", "--- last"]:
+            lines.feed(line)
+        lines.close()
+        self.assertEqual((lines.removed, lines.added), (2, 1))
+
+
 class StreamingDeleteTests(unittest.TestCase):
     def setUp(self):
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), base.SSEUpstream)
@@ -218,6 +300,29 @@ class StreamingDeleteTests(unittest.TestCase):
             self.adapter().complete(READ_KV)
         error = caught.exception
         self.assertEqual((error.degenerate_retries, error.delete_retries, len(base.SSEUpstream.seen)), (1, 1, 3))
+
+    def test_several_streamed_patches_add_up_and_a_streamed_reorder_passes_on_retry(self):
+        def several(_body):
+            for index, start in enumerate((0, 30, 60)):
+                yield base.sse_event(base.chunk(calls=[edit_call(patch(hunk(start + 1, HUNDRED[start:start + 15])),
+                                                                 index=index, call_id="e%d" % index)]))
+            for _ in range(10000):
+                yield b": ping\n\n"
+                time.sleep(0.002)
+            yield base.sse_event(base.chunk(finish="tool_calls"))
+        base.SSEUpstream.script = [several, SMALL_EDIT]
+        started = time.monotonic()
+        completion = self.adapter().complete(READ_HUNDRED)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual(self.counts(completion), (1, 0, 0, 0, 0, 0))
+        self.assertEqual(base.SSEUpstream.seen[1]["messages"][-1], delete_correction(45, 100))
+        # A reorder: stopped at its first hunk while streaming, then judged
+        # whole on the retry's final message, where it passes.
+        block = HUNDRED[10:50]
+        reorder = streamed_edit(patch(hunk(11, block), hunk(90, [], block)))
+        base.SSEUpstream.seen, base.SSEUpstream.script = [], [reorder, reorder]
+        completion = self.adapter().complete(READ_HUNDRED)
+        self.assertEqual((len(base.SSEUpstream.seen), self.counts(completion)), (2, (1, 0, 0, 0, 0, 0)))
 
     def test_each_upstream_attempt_is_judged_on_its_own_stream(self):
         def degenerate_edit(_body):

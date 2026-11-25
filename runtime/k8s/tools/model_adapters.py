@@ -129,19 +129,21 @@ PRUNED_NOTE = re.compile(r"\n\n\.\.\. \[Tool output of \d+ characters truncated 
 READ_NOTE = re.compile(r"\n\n\[\d+ lines (?:total|shown, \d+ total\. [^\n]*)\]\Z")
 # The same note, capturing the file's total line count.
 READ_TOTAL = re.compile(r"\n\n\[(?:(\d{1,9}) lines total|\d{1,9} lines shown, (\d{1,9}) total\. [^\n]*)\]\Z")
-# Destructive-edit guard (``_DeleteWatch``). An edit_file patch is destructive
-# when, counted over its completed hunks in order, it removes at least
+# Destructive-edit guard (``destructive``). The model's edits of a read file
+# since its latest read are destructive when they remove at least
 # DELETE_MIN_LINES lines, at least DELETE_FRACTION of the file's known lines
 # (SCC's read note gives the total even for a partial read), and at least
-# DELETE_MIN_NET more lines than it adds. Replacing a block with a block of
-# similar size never qualifies; a targeted fix removes a few lines.
+# DELETE_MIN_NET more lines than they add. Replacing a block with a block of
+# similar size never qualifies, nor does moving a block within the file; a
+# targeted fix removes a few lines.
 DELETE_MIN_LINES = 30
 DELETE_FRACTION = 0.4
 DELETE_MIN_NET = 30
 EDIT_PATCH = re.compile(r'"patch"\s*:\s*"')
-DELETE_CORRECTION = ("edit_file on %s was refused: the patch deletes %d of its %d lines. Keep existing code and "
-                     "tests; change only the lines the issue needs, and add new code without removing what is there. "
-                     "If the issue asks to move code, write it to its new file in the same answer.")
+DELETE_CORRECTION = ("edit_file on %s was refused: your edits delete %d of its %d lines. Keep existing code and "
+                     "tests; change only the lines the issue needs, and add new code without removing what is there, "
+                     "unless the issue asks you to move or remove it. To move code to another file, write it there "
+                     "in the same answer.")
 COPY_CORRECTION = ("write_file to %s was refused: it repeats content of %s that already exists. Write only "
                    "the new code and tests the issue asks for; never copy existing tests or code into a new file, "
                    "unless the issue asks you to move it: then also remove it from %s with edit_file in the same answer.")
@@ -444,37 +446,107 @@ class PatchLines:
     header ("@@") every line is preamble, so the "---"/"+++" file headers
     are never counted. Inside hunks every line starting with "-" is a removed
     line, including "-- x" and "--- x" (a removed line that itself starts
-    with "-- "), and every line starting with "+" an added one. ``feed``
-    returns True when a line starts a hunk after an earlier one: the earlier
-    hunk is complete."""
+    with "-- "), and every line starting with "+" an added one. A "---" line
+    followed by a "+++" line and a hunk header is the next file's header in a
+    multi-file patch (which SCC refuses): counting starts again there.
+    ``feed`` returns True when a line starts a hunk after an earlier one: the
+    earlier hunk is complete. ``close`` ends the patch."""
     def __init__(self):
-        self.in_hunk, self.removed, self.added, self.removed_lines = False, 0, 0, []
+        self.in_hunk, self.removed, self.added = False, 0, 0
+        self.removed_lines, self.added_lines, self.pending = [], [], []
 
-    def feed(self, line):
-        if line.startswith("@@"):
-            completed, self.in_hunk = self.in_hunk, True
-            return completed
-        if self.in_hunk and line.startswith("-"):
+    def _count(self, line):
+        if line.startswith("-"):
             self.removed += 1
             if len(self.removed_lines) < COPY_MAX_LINES:
                 self.removed_lines.append(line[1:])
-        elif self.in_hunk and line.startswith("+"):
+        elif line.startswith("+"):
             self.added += 1
+            if len(self.added_lines) < COPY_MAX_LINES:
+                self.added_lines.append(line[1:])
+
+    def close(self):
+        for line in self.pending:
+            self._count(line)
+        self.pending = []
+
+    def feed(self, line):
+        if self.pending:
+            if len(self.pending) == 1 and line.startswith("+++ "):
+                self.pending.append(line)
+                return False
+            if len(self.pending) == 2 and line.startswith("@@"):
+                self.__init__()  # the next file of a multi-file patch
+                self.in_hunk = True
+                return False
+            self.close()
+        if line.startswith("@@"):
+            completed, self.in_hunk = self.in_hunk, True
+            return completed
+        if self.in_hunk and line.startswith("--- "):
+            self.pending = [line]  # a removed line, or the next file's header
+        elif self.in_hunk:
+            self._count(line)
         return False
 
 
+def moved_within(removed_lines, added_lines):
+    """How many removed lines come back as added lines (a block moved within
+    the same file), matched one for one as the copy guard compares lines.
+    Trivial lines (braces, blank lines) never match: any edit moves those."""
+    added = {}
+    for line in filter(None, map(copy_line, added_lines)):
+        added[line] = added.get(line, 0) + 1
+    matched = 0
+    for line in removed_lines:
+        key = copy_line(line)
+        if key is not None and added.get(key):
+            added[key] -= 1
+            matched += 1
+    return matched
+
+
+def patch_counts(patches, lines=None):
+    """(removed, added) lines of ``patches`` taken together, after
+    discounting removed lines that come back as added ones (a block moved
+    within the file). ``lines``, when given, collects the removed lines."""
+    removed, added = [], []
+    removed_count = added_count = 0
+    for patch in patches:
+        parsed = PatchLines()
+        for line in patch.split("\n"):
+            parsed.feed(line)
+        parsed.close()
+        removed += parsed.removed_lines
+        added += parsed.added_lines
+        removed_count, added_count = removed_count + parsed.removed, added_count + parsed.added
+    if lines is not None:
+        lines.extend(removed)
+    moved = moved_within(removed, added)
+    return removed_count - moved, added_count - moved
+
+
+def destructive(removed, added, total):
+    """The ``DELETE_*`` bounds on removed and added line counts."""
+    return (removed >= DELETE_MIN_LINES and removed >= DELETE_FRACTION * total
+            and removed - added >= DELETE_MIN_NET)
+
+
 class _DeleteWatch:
-    """Judges one ``edit_file`` patch on a file of ``total`` known lines,
-    line by line: ``line`` and ``end`` return (removed, total) once the
-    patch is destructive at a completed hunk (see ``DELETE_*``). Hunks are
-    judged whole because a hunk's added lines follow its removed ones."""
-    def __init__(self, target, total):
-        self.target, self.total, self.patch = target, total, PatchLines()
+    """Judges one streamed ``edit_file`` patch on a file of ``total`` known
+    lines, on top of ``base`` (removed, added) lines of the model's other
+    edits of the file since its latest read and earlier in this answer:
+    ``line`` and ``end`` return (removed, total) once the edits become
+    destructive at a completed hunk (see ``DELETE_*``). Hunks are judged
+    whole because a hunk's added lines follow its removed ones. Only an
+    answer that makes the file's edits destructive is refused; once they
+    already are, later answers are not refused again."""
+    def __init__(self, target, total, base=(0, 0)):
+        self.target, self.total, self.base, self.patch = target, total, base, PatchLines()
 
     def verdict(self):
-        removed, added = self.patch.removed, self.patch.added
-        if (removed >= DELETE_MIN_LINES and removed >= DELETE_FRACTION * self.total
-                and removed - added >= DELETE_MIN_NET):
+        removed, added = self.base[0] + self.patch.removed, self.base[1] + self.patch.added
+        if destructive(removed, added, self.total) and not destructive(*self.base, self.total):
             return removed, self.total
         return None
 
@@ -482,6 +554,7 @@ class _DeleteWatch:
         return self.verdict() if self.patch.feed(line) else None
 
     def end(self):
+        self.patch.close()
         return self.verdict() if self.patch.in_hunk else None
 
 
@@ -617,12 +690,23 @@ class RewriteGuard:
         self.existing = self.preexisting(messages)
         self.reads = self.read_lines(messages) if copies else {}
         self.totals = self.read_totals(messages) if copies else {}
+        self.edits = self.edits_since_read(messages) if copies else {}
+        self.stream_edits = {}
         self.streams = {}
         self.retries = {}
 
     def begin_stream(self):
-        """Forgets what was decided per call index in an earlier stream."""
-        self.streams = {}
+        """Forgets what was decided per call index in an earlier stream, and
+        the edits that stream proposed."""
+        self.streams, self.stream_edits = {}, {}
+
+    def base(self, path, *more):
+        """(removed, added) lines of the model's earlier edits of ``path``
+        since its latest read, plus ``more`` such pairs."""
+        removed, added = self.edits.get(path, (0, 0))
+        for extra_removed, extra_added in more:
+            removed, added = removed + extra_removed, added + extra_added
+        return removed, added
 
     @staticmethod
     def _results(messages):
@@ -653,7 +737,6 @@ class RewriteGuard:
         return frozenset(existing)
 
     @staticmethod
-    @staticmethod
     def _reads(messages):
         """(path, result) of each successful ``read_file`` in order, except of
         a file the model created (``write_file`` before any read or edit
@@ -679,6 +762,25 @@ class RewriteGuard:
             text = PRUNED_NOTE.sub("\n", READ_NOTE.sub("", result))
             reads.setdefault(path, set()).update(copy_lines(text))
         return {path: frozenset(lines) for path, lines in reads.items() if lines}
+
+    @staticmethod
+    def edits_since_read(messages):
+        """(removed, added) lines of each read file's successful ``edit_file``
+        calls since its latest successful read, matched to their results by
+        call id. A removed line that comes back as an added line of the same
+        patch (a block moved within the file) is not counted on either side.
+        A call without a result, or with an error result, changed nothing."""
+        edits, read = {}, set()
+        for name, path, arguments, result in RewriteGuard._calls(messages, RewriteGuard._results(messages)):
+            succeeded = isinstance(result, str) and not result.startswith(TOOL_ERROR_PREFIXES)
+            if name == READ_TOOL and succeeded:
+                read.add(path)
+                edits[path] = (0, 0)
+            elif name == EDIT_TOOL and succeeded and path in read and isinstance(arguments.get("patch"), str):
+                removed, added = patch_counts([arguments["patch"]])
+                before = edits[path]
+                edits[path] = (before[0] + removed, before[1] + added)
+        return {path: counts for path, counts in edits.items() if counts != (0, 0)}
 
     @staticmethod
     def read_totals(messages):
@@ -726,15 +828,10 @@ class RewriteGuard:
     def refused(self, message):
         """The first refusal a final message holds, or ``None``."""
         calls = [_call_arguments(call) for call in message.get("tool_calls") or []]
+        refusal = self.destructive_edits(calls)
+        if refusal is not None:
+            return refusal
         for name, path, arguments in calls:
-            if name == EDIT_TOOL and path in self.totals and isinstance(arguments.get("patch"), str):
-                watch = _DeleteWatch(path, self.totals[path])
-                verdict = None
-                for line in arguments["patch"].split("\n"):
-                    verdict = verdict or watch.line(line)
-                verdict = verdict or watch.end()
-                if verdict is not None and not self.moves_out(calls, path, watch.patch.removed_lines):
-                    return Refusal("delete", path, verdict)
             if name != WRITE_TOOL:
                 continue
             if path in self.existing:
@@ -759,6 +856,25 @@ class RewriteGuard:
             source = watch.add(line)
             if source is not None:
                 return source
+        return None
+
+    def destructive_edits(self, calls):
+        """The first read file whose ``edit_file`` calls in this answer, taken
+        whole and together, on top of the model's earlier edits since its
+        latest read, make its edits destructive; the removal half of a move
+        out of the file is exempt."""
+        patches = {}
+        for name, path, arguments in calls:
+            if name == EDIT_TOOL and path in self.totals and isinstance(arguments.get("patch"), str):
+                patches.setdefault(path, []).append(arguments["patch"])
+        for path, texts in patches.items():
+            removed_lines = []
+            counts = patch_counts(texts, removed_lines)
+            base, total = self.base(path), self.totals[path]
+            removed, added = self.base(path, counts)
+            if (destructive(removed, added, total) and not destructive(*base, total)
+                    and not self.moves_out(calls, path, removed_lines)):
+                return Refusal("delete", path, (removed, total))
         return None
 
     @staticmethod
@@ -865,7 +981,11 @@ class RewriteGuard:
 
     def _streamed_edit(self, index, arguments, state):
         """A streamed ``edit_file``: its patch is judged at each completed
-        hunk, once its path is a read file of known length."""
+        hunk, once its path is a read file of known length, on top of the
+        model's earlier edits of the file since its latest read and the
+        completed edits of it earlier in this stream. Removed lines that a
+        later hunk adds back are not discounted here: that needs the whole
+        patch, which the final message has."""
         if state is None:
             match = STREAMED_PATH.match(arguments[:REWRITE_SCAN_CHARS])
             if match is None:
@@ -879,7 +999,8 @@ class RewriteGuard:
             if path not in self.totals:
                 self.streams[index] = None
                 return None
-            state = self.streams[index] = [_DeleteWatch(path, self.totals[path]), None]
+            base = self.base(path, self.stream_edits.get(path, (0, 0)))
+            state = self.streams[index] = [_DeleteWatch(path, self.totals[path], base), None]
         watch, patch = state
         if patch is None:
             start = EDIT_PATCH.search(arguments, 0, REWRITE_SCAN_CHARS)
@@ -897,6 +1018,8 @@ class RewriteGuard:
             if verdict is not None:
                 return self._stop(index, Refusal("delete", watch.target, verdict))
             self.streams[index] = None
+            done = self.stream_edits.get(watch.target, (0, 0))
+            self.stream_edits[watch.target] = (done[0] + watch.patch.removed, done[1] + watch.patch.added)
         return None
 
 
