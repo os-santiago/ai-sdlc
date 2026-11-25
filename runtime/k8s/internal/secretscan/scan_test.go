@@ -297,3 +297,30 @@ func TestResumingNeverMatchesInsideAToken(t *testing.T) {
 		t.Fatal("boundaries")
 	}
 }
+
+// A replaced key that keeps its header and first body line (unencrypted
+// OpenSSH keys of one type share their encoding prefix) is still a new key;
+// an existing block left fully intact, or re-indented elsewhere unchanged,
+// is not.
+func TestReplacedKeyKeepingItsStartIsFound(t *testing.T) {
+	header := "-----BEGIN " + "OPENSSH PRIVATE" + " KEY-----"
+	first := body(70, 30, b64)
+	before := header + "\n" + first + "\n" + body(70, 31, b64) + "\n" + body(70, 32, b64) + "\n" + body(20, 33, b64) + "\n-----END OPENSSH PRIVATE KEY-----\n"
+	after := header + "\n" + first + "\n" + body(70, 31, b64) + "\n" + body(70, 41, b64) + "\n" + body(20, 43, b64) + "\n-----END OPENSSH PRIVATE KEY-----\n"
+	if f, ok := scan(t, map[string]string{"id_ed25519": before}, map[string]string{"id_ed25519": after}); !ok || f.Rule != RulePrivateKey {
+		t.Fatalf("finding = %+v, %v", f, ok)
+	}
+	// Only the last, short line differs.
+	lastOnly := strings.Replace(before, body(20, 33, b64), body(20, 44, b64), 1)
+	if f, ok := scan(t, map[string]string{"id_ed25519": before}, map[string]string{"id_ed25519": lastOnly}); !ok || f.Rule != RulePrivateKey {
+		t.Fatalf("last line: finding = %+v, %v", f, ok)
+	}
+	// An intact block next to an unrelated edit is existing text.
+	if f, ok := scan(t, map[string]string{"id_ed25519": before}, map[string]string{"id_ed25519": "# comment\n" + before}); ok {
+		t.Fatalf("unexpected finding %+v", f)
+	}
+	// Text after the END line is not part of the block.
+	if f, ok := scan(t, map[string]string{"k.pem": before}, map[string]string{"k.pem": before + body(70, 50, b64) + "\n"}); ok {
+		t.Fatalf("unexpected finding after END %+v", f)
+	}
+}

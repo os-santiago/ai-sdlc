@@ -22,7 +22,7 @@ import (
 // counts as an added line must change it: the repository-tests recipe
 // revision binds it, so a command signed under other rules no longer verifies
 // and no proof from them can be published.
-const Version = "secret-scan/v1"
+const Version = "secret-scan/v2"
 
 // Rule identifiers, the only rule names a finding can carry.
 const (
@@ -103,8 +103,17 @@ var (
 	keyArmor = regexp.MustCompile(`^[\s"'` + "`" + `]*(?:\+[\s"'` + "`" + `]*)?(?:Proc-Type|DEK-Info|Version|Comment):`)
 )
 
-// keyLookahead bounds the lines read after a private key header.
-const keyLookahead = 4
+// keyLookahead bounds the lines read after a private key header before its
+// first body line; keyBlockLines bounds the body lines of one block (a 16 KiB
+// RSA key in 64-character lines has about 300).
+const (
+	keyLookahead  = 4
+	keyBlockLines = 512
+)
+
+// keyContinuation is a body line after the first: base64, possibly short
+// (the last line) and possibly inside a quoted, concatenated string.
+var keyContinuation = regexp.MustCompile(`^[\s"'` + "`" + `]*(?:\+[\s"'` + "`" + `]*)?[A-Za-z0-9+/]{4,}={0,2}`)
 
 // Rules lists every rule ID a finding can carry, in evaluation order.
 func Rules() []string {
@@ -173,8 +182,18 @@ func scanFile(before, after []byte) (string, bool) {
 	for i, line := range lines {
 		// Every key shares its header line, so a new key under an existing
 		// header is found by its new body line.
-		if body, ok := privateKey(lines, i); ok && (added(line) || added(lines[body])) {
-			return RulePrivateKey, true
+		if body, ok := privateKey(lines, i); ok {
+			// A block is new when its header or any of its body lines is:
+			// a replaced key often keeps the header and the first body line
+			// (the key type and its encoding prefix). Only a block whose
+			// every line is unchanged is existing text.
+			changed := added(line)
+			for _, j := range body {
+				changed = changed || added(lines[j])
+			}
+			if changed {
+				return RulePrivateKey, true
+			}
 		}
 		if !added(line) {
 			continue
@@ -200,15 +219,17 @@ func splitLines(data []byte) []string {
 	return lines
 }
 
-// privateKey reports whether lines[i] starts a private key, and the index of
-// the line holding its body (i itself for an inline body).
-func privateKey(lines []string, i int) (int, bool) {
+// privateKey reports whether lines[i] starts a private key, and the indexes
+// of every line of its body: i itself for an inline body (the whole key is on
+// that line), otherwise the first body line and each following base64 line
+// up to the END line, a non-base64 line or keyBlockLines.
+func privateKey(lines []string, i int) ([]int, bool) {
 	if !keyHeader.MatchString(lines[i]) {
-		return 0, false
+		return nil, false
 	}
 	for _, m := range keyInlineBody.FindAllStringSubmatch(lines[i], -1) {
 		if keyMaterial(m[1]) {
-			return i, true
+			return []int{i}, true
 		}
 	}
 	for j := i + 1; j < len(lines) && j <= i+keyLookahead; j++ {
@@ -217,9 +238,19 @@ func privateKey(lines []string, i int) (int, bool) {
 			continue
 		}
 		m := keyBody.FindStringSubmatch(line)
-		return j, m != nil && keyMaterial(m[1])
+		if m == nil || !keyMaterial(m[1]) {
+			return nil, false
+		}
+		body := []int{j}
+		for k := j + 1; k < len(lines) && len(body) < keyBlockLines; k++ {
+			if strings.Contains(lines[k], "-----END") || !keyContinuation.MatchString(lines[k]) {
+				break
+			}
+			body = append(body, k)
+		}
+		return body, true
 	}
-	return 0, false
+	return nil, false
 }
 
 // keyMaterial requires the mix of cases and digits that encoded key bytes
