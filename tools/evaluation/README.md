@@ -44,7 +44,9 @@ installed revision and the lock file's sha256, and the runner also records the
 installed deployments' images when it can read them. Each attempt records the
 furthest stage it reached (`stageReached`) and the review runs created during
 it (`reviews`, as `state|reason`). These fields are additive; older reports
-stay valid.
+stay valid. The runner's database queries match the issue number and the
+repository, so an installation serving several repositories does not mix
+issues that share a number.
 
 It needs an authenticated `gh` CLI that can label issues as the installation's
 authorized actor, and a kubeconfig for the installation. It reads the
@@ -55,9 +57,10 @@ verifier logs. It writes nothing to the cluster.
 
 `summarize.py` reads one or more reports, partial ones included, and writes a
 deterministic JSON (standard output or `--json`) and Markdown (`--markdown`)
-summary per cell: delivery rates with Wilson 95% intervals, pass@1 and pass@2,
-stop classes by stage and diagnostic name, reviewer verdicts against outcomes,
-and the Beta gate check. Reports without a model path take one from
+summary per cell: delivery rates with Wilson 95% intervals, issue-weighted
+pass@1 and pass@2, stop classes by stage and diagnostic name, reviewer verdicts
+against outcomes, and the Beta gate check, always computed on one trial per
+issue. Reports without a model path take one from
 `--model-path` or `--label REPORT=LABEL`.
 
 ```bash

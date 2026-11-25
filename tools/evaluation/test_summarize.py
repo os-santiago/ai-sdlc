@@ -115,7 +115,7 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(cell['deliveredWithinTwo']['successes'], 2)
         self.assertEqual(cell['firstAttempt']['successes'], 1)
         self.assertEqual(cell['secondAttemptRecovery'], summarize.rate(1, 2))
-        self.assertEqual(cell['passAtK'], {'1': 0.3333, '2': 0.6667})
+        self.assertEqual(cell['issueMeanPassAtK'], {'1': 0.3333, '2': 0.6667})
         self.assertEqual(cell['finalStops'], [{'stage': 'execution', 'reason': 'uncertain', 'diagnostic': 'model-provider', 'count': 1}])
         self.assertEqual(cell['stops'][0]['count'], 3)
 
@@ -141,14 +141,52 @@ class SummaryTests(unittest.TestCase):
         first = reports.write(report(issue(87, stop(87, started='2026-11-23T01:00:00Z'), stop(87, started='2026-11-23T01:10:00Z')),
                                      issue(5, ok(5, started='2026-11-23T01:20:00Z'))))
         second = reports.write(report(issue(87, ok(87, started='2026-11-23T05:00:00Z'))))
-        trial = summarize.summarize([first, second, first], model_path='agent-cli')
+        trial = summarize.summarize([first, second, first], model_path='agent-cli', rule='trial')
         cell = trial['cells'][0]
         # The same file twice adds nothing; each battery run of #87 is a trial.
         self.assertEqual((trial['duplicateTrialsDropped'], cell['trials'], cell['distinctIssues']), (2, 3, 2))
         self.assertEqual(cell['deliveredWithinTwo']['successes'], 2)
-        self.assertEqual(cell['passAtK']['2'], 0.75)  # (#5: 1 + #87: 1/2) / 2
-        earliest = summarize.summarize([second, first], model_path='agent-cli', rule='first')['cells'][0]
+        self.assertEqual(cell['issueMeanPassAtK']['2'], 0.75)  # (#5: 1 + #87: 1/2) / 2
+        # The gate takes #87's earliest run whatever the display rule.
+        self.assertEqual((cell['gate']['issues'], cell['gate']['deliveredWithinTwo']['successes']), (2, 1))
+        earliest = summarize.summarize([second, first], model_path='agent-cli')['cells'][0]
         self.assertEqual((earliest['trials'], earliest['deliveredWithinTwo']['successes']), (2, 1))
+        self.assertEqual(earliest['gate']['deliveredWithinTwo'], cell['gate']['deliveredWithinTwo'])
+
+    def test_reruns_cannot_lift_the_gate(self):
+        # 60 issues, 48 delivered on their first run (80%, lower bound 68.2%);
+        # 20 re-runs (the 12 undelivered, all delivered now, and 8 delivered
+        # ones, 5 delivered again) give 65/80 = 81.3% under `trial`.
+        reports = Reports(self)
+        firsts = [issue(n, ok(n, started='2026-11-23T01:%02d:00Z' % (n % 60))) for n in range(1, 49)]
+        firsts += [issue(n, stop(n, started='2026-11-23T02:%02d:00Z' % (n % 60)), stop(n, started='2026-11-23T03:%02d:00Z' % (n % 60)))
+                   for n in range(49, 61)]
+        installation = {'revision': 'abc123'}
+        a = reports.write(report(*firsts, cell={'modelPath': 'local-llama'}, installation=installation))
+        reruns = [issue(n, ok(n, started='2026-11-24T01:%02d:00Z' % (n % 60))) for n in range(49, 61)]
+        reruns += [issue(n, ok(n, started='2026-11-24T02:%02d:00Z' % (n % 60))) for n in range(41, 46)]
+        reruns += [issue(n, stop(n, started='2026-11-24T03:%02d:00Z' % n), stop(n, started='2026-11-24T04:%02d:00Z' % n)) for n in range(46, 49)]
+        b = reports.write(report(*reruns, cell={'modelPath': 'local-llama'}, installation=installation))
+        trial = summarize.summarize([a, b], rule='trial')['cells'][0]
+        self.assertEqual((trial['deliveredWithinTwo']['successes'], trial['trials']), (65, 80))
+        self.assertGreaterEqual(trial['deliveredWithinTwo']['wilson95'][0], 0.70)  # the pooled trials alone would pass
+        self.assertEqual((trial['gate']['deliveredWithinTwo']['successes'], trial['gate']['issues']), (48, 60))
+        self.assertFalse(trial['gate']['passed'])
+        self.assertEqual(len(trial['gate']['reasons']), 1)
+        self.assertIn('lower bound 68.2%', trial['gate']['reasons'][0])
+
+    def test_unknown_revision_fails_the_gate(self):
+        reports = Reports(self)
+        known = reports.write(report(*[issue(n, ok(n, started='2026-11-23T00:%02d:00Z' % n)) for n in range(1, 60)],
+                                     cell={'modelPath': 'local-llama'}, installation={'revision': 'abc'}))
+        unknown = reports.write(report(issue(60, ok(60, started='2026-11-23T01:00:00Z')), cell={'modelPath': 'local-llama'}))
+        result = summarize.summarize([known, unknown])['cells'][0]['gate']
+        self.assertEqual(result['reasons'], ['installation revision unknown for 1 issues: record --installation-revision or --image-lock'])
+        mixed = reports.write(report(issue(60, ok(60, started='2026-11-23T01:00:00Z')), cell={'modelPath': 'local-llama'},
+                                     installation={'revision': 'def'}))
+        result = summarize.summarize([known, mixed])['cells'][0]['gate']
+        self.assertTrue(result['passed'])
+        self.assertIn('the trials span 2 installation revisions', result['warnings'])
 
     def test_partial_reports(self):
         reports = Reports(self)
@@ -158,6 +196,9 @@ class SummaryTests(unittest.TestCase):
         self.assertIn('1 incomplete trials excluded', cell['gate']['warnings'])
         decided = reports.write(report(issue(1, ok(1)), inProgress=[stop(2), stop(2)]))
         self.assertEqual(summarize.summarize([decided], model_path='agent-cli')['cells'][0]['trials'], 2)
+        # Two failures settle "within two" even with a budget of three.
+        settled = reports.write(report(issue(1, ok(1)), inProgress=[stop(2), stop(2)], attemptBudget=3))
+        self.assertEqual(summarize.summarize([settled], model_path='agent-cli')['cells'][0]['incompleteTrials'], 0)
         delivered = reports.write(report(inProgress=[ok(3)]))
         self.assertEqual(summarize.summarize([delivered], model_path='agent-cli')['cells'][0]['deliveredWithinTwo']['successes'], 1)
 
@@ -189,10 +230,9 @@ class SummaryTests(unittest.TestCase):
 
 
 class GateTests(unittest.TestCase):
-    def cell(self, delivered, n, distinct=None, model_path='local-llama'):
-        within = summarize.rate(delivered, n)
-        return {'modelPath': model_path, 'distinctIssues': n if distinct is None else distinct, 'deliveredWithinTwo': within,
-                'revisions': [], 'incompleteTrials': 0, 'truncatedTrials': 0}
+    def cell(self, delivered, n, model_path='local-llama', unknown=0):
+        return {'modelPath': model_path, 'revisions': ['abc'], 'incompleteTrials': 0, 'truncatedTrials': 0,
+                'gateSample': {'issues': n, 'deliveredWithinTwo': summarize.rate(delivered, n), 'unknownRevision': unknown}}
 
     def test_gate_needs_size_rate_and_lower_bound(self):
         self.assertTrue(summarize.gate(self.cell(49, 60))['passed'])
@@ -205,9 +245,9 @@ class GateTests(unittest.TestCase):
         low = summarize.gate(self.cell(70, 100))
         self.assertEqual(len(low['reasons']), 2)
 
-    def test_repeated_trials_do_not_replace_distinct_issues(self):
-        result = summarize.gate(self.cell(90, 100, distinct=40))
-        self.assertEqual(result['reasons'], ['40 distinct issues, at least 60 needed'])
+    def test_unknown_model_path_or_revision(self):
+        result = summarize.gate(self.cell(60, 60, model_path='unspecified', unknown=60))
+        self.assertEqual(len(result['reasons']), 2)
 
     def test_no_trials(self):
         self.assertIn('no complete trials', summarize.gate(self.cell(0, 0))['reasons'])

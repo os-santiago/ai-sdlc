@@ -14,10 +14,19 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Test the battery runner and the summarizer
         run: python3 -m unittest discover -s tools/evaluation -p 'test_*.py' -v
-      - name: Summarize the committed battery reports
+      # A smoke test of the parser on every committed report, not a gate claim:
+      # the reports predate the cell metadata, so they are pooled into one cell
+      # across several installation revisions.
+      - name: Summarize the committed battery reports (informational)
         run: |
           python3 tools/evaluation/summarize.py docs/evidence/*-evaluation-battery-*.json \
             --model-path agent-cli --json "$RUNNER_TEMP/summary.json" --markdown "$RUNNER_TEMP/summary.md"
-          cat "$RUNNER_TEMP/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo '> Informational smoke test, not a gate claim: the committed reports predate the cell metadata and are pooled into one cell across several installation revisions.'
+            echo
+            cat "$RUNNER_TEMP/summary.md"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -8,15 +8,20 @@ cell it reports:
 
   * the rate delivered within two attempts and the first-attempt rate, each
     with a Wilson 95% interval;
-  * pass@1 and pass@2 averaged over distinct issues, the per-attempt success
-    rate, and how often a second attempt recovers a failed first one;
+  * an issue-weighted pass@1 and pass@2 (the mean over distinct issues of
+    each issue's delivered fraction; not the unbiased estimator of Chen et
+    al., since attempts are sequential and stop at the first success), the
+    per-attempt success rate, and how often a second attempt recovers a
+    failed first one;
   * stop classes by stage, runner reason and the components' bounded
     diagnostic name, per attempt and for the final stop of each undelivered
     trial;
   * the reviewer verdict against the attempt outcome, observed when the report
     records review runs and derived from the stop otherwise;
-  * the Beta functional gate: at least 60 distinct issues, a rate of at least
-    80% within two attempts and a 95% lower bound of at least 70%.
+  * the Beta functional gate, always on one trial per issue (its earliest
+    complete run, whatever the display rule): a known model path and
+    installation revision, at least 60 distinct issues, a rate of at least 80%
+    within two attempts and a 95% lower bound of at least 70%.
 
 The output is deterministic: the same reports give byte-identical JSON and
 Markdown. Pure standard library; see docs/operations/evaluation-harness.md.
@@ -179,8 +184,8 @@ def trials(path, report, model_path):
 
     A trial in `issues` is complete as the runner recorded it. A trial in
     `inProgress` (a battery stopped mid-issue) is complete only when it already
-    succeeded or used its whole attempt budget; otherwise it is incomplete and
-    stays out of the rates."""
+    succeeded or made two attempts (or its whole budget, if smaller); otherwise
+    it is incomplete and stays out of the rates."""
     budget = int(report.get('attemptBudget') or 2)
     cell = report.get('cell') if isinstance(report.get('cell'), dict) else {}
     repository = cell.get('repository') or report['repository']
@@ -190,7 +195,8 @@ def trials(path, report, model_path):
     progress = report.get('inProgress') or []
     if progress:
         succeeded = any(a.get('outcome') == 'success' for a in progress)
-        entries.append((progress[0].get('issue'), progress, succeeded or len(progress) >= budget))
+        # Two failed attempts already settle "within two", whatever the budget.
+        entries.append((progress[0].get('issue'), progress, succeeded or len(progress) >= min(budget, 2)))
     out = []
     for issue, attempts, complete in entries:
         if not attempts or issue is None:
@@ -271,6 +277,11 @@ def summarize_cell(cell_trials):
             finals[stop_class(t['attempts'][-1])] += 1
     delivered_seconds = [sum(a.get('seconds') or 0 for a in t['attempts']) for t in complete if t['successAt'] is not None]
     revisions = sorted({t['revision'] for t in complete if t['revision']})
+    # The gate counts issues: one trial per issue, its earliest complete run.
+    earliest = {}
+    for t in sorted(complete, key=lambda t: (t['startedAt'], natural(t['source']))):
+        earliest.setdefault(t['issue'], t)
+    sample = list(earliest.values())
     cell = {
         'repository': cell_trials[0]['repository'], 'modelPath': cell_trials[0]['modelPath'],
         'trials': n, 'distinctIssues': len(issues), 'incompleteTrials': len(incomplete),
@@ -278,7 +289,7 @@ def summarize_cell(cell_trials):
         'attempts': len(attempts),
         'deliveredWithinTwo': rate(within, n),
         'firstAttempt': rate(first, n),
-        'passAtK': pass_at,
+        'issueMeanPassAtK': pass_at,
         'attemptSuccess': rate(attempt_successes, len(attempts)),
         'secondAttemptRecovery': rate(sum(1 for t in second if t['successAt'] == 2), len(second)),
         'medianSecondsToDelivery': round(statistics.median(delivered_seconds)) if delivered_seconds else None,
@@ -289,6 +300,11 @@ def summarize_cell(cell_trials):
                      'observedAttempts': sources['observed'], 'derivedAttempts': sources['derived'],
                      'changesRequested': {o: repairs[o] for o in OUTCOMES if repairs[o]}},
         'revisions': revisions,
+        'gateSample': {
+            'issues': len(sample),
+            'deliveredWithinTwo': rate(sum(1 for t in sample if t['successAt'] is not None and t['successAt'] <= 2), len(sample)),
+            'unknownRevision': sum(1 for t in sample if not t['revision']),
+        },
         'sources': sorted({t['source'] for t in cell_trials}, key=natural),
     }
     cell['gate'] = gate(cell)
@@ -296,13 +312,20 @@ def summarize_cell(cell_trials):
 
 
 def gate(cell):
-    """Whether the cell meets the Beta functional gate, and why not."""
+    """Whether the cell meets the Beta functional gate, and why not.
+
+    The rate and its bound are computed on the gate sample, one trial per
+    issue (its earliest complete run), so re-running issues can neither add
+    to n nor lift the rate."""
     reasons = []
-    within = cell['deliveredWithinTwo']
+    sample = cell['gateSample']
+    within = sample['deliveredWithinTwo']
     if cell['modelPath'] == UNSPECIFIED:
         reasons.append('the model path is unspecified: record --cell-model-path or pass --model-path')
-    if cell['distinctIssues'] < GATE['minIssues']:
-        reasons.append('%d distinct issues, at least %d needed' % (cell['distinctIssues'], GATE['minIssues']))
+    if sample['unknownRevision']:
+        reasons.append('installation revision unknown for %d issues: record --installation-revision or --image-lock' % sample['unknownRevision'])
+    if sample['issues'] < GATE['minIssues']:
+        reasons.append('%d distinct issues, at least %d needed' % (sample['issues'], GATE['minIssues']))
     if within['n'] and within['rate'] < GATE['minRate']:
         reasons.append('delivered within two attempts %.1f%%, at least %.0f%% needed' % (100 * within['rate'], 100 * GATE['minRate']))
     if within['n'] and within['wilson95'][0] < GATE['minLowerBound']:
@@ -316,7 +339,8 @@ def gate(cell):
         warnings.append('%d incomplete trials excluded' % cell['incompleteTrials'])
     if cell['truncatedTrials']:
         warnings.append('%d undelivered trials had fewer than two attempts and count as not delivered' % cell['truncatedTrials'])
-    return {'passed': not reasons, 'reasons': reasons, 'warnings': warnings}
+    return {'passed': not reasons, 'issues': sample['issues'], 'deliveredWithinTwo': within,
+            'reasons': reasons, 'warnings': warnings}
 
 
 def overall(cells):
@@ -336,7 +360,7 @@ def overall(cells):
             'note': 'The two repositories must also be in different languages; check that by hand.'}
 
 
-def summarize(paths, model_path=None, labels=None, rule='trial'):
+def summarize(paths, model_path=None, labels=None, rule='first'):
     labels = {str(Path(p)): label for p, label in (labels or {}).items()}
     inputs, collected = [], []
     for path in paths:
@@ -370,7 +394,8 @@ def pct(r):
 
 def markdown(summary):
     lines = ['# Evaluation summary', '',
-             'Dedupe rule: `%s`. Gate: at least %d distinct issues, delivered within two attempts at least %.0f%%, '
+             'Display rule: `%s`. Gate, always on one trial per issue (its earliest complete run): a known model path and '
+             'installation revision, at least %d distinct issues, delivered within two attempts at least %.0f%%, '
              '95%% Wilson lower bound at least %.0f%%.' % (summary['dedupe'], GATE['minIssues'], 100 * GATE['minRate'], 100 * GATE['minLowerBound']),
              '', '| Report | Model path | Trials | Partial |', '|---|---|---|---|']
     for i in summary['inputs']:
@@ -380,14 +405,16 @@ def markdown(summary):
     for c in summary['cells']:
         g = c['gate']
         lines += ['', '## `%s` × `%s`' % (c['repository'], c['modelPath']), '',
-                  '**Beta gate: %s.**%s' % ('met' if g['passed'] else 'not met', (' ' + '; '.join(g['reasons']) + '.') if g['reasons'] else ''), '']
+                  '**Beta gate: %s.** On one trial per issue (earliest run): %s.%s' % (
+                      'met' if g['passed'] else 'not met', pct(g['deliveredWithinTwo']),
+                      (' ' + '; '.join(g['reasons']) + '.') if g['reasons'] else ''), '']
         if g['warnings']:
             lines += ['Warnings: ' + '; '.join(g['warnings']) + '.', '']
         lines += ['| Measure | Value |', '|---|---|',
                   '| Trials (distinct issues) | %d (%d) |' % (c['trials'], c['distinctIssues']),
                   '| Delivered within two attempts | %s |' % pct(c['deliveredWithinTwo']),
                   '| First attempt | %s |' % pct(c['firstAttempt']),
-                  '| pass@1, pass@2 (per distinct issue) | %s, %s |' % tuple('n/a' if v is None else '%.3f' % v for v in (c['passAtK']['1'], c['passAtK']['2'])),
+                  '| Issue-weighted pass@1, pass@2 | %s, %s |' % tuple('n/a' if v is None else '%.3f' % v for v in (c['issueMeanPassAtK']['1'], c['issueMeanPassAtK']['2'])),
                   '| Attempt success | %s |' % pct(c['attemptSuccess']),
                   '| Second attempt recovers a failed first | %s |' % pct(c['secondAttemptRecovery']),
                   '| Median seconds to delivery | %s |' % ('n/a' if c['medianSecondsToDelivery'] is None else c['medianSecondsToDelivery']),
@@ -428,8 +455,9 @@ def main(argv=None):
     parser.add_argument('--model-path', type=model_label, help='Model path for reports that do not record one')
     parser.add_argument('--label', type=parse_label, action='append', default=[], metavar='REPORT=LABEL',
                         help='Model path for one report that does not record one (repeatable)')
-    parser.add_argument('--dedupe', choices=('trial', 'first'), default='trial',
-                        help='trial: every battery run of an issue is a trial; first: only each issue\'s earliest run')
+    parser.add_argument('--dedupe', choices=('first', 'trial'), default='first',
+                        help='first: only each issue\'s earliest run (default); trial: every battery run of an issue, as a '
+                             'diagnostic. The gate always uses one trial per issue.')
     parser.add_argument('--json', type=Path, help='Write the JSON summary here (default: standard output)')
     parser.add_argument('--markdown', type=Path, help='Write the Markdown summary here')
     args = parser.parse_args(argv)

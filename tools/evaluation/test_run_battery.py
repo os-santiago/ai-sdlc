@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import tempfile
 import unittest
@@ -138,6 +140,9 @@ class AttemptTests(unittest.TestCase):
 
 @mock.patch('run_battery.time.sleep', lambda _: None)
 class MainTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(contextlib.redirect_stdout(io.StringIO()))
+
     def test_blocked_runtime_stops_the_battery(self):
         with tempfile.TemporaryDirectory() as directory, \
                 mock.patch('run_battery.Runtime', return_value=FakeRuntime([state()], blocked=True)), \
@@ -218,6 +223,21 @@ class QueryTests(unittest.TestCase):
         self.assertGreaterEqual(joined.count('ORDER BY created_at DESC, id DESC LIMIT 1'), 6)
         self.assertIn("h.state='rejected'", joined)
         self.assertIn("r.expires_at<=now() AND NOT EXISTS", joined)
+
+    def test_queries_are_bound_to_the_repository(self):
+        runtime = run_battery.Runtime('kubectl', 'kubeconfig', repository='Owner/Repo')
+        queries = []
+        with mock.patch.object(run_battery.Runtime, 'sql', lambda self, q: queries.append(q) or ['0']):
+            runtime.snapshot(7)
+            runtime.review_states(7, '2026-11-24T00:00:00Z')
+        bound = "'issueNumber' = '7' AND lower(convert_from(payload,'UTF8')::json->>'repository') = 'owner/repo'"
+        issue_queries = [q for q in queries if "'issueNumber'" in q]
+        self.assertTrue(issue_queries)
+        for query in issue_queries:
+            self.assertEqual(query.count("'issueNumber' = '7'"), query.count(bound))
+        self.assertIn(bound, queries[-1])
+        with self.assertRaises(ValueError):
+            run_battery.Runtime('kubectl', 'kubeconfig', repository="o/r' OR '1'='1")
 
     def test_review_states_are_bound_to_the_issue_and_attempt(self):
         runtime = run_battery.Runtime('kubectl', 'kubeconfig')

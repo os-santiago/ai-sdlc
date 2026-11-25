@@ -39,6 +39,7 @@ from pathlib import Path
 LABEL = 'ai-sdlc:shadow'
 REPORT_SCHEMA = 2
 MODEL_PATH = re.compile(r'^[a-z0-9][a-z0-9-]{0,39}$')
+REPOSITORY = re.compile(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')
 # The furthest stage an attempt reached, in delivery order.
 STAGES = ('intake', 'execution', 'verification', 'review', 'merge')
 POLL_SECONDS = 20
@@ -67,8 +68,21 @@ def run(args, retry=True, **kwargs):
 
 
 class Runtime:
-    def __init__(self, kubectl, kubeconfig, namespace='ai-sdlc-runtime'):
+    def __init__(self, kubectl, kubeconfig, namespace='ai-sdlc-runtime', repository=None):
         self.base = [kubectl, '--kubeconfig', str(kubeconfig), '-n', namespace]
+        if repository is not None and not REPOSITORY.match(repository):
+            raise ValueError('repository must be OWNER/NAME')
+        self.repository = repository
+
+    def issue_filter(self, issue):
+        """Matches a request payload to this battery's issue, and to its
+        repository when known, so an installation serving several
+        repositories does not mix issues that share a number."""
+        clause = "convert_from(payload,'UTF8')::json->>'issueNumber' = '%d'" % int(issue)
+        if self.repository:
+            # GitHub names are case-insensitive; REPOSITORY admits no quotes.
+            clause += " AND lower(convert_from(payload,'UTF8')::json->>'repository') = '%s'" % self.repository.lower()
+        return clause
 
     def sql(self, query):
         out = run(self.base + ['exec', 'ai-sdlc-postgres-0', '--', 'psql', '-U', 'ai_sdlc', '-d', 'ai_sdlc', '-Atc', query])
@@ -90,7 +104,7 @@ class Runtime:
         """The review runs for this issue created since the attempt started,
         oldest first, as `state|reason` (for example `failed|request-changes`
         before a repair, then `passed`)."""
-        executions = "SELECT work_item_uuid FROM execution_requests WHERE convert_from(payload,'UTF8')::json->>'issueNumber' = '%d'" % int(issue)
+        executions = "SELECT work_item_uuid FROM execution_requests WHERE " + self.issue_filter(issue)
         return self.sql("SELECT state||'|'||reason FROM review_runs WHERE work_item_uuid IN (%s) "
                         "AND created_at >= '%s'::timestamptz ORDER BY created_at, id" % (executions, since))
 
@@ -119,9 +133,8 @@ class Runtime:
         def one(query):
             rows = self.sql(query)
             return rows[0] if rows else ''
-        n = int(issue)
-        executions = "FROM execution_requests WHERE convert_from(payload,'UTF8')::json->>'issueNumber' = '%d'" % n
-        verifications = "FROM verification_requests WHERE convert_from(payload,'UTF8')::json->>'issueNumber' = '%d'" % n
+        executions = "FROM execution_requests WHERE " + self.issue_filter(issue)
+        verifications = "FROM verification_requests WHERE " + self.issue_filter(issue)
         reviews = "FROM review_runs WHERE work_item_uuid IN (SELECT work_item_uuid %s)" % executions
         return {
             'executions': int(one('SELECT count(*) ' + executions) or 0),
@@ -267,7 +280,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.cell_model_path is not None and not MODEL_PATH.match(args.cell_model_path):
         parser.error('--cell-model-path must be a short lowercase label such as local-llama or agent-cli')
-    runtime, github = Runtime(args.kubectl, args.kubeconfig), GitHub(args.repository)
+    if not REPOSITORY.match(args.repository):
+        parser.error('--repository must be OWNER/NAME')
+    runtime, github = Runtime(args.kubectl, args.kubeconfig, repository=args.repository), GitHub(args.repository)
     report = {'schemaVersion': REPORT_SCHEMA, 'repository': args.repository, 'attemptBudget': args.attempts,
               'cell': {'repository': args.repository, 'modelPath': args.cell_model_path}}
     installation = {}

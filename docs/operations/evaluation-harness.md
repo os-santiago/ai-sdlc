@@ -33,8 +33,10 @@ The report also records, when available, `installation.revision` (from
 `installation.imageLockDigest` (the sha256 of the image lock file) and
 `installation.images` (the installed deployments' images, read best effort).
 The summary lists the revisions in each cell and warns when a cell spans more
-than one. A gate claim for a release should use batteries of that release's
-revision only: pass just those reports.
+than one. A cell with any gate issue whose report records no revision fails
+the gate (`installation revision unknown`): a rate that cannot be tied to the
+images that produced it does not count. A gate claim for a release should use
+batteries of that release's revision only: pass just those reports.
 
 ## Trials and dedupe
 
@@ -44,20 +46,25 @@ runtime's branch merged) or not.
 
 - **Same trial read twice** (same cell, issue and first-attempt start, for
   example the same report passed twice) counts once.
-- **`--dedupe trial`** (default): every battery run of an issue counts. Issues
-  that failed are often run again, so this rate mixes first exposures with
-  retries of hard issues.
-- **`--dedupe first`**: only each issue's earliest complete run counts. This
-  avoids the selection effect of re-running failed issues, and gives one trial
-  per distinct issue.
+- **`--dedupe first`** (default): only each issue's earliest complete run
+  counts. This avoids the selection effect of re-running failed issues, and
+  gives one trial per distinct issue.
+- **`--dedupe trial`** (diagnostic): every battery run of an issue counts.
+  Issues that failed are often run again, so this rate mixes first exposures
+  with retries of hard issues.
 
-Whatever the rule, the gate counts **distinct issues**: repeated trials of the
-same issue are correlated and do not stand in for new issues.
+Whatever the display rule, **the gate counts issues**: its rate and Wilson
+bound are computed on one trial per issue, the issue's earliest complete run,
+and its n is the number of distinct issues. Repeated trials of the same issue
+are correlated, and re-running failures until they pass would otherwise lift
+the rate: 60 issues with 48 delivered on their first run, plus 20 re-runs, can
+read 65/80 (lower bound 71.3%) under `trial`, yet the gate sees 48/60 (68.2%)
+and fails.
 
 **Partial reports.** A report written by a battery that stopped mid-issue
-carries `inProgress`. That trial counts if it already succeeded or used its
-whole budget; otherwise it is **incomplete**, excluded from the rates, and
-reported. A trial that ended with no success after fewer than two attempts
+carries `inProgress`. That trial counts if it already succeeded or made two
+attempts (two failures settle "within two" even with a larger budget);
+otherwise it is **incomplete**, excluded from the rates, and reported. A trial that ended with no success after fewer than two attempts
 (for example `runtime-blocked`, or an attempt budget of one) counts as not
 delivered, and is reported as truncated.
 
@@ -69,7 +76,7 @@ For each cell, over its complete trials:
 |---|---|
 | Delivered within two attempts | Trials delivered at attempt 1 or 2, over trials. A success at a third attempt does not count. The gate rate. |
 | First attempt | Trials delivered at attempt 1, over trials |
-| pass@1, pass@2 | For each distinct issue, the fraction of its trials delivered within *k* attempts; then the mean over issues. Each issue weighs the same however often it ran. Equal to the two rates above under `--dedupe first`. |
+| Issue-weighted pass@1, pass@2 (`issueMeanPassAtK`) | For each distinct issue, the fraction of its trials delivered within *k* attempts; then the mean over issues. Each issue weighs the same however often it ran. Equal to the two rates above under `--dedupe first`. This is not the unbiased pass@k estimator of Chen et al. (2021), which needs *n* independent samples per problem: battery attempts are sequential and stop at the first success. |
 | Attempt success | Successful attempts over all attempts |
 | Second-attempt recovery | Trials delivered at attempt 2, over trials whose first attempt failed and that made a second one. This is the value of the retry. |
 
@@ -138,9 +145,11 @@ visible with an outside check (for example hidden tests or a later revert).
 
 ## The gate
 
-A cell meets the **Beta functional gate** when all of these hold:
+A cell meets the **Beta functional gate** when all of these hold, on one trial
+per issue (its earliest complete run):
 
 - its model path is known;
+- every gate issue's report records its installation revision;
 - it has at least **60 distinct issues**;
 - delivered within two attempts is at least **80%**;
 - the 95% Wilson lower bound of that rate is at least **70%**.
@@ -149,7 +158,7 @@ Each failing condition is listed as a reason. With 60 issues, 48 deliveries
 (80%) are not enough: the lower bound is 68.2%. The smallest passing counts
 are:
 
-| Distinct issues | Deliveries needed | Rate |
+| n (distinct issues) | Deliveries needed | Rate |
 |---|---|---|
 | 60 | 49 | 81.7% |
 | 70 | 57 | 81.4% |
