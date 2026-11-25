@@ -351,6 +351,56 @@ fails the call with reason `degenerate`. The guard retries only this detected
 corruption. Every other failure, including `truncated`, is returned at once:
 retrying it is the broker's decision.
 
+## Rewrite guard
+
+The executor prompt tells the model to change existing files with `edit_file`
+and to put new tests in a new file. A local Qwen3-Coder-30B-A3B ignored this.
+In evaluation battery 27, every candidate for two issues failed verification.
+In one of them the model had called `write_file` on an existing 834-line test
+file. It wrote about 100 lines, dropping about 750 lines of tests and a
+helper, and the package no longer compiled. A whole rewrite is also the most
+expensive answer a slow model gives: minutes of generation, often up to the
+call's ceiling. In battery 26, the issues where the model created new files
+were delivered.
+
+The gateway therefore refuses such a rewrite once per call. It reads no
+workspace, so it decides only from the request's own messages. A path counts
+as **pre-existing** when an earlier assistant `read_file` or `edit_file` on it
+succeeded before any `write_file` of the model created it. A failed read or
+edit counts only when SCC had already opened the file (`File too large`,
+`exceeds file length`, `Patch does not match file content`,
+`Patch produces no changes`); a missing file does not. Paths are compared
+after removing `.` segments (a leading `./`) and repeated `/`. Nothing else
+is resolved.
+
+A `write_file` to a new path, or to a path the model created earlier in the
+conversation, is never refused. Neither is `edit_file`.
+
+- **Detection.** The `openai` adapter checks each streamed tool call. As soon
+  as a `write_file` call's `path` value is complete and names a pre-existing
+  file, the gateway shuts the upstream connection down. It does not wait for
+  the content. A `path` that is not among the first 4,096 characters of the
+  arguments (after a long `content`) is judged on the final message. The
+  `anthropic` and `agent-cli` adapters, and an upstream that answers JSON,
+  check the final message the same way.
+- **Retry.** The gateway sends the same request once more with one user
+  message appended:
+  `write_file on the existing file <path> was refused: it would replace the
+  whole file and drop what you do not repeat. Change it with edit_file (a
+  unified diff), or put new code and new tests in a new file.` The path text
+  is cut at 200 characters. The retry shares the call's deadline and its one
+  degenerate retry, and needs at least 10 s of the budget left.
+- **Fail open.** If the retry proposes a rewrite again, its answer is returned
+  unchanged. So is a refused answer when no retry fits: too little budget, or
+  a corrected request that would exceed the request contract (256 messages).
+  The result is never worse than without the guard. The event records it.
+
+`AI_SDLC_MODEL_GATEWAY_REWRITE_GUARD` (`true` or `false`, default `true`)
+turns the guard on or off. Any other value refuses to start. The chart sets
+`true` on the worker gateway and `false` on the verifier's review gateway: the
+reviewer never writes files. Benchmark probes are never guarded, and the guard
+is inert when the request does not offer `write_file`.
+
 ## Per-call events
 
 After the benchmark, the gateway logs one bounded `model-call` event per
@@ -375,6 +425,12 @@ absent otherwise:
 {"event": "model-call", "outcome": "ok", "seconds": 31.5, "budgetSeconds": 300, "promptTokens": 9632, "completionTokens": 88, "estimated": false, "degenerateRetries": 1}
 {"event": "model-call", "outcome": "failed", "seconds": 24.9, "budgetSeconds": 300, "reason": "degenerate", "degenerateRetries": 1}
 ```
+
+When the [rewrite guard](#rewrite-guard) refused an answer and retried, the
+event carries `"rewriteRetries": 1`, also on a failure of the retry. When a
+refused rewrite was returned unchanged (the retry rewrote again, or no retry
+fitted), it carries `"rewritePassed": 1`. Both are absent otherwise. They are
+counts only, never paths or content.
 
 On the review gateway with a [tool allowlist](#review-tool-allowlist), every
 event also carries `"toolsWithheld": N` when the request offered tools outside

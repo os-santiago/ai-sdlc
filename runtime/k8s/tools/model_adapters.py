@@ -23,6 +23,13 @@ assembles the same final message the non-streaming contract returns, so it can
 stop a degenerate generation (``DegenerateGuard``) as soon as it starts,
 instead of waiting for it to run to ``max_tokens``. It then retries the same
 request at most once, inside the same call budget.
+
+Every adapter also refuses, once per call, a ``write_file`` that would replace
+a whole file which existed before the conversation (``RewriteGuard``), judged
+only from the request's own messages. The ``openai`` adapter stops such a
+stream as soon as the call's path is known. The request is then repeated with
+one short correction appended, inside the same call budget; a second rewrite
+is passed through unchanged (fail open).
 """
 import http.client
 import ipaddress
@@ -71,6 +78,28 @@ MAX_STREAM_CALLS = 8
 # failing as ``degenerate`` names the cause better than a later ``deadline``.
 DEGENERATE_RETRIES = 1
 DEGENERATE_RETRY_MIN_SECONDS = 10
+# Rewrite guard (``RewriteGuard``): SCC's tool names and argument keys.
+READ_TOOL, WRITE_TOOL = "read_file", "write_file"
+REWRITE_GUARD_ENV = "AI_SDLC_MODEL_GATEWAY_REWRITE_GUARD"
+REWRITE_RETRIES = 1
+REWRITE_RETRY_MIN_SECONDS = DEGENERATE_RETRY_MIN_SECONDS
+MAX_GUARD_PATH_CHARS = 1024
+# The path text repeated to the model in the correction.
+MAX_CORRECTION_PATH_CHARS = 200
+# A streamed write_file whose "path" is not among the leading scalar keys of
+# its first bytes is judged on the final message instead.
+REWRITE_SCAN_CHARS = 4096
+_JSON_STRING = r'"(?:[^"\\]|\\.)*"'
+_JSON_SCALAR = _JSON_STRING + r"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null"
+STREAMED_PATH = re.compile(r'\s*\{\s*(?:%s\s*:\s*(?:%s)\s*,\s*)*"path"\s*:\s*(%s)\s*[,}]' % (_JSON_STRING, _JSON_SCALAR, _JSON_STRING), re.S)
+# SCC reports a failed tool as "Error: ..." or "[ERROR] ...". These failures
+# happen only after SCC has opened the file, so they still prove it exists.
+TOOL_ERROR_PREFIXES = ("Error:", "[ERROR]")
+EXISTING_FILE_ERRORS = ("Patch does not match file content", "Patch produces no changes",
+                        "File too large", "exceeds file length")
+CORRECTION = ("write_file on the existing file %s was refused: it would replace the whole file and drop "
+              "what you do not repeat. Change it with edit_file (a unified diff), or put new code and new "
+              "tests in a new file.")
 
 
 @dataclass
@@ -83,6 +112,8 @@ class Completion:
     usage: dict = field(default_factory=dict)
     edit_patches_recounted: int = 0
     degenerate_retries: int = 0
+    rewrite_retries: int = 0
+    rewrite_passed: int = 0
 
 
 def _hunks(lines):
@@ -289,6 +320,146 @@ class DegenerateGuard:
         return False
 
 
+class RewriteRefused(ValueError):
+    """A proposed ``write_file`` over a file that existed before the
+    conversation, stopped while it streamed."""
+    def __init__(self, path):
+        super().__init__("rewrite refused")
+        self.path = path
+
+
+def guard_path(path):
+    """The path the rewrite guard compares: "." segments (a leading "./") and
+    repeated separators removed, nothing else resolved. ``None`` when the
+    value is not a usable path."""
+    if not isinstance(path, str) or not path or len(path) > MAX_GUARD_PATH_CHARS or "\x00" in path:
+        return None
+    parts = [part for part in path.split("/") if part not in ("", ".")]
+    if not parts:
+        return None
+    return ("/" if path.startswith("/") else "") + "/".join(parts)
+
+
+def _call_target(call):
+    """(tool name, normalized path) of one OpenAI-shaped tool call, or
+    (None, None) when it has no usable name and path."""
+    function = call.get("function") if isinstance(call, dict) else None
+    raw = function.get("arguments") if isinstance(function, dict) else None
+    if not isinstance(raw, str) or not isinstance(function.get("name"), str):
+        return None, None
+    try:
+        arguments = json.loads(raw)
+    except (ValueError, RecursionError):
+        return None, None
+    path = guard_path(arguments.get("path")) if isinstance(arguments, dict) else None
+    return (function["name"], path) if path is not None else (None, None)
+
+
+class _Call:
+    """What one ``complete`` shares across its upstream attempts: one deadline,
+    one degenerate-retry allowance, and the rewrite guard while it may still
+    stop a stream."""
+    def __init__(self, deadline):
+        self.deadline = deadline
+        self.degenerate_retries = 0
+        self.rewrite = None
+
+
+class RewriteGuard:
+    """Refuses a ``write_file`` that would replace a whole file which existed
+    before the conversation, so the model is asked once to edit it instead.
+
+    Observed fault: a local model rewrote an 834-line test file in about 100
+    lines with ``write_file``, dropping most of its tests and a helper; every
+    candidate for those issues then failed verification. The executor prompt
+    already forbids this; the model ignored it.
+
+    The gateway reads no workspace, so the guard decides only from the
+    request's own conversation. A path existed before it when an earlier
+    assistant ``read_file`` or ``edit_file`` on it succeeded (or failed only
+    after SCC opened the file) before any ``write_file`` of the model created
+    it. A ``write_file`` to a new path, or to a path the model itself created
+    earlier, is never refused. Paths are compared after ``guard_path``."""
+
+    def __init__(self, request, messages, deadline):
+        self.request, self.deadline = request, deadline
+        self.existing = self.preexisting(messages)
+        self.scanned = set()
+        self.retries = {}
+
+    @staticmethod
+    def preexisting(messages):
+        results = {}
+        for message in messages:
+            if message.get("role") == "tool" and isinstance(message.get("tool_call_id"), str):
+                results[message["tool_call_id"]] = message.get("content") or ""
+        existing, created = set(), set()
+        for message in messages:
+            calls = message.get("tool_calls") if message.get("role") == "assistant" else None
+            for call in calls if isinstance(calls, list) else []:
+                name, path = _call_target(call)
+                if name in (READ_TOOL, EDIT_TOOL) and path not in created and RewriteGuard.opened(results.get(call.get("id"))):
+                    existing.add(path)
+                elif name == WRITE_TOOL and path not in existing:
+                    created.add(path)
+        return frozenset(existing)
+
+    @staticmethod
+    def opened(result):
+        """Whether SCC's result for a read or edit shows the file existed."""
+        if not isinstance(result, str):
+            return False  # no result in the conversation: nothing is known
+        if not result.startswith(TOOL_ERROR_PREFIXES):
+            return True
+        return any(marker in result for marker in EXISTING_FILE_ERRORS)
+
+    def refused(self, message):
+        """The first pre-existing path a final message proposes to rewrite."""
+        for call in message.get("tool_calls") or []:
+            name, path = _call_target(call)
+            if name == WRITE_TOOL and path in self.existing:
+                return path
+        return None
+
+    def retry(self, path):
+        """The validated retry request for ``path``, or ``None`` when the
+        corrected request leaves the contract (too many messages or bytes)
+        or too little of the call budget remains."""
+        if self.deadline - time.monotonic() < REWRITE_RETRY_MIN_SECONDS:
+            return None
+        if path not in self.retries:
+            shown = "".join(c if c.isprintable() else "?" for c in path[:MAX_CORRECTION_PATH_CHARS])
+            shown += "..." if len(path) > MAX_CORRECTION_PATH_CHARS else ""
+            request = dict(self.request, messages=list(self.request["messages"]) + [{"role": "user", "content": CORRECTION % shown}])
+            try:
+                validate_request(request)
+            except ValueError:
+                request = None
+            self.retries[path] = request
+        return self.retries[path]
+
+    def streamed(self, index, name, arguments):
+        """The path to stop the stream for, as soon as a streamed call is a
+        ``write_file`` whose complete ``path`` value is a pre-existing file
+        and a retry is still possible; otherwise ``None``. Each call is
+        decided once; its content is never waited for."""
+        if index in self.scanned or name != WRITE_TOOL:
+            return None
+        match = STREAMED_PATH.match(arguments[:REWRITE_SCAN_CHARS])
+        if match is None:
+            if len(arguments) >= REWRITE_SCAN_CHARS:
+                self.scanned.add(index)  # left to the final message
+            return None
+        self.scanned.add(index)
+        try:
+            path = guard_path(json.loads(match.group(1)))
+        except (ValueError, RecursionError):
+            return None
+        if path in self.existing and self.retry(path) is not None:
+            return path
+        return None
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
@@ -463,9 +634,10 @@ class _Stream:
     events) into what the non-streaming answer holds: the content, the tool
     calls (by ``index``; string fields concatenate, as the OpenAI SDKs
     accumulate them), the last finish reason and the last usage object.
-    Every delta is fed to the guard before it is kept."""
-    def __init__(self, guard):
-        self.guard, self.content, self.calls = guard, [], {}
+    Every delta is fed to the guard before it is kept. With a ``rewrite``
+    guard, a tool call is also checked as its arguments arrive."""
+    def __init__(self, guard, rewrite=None):
+        self.guard, self.rewrite, self.content, self.calls = guard, rewrite, [], {}
         self.finish, self.usage, self.done, self.size = None, None, False, 0
         self.data, self.data_size = [], 0  # the current event's data lines
 
@@ -574,6 +746,10 @@ class _Stream:
             else:
                 self.keep(("arguments", index), value)
                 entry["arguments"] += value
+        if self.rewrite is not None:
+            path = self.rewrite.streamed(index, entry["name"], entry["arguments"])
+            if path is not None:
+                raise _Stop(RewriteRefused(path))
 
     def read(self, response, deadline):
         buffer, total = b"", 0
@@ -614,7 +790,7 @@ class _Stream:
         return answer
 
 
-def _read_completion(response, deadline):
+def _read_completion(response, deadline, rewrite=None):
     """An SSE stream is assembled while it is guarded; any other answer (a
     server that ignored ``stream``) is read as the bounded JSON body."""
     media = (response.headers.get("Content-Type") or "").split(";")[0].strip().lower()
@@ -624,13 +800,14 @@ def _read_completion(response, deadline):
             return json.loads(body)
         except (ValueError, RecursionError):
             raise _Stop(ValueError("invalid completion")) from None
-    return _Stream(DegenerateGuard()).read(response, deadline)
+    return _Stream(DegenerateGuard(), rewrite).read(response, deadline)
 
 
-def post_completion(url, payload, headers, seconds):
+def post_completion(url, payload, headers, seconds, rewrite=None):
     """POST once and return the answer in the non-streaming shape, streamed
     and guarded when the upstream streams (see ``_exchange``)."""
-    answer = _exchange(url, payload, headers, seconds, _read_completion)
+    answer = _exchange(url, payload, headers, seconds,
+                       lambda response, deadline: _read_completion(response, deadline, rewrite))
     return answer.answer() if isinstance(answer, _Stream) else answer
 
 
@@ -647,26 +824,61 @@ class Adapter:
     shared contract and returns a bounded ``Completion``."""
     name = ""
 
-    def __init__(self, url="", model="", seconds=300, credential="", direct_answers=False):
+    def __init__(self, url="", model="", seconds=300, credential="", direct_answers=False, rewrite_guard=True):
         self.url, self.model, self.seconds, self.credential = url, model, seconds, credential
-        self.direct_answers = direct_answers
+        self.direct_answers, self.rewrite_guard = direct_answers, rewrite_guard
 
     def complete(self, request, seconds=None, probe=False):
         """``probe`` is used only by the startup benchmark, whose prefill and
-        generation probes are truncated on purpose; SCC traffic never is."""
+        generation probes are truncated on purpose; SCC traffic never is.
+
+        When the rewrite guard refuses an answer (``RewriteGuard``), the same
+        request is repeated once with one correction appended, inside the same
+        ``seconds``: the streaming adapter stops the first answer as soon as
+        the refused path is known, the others judge the final message. A
+        retry that rewrites again is returned unchanged (fail open) and
+        counted in ``rewrite_passed``, as is a refused answer when no retry
+        fits. One degenerate retry is shared by all attempts."""
         messages, tools, names, tokens = validate_request(request)
         validate_parameters(request, names)
-        self.truncation_ok = probe
+        call = _Call(time.monotonic() + (seconds or self.seconds))
+        # Inert when write_file is not offered (a narrowed review gateway).
+        guard = (RewriteGuard(request, messages, call.deadline)
+                 if self.rewrite_guard and not probe and WRITE_TOOL in names else None)
+        retries = passed = 0
+        self.truncation_ok, self._call = probe, call
         try:
-            completion = self.backend(request, messages, tools, names, tokens, seconds or self.seconds)
+            while True:
+                call.rewrite = guard if retries < REWRITE_RETRIES else None
+                try:
+                    completion = self.backend(request, messages, tools, names, tokens,
+                                              max(call.deadline - time.monotonic(), 0.001))
+                except RewriteRefused as refused:
+                    # A stream is stopped only once its retry request is ready.
+                    request, retries = guard.retries[refused.path], retries + 1
+                    messages, tools, names, tokens = validate_request(request)
+                    continue
+                path = guard.refused(completion.message) if guard is not None else None
+                retry = guard.retry(path) if path is not None and retries < REWRITE_RETRIES else None
+                if retry is None:
+                    passed = int(path is not None)
+                    break
+                request, retries = retry, retries + 1
+                messages, tools, names, tokens = validate_request(request)
+        except Exception as error:
+            error.degenerate_retries, error.rewrite_retries = call.degenerate_retries, retries
+            raise
         finally:
-            self.truncation_ok = False
+            self.truncation_ok, self._call = False, None
+        completion.degenerate_retries = call.degenerate_retries
+        completion.rewrite_retries, completion.rewrite_passed = retries, passed
         # Every adapter's message is normalized here, before the gateway
         # returns it and so before the broker records or digests anything.
         completion.edit_patches_recounted = recount_edit_patches(completion.message)
         return completion
 
     truncation_ok = False
+    _call = None
 
     def backend(self, request, messages, tools, names, tokens, seconds):
         raise NotImplementedError
@@ -692,7 +904,9 @@ class OpenAIAdapter(Adapter):
 
     def backend(self, request, messages, tools, names, tokens, seconds):
         """Streams the answer and retries once, inside the same ``seconds``
-        budget, when the guard stops a degenerate generation. Any other
+        budget, when the guard stops a degenerate generation. A rewrite the
+        rewrite guard stops (``RewriteRefused``) is retried by ``complete``,
+        which shares that one degenerate retry across its attempts. Any other
         failure is returned at once: retrying it is the broker's decision."""
         payload = {"model": self.model, "messages": messages, "max_tokens": tokens,
                    "stream": True, "stream_options": {"include_usage": True}}
@@ -707,22 +921,17 @@ class OpenAIAdapter(Adapter):
                 payload[key] = request[key]
         headers = {"Authorization": "Bearer " + self.credential} if self.credential else {}
         deadline = time.monotonic() + seconds
-        retries = 0
-        try:
-            while True:
-                try:
-                    answer = post_completion(self.url, payload, headers, max(deadline - time.monotonic(), 0.001))
-                except DegenerateCompletion:
-                    if retries < DEGENERATE_RETRIES and deadline - time.monotonic() >= DEGENERATE_RETRY_MIN_SECONDS:
-                        retries += 1
-                        continue
-                    raise
-                completion = self.parse(answer, messages, names)
-                completion.degenerate_retries = retries
-                return completion
-        except Exception as error:
-            error.degenerate_retries = retries
-            raise
+        # ``complete`` shares one degenerate retry across rewrite retries.
+        call = self._call or _Call(deadline)
+        while True:
+            try:
+                answer = post_completion(self.url, payload, headers, max(deadline - time.monotonic(), 0.001), call.rewrite)
+            except DegenerateCompletion:
+                if call.degenerate_retries < DEGENERATE_RETRIES and deadline - time.monotonic() >= DEGENERATE_RETRY_MIN_SECONDS:
+                    call.degenerate_retries += 1
+                    continue
+                raise
+            return self.parse(answer, messages, names)
 
     def parse(self, answer, messages, names):
         """The bounded completion from one answer in the non-streaming shape."""
@@ -851,8 +1060,13 @@ def adapter_from_environ(environ=os.environ):
     seconds = environ.get("AI_SDLC_MODEL_UPSTREAM_SECONDS", "300")
     if not seconds.isdigit() or not UPSTREAM_SECONDS_MIN <= int(seconds) <= UPSTREAM_SECONDS_MAX:
         raise RuntimeError("model upstream unavailable")
+    # On unless the installation turns it off (the chart does so on the
+    # independent review gateway: the reviewer never writes files).
+    guard = environ.get(REWRITE_GUARD_ENV, "true")
+    if guard not in ("true", "false"):
+        raise RuntimeError("model gateway rewrite guard invalid")
     if cls is AgentCLIAdapter:
-        return cls(seconds=int(seconds))
+        return cls(seconds=int(seconds), rewrite_guard=guard == "true")
     url = fixed_url(environ.get("AI_SDLC_MODEL_UPSTREAM_URL", ""), cls.path)
     model = environ.get("AI_SDLC_MODEL_UPSTREAM_MODEL", "")
     if not MODEL_ALIAS.fullmatch(model):
@@ -863,4 +1077,4 @@ def adapter_from_environ(environ=os.environ):
     direct = environ.get("AI_SDLC_MODEL_UPSTREAM_DIRECT_ANSWERS", "false")
     if direct not in ("true", "false"):
         raise RuntimeError("model upstream unavailable")
-    return cls(url, model, int(seconds), credential, direct == "true")
+    return cls(url, model, int(seconds), credential, direct == "true", guard == "true")
