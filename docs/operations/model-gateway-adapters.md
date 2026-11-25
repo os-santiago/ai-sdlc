@@ -430,8 +430,13 @@ Duplicate test functions do not even compile in one package.
 The rewrite guard therefore also checks a `write_file` to a path that is not
 pre-existing. Its sources are the request's own successful `read_file`
 results, all reads of one path together, partial reads (`offset`, `limit`)
-included. SCC's trailing `[N lines ...]` note is not content. A source with the
-same path as the new file is skipped: the model may rewrite a file it created.
+included. SCC returns the raw lines with no line numbers, then a
+`[N lines ...]` note after a blank line; the note is not content. SCC shortens
+old tool outputs to their first and last 300 characters around a marker. The
+marker is dropped, and what remains is usually too little to judge a copy by.
+Two kinds of file are never sources: one with the same path as the new file,
+and one the model created itself (a `write_file` before any read or edit
+proved it existed). The model may rewrite or reuse what it wrote.
 
 Lines are compared after collapsing runs of whitespace. Only non-trivial lines
 count: at least 4 letters or digits, so braces, blank lines and short imports
@@ -448,14 +453,25 @@ nearly every line. The check is linear in the streamed content and stops
 after 4,096 distinct lines. A new file that copies a little and adds much
 (under 60% repeated) passes.
 
+A move or a split repeats content legitimately. When the same answer also
+proposes an `edit_file` on the source (the removal half of the move), the copy
+is not refused. While streaming, the gateway sees only the calls that came
+before: an `edit_file` sent first leaves the copy to the final message, which
+then passes it. An `edit_file` sent after the copy arrives too late. The copy
+is refused once, and the correction asks for the removal in the same answer.
+
 - **Detection.** The `openai` adapter decodes the streamed `content` string as
-  it arrives and stops the stream as soon as the content qualifies. A
+  it arrives and stops the stream as soon as the content qualifies. Each
+  upstream attempt is judged on its own stream: a degenerate retry starts
+  again from nothing. A
   `content` key that does not start within the first 4,096 characters of the
   arguments, and every non-streaming answer, is judged on the final message.
 - **Retry.** The same machinery as the rewrite guard, with this correction:
   `write_file to "<path>" was refused: it repeats content of "<source>" that
   already exists. Write only the new code and tests the issue asks for; never
-  copy existing tests or code into a new file.` Both paths are cut at 200
+  copy existing tests or code into a new file, unless the issue asks you to
+  move it: then also remove it from "<source>" with edit_file in the same
+  answer.` Both paths are cut at 200
   characters and quoted as JSON strings. One call spends at most one guard
   retry for rewrites and copies together, and shares the degenerate retry and
   the deadline.

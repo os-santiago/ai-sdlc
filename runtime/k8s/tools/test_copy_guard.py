@@ -42,6 +42,24 @@ SOURCE = "\n".join(SOURCE_LINES)
 LEGIT_LINES = HEADER + table_test("Capitalize", 18) + table_test("SnakeCase", 18)
 
 
+def scc_read(text, offset=1, limit=None):
+    """SCC's read_file result, as src/tools/read-file.ts builds it: the raw
+    lines (no line numbers) from ``offset``, then a note after a blank line."""
+    lines = text.split("\n")
+    sliced = lines[offset - 1:offset - 1 + limit] if limit else lines[offset - 1:]
+    suffix = ("\n\n[%d lines shown, %d total. Use offset=%d&limit=%d to read more.]"
+              % (len(sliced), len(lines), offset + len(sliced), limit or 50)
+              if len(lines) > len(sliced) else "\n\n[%d lines total]" % len(lines))
+    return "\n".join(sliced) + suffix
+
+
+def scc_prune(content):
+    """SCC's shortened old tool output (pruneMessageHistory in
+    src/core/agent/message-history.ts): first and last 300 characters."""
+    return "%s\n\n... [Tool output of %d characters truncated to save context window] ...\n\n%s" % (
+        content[:300], len(content), content[-300:])
+
+
 def read_result(text, shown=None, total=None):
     note = "[%d lines total]" % total if shown is None else \
         "[%d lines shown, %d total. Use offset=%d&limit=50 to read more.]" % (shown, total, shown + 1)
@@ -219,6 +237,47 @@ class StreamingCopyTests(unittest.TestCase):
         completion = self.adapter(seconds=5).complete(READ)
         self.assertEqual((len(base.SSEUpstream.seen), self.counts(completion)), (1, (0, 1, 0, 0)))
 
+    def test_each_upstream_attempt_is_judged_on_its_own_stream(self):
+        def degenerate_write(path):
+            # A write_file to a new path that degenerates inside its content.
+            def deltas(_body):
+                yield base.sse_event(base.chunk(role="assistant", calls=[{"index": 0, "id": "d", "type": "function",
+                                                                         "function": {"name": "write_file", "arguments": ""}}]))
+                yield base.sse_event(base.chunk(calls=[{"index": 0, "function": {"arguments": "{\"path\": %s, \"content\": \"" % json.dumps(path)}}]))
+                for line in SOURCE_LINES[:20]:
+                    yield base.sse_event(base.chunk(calls=[{"index": 0, "function": {"arguments": json.dumps(line + "\n")[1:-1]}}]))
+                for _ in range(5000):
+                    yield base.sse_event(base.chunk(calls=[{"index": 0, "function": {"arguments": "??"}}]))
+            return deltas
+        # Degenerate, then a copy to another path at the same call index: the
+        # copy is stopped early and the correction names the retry's path.
+        base.SSEUpstream.script = [degenerate_write("textutil/first_try_test.go"), SLOW_COPY, LEGIT]
+        started = time.monotonic()
+        completion = self.adapter().complete(READ)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual((completion.degenerate_retries, len(base.SSEUpstream.seen)), (1, 3))
+        self.assertEqual(self.counts(completion), (1, 0, 0, 0))
+        self.assertEqual(base.SSEUpstream.seen[2]["messages"][-1], copy_correction(NEW))
+        # The same for #797's rewrite check: attempt 2 rewrites a pre-existing file.
+        base.SSEUpstream.seen, base.SSEUpstream.script = [], [degenerate_write("textutil/first_try_test.go"), rg.slow_rewrite, LEGIT]
+        started = time.monotonic()
+        completion = self.adapter().complete(READ)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual(self.counts(completion), (0, 0, 1, 0))
+        self.assertEqual(base.SSEUpstream.seen[2]["messages"][-1], rg.correction(EXISTING))
+
+    def test_a_streamed_move_is_left_to_the_final_message(self):
+        edit_first = base.stream(
+            base.chunk(calls=[{"index": 0, "id": "e", "type": "function", "function": {
+                "name": "edit_file", "arguments": json.dumps({"path": EXISTING, "patch": "p"})}}]),
+            base.chunk(calls=[{"index": 1, "id": "w", "type": "function", "function": {
+                "name": "write_file", "arguments": json.dumps({"path": NEW, "content": SOURCE})[:-1]}}]),
+            base.chunk(calls=[{"index": 1, "function": {"arguments": "}"}}]),
+            base.chunk(finish="tool_calls"))
+        base.SSEUpstream.script = [edit_first]
+        completion = self.adapter().complete(READ)
+        self.assertEqual((len(base.SSEUpstream.seen), self.counts(completion)), (1, (0, 0, 0, 0)))
+
     def test_disabled_guard_and_a_failing_copy_check_never_refuse(self):
         base.SSEUpstream.script = [COPY]
         completion = self.adapter(guard=False).complete(READ)
@@ -227,6 +286,57 @@ class StreamingCopyTests(unittest.TestCase):
         with unittest.mock.patch.object(adapters.RewriteGuard, "read_lines", side_effect=TypeError("boom")):
             completion = self.adapter().complete(READ)
         self.assertEqual((len(base.SSEUpstream.seen), self.counts(completion)), (1, (0, 0, 0, 0)))
+
+
+class SourceRules(unittest.TestCase):
+    def reads(self, *turns):
+        return adapters.RewriteGuard.read_lines(adapters.validate_request(rg.conversation(*turns))[0])
+
+    def test_scc_read_results_are_raw_lines_with_a_trailing_note(self):
+        whole = scc_read(SOURCE)
+        self.assertTrue(whole.endswith("\n\n[%d lines total]" % len(SOURCE_LINES)))
+        self.assertEqual(adapters.READ_NOTE.sub("", whole), SOURCE)
+        part = scc_read(SOURCE, offset=11, limit=20)
+        self.assertIn("lines shown", part)
+        self.assertEqual(adapters.READ_NOTE.sub("", part), "\n".join(SOURCE_LINES[10:30]))
+        reads = self.reads(rg.assistant(("r1", "read_file", {"path": EXISTING, "offset": 11, "limit": 20})), rg.result("r1", part))
+        self.assertEqual(reads[EXISTING], adapters.copy_lines("\n".join(SOURCE_LINES[10:30])))
+        self.assertFalse(any("lines" in line and "shown" in line for line in reads[EXISTING]))
+
+    def test_a_shortened_old_output_keeps_only_what_remains(self):
+        pruned = scc_prune(scc_read(SOURCE))
+        reads = self.reads(rg.assistant(("r1", "read_file", {"path": EXISTING})), rg.result("r1", pruned))[EXISTING]
+        self.assertFalse(any("truncated to save context window" in line for line in reads))
+        self.assertLess(len(reads), adapters.COPY_MIN_MATCHED)  # too little left to judge a copy by
+
+    def test_files_the_model_created_are_never_sources(self):
+        reads = self.reads(rg.assistant(("w1", "write_file", {"path": "textutil/helper.go", "content": SOURCE})),
+                           rg.result("w1", "File written successfully: textutil/helper.go"),
+                           rg.assistant(("r1", "read_file", {"path": "textutil/helper.go"}), ("r2", "read_file", {"path": EXISTING})),
+                           rg.result("r1", scc_read(SOURCE)), rg.result("r2", scc_read(SOURCE)))
+        self.assertEqual(set(reads), {EXISTING})
+
+
+class MoveTests(base.UpstreamCase):
+    def call(self, name, **arguments):
+        return {"id": name, "type": "function", "function": {"name": name, "arguments": json.dumps(dict(arguments))}}
+
+    def test_a_move_with_its_removal_in_the_same_answer_is_not_a_copy(self):
+        move = [self.call("write_file", path=NEW, content=SOURCE), self.call("edit_file", path="./" + EXISTING, patch="p")]
+        base.FakeUpstream.reply = (200, base.openai_reply(calls=move), {})
+        completion = adapters.OpenAIAdapter(self.base + "/v1/chat/completions", "m", 30).complete(READ)
+        self.assertEqual((completion.copy_retries, completion.copy_passed, len(base.FakeUpstream.seen)), (0, 0, 1))
+        # An edit of another file is no move.
+        base.FakeUpstream.seen = []
+        other = [move[0], self.call("edit_file", path="textutil/textutil.go", patch="p")]
+        replies = [(200, base.openai_reply(calls=other), {}), (200, base.openai_reply(calls=move), {})]
+        base.FakeUpstream.reply = lambda _body: replies[len(base.FakeUpstream.seen) - 1]
+        completion = adapters.OpenAIAdapter(self.base + "/v1/chat/completions", "m", 30).complete(READ)
+        self.assertEqual((completion.copy_retries, completion.copy_passed, len(base.FakeUpstream.seen)), (1, 0, 2))
+        # The correction names moving as the legitimate exception.
+        text = base.FakeUpstream.seen[1][2]["messages"][-1]["content"]
+        self.assertIn("unless the issue asks you to move it", text)
+        self.assertIn("remove it from %s with edit_file" % json.dumps(EXISTING), text)
 
 
 class FinalMessageCopyTests(base.UpstreamCase):
