@@ -52,6 +52,7 @@ that must pass before consequential actions. The detailed controls are in
 | Credential | Holder | Notes |
 |---|---|---|
 | GitHub credential | Intake (read) and release manager (write) | Imported with `./install.sh credentials`. Today this is a personal session token; a GitHub App with least-privilege installation scopes is planned. |
+| Source read credential (optional) | Verifier controller container only | `ai-sdlc-source-reader`, supplied by the administrator and mounted with `verifier.sourceCredential`. A read-only token scoped to the configured repository, used only for the source reads of verification and review. Never mounted into the model gateway sidecar or any verification, test or reviewer pod, and never placed in prompts, logs, proofs or reports. Without it those reads are anonymous ([source availability](operations/source-availability.md#authenticated-verification-and-review-reads)). |
 | Model provider credential | Model gateway only | Mounted from a Secret named in the reviewed upstream configuration. Executor and reviewer pods never receive it. |
 | Database credentials | One per component | Created by the migrator; a component can access only its own grants. |
 | Signing identities | One per component | Ed25519 keys in per-component Secrets. Public keys are bound into the installed policy. |
