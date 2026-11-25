@@ -70,14 +70,37 @@ var rules = []rule{
 	{RuleAzureStorageKey, regexp.MustCompile(`(?:^|[^A-Za-z0-9])AccountKey=([A-Za-z0-9+/]{86}==)`), random},
 }
 
+// matches reports whether an accepted value of the rule occurs in line. The
+// right boundary consumes the character after a value, so a scan that
+// resumed after the whole match would miss a value that starts right after a
+// rejected one (a placeholder or documented example followed by a real
+// token). Each search therefore resumes at the end of the value itself; the
+// boundary character there satisfies the next value's left boundary, and
+// the anchor ^ cannot match inside a token because that character is never
+// part of one.
+func (r rule) matches(line string) bool {
+	for pos := 0; pos < len(line); {
+		m := r.pattern.FindStringSubmatchIndex(line[pos:])
+		if m == nil {
+			return false
+		}
+		if r.accept(line[pos+m[2] : pos+m[3]]) {
+			return true
+		}
+		pos += m[3]
+	}
+	return false
+}
+
 // A private key needs its header and, on the same line after an escaped
 // newline or within the next lines, a base64 body: code that only names the
 // header (a PEM parser, a log message) does not match.
 var (
 	keyHeader     = regexp.MustCompile(`-----BEGIN (?:[A-Z0-9]+ ){0,3}PRIVATE KEY(?: BLOCK)?-----`)
 	keyInlineBody = regexp.MustCompile(`-----BEGIN (?:[A-Z0-9]+ ){0,3}PRIVATE KEY(?: BLOCK)?-----(?:\\r)?(?:\\n){1,2}([A-Za-z0-9+/]{40,})`)
-	keyBody       = regexp.MustCompile(`^[\s"'` + "`" + `]*([A-Za-z0-9+/]{40,})`)
-	keyArmor      = regexp.MustCompile(`^[\s"'` + "`" + `]*(?:Proc-Type|DEK-Info|Version|Comment):`)
+	// A body line may continue a string concatenation (`+ "MIIE..."`).
+	keyBody  = regexp.MustCompile(`^[\s"'` + "`" + `]*(?:\+[\s"'` + "`" + `]*)?([A-Za-z0-9+/]{40,})`)
+	keyArmor = regexp.MustCompile(`^[\s"'` + "`" + `]*(?:\+[\s"'` + "`" + `]*)?(?:Proc-Type|DEK-Info|Version|Comment):`)
 )
 
 // keyLookahead bounds the lines read after a private key header.
@@ -157,10 +180,8 @@ func scanFile(before, after []byte) (string, bool) {
 			continue
 		}
 		for _, r := range rules {
-			for _, m := range r.pattern.FindAllStringSubmatch(line, -1) {
-				if r.accept(m[1]) {
-					return r.id, true
-				}
+			if r.matches(line) {
+				return r.id, true
 			}
 		}
 	}

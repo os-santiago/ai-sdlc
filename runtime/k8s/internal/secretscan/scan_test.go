@@ -73,6 +73,8 @@ func TestEachRuleFindsItsSecretInAnAddedLine(t *testing.T) {
 		{RulePrivateKey, "deploy/key.pem", keyHeaderLine() + "\n" + keyBodyLine() + "\n" + "-----END RSA PRIVATE KEY-----\n"},
 		{RulePrivateKey, "config/sa.json", `{"private_key": "` + "-----BEGIN " + "PRIVATE" + " KEY-----\\n" + keyBodyLine() + `\n"}`},
 		{RulePrivateKey, "main.go", "const k = `" + keyHeaderLine() + "\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,00\n\n" + keyBodyLine() + "\n`\n"},
+		{RulePrivateKey, "Keys.java", "String k = \"" + keyHeaderLine() + "\\n\"\n    + \"" + keyBodyLine() + "\\n\"\n    + \"-----END RSA PRIVATE KEY-----\";"},
+		{RulePrivateKey, "keys.go", "k := \"" + keyHeaderLine() + "\\n\" +\n\t\"" + keyBodyLine() + "\\n\" +\n"},
 		{RulePrivateKey, "id_ed25519", "-----BEGIN " + "OPENSSH PRIVATE" + " KEY-----\n" + keyBodyLine() + "\n"},
 		{RuleAWSAccessKeyID, "main.go", `id := "` + awsKeyID() + `"`},
 		{RuleAWSAccessKeyID, "settings.yaml", "key: " + "AS" + "IA" + body(16, 11, base32)},
@@ -256,5 +258,42 @@ func TestLargeDeltaWithinBoundsScansQuickly(t *testing.T) {
 	many := strings.Repeat("value := compute(input) // "+strings.Repeat("x", 40)+"\n", 8000)
 	if f, ok := scan(t, map[string]string{"README.md": "base\n"}, map[string]string{"README.md": "base\n", "long.txt": long, "many.go": many}); ok {
 		t.Fatalf("unexpected finding %+v", f)
+	}
+}
+
+// The right boundary of one value must not hide the value right after it:
+// a rejected placeholder or documented example, or an accepted token,
+// followed by a real token after a single separator.
+func TestAdjacentValuesAreEachScanned(t *testing.T) {
+	cases := []struct{ rule, content string }{
+		{RuleGitHubToken, "gh" + "p_" + strings.Repeat("x", 36) + " " + githubClassic()},
+		{RuleGitHubToken, "gh" + "p_" + strings.Repeat("x", 36) + "," + githubClassic()},
+		{RuleAWSAccessKeyID, "AK" + "IAIOSFODNN7" + "EXAMPLE," + awsKeyID()},
+		{RuleAWSAccessKeyID, "AK" + "IAIOSFODNN7" + "EXAMPLE " + awsKeyID()},
+		{RuleGitLabToken, "gl" + "pat-" + strings.Repeat("X", 20) + " " + gitlabToken()},
+		{RuleGoogleAPIKey, "AI" + "za" + strings.Repeat("A", 35) + "," + googleKey()},
+		{RuleGitHubToken, githubClassic() + " " + "gh" + "o_" + body(36, 13, base62)},
+		{RuleAWSAccessKeyID, awsKeyID() + "," + "AS" + "IA" + body(16, 11, base32)},
+	}
+	for i, c := range cases {
+		if f, ok := added(t, "main.go", "package x\n"+c.content+"\n"); !ok || f.Rule != c.rule {
+			t.Errorf("case %d: finding = %+v, %v; want %s", i, f, ok, c.rule)
+		}
+	}
+	// Two rejected values side by side stay rejected.
+	if f, ok := added(t, "main.go", "gh"+"p_"+strings.Repeat("x", 36)+" gh"+"p_"+strings.Repeat("y", 36)+"\n"); ok {
+		t.Fatalf("unexpected finding %+v", f)
+	}
+}
+
+// Each rule matches only the accepted value after resuming, never a value
+// that starts inside the previous one.
+func TestResumingNeverMatchesInsideAToken(t *testing.T) {
+	r := rules[0] // aws-access-key-id
+	if r.id != RuleAWSAccessKeyID {
+		t.Fatal("rule order changed")
+	}
+	if r.matches("AK"+"IAIOSFODNN7"+"EXAMPLE") || r.matches("x"+awsKeyID()) || !r.matches(awsKeyID()) {
+		t.Fatal("boundaries")
 	}
 }
