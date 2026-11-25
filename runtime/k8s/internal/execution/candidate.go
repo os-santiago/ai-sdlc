@@ -90,3 +90,31 @@ func (l *Lifecycle) CaptureCandidate(ctx context.Context, exported []byte) (reco
 	l.captured = true
 	return record, nil
 }
+
+// Unchanged reports whether an exported workspace carries no change to keep:
+// its tree equals the original source tree or, for a repair, the rejected
+// candidate's tree it started from. It reads only the bounded export and the
+// prepared inputs; an export it cannot decode is not unchanged, so capture
+// refuses it with the same checks as any other.
+func (l *Lifecycle) Unchanged(exported []byte) bool {
+	if l == nil || len(exported) < 1 || len(exported) > workspacebundle.MaxWireBytes {
+		return false
+	}
+	result, err := workspacebundle.Decode(exported)
+	if err != nil {
+		return false
+	}
+	tree, err := result.TreeDigest()
+	if err != nil {
+		return false
+	}
+	source, err := workspacebundle.Decode(l.prepared.originalSource)
+	if err != nil {
+		return false
+	}
+	if original, e := source.TreeDigest(); e == nil && original == tree {
+		return true
+	}
+	assignment, err := executor.ParseAssignment(l.prepared.assignment, workspacebundle.Digest(l.prepared.assignment), time.Now())
+	return err == nil && assignment.Repair != nil && assignment.Repair.Reference.ParentTreeSHA256 == tree
+}

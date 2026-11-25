@@ -201,7 +201,9 @@ func Run(ctx context.Context, assignmentDigest string) int {
 	if p.Version == ReviewProfileVersion {
 		env = append(env, "SC_ROLE_MAX_FIXES=0")
 	}
+	started := time.Now()
 	err = runBounded(runCtx, "/usr/local/bin/scc", WorkspaceDirectory+"/repository", env, args)
+	elapsed := time.Since(started)
 	if err == nil {
 		if p.Version == ReviewProfileVersion && VerifySource(WorkspaceDirectory, a) != nil {
 			return 1
@@ -214,7 +216,9 @@ func Run(ctx context.Context, assignmentDigest string) int {
 			return 1
 		}
 		switch exit.ExitCode() {
-		case 10, 20, 21, 22, 23:
+		case 22:
+			return budgetExitCode(p, elapsed)
+		case 10, 20, 21, 23:
 			return exit.ExitCode()
 		}
 	}

@@ -16,11 +16,14 @@ Issue/model content cannot choose those capabilities. The sequence is:
 4. Acknowledge start, exchange model requests serially and recheck authority on
    every idle cycle and each broker boundary.
 5. Observe the original worker's zero exit, export and capture the unvalidated delta.
+   The launcher's step-budget exit 25 is exported and captured the same way,
+   once its observation is retained; see
+   [step-budget exit 25](../operations/executor-failure-diagnostics.md#step-budget-exit-25).
 6. Delete acknowledged resources using UID preconditions, including on failure.
 
 Completion is driven by the worker instance, not by a fixed call count, model
 prose or `finish_reason`. Duplicate reads must be byte/identity equivalent to
-the preceding request. Gaps, rebinding, nonzero exit, revoked authority,
+the preceding request. Gaps, rebinding, any other nonzero exit, revoked authority,
 ambiguous dispatch or cancellation stop the attempt; there is no provider retry.
 Read/exit races use a distinct transport outcome emitted only after validating
 the helper result and observing the original worker exit. Protocol rejection

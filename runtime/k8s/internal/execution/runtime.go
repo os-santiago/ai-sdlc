@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
@@ -201,9 +202,13 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if e != nil {
 		return "stopped", e
 	}
-	_, e = RunController(ctx, r.Component.DB, load, prep, client, admission, provider, func(ctx context.Context) (ModelPolicy, error) { _, _, e := load(ctx); return config.Model, e })
+	record, e := RunController(ctx, r.Component.DB, load, prep, client, admission, provider, func(ctx context.Context) (ModelPolicy, error) { _, _, e := load(ctx); return config.Model, e })
 	if e != nil {
 		return "stopped", e
+	}
+	if record.GenerationEnded == candidate.GenerationEndedStepBudget {
+		// Evaluation marker only; the candidate goes through the same gates.
+		return "candidate-captured generationEnded=" + candidate.GenerationEndedStepBudget, nil
 	}
 	return "candidate-captured", nil
 }

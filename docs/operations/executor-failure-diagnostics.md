@@ -1,9 +1,11 @@
 # Executor failure diagnostics
 
 A nonzero exit from the original executor stops the attempt before candidate
-export. The controller reobserves that same Pod and container instance, including
-the termination container ID and zero restarts. Within the original live claim
-it appends the bounded exit code to `execution_failures`, then cleans up.
+export, with one exception: the [step-budget exit](#step-budget-exit-25), whose
+change is exported for independent verification and review. The controller
+reobserves that same Pod and container instance, including the termination
+container ID and zero restarts. Within the original live claim it appends the
+bounded exit code to `execution_failures`, then cleans up.
 
 The worker can insert identity/code fields and read this table. It cannot supply
 the database observation time, update or delete a diagnostic. Identical repeated
@@ -37,11 +39,62 @@ possible above the default when the last call or tool outlasts the margin, for
 example a slow model whose call window is longer than an eighth of the budget;
 the stop line above still names it.
 
+#### Step-budget exit 25
+
+SCC ends a generation with exit 22 (`BUDGET_EXCEEDED`) when it runs out of its
+time budget or its tool-step budget. The launcher tells them apart from a fact
+it measures itself, never from SCC's output, summary or audit log, which the
+generated tools can write:
+
+- The pinned SCC checks its time budget before its step budget, before every
+  model call, and measures it from its own start, which is later than the
+  launcher's clock starts. The launcher configures no token budget, so time
+  and steps are the only budgets that end a generation run.
+- If SCC exits 22 strictly before its time budget (`--max-seconds`, above) has
+  elapsed on the launcher's monotonic clock, the time budget cannot have ended
+  it: the launcher exits **25**, the step budget.
+- At or after that point the cause is ambiguous, because a step budget reached
+  at the deadline looks the same, so the launcher keeps **22**. A time-out
+  therefore stays exit 22 and stops before export, as before. Reviewer runs
+  always keep 22.
+
+A step budget ending is a generator efficiency signal, not a safety signal: in
+the evaluation batteries the generator had usually made its change and seen the
+manifest test pass before it spent its remaining steps re-running variants. On
+exit 25 the controller first retains the observation in `execution_failures`
+(code 25). Only once that row exists does it run the same export and capture as
+a clean exit, with every bound (workspace bundle checks, size and change
+limits, the nonempty reconstructable delta, completed model handoffs). The
+store accepts a nonzero export receipt only for code 25 and only with that row
+for the same Pod, so every such candidate carries its durable marker. If the
+workspace holds no change (its tree equals the source tree, or the rejected
+candidate's tree for a repair), the attempt stops as `worker-exit
+workerExitCode=25 failureRecorded=true`. If the observation cannot be retained,
+it stops before export.
+
+A captured step-budget candidate is logged as `candidate reconciliation:
+candidate-captured generationEnded=step-budget`, and the durable records are the
+`execution_failures` row with code 25 next to an `execution_candidates` row for
+the same request, and the export receipt (`execution_effects` kind `export`)
+with `exitCode` 25. Verification, review, publication and merge do not read
+either: the candidate is the same unvalidated data as any other, and it must
+pass the repository tests in the pinned offline image, the test that must fail
+on the current code and the strict independent review. It is never stronger
+evidence than a clean exit, and a clean exit is not evidence of completeness
+either.
+
+This is the default for every installation and changes no configuration: the
+execution configuration, its digest and every compiled workload are unchanged.
+It applies on the bundled agent-CLI path as on a model upstream; there the
+16-call ledger usually ends a run first, as a provider refusal rather than an
+exit 22.
+
 #### Telling a time-out from a step-budget stop
 
-Code 22 is SCC's budget exhaustion for both its time and its tool-step budget.
-Both are failures, and partial changes are never promoted. The diagnostic keeps
-only the exit code, not SCC's summary, so tell them apart from durable records:
+Exit 25 is a step-budget stop. Exit 22 is now a time-out, or a step-budget stop
+reached at SCC's time budget. Before this launcher, code 22 covered both
+budgets; for those older records, or to look into an exit 22, use the durable
+records:
 
 - **Elapsed time.** Compare `execution_failures.observed_at` with the attempt's
   `execution_lifecycles.created_at`. A time-out ends at or after SCC's
