@@ -164,7 +164,8 @@ not match the test sources.
 - **Time budget.** Analysis runs inside the same 30-minute verification
   command window as the tests (`MaxCommandAge`). The candidate pod needs
   about `repeat × timeoutSeconds + commands × analysis timeout`, plus up to
-  300 s for image pulls and the ready wait. The manifest rules bound analysis
+  480 s of overhead (300 s for image pulls, 120 s for the ready wait and a 60 s
+  margin, as `repositorytests.DeadlineSeconds` adds). The manifest rules bound analysis
   to 600 s, but they do not check the sum against the window: a manifest
   near the test limits (for example `repeat: 3` with a 600 s timeout)
   already exceeds it without analysis. Keep the total well inside 30
@@ -196,9 +197,10 @@ not match the test sources.
     (`merge-authority-denied`), blocking every later merge.
 
   Selection only filters. It never changes historical evidence and grants
-  no authority. A queued review or publication request under the old
-  revision fails its proof check and lapses at its expiry, which is at most
-  the 30-minute command window.
+  no authority. A queued review under the old revision fails its proof check
+  and is rejected on the review controller's next poll. A queued publication
+  request under the old revision fails its proof check and lapses at its
+  expiry, at most the 30-minute command window.
 
   **Recovery.** A skipped pull request stays open, unmerged, with its work
   item still running, as for any other obsolete publication (see the
