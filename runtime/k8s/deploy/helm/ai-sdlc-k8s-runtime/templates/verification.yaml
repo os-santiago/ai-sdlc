@@ -168,6 +168,12 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: {name: {{ printf "%s-verifier" .Values.authority.databaseSecretPrefix }}, key: uri}
+            {{- if .Values.verifier.sourceCredential }}
+            {{- /* The repository-scoped read credential reaches only this
+                   container: never the model gateway sidecar, and never a
+                   verification, test or reviewer pod the verifier creates. */}}
+            - {name: AI_SDLC_SOURCE_CREDENTIAL_FILE, value: /var/run/ai-sdlc/source/credential.json}
+            {{- end }}
           ports: [{name: http, containerPort: 8087}{{ if .Values.metrics.enabled }}, {name: metrics, containerPort: {{ .Values.metrics.port }}}{{ end }}]
           readinessProbe: {httpGet: {path: /readyz, port: http}{{ with $.Values.probes.readinessTimeoutSeconds }}, timeoutSeconds: {{ . }}{{ end }}}
           livenessProbe: {httpGet: {path: /healthz, port: http}, initialDelaySeconds: 10}
@@ -188,6 +194,9 @@ spec:
             - {name: review-model-client, mountPath: /var/run/ai-sdlc/review-model, readOnly: true}
             {{- end }}
             - {name: kubernetes, mountPath: /var/run/ai-sdlc/kubernetes, readOnly: true}
+            {{- if .Values.verifier.sourceCredential }}
+            - {name: source-credential, mountPath: /var/run/ai-sdlc/source, readOnly: true}
+            {{- end }}
         {{- if .Values.review.enabled }}
         - name: model-gateway
           image: "{{ .Values.image.repository }}@{{ .Values.components.worker.digest }}"
@@ -261,6 +270,10 @@ spec:
 {{- end }}
         - name: identity
           secret: {secretName: {{ printf "%s-verifier" .Values.authority.identitySecretPrefix }}, defaultMode: 0440}
+        {{- if .Values.verifier.sourceCredential }}
+        - name: source-credential
+          secret: {secretName: ai-sdlc-source-reader, defaultMode: 0440, items: [{key: credential.json, path: credential.json}]}
+        {{- end }}
         - name: intake
           configMap: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-intake}
         - name: execution

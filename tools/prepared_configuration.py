@@ -187,8 +187,11 @@ class Configuration:
         import install
         raw=self.base_run(self.kubectl+['get','secrets','-n',platform.NAMESPACE,'-o','json'],capture_output=True,timeout=20).stdout
         if len(raw)>4*1024*1024:raise ValueError('Prepared credential inventory exceeded bound')
+        # source-reader is supplied by the administrator before preparation;
+        # like the other supplied credentials it is recorded as an original
+        # Secret, and one appearing mid-transition is refused as unrecorded.
         allowed={'ai-sdlc-'+x for x in ('postgres-app','database-roles','github-client','publication-client',
-            'codex-auth','model-client','review-model-client','provenance-registry')}
+            'codex-auth','model-client','review-model-client','provenance-registry','source-reader')}
         allowed.update('ai-sdlc-'+prefix+'-'+role for role in install.ALL_ROLES for prefix in ('identity','database'))
         observations={}
         for item in json.loads(raw)['items']:
@@ -358,6 +361,10 @@ def install_prepared(args,state,binaries,provider,execution_values):
     execution=copy.deepcopy(execution_values)
     execution['candidate']['credentialRevision']=candidate_install.model_credentials(kubectl,cluster_uid,args.codex_auth_file,installer=config)
     candidate_install.review_credentials(kubectl,cluster_uid,installer=config)
+    # The optional source read credential is referenced, never created: an
+    # administrator-supplied Secret present at begin() is an original
+    # credential whose custody check_secrets() keeps unchanged throughout.
+    candidate_install.apply_source_credential(execution,kubectl,cluster_uid,args.repository,installer=config)
     execution['publication']['credentialRevision']=install.configure_publication_client(kubectl,cluster_uid,args.repository,args.github_auth,installer=config)
     config.guard()
     execution['merge']['configJSON']=json.dumps(github_merge_install.reconcile(state,args.repository),sort_keys=True)

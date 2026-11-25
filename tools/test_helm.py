@@ -408,6 +408,68 @@ class ChartTests(unittest.TestCase):
             with self.subTest(bad=bad):
                 self.assertNotEqual(self.render_build(dict(base, metrics=bad)).returncode, 0)
 
+    def test_source_credential_mounts_only_into_the_verifier_container_when_set(self):
+        base = self.build_values()
+        before = self.render_build(base)
+        self.assertEqual(before.returncode, 0, before.stderr)
+        # Absent or false: recorded installations render byte-identically.
+        off = self.render_build(dict(base, verifier=dict(base['verifier'], sourceCredential=False)))
+        self.assertEqual(off.stdout, before.stdout)
+        self.assertNotIn('ai-sdlc-source-reader', before.stdout)
+        self.assertNotIn('AI_SDLC_SOURCE_CREDENTIAL_FILE', before.stdout)
+        for review in (True, False):
+            with self.subTest(review=review):
+                # With review: the maximal build installation; without: the
+                # verifier alone (no model gateway sidecar).
+                values = base if review else {'runtime': {'mode': 'verification'}, 'verifier': base['verifier']}
+                values = dict(values, verifier=dict(base['verifier'], sourceCredential=True))
+                on = self.render_build(values)
+                self.assertEqual(on.returncode, 0, on.stderr)
+                docs = [d for d in yaml.safe_load_all(on.stdout) if d]
+                # Exactly one workload references the Secret: the verifier
+                # Deployment, whose own container alone mounts it. The model
+                # gateway sidecar and every other workload never see it.
+                holders = []
+                for doc in docs:
+                    if doc['kind'] not in ('Deployment', 'StatefulSet', 'Job', 'Pod', 'DaemonSet', 'CronJob'):
+                        continue
+                    pod = doc['spec']['template']['spec']
+                    volumes = {v['name'] for v in pod.get('volumes', []) if v.get('secret', {}).get('secretName') == 'ai-sdlc-source-reader'}
+                    for container in pod.get('containers', []) + pod.get('initContainers', []):
+                        mounts = [m for m in container.get('volumeMounts', []) if m['name'] in volumes]
+                        env = [e for e in container.get('env', []) if e['name'] == 'AI_SDLC_SOURCE_CREDENTIAL_FILE']
+                        if mounts or env:
+                            holders.append((doc['metadata']['name'], container['name'], mounts, env))
+                    if volumes:
+                        self.assertEqual(doc['metadata']['name'], 'ai-sdlc-verifier')
+                        volume = next(v for v in pod['volumes'] if v['name'] in volumes)
+                        self.assertEqual(volume['secret'], {'secretName': 'ai-sdlc-source-reader', 'defaultMode': 0o440,
+                                                            'items': [{'key': 'credential.json', 'path': 'credential.json'}]})
+                self.assertEqual(holders, [('ai-sdlc-verifier', 'verifier',
+                                            [{'name': 'source-credential', 'mountPath': '/var/run/ai-sdlc/source', 'readOnly': True}],
+                                            [{'name': 'AI_SDLC_SOURCE_CREDENTIAL_FILE', 'value': '/var/run/ai-sdlc/source/credential.json'}])])
+                # Not through configuration either: no ConfigMap (including the
+                # ones the verifier's pods read) names the credential.
+                for doc in docs:
+                    if doc['kind'] == 'ConfigMap':
+                        self.assertNotIn('ai-sdlc-source-reader', json.dumps(doc))
+                        self.assertNotIn('/var/run/ai-sdlc/source', json.dumps(doc))
+                # Nothing else changes: no RBAC (the kubelet mounts the Secret).
+                plain = self.render_build(dict(values, verifier=base['verifier']))
+                strip = lambda text: (text
+                    .replace('\n            - {name: AI_SDLC_SOURCE_CREDENTIAL_FILE, value: /var/run/ai-sdlc/source/credential.json}', '')
+                    .replace('\n            - {name: source-credential, mountPath: /var/run/ai-sdlc/source, readOnly: true}', '')
+                    .replace('\n        - name: source-credential\n          secret: {secretName: ai-sdlc-source-reader, defaultMode: 0440, items: [{key: credential.json, path: credential.json}]}', ''))
+                self.assertEqual(strip(on.stdout), plain.stdout)
+        # Outside verification mode there is no verifier; the setting renders nothing.
+        for profile in ({}, {'runtime': {'mode': 'shadow'}}):
+            plain = self.render_build(profile)
+            ignored = self.render_build(dict(profile, verifier={'digest': '', 'sourceCredential': True}))
+            self.assertEqual((plain.returncode, ignored.stdout), (0, plain.stdout))
+        for bad in ('yes', 1, 'ai-sdlc-publication-client'):
+            with self.subTest(bad=bad):
+                self.assertNotEqual(self.render_build(dict(base, verifier=dict(base['verifier'], sourceCredential=bad))).returncode, 0)
+
     def test_review_gateway_tool_allowlist_renders_only_when_set_and_review_is_enabled(self):
         upstream = {'adapter': 'openai', 'upstream': {'url': 'http://192.0.2.10:8080', 'model': 'qwen3-coder', 'cidr': '192.0.2.10/32'}}
         review = {'enabled': True, 'configJSON': '{}'}

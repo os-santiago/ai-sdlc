@@ -15,7 +15,7 @@ below, or when a table row is no longer used. The same test scans the
 template source, so a new Secret reference cannot be added in a branch the
 renderings do not reach without updating this page.
 
-Observed against the chart at `0.4.0` on 2026-11-24.
+Observed against the chart at `0.4.0` on 2026-11-25.
 
 ## Lifecycle terms
 
@@ -56,6 +56,7 @@ needed only when its workload renders: the six core Deployments always, the
 | `ai-sdlc-model-client` | `token` | `runtime.mode` is `candidate` or `verification` | worker, and its model gateway | installer | generated once and adopted |
 | `ai-sdlc-review-model-client` | `token` | `runtime.mode=verification` | verifier, and its model gateway | installer | generated once and adopted |
 | `{modelGateway.upstream.credentialSecret}` (no default) | `credential` | `modelGateway.upstream.credentialSecret` is set with an upstream adapter | worker and verifier model gateways | administrator (the model-upstream upgrade; the installer refuses it at installation) | supplied |
+| `ai-sdlc-source-reader` | `credential.json` | `verifier.sourceCredential` is `true` (with `runtime.mode=verification`) | the verifier controller container only (`/var/run/ai-sdlc/source/credential.json`), for the source reads of verification and independent review; never the model gateway sidecar or any pod the verifier creates | administrator (or an external secret operator); the installer only references an existing one | supplied |
 | `ai-sdlc-provenance-registry` (`provenance.registryCredentialSecret`, which must equal `<release fullname>-provenance-registry`) | `credential.json` | `provenance.enabled` | provenance verifier | installer (`provenance_runtime_install.py`) | supplied |
 <!-- secret-contract:end -->
 
@@ -95,6 +96,16 @@ outside the release namespace.
   "actorID", "actorLogin", "token"}`. The intake configuration's
   `authorizedActorIDs` is derived from `actorID`.
 - `token` (model clients): 32 to 128 characters of `[A-Za-z0-9_-]`.
+- `credential.json` (source reader): `{"version": 1, "host": "github.com",
+  "repository": "<owner>/<name>", "access": "read", "token": "<token>"}`, at
+  most 8 KiB, no other field. Keys are matched exactly (case-sensitive) by
+  both the installer and the verifier. `repository` must equal the policy's repository
+  exactly; `token` is 20 to 4096 characters of `[A-Za-z0-9_.-]`. Use a token
+  that can only read that one repository, for example a fine-grained personal
+  access token restricted to it with only the *Contents: read* permission (and
+  the implied *Metadata: read*). Never reuse `ai-sdlc-github-client` or
+  `ai-sdlc-publication-client`: they hold a write-capable account token. See
+  [Source availability](source-availability.md#authenticated-verification-and-review-reads).
 - `auth.json`: the agent CLI's JSON authentication document, at most 16 KiB.
 
 ## Generating once without the installer

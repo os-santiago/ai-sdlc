@@ -150,10 +150,14 @@ func (c *Client) archiveURL(ctx context.Context, sha string) (string, error) {
 		}
 		return "", ErrSource
 	}
-	response.Body.Close()
 	if response.StatusCode != http.StatusFound {
-		return "", httpSourceError(response)
+		// Classify before closing: a secondary rate limit may be named only
+		// in the response body.
+		err := c.responseError(response)
+		response.Body.Close()
+		return "", err
 	}
+	response.Body.Close()
 	if len(response.Header.Values("Location")) != 1 {
 		return "", ErrSource
 	}

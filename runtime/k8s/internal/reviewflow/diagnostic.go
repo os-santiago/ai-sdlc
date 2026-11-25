@@ -33,7 +33,7 @@ func DiagnosticStage(err error) string {
 		switch stopped.Stage {
 		case "authority", "binding", "claim", "cleanup", "cleanup-pod", "cleanup-config", "cleanup-confirm", "commit", "config", "configuration", "expiry", "export",
 			"gateway-profile-unfit", "gateway-unavailable", "import", "model", "observation", "pod",
-			"preparation", "preparation-source-rate-limited", "queue", "readiness", "rejection", "rejection-commit", "request-changes", "sandbox-runtime-class", "start", "template":
+			"preparation", "preparation-source-rate-limited", "preparation-source-credential-rejected", "preparation-source-credential-invalid", "queue", "readiness", "rejection", "rejection-commit", "request-changes", "sandbox-runtime-class", "start", "template":
 			return stopped.Stage
 		}
 		for _, step := range []string{"cleanup-pod-", "cleanup-config-"} {

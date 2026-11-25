@@ -731,6 +731,11 @@ def _main(argv, stack):
         execution_values["candidate"]["credentialRevision"] = candidate_install.model_credentials(kubectl, cluster_uid, args.codex_auth_file, args.refresh_model_credential)
         if args.independent_review:
             candidate_install.review_credentials(kubectl, cluster_uid)
+        # Verification and review read source with the installation's
+        # repository-scoped read credential when the administrator supplied
+        # one; otherwise they stay anonymous (rendering unchanged).
+        if args.profile == 'verification':
+            candidate_install.apply_source_credential(execution_values, kubectl, cluster_uid, args.repository)
         if args.publication:
             execution_values['publication']['credentialRevision'] = configure_publication_client(kubectl, cluster_uid, args.repository, args.github_auth, args.refresh_github_credential, project_manifest=project_manifest)
         if not openshift:

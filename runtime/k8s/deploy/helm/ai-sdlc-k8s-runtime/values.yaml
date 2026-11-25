@@ -42,6 +42,12 @@ candidate:
   apiServerCIDRs: []
 verifier:
   digest: ""
+  # Mount the pre-existing Secret ai-sdlc-source-reader (key credential.json:
+  # a read-only token scoped to the configured repository) into the verifier
+  # container only, so verification and review read source authenticated
+  # instead of from the forge's anonymous quota. Never mounted into the pods
+  # the verifier creates. See docs/operations/helm-chart-secret-contract.md.
+  sourceCredential: false
 # Sandbox RuntimeClass for every executor, reviewer and verification pod. Use
 # the platform's standard sandbox class (for example gvisor on GKE Sandbox,
 # kata on OpenShift sandboxed containers, kata-mshv-vm-isolation on AKS Pod

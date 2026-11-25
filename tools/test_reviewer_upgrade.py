@@ -105,6 +105,27 @@ class ReviewerTargets(unittest.TestCase):
                     names = [e['name'] for e in gateway['env']]
                     self.assertEqual('AI_SDLC_MODEL_GATEWAY_TOOLS' in names, recorded)
 
+    def test_source_credential_is_inherited_as_recorded(self):
+        # The actual chart: an installation recorded without the source read
+        # credential never gains its mount; one recorded with it keeps it,
+        # in the verifier container only, in every phase.
+        image = install_images.REGISTRY + '@sha256:' + 'c' * 64
+        for recorded in (None, True):
+            with self.subTest(recorded=recorded):
+                source, render, compiler = self.source()
+                source['values']['verifier'].pop('sourceCredential', None)
+                if recorded is not None:
+                    source['values']['verifier']['sourceCredential'] = recorded
+                source['documents'] = render(source['values'])
+                result = reviewer_upgrade_targets.targets(source, image, render, compiler)
+                for phase in ('paused', 'staged', 'warming', 'armed', 'active'):
+                    self.assertEqual(result[phase]['values']['verifier'].get('sourceCredential'), recorded)
+                    mounted = {(d['metadata']['name'], c['name'])
+                               for d in result[phase]['documents'] if d['kind'] == 'Deployment'
+                               for c in d['spec']['template']['spec']['containers']
+                               if any(m['name'] == 'source-credential' for m in c.get('volumeMounts', []))}
+                    self.assertEqual(mounted, {('ai-sdlc-verifier', 'verifier')} if recorded else set(), phase)
+
     def test_unpinned_foreign_and_unchanged_images_rejected(self):
         source, render, compiler = self.source()
         for image in ('latest', 'another/image@sha256:' + 'c'*64,

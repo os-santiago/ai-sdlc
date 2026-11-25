@@ -70,6 +70,17 @@ class RefreshTargets(unittest.TestCase):
             self.assertEqual(active['review'].get('narrowModelTools'), recorded)
             self.assertEqual(set(active['review']), set(source['values']['review']))
 
+    def test_the_source_credential_is_inherited_as_recorded(self):
+        # Installations recorded without the source read credential never
+        # gain it; those recorded with it keep it.
+        for recorded in (None, True):
+            source = installed()
+            source['values']['verifier'].pop('sourceCredential', None)
+            if recorded is not None:
+                source['values']['verifier']['sourceCredential'] = recorded
+            active = run_targets(source)['active']['values']
+            self.assertEqual(active['verifier'].get('sourceCredential'), recorded)
+
     def test_the_readiness_probe_timeout_is_inherited_as_recorded(self):
         # Installations recorded before the setting never gain it; newer
         # ones keep it.
