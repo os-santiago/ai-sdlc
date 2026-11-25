@@ -124,6 +124,11 @@ func (c *Cache) Fetch(ctx context.Context, repository, sha string) (workspacebun
 		return workspacebundle.Bundle{}, c.failure
 	}
 	bundle, e := c.fetch(ctx, repository, sha)
+	if e != nil && CredentialInvalid(e) {
+		// A local credential file problem made no forge request: caching it
+		// saves no quota and would only outlive a rotation.
+		return workspacebundle.Bundle{}, e
+	}
 	if e != nil {
 		c.failedRepository, c.failedSHA, c.failure = repository, sha, e
 		c.retryAt = time.Now().Add(10 * time.Second)

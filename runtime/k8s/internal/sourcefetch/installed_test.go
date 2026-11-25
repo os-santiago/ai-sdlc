@@ -336,3 +336,70 @@ func TestCachedReaderReusesTheBundleAndBacksOffOnRateLimit(t *testing.T) {
 		t.Fatal("Cached changed the original reader")
 	}
 }
+
+// The #796 guarantees hold through the real Cached wiring: a valid
+// credential authenticates the cached read, a rejected one is a named stop
+// with no anonymous request, and an invalid file stops before any request
+// and is not cached (a fixed file takes effect at once).
+func TestCachedReaderKeepsCredentialGuarantees(t *testing.T) {
+	t.Run("authenticated", func(t *testing.T) {
+		forge := newFakeForge(t)
+		base, _ := InstalledReader(writeCredential(t, validCredential()))
+		base.adjust = forge.point
+		reader := base.Cached()
+		if _, err := reader.Fetch(context.Background(), "fixture/product", testSHA); err != nil {
+			t.Fatal(err)
+		}
+		api, archive := forge.calls()
+		for _, auth := range api {
+			if auth != "Bearer "+fakeReadToken {
+				t.Fatal("cached read not authenticated")
+			}
+		}
+		if len(api) == 0 {
+			t.Fatal("no forge read")
+		}
+		if _, err := reader.Fetch(context.Background(), "fixture/product", testSHA); err != nil {
+			t.Fatal(err)
+		}
+		if again, archiveAgain := forge.calls(); len(again) != len(api) || len(archiveAgain) != len(archive) {
+			t.Fatal("cached SHA read from the forge again")
+		}
+	})
+	t.Run("rejected", func(t *testing.T) {
+		forge := newFakeForge(t)
+		forge.apiStatus = 401
+		base, _ := InstalledReader(writeCredential(t, validCredential()))
+		base.adjust = forge.point
+		reader := base.Cached()
+		if _, err := reader.Fetch(context.Background(), "fixture/product", testSHA); !CredentialRejected(err) {
+			t.Fatal("rejection not named", err)
+		}
+		if api, archive := forge.calls(); len(api) != 1 || api[0] != "Bearer "+fakeReadToken || len(archive) != 0 {
+			t.Fatal("anonymous fallback or retry through the cache")
+		}
+	})
+	t.Run("invalid-not-cached", func(t *testing.T) {
+		forge := newFakeForge(t)
+		path := writeCredential(t, validCredential())
+		if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		base, _ := InstalledReader(path)
+		base.adjust = forge.point
+		reader := base.Cached()
+		if _, err := reader.Fetch(context.Background(), "fixture/product", testSHA); !CredentialInvalid(err) {
+			t.Fatal("invalid credential not named", err)
+		}
+		if api, archive := forge.calls(); len(api) != 0 || len(archive) != 0 {
+			t.Fatal("request made with an invalid credential")
+		}
+		raw, _ := json.Marshal(validCredential())
+		if err := os.WriteFile(path, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := reader.Fetch(context.Background(), "fixture/product", testSHA); err != nil {
+			t.Fatal("fixed credential did not take effect at once", err)
+		}
+	})
+}

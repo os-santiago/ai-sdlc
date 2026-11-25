@@ -54,7 +54,9 @@ type installedCredential struct {
 // Secret takes effect without a restart), kept in memory for that fetch only,
 // and sent only to the fixed API host for the credential's own repository.
 // A credential that cannot be loaded or that the forge rejects stops the
-// fetch; it never falls back to an anonymous read.
+// fetch; it never falls back to an anonymous read. A Cached reader serves the
+// bundle of the last pinned SHA without a forge read, so such a hit needs no
+// credential.
 //
 // A Reader from Cached shares one Cache across its copies: the verified
 // bundle of the last pinned SHA is reused, and an availability failure (a
@@ -62,6 +64,9 @@ type installedCredential struct {
 type Reader struct {
 	path  string
 	cache *Cache
+	// adjust, set only by tests, redirects each client the Reader builds
+	// (to a fake forge).
+	adjust func(*Client)
 }
 
 // Cached returns r backed by one shared source cache. The verifier's
@@ -72,7 +77,7 @@ type Reader struct {
 // read still loads the token from the mounted file.
 func (r Reader) Cached() Reader {
 	c := NewCache()
-	uncached := Reader{path: r.path}
+	uncached := Reader{path: r.path, adjust: r.adjust}
 	c.fetch = uncached.Fetch
 	r.cache = c
 	return r
@@ -113,6 +118,14 @@ func (r Reader) Fetch(ctx context.Context, repository, sha string) (workspacebun
 }
 
 func (r Reader) client(repository string) (*Client, error) {
+	client, err := r.build(repository)
+	if err == nil && r.adjust != nil {
+		r.adjust(client)
+	}
+	return client, err
+}
+
+func (r Reader) build(repository string) (*Client, error) {
 	if r.path == "" {
 		return New(repository, "")
 	}

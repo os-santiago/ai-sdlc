@@ -56,8 +56,9 @@ func main() {
 	if err != nil {
 		log.Fatal("invalid source credential configuration")
 	}
-	// One cache shared by verification and review: both read the same pinned
-	// SHA on every reconcile tick (see sourcefetch.Reader.Cached).
+	// One cache shared by verification and review, which run one after the
+	// other on every reconcile tick and read the same pinned SHA (see
+	// sourcefetch.Reader.Cached).
 	source = source.Cached()
 	loadReview := func(ctx context.Context) (reviewflow.Configuration, error) {
 		if ctx.Err() != nil {
