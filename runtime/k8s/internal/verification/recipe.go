@@ -11,6 +11,7 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repositorytests"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/secretscan"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
@@ -104,8 +105,10 @@ func RecipeRevision() string {
 func RevisionForRecipe(recipe string) string {
 	if recipe == repositorytests.Recipe {
 		// The settings are bound by the policy's project digest; the revision
-		// binds the decision rules.
-		return workspacebundle.Digest([]byte(repositorytests.Recipe + "\x00" + repositorytests.RulesVersion))
+		// binds the decision rules and the candidate secret scan, so neither
+		// a verification command nor a publication command signed under other
+		// rules is accepted.
+		return workspacebundle.Digest([]byte(repositorytests.Recipe + "\x00" + repositorytests.RulesVersion + "\x00" + secretscan.Version))
 	}
 	directory := recipeDirectory(recipe)
 	if directory == "" {
