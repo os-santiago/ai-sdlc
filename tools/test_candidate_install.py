@@ -358,6 +358,60 @@ class CandidateInstallTests(unittest.TestCase):
             self.assertEqual(revision, '102')
             self.assertEqual([json.loads(value)['test_identity'] for value in writes], ['B'])
 
+    def test_source_credential_is_referenced_only_when_valid(self):
+        # A fake token with a fine-grained token's shape; never a real credential.
+        token = 'github_pat_' + 'F' * 82
+        valid = {'version': 1, 'host': 'github.com', 'repository': 'fixture/product', 'access': 'read', 'token': token}
+        def check(secret):
+            with patch.object(install, 'owned_secret', return_value=secret) as owned:
+                result = candidate_install.source_credential(['kubectl'], 'uid', 'fixture/product')
+            owned.assert_called_once_with(['kubectl'], 'ai-sdlc-source-reader', 'uid')
+            return result
+        self.assertIs(check(None), False)
+        self.assertIs(check({'credential.json': json.dumps(valid)}), True)
+        write_client = {'version': 1, 'mode': 'gh-cli', 'host': 'github.com', 'repository': 'fixture/product',
+                        'actorID': 1, 'actorLogin': 'fixture', 'token': token}
+        bad = [{'credential.json': json.dumps(dict(valid, repository='other/product'))},
+               {'credential.json': json.dumps(dict(valid, access='write'))},
+               {'credential.json': json.dumps(dict(valid, version=True))},
+               {'credential.json': json.dumps(dict(valid, host='github.example'))},
+               {'credential.json': json.dumps(dict(valid, token='short'))},
+               {'credential.json': json.dumps(dict(valid, token=token + '\n'))},
+               {'credential.json': json.dumps(write_client)},
+               {'credential.json': json.dumps(valid)[:-1] + ', "token": "' + 'x' * 32 + '"}'},
+               {'credential.json': json.dumps(valid), 'token': token},
+               {'credential.json': '[]'}, {'credential.json': '{'}, {'credential.json': ' ' * 8193}]
+        for secret in bad:
+            with self.subTest(secret=sorted(secret)), self.assertRaises(ValueError) as raised:
+                check(secret)
+            self.assertNotIn(token, str(raised.exception))
+            self.assertIn('ai-sdlc-source-reader', str(raised.exception))
+        # A Secret this installation does not own is refused, never adopted.
+        with patch.object(install, 'owned_secret', side_effect=ValueError('Refusing to adopt')):
+            with self.assertRaises(ValueError):
+                candidate_install.source_credential(['kubectl'], 'uid', 'fixture/product')
+        # The prepared installer's own Secret reader is honoured.
+        class Installer:
+            def owned_secret(self, *_):
+                return {'credential.json': json.dumps(valid)}
+        self.assertIs(candidate_install.source_credential(['kubectl'], 'uid', 'fixture/product', installer=Installer()), True)
+        # Verification values gain the reference only when the Secret exists.
+        lock_path = install.LOCAL / 'images.lock.json'
+        evidence = json.loads(lock_path.with_name('images.evidence.json').read_text())
+        evidence['images']['verifier'] = dict(evidence['images']['worker'], component='verifier')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'images.lock.json'
+            path.with_name('images.evidence.json').write_text(json.dumps(evidence))
+            desired = candidate_install.desired_values(install.ROOT, path, install.image_lock(lock_path), verification=True, review=True)
+        for secret, expected in ((None, None), ({'credential.json': json.dumps(valid)}, True)):
+            values = copy.deepcopy(desired)
+            with patch.object(install, 'owned_secret', return_value=secret):
+                candidate_install.apply_source_credential(values, ['kubectl'], 'uid', 'fixture/product')
+            self.assertEqual(values['verifier'].get('sourceCredential'), expected)
+            values['verifier'].pop('sourceCredential', None)
+            self.assertEqual(values, desired)
+        self.assertNotIn('sourceCredential', desired['verifier'])
+
     def test_verification_requires_exact_published_identity(self):
         lock_path = install.LOCAL / 'images.lock.json'
         lock = install.image_lock(lock_path)

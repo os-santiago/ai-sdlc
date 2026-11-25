@@ -304,6 +304,60 @@ def review_credentials(kubectl, cluster_uid, installer=None):
         raise ValueError('Invalid independent review model client identity')
 
 
+# The optional repository-scoped source read credential (#741). Supplied by
+# the administrator; the installer never creates, imports or prints it.
+SOURCE_CREDENTIAL_SECRET = 'ai-sdlc-source-reader'
+_SOURCE_TOKEN = re.compile(r'[A-Za-z0-9_.-]{20,4096}')
+
+
+def source_credential(kubectl, cluster_uid, repository, installer=None):
+    """Return True when the installation already holds a valid source read
+    credential for repository, so the verifier may mount it.
+
+    Only a Secret owned by this installation (the cluster-UID annotation) with
+    exactly the documented credential.json is referenced. Its token is checked
+    for shape only and never leaves this function: errors name the Secret,
+    never its content. Its real scope is the forge's to enforce; the document
+    must declare read access to exactly the configured repository."""
+    from install import owned_secret
+    if installer is not None:
+        owned_secret = installer.owned_secret
+    current = owned_secret(kubectl, SOURCE_CREDENTIAL_SECRET, cluster_uid)
+    if current is None:
+        return False
+    invalid = ValueError('Invalid source read credential Secret ' + SOURCE_CREDENTIAL_SECRET
+                         + '; see docs/operations/helm-chart-secret-contract.md')
+    if set(current) != {'credential.json'} or len(current['credential.json']) > 8192:
+        raise invalid
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise invalid
+            result[key] = value
+        return result
+    try:
+        document = json.loads(current['credential.json'], object_pairs_hook=unique)
+    except ValueError:
+        raise invalid from None
+    if (not isinstance(document, dict)
+            or set(document) != {'version', 'host', 'repository', 'access', 'token'}
+            or document['version'] != 1 or type(document['version']) is not int
+            or document['host'] != 'github.com' or document['access'] != 'read'
+            or document['repository'] != repository
+            or not isinstance(document['token'], str) or not _SOURCE_TOKEN.fullmatch(document['token'])):
+        raise invalid
+    return True
+
+
+def apply_source_credential(values, kubectl, cluster_uid, repository, installer=None):
+    """Reference an existing source read credential in verification values.
+    Without one the values, and so the rendered chart, stay unchanged."""
+    if source_credential(kubectl, cluster_uid, repository, installer):
+        values['verifier']['sourceCredential'] = True
+    return values
+
+
 def apply_model_upstream(values, path):
     """Select a reviewed OpenAI-compatible model service at installation: the
     gateways use the openai adapter against one private endpoint, and the
