@@ -133,6 +133,13 @@ func preparationProofStatus(ctx context.Context, db *store.DB, load PreparationL
 		status = "running"
 	}
 	snapshot, err := verifiedSnapshotStatus(ctx, db, in.Policy, in.Intake, c, status)
+	// Stale but otherwise unchanged evidence does not stop the remaining
+	// checks: any of them that refuses names its own step at once, and stale
+	// is returned only when every other check passed.
+	var stale error
+	if errors.Is(err, errSnapshotStale) {
+		stale, snapshot, err = staleEvidence{wait: staleEvidenceWait(in.Intake.PollSeconds)}, intake.Snapshot{}, nil
+	}
 	if err != nil {
 		return fail("snapshot")
 	}
@@ -161,6 +168,11 @@ func preparationProofStatus(ctx context.Context, db *store.DB, load PreparationL
 	}
 	if _, err = verifyRecord(latest.Policy, r); err != nil {
 		return fail("record")
+	}
+	if stale != nil {
+		// The command and inputs let the lifecycle finish its own checks; a
+		// stale result authorizes nothing, and no snapshot is returned.
+		return c, intake.Snapshot{}, in, stale
 	}
 	return c, snapshot, in, nil
 }

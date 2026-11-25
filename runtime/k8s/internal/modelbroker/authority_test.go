@@ -171,7 +171,7 @@ func TestBrokerNamesTheAuthorityRefusalStep(t *testing.T) {
 }
 
 func TestAuthorizationRefusalStagesAreBounded(t *testing.T) {
-	for _, good := range []string{"authorization-reservation-busy", "authorization-dispatch-claim-expired", "authorization-publication-snapshot", "authorization-publication-scope-expired"} {
+	for _, good := range []string{"authorization-reservation-busy", "authorization-dispatch-claim-expired", "authorization-publication-snapshot", "authorization-publication-snapshot-stale", "authorization-publication-scope-expired"} {
 		if SafeFailureStage(good) != good {
 			t.Fatal(good)
 		}
@@ -231,5 +231,219 @@ func TestBrokerDuplicateHandoffStillRequiresCurrentAuthority(t *testing.T) {
 	}
 	if invoked.Load() != 1 || published.Load() != 1 {
 		t.Fatal("duplicate replayed effect")
+	}
+}
+
+// fixtureStaleEvidence is the execution lifecycle's snapshot-stale refusal:
+// unchanged issue evidence older than its window, with a bounded wait.
+type fixtureStaleEvidence time.Duration
+
+func (e fixtureStaleEvidence) Error() string               { return "sensitive arbitrary exception" }
+func (e fixtureStaleEvidence) AuthorityStep() string       { return "snapshot-stale" }
+func (e fixtureStaleEvidence) EvidenceWait() time.Duration { return time.Duration(e) }
+
+func fastStaleEvidenceRetry(t *testing.T) {
+	t.Helper()
+	previous := staleEvidenceRetry
+	staleEvidenceRetry = 10 * time.Millisecond
+	t.Cleanup(func() { staleEvidenceRetry = previous })
+}
+
+// After the provider answered, publication authorization refuses with the
+// given error until fresh is reached (or forever when fresh is negative).
+func publicationAuthorityFixture(t *testing.T, refusal error, fresh int32) (Result, int32, int32, time.Duration, error) {
+	t.Helper()
+	fastStaleEvidenceRetry(t)
+	var answered atomic.Bool
+	var published, refusals atomic.Int32
+	d, a, profile, request := brokerFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		answered.Store(true)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(completionBody)
+	}, publisherFunc(func(context.Context, modelmailbox.Envelope) error { published.Add(1); return nil }))
+	d.Authority = fixtureAuthority(func(ctx context.Context, scope store.ModelScope) (time.Time, error) {
+		if answered.Load() && (fresh < 0 || refusals.Load() < fresh) {
+			refusals.Add(1)
+			return time.Time{}, refusal
+		}
+		return scope.ExpiresAt, ctx.Err()
+	})
+	started := time.Now()
+	result, err := d.Deliver(context.Background(), a.ID, profile, request)
+	return result, refusals.Load(), published.Load(), time.Since(started), err
+}
+
+func TestBrokerWaitsForStaleEvidenceToBecomeFresh(t *testing.T) {
+	result, refusals, published, _, err := publicationAuthorityFixture(t, fixtureStaleEvidence(time.Second), 3)
+	if err != nil || !result.HandoffConfirmed || result.Outcome != "handed-off" || published != 1 || refusals != 3 {
+		t.Fatalf("fresh evidence within the bound did not proceed: err=%v stage=%q refusals=%d published=%d", err, result.FailureStage, refusals, published)
+	}
+}
+
+func TestBrokerStaleEvidenceThatStaysStaleRefusesByName(t *testing.T) {
+	result, refusals, published, took, err := publicationAuthorityFixture(t, fixtureStaleEvidence(200*time.Millisecond), -1)
+	if !errors.Is(err, ErrUncertain) || result.HandoffConfirmed || published != 0 || result.FailureStage != "authorization-publication-snapshot-stale" {
+		t.Fatalf("stale evidence accepted or unnamed: err=%v stage=%q published=%d", err, result.FailureStage, published)
+	}
+	if refusals < 2 || took < 150*time.Millisecond || took > 5*time.Second {
+		t.Fatalf("wait not bounded by the refusal: refusals=%d took=%v", refusals, took)
+	}
+}
+
+func TestBrokerChangedSnapshotRefusesWithoutWaiting(t *testing.T) {
+	for step, refusal := range map[string]error{"snapshot": fixtureAuthorityStop("snapshot"), "authority": errors.New("revoked")} {
+		t.Run(step, func(t *testing.T) {
+			result, refusals, published, _, err := publicationAuthorityFixture(t, refusal, -1)
+			if !errors.Is(err, ErrUncertain) || published != 0 || refusals != 1 || result.FailureStage != "authorization-publication-"+step {
+				t.Fatalf("changed snapshot waited or proceeded: err=%v stage=%q refusals=%d published=%d", err, result.FailureStage, refusals, published)
+			}
+		})
+	}
+}
+
+// A request that aged in the mailbox (the generation loop waited for fresh
+// evidence before delivering it) is refused as provider-time, before anything
+// is reserved, when the provider would be left less than minimumProviderTime,
+// even though current authority passes on the first check.
+func TestBrokerRefusesAnAgedRequestWithoutSpendingACall(t *testing.T) {
+	for name, tc := range map[string]struct {
+		remaining time.Duration
+		refused   bool
+	}{
+		"aged":   {15*time.Second + providerReserve - time.Second, true},
+		"enough": {15*time.Second + providerReserve + 2*time.Second, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var invoked atomic.Int32
+			d, a, profile, request := brokerFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				invoked.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(completionBody)
+			}, publisherFunc(func(context.Context, modelmailbox.Envelope) error { return nil }))
+			request.ExpiresAt = time.Now().Add(tc.remaining).UnixMilli()
+			result, err := d.Deliver(context.Background(), a.ID, profile, request)
+			if !tc.refused {
+				if err != nil || !result.HandoffConfirmed || invoked.Load() != 1 {
+					t.Fatalf("request with enough time refused: err=%v stage=%q", err, result.FailureStage)
+				}
+				return
+			}
+			if !errors.Is(err, ErrRejected) || result.FailureStage != "provider-time" || SafeFailureStage("provider-time") != "provider-time" || result.DispatchAttempted || invoked.Load() != 0 {
+				t.Fatalf("aged request not refused by name: err=%v stage=%q", err, result.FailureStage)
+			}
+			var count int
+			if err := d.DB.Pool.QueryRow(`SELECT count(*) FROM model_calls WHERE allocation_id=$1`, a.ID).Scan(&count); err != nil || count != 0 {
+				t.Fatal("an aged request spent a call")
+			}
+		})
+	}
+}
+
+// A reservation wait leaves the last check and the provider providerReserve
+// before the mailbox deadline (its expiry less 15 s), even with an hour-long
+// bound. When less than that remains it does not wait at all, and nothing is
+// reserved.
+func TestBrokerStaleEvidenceWaitLeavesProviderTime(t *testing.T) {
+	for name, tc := range map[string]struct {
+		remaining time.Duration
+		waits     bool
+	}{
+		"ends-before-the-mailbox": {15*time.Second + providerReserve + 300*time.Millisecond, true},
+		"too-late-to-wait":        {15*time.Second + providerReserve - time.Second, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fastStaleEvidenceRetry(t)
+			var invoked atomic.Int32
+			d, a, profile, request := brokerFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				invoked.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(completionBody)
+			}, publisherFunc(func(context.Context, modelmailbox.Envelope) error { return nil }))
+			request.ExpiresAt = time.Now().Add(tc.remaining).UnixMilli()
+			var checks atomic.Int32
+			d.Authority = fixtureAuthority(func(ctx context.Context, scope store.ModelScope) (time.Time, error) {
+				checks.Add(1)
+				return time.Time{}, fixtureStaleEvidence(time.Hour)
+			})
+			started := time.Now()
+			result, err := d.Deliver(context.Background(), a.ID, profile, request)
+			if err == nil || result.FailureStage != "authorization-reservation-snapshot-stale" || time.Since(started) > 2*time.Second || (checks.Load() > 1) != tc.waits {
+				t.Fatalf("err=%v stage=%q took=%v checks=%d", err, result.FailureStage, time.Since(started), checks.Load())
+			}
+			var count int
+			if err := d.DB.Pool.QueryRow(`SELECT count(*) FROM model_calls WHERE allocation_id=$1`, a.ID).Scan(&count); err != nil || count != 0 || invoked.Load() != 0 {
+				t.Fatal("a refused stale wait spent a call")
+			}
+		})
+	}
+}
+
+// A dispatch-stage wait: the call is claimed, evidence is stale at the
+// dispatch check and becomes fresh within the bound, so the provider is called
+// once and the response handed off.
+func TestBrokerDispatchWaitsForStaleEvidence(t *testing.T) {
+	fastStaleEvidenceRetry(t)
+	var invoked, published, checks atomic.Int32
+	d, a, profile, request := brokerFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		invoked.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(completionBody)
+	}, publisherFunc(func(context.Context, modelmailbox.Envelope) error { published.Add(1); return nil }))
+	d.Authority = fixtureAuthority(func(ctx context.Context, scope store.ModelScope) (time.Time, error) {
+		// Check 1 is the reservation; checks 2-4 are the dispatch check.
+		if n := checks.Add(1); n >= 2 && n <= 4 {
+			if invoked.Load() != 0 {
+				t.Error("provider called while evidence was stale")
+			}
+			return time.Time{}, fixtureStaleEvidence(time.Second)
+		}
+		return scope.ExpiresAt, ctx.Err()
+	})
+	result, err := d.Deliver(context.Background(), a.ID, profile, request)
+	if err != nil || !result.HandoffConfirmed || invoked.Load() != 1 || published.Load() != 1 || checks.Load() != 6 {
+		t.Fatalf("dispatch wait: err=%v stage=%q invoked=%d published=%d checks=%d", err, result.FailureStage, invoked.Load(), published.Load(), checks.Load())
+	}
+}
+
+// Stale evidence that turns into a revocation partway through the wait
+// refuses at once by the revocation's own step.
+func TestBrokerStaleEvidenceTurningIntoRevocationRefusesAtOnce(t *testing.T) {
+	fastStaleEvidenceRetry(t)
+	var answered atomic.Bool
+	var published, refusals atomic.Int32
+	d, a, profile, request := brokerFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		answered.Store(true)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(completionBody)
+	}, publisherFunc(func(context.Context, modelmailbox.Envelope) error { published.Add(1); return nil }))
+	d.Authority = fixtureAuthority(func(ctx context.Context, scope store.ModelScope) (time.Time, error) {
+		if !answered.Load() {
+			return scope.ExpiresAt, ctx.Err()
+		}
+		if refusals.Add(1) <= 2 {
+			return time.Time{}, fixtureStaleEvidence(time.Minute)
+		}
+		return time.Time{}, fixtureAuthorityStop("model-policy")
+	})
+	started := time.Now()
+	result, err := d.Deliver(context.Background(), a.ID, profile, request)
+	if !errors.Is(err, ErrUncertain) || published.Load() != 0 || refusals.Load() != 3 || result.FailureStage != "authorization-publication-model-policy" || time.Since(started) > 5*time.Second {
+		t.Fatalf("err=%v stage=%q refusals=%d published=%d", err, result.FailureStage, refusals.Load(), published.Load())
+	}
+}
+
+// The scope's expiry bounds a stale wait, whatever the refusal's own bound.
+func TestStaleEvidenceWaitEndsAtScopeExpiry(t *testing.T) {
+	fastStaleEvidenceRetry(t)
+	var checks atomic.Int32
+	d := Dispatcher{Authority: fixtureAuthority(func(context.Context, store.ModelScope) (time.Time, error) {
+		checks.Add(1)
+		return time.Time{}, fixtureStaleEvidence(time.Hour)
+	})}
+	started := time.Now()
+	_, err := d.authorizeWaiting(context.Background(), store.ModelScope{ExpiresAt: started.Add(300 * time.Millisecond)}, started.Add(time.Hour))
+	var refused authorizationRefusal
+	if took := time.Since(started); !errors.As(err, &refused) || refused != "snapshot-stale" || took < 250*time.Millisecond || took > 2*time.Second || checks.Load() < 2 {
+		t.Fatalf("err=%v took=%v checks=%d", err, took, checks.Load())
 	}
 }

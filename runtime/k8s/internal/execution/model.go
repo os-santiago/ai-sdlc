@@ -166,11 +166,14 @@ func (l *Lifecycle) Authorize(ctx context.Context, scope store.ModelScope) (unti
 	_, phase, err := l.proofPhase(ctx)
 	if err != nil {
 		var named authorityStop
+		var stale staleEvidence
 		switch {
 		case ctx.Err() != nil:
 			return time.Time{}, authorityStop("deadline")
 		case errors.As(err, &named):
 			return time.Time{}, named
+		case errors.As(err, &stale):
+			return time.Time{}, stale
 		}
 		return time.Time{}, authorityStop("authority")
 	}
@@ -191,3 +194,24 @@ type authorityStop string
 func (e authorityStop) Error() string         { return "execution authority refused at " + string(e) }
 func (e authorityStop) Unwrap() error         { return ErrAuthority }
 func (e authorityStop) AuthorityStep() string { return string(e) }
+
+// staleEvidence refuses like any authority stop, at the step snapshot-stale:
+// the issue evidence is unchanged but older than the evidence window (for
+// example after one incomplete intake scan). EvidenceWait bounds how long a
+// caller may wait for a later complete scan to refresh it before refusing
+// with the same step. Waiting never extends the claim, scope or call deadline,
+// and a changed snapshot is the step snapshot instead, never this one.
+type staleEvidence struct{ wait time.Duration }
+
+func (e staleEvidence) Error() string               { return "execution authority refused at snapshot-stale" }
+func (e staleEvidence) Unwrap() error               { return ErrAuthority }
+func (e staleEvidence) AuthorityStep() string       { return "snapshot-stale" }
+func (e staleEvidence) EvidenceWait() time.Duration { return e.wait }
+
+// staleEvidenceWait is one poll interval, but at least the intake's 60-second
+// retry after a first incomplete scan, plus 30 seconds for that scan to finish,
+// at most two minutes.
+func staleEvidenceWait(pollSeconds int) time.Duration {
+	wait := max(time.Duration(pollSeconds)*time.Second, 60*time.Second) + 30*time.Second
+	return min(wait, 2*time.Minute)
+}

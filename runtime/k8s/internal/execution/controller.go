@@ -88,7 +88,7 @@ func DiagnosticStage(err error) string {
 		}
 	}
 	switch stopped.Stage {
-	case "source-preflight-authority", "sandbox-runtime-class", "source-rate-limited", "source-unavailable", "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "execution-authority", "execution-observe", "execution-read", "execution-sequence", "execution-exit-race", "worker-exit", "export", "capture", "cleanup", "cleanup-pod", "cleanup-config", "cleanup-confirm":
+	case "source-preflight-authority", "sandbox-runtime-class", "source-rate-limited", "source-unavailable", "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "execution-authority", "execution-authority-snapshot-stale", "execution-observe", "execution-read", "execution-sequence", "execution-exit-race", "worker-exit", "export", "capture", "cleanup", "cleanup-pod", "cleanup-config", "cleanup-confirm":
 		return stopped.Stage
 	}
 	if strings.HasPrefix(stopped.Stage, "model-") {
@@ -311,12 +311,36 @@ type modelSession interface {
 // driveModel waits for the original worker's exit rather than a prescribed
 // response count. Every idle cycle rechecks authority. A duplicate observation
 // is allowed only for the exact last request; sequence gaps/rebinding stop it.
+//
+// Authority refused only because the issue evidence is stale (snapshot-stale)
+// is checked again, without observing, reading or delivering anything, until
+// the refusal's own bound; then it stops as execution-authority-snapshot-stale.
+// Any other refusal, and the end of ctx (the claim), stop at once as before.
 func driveModel(ctx context.Context, session modelSession, authorize func(context.Context) error, deliver func(context.Context, modelmailbox.Envelope) error) error {
 	var previous modelmailbox.Envelope
+	var staleUntil time.Time
 	for {
-		if ctx.Err() != nil || authorize(ctx) != nil {
+		if ctx.Err() != nil {
 			return driveStop{"execution-authority"}
 		}
+		if err := authorize(ctx); err != nil {
+			var stale interface{ EvidenceWait() time.Duration }
+			if !errors.As(err, &stale) || stale.EvidenceWait() <= 0 || ctx.Err() != nil {
+				return driveStop{"execution-authority"}
+			}
+			now := time.Now()
+			if staleUntil.IsZero() {
+				staleUntil = now.Add(min(stale.EvidenceWait(), 2*time.Minute))
+			}
+			if !now.Before(staleUntil) {
+				return driveStop{"execution-authority-snapshot-stale"}
+			}
+			if !pauseDrive(ctx) {
+				return driveStop{"execution-authority"}
+			}
+			continue
+		}
+		staleUntil = time.Time{}
 		code, exited, err := session.WorkerExit(ctx)
 		if err != nil {
 			return driveStop{"execution-observe"}
@@ -369,12 +393,20 @@ func driveModel(ctx context.Context, session modelSession, authorize func(contex
 				previous.Payload = append([]byte(nil), request.Payload...)
 			}
 		}
-		timer := time.NewTimer(100 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		if !pauseDrive(ctx) {
 			return driveStop{"execution-authority"}
-		case <-timer.C:
 		}
+	}
+}
+
+// pauseDrive waits one driveModel cycle; false when ctx ended first.
+func pauseDrive(ctx context.Context) bool {
+	timer := time.NewTimer(100 * time.Millisecond)
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		return false
+	case <-timer.C:
+		return true
 	}
 }

@@ -146,6 +146,91 @@ without response headers; see
 As with every publication failure, the call stays uncertain and is never
 retried by this diagnostic.
 
+## Model authorization stops
+
+The broker checks current execution authority before it reserves a model call,
+before it sends the call to the provider, and again before it publishes the
+response into the executor pod. A refusal names the check and the step that
+refused, for example `model-authorization-publication-snapshot`. The
+`reservation`, `dispatch` and `publication` checks share these issue-evidence
+steps:
+
+| Step | Meaning |
+|---|---|
+| `snapshot` | The issue evidence is missing or changed: a new issue revision or labels, a withdrawn or changed admission or plan, other criteria, or another authority revision |
+| `snapshot-stale` | The issue evidence is unchanged, but the intake poll watermark or the issue's observation is older than the evidence window (twice `pollSeconds`, at most 300 s) |
+
+Intake records the poll watermark only after a complete scan. One incomplete
+scan (`intake scan incomplete; cursor retained`: a GitHub error, rate limit,
+an issue that changed while it was read, or the 90-second scan bound) keeps
+the previous watermark. The next scan starts after a backoff of 2^failures ×
+30 seconds (60 seconds after one failure, whatever `pollSeconds` is; a
+GitHub `Retry-After` can make it longer), and the watermark is recorded only
+when that scan completes. With the installed 30-second poll interval the
+60-second window can end before then, even though nothing about the issue
+changed. Battery 29 lost a 16-call attempt to this at the publication check
+(issue 187).
+
+### Bounded wait for stale evidence
+
+On `snapshot-stale` the authorization is checked again instead of refusing at
+once. The bound of one wait is `max(pollSeconds, 60 s) + 30 s`, at most
+2 minutes: 90 seconds with the installed configuration. It is sized for one
+missed scan: the 60-second retry plus up to 30 seconds for that scan to
+complete. It does not cover more: a slower retry scan, a second failure
+(120-second backoff), a longer `Retry-After`, or with `pollSeconds` above 90
+the 2-minute cap, can end the wait before a complete scan, and the stop is
+then `snapshot-stale`.
+
+| Where | Checks every | Also ends | Stop when the wait ends |
+|---|---|---|---|
+| Broker, `reservation` check | 3 s | 35 s plus 15 s before the mailbox request expires | `model-authorization-reservation-snapshot-stale` |
+| Broker, `dispatch` check | 3 s | 35 s before the call deadline (the call's or mailbox's expiry less 15 s) | `model-authorization-dispatch-snapshot-stale` |
+| Broker, `publication` check | 3 s | 10 s before the mailbox request expires | `model-authorization-publication-snapshot-stale` |
+| Generation loop, between model calls | 100 ms | the claim | `execution-authority-snapshot-stale` |
+
+Every wait also ends at the claim and model scope expiry. Before reservation
+and dispatch the broker keeps 30 seconds for the provider, the provider's
+default completion timeout and the smallest one an installation may select,
+plus 5 seconds for the last authorization check (its own bound): a wait that
+would leave less refuses instead of reserving or claiming a call that cannot
+be answered in time. A check that passes without waiting is not affected.
+While the generation loop waits it neither observes the worker nor reads or
+delivers model requests.
+
+A request still waits in the mailbox while the generation loop waits, so it
+can age. The broker therefore refuses a request with less than those 35
+seconds left before its mailbox deadline (its expiry less 15 s) as
+`model-provider-time`, after the reservation check and before anything is
+reserved: no call is spent, and the stop is not a provider failure. The
+30 seconds are fixed, not the gateway's configured completion timeout: that
+timeout is a maximum, a fast model answers well within it, and using it as a
+minimum would refuse most calls. The 30 seconds are not a guarantee that a
+slow model answers in time; the call keeps its own deadline as before. The
+database reservation and claim between the check and the provider call take
+part of the 5-second margin.
+
+Each wait starts at its own first stale refusal, so on one call the waits can
+add up: at most 90 s each at reservation, dispatch and publication, 270 s in
+all with the installed configuration, still inside the call's mailbox window
+(the reservation and dispatch waits end at least 50 s and 35 s before their
+deadlines, the publication wait 10 s before the mailbox expires). The
+generation loop can wait another 90 s per stale period between calls. All
+waits spend the run's own time budget; none extends the claim, scope, call or
+mailbox deadline.
+
+Every repeated check is a complete authorization. A stale result still runs
+every other check (`reload`, `record`, `claim-read`, `prepared`, `binding`),
+so a stopped lifecycle, an expired claim, a changed placement or a changed
+snapshot refuses at once by its own step, even while the evidence is also
+stale. Stale evidence never authorizes a step, and the window itself is
+unchanged.
+
+`snapshot` never waits. Other steps (`claim`, `record`, `reload`,
+`model-policy` and so on) also refuse at once, as before. Before the stale
+step existed, stale evidence was reported as `snapshot` by the broker and as
+`execution-authority` by the generation loop.
+
 ## Readiness stops
 
 An attempt that stops before the executor runs logs a `readiness` stage. A

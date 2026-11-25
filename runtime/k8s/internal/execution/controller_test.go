@@ -21,9 +21,11 @@ type driverSession struct {
 	code        int32
 	readErr     error
 	errorOnRead int
+	exits       int
 }
 
 func (s *driverSession) WorkerExit(context.Context) (int32, bool, error) {
+	s.exits++
 	return s.code, s.exitAfter >= 0 && s.read >= s.exitAfter, nil
 }
 func (s *driverSession) ReadRequest(context.Context) (modelmailbox.Envelope, error) {
