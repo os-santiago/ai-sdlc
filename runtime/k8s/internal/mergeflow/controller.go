@@ -184,8 +184,7 @@ func (r Runtime) run(ctx context.Context, j *store.MergeJournal, id string) (err
 			_ = j.StopMerge(cleanup, claim, "uncertain")
 		}
 	}()
-	fence := func(ctx context.Context) error {
-		c, fact, e := publicationflow.CurrentPublishedProof(ctx, r.DB, r.Policy, r.Review, command.PublicationID)
+	bound := func(ctx context.Context, c publication.Command, fact store.PublishedRecord, e error) error {
 		if e != nil || fact.Digest() != command.PublicationRecordSHA256 || c.AuthorityRevision != command.AuthorityRevision {
 			return ErrMerge
 		}
@@ -195,14 +194,34 @@ func (r Runtime) run(ctx context.Context, j *store.MergeJournal, id string) (err
 		}
 		return j.CheckMerge(ctx, claim)
 	}
+	// fence guards everything up to and including the last pre-send check: the
+	// issue must still be the same open, eligible generation.
+	fence := func(ctx context.Context) error {
+		c, fact, e := publicationflow.CurrentPublishedProof(ctx, r.DB, r.Policy, r.Review, command.PublicationID)
+		return bound(ctx, c, fact, e)
+	}
+	// sent guards the stages after the merge request may have been sent: the
+	// writer's post-response check, the acknowledgement and the finish. For a
+	// manifest repository the pull request says "Closes #N", so the merge itself
+	// closes the issue and the intake records a new generation. Like the other
+	// post-effect stages, recording the outcome binds to the claim, lease,
+	// authority, immutable publication fact, gate, request digest and receipt,
+	// not to issue state the effect itself changes.
+	sent := func(ctx context.Context) error {
+		c, fact, e := publicationflow.SentPublishedProof(ctx, r.DB, r.Policy, r.Review, command.PublicationID)
+		return bound(ctx, c, fact, e)
+	}
 	var effect store.MergeEffect
-	calls := 0
+	calls, armed := 0, false
 	transportFence := func(ctx context.Context, digest string) error {
 		calls++
-		if calls > 2 || fence(ctx) != nil {
+		if calls > 2 {
 			return ErrMerge
 		}
 		if calls == 1 {
+			if fence(ctx) != nil {
+				return ErrMerge
+			}
 			gp, e := r.GatePolicy()
 			if e != nil {
 				return ErrMerge
@@ -224,19 +243,21 @@ func (r Runtime) run(ctx context.Context, j *store.MergeJournal, id string) (err
 				_ = j.SealMergeNotSent(cleanup, effect)
 				return ErrMerge
 			}
+			armed = true
 			return nil
 		}
-		if effect.RequestDigest != digest {
+		// The writer's second call follows the merge response.
+		if !armed || effect.RequestDigest != digest || sent(ctx) != nil {
 			return ErrMerge
 		}
 		return nil
 	}
 	receipt, e := r.Writer.Merge(ctx, gate.Expected, command.IssueNumber, transportFence)
-	if e != nil || calls != 2 || effect.Token == "" || fence(ctx) != nil {
+	if e != nil || calls != 2 || effect.Token == "" || sent(ctx) != nil {
 		return ErrMerge
 	}
 	stored := store.MergeReceipt{Version: receipt.Version, CommitSHA: receipt.CommitSHA, HeadSHA: receipt.HeadSHA, BaseSHA: receipt.BaseSHA, TreeSHA: receipt.TreeSHA, PullRequest: receipt.PullRequest}
-	if j.AcknowledgeMergeEffect(ctx, effect, stored) != nil || fence(ctx) != nil {
+	if j.AcknowledgeMergeEffect(ctx, effect, stored) != nil || sent(ctx) != nil {
 		return ErrMerge
 	}
 	evidence, e := j.ReadMergeEvidence(ctx, claim)
@@ -246,7 +267,7 @@ func (r Runtime) run(ctx context.Context, j *store.MergeJournal, id string) (err
 	raw, _ := json.Marshal(evidence)
 	proof := store.MergeProof{Version: "ai-sdlc.merge-proof/v1", MergeID: id, PublicationID: command.PublicationID, PublicationRecordSHA256: claim.RecordDigest, GateSHA256: claim.GateDigest, EffectSHA256: authority.Digest(raw), Receipt: stored}
 	raw, _ = json.Marshal(proof)
-	if fence(ctx) != nil || j.FinishMerge(ctx, claim, raw) != nil {
+	if sent(ctx) != nil || j.FinishMerge(ctx, claim, raw) != nil {
 		return ErrMerge
 	}
 	return nil
