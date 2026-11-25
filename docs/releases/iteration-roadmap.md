@@ -42,7 +42,7 @@ The same loop produced every result so far:
    - the generator's miscounted diff hunks;
    - a hidden 300-second client default.
 4. **Fix deterministically and fail closed.** Generative steps get repaired
-   inputs or narrowed choices, never relaxed gates. Examples: hunk-count
+   outputs or narrowed choices, never relaxed gates. Examples: hunk-count
    repair, tool-list narrowing for review, and degenerate-output detection.
 5. **Audit independently before merge.** Every change passes green CI, has no
    unresolved review threads, and is audited by a reviewer that is given the
@@ -56,7 +56,7 @@ The same loop produced every result so far:
 | Decision | Reason |
 |---|---|
 | A local model behind an OpenAI-compatible gateway | The only model path available; it also proves the system works without a vendor API |
-| ROCm/HIP with a 1,024-token micro-batch, not Vulkan, on the reference iGPU | Vulkan corrupted output intermittently; HIP with this setting stayed clean in repeated replays. A restart clears a corrupted process. |
+| ROCm/HIP with a 1,024-token micro-batch, not Vulkan, on the reference iGPU | Vulkan corrupted output intermittently; HIP with this setting stayed clean in repeated replays, and a restart clears a corrupted process (operator evaluation; evidence document pending) |
 | The generator gets the manifest's own toolchain (B1) | Refused candidates mostly failed their own tests; running them before export is the cheapest fix |
 | Configurable generation budget and answer bound (B2) | Slow local models need more time and longer answers; defaults stay byte-identical |
 | The sandbox `RuntimeClass` is a checked value (B3) | Portable sandboxing across kind, OpenShift (Kata) and managed clouds |
@@ -65,10 +65,12 @@ The same loop produced every result so far:
 
 ## Where we are
 
-- **Stage:** late Alpha, with the Beta safety and supply-chain items largely in
-  place. The progress table is in the [release plan](release-plan.md#progress).
-- **Functional:** on the local model, the flow delivered its first issue
-  autonomously, from label to a merged pull request, in battery 24. Remaining
+- **Stage:** late Alpha. Sandbox and signing items are in progress; the separate
+  review authority (B4), signature verification at install and Kata validation
+  remain. The progress table is in the [release plan](release-plan.md#progress).
+- **Functional:** on the local model, one issue went from label to a merged
+  pull request with no human step in battery 24 (operator evaluation; a single
+  observation, not a rate; an evidence document is pending). Remaining
   attempts mostly fail on model capability: candidates whose tests fail, or
   steps running out. The independent reviewer's final answer sometimes misses
   the strict verdict format.
@@ -89,7 +91,8 @@ above.
    Record rates per issue and per stop class.
 3. Close the issue from the merged pull request for manifest repositories (B9,
    open pull request #715).
-4. Keep the evaluation evidence documents current.
+4. Add the evidence document for batteries 19–24, the GPU backend decision
+   and the first signed publication, and keep it current.
 
 ### Iteration 2: the second cell and the evaluation harness
 
@@ -97,7 +100,10 @@ above.
    toolchain (the Beta gate needs two repositories).
 2. Evaluation harness v1 (B7): pass@k per cell with 95% intervals, a stop-class
    breakdown, and a reviewer confusion matrix.
-3. Minimal metrics (B10): queue depth, stops by class, model calls.
+3. Minimal metrics and a scheduled database backup (B10).
+4. The component table checked in CI (B9, truthful docs).
+5. A second model path for the second cell: the agent-CLI service, or a
+   hosted model over HTTPS when an API key is available (B6b).
 
 ### Iteration 3: installable by others
 
@@ -105,14 +111,16 @@ above.
    documented Secret contract, and a generic Kubernetes path.
 2. External PostgreSQL with TLS.
 3. A quickstart verified on a clean kind cluster without the repository's
-   local tooling.
+   local tooling, and an install on OpenShift with Kata when a full OpenShift
+   cluster is available (an open environment condition otherwise).
 
 ### Iteration 4: separation of authority and quality gates
 
 1. An independent review identity; merge requires a co-signature (B4).
 2. A candidate quality and security baseline in the merge gate (B8): static
    analysis, dependency and secret scanning.
-3. Image vulnerability scanning in CI (rest of B5).
+3. The rest of B5: image scanning, attestation verification, and signature
+   verification when installing from a committed lock and at admission.
 
 ### Then: the Beta release
 
