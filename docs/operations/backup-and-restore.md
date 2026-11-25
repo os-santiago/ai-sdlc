@@ -37,9 +37,12 @@ With `backup.enabled`, the chart renders three objects:
 Each run is safe to interrupt:
 
 1. It takes a lock on the volume (a `.ai-sdlc-backup.lock` directory). If
-   another backup or restore holds it, the run fails and touches nothing. A
-   lock older than `backup.activeDeadlineSeconds` was left by a killed run,
-   because no run outlives that deadline; the next run removes it.
+   another backup or restore holds it, the run fails and touches nothing.
+   The owner writes its own deadline into the lock: its start time plus its
+   Job's `backup.activeDeadlineSeconds`. No run outlives its deadline, so a
+   lock five minutes past it was left by a killed run, and the next run
+   removes it. A lock without a readable deadline is removed only when it is
+   a day old.
 2. It removes temporary files a killed run left behind, then writes the dump
    to a new hidden temporary file.
 3. It reads the whole new file with `pg_restore --file=/dev/null`. This
@@ -96,7 +99,7 @@ Other settings, with their defaults:
 | `backup.image` | `postgres.local.image` | The `pg_dump` image. It must be pinned by digest. |
 | `backup.startingDeadlineSeconds` | `600` | A run that cannot start this long after its schedule is skipped. |
 | `backup.backoffLimit` | `1` | Retries of a failed run. |
-| `backup.activeDeadlineSeconds` | `3600` | Deadline of one run, retries included. Also the age of an abandoned lock. |
+| `backup.activeDeadlineSeconds` | `3600` | Deadline of one run, retries included. The run records it in the volume lock. |
 | `backup.resources` | 50m/64Mi requested, 1 CPU/512Mi limit | Container resources. |
 
 The CronJob uses `concurrencyPolicy: Forbid`, so it never starts a scheduled
@@ -143,15 +146,22 @@ The script splits it as follows:
   part early and leave the password in the URL.
 - An invalid escape (such as `%2` or `%zz`) and an encoded NUL (`%00`) are
   refused.
-- A `password=` query parameter is refused. Put the password in the URL's
-  user part instead.
-- The user name, host, port, database and query parameters go to the
-  PostgreSQL tools unchanged. Encode reserved characters in the user name.
+- Query parameters pass only from an allowlist of non-secret ones:
+  `sslmode`, `sslrootcert`, `sslcrl`, `sslsni`, `connect_timeout`,
+  `application_name`, `target_session_attrs`, `gssencmode`,
+  `channel_binding` and the `keepalives` settings. libpq decodes parameter
+  names, so the script decodes and lower-cases each name before it checks
+  it. Any other parameter is refused, including `password`, however it is
+  spelled or encoded (for example `%70assword`). Put the password in the
+  URL's user part instead.
+- The user name, host, port, database and allowlisted parameter values go
+  to the PostgreSQL tools as written. Encode reserved characters in the
+  user name.
 
 A refusal names the problem but never prints any part of the URL. The
 installer's and CloudNativePG's generated passwords need no encoding.
 
-TLS: the script passes the URL's query parameters to `pg_dump` unchanged.
+TLS: the script passes the allowlisted TLS parameters to `pg_dump`.
 `sslmode=require` encrypts the connection without checking the server's
 certificate. `verify-ca` and `verify-full` need a CA file, and the chart
 does not mount one. Verified TLS to an external database is not covered yet
@@ -183,11 +193,16 @@ kubectl -n ai-sdlc-runtime create job ai-sdlc-backup-manual --from=cronjob/ai-sd
 ## Verify a backup
 
 Start a short-lived pod that mounts the backup volume read-only. It uses the
-CronJob's image and needs no database access:
+CronJob's image and the claim the CronJob actually mounts, which is
+`backup.storage.existingClaim` when you set one. It needs no database
+access:
 
 ```bash
 image="$(kubectl -n ai-sdlc-runtime get cronjob ai-sdlc-backup \
   -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].image}')"
+claim="$(kubectl -n ai-sdlc-runtime get cronjob ai-sdlc-backup \
+  -o jsonpath='{.spec.jobTemplate.spec.template.spec.volumes[?(@.name=="backup")].persistentVolumeClaim.claimName}')"
+[ -n "$image" ] && [ -n "$claim" ] || echo "cannot read the CronJob's image or claim; stop here" >&2
 kubectl -n ai-sdlc-runtime apply -f - <<EOF
 apiVersion: v1
 kind: Pod
@@ -213,7 +228,7 @@ spec:
       volumeMounts: [{name: backup, mountPath: /backup, readOnly: true}]
   volumes:
     - name: backup
-      persistentVolumeClaim: {claimName: ai-sdlc-backup, readOnly: true}
+      persistentVolumeClaim: {claimName: ${claim}, readOnly: true}
 EOF
 kubectl -n ai-sdlc-runtime wait --for=condition=Ready pod/ai-sdlc-backup-inspect
 ```
@@ -292,40 +307,74 @@ into a newer installation's schema, or into an older chart, is not supported.
    and copy the file and its checksum in. Keep their names:
 
    ```bash
+   file=ai-sdlc-20261125T021700Z.dump
    kubectl -n ai-sdlc-runtime exec -i ai-sdlc-backup-inspect -- sh -c "cat > /backup/$file" < "$file"
    kubectl -n ai-sdlc-runtime exec -i ai-sdlc-backup-inspect -- sh -c "cat > /backup/$file.sha256" < "$file.sha256"
    kubectl -n ai-sdlc-runtime delete pod ai-sdlc-backup-inspect
    ```
 
-4. **Restore.** Create a Job from the CronJob and give it `RESTORE_FILE`. The
+4. **Restore.** Set `file` to the backup to restore and check it. Then create
+   a Job from the CronJob with `BACKUP_MODE=restore` and `RESTORE_FILE`. The
    Job runs the same script, with the same Secret reference, security context
-   and network policy. With `RESTORE_FILE` set it restores instead of taking
-   a backup:
+   and network policy. These commands are for bash:
 
    ```bash
-   kubectl -n ai-sdlc-runtime create job ai-sdlc-restore --from=cronjob/ai-sdlc-backup \
-       --dry-run=client -o yaml \
-     | kubectl set env --local -f - RESTORE_FILE="$file" -o yaml \
-     | kubectl -n ai-sdlc-runtime apply -f -
-   kubectl -n ai-sdlc-runtime logs -f job/ai-sdlc-restore
+   file=ai-sdlc-20261125T021700Z.dump
+   if [[ "$file" =~ ^ai-sdlc-[0-9]{8}T[0-9]{6}Z\.dump$ ]]; then
+     kubectl -n ai-sdlc-runtime create job ai-sdlc-restore --from=cronjob/ai-sdlc-backup \
+         --dry-run=client -o yaml \
+       | kubectl set env --local -f - BACKUP_MODE=restore RESTORE_FILE="$file" -o yaml \
+       | kubectl -n ai-sdlc-runtime apply -f -
+   else
+     echo "file must name a backup, such as ai-sdlc-20261125T021700Z.dump; stop here" >&2
+   fi
    ```
+
+   The script never infers a restore. The CronJob sets `BACKUP_MODE=backup`.
+   With `BACKUP_MODE=restore` and an empty or malformed `RESTORE_FILE` the
+   Job fails without touching the database. With `BACKUP_MODE=backup` and a
+   `RESTORE_FILE`, it also fails, and takes no backup.
 
    The Job takes the volume lock, checks the file against its checksum when
    one is present, reads the whole file with `pg_restore --file=/dev/null`,
    and checks that no component is connected. Then it runs
    `pg_restore --clean --if-exists --no-owner --single-transaction --exit-on-error`.
-   Success logs `backup: restored <file>`. On failure the transaction rolls
-   back and the database keeps its previous contents.
+   On failure the transaction rolls back and the database keeps its previous
+   contents.
 
-5. **Start the runtime.** Delete the Job, give each Deployment back its
-   recorded replica count, and resume the schedule:
+   Wait until the Job completes or fails. The Job fails by itself at
+   `backup.activeDeadlineSeconds`, so this loop ends:
 
    ```bash
-   kubectl -n ai-sdlc-runtime delete job ai-sdlc-restore
-   while IFS='=' read -r name count; do
-     kubectl -n ai-sdlc-runtime scale deployment "$name" --replicas="$count"
-   done < replicas.txt
-   kubectl -n ai-sdlc-runtime patch cronjob ai-sdlc-backup -p '{"spec":{"suspend":false}}'
+   restored=no
+   while :; do
+     state="$(kubectl -n ai-sdlc-runtime get job ai-sdlc-restore \
+       -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.type}{" "}{end}')"
+     case " $state " in
+       *" Complete "*) restored=yes; break ;;
+       *" Failed "*) break ;;
+     esac
+     sleep 10
+   done
+   kubectl -n ai-sdlc-runtime logs job/ai-sdlc-restore
+   echo "restored: $restored"
+   ```
+
+   Success logs `backup: restored <file>`. If `restored` is `no`, stop here.
+   Read the log, fix the cause, delete the Job and repeat this step. Keep
+   the components at zero until a restore completes.
+
+5. **Start the runtime.** Only after `restored: yes`: delete the Job, give
+   each Deployment back its recorded replica count, and resume the schedule:
+
+   ```bash
+   if [ "$restored" = yes ]; then
+     kubectl -n ai-sdlc-runtime delete job ai-sdlc-restore
+     while IFS='=' read -r name count; do
+       kubectl -n ai-sdlc-runtime scale deployment "$name" --replicas="$count"
+     done < replicas.txt
+     kubectl -n ai-sdlc-runtime patch cronjob ai-sdlc-backup -p '{"spec":{"suspend":false}}'
+   fi
    ```
 
    Do not scale every Deployment to 1: that would start an intake the
@@ -383,7 +432,9 @@ These tests render the chart and run the backup script against stub
 
 - the atomic write, the checksum, the file mode and the retention;
 - that a truncated archive is refused;
-- the volume lock, with concurrent runs and a stale lock;
+- the volume lock: concurrent runs, the owner's recorded deadline and
+  legacy locks;
+- the query parameter allowlist and the explicit `BACKUP_MODE`;
 - the refusal while a component is connected;
 - that the password never reaches a command line or the output, for every
   URL form above.

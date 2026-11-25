@@ -3,18 +3,21 @@
 # PostgreSQL image's busybox shell.
 #
 # Inputs (environment):
+#   BACKUP_MODE                "backup" (the CronJob) or "restore" (an
+#                              operator's restore Job). Required: a restore is
+#                              never inferred from another variable.
 #   DATABASE_URL               the bootstrap owner's postgresql:// URL, from a Secret
 #   BACKUP_DIR                 the backup volume
 #   BACKUP_RETENTION           how many complete backups to keep (at least 1)
-#   BACKUP_LOCK_STALE_SECONDS  age after which a volume lock is abandoned
-#                              (the Job's activeDeadlineSeconds)
-#   RESTORE_FILE               set only by an operator's restore Job: the backup
-#                              file name to restore instead of taking a backup
+#   BACKUP_LOCK_STALE_SECONDS  this run's deadline (the Job's
+#                              activeDeadlineSeconds), recorded in the lock
+#   RESTORE_FILE               with BACKUP_MODE=restore only: the backup file
+#                              name to restore
 #
 # The password never reaches a command line or the log. It is split from the
 # URL, percent-decoded into PGPASSWORD, and the PostgreSQL tools receive the
-# URL without it. Any URL the script cannot split safely is refused without
-# being echoed.
+# URL without it, rebuilt with only allowlisted query parameters. Any URL the
+# script cannot split safely is refused without being echoed.
 set -eu
 # Owner read-write, group read: a pod running with the volume's fsGroup can
 # read a backup (for example the inspect pod in the runbook), nobody else can.
@@ -24,6 +27,21 @@ fail() {
   echo "backup: $*" >&2
   exit 1
 }
+
+mode="${BACKUP_MODE:-}"
+case "$mode" in
+  backup)
+    [ -z "${RESTORE_FILE:-}" ] || fail "RESTORE_FILE is set but BACKUP_MODE is backup; set BACKUP_MODE=restore to restore"
+    ;;
+  restore)
+    [ -n "${RESTORE_FILE:-}" ] || fail "BACKUP_MODE=restore needs RESTORE_FILE"
+    case "$RESTORE_FILE" in
+      ai-sdlc-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z.dump) ;;
+      *) fail "RESTORE_FILE must name a backup file" ;;
+    esac
+    ;;
+  *) fail "BACKUP_MODE must be backup or restore" ;;
+esac
 
 dir="${BACKUP_DIR:?BACKUP_DIR is required}"
 retention="${BACKUP_RETENTION:?BACKUP_RETENTION is required}"
@@ -36,6 +54,32 @@ case "$stale" in
 esac
 [ -d "$dir" ] || fail "backup directory is missing"
 [ -w "$dir" ] || fail "backup directory is not writable"
+
+# Percent-decode $1 (RFC 3986) into $decoded. $2 names the part in errors,
+# which never include the input.
+decode() {
+  undecoded="$1"
+  decoded=""
+  while [ -n "$undecoded" ]; do
+    case "$undecoded" in
+      %[0-9A-Fa-f][0-9A-Fa-f]*)
+        hex="${undecoded#%}"
+        hex="${hex%"${hex#??}"}"
+        undecoded="${undecoded#%??}"
+        [ "$hex" != 00 ] || fail "DATABASE_URL has an encoded NUL in its $2"
+        char="$(printf "\\$(printf '%03o' "0x$hex")x")"
+        decoded="$decoded${char%x}"
+        ;;
+      %*) fail "DATABASE_URL has an invalid percent escape in its $2" ;;
+      *)
+        rest_="${undecoded#?}"
+        decoded="$decoded${undecoded%"$rest_"}"
+        undecoded="$rest_"
+        ;;
+    esac
+  done
+  unset undecoded hex char rest_
+}
 
 # --- Split the URL. Messages below never include any part of it. ---
 uri="${DATABASE_URL:?DATABASE_URL is required}"
@@ -76,43 +120,50 @@ esac
 case "$hostport" in
   [/?#]*) fail "DATABASE_URL has no host" ;;
 esac
-# Everything after the host goes to the tools as it is: it must hold no password.
-case "$(printf '%s' "$hostport$path" | tr 'A-Z' 'a-z')" in
-  *'?password='* | *'&password='*) fail "DATABASE_URL must not carry a password query parameter" ;;
-esac
 
-# Percent-decode the password (RFC 3986). Raw characters other than "/" are
-# accepted as they are.
-password=""
-while [ -n "$encoded" ]; do
-  case "$encoded" in
-    %[0-9A-Fa-f][0-9A-Fa-f]*)
-      hex="${encoded#%}"
-      hex="${hex%"${hex#??}"}"
-      encoded="${encoded#%??}"
-      [ "$hex" != 00 ] || fail "DATABASE_URL has an encoded NUL in its password"
-      char="$(printf "\\$(printf '%03o' "0x$hex")x")"
-      password="$password${char%x}"
-      ;;
-    %*) fail "DATABASE_URL has an invalid percent escape in its password" ;;
-    *)
-      tail="${encoded#?}"
-      password="$password${encoded%"$tail"}"
-      encoded="$tail"
-      ;;
+# Host, port and database, then the query. libpq decodes parameter names, so
+# a name is decoded before it is checked, and only allowlisted, non-secret
+# parameters are passed on. Everything else, password included, is refused.
+target="$hostport$path"
+location="${target%%\?*}"
+query="${target#"$location"}"
+query="${query#\?}"
+allowed=" sslmode sslrootcert sslcrl sslsni connect_timeout application_name target_session_attrs gssencmode channel_binding keepalives keepalives_idle keepalives_interval keepalives_count "
+kept=""
+set -f
+IFS='&'
+for parameter in $query; do
+  unset IFS
+  [ -n "$parameter" ] || continue
+  case "$parameter" in
+    *=*) ;;
+    *) fail "DATABASE_URL has a query parameter without a value" ;;
   esac
+  decode "${parameter%%=*}" "query parameter name"
+  key="$(printf '%s' "$decoded" | tr 'A-Z' 'a-z')"
+  case "$key" in
+    password) fail "DATABASE_URL must not carry a password query parameter" ;;
+    *[!a-z_]* | '') fail "DATABASE_URL has an unsupported query parameter" ;;
+  esac
+  case "$allowed" in
+    *" $key "*) ;;
+    *) fail "DATABASE_URL has an unsupported query parameter; allowed:$allowed" ;;
+  esac
+  kept="$kept${kept:+&}$key=${parameter#*=}"
+  IFS='&'
 done
-unset DATABASE_URL uri rest authority userinfo encoded hex char tail
+unset IFS
+set +f
+
+decode "$encoded" "password"
+password="$decoded"
+unset DATABASE_URL uri rest authority userinfo encoded decoded target query parameter key
 if [ -n "$password" ]; then
   PGPASSWORD="$password"
   export PGPASSWORD
 fi
 unset password
-if [ -n "$user" ]; then
-  conninfo="$scheme://$user@$hostport$path"
-else
-  conninfo="$scheme://$hostport$path"
-fi
+conninfo="$scheme://${user:+$user@}$location${kept:+?$kept}"
 
 # Reads every byte of an archive: the table of contents and every data block.
 # pg_restore --list alone reads only the table of contents at the start.
@@ -122,14 +173,25 @@ archive_complete() {
 
 # --- One backup or restore at a time on this volume. ---
 # concurrencyPolicy: Forbid does not cover a Job created by hand from the
-# CronJob. No run outlives the Job's activeDeadlineSeconds, so an older lock
-# was left by a killed run.
+# CronJob. The owner records its own deadline (start + its Job's
+# activeDeadlineSeconds) in the lock. No run outlives its deadline, so a lock
+# past its deadline plus a margin was left by a killed run. A lock without a
+# readable deadline (written by an older script, or a run killed right after
+# mkdir) is reclaimed only after a conservative day.
 lock="$dir/.ai-sdlc-backup.lock"
+margin=300
+legacy=86400
+now="$(date +%s)"
 if ! mkdir "$lock" 2> /dev/null; then
-  now="$(date +%s)"
-  since="$(stat -c %Y "$lock" 2> /dev/null || echo "$now")"
-  if [ $((now - since)) -gt "$stale" ]; then
-    echo "backup: removing a lock older than $stale seconds"
+  deadline="$(cat "$lock/deadline" 2> /dev/null || true)"
+  case "$deadline" in
+    '' | *[!0-9]*)
+      since="$(stat -c %Y "$lock" 2> /dev/null || echo "$now")"
+      deadline=$((since + legacy - margin))
+      ;;
+  esac
+  if [ "$now" -gt $((deadline + margin)) ]; then
+    echo "backup: removing a lock whose owner's deadline has passed"
     rm -rf -- "$lock"
     mkdir "$lock" 2> /dev/null || fail "another backup or restore holds the volume lock"
   else
@@ -140,15 +202,12 @@ trap 'rm -rf -- "$lock"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-date -u +%Y-%m-%dT%H:%M:%SZ > "$lock/started"
+printf '%s\n' "$((now + stale))" > "$lock/deadline.tmp"
+mv -- "$lock/deadline.tmp" "$lock/deadline"
 
-if [ -n "${RESTORE_FILE:-}" ]; then
+if [ "$mode" = restore ]; then
   # Restore: replace the database's objects and rows with the archive's, in
   # one transaction. Refuse while any runtime component is still connected.
-  case "$RESTORE_FILE" in
-    ai-sdlc-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z.dump) ;;
-    *) fail "RESTORE_FILE must name a backup file" ;;
-  esac
   [ -f "$dir/$RESTORE_FILE" ] || fail "$RESTORE_FILE is not on the backup volume"
   if [ -f "$dir/$RESTORE_FILE.sha256" ]; then
     (cd "$dir" && sha256sum -c "$RESTORE_FILE.sha256" > /dev/null) || fail "$RESTORE_FILE does not match its checksum"

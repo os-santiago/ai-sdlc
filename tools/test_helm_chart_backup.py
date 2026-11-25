@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -90,6 +91,8 @@ class BackupChartTests(unittest.TestCase):
         self.assertEqual(env['BACKUP_RETENTION']['value'], '7')
         # No run outlives the Job deadline, so an older volume lock is stale.
         self.assertEqual(env['BACKUP_LOCK_STALE_SECONDS']['value'], '3600')
+        # The CronJob always backs up; a restore is an explicit BACKUP_MODE=restore.
+        self.assertEqual(env['BACKUP_MODE']['value'], 'backup')
         self.assertEqual(env['BACKUP_DIR']['value'], '/backup')
         self.assertEqual(container['resources'], values['backup']['resources'])
         self.assertEqual({m['mountPath']: m['name'] for m in container['volumeMounts']}, {'/backup': 'backup', '/tmp': 'tmp'})
@@ -309,9 +312,10 @@ class BackupScriptTests(unittest.TestCase):
 
     def environment(self, url, retention, extra):
         env = {'PATH': '%s:%s' % (self.bin, os.environ.get('PATH', '/usr/bin:/bin')), 'BACKUP_DIR': str(self.dir),
-               'BACKUP_RETENTION': retention, 'DATABASE_URL': url, 'STUB_LOG': str(self.log)}
+               'BACKUP_RETENTION': retention, 'DATABASE_URL': url, 'STUB_LOG': str(self.log),
+               'BACKUP_MODE': 'restore' if 'RESTORE_FILE' in extra else 'backup'}
         env.update(extra)
-        return env
+        return {key: value for key, value in env.items() if value is not None}
 
     def stub_log(self, suffix):
         path = Path(str(self.log) + suffix)
@@ -417,6 +421,9 @@ class BackupScriptTests(unittest.TestCase):
              'p@ss:w?rd#-' + secret),
             ('postgresql://owner:%s@db.example?sslmode=require' % secret, '--dbname=postgresql://owner@db.example?sslmode=require',
              secret),
+            # Allowlisted names are decoded and lower-cased; values pass as written.
+            ('postgresql://owner:' + secret + '@db.example/app?SSLMODE=require&&application_name=ai%20sdlc&connect_timeout=10',
+             '--dbname=postgresql://owner@db.example/app?sslmode=require&application_name=ai%20sdlc&connect_timeout=10', secret),
             ('postgresql://owner@db.example/app', '--dbname=postgresql://owner@db.example/app', '<unset>'),
         ]
         for url, expected, password in cases:
@@ -438,6 +445,21 @@ class BackupScriptTests(unittest.TestCase):
             ({'url': 'postgresql://owner@h/d?sslmode=require&password=%s' % secret}, 'password query parameter'),
             ({'url': 'postgresql://owner@h/d?PASSWORD=%s' % secret}, 'password query parameter'),
             ({'url': 'postgresql://owner@h?password=%s' % secret}, 'password query parameter'),
+            # libpq decodes parameter names, so encoded or mixed-case spellings are refused too.
+            ({'url': 'postgresql://owner@h/d?%70assword=' + secret}, 'password query parameter'),
+            ({'url': 'postgresql://owner@h/d?sslmode=require&%50a%53sWord=' + secret}, 'password query parameter'),
+            ({'url': 'postgresql://owner@h/d?PassWord=' + secret}, 'password query parameter'),
+            # Only allowlisted, non-secret parameters pass.
+            ({'url': 'postgresql://owner@h/d?sslpassword=' + secret}, 'unsupported query parameter'),
+            ({'url': 'postgresql://owner@h/d?options=' + secret}, 'unsupported query parameter'),
+            ({'url': 'postgresql://owner@h/d?ssl%2Dmode=' + secret}, 'unsupported query parameter'),
+            ({'url': 'postgresql://owner@h/d?sslmode'}, 'without a value'),
+            ({'url': 'postgresql://owner@h/d?%zz' + secret + '=x'}, 'invalid percent escape'),
+            ({'url': 'postgresql://owner:' + secret + '@h/d', 'BACKUP_MODE': None}, 'BACKUP_MODE must be'),
+            ({'url': 'postgresql://owner:' + secret + '@h/d', 'BACKUP_MODE': 'Restore'}, 'BACKUP_MODE must be'),
+            ({'url': 'postgresql://owner:' + secret + '@h/d', 'BACKUP_MODE': 'restore'}, 'needs RESTORE_FILE'),
+            ({'url': 'postgresql://owner:' + secret + '@h/d', 'BACKUP_MODE': 'backup',
+              'RESTORE_FILE': 'ai-sdlc-20260101T000000Z.dump'}, 'set BACKUP_MODE=restore'),
             ({'url': 'postgresql://owner:%s%%2@h/d' % secret}, 'invalid percent escape'),
             ({'url': 'postgresql://owner:%s%%zz@h/d' % secret}, 'invalid percent escape'),
             ({'url': 'postgresql://owner:%s%%00@h/d' % secret}, 'encoded NUL'),
@@ -474,14 +496,53 @@ class BackupScriptTests(unittest.TestCase):
         self.assertIn('holds the volume lock', restore.stderr)
         self.assertIsNone(self.stub_log('.restore'))
 
-    def test_a_stale_lock_is_removed_and_every_exit_releases_the_lock(self):
+    def test_a_lock_is_reclaimed_only_after_its_owners_deadline(self):
+        """The owner's recorded deadline decides, not the new run's own deadline."""
         lock = self.dir / LOCK
-        lock.mkdir()
-        old = time.time() - 120
-        os.utime(lock, (old, old))
-        result = self.run_backup(BACKUP_LOCK_STALE_SECONDS='60')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('removing a lock older than 60 seconds', result.stdout)
+        now = int(time.time())
+
+        # (recorded deadline or None for a legacy lock, lock age in seconds, reclaimed?)
+        cases = [(now - 400, 0, True),          # past its deadline and the 300 s margin
+                 (now - 100, 0, False),         # past its deadline, within the margin
+                 (now + 7200, 2 * 86400, False),  # an old lock whose owner has a long deadline
+                 ('garbage', 2 * 86400, True),  # unreadable deadline: legacy rule, a day old
+                 (None, 2 * 86400, True),       # legacy lock, older than a day
+                 (None, 7200, False)]           # legacy lock, younger than a day
+        for deadline, age, reclaimed in cases:
+            with self.subTest(deadline=deadline, age=age):
+                for old in self.dir.iterdir():
+                    old.unlink()
+                lock.mkdir()
+                if deadline is not None:
+                    (lock / 'deadline').write_text('%s\n' % deadline)
+                stamp = now - age
+                os.utime(lock, (stamp, stamp))
+                result = self.run_backup(BACKUP_LOCK_STALE_SECONDS='60')
+                if reclaimed:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("removing a lock whose owner's deadline has passed", result.stdout)
+                    self.assertFalse(lock.exists())
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('holds the volume lock', result.stderr)
+                    self.assertTrue(lock.is_dir())
+                    shutil.rmtree(lock)
+
+
+    def test_the_lock_records_the_owners_deadline_and_every_exit_releases_it(self):
+        lock = self.dir / LOCK
+        env = self.environment('postgresql://ai_sdlc:%s@h/d' % FAKE_PASSWORD, '5',
+                               {'STUB_SLEEP': '2', 'BACKUP_LOCK_STALE_SECONDS': '900'})
+        started = int(time.time())
+        run = subprocess.Popen(['/bin/sh', '-c', SCRIPT.read_text()], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        deadline_file = lock / 'deadline'
+        limit = time.time() + 10
+        while not deadline_file.exists() and time.time() < limit:
+            time.sleep(0.05)
+        recorded = int(deadline_file.read_text())
+        self.assertTrue(started + 900 <= recorded <= int(time.time()) + 900, recorded)
+        _, err = run.communicate(timeout=60)
+        self.assertEqual(run.returncode, 0, err)
         self.assertFalse(lock.exists())
         failed = self.run_backup(STUB_DUMP_FAIL='1')
         self.assertNotEqual(failed.returncode, 0)
