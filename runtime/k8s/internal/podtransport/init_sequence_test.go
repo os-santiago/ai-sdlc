@@ -176,98 +176,98 @@ func TestToolchainPodReadinessRefusesAnyOtherInitSequence(t *testing.T) {
 		"restarted": {func(_ int32, pod *core.Pod) {
 			initializing(pod)
 			pod.Status.InitContainerStatuses[1].RestartCount = 1
-		}, ""},
+		}, "init-identity"},
 		"previous-termination": {func(_ int32, pod *core.Pod) {
 			initializing(pod)
 			runningInit(&pod.Status.InitContainerStatuses[1])
 			pod.Status.InitContainerStatuses[1].LastTerminationState.Terminated = &core.ContainerStateTerminated{ExitCode: 1}
-		}, ""},
+		}, "init-identity"},
 		"extra-status": {func(_ int32, pod *core.Pod) {
 			initializing(pod)
 			extra := pod.Status.InitContainerStatuses[1]
 			extra.Name = "injected"
 			pod.Status.InitContainerStatuses = append(pod.Status.InitContainerStatuses, extra)
-		}, ""},
+		}, "init-count"},
 		"missing-status": {func(_ int32, pod *core.Pod) {
 			initializing(pod)
 			pod.Status.InitContainerStatuses = pod.Status.InitContainerStatuses[:1]
-		}, ""},
+		}, "init-count"},
 		"reordered-status": {func(_ int32, pod *core.Pod) {
 			initializing(pod)
 			s := pod.Status.InitContainerStatuses
 			s[0], s[1] = s[1], s[0]
-		}, ""},
+		}, "init-identity"},
 		"copy-before-install": {func(_ int32, pod *core.Pod) {
 			initializing(pod)
 			waitingInit(&pod.Status.InitContainerStatuses[0], "PodInitializing")
 			runningInit(&pod.Status.InitContainerStatuses[1])
-		}, ""},
+		}, "init-running"},
 		"both-running": {func(_ int32, pod *core.Pod) {
 			initializing(pod)
 			runningInit(&pod.Status.InitContainerStatuses[0])
 			runningInit(&pod.Status.InitContainerStatuses[1])
-		}, ""},
+		}, "init-running"},
 		"copy-done-install-waiting": {func(_ int32, pod *core.Pod) {
 			initializing(pod)
 			waitingInit(&pod.Status.InitContainerStatuses[0], "PodInitializing")
-		}, ""},
+		}, "init-terminated"},
 		"worker-during-copy": {func(_ int32, pod *core.Pod) {
 			pod.Status.Phase = core.PodPending
 			runningInit(&pod.Status.InitContainerStatuses[1])
-		}, ""},
+		}, "containers-before-init"},
 		"wrong-copy-image": {func(_ int32, pod *core.Pod) {
 			initializing(pod)
 			pod.Status.InitContainerStatuses[1].ImageID = "registry.example/go@sha256:" + strings.Repeat("f", 64)
-		}, ""},
+		}, "init-image"},
 		"wrong-install-image": {func(_ int32, pod *core.Pod) {
 			initializing(pod)
 			pod.Status.InitContainerStatuses[0].ImageID = "fixture/worker@sha256:" + strings.Repeat("a", 64)
-		}, ""},
+		}, "init-image"},
 		"terminated-id-mismatch": {func(_ int32, pod *core.Pod) {
 			initializing(pod)
 			pod.Status.InitContainerStatuses[1].State.Terminated.ContainerID = "containerd://" + strings.Repeat("f", 64)
-		}, ""},
+		}, "init-terminated"},
 		"terminated-without-id": {func(_ int32, pod *core.Pod) {
 			initializing(pod)
 			pod.Status.InitContainerStatuses[1].ContainerID = ""
-		}, ""},
+		}, "init-terminated"},
 		"waiting-with-id": {func(_ int32, pod *core.Pod) {
 			initializing(pod)
 			waitingInit(&pod.Status.InitContainerStatuses[1], "PodInitializing")
 			pod.Status.InitContainerStatuses[1].ContainerID = "containerd://" + strings.Repeat("e", 64)
-		}, ""},
+		}, "init-created"},
 		"pull-error": {func(_ int32, pod *core.Pod) {
 			initializing(pod)
 			waitingInit(&pod.Status.InitContainerStatuses[1], "ErrImagePull")
-		}, ""},
+		}, "init-waiting"},
 		"no-state": {func(_ int32, pod *core.Pod) {
 			initializing(pod)
 			pod.Status.InitContainerStatuses[1].State = core.ContainerState{}
-		}, ""},
+		}, "init-state"},
 		"running-without-init-status": {func(_ int32, pod *core.Pod) {
 			pod.Status.InitContainerStatuses = nil
-		}, ""},
+		}, "containers-before-init"},
 		"extra-spec-init": {func(_ int32, pod *core.Pod) {
 			pod.Spec.InitContainers = append(pod.Spec.InitContainers, pod.Spec.InitContainers[0])
 			pod.Spec.InitContainers[2].Name = "injected"
-		}, ""},
+		}, "template"},
 		"reordered-spec-init": {func(_ int32, pod *core.Pod) {
 			s := pod.Spec.InitContainers
 			s[0], s[1] = s[1], s[0]
-		}, ""},
+		}, "template"},
 		"missing-spec-init": {func(_ int32, pod *core.Pod) {
 			pod.Spec.InitContainers = pod.Spec.InitContainers[:1]
-		}, ""},
+		}, "template"},
 		"init-sidecar": {func(_ int32, pod *core.Pod) {
 			always := core.ContainerRestartPolicyAlways
 			pod.Spec.InitContainers[1].RestartPolicy = &always
-		}, ""},
+		}, "template"},
 		"copy-root-changed": {func(_ int32, pod *core.Pod) {
 			pod.Spec.InitContainers[1].Command[2] = "/"
-		}, ""},
+		}, "template"},
 		"copy-writes-runner": {func(_ int32, pod *core.Pod) {
 			pod.Spec.InitContainers[1].VolumeMounts[0].ReadOnly = false
-		}, ""},
+		}, "template"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r, _, _, calls := toolchainResources(t, c.edit)
@@ -275,7 +275,8 @@ func TestToolchainPodReadinessRefusesAnyOtherInitSequence(t *testing.T) {
 			if err == nil || session != nil || !errors.Is(err, ErrTransport) || calls.Load() != 1 {
 				t.Fatal("unsafe init sequence accepted or retried", err, calls.Load())
 			}
-			if ReadinessStep(err) != c.step || (c.step != "" && !KnownReadinessStep(c.step)) {
+			// Every refusal names its bounded step.
+			if ReadinessStep(err) != c.step || !KnownReadinessStep(c.step) {
 				t.Fatal("readiness step", ReadinessStep(err), c.step)
 			}
 		})
@@ -315,8 +316,8 @@ func TestToolchainInitContainerIDsAreStable(t *testing.T) {
 					edit(pod)
 				}
 			})
-			if session, err := r.WaitRunning(context.Background(), "22222222-2222-4222-8222-222222222222"); err == nil || session != nil || calls.Load() != 2 {
-				t.Fatal("init container vanished during start and was accepted", err, calls.Load())
+			if session, err := r.WaitRunning(context.Background(), "22222222-2222-4222-8222-222222222222"); err == nil || session != nil || calls.Load() != 2 || ReadinessStep(err) != "init-unstable" {
+				t.Fatal("init container vanished during start and was accepted or misnamed", err, calls.Load())
 			}
 		})
 	}
@@ -326,8 +327,8 @@ func TestToolchainInitContainerIDsAreStable(t *testing.T) {
 			pod.Status.InitContainerStatuses[0] = terminatedInit(executor.InitInstallRunner, "fixture/mailbox:imported", "fixture/mailbox@sha256:"+strings.Repeat("b", 64), "f", 0)
 		}
 	})
-	if session, err := r.WaitRunning(context.Background(), "22222222-2222-4222-8222-222222222222"); err == nil || session != nil {
-		t.Fatal("bound session with other init containers")
+	if session, err := r.WaitRunning(context.Background(), "22222222-2222-4222-8222-222222222222"); err == nil || session != nil || ReadinessStep(err) != "bind-unstable" {
+		t.Fatal("bound session with other init containers", err)
 	}
 	// After binding, any change to an init container stops the session.
 	for name, edit := range map[string]func(*core.Pod){
@@ -387,5 +388,255 @@ func TestToolchainPodComposesWithRuntimeClassAdmission(t *testing.T) {
 		if !admitted && err == nil {
 			t.Fatal("class additions accepted without the observed admission")
 		}
+	}
+}
+
+func TestReadinessNamesEveryOtherRefusalStep(t *testing.T) {
+	for name, c := range map[string]struct {
+		respond func(core.Pod, http.ResponseWriter)
+		cause   error
+	}{
+		"status":     {func(pod core.Pod, w http.ResponseWriter) { writeResource(w, 404, pod) }, ErrTransport},
+		"permission": {func(_ core.Pod, w http.ResponseWriter) { w.WriteHeader(403) }, ErrPermission},
+		"template": {func(pod core.Pod, w http.ResponseWriter) {
+			pod.Spec.Containers[0].Image = "fixture/other@sha256:" + strings.Repeat("f", 64)
+			writeResource(w, 200, pod)
+		}, ErrTransport},
+		"phase": {func(pod core.Pod, w http.ResponseWriter) {
+			pod.Status.Phase = core.PodFailed
+			writeResource(w, 200, pod)
+		}, ErrTransport},
+		"containers": {func(pod core.Pod, w http.ResponseWriter) {
+			pod.Status.ContainerStatuses[0].RestartCount = 1
+			writeResource(w, 200, pod)
+		}, ErrTransport},
+		"request": {func(_ core.Pod, w http.ResponseWriter) {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				conn.Close()
+			}
+		}, ErrTransport},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, _ := resourcesFixture(t, func(_ *Resources, pod core.Pod, w http.ResponseWriter, _ *http.Request) { c.respond(pod, w) })
+			session, err := r.WaitRunning(context.Background(), "22222222-2222-4222-8222-222222222222")
+			if session != nil || !errors.Is(err, c.cause) {
+				t.Fatal("refusal changed", err)
+			}
+			if ReadinessStep(err) != name || !KnownReadinessStep(name) {
+				t.Fatal("readiness step", ReadinessStep(err), name)
+			}
+		})
+	}
+	// A pod still starting when the caller's deadline ends.
+	r, _, _, _ := toolchainResources(t, func(_ int32, pod *core.Pod) {
+		initializing(pod)
+		runningInit(&pod.Status.InitContainerStatuses[1])
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := r.WaitRunning(ctx, "22222222-2222-4222-8222-222222222222"); !errors.Is(err, ErrTransport) || ReadinessStep(err) != "deadline" {
+		t.Fatal("deadline not named", err, ReadinessStep(err))
+	}
+	if _, err := r.WaitRunning(context.Background(), "not-a-uid"); !errors.Is(err, ErrTransport) || ReadinessStep(err) != "uid" {
+		t.Fatal("malformed pod UID not named", err)
+	}
+	for _, step := range []string{"", "init-other", "toolchain-", "readiness", "bind-x", "request-timeout", "containers-created-x", "containers-unstable-x"} {
+		if KnownReadinessStep(step) {
+			t.Fatal("unbounded readiness step accepted", step)
+		}
+	}
+}
+
+// createdNotStarted is the status the kubelet writes for a container the
+// runtime has created but not yet started (convertToAPIContainerStatuses,
+// ContainerStateCreated): waiting with no reason, its container ID and image.
+func createdNotStarted(status *core.ContainerStatus) {
+	status.State = core.ContainerState{Waiting: &core.ContainerStateWaiting{}}
+}
+
+func TestToolchainPodAcceptsTheKubeletCreatedState(t *testing.T) {
+	// The observed start (battery 25): install-runner completes, then
+	// copy-toolchain is reported created (before and after its image ID),
+	// then running with the same container ID; one main container is
+	// reported created while the other already runs.
+	r, _, _, calls := toolchainResources(t, func(n int32, pod *core.Pod) {
+		inits := pod.Status.InitContainerStatuses
+		switch n {
+		case 1:
+			initializing(pod)
+			waitingInit(&inits[1], "PodInitializing")
+		case 2:
+			initializing(pod)
+			createdNotStarted(&inits[1])
+			inits[1].ImageID = ""
+		case 3:
+			initializing(pod)
+			createdNotStarted(&inits[1])
+		case 4:
+			initializing(pod)
+			runningInit(&inits[1])
+		case 5:
+			pod.Status.Phase = core.PodPending
+			createdNotStarted(&pod.Status.ContainerStatuses[0])
+			createdNotStarted(&pod.Status.ContainerStatuses[1])
+			pod.Status.ContainerStatuses[0].ImageID = ""
+		case 6:
+			pod.Status.Phase = core.PodRunning
+			createdNotStarted(&pod.Status.ContainerStatuses[1])
+		}
+	})
+	session, err := r.WaitRunning(context.Background(), "22222222-2222-4222-8222-222222222222")
+	if err != nil || session == nil || calls.Load() != 8 {
+		t.Fatal("kubelet created state refused", err, ReadinessStep(err), calls.Load())
+	}
+	if session.initInstances()[executor.InitCopyToolchain].ID != "containerd://"+strings.Repeat("e", 64) {
+		t.Fatal("created container not held in the baseline")
+	}
+	// A pod without init containers: both main containers reported created
+	// first.
+	var gets atomic.Int32
+	plain, _ := resourcesFixture(t, func(_ *Resources, pod core.Pod, w http.ResponseWriter, _ *http.Request) {
+		if gets.Add(1) == 1 {
+			pod.Status.Phase = core.PodPending
+			createdNotStarted(&pod.Status.ContainerStatuses[0])
+			createdNotStarted(&pod.Status.ContainerStatuses[1])
+		}
+		writeResource(w, 200, pod)
+	})
+	if session, err := plain.WaitRunning(context.Background(), "22222222-2222-4222-8222-222222222222"); err != nil || session == nil || gets.Load() < 3 {
+		t.Fatal("created main containers refused", err, ReadinessStep(err))
+	}
+}
+
+func TestKubeletCreatedStateIsAcceptedExactly(t *testing.T) {
+	other := "containerd://" + strings.Repeat("f", 64)
+	for name, c := range map[string]struct {
+		edit  func(n int32, pod *core.Pod)
+		step  string
+		calls int32
+	}{
+		"created-with-reason": {func(_ int32, pod *core.Pod) {
+			initializing(pod)
+			createdNotStarted(&pod.Status.InitContainerStatuses[1])
+			pod.Status.InitContainerStatuses[1].State.Waiting.Reason = "PodInitializing"
+		}, "init-created", 1},
+		"created-with-error-reason": {func(_ int32, pod *core.Pod) {
+			initializing(pod)
+			createdNotStarted(&pod.Status.InitContainerStatuses[1])
+			pod.Status.InitContainerStatuses[1].State.Waiting.Reason = "CreateContainerError"
+		}, "init-created", 1},
+		"created-with-message": {func(_ int32, pod *core.Pod) {
+			initializing(pod)
+			createdNotStarted(&pod.Status.InitContainerStatuses[1])
+			pod.Status.InitContainerStatuses[1].State.Waiting.Message = "x"
+		}, "init-created", 1},
+		"created-malformed-id": {func(_ int32, pod *core.Pod) {
+			initializing(pod)
+			createdNotStarted(&pod.Status.InitContainerStatuses[1])
+			pod.Status.InitContainerStatuses[1].ContainerID = "containerd://short"
+		}, "init-created", 1},
+		"created-before-install-done": {func(_ int32, pod *core.Pod) {
+			initializing(pod)
+			runningInit(&pod.Status.InitContainerStatuses[0])
+			createdNotStarted(&pod.Status.InitContainerStatuses[1])
+		}, "init-created", 1},
+		"created-after-install-failed": {func(_ int32, pod *core.Pod) {
+			initializing(pod)
+			pod.Status.InitContainerStatuses[0].State.Terminated.ExitCode = 1
+			createdNotStarted(&pod.Status.InitContainerStatuses[1])
+		}, "toolchain-install", 1},
+		"created-wrong-image": {func(_ int32, pod *core.Pod) {
+			initializing(pod)
+			createdNotStarted(&pod.Status.InitContainerStatuses[1])
+			pod.Status.InitContainerStatuses[1].ImageID = "registry.example/go@sha256:" + strings.Repeat("f", 64)
+		}, "init-image", 1},
+		"created-replaced-when-started": {func(n int32, pod *core.Pod) {
+			initializing(pod)
+			if n == 1 {
+				createdNotStarted(&pod.Status.InitContainerStatuses[1])
+				pod.Status.InitContainerStatuses[1].ContainerID = other
+				return
+			}
+			runningInit(&pod.Status.InitContainerStatuses[1])
+		}, "init-unstable", 2},
+		"running-then-created": {func(n int32, pod *core.Pod) {
+			initializing(pod)
+			if n == 1 {
+				runningInit(&pod.Status.InitContainerStatuses[1])
+				return
+			}
+			createdNotStarted(&pod.Status.InitContainerStatuses[1])
+		}, "init-unstable", 2},
+		"created-then-gone": {func(n int32, pod *core.Pod) {
+			initializing(pod)
+			if n == 1 {
+				createdNotStarted(&pod.Status.InitContainerStatuses[1])
+				return
+			}
+			waitingInit(&pod.Status.InitContainerStatuses[1], "PodInitializing")
+		}, "init-unstable", 2},
+		"main-created-during-copy": {func(_ int32, pod *core.Pod) {
+			pod.Status.Phase = core.PodPending
+			runningInit(&pod.Status.InitContainerStatuses[1])
+			createdNotStarted(&pod.Status.ContainerStatuses[1])
+		}, "containers-before-init", 1},
+		"main-created-with-reason": {func(_ int32, pod *core.Pod) {
+			createdNotStarted(&pod.Status.ContainerStatuses[1])
+			pod.Status.ContainerStatuses[1].State.Waiting.Reason = "RunContainerError"
+		}, "containers-created", 1},
+		"main-running-then-created": {func(n int32, pod *core.Pod) {
+			pod.Status.Phase = core.PodRunning
+			if n == 1 {
+				createdNotStarted(&pod.Status.ContainerStatuses[0])
+				return
+			}
+			createdNotStarted(&pod.Status.ContainerStatuses[1])
+		}, "containers-created", 2},
+		"main-created-replaced": {func(n int32, pod *core.Pod) {
+			pod.Status.Phase = core.PodPending
+			createdNotStarted(&pod.Status.ContainerStatuses[0])
+			if n > 1 {
+				pod.Status.ContainerStatuses[0].ContainerID = other
+			}
+		}, "containers-unstable", 2},
+		"main-created-replaced-when-started": {func(n int32, pod *core.Pod) {
+			if n == 1 {
+				pod.Status.Phase = core.PodPending
+				createdNotStarted(&pod.Status.ContainerStatuses[0])
+				pod.Status.ContainerStatuses[0].ContainerID = other
+			}
+		}, "containers-unstable", 2},
+		"main-created-then-gone": {func(n int32, pod *core.Pod) {
+			pod.Status.Phase = core.PodPending
+			if n == 1 {
+				createdNotStarted(&pod.Status.ContainerStatuses[0])
+				return
+			}
+			pod.Status.ContainerStatuses[0].State = core.ContainerState{Waiting: &core.ContainerStateWaiting{Reason: "ContainerCreating"}}
+			pod.Status.ContainerStatuses[0].ContainerID, pod.Status.ContainerStatuses[0].ImageID = "", ""
+		}, "containers-unstable", 2},
+		"main-status-vanished": {func(n int32, pod *core.Pod) {
+			pod.Status.Phase = core.PodPending
+			createdNotStarted(&pod.Status.ContainerStatuses[0])
+			if n > 1 {
+				pod.Status.ContainerStatuses = pod.Status.ContainerStatuses[1:]
+			}
+		}, "containers-unstable", 2},
+		"main-created-wrong-image": {func(_ int32, pod *core.Pod) {
+			createdNotStarted(&pod.Status.ContainerStatuses[1])
+			pod.Status.ContainerStatuses[1].ImageID = "fixture/other@sha256:" + strings.Repeat("f", 64)
+		}, "containers", 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, _, _, calls := toolchainResources(t, c.edit)
+			session, err := r.WaitRunning(context.Background(), "22222222-2222-4222-8222-222222222222")
+			if err == nil || session != nil || !errors.Is(err, ErrTransport) || calls.Load() != c.calls {
+				t.Fatal("unsafe created state accepted or retried", err, calls.Load())
+			}
+			if ReadinessStep(err) != c.step || !KnownReadinessStep(c.step) {
+				t.Fatal("readiness step", ReadinessStep(err), c.step)
+			}
+		})
 	}
 }

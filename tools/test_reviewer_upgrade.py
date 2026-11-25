@@ -57,6 +57,36 @@ class ReviewerTargets(unittest.TestCase):
             intake = next(d for d in deployments if d['metadata']['name'] == 'ai-sdlc-intake')
             self.assertEqual(intake['spec']['replicas'], int(phase == 'active'))
 
+    def test_readiness_probe_timeout_is_inherited_as_recorded(self):
+        # The actual chart: an installation recorded before the setting
+        # renders without a probe timeout in every phase; a newer one keeps 5.
+        # (Components with their own fixed probe timeout keep it.)
+        image = install_images.REGISTRY + '@sha256:' + 'c' * 64
+        timeouts = {}
+        for recorded in (None, 5):
+            with self.subTest(recorded=recorded):
+                source, render, compiler = self.source()
+                source['values'].pop('probes', None)
+                if recorded is not None:
+                    source['values']['probes'] = {'readinessTimeoutSeconds': recorded}
+                source['documents'] = render(source['values'])
+                result = reviewer_upgrade_targets.targets(source, image, render, compiler)
+                for phase in ('paused', 'staged', 'warming', 'armed', 'active'):
+                    for deployment in (d for d in result[phase]['documents'] if d['kind'] == 'Deployment'):
+                        for container in deployment['spec']['template']['spec']['containers']:
+                            if 'readinessProbe' not in container:
+                                continue
+                            key = (phase, deployment['metadata']['name'], container['name'])
+                            got = container['readinessProbe'].get('timeoutSeconds')
+                            if recorded is None:
+                                timeouts[key] = got
+                            elif timeouts[key] is None:
+                                self.assertEqual(got, recorded, key)
+                            else:
+                                self.assertEqual(got, timeouts[key], key)
+        self.assertIsNone(timeouts[('active', 'ai-sdlc-verifier', 'verifier')])
+        self.assertIsNone(timeouts[('active', 'ai-sdlc-worker', 'worker')])
+
     def test_review_tool_allowlist_is_inherited_as_recorded(self):
         # Installations recorded before the setting render unchanged and never
         # gain it; newer ones keep it in every phase.

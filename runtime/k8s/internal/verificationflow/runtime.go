@@ -94,9 +94,14 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	// Expiry, cleanup and rejection above always run; claiming the work and
 	// creating its pods require the sandbox class, observed now with this
 	// poll's client.
+	// An unknown class (a transient API failure) refuses the claim too.
 	admission, err := r.Client.CheckRuntimeClass(ctx, r.RuntimeClass)
 	if err != nil {
-		return "sandbox-runtime-class-unavailable", ControllerError{"sandbox-runtime-class"}
+		state := "sandbox-runtime-class-unavailable"
+		if podtransport.RuntimeClassUnknown(err) {
+			state = "sandbox-runtime-class-unknown"
+		}
+		return state, podtransport.WithRuntimeClassReason(ControllerError{"sandbox-runtime-class"}, err)
 	}
 	if _, err = RunWithMailbox(ctx, r.DB, r.Load, id, r.Client, r.Image, r.MailboxImage, r.RuntimeClass, admission); err != nil {
 		return "stopped", err

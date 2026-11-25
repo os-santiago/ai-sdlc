@@ -319,9 +319,18 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		for _, run := range repositorytests.RunNames() {
 			deadline = maxTime(deadline, time.Now().Add(time.Duration(repositorytests.DeadlineSeconds(run, v))*time.Second))
 		}
+		// Every stop in this loop names a bounded step: runs-* for the
+		// whole set of runs, or the run and its step (for example
+		// candidate-import-transfer-timeout). The stop itself is unchanged,
+		// and the stage is kept for a failed cleanup's diagnostic.
 		imported, finished := map[string]bool{}, map[string]bool{}
 		for len(finished) < len(testRuns) {
-			if time.Now().After(deadline) || renew() != nil {
+			if time.Now().After(deadline) {
+				stage = "runs-deadline"
+				return proof, ControllerError{stage}
+			}
+			if renew() != nil {
+				stage = "runs-renew"
 				return proof, ControllerError{stage}
 			}
 			for _, run := range repositorytests.RunNames() {
@@ -332,6 +341,7 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 				stage = kind
 				status, e := testRuns[kind].Status(ctx, pods[kind])
 				if e != nil {
+					stage = testsStage(stage, e)
 					return proof, ControllerError{stage}
 				}
 				switch {
@@ -339,18 +349,29 @@ func RunWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 					// Each run imports as soon as it is ready: its runner
 					// waits for the marker only a bounded time.
 					// Renew first so the claim covers this whole import.
-					if renew() != nil || fence() != nil || testRuns[kind].Import(ctx, pods[kind]) != nil {
+					if renew() != nil {
+						stage += "-import-renew"
+						return proof, ControllerError{stage}
+					}
+					if fence() != nil {
+						stage += "-import-fence"
+						return proof, ControllerError{stage}
+					}
+					if e := testRuns[kind].Import(ctx, pods[kind]); e != nil {
+						stage = testsStage(stage, e)
 						return proof, ControllerError{stage}
 					}
 					imported[kind] = true
 				case status.Succeeded && imported[kind]:
 					finished[kind] = true
 				case status.Succeeded:
+					stage += "-unimported-success"
 					return proof, ControllerError{stage}
 				}
 			}
 			select {
 			case <-ctx.Done():
+				stage = "runs-context"
 				return proof, ControllerError{stage}
 			case <-time.After(time.Second):
 			}

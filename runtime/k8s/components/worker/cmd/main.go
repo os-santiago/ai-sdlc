@@ -42,8 +42,10 @@ func main() {
 		runtime := execution.Runtime{SourceCache: sourcefetch.NewCache(), Component: component, ConfigPath: path, IntakePath: os.Getenv("AI_SDLC_INTAKE_CONFIG_PATH"), APIServer: "https://kubernetes.default.svc", TokenPath: "/var/run/ai-sdlc/kubernetes/token", CAPath: "/var/run/ai-sdlc/kubernetes/ca.crt", GatewayTokenPath: "/var/run/ai-sdlc/model/token", ProviderTimeoutSeconds: gatewaySeconds, AdoptGatewayProfile: os.Getenv("AI_SDLC_MODEL_GATEWAY_PROFILE") == "benchmark"}
 		// Executor pods run only in the installed sandbox RuntimeClass. Without
 		// it the worker is not ready, and each poll refuses to claim work while
-		// cleanup still runs; it never runs unsandboxed.
-		sandbox := &bootstrap.SandboxGate{Known: []error{podtransport.ErrRuntimeClassOverhead, podtransport.ErrRuntimeClassScheduling}}
+		// cleanup still runs; it never runs unsandboxed. A transient (unknown)
+		// read within the grace keeps readiness only; claims still need a
+		// successful read in the poll.
+		sandbox := &bootstrap.SandboxGate{Classify: podtransport.ClassifyRuntimeClass, Grace: bootstrap.SandboxGrace}
 		ready = func(ctx context.Context) error {
 			if e := component.Ready(ctx); e != nil {
 				return e

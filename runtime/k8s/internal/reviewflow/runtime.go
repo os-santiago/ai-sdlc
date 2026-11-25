@@ -121,8 +121,13 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		return "", ControllerError{Stage: "configuration"}
 	}
 	sandbox := Sandbox{RuntimeClass: config.SandboxRuntimeClass()}
+	// An unknown class (a transient API failure) refuses the claim too.
 	if sandbox.Admission, e = r.Client.CheckRuntimeClass(ctx, sandbox.RuntimeClass); e != nil {
-		return "sandbox-runtime-class-unavailable", ControllerError{Stage: "sandbox-runtime-class"}
+		state := "sandbox-runtime-class-unavailable"
+		if podtransport.RuntimeClassUnknown(e) {
+			state = "sandbox-runtime-class-unknown"
+		}
+		return state, podtransport.WithRuntimeClassReason(ControllerError{Stage: "sandbox-runtime-class"}, e)
 	}
 	if _, e = Run(ctx, r.DB, r.Policy, r.Load, id, r.Client, sandbox); e != nil {
 		return "stopped", e

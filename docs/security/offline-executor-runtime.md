@@ -67,26 +67,80 @@ subdomain.
 
 The worker and the verifier check, read-only, that the configured class exists
 (`get` on that one `runtimeclasses.node.k8s.io` name, granted by a chart
-ClusterRole). Until it does they are not ready and log
-`sandbox runtime class unavailable` once. Each poll repeats the check, with
+ClusterRole). Until it does they are not ready. Each poll repeats the check, with
 the configuration and client it then uses, immediately before it claims work
 or creates a pod; expiry, cleanup, rejection and handoff of already approved
 work keep running. There is no fallback to running without the sandbox.
+
+### Transient reads, reasons and the readiness grace
+
+Each check names one bounded reason when it fails. Kubernetes did not answer
+in time (`timeout`), the connection failed (`transport`), or the API server
+answered 429 (`throttled`) or 5xx (`server-error`): these are *unknown*, not
+absent. The other reasons are definite observations or refusals: `not-found`
+(404), `forbidden` (401 or 403), `no-handler`, `terminating`, `invalid`
+(another status, an oversized or malformed body, or another class), `overhead`,
+`scheduling` and `configuration` (no client or an invalid name).
+
+- **Retry within one check.** An unknown read is retried twice, after 200 ms
+  and 400 ms, each read bounded to 2 s and the whole check to 5 s and the
+  caller's deadline. A definite answer is final at once.
+- **New work.** A poll claims work only after a successful read in that poll.
+  An unknown class refuses the claim like a missing one (poll state
+  `sandbox-runtime-class-unknown` instead of `-unavailable`; the stop names the
+  reason, for example `sandbox-runtime-class-timeout` or
+  `sandbox-runtime-class-not-found`). Unknown is never treated as available.
+- **Work in progress.** No in-flight path reads the class again. A running
+  executor, verification or review uses the admission its poll observed before
+  the claim (`Session.Bind` and the exact pod comparison check it), so a later
+  read failure cannot stop it. A test pins the only callers of the read.
+- **Readiness.** The readiness gate stays ready through an unknown read only
+  while it observed the same class name(s) available within the last 60 s. A
+  definite failure, another class or an older observation makes the component
+  not ready at once. The grace covers readiness only, never a claim.
+
+The gate logs only changes, with one of these bounded lines:
+
+```text
+sandbox runtime class available
+sandbox runtime class unavailable: <reason>
+sandbox runtime class unknown: <reason>
+sandbox runtime class unknown: <reason>; within grace
+```
+
+An error the gate cannot name (an unreadable configuration or service account
+token) is `unavailable: preflight`. A readiness probe whose deadline ended
+before or during the read is `unknown: timeout`.
+
+The chart value `probes.readinessTimeoutSeconds` sets the readiness probes'
+`timeoutSeconds` for every runtime component. `/readyz` bounds its own checks
+to 3 s, and the kubelet's default of 1 s cut slow reads short. In evaluation
+battery 24 (issue #790), every `sandbox runtime class unavailable` line from the
+verifier came with a `/readyz` request that ended at exactly 1.000 s. The probe
+had canceled the read; no read ever answered that the class was missing.
+
+The default, 0, omits the field, so the kubelet default applies and an
+installation recorded before this setting renders byte-identically (the
+upgrade tools compare the re-render with the recorded documents). The
+installer sets 5 for new candidate and verification installations, and every
+upgrade carries the recorded value forward unchanged. To adopt it on an
+existing installation, set the value in a deliberate configuration change.
+The kustomize base (`runtime/k8s/deploy/kustomize/base`) keeps the kubelet
+default; add `timeoutSeconds: 5` to its readiness probes with an overlay patch
+if you deploy from it.
 
 RuntimeClass admission adds the class's `overhead.podFixed` as the pod's
 `spec.overhead` and merges the class's `scheduling` nodeSelector and
 tolerations. The preflight returns exactly those additions and every pod is
 compared with its compiled template plus exactly them; any other added or
 changed field still fails. Tolerations that subsume each other or the API
-defaults are refused (`sandbox runtime class scheduling unsupported`), so the
-merge is an exact union.
+defaults are refused (reason `scheduling`), so the merge is an exact union.
 
 Pod overhead counts against each sandbox namespace's ResourceQuota. Set
 `sandbox.podOverhead` (whole millicores and Mi) to grow every sandbox quota by
 that overhead for each pod it admits. The controllers refuse a class whose
-overhead exceeds the declared headroom (`sandbox runtime class overhead
-exceeds quota headroom`); with no headroom only a class without overhead is
-used. On OpenShift the installer reads the class's overhead and sets the
+overhead exceeds the declared headroom (reason `overhead`); with no headroom
+only a class without overhead is used. On OpenShift the installer reads the class's overhead and sets the
 headroom, rounded up.
 
 On OpenShift, select the class with

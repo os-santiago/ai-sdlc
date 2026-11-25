@@ -155,6 +155,10 @@ def validate_runtime_class(name):
     return name
 
 
+# Readiness probe timeout set on new installations (chart value probes.readinessTimeoutSeconds).
+READINESS_TIMEOUT_SECONDS = 5
+
+
 def desired_values(root, image_lock_path, lock, verification=False, review=False, publication=False, merge=False, repair=False,
                    generation_seconds=None, generation_steps=None, model_upstream=False, runtime_class=DEFAULT_RUNTIME_CLASS,
                    generation_answer_tokens=None):
@@ -203,7 +207,11 @@ def desired_values(root, image_lock_path, lock, verification=False, review=False
     custom_runtime_class = validate_runtime_class(runtime_class) != DEFAULT_RUNTIME_CLASS
     if custom_runtime_class:
         config['placement']['RuntimeClass'] = runtime_class
-    result = {'candidate': {'configJSON': json.dumps(config, sort_keys=True), 'apiServerCIDRs': []}}
+    # Readiness probes wait 5 s, longer than /readyz bounds its own checks
+    # (3 s). Installations recorded before this setting omit it and keep
+    # rendering exactly as installed; upgrades carry the recorded value.
+    result = {'candidate': {'configJSON': json.dumps(config, sort_keys=True), 'apiServerCIDRs': []},
+              'probes': {'readinessTimeoutSeconds': READINESS_TIMEOUT_SECONDS}}
     if custom_runtime_class:
         result['sandbox'] = {'runtimeClassName': runtime_class}
     if verification:

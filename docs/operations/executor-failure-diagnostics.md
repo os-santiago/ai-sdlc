@@ -145,3 +145,124 @@ without response headers; see
 
 As with every publication failure, the call stays uncertain and is never
 retried by this diagnostic.
+
+## Readiness stops
+
+An attempt that stops before the executor runs logs a `readiness` stage. A
+refused toolchain copy is named `readiness-toolchain-*` (see
+[project manifest installation](project-manifest-installation.md)). Every
+other refusal of the starting pod now names one bounded step; the stop,
+cleanup and the exact pod acceptance are unchanged:
+
+| Stage | Meaning |
+|---|---|
+| `readiness-uid` | The recorded pod UID is malformed (a programming guard) |
+| `readiness-request` | Reading the pod failed (no answer within 5 s, or the connection failed) |
+| `readiness-permission` | Reading the pod was denied |
+| `readiness-status` | The read returned a status other than 200 |
+| `readiness-deadline` | The start budget or the claim ended while the pod was still starting |
+| `readiness-template` | The pod differs from its compiled template plus the observed RuntimeClass additions |
+| `readiness-phase` | The pod left Pending/Running |
+| `readiness-containers` | A worker or mailbox container restarted, terminated or reported an unexpected state |
+| `readiness-containers-before-init` | A worker or mailbox container was created or ran before every init container completed |
+| `readiness-containers-unstable` | A worker or mailbox container observed earlier (created or running) changed its container ID or vanished |
+| `readiness-containers-created` | A worker or mailbox container reported waiting with a container ID that is not the kubelet's created state, or returned to it after running |
+| `readiness-init-count` | The init container statuses were not the compiled ones (extra, missing, or an empty list when one is required) |
+| `readiness-init-identity` | An init container was out of order, restarted or has a previous termination |
+| `readiness-init-image` | An init container runs another image than its pin |
+| `readiness-init-terminated` | An init container terminated out of order, without a container ID, or with a terminated container ID different from its status |
+| `readiness-init-running` | An init container ran before the previous one completed, or without an ID or image |
+| `readiness-init-created` | An init container reported waiting with a container ID that is not the kubelet's created state, or before the previous one completed |
+| `readiness-init-waiting` | An init container waited for a reason other than PodInitializing or ContainerCreating |
+| `readiness-init-state` | An init container reported no single state |
+| `readiness-init-unstable` | An init container observed earlier vanished, changed its container ID, or returned to created after it ran |
+| `readiness-bind` | The executor session could not be bound to the running pod |
+| `readiness-bind-unstable` | The bound session observed other init containers than readiness did |
+
+### The created-but-not-started state (issue #790)
+
+Between two kubelet status updates a container can be *created* by the
+container runtime but not yet *started*. The kubelet then writes it as
+`waiting` with its container ID, its image, and no reason or message
+(`convertToAPIContainerStatuses`, `ContainerStateCreated` in
+`pkg/kubelet/kubelet_pods.go`). Before this change, readiness required every
+waiting container to have no container ID, so this legitimate state refused
+the pod and stopped the attempt at plain `readiness` with 0 model calls.
+
+Evidence from evaluation battery 25: an init-state recording of
+`executor-a22df1c0-…-1` shows `install-runner` terminated with exit code 0 at
+03:58:57Z, `copy-toolchain` running at 03:58:59Z, and the pod Failed at
+03:59:02Z with `copy-toolchain` terminated by SIGTERM (exit code 143): the
+controller deleted a healthy pod a few seconds into its init sequence. Two
+consecutive attempts did this, with no RuntimeClass failure logged. The
+recorder polls every 0.3 to 2 s and did not capture the status the controller
+refused. Checked against the kubelet source, the candidates fall into three
+groups: `started: false` and an empty `state.terminated.containerID` are
+already accepted; a shorter or reordered list and a previous state are not
+written for this pod (the kubelet writes one status per spec container in spec
+order, and a previous state needs a restart); the created state is written and
+was refused. This is the best-supported cause; the refused status itself was
+not captured.
+
+Readiness now accepts exactly that state and nothing broader:
+
+- waiting with no reason and no message, a well-formed container ID, no
+  restart and no previous termination; an image ID, when already reported,
+  must match the pin (a started container must report one);
+- an init container only when every earlier one exited 0; a worker or mailbox
+  container only after the init sequence completed;
+- the created container's ID is held like any other: it must be observed
+  again with the same ID (for a worker or mailbox container too), and a
+  container observed running or terminated is never accepted as created
+  again;
+- a running pod (`Bind` and every later session observation) still requires
+  every init container terminated and both main containers running;
+- a created container whose start fails never becomes acceptable: the kubelet
+  then reports a reason (for example `RunContainerError`), a restart or a
+  failed pod, which refuses it (`readiness-init-created`,
+  `readiness-containers-created`, `readiness-init-identity` or
+  `readiness-phase`). If it simply stays created, the start budget ends at
+  `readiness-deadline`. Either way the attempt fails closed.
+
+A waiting status with a container ID and any reason (for example
+`CreateContainerError`, or `PodInitializing` with an ID) is still refused, as
+is every other rule above. The repository-tests observation of the verifier
+accepts the same created state as waiting.
+
+## Verification transport stops
+
+The verifier logs `verification reconciliation stopped safely: <stage>`. For
+the repository-tests recipe, a stop while its three runs (`baseline`, `tests`,
+`candidate`) execute now names one bounded step. A stop that concerns all
+three runs is `runs-deadline` (the runs outlived their deadline), `runs-renew`
+(renewing the verification claim failed) or `runs-context` (the verification's
+deadline ended between observations). Any other stop names the run and its
+step, for example `candidate-import-transfer-timeout`:
+
+| Step | Meaning |
+|---|---|
+| `import-renew`, `import-fence` | The claim renewal or the authority fence before an import failed |
+| `unimported-success` | The pod succeeded before its source was imported |
+| `observe-request`, `observe-permission`, `observe-status` | Reading the pod failed, was denied, or returned another status |
+| `observe-template`, `observe-phase`, `observe-container`, `observe-progress` | The pod differs from its template, failed, has a refused container state, or ended without a completed tests container |
+| `import-before-*`, `import-after-*`, `ready-after-*` | The same observation steps around the import and the ready marker; `-state` means the observed containers changed |
+| `import-transfer-*`, `ready-transfer-*` | The helper exchange through the API server failed: `-request`, `-permission` or `-timeout` |
+| `import-exit`, `ready-exit` | A helper exited nonzero |
+| `import-receipt` | The import receipt did not match the source |
+| `import-repeat` | A second import was refused |
+| `observe-uid` | The recorded pod UID is invalid |
+
+The stop and cleanup are unchanged. A failed cleanup after such a stop keeps
+the step, for example `cleanup-after-runs-renew`.
+
+In battery 24 a verification stopped at plain `candidate` 3 s after the
+verifier's readiness probe timed out, while its pods were transferring source.
+That image named the last run for a claim renewal, deadline or context stop
+too, so plain `candidate` covers those as well as any candidate observation or
+import step; it cannot be attributed further. It was not caused by the
+RuntimeClass check: no in-flight path reads the class (see
+[transient reads](../security/offline-executor-runtime.md#transient-reads-reasons-and-the-readiness-grace)).
+Two causes remain possible and are not established: a short stall of the
+verifier's dependencies (the API server or PostgreSQL), or the
+created-but-not-started state above, which the repository-tests observation
+also refused (`observe-container`) and now accepts.

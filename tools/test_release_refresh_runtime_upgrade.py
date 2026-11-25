@@ -70,6 +70,16 @@ class RefreshTargets(unittest.TestCase):
             self.assertEqual(active['review'].get('narrowModelTools'), recorded)
             self.assertEqual(set(active['review']), set(source['values']['review']))
 
+    def test_the_readiness_probe_timeout_is_inherited_as_recorded(self):
+        # Installations recorded before the setting never gain it; newer
+        # ones keep it.
+        for recorded in (None, 5):
+            source = installed()
+            if recorded is not None:
+                source['values']['probes'] = {'readinessTimeoutSeconds': recorded}
+            active = run_targets(source)['active']['values']
+            self.assertEqual(active.get('probes'), source['values'].get('probes'))
+
     def test_a_different_or_missing_upstream_is_refused(self):
         source = installed()
         source['values'].pop('modelGateway')

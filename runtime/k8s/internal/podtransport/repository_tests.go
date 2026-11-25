@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
+	"regexp"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -114,16 +116,19 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 	r := t.resources
 	raw, status, err := r.request(ctx, http.MethodGet, "pods", r.pod.Name, nil, false)
 	if err != nil {
-		return testsObservation{}, err
+		return testsObservation{}, testsFailure(requestStep("observe", err), err)
+	}
+	if status != 200 {
+		return testsObservation{}, testsFailure("observe-status", ErrTransport)
 	}
 	var pod core.Pod
-	if status != 200 || authority.DecodeStrict(raw, &pod) != nil || !exactPodTemplate(pod, r.pod, uid, r.binding.Admission) || len(pod.Status.EphemeralContainerStatuses) != 0 ||
+	if authority.DecodeStrict(raw, &pod) != nil || !exactPodTemplate(pod, r.pod, uid, r.binding.Admission) || len(pod.Status.EphemeralContainerStatuses) != 0 ||
 		len(pod.Status.InitContainerStatuses) > 2 || len(pod.Status.ContainerStatuses) > 1 {
-		return testsObservation{}, ErrTransport
+		return testsObservation{}, testsFailure("observe-template", ErrTransport)
 	}
 	o := testsObservation{phase: pod.Status.Phase, testsState: "waiting"}
 	if o.phase != core.PodPending && o.phase != core.PodRunning && o.phase != core.PodSucceeded {
-		return testsObservation{}, ErrTransport
+		return testsObservation{}, testsFailure("observe-phase", ErrTransport)
 	}
 	images := map[string]string{}
 	for _, c := range append(append([]core.Container{}, r.pod.Spec.InitContainers...), r.pod.Spec.Containers...) {
@@ -135,17 +140,21 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 		pin, known := images[s.Name]
 		if !known || seen[s.Name] || s.RestartCount != 0 || s.LastTerminationState.Terminated != nil || s.LastTerminationState.Running != nil ||
 			s.LastTerminationState.Waiting != nil || len(s.Image) > 1024 || len(s.ImageID) > 1024 {
-			return testsObservation{}, ErrTransport
+			return testsObservation{}, testsFailure("observe-container", ErrTransport)
 		}
 		seen[s.Name] = true
 		if s.ImageID != "" && (!imageIDPattern.MatchString(s.ImageID) || !imageMatchesPin(s.Image, s.ImageID, pin)) {
-			return testsObservation{}, ErrTransport
+			return testsObservation{}, testsFailure("observe-container", ErrTransport)
 		}
-		started := s.ContainerID != ""
+		// A container the runtime created but has not started is reported
+		// waiting with its ID and no reason (see createdStatus); it counts
+		// as waiting. Every other container with an ID has a pinned image ID.
+		created := createdStatus(s)
+		started := s.ContainerID != "" && !created
 		if started && (!containerIDPattern.MatchString(s.ContainerID) || s.ImageID == "") {
-			return testsObservation{}, ErrTransport
+			return testsObservation{}, testsFailure("observe-container", ErrTransport)
 		}
-		waiting := s.State.Waiting != nil && s.State.Running == nil && s.State.Terminated == nil && !started &&
+		waiting := created || s.State.Waiting != nil && s.State.Running == nil && s.State.Terminated == nil && s.ContainerID == "" &&
 			(s.State.Waiting.Reason == "ContainerCreating" || s.State.Waiting.Reason == "PodInitializing")
 		running := s.State.Running != nil && s.State.Waiting == nil && s.State.Terminated == nil && started
 		completed := s.State.Terminated != nil && s.State.Running == nil && s.State.Waiting == nil && started &&
@@ -153,14 +162,14 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 		switch s.Name {
 		case "install-runner":
 			if !waiting && !completed && !(running && o.phase == core.PodPending) {
-				return testsObservation{}, ErrTransport
+				return testsObservation{}, testsFailure("observe-container", ErrTransport)
 			}
 		case "transfer":
 			// The kubelet stops the sidecar once the tests end, possibly before
 			// the phase changes; its exit then no longer matters.
 			stopped := s.State.Terminated != nil && s.State.Running == nil && s.State.Waiting == nil && started
 			if !waiting && !running && !stopped {
-				return testsObservation{}, ErrTransport
+				return testsObservation{}, testsFailure("observe-container", ErrTransport)
 			}
 			if running {
 				o.transfer = s.ContainerID
@@ -174,12 +183,12 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 			case completed:
 				o.tests, o.testsState = s.ContainerID, "completed"
 			case !waiting:
-				return testsObservation{}, ErrTransport
+				return testsObservation{}, testsFailure("observe-container", ErrTransport)
 			}
 		}
 	}
 	if (o.phase == core.PodSucceeded || transferStopped) && o.testsState != "completed" {
-		return testsObservation{}, ErrTransport
+		return testsObservation{}, testsFailure("observe-progress", ErrTransport)
 	}
 	return o, nil
 }
@@ -213,7 +222,7 @@ type TestsStatus struct {
 // (a failed container, a restart, a changed template) is an error.
 func (t *TestsRun) Status(ctx context.Context, uid string) (TestsStatus, error) {
 	if t == nil || !resourceUID.MatchString(uid) {
-		return TestsStatus{}, ErrTransport
+		return TestsStatus{}, testsFailure("observe-uid", ErrTransport)
 	}
 	o, err := t.observe(ctx, uid)
 	if err != nil {
@@ -241,12 +250,15 @@ func (t *TestsRun) Prepare(ctx context.Context, uid string) error {
 // before and after. It runs at most once per run.
 func (t *TestsRun) Import(ctx context.Context, uid string) error {
 	if t == nil || !resourceUID.MatchString(uid) || t.tests != "" || t.imported {
-		return ErrTransport
+		return testsFailure("import-repeat", ErrTransport)
 	}
 	t.imported = true
 	before, err := t.observe(ctx, uid)
-	if err != nil || before.phase != core.PodRunning || before.transfer == "" || before.testsState != "running" {
-		return ErrTransport
+	if err != nil {
+		return importFailure("import-before", err)
+	}
+	if before.phase != core.PodRunning || before.transfer == "" || before.testsState != "running" {
+		return testsFailure("import-before-state", ErrTransport)
 	}
 	// The runner waits ReadySeconds from its own start; import and ready
 	// must finish well within that.
@@ -258,8 +270,11 @@ func (t *TestsRun) Import(ctx context.Context, uid string) error {
 		command:    []string{"/workspace-transfer", "import", "--pod-uid", uid, "--source-sha", t.sourceSHA, "--digest", digest},
 		inputLimit: workspacebundle.MaxWireBytes, outputLimit: 2048, frames: 1024, timeout: 30 * time.Second, stdin: true,
 	}, t.source)
-	if err != nil || code != 0 {
-		return ErrTransport
+	if err != nil {
+		return testsFailure(exchangeStep("import-transfer", ctx, err), ErrTransport)
+	}
+	if code != 0 {
+		return testsFailure("import-exit", ErrTransport)
 	}
 	bundle, _ := workspacebundle.Decode(t.source)
 	var receipt struct {
@@ -270,22 +285,29 @@ func (t *TestsRun) Import(ctx context.Context, uid string) error {
 	}
 	if authority.DecodeStrict(raw, &receipt) != nil || receipt.Imported == nil || !*receipt.Imported || receipt.Files == nil || *receipt.Files != len(bundle.Files) ||
 		receipt.SourceSHA == nil || *receipt.SourceSHA != t.sourceSHA || receipt.BundleSHA256 == nil || *receipt.BundleSHA256 != digest {
-		return ErrTransport
+		return testsFailure("import-receipt", ErrTransport)
 	}
-	if after, err := t.observe(ctx, uid); err != nil || after.transfer != before.transfer || after.tests != before.tests || after.testsState != "running" {
-		return ErrTransport
+	if after, err := t.observe(ctx, uid); err != nil {
+		return importFailure("import-after", err)
+	} else if after.transfer != before.transfer || after.tests != before.tests || after.testsState != "running" {
+		return testsFailure("import-after-state", ErrTransport)
 	}
 	raw, code, err = session.exchangeFixed(ctx, helperOperation{
 		command: []string{"/workspace-transfer", "ready", "--pod-uid", uid, "--source-sha", t.sourceSHA, "--tree-sha256", t.treeSHA},
 		frames:  1024, timeout: 60 * time.Second,
 	}, nil)
-	if err != nil || code != 0 || len(raw) != 0 {
-		return ErrTransport
+	if err != nil {
+		return testsFailure(exchangeStep("ready-transfer", ctx, err), ErrTransport)
+	}
+	if code != 0 || len(raw) != 0 {
+		return testsFailure("ready-exit", ErrTransport)
 	}
 	// From here on the repository's code controls /workspaces: no further
 	// helper runs in this pod.
-	if after, err := t.observe(ctx, uid); err != nil || after.tests != before.tests || (after.testsState == "running" && after.transfer != before.transfer) {
-		return ErrTransport
+	if after, err := t.observe(ctx, uid); err != nil {
+		return importFailure("ready-after", err)
+	} else if after.tests != before.tests || (after.testsState == "running" && after.transfer != before.transfer) {
+		return testsFailure("ready-after-state", ErrTransport)
 	}
 	t.tests = before.tests
 	return nil
@@ -344,3 +366,54 @@ func itoa(n int64) string {
 	raw, _ := json.Marshal(n)
 	return string(raw)
 }
+
+// testsError names the bounded step of a repository-tests observation or
+// import that failed. It unwraps to the original error (ErrTransport or
+// ErrPermission), so every caller stops exactly as before; the step only
+// refines the verification stop diagnostic.
+type testsError struct {
+	step  string
+	cause error
+}
+
+func (e testsError) Error() string { return "repository tests stopped at " + e.step }
+func (e testsError) Unwrap() error { return e.cause }
+
+func testsFailure(step string, err error) error { return testsError{step: step, cause: err} }
+
+// importFailure prefixes the failed observation step with the import step it
+// belongs to, for example import-before-observe-request. Import has always
+// stopped with ErrTransport, whatever the observation's cause.
+func importFailure(step string, err error) error {
+	if observed := TestsStep(err); observed != "" {
+		step += "-" + observed
+	}
+	return testsError{step: step, cause: ErrTransport}
+}
+
+// exchangeStep names a failed helper exchange: denied, timed out (its own
+// bound or the caller's deadline) or another transport failure.
+func exchangeStep(step string, ctx context.Context, err error) string {
+	switch {
+	case errors.Is(err, ErrPermission):
+		return step + "-permission"
+	case ctx.Err() != nil:
+		return step + "-timeout"
+	}
+	return step + "-request"
+}
+
+var testsSteps = regexp.MustCompile(`^((import-before|import-after|ready-after)-)?observe-(uid|request|permission|status|template|phase|container|progress)$|^(import-(repeat|before-state|after-state|exit|receipt)|ready-(exit|after-state)|(import|ready)-transfer-(request|permission|timeout))$`)
+
+// TestsStep returns the failed repository-tests step, or "" for any other
+// error.
+func TestsStep(err error) string {
+	var failed testsError
+	if errors.As(err, &failed) && testsSteps.MatchString(failed.step) {
+		return failed.step
+	}
+	return ""
+}
+
+// KnownTestsStep reports whether step is one TestsStep can return.
+func KnownTestsStep(step string) bool { return testsSteps.MatchString(step) }

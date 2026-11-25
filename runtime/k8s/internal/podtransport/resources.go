@@ -211,49 +211,61 @@ const StartBudget = 120 * time.Second
 // scheduling is bounded; mutations, replacement and terminal states fail.
 func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, error) {
 	if r == nil || !resourceUID.MatchString(uid) {
-		return nil, ErrTransport
+		return nil, readinessError{step: "uid"}
 	}
 	ctx, cancel := context.WithDeadline(ctx, minDeadline(time.Now().Add(startBudget(r.pod)), r.expires))
 	defer cancel()
-	// Init container IDs, once observed, must never change.
-	seen := map[string]instance{}
+	// Init container IDs, once observed, must never change, and a container
+	// observed started is never again reported created. Worker and mailbox
+	// container IDs, once observed (created or running), are held too.
+	seen, started, mainIDs := map[string]instance{}, map[string]bool{}, map[string]string{}
 	for {
 		raw, status, err := r.request(ctx, http.MethodGet, "pods", r.pod.Name, nil, false)
 		if err != nil {
-			return nil, err
+			step := "request"
+			switch {
+			case errors.Is(err, ErrPermission):
+				step = "permission"
+			case ctx.Err() != nil:
+				step = "deadline"
+			}
+			return nil, readinessError{step: step, cause: err}
 		}
 		if status != 200 {
-			return nil, ErrTransport
+			return nil, readinessError{step: "status"}
 		}
 		var pod core.Pod
 		if authority.DecodeStrict(raw, &pod) != nil || !exactPodTemplate(pod, r.pod, uid, r.binding.Admission) {
-			return nil, ErrTransport
+			return nil, readinessError{step: "template"}
 		}
 		// The init sequence is checked first, so a failed toolchain copy
 		// (which fails the pod) is named rather than a generic phase stop.
-		ready, err := r.containersReady(pod, seen)
+		ready, err := r.containersReady(pod, seen, started, mainIDs)
 		if err != nil {
 			return nil, err
 		}
 		if pod.Status.Phase != core.PodPending && pod.Status.Phase != core.PodRunning {
-			return nil, ErrTransport
+			return nil, readinessError{step: "phase"}
 		}
 		if ready && pod.Status.Phase == core.PodRunning {
 			b := r.binding
 			b.PodUID = uid
 			session, err := Bind(ctx, r.client, b)
 			if err != nil {
-				return nil, err
+				if ReadinessStep(err) != "" {
+					return nil, err
+				}
+				return nil, readinessError{step: "bind", cause: err}
 			}
 			// The session's baseline is the same init containers observed here.
 			if !stableInit(seen, session.initInstances()) {
-				return nil, ErrTransport
+				return nil, readinessError{step: "bind-unstable"}
 			}
 			return session, nil
 		}
 		select {
 		case <-ctx.Done():
-			return nil, ErrTransport
+			return nil, readinessError{step: "deadline"}
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
@@ -263,16 +275,21 @@ func (r *Resources) WaitRunning(ctx context.Context, uid string) (*Session, erro
 // is not a generic retry of failed binding, restarts or unknown transport errors.
 // The compiled init containers must progress exactly in order before any
 // worker or mailbox container starts.
-func (r *Resources) containersReady(pod core.Pod, seen map[string]instance) (bool, error) {
+//
+// A worker or mailbox container may be reported created but not started
+// (see createdStatus) only after the init sequence completed, and never
+// after it was observed running. A worker or mailbox container ID, once
+// observed, never changes and never disappears (containers-unstable).
+func (r *Resources) containersReady(pod core.Pod, seen map[string]instance, everStarted map[string]bool, mainIDs map[string]string) (bool, error) {
 	if len(pod.Status.ContainerStatuses) > 2 || len(pod.Status.EphemeralContainerStatuses) != 0 {
-		return false, ErrTransport
+		return false, readinessError{step: "containers"}
 	}
 	initialized, err := observeInit(r.pod.Spec.InitContainers, pod.Status.InitContainerStatuses, false)
 	if err != nil {
 		return false, err
 	}
-	if !stableInit(seen, initialized.instances) {
-		return false, ErrTransport
+	if !stableInit(seen, initialized.instances) || !neverUnstarted(everStarted, initialized.instances, initialized.created) {
+		return false, initRefusal("unstable")
 	}
 	images := map[string]string{}
 	for _, container := range r.pod.Spec.Containers {
@@ -283,24 +300,48 @@ func (r *Resources) containersReady(pod core.Pod, seen map[string]instance) (boo
 	for _, status := range pod.Status.ContainerStatuses {
 		pin, known := images[status.Name]
 		if !known || started[status.Name] || status.RestartCount != 0 || status.State.Terminated != nil || status.LastTerminationState.Terminated != nil || status.LastTerminationState.Running != nil || status.LastTerminationState.Waiting != nil {
-			return false, ErrTransport
+			return false, readinessError{step: "containers"}
 		}
 		started[status.Name] = true
 		if len(status.Image) > 1024 || len(status.ImageID) > 1024 {
-			return false, ErrTransport
+			return false, readinessError{step: "containers"}
 		}
 		if status.ImageID != "" && (!imageIDPattern.MatchString(status.ImageID) || !imageMatchesPin(status.Image, status.ImageID, pin)) {
-			return false, ErrTransport
+			return false, readinessError{step: "containers"}
+		}
+		if previous, ok := mainIDs[status.Name]; ok && status.ContainerID != previous {
+			return false, readinessError{step: "containers-unstable"}
 		}
 		if status.State.Running != nil && status.State.Waiting == nil {
-			if !initialized.complete || !containerIDPattern.MatchString(status.ContainerID) || status.ImageID == "" || status.Image == "" {
-				return false, ErrTransport
+			if !initialized.complete {
+				return false, readinessError{step: "containers-before-init"}
 			}
+			if !containerIDPattern.MatchString(status.ContainerID) || status.ImageID == "" || status.Image == "" {
+				return false, readinessError{step: "containers"}
+			}
+			everStarted[status.Name] = true
+			mainIDs[status.Name] = status.ContainerID
 			running++
 			continue
 		}
+		if status.ContainerID != "" && status.State.Running == nil && status.State.Waiting != nil {
+			// Created, not yet started (the kubelet's ContainerStateCreated).
+			if !initialized.complete {
+				return false, readinessError{step: "containers-before-init"}
+			}
+			if !createdStatus(status) || everStarted[status.Name] {
+				return false, readinessError{step: "containers-created"}
+			}
+			mainIDs[status.Name] = status.ContainerID
+			continue
+		}
 		if status.State.Running != nil || status.State.Waiting == nil || status.ContainerID != "" || (status.State.Waiting.Reason != "ContainerCreating" && status.State.Waiting.Reason != "PodInitializing") {
-			return false, ErrTransport
+			return false, readinessError{step: "containers"}
+		}
+	}
+	for name := range mainIDs {
+		if !started[name] {
+			return false, readinessError{step: "containers-unstable"}
 		}
 	}
 	return running == 2, nil

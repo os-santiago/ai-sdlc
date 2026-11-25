@@ -83,6 +83,9 @@ spec:
             - {name: http, containerPort: {{ $component.port }}}
           readinessProbe:
             httpGet: {path: /readyz, port: http}
+            {{- with $.Values.probes.readinessTimeoutSeconds }}
+            timeoutSeconds: {{ . }}
+            {{- end }}
           livenessProbe:
             httpGet: {path: /healthz, port: http}
             initialDelaySeconds: 10

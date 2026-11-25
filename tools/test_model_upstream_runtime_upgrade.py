@@ -105,6 +105,14 @@ class Targets(unittest.TestCase):
             self.assertEqual(active['review'].get('narrowModelTools'), recorded)
             self.assertNotIn('tools', active['modelGateway'])
 
+    def test_the_readiness_probe_timeout_is_inherited_as_recorded(self):
+        for recorded in (None, 5):
+            source = self.source()
+            if recorded is not None:
+                source['values']['probes'] = {'readinessTimeoutSeconds': recorded}
+            active = self.run_targets(source)['active']['values']
+            self.assertEqual(active.get('probes'), source['values'].get('probes'))
+
     def test_a_recorded_generation_budget_is_inherited_unchanged(self):
         source = self.source()
         candidate = json.loads(source['values']['candidate']['configJSON'])

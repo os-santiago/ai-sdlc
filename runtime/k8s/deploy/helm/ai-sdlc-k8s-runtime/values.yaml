@@ -9,6 +9,12 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 serviceAccount: {create: true, name: ""}
+# Readiness probe timeout (seconds) of every runtime component. 0 omits the
+# field, so the kubelet default (1 s) applies and installations recorded
+# before this setting render unchanged. The installer sets 5 for new
+# installations: /readyz bounds its own checks to 3 s, and a 1 s probe
+# cancels a slow API or database read and reports it as a missing dependency.
+probes: {readinessTimeoutSeconds: 0}
 runtime:
   intakePaused: false
   mode: maintenance

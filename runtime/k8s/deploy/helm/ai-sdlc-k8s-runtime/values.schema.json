@@ -60,6 +60,18 @@
         }
       }
     },
+    "probes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "readinessTimeoutSeconds": {
+          "description": "Readiness probe timeoutSeconds of every runtime component; 0 omits it (kubelet default).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30
+        }
+      }
+    },
     "serviceAccount": {
       "type": "object",
       "additionalProperties": false,
