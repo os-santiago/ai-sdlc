@@ -346,6 +346,68 @@ class ChartTests(unittest.TestCase):
                 self.assertNotEqual(self.render_build(dict(base, probes={'readinessTimeoutSeconds': bad})).returncode, 0)
         self.assertNotEqual(self.render_build(dict(base, probes={'other': 1})).returncode, 0)
 
+    def test_metrics_render_only_when_enabled_and_admit_only_the_metrics_port(self):
+        base = self.build_values()
+        before = self.render_build(base)
+        self.assertEqual(before.returncode, 0, before.stderr)
+        # Off (absent or false): recorded installations render byte-identically.
+        off = self.render_build(dict(base, metrics={'enabled': False, 'scrapeFrom': [], 'podMonitor': {'enabled': True}}))
+        self.assertEqual(off.stdout, before.stdout)
+        self.assertNotIn('AI_SDLC_METRICS_ADDRESS', before.stdout)
+        peer = {'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': 'monitoring'}}}
+        on = self.render_build(dict(base, metrics={'enabled': True, 'scrapeFrom': [peer]}))
+        self.assertEqual(on.returncode, 0, on.stderr)
+        docs = [d for d in yaml.safe_load_all(on.stdout) if d]
+        old = [d for d in yaml.safe_load_all(before.stdout) if d]
+        # Every runtime container gains only the metrics listener and port.
+        listeners = {}
+        for d in docs:
+            if d['kind'] != 'Deployment':
+                continue
+            for c in d['spec']['template']['spec']['containers']:
+                env = {e['name']: e.get('value') for e in c.get('env', [])}
+                if 'AI_SDLC_HTTP_ADDRESS' in env:
+                    listeners[d['metadata']['name']] = (env['AI_SDLC_METRICS_ADDRESS'], [p for p in c['ports'] if p['name'] == 'metrics'])
+                else:
+                    self.assertNotIn('AI_SDLC_METRICS_ADDRESS', env)
+        self.assertIn('ai-sdlc-worker', listeners)
+        self.assertIn('ai-sdlc-verifier', listeners)
+        self.assertIn('ai-sdlc-build-controller', listeners)
+        for name, listener in listeners.items():
+            self.assertEqual(listener, (':9090', [{'name': 'metrics', 'containerPort': 9090}]), name)
+        policy = next(d for d in docs if d['kind'] == 'NetworkPolicy' and d['metadata']['name'] == 'ai-sdlc-metrics')
+        self.assertEqual(policy['spec']['policyTypes'], ['Ingress'])
+        self.assertEqual(policy['spec']['ingress'], [{'from': [peer], 'ports': [{'protocol': 'TCP', 'port': 'metrics'}]}])
+        self.assertNotIn('PodMonitor', [d['kind'] for d in docs])
+        def strip(items):
+            out = []
+            for d in items:
+                if d['kind'] == 'NetworkPolicy' and d['metadata']['name'] == 'ai-sdlc-metrics':
+                    continue
+                for c in d.get('spec', {}).get('template', {}).get('spec', {}).get('containers', []) if d['kind'] == 'Deployment' else []:
+                    c['env'] = [e for e in c.get('env', []) if e['name'] != 'AI_SDLC_METRICS_ADDRESS']
+                    if 'ports' in c:
+                        c['ports'] = [p for p in c['ports'] if p['name'] != 'metrics']
+                out.append(d)
+            return out
+        self.assertEqual(strip(docs), old)
+        # The PodMonitor is a separate opt-in.
+        monitored = self.render_build(dict(base, metrics={'enabled': True, 'scrapeFrom': [peer], 'podMonitor': {'enabled': True, 'interval': '1m'}}))
+        self.assertEqual(monitored.returncode, 0, monitored.stderr)
+        monitor = next(d for d in yaml.safe_load_all(monitored.stdout) if d and d['kind'] == 'PodMonitor')
+        self.assertEqual(monitor['spec']['podMetricsEndpoints'], [{'port': 'metrics', 'path': '/metrics', 'scheme': 'http', 'interval': '1m'}])
+        # Without the global policy, select only pods that carry their own.
+        plain = self.render_build(dict(base, networkPolicy={'enabled': False, 'databaseEgressCIDRs': []}, metrics={'enabled': True, 'scrapeFrom': [peer]}))
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        selected = next(d for d in yaml.safe_load_all(plain.stdout) if d and d['metadata']['name'] == 'ai-sdlc-metrics')
+        self.assertEqual(selected['spec']['podSelector']['matchExpressions'][0]['values'], ['build-controller', 'provenance-verifier', 'deployer'])
+        # An empty peer list would admit every source; a shared port would break a component.
+        for bad in ({'enabled': True}, {'enabled': True, 'scrapeFrom': [{}]}, {'enabled': True, 'scrapeFrom': [peer], 'port': 8087},
+                    {'enabled': True, 'scrapeFrom': [peer], 'port': 8083}, {'enabled': True, 'scrapeFrom': [peer], 'port': 80},
+                    {'enabled': 'yes', 'scrapeFrom': [peer]}, {'enabled': True, 'scrapeFrom': [peer], 'other': 1}):
+            with self.subTest(bad=bad):
+                self.assertNotEqual(self.render_build(dict(base, metrics=bad)).returncode, 0)
+
     def test_review_gateway_tool_allowlist_renders_only_when_set_and_review_is_enabled(self):
         upstream = {'adapter': 'openai', 'upstream': {'url': 'http://192.0.2.10:8080', 'model': 'qwen3-coder', 'cidr': '192.0.2.10/32'}}
         review = {'enabled': True, 'configJSON': '{}'}

@@ -158,6 +158,9 @@ spec:
             - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-config}
           env:
             - {name: AI_SDLC_HTTP_ADDRESS, value: ":8087"}
+            {{- if .Values.metrics.enabled }}
+            - {name: AI_SDLC_METRICS_ADDRESS, value: ":{{ .Values.metrics.port }}"}
+            {{- end }}
             {{- if ne .Values.modelGateway.adapter "agent-cli" }}
             - {name: AI_SDLC_MODEL_GATEWAY_SECONDS, value: {{ add .Values.modelGateway.upstream.seconds 30 | quote }}}
             - {name: AI_SDLC_MODEL_GATEWAY_PROFILE, value: benchmark}
@@ -165,7 +168,7 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef: {name: {{ printf "%s-verifier" .Values.authority.databaseSecretPrefix }}, key: uri}
-          ports: [{name: http, containerPort: 8087}]
+          ports: [{name: http, containerPort: 8087}{{ if .Values.metrics.enabled }}, {name: metrics, containerPort: {{ .Values.metrics.port }}}{{ end }}]
           readinessProbe: {httpGet: {path: /readyz, port: http}{{ with $.Values.probes.readinessTimeoutSeconds }}, timeoutSeconds: {{ . }}{{ end }}}
           livenessProbe: {httpGet: {path: /healthz, port: http}, initialDelaySeconds: 10}
           resources:

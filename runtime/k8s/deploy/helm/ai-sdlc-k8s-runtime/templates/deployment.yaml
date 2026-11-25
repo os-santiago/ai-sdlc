@@ -61,6 +61,9 @@ spec:
             - configMapRef: {name: {{ include "ai-sdlc-k8s-runtime.fullname" $ }}-config}
           env:
             - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ $component.port }}"}
+            {{- if $.Values.metrics.enabled }}
+            - {name: AI_SDLC_METRICS_ADDRESS, value: ":{{ $.Values.metrics.port }}"}
+            {{- end }}
             {{- if and (eq $key "worker") (ne $.Values.modelGateway.adapter "agent-cli") }}
             - {name: AI_SDLC_MODEL_GATEWAY_SECONDS, value: {{ add $.Values.modelGateway.upstream.seconds 30 | quote }}}
             - {name: AI_SDLC_MODEL_GATEWAY_PROFILE, value: benchmark}
@@ -81,6 +84,9 @@ spec:
             {{- end }}
           ports:
             - {name: http, containerPort: {{ $component.port }}}
+            {{- if $.Values.metrics.enabled }}
+            - {name: metrics, containerPort: {{ $.Values.metrics.port }}}
+            {{- end }}
           readinessProbe:
             httpGet: {path: /readyz, port: http}
             {{- with $.Values.probes.readinessTimeoutSeconds }}

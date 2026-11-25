@@ -15,6 +15,21 @@ serviceAccount: {create: true, name: ""}
 # installations: /readyz bounds its own checks to 3 s, and a 1 s probe
 # cancels a slow API or database read and reports it as a missing dependency.
 probes: {readinessTimeoutSeconds: 0}
+# Prometheus metrics (docs/operations/metrics.md). Off by default: nothing
+# below renders and installations recorded before this setting render
+# unchanged. Enabled, each runtime component also listens on port, serving
+# only GET /metrics (bounded counters, never issue or model content), and a
+# NetworkPolicy admits scrapeFrom to that port alone, never to the
+# component's routes.
+metrics:
+  enabled: false
+  port: 9090
+  # NetworkPolicy peers that may scrape, required when enabled, for example
+  # [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}}].
+  scrapeFrom: []
+  # A Prometheus Operator PodMonitor for the metrics port. Needs the
+  # monitoring.coreos.com CRDs (OpenShift user workload monitoring has them).
+  podMonitor: {enabled: false, interval: 30s}
 runtime:
   intakePaused: false
   mode: maintenance
