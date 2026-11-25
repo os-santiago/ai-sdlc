@@ -31,7 +31,7 @@ const (
 // runs inside the repository's pinned toolchain image:
 //
 //	repository-tests install <dest>
-//	repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs>
+//	repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs> [analyze]
 //
 // The same binary, run inside the pinned toolchain image, copies a reviewed
 // toolchain root into a volume for the generation worker:
@@ -66,10 +66,17 @@ func main() {
 // writes one bounded result line per run to stdout. It opens no database,
 // network or cluster connection and loads no signing identity.
 //
-//	repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs>
+// With the analyze argument (only for settings with analysis) it first runs
+// the analysis commands on their own copy of the verified tree, made with
+// the other copies before any repository code runs and analysed before any
+// test runs, so no test can alter what is analysed. Their exit codes go on
+// the first result line.
+//
+//	repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs> [analyze]
 func runRepositoryTests(ctx context.Context, args []string, out io.Writer, parent, uidPath string) error {
-	if len(args) != 5 || len(args[4]) != 1 || args[4][0] < '1' || args[4][0] > '3' {
-		return errors.New("usage: repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs 1-3>")
+	analyze := len(args) == 6 && args[5] == repositorytests.AnalyzeArgument
+	if (len(args) != 5 && !analyze) || len(args[4]) != 1 || args[4][0] < '1' || args[4][0] > '3' {
+		return errors.New("usage: repository-tests run <verification.json> <scratch> <source-sha> <tree-sha256> <runs 1-3> [analyze]")
 	}
 	runs := int(args[4][0] - '0')
 	f, err := os.Open(args[0])
@@ -85,7 +92,7 @@ func runRepositoryTests(ctx context.Context, args []string, out io.Writer, paren
 	if authority.DecodeStrict(raw, &v) != nil {
 		return errors.New("invalid verification settings")
 	}
-	if v.Validate() != nil || (runs != 1 && runs != v.Repeat) {
+	if v.Validate() != nil || (runs != 1 && runs != v.Repeat) || (analyze && v.Analysis == nil) {
 		return errors.New("invalid verification settings")
 	}
 	uid, err := readUID(uidPath)
@@ -111,25 +118,48 @@ func runRepositoryTests(ctx context.Context, args []string, out io.Writer, paren
 	// before any repository code runs. A run can still alter later copies;
 	// that can only make the repetitions disagree, which fails as uncertain.
 	workspaces := []string{filepath.Join(parent, "repository")}
-	if runs > 1 {
+	analysisWorkspace := ""
+	if runs > 1 || analyze {
 		tree, err := workspacebundle.Export(parent, args[2])
 		if err != nil {
 			return errors.New("imported tree does not match")
 		}
-		for i := 2; i <= runs; i++ {
-			copyParent := filepath.Join(args[1], ".runs", strconv.Itoa(i))
+		copyTree := func(name string) (string, error) {
+			copyParent := filepath.Join(args[1], ".runs", name)
 			if os.MkdirAll(copyParent, 0o700) != nil || workspacebundle.Import(copyParent, tree) != nil {
-				return errors.New("run copy failed")
+				return "", errors.New("run copy failed")
 			}
-			workspaces = append(workspaces, filepath.Join(copyParent, "repository"))
+			return filepath.Join(copyParent, "repository"), nil
+		}
+		for i := 2; i <= runs; i++ {
+			workspace, err := copyTree(strconv.Itoa(i))
+			if err != nil {
+				return err
+			}
+			workspaces = append(workspaces, workspace)
+		}
+		if analyze {
+			if analysisWorkspace, err = copyTree("analysis"); err != nil {
+				return err
+			}
+		}
+	}
+	var analysis []int
+	if analyze {
+		runner := repositorytests.Runner{Verification: v, Workspace: analysisWorkspace, Scratch: args[1], ReapAll: os.Getpid() == 1}
+		if analysis, err = runner.Analyze(ctx); err != nil {
+			return err
 		}
 	}
 	var lines []byte
-	for _, workspace := range workspaces {
+	for i, workspace := range workspaces {
 		runner := repositorytests.Runner{Verification: v, Workspace: workspace, Scratch: args[1], ReapAll: os.Getpid() == 1}
 		result, err := runner.Run(ctx)
 		if err != nil {
 			return err
+		}
+		if i == 0 {
+			result.Analysis = analysis
 		}
 		lines = append(append(lines, result.Encode()...), '\n')
 	}

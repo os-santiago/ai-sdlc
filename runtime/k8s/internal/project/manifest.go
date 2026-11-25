@@ -62,6 +62,51 @@ type Verification struct {
 	// tool home inside the image). HOME, TMPDIR and the runner's fixed
 	// variables cannot be overridden.
 	Env map[string]string `json:"env,omitempty"`
+	// Analysis is optional static analysis, omitted when absent so manifests
+	// without it keep their canonical form, digest and verifier settings.
+	Analysis *Analysis `json:"analysis,omitempty"`
+}
+
+// Analysis declares static analysis commands (for example go vet ./...) that
+// the verifier runs, offline, in the same pinned image, working directory and
+// environment as the tests, on the baseline and on the candidate. A command
+// that passes on the baseline and fails on the candidate refuses it; a command
+// that already fails on the baseline gives no signal for that candidate.
+type Analysis struct {
+	Commands       [][]string `json:"commands"`
+	TimeoutSeconds int        `json:"timeoutSeconds"`
+}
+
+// Bounds of Analysis.
+const (
+	MaxAnalysisCommands       = 4
+	MinAnalysisTimeoutSeconds = 10
+	MaxAnalysisTimeoutSeconds = 300
+	// MaxAnalysisTotalSeconds bounds all commands together: analysis runs
+	// inside the same bounded verification command window as the tests.
+	MaxAnalysisTotalSeconds = 600
+)
+
+func (a Analysis) validate(workingDir string) error {
+	if len(a.Commands) == 0 || len(a.Commands) > MaxAnalysisCommands ||
+		a.TimeoutSeconds < MinAnalysisTimeoutSeconds || a.TimeoutSeconds > MaxAnalysisTimeoutSeconds ||
+		len(a.Commands)*a.TimeoutSeconds > MaxAnalysisTotalSeconds {
+		return ErrManifest
+	}
+	for _, command := range a.Commands {
+		if !ValidCommand(command, workingDir) {
+			return ErrManifest
+		}
+	}
+	return nil
+}
+
+// AnalysisCommands is the number of analysis commands, or 0 without analysis.
+func (v Verification) AnalysisCommands() int {
+	if v.Analysis == nil {
+		return 0
+	}
+	return len(v.Analysis.Commands)
 }
 
 // Bounds of Verification.Env.
@@ -510,6 +555,9 @@ func (v Verification) validate() error {
 		}
 	}
 	if !ValidCommand(v.Command, v.WorkingDir) {
+		return ErrManifest
+	}
+	if v.Analysis != nil && v.Analysis.validate(v.WorkingDir) != nil {
 		return ErrManifest
 	}
 	if v.Result.JUnitPath != "" && cleanPath(v.Result.JUnitPath) != nil {

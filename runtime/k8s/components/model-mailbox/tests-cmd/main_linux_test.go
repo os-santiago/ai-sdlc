@@ -179,3 +179,64 @@ func TestPodIdentityMustBeSmallAndPresent(t *testing.T) {
 		t.Fatal("oversized identity accepted")
 	}
 }
+
+func TestAnalysisRunsFirstOnItsOwnTreeAndReportsOnTheFirstLine(t *testing.T) {
+	v := settings()
+	v.Repeat = 2
+	// The tests fail if anything dirtied their tree; the first analysis
+	// command dirties its own tree, and the second always fails.
+	v.Command = []string{"/bin/sh", "-c", "test ! -e dirty && touch dirty && exit 5"}
+	v.Analysis = &project.Analysis{Commands: [][]string{
+		{"/bin/sh", "-c", "test -f go.mod && test ! -e dirty && touch dirty"},
+		{"/bin/sh", "-c", "exit 3"},
+	}, TimeoutSeconds: 30}
+	p := newTestsPod(t, v)
+	p.ready(t)
+	args := append(p.args(), repositorytests.AnalyzeArgument)
+	args[4] = "2"
+	var out bytes.Buffer
+	if err := runRepositoryTests(context.Background(), args, &out, p.parent, p.uidPath); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatal("one line per run", out.String())
+	}
+	for i, line := range lines {
+		run, err := repositorytests.ParseRun([]byte(line))
+		if err != nil || run.ExitCode != 5 {
+			t.Fatal("a run did not see a fresh tree", line, err)
+		}
+		if want := []int{0, 3}; i == 0 && (len(run.Analysis) != 2 || run.Analysis[0] != want[0] || run.Analysis[1] != want[1]) {
+			t.Fatal("analysis exit codes", line)
+		}
+		if i > 0 && run.Analysis != nil {
+			t.Fatal("analysis reported on a repetition", line)
+		}
+	}
+}
+
+func TestAnalyzeArgumentRequiresAnalysisSettings(t *testing.T) {
+	p := newTestsPod(t, settings())
+	p.ready(t)
+	for _, extra := range []string{repositorytests.AnalyzeArgument, "lint"} {
+		if err := runRepositoryTests(context.Background(), append(p.args(), extra), &bytes.Buffer{}, p.parent, p.uidPath); err == nil {
+			t.Fatal("accepted", extra)
+		}
+	}
+	v := settings()
+	v.Analysis = &project.Analysis{Commands: [][]string{{"/bin/sh", "-c", "exit 0"}}, TimeoutSeconds: 30}
+	p = newTestsPod(t, v)
+	p.ready(t)
+	if err := runRepositoryTests(context.Background(), append(p.args(), "lint"), &bytes.Buffer{}, p.parent, p.uidPath); err == nil {
+		t.Fatal("accepted an unknown argument")
+	}
+	// Without the argument (the cross run) analysis settings run no analysis.
+	var out bytes.Buffer
+	if err := runRepositoryTests(context.Background(), p.args(), &out, p.parent, p.uidPath); err != nil {
+		t.Fatal(err)
+	}
+	if run, err := repositorytests.ParseRun(bytes.TrimSuffix(out.Bytes(), []byte("\n"))); err != nil || run.Analysis != nil {
+		t.Fatal("analysis ran without the argument", out.String(), err)
+	}
+}

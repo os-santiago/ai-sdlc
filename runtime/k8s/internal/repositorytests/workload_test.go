@@ -1,7 +1,9 @@
 package repositorytests
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -160,6 +162,62 @@ func TestRunsShareSettingsAndTheCandidateRepeats(t *testing.T) {
 		}
 		if command[6] != want || spec["activeDeadlineSeconds"] != deadline {
 			t.Fatal("repetitions", run, command[6], spec["activeDeadlineSeconds"])
+		}
+	}
+}
+
+// Digests of the pods rendered on main before analysis existed: a manifest
+// without analysis must render every run byte for byte as before.
+func TestPodsWithoutAnalysisRenderExactlyAsBefore(t *testing.T) {
+	want := map[string]string{
+		RunBaseline:  "7edc86efb09dcb3d7e892a609f8fe0c17e8c1a85e101ede22b87177f2c1452dd",
+		RunCross:     "b676b2bdfd10704833b5d87a761918e1814cdee2eb1467f524a84bd075b35c68",
+		RunCandidate: "968652eb834b99c19902e5c050e0c539c3b6aec0f5c414213dbe579cbb22a63e",
+	}
+	for _, run := range RunNames() {
+		p := testPod()
+		p.Run = run
+		w, err := CompilePod(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(w)
+		if got := fmt.Sprintf("%x", sha256.Sum256(raw)); got != want[run] {
+			t.Fatalf("%s pod changed: %s", run, got)
+		}
+	}
+}
+
+func TestPodsWithAnalysisAnalyzeBaselineAndCandidateOnly(t *testing.T) {
+	for _, run := range RunNames() {
+		p := testPod()
+		p.Run = run
+		p.Verification.Analysis = &project.Analysis{Commands: [][]string{{"go", "vet", "./..."}, {"staticcheck", "./..."}}, TimeoutSeconds: 90}
+		w, err := CompilePod(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(w.Pod)
+		if strings.Contains(string(raw), "vet") || strings.Contains(string(raw), "staticcheck") {
+			t.Fatal("an analysis command reached the pod spec")
+		}
+		spec := w.Pod["spec"].(map[string]any)
+		command := spec["containers"].([]any)[0].(map[string]any)["command"].([]any)
+		analyzes := run != RunCross
+		extra := 0
+		if analyzes {
+			extra = 2 * 90
+		}
+		if (len(command) == 8 && command[7] == AnalyzeArgument) != analyzes || (!analyzes && len(command) != 7) {
+			t.Fatal(run, "runner command", command)
+		}
+		if spec["activeDeadlineSeconds"] != float64(PullSeconds+ReadySeconds+Repetitions(run, p.Verification)*300+extra+MarginSeconds) ||
+			AnalysisSeconds(run, p.Verification) != extra || Analyzes(run, p.Verification) != analyzes {
+			t.Fatal(run, "deadline", spec["activeDeadlineSeconds"])
+		}
+		settings := w.ConfigMap["data"].(map[string]any)["verification.json"].(string)
+		if !strings.Contains(settings, `"analysis":{"commands":[["go","vet","./..."],["staticcheck","./..."]],"timeoutSeconds":90}`) {
+			t.Fatal("settings", settings)
 		}
 	}
 }
