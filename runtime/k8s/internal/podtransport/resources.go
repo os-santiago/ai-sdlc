@@ -475,6 +475,9 @@ const minReadAttempts = 3
 // the steps after the read (see withReadReserve).
 type readReserveKey struct{}
 
+// A reserve needs a ctx with a deadline: without one, a reserved read never
+// retries (it cannot prove the reserve would still fit).
+//
 // withReadReserve marks ctx so that a transient read retries only while at
 // least reserve remains for the caller's next steps after the retry: the
 // first attempt is unchanged, but no retry may starve, for example, a pod

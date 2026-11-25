@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -623,5 +624,33 @@ func TestReadReserveLimitsRetries(t *testing.T) {
 				t.Fatalf("calls=%d, want retried=%v", calls, tc.retried)
 			}
 		})
+	}
+}
+
+// Every read that shares its budget with a side-effecting or long step that
+// follows keeps a reserve (audits of #805): the first ConfigMap read before
+// the pod POST, the start and import observations, the candidate and review
+// export observations, and the publication observation.
+func TestReadReserveCallSites(t *testing.T) {
+	want := map[string][]string{
+		"resources.go": {"r.getConfig(withReadReserve(ctx, readAttemptBound+time.Second), configUID)"},
+		"workspace.go": {
+			"s.observe(withReadReserve(ctx, 30*time.Second+readAttemptBound), false)",
+			"s.observe(withReadReserve(ctx, readAttemptBound+time.Second), false)",
+			"s.inspect(withReadReserve(ctx, 30*time.Second+readAttemptBound), true)",
+		},
+		"exchange.go": {"s.inspect(withReadReserve(ctx, 2*readAttemptBound), true)"},
+		"review.go":   {"s.inspect(withReadReserve(ctx, 2*readAttemptBound), true)"},
+	}
+	for file, sites := range want {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, site := range sites {
+			if !strings.Contains(string(raw), site) {
+				t.Errorf("%s lost the read reserve %q", file, site)
+			}
+		}
 	}
 }
