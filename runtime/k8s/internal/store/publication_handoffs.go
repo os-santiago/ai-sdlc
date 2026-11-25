@@ -16,12 +16,15 @@ type PassedReview struct {
 
 type PublicationSelection struct {
 	AuthorityRevision, IntakeConfiguration, ExecutionProfile, ReviewProfile, ReviewConfiguration string
+	// RecipeRevision is the current verification recipe revision; a review
+	// of a verification signed under another one is obsolete.
+	RecipeRevision string
 }
 
 func (db *DB) NextPublicationHandoff(ctx context.Context, selection PublicationSelection) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	for _, value := range []string{selection.AuthorityRevision, selection.IntakeConfiguration, selection.ExecutionProfile, selection.ReviewProfile, selection.ReviewConfiguration} {
+	for _, value := range []string{selection.AuthorityRevision, selection.IntakeConfiguration, selection.ExecutionProfile, selection.ReviewProfile, selection.ReviewConfiguration, selection.RecipeRevision} {
 		if !modelDigest.MatchString(value) {
 			return "", ErrExecution
 		}
@@ -34,6 +37,7 @@ func (db *DB) NextPublicationHandoff(ctx context.Context, selection PublicationS
 	// historical proof or extending authority. CurrentProof still authorizes.
 	e := db.Pool.QueryRowContext(ctx, `SELECT r.verification_id FROM review_runs r
  JOIN execution_requests e ON e.id=r.candidate_id
+ JOIN verification_requests v ON v.id=r.verification_id
  JOIN work_items w ON w.uuid=e.work_item_uuid
  JOIN intake_heads h ON h.repository=e.repository
   AND h.issue_number=(convert_from(e.payload,'UTF8')::jsonb->>'issueNumber')::integer
@@ -43,8 +47,9 @@ func (db *DB) NextPublicationHandoff(ctx context.Context, selection PublicationS
   AND e.authority_revision=$1 AND i.config_digest=$2
   AND convert_from(e.payload,'UTF8')::jsonb->>'profileSHA256'=$3
   AND r.profile_digest=$4 AND r.configuration_digest=$5 AND w.status='running'
+  AND convert_from(v.payload,'UTF8')::jsonb->>'recipeRevision'=$6
   AND NOT EXISTS(SELECT 1 FROM publication_handoffs p WHERE p.review_id=r.id)
- ORDER BY r.created_at,r.id LIMIT 1`, selection.AuthorityRevision, selection.IntakeConfiguration, selection.ExecutionProfile, selection.ReviewProfile, selection.ReviewConfiguration).Scan(&id)
+ ORDER BY r.created_at,r.id LIMIT 1`, selection.AuthorityRevision, selection.IntakeConfiguration, selection.ExecutionProfile, selection.ReviewProfile, selection.ReviewConfiguration, selection.RecipeRevision).Scan(&id)
 	if errors.Is(e, sql.ErrNoRows) {
 		return "", nil
 	}

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/secretscan"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 )
 
@@ -44,14 +45,28 @@ func DiagnosticStage(err error) string {
 	return "unknown"
 }
 
-// refusalReason bounds the repository test decision reasons the log may name.
+// refusalReason bounds the decision reasons the log may name: the repository
+// test rules and the candidate baseline.
 func refusalReason(reason string) bool {
 	switch reason {
 	case "incomplete-evidence", "invalid-delta", "harness-changed", "test-deleted", "no-test-change", "uncertain",
-		"candidate-failed", "no-cross-report", "regression", "no-failing-test", "baseline-failing":
+		"candidate-failed", "no-cross-report", "regression", "no-failing-test", "baseline-failing",
+		SecretRefusal, "candidate-analysis":
 		return true
 	}
 	return false
+}
+
+// RefusalDetail is the bounded detail of a secret refusal for the stop log,
+// for example "rule=github-token class=code", or "" for any other error. It
+// never carries the matched text or the path.
+func RefusalDetail(err error) string {
+	var refused DecisionError
+	if !errors.As(err, &refused) || refused.Reason != SecretRefusal ||
+		!secretscan.KnownRule(refused.Secret.Rule) || !secretscan.KnownClass(refused.Secret.PathClass) {
+		return ""
+	}
+	return "rule=" + refused.Secret.Rule + " class=" + refused.Secret.PathClass
 }
 
 // createStop names which step of creating a verification resource failed.

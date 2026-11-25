@@ -8,6 +8,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/delivery"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publication"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
 	"time"
 )
@@ -33,6 +34,7 @@ func Handoff(ctx context.Context, db *store.DB, policy verificationflow.PolicyLo
 	id, e := db.NextPublicationHandoff(ctx, store.PublicationSelection{
 		AuthorityRevision: selectedPolicy.Revision(), IntakeConfiguration: intake.Digest(),
 		ExecutionProfile: profile, ReviewProfile: expected.Profile, ReviewConfiguration: expected.Configuration,
+		RecipeRevision: verification.CurrentRecipeRevision(selectedPolicy.Repository),
 	})
 	if e != nil || id == "" {
 		return false, e

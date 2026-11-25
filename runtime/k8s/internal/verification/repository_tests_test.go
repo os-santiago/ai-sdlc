@@ -7,6 +7,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repositorytests"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/secretscan"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
@@ -70,5 +71,17 @@ func TestPrepareRepositoryTestsRequiresAnExactDelta(t *testing.T) {
 	}
 	if _, err := Prepare("example/other", repositorytests.Recipe, "", source, raw); err == nil {
 		t.Fatal("prepared for a repository without the recipe")
+	}
+}
+
+// The repository-tests revision binds the candidate secret scan: commands and
+// publications signed under another rule set do not verify.
+func TestRepositoryTestsRevisionBindsTheSecretScan(t *testing.T) {
+	want := workspacebundle.Digest([]byte(repositorytests.Recipe + "\x00" + repositorytests.RulesVersion + "\x00" + secretscan.Version))
+	if got := RevisionForRecipe(repositorytests.Recipe); got != want {
+		t.Fatalf("revision = %s, want %s", got, want)
+	}
+	if RevisionForRecipe(repositorytests.Recipe) == workspacebundle.Digest([]byte(repositorytests.Recipe+"\x00"+repositorytests.RulesVersion)) {
+		t.Fatal("revision does not bind the secret scan")
 	}
 }

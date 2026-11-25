@@ -23,7 +23,9 @@ import (
 const Recipe = "repository-tests/v1"
 
 // RulesVersion names the decision rules below; a change to them must change
-// it, so commands signed under the old rules no longer verify.
+// it, so commands signed under the old rules no longer verify. The analysis
+// rule did not change it: it applies only to manifests with analysis, whose
+// new manifest digest the signed authority revision already binds.
 const RulesVersion = "decide/v1"
 
 // Bounds of one runner result line.
@@ -48,9 +50,14 @@ const (
 // Run is one runner result: the test command's exit code and, when the
 // manifest declares a JUnit report, each test's status keyed by the sha256
 // of its fully qualified name (names are repository data, never logged).
+//
+// A run of a manifest with analysis also carries, on its first result line
+// only, each analysis command's exit code in manifest order. The field is
+// omitted otherwise, so results without analysis are unchanged.
 type Run struct {
 	ExitCode int               `json:"exitCode"`
 	Tests    map[string]string `json:"tests,omitempty"`
+	Analysis []int             `json:"analysis,omitempty"`
 }
 
 // ParseRun accepts exactly one bounded runner result; the exit code must be
@@ -60,8 +67,13 @@ func ParseRun(raw []byte) (Run, error) {
 	var fields map[string]json.RawMessage
 	if len(raw) == 0 || len(raw) > MaxResultBytes || authority.DecodeStrict(raw, &r) != nil ||
 		json.Unmarshal(raw, &fields) != nil || fields["exitCode"] == nil || string(fields["exitCode"]) == "null" ||
-		r.ExitCode < 0 || r.ExitCode > 255 || len(r.Tests) > MaxTests {
+		r.ExitCode < 0 || r.ExitCode > 255 || len(r.Tests) > MaxTests || len(r.Analysis) > project.MaxAnalysisCommands {
 		return Run{}, ErrResult
+	}
+	for _, code := range r.Analysis {
+		if code < 0 || code > 255 {
+			return Run{}, ErrResult
+		}
 	}
 	for id, status := range r.Tests {
 		if !testID.MatchString(id) || (status != Pass && status != Fail && status != Skip) {
@@ -111,6 +123,13 @@ type Summary struct {
 	Regressions      int      `json:"regressions"`
 	ChangedTestFiles []string `json:"changedTestFiles"` // sorted, unique, at most MaxSummaryPaths
 	BaselineFailing  bool     `json:"baselineFailing"`
+	// With analysis only (omitted otherwise, so summaries without it are
+	// unchanged): the number of analysis commands, those that already fail
+	// on the baseline and so give no signal, and those the candidate newly
+	// fails.
+	AnalysisCommands        int `json:"analysisCommands,omitempty"`
+	AnalysisBaselineFailing int `json:"analysisBaselineFailing,omitempty"`
+	AnalysisNewFailures     int `json:"analysisNewFailures,omitempty"`
 }
 
 // Decide applies the reviewed rules. A non-pass decision carries one reason,
@@ -126,14 +145,37 @@ type Summary struct {
 //	"no-cross-report": with a report, the cross run produced none;
 //	"regression": a test passing on the baseline no longer passes;
 //	"baseline-failing": without a report, the baseline does not pass;
-//	"no-failing-test": no candidate test fails on the base code.
+//	"no-failing-test": no candidate test fails on the base code;
+//	"candidate-analysis": with analysis, an analysis command that passes on
+//	the baseline fails on the candidate.
+//
+// With analysis, evidence without exactly one exit code per command on the
+// baseline and the first candidate run (and none elsewhere) is incomplete;
+// without analysis, any analysis result is incomplete evidence.
 func Decide(v project.Verification, e Evidence) Decision {
 	report := v.Result.JUnitPath != ""
 	s := Summary{BaselineExitCode: e.Baseline.ExitCode, CrossExitCode: e.Cross.ExitCode, CandidateRuns: len(e.Candidate),
-		TestReport: report, Weak: !report, BaselineFailing: e.Baseline.ExitCode != 0, ChangedTestFiles: []string{}}
+		TestReport: report, Weak: !report, BaselineFailing: e.Baseline.ExitCode != 0, ChangedTestFiles: []string{},
+		AnalysisCommands: v.AnalysisCommands()}
 	result := func(passed bool, reason string) Decision { return Decision{Passed: passed, Reason: reason, Summary: s} }
-	if len(e.Candidate) == 0 || len(e.Candidate) != v.Repeat {
+	if len(e.Candidate) == 0 || len(e.Candidate) != v.Repeat || !completeAnalysis(v, e) {
 		return result(false, "incomplete-evidence")
+	}
+	// Analysis is counted first so the summary is canonical whatever the
+	// decision; it refuses only after every test rule passed.
+	for i := 0; i < s.AnalysisCommands; i++ {
+		switch {
+		case e.Baseline.Analysis[i] != 0:
+			s.AnalysisBaselineFailing++
+		case e.Candidate[0].Analysis[i] != 0:
+			s.AnalysisNewFailures++
+		}
+	}
+	pass := func() Decision {
+		if s.AnalysisNewFailures > 0 {
+			return result(false, "candidate-analysis")
+		}
+		return result(true, "")
 	}
 	s.CandidateExitCode = e.Candidate[0].ExitCode
 	// The summary's test file list is computed from the whole delta first,
@@ -202,7 +244,7 @@ func Decide(v project.Verification, e Evidence) Decision {
 		if s.FailToPass == 0 {
 			return result(false, "no-failing-test")
 		}
-		return result(true, "")
+		return pass()
 	}
 	// Without a report: the baseline must pass and the candidate's tests must
 	// fail on the base code. The decision is marked weak for the reviewer.
@@ -215,7 +257,23 @@ func Decide(v project.Verification, e Evidence) Decision {
 		return result(false, "no-failing-test")
 	}
 	s.FailToPass = 1
-	return result(true, "")
+	return pass()
+}
+
+// completeAnalysis reports whether the runs carry exactly the analysis
+// evidence the settings ask for: one exit code per command on the baseline
+// and on the first candidate run, and none on the cross run or a repetition.
+func completeAnalysis(v project.Verification, e Evidence) bool {
+	n := v.AnalysisCommands()
+	if len(e.Cross.Analysis) != 0 || len(e.Baseline.Analysis) != n || len(e.Candidate[0].Analysis) != n {
+		return false
+	}
+	for _, run := range e.Candidate[1:] {
+		if len(run.Analysis) != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func sameTests(a, b map[string]string) bool {

@@ -16,14 +16,20 @@ Start from [`examples/ai-sdlc-sample.project.json`](../../examples/ai-sdlc-sampl
 | `verification.command` | The test command as an argument list, run from the repository root |
 | `verification.result` | `exitCode: true`, plus an optional JUnit `junitPath` for per-test evidence. Without a report the decision is *weak* and the reviewer must judge it |
 | `verification.testGlobs` | The files that count as tests |
-| `verification.harnessGlobs` | Files a candidate may not change (build, dependency and test configuration) |
+| `verification.harnessGlobs` | Files a candidate may not change (build, dependency and test configuration, and the configuration of any `verification.analysis` tool, such as `.golangci.yml`, so a candidate cannot switch off its own analysis) |
 | `verification.env` | Optional reviewed toolchain variables, for example `GOTOOLCHAIN=local` |
+| `verification.analysis` | Optional static analysis: up to 4 argv `commands` and one `timeoutSeconds` (10–300, at most 600 in total), for example `{"commands": [["go", "vet", "./..."]], "timeoutSeconds": 120}`. They run offline in `verification.image`, on the baseline and on the candidate. A command that passes on the baseline and fails on the candidate refuses it (`refused-candidate-analysis`). See the [candidate baseline](../architecture/candidate-quality-baseline.md#static-analysis) |
 | `publication` | The paths a candidate may change, and the file and size limits |
 | `merge` | The required checks (context and GitHub App ID), strict checks, resolved threads, zero human approvals. `baseBranch` must be `main` |
 | `generation.toolchain` | Optional. The toolchain root inside `verification.image` and the directories under it for the generator's `PATH`. See below |
 
 The pod limits in the manifest set the verifier namespace quota for three
 concurrent runs. The installer derives that quota.
+
+Every candidate is also scanned for added credentials before verification
+starts, whatever the manifest says (`refused-candidate-secret`). Test
+fixtures that need a key or token-shaped value should generate it at run
+time; see the [candidate baseline](../architecture/candidate-quality-baseline.md#secret-scanning).
 
 ### Optional: a toolchain for the generator
 

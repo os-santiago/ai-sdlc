@@ -25,9 +25,17 @@ func (db *DB) ReadBehaviorProof(ctx context.Context, id string) ([]byte, error) 
 	}
 	return raw, nil
 }
-func (db *DB) NextVerifiedForReview(ctx context.Context) (string, error) {
+
+// NextVerifiedForReview selects the oldest passed verification without a
+// review whose command carries recipeRevision, the current recipe revision:
+// a verification signed under another revision (before an upgrade) can never
+// pass the proof check and would otherwise be selected on every poll.
+func (db *DB) NextVerifiedForReview(ctx context.Context, recipeRevision string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	if !modelDigest.MatchString(recipeRevision) {
+		return "", ErrExecution
+	}
 	if err := AssertComponent(ctx, db.Pool, "verifier"); err != nil {
 		return "", identityObservationError(err)
 	}
@@ -36,7 +44,9 @@ func (db *DB) NextVerifiedForReview(ctx context.Context) (string, error) {
  JOIN intake_heads h ON h.repository=e.repository
  AND h.issue_number=(convert_from(v.payload,'UTF8')::jsonb->>'issueNumber')::integer
  AND h.generation=(convert_from(v.payload,'UTF8')::jsonb->>'generation')::bigint
- WHERE v.state='passed' AND v.cleanup_state='complete' AND v.expires_at>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM review_runs r WHERE r.verification_id=v.id) ORDER BY v.created_at,v.id LIMIT 1`).Scan(&id)
+ WHERE v.state='passed' AND v.cleanup_state='complete' AND v.expires_at>clock_timestamp()
+ AND convert_from(v.payload,'UTF8')::jsonb->>'recipeRevision'=$1
+ AND NOT EXISTS(SELECT 1 FROM review_runs r WHERE r.verification_id=v.id) ORDER BY v.created_at,v.id LIMIT 1`, recipeRevision).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}

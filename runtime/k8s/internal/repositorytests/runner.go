@@ -53,39 +53,90 @@ var errRunner = errors.New("repository test runner refused its input")
 // not an error; only an invalid setup or an unreadable report is an error.
 func (r Runner) Run(ctx context.Context) (Run, error) {
 	v := r.Verification
-	if len(v.Command) == 0 || !filepath.IsAbs(r.Workspace) || !filepath.IsAbs(r.Scratch) {
-		return Run{}, errRunner
+	code, found, err := r.execute(ctx, v.Command, time.Duration(v.TimeoutSeconds)*time.Second)
+	if err != nil {
+		return Run{}, err
+	}
+	result := Run{ExitCode: code}
+	if !found {
+		// The command could not be found: there is no report to read.
+		return result, nil
+	}
+	if v.Result.JUnitPath != "" {
+		tests, err := readReport(r.Workspace, v.Result.JUnitPath)
+		if err != nil {
+			return Run{}, err
+		}
+		result.Tests = tests
+	}
+	return result, nil
+}
+
+// Analyze executes each reviewed analysis command once, in order, each with
+// the analysis timeout, and returns their exit codes (124 for a timeout, 125
+// for a command that could not run). Like Run, the output is discarded and a
+// failing command is a result, not an error.
+func (r Runner) Analyze(ctx context.Context) ([]int, error) {
+	a := r.Verification.Analysis
+	if a == nil || len(a.Commands) == 0 {
+		return nil, errRunner
+	}
+	codes := make([]int, 0, len(a.Commands))
+	for _, command := range a.Commands {
+		code, _, err := r.execute(ctx, command, time.Duration(a.TimeoutSeconds)*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		codes = append(codes, code)
+	}
+	return codes, nil
+}
+
+// lookup resolves a bare program name with the reviewed PATH, never the
+// runner's own environment, or returns "".
+func (r Runner) lookup(name string) string {
+	for _, d := range r.searchPath() {
+		if info, err := os.Stat(filepath.Join(d, name)); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
+			return filepath.Join(d, name)
+		}
+	}
+	return ""
+}
+
+func (r Runner) searchPath() []string {
+	if reviewed := r.Verification.SearchPath(); reviewed != nil {
+		return reviewed
+	}
+	return searchPath
+}
+
+// execute runs one reviewed argv in the workspace with the fixed environment
+// and returns its exit code: 124 for a timeout, 125 when it could not run or
+// was killed by a signal. found is false when a bare program name is not on
+// the reviewed PATH (exit code 125, nothing ran).
+func (r Runner) execute(ctx context.Context, argv []string, timeout time.Duration) (code int, found bool, err error) {
+	v := r.Verification
+	if len(argv) == 0 || !filepath.IsAbs(r.Workspace) || !filepath.IsAbs(r.Scratch) {
+		return 0, false, errRunner
 	}
 	dir := r.Workspace
 	if v.WorkingDir != "" {
 		if project.CleanPath(v.WorkingDir) != nil || noSymlinks(r.Workspace, v.WorkingDir) != nil {
-			return Run{}, errRunner
+			return 0, false, errRunner
 		}
 		dir = filepath.Join(r.Workspace, filepath.FromSlash(v.WorkingDir))
 	}
-	dirs := searchPath
-	if reviewed := v.SearchPath(); reviewed != nil {
-		dirs = reviewed
-	}
-	program := v.Command[0]
+	program := argv[0]
 	if !strings.Contains(program, "/") {
-		// Resolve with the reviewed PATH, never the runner's own environment.
-		program = ""
-		for _, d := range dirs {
-			if info, err := os.Stat(filepath.Join(d, v.Command[0])); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
-				program = filepath.Join(d, v.Command[0])
-				break
-			}
-		}
-		if program == "" {
-			return Run{ExitCode: 125}, nil
+		if program = r.lookup(argv[0]); program == "" {
+			return 125, false, nil
 		}
 	}
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(v.TimeoutSeconds)*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, program, v.Command[1:]...)
+	cmd := exec.CommandContext(ctx, program, argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = []string{"PATH=" + strings.Join(dirs, ":"), "HOME=" + r.Scratch, "TMPDIR=" + r.Scratch, "LC_ALL=C.UTF-8", "TZ=UTC", "CI=1"}
+	cmd.Env = []string{"PATH=" + strings.Join(r.searchPath(), ":"), "HOME=" + r.Scratch, "TMPDIR=" + r.Scratch, "LC_ALL=C.UTF-8", "TZ=UTC", "CI=1"}
 	names := make([]string, 0, len(v.Env))
 	for name := range v.Env {
 		if name != "PATH" {
@@ -102,33 +153,22 @@ func (r Runner) Run(ctx context.Context) (Run, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = 5 * time.Second
-	result := Run{}
-	err := cmd.Run()
+	err = cmd.Run()
 	if r.ReapAll && reapAll(5*time.Second) != nil {
-		// Something the repository started survived: its report is untrusted.
-		return Run{}, errRunner
+		// Something the repository started survived: its result is untrusted.
+		return 0, true, errRunner
 	}
 	switch {
 	case err == nil:
-		result.ExitCode = 0
+		return 0, true, nil
 	case ctx.Err() != nil:
-		result.ExitCode = 124 // timed out
-	default:
-		var exit *exec.ExitError
-		if !errors.As(err, &exit) || exit.ExitCode() < 0 || exit.ExitCode() > 255 {
-			result.ExitCode = 125 // could not run, or killed by a signal
-		} else {
-			result.ExitCode = exit.ExitCode()
-		}
+		return 124, true, nil // timed out
 	}
-	if v.Result.JUnitPath != "" {
-		tests, err := readReport(r.Workspace, v.Result.JUnitPath)
-		if err != nil {
-			return Run{}, err
-		}
-		result.Tests = tests
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() < 0 || exit.ExitCode() > 255 {
+		return 125, true, nil // could not run, or killed by a signal
 	}
-	return result, nil
+	return exit.ExitCode(), true, nil
 }
 
 // noSymlinks reports whether every component of rel under root exists and

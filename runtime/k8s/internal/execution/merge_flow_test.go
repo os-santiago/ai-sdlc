@@ -15,6 +15,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergewriter"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 )
 
 type mergeGatesFunc func(context.Context, mergegate.Expected, mergegate.Policy) (mergegate.Observation, error)
@@ -188,11 +189,53 @@ func TestInstalledMergePrivilegesAndAuthoritySelection(t *testing.T) {
 }
 
 func mergeSelection(f execution.PublishedMergeTestFixture) store.MergeSelection {
-	return store.MergeSelection{AuthorityRevision: f.Policy.Revision(), IntakeConfiguration: f.Intake.Digest(), ExecutionProfile: f.Profile, ReviewProfile: f.ReviewProfile, ReviewConfiguration: f.ReviewConfiguration}
+	return store.MergeSelection{AuthorityRevision: f.Policy.Revision(), IntakeConfiguration: f.Intake.Digest(), ExecutionProfile: f.Profile, ReviewProfile: f.ReviewProfile, ReviewConfiguration: f.ReviewConfiguration,
+		RecipeRevision: verification.CurrentRecipeRevision(f.Policy.Repository)}
+}
+
+// A publication whose verification command was signed under an earlier
+// recipe revision (for example before an upgrade added the candidate secret
+// scan) can never pass the published-proof check. Selection skips it, so it
+// cannot block later publications on every tick, and nothing is mutated.
+func TestMergeSelectionSkipsAnEarlierRecipeRevision(t *testing.T) {
+	f := execution.NewPublishedMergeTestFixture(t)
+	ctx := context.Background()
+	selection := mergeSelection(f)
+	if selection.RecipeRevision == "" {
+		t.Fatal("fixture repository has no recipe")
+	}
+	if id, e := f.DB.NextMergePublication(ctx, selection); e != nil || id != f.PublicationID {
+		t.Fatal("current fact", id, e)
+	}
+	// The stored command was signed under the current revision: an upgraded
+	// runtime with another current revision sees it as obsolete.
+	upgraded := selection
+	upgraded.RecipeRevision = strings.Repeat("e", 64)
+	if id, e := f.DB.NextMergePublication(ctx, upgraded); e != nil || id != "" {
+		t.Fatal("earlier recipe revision remained selectable", id, e)
+	}
+	// The same, from the stored side: a fact whose signed command names an
+	// earlier revision is skipped by the current runtime.
+	if _, e := f.Admin.Pool.Exec(`UPDATE verification_requests SET payload=convert_to(jsonb_set(convert_from(payload,'UTF8')::jsonb,'{recipeRevision}',to_jsonb($1::text))::text,'UTF8')
+ WHERE id=(SELECT verification_id FROM publication_requests WHERE id=$2)`, strings.Repeat("d", 64), f.PublicationID); e != nil {
+		t.Fatal(e)
+	}
+	if id, e := f.DB.NextMergePublication(ctx, selection); e != nil || id != "" {
+		t.Fatal("fact signed under an earlier revision selected", id, e)
+	}
+	var facts, attempts int
+	if f.Admin.Pool.QueryRow(`SELECT count(*) FROM published_records`).Scan(&facts) != nil || facts != 1 ||
+		f.Admin.Pool.QueryRow(`SELECT count(*) FROM merge_requests`).Scan(&attempts) != nil || attempts != 0 {
+		t.Fatal("selection changed historical facts or created authority", facts, attempts)
+	}
+	if _, e := f.DB.NextMergePublication(ctx, store.MergeSelection{AuthorityRevision: selection.AuthorityRevision, IntakeConfiguration: selection.IntakeConfiguration,
+		ExecutionProfile: selection.ExecutionProfile, ReviewProfile: selection.ReviewProfile, ReviewConfiguration: selection.ReviewConfiguration}); e == nil {
+		t.Fatal("a selection without a recipe revision was accepted")
+	}
 }
 
 func TestMergeSelectionSkipsChangedConfigurationAndIssue(t *testing.T) {
-	for _, change := range []string{"intake", "execution-profile", "review-profile", "review-configuration", "generation", "work-state"} {
+	for _, change := range []string{"intake", "execution-profile", "review-profile", "review-configuration", "recipe-revision", "generation", "work-state"} {
 		t.Run(change, func(t *testing.T) {
 			f := execution.NewPublishedMergeTestFixture(t)
 			ctx := context.Background()
@@ -210,6 +253,8 @@ func TestMergeSelectionSkipsChangedConfigurationAndIssue(t *testing.T) {
 				selection.ReviewProfile = stale
 			case "review-configuration":
 				selection.ReviewConfiguration = stale
+			case "recipe-revision":
+				selection.RecipeRevision = stale
 			case "generation":
 				if _, e := f.Admin.Pool.Exec(`UPDATE intake_heads SET generation=generation+1`); e != nil {
 					t.Fatal(e)

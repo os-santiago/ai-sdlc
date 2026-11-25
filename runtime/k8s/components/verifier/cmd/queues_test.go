@@ -1,13 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/metrics"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/reviewflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/secretscan"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
 )
 
@@ -107,5 +112,28 @@ func TestStoppedLoopsAreCountedUnderTheLoggedStage(t *testing.T) {
 		func(context.Context) (bool, error) { return false, errors.New("stale proof") })
 	if count("review", "model-provider") != review+1 || count("verification", "refused-regression") != verification+1 || count("publication-handoff", metrics.Unclassified) != handoff+1 {
 		t.Fatal("stop not counted under its loop and stage")
+	}
+}
+
+// A secret refusal's log line names its rule and path class and nothing
+// else from the candidate; its metric keeps the bounded stage alone.
+func TestSecretRefusalLogNamesOnlyTheRuleAndPathClass(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	count := func() float64 {
+		v, _ := metrics.Default.Sample("ai_sdlc_stops_total", "verifier", "verification", "refused-candidate-secret")
+		return v
+	}
+	before := count()
+	reconcileQueues(context.Background(), nil, func(context.Context) (string, error) {
+		return "", verificationflow.DecisionError{Reason: verificationflow.SecretRefusal,
+			Secret: secretscan.Finding{Rule: secretscan.RuleAWSAccessKeyID, PathClass: secretscan.ClassConfig}}
+	}, nil)
+	if !strings.HasSuffix(buf.String(), "verification reconciliation stopped safely: refused-candidate-secret rule=aws-access-key-id class=config\n") {
+		t.Fatalf("log = %q", buf.String())
+	}
+	if count() != before+1 {
+		t.Fatal("secret refusal not counted under its stage")
 	}
 }

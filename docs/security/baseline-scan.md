@@ -33,6 +33,7 @@ fingerprint and fails the gate — suppression never excuses recurrence.
 | `04fa20f…:runtime/k8s/internal/modelbroker/provider_timeout_test.go:generic-api-key:16` | `generic-api-key` | `runtime/k8s/internal/modelbroker/provider_timeout_test.go` | `false-positive` | Synthetic hex bearer for an `httptest`/loopback provider-timeout fixture; never a credential. Current fixtures use a generated low-entropy token; exact historical fingerprint only. |
 | `75b6e27…:runtime/k8s/internal/modelbroker/provider_timeout_test.go:generic-api-key:43` | `generic-api-key` | `runtime/k8s/internal/modelbroker/provider_timeout_test.go` | `false-positive` | Same synthetic loopback bearer in the gateway-profile fixture; exact historical fingerprint only. |
 | `75b6e27…:runtime/k8s/internal/execution/gateway_profile_test.go:generic-api-key:15` | `generic-api-key` | `runtime/k8s/internal/execution/gateway_profile_test.go` | `false-positive` | Same synthetic loopback bearer in the worker profile-adoption fixture; exact historical fingerprint only. |
+| `164eb32…:runtime/k8s/internal/secretscan/scan_test.go:generic-api-key:103` | `generic-api-key` | `runtime/k8s/internal/secretscan/scan_test.go` | `false-positive` | AWS's published documentation example secret key (ends in `EXAMPLEKEY`), used to prove the candidate secret scanner ignores vendor examples; never a credential. Current sources split it further so no detector matches; exact historical fingerprint only. |
 
 (Fingerprints abbreviated for readability; `.gitleaksignore` carries the
 full 40-char commit SHAs.)

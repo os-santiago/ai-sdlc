@@ -254,3 +254,32 @@ func TestReapAllWaitsForEveryChild(t *testing.T) {
 		t.Fatal("waiting for no children blocked")
 	}
 }
+
+func TestAnalyzeRunsEachCommandWithItsTimeoutAndCleanEnvironment(t *testing.T) {
+	r, _ := runner(t, []string{"/bin/sh", "-c", "exit 0"}, "")
+	t.Setenv("SECRET", "must-not-leak")
+	if _, err := r.Analyze(context.Background()); err == nil {
+		t.Fatal("analysis without settings must be refused")
+	}
+	r.Verification.Analysis = &project.Analysis{Commands: [][]string{
+		{"/bin/sh", "-c", `test -z "$SECRET" && test "$HOME" = "$TMPDIR"`},
+		{"/bin/sh", "-c", "exit 4"},
+		{"no-such-analyzer-on-the-reviewed-path"},
+		{"/bin/sh", "-c", "sleep 60 & sleep 60"},
+	}, TimeoutSeconds: 1}
+	started := time.Now()
+	got, err := r.Analyze(context.Background())
+	if err != nil || len(got) != 4 || got[0] != 0 || got[1] != 4 || got[2] != 125 || got[3] != 124 || time.Since(started) > 20*time.Second {
+		t.Fatal("analysis exit codes", got, err, time.Since(started))
+	}
+}
+
+func TestRunWithAMissingProgramReadsNoReport(t *testing.T) {
+	r, workspace := runner(t, []string{"no-such-test-runner-on-the-reviewed-path"}, "report.xml")
+	if err := os.WriteFile(filepath.Join(workspace, "report.xml"), []byte("not xml"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.Run(context.Background()); err != nil || got.ExitCode != 125 || got.Tests != nil {
+		t.Fatal("a command that could not be found has no report", got, err)
+	}
+}

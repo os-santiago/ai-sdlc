@@ -24,6 +24,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
 )
 
@@ -141,7 +142,7 @@ func TestRealVerificationFlowFixture(t *testing.T) {
 	if state, e := verifier.PollOnce(ctx); e != nil || state != "behavior-verified" {
 		t.Fatal("behavior prerequisite", state, e)
 	}
-	id, e := db.NextVerifiedForReview(ctx)
+	id, e := db.NextVerifiedForReview(ctx, verification.CurrentRecipeRevision(in.Policy.Repository))
 	if e != nil || id == "" {
 		t.Fatal("verified review input")
 	}
