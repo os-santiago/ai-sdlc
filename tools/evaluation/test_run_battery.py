@@ -14,8 +14,9 @@ def state(executions=0, execution='', verifications=0, verification='', reviews=
 
 
 class FakeRuntime:
-    def __init__(self, snapshots, blocked=False):
+    def __init__(self, snapshots, blocked=False, reviews=(), images=None):
         self.snapshots, self.is_blocked = list(snapshots), blocked
+        self.reviews, self.installed = list(reviews), images or {}
 
     def snapshot(self, issue):
         return self.snapshots.pop(0) if len(self.snapshots) > 1 else self.snapshots[0]
@@ -25,6 +26,12 @@ class FakeRuntime:
 
     def blocked(self):
         return self.is_blocked
+
+    def review_states(self, issue, since):
+        return self.reviews
+
+    def images(self):
+        return self.installed
 
 
 class FakeGitHub:
@@ -108,6 +115,21 @@ class AttemptTests(unittest.TestCase):
         rejected = run_battery.attempt(FakeRuntime([state(), state(reviews=1, review='failed|rejected')]), FakeGitHub(), 5, 60)
         self.assertEqual((rejected['outcome'], rejected['stage'], rejected['reason']), ('failure', 'review', 'rejected'))
 
+    def test_attempt_records_the_stage_reached_and_its_reviews(self):
+        merged = run_battery.attempt(FakeRuntime([state(), state(executions=1, verifications=1, reviews=2)],
+                                                 reviews=['failed|request-changes', 'passed|']), FakeGitHub(merged=5), 4, 60)
+        self.assertEqual((merged['stageReached'], merged['reviews']), ('merge', ['failed|request-changes', 'passed|']))
+        refused = run_battery.attempt(FakeRuntime([state(), state(executions=1, verifications=1, verification='failed|comparison-failed')]),
+                                      FakeGitHub(), 4, 60)
+        self.assertEqual((refused['stageReached'], refused['reviews']), ('verification', []))
+
+    def test_unobservable_reviews_leave_the_field_out(self):
+        runtime = FakeRuntime([state(), state(executions=1, execution='stopped|uncertain')])
+        runtime.review_states = mock.Mock(side_effect=run_battery.subprocess.CalledProcessError(1, 'kubectl'))
+        result = run_battery.attempt(runtime, FakeGitHub(), 4, 60)
+        self.assertEqual(result['stageReached'], 'execution')
+        self.assertNotIn('reviews', result)
+
     def test_label_is_removed_then_added(self):
         github = FakeGitHub(merged=3)
         run_battery.attempt(FakeRuntime([state()]), github, 9, 60)
@@ -146,6 +168,28 @@ class MainTests(unittest.TestCase):
             summary = json.loads(output.read_text())['summary']
         self.assertEqual((summary['firstAttemptSuccess'], summary['successWithinBudget'], summary['rateWithinBudget']), (1, 2, 1.0))
 
+    def test_report_names_its_cell_and_installation(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch('run_battery.Runtime', return_value=FakeRuntime([state()], images={'ai-sdlc-worker': 'q/w@sha256:1'})), \
+                mock.patch('run_battery.GitHub', return_value=FakeGitHub()), \
+                mock.patch('run_battery.attempt', side_effect=lambda *a: {'outcome': 'success'}):
+            lock = Path(directory) / 'images.lock.json'
+            lock.write_text('{"image": {"tag": "abc123"}}\n')
+            output = Path(directory) / 'report.json'
+            run_battery.main(['--repository', 'o/r', '--issues', '4', '--kubectl', 'k', '--kubeconfig', 'c', '--output', str(output),
+                              '--cell-model-path', 'local-llama', '--image-lock', str(lock)])
+            report = json.loads(output.read_text())
+        self.assertEqual(report['schemaVersion'], 2)
+        self.assertEqual(report['cell'], {'repository': 'o/r', 'modelPath': 'local-llama'})
+        self.assertEqual(report['installation']['revision'], 'abc123')
+        self.assertEqual(report['installation']['imageLockDigest'],
+                         'sha256:' + run_battery.hashlib.sha256(b'{"image": {"tag": "abc123"}}\n').hexdigest())
+        self.assertEqual(report['installation']['images'], {'ai-sdlc-worker': 'q/w@sha256:1'})
+
+    def test_model_path_label_is_bounded(self):
+        with mock.patch('sys.stderr'), self.assertRaises(SystemExit):
+            run_battery.main(['--repository', 'o/r', '--issues', '4', '--kubectl', 'k', '--kubeconfig', 'c', '--output', 'r.json',
+                              '--cell-model-path', 'Local Llama'])
 
 
 class QueryTests(unittest.TestCase):
@@ -174,6 +218,14 @@ class QueryTests(unittest.TestCase):
         self.assertGreaterEqual(joined.count('ORDER BY created_at DESC, id DESC LIMIT 1'), 6)
         self.assertIn("h.state='rejected'", joined)
         self.assertIn("r.expires_at<=now() AND NOT EXISTS", joined)
+
+    def test_review_states_are_bound_to_the_issue_and_attempt(self):
+        runtime = run_battery.Runtime('kubectl', 'kubeconfig')
+        queries = []
+        with mock.patch.object(run_battery.Runtime, 'sql', lambda self, q: queries.append(q) or ['passed|']):
+            self.assertEqual(runtime.review_states(7, '2026-11-24T00:00:00Z'), ['passed|'])
+        self.assertIn("'issueNumber' = '7'", queries[0])
+        self.assertIn("created_at >= '2026-11-24T00:00:00Z'::timestamptz ORDER BY created_at, id", queries[0])
 
 
 

@@ -18,9 +18,18 @@ attempt also records the components' own safe stop lines (for example
 `runtime-blocked`, when a verification cleanup or an execution cleanup that will not complete blocks all later work.
 The runner reads the runtime's database and logs through `kubectl` with the
 installation's kubeconfig; it writes nothing to the cluster.
+
+The report names its evaluation cell (the repository and a short model-path
+label such as `local-llama` or `agent-cli`) and, when given, the installation
+revision and the image lock digest, so `summarize.py` can group batteries per
+cell. Each attempt also records the furthest stage it reached and the review
+runs created during it (`state|reason`). All of these fields are additive:
+reports written before them still parse.
 """
 import argparse
+import hashlib
 import json
+import re
 import subprocess
 import sys
 import time
@@ -28,6 +37,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 LABEL = 'ai-sdlc:shadow'
+REPORT_SCHEMA = 2
+MODEL_PATH = re.compile(r'^[a-z0-9][a-z0-9-]{0,39}$')
+# The furthest stage an attempt reached, in delivery order.
+STAGES = ('intake', 'execution', 'verification', 'review', 'merge')
 POLL_SECONDS = 20
 # An execution cleanup that will not complete: the runtime blocks all worker
 # work until an operator acts (store.ExecutionCleanupBlocked). Normal retries
@@ -72,6 +85,24 @@ class Runtime:
                 continue
             lines += sorted({line.split(' ', 2)[-1] for line in out.splitlines() if 'stopped safely' in line})
         return lines[:10]
+
+    def review_states(self, issue, since):
+        """The review runs for this issue created since the attempt started,
+        oldest first, as `state|reason` (for example `failed|request-changes`
+        before a repair, then `passed`)."""
+        executions = "SELECT work_item_uuid FROM execution_requests WHERE convert_from(payload,'UTF8')::json->>'issueNumber' = '%d'" % int(issue)
+        return self.sql("SELECT state||'|'||reason FROM review_runs WHERE work_item_uuid IN (%s) "
+                        "AND created_at >= '%s'::timestamptz ORDER BY created_at, id" % (executions, since))
+
+    def images(self):
+        """The installed deployments' images, best effort, so a report can be
+        tied to the revision that produced it."""
+        try:
+            out = run(self.base + ['get', 'deployments', '-o',
+                                   'jsonpath={range .items[*]}{.metadata.name}={.spec.template.spec.containers[0].image}{"\\n"}{end}'], retry=False)
+        except subprocess.SubprocessError:
+            return {}
+        return dict(sorted(line.split('=', 1) for line in out.splitlines() if '=' in line))
 
     def blocked(self):
         """A failed verification whose cleanup is not complete, or an execution
@@ -136,6 +167,29 @@ class GitHub:
         return None
 
 
+def stage_reached(result, before, after):
+    """The furthest stage the attempt reached, from the snapshots around it."""
+    if result['outcome'] == 'success':
+        return 'merge'
+    if after['reviews'] > before['reviews']:
+        return 'review'
+    if after['verifications'] > before['verifications']:
+        return 'verification'
+    if after['executions'] > before['executions']:
+        return 'execution'
+    return 'intake'
+
+
+def image_lock_digest(path):
+    """The sha256 of the image lock file and its image tag, if it has one."""
+    data = Path(path).read_bytes()
+    try:
+        tag = json.loads(data).get('image', {}).get('tag')
+    except (ValueError, AttributeError):
+        tag = None
+    return 'sha256:' + hashlib.sha256(data).hexdigest(), tag if isinstance(tag, str) else None
+
+
 def attempt(runtime, github, issue, timeout):
     github.label(issue, False)
     time.sleep(40)
@@ -188,6 +242,11 @@ def attempt(runtime, github, issue, timeout):
     after = runtime.snapshot(issue)
     result['seconds'] = round(time.monotonic() - started)
     result['modelCalls'] = after['modelCalls'] - before['modelCalls']
+    result['stageReached'] = stage_reached(result, before, after)
+    try:
+        result['reviews'] = runtime.review_states(issue, since)
+    except subprocess.SubprocessError:
+        pass  # Best effort: the summary then derives the verdict from the stop.
     if result['outcome'] != 'success':
         result['diagnostics'] = runtime.stop_lines(since)
     return result
@@ -202,9 +261,27 @@ def main(argv=None):
     parser.add_argument('--attempts', type=int, default=2)
     parser.add_argument('--timeout-minutes', type=int, default=15)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--cell-model-path', help='Short label of the model path for the evaluation cell, for example local-llama or agent-cli')
+    parser.add_argument('--installation-revision', help='Source revision of the installed images (defaults to the image lock tag)')
+    parser.add_argument('--image-lock', type=Path, help='Image lock file the installation used; its sha256 is recorded')
     args = parser.parse_args(argv)
+    if args.cell_model_path is not None and not MODEL_PATH.match(args.cell_model_path):
+        parser.error('--cell-model-path must be a short lowercase label such as local-llama or agent-cli')
     runtime, github = Runtime(args.kubectl, args.kubeconfig), GitHub(args.repository)
-    report = {'repository': args.repository, 'attemptBudget': args.attempts, 'issues': []}
+    report = {'schemaVersion': REPORT_SCHEMA, 'repository': args.repository, 'attemptBudget': args.attempts,
+              'cell': {'repository': args.repository, 'modelPath': args.cell_model_path}}
+    installation = {}
+    if args.image_lock:
+        installation['imageLockDigest'], tag = image_lock_digest(args.image_lock)
+        if tag and not args.installation_revision:
+            installation['revision'] = tag
+    if args.installation_revision:
+        installation['revision'] = args.installation_revision
+    images = runtime.images()
+    if images:
+        installation['images'] = images
+    report['installation'] = dict(sorted(installation.items()))
+    report['issues'] = []
     for issue in [int(n) for n in args.issues.split(',')]:
         if runtime.blocked():
             report['stopped'] = 'runtime-blocked'

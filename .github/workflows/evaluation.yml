@@ -1,0 +1,23 @@
+name: evaluation
+on:
+  pull_request:
+    paths: ['tools/evaluation/**', 'docs/evidence/*-evaluation-battery-*.json', '.github/workflows/evaluation.yml']
+  push:
+    branches: [main]
+    paths: ['tools/evaluation/**', 'docs/evidence/*-evaluation-battery-*.json', '.github/workflows/evaluation.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  harness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Test the battery runner and the summarizer
+        run: python3 -m unittest discover -s tools/evaluation -p 'test_*.py' -v
+      - name: Summarize the committed battery reports
+        run: |
+          python3 tools/evaluation/summarize.py docs/evidence/*-evaluation-battery-*.json \
+            --model-path agent-cli --json "$RUNNER_TEMP/summary.json" --markdown "$RUNNER_TEMP/summary.md"
+          cat "$RUNNER_TEMP/summary.md" >> "$GITHUB_STEP_SUMMARY"
