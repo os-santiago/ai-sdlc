@@ -62,7 +62,14 @@ type uncertainPublication struct {
 // battery-31 shape when kind is "branch".
 func newUncertainPublication(t *testing.T, kind string) uncertainPublication {
 	t.Helper()
-	f, db, r := publicationJournalFixture(t)
+	return newPlannedUncertainPublication(t, kind, nil)
+}
+
+// newPlannedUncertainPublication journals with the plan that build returns
+// (nil: a synthetic plan), optionally configuring the fixture first.
+func newPlannedUncertainPublication(t *testing.T, kind string, build func(*testing.T, *store.DB, publication.Command) publication.TreePlan, configure ...func(*fixture)) uncertainPublication {
+	t.Helper()
+	f, db, r := publicationJournalFixture(t, configure...)
 	ctx := context.Background()
 	var cmd publication.Command
 	if authority.DecodeStrict(r.Payload, &cmd) != nil {
@@ -70,6 +77,17 @@ func newUncertainPublication(t *testing.T, kind string) uncertainPublication {
 	}
 	plan := publication.TreePlan{Repository: cmd.Repository, Request: publication.TreeRequest{BaseTree: strings.Repeat("a", 40), Tree: []publication.TreeEntry{{Path: verification.LocaleSource, Mode: "100644", Type: "blob", Content: "source"}, {Path: verification.LocaleNewTest, Mode: "100644", Type: "blob", Content: "test"}}},
 		ExpectedTreeSHA: strings.Repeat("b", 40), Branch: publication.BranchName(cmd), CommitMessage: publication.CommitMessage(cmd.IssueNumber)}
+	if build != nil {
+		// The candidate projection is part of the installed publication grants.
+		passwords := map[string]string{}
+		for role := range f.Material.Identities {
+			passwords[role] = strings.ReplaceAll(role, "-", "_") + strings.Repeat("q", 40)
+		}
+		if e := f.Admin.ProvisionRolesForCapabilities(ctx, passwords, "verification", true, true); e != nil {
+			t.Fatal(e)
+		}
+		plan = build(t, db, cmd)
+	}
 	claim, e := db.ClaimPublication(ctx, r.ID, publication.PlanDigest(cmd, plan))
 	if e != nil {
 		t.Fatal(e)
@@ -372,5 +390,100 @@ func TestPublicationReconciliationUnplannedStaysQuarantined(t *testing.T) {
 	}
 	if row := u.effect(t, "tree"); row.completed || row.notSent {
 		t.Fatal("unplanned effect changed")
+	}
+}
+
+// One effect whose journaled predecessors no longer verify is reported as
+// unplanned and stays quarantined; it never turns the listing into an error
+// that would stop reconciliation of every other effect.
+func TestPublicationReconciliationInconsistentEffectDoesNotBlockListing(t *testing.T) {
+	u := newUncertainPublication(t, "branch")
+	u.settle(t)
+	ctx := context.Background()
+	if _, e := u.f.Admin.Pool.Exec(`UPDATE publication_effects SET receipt_digest=repeat('0',64) WHERE request_id=$1 AND kind='commit'`, u.request.ID); e != nil {
+		t.Fatal(e)
+	}
+	pending, e := u.db.PublicationReconciliations(ctx, 16)
+	if e != nil || len(pending) != 1 || pending[0].Consistent || pending[0].Completed != nil {
+		t.Fatal("inconsistent effect listing", len(pending), e)
+	}
+	forge := &reconcileForge{observation: publication.Observation{State: publication.ObservedAbsent}}
+	r := u.reconciler()
+	step, attempted, e := r.Step(ctx, forge)
+	if e != nil || !attempted || step.Outcome != publicationrecovery.Unplanned || len(forge.seen) != 0 {
+		t.Fatal("inconsistent effect", step, attempted, e)
+	}
+	if u.db.ResolvePublicationEffect(ctx, pending[0], nil) == nil {
+		t.Fatal("inconsistent effect resolved")
+	}
+	if blocked, e := u.db.PublicationBlocked(ctx); e != nil || !blocked {
+		t.Fatal("inconsistent effect lifted quarantine")
+	}
+	// Once its journal verifies again it is reconciled like any other.
+	var raw []byte
+	if e := u.f.Admin.Pool.QueryRow(`SELECT receipt FROM publication_effects WHERE request_id=$1 AND kind='commit'`, u.request.ID).Scan(&raw); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := u.f.Admin.Pool.Exec(`UPDATE publication_effects SET receipt_digest=$2 WHERE request_id=$1 AND kind='commit'`, u.request.ID, authority.Digest(raw)); e != nil {
+		t.Fatal(e)
+	}
+	if step, _, e := u.reconciler().Step(ctx, forge); e != nil || step.Outcome != publicationrecovery.NotSent {
+		t.Fatal("restored effect", step, e)
+	}
+}
+
+// The default tree plan: the immutable candidate delta read from the journal,
+// applied to the fetched pinned source and rebuilt by PrepareTree, must match
+// the plan digest the claim journaled, exactly as the controller computes it.
+func TestPublicationReconciliationRebuildsTreePlanFromCandidate(t *testing.T) {
+	source := workspacebundle.Bundle{Version: workspacebundle.Version, Files: []workspacebundle.File{
+		{Path: "README.md", Mode: 0644, Data: []byte("fixture source\n")},
+		{Path: verification.LocaleSource, Mode: 0644, Data: []byte("old source\n")},
+		{Path: verification.LocaleExistingTest, Mode: 0644, Data: []byte("existing test\n")},
+	}}
+	configure := func(f *fixture) {
+		source.SourceSHA = f.command.SourceSHA
+		f.sourceOverride = &source
+		f.candidateChanges = map[string]string{verification.LocaleSource: "new source\n", verification.LocaleNewTest: "new test\n"}
+	}
+	controllerPlan := func(t *testing.T, db *store.DB, cmd publication.Command) publication.TreePlan {
+		candidate, e := db.ReadPublicationCandidate(context.Background(), cmd.CandidateID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		plan, e := publication.PrepareTree(cmd, source, candidate.Delta)
+		if e != nil {
+			t.Fatal("controller plan", e)
+		}
+		return plan
+	}
+	for _, c := range []struct {
+		state, outcome string
+	}{{publication.ObservedExact, publicationrecovery.Completed}, {publication.ObservedAbsent, publicationrecovery.NotSent}} {
+		t.Run(c.outcome, func(t *testing.T) {
+			u := newPlannedUncertainPublication(t, "tree", controllerPlan, configure)
+			u.settle(t)
+			ctx := context.Background()
+			fetches := 0
+			r := &publicationrecovery.Reconciler{DB: u.db, Log: func(string, ...any) {},
+				Fetch: func(_ context.Context, repo, sha string) (workspacebundle.Bundle, error) {
+					fetches++
+					if repo != u.command.Repository || sha != u.command.SourceSHA {
+						return workspacebundle.Bundle{}, errors.New("unplanned source")
+					}
+					return source, nil
+				}}
+			forge := &reconcileForge{observation: publication.Observation{State: c.state}}
+			step, attempted, e := r.Step(ctx, forge)
+			if e != nil || !attempted || step.Outcome != c.outcome || fetches != 1 {
+				t.Fatal("default tree plan", step, e, fetches)
+			}
+			if len(forge.seen) != 1 || forge.seen[0].SHA != u.plan.ExpectedTreeSHA || forge.seen[0].RequestDigest != u.planned.RequestDigest || forge.writes.Load() != 0 {
+				t.Fatal("observed tree differs from the controller plan")
+			}
+			if blocked, e := u.db.PublicationBlocked(ctx); e != nil || blocked {
+				t.Fatal("quarantine")
+			}
+		})
 	}
 }

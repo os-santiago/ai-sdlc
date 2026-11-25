@@ -72,7 +72,11 @@ Outcome names are closed:
 
 - `completed`: the receipt the original call would have produced is recorded.
   It is marked `"observed": true`.
-- `not-sent`: a known no-send is recorded (`not_sent_at`).
+- `not-sent`: the forge proves that the planned object is absent, so the effect
+  is recorded as not sent (`not_sent_at`). This is a statement about the forge's
+  current state, not about the network. A request may have left and been rejected
+  or never applied; what matters is that the planned object does not exist and,
+  after the settle window, cannot appear.
 - `mismatch`: something exists that is not the planned effect. The publication stays quarantined.
 - `unavailable`: the forge, the source or the journal could not be read or
   written, including any non-200, non-404 status. The publication stays quarantined.
@@ -92,7 +96,10 @@ change no row; they appear only in the bounded log line.
   is still `failed` and settled with the same plan digest and commit time, and
   that the effect is the same uncertain intent (token and request digest) with
   every predecessor acknowledged. A branch receipt must name the acknowledged
-  commit; a pull request receipt must name the acknowledged commit and branch.
+  commit and the branch the signed command plans; a pull request receipt must
+  name the acknowledged commit and that same branch. An effect whose
+  predecessors no longer verify is reported `unplanned` and stays quarantined,
+  without stopping reconciliation of other effects.
   A resolved effect can never change again.
 - **Observed receipts never authorize anything.** A live write cannot present an
   observed receipt (`AcknowledgePublicationEffect` rejects it). `FinishPublication`
@@ -138,6 +145,15 @@ Consequences for the operator:
 A `mismatch`, `unplanned` or persistent `unavailable` outcome needs an operator.
 Inspect the forge read-only, then reconcile the effect row by hand, as before
 this change. The bounded log line names the effect kind and the reason.
+
+- **Pull request closed or edited** (`effect=pull-request outcome=mismatch`): the
+  forge has a PR for the planned head, but it is closed, a draft, retargeted, or its
+  body no longer carries the plan digest. A PR was sent, so the effect can never be
+  recorded as not sent. Confirm read-only that it is the runtime's PR (head branch
+  and head SHA). Then record its receipt by hand and leave the PR closed, or
+  reopen and restore it so that the next observation completes it.
+- **Branch at another SHA** (`effect=branch outcome=mismatch`): something
+  moved the branch. Do not delete it before you have established who moved it.
 
 ## Configuration and migration
 

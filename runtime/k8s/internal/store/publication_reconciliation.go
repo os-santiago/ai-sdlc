@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -29,6 +31,11 @@ type PublicationReconciliation struct {
 	// journal admits an effect only after every predecessor completed, so
 	// at most one effect per request can be uncertain.
 	Completed []PublicationEvidence
+	// Consistent is false when the journaled predecessors cannot be read or
+	// are not exactly the acknowledged effects before Kind. Such an effect is
+	// still listed, so it is reported (and stays quarantined) without hiding
+	// the others behind an error.
+	Consistent bool
 }
 
 var publicationKinds = []string{"tree", "commit", "branch", "pull-request"}
@@ -65,11 +72,12 @@ func (db *DB) PublicationReconciliations(ctx context.Context, limit int) ([]Publ
 			return ErrExecution
 		}
 		for i := range result {
+			// readPublicationEffects is a plain SELECT: a rejected row does not
+			// abort this transaction for the rows after it.
 			completed, e := readPublicationEffects(ctx, tx, result[i].RequestID)
-			if e != nil || !publicationPredecessors(result[i].Kind, completed) {
-				return ErrExecution
+			if e == nil && publicationPredecessors(result[i].Kind, completed) {
+				result[i].Completed, result[i].Consistent = completed, true
 			}
-			result[i].Completed = completed
 		}
 		return nil
 	})
@@ -123,10 +131,11 @@ func (db *DB) ResolvePublicationEffect(ctx context.Context, r PublicationReconci
 		if _, e := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(73421025)`); e != nil {
 			return ErrExecution
 		}
-		var ok bool
-		if tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM publication_requests WHERE state='claimed') AND EXISTS(SELECT 1 FROM publication_effects e JOIN publication_requests r ON r.id=e.request_id
+		var idle bool
+		var payload []byte
+		if tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM publication_requests WHERE state='claimed'),r.payload FROM publication_effects e JOIN publication_requests r ON r.id=e.request_id
  WHERE e.request_id=$1 AND e.kind=$2 AND e.token=$3::uuid AND e.request_digest=$4 AND e.completed_at IS NULL AND e.not_sent_at IS NULL
- AND r.state='failed' AND r.plan_digest=$5 AND r.commit_time=$6 AND r.claim_until+`+publicationSettle+`<clock_timestamp())`, r.RequestID, r.Kind, r.EffectToken, r.RequestDigest, r.PlanDigest, r.CommitTime).Scan(&ok) != nil || !ok {
+ AND r.state='failed' AND r.plan_digest=$5 AND r.commit_time=$6 AND r.claim_until+`+publicationSettle+`<clock_timestamp()`, r.RequestID, r.Kind, r.EffectToken, r.RequestDigest, r.PlanDigest, r.CommitTime).Scan(&idle, &payload) != nil || !idle {
 			return ErrExecution
 		}
 		completed, e := readPublicationEffects(ctx, tx, r.RequestID)
@@ -139,13 +148,15 @@ func (db *DB) ResolvePublicationEffect(ctx context.Context, r PublicationReconci
 		} else {
 			// A branch or pull request points at the acknowledged commit, and a
 			// pull request's head is the acknowledged branch.
+			// Both name the only branch the signed command may publish to.
+			branch := plannedPublicationBranch(payload)
 			switch r.Kind {
 			case "branch":
-				if receipt.SHA != completed[1].Receipt.SHA {
+				if receipt.SHA != completed[1].Receipt.SHA || branch == "" || receipt.Branch != branch {
 					return ErrExecution
 				}
 			case "pull-request":
-				if receipt.SHA != completed[1].Receipt.SHA || receipt.SHA != completed[2].Receipt.SHA || receipt.Branch != completed[2].Receipt.Branch {
+				if receipt.SHA != completed[1].Receipt.SHA || receipt.SHA != completed[2].Receipt.SHA || branch == "" || receipt.Branch != branch || completed[2].Receipt.Branch != branch {
 					return ErrExecution
 				}
 			}
@@ -159,4 +170,19 @@ func (db *DB) ResolvePublicationEffect(ctx context.Context, r PublicationReconci
 		}
 		return nil
 	})
+}
+
+var publicationCandidate = regexp.MustCompile(`^execution-[a-f0-9]{64}$`)
+
+// plannedPublicationBranch mirrors publication.BranchName for the journaled
+// signed command (the store cannot import the publication package).
+func plannedPublicationBranch(payload []byte) string {
+	var c struct {
+		IssueNumber int    `json:"issueNumber"`
+		CandidateID string `json:"candidateId"`
+	}
+	if json.Unmarshal(payload, &c) != nil || c.IssueNumber < 1 || c.IssueNumber > 2147483647 || !publicationCandidate.MatchString(c.CandidateID) {
+		return ""
+	}
+	return fmt.Sprintf("ai-sdlc/issue-%d-%s", c.IssueNumber, c.CandidateID[len("execution-"):len("execution-")+32])
 }

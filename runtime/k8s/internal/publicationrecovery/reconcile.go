@@ -179,6 +179,11 @@ func (r *Reconciler) Step(ctx context.Context, observer Observer) (Step, bool, e
 }
 
 func (r *Reconciler) reconcile(ctx context.Context, observer Observer, c store.PublicationReconciliation) string {
+	if !c.Consistent {
+		// Its predecessors are not exactly the acknowledged effects: nothing
+		// can be planned, so it stays quarantined, paced like any other.
+		return Unplanned
+	}
 	ctx, cancel := context.WithTimeout(ctx, stepBudget)
 	defer cancel()
 	x, outcome := r.expect(ctx, c)
