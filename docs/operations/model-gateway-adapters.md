@@ -419,6 +419,54 @@ turns the guard on or off. Any other value refuses to start. The chart sets
 reviewer never writes files. Benchmark probes are never guarded, and the guard
 is inert when the request does not offer `write_file`.
 
+## Copy guard
+
+Told to put new tests in a new file, the model may copy the existing ones into
+it. In evaluation battery 29, with the rewrite guard installed, one call ran to
+the 570 s ceiling. It was a `write_file` to a new `textutil_test_new.go` whose
+content repeated the existing tests of `textutil_test.go`: about 6,000 tokens.
+Duplicate test functions do not even compile in one package.
+
+The rewrite guard therefore also checks a `write_file` to a path that is not
+pre-existing. Its sources are the request's own successful `read_file`
+results, all reads of one path together, partial reads (`offset`, `limit`)
+included. SCC's trailing `[N lines ...]` note is not content. A source with the
+same path as the new file is skipped: the model may rewrite a file it created.
+
+Lines are compared after collapsing runs of whitespace. Only non-trivial lines
+count: at least 4 letters or digits, so braces, blank lines and short imports
+such as `"os"` never do. Each distinct line counts once. The content is a copy
+of one source when, after at least 40 distinct non-trivial lines, that source
+holds at least 30 of them and at least 60% of all of them.
+
+The bounds keep legitimate files out. A new Go test file shares its package
+clause, imports and the lines of the table-test shape (`tests := []struct {`,
+`name string`, `for _, tt := range tests {`, `t.Run(tt.name, ...`) with its
+neighbours: 10 distinct lines in the test fixture, 19% of a 52-line file. A
+file under 40 distinct non-trivial lines is never judged. A copy matches
+nearly every line. The check is linear in the streamed content and stops
+after 4,096 distinct lines. A new file that copies a little and adds much
+(under 60% repeated) passes.
+
+- **Detection.** The `openai` adapter decodes the streamed `content` string as
+  it arrives and stops the stream as soon as the content qualifies. A
+  `content` key that does not start within the first 4,096 characters of the
+  arguments, and every non-streaming answer, is judged on the final message.
+- **Retry.** The same machinery as the rewrite guard, with this correction:
+  `write_file to "<path>" was refused: it repeats content of "<source>" that
+  already exists. Write only the new code and tests the issue asks for; never
+  copy existing tests or code into a new file.` Both paths are cut at 200
+  characters and quoted as JSON strings. One call spends at most one guard
+  retry for rewrites and copies together, and shares the degenerate retry and
+  the deadline.
+- **Fail open.** The same rules apply. A second refusal of either kind is
+  passed through, and so is a refusal with no retry that fits. A complete
+  refused answer is returned when its retry fails. Any error in the guard
+  turns it off for the call.
+
+The copy guard has no switch of its own: `AI_SDLC_MODEL_GATEWAY_REWRITE_GUARD`
+turns both checks on or off.
+
 ## Per-call events
 
 After the benchmark, the gateway logs one bounded `model-call` event per
@@ -443,6 +491,10 @@ absent otherwise:
 {"event": "model-call", "outcome": "ok", "seconds": 31.5, "budgetSeconds": 300, "promptTokens": 9632, "completionTokens": 88, "estimated": false, "degenerateRetries": 1}
 {"event": "model-call", "outcome": "failed", "seconds": 24.9, "budgetSeconds": 300, "reason": "degenerate", "degenerateRetries": 1}
 ```
+
+The [copy guard](#copy-guard) adds `"copyRetries": 1` and `"copyPassed": 1`
+by the same rules. One call spends at most one guard retry, so at most one of
+`rewriteRetries` and `copyRetries` is present.
 
 When the [rewrite guard](#rewrite-guard) refused an answer and retried, the
 event carries `"rewriteRetries": 1`, also on a failure of the retry. When a

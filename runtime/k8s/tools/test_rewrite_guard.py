@@ -27,6 +27,7 @@ def tool(name, *keys):
 TOOLS = [tool("read_file", "path"), tool("edit_file", "path", "patch"), tool("write_file", "path", "content"),
          tool("list_dir", "path")]
 EXISTING = "textutil/textutil_test.go"
+REWRITE = adapters.Refusal("rewrite", EXISTING, None)
 TEST_SOURCE = "package textutil\n\nfunc TestTrim(t *testing.T) {}\n"
 
 
@@ -142,11 +143,11 @@ class GuardRules(unittest.TestCase):
         self.assertIsNone(guard.streamed(0, "write_file", "{\"path\": \"textutil/textutil_te"))
         self.assertIsNone(guard.streamed(0, "write_file", "{\"path\": \"textutil/textutil_test.go\""))
         self.assertIsNone(guard.streamed(1, "edit_file", "{\"path\": \"textutil/textutil_test.go\", "))
-        self.assertEqual(guard.streamed(0, "write_file", "{\"path\": \"textutil/textutil_test.go\", \"con"), EXISTING)
+        self.assertEqual(guard.streamed(0, "write_file", "{\"path\": \"textutil/textutil_test.go\", \"con"), REWRITE)
         self.assertIsNone(guard.streamed(0, "write_file", "{\"path\": \"textutil/textutil_test.go\", \"content\": \"x"))
         # Complete scalar keys may come first; escapes are decoded.
-        self.assertEqual(guard.streamed(2, "write_file", "{\"mode\": 1, \"path\": \"textutil\\/textutil_test.go\"}"), EXISTING)
-        self.assertEqual(guard.streamed(3, "write_file", "{\"content\": \"x\", \"path\": \"textutil/textutil_test.go\"}"), EXISTING)
+        self.assertEqual(guard.streamed(2, "write_file", "{\"mode\": 1, \"path\": \"textutil\\/textutil_test.go\"}"), REWRITE)
+        self.assertEqual(guard.streamed(3, "write_file", "{\"content\": \"x\", \"path\": \"textutil/textutil_test.go\"}"), REWRITE)
         self.assertIsNone(guard.streamed(4, "write_file", "{\"path\": \"textutil/other.go\", "))
         # A path not within the first scanned characters is left to the final message.
         long_first = "{\"content\": \"" + "x" * adapters.REWRITE_SCAN_CHARS

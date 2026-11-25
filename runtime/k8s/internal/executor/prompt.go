@@ -38,7 +38,8 @@ write_file, plus the smallest edit_file change that wires it in where the
 language requires it (import, export, mod). Never fall back to rewriting an
 existing file. Keep existing tests intact; when an existing test file is
 large, add the new tests in a new test file named like the existing test
-files.
+files. That new file holds only the new tests: never copy existing tests or
+code into it.
 
 <reviewed-adev-policy>
 %s
