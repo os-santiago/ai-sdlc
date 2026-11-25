@@ -3,6 +3,9 @@ package podtransport
 import (
 	"bytes"
 	"context"
+	"errors"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -126,35 +129,78 @@ func (s *Session) ExportCandidate(ctx context.Context) (Candidate, error) {
 	if s == nil {
 		return Candidate{}, ErrTransport
 	}
-	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
+	// 46 s: the 30 s export and the after-inspect keep their time (the
+	// reserve), and a quick failure of the first inspect can still be retried
+	// for about 5 s instead of losing a finished candidate (battery 30).
+	ctx, cancel := context.WithTimeout(ctx, 46*time.Second)
 	defer cancel()
 	before, err := s.inspect(withReadReserve(ctx, 30*time.Second+readAttemptBound), true)
 	if err != nil {
-		return Candidate{}, err
+		return Candidate{}, exportFailure("before", err)
 	}
 	if before.workerExitCode == nil {
-		return Candidate{}, ErrTransport
+		return Candidate{}, exportFailure("before-running", ErrTransport)
 	}
 	raw, code, err := s.exchangeFixed(ctx, helperOperation{
 		command:     []string{"/workspace-transfer", "export", "--pod-uid", s.identity.PodUID, "--source-sha", s.sourceSHA},
 		outputLimit: workspacebundle.MaxWireBytes, frames: 8192, timeout: 30 * time.Second,
 	}, nil)
 	if err != nil {
-		return Candidate{}, err
+		return Candidate{}, exportFailure("helper-transport", err)
 	}
 	if code != 0 {
-		return Candidate{}, ErrTransport
+		return Candidate{}, exportFailure(helperExitStep(code), ErrTransport)
 	}
 	bundle, err := workspacebundle.Decode(raw)
 	if err != nil || bundle.SourceSHA != s.sourceSHA {
-		return Candidate{}, ErrTransport
+		return Candidate{}, exportFailure("decode", ErrTransport)
 	}
 	after, err := s.inspect(ctx, true)
 	if err != nil {
-		return Candidate{}, err
+		return Candidate{}, exportFailure("after", err)
 	}
 	if after.workerExitCode == nil || *after.workerExitCode != *before.workerExitCode {
-		return Candidate{}, ErrTransport
+		return Candidate{}, exportFailure("after-identity", ErrTransport)
 	}
 	return Candidate{raw: raw, exitCode: *after.workerExitCode}, nil
 }
+
+// exportError names the bounded export step that failed (see exportSteps).
+// Evaluation battery 30 lost a step-budget candidate at "export" two seconds
+// into the export, and the stop named no step. It unwraps to the original
+// transport or permission error, so every caller stops the same way.
+type exportError struct {
+	step  string
+	cause error
+}
+
+func (e exportError) Error() string { return "candidate export failed at " + e.step }
+func (e exportError) Unwrap() error { return e.cause }
+
+func exportFailure(step string, err error) error { return exportError{step: step, cause: err} }
+
+// helperExitStep names a nonzero export helper exit by its bounded code.
+func helperExitStep(code int) string {
+	if code > 0 && code <= 255 {
+		return "helper-exit-" + strconv.Itoa(code)
+	}
+	return "helper-exit"
+}
+
+var exportSteps = regexp.MustCompile(`^(before|before-running|helper-transport|helper-exit(-([1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))?|decode|after|after-identity)$`)
+
+// ExportFailureForTest builds a named export failure for other packages'
+// tests; production code never calls it.
+func ExportFailureForTest(step string) error { return exportFailure(step, ErrTransport) }
+
+// ExportStep returns the named export step, or "" for any other error.
+func ExportStep(err error) string {
+	var failed exportError
+	if errors.As(err, &failed) {
+		return failed.step
+	}
+	return ""
+}
+
+// KnownExportStep reports whether step is one of the bounded export steps.
+func KnownExportStep(step string) bool { return exportSteps.MatchString(step) }

@@ -105,6 +105,9 @@ func DiagnosticStage(err error) string {
 	if detail, ok := strings.CutPrefix(stopped.Stage, "execution-read-"); ok && podtransport.KnownReadStep(detail) {
 		return stopped.Stage
 	}
+	if detail, ok := strings.CutPrefix(stopped.Stage, "export-"); ok && podtransport.KnownExportStep(detail) {
+		return stopped.Stage
+	}
 	return "unknown"
 }
 
@@ -274,11 +277,17 @@ func finishGeneration(ctx context.Context, db *store.DB, l *Lifecycle, end gener
 	}
 	*stage = "export"
 	var exported []byte
+	// RunEffect returns ErrAuthority for any operation error, so the export's
+	// own named step is kept from inside the operation.
+	var exportErr error
 	if err = l.RunEffect(ctx, *stage, func(ctx context.Context, in EffectInput) (store.LifecycleResult, error) {
 		raw, code, e := end.Export(ctx)
-		exported = raw
+		exported, exportErr = raw, e
 		return store.LifecycleResult{UID: in.PodUID, Digest: workspacebundle.Digest(raw), Bytes: len(raw), ExitCode: &code}, e
 	}); err != nil {
+		if step := podtransport.ExportStep(exportErr); podtransport.KnownExportStep(step) {
+			*stage = "export-" + step
+		}
 		return record, ControllerError{*stage}
 	}
 	if stepBudget && l.Unchanged(exported) {
