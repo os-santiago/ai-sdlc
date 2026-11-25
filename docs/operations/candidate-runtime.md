@@ -154,8 +154,13 @@ existing profile.
 SCC counts individual tools, including tools in the same response, and checks its
 step limit between batches. A 16-step run can therefore stop after six model
 responses containing 18 tool calls. This is a cooperative execution budget,
-not a strict per-operation security quota. Exit 22 remains a failure; partial
-workspace changes cannot be promoted as a successful candidate.
+not a strict per-operation security quota. A run that ends on its step budget
+is not a success. When the launcher establishes that the step budget, not the
+time budget, ended SCC, it exits 25 and the controller exports the workspace's
+change, if any, through the same capture bounds as a clean exit; independent
+verification and review then decide, exactly as for any candidate. Time-outs
+and every other nonzero exit still stop before export. See
+[step-budget exit 25](executor-failure-diagnostics.md#step-budget-exit-25).
 
 The offline regression runs the actual SCC process from an immutable executor
 image against a deterministic loopback provider, with no credentials or external
@@ -296,7 +301,7 @@ Above the default, SCC therefore receives a shorter `--max-seconds`: one call
 window plus its 15-second provider-wait slack earlier, capped at an eighth of
 the budget and taken only from the seconds above 600. The last call it starts
 can usually answer before the kill, and SCC then stops with exit 22 and its
-summary. Examples: 600 s (default) keeps exactly 600, as before; 650 s gives
+summary (a time-out, which stops before export). Examples: 600 s (default) keeps exactly 600, as before; 650 s gives
 600; 700 s gives 625; 900 s gives 825; and 900 s with a 330-second call window
 gives 788. SCC never receives less than the 600 seconds it had before. To make
 time-outs end gracefully, select a budget at least one call window plus 15

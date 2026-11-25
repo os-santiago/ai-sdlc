@@ -18,6 +18,18 @@ const MaxBytes = 2 * 1024 * 1024
 
 var ErrInvalid = errors.New("invalid or oversized unvalidated candidate delta")
 
+// StepBudgetExitCode is the executor launcher's exit code for a generation
+// that SCC ended on its tool-step budget (SCC's exit 22, BUDGET_EXCEEDED),
+// established by the launcher's own clock rather than by SCC's output. Such a
+// run's workspace is exported like a clean exit when it holds a change.
+const StepBudgetExitCode = 25
+
+// GenerationEndedStepBudget is the bounded marker a captured candidate carries
+// when its generation ended on the step budget. It is evaluation data only:
+// verification, review, publication and merge never read it, and it grants
+// nothing.
+const GenerationEndedStepBudget = "step-budget"
+
 type Identity struct {
 	Mode   uint32 `json:"mode"`
 	Bytes  int    `json:"bytes"`

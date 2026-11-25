@@ -15,6 +15,11 @@ type CandidateRecord struct {
 	RequestID, AllocationID, PodUID, SourceSHA                       string
 	SourceTreeSHA256, CandidateTreeSHA256, ExportSHA256, DeltaSHA256 string
 	ExportBytes, Changes, ModelCalls                                 int
+	// GenerationEnded is empty for a clean generator exit and
+	// candidate.GenerationEndedStepBudget when the generator ended on its
+	// tool-step budget. It is derived from the durable export receipt and the
+	// retained worker-exit observation, for evaluation only.
+	GenerationEnded string
 }
 
 // CaptureLifecycleCandidate serializes capture with every model reservation.
@@ -40,7 +45,21 @@ func (db *DB) CaptureLifecycleCandidate(ctx context.Context, l Lifecycle, alloca
 			return ErrExecution
 		}
 		var receipt LifecycleResult
-		if json.Unmarshal(receiptRaw, &receipt) != nil || receipt.UID != pod || receipt.ExitCode == nil || *receipt.ExitCode != 0 || receipt.Digest != result.ExportSHA256 || receipt.Bytes != result.ExportBytes {
+		if json.Unmarshal(receiptRaw, &receipt) != nil || receipt.UID != pod || receipt.ExitCode == nil || receipt.Digest != result.ExportSHA256 || receipt.Bytes != result.ExportBytes {
+			return ErrExecution
+		}
+		switch *receipt.ExitCode {
+		case 0:
+		case candidate.StepBudgetExitCode:
+			// A step-budget exit is captured only with its worker-exit
+			// observation already retained for the same Pod, so the durable
+			// diagnostic always marks the candidate.
+			var observed bool
+			if tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM execution_failures WHERE request_id=$1 AND pod_uid=$2 AND exit_code=$3)`, l.Claim.ID, pod, candidate.StepBudgetExitCode).Scan(&observed) != nil || !observed {
+				return ErrExecution
+			}
+			result.GenerationEnded = candidate.GenerationEndedStepBudget
+		default:
 			return ErrExecution
 		}
 		ledger, e := lockModel(ctx, tx, allocationID)

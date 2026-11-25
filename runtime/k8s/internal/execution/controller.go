@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
@@ -216,35 +217,72 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 			return ErrAuthority
 		}
 		return nil
-	}); err != nil {
-		if errors.Is(err, errWorkerNonzero) {
-			var failure nonzeroWorkerExit
-			errors.As(err, &failure)
-			uid, container, code, observationErr := session.WorkerFailure(ctx)
-			recorded := observationErr == nil && code == failure.code && db.RecordExecutionFailure(ctx, l.durable, uid, container, code) == nil
-			return record, workerFailure{code: failure.code, recorded: recorded}
-		}
+	}); err != nil && !errors.Is(err, errWorkerNonzero) {
 		var stopped driveStop
 		if stage == "execution" && errors.As(err, &stopped) {
 			stage = stopped.stage
 		}
 		return record, ControllerError{stage}
 	}
-	stage = "export"
-	var exported podtransport.Candidate
-	if err = l.RunEffect(ctx, stage, func(ctx context.Context, in EffectInput) (store.LifecycleResult, error) {
-		var e error
-		exported, e = session.ExportCandidate(ctx)
-		code := exported.WorkerExitCode()
-		raw := exported.Bytes()
+	return finishGeneration(ctx, db, l, sessionEnd{session}, err, &stage)
+}
+
+// generationEnd is the part of the original executor session that ends a
+// generation: the bounded worker-exit observation and the candidate export.
+type generationEnd interface {
+	WorkerFailure(context.Context) (podUID, containerID string, code int32, err error)
+	Export(context.Context) (raw []byte, code int32, err error)
+}
+
+type sessionEnd struct{ session *podtransport.Session }
+
+func (e sessionEnd) WorkerFailure(ctx context.Context) (string, string, int32, error) {
+	return e.session.WorkerFailure(ctx)
+}
+
+func (e sessionEnd) Export(ctx context.Context) ([]byte, int32, error) {
+	exported, err := e.session.ExportCandidate(ctx)
+	return exported.Bytes(), exported.WorkerExitCode(), err
+}
+
+// finishGeneration decides, after the original worker exited, whether its
+// workspace is exported and captured. driven is nil for exit zero or the
+// nonzero exit driveModel observed. A nonzero exit stops before export, with
+// one exception: the launcher's step-budget code, once its observation is
+// retained (that row is the candidate's durable marker), goes through the
+// same export and capture as exit zero, with every bound, and then the same
+// independent verification and review. A step-budget run that left no change
+// stops as the worker exit it is.
+func finishGeneration(ctx context.Context, db *store.DB, l *Lifecycle, end generationEnd, driven error, stage *string) (record store.CandidateRecord, err error) {
+	stepBudget := false
+	if driven != nil {
+		var failure nonzeroWorkerExit
+		if !errors.As(driven, &failure) {
+			return record, ControllerError{*stage}
+		}
+		uid, container, code, observationErr := end.WorkerFailure(ctx)
+		recorded := observationErr == nil && code == failure.code && db.RecordExecutionFailure(ctx, l.durable, uid, container, code) == nil
+		if failure.code != candidate.StepBudgetExitCode || !recorded {
+			return record, workerFailure{code: failure.code, recorded: recorded}
+		}
+		stepBudget = true
+	}
+	*stage = "export"
+	var exported []byte
+	if err = l.RunEffect(ctx, *stage, func(ctx context.Context, in EffectInput) (store.LifecycleResult, error) {
+		raw, code, e := end.Export(ctx)
+		exported = raw
 		return store.LifecycleResult{UID: in.PodUID, Digest: workspacebundle.Digest(raw), Bytes: len(raw), ExitCode: &code}, e
 	}); err != nil {
-		return record, ControllerError{stage}
+		return record, ControllerError{*stage}
 	}
-	stage = "capture"
-	record, err = l.CaptureCandidate(ctx, exported.Bytes())
+	if stepBudget && l.Unchanged(exported) {
+		return record, workerFailure{code: candidate.StepBudgetExitCode, recorded: true}
+	}
+	*stage = "capture"
+	record, err = l.CaptureCandidate(ctx, exported)
 	if err != nil {
-		return store.CandidateRecord{}, ControllerError{stage}
+		return store.CandidateRecord{}, ControllerError{*stage}
 	}
 	return record, nil
 }

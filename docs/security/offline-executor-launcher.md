@@ -58,7 +58,11 @@ attempt, not an automatic replay.
 7. The helper exports regular-file candidates only after that external check.
    The controller must independently compare them with trusted source and apply
    review, test, security, performance and release gates. Exit zero alone never
-   means the candidate is accepted or ready for release.
+   means the candidate is accepted or ready for release, and neither does the
+   launcher's step-budget exit 25, which it derives from its own clocks (SCC
+   exit 22 while both its monotonic and wall-clock readings are strictly below
+   SCC's time budget), never from SCC's output or summary files. See
+   [step-budget exit 25](../operations/executor-failure-diagnostics.md#step-budget-exit-25).
 
 The canonical tree digest includes the source commit and every sorted UTF-8 path,
 Git executable mode, byte length and SHA-256 content digest. Its versioned binary

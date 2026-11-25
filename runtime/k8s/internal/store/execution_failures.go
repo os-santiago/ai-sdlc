@@ -10,7 +10,11 @@ import (
 var failureContainerID = regexp.MustCompile(`^[a-z0-9-]{1,32}://[a-f0-9]{32,128}$`)
 
 // RecordExecutionFailure retains a bounded observation before containment cleanup.
-// It cannot capture a candidate, renew authority or reopen an attempt. Repeating
+// It does not capture a candidate, renew authority or reopen an attempt by
+// itself. One code is also a precondition: a candidate exported after the
+// launcher's step-budget exit (candidate.StepBudgetExitCode) is captured only
+// when this observation exists for the same request and Pod, so the row is
+// that candidate's durable marker (see CaptureLifecycleCandidate). Repeating
 // the identical observation preserves its original database timestamp.
 func (db *DB) RecordExecutionFailure(ctx context.Context, l Lifecycle, podUID, containerID string, code int32) error {
 	if !lifecycleUUID.MatchString(podUID) || !failureContainerID.MatchString(containerID) || code < 1 || code > 255 {

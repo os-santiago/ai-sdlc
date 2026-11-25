@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repair"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
@@ -244,4 +245,35 @@ func ParseAssignment(raw []byte, expected string, now time.Time) (Assignment, er
 		return Assignment{}, ErrInvalid
 	}
 	return a, nil
+}
+
+// StepBudgetExitCode is the launcher's own exit code for an SCC generation
+// that ended with SCC's exit 22 (BUDGET_EXCEEDED) on its tool-step budget. It
+// is outside SCC's documented codes, and the launcher never passes an
+// arbitrary SCC code through, so it cannot be produced any other way. The
+// controller exports the candidate of such a run, when the workspace holds a
+// change, for independent verification and review; it is not success.
+const StepBudgetExitCode = candidate.StepBudgetExitCode
+
+// budgetExitCode classifies SCC's exit 22 from facts the launcher measures
+// itself, never from SCC's output, summary or audit log, which the generated
+// tools can write. The pinned SCC ends a generation run with exit 22 for its
+// time budget or its step budget only (no token budget is configured: the
+// launcher's environment and arguments set none), and it checks the time
+// budget first, on the wall clock (Date.now), measured from a start later
+// than the launcher's own clock starts. The launcher reads the same interval
+// on its monotonic clock and on the wall clock. The monotonic clock stops
+// while a host or VM is suspended, and the wall clock can be stepped, so only
+// when both readings are strictly below SCC's time budget (the larger is
+// compared) can the time budget not have ended the run: it is the step
+// budget. At or after that point the cause is ambiguous (a step budget
+// reached at the deadline looks the same), so the run keeps exit 22 and stops
+// as before. Reviewer runs always keep exit 22. A change of the worker image's
+// SCC_ENGINE_PIN must recheck that SCC still orders its budget checks this way.
+func budgetExitCode(p Profile, monotonic, wall time.Duration) int {
+	elapsed := max(monotonic, wall)
+	if p.Version == ProfileVersion && elapsed >= 0 && elapsed < time.Duration(SCCSeconds(p))*time.Second {
+		return StepBudgetExitCode
+	}
+	return 22
 }

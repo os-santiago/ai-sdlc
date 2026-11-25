@@ -16,6 +16,21 @@ import (
 
 func candidateFixture(t *testing.T, configure ...func(*fixture)) (*lifecycleFixture, *Lifecycle, store.ModelScope, []byte) {
 	t.Helper()
+	f, l, scope, raw, pod := exitedWorkerFixture(t, configure...)
+	zero := int32(0)
+	if err := l.RunEffect(context.Background(), "export", func(context.Context, EffectInput) (store.LifecycleResult, error) {
+		return store.LifecycleResult{UID: pod, Digest: workspacebundle.Digest(raw), Bytes: len(raw), ExitCode: &zero}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return f, l, scope, raw
+}
+
+// exitedWorkerFixture stops where the original worker has exited after one
+// completed model call: the lifecycle is start-ready and raw is a workspace
+// export with one change. pod is the worker Pod's UID.
+func exitedWorkerFixture(t *testing.T, configure ...func(*fixture)) (*lifecycleFixture, *Lifecycle, store.ModelScope, []byte, string) {
+	t.Helper()
 	f, l, load, pod := modelLifecycleFixture(t, configure...)
 	if _, err := f.Admin.Pool.Exec(`GRANT INSERT ON execution_candidates TO aisdlc_worker; GRANT SELECT ON model_calls TO aisdlc_worker; GRANT UPDATE(state,stop_reason) ON model_budgets TO aisdlc_worker; GRANT UPDATE(reserved_calls) ON model_allocations TO aisdlc_worker`); err != nil {
 		t.Fatal(err)
@@ -59,13 +74,7 @@ func candidateFixture(t *testing.T, configure ...func(*fixture)) (*lifecycleFixt
 	if err != nil {
 		t.Fatal(err)
 	}
-	zero := int32(0)
-	if err = l.RunEffect(context.Background(), "export", func(context.Context, EffectInput) (store.LifecycleResult, error) {
-		return store.LifecycleResult{UID: pod, Digest: workspacebundle.Digest(raw), Bytes: len(raw), ExitCode: &zero}, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return f, l, scope, raw
+	return f, l, scope, raw, pod
 }
 
 func TestCandidateCapturePersistsExactDeltaAndSealsBudget(t *testing.T) {
