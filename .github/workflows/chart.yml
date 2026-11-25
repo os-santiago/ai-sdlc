@@ -2,8 +2,10 @@
 #
 # The package job packages runtime/k8s/deploy/helm/ai-sdlc-k8s-runtime at its
 # deterministic published version (Chart.yaml version + "+<12-digit
-# revision>", OCI tag with "_"), lints and renders the packaged archive, and
-# checks the documented Secret contract (docs/operations/helm-chart-secret-contract.md).
+# revision>", OCI tag with "_") with reproducible bytes, and uploads it without
+# installing any Python package. The test job then lints and renders that
+# archive and checks the documented Secret contract
+# (docs/operations/helm-chart-secret-contract.md), with only hash-pinned wheels.
 #
 # On push to main only, the publish job pushes the packaged archive to
 # oci://quay.io/os-santiago/ai-sdlc-k8s-runtime, the same namespace as the
@@ -26,6 +28,7 @@ on:
       - 'docs/operations/helm-chart-*.md'
       - 'tools/chart_release.py'
       - 'tools/test_helm_chart_*.py'
+      - 'tools/chart-test-requirements.txt'
       - 'tools/test_helm.py'
       - 'tools/test_release_helm.py'
       - 'tools/install.py'
@@ -39,6 +42,7 @@ on:
       - 'docs/operations/helm-chart-*.md'
       - 'tools/chart_release.py'
       - 'tools/test_helm_chart_*.py'
+      - 'tools/chart-test-requirements.txt'
       - 'tools/test_helm.py'
       - 'tools/test_release_helm.py'
       - 'tools/install.py'
@@ -52,32 +56,28 @@ concurrency:
   cancel-in-progress: false
 jobs:
   package:
+    # Produces the bytes that get signed. It runs only the checkout, the
+    # repository's checksum-verified client tools and the standard-library
+    # packager; it installs no Python packages. The archive and its record are
+    # hashed and uploaded here, before any job installs test dependencies.
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install verified client tools and test dependencies
+      - name: Install verified client tools
         run: |
           ./install.sh tools > "$RUNNER_TEMP/install-tools.json"
-          python3 -m venv "$RUNNER_TEMP/chart-venv"
-          "$RUNNER_TEMP/chart-venv/bin/pip" install -r tools/quality-requirements.txt
-          echo "$RUNNER_TEMP/chart-venv/bin" >> "$GITHUB_PATH"
           python3 - <<'PY'
           import json, os, pathlib
           tools = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'install-tools.json').read_text())
           with open(os.environ['GITHUB_ENV'], 'a') as output:
-              output.write('AI_SDLC_TEST_HELM=' + tools['helm'] + '\n')
+              output.write('HELM=' + tools['helm'] + '\n')
           PY
-      - name: Package the chart at its deterministic version
+      - name: Package the chart reproducibly at its deterministic version
         run: |
-          python3 tools/chart_release.py package --helm "$AI_SDLC_TEST_HELM" \
-            --revision "$GITHUB_SHA" --output "$RUNNER_TEMP/chart"
-          echo "AI_SDLC_TEST_CHART_PACKAGE=$RUNNER_TEMP/chart" >> "$GITHUB_ENV"
-      - name: Lint and render the packaged chart; check the Secret contract
-        run: |
-          python3 -m unittest discover -s tools -p 'test_helm_chart_*.py' -v
+          python3 tools/chart_release.py package --helm "$HELM" --revision "$GITHUB_SHA" \
+            --source-date-epoch "$(git log -1 --format=%ct "$GITHUB_SHA")" --output "$RUNNER_TEMP/chart"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           name: chart-package
           path: |
@@ -85,9 +85,36 @@ jobs:
             ${{ runner.temp }}/chart/chart-release.json
           if-no-files-found: error
           retention-days: 30
+  test:
+    # Tests the uploaded archive. Its only third-party package is PyYAML,
+    # installed from hash-pinned wheels (no source builds, no dependencies).
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: chart-package
+          path: ${{ runner.temp }}/chart
+      - name: Install verified client tools and the hash-pinned test dependency
+        run: |
+          ./install.sh tools > "$RUNNER_TEMP/install-tools.json"
+          python3 -m venv "$RUNNER_TEMP/chart-venv"
+          "$RUNNER_TEMP/chart-venv/bin/pip" install --require-hashes --only-binary :all: --no-deps -r tools/chart-test-requirements.txt
+          echo "$RUNNER_TEMP/chart-venv/bin" >> "$GITHUB_PATH"
+          python3 - <<'PY'
+          import json, os, pathlib
+          tools = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'install-tools.json').read_text())
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('AI_SDLC_TEST_HELM=' + tools['helm'] + '\n')
+          PY
+      - name: Lint and render the packaged chart; check the Secret contract
+        run: |
+          AI_SDLC_TEST_CHART_PACKAGE="$RUNNER_TEMP/chart" python3 -m unittest discover -s tools -p 'test_helm_chart_*.py' -v
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: package
+    needs: [package, test]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

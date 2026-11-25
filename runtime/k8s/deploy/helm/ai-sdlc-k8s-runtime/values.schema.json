@@ -212,7 +212,7 @@
           "type": "string"
         },
         "apiKeySecret": {
-          "description": "Unused by the templates; kept for compatibility. Model credentials use modelGateway.upstream.credentialSecret or the ai-sdlc-codex-auth Secret.",
+          "description": "Not mounted by any workload. The provenance template only refuses to reuse this name for its registry credential. Model credentials use modelGateway.upstream.credentialSecret or the ai-sdlc-codex-auth Secret.",
           "type": "object",
           "additionalProperties": false,
           "properties": {

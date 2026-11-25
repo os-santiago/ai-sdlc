@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -18,6 +19,7 @@ WORKFLOW = ROOT / '.github/workflows/chart.yml'
 LOCK = ROOT / 'tools/install-tools.lock.json'
 GUIDE = ROOT / 'docs/operations/helm-chart-install.md'
 REVISION = '0123456789abcdef0123456789abcdef01234567'
+EPOCH = 1764000000
 IDENTITY = 'https://github.com/os-santiago/ai-sdlc/.github/workflows/chart.yml@refs/heads/main'
 
 
@@ -53,7 +55,7 @@ class PackagedChartTests(unittest.TestCase):
         else:
             cls.temporary = tempfile.TemporaryDirectory()
             cls.directory = Path(cls.temporary.name)
-            chart_release.package(HELM, REVISION, cls.directory)
+            chart_release.package(HELM, REVISION, cls.directory, EPOCH)
         cls.record = json.loads((cls.directory / 'chart-release.json').read_text())
         cls.archive = cls.directory / cls.record['archive']
 
@@ -75,6 +77,22 @@ class PackagedChartTests(unittest.TestCase):
         self.assertEqual(record['tag'], record['version'].replace('+', '_'))
         data = self.archive.read_bytes()
         self.assertEqual((len(data), hashlib.sha256(data).hexdigest()), (record['size'], record['sha256']))
+
+    def test_packaging_is_reproducible_whatever_the_file_times(self):
+        """The same commit packages to the same bytes after the files are touched."""
+        with tempfile.TemporaryDirectory() as work:
+            work = Path(work)
+            chart = work / 'source' / chart_release.CHART_NAME
+            shutil.copytree(CHART, chart)
+            first = chart_release.package(HELM, REVISION, work / 'first', EPOCH, chart=chart)
+            for path in chart.rglob('*'):
+                os.utime(path, (EPOCH + 86400, EPOCH + 86400))
+            second = chart_release.package(HELM, REVISION, work / 'second', EPOCH, chart=chart)
+            self.assertEqual(first['sha256'], second['sha256'])
+            other = chart_release.package(HELM, REVISION, work / 'other', EPOCH + 1, chart=chart)
+            self.assertNotEqual(first['sha256'], other['sha256'])
+        with self.assertRaises(ValueError):
+            chart_release.normalize(self.archive, -1)
 
     def test_packaged_chart_lints(self):
         self.helm('lint', '--strict', str(self.archive))
@@ -148,11 +166,24 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn(IDENTITY, guide)
         self.assertIn('--certificate-oidc-issuer https://token.actions.githubusercontent.com', guide)
 
-    def test_package_job_tests_the_packaged_archive(self):
-        runs = '\n'.join(s.get('run', '') for s in self.jobs['package']['steps'])
-        self.assertIn('tools/chart_release.py package', runs)
-        self.assertIn('AI_SDLC_TEST_CHART_PACKAGE', runs)
-        self.assertIn("-p 'test_helm_chart_*.py'", runs)
+    def test_the_signed_bytes_never_share_a_job_with_unpinned_dependencies(self):
+        """package hashes and uploads the archive without installing Python
+        packages; test installs only hash-pinned wheels, and publication needs both."""
+        package = '\n'.join(s.get('run', '') for s in self.jobs['package']['steps'])
+        self.assertIn('tools/chart_release.py package', package)
+        self.assertIn('--source-date-epoch', package)
+        self.assertNotIn('pip', package)
+        test = '\n'.join(s.get('run', '') for s in self.jobs['test']['steps'])
+        self.assertIn('pip" install --require-hashes --only-binary :all: --no-deps -r tools/chart-test-requirements.txt', test)
+        self.assertEqual(test.count(' install --'), 1)
+        self.assertNotIn('pip install', test)
+        self.assertIn('AI_SDLC_TEST_CHART_PACKAGE', test)
+        self.assertIn("-p 'test_helm_chart_*.py'", test)
+        self.assertEqual(self.jobs['test']['needs'], 'package')
+        self.assertEqual(self.jobs['publish']['needs'], ['package', 'test'])
+        for line in (ROOT / 'tools/chart-test-requirements.txt').read_text().splitlines():
+            if line and not line.startswith('#') and not line.startswith(' '):
+                self.assertRegex(line, r'^[A-Za-z0-9_.-]+==[0-9.]+ \\$')
 
 
 if __name__ == '__main__':

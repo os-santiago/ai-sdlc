@@ -100,11 +100,12 @@ classified as:
 
 ## Publication
 
-The [`chart`](../../.github/workflows/chart.yml) workflow has three jobs:
+The [`chart`](../../.github/workflows/chart.yml) workflow has four jobs:
 
 | Job | Runs on | Permissions | Does |
 |---|---|---|---|
-| `package` | pull requests and `main` pushes that touch the chart, its docs, tests or tool pins | `contents: read` | Packages the chart with `tools/chart_release.py`, runs `helm lint --strict` and renders the packaged archive, checks that it renders like the source chart, and checks the Secret contract. On `main` it uploads the archive and its record (`chart-release.json`: version, tag, revision, SHA-256, size). |
+| `package` | pull requests and `main` pushes that touch the chart, its docs, tests or tool pins | `contents: read` | Packages the chart reproducibly with `tools/chart_release.py` and uploads the archive and its record (`chart-release.json`: version, tag, revision, SHA-256, size). Runs only the checkout, the checksum-verified client tools and the standard-library packager; installs no Python package. |
+| `test` | after `package` | `contents: read` | Downloads the archive, runs `helm lint --strict`, checks that it renders like the source chart, and checks the Secret contract. Its only third-party package is PyYAML from hash-pinned wheels (`--require-hashes --only-binary :all: --no-deps`). Publication needs it to pass. |
 | `publish` | `main` pushes only | `contents: read`; the Quay robot secret | Checks anonymously that the public repository exists, pushes the archive with the verified Helm client, and records the manifest digest Helm reports. Holds no OIDC token. |
 | `sign` | `main` pushes only, after a publication | `contents: read`, `id-token: write` | Pulls the manifest anonymously by tag, checks that it has the recorded digest and a single chart layer equal to the packaged archive, signs the digest keyless with the checksum-pinned cosign, and verifies the signature as an adopter would. Runs no third-party action and no repository code. |
 
@@ -127,7 +128,21 @@ re-read only proves that what is public is what was built.
   labelled ConfigMap, the Deployments' `checksum/config` annotation. The
   installer keeps rendering the source chart, so existing installations
   render unchanged.
+- **Reproducible bytes:** after `helm package`, the archive is rewritten with
+  sorted members, the commit time as every file's modification time, root
+  ownership, fixed modes and a gzip header without a timestamp. Re-running
+  the same commit yields the same archive SHA-256 (a test packages, touches
+  every file, packages again and compares).
+- **The signed bytes and the test dependencies are kept apart:** the job that
+  hashes and uploads the archive installs no Python package, and the test job
+  installs only hash-pinned wheels. Hash pinning, not job order alone, is
+  what matters: any job in the run can use the run's artifact token, so the
+  test job must not run unreviewed code either.
 - **Tags are never signed;** the signature is bound to the manifest digest.
+  If a run fails after the push and before signing, the tag stays in the
+  repository unsigned. `cosign verify` refuses it (no matching signature),
+  so adopters who follow the steps below fail closed. A re-run of the same
+  commit pushes the same archive and signs it.
 
 ### Owner action
 
@@ -172,6 +187,10 @@ cosign verify quay.io/os-santiago/ai-sdlc-k8s-runtime@sha256:<digest> \
 helm install ai-sdlc ./chart/ai-sdlc-k8s-runtime-"$VERSION".tgz \
   --namespace ai-sdlc-runtime -f my-values.yaml
 ```
+
+If `cosign verify` reports no matching signatures, do not install: the
+version was pushed but never signed (for example, a run that failed after
+the push).
 
 Use the exact `--certificate-identity`; do not replace it with
 `--certificate-identity-regexp`. Helm checks the downloaded archive against

@@ -127,12 +127,24 @@ def secret_references(docs):
     return found
 
 
+BUILT_IN_SECRET_ROLES = {'edit', 'admin', 'cluster-admin'}
+
+
 def api_references(docs):
+    """Secrets read through RBAC. Wildcard resources or API groups, and bindings
+    to built-in roles that read Secrets, would hide access from the contract."""
     found = set()
     for doc in docs:
+        if doc['kind'] in ('RoleBinding', 'ClusterRoleBinding'):
+            role = doc['roleRef']
+            if role['kind'] == 'ClusterRole' and role['name'] in BUILT_IN_SECRET_ROLES:
+                raise AssertionError('binding to a built-in role that reads Secrets: ' + doc['metadata']['name'])
+            continue
         if doc['kind'] not in ('Role', 'ClusterRole'):
             continue
         for rule in doc.get('rules') or []:
+            if '*' in rule.get('resources', []) or ('*' in rule.get('apiGroups', []) and rule.get('resources')):
+                raise AssertionError('wildcard RBAC rule could read Secrets: ' + doc['metadata']['name'])
             if 'secrets' in rule.get('resources', []):
                 names = rule.get('resourceNames')
                 if not names or doc['kind'] != 'Role':
@@ -204,6 +216,22 @@ class SecretContractTests(unittest.TestCase):
         for docs in self.renderings.values():
             found |= api_references(docs)
         self.assertEqual(found, api_contract())
+
+    def test_rbac_scan_refuses_wildcards_and_built_in_secret_roles(self):
+        def role(rules):
+            return [{'kind': 'Role', 'metadata': {'name': 'r', 'namespace': 'n'}, 'rules': rules}]
+        for rules in ([{'apiGroups': [''], 'resources': ['*'], 'verbs': ['get']}],
+                      [{'apiGroups': ['*'], 'resources': ['secrets'], 'resourceNames': ['x'], 'verbs': ['get']}],
+                      [{'apiGroups': [''], 'resources': ['secrets'], 'verbs': ['get']}]):
+            with self.assertRaises(AssertionError):
+                api_references(role(rules))
+        for name in BUILT_IN_SECRET_ROLES:
+            binding = {'kind': 'RoleBinding', 'metadata': {'name': 'b', 'namespace': 'n'},
+                       'roleRef': {'kind': 'ClusterRole', 'name': name}}
+            with self.assertRaises(AssertionError):
+                api_references([binding])
+        self.assertEqual(api_references(role([{'apiGroups': [''], 'resources': ['secrets'],
+                                               'resourceNames': ['x'], 'verbs': ['get']}])), {('x', 'n')})
 
     def test_template_source_secret_references_are_documented(self):
         contract = mounted_contract()

@@ -7,12 +7,21 @@ hex digits of the source revision as SemVer build metadata, for example
 version under the tag ``0.4.0_0e3b526f1a2b``. The same revision always yields
 the same version; the signature certificate carries the full revision.
 
+The archive bytes are reproducible: after ``helm package`` the archive is
+rewritten with sorted members, a fixed modification time (the commit time,
+passed as the source date epoch), root ownership, normalized modes and a
+gzip header without a timestamp. Packaging the same commit twice, whatever
+the files' mtimes, yields the same SHA-256.
+
 Only the standard library is used. This tool never pushes or signs: the chart
 workflow pushes in a job without an OIDC token, and signs in a separate job
 that runs no repository code.
 """
 import argparse
+import gzip
 import hashlib
+import io
+import os
 import json
 from pathlib import Path
 import re
@@ -50,7 +59,33 @@ def oci_tag(version):
     return version.replace('+', '_')
 
 
-def package(helm, revision, output, chart=CHART):
+def normalize(archive, epoch):
+    """Rewrite a packaged chart so that its bytes depend only on file contents."""
+    if type(epoch) is not int or not 0 <= epoch < 2 ** 33:
+        raise ValueError('The source date epoch must be a non-negative integer')
+    files = {}
+    with tarfile.open(archive, 'r:gz') as bundle:
+        for member in bundle.getmembers():
+            if member.isdir():
+                continue
+            if not member.isfile() or member.name in files:
+                raise ValueError('Packaged chart contains a non-regular or duplicate entry: ' + member.name)
+            files[member.name] = bundle.extractfile(member).read()
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode='w', format=tarfile.GNU_FORMAT) as bundle:
+        for name in sorted(files):
+            info = tarfile.TarInfo(name)
+            info.size, info.mtime, info.mode = len(files[name]), epoch, 0o644
+            info.uid = info.gid = 0
+            info.uname = info.gname = ''
+            bundle.addfile(info, io.BytesIO(files[name]))
+    compressed = io.BytesIO()
+    with gzip.GzipFile(filename='', mode='wb', fileobj=compressed, mtime=0, compresslevel=9) as stream:
+        stream.write(raw.getvalue())
+    Path(archive).write_bytes(compressed.getvalue())
+
+
+def package(helm, revision, output, epoch, chart=CHART):
     """Package the chart with ``helm package --version`` and return its release record."""
     version = published_version((Path(chart) / 'Chart.yaml').read_text(), revision)
     output = Path(output)
@@ -58,6 +93,7 @@ def package(helm, revision, output, chart=CHART):
     subprocess.run([str(helm), 'package', str(chart), '--version', version, '--destination', str(output)],
                    check=True, stdout=subprocess.DEVNULL)
     archive = output / (CHART_NAME + '-' + version + '.tgz')
+    normalize(archive, epoch)
     data = archive.read_bytes()
     if not 0 < len(data) <= MAX_PACKAGE_BYTES:
         raise ValueError('Packaged chart size is outside its bound')
@@ -84,12 +120,19 @@ def main(argv=None):
     build.add_argument('--helm', required=True, type=Path)
     build.add_argument('--revision', required=True)
     build.add_argument('--output', required=True, type=Path)
+    build.add_argument('--source-date-epoch', type=int, default=None,
+                       help='archive modification time; default: the SOURCE_DATE_EPOCH environment variable')
     args = parser.parse_args(argv)
     if args.command == 'version':
         value = published_version((CHART / 'Chart.yaml').read_text(), args.revision)
         print(json.dumps({'chart': CHART_NAME, 'version': value, 'tag': oci_tag(value), 'repository': REPOSITORY}))
     else:
-        print(json.dumps(package(args.helm, args.revision, args.output), sort_keys=True))
+        epoch = args.source_date_epoch
+        if epoch is None:
+            if not re.fullmatch(r'[0-9]{1,11}', os.environ.get('SOURCE_DATE_EPOCH', '')):
+                raise ValueError('Pass --source-date-epoch or set SOURCE_DATE_EPOCH (for example the commit time)')
+            epoch = int(os.environ['SOURCE_DATE_EPOCH'])
+        print(json.dumps(package(args.helm, args.revision, args.output, epoch), sort_keys=True))
     return 0
 
 
