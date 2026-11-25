@@ -463,14 +463,24 @@ func (r *Resources) getTransient(ctx context.Context, kind, name string) ([]byte
 	})
 }
 
-// retryTransient runs read until it returns a non-transient outcome, the retry
-// window closes, the expiry passes or ctx ends.
+// minReadAttempts is how many attempts a transient read always gets, however
+// long each took. An attempt that timed out after request's 5-second bound
+// used up observeRetryWindow on its own; evaluation battery 29 still stopped
+// at readiness-request that way, after the window-only retry of #800.
+const minReadAttempts = 3
+
+// retryTransient runs read until it returns a non-transient outcome. Another
+// attempt starts while observeRetryWindow lasts (quick failures such as a
+// refused connection) or until minReadAttempts attempts were made (slow
+// failures such as a timeout), and never after the expiry or once ctx has no
+// room for the pause. Each attempt keeps its own bound and the caller's ctx.
 func retryTransient(ctx context.Context, expires time.Time, read func() ([]byte, int, error)) ([]byte, int, error) {
 	last := time.Now().Add(observeRetryWindow)
-	for {
+	for attempts := 1; ; attempts++ {
 		raw, status, err := read()
 		transient := (err != nil && !errors.Is(err, ErrPermission)) || (err == nil && transientStatus(status))
-		if !transient || !time.Now().Before(last) || !time.Now().Before(expires) || !retryRemoval(ctx) {
+		more := time.Now().Before(last) || attempts < minReadAttempts
+		if !transient || !more || !time.Now().Before(expires) || !retryRemoval(ctx) {
 			return raw, status, err
 		}
 	}
