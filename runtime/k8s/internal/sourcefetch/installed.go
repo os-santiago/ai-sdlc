@@ -54,8 +54,34 @@ type installedCredential struct {
 // Secret takes effect without a restart), kept in memory for that fetch only,
 // and sent only to the fixed API host for the credential's own repository.
 // A credential that cannot be loaded or that the forge rejects stops the
-// fetch; it never falls back to an anonymous read.
-type Reader struct{ path string }
+// fetch; it never falls back to an anonymous read. A Cached reader serves the
+// bundle of the last pinned SHA without a forge read, so such a hit needs no
+// credential.
+//
+// A Reader from Cached shares one Cache across its copies: the verified
+// bundle of the last pinned SHA is reused, and an availability failure (a
+// rate limit above all) suppresses repeated reads until the forge's reset.
+type Reader struct {
+	path  string
+	cache *Cache
+	// adjust, set only by tests, redirects each client the Reader builds
+	// (to a fake forge).
+	adjust func(*Client)
+}
+
+// Cached returns r backed by one shared source cache. The verifier's
+// verification and review loops reconcile every few seconds and both read
+// the same pinned SHA; uncached, a review waiting on its model gateway
+// re-downloaded the source on each tick and exhausted the forge's anonymous
+// quota (evaluation battery 28). The cache holds no credential: each forge
+// read still loads the token from the mounted file.
+func (r Reader) Cached() Reader {
+	c := NewCache()
+	uncached := Reader{path: r.path, adjust: r.adjust}
+	c.fetch = uncached.Fetch
+	r.cache = c
+	return r
+}
 
 // InstalledReader returns the anonymous Reader for an empty path, and
 // otherwise a Reader bound to the absolute, clean credential file path.
@@ -81,6 +107,9 @@ func (r Reader) Check(repository string) error {
 
 // Fetch reads the pinned SHA of repository, authenticated when configured.
 func (r Reader) Fetch(ctx context.Context, repository, sha string) (workspacebundle.Bundle, error) {
+	if r.cache != nil {
+		return r.cache.Fetch(ctx, repository, sha)
+	}
 	client, err := r.client(repository)
 	if err != nil {
 		return workspacebundle.Bundle{}, err
@@ -89,6 +118,14 @@ func (r Reader) Fetch(ctx context.Context, repository, sha string) (workspacebun
 }
 
 func (r Reader) client(repository string) (*Client, error) {
+	client, err := r.build(repository)
+	if err == nil && r.adjust != nil {
+		r.adjust(client)
+	}
+	return client, err
+}
+
+func (r Reader) build(repository string) (*Client, error) {
 	if r.path == "" {
 		return New(repository, "")
 	}

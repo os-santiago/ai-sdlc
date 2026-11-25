@@ -13,6 +13,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
 // A fake value with the shape of a fine-grained token; never a real credential.
@@ -286,4 +289,131 @@ func TestInvalidInstalledCredentialStopsBeforeAnyRead(t *testing.T) {
 	if strings.Contains(fmt.Sprintf("%v %+v %#v", reader, reader, reader), fakeReadToken) || strings.Contains(logs.String(), fakeReadToken) {
 		t.Fatal("credential printed or logged")
 	}
+}
+
+// A Cached reader, shared by verification and review, reads one pinned SHA
+// once and suppresses repeated reads while the forge is rate limited
+// (evaluation battery 28: an uncached review re-downloaded the source on each
+// reconcile tick and exhausted the anonymous quota). Copies share the cache;
+// the uncached reader is unchanged.
+func TestCachedReaderReusesTheBundleAndBacksOffOnRateLimit(t *testing.T) {
+	base, err := InstalledReader("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := base.Cached()
+	copied := reader
+	var reads int
+	limited := false
+	reader.cache.fetch = func(_ context.Context, _, sha string) (workspacebundle.Bundle, error) {
+		reads++
+		if limited {
+			return workspacebundle.Bundle{}, AvailabilityError{retryAt: time.Now().Add(time.Minute), rateLimited: true}
+		}
+		return cachedFixture(sha), nil
+	}
+	for i := 0; i < 3; i++ {
+		for _, r := range []Reader{reader, copied} {
+			if b, err := r.Fetch(context.Background(), "fixture/product", testSHA); err != nil || b.SourceSHA != testSHA {
+				t.Fatal("cached read failed", err)
+			}
+		}
+	}
+	if reads != 1 {
+		t.Fatalf("pinned SHA read %d times, want 1", reads)
+	}
+	limited = true
+	other := strings.Repeat("b", 40)
+	for i := 0; i < 3; i++ {
+		if _, err := copied.Fetch(context.Background(), "fixture/product", other); !RateLimited(err) {
+			t.Fatal("rate limit not reported", err)
+		}
+	}
+	if reads != 2 {
+		t.Fatalf("rate-limited reads repeated: %d reads, want 2", reads)
+	}
+	if base.cache != nil || reader.Authenticated() != base.Authenticated() {
+		t.Fatal("Cached changed the original reader")
+	}
+}
+
+// The #796 guarantees hold through the real Cached wiring: a valid
+// credential authenticates the cached read, a rejected one is a named stop
+// with no anonymous request, and an invalid file stops before any request
+// and is not cached (a fixed file takes effect at once).
+func TestCachedReaderKeepsCredentialGuarantees(t *testing.T) {
+	t.Run("authenticated", func(t *testing.T) {
+		forge := newFakeForge(t)
+		base, _ := InstalledReader(writeCredential(t, validCredential()))
+		base.adjust = forge.point
+		reader := base.Cached()
+		if _, err := reader.Fetch(context.Background(), "fixture/product", testSHA); err != nil {
+			t.Fatal(err)
+		}
+		api, archive := forge.calls()
+		for _, auth := range api {
+			if auth != "Bearer "+fakeReadToken {
+				t.Fatal("cached read not authenticated")
+			}
+		}
+		if len(api) == 0 {
+			t.Fatal("no forge read")
+		}
+		if _, err := reader.Fetch(context.Background(), "fixture/product", testSHA); err != nil {
+			t.Fatal(err)
+		}
+		if again, archiveAgain := forge.calls(); len(again) != len(api) || len(archiveAgain) != len(archive) {
+			t.Fatal("cached SHA read from the forge again")
+		}
+	})
+	t.Run("rejected", func(t *testing.T) {
+		forge := newFakeForge(t)
+		forge.apiStatus = 401
+		base, _ := InstalledReader(writeCredential(t, validCredential()))
+		base.adjust = forge.point
+		reader := base.Cached()
+		if _, err := reader.Fetch(context.Background(), "fixture/product", testSHA); !CredentialRejected(err) {
+			t.Fatal("rejection not named", err)
+		}
+		if api, archive := forge.calls(); len(api) != 1 || api[0] != "Bearer "+fakeReadToken || len(archive) != 0 {
+			t.Fatal("anonymous fallback or retry through the cache")
+		}
+		// A rejection is not cached: once the forge accepts the (rotated)
+		// credential, the next read succeeds at once.
+		forge.mu.Lock()
+		forge.apiStatus = 0
+		forge.mu.Unlock()
+		if _, err := reader.Fetch(context.Background(), "fixture/product", testSHA); err != nil {
+			t.Fatal("cached rejection outlived the rotation", err)
+		}
+	})
+	t.Run("invalid-not-cached", func(t *testing.T) {
+		forge := newFakeForge(t)
+		path := writeCredential(t, validCredential())
+		rewrite := func(raw []byte) {
+			t.Helper()
+			// The fixture file is read-only; replace it as a rotation does.
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		rewrite([]byte("{}"))
+		base, _ := InstalledReader(path)
+		base.adjust = forge.point
+		reader := base.Cached()
+		if _, err := reader.Fetch(context.Background(), "fixture/product", testSHA); !CredentialInvalid(err) {
+			t.Fatal("invalid credential not named", err)
+		}
+		if api, archive := forge.calls(); len(api) != 0 || len(archive) != 0 {
+			t.Fatal("request made with an invalid credential")
+		}
+		raw, _ := json.Marshal(validCredential())
+		rewrite(raw)
+		if _, err := reader.Fetch(context.Background(), "fixture/product", testSHA); err != nil {
+			t.Fatal("fixed credential did not take effect at once", err)
+		}
+	})
 }
