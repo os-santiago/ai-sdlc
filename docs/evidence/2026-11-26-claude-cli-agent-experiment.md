@@ -71,10 +71,10 @@ Battery 37 repeated the product path on the second sample repository, in another
 - **Corpus:** the repository's 12 seed issues (1–12), label trigger, two attempts each, cell label `agent-cli-claude-sonnet`.
 - **Result:** 12/12 delivered within two attempts, **100% [75.8%, 100%]**; 10/12 on the first attempt (83.3% [55.2%, 95.3%]). Median 281 s to delivery (at most 411 s, counting every attempt), 5–9 model calls per delivering attempt (median 7). [Report](2026-11-26-evaluation-battery-37.json).
 - **Two failed first attempts:**
-  - Issue 4: verification refused the candidate (`comparison-failed`). That is a legitimate refusal; the retry delivered.
+  - Issue 4: verification refused the candidate because its own tests failed (`refused-candidate-failed`, reason `comparison-failed`). That is the verifier working as intended, though the candidate was not inspected; the retry delivered.
   - Issue 5: the review's mailbox read hit the same transport stop as issue 288 in battery 36. It is tracked in #826.
 
-**Reading:** the path delivers on a second language with the same call count as on Go. Each repository now has a first 12-issue measurement on this model path: 12 of the 60 distinct issues each cell needs. They are not gate evidence, because they ran on development revisions.
+**Reading:** the path delivers on a second language with the same median call count as on Go (7; 5–9 here, 5–15 on Go). Each repository now has a first 12-issue measurement on this model path: 12 of the 60 distinct issues each cell needs. They are not gate evidence, because they ran on development revisions.
 
 ## Limits
 
