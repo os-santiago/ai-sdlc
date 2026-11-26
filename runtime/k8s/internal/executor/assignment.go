@@ -13,6 +13,7 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repair"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
@@ -52,6 +53,19 @@ type Assignment struct {
 	// reviewed manifest; it requires WorkspaceOfflineTests. Omitted keeps
 	// the original assignment bytes and workload.
 	Toolchain *Toolchain `json:"toolchain,omitempty"`
+	// Verification is the reviewed manifest's verification command, named in
+	// the prompt of an offline workspace without a toolchain (a toolchain
+	// already carries it). It requires WorkspaceOfflineTests and excludes
+	// Toolchain. Omitted keeps the original assignment bytes.
+	Verification *Verification `json:"verification,omitempty"`
+}
+
+// Verification is installation-controlled assignment context, never issue or
+// model text: verification.command and verification.workingDir from the
+// repository's reviewed project manifest. It only informs the prompt.
+type Verification struct {
+	Command    []string `json:"command"`
+	WorkingDir string   `json:"workingDir,omitempty"`
 }
 
 // Profile contains reviewed local bounds, never arbitrary shell commands,
@@ -208,6 +222,9 @@ func ParseAssignment(raw []byte, expected string, now time.Time) (Assignment, er
 	if fields["toolchain"] != nil {
 		keys = append(keys, "toolchain")
 	}
+	if fields["verification"] != nil {
+		keys = append(keys, "verification")
+	}
 	if strictBound(raw, expected, MaxAssignmentBytes, keys, &a) != nil || a.Version != AssignmentVersion || !uuidPattern.MatchString(a.WorkItemID) || a.Attempt < 1 || a.Attempt > 16 || len(a.Repository) > 256 || !repoPattern.MatchString(a.Repository) || !workspacebundle.ValidSourceSHA(a.SourceSHA) || !workspacebundle.ValidDigest(a.TreeSHA256) || !workspacebundle.ValidDigest(a.ProfileSHA256) || !workspacebundle.ValidDigest(a.AuthorityRevision) {
 		return Assignment{}, ErrInvalid
 	}
@@ -218,6 +235,9 @@ func ParseAssignment(raw []byte, expected string, now time.Time) (Assignment, er
 		return Assignment{}, ErrInvalid
 	}
 	if a.Toolchain != nil && (a.Workspace != WorkspaceOfflineTests || !a.Toolchain.valid()) {
+		return Assignment{}, ErrInvalid
+	}
+	if a.Verification != nil && (a.Workspace != WorkspaceOfflineTests || a.Toolchain != nil || !project.ValidCommand(a.Verification.Command, a.Verification.WorkingDir)) {
 		return Assignment{}, ErrInvalid
 	}
 	for _, part := range strings.Split(a.Repository, "/") {

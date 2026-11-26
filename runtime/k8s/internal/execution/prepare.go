@@ -201,8 +201,7 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 		Repository: c.Repository, SourceSHA: c.SourceSHA, TreeSHA256: c.ProfileSHA256, ProfileSHA256: c.ProfileSHA256,
 		AuthorityRevision: c.AuthorityRevision, IssueNumbers: []int{c.IssueNumber}, Title: snapshot.Issue.Title, Body: snapshot.Issue.Body,
 		AcceptanceCriteria: normalizedevent.ExtractAcceptanceCriteria(snapshot.Issue.Body), ExpiresAt: c.ExpiresAt}
-	assignment.Workspace = WorkspaceFor(c.Repository)
-	assignment.Toolchain = ToolchainFor(c.Repository)
+	addRepositoryContext(&assignment)
 	var parent store.VerificationCandidate
 	if c.Repair != nil {
 		a, p, e := repairPreparation(ctx, db, in.Policy, c)
@@ -263,6 +262,17 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 	return Prepared{assignment: raw, source: source, originalSource: originalSource, profile: in.Profile, adev: in.ADev, claim: claim}, nil
 }
 
+// addRepositoryContext adds the reviewed manifest's workspace context to a
+// generation assignment: the workspace mark, the toolchain, and, only without a
+// toolchain (which already carries it), the verification command.
+func addRepositoryContext(a *executor.Assignment) {
+	a.Workspace = WorkspaceFor(a.Repository)
+	a.Toolchain = ToolchainFor(a.Repository)
+	if a.Toolchain == nil {
+		a.Verification = VerificationFor(a.Repository)
+	}
+}
+
 // WorkspaceFor marks the assignment of a repository verified with its own
 // tests, whose generator workspace cannot build or test: the prompt then says
 // so as reviewed installation context. Without it, agents spend their step
@@ -273,6 +283,18 @@ func WorkspaceFor(repository string) string {
 		return ""
 	}
 	return executor.WorkspaceOfflineTests
+}
+
+// VerificationFor returns the verification command a repository's reviewed
+// manifest declares, or nil, for the prompt of an offline workspace. It comes
+// only from the manifest, never from issue text; environment, image and limits
+// stay verification-only.
+func VerificationFor(repository string) *executor.Verification {
+	m, ok := project.Lookup(repository)
+	if !ok || m.Verification == nil {
+		return nil
+	}
+	return &executor.Verification{Command: append([]string(nil), m.Verification.Command...), WorkingDir: m.Verification.WorkingDir}
 }
 
 // ToolchainFor returns the generation toolchain a repository's reviewed
