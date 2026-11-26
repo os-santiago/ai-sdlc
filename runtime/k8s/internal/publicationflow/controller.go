@@ -3,6 +3,7 @@ package publicationflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publication"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationrecovery"
@@ -10,6 +11,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
+	"strings"
 	"time"
 )
 
@@ -23,9 +25,47 @@ type Transport interface {
 }
 type Proof = store.PublicationProof
 
-type ControllerError struct{ Stage string }
+// ControllerError names the stage that stopped a publication. Class is the
+// bounded writer class (publication.StopClass) when the stage is a forge write.
+type ControllerError struct{ Stage, Class string }
 
 func (e ControllerError) Error() string { return "publication stopped at " + e.Stage }
+
+// DiagnosticStage is bounded controller metadata for the stop log, for example
+// "tree-status-422" or "commit-transport". It never carries a response body,
+// URL, credential or candidate text.
+func DiagnosticStage(err error) string {
+	var stopped ControllerError
+	if !errors.As(err, &stopped) {
+		return "unknown"
+	}
+	switch stopped.Stage {
+	case "configuration", "authority", "source", "tree-plan", "claim", "proof", "commit-proof":
+		return stopped.Stage
+	case "tree", "commit", "branch", "pull-request":
+		if knownClass(stopped.Class) {
+			return stopped.Stage + "-" + stopped.Class
+		}
+		return stopped.Stage
+	}
+	return "unknown"
+}
+
+func knownClass(class string) bool {
+	switch class {
+	case publication.StopTransport, publication.StopResponse, publication.StopMismatch, publication.StopFence, "status-invalid":
+		return true
+	}
+	if len(class) == len("status-000") && strings.HasPrefix(class, "status-") {
+		for _, c := range class[len("status-"):] {
+			if (c < '0' || c > '9') && c != 'x' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
 
 type SourceLoader func(context.Context, string, string) (workspacebundle.Bundle, error)
 
@@ -44,47 +84,47 @@ func Run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 }
 func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader, review ReviewLoader, id string, writer Transport, fetch SourceLoader) (proof Proof, err error) {
 	if db == nil || policy == nil || review == nil || writer == nil || fetch == nil {
-		return proof, ControllerError{"configuration"}
+		return proof, ControllerError{Stage: "configuration"}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 160*time.Second)
 	defer cancel()
 	c, record, e := CurrentProof(ctx, db, policy, review, id)
 	if e != nil {
-		return proof, ControllerError{"authority"}
+		return proof, ControllerError{Stage: "authority"}
 	}
 	prepareCtx, stop := context.WithTimeout(ctx, 40*time.Second)
 	source, e := fetch(prepareCtx, c.Repository, c.SourceSHA)
 	stop()
 	if e != nil {
-		return proof, ControllerError{"source"}
+		return proof, ControllerError{Stage: "source"}
 	}
 	// The plan's manifest (scope and commit identity) must be the one bound by
 	// the policy that authorized the command, not whatever manifest the
 	// process holds after a concurrent reload.
 	authorizing, _, _, e := policy()
 	if e != nil || authorizing.Revision() != c.AuthorityRevision {
-		return proof, ControllerError{"authority"}
+		return proof, ControllerError{Stage: "authority"}
 	}
 	plan, e := publication.PrepareTree(c, authorizing.ProjectSHA256, source, record.Delta)
 	if e != nil {
-		return proof, ControllerError{"tree-plan"}
+		return proof, ControllerError{Stage: "tree-plan"}
 	}
 	planDigest := publication.PlanDigest(c, plan)
 	var raw []byte
 	current, _, e := CurrentProof(ctx, db, policy, review, id)
 	if e != nil || current != c {
-		return proof, ControllerError{"authority"}
+		return proof, ControllerError{Stage: "authority"}
 	}
 	claim, e := db.ClaimPublication(ctx, id, planDigest)
 	if e != nil {
-		return proof, ControllerError{"claim"}
+		return proof, ControllerError{Stage: "claim"}
 	}
 	ctx, stopClaim := context.WithDeadline(ctx, claim.Until)
 	defer stopClaim()
 	stage := "authority"
 	defer func() {
 		if recover() != nil {
-			err = ControllerError{stage}
+			err = ControllerError{Stage: stage}
 		}
 		if err != nil {
 			proof = Proof{}
@@ -100,6 +140,8 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 		}
 		return db.CheckPublication(ctx, claim)
 	}
+	// class is the bounded writer class of the last forge write that failed.
+	class := ""
 	effect := func(kind string, invoke func(publication.WriteFence) (store.PublicationReceipt, error)) error {
 		var intent store.PublicationEffect
 		calls := 0
@@ -143,56 +185,61 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	stage = "tree"
 	if effect("tree", func(f publication.WriteFence) (store.PublicationReceipt, error) {
 		sha, e := writer.CreateTree(ctx, f, plan)
+		class = publication.StopClass(e)
 		if e != nil || sha != plan.ExpectedTreeSHA {
 			return store.PublicationReceipt{}, publication.ErrPublication
 		}
 		return store.PublicationReceipt{Version: "ai-sdlc.publication-receipt/v1", Kind: "tree", SHA: sha}, nil
 	}) != nil {
-		return proof, ControllerError{stage}
+		return proof, ControllerError{Stage: stage, Class: class}
 	}
 	stage = "commit"
 	commit := ""
 	if effect("commit", func(f publication.WriteFence) (store.PublicationReceipt, error) {
 		var e error
 		commit, e = writer.CreateCommit(ctx, f, plan, c.SourceSHA, claim.CommitTime)
+		class = publication.StopClass(e)
 		if e != nil || !workspacebundle.ValidSourceSHA(commit) {
 			return store.PublicationReceipt{}, publication.ErrPublication
 		}
 		return store.PublicationReceipt{Version: "ai-sdlc.publication-receipt/v1", Kind: "commit", SHA: commit}, nil
 	}) != nil {
-		return proof, ControllerError{stage}
+		return proof, ControllerError{Stage: stage, Class: class}
 	}
 	stage = "branch"
 	if effect("branch", func(f publication.WriteFence) (store.PublicationReceipt, error) {
-		if e := writer.CreateBranch(ctx, f, plan, commit); e != nil {
+		e := writer.CreateBranch(ctx, f, plan, commit)
+		class = publication.StopClass(e)
+		if e != nil {
 			return store.PublicationReceipt{}, e
 		}
 		return store.PublicationReceipt{Version: "ai-sdlc.publication-receipt/v1", Kind: "branch", SHA: commit, Branch: plan.Branch}, nil
 	}) != nil {
-		return proof, ControllerError{stage}
+		return proof, ControllerError{Stage: stage, Class: class}
 	}
 	stage = "pull-request"
 	number := 0
 	if effect("pull-request", func(f publication.WriteFence) (store.PublicationReceipt, error) {
 		pr, e := writer.CreatePullRequest(ctx, f, plan, c.SourceSHA, commit, planDigest)
+		class = publication.StopClass(e)
 		if e != nil || pr.HeadSHA != commit || pr.Branch != plan.Branch || pr.Number < 1 {
 			return store.PublicationReceipt{}, publication.ErrPublication
 		}
 		number = pr.Number
 		return store.PublicationReceipt{Version: "ai-sdlc.publication-receipt/v1", Kind: "pull-request", SHA: commit, Branch: plan.Branch, PullRequest: number}, nil
 	}) != nil {
-		return proof, ControllerError{stage}
+		return proof, ControllerError{Stage: stage, Class: class}
 	}
 	stage = "proof"
 	evidence, e := db.ReadPublicationEffects(ctx, claim)
 	if e != nil || fence(ctx) != nil {
-		return proof, ControllerError{stage}
+		return proof, ControllerError{Stage: stage}
 	}
 	raw, _ = json.Marshal(evidence)
 	proof = Proof{Version: "ai-sdlc.publication-proof/v1", PublicationID: id, PlanSHA256: planDigest, EffectsSHA256: authority.Digest(raw), CommitSHA: commit, Branch: plan.Branch, PullRequest: number}
 	raw, _ = json.Marshal(proof)
 	if db.FinishPublication(ctx, claim, raw) != nil {
-		return Proof{}, ControllerError{"commit-proof"}
+		return Proof{}, ControllerError{Stage: "commit-proof"}
 	}
 	return proof, nil
 }
@@ -210,7 +257,7 @@ type Runtime struct {
 
 func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if r.DB == nil || r.Policy == nil || r.Review == nil || r.Writer == nil {
-		return "", ControllerError{"configuration"}
+		return "", ControllerError{Stage: "configuration"}
 	}
 	if e := r.DB.ExpirePublications(ctx); e != nil {
 		return "", e

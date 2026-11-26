@@ -199,8 +199,12 @@ func main() {
 		state, e := r.PollOnce(ctx)
 		countDelivery(state)
 		if e != nil {
+			stage := publicationflow.DiagnosticStage(e)
+			if state == "publication-quarantined" {
+				stage = "quarantined"
+			}
 			metrics.Stop("release-manager", "publication", metrics.Unclassified)
-			log.Print("publication reconciliation stopped safely")
+			log.Print("publication reconciliation stopped safely: " + stage)
 		} else if state != "publication-idle" {
 			log.Print("publication reconciliation: " + state)
 		}
@@ -237,7 +241,12 @@ func main() {
 			countDelivery(state)
 			if e != nil {
 				metrics.Stop("release-manager", "merge", metrics.Unclassified)
-				log.Print("merge reconciliation stopped safely")
+				// state is a fixed controller constant ("merge-quarantined",
+				// "merge-stopped", ...); it names why the loop stopped.
+				if state == "" {
+					state = "unclassified"
+				}
+				log.Print("merge reconciliation stopped safely: " + state)
 			} else if state != "" {
 				log.Print("merge reconciliation: " + state)
 			}

@@ -43,6 +43,17 @@ type Receipt struct {
 	PullRequest int    `json:"pullRequest"`
 }
 
+// GitHub answers a merge PUT only after it has written the merge commit and
+// moved the base branch, which takes several seconds (about 1.5 to 5 s in
+// battery 39). A response deadline at that scale turns a merge GitHub completed
+// into an unacknowledged effect that quarantines every later merge, so the
+// transport waits well beyond it. The controller's claim deadline (at most the
+// gate observation's lifetime) still bounds the whole request.
+const (
+	responseHeaderTimeout = 20 * time.Second
+	requestTimeout        = 25 * time.Second
+)
+
 func New(credential forge.Credential) (*Writer, error) {
 	if !project.Supported(credential.Repository) {
 		return nil, ErrMerge
@@ -50,8 +61,8 @@ func New(credential forge.Credential) (*Writer, error) {
 	if _, e := forge.New(credential, credential.Repository); e != nil {
 		return nil, ErrMerge
 	}
-	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DisableCompression: true, DialContext: (&net.Dialer{Timeout: 3 * time.Second, KeepAlive: -1}).DialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}}, TLSNextProto: map[string]func(string, *tls.Conn) http.RoundTripper{}, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 5 * time.Second, MaxResponseHeaderBytes: 8192}
-	return &Writer{token: credential.Token, base: "https://api.github.com", repository: credential.Repository, http: &http.Client{Transport: transport, Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DisableCompression: true, DialContext: (&net.Dialer{Timeout: 3 * time.Second, KeepAlive: -1}).DialContext, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}}, TLSNextProto: map[string]func(string, *tls.Conn) http.RoundTripper{}, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: responseHeaderTimeout, MaxResponseHeaderBytes: 8192}
+	return &Writer{token: credential.Token, base: "https://api.github.com", repository: credential.Repository, http: &http.Client{Transport: transport, Timeout: requestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 // mergeMessage is the merge commit body. It carries no Signed-off-by: GitHub
