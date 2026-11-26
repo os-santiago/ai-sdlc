@@ -26,12 +26,28 @@ no workflow authority. It is off by default.
 - **Stage and outcome are encoded separately.** The stage is the bar's hue,
   one fixed hue per stage (generate blue, verify orange, review green, publish
   amber, merge magenta; intake, admission and planning grey), with its name
-  inside the bar when it fits and its initial (G, V, R, P, M) otherwise; a
-  stage legend sits above the timeline. The outcome is the bar's form: solid
+  inside the bar when it fits and its initial (G, V, R, P, M) otherwise. The
+  work-now strip above the timeline is also the stage colour key. The outcome is the bar's form: solid
   with ✓ for completed, striped with an open end for running, a dashed outline
   for waiting (and a dashed lead-in for the queue time before a claim), a hatch
   for blocked or quarantined, and an end badge for failed (✕), stopped safely
   (■), blocked (⏸) and quarantined (⛔).
+- **Work now**: a strip above the timeline counts the work items currently
+  queued, generating, verifying, reviewing, publishing, merging and blocked
+  or quarantined. Click a cell to show only those lanes; click it again to
+  clear the filter.
+- **Trends**: sparklines in the tiles over the visible window (24 buckets):
+  model call latency p50 and p90, stops and refusals per hour, and
+  deliveries (merges) per hour; hover a bucket for its values.
+- **Degradation periods**: a red band across the lanes wherever at least
+  three stops, degradations, retries, blocks or quarantines fall within about
+  15 minutes, labelled with the count above the axis.
+- **Live events**: the *Live events* button opens a side panel with the
+  newest 300 events across all work items (time, issue, stage, step, kind,
+  diagnostic, component), filterable by text and by kind (problems only, or
+  stage starts and ends). It refreshes on its own while *Follow now* is on;
+  otherwise it offers the count of new events and keeps your position. Click
+  or press Enter on an event to open its work item.
 - **Markers on their own row** above the bars for retries, stale waits,
   degradations (a failed or uncertain model call, a cleanup retry), blocks and
   quarantine. Markers closer than about 15 px merge into one badge with a
@@ -60,7 +76,7 @@ no workflow authority. It is off by default.
   (the page then keeps the last known events).
 
 The view is shareable: `?range=<hours>`, `?status=inflight|delivered|failed|blocked`,
-`?issue=<text>`, `?sort=problems` and `?open=<owner>/<repository>%23<issue>` set the initial
+`?issue=<text>`, `?sort=problems`, `?now=queued|execution|verification|review|publication|merge|blocked`, `?feed=1` and `?open=<owner>/<repository>%23<issue>` set the initial
 window, filters and detail panel.
 
 ## Event contract: `ai-sdlc.flow-event/v1`

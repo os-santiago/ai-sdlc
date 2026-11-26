@@ -12,19 +12,22 @@
     <h1>AI-SDLC flow</h1>
     <span class="subtitle">read-only timeline of the autonomous flow</span>
   </div>
-  <div class="source" id="source" role="status" aria-live="polite">
-    <span class="dot" id="source-dot" aria-hidden="true"></span>
-    <span id="source-text">connecting…</span>
+  <div class="top-right">
+    <div class="source" id="source" role="status" aria-live="polite">
+      <span class="dot" id="source-dot" aria-hidden="true"></span>
+      <span id="source-text">connecting…</span>
+    </div>
+    <button type="button" id="feed-toggle" class="toggle" aria-pressed="false" aria-controls="feed">Live events</button>
   </div>
 </header>
 
 <section class="tiles" aria-label="Summary">
   <div class="tile"><div class="tile-label">In flight</div><div class="tile-value" id="t-inflight">–</div><div class="tile-note" id="t-inflight-note"></div></div>
-  <div class="tile"><div class="tile-label">Delivered</div><div class="tile-value" id="t-delivered">–</div><div class="tile-note" id="t-delivered-note"></div></div>
-  <div class="tile"><div class="tile-label">Failed</div><div class="tile-value" id="t-failed">–</div><div class="tile-note" id="t-failed-note"></div></div>
+  <div class="tile"><div class="tile-label">Delivered</div><div class="tile-row"><div class="tile-value" id="t-delivered">–</div><svg class="spark" id="s-delivered" role="img"></svg></div><div class="tile-note" id="t-delivered-note"></div></div>
+  <div class="tile"><div class="tile-label">Failed</div><div class="tile-row"><div class="tile-value" id="t-failed">–</div><svg class="spark" id="s-stops" role="img"></svg></div><div class="tile-note" id="t-failed-note"></div></div>
   <div class="tile"><div class="tile-label">Blocked or quarantined</div><div class="tile-value" id="t-blocked">–</div><div class="tile-note" id="t-blocked-note"></div></div>
   <div class="tile"><div class="tile-label">Median time to delivery</div><div class="tile-value" id="t-ttd">–</div><div class="tile-note" id="t-ttd-note"></div></div>
-  <div class="tile"><div class="tile-label">Model call latency</div><div class="tile-value" id="t-latency">–</div><div class="tile-note" id="t-latency-note"></div></div>
+  <div class="tile"><div class="tile-label">Model call latency</div><div class="tile-row"><div class="tile-value" id="t-latency">–</div><svg class="spark" id="s-latency" role="img"></svg></div><div class="tile-note" id="t-latency-note"></div></div>
 </section>
 
 <section class="filters" aria-label="Filters">
@@ -61,7 +64,7 @@
   <button type="button" id="follow" class="toggle" aria-pressed="true" title="Keep the now line in view">Follow now</button>
 </section>
 
-<div class="stage-legend" id="stage-legend" aria-label="Stage colours"></div>
+<nav class="funnel" id="funnel" aria-label="Where the work is now: current stage counts, click to filter"></nav>
 
 <main class="timeline" id="timeline">
   <div class="axis-row">
@@ -88,6 +91,23 @@
   </div>
   <div class="panel-meta" id="panel-meta"></div>
   <ol class="panel-events" id="panel-events"></ol>
+</aside>
+
+<aside class="feed" id="feed" hidden aria-labelledby="feed-title">
+  <div class="panel-head">
+    <h2 id="feed-title">Live events</h2>
+    <button type="button" id="feed-close" aria-label="Close live events">×</button>
+  </div>
+  <div class="feed-filters">
+    <input id="feed-filter" type="search" placeholder="issue, stage, diagnostic" autocomplete="off" spellcheck="false" aria-label="Filter events">
+    <select id="feed-kind" aria-label="Event kinds">
+      <option value="">All kinds</option>
+      <option value="problems">Problems only</option>
+      <option value="lifecycle">Stage starts and ends</option>
+    </select>
+  </div>
+  <button type="button" class="feed-new" id="feed-new" hidden></button>
+  <ol class="feed-list" id="feed-list" aria-live="off"></ol>
 </aside>
 
 <div class="tooltip" id="tooltip" role="tooltip" hidden></div>

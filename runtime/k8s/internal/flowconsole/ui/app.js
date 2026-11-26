@@ -37,7 +37,8 @@
     view: null,            // [t0, t1] in ms
     follow: true,
     sort: 'recent',
-    filter: { status: 'all', component: '', issue: '' },
+    filter: { status: 'all', component: '', issue: '', current: '' },
+    feedOpen: false,
     selected: null,
   };
 
@@ -227,6 +228,7 @@
     const out = Array.from(state.lanes.values()).filter((l) => {
       if (f.status !== 'all' && l.status !== f.status) return false;
       if (f.component && !l.components.has(f.component)) return false;
+      if (f.current && l.current !== f.current) return false;
       if (q) {
         const value = (l.repository + '#' + l.issue + ' ' + l.workItem).toLowerCase();
         if (String(l.issue) !== q && value.indexOf(q) < 0) return false;
@@ -264,6 +266,171 @@
     for (const l of all) for (const s of l.segments) { for (const c of s.calls) if (c.latencyMs) lat.push(c.latencyMs); degraded += s.degraded.length; }
     $('t-latency').textContent = lat.length ? fmtDuration(median(lat)) : '–';
     $('t-latency-note').textContent = lat.length ? 'p90 ' + fmtDuration(quantile(lat, 0.9)) + ' · ' + lat.length + ' calls · ' + degraded + ' degraded' : 'no model calls';
+  }
+
+  // ---------- trends over the visible window ----------
+  const BUCKETS = 24;
+  function trends(all) {
+    const [t0, t1] = state.view, width = (t1 - t0) / BUCKETS;
+    const lat = Array.from({ length: BUCKETS }, () => []), stops = new Array(BUCKETS).fill(0), delivered = new Array(BUCKETS).fill(0);
+    const at = (t) => Math.floor((t - t0) / width);
+    for (const l of all) for (const e of l.events) {
+      if (e.t < t0 || e.t >= t1) continue;
+      const i = at(e.t);
+      if (e.step === 'model-call' && e.kind === 'progressed' && e.latencyMs) lat[i].push(e.latencyMs);
+      else if (e.kind === 'failed' || e.kind === 'stopped-safely') stops[i]++;
+      else if (e.kind === 'completed' && e.stage === 'merge') delivered[i]++;
+    }
+    const hours = width / 3600e3;
+    sparkLines($('s-latency'), lat.map((v) => quantile(v, 0.5)), lat.map((v) => quantile(v, 0.9)), width, (v) => fmtDuration(v), 'Model call latency p50 (bright) and p90 (grey) per ' + fmtDuration(width));
+    sparkBars($('s-stops'), stops.map((v) => v / hours), width, (v) => v.toFixed(1) + ' stops/h', 'var(--stopped)', 'Stops and refusals per hour per ' + fmtDuration(width));
+    sparkBars($('s-delivered'), delivered.map((v) => v / hours), width, (v) => v.toFixed(1) + ' merges/h', 'var(--completed)', 'Deliveries (merges) per hour per ' + fmtDuration(width));
+  }
+  function sparkFrame(el, label) {
+    el.textContent = '';
+    const w = el.clientWidth || 92, h = 30;
+    el.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+    el.setAttribute('aria-label', label);
+    svg('title', {}, el).textContent = label;
+    return { w, h };
+  }
+  function sparkLines(el, p50, p90, width, fmt, label) {
+    const { w, h } = sparkFrame(el, label);
+    const max = Math.max(1, ...p90.filter((v) => v !== null));
+    const path = (values) => values.map((v, i) => (v === null ? null : [(i + 0.5) / values.length * w, h - 2 - v / max * (h - 4)]))
+      .reduce((d, p, i, a) => (p ? d + (i && a[i - 1] ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1) : d), '');
+    svg('path', { d: path(p90), class: 'p90', fill: 'none', 'stroke-width': 1.2 }, el);
+    svg('path', { d: path(p50), fill: 'none', stroke: 'var(--running)', 'stroke-width': 2, 'stroke-linejoin': 'round' }, el);
+    hoverBuckets(el, w, h, p50.length, (i) => p50[i] === null ? 'no calls' : 'p50 ' + fmt(p50[i]) + ' · p90 ' + fmt(p90[i]), width);
+  }
+  function sparkBars(el, values, width, fmt, color, label) {
+    const { w, h } = sparkFrame(el, label);
+    const max = Math.max(1e-9, ...values), bw = w / values.length;
+    svg('line', { x1: 0, x2: w, y1: h - 0.5, y2: h - 0.5, stroke: 'var(--line)' }, el);
+    values.forEach((v, i) => { if (v > 0) svg('rect', { x: i * bw + 0.5, y: h - 1 - v / max * (h - 3), width: Math.max(bw - 1, 1), height: v / max * (h - 3), fill: color, rx: 1 }, el); });
+    hoverBuckets(el, w, h, values.length, (i) => fmt(values[i]), width);
+  }
+  function hoverBuckets(el, w, h, n, describe, width) {
+    const bw = w / n;
+    for (let i = 0; i < n; i++) {
+      const r = svg('rect', { x: i * bw, y: 0, width: bw, height: h, fill: 'transparent' }, el);
+      const start = state.view[0] + i * width;
+      r.addEventListener('mousemove', (ev) => showTooltip(ev, { title: fmtClock(start) + '–' + fmtClock(start + width), rows: [['', describe(i)]] }));
+      r.addEventListener('mouseleave', hideTooltip);
+    }
+  }
+
+  // Degradation periods: windows with a burst of stops, degradations,
+  // retries and quarantines, shaded across the lanes.
+  function bands(all) {
+    const [t0, t1] = state.view, n = 60, width = (t1 - t0) / n;
+    const counts = new Array(n).fill(0);
+    for (const l of all) for (const e of l.events) {
+      if (e.t < t0 || e.t >= t1) continue;
+      if (e.kind === 'failed' || e.kind === 'stopped-safely' || e.kind === 'degraded' || e.kind === 'retried' || e.kind === 'quarantined' || e.kind === 'blocked') counts[Math.floor((e.t - t0) / width)]++;
+    }
+    // A burst: at least three problem events within ~15 minutes (or 3 buckets).
+    const span = Math.max(1, Math.round(15 * 60e3 / width));
+    // Mark the problem buckets of every dense window, then join marked
+    // buckets closer than the window: a band spans first to last problem.
+    const marked = new Array(n).fill(false);
+    for (let i = 0; i < n; i++) {
+      let sum = 0;
+      for (let j = i; j < Math.min(n, i + span); j++) sum += counts[j];
+      if (sum >= 3) for (let j = i; j < Math.min(n, i + span); j++) if (counts[j]) marked[j] = true;
+    }
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      if (!marked[i]) continue;
+      const last = out[out.length - 1], a = t0 + i * width, b = a + width;
+      if (last && i - last.end <= span) { last.b = b; last.end = i; last.count += counts[i]; } else out.push({ a, b, end: i, count: counts[i] });
+    }
+    return out;
+  }
+
+  // ---------- funnel ----------
+  const FUNNEL = [
+    { key: 'queued', name: 'Queued', note: 'waiting for a claim', swatch: 'outline' },
+    { key: 'execution', name: 'Generating', stage: 'execution' },
+    { key: 'verification', name: 'Verifying', stage: 'verification' },
+    { key: 'review', name: 'Reviewing', stage: 'review' },
+    { key: 'publication', name: 'Publishing', stage: 'publication' },
+    { key: 'merge', name: 'Merging', stage: 'merge' },
+    { key: 'blocked', name: 'Blocked', note: 'or quarantined', swatch: 'hatch' },
+  ];
+  function renderFunnel(all) {
+    const box = $('funnel');
+    if (!box.childElementCount) {
+      html('div', 'funnel-title', 'Work now', box);
+      for (const f of FUNNEL) {
+        const b = html('button', null, null, box);
+        b.type = 'button';
+        b.dataset.current = f.key;
+        b.setAttribute('aria-pressed', 'false');
+        const sw = html('span', 'stage-swatch' + (f.swatch ? ' ' + f.swatch : ''), f.stage ? STAGE_INITIAL[f.stage] : '', b);
+        if (f.stage) sw.style.background = STAGE_COLOR[f.stage];
+        sw.setAttribute('aria-hidden', 'true');
+        html('span', 'count', '0', b);
+        const name = html('span', 'name', f.name, b);
+        if (f.note) html('small', null, f.note, name);
+      }
+    }
+    for (const b of box.querySelectorAll('button')) {
+      const n = all.filter((l) => l.current === b.dataset.current).length;
+      b.querySelector('.count').textContent = String(n);
+      b.classList.toggle('zero', n === 0);
+      b.setAttribute('aria-pressed', String(state.filter.current === b.dataset.current));
+      b.setAttribute('aria-label', b.querySelector('.name').firstChild.textContent + ': ' + n + ' work items' + (state.filter.current === b.dataset.current ? ', filtering' : ''));
+    }
+  }
+
+  // ---------- live feed ----------
+  const PROBLEM_KINDS = { failed: true, 'stopped-safely': true, degraded: true, quarantined: true, blocked: true, retried: true };
+  let feedShown = 0, feedPending = 0;
+  function feedMatches(e, q, kind) {
+    if (kind === 'problems' && !PROBLEM_KINDS[e.kind] && e.diagnostic !== 'stale-wait') return false;
+    if (kind === 'lifecycle' && e.kind === 'progressed') return false;
+    if (!q) return true;
+    const hay = ('#' + (e.issue || '') + ' ' + (e.repository || '') + ' ' + e.component + ' ' + STAGE_NAME[e.stage] + ' ' + e.stage + ' ' + e.kind + ' ' + (e.step || '') + ' ' + (e.diagnostic || '')).toLowerCase();
+    return hay.indexOf(q) >= 0;
+  }
+  function renderFeed(force) {
+    if (!state.feedOpen) return;
+    const total = state.events.size;
+    // Auto-refresh only while following now; otherwise offer the new events.
+    if (!force && !state.follow && feedShown) {
+      feedPending = total - feedShown;
+      const nb = $('feed-new');
+      nb.hidden = feedPending <= 0;
+      nb.textContent = feedPending + ' new events — show';
+      return;
+    }
+    feedShown = total;
+    $('feed-new').hidden = true;
+    const q = $('feed-filter').value.trim().toLowerCase(), kind = $('feed-kind').value;
+    const list = $('feed-list');
+    const items = Array.from(state.events.values()).filter((e) => feedMatches(e, q, kind)).sort((a, b) => b.t - a.t).slice(0, 300);
+    list.textContent = '';
+    for (const e of items) {
+      const li = html('li', PROBLEM_KINDS[e.kind] || e.diagnostic ? 'problem' : '', null, list);
+      li.tabIndex = 0;
+      li.dataset.key = laneKey(e);
+      li.style.borderLeftColor = STAGE_COLOR[e.stage];
+      const time = html('span', 'time', fmtClock(e.t, true), li);
+      time.title = fmtUTC(e.t);
+      html('span', 'what', (e.issue ? '#' + e.issue + ' ' : '') + STAGE_NAME[e.stage] + (e.step ? ' · ' + e.step : '') + ' — ' + e.kind + (e.diagnostic ? ' (' + e.diagnostic + ')' : ''), li);
+      html('span', 'detail', [e.component, e.attempt ? 'attempt ' + e.attempt : '', e.durationMs ? fmtDuration(e.durationMs) : '', e.latencyMs ? 'latency ' + fmtDuration(e.latencyMs) : ''].filter(Boolean).join(' · '), li);
+    }
+    if (state.follow) list.scrollTop = 0;
+  }
+  function setFeed(open) {
+    state.feedOpen = open;
+    $('feed').hidden = !open;
+    document.body.classList.toggle('feed-open', open);
+    $('feed-toggle').setAttribute('aria-pressed', String(open));
+    feedShown = 0;
+    renderFeed(true);
+    schedule();
   }
 
   // ---------- scales ----------
@@ -433,11 +600,14 @@
     for (const lane of state.lanes.values()) if (lane.dirty || lane.segments === undefined || lane.hasOpen) buildLane(lane, now);
     const all = Array.from(state.lanes.values());
     renderTiles(all);
+    renderFunnel(all);
     const matching = visibleLanes();
     const extent = dataExtent(matching.length ? matching : all, now);
-    if (!state.view) {
+    // The initial window is chosen once the first events exist.
+    if (!state.view || (!state.viewChosen && all.length)) {
       const hours = Number(params.get('range'));
       state.view = hours > 0 && hours <= 192 ? [now - hours * 3600e3 * 0.95, now + hours * 3600e3 * 0.05] : extent;
+      state.viewChosen = all.length > 0;
     }
     if (state.follow) {
       const span = state.view[1] - state.view[0];
@@ -461,6 +631,14 @@
     lanes.forEach((_, i) => { if (i % 2) svg('rect', { class: 'lane-bg alt', x: 0, y: i * LANE_H, width: w, height: LANE_H }, grid); });
     for (const tk of ticksCache) svg('line', { x1: tk.px, x2: tk.px, y1: 0, y2: height, stroke: tk.major ? '#3a3a37' : 'var(--grid)', 'stroke-width': 1 }, grid);
     lanes.forEach((_, i) => svg('line', { class: 'lane-sep', x1: 0, x2: w, y1: (i + 1) * LANE_H - 0.5, y2: (i + 1) * LANE_H - 0.5 }, grid));
+    for (const b of bands(all)) {
+      const xa = Math.max(0, x(b.a)), xb = Math.min(w, x(b.b));
+      if (xb <= xa) continue;
+      const r = svg('rect', { class: 'band', x: xa, y: 0, width: xb - xa, height }, grid);
+      svg('title', {}, r).textContent = 'Degradation period ' + fmtClock(b.a) + '–' + fmtClock(b.b) + ': ' + b.count + ' stops, degradations, retries or quarantines';
+      if (xb - xa > 60) text(axis, { class: 'band-label', x: xa + 3, y: 9 }, b.count + ' problems');
+    }
+    trends(all);
 
     // Labels column: issue, repository, status, and a summary line.
     labels.textContent = '';
@@ -500,8 +678,14 @@
       // The diagnostic of a failed or blocked lane's final stop is always shown,
       // after its last bar (the summary line in the label column repeats it).
       if (finalBox && lane.final.diagnostic) {
-        const tx = Math.max(finalBox.x1, lastEnd) + 6;
-        if (tx < w - 20) text(bars, { class: 'diag' + (lane.status === 'blocked' ? ' blocked' : ''), x: tx, y: y0 + LANE_H - 9 }, lane.final.diagnostic);
+        const cls = 'diag' + (lane.status === 'blocked' ? ' blocked' : ''), tx = Math.max(finalBox.x1, lastEnd) + 6;
+        const width = lane.final.diagnostic.length * 6.9;
+        // Near the right edge the text goes before the lane's first bar instead.
+        if (tx + width < w - 4) text(bars, { class: cls, x: tx, y: y0 + LANE_H - 9 }, lane.final.diagnostic);
+        else {
+          const first = Math.min.apply(null, lane.segments.map((o) => x(o.queued)));
+          if (first - width - 8 > 0) text(bars, { class: cls, x: first - 8, y: y0 + LANE_H - 9, 'text-anchor': 'end' }, lane.final.diagnostic);
+        }
       }
       // Marker row above the bars; overlapping markers cluster.
       const my = y0 + 9;
@@ -532,6 +716,7 @@
       text(g, { class: 'now-label', x: nx, y: 31, 'text-anchor': 'middle' }, 'NOW');
     }
     if (state.selected) renderPanel();
+    renderFeed(false);
     document.body.dataset.renderMs = String(Math.round(performance.now() - t0perf));
   }
 
@@ -637,17 +822,6 @@
   }
 
   // ---------- legends ----------
-  function stageLegend() {
-    const box = $('stage-legend');
-    html('span', 'legend-title', 'Stages', box);
-    for (const stage of ['planning', 'execution', 'verification', 'review', 'publication', 'merge']) {
-      const item = html('span', 'stage-key', null, box);
-      const sw = html('span', 'stage-swatch', stage === 'planning' ? '·' : STAGE_INITIAL[stage], item);
-      sw.style.background = STAGE_COLOR[stage];
-      sw.setAttribute('aria-hidden', 'true');
-      html('span', null, stage === 'planning' ? 'intake · admission · planning' : STAGE_NAME[stage], item);
-    }
-  }
   function legend() {
     const ul = $('legend');
     const item = (draw, label) => {
@@ -673,6 +847,7 @@
 
   // ---------- interaction ----------
   function setView(t0, t1, follow) {
+    state.viewChosen = true;
     const span = Math.min(Math.max(t1 - t0, 5 * 60e3), 8 * 86400e3);
     const mid = (t0 + t1) / 2;
     state.view = [mid - span / 2, mid + span / 2];
@@ -702,6 +877,25 @@
   });
   $('component-filter').addEventListener('change', (ev) => { state.filter.component = ev.target.value; schedule(); });
   $('issue-filter').addEventListener('input', (ev) => { state.filter.issue = ev.target.value; schedule(); });
+  $('funnel').addEventListener('click', (ev) => {
+    const b = ev.target.closest('button');
+    if (!b) return;
+    state.filter.current = state.filter.current === b.dataset.current ? '' : b.dataset.current;
+    schedule();
+  });
+  $('feed-toggle').addEventListener('click', () => setFeed(!state.feedOpen));
+  $('feed-close').addEventListener('click', () => setFeed(false));
+  $('feed-filter').addEventListener('input', () => renderFeed(true));
+  $('feed-kind').addEventListener('change', () => renderFeed(true));
+  $('feed-new').addEventListener('click', () => renderFeed(true));
+  $('feed-list').addEventListener('click', (ev) => { const li = ev.target.closest('li'); if (li && state.lanes.has(li.dataset.key)) openPanel(li.dataset.key); });
+  $('feed-list').addEventListener('keydown', (ev) => {
+    const li = ev.target.closest('li');
+    if (!li) return;
+    if (ev.key === 'Enter' && state.lanes.has(li.dataset.key)) openPanel(li.dataset.key);
+    if (ev.key === 'ArrowDown' && li.nextElementSibling) { ev.preventDefault(); li.nextElementSibling.focus(); }
+    if (ev.key === 'ArrowUp' && li.previousElementSibling) { ev.preventDefault(); li.previousElementSibling.focus(); }
+  });
   $('sort').addEventListener('change', (ev) => { state.sort = ev.target.value === 'problems' ? 'problems' : 'recent'; schedule(); });
   $('panel-close').addEventListener('click', closePanel);
   document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && state.selected) closePanel(); });
@@ -835,8 +1029,9 @@
 
   $('timezone').textContent = 'Local time ' + tzOffset;
   $('timezone').title = (tzName ? tzName + ', ' : '') + tzOffset + '. Hover a tick or a bar for UTC.';
-  stageLegend();
   legend();
+  if (params.get('feed') === '1') setFeed(true);
+  if (FUNNEL.some((f) => f.key === params.get('now'))) state.filter.current = params.get('now');
   if (params.get('issue')) { state.filter.issue = params.get('issue').slice(0, 100); $('issue-filter').value = state.filter.issue; }
   if (params.get('sort') === 'problems') { state.sort = 'problems'; $('sort').value = 'problems'; }
   const initialStatus = params.get('status');

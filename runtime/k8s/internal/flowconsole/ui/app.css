@@ -137,15 +137,50 @@ body.panel-open { padding-right: 420px; }
 .tooltip dl { margin: 0; display: grid; grid-template-columns: auto auto; gap: 2px 12px; }
 .tooltip dt { color: var(--text-muted); }
 .tooltip dd { margin: 0; font-variant-numeric: tabular-nums; }
-/* Stage legend: hue and initial of each stage, in flow order. */
-.stage-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 0 24px 10px; color: var(--text-secondary); font-size: 13px; }
-.legend-title { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); }
-.stage-key { display: inline-flex; align-items: center; gap: 6px; }
-.stage-swatch { width: 18px; height: 14px; border-radius: 3px; color: #0e0e0d; font-size: 10px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+/* Funnel: where the work is now, one cell per current stage, in flow
+   order; the cells double as the stage colour key and as filters. */
+.funnel { display: flex; align-items: stretch; gap: 0; margin: 0 24px 10px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--surface-1); }
+.funnel-title { display: flex; flex-direction: column; justify-content: center; padding: 6px 12px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; border-right: 1px solid var(--line); white-space: nowrap; }
+.funnel button { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; padding: 7px 12px; background: none; border: 0; border-right: 1px solid var(--line); cursor: pointer; text-align: left; position: relative; }
+.funnel button:last-child { border-right: 0; }
+.funnel button:hover { background: var(--surface-2); }
+.funnel button[aria-pressed="true"] { background: var(--surface-3); box-shadow: inset 0 -3px 0 var(--text-primary); }
+.funnel button:not(:last-child)::after { content: ""; position: absolute; right: -6px; top: 50%; width: 10px; height: 10px; transform: translateY(-50%) rotate(45deg); border-top: 1px solid var(--line); border-right: 1px solid var(--line); background: inherit; z-index: 1; }
+.funnel .count { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text-primary); min-width: 1.2em; }
+.funnel .zero .count { color: var(--text-muted); }
+.funnel .name { display: flex; flex-direction: column; font-size: 12px; color: var(--text-secondary); line-height: 1.25; min-width: 0; }
+.funnel .name small { color: var(--text-muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stage-swatch { flex: none; width: 20px; height: 16px; border-radius: 4px; color: #0e0e0d; font-size: 10px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.stage-swatch.outline { background: none !important; border: 1.5px dashed var(--text-muted); color: var(--text-secondary); }
+.stage-swatch.hatch { background: repeating-linear-gradient(45deg, #c98500 0 3px, rgba(201,133,0,.3) 3px 6px) !important; }
+.tile-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; }
+.spark { width: 92px; height: 30px; flex: none; margin-bottom: 2px; overflow: visible; }
+.spark .p90 { stroke: #8f8e86; }
+.band { fill: rgba(208,59,59,.10); }
+.band-label { fill: #f09a9a; font-size: 10px; }
+.top-right { display: flex; align-items: center; gap: 10px; }
+.feed { position: fixed; top: 0; right: 0; bottom: 0; width: 380px; background: var(--surface-1); border-left: 1px solid var(--line); box-shadow: -12px 0 30px rgba(0,0,0,.4); display: flex; flex-direction: column; z-index: 9; }
+body.feed-open { padding-right: 380px; }
+body.feed-open.panel-open { padding-right: 420px; }
+.feed-filters { display: flex; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.feed-filters input, .feed-filters select { background: var(--surface-0); border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px; color: var(--text-primary); min-width: 0; }
+.feed-filters input { flex: 1; }
+.feed-new { margin: 8px 14px 0; background: var(--surface-3); border: 1px solid var(--accent); border-radius: 8px; padding: 5px; cursor: pointer; }
+.feed-list { list-style: none; margin: 0; padding: 0 0 20px; overflow-y: auto; flex: 1; }
+.feed-list li { display: grid; grid-template-columns: 58px 1fr; gap: 1px 8px; padding: 6px 14px; border-bottom: 1px solid var(--grid); font-size: 12.5px; cursor: pointer; border-left: 3px solid transparent; }
+.feed-list li:hover, .feed-list li:focus { background: var(--surface-2); }
+.feed-list .time { color: var(--text-muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+.feed-list .what { color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.feed-list .detail { grid-column: 2; color: var(--text-muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.feed-list li.problem .what { color: #f2c4a0; }
 @media (max-width: 1400px) {
   :root { --label-w: 214px; font-size: 13px; }
-  .top, .tiles, .filters, .stage-legend, .legend { padding-left: 16px; padding-right: 16px; }
-  .timeline { margin: 0 16px; }
+  .top, .tiles, .filters, .legend { padding-left: 16px; padding-right: 16px; }
+  .timeline, .funnel { margin-left: 16px; margin-right: 16px; }
+  .funnel button { padding: 6px 9px; gap: 7px; }
+  .funnel .count { font-size: 17px; }
+  .funnel-title { display: none; }
+  .spark { width: 70px; }
   .tile { padding: 8px 11px 9px; }
   .tile-value { font-size: 22px; }
   .tile-label { font-size: 11px; }
