@@ -74,6 +74,15 @@ images do not: their interpreter is dynamically linked against glibc, and a
 omits `generation.toolchain`; the generator gets the offline guidance and
 the verifier still runs the repository's `unittest` suite.
 
+The Python example runs the suite as `python3 -I -B -m unittest discover -s . -t .`.
+Isolated mode (`-I`) keeps the candidate's working tree off `sys.path` until
+discovery starts, so a candidate's `unittest.py` or `sitecustomize.py` cannot
+replace the test runner, and it ignores `PYTHON*` variables; `-B` keeps the
+no-bytecode behavior. A package's `load_tests` hook can still change which
+tests run, as Go's `init` functions can in the Go example. Package files are
+product code, so they cannot be listed in `harnessGlobs`; the independent
+review is the control for that case.
+
 #### What the generator gets
 
 With the section, each generation (and its repair) runs in an executor pod

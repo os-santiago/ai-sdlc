@@ -4,7 +4,7 @@
   "baseBranch": "main",
   "verification": {
     "image": "docker.io/library/python@sha256:191083cdf6c7bda8c76158983163ead5d5cf7b77cf3033e805bb0f5296f51b4b",
-    "command": ["python3", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"],
+    "command": ["python3", "-I", "-B", "-m", "unittest", "discover", "-s", ".", "-t", ".", "-p", "test_*.py"],
     "timeoutSeconds": 120,
     "cpu": "500m",
     "memory": "512Mi",
