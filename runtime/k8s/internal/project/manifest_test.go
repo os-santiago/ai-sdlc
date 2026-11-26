@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -227,6 +228,27 @@ func TestManifestDigestsWithoutGenerationAreUnchanged(t *testing.T) {
 	}
 	if strings.Contains(string(generic().Canonical()), "generation") {
 		t.Fatal("absent generation section is encoded")
+	}
+}
+
+// The Python example is a second-language reference: it must parse, carry no
+// generation toolchain (the image's interpreter is dynamically linked) and
+// classify its own test and harness files.
+func TestPythonSampleManifestParses(t *testing.T) {
+	raw, err := os.ReadFile("../../../../examples/ai-sdlc-sample-python.project.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := ParseManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Generation != nil || !m.Verification.MatchesTest("textutil/test_reverse.py") ||
+		m.Verification.MatchesTest("textutil/reverse.py") || !m.Verification.MatchesHarness("pyproject.toml") ||
+		!m.Publication.Allows("kv/pick.py") || m.Publication.Allows("pyproject.toml") ||
+		m.Publication.Allows("unittest.py") || m.Publication.Allows("sitecustomize.py") ||
+		!slices.Contains(m.Verification.Command, "-I") {
+		t.Fatalf("unexpected Python sample manifest: %+v", m)
 	}
 }
 
