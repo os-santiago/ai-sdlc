@@ -5,6 +5,11 @@ console.databaseSecret; it never receives the bootstrap owner's or any
 component's credential, holds no Kubernetes API token and sends nothing to
 any component. The role exists only after the migrator received the optional
 flow-console entry of passwords.json. */}}
+{{- /* Without the policy no rule selects the console pod, so any pod in the
+cluster could reach it and console.accessFrom could not be honoured. */}}
+{{- if not .Values.networkPolicy.enabled }}
+{{- fail "console.enabled requires networkPolicy.enabled, so that only console.accessFrom (or port-forward) can reach the console" }}
+{{- end }}
 {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" .Values.console.databaseSecret) }}
 {{- fail "console.databaseSecret must name the Secret holding the flow console's read-only database URL" }}
 {{- end }}
@@ -87,7 +92,6 @@ spec:
     app.kubernetes.io/component: flow-console
   ports:
     - {name: http, port: {{ $port }}, targetPort: http, protocol: TCP}
-{{- if .Values.networkPolicy.enabled }}
 ---
 # Ingress: only console.accessFrom on the console port; empty admits no peer,
 # leaving kubectl port-forward (which the kubelet delivers inside the pod) as
@@ -135,5 +139,4 @@ spec:
     - to: [{ipBlock: {cidr: {{ . | quote }}}}]
       ports: [{protocol: TCP, port: 5432}]
     {{- end }}
-{{- end }}
 {{- end }}

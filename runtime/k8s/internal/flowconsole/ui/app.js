@@ -665,24 +665,74 @@
   function describeStatus() {
     const s = state.status;
     if (!state.connected) return setSource('reconnecting…', 'down');
-    if (!s) return setSource('connected', 'live');
+    // A gap stays visible: the hub had already evicted events this page
+    // never received, so the view is incomplete until it is rebuilt.
+    const gap = state.gap ? ' · some events were evicted before this page received them' : '';
+    if (!s) return setSource('connected' + gap, gap ? 'down' : 'live');
     const source = s.source === 'fixture' ? 'recorded fixture' : 'journal';
-    if (!s.healthy) return setSource(source + ' unavailable — showing last known events', 'down');
+    if (!s.healthy) return setSource(source + ' unavailable — showing last known events' + gap, 'down');
     const when = s.observedAt ? ' · read ' + fmtClock(Date.parse(s.observedAt), true) : '';
-    setSource('live · ' + source + (s.problem === 'window-truncated' ? ' · window truncated' : '') + when, 'live');
+    setSource('live · ' + source + (s.problem === 'window-truncated' ? ' · window truncated' : '') + when + gap, gap ? 'down' : 'live');
   }
+  let stream = null, cursor = '', retryDelay = 1000;
   function connect() {
-    const stream = new EventSource('events');
-    stream.addEventListener('open', () => { state.connected = true; describeStatus(); });
-    stream.addEventListener('flow', (m) => { try { addEvent(JSON.parse(m.data)); schedule(); } catch (_) { /* ignore malformed */ } });
+    // Resume after the last received cursor, so a reconnect never duplicates.
+    stream = new EventSource('events' + (cursor ? '?since=' + encodeURIComponent(cursor) : ''));
+    stream.addEventListener('open', () => { state.connected = true; retryDelay = 1000; describeStatus(); });
+    stream.addEventListener('flow', (m) => {
+      if (m.lastEventId) cursor = m.lastEventId;
+      try { addEvent(JSON.parse(m.data)); schedule(); } catch (_) { /* ignore malformed */ }
+    });
     stream.addEventListener('status', (m) => { try { state.status = JSON.parse(m.data); describeStatus(); } catch (_) { /* ignore */ } });
-    stream.addEventListener('ready', () => {
+    stream.addEventListener('ready', (m) => {
+      try { const c = JSON.parse(m.data).cursor; if (c) cursor = String(c); } catch (_) { /* ignore */ }
       state.connected = true; describeStatus(); schedule();
       const open = params.get('open');
       if (open && state.lanes.has(open) && !state.selected) openPanel(open);
     });
-    stream.addEventListener('gap', () => { setSource('events were missed while disconnected; reload for full history', 'down'); });
-    stream.addEventListener('error', () => { state.connected = false; describeStatus(); });
+    stream.addEventListener('gap', () => { state.gap = true; describeStatus(); });
+    stream.addEventListener('error', () => {
+      state.connected = false;
+      describeStatus();
+      // The browser retries a dropped stream itself (CONNECTING); a refused
+      // one (for example 503 when every stream slot is taken) is CLOSED and
+      // needs a new EventSource, with a growing delay.
+      if (stream.readyState === EventSource.CLOSED) {
+        stream.close();
+        setTimeout(connect, retryDelay);
+        retryDelay = Math.min(retryDelay * 2, 60000);
+      }
+    });
+  }
+
+  // Bound the page's own history like the server's: at most MAX_EVENTS, and
+  // for the journal source nothing older than its window plus a margin.
+  const MAX_EVENTS = 60000;
+  function windowMs(text) {
+    const m = /^(?:(\d+)h)?(?:(\d+)m)?(?:[\d.]+s)?$/.exec(text || '');
+    return m && (m[1] || m[2]) ? (Number(m[1] || 0) * 3600e3 + Number(m[2] || 0) * 60e3) : 0;
+  }
+  function prune() {
+    let cutoff = -Infinity;
+    const span = state.status && state.status.source === 'journal' ? windowMs(state.status.window) : 0;
+    if (span) cutoff = Date.now() - span - 2 * 3600e3;
+    let excess = state.events.size - MAX_EVENTS;
+    if (excess <= 0 && cutoff === -Infinity) return;
+    const ordered = Array.from(state.events.values()).sort((a, b) => a.t - b.t);
+    const drop = new Set();
+    for (const e of ordered) {
+      if (excess > 0 || e.t < cutoff) { drop.add(e.id); excess--; } else break;
+    }
+    if (!drop.size) return;
+    for (const id of drop) state.events.delete(id);
+    for (const [key, lane] of state.lanes) {
+      const kept = lane.events.filter((e) => !drop.has(e.id));
+      if (kept.length === lane.events.length) continue;
+      if (!kept.length) { state.lanes.delete(key); if (state.selected === key) closePanel(); continue; }
+      lane.events = kept;
+      lane.dirty = true;
+    }
+    schedule();
   }
 
   legend();
@@ -695,4 +745,5 @@
   connect();
   // Advance the now line and open bars.
   setInterval(schedule, 5000);
+  setInterval(prune, 60000);
 })();

@@ -119,7 +119,7 @@ The console accepts only `GET` and `HEAD`:
 | Path | Response |
 |---|---|
 | `/` | The embedded UI (HTML, CSS and vanilla JavaScript; no external requests). |
-| `/events` | Server-Sent Events. First a replay of the most recent history (up to 5,000 events), then a `ready` event with the cursor, then live events. Each `flow` event's SSE `id` is its cursor; a reconnecting client sends `Last-Event-ID` (or `?since=<cursor>`) and receives only later events. A `gap` event says events after the cursor were already evicted; `status` events report the source state. At most 32 concurrent streams. |
+| `/events` | Server-Sent Events. First a replay of the most recent history (up to 5,000 events), then a `ready` event with the cursor, then live events. Each `flow` event's SSE `id` is its cursor; a reconnecting client sends `Last-Event-ID` (or `?since=<cursor>`) and receives only later events. A `gap` event says events after the cursor were already evicted (also on a live stream that fell behind), and the page then keeps a warning that its view is incomplete; `status` events report the source state. Each write batch has a 10-second deadline, so a client that stops reading frees its slot. At most 32 concurrent streams; a refused page reconnects with a growing delay from its last cursor. |
 | `/api/snapshot` | JSON (`ai-sdlc.flow-snapshot/v1`): the cursor, the source status and the retained events, or only those after `?since=<cursor>`. |
 | `/api/contract` | The contract version, stages and kinds. |
 | `/healthz`, `/readyz` | Liveness; readiness after the first successful journal read. |
@@ -155,9 +155,11 @@ as HTML.
   when its credential document holds a `flow-console` entry. Removing the
   entry and running the migrator again sets the role `NOLOGIN` and revokes
   every privilege.
-- **Network.** With `networkPolicy.enabled`, the console pod accepts traffic
-  only from `console.accessFrom` peers on its port (none by default) and
-  reaches only DNS and the database. The internal component policy excludes
+- **Network.** The chart refuses `console.enabled` without
+  `networkPolicy.enabled`, because no policy would then select the console
+  pod and any pod could reach it. The console pod accepts traffic only from
+  `console.accessFrom` peers on its port (none by default) and reaches only
+  DNS and the database. The internal component policy excludes
   it, so it never reaches a component port.
 - **Pod.** Non-root, `RuntimeDefault` seccomp, no privilege escalation, every
   capability dropped, read-only root filesystem, no volumes and no service
@@ -248,7 +250,8 @@ person-blocked admission and in-flight work.
   24 h), at most 5,000 rows per journal table per read; the source badge says
   when a read was truncated. It retains at most 50,000 events in memory and
   rebuilds its history from the journal after a restart. Cursors are local to
-  one console process.
+  one console process. An open page keeps at most 60,000 events and, for the
+  journal source, nothing older than the window plus two hours.
 - Stops are named from the journal: the stop reason, the lifecycle phase and an
   observed exit code. The richer names in component logs (for example
   `model-provider` or `export`) are not in the journal and are not shown.

@@ -472,6 +472,10 @@ class ChartTests(unittest.TestCase):
                     {'enabled': True, 'pollSeconds': 0}):
             with self.subTest(bad=bad):
                 self.assertNotEqual(self.render_build(dict(base, console=bad)).returncode, 0)
+        # Without the policy any pod could reach the console: the chart refuses.
+        plain = self.render_build(dict(base, networkPolicy={'enabled': False, 'databaseEgressCIDRs': []}, console={'enabled': True}))
+        self.assertNotEqual(plain.returncode, 0)
+        self.assertIn('console.enabled requires networkPolicy.enabled', plain.stderr)
 
     def test_source_credential_mounts_only_into_the_verifier_container_when_set(self):
         base = self.build_values()

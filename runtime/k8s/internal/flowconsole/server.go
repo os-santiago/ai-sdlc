@@ -28,6 +28,8 @@ type Server struct {
 	MaxStreams int
 	// Heartbeat is the SSE keep-alive interval.
 	Heartbeat time.Duration
+	// WriteTimeout bounds each SSE write batch, not the stream.
+	WriteTimeout time.Duration
 	// Ready reports whether the source has produced a successful read.
 	Ready func() bool
 
@@ -59,6 +61,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	if s.Heartbeat <= 0 {
 		s.Heartbeat = 15 * time.Second
+	}
+	if s.WriteTimeout <= 0 {
+		s.WriteTimeout = 10 * time.Second
 	}
 	s.streams = make(chan struct{}, s.MaxStreams)
 	static, _ := fs.Sub(uiFS, "ui")
@@ -125,14 +130,10 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid cursor", http.StatusBadRequest)
 		return
 	}
-	var entries []Entry
-	var current uint64
-	var gap bool
-	if ok {
-		entries, current, gap = s.Hub.Since(cursor, 0)
-	} else {
-		entries = s.Hub.Tail(0)
-		_, current, _ = s.Hub.Since(^uint64(0), 1)
+	// One hub read: the events and the cursor they end at are consistent.
+	entries, current, gap := s.Hub.Since(cursor, 0)
+	if !ok {
+		gap = false
 	}
 	doc := Snapshot{Version: SnapshotVersion, Cursor: current, Gap: gap, Status: s.Hub.Status(), Events: make([]SnapshotElement, 0, len(entries))}
 	for _, e := range entries {
@@ -154,11 +155,6 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid cursor", http.StatusBadRequest)
 		return
 	}
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
 	select {
 	case s.streams <- struct{}{}:
 		defer func() { <-s.streams }()
@@ -173,24 +169,44 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	updates, cancel := s.Hub.Subscribe()
 	defer cancel()
 
-	var batch []Entry
-	if resumed {
-		var gap bool
-		batch, _, gap = s.Hub.Since(cursor, 0)
-		if gap {
-			fmt.Fprint(w, "event: gap\ndata: {}\n\n")
+	// Each write batch gets its own deadline: a client that stops reading
+	// without closing cannot hold a stream slot, while a healthy connection
+	// stays open indefinitely.
+	control := http.NewResponseController(w)
+	send := func(write func() error) bool {
+		if control.SetWriteDeadline(time.Now().Add(s.WriteTimeout)) != nil {
+			return false
 		}
+		return write() == nil && control.Flush() == nil
+	}
+
+	var batch []Entry
+	var gap bool
+	if resumed {
+		batch, _, gap = s.Hub.Since(cursor, 0)
 	} else {
 		batch = s.Hub.Tail(s.Replay)
 	}
-	fmt.Fprint(w, "retry: 3000\n\n")
-	if err := writeEntries(w, batch, &cursor); err != nil {
+	status := s.Hub.Status()
+	if !send(func() error {
+		if gap {
+			if err := writeJSON(w, "gap", "", map[string]uint64{"after": cursor}); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprint(w, "retry: 3000\n\n"); err != nil {
+			return err
+		}
+		if err := writeEntries(w, batch, &cursor); err != nil {
+			return err
+		}
+		if err := writeJSON(w, "status", "", status); err != nil {
+			return err
+		}
+		return writeJSON(w, "ready", "", map[string]uint64{"cursor": cursor})
+	}) {
 		return
 	}
-	status := s.Hub.Status()
-	writeJSON(w, "status", "", status)
-	writeJSON(w, "ready", "", map[string]uint64{"cursor": cursor})
-	flusher.Flush()
 
 	heartbeat := time.NewTicker(s.Heartbeat)
 	defer heartbeat.Stop()
@@ -199,25 +215,36 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-heartbeat.C:
-			if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
+			if !send(func() error { _, err := fmt.Fprint(w, ": keep-alive\n\n"); return err }) {
 				return
 			}
-			flusher.Flush()
 		case <-updates:
-			for {
-				batch, _, _ = s.Hub.Since(cursor, 1000)
-				if len(batch) == 0 {
-					break
+			ok := send(func() error {
+				for {
+					// A live client that fell behind the retained history is
+					// told so before it receives the entries that remain.
+					next, _, evicted := s.Hub.Since(cursor, 1000)
+					if evicted {
+						if err := writeJSON(w, "gap", "", map[string]uint64{"after": cursor}); err != nil {
+							return err
+						}
+					}
+					if len(next) == 0 {
+						break
+					}
+					if err := writeEntries(w, next, &cursor); err != nil {
+						return err
+					}
 				}
-				if err := writeEntries(w, batch, &cursor); err != nil {
-					return
+				if next := s.Hub.Status(); next != status {
+					status = next
+					return writeJSON(w, "status", "", status)
 				}
+				return nil
+			})
+			if !ok {
+				return
 			}
-			if next := s.Hub.Status(); next != status {
-				status = next
-				writeJSON(w, "status", "", status)
-			}
-			flusher.Flush()
 		}
 	}
 }

@@ -131,6 +131,22 @@ func TestEventStreamReportsGapAfterEviction(t *testing.T) {
 	}
 }
 
+func TestLiveStreamReportsGapWhenItFallsBehindRetention(t *testing.T) {
+	hub := NewHub(2, "journal")
+	hub.Publish([]flowevent.Event{event(1), event(2)})
+	server := httptest.NewServer((&Server{Hub: hub}).Handler())
+	defer server.Close()
+	stream, done := open(t, server.URL+"/events", "")
+	defer done()
+	readSSE(t, stream, 0, "ready")
+	// Three events in one publish evict cursor 3 before the stream reads it.
+	hub.Publish([]flowevent.Event{event(3), event(4), event(5)})
+	got := readSSE(t, stream, 2, "")
+	if got[0].event != "gap" || got[0].data != `{"after":2}` || got[len(got)-2].id != "4" || got[len(got)-1].id != "5" {
+		t.Fatalf("live gap %+v", got)
+	}
+}
+
 func TestSnapshotCursorAndReadOnlySurface(t *testing.T) {
 	hub := NewHub(10, "fixture")
 	hub.Publish([]flowevent.Event{event(1), event(2)})

@@ -140,6 +140,7 @@ backup:
 # renders and recorded installations render unchanged. Enabled, it runs one
 # Deployment and a ClusterIP Service, reads the journal as the dedicated
 # aisdlc_flow_console role and holds no write or Kubernetes API privilege.
+# Requires networkPolicy.enabled.
 # Before enabling, add a "flow-console" password to the migrator's
 # passwords.json (migrator.credentialsSecret) and create databaseSecret with
 # that role's postgresql:// URL under key "uri".
