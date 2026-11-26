@@ -408,6 +408,71 @@ class ChartTests(unittest.TestCase):
             with self.subTest(bad=bad):
                 self.assertNotEqual(self.render_build(dict(base, metrics=bad)).returncode, 0)
 
+    def test_flow_console_renders_only_when_enabled_read_only_and_isolated(self):
+        base = self.build_values()
+        before = self.render_build(base)
+        self.assertEqual(before.returncode, 0, before.stderr)
+        # Off (absent or false): recorded installations render byte-identically.
+        off = self.render_build(dict(base, console={'enabled': False, 'accessFrom': [{'podSelector': {}}]}))
+        self.assertEqual(off.stdout, before.stdout)
+        self.assertNotIn('flow-console', before.stdout)
+        on = self.render_build(dict(base, console={'enabled': True}))
+        self.assertEqual(on.returncode, 0, on.stderr)
+        docs = [d for d in yaml.safe_load_all(on.stdout) if d]
+        old = [d for d in yaml.safe_load_all(before.stdout) if d]
+        console = [d for d in docs if d['metadata'].get('labels', {}).get('app.kubernetes.io/component') == 'flow-console'
+                   or d['metadata']['name'] == 'ai-sdlc-flow-console']
+        self.assertEqual(sorted(d['kind'] for d in console), ['Deployment', 'NetworkPolicy', 'Service'])
+        deployment = next(d for d in console if d['kind'] == 'Deployment')
+        pod = deployment['spec']['template']['spec']
+        self.assertFalse(pod['automountServiceAccountToken'])
+        self.assertEqual(pod['securityContext'], {'runAsNonRoot': True, 'seccompProfile': {'type': 'RuntimeDefault'}})
+        [container] = pod['containers']
+        self.assertEqual(container['securityContext'], {'allowPrivilegeEscalation': False, 'capabilities': {'drop': ['ALL']}, 'readOnlyRootFilesystem': True})
+        self.assertNotIn('volumeMounts', container)
+        self.assertNotIn('volumes', pod)
+        self.assertNotIn('envFrom', container)
+        self.assertEqual(container['image'], 'quay.io/os-santiago/ai-sdlc:flow-console-unpublished')
+        # Only the read-only role's URL; never the bootstrap or a component credential.
+        secrets = [e['valueFrom']['secretKeyRef'] for e in container['env'] if 'valueFrom' in e]
+        self.assertEqual(secrets, [{'name': 'ai-sdlc-flow-console-database', 'key': 'uri'}])
+        service = next(d for d in console if d['kind'] == 'Service')
+        self.assertEqual(service['spec']['type'], 'ClusterIP')
+        self.assertEqual(service['spec']['ports'], [{'name': 'http', 'port': 8091, 'targetPort': 'http', 'protocol': 'TCP'}])
+        policy = next(d for d in console if d['kind'] == 'NetworkPolicy')
+        self.assertEqual(policy['spec']['policyTypes'], ['Ingress', 'Egress'])
+        self.assertEqual(policy['spec']['ingress'], [])
+        egress_ports = sorted((p['protocol'], p['port']) for rule in policy['spec']['egress'] for p in rule['ports'])
+        self.assertEqual(set(egress_ports), {('UDP', 53), ('TCP', 53), ('TCP', 5432)})
+        # The internal component policy excludes the console, so it gains no component peer.
+        internal = next(d for d in docs if d['kind'] == 'NetworkPolicy' and d['metadata']['name'] == 'ai-sdlc-internal')
+        self.assertIn({'key': 'app.kubernetes.io/component', 'operator': 'NotIn', 'values': ['flow-console']}, internal['spec']['podSelector']['matchExpressions'])
+        def strip(items):
+            out = []
+            for d in items:
+                if d in console:
+                    continue
+                if d['kind'] == 'NetworkPolicy' and d['metadata']['name'] == 'ai-sdlc-internal':
+                    d = copy.deepcopy(d)
+                    d['spec']['podSelector']['matchExpressions'] = [e for e in d['spec']['podSelector']['matchExpressions'] if e['values'] != ['flow-console']]
+                out.append(d)
+            return out
+        self.assertEqual(strip(docs), old)
+        # Named peers open the console port, nothing else.
+        peer = {'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': 'operators'}}}
+        opened = self.render_build(dict(base, console={'enabled': True, 'accessFrom': [peer], 'digest': 'sha256:' + 'c' * 64}))
+        self.assertEqual(opened.returncode, 0, opened.stderr)
+        opened_docs = [d for d in yaml.safe_load_all(opened.stdout) if d]
+        policy = next(d for d in opened_docs if d['kind'] == 'NetworkPolicy' and d['metadata']['name'] == 'ai-sdlc-flow-console')
+        self.assertEqual(policy['spec']['ingress'], [{'from': [peer], 'ports': [{'protocol': 'TCP', 'port': 'http'}]}])
+        image = next(d for d in opened_docs if d['kind'] == 'Deployment' and d['metadata']['name'] == 'ai-sdlc-flow-console')['spec']['template']['spec']['containers'][0]['image']
+        self.assertEqual(image, 'quay.io/os-santiago/ai-sdlc@sha256:' + 'c' * 64)
+        for bad in ({'enabled': True, 'port': 8083}, {'enabled': True, 'databaseSecret': 'Bad Name'}, {'enabled': 'yes'},
+                    {'enabled': True, 'digest': 'latest'}, {'enabled': True, 'accessFrom': [{}]}, {'enabled': True, 'other': 1},
+                    {'enabled': True, 'pollSeconds': 0}):
+            with self.subTest(bad=bad):
+                self.assertNotEqual(self.render_build(dict(base, console=bad)).returncode, 0)
+
     def test_source_credential_mounts_only_into_the_verifier_container_when_set(self):
         base = self.build_values()
         before = self.render_build(base)

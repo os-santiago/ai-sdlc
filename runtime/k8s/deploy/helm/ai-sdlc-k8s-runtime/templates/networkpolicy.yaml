@@ -8,7 +8,7 @@ spec:
   podSelector:
     matchLabels:
       {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
-    {{- if or .Values.build.enabled .Values.backup.enabled }}
+    {{- if or .Values.build.enabled .Values.backup.enabled .Values.console.enabled }}
     matchExpressions:
       {{- if .Values.build.enabled }}
       - {key: app.kubernetes.io/component, operator: NotIn, values: [build-controller]}
@@ -21,6 +21,9 @@ spec:
       {{- end }}
       {{- if .Values.backup.enabled }}
       - {key: app.kubernetes.io/component, operator: NotIn, values: [backup]}
+      {{- end }}
+      {{- if .Values.console.enabled }}
+      - {key: app.kubernetes.io/component, operator: NotIn, values: [flow-console]}
       {{- end }}
     {{- end }}
   policyTypes: [Ingress, Egress]

@@ -1,0 +1,139 @@
+{{- if .Values.console.enabled }}
+{{- /* Read-only flow console (docs/operations/flow-console.md). It reads the
+journal as the dedicated aisdlc_flow_console role, whose URL comes from
+console.databaseSecret; it never receives the bootstrap owner's or any
+component's credential, holds no Kubernetes API token and sends nothing to
+any component. The role exists only after the migrator received the optional
+flow-console entry of passwords.json. */}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" .Values.console.databaseSecret) }}
+{{- fail "console.databaseSecret must name the Secret holding the flow console's read-only database URL" }}
+{{- end }}
+{{- $port := int .Values.console.port }}
+{{- range .Values.components }}
+{{- if eq (int .port) $port }}
+{{- fail "console.port must differ from every component port" }}
+{{- end }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-flow-console
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+    app.kubernetes.io/component: flow-console
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: flow-console
+  template:
+    metadata:
+      labels:
+        {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: flow-console
+    spec:
+      serviceAccountName: {{ include "ai-sdlc-k8s-runtime.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: flow-console
+          image: "{{ .Values.image.repository }}{{ if .Values.console.digest }}@{{ .Values.console.digest }}{{ else }}:flow-console-{{ .Values.image.tag }}{{ end }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - {name: AI_SDLC_HTTP_ADDRESS, value: ":{{ $port }}"}
+            - {name: AI_SDLC_FLOW_CONSOLE_POLL, value: {{ printf "%ds" (int .Values.console.pollSeconds) | quote }}}
+            - {name: AI_SDLC_FLOW_CONSOLE_WINDOW, value: {{ printf "%dh" (int .Values.console.windowHours) | quote }}}
+            - {name: AI_SDLC_FLOW_CONSOLE_STALE_WAIT, value: {{ printf "%dm" (int .Values.console.staleWaitMinutes) | quote }}}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: {{ .Values.console.databaseSecret }}, key: uri}
+          ports:
+            - {name: http, containerPort: {{ $port }}}
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          resources:
+            {{- toYaml .Values.console.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-flow-console
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+    app.kubernetes.io/component: flow-console
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: flow-console
+  ports:
+    - {name: http, port: {{ $port }}, targetPort: http, protocol: TCP}
+{{- if .Values.networkPolicy.enabled }}
+---
+# Ingress: only console.accessFrom on the console port; empty admits no peer,
+# leaving kubectl port-forward (which the kubelet delivers inside the pod) as
+# the documented access path. Egress: DNS and the database only, exactly as
+# the backup pod. The internal component policy excludes this pod, so it never
+# reaches or is reached on a component port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ai-sdlc-k8s-runtime.fullname" . }}-flow-console
+  namespace: {{ include "ai-sdlc-k8s-runtime.namespace" . }}
+  labels:
+    {{- include "ai-sdlc-k8s-runtime.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: flow-console
+  policyTypes: [Ingress, Egress]
+  {{- if .Values.console.accessFrom }}
+  ingress:
+    - from:{{ toYaml .Values.console.accessFrom | nindent 8 }}
+      ports: [{protocol: TCP, port: http}]
+  {{- else }}
+  ingress: []
+  {{- end }}
+  egress:
+{{- if .Values.openshift.enabled }}
+    {{- include "ai-sdlc-k8s-runtime.openshiftDNSEgress" . | nindent 4 }}
+{{- else }}
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+{{- end }}
+    {{- if .Values.postgres.local.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "ai-sdlc-k8s-runtime.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: postgres
+      ports: [{protocol: TCP, port: 5432}]
+    {{- end }}
+    {{- range .Values.networkPolicy.databaseEgressCIDRs }}
+    - to: [{ipBlock: {cidr: {{ . | quote }}}}]
+      ports: [{protocol: TCP, port: 5432}]
+    {{- end }}
+{{- end }}
+{{- end }}

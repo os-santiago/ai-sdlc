@@ -62,6 +62,25 @@ class ImageResolutionTests(unittest.TestCase):
             else:value['artifacts'].append(dict(value['artifacts'][-1],id=104));value['total_count']+=1
             with self.subTest(fault=fault),self.assertRaises(ValueError):images.select_artifacts(value,RUN,SHA,True,True,True)
 
+    def test_console_image_class_never_enters_an_installer_lock(self):
+        # The optional read-only flow console publishes its own artifact class,
+        # which no installer selection admits: every existing lock is unchanged.
+        catalog={'total_count':len(images.ARTIFACT_COMPONENTS),'artifacts':[archive(c)[1] for c in sorted(images.ARTIFACT_COMPONENTS)]}
+        for index, component in enumerate(('artifact-builder','build-controller'),100):
+            catalog['artifacts'].append(dict(archive('worker')[1],id=index,name='supply-chain-image-'+component))
+        catalog['artifacts'].append(dict(archive('worker')[1],id=102,name='release-image-deployer'))
+        catalog['artifacts'].append(dict(archive('worker')[1],id=103,name='browser-image-browser-verifier'))
+        catalog['total_count']=len(catalog['artifacts'])
+        before={flags:images.select_artifacts(catalog,RUN,SHA,*flags) for flags in ((),(True,),(True,True),(True,True,True))}
+        catalog['artifacts'].append(dict(archive('worker')[1],id=104,name='console-image-flow-console'))
+        catalog['total_count']+=1
+        for flags, selected in before.items():
+            with self.subTest(flags=flags):
+                self.assertEqual(images.select_artifacts(catalog,RUN,SHA,*flags),selected)
+                self.assertNotIn('flow-console',selected)
+        workflow=(Path(__file__).resolve().parents[1]/'.github/workflows/containers.yml').read_text()
+        self.assertEqual(workflow.count("matrix.component == 'flow-console' && 'console-image'"),2)
+
     def test_rejects_unreviewed_or_failed_run_before_artifacts(self):
         cases = [{'event': 'pull_request'}, {'head_branch': 'build/unreviewed'}, {'head_sha': 'c' * 40},
                  {'conclusion': 'failure'}, {'status': 'in_progress'}, {'path': '.github/workflows/other.yml'},

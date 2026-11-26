@@ -135,6 +135,28 @@ backup:
   resources:
     requests: {cpu: 50m, memory: 64Mi}
     limits: {cpu: "1", memory: 512Mi}
+# Read-only flow console (docs/operations/flow-console.md): a web timeline of
+# the autonomous flow derived from the journal. Off by default: nothing below
+# renders and recorded installations render unchanged. Enabled, it runs one
+# Deployment and a ClusterIP Service, reads the journal as the dedicated
+# aisdlc_flow_console role and holds no write or Kubernetes API privilege.
+# Before enabling, add a "flow-console" password to the migrator's
+# passwords.json (migrator.credentialsSecret) and create databaseSecret with
+# that role's postgresql:// URL under key "uri".
+console:
+  enabled: false
+  digest: ""
+  port: 8091
+  databaseSecret: ai-sdlc-flow-console-database
+  # NetworkPolicy peers admitted to the console port. Empty admits none:
+  # reach it with kubectl port-forward.
+  accessFrom: []
+  pollSeconds: 3
+  windowHours: 24
+  staleWaitMinutes: 10
+  resources:
+    requests: {cpu: 25m, memory: 48Mi}
+    limits: {cpu: 250m, memory: 256Mi}
 # Maintenance never invokes this engine or loads a model credential.
 engine: scc
 modelProvider:
