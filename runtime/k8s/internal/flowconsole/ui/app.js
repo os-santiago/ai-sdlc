@@ -119,8 +119,10 @@
     return 'work-item/' + e.workItem;
   }
 
+  let arrivals = 0;
   function addEvent(e) {
     if (state.events.has(e.id)) return;
+    arrivals++;
     e.t = Date.parse(e.time);
     state.events.set(e.id, e);
     const key = laneKey(e);
@@ -208,6 +210,8 @@
     lane.currentSegment = current;
     lane.first = list.length ? Math.min.apply(null, list.map((s) => s.queued)) : now;
     lane.last = list.length ? Math.max.apply(null, list.map((s) => s.drawEnd)) : now;
+    // Sorting uses the newest event, not the end of an open bar (which is now).
+    lane.lastActivity = lane.events.length ? lane.events[lane.events.length - 1].t : lane.first;
     lane.delivery = merged ? merged.end - lane.first : null;
     lane.stopped = list.filter((s) => s.outcome === 'failed' || s.outcome === 'stopped-safely').length;
     lane.hasOpen = list.some((s) => s.open);
@@ -237,8 +241,8 @@
       }
       return true;
     });
-    if (state.sort === 'problems') out.sort((a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status] || b.last - a.last);
-    else out.sort((a, b) => b.last - a.last || b.first - a.first);
+    if (state.sort === 'problems') out.sort((a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status] || b.lastActivity - a.lastActivity);
+    else out.sort((a, b) => b.lastActivity - a.lastActivity || b.first - a.first);
     return out;
   }
 
@@ -287,6 +291,21 @@
     sparkLines($('s-latency'), lat.map((v) => quantile(v, 0.5)), lat.map((v) => quantile(v, 0.9)), width, (v) => fmtDuration(v), 'Model call latency p50 (bright) and p90 (grey) per ' + fmtDuration(width));
     sparkBars($('s-stops'), stops.map((v) => v / hours), width, (v) => v.toFixed(1) + ' stops/h', 'var(--stopped)', 'Stops and refusals per hour per ' + fmtDuration(width));
     sparkBars($('s-delivered'), delivered.map((v) => v / hours), width, (v) => v.toFixed(1) + ' merges/h', 'var(--completed)', 'Deliveries (merges) per hour per ' + fmtDuration(width));
+    trendTable(width, lat, stops, delivered, hours);
+  }
+  // The same buckets as a table, for keyboard and screen-reader users.
+  function trendTable(width, lat, stops, delivered, hours) {
+    const details = $('trend-table');
+    if (!details.open) return;
+    const body = details.querySelector('tbody');
+    body.textContent = '';
+    for (let i = 0; i < lat.length; i++) {
+      const start = state.view[0] + i * width, tr = html('tr', null, null, body);
+      html('th', null, fmtClock(start) + '–' + fmtClock(start + width), tr).scope = 'row';
+      html('td', null, lat[i].length ? fmtDuration(quantile(lat[i], 0.5)) + ' / ' + fmtDuration(quantile(lat[i], 0.9)) : '–', tr);
+      html('td', null, (stops[i] / hours).toFixed(1), tr);
+      html('td', null, (delivered[i] / hours).toFixed(1), tr);
+    }
   }
   function sparkFrame(el, label) {
     el.textContent = '';
@@ -393,7 +412,7 @@
 
   // ---------- live feed ----------
   const PROBLEM_KINDS = { failed: true, 'stopped-safely': true, degraded: true, quarantined: true, blocked: true, retried: true };
-  let feedShown = 0, feedPending = 0;
+  let feedShown = 0;
   function feedMatches(e, q, kind) {
     if (kind === 'problems' && !PROBLEM_KINDS[e.kind] && e.diagnostic !== 'stale-wait') return false;
     if (kind === 'lifecycle' && e.kind === 'progressed') return false;
@@ -403,16 +422,16 @@
   }
   function renderFeed(force) {
     if (!state.feedOpen) return;
-    const total = state.events.size;
     // Auto-refresh only while following now; otherwise offer the new events.
+    // Arrivals are counted, so pruning old events never hides the offer.
     if (!force && !state.follow && feedShown) {
-      feedPending = total - feedShown;
+      const pending = arrivals - feedShown;
       const nb = $('feed-new');
-      nb.hidden = feedPending <= 0;
-      nb.textContent = feedPending + ' new events — show';
+      nb.hidden = pending <= 0;
+      nb.textContent = pending + ' new events — show';
       return;
     }
-    feedShown = total;
+    feedShown = arrivals;
     $('feed-new').hidden = true;
     const q = $('feed-filter').value.trim().toLowerCase(), kind = $('feed-kind').value;
     const list = $('feed-list');
@@ -422,6 +441,7 @@
       const li = html('li', PROBLEM_KINDS[e.kind] || e.diagnostic ? 'problem' : '', null, list);
       li.tabIndex = 0;
       li.dataset.key = laneKey(e);
+      li.dataset.id = e.id;
       li.style.borderLeftColor = STAGE_COLOR[e.stage];
       const time = html('span', 'time', fmtClock(e.t, true), li);
       time.title = fmtUTC(e.t);
@@ -605,8 +625,29 @@
     return { g, x0: Math.min(xq, x0), x1: x0 + width + (badged ? 8 : 6) };
   }
 
+  // Re-rendering recreates rows; remember which lane, panel event or feed
+  // event had keyboard focus and put it back on the new node.
+  function focusedKey() {
+    const a = document.activeElement;
+    if (!a || !a.closest) return null;
+    if (a.closest('#labels') && a.dataset.key) return { box: '#labels', attr: 'key', value: a.dataset.key };
+    if (a.closest('#panel-events') && a.dataset.id) return { box: '#panel-events', attr: 'id', value: a.dataset.id };
+    if (a.closest('#feed-list') && a.dataset.id) return { box: '#feed-list', attr: 'id', value: a.dataset.id };
+    return null;
+  }
+  function restoreFocus(f) {
+    if (!f || (document.activeElement && document.activeElement !== document.body && focusedKey())) return;
+    const box = document.querySelector(f.box);
+    const node = box && Array.from(box.querySelectorAll('[data-' + f.attr + ']')).find((n) => n.dataset[f.attr] === f.value);
+    if (node) { node.tabIndex = 0; node.focus({ preventScroll: true }); }
+  }
+
   let ticksCache = [];
   function render() {
+    const keep = focusedKey();
+    try { draw(); } finally { restoreFocus(keep); }
+  }
+  function draw() {
     const t0perf = performance.now();
     const now = Date.now();
     for (const lane of state.lanes.values()) if (lane.dirty || lane.segments === undefined || lane.hasOpen) buildLane(lane, now);
@@ -618,7 +659,8 @@
     // The initial window is chosen once the first events exist.
     if (!state.view || (!state.viewChosen && all.length)) {
       const hours = Number(params.get('range'));
-      state.view = hours > 0 && hours <= 192 ? [now - hours * 3600e3 * 0.95, now + hours * 3600e3 * 0.05] : extent;
+      // The same 5-minute minimum as the zoom; anything else uses the extent.
+      state.view = hours >= 5 / 60 && hours <= 192 ? [now - hours * 3600e3 * 0.95, now + hours * 3600e3 * 0.05] : extent;
       state.viewChosen = all.length > 0;
     }
     if (state.follow) {
@@ -670,7 +712,7 @@
       row.setAttribute('aria-posinset', String(index + 1));
       row.setAttribute('aria-setsize', String(lanes.length));
       // Roving focus: one lane is in the tab order; arrows move between lanes.
-      row.tabIndex = index === (focused >= 0 ? focused : first) ? 0 : -1;
+      row.tabIndex = index === (focused >= first && focused < last ? focused : first) ? 0 : -1;
       row.dataset.key = lane.key;
       row.dataset.index = String(index);
       const top = html('div', 'label-top', null, row);
@@ -835,6 +877,7 @@
       while (isCall(e) && isCall(events[j + 1])) j++;
       const li = html('li', null, null, list);
       li.tabIndex = list.querySelector('li[tabindex="0"]') ? -1 : 0;
+      li.dataset.id = e.id;
       const time = html('span', 'time', fmtClock(e.t, true), li);
       time.title = fmtUTC(e.t);
       const sw = html('span', 'glyph', null, li);
@@ -921,6 +964,7 @@
     schedule();
   });
   $('feed-toggle').addEventListener('click', () => setFeed(!state.feedOpen));
+  $('trend-table').addEventListener('toggle', schedule);
   $('feed-close').addEventListener('click', () => setFeed(false));
   $('feed-filter').addEventListener('input', () => renderFeed(true));
   $('feed-kind').addEventListener('change', () => renderFeed(true));

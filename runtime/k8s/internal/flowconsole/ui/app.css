@@ -159,6 +159,11 @@ body.panel-open { padding-right: 420px; }
 .stage-swatch { flex: none; width: 20px; height: 16px; border-radius: 4px; color: #0e0e0d; font-size: 10px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
 .stage-swatch.outline { background: none !important; border: 1.5px dashed var(--text-muted); color: var(--text-secondary); }
 .stage-swatch.hatch { background: repeating-linear-gradient(45deg, #c98500 0 3px, rgba(201,133,0,.3) 3px 6px) !important; }
+.trend-table { margin: -4px 24px 10px; color: var(--text-secondary); font-size: 12.5px; }
+.trend-table summary { cursor: pointer; color: var(--text-muted); width: max-content; }
+.trend-table table { border-collapse: collapse; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.trend-table th, .trend-table td { padding: 2px 14px 2px 0; text-align: left; font-weight: 400; border-bottom: 1px solid var(--grid); }
+.trend-table thead th { color: var(--text-muted); }
 .tile-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; }
 .spark { width: 92px; height: 30px; flex: none; margin-bottom: 2px; overflow: visible; }
 .spark .p90 { stroke: #8f8e86; }
@@ -182,7 +187,7 @@ body.feed-open.panel-open { padding-right: 420px; }
 @media (max-width: 1400px) {
   :root { --label-w: 214px; font-size: 13px; }
   .top, .tiles, .filters, .legend { padding-left: 16px; padding-right: 16px; }
-  .timeline, .funnel { margin-left: 16px; margin-right: 16px; }
+  .timeline, .funnel, .trend-table { margin-left: 16px; margin-right: 16px; }
   .funnel button { padding: 6px 9px; gap: 7px; }
   .funnel .count { font-size: 17px; }
   .funnel-title { display: none; }

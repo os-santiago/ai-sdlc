@@ -38,10 +38,14 @@ no workflow authority. It is off by default.
   clear the filter.
 - **Trends**: sparklines in the tiles over the visible window (24 buckets):
   model call latency p50 and p90, stops and refusals per hour, and
-  deliveries (merges) per hour; hover a bucket for its values.
-- **Degradation periods**: a red band across the lanes wherever at least
-  three stops, degradations, retries, blocks or quarantines fall within about
-  15 minutes, labelled with the count above the axis.
+  deliveries (merges) per hour; hover a bucket for its values, or open
+  *Trend values (table)* under the tiles for the same buckets as a table.
+- **Degradation periods**: a red band across the lanes wherever stops,
+  degradations, retries, blocks or quarantines cluster within about 15
+  minutes: at least three of them, and at least twice the visible window's
+  own average for 15 minutes, so a busy day is not shaded everywhere. The
+  count is shown above the axis. No band does not mean no problems: the
+  markers and the failed and blocked lanes still show every one.
 - **Live events**: the *Live events* button opens a side panel with the
   newest 300 events across all work items (time, issue, stage, step, kind,
   diagnostic, component), filterable by text and by kind (problems only, or
@@ -73,7 +77,7 @@ no workflow authority. It is off by default.
 - **Text legend** for every colour, texture and marker.
 - **Keyboard**: the lane list is one tab stop; the arrow keys, Page Up/Down,
   Home and End move between lanes (scrolling as needed) and Enter or Space
-  opens the details. In the detail panel and the live-events list the arrow
+  opens the details. Live updates keep the focused lane or event focused. In the detail panel and the live-events list the arrow
   keys move between events; Escape closes the panel. Every control shows a
   focus ring.
 - **Reduce motion**: the button stops the running-bar animation. It follows
@@ -261,8 +265,12 @@ REVOKE ALL ON ALL TABLES IN SCHEMA public FROM aisdlc_flow_console;
 REVOKE USAGE ON SCHEMA public FROM aisdlc_flow_console;
 ```
 
-Column grants survive a table-level revoke; the migrator's own reconciliation
-also revokes them, and they are inert without `LOGIN`. Leave the role and the
+`NOLOGIN` stops new sessions; the revokes withdraw the privileges. In
+PostgreSQL, revoking a table privilege also revokes the matching column
+privileges granted by the same grantor (the bootstrap owner, who ran the
+migrator), so no column grant remains. Check with
+`SELECT count(*) FROM information_schema.column_privileges WHERE grantee='aisdlc_flow_console'`
+(expect 0). Leave the role and the
 migration 0039 policies in place (migrations are not reverted): the policies
 admit nothing to a role that cannot log in and holds no grants.
 
