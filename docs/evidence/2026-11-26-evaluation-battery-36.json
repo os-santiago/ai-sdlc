@@ -1,0 +1,264 @@
+{
+  "schemaVersion": 2,
+  "repository": "os-santiago/ai-sdlc-sample",
+  "attemptBudget": 2,
+  "cell": {
+    "repository": "os-santiago/ai-sdlc-sample",
+    "modelPath": "agent-cli-claude-sonnet"
+  },
+  "installation": {
+    "imageLockDigest": "sha256:990cb25a6f57a5287462e39f95f6d052846d96e49df904faec7114cf462abea6",
+    "images": {
+      "ai-sdlc-admission-controller": "quay.io/os-santiago/ai-sdlc@sha256:2431ded0b301211e159d8cca3d8a0ffe0dd9519aba7986ae4f57fe63f795e4cd",
+      "ai-sdlc-flow-console": "quay.io/os-santiago/ai-sdlc@sha256:41cd5c939410d78ef31994c45c50c020687f5d610e5faa4db3b2a5b5ffaa4c8d",
+      "ai-sdlc-intake": "quay.io/os-santiago/ai-sdlc@sha256:bf081bed9710ea033eb4985a31e98e4df31bdcfb47b9e26fc68284ac05b82270",
+      "ai-sdlc-orchestrator": "quay.io/os-santiago/ai-sdlc@sha256:c88428a70fabba98cdac00290c4814182fe6c1491dd261a3109eaf0b1bca0451",
+      "ai-sdlc-relay": "quay.io/os-santiago/ai-sdlc@sha256:408a7218fdbbb47dc55c16a34b2fabd0f6c4c9be83db27d5f99899a2ba486165",
+      "ai-sdlc-release-manager": "quay.io/os-santiago/ai-sdlc@sha256:5cdc08b765db0db40a37e63b512f8981b21a57766c88466c52e4aad5801e0542",
+      "ai-sdlc-verifier": "quay.io/os-santiago/ai-sdlc@sha256:565fee1ce29894b764867ef4598404b20a5ea10f39d147af30dd1d91ba1c4638",
+      "ai-sdlc-worker": "quay.io/os-santiago/ai-sdlc@sha256:ae92329954ce4a67d11edf3429fab592174cd462f42717445aae235b5468db60"
+    },
+    "revision": "d22e8b4ea3e7729e1cbc972905b8e9242d683871"
+  },
+  "issues": [
+    {
+      "issue": 288,
+      "attempts": [
+        {
+          "issue": 288,
+          "startedAt": "2026-11-26T10:05:15Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 216,
+          "modelCalls": 7,
+          "stageReached": "review",
+          "reviews": [
+            "failed|uncertain"
+          ],
+          "diagnostics": [
+            "independent review stopped safely: model-mailbox-read-helper-transport"
+          ]
+        },
+        {
+          "issue": 288,
+          "startedAt": "2026-11-26T10:09:36Z",
+          "outcome": "success",
+          "pullRequest": 300,
+          "seconds": 325,
+          "modelCalls": 5,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 289,
+      "attempts": [
+        {
+          "issue": 289,
+          "startedAt": "2026-11-26T10:15:48Z",
+          "outcome": "success",
+          "pullRequest": 301,
+          "seconds": 411,
+          "modelCalls": 8,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 290,
+      "attempts": [
+        {
+          "issue": 290,
+          "startedAt": "2026-11-26T10:23:25Z",
+          "outcome": "success",
+          "pullRequest": 302,
+          "seconds": 389,
+          "modelCalls": 5,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 291,
+      "attempts": [
+        {
+          "issue": 291,
+          "startedAt": "2026-11-26T10:30:41Z",
+          "outcome": "success",
+          "pullRequest": 303,
+          "seconds": 345,
+          "modelCalls": 6,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 292,
+      "attempts": [
+        {
+          "issue": 292,
+          "startedAt": "2026-11-26T10:37:14Z",
+          "outcome": "success",
+          "pullRequest": 304,
+          "seconds": 475,
+          "modelCalls": 13,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 293,
+      "attempts": [
+        {
+          "issue": 293,
+          "startedAt": "2026-11-26T10:45:56Z",
+          "outcome": "success",
+          "pullRequest": 305,
+          "seconds": 454,
+          "modelCalls": 15,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 294,
+      "attempts": [
+        {
+          "issue": 294,
+          "startedAt": "2026-11-26T10:54:17Z",
+          "outcome": "success",
+          "pullRequest": 306,
+          "seconds": 323,
+          "modelCalls": 6,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 295,
+      "attempts": [
+        {
+          "issue": 295,
+          "startedAt": "2026-11-26T11:00:27Z",
+          "outcome": "success",
+          "pullRequest": 307,
+          "seconds": 345,
+          "modelCalls": 5,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 296,
+      "attempts": [
+        {
+          "issue": 296,
+          "startedAt": "2026-11-26T11:06:59Z",
+          "outcome": "success",
+          "pullRequest": 308,
+          "seconds": 411,
+          "modelCalls": 10,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 297,
+      "attempts": [
+        {
+          "issue": 297,
+          "startedAt": "2026-11-26T11:14:37Z",
+          "outcome": "success",
+          "pullRequest": 309,
+          "seconds": 346,
+          "modelCalls": 6,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 298,
+      "attempts": [
+        {
+          "issue": 298,
+          "startedAt": "2026-11-26T11:21:10Z",
+          "outcome": "success",
+          "pullRequest": 310,
+          "seconds": 390,
+          "modelCalls": 8,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 299,
+      "attempts": [
+        {
+          "issue": 299,
+          "startedAt": "2026-11-26T11:28:27Z",
+          "outcome": "success",
+          "pullRequest": 311,
+          "seconds": 346,
+          "modelCalls": 8,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    }
+  ],
+  "summary": {
+    "issues": 12,
+    "firstAttemptSuccess": 11,
+    "successWithinBudget": 12,
+    "firstAttemptRate": 0.917,
+    "rateWithinBudget": 1.0
+  }
+}

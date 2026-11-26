@@ -46,8 +46,20 @@ Twelve changes only added files. Six (248, 232, 233, 259, 263 and 266) also modi
 ## What this suggests
 
 - **Make generation fit the local model's speed.** Tune the time and step budgets together, and reduce the turns a change needs: fewer exploratory reads, and apply the change once tests pass. Then measure again.
-- **Isolate SCC's loop from the model.** Run SCC with a hosted model through the existing agent-CLI model path. That path is also the Beta gate's second model path. If it delivers close to 100%, the local model is the likely limit. If not, the loop needs work. That run was not possible in this session: the host service's client allowlist did not include the new kind node, and changing it was left to the maintainer.
+- **Isolate SCC's loop from the model.** Run SCC with a hosted model through the existing agent-CLI model path. That path is also the Beta gate's second model path. If it delivers close to 100%, the local model is the likely limit. If not, the loop needs work. Battery 36 ran it afterwards (see the next section): SCC with Claude Sonnet as its model delivered 12 of 12 issues, so the local model is the likely limit.
 - **Treat an external agent as a possible product mode, not a default.** A hosted-model agent outside the cluster delivered every issue, but generation would then run outside the executor sandbox and send source to a provider. Adopting it needs an explicit design (the source boundary, the credential custody, and replay into the sandbox as here) and a maintainer decision.
+
+## Follow-up: SCC with a hosted model (battery 36)
+
+After the maintainer allowed the kind node, battery 36 ran the product path: SCC's own loop inside the executor sandbox, with Claude Sonnet as its model through the agent-CLI OpenAI-compatible service on the host (`tools/local_model_service`). No bridge and no replay. Review also ran on Claude Sonnet.
+
+- **Install:** d22e8b4, in place on the same kind cluster, with `--model-upstream` pointing at the service and `--flow-console`.
+- **Corpus:** 12 new issues (288–299) in `os-santiago/ai-sdlc-sample`, label trigger, two attempts each.
+- **Result:** 12/12 delivered within two attempts, **100% [75.7%, 100%]**; 11/12 on the first attempt (91.7% [64.6%, 98.5%]). Median 368 s to delivery (at most 475 s), 5–15 model calls per delivery (median 7). [Report](2026-11-26-evaluation-battery-36.json).
+- **The one failed attempt** (288, first attempt) stopped in the independent review with `model-mailbox-read-helper-transport`: the pod exec transport failed reading the review mailbox. That is not a model or SCC failure, and the retry delivered.
+- **Setup finding:** the host service had been installed from an older revision. It rejected the gateway's `stream` and `stream_options` parameters with a 400. It logs only completions, so the gateways reported just "model unavailable". Updating the service from main fixed it. A host-side copy of the service must come from the same revision as the cluster.
+
+**Reading:** SCC's loop, tools and guards deliver on this corpus when the model is fast and capable: about 7 calls instead of 15–32. The local model's speed and quality are the binding limit on the local path, not the loop. This cell counts toward the Beta gate's second model path (12 of the 60 distinct issues it needs). The second repository in another language (`os-santiago/ai-sdlc-sample-python`) is the next cell.
 
 ## Limits
 
