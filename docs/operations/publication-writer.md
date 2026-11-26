@@ -9,10 +9,55 @@ themselves. No installed route, credential mount or grant activates this writer.
 The finite sequence creates a tree, commit, new branch and pull request. It
 accepts only the two regular UTF-8 files in the reviewed locale recipe, checks
 GitHub's resulting tree SHA, binds the commit to its original parent/tree, and
-checks the returned PR repository, branch, head and base SHA. Commit authorship
-and signoff are fixed to Sergio Canales <sergio.canales.e@gmail.com>. Both commit
+checks the returned PR repository, branch, head and base SHA. The commit's author,
+committer and `Signed-off-by` trailer are the plan's
+[commit identity](#commit-identity), and the writer accepts only the commit whose
+SHA is the Git object identity of exactly the commit it requested. Both commit
 message and PR title retain `[skip release]`; the issue is referenced rather than
 closed before the local production-test promotion completes.
+
+## Commit identity
+
+The identity is installation configuration, not a property of the product. It
+is the optional `publication.commitIdentity` of the installed
+[project manifest](project-manifest-installation.md):
+
+```json
+"publication": {
+  "allow": ["**/*.go"],
+  "maxChangedFiles": 5, "maxChangedBytes": 65536, "maxFileBytes": 32768,
+  "commitIdentity": {"name": "Example Delivery Bot", "email": "delivery-bot@example.org"}
+}
+```
+
+Without it, and for the built-in Homedir and Saferus manifests, commits use the
+neutral default `ai-sdlc[bot] <noreply@ai-sdlc.invalid>`. The reserved
+`.invalid` domain never resolves, so the address cannot be delivered to or
+attributed to a real person or forge account. To attribute commits to the
+GitHub account or App that owns the publication credential, set its no-reply
+address (for example `ID+login@users.noreply.github.com`).
+
+A name is 1 to 100 bytes, without `<`, `>`, control or format characters, and
+cannot begin or end with whitespace or `. , : ; " \ '`, which Git would trim; the
+email is a plain `local@domain.tld` address of at most 254 bytes. The migrator
+refuses a manifest with any other identity.
+
+The identity is bound like the other publication settings:
+
+- The installer binds the manifest digest into the authority policy
+  (`projectSHA256`), so the identity is part of the authority revision every
+  signed publication command carries. Omitting the section keeps the digest of
+  existing manifests unchanged.
+- `PrepareTree` resolves the identity into the `TreePlan`; the plan digest that
+  the publication claim records, the commit request digest that the effect
+  journal records before the POST, and the planned commit SHA all derive from
+  the same `commitBody` builder.
+- A publication keeps the identity it was planned with: the writer reads it from
+  the plan, never from the current installation. Changing the identity is a
+  manifest reconfiguration, which changes the authority revision; queued
+  commands issued under the old revision fail their authority check and are
+  not published, and an effect already in flight stays bound to its recorded
+  plan and request digests.
 
 Each operation performs one bounded HTTP/1 POST to the fixed GitHub API, with
 no proxy, redirects, transport replay or response-body logging. Current authority

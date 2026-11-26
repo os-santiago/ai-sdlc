@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 )
@@ -358,7 +359,49 @@ type Publication struct {
 	MaxChangedFiles int      `json:"maxChangedFiles"`
 	MaxChangedBytes int      `json:"maxChangedBytes"`
 	MaxFileBytes    int      `json:"maxFileBytes"`
+	// CommitIdentity is optional and omitted when absent, so manifests
+	// without it keep their canonical form and digest. Absent means
+	// DefaultCommitIdentity.
+	CommitIdentity *CommitIdentity `json:"commitIdentity,omitempty"`
 }
+
+// CommitIdentity is the author and committer of every commit a publication
+// creates, and the identity of its Signed-off-by trailer.
+type CommitIdentity struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
+// DefaultCommitIdentity is a neutral identity. The reserved .invalid domain
+// (RFC 2606) never resolves, so the address cannot be delivered to, or
+// attributed to, any real person or forge account.
+var DefaultCommitIdentity = CommitIdentity{Name: "ai-sdlc[bot]", Email: "noreply@ai-sdlc.invalid"}
+
+// Identity returns the configured commit identity, or the default.
+func (p Publication) Identity() CommitIdentity {
+	if p.CommitIdentity == nil {
+		return DefaultCommitIdentity
+	}
+	return *p.CommitIdentity
+}
+
+var commitEmail = regexp.MustCompile(`^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(\.[A-Za-z0-9-]{1,63})+$`)
+
+// Validate refuses an identity that Git would rewrite or that could change
+// the meaning of a commit header. Git trims whitespace and the characters
+// . , : ; < > " \ ' from both ends of a name, and a name cannot hold an angle
+// bracket or a line break. A rewritten identity would make the commit the
+// forge stores differ from the commit the runtime planned.
+func (c CommitIdentity) Validate() error {
+	if len(c.Name) == 0 || len(c.Name) > 100 || !utf8.ValidString(c.Name) || strings.ContainsAny(c.Name, "<>") ||
+		strings.IndexFunc(c.Name, hiddenRune) >= 0 || gitCrud(c.Name[0]) || gitCrud(c.Name[len(c.Name)-1]) ||
+		len(c.Email) > 254 || !commitEmail.MatchString(c.Email) {
+		return ErrManifest
+	}
+	return nil
+}
+
+func gitCrud(b byte) bool { return b <= ' ' || strings.IndexByte(".,:;<>\"\\'", b) >= 0 }
 
 type Merge struct {
 	RulesetID      int64   `json:"rulesetID"`
@@ -575,7 +618,8 @@ func (p Publication) validate() error {
 	if len(p.Allow) == 0 || len(p.Allow) > 64 || len(p.Deny) > 64 ||
 		p.MaxChangedFiles < 1 || p.MaxChangedFiles > 200 ||
 		p.MaxChangedBytes < 1 || p.MaxChangedBytes > maxPublishedBytes ||
-		p.MaxFileBytes < 1 || p.MaxFileBytes > p.MaxChangedBytes {
+		p.MaxFileBytes < 1 || p.MaxFileBytes > p.MaxChangedBytes ||
+		(p.CommitIdentity != nil && p.CommitIdentity.Validate() != nil) {
 		return ErrManifest
 	}
 	for _, g := range append(append([]string{}, p.Allow...), p.Deny...) {

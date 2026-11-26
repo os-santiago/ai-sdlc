@@ -32,6 +32,11 @@ type TreePlan struct {
 	ExpectedTreeSHA string
 	Branch          string
 	CommitMessage   string
+	// CommitIdentity is resolved from the installed manifest when the plan
+	// is prepared. The plan digest the claim records binds it, so the
+	// commit a publication creates keeps the identity it was planned with
+	// even if the installation is reconfigured while it is in flight.
+	CommitIdentity project.CommitIdentity
 }
 
 // PrepareTree is pure reconstruction, not a publication authorization. It must
@@ -83,8 +88,9 @@ func PrepareTree(c Command, source workspacebundle.Bundle, delta []byte) (TreePl
 	// Keep the tested public VPS release workflow out of the local-kind pilot.
 	// No model or issue text can remove the explicit release-skip marker.
 	return TreePlan{Repository: c.Repository, Request: TreeRequest{base, entries}, ExpectedTreeSHA: expected,
-		Branch:        "ai-sdlc/issue-" + strconv.Itoa(c.IssueNumber) + "-" + strings.TrimPrefix(c.CandidateID, "execution-")[:32],
-		CommitMessage: fmt.Sprintf("fix(ai-sdlc): address issue #%d [skip release]", c.IssueNumber)}, nil
+		Branch:         "ai-sdlc/issue-" + strconv.Itoa(c.IssueNumber) + "-" + strings.TrimPrefix(c.CandidateID, "execution-")[:32],
+		CommitMessage:  fmt.Sprintf("fix(ai-sdlc): address issue #%d [skip release]", c.IssueNumber),
+		CommitIdentity: manifest.Publication.Identity()}, nil
 }
 
 type gitNode struct {

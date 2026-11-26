@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
@@ -68,6 +70,24 @@ func TestTreePlanPreservesCompleteSourceAndFixedDestination(t *testing.T) {
 	}
 	if !strings.HasPrefix(plan.Branch, "ai-sdlc/issue-3-") || !strings.Contains(plan.CommitMessage, "[skip release]") {
 		t.Fatal("unbounded destination or release scope")
+	}
+	if plan.CommitIdentity != project.DefaultCommitIdentity {
+		t.Fatal("a manifest without commitIdentity must plan the default identity", plan.CommitIdentity)
+	}
+	// An installed manifest's identity is resolved into the plan, so the plan
+	// digest the claim records binds it.
+	configured, _ := project.Builtin(project.Homedir)
+	configured.Publication.CommitIdentity = &project.CommitIdentity{Name: "Example Bot", Email: "bot@example.org"}
+	project.SetInstalled(&configured)
+	reconfigured, err := PrepareTree(c, source, raw)
+	project.SetInstalled(nil)
+	if err != nil || reconfigured.CommitIdentity != *configured.Publication.CommitIdentity {
+		t.Fatal("configured identity not planned", err, reconfigured.CommitIdentity)
+	}
+	before, _ := json.Marshal(plan)
+	after, _ := json.Marshal(reconfigured)
+	if authority.Digest(before) == authority.Digest(after) {
+		t.Fatal("identity not bound into the plan digest")
 	}
 	for _, entry := range plan.Request.Tree {
 		if entry.Mode != "100644" || entry.Type != "blob" || (entry.Path != verification.LocaleSource && entry.Path != verification.LocaleNewTest) {
