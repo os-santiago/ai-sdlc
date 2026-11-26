@@ -169,7 +169,7 @@
     for (const e of lane.events) {
       const attempt = e.attempt || 0;
       attempts = Math.max(attempts, attempt);
-      const key = (STAGES.indexOf(e.stage) < 3 ? 'pre' : (e.workItem + '/' + attempt)) + '/' + e.stage + (e.stage === 'admission' || e.stage === 'intake' ? '/' + e.id : '');
+      const key = (STAGES.indexOf(e.stage) < 3 ? 'pre' : (e.workItem + '/' + attempt)) + '/' + e.stage + (e.stage === 'admission' || e.stage === 'intake' ? '/' + e.id : e.stage === 'planning' ? '/' + (e.workItem || '') : '');
       let s = segments.get(key);
       if (!s) {
         s = { stage: e.stage, attempt, workItem: e.workItem, first: e.t, queued: null, start: null, end: null, outcome: null, diagnostic: '',
@@ -522,7 +522,7 @@
   const PROBLEM_KINDS = { failed: true, 'stopped-safely': true, degraded: true, quarantined: true, blocked: true, retried: true };
   let feedShown = 0;
   function feedMatches(e, q, kind) {
-    if (kind === 'problems' && !PROBLEM_KINDS[e.kind] && e.diagnostic !== 'stale-wait') return false;
+    if (kind === 'problems' && (e.postDelivery || (!PROBLEM_KINDS[e.kind] && e.diagnostic !== 'stale-wait'))) return false;
     if (kind === 'lifecycle' && e.kind === 'progressed') return false;
     if (!q) return true;
     const hay = ('#' + (e.issue || '') + ' ' + (e.repository || '') + ' ' + e.component + ' ' + stageName(e.stage) + ' ' + e.stage + ' ' + e.kind + ' ' + (e.step || '') + ' ' + (e.diagnostic || '')).toLowerCase();
