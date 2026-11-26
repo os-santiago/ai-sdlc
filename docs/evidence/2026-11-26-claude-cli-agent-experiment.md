@@ -63,9 +63,22 @@ After the maintainer allowed the kind node, battery 36 ran the product path: SCC
 
 **Beta gate:** this is a first measurement of the `os-santiago/ai-sdlc-sample` × agent-CLI cell: 12 of the 60 distinct issues that cell needs, and not yet gate evidence, because a gate claim uses only batteries of the release's revision. The same model path on the Python sample (`os-santiago/ai-sdlc-sample-python`) is a separate cell that also needs 60. The report records the cell's model path as `agent-cli-claude-sonnet`; later batteries must record the same label to pool into this cell.
 
+## Follow-up: the same path on the Python sample (battery 37)
+
+Battery 37 repeated the product path on the second sample repository, in another language: `os-santiago/ai-sdlc-sample-python` (Python 3.12, standard library, `unittest`, the manifest from #821).
+
+- **Install:** 32321e1 (main, with #821 and #822), on a fresh kind cluster `ai-sdlc-python`. The installer refuses to change the repository of an existing installation, so the Go cluster could not be reused.
+- **Corpus:** the repository's 12 seed issues (1–12), label trigger, two attempts each, cell label `agent-cli-claude-sonnet`.
+- **Result:** 12/12 delivered within two attempts, **100% [75.8%, 100%]**; 10/12 on the first attempt (83.3% [55.2%, 95.3%]). Median 281 s to delivery (at most 411 s, counting every attempt), 5–9 model calls per delivering attempt (median 7). [Report](2026-11-26-evaluation-battery-37.json).
+- **Two failed first attempts:**
+  - Issue 4: verification refused the candidate because its own tests failed (`refused-candidate-failed`, reason `comparison-failed`). That is the verifier working as intended, though the candidate was not inspected; the retry delivered.
+  - Issue 5: the review's mailbox read hit the same transport stop as issue 288 in battery 36. It is tracked in #826.
+
+**Reading:** the path delivers on a second language with the same median call count as on Go (7; 5–9 here, 5–15 on Go). Each repository now has a first 12-issue measurement on this model path: 12 of the 60 distinct issues each cell needs. They are not gate evidence, because they ran on development revisions.
+
 ## Limits
 
-- **Easy issues.** The corpus is small Go functions in one sample repository.
+- **Easy issues.** The corpus is small Go functions in one sample repository (and, for battery 37, small Python functions in a second).
 - **Not a product path.** The bridge is evaluation-only, so batteries 33–35 are not Beta gate evidence. Battery 36 is a product path but shares the easy-issue, single-Go-repository limit, and ran on an in-place install rather than a fresh cluster.
 - **Not a controlled comparison.** The local-model figures come from different issues and from three revisions (7f50d07, 4f51e42 and 24c3190); only 230, 232 and 233 overlap.
 - **Host load.** The local model served only reviews, so the cluster was less loaded than in the local-model batteries.
