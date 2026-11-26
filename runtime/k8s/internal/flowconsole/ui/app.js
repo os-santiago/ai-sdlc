@@ -161,6 +161,45 @@
     lane.dirty = true;
   }
 
+  // After a merge, intake sees the closed issue, admission records the
+  // server-labelled issue-closed step, and sometimes refuses the closed
+  // issue's next revisions (step after-issue-closed). From each merge up to
+  // the first accepted admission or new work item, those segments and the
+  // intake revisions leading to them fold into one neutral "closed" flag per
+  // merge; they keep their event kinds in the detail panel and count as
+  // neither failures nor stops. Any other refusal or block after the merge
+  // (a reopened issue) stays visible as a problem.
+  const CLOSURE_STEPS = { 'issue-closed': true, 'after-issue-closed': true };
+  function markPostDelivery(lane, list, merges) {
+    lane.closed = [];
+    for (const s of list) s.postDelivery = false;
+    const ordered = list.slice().sort((a, b) => a.first - b.first);
+    const step = (s) => (s.terminal || s.events[0]).step;
+    const closure = (s) => s.stage === 'admission' && s.outcome !== 'blocked' && CLOSURE_STEPS[step(s)];
+    merges.forEach((m, i) => {
+      const next = merges[i + 1] ? merges[i + 1].end : Infinity;
+      let stop = next;
+      for (const s of ordered) {
+        if (s.first < m.end || s.first >= stop) continue;
+        if (s.stage === 'planning' || (s.stage === 'admission' && s.outcome === 'completed' && !closure(s))) stop = s.first;
+      }
+      let group = null;
+      ordered.forEach((s, k) => {
+        if (s.first < m.end || s.first >= stop || STAGES.indexOf(s.stage) >= 2) return;
+        let fold = closure(s);
+        if (s.stage === 'intake') {
+          const adm = ordered.slice(k + 1).find((x) => x.stage === 'admission');
+          fold = adm ? adm.first < stop && closure(adm) : true;
+        }
+        if (!fold) return;
+        s.postDelivery = true;
+        if (!group) lane.closed.push(group = { at: s.first, segments: [] });
+        group.segments.push(s);
+      });
+    });
+    for (const s of list) for (const e of s.events) e.postDelivery = s.postDelivery;
+  }
+
   // Build stage segments of one lane: one per (attempt, stage), in order.
   function buildLane(lane, now) {
     lane.events.sort((a, b) => a.t - b.t || STAGES.indexOf(a.stage) - STAGES.indexOf(b.stage));
@@ -169,7 +208,7 @@
     for (const e of lane.events) {
       const attempt = e.attempt || 0;
       attempts = Math.max(attempts, attempt);
-      const key = (STAGES.indexOf(e.stage) < 3 ? 'pre' : (e.workItem + '/' + attempt)) + '/' + e.stage + (e.stage === 'admission' || e.stage === 'intake' ? '/' + e.id : '');
+      const key = (STAGES.indexOf(e.stage) < 3 ? 'pre' : (e.workItem + '/' + attempt)) + '/' + e.stage + (e.stage === 'admission' || e.stage === 'intake' ? '/' + e.id : e.stage === 'planning' ? '/' + (e.workItem || '') : '');
       let s = segments.get(key);
       if (!s) {
         s = { stage: e.stage, attempt, workItem: e.workItem, first: e.t, queued: null, start: null, end: null, outcome: null, diagnostic: '',
@@ -220,19 +259,20 @@
     lane.attempts = attempts;
     lane.components = new Set(lane.events.map((e) => e.component));
     // Lane status and where its work is now, from the newest work.
-    const merged = list.find((s) => s.stage === 'merge' && s.outcome === 'completed');
-    // A refusal of a revision that arrives after the issue's own merge is
-    // still a refusal (its event kind is unchanged) but is drawn softly with
-    // an "after delivery" note: the delivered work is not what was refused.
-    for (const s of list) s.afterDelivery = !!merged && s.stage === 'admission' && s.outcome === 'failed' && s.end !== null && s.end >= merged.end;
-    const open = list.filter((s) => s.open && s.outcome !== 'quarantined');
-    const problem = list.filter((s) => s.outcome === 'quarantined' || (s.outcome === 'blocked' && (s.open || s.stage === 'admission'))).pop();
-    const lastTerminal = list.filter((s) => s.end !== null && !INSTANT[s.stage]).sort((a, b) => a.end - b.end).pop();
+    const merges = list.filter((s) => s.stage === 'merge' && s.outcome === 'completed').sort((a, b) => a.end - b.end);
+    const merged = merges[0] || null, lastMerge = merges[merges.length - 1] || null;
+    markPostDelivery(lane, list, merges);
+    // Status comes from the work after the most recent merge: a reopened
+    // issue's refusal, block or new work shows; before that merge, delivered.
+    const after = lastMerge ? list.filter((s) => !s.postDelivery && s.first >= lastMerge.end) : list;
+    const open = after.filter((s) => s.open && s.outcome !== 'quarantined');
+    const problem = after.filter((s) => s.outcome === 'quarantined' || (s.outcome === 'blocked' && (s.open || s.stage === 'admission'))).pop();
+    const lastTerminal = after.filter((s) => s.end !== null && !INSTANT[s.stage]).sort((a, b) => a.end - b.end).pop();
     lane.final = null;
-    if (merged) lane.status = 'delivered';
-    else if (problem) { lane.status = 'blocked'; lane.final = problem; }
+    if (problem) { lane.status = 'blocked'; lane.final = problem; }
     else if (open.length) lane.status = 'inflight';
     else if (lastTerminal && lastTerminal.outcome !== 'completed') { lane.status = 'failed'; lane.final = lastTerminal; }
+    else if (merged) lane.status = 'delivered';
     else lane.status = 'inflight';
     const current = open.length ? open[open.length - 1] : null;
     lane.current = lane.status === 'blocked' ? 'blocked' : current ? (current.outcome === 'waiting' ? 'queued' : current.stage) : null;
@@ -242,7 +282,7 @@
     // Sorting uses the newest event, not the end of an open bar (which is now).
     lane.lastActivity = lane.events.length ? lane.events[lane.events.length - 1].t : lane.first;
     lane.delivery = merged ? merged.end - lane.first : null;
-    lane.stopped = list.filter((s) => s.outcome === 'failed' || s.outcome === 'stopped-safely').length;
+    lane.stopped = list.filter((s) => !s.postDelivery && (s.outcome === 'failed' || s.outcome === 'stopped-safely')).length;
     lane.hasOpen = list.some((s) => s.open);
     lane.dirty = false;
   }
@@ -378,7 +418,7 @@
     const lat = Array.from({ length: BUCKETS }, () => []), stops = new Array(BUCKETS).fill(0), delivered = new Array(BUCKETS).fill(0);
     const at = (t) => Math.floor((t - t0) / width);
     for (const l of all) for (const e of l.events) {
-      if (e.t < t0 || e.t >= t1) continue;
+      if (e.t < t0 || e.t >= t1 || e.postDelivery) continue;
       const i = at(e.t);
       if (e.step === 'model-call' && e.kind === 'progressed' && e.latencyMs) lat[i].push(e.latencyMs);
       else if (e.kind === 'failed' || e.kind === 'stopped-safely') stops[i]++;
@@ -445,6 +485,7 @@
     const counts = new Array(n).fill(0);
     for (const l of all) for (const e of l.events) {
       if (e.t < t0 || e.t >= t1) continue;
+      if (e.postDelivery) continue;
       if (e.kind === 'failed' || e.kind === 'stopped-safely' || e.kind === 'degraded' || e.kind === 'retried' || e.kind === 'quarantined' || e.kind === 'blocked') counts[Math.floor((e.t - t0) / width)]++;
     }
     // A burst window is ~15 minutes (at least one bucket).
@@ -512,7 +553,7 @@
   const PROBLEM_KINDS = { failed: true, 'stopped-safely': true, degraded: true, quarantined: true, blocked: true, retried: true };
   let feedShown = 0;
   function feedMatches(e, q, kind) {
-    if (kind === 'problems' && !PROBLEM_KINDS[e.kind] && e.diagnostic !== 'stale-wait') return false;
+    if (kind === 'problems' && (e.postDelivery || (!PROBLEM_KINDS[e.kind] && e.diagnostic !== 'stale-wait'))) return false;
     if (kind === 'lifecycle' && e.kind === 'progressed') return false;
     if (!q) return true;
     const hay = ('#' + (e.issue || '') + ' ' + (e.repository || '') + ' ' + e.component + ' ' + stageName(e.stage) + ' ' + e.stage + ' ' + e.kind + ' ' + (e.step || '') + ' ' + (e.diagnostic || '')).toLowerCase();
@@ -537,7 +578,7 @@
     list.textContent = '';
     if (!$('feed-every').checked) return renderFeedGrouped(list, sorted);
     for (const e of sorted.slice(0, 300)) {
-      const li = html('li', PROBLEM_KINDS[e.kind] || e.diagnostic ? 'problem' : '', null, list);
+      const li = html('li', !e.postDelivery && (PROBLEM_KINDS[e.kind] || e.diagnostic) ? 'problem' : '', null, list);
       li.tabIndex = 0;
       li.dataset.key = laneKey(e);
       li.dataset.id = e.id;
@@ -564,7 +605,7 @@
       if (rows.length >= 300) break;
     }
     for (const r of rows) {
-      const e = r.e, problem = PROBLEM_KINDS[e.kind] || e.diagnostic === 'stale-wait';
+      const e = r.e, problem = !e.postDelivery && (PROBLEM_KINDS[e.kind] || e.diagnostic === 'stale-wait');
       const li = html('li', r.group ? 'progress' : problem ? 'problem' : 'transition', null, list);
       li.tabIndex = 0;
       li.dataset.key = laneKey(e);
@@ -659,11 +700,6 @@
         svg('circle', { cx, cy, r: 7, fill: '#f0efec', stroke: '#d03b3b', 'stroke-width': 2 }, g);
         svg('path', Object.assign({ d: `M${cx - 3},${cy - 3} l6,6 M${cx + 3},${cy - 3} l-6,6` }, ink), g);
         break;
-      case 'after-delivery':
-        // Muted refusal: a thin ring and a small cross, not the red badge.
-        svg('circle', { cx, cy, r: 6, fill: 'var(--surface-1)', stroke: 'var(--text-muted)', 'stroke-width': 1.2 }, g);
-        svg('path', Object.assign({ d: `M${cx - 2.2},${cy - 2.2} l4.4,4.4 M${cx + 2.2},${cy - 2.2} l-4.4,4.4` }, ink, { stroke: 'var(--text-muted)', 'stroke-width': 1.3 }), g);
-        break;
       case 'stopped-safely':
         svg('circle', { cx, cy, r: 7, fill: '#f0efec', stroke: '#1a1a19', 'stroke-width': 1.5 }, g);
         svg('rect', { x: cx - 3, y: cy - 3, width: 6, height: 6, fill: '#0e0e0d', rx: 1 }, g);
@@ -686,6 +722,19 @@
     svg('path', { d: `M${cx - 3.5},${cy} l2.5,2.8 l4.5,-5.5`, stroke: '#0e0e0d', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', fill: 'none' }, g);
   }
 
+  // The issue closed after its merge: a neutral flag on the bar row.
+  function closedTick(g, px, cy) {
+    svg('line', { x1: px, x2: px, y1: cy - 8, y2: cy + 8, stroke: 'var(--text-muted)', 'stroke-width': 1.5 }, g);
+    svg('path', { d: `M${px},${cy - 8} l7,2.5 l-7,2.5 z`, fill: 'var(--text-muted)' }, g);
+  }
+  function closedTooltip(lane, group) {
+    const rows = [];
+    for (const s of group.segments) for (const e of s.events) {
+      rows.push([fmtClock(e.t, true), stageName(e.stage) + (e.step ? ' · ' + e.step : '') + ' — ' + kindLabel(e.kind) + (e.diagnostic ? ' (' + e.diagnostic + ')' : '')]);
+    }
+    rows.push(['', t('closed.note')]);
+    return { title: (lane.issue ? '#' + lane.issue + ' · ' : '') + t('closed.title'), rows };
+  }
   function marker(g, type, px, cy) {
     switch (type) {
       case 'degraded':
@@ -775,7 +824,7 @@
     if (s.outcome === 'completed' && width > 22) check(g, x0 + width - 8, cy);
     // Badges go on a layer above every bar, so a retry that starts right
     // after a stop cannot cover the stop's glyph.
-    if (badged) badge(svg('g', { opacity: dim ? 0.28 : s.afterDelivery ? 0.55 : 1 }, overlay || g), s.afterDelivery ? 'after-delivery' : s.outcome, x0 + width, cy);
+    if (badged) badge(svg('g', { opacity: dim ? 0.28 : 1 }, overlay || g), s.outcome, x0 + width, cy);
     return { g, x0: Math.min(xq, x0), x1: x0 + width + (badged ? 8 : 6) };
   }
 
@@ -907,7 +956,19 @@
         svg('line', { class: 'attempt-divider', x1: px, x2: px, y1: y0 + 17, y2: y0 + LANE_H - 2 }, bars);
         text(bars, { class: 'attempt-label', x: px - 3, y: y0 + 24, 'text-anchor': 'end' }, '#' + a);
       }
+      for (const group of lane.closed) {
+        const px = x(group.at), cy = y0 + LANE_H - 13;
+        if (px > -10 && px < w + 10) {
+          const g = svg('g', { class: 'closed-tick' }, bars);
+          closedTick(g, px, cy);
+          const hit = svg('rect', { class: 'hit', x: px - 8, y: y0 + 16, width: 16, height: LANE_H - 18 }, g);
+          hit.addEventListener('mousemove', (ev) => showTooltip(ev, closedTooltip(lane, group)));
+          hit.addEventListener('mouseleave', hideTooltip);
+          hit.addEventListener('click', () => openPanel(lane.key));
+        }
+      }
       for (const s of lane.segments) {
+        if (s.postDelivery) continue;
         const box = drawSegment(bars, lane, s, y0, w, dim && s.events[0].component !== dim, overlay);
         if (!box) continue;
         lastEnd = Math.max(lastEnd, box.x1);
@@ -977,7 +1038,7 @@
   function segmentTooltip(lane, s) {
     const rows = [];
     rows.push([t('tt.stage'), stageName(s.stage) + ' (' + s.events[0].component + ')']);
-    rows.push([t('tt.outcome'), outcomeText(s.outcome) + (s.afterDelivery ? ' · ' + t('after.delivery') : '')]);
+    rows.push([t('tt.outcome'), outcomeText(s.outcome)]);
     if (s.diagnostic) rows.push([t('tt.diagnostic'), s.diagnostic]);
     if (s.attempt) rows.push([t('tt.attempt'), String(s.attempt)]);
     if (s.start !== null && s.queued < s.start) rows.push([t('tt.waited'), fmtDuration(s.start - s.queued)]);
@@ -1142,6 +1203,7 @@
     item((s) => marker(s, 'stale', 20, 10), t('lg.stale'));
     item((s) => { marker(s, 'quarantined', 16, 10); svg('rect', { x: 21, y: 2, width: 13, height: 11, rx: 5.5, fill: '#f0efec' }, s); text(s, { class: 'count', x: 27.5, y: 10.6, 'text-anchor': 'middle' }, '3'); }, t('lg.cluster'));
     item((s) => { svg('rect', { x: 1, y: 2, width: 32, height: 16, rx: 4, fill: color }, s); for (const px of [8, 14, 18, 26]) svg('line', { x1: px, x2: px, y1: 14, y2: 17, stroke: 'rgba(14,14,13,.7)' }, s); }, t('lg.calls'));
+    item((s) => closedTick(s, 18, 10), t('lg.closed'));
   }
 
   // ---------- interaction ----------
