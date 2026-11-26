@@ -16,6 +16,8 @@ Start here:
 - [Runtime upgrades and installation details](operations/runtime-upgrades.md).
 - [Runtime metrics](operations/metrics.md): queue depth, safe stops, model
   calls and deliveries, and how to scrape them.
+- [Flow console](operations/flow-console.md): a read-only web timeline of the
+  autonomous flow, derived from the journal, and its event contract.
 - [Database backup and restore](operations/backup-and-restore.md): the
   opt-in scheduled backup, checking a backup, and restoring it.
 
