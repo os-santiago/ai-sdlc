@@ -177,6 +177,8 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	doc.More = doc.Next < current
 	w.Header().Set("Content-Type", "application/json")
+	// A client that stops reading must not hold a snapshot slot.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.WriteTimeout))
 	json.NewEncoder(w).Encode(doc)
 }
 

@@ -25,12 +25,16 @@ func TestPollJournalLatchesReadinessAndLogsOnlyTransitions(t *testing.T) {
 	poll := func(context.Context) error {
 		mu.Lock()
 		defer mu.Unlock()
-		if calls > 0 {
+		if calls > 0 && ctx.Err() == nil {
 			readyAfter = append(readyAfter, ready.Load())
 		}
 		if calls == len(outcomes) {
-			cancel()
-			close(done)
+			// A tick already pending may call poll once more before the loop
+			// sees the cancellation; close done only once.
+			if ctx.Err() == nil {
+				cancel()
+				close(done)
+			}
 			return nil
 		}
 		ok := outcomes[calls]

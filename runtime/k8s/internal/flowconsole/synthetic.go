@@ -27,7 +27,7 @@ func Synthetic(items int, end time.Time) []flowevent.Event {
 		}
 		item := fmt.Sprintf("%08x-0000-4000-8000-%012x", issue, i)
 		start := end.Add(-span + time.Duration(float64(span)*float64(i)/float64(items)))
-		g := synth{out: &out, rng: rng, repository: repository, issue: issue, item: item}
+		g := synth{out: &out, rng: rng, repository: repository, issue: issue, item: item, end: end}
 		g.emit("intake", "observed", flowevent.KindCompleted, "", start.Add(-40*time.Second), 0, 0, 0, map[string]string{"generation": "1"})
 		g.emit("admission", "decision", flowevent.KindCompleted, "", start.Add(-35*time.Second), 0, 800, 0, map[string]string{"decision": "accepted", "risk": "low"})
 		g.emit("planning", "work-item", flowevent.KindCompleted, "", start.Add(-32*time.Second), 0, 0, 0, map[string]string{"status": "ready"})
@@ -84,10 +84,16 @@ type synth struct {
 	repository string
 	issue      int
 	item       string
+	end        time.Time
 	n          int
 }
 
 func (g *synth) emit(stage, step, kind, diagnostic string, at time.Time, attempt int, duration, latency int64, attributes map[string]string) {
+	// Nothing after end: offsets after a check (a queue time, a degraded
+	// call) could otherwise land in the future.
+	if at.After(g.end) {
+		return
+	}
 	g.n++
 	e := flowevent.Event{Version: flowevent.Version, ID: flowevent.NewID("synthetic", g.item, strconv.Itoa(g.n)), Time: at.UTC().Truncate(time.Millisecond),
 		Component: flowevent.ComponentOf(stage), Repository: g.repository, Issue: g.issue, Attempt: attempt, Stage: stage, Step: step, Kind: kind,
