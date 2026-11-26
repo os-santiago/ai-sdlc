@@ -154,7 +154,7 @@ func TestPublisherAmbiguousResponsesNeverRetryOrLeak(t *testing.T) {
 				}
 				return nil
 			}
-			if _, e := w.CreateTree(context.Background(), fence, writerPlan()); e != ErrPublication {
+			if _, e := w.CreateTree(context.Background(), fence, writerPlan()); !errors.Is(e, ErrPublication) {
 				t.Fatal("unsafe response yielded receipt", e)
 			}
 			if calls.Load() != 1 || target.Load() != 0 {
@@ -219,7 +219,7 @@ func TestSaferusWriterBindsRepositoryAndFinitePaths(t *testing.T) {
 		copy := p
 		copy.Request.Tree = append([]TreeEntry{}, p.Request.Tree...)
 		mutate(&copy)
-		if _, err := w.CreateTree(context.Background(), fence, copy); err != ErrPublication {
+		if _, err := w.CreateTree(context.Background(), fence, copy); !errors.Is(err, ErrPublication) {
 			t.Fatal("scope escaped")
 		}
 	}
@@ -237,5 +237,53 @@ func TestIssueReferenceClosesOnlyManifestIssues(t *testing.T) {
 		if got := IssueReference(repository, 7); got != want {
 			t.Fatalf("%s: %q", repository, got)
 		}
+	}
+}
+
+// A stopped write names a bounded class so an operator can tell a refusal by
+// the forge from a lost connection or a response that is not the plan. The
+// error stays ErrPublication, and no response text reaches it.
+func TestPublisherStopClassIsBoundedAndCarriesNoResponse(t *testing.T) {
+	for scenario, want := range map[string]string{"unprocessable": "status-422", "server": "status-503", "teapot": "status-4xx", "lost-reply": StopTransport, "duplicate": StopResponse, "wrong-tree": StopMismatch, "revoked-after": StopFence} {
+		t.Run(scenario, func(t *testing.T) {
+			w, _ := writerFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				switch scenario {
+				case "unprocessable":
+					w.WriteHeader(422)
+					w.Write([]byte(`{"message":"secret-provider-response"}`))
+				case "server":
+					w.WriteHeader(503)
+				case "teapot":
+					w.WriteHeader(418)
+				case "lost-reply":
+					conn, _, _ := w.(http.Hijacker).Hijack()
+					conn.Close()
+				case "duplicate":
+					w.WriteHeader(201)
+					w.Write([]byte(`{"sha":"` + strings.Repeat("b", 40) + `","sha":"` + strings.Repeat("a", 40) + `"}`))
+				case "wrong-tree":
+					w.WriteHeader(201)
+					w.Write([]byte(`{"sha":"` + strings.Repeat("a", 40) + `"}`))
+				default:
+					w.WriteHeader(201)
+					w.Write([]byte(`{"sha":"` + writerPlan().ExpectedTreeSHA + `"}`))
+				}
+			})
+			fences := 0
+			fence := func(context.Context, string) error {
+				fences++
+				if scenario == "revoked-after" && fences == 2 {
+					return errors.New("revoked")
+				}
+				return nil
+			}
+			_, e := w.CreateTree(context.Background(), fence, writerPlan())
+			if !errors.Is(e, ErrPublication) || StopClass(e) != want || strings.Contains(e.Error(), "secret") {
+				t.Fatal("stop class", StopClass(e), want, e)
+			}
+		})
+	}
+	if StopClass(ErrPublication) != "" {
+		t.Fatal("an unclassified refusal gained a class")
 	}
 }

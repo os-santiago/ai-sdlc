@@ -3,6 +3,7 @@ package publication
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -107,7 +108,7 @@ func TestWriterCommitsWithThePlannedIdentity(t *testing.T) {
 	// A forge commit that is not the planned object (for example one created
 	// with another identity) yields no receipt.
 	forgeSHA.Store(commitSHA(commitBody(p.CommitMessage, p.ExpectedTreeSHA, source, project.DefaultCommitIdentity, now)))
-	if _, e := w.CreateCommit(context.Background(), fence, p, source, now); e != ErrPublication {
+	if _, e := w.CreateCommit(context.Background(), fence, p, source, now); !errors.Is(e, ErrPublication) {
 		t.Fatal("unplanned commit object accepted")
 	}
 	if calls.Load() != 2 {
@@ -117,7 +118,7 @@ func TestWriterCommitsWithThePlannedIdentity(t *testing.T) {
 	for _, identity := range []project.CommitIdentity{{}, {Name: "Bot", Email: "bot"}, {Name: "Bot <x@y.z>", Email: "bot@example.org"}, {Name: " Bot", Email: "bot@example.org"}} {
 		q := writerPlan()
 		q.CommitIdentity = identity
-		if _, e := w.CreateCommit(context.Background(), fence, q, source, now); e != ErrPublication {
+		if _, e := w.CreateCommit(context.Background(), fence, q, source, now); !errors.Is(e, ErrPublication) {
 			t.Fatal("invalid identity accepted", identity)
 		}
 	}

@@ -82,21 +82,39 @@ func (w *Writer) post(ctx context.Context, fence WriteFence, suffix string, valu
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	response, e := w.http.Do(req)
 	if e != nil {
-		return ErrPublication
+		return transportStop{StopTransport}
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusCreated || response.ContentLength > 1024*1024 || response.Header.Get("Content-Encoding") != "" {
-		return ErrPublication
+	if response.StatusCode != http.StatusCreated {
+		return transportStop{statusClass(response.StatusCode)}
+	}
+	if response.ContentLength > 1024*1024 || response.Header.Get("Content-Encoding") != "" {
+		return transportStop{StopResponse}
 	}
 	raw, e = io.ReadAll(io.LimitReader(response.Body, 1024*1024+1))
 	if e != nil || len(raw) < 1 || len(raw) > 1024*1024 || !utf8.Valid(raw) {
-		return ErrPublication
+		return transportStop{StopResponse}
 	}
 	// GitHub may add metadata fields; retain strict duplicate-key rejection before
 	// projecting its response onto the finite fields that bind this operation.
 	var object map[string]json.RawMessage
-	if authority.DecodeStrict(raw, &object) != nil || object == nil || json.Unmarshal(raw, out) != nil || ctx.Err() != nil || fence(ctx, requestDigest) != nil {
-		return ErrPublication
+	if authority.DecodeStrict(raw, &object) != nil || object == nil || json.Unmarshal(raw, out) != nil {
+		return transportStop{StopResponse}
+	}
+	if ctx.Err() != nil || fence(ctx, requestDigest) != nil {
+		return transportStop{StopFence}
+	}
+	return nil
+}
+
+// sent returns the classified post failure, or a mismatch when a decoded
+// response is not the planned object.
+func sent(post error, matches bool) error {
+	if post != nil {
+		return post
+	}
+	if !matches {
+		return transportStop{StopMismatch}
 	}
 	return nil
 }
@@ -146,8 +164,8 @@ func (w *Writer) CreateTree(ctx context.Context, fence WriteFence, p TreePlan) (
 		SHA       string `json:"sha"`
 		Truncated bool   `json:"truncated"`
 	}
-	if w.post(ctx, fence, "/git/trees", p.Request, &result) != nil || result.SHA != p.ExpectedTreeSHA || result.Truncated {
-		return "", ErrPublication
+	if e := sent(w.post(ctx, fence, "/git/trees", p.Request, &result), result.SHA == p.ExpectedTreeSHA && !result.Truncated); e != nil {
+		return "", e
 	}
 	return result.SHA, nil
 }
@@ -238,8 +256,9 @@ func (w *Writer) CreateCommit(ctx context.Context, fence WriteFence, p TreePlan,
 		Author    commitPerson `json:"author"`
 		Committer commitPerson `json:"committer"`
 	}
-	if w.post(ctx, fence, "/git/commits", value, &result) != nil || !workspacebundle.ValidSourceSHA(result.SHA) || result.SHA != planned || result.Tree.SHA != p.ExpectedTreeSHA || len(result.Parents) != 1 || result.Parents[0].SHA != sourceSHA || strings.TrimSuffix(result.Message, "\n") != strings.TrimSuffix(message, "\n") || result.Author != person || result.Committer != person {
-		return "", ErrPublication
+	post := w.post(ctx, fence, "/git/commits", value, &result)
+	if e := sent(post, workspacebundle.ValidSourceSHA(result.SHA) && result.SHA == planned && result.Tree.SHA == p.ExpectedTreeSHA && len(result.Parents) == 1 && result.Parents[0].SHA == sourceSHA && strings.TrimSuffix(result.Message, "\n") == strings.TrimSuffix(message, "\n") && result.Author == person && result.Committer == person); e != nil {
+		return "", e
 	}
 	return result.SHA, nil
 }
@@ -256,8 +275,8 @@ func (w *Writer) CreateBranch(ctx context.Context, fence WriteFence, p TreePlan,
 			SHA  string `json:"sha"`
 		} `json:"object"`
 	}
-	if w.post(ctx, fence, "/git/refs", value, &result) != nil || result.Ref != ref || result.Object.Type != "commit" || result.Object.SHA != commit {
-		return ErrPublication
+	if e := sent(w.post(ctx, fence, "/git/refs", value, &result), result.Ref == ref && result.Object.Type == "commit" && result.Object.SHA == commit); e != nil {
+		return e
 	}
 	return nil
 }
@@ -288,8 +307,9 @@ func (w *Writer) CreatePullRequest(ctx context.Context, fence WriteFence, p Tree
 		Head   end    `json:"head"`
 		Base   end    `json:"base"`
 	}
-	if w.post(ctx, fence, "/pulls", value, &result) != nil || result.Number < 1 || result.Number > 2147483647 || result.State != "open" || result.Draft || result.Head.Ref != p.Branch || result.Head.SHA != commit || result.Head.Repo.FullName != w.repository || result.Base.Ref != "main" || result.Base.SHA != sourceSHA || result.Base.Repo.FullName != w.repository || result.URL != "https://github.com/"+w.repository+"/pull/"+strconv.Itoa(result.Number) {
-		return PublishedPullRequest{}, ErrPublication
+	post := w.post(ctx, fence, "/pulls", value, &result)
+	if e := sent(post, result.Number >= 1 && result.Number <= 2147483647 && result.State == "open" && !result.Draft && result.Head.Ref == p.Branch && result.Head.SHA == commit && result.Head.Repo.FullName == w.repository && result.Base.Ref == "main" && result.Base.SHA == sourceSHA && result.Base.Repo.FullName == w.repository && result.URL == "https://github.com/"+w.repository+"/pull/"+strconv.Itoa(result.Number)); e != nil {
+		return PublishedPullRequest{}, e
 	}
 	return PublishedPullRequest{result.Number, commit, p.Branch, result.URL}, nil
 }

@@ -227,3 +227,31 @@ func TestSaferusMergeUsesOnlyCredentialRepository(t *testing.T) {
 		t.Fatal("write or observation count")
 	}
 }
+
+// Battery 39: GitHub took about five seconds to answer the merge PUT of a PR it
+// merged. A five-second response deadline left that merge unacknowledged and
+// quarantined every later merge. A slow synchronous merge is still a receipt.
+func TestMergeAcceptsSlowSynchronousMergeResponse(t *testing.T) {
+	var puts atomic.Int32
+	w, ctx := fixture(t, func(out http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			puts.Add(1)
+			time.Sleep(6 * time.Second)
+			_ = json.NewEncoder(out).Encode(map[string]any{"merged": true, "sha": strings.Repeat("e", 40)})
+			return
+		}
+		_ = json.NewEncoder(out).Encode(commitResponse())
+	})
+	receipt, err := w.Merge(ctx, expected(), 3, func(context.Context, string) error { return nil })
+	if err != nil || puts.Load() != 1 || receipt.CommitSHA != strings.Repeat("e", 40) {
+		t.Fatal("slow merge response lost", err)
+	}
+}
+
+// The response deadline must stay well above GitHub's observed merge latency
+// and inside the controller's claim, which the gate caps at 25 seconds.
+func TestMergeResponseDeadlineCoversForgeLatency(t *testing.T) {
+	if responseHeaderTimeout < 15*time.Second || requestTimeout <= responseHeaderTimeout || requestTimeout > 30*time.Second {
+		t.Fatal("merge response deadline", responseHeaderTimeout, requestTimeout)
+	}
+}
