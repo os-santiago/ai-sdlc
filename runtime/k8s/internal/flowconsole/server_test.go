@@ -229,6 +229,31 @@ func TestCollectorPublishesOnlyNewFactsAndReportsUnavailableJournal(t *testing.T
 	}
 }
 
+// A row selected by a recent change can carry an event time older than the
+// window (a work item created long ago that changed today). It must be
+// published once, not forgotten and re-published on every poll.
+func TestCollectorNeverRepublishesAnOldEventStillDerived(t *testing.T) {
+	hub := NewHub(100, "journal")
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-30 * time.Hour)
+	journal := store.FlowJournal{ObservedAt: now, WorkItems: []store.FlowWorkItem{{UUID: "8f9a2c1e-3b4d-4e5f-8a6b-7c8d9e0f1a2b", Repository: "example/app", Issues: []int{7}, Status: "ready", CreatedAt: old, UpdatedAt: now}}}
+	c := Collector{Hub: hub, Window: 24 * time.Hour, Limit: 10, Read: func(context.Context, time.Time, int) (store.FlowJournal, error) { return journal, nil }}
+	for poll := 0; poll < 5; poll++ {
+		if n, err := c.Poll(context.Background(), now.Add(time.Duration(poll)*3*time.Second)); err != nil || (poll == 0) != (n == 1) {
+			t.Fatalf("poll %d published %d (%v)", poll, n, err)
+		}
+	}
+	if _, cursor, _ := hub.Since(0, 0); cursor != 1 {
+		t.Fatal("old event re-published", cursor)
+	}
+	// Once no poll derives it any more, its id may be forgotten.
+	journal.WorkItems = nil
+	c.Poll(context.Background(), now)
+	if len(hub.seen) != 0 {
+		t.Fatal("de-duplication memory not bounded")
+	}
+}
+
 func TestFixtureReleasesShiftedEventsLive(t *testing.T) {
 	hub := NewHub(100, "fixture")
 	events := []flowevent.Event{event(1), event(2), event(30)}

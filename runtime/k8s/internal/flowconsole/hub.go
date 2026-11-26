@@ -72,14 +72,16 @@ func (h *Hub) Publish(events []flowevent.Event) int {
 }
 
 // Forget drops de-duplication memory for events older than cutoff, so the
-// id set stays bounded by the collector window. An event re-derived after
-// being forgotten would be re-sent; the collector only forgets ids older
-// than the window it reads, which it can no longer derive.
-func (h *Hub) Forget(cutoff time.Time) {
+// id set stays bounded by the collector window, but never for an id in
+// current: the ids the latest poll derived. An event time can lie before the
+// window while its row is still selected (for example a work item created
+// long ago that changed today); forgetting it would re-publish it with a new
+// cursor on every poll and push real history out of the buffer.
+func (h *Hub) Forget(cutoff time.Time, current map[string]bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for id, at := range h.seen {
-		if at.Before(cutoff) {
+		if at.Before(cutoff) && !current[id] {
 			delete(h.seen, id)
 		}
 	}

@@ -33,8 +33,13 @@ func (c Collector) Poll(ctx context.Context, now time.Time) (int, error) {
 		c.Hub.SetStatus(Status{Source: "journal", Healthy: false, Problem: "journal-unavailable", ObservedAt: c.Hub.Status().ObservedAt, Window: c.Window.String()})
 		return 0, err
 	}
-	added := c.Hub.Publish(Derive(j, c.Options))
-	c.Hub.Forget(j.ObservedAt.Add(-c.Window - time.Hour))
+	events := Derive(j, c.Options)
+	added := c.Hub.Publish(events)
+	current := make(map[string]bool, len(events))
+	for _, e := range events {
+		current[e.ID] = true
+	}
+	c.Hub.Forget(j.ObservedAt.Add(-c.Window-time.Hour), current)
 	problem := ""
 	if j.Truncated {
 		problem = "window-truncated"
