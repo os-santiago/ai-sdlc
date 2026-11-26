@@ -139,7 +139,7 @@ func TestUpgradeObservationDetectsPartialMigrationWithoutClaimingRollback(t *tes
 	before := upgradeHistory(t, db)
 	catalog, _ := MigrationCatalog()
 	last := catalog[len(catalog)-1].Filename
-	if last != "0038_generic_publication_scope.sql" {
+	if last != "0039_flow_console_reader.sql" {
 		t.Fatal("Update the explicit final-file rollback assertions for the new migration")
 	}
 	// First pending file commits; fail recording the second file so its DDL and
@@ -171,7 +171,8 @@ func TestUpgradeObservationDetectsPartialMigrationWithoutClaimingRollback(t *tes
  AND to_regclass('public.review_feedback') IS NOT NULL
  AND to_regclass('public.review_repair_handoffs') IS NOT NULL
  AND to_regprocedure('public.lock_repair_parent_budget(uuid)') IS NOT NULL
- AND (SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname='publication_requests_repository_check') LIKE '%os-santiago/homedir%'`).Scan(&finalTableAbsent); err != nil || !finalTableAbsent {
+ AND (SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname='publication_requests_repository_check') NOT LIKE '%os-santiago/homedir%'
+ AND NOT EXISTS(SELECT 1 FROM pg_policy WHERE polname='flow_console_reader')`).Scan(&finalTableAbsent); err != nil || !finalTableAbsent {
 		t.Fatal("failed file DDL did not roll back", err)
 	}
 	if _, err = db.Pool.ExecContext(ctx, `DROP TRIGGER upgrade_failure ON public.schema_migrations; DROP FUNCTION public.reject_upgrade_record()`); err != nil {

@@ -1,0 +1,217 @@
+{
+  "schemaVersion": 2,
+  "repository": "os-santiago/ai-sdlc-sample",
+  "attemptBudget": 2,
+  "cell": {
+    "repository": "os-santiago/ai-sdlc-sample",
+    "modelPath": "local-llama"
+  },
+  "installation": {
+    "imageLockDigest": "sha256:4420798c74c5f4d8ea471841087df419913fa034a096bf8af765f79455fabf37",
+    "images": {
+      "ai-sdlc-admission-controller": "quay.io/os-santiago/ai-sdlc@sha256:408612015abce60915bcf936d505b5975ba64ebd5a2c01bfc89f3e3ecc726463",
+      "ai-sdlc-intake": "quay.io/os-santiago/ai-sdlc@sha256:16231b258592c8009747deb7c41369541badacae5d702a12a5e689b525948262",
+      "ai-sdlc-orchestrator": "quay.io/os-santiago/ai-sdlc@sha256:d6de27c6d203fdf97ccff30a7466b5fbd6a79957d48cfb6f427047b08cfc0ceb",
+      "ai-sdlc-relay": "quay.io/os-santiago/ai-sdlc@sha256:147a645db2699e9ddf614b0979b3b6f7fc2b14f89314d2fdc17899552a066b37",
+      "ai-sdlc-release-manager": "quay.io/os-santiago/ai-sdlc@sha256:937155cd0b1c179b9fcf803b51410e8882a1f28b6dfb21961ff29a9a3bcc9eab",
+      "ai-sdlc-verifier": "quay.io/os-santiago/ai-sdlc@sha256:8e7d6b9f170ae62172496d1f0f2946b9daf4c897d3a178b9a7bdcbaf36849ad0",
+      "ai-sdlc-worker": "quay.io/os-santiago/ai-sdlc@sha256:cf73c672e1f4f120df91e840c39f12c3c54dba4b4edc7a5b999f4caa26fe4f47"
+    },
+    "revision": "24c3190f3d414c4a7f372e7014057e3ca44bd5af"
+  },
+  "issues": [
+    {
+      "issue": 230,
+      "attempts": [
+        {
+          "issue": 230,
+          "startedAt": "2026-11-25T22:17:49Z",
+          "outcome": "failure",
+          "stage": "verification",
+          "reason": "comparison-failed",
+          "seconds": 915,
+          "modelCalls": 32,
+          "stageReached": "verification",
+          "reviews": [],
+          "diagnostics": [
+            "verification reconciliation stopped safely: refused-candidate-failed"
+          ]
+        },
+        {
+          "issue": 230,
+          "startedAt": "2026-11-25T22:33:49Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 853,
+          "modelCalls": 22,
+          "stageReached": "execution",
+          "reviews": [],
+          "diagnostics": [
+            "candidate reconciliation stopped safely: worker-exit cleanupPending=false workerExitCode=22 failureRecorded=true"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 231,
+      "attempts": [
+        {
+          "issue": 231,
+          "startedAt": "2026-11-25T22:48:49Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 675,
+          "modelCalls": 31,
+          "stageReached": "execution",
+          "reviews": [],
+          "diagnostics": [
+            "candidate reconciliation stopped safely: model-provider cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        },
+        {
+          "issue": 231,
+          "startedAt": "2026-11-25T23:00:50Z",
+          "outcome": "success",
+          "pullRequest": 240,
+          "seconds": 566,
+          "modelCalls": 16,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 232,
+      "attempts": [
+        {
+          "issue": 232,
+          "startedAt": "2026-11-25T23:11:02Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 902,
+          "modelCalls": 32,
+          "stageReached": "execution",
+          "reviews": [],
+          "diagnostics": [
+            "candidate reconciliation stopped safely: worker-exit cleanupPending=false workerExitCode=22 failureRecorded=true"
+          ]
+        },
+        {
+          "issue": 232,
+          "startedAt": "2026-11-25T23:26:51Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 853,
+          "modelCalls": 20,
+          "stageReached": "execution",
+          "reviews": [],
+          "diagnostics": [
+            "candidate reconciliation stopped safely: worker-exit cleanupPending=false workerExitCode=22 failureRecorded=true"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 233,
+      "attempts": [
+        {
+          "issue": 233,
+          "startedAt": "2026-11-25T23:41:51Z",
+          "outcome": "failure",
+          "stage": "verification",
+          "reason": "comparison-failed",
+          "seconds": 613,
+          "modelCalls": 32,
+          "stageReached": "verification",
+          "reviews": [],
+          "diagnostics": [
+            "verification reconciliation stopped safely: refused-candidate-failed"
+          ]
+        },
+        {
+          "issue": 233,
+          "startedAt": "2026-11-25T23:52:49Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 871,
+          "modelCalls": 32,
+          "stageReached": "execution",
+          "reviews": [],
+          "diagnostics": [
+            "candidate reconciliation stopped safely: worker-exit cleanupPending=false workerExitCode=22 failureRecorded=true"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 227,
+      "attempts": [
+        {
+          "issue": 227,
+          "startedAt": "2026-11-26T00:08:07Z",
+          "outcome": "success",
+          "pullRequest": 241,
+          "seconds": 582,
+          "modelCalls": 19,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 207,
+      "attempts": [
+        {
+          "issue": 207,
+          "startedAt": "2026-11-26T00:18:36Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 517,
+          "modelCalls": 19,
+          "stageReached": "review",
+          "reviews": [
+            "failed|uncertain"
+          ],
+          "diagnostics": [
+            "independent review stopped safely: model-publication"
+          ]
+        },
+        {
+          "issue": 207,
+          "startedAt": "2026-11-26T00:27:59Z",
+          "outcome": "success",
+          "pullRequest": 242,
+          "seconds": 496,
+          "modelCalls": 17,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    }
+  ],
+  "summary": {
+    "issues": 6,
+    "firstAttemptSuccess": 1,
+    "successWithinBudget": 3,
+    "firstAttemptRate": 0.167,
+    "rateWithinBudget": 0.5
+  }
+}

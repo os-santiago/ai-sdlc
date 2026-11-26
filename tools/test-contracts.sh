@@ -14,6 +14,17 @@ with open("spec/local-install.schema.json", encoding="utf-8") as source:
 Draft202012Validator.check_schema(schema)
 with open("examples/homedir.local-install.json", encoding="utf-8") as source:
     Draft202012Validator(schema).validate(json.load(source))
+with open("spec/flow-event.schema.json", encoding="utf-8") as source:
+    schema = json.load(source)
+Draft202012Validator.check_schema(schema)
+validator = Draft202012Validator(schema)
+with open("runtime/k8s/components/flow-console/fixtures/evaluation-batteries-29-30.jsonl", encoding="utf-8") as source:
+    events = [json.loads(line) for line in source if line.strip() and not line.startswith("#")]
+assert events
+for event in events:
+    validator.validate(event)
+for invalid in ({**events[0], "prompt": "x"}, {**events[0], "kind": "succeeded"}, {**events[0], "attributes": {"token": "x"}}):
+    assert not validator.is_valid(invalid)
 PY
 for contract in examples/*.ai-sdlc.yaml; do
   bash tools/validate-ai-sdlc-config.sh "$contract"

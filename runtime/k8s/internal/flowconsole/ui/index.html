@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI-SDLC flow console</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<!-- Strings live in i18n.js: data-i18n sets the text, data-i18n-<attr> an attribute. -->
+<header class="top">
+  <div class="brand">
+    <h1 data-i18n="title">AI-SDLC flow</h1>
+    <span class="header-repo" id="header-repo" hidden data-i18n-title="repo.title"></span>
+    <span class="subtitle" data-i18n="subtitle">read-only timeline of the autonomous flow</span>
+  </div>
+  <div class="top-right">
+    <div class="source" id="source" role="status" aria-live="polite">
+      <span class="dot" id="source-dot" aria-hidden="true"></span>
+      <span id="source-text">…</span>
+    </div>
+    <button type="button" id="lang" class="toggle compact" data-i18n-title="lang.title" lang="">ES</button>
+    <button type="button" id="theme" class="toggle compact"></button>
+    <button type="button" id="motion" class="toggle" aria-pressed="false" data-i18n="motion" data-i18n-title="motion.title">Reduce motion</button>
+    <button type="button" id="feed-toggle" class="toggle" aria-pressed="false" aria-controls="feed" data-i18n="feed.toggle">Live events</button>
+  </div>
+</header>
+
+<section class="tiles" data-i18n-aria-label="tiles">
+  <div class="tile"><div class="tile-label" data-i18n="tile.inflight"></div><div class="tile-value" id="t-inflight">–</div><div class="tile-note" id="t-inflight-note"></div></div>
+  <div class="tile"><div class="tile-label" data-i18n="tile.delivered"></div><div class="tile-row"><div class="tile-value" id="t-delivered">–</div><svg class="spark" id="s-delivered" role="img"></svg></div><div class="tile-note" id="t-delivered-note"></div></div>
+  <div class="tile"><div class="tile-label" data-i18n="tile.failed"></div><div class="tile-row"><div class="tile-value" id="t-failed">–</div><svg class="spark" id="s-stops" role="img"></svg></div><div class="tile-note" id="t-failed-note"></div></div>
+  <div class="tile"><div class="tile-label" data-i18n="tile.blocked"></div><div class="tile-value" id="t-blocked">–</div><div class="tile-note" id="t-blocked-note"></div></div>
+  <div class="tile"><div class="tile-label" data-i18n="tile.ttd"></div><div class="tile-value" id="t-ttd">–</div><div class="tile-note" id="t-ttd-note"></div></div>
+  <div class="tile"><div class="tile-label" data-i18n="tile.latency"></div><div class="tile-row"><div class="tile-value" id="t-latency">–</div><svg class="spark" id="s-latency" role="img"></svg></div><div class="tile-note" id="t-latency-note"></div></div>
+</section>
+
+<details class="trend-table" id="trend-table">
+  <summary data-i18n="trend.summary"></summary>
+  <table>
+    <thead><tr><th scope="col" data-i18n="trend.interval"></th><th scope="col" data-i18n="trend.latency"></th><th scope="col" data-i18n="trend.stops"></th><th scope="col" data-i18n="trend.deliveries"></th></tr></thead>
+    <tbody></tbody>
+  </table>
+</details>
+
+<section class="filters" data-i18n-aria-label="filters">
+  <div class="seg" role="group" data-i18n-aria-label="status.filter" id="status-filter">
+    <button type="button" data-status="all" aria-pressed="true" data-i18n="f.all"></button>
+    <button type="button" data-status="inflight" aria-pressed="false" data-i18n="f.inflight"></button>
+    <button type="button" data-status="delivered" aria-pressed="false" data-i18n="f.delivered"></button>
+    <button type="button" data-status="failed" aria-pressed="false" data-i18n="f.failed"></button>
+    <button type="button" data-status="blocked" aria-pressed="false" data-i18n="f.blocked"></button>
+  </div>
+  <label class="field"><span data-i18n="component"></span>
+    <select id="component-filter">
+      <option value="" data-i18n="component.all"></option>
+      <option>intake</option><option>admission-controller</option><option>orchestrator</option>
+      <option>worker</option><option>verifier</option><option>release-manager</option>
+    </select>
+  </label>
+  <label class="field"><span data-i18n="issue"></span>
+    <input id="issue-filter" type="search" data-i18n-placeholder="issue.placeholder" autocomplete="off" spellcheck="false">
+  </label>
+  <label class="field"><span data-i18n="sort"></span>
+    <select id="sort">
+      <option value="recent" data-i18n="sort.recent"></option>
+      <option value="problems" data-i18n="sort.problems"></option>
+    </select>
+  </label>
+  <div class="spacer"></div>
+  <div class="seg" role="group" data-i18n-aria-label="range">
+    <button type="button" data-range="1">1 h</button>
+    <button type="button" data-range="6">6 h</button>
+    <button type="button" data-range="24">24 h</button>
+    <button type="button" data-range="fit" data-i18n="fit"></button>
+  </div>
+  <button type="button" id="follow" class="toggle" aria-pressed="true" data-i18n="follow" data-i18n-title="follow.title"></button>
+</section>
+
+<nav class="funnel" id="funnel" data-i18n-aria-label="funnel.aria"></nav>
+
+<section class="problems" id="problems" hidden aria-labelledby="problems-title">
+  <h2 id="problems-title"><span data-i18n="problems.title"></span> <span class="muted" id="problem-count"></span></h2>
+  <ul id="problem-list"></ul>
+  <button type="button" class="problem-more" id="problem-more" hidden></button>
+</section>
+
+<main class="timeline" id="timeline">
+  <div class="axis-row">
+    <div class="lane-head"><span><span data-i18n="lanes.head"></span> <span class="muted" id="lane-count"></span></span><span class="tz" id="timezone"></span></div>
+    <svg id="axis" class="axis" aria-hidden="true"></svg>
+  </div>
+  <div class="lanes" id="lanes" tabindex="-1">
+    <div class="labels" id="labels" role="list" data-i18n-aria-label="lanes.aria"></div>
+    <svg id="chart" class="chart" role="img" data-i18n-aria-label="chart.aria"></svg>
+  </div>
+  <div class="empty" id="empty" hidden></div>
+  <div class="hint perf" id="perf" hidden></div>
+  <div class="hint" data-i18n="hint"></div>
+</main>
+
+<section class="legend" data-i18n-aria-label="legend">
+  <h2 data-i18n="legend"></h2>
+  <ul id="legend"></ul>
+</section>
+
+<aside class="panel" id="panel" hidden aria-labelledby="panel-title">
+  <div class="panel-head">
+    <h2 id="panel-title"></h2>
+    <button type="button" id="panel-close" data-i18n-aria-label="panel.close">×</button>
+  </div>
+  <div class="panel-meta" id="panel-meta"></div>
+  <div class="breakdown" id="breakdown"></div>
+  <ol class="panel-events" id="panel-events"></ol>
+</aside>
+
+<aside class="feed" id="feed" hidden aria-labelledby="feed-title">
+  <div class="panel-head">
+    <h2 id="feed-title" data-i18n="feed.title"></h2>
+    <button type="button" id="feed-close" data-i18n-aria-label="feed.close">×</button>
+  </div>
+  <div class="feed-filters">
+    <input id="feed-filter" type="search" data-i18n-placeholder="feed.filter" autocomplete="off" spellcheck="false" data-i18n-aria-label="feed.filter.aria">
+    <label class="feed-every"><input type="checkbox" id="feed-every"> <span data-i18n="feed.every"></span></label>
+    <select id="feed-kind" data-i18n-aria-label="feed.kinds">
+      <option value="" data-i18n="feed.allkinds"></option>
+      <option value="problems" data-i18n="feed.problems"></option>
+      <option value="lifecycle" data-i18n="feed.lifecycle"></option>
+    </select>
+  </div>
+  <button type="button" class="feed-new" id="feed-new" hidden></button>
+  <ol class="feed-list" id="feed-list" aria-live="off"></ol>
+</aside>
+
+<div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+<script src="i18n.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

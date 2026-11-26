@@ -38,6 +38,12 @@ COMPONENTS = tuple(COMPONENT_NAMES)
 NAMESPACE = 'ai-sdlc-runtime'
 ROLES = ('intake', 'admission-controller', 'orchestrator', 'worker', 'verifier', 'release-manager', 'relay', 'deployer')
 ALL_ROLES = ROLES + ('build-controller',)
+# The optional read-only flow console observer (docs/operations/flow-console.md).
+# It is not a workflow component: no identity, only a database login that the
+# migrator provisions while passwords.json names it.
+CONSOLE_ROLE = 'flow-console'
+CONSOLE_SECRET = 'ai-sdlc-flow-console-database'
+CONSOLE_SERVICE = 'ai-sdlc-flow-console'
 
 
 def run(args, **kwargs):
@@ -197,6 +203,41 @@ def component_uri(role, password):
             + '@ai-sdlc-postgres:5432/ai_sdlc?sslmode=disable')
 
 
+def console_uri(password):
+    if not re.fullmatch(r'[A-Za-z0-9_-]{32,128}', password):
+        raise ValueError('Invalid flow console database credential')
+    return 'postgresql://aisdlc_flow_console:' + password + '@ai-sdlc-postgres:5432/ai_sdlc?sslmode=disable'
+
+
+def console_images(path, lock):
+    """Read the reviewed console image pin written by install_images.py
+    --include-console. It must come from the same signed main run (revision)
+    as the installation's image lock."""
+    try:
+        document = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        raise ValueError('Flow console needs console-images.json beside the image lock (tools/install_images.py --include-console) or --console-images') from None
+    if (not isinstance(document, dict) or set(document) != {'version', 'revision', 'digest'}
+            or document['version'] != 'ai-sdlc.console-images/v1'
+            or not isinstance(document['digest'], str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', document['digest'])):
+        raise ValueError('Invalid flow console image pin')
+    if document['revision'] != lock.get('image', {}).get('tag'):
+        raise ValueError('Flow console image pin is from a different publication than the image lock')
+    return document['digest']
+
+
+def remove_console_credential(kubectl, cluster_uid, installer=None):
+    """After the migrator ran without the flow-console entry (role set to
+    NOLOGIN, privileges revoked), delete the console's URL Secret."""
+    api = installer or SimpleNamespace(read_resource=read_resource, run=run)
+    resource = api.read_resource(kubectl, 'secret', CONSOLE_SECRET)
+    # Delete only this installation's own Secret; leave any other untouched.
+    if resource is None or resource.get('metadata', {}).get('annotations', {}).get('ai-sdlc.io/cluster-uid') != cluster_uid:
+        return False
+    api.run(kubectl + ['delete', 'secret', CONSOLE_SECRET, '-n', NAMESPACE, '--wait=true'], stdout=subprocess.DEVNULL)
+    return True
+
+
 def identity_material(provider, image, repository, environment):
     # Disable the container log driver: private bootstrap stdout must exist only
     # in this captured pipe, never the host journal or container log files.
@@ -208,7 +249,7 @@ def identity_material(provider, image, repository, environment):
     return json.loads(result.stdout)
 
 
-def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False, verification=False, publication=False, merge=False, require_build=False, build=False, installer=None, review=False, project_manifest=None):
+def configure_identities(kubectl, provider, lock, cluster_uid, repository, environment, freeze=None, candidate=False, verification=False, publication=False, merge=False, require_build=False, build=False, installer=None, review=False, project_manifest=None, flow_console=False):
     api = installer or SimpleNamespace(owned_secret=owned_secret, read_resource=read_resource,
         create_owned_secret=create_owned_secret, run=run)
     if build and (not merge or repository != 'os-santiago/saferus' or environment != 'ai-sdlc-production'):
@@ -264,7 +305,22 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
             password = secrets.token_urlsafe(48)
             pending.append((name, {'password': password, 'uri': component_uri(role, password)}))
         passwords[role] = password
-    if len(set(passwords.values())) != len(roles):
+    # The flow console's password: same generator, same custody (its own
+    # URL Secret plus the same passwords.json entry). Without the option the
+    # entry is dropped, and the migrator disables the observer role.
+    if flow_console:
+        # Only consulted with the option: a foreign Secret of that name never
+        # blocks an installation without the console.
+        current = api.owned_secret(kubectl, CONSOLE_SECRET, cluster_uid)
+        if current is not None:
+            if set(current) != {'uri', 'password'} or current['uri'] != console_uri(current['password']):
+                raise ValueError('Inconsistent flow console database Secret')
+            password = current['password']
+        else:
+            password = secrets.token_urlsafe(48)
+            pending.append((CONSOLE_SECRET, {'password': password, 'uri': console_uri(password)}))
+        passwords[CONSOLE_ROLE] = password
+    if len(set(passwords.values())) != len(passwords):
         raise ValueError('Component database credentials must be distinct')
     current_policy = api.read_resource(kubectl, 'configmap', 'ai-sdlc-authority')
     if current_policy is not None:
@@ -300,8 +356,15 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
             raise ValueError('Migrator credentials differ from the component database Secrets')
         previous = json.loads(current_passwords['passwords.json'])
         if previous != passwords:
-            if (set(previous) != set(roles) - {'build-controller'}
-                    or any(previous[role] != passwords[role] for role in previous)):
+            # The console entry may be added or dropped; when kept, it must
+            # still match the console's own Secret.
+            console_before = previous.get(CONSOLE_ROLE)
+            if console_before is not None and CONSOLE_ROLE in passwords and console_before != passwords[CONSOLE_ROLE]:
+                raise ValueError('Migrator credentials differ from the flow console database Secret')
+            before = {role: value for role, value in previous.items() if role != CONSOLE_ROLE}
+            after = {role: value for role, value in passwords.items() if role != CONSOLE_ROLE}
+            if before != after and (set(before) != set(roles) - {'build-controller'}
+                    or any(before[role] != after[role] for role in before)):
                 raise ValueError('Migrator credentials differ from the component database Secrets')
             password_upgrade = (current_passwords, {'passwords.json': json.dumps(passwords, sort_keys=True)})
     else:
@@ -444,6 +507,8 @@ def _main(argv, stack):
     parser.add_argument('--model-upstream', type=Path, help='Reviewed OpenAI-compatible model service document (see docs/operations/model-gateway-adapters.md)')
     parser.add_argument('--runtime-class', help='Existing sandbox RuntimeClass for executor, reviewer and verification pods (for example kata); --platform openshift with the candidate or verification profile. kind installs and uses ai-sdlc-offline')
     parser.add_argument('--project-manifest', type=Path, help='Reviewed ai-sdlc.project/v1 manifest for a repository that is not a built-in reference')
+    parser.add_argument('--flow-console', action='store_true', default=None, help='Enable the read-only flow console (docs/operations/flow-console.md); omitting it on a later install disables it')
+    parser.add_argument('--console-images', type=Path, help='Reviewed console-images.json from tools/install_images.py --include-console; default: beside the image lock')
     parser.add_argument('--generation-seconds', type=int, help='Generation time budget in seconds (600-900, default 600); candidate or verification only, recorded in the execution configuration')
     parser.add_argument('--generation-steps', type=int, help='Generation SCC tool-step budget (24-32, default 24; above 24 requires --model-upstream); candidate or verification only, recorded in the execution configuration')
     parser.add_argument('--generation-answer-tokens', type=int, help='Requested output tokens per generator model answer (4096-8192, default 4096; above 4096 requires --model-upstream); candidate or verification only, recorded in the execution configuration')
@@ -493,6 +558,12 @@ def _main(argv, stack):
         raise ValueError('Publication requires a reviewed repository, verification and independent review')
     if args.publication is not None and args.command not in ('plan', 'local', 'status', 'credentials', 'sandbox'):
         raise ValueError('Publication option requires an installation scope')
+    if (args.flow_console is not None or args.console_images is not None) and args.command not in ('plan', 'local'):
+        raise ValueError('--flow-console requires plan or local')
+    if args.console_images is not None and not args.flow_console:
+        raise ValueError('--console-images requires --flow-console')
+    if args.flow_console and args.platform == 'konflux':
+        raise ValueError('--flow-console is not supported on the Konflux platform yet')
     if args.review_repair and not args.independent_review:
         raise ValueError('Review repair requires independent review')
     if args.review_repair is not None and args.command not in ('plan', 'local', 'status', 'credentials', 'sandbox'):
@@ -557,6 +628,15 @@ def _main(argv, stack):
             candidate_install.apply_model_upstream(execution_values, args.model_upstream)
     elif args.model_upstream is not None:
         raise ValueError('A model upstream requires the candidate or verification profile')
+    # A local install needs the reviewed console pin before any effect; a plan
+    # renders without it when it is not there yet.
+    console_digest = None
+    if args.flow_console:
+        pin = args.console_images or Path(args.images).with_name('console-images.json')
+        # Only an absent default pin is tolerated, and only by plan; a pin
+        # that exists but is invalid, or an explicit path, always fails.
+        if args.command == 'local' or args.console_images is not None or pin.exists():
+            console_digest = console_images(pin, image_lock(args.images))
     # The prepared transition renders the original complete state first and its
     # complete target after native policy reconciliation. Its partial selection
     # cannot satisfy the chart's mandatory installed merge-policy input yet.
@@ -575,6 +655,10 @@ def _main(argv, stack):
                     preview_values['project'] = {'manifestJSON': preview_json}
                     preview_values['authority'] = {'policyJSON': json.dumps({'repository': args.repository,
                         'projectSHA256': hashlib.sha256(preview_json.encode()).hexdigest()})}
+            if args.flow_console:
+                preview_values['console'] = {'enabled': True}
+                if console_digest is not None:
+                    preview_values['console']['digest'] = console_digest
             json.dump(preview_values, preview); preview.flush()
             run(helm_args + ['-f', preview.name], stdout=subprocess.DEVNULL)
     if args.command == 'plan':
@@ -585,6 +669,8 @@ def _main(argv, stack):
                           'publicationEnabled': bool(args.publication),
                           'mergeEnabled': bool(args.merge),
                           'buildEnabled': build_bundle is not None,
+                          # Only with the option: default output is unchanged.
+                          **({'flowConsoleEnabled': True} if args.flow_console else {}),
                           'githubAuth': args.github_auth, 'repository': args.repository,
                           'environment': args.environment, 'configurationDigest': config_digest}, indent=2))
         return 0
@@ -721,7 +807,10 @@ def _main(argv, stack):
     public_values = configure_identities(kubectl, provider, image_lock(args.images),
                                          cluster_uid, args.repository, args.environment,
                                          freeze=args.profile == 'maintenance', candidate=args.profile in ('candidate', 'verification'), verification=args.profile == 'verification', publication=bool(args.publication), merge=bool(args.merge), build=build_bundle is not None, review=bool(args.independent_review),
-                                         project_manifest=project_manifest)
+                                         project_manifest=project_manifest, flow_console=bool(args.flow_console))
+    if args.flow_console:
+        # Values name the image only; the credential stays in its Secret.
+        public_values['console'] = {'enabled': True, 'digest': console_digest}
     if intake_values is not None:
         public_values['intake'] = intake_values
     if args.profile in ('candidate', 'verification'):
@@ -763,6 +852,12 @@ def _main(argv, stack):
     for name in list(COMPONENT_NAMES.values()) + (["verifier"] if args.profile == "verification" else []) + (["build-controller"] if build_bundle is not None else []):
         run(kubectl + ['rollout', 'status', 'deployment/ai-sdlc-' + name, '-n', NAMESPACE,
                        '--timeout', args.timeout])
+    if args.flow_console:
+        run(kubectl + ['rollout', 'status', 'deployment/' + CONSOLE_SERVICE, '-n', NAMESPACE,
+                       '--timeout', args.timeout])
+    else:
+        # The migrator has run without the console entry: drop its URL Secret.
+        remove_console_credential(kubectl, cluster_uid)
     lock = image_lock(args.images)
     network = network_probe.verify(kubectl, lock['image']['repository'] + '@' + lock['components']['worker']['digest'])
     report = {'cluster': args.cluster, 'platform': args.platform, 'namespace': NAMESPACE, 'provider': provider,
@@ -777,10 +872,17 @@ def _main(argv, stack):
                           'publicationEnabled': bool(args.publication),
                           'mergeEnabled': bool(args.merge),
                           'buildEnabled': build_bundle is not None,
+                          # Only with the option: default output is unchanged.
+                          **({'flowConsoleEnabled': True} if args.flow_console else {}),
               'networkPolicyVerification': network,
               'images': image_lock(args.images)}
     (state / 'installation.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
+    if args.flow_console:
+        # One line, no credential: the Service is ClusterIP and the policy
+        # admits no peer by default, so port-forward is the access path.
+        print('Flow console: kubectl --kubeconfig ' + str(kubeconfig) + ' --context ' + str(kube_context)
+              + ' -n ' + NAMESPACE + ' port-forward svc/' + CONSOLE_SERVICE + ' 8080:8091  (then open http://127.0.0.1:8080/)', file=sys.stderr)
     return 0
 
 

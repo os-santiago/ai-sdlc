@@ -30,6 +30,10 @@ func AssertComponent(ctx context.Context, q Querier, component string) error {
 	if err != nil {
 		return err
 	}
+	return assertRole(ctx, q, want)
+}
+
+func assertRole(ctx context.Context, q Querier, want string) error {
 	var actual, session string
 	var elevated bool
 	if err := q.QueryRowContext(ctx, `SELECT current_user, session_user,
@@ -275,6 +279,11 @@ func (db *DB) ProvisionRolesForDeployment(ctx context.Context, passwords map[str
 				}
 			}
 		}
+		// The optional read-only flow console observer (never a component).
+		consolePassword, console := passwords[FlowConsoleComponent]
+		if err := reconcileFlowConsoleRole(ctx, tx, quotedSchema, columnRevocations, consolePassword, console); err != nil {
+			return err
+		}
 		// PostgreSQL installations may grant PUBLIC schema creation by default.
 		if _, err := tx.ExecContext(ctx, `REVOKE CREATE ON SCHEMA `+quotedSchema+` FROM PUBLIC`); err != nil {
 			return errors.New("public schema privilege reconciliation failed")
@@ -287,13 +296,19 @@ func (db *DB) ProvisionRolesForDeployment(ctx context.Context, passwords map[str
 }
 
 // ValidateRoleCredentials must run before privileged installation effects.
+// The flow console credential is optional: present, its observer role is
+// provisioned; absent, a previously provisioned observer is disabled.
 func ValidateRoleCredentials(passwords map[string]string) error {
-	if len(passwords) != len(componentTables) {
+	required := len(componentTables)
+	if _, console := passwords[FlowConsoleComponent]; console {
+		required++
+	}
+	if len(passwords) != required {
 		return errors.New("all component database credentials required")
 	}
 	seenPasswords := map[string]bool{}
 	for component, password := range passwords {
-		if _, err := ComponentRole(component); err != nil {
+		if _, err := ComponentRole(component); err != nil && component != FlowConsoleComponent {
 			return err
 		}
 		if !rolePasswordPattern.MatchString(password) {

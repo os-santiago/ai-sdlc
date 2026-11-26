@@ -58,6 +58,7 @@ needed only when its workload renders: the six core Deployments always, the
 | `{modelGateway.upstream.credentialSecret}` (no default) | `credential` | `modelGateway.upstream.credentialSecret` is set with an upstream adapter | worker and verifier model gateways | administrator (the model-upstream upgrade; the installer refuses it at installation) | supplied |
 | `ai-sdlc-source-reader` | `credential.json` | `verifier.sourceCredential` is `true` (with `runtime.mode=verification`) | the verifier controller container only (`/var/run/ai-sdlc/source/credential.json`), for the source reads of verification and independent review; never the model gateway sidecar or any pod the verifier creates | administrator (or an external secret operator); the installer only references an existing one | supplied |
 | `ai-sdlc-provenance-registry` (`provenance.registryCredentialSecret`, which must equal `<release fullname>-provenance-registry`) | `credential.json` | `provenance.enabled` | provenance verifier | installer (`provenance_runtime_install.py`) | supplied |
+| `ai-sdlc-flow-console-database` (`console.databaseSecret`) | `uri`; installer also keeps `password` | `console.enabled` | the read-only flow console (`DATABASE_URL`: the `aisdlc_flow_console` role's `postgresql://` URL; see [flow console](flow-console.md)) | installer with `--flow-console` (`password` kept for its consistency checks), or the administrator | generated once and adopted; removed when a later install omits the option; its password is also the optional `flow-console` entry of `passwords.json` |
 <!-- secret-contract:end -->
 
 `modelProvider.apiKeySecret` is accepted by the values schema but no template
@@ -87,7 +88,11 @@ outside the release namespace.
 - `password` (component): 32 to 128 characters of `[A-Za-z0-9_-]`, distinct for
   every role.
 - `passwords.json`: a JSON object mapping each role name to the same password
-  as its `ai-sdlc-database-{role}` Secret.
+  as its `ai-sdlc-database-{role}` Secret. It may also hold an optional
+  `flow-console` entry: the migrator then provisions the read-only
+  `aisdlc_flow_console` role with that password (the same as in
+  `ai-sdlc-flow-console-database`), and disables that role when the entry is
+  removed. It is not a component role and has no identity Secret.
 - `identity.json`: `{"keyId", "role", "privateKey"}`; `public-key.json`:
   `{"role", "value"}`. The public key must also appear under `keyId` in the
   authority policy (`authority.policyJSON`), so both are produced together
