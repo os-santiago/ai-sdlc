@@ -562,7 +562,7 @@
     return out;
   }
 
-  function drawSegment(parent, lane, s, y0, w, dim) {
+  function drawSegment(parent, lane, s, y0, w, dim, overlay) {
     const LANE_H = laneHeight(), cy = y0 + LANE_H - 13;
     const xq = x(s.queued), xs = s.start !== null ? x(s.start) : x(s.drawEnd), xe = x(s.drawEnd);
     if (xe < -20 || xq > w + 20) return null;
@@ -599,7 +599,9 @@
     const label = room >= name.length * 6.3 ? name : room >= 9 ? STAGE_INITIAL[s.stage] : '';
     if (label) text(g, { class: 'bar-label' + (s.outcome === 'waiting' || s.outcome === 'blocked' || s.outcome === 'quarantined' ? ' light' : ''), x: x0 + 5, y: cy + 4 }, label);
     if (s.outcome === 'completed' && width > 22) check(g, x0 + width - 8, cy);
-    if (badged) badge(g, s.outcome, x0 + width, cy);
+    // Badges go on a layer above every bar, so a retry that starts right
+    // after a stop cannot cover the stop's glyph.
+    if (badged) badge(svg('g', { opacity: dim ? 0.28 : 1 }, overlay || g), s.outcome, x0 + width, cy);
     return { g, x0: Math.min(xq, x0), x1: x0 + width + (badged ? 8 : 6) };
   }
 
@@ -685,12 +687,13 @@
     });
 
     const bars = svg('g', {}, chart);
+    const overlay = svg('g', {}, chart);
     lanes.slice(first, last).forEach((lane, k) => {
       const i = first + k, y0 = i * LANE_H;
       const dim = state.filter.component;
       let lastEnd = -Infinity, finalBox = null;
       for (const s of lane.segments) {
-        const box = drawSegment(bars, lane, s, y0, w, dim && s.events[0].component !== dim);
+        const box = drawSegment(bars, lane, s, y0, w, dim && s.events[0].component !== dim, overlay);
         if (!box) continue;
         lastEnd = Math.max(lastEnd, box.x1);
         if (s === lane.final) finalBox = box;
