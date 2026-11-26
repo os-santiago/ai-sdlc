@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"crypto/sha1" // Git object identities; SHA-256 remains the evidence binding.
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
@@ -91,9 +93,31 @@ func PrepareTree(c Command, projectSHA256 string, source workspacebundle.Bundle,
 	// Keep the tested public VPS release workflow out of the local-kind pilot.
 	// No model or issue text can remove the explicit release-skip marker.
 	return TreePlan{Repository: c.Repository, Request: TreeRequest{base, entries}, ExpectedTreeSHA: expected,
-		Branch:         "ai-sdlc/issue-" + strconv.Itoa(c.IssueNumber) + "-" + strings.TrimPrefix(c.CandidateID, "execution-")[:32],
-		CommitMessage:  fmt.Sprintf("fix(ai-sdlc): address issue #%d [skip release]", c.IssueNumber),
-		CommitIdentity: manifest.Publication.Identity()}, nil
+		Branch: BranchName(c), CommitMessage: CommitMessage(c.IssueNumber), CommitIdentity: manifest.Publication.Identity()}, nil
+}
+
+// BranchName is the only branch a command may publish to. It is derived from
+// the signed issue number and candidate identity, never from model output.
+func BranchName(c Command) string {
+	if !candidateID.MatchString(c.CandidateID) || c.IssueNumber < 1 {
+		return ""
+	}
+	return "ai-sdlc/issue-" + strconv.Itoa(c.IssueNumber) + "-" + strings.TrimPrefix(c.CandidateID, "execution-")[:32]
+}
+
+// CommitMessage is the fixed commit subject (and pull request title).
+func CommitMessage(issue int) string {
+	return fmt.Sprintf("fix(ai-sdlc): address issue #%d [skip release]", issue)
+}
+
+// PlanDigest binds a command to its reconstructed tree plan. The release
+// manager journals it when it claims a publication.
+func PlanDigest(c Command, p TreePlan) string {
+	raw, _ := json.Marshal(struct {
+		Command Command
+		Plan    TreePlan
+	}{c, p})
+	return authority.Digest(raw)
 }
 
 type gitNode struct {

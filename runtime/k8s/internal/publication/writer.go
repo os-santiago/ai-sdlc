@@ -189,6 +189,35 @@ func commitSHA(c commitRequest) string {
 	return hex.EncodeToString(objectID("commit", []byte(raw)))
 }
 
+// The request bodies below, like commitBody and commitSHA, are shared with
+// the read-only reconciler, which re-derives them to prove which journaled
+// write it observes.
+type refRequest struct {
+	Ref string `json:"ref"`
+	SHA string `json:"sha"`
+}
+
+func branchBody(branch, commit string) refRequest {
+	return refRequest{"refs/heads/" + branch, commit}
+}
+
+type pullRequestRequest struct {
+	Title               string `json:"title"`
+	Body                string `json:"body"`
+	Head                string `json:"head"`
+	Base                string `json:"base"`
+	Draft               bool   `json:"draft"`
+	MaintainerCanModify bool   `json:"maintainer_can_modify"`
+}
+
+// proofMarker is the line of the pull request body that carries the plan digest.
+func proofMarker(proofDigest string) string {
+	return "Publication proof SHA-256: `" + proofDigest + "`."
+}
+func pullRequestBody(repository string, issue int, title, branch, proofDigest string) pullRequestRequest {
+	return pullRequestRequest{Title: title, Body: IssueReference(repository, issue) + "\n\nAI-SDLC verified candidate.\n" + proofMarker(proofDigest) + "\nIt merges only after the repository's required checks pass.\n", Head: branch, Base: "main"}
+}
+
 // CreateCommit uses the plan's recorded identity, not the current
 // installation's, and accepts only the commit object it planned.
 func (w *Writer) CreateCommit(ctx context.Context, fence WriteFence, p TreePlan, sourceSHA string, date time.Time) (string, error) {
@@ -218,11 +247,8 @@ func (w *Writer) CreateBranch(ctx context.Context, fence WriteFence, p TreePlan,
 	if _, e := w.validatePlan(p); e != nil || !workspacebundle.ValidSourceSHA(commit) {
 		return ErrPublication
 	}
-	ref := "refs/heads/" + p.Branch
-	value := struct {
-		Ref string `json:"ref"`
-		SHA string `json:"sha"`
-	}{ref, commit}
+	value := branchBody(p.Branch, commit)
+	ref := value.Ref
 	var result struct {
 		Ref    string `json:"ref"`
 		Object struct {
@@ -246,15 +272,7 @@ func (w *Writer) CreatePullRequest(ctx context.Context, fence WriteFence, p Tree
 	if e != nil || !workspacebundle.ValidSourceSHA(sourceSHA) || !workspacebundle.ValidSourceSHA(commit) || !workspacebundle.ValidDigest(proofDigest) {
 		return PublishedPullRequest{}, ErrPublication
 	}
-	value := struct {
-		Title               string `json:"title"`
-		Body                string `json:"body"`
-		Head                string `json:"head"`
-		Base                string `json:"base"`
-		Draft               bool   `json:"draft"`
-		MaintainerCanModify bool   `json:"maintainer_can_modify"`
-	}{
-		Title: p.CommitMessage, Body: IssueReference(w.repository, number) + "\n\nAI-SDLC verified candidate.\nPublication proof SHA-256: `" + proofDigest + "`.\nIt merges only after the repository's required checks pass.\n", Head: p.Branch, Base: "main"}
+	value := pullRequestBody(w.repository, number, p.CommitMessage, p.Branch, proofDigest)
 	type end struct {
 		Ref  string `json:"ref"`
 		SHA  string `json:"sha"`

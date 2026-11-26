@@ -204,11 +204,14 @@ func TestRuntimeMetricsKeepLabelsBounded(t *testing.T) {
 	SetQueueDepth("worker", "issue-42", 1)
 	Delivery("published")
 	Delivery("pull-request https://github.com/x/y/pull/1")
+	Reconciliation("branch", "not-sent")
+	Reconciliation("refs/heads/main", "forge said 502")
 	allowed := map[string]map[string]bool{
 		"component": set(append(Components, Other)...),
 		"loop":      set(append(Loops, Other)...),
 		"role":      set(append(ModelRoles, Other)...),
-		"outcome":   set(append(append(ModelOutcomes, DeliveryOutcomes...), Other)...),
+		"outcome":   set(append(append(append(ModelOutcomes, DeliveryOutcomes...), ReconciliationOutcomes...), Other)...),
+		"effect":    set(append(ReconciliationEffects, Other)...),
 		"stage":     nil, // bounded by the diagnostic functions and the charset
 	}
 	queue := set(append(QueueStages, Other)...)

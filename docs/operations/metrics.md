@@ -47,6 +47,7 @@ credentials or error text.
 | `ai_sdlc_model_calls_total` | counter | `role`, `outcome` | Each model gateway call made by the broker |
 | `ai_sdlc_model_call_duration_seconds` | histogram | `role`, `outcome` | Duration of those calls |
 | `ai_sdlc_deliveries_total` | counter | `outcome` | Each claimed publication or merge attempt |
+| `ai_sdlc_publication_reconciliations_total` | counter | `effect`, `outcome` | Each read-only reconciliation of an uncertain publication effect |
 
 ### Queue depth
 
@@ -129,11 +130,26 @@ attempts: `published` (a pull request was opened), `publication-stopped`,
 `merged` and `merge-stopped`. Idle cycles and standing quarantine are polled
 states, not attempts, and are not counted.
 
+### Publication reconciliations
+
+`ai_sdlc_publication_reconciliations_total{effect,outcome}` counts each
+[reconciliation](publication-reconciliation.md) step of an uncertain
+publication effect. `effect` is `tree`, `commit`, `branch` or `pull-request`.
+`outcome` is `completed`, `not-sent`, `mismatch`, `unavailable`, `unplanned` or
+`unproven`.
+Together with the bounded log line, this counter is the record of attempts that
+leave an effect quarantined. To alert on a quarantine that keeps failing
+reconciliation:
+
+```promql
+increase(ai_sdlc_publication_reconciliations_total{outcome=~"mismatch|unplanned|unproven"}[1h]) > 0
+```
+
 ## Cardinality
 
 Every label value is bounded twice:
 
-1. **Allowlists.** `component`, `loop`, `role`, `outcome` and the queue
+1. **Allowlists.** `component`, `loop`, `role`, `effect`, `outcome` and the queue
    `stage` accept only fixed values. The stop `stage` accepts only the output
    of the diagnostic functions above, each of which returns a fixed constant
    or `unknown`.
@@ -151,6 +167,7 @@ Expected series per component:
 | `ai_sdlc_model_calls_total` | 18 | Fewer than 8 |
 | `ai_sdlc_model_call_duration_seconds` | 18 label sets × 16 lines | Fewer than 8 label sets |
 | `ai_sdlc_deliveries_total` | 4 | 4 |
+| `ai_sdlc_publication_reconciliations_total` | 20 | Fewer than 4 |
 
 Counters reset when a process starts: use `rate()` and `increase()`. A
 labelled series appears only at its first increment, with no earlier zero

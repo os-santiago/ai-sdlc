@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publication"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationrecovery"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verificationflow"
@@ -68,11 +69,8 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	if e != nil {
 		return proof, ControllerError{"tree-plan"}
 	}
-	raw, _ := json.Marshal(struct {
-		Command publication.Command
-		Plan    publication.TreePlan
-	}{c, plan})
-	planDigest := authority.Digest(raw)
+	planDigest := publication.PlanDigest(c, plan)
+	var raw []byte
 	current, _, e := CurrentProof(ctx, db, policy, review, id)
 	if e != nil || current != c {
 		return proof, ControllerError{"authority"}
@@ -204,6 +202,10 @@ type Runtime struct {
 	Policy verificationflow.PolicyLoader
 	Review ReviewLoader
 	Writer Transport
+	// Reconciler and Observer, when both set, resolve an uncertain effect
+	// that quarantines publication by a read-only forge observation.
+	Reconciler *publicationrecovery.Reconciler
+	Observer   publicationrecovery.Observer
 }
 
 func (r Runtime) PollOnce(ctx context.Context) (string, error) {
@@ -218,7 +220,19 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		return "", e
 	}
 	if blocked {
-		return "publication-quarantined", nil
+		if r.Reconciler == nil || r.Observer == nil {
+			return "publication-quarantined", nil
+		}
+		// The failed request stays failed: reconciliation only records what the
+		// forge shows. The quarantine lifts once no uncertain effect remains;
+		// the next poll then selects queued work as usual.
+		if _, _, e = r.Reconciler.Step(ctx, r.Observer); e != nil {
+			return "publication-quarantined", e
+		}
+		if blocked, e = r.DB.PublicationBlocked(ctx); e != nil || blocked {
+			return "publication-quarantined", e
+		}
+		return "publication-reconciled", nil
 	}
 	id, e := r.DB.NextPublication(ctx)
 	if e != nil || id == "" {

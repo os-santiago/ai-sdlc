@@ -464,11 +464,44 @@ func (d *deriver) verdicts(stage string, rows []store.FlowVerdict, effects map[s
 					break
 				}
 			}
+			if stage == "publication" {
+				d.reconciled(l, r, list, key)
+			}
 		case r.State == "claimed" && r.ClaimUntil != nil && r.ClaimUntil.Before(d.now):
 			d.emit(l, stage, "lease", flowevent.KindBlocked, "lease-lapsed", *r.ClaimUntil, 0, 0, nil, key)
 		}
 		if r.Cleanup == "uncertain" {
 			d.emit(l, stage, "cleanup", flowevent.KindQuarantined, "cleanup-uncertain", end, 0, 0, attrs("cleanup", r.Cleanup), key)
 		}
+	}
+}
+
+// reconciliationSettle mirrors the store's settle window: reconciliation
+// resolves an uncertain publication effect only once the claim ended this long
+// ago, while a live acknowledgement or pre-send seal happens within (or right
+// at the end of) the claim. A later resolution is therefore a read-only
+// reconciliation, readable from the columns the console already reads.
+const reconciliationSettle = 120 * time.Second
+
+// reconciled emits publication / reconciled / completed or not-sent for each
+// effect of a failed publication that reconciliation resolved. Outcomes that
+// keep the quarantine change no row, so they remain the quarantined event.
+func (d *deriver) reconciled(l link, r store.FlowVerdict, effects []store.FlowEffect, key string) {
+	if r.ClaimUntil == nil {
+		return
+	}
+	settled := r.ClaimUntil.Add(reconciliationSettle)
+	for _, e := range effects {
+		var outcome string
+		var at time.Time
+		switch {
+		case e.CompletedAt != nil && e.CompletedAt.After(settled):
+			outcome, at = "completed", *e.CompletedAt
+		case e.NotSentAt != nil && e.NotSentAt.After(settled):
+			outcome, at = "not-sent", *e.NotSentAt
+		default:
+			continue
+		}
+		d.emit(l, "publication", "reconciled", flowevent.KindProgressed, outcome, at, 0, 0, attrs("effect", e.Kind, "reason", r.Reason), key, "reconciled", e.Kind)
 	}
 }

@@ -165,7 +165,7 @@ by `runtime/k8s/internal/flowevent`:
 | `kind` | `started`, `progressed`, `completed`, `failed` (a verdict against the work), `stopped-safely` (stopped without a verdict), `waiting`, `retried`, `quarantined`, `degraded` or `blocked`. |
 | `diagnostic` | A bounded name (`^[a-z0-9][a-z0-9.-]{0,79}$`), for example `worker-exit-22`, `comparison-failed`, `stale-wait`, `model-status-503`, `cleanup-uncertain`, `unresolved-effect`, `lease-lapsed`. |
 | `durationMs`, `latencyMs` | Duration of the stage or step, and latency of a model call, when known. |
-| `attributes` | At most eight values from a closed key set (`phase`, `exitCode`, `reason`, `decision`, `risk`, `status`, `changes`, `modelCalls`, `sequence`, `inputBytes`, `outputBytes`, `responseStatus`, `cleanup`, `cleanupAttempts`, `generation`, `previousAttempt`, `waitedMs`, `effects`, `source`), each a short name or number. |
+| `attributes` | At most eight values from a closed key set (`phase`, `exitCode`, `reason`, `decision`, `risk`, `status`, `changes`, `modelCalls`, `sequence`, `inputBytes`, `outputBytes`, `responseStatus`, `cleanup`, `cleanupAttempts`, `generation`, `previousAttempt`, `waitedMs`, `effects`, `source`, `effect`), each a short name or number. |
 
 An event never carries source code, diffs, prompts, model output, issue text,
 review text, tokens, digests, Kubernetes object names or credentials. Unknown
@@ -193,7 +193,7 @@ ids it has not published before.
 | `execution_models`, `model_calls` | generator model calls: `progressed` with latency, `degraded` for a non-200 status or an `ambiguous` or `stopped` call |
 | `verification_requests`, `verification_effects` | verification `waiting`, `started`, `progressed`, `completed`, `failed` (`comparison-failed`, `rejected`) or `stopped-safely` (`expired`, `revoked`, `uncertain`), `quarantined` (`cleanup-uncertain`) |
 | `review_runs`, `review_effects`, `review_model_calls` | the same for review (`request-changes` is a verdict), with reviewer model call latency |
-| `publication_requests`, `publication_effects`, `published_records` | publication, with `quarantined` (`unresolved-effect`) when a failed publication has an effect that was neither acknowledged nor sealed as not sent: the same condition that blocks the release manager |
+| `publication_requests`, `publication_effects`, `published_records` | publication, with `quarantined` (`unresolved-effect`) when a failed publication has an effect that was neither acknowledged nor sealed as not sent: the same condition that blocks the release manager. An effect of a failed publication that was resolved more than 120 s after its claim ended was resolved by [reconciliation](publication-reconciliation.md). It is shown as `progressed`, step `reconciled`, diagnostic `completed` or `not-sent`, with attributes `effect` and `reason`. A reconciliation that keeps the quarantine changes no row, so it stays the `quarantined` event. |
 | `merge_requests`, `merge_effects` | merge, with the same quarantine rule |
 
 The journal records state, not a log, so a few timings are derived:

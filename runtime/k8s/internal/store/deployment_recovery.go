@@ -35,7 +35,10 @@ type DeploymentRecovery struct {
 
 // Only an authenticated durable API acknowledgement can be recovered. An
 // unsent intent and a sent-but-unacknowledged effect both remain uncertain:
-// current image equality can never manufacture a missing receipt.
+// current image equality can never manufacture a missing receipt. (The single,
+// named exception to that rule is publication reconciliation's observed receipt
+// for a failed request: see ResolvePublicationEffect and
+// docs/operations/publication-reconciliation.md. Deployment has none.)
 func (j *DeploymentJournal) ReadDeploymentRecovery(ctx context.Context, c DeploymentClaim) (DeploymentRecovery, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

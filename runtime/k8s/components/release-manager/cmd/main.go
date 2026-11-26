@@ -20,6 +20,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publication"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationflow"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationrecovery"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/releaseflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/releasing"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/reviewflow"
@@ -176,13 +177,25 @@ func main() {
 		}
 		return nil
 	}
+	// Pacing for read-only reconciliation of uncertain effects lives across polls.
+	reconciler := &publicationrecovery.Reconciler{DB: c.DB, Policy: func() (authority.Policy, error) { p, _, _, e := policy(); return p, e }}
 	stop := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
-		w, e := writer()
+		value, e := credential()
 		if e != nil {
 			log.Print("publication credential unavailable")
 			return
 		}
-		r := publicationflow.Runtime{DB: c.DB, Policy: policy, Review: review, Writer: w}
+		w, e := publication.NewWriter(value)
+		if e != nil {
+			log.Print("publication credential unavailable")
+			return
+		}
+		observer, e := publication.NewReader(value)
+		if e != nil {
+			log.Print("publication credential unavailable")
+			return
+		}
+		r := publicationflow.Runtime{DB: c.DB, Policy: policy, Review: review, Writer: w, Reconciler: reconciler, Observer: observer}
 		state, e := r.PollOnce(ctx)
 		countDelivery(state)
 		if e != nil {

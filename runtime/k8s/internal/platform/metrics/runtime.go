@@ -54,6 +54,12 @@ var ModelOutcomes = []string{ModelSuccess, ModelTimeout, ModelCanceled, ModelTra
 // attempt, and is not counted.
 var DeliveryOutcomes = []string{"published", "publication-stopped", "merged", "merge-stopped"}
 
+// ReconciliationEffects and ReconciliationOutcomes are the closed label sets of
+// one read-only reconciliation of an uncertain publication effect
+// (publicationrecovery.Step).
+var ReconciliationEffects = []string{"tree", "commit", "branch", "pull-request"}
+var ReconciliationOutcomes = []string{"completed", "not-sent", "mismatch", "unavailable", "unplanned", "unproven"}
+
 // ModelCallBuckets span a fast local answer up to the 600 s ceiling.
 var ModelCallBuckets = []float64{1, 2.5, 5, 10, 20, 30, 60, 90, 120, 180, 300, 450, 600}
 
@@ -73,6 +79,9 @@ var (
 	deliveries = Default.NewCounter("ai_sdlc_deliveries_total",
 		"Publication and merge attempts of the release manager, by outcome.",
 		OneOf("outcome", DeliveryOutcomes...))
+	reconciliations = Default.NewCounter("ai_sdlc_publication_reconciliations_total",
+		"Read-only reconciliations of uncertain publication effects, by effect kind and outcome.",
+		OneOf("effect", ReconciliationEffects...), OneOf("outcome", ReconciliationOutcomes...))
 )
 
 // MaxQueueDepth caps the sampled count, so the query stays bounded.
@@ -102,3 +111,7 @@ func ModelCall(role, outcome string, elapsed time.Duration) {
 
 // Delivery counts one terminal publication or merge outcome.
 func Delivery(outcome string) { deliveries.Inc(outcome) }
+
+// Reconciliation counts one reconciliation step of an uncertain publication
+// effect. Values outside the closed sets are recorded as "other".
+func Reconciliation(effect, outcome string) { reconciliations.Inc(effect, outcome) }
