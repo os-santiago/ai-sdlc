@@ -86,8 +86,10 @@ def validate_run(run, run_id, revision):
         raise ValueError('Expected a successful exact-revision main container publication')
 
 
-def select_artifacts(catalog, run_id, revision, include_build=False, include_release=False, include_browser=False):
-    expected = ARTIFACT_COMPONENTS | ({'artifact-builder', 'build-controller'} if include_build else set()) | ({'deployer'} if include_release else set()) | ({'browser-verifier'} if include_browser else set())
+def select_artifacts(catalog, run_id, revision, include_build=False, include_release=False, include_browser=False, include_console=False):
+    # The optional flow console is its own artifact class (console-image-),
+    # selected only on request and never part of the default image lock.
+    expected = ARTIFACT_COMPONENTS | ({'artifact-builder', 'build-controller'} if include_build else set()) | ({'deployer'} if include_release else set()) | ({'browser-verifier'} if include_browser else set()) | ({'flow-console'} if include_console else set())
     if include_release and not include_build: raise ValueError('Release images require complete build publication')
     if include_browser and not include_release: raise ValueError('Browser images require complete release publication')
     if (not isinstance(catalog, dict) or type(catalog.get('total_count')) is not int
@@ -104,10 +106,12 @@ def select_artifacts(catalog, run_id, revision, include_build=False, include_rel
         prefix = 'release-image-' if include_release and isinstance(name,str) and name.startswith('release-image-') else 'supply-chain-image-' if include_build and isinstance(name, str) and name.startswith('supply-chain-image-') else 'image-'
         if include_browser and isinstance(name, str) and name.startswith('browser-image-'):
             prefix = 'browser-image-'
+        if include_console and isinstance(name, str) and name.startswith('console-image-'):
+            prefix = 'console-image-'
         if not isinstance(name, str) or not name.startswith(prefix):
             continue
         component = name[len(prefix):]
-        if (prefix == 'supply-chain-image-') != (component in ('artifact-builder', 'build-controller')) or (prefix=='release-image-') != (component=='deployer') or (prefix=='browser-image-') != (component=='browser-verifier'):
+        if (prefix == 'supply-chain-image-') != (component in ('artifact-builder', 'build-controller')) or (prefix=='release-image-') != (component=='deployer') or (prefix=='browser-image-') != (component=='browser-verifier') or (prefix=='console-image-') != (component=='flow-console'):
             raise ValueError('Unexpected component publication artifact class')
         origin = item.get('workflow_run', {})
         if not isinstance(origin, dict):
@@ -294,14 +298,14 @@ def signature_verifier(api, revision, allow_unsigned_legacy, refuse_ineligible=F
     return verify
 
 
-def resolve(api, run_id, revision, include_build=False, include_release=False, include_browser=False, *, verify):
+def resolve(api, run_id, revision, include_build=False, include_release=False, include_browser=False, *, verify, include_console=False):
     """Resolve a publication. verify is required: a signature_verifier()
     callback, or False only where a caller documents why it cannot verify."""
     if verify is not False and not callable(verify):
         raise ValueError('resolve() requires a signature verifier or an explicit verify=False')
     run = decode(api.get('actions/runs/' + str(run_id)))
     validate_run(run, run_id, revision)
-    artifacts = select_artifacts(decode(api.get('actions/runs/' + str(run_id) + '/artifacts?per_page=100')), run_id, revision, include_build, include_release, include_browser)
+    artifacts = select_artifacts(decode(api.get('actions/runs/' + str(run_id) + '/artifacts?per_page=100')), run_id, revision, include_build, include_release, include_browser, include_console)
     identities = {}
     for component, artifact in sorted(artifacts.items()):
         identities[component] = image_identity(api.get('actions/artifacts/' + str(artifact['id']) + '/zip'), artifact, component, revision)
@@ -332,6 +336,7 @@ def main(argv=None):
     parser.add_argument('--include-release', action='store_true', help='Also require the exact-main deployer image; requires --include-build')
     parser.add_argument('--include-browser', action='store_true', help='Also require the exact-main browser image; requires --include-release')
     parser.add_argument('--include-build', action='store_true', help='Also require exact-main publisher and build-controller identities')
+    parser.add_argument('--include-console', action='store_true', help='Also require the exact-main flow console image and write console-images.json (the image lock is unchanged)')
     parser.add_argument('--run', type=int, required=True, help='Successful containers workflow run on main')
     parser.add_argument('--revision', required=True, help='Exact reviewed source commit')
     parser.add_argument('--output', type=Path, required=True, help='New directory for image lock and evidence')
@@ -348,13 +353,18 @@ def main(argv=None):
         api = GitHub()
         verify = signature_verifier(api, args.revision, args.allow_unsigned_legacy, refuse_ineligible=True, cosign=verifier)
         lock, evidence = resolve(api, args.run, args.revision, args.include_build, args.include_release, args.include_browser,
-                                 verify=verify)
+                                 verify=verify, include_console=args.include_console)
         args.output.mkdir(parents=True, mode=0o700, exist_ok=False)
         (args.output / 'images.lock.json').write_text(json.dumps(lock, indent=2) + '\n')
         evidence_json = json.dumps(evidence, indent=2) + '\n'
         (args.output / 'evidence.json').write_text(evidence_json)
         # Execution installation consumes this sibling of images.lock.json.
         (args.output / 'images.evidence.json').write_text(evidence_json)
+        if args.include_console:
+            # Its signature was verified with every other image above.
+            console = {'version': 'ai-sdlc.console-images/v1', 'revision': args.revision,
+                       'digest': evidence['images']['flow-console']['digest']}
+            (args.output / 'console-images.json').write_text(json.dumps(console, indent=2) + '\n')
         if args.include_browser:
             browser={'version':'ai-sdlc.browser-images/v1','revision':args.revision,
                      'image':REGISTRY+'@'+evidence['images']['browser-verifier']['digest']}

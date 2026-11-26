@@ -81,6 +81,45 @@ class ImageResolutionTests(unittest.TestCase):
         workflow=(Path(__file__).resolve().parents[1]/'.github/workflows/containers.yml').read_text()
         self.assertEqual(workflow.count("matrix.component == 'flow-console' && 'console-image'"),2)
 
+    def test_console_image_is_selected_only_on_request_and_verified_with_the_others(self):
+        responses = {'actions/runs/123': json.dumps(run()).encode()}
+        catalog = {'total_count': 0, 'artifacts': []}
+        for component in sorted(images.ARTIFACT_COMPONENTS):
+            data, metadata = archive(component)
+            catalog['artifacts'].append(metadata)
+            responses['actions/artifacts/' + str(metadata['id']) + '/zip'] = data
+        data, metadata = archive('worker', changes={'component': 'flow-console'}, filename='flow-console.json')
+        metadata = dict(metadata, id=200, name='console-image-flow-console')
+        catalog['artifacts'].append(metadata)
+        responses['actions/artifacts/200/zip'] = data
+        catalog['total_count'] = len(catalog['artifacts'])
+        responses['actions/runs/123/artifacts?per_page=100'] = json.dumps(catalog).encode()
+        class API:
+            def get(self, path):
+                return responses[path]
+        default_lock, default_evidence = images.resolve(API(), RUN, SHA, verify=False)
+        self.assertNotIn('flow-console', default_evidence['images'])
+        verifier = FakeVerifier()
+        lock, evidence = images.resolve(API(), RUN, SHA, include_console=True,
+                                        verify=lambda ids: images.verify_publication(verifier, ids, SHA))
+        # The installer image lock is identical; the console digest is evidence only.
+        self.assertEqual(lock, default_lock)
+        self.assertEqual(evidence['images']['flow-console']['digest'], DIGEST_B)
+        self.assertIn(('flow-console', DIGEST_B, SHA), verifier.calls)
+        self.assertEqual(evidence['signatures']['images']['flow-console'], 'verified')
+        # A console signature failure fails the whole resolution.
+        with self.assertRaises(images.ImageSignatureRejected):
+            images.resolve(API(), RUN, SHA, include_console=True,
+                           verify=lambda ids: images.verify_publication(FakeVerifier({'flow-console': images.ImageSignatureRejected}), ids, SHA))
+        # Requested but absent, or published under another class, is refused.
+        missing = dict(catalog, artifacts=catalog['artifacts'][:-1], total_count=catalog['total_count'] - 1)
+        with self.assertRaises(ValueError):
+            images.select_artifacts(missing, RUN, SHA, include_console=True)
+        wrong = json.loads(json.dumps(catalog))
+        wrong['artifacts'][-1]['name'] = 'console-image-worker'
+        with self.assertRaises(ValueError):
+            images.select_artifacts(wrong, RUN, SHA, include_console=True)
+
     def test_rejects_unreviewed_or_failed_run_before_artifacts(self):
         cases = [{'event': 'pull_request'}, {'head_branch': 'build/unreviewed'}, {'head_sha': 'c' * 40},
                  {'conclusion': 'failure'}, {'status': 'in_progress'}, {'path': '.github/workflows/other.yml'},

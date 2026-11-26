@@ -25,6 +25,11 @@ fields. GitHub responses have a 1 MiB file limit, 30-second request limit and
 180-second overall work limit. Missing, duplicate, expired or mismatched
 artifacts fail before an installer lock is written.
 
+With `--include-console` the resolver also requires the
+`console-image-flow-console` artifact of the same run, verifies its signature
+with the others, and writes `console-images.json` beside the lock for
+`./install.sh local --flow-console`. The image lock itself is unchanged.
+
 ### Signature verification
 
 Before it writes any file, the resolver verifies the keyless signature of every

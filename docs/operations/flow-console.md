@@ -259,6 +259,46 @@ as HTML.
 
 ## Enable it
 
+### With the installer
+
+1. Resolve the image pins with the console included. The console image comes
+   from the same signed `containers` run on `main` as the installation's image
+   lock, and its signature is verified with the others:
+
+   ```bash
+   python3 tools/install_images.py --run RUN_ID --revision FULL_COMMIT_SHA \
+     --include-console --output /tmp/reviewed-ai-sdlc-images
+   ```
+
+   Besides the unchanged `images.lock.json` this writes
+   `console-images.json` (`ai-sdlc.console-images/v1`: the revision and the
+   console digest).
+2. Install with the flag; the installer reads `console-images.json` beside
+   the image lock (or `--console-images PATH`) and refuses a pin from a
+   different revision:
+
+   ```bash
+   ./install.sh local --images /tmp/reviewed-ai-sdlc-images/images.lock.json --flow-console ...
+   ```
+
+   It generates the console's database password with the same generator and
+   custody as the component passwords, adds the `flow-console` entry to the
+   migrator's `passwords.json`, creates `ai-sdlc-flow-console-database`
+   (`uri`, plus `password` for its own consistency checks), and sets
+   `console.enabled` and `console.digest` in the Helm values. No credential
+   reaches the values, a command line or the output. At the end it prints a
+   one-line `kubectl port-forward` hint (see [Reach it](#reach-it)).
+3. Running a later install **without** `--flow-console` disables the
+   console: the entry leaves `passwords.json`, the migrator sets the role
+   `NOLOGIN` and revokes its privileges, and the installer then deletes the
+   console's Secret.
+
+The bootstrap `install.sh` forwards the same options, so a remote or
+versioned bootstrap accepts `--flow-console` too. The Konflux platform does
+not support it yet.
+
+### Manually (Helm only)
+
 1. Add a password for the console to the migrator's credential document
    (`migrator.credentialsSecret`, default `ai-sdlc-database-roles`, key
    `passwords.json`): a `flow-console` entry with 32 to 128 characters of
@@ -275,7 +315,6 @@ as HTML.
    ```
 
    Never put these values in Git, Helm values, `--set` arguments or CI logs.
-   The installer does not manage this credential yet.
 3. Enable the console in the installation's chart values and upgrade the
    release. The migrator Job applies migration 0039 (if it is missing) and
    provisions the role:
@@ -296,11 +335,13 @@ installations render byte-identically.
 Pin `console.digest` to the digest of a `flow-console` image published by the
 `containers` workflow on `main` (its identity artifact is
 `console-image-flow-console`). The tag fallback exists for local development;
-a tag is mutable, and the installer's image lock does not cover the console.
+a tag is mutable, and the installer's image lock does not cover the console
+(the installer pins it from `console-images.json`).
 
 ### Disable or roll back
 
-To turn the console off, set `console.enabled: false`, remove the
+To turn the console off with the installer, run the next install without
+`--flow-console`. By hand: set `console.enabled: false`, remove the
 `flow-console` entry from `passwords.json` and upgrade: the migrator sets the
 role `NOLOGIN` and revokes its privileges. Then delete the console's database
 Secret.
@@ -329,8 +370,8 @@ admit nothing to a role that cannot log in and holds no grants.
 The Service is `ClusterIP` only. From a workstation with access to the cluster:
 
 ```bash
-kubectl -n ai-sdlc-runtime port-forward svc/ai-sdlc-flow-console 8091:8091
-# open http://127.0.0.1:8091/
+kubectl -n ai-sdlc-runtime port-forward svc/ai-sdlc-flow-console 8080:8091
+# open http://127.0.0.1:8080/
 ```
 
 To expose it further, add explicit `console.accessFrom` peers (for example an
