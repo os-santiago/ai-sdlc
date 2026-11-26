@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/verification"
@@ -64,7 +63,7 @@ func TestTreePlanPreservesCompleteSourceAndFixedDestination(t *testing.T) {
 	}
 	c.DeltaSHA256 = workspacebundle.Digest(raw)
 	c.CandidateTreeSHA256 = d.CandidateTreeSHA256
-	plan, err := PrepareTree(c, source, raw)
+	plan, err := PrepareTree(c, "", source, raw)
 	if err != nil || len(plan.Request.Tree) != 2 || plan.Request.BaseTree == plan.ExpectedTreeSHA {
 		t.Fatal("tree plan", err)
 	}
@@ -72,22 +71,12 @@ func TestTreePlanPreservesCompleteSourceAndFixedDestination(t *testing.T) {
 		t.Fatal("unbounded destination or release scope")
 	}
 	if plan.CommitIdentity != project.DefaultCommitIdentity {
-		t.Fatal("a manifest without commitIdentity must plan the default identity", plan.CommitIdentity)
+		t.Fatal("a reference repository must plan the default identity", plan.CommitIdentity)
 	}
-	// An installed manifest's identity is resolved into the plan, so the plan
-	// digest the claim records binds it.
-	configured, _ := project.Builtin(project.Homedir)
-	configured.Publication.CommitIdentity = &project.CommitIdentity{Name: "Example Bot", Email: "bot@example.org"}
-	project.SetInstalled(&configured)
-	reconfigured, err := PrepareTree(c, source, raw)
-	project.SetInstalled(nil)
-	if err != nil || reconfigured.CommitIdentity != *configured.Publication.CommitIdentity {
-		t.Fatal("configured identity not planned", err, reconfigured.CommitIdentity)
-	}
-	before, _ := json.Marshal(plan)
-	after, _ := json.Marshal(reconfigured)
-	if authority.Digest(before) == authority.Digest(after) {
-		t.Fatal("identity not bound into the plan digest")
+	// A reference repository is never governed by an installed manifest, so
+	// a policy binding one cannot plan it.
+	if _, err := PrepareTree(c, strings.Repeat("a", 64), source, raw); err == nil {
+		t.Fatal("reference repository planned under a manifest binding")
 	}
 	for _, entry := range plan.Request.Tree {
 		if entry.Mode != "100644" || entry.Type != "blob" || (entry.Path != verification.LocaleSource && entry.Path != verification.LocaleNewTest) {
@@ -96,12 +85,12 @@ func TestTreePlanPreservesCompleteSourceAndFixedDestination(t *testing.T) {
 	}
 	changed := c
 	changed.DeltaSHA256 = strings.Repeat("f", 64)
-	if _, err = PrepareTree(changed, source, raw); err == nil {
+	if _, err = PrepareTree(changed, "", source, raw); err == nil {
 		t.Fatal("delta substituted")
 	}
 	changed = c
 	changed.CandidateTreeSHA256 = strings.Repeat("f", 64)
-	if _, err = PrepareTree(changed, source, raw); err == nil {
+	if _, err = PrepareTree(changed, "", source, raw); err == nil {
 		t.Fatal("tree substituted")
 	}
 	result.Files[0].Data = []byte("unsafe workflow change")
@@ -112,7 +101,7 @@ func TestTreePlanPreservesCompleteSourceAndFixedDestination(t *testing.T) {
 	raw, _ = candidate.Encode(d)
 	c.DeltaSHA256 = workspacebundle.Digest(raw)
 	c.CandidateTreeSHA256 = d.CandidateTreeSHA256
-	if _, err = PrepareTree(c, source, raw); err == nil {
+	if _, err = PrepareTree(c, "", source, raw); err == nil {
 		t.Fatal("out-of-recipe write accepted")
 	}
 }

@@ -40,6 +40,13 @@ func TestInvalidCommitIdentitiesAreRefused(t *testing.T) {
 		{Name: "Bot", Email: "<bot@example.org>"},
 		{Name: "Bot", Email: "bot @example.org"},
 		{Name: "Bot", Email: "bot@example.org\n"},
+		{Name: "\u00a0Bot", Email: "bot@example.org"},
+		{Name: "Bot\u3000", Email: "bot@example.org"},
+		{Name: "\u2003Bot", Email: "bot@example.org"},
+		{Name: "Bot\u0085", Email: "bot@example.org"},
+		{Name: "Bot\u2028", Email: "bot@example.org"},
+		{Name: "Bot\u2029Two", Email: "bot@example.org"},
+		{Name: "Bot\u2028Two", Email: "bot@example.org"},
 	} {
 		m := generic()
 		identity := c
@@ -47,5 +54,40 @@ func TestInvalidCommitIdentitiesAreRefused(t *testing.T) {
 		if c.Validate() == nil || m.Validate() == nil {
 			t.Fatalf("accepted invalid identity %q", c)
 		}
+	}
+	// Interior white space and non-ASCII letters remain valid.
+	for _, c := range []CommitIdentity{{Name: "Équipe de livraison", Email: "bot@example.org"}, {Name: "ai-sdlc[bot]", Email: "noreply@ai-sdlc.invalid"}} {
+		if c.Validate() != nil {
+			t.Fatalf("refused valid identity %q", c)
+		}
+	}
+}
+
+// Bound resolves only the manifest a given policy binds; Lookup's fallback
+// to a built-in or to another policy load's manifest never applies.
+func TestBoundRefusesAManifestFromAnotherPolicyLoad(t *testing.T) {
+	t.Cleanup(func() { SetInstalled(nil) })
+	a, b := generic(), generic()
+	b.Publication.CommitIdentity = &CommitIdentity{Name: "Other Bot", Email: "other@example.org"}
+	SetInstalled(&a)
+	if m, ok := Bound(a.Repository, a.Digest()); !ok || m.Digest() != a.Digest() {
+		t.Fatal("bound manifest refused")
+	}
+	for name, c := range map[string]struct{ repository, digest string }{
+		"other digest":          {a.Repository, b.Digest()},
+		"no binding":            {a.Repository, ""},
+		"other repository":      {"example/other", a.Digest()},
+		"reference with digest": {Homedir, a.Digest()},
+	} {
+		if _, ok := Bound(c.repository, c.digest); ok {
+			t.Fatal("bound:", name)
+		}
+	}
+	SetInstalled(nil)
+	if _, ok := Bound(a.Repository, a.Digest()); ok {
+		t.Fatal("bound after the installed manifest was cleared")
+	}
+	if m, ok := Bound(Homedir, ""); !ok || m.Repository != Homedir {
+		t.Fatal("reference repository without a binding")
 	}
 }

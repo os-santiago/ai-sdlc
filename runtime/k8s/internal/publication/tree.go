@@ -42,11 +42,14 @@ type TreePlan struct {
 // PrepareTree is pure reconstruction, not a publication authorization. It must
 // be followed by current signed evidence checks and a durable effect journal.
 // Only the finite files in the repository-specific reviewed recipe can be written.
-func PrepareTree(c Command, source workspacebundle.Bundle, delta []byte) (TreePlan, error) {
+// projectSHA256 is the ProjectSHA256 of the policy that authorized c (the
+// policy whose Revision is c.AuthorityRevision). The plan uses only the
+// manifest that policy binds, never a manifest from another policy load.
+func PrepareTree(c Command, projectSHA256 string, source workspacebundle.Bundle, delta []byte) (TreePlan, error) {
 	if !project.Supported(c.Repository) || c.SourceSHA != source.SourceSHA || c.IssueNumber < 1 || !candidateID.MatchString(c.CandidateID) || workspacebundle.Digest(delta) != c.DeltaSHA256 {
 		return TreePlan{}, ErrPublication
 	}
-	manifest, ok := project.Lookup(c.Repository)
+	manifest, ok := project.Bound(c.Repository, projectSHA256)
 	if !ok {
 		return TreePlan{}, ErrPublication
 	}

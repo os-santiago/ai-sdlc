@@ -57,7 +57,14 @@ func run(ctx context.Context, db *store.DB, policy verificationflow.PolicyLoader
 	if e != nil {
 		return proof, ControllerError{"source"}
 	}
-	plan, e := publication.PrepareTree(c, source, record.Delta)
+	// The plan's manifest (scope and commit identity) must be the one bound by
+	// the policy that authorized the command, not whatever manifest the
+	// process holds after a concurrent reload.
+	authorizing, _, _, e := policy()
+	if e != nil || authorizing.Revision() != c.AuthorityRevision {
+		return proof, ControllerError{"authority"}
+	}
+	plan, e := publication.PrepareTree(c, authorizing.ProjectSHA256, source, record.Delta)
 	if e != nil {
 		return proof, ControllerError{"tree-plan"}
 	}

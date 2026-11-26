@@ -391,14 +391,25 @@ var commitEmail = regexp.MustCompile(`^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}
 // the meaning of a commit header. Git trims whitespace and the characters
 // . , : ; < > " \ ' from both ends of a name, and a name cannot hold an angle
 // bracket or a line break. A rewritten identity would make the commit the
-// forge stores differ from the commit the runtime planned.
+// forge stores differ from the commit the runtime planned. Unicode white
+// space is also refused at either end (a forge may trim it), and line and
+// paragraph separators anywhere.
 func (c CommitIdentity) Validate() error {
 	if len(c.Name) == 0 || len(c.Name) > 100 || !utf8.ValidString(c.Name) || strings.ContainsAny(c.Name, "<>") ||
-		strings.IndexFunc(c.Name, hiddenRune) >= 0 || gitCrud(c.Name[0]) || gitCrud(c.Name[len(c.Name)-1]) ||
+		strings.IndexFunc(c.Name, hiddenRune) >= 0 || strings.IndexFunc(c.Name, separatorRune) >= 0 ||
+		gitCrud(c.Name[0]) || gitCrud(c.Name[len(c.Name)-1]) || spaceEnd(c.Name) ||
 		len(c.Email) > 254 || !commitEmail.MatchString(c.Email) {
 		return ErrManifest
 	}
 	return nil
+}
+
+func separatorRune(r rune) bool { return unicode.In(r, unicode.Zl, unicode.Zp) }
+
+func spaceEnd(s string) bool {
+	first, _ := utf8.DecodeRuneInString(s)
+	last, _ := utf8.DecodeLastRuneInString(s)
+	return unicode.IsSpace(first) || unicode.IsSpace(last)
 }
 
 func gitCrud(b byte) bool { return b <= ' ' || strings.IndexByte(".,:;<>\"\\'", b) >= 0 }

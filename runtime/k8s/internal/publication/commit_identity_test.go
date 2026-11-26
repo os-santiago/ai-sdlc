@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
 var configuredIdentity = project.CommitIdentity{Name: "Example Delivery Bot", Email: "delivery-bot@example.org"}
@@ -120,5 +123,73 @@ func TestWriterCommitsWithThePlannedIdentity(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatal("invalid identity reached the network")
+	}
+}
+
+func genericIdentityManifest(identity *project.CommitIdentity) project.Manifest {
+	return project.Manifest{Version: project.ManifestVersion, Repository: "example/service", BaseBranch: "main",
+		Verification: &project.Verification{Image: "registry.example/go@sha256:" + strings.Repeat("a", 64),
+			Command: []string{"go", "test", "./..."}, TimeoutSeconds: 300, CPU: "2", Memory: "2Gi", EphemeralStorage: "1Gi",
+			Network: "none", Result: project.Result{ExitCode: true}, Repeat: 1, TestGlobs: []string{"**/*_test.go"}},
+		Publication: project.Publication{Allow: []string{"**/*.go"}, MaxChangedFiles: 2, MaxChangedBytes: 1000, MaxFileBytes: 500, CommitIdentity: identity},
+		Merge:       project.Merge{RulesetID: 7, Required: []project.Check{{Context: "ci", AppID: 1}}, StrictChecks: true, ResolveThreads: true}}
+}
+
+// The plan must use the manifest bound by the policy that authorized the
+// command. A concurrent reload that fails (clearing the installed manifest)
+// or installs another manifest (A -> B, or A -> B -> A observed as B) must
+// refuse rather than plan another scope or commit identity.
+func TestPrepareTreeUsesOnlyTheAuthorizingPolicyManifest(t *testing.T) {
+	t.Cleanup(func() { project.SetInstalled(nil) })
+	_, c, _, _ := fixture(t)
+	c.Repository = "example/service"
+	source := workspacebundle.Bundle{Version: workspacebundle.Version, SourceSHA: c.SourceSHA, Files: []workspacebundle.File{{Path: "pkg/add.go", Mode: 0644, Data: []byte("package pkg\n")}}}
+	result := source
+	result.Files = []workspacebundle.File{{Path: "pkg/add.go", Mode: 0644, Data: []byte("package pkg\n\nfunc Add(a, b int) int { return a + b }\n")}}
+	d, err := candidate.Build(source, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := candidate.Encode(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.DeltaSHA256, c.CandidateTreeSHA256 = workspacebundle.Digest(raw), d.CandidateTreeSHA256
+	a := genericIdentityManifest(&configuredIdentity)
+	b := genericIdentityManifest(&project.CommitIdentity{Name: "Other Bot", Email: "other@example.org"})
+	plain := genericIdentityManifest(nil)
+	for _, m := range []project.Manifest{a, b, plain} {
+		if m.Validate() != nil {
+			t.Fatal("fixture manifest invalid")
+		}
+	}
+
+	project.SetInstalled(&a)
+	planned, err := PrepareTree(c, a.Digest(), source, raw)
+	if err != nil || planned.CommitIdentity != configuredIdentity {
+		t.Fatal("configured identity not planned", err, planned.CommitIdentity)
+	}
+	if _, err := PrepareTree(c, "", source, raw); err == nil {
+		t.Fatal("planned under a policy that binds no manifest")
+	}
+
+	project.SetInstalled(&b)
+	if p, err := PrepareTree(c, a.Digest(), source, raw); err == nil {
+		t.Fatal("planned with another policy load's manifest", p.CommitIdentity)
+	}
+	project.SetInstalled(nil)
+	if _, err := PrepareTree(c, a.Digest(), source, raw); err == nil {
+		t.Fatal("planned after a failed reload cleared the manifest")
+	}
+
+	project.SetInstalled(&plain)
+	unconfigured, err := PrepareTree(c, plain.Digest(), source, raw)
+	if err != nil || unconfigured.CommitIdentity != project.DefaultCommitIdentity {
+		t.Fatal("default identity not planned", err)
+	}
+	before, _ := json.Marshal(planned)
+	after, _ := json.Marshal(unconfigured)
+	if authority.Digest(before) == authority.Digest(after) {
+		t.Fatal("identity not bound into the plan digest")
 	}
 }
