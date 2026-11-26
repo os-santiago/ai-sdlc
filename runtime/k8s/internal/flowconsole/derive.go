@@ -48,13 +48,13 @@ func Derive(j store.FlowJournal, options DeriveOptions) []flowevent.Event {
 		d.issues[w.UUID] = w
 	}
 	d.intake(j.Intake)
-	d.admissions(j.Admissions)
+	d.admissions(j.Admissions, d.mergedIssues(j.Merges))
 	d.workItems(j.WorkItems)
 	d.executions(j.Executions, group(j.ExecutionEffects), groupCalls(j.ModelCalls))
-	d.verdicts("verification", j.Verifications, group(j.VerificationEffects), nil)
-	d.verdicts("review", j.Reviews, group(j.ReviewEffects), groupCalls(j.ReviewModelCalls))
-	d.verdicts("publication", j.Publications, group(j.PublicationEffects), nil)
-	d.verdicts("merge", j.Merges, group(j.MergeEffects), nil)
+	d.verdicts("verification", j.Verifications, group(j.VerificationEffects), nil, successors(j.Reviews))
+	d.verdicts("review", j.Reviews, group(j.ReviewEffects), groupCalls(j.ReviewModelCalls), successors(j.Publications))
+	d.verdicts("publication", j.Publications, group(j.PublicationEffects), nil, nil)
+	d.verdicts("merge", j.Merges, group(j.MergeEffects), nil, nil)
 	flowevent.Sort(d.out)
 	return d.out
 }
@@ -156,17 +156,58 @@ func (d *deriver) intake(rows []store.FlowIntake) {
 	}
 }
 
-func (d *deriver) admissions(rows []store.FlowAdmission) {
-	for _, r := range rows {
+// mergedIssues maps repository#issue to the times its work was merged, in
+// order (an issue can be reopened and delivered again).
+func (d *deriver) mergedIssues(merges []store.FlowVerdict) map[string][]time.Time {
+	out := map[string][]time.Time{}
+	for _, m := range merges {
+		if m.State != "merged" || m.FinishedAt == nil {
+			continue
+		}
+		l := d.link(m.FlowLink)
+		if l.issue > 0 {
+			key := l.repository + "#" + strconv.Itoa(l.issue)
+			out[key] = append(out[key], *m.FinishedAt)
+		}
+	}
+	for _, times := range out {
+		sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
+	}
+	return out
+}
+
+// admissions maps admission decisions. Merging closes the issue, and intake
+// then observes a new revision that admission rejects ("issue is closed").
+// Only the first rejection after each merge is that closure and becomes a
+// completed step named issue-closed. Every later rejection (for example of
+// an issue reopened after delivery) stays a refusal. The revision generation
+// that would tie a rejection to the closing revision is not in the console's
+// readable columns, so the first rejection after the merge is used.
+func (d *deriver) admissions(rows []store.FlowAdmission, merged map[string][]time.Time) {
+	ordered := append([]store.FlowAdmission(nil), rows...)
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].UpdatedAt.Before(ordered[j].UpdatedAt) })
+	closed := map[string]bool{} // repository#issue#merge-index already relabelled
+	for _, r := range ordered {
 		l := link{repository: r.Repository, issue: r.Issue}
-		kind, diagnostic := flowevent.KindBlocked, r.Decision
+		kind, diagnostic, step := flowevent.KindBlocked, r.Decision, "decision"
 		switch r.Decision {
 		case "accepted":
 			kind, diagnostic = flowevent.KindCompleted, ""
 		case "rejected":
 			kind = flowevent.KindFailed
+			key := r.Repository + "#" + strconv.Itoa(r.Issue)
+			last := -1
+			for i, at := range merged[key] {
+				if !r.UpdatedAt.Before(at) {
+					last = i
+				}
+			}
+			if slot := key + "#" + strconv.Itoa(last); last >= 0 && !closed[slot] {
+				closed[slot] = true
+				kind, diagnostic, step = flowevent.KindCompleted, "", "issue-closed"
+			}
 		}
-		d.emit(l, "admission", "decision", kind, diagnostic, r.UpdatedAt, ms(r.UpdatedAt.Sub(r.CreatedAt)), 0, attrs("decision", r.Decision, "risk", r.Risk),
+		d.emit(l, "admission", step, kind, diagnostic, r.UpdatedAt, ms(r.UpdatedAt.Sub(r.CreatedAt)), 0, attrs("decision", r.Decision, "risk", r.Risk),
 			r.Repository, strconv.Itoa(r.Issue), r.CreatedAt.UTC().Format(time.RFC3339Nano), r.Decision)
 	}
 }
@@ -313,7 +354,23 @@ func (d *deriver) cleanup(l link, stage, state string, attempts int, at *time.Ti
 }
 
 // verdicts covers the four claim-based stages that end in a state and reason.
-func (d *deriver) verdicts(stage string, rows []store.FlowVerdict, effects map[string][]store.FlowEffect, calls map[string][]store.FlowModelCall) {
+// successors maps a candidate to the earliest creation of the next stage's
+// row for it. Verification and review record no finish time, and their
+// effects are Kubernetes object creations acknowledged long before the
+// pods finish: in a real journal verification's last effect came about 55 s
+// before its verdict. The next stage is created from the passed verdict's
+// handoff, so its creation bounds the verdict time.
+func successors(rows []store.FlowVerdict) map[string]time.Time {
+	out := map[string]time.Time{}
+	for _, r := range rows {
+		if t, ok := out[r.Candidate]; r.Candidate != "" && (!ok || r.CreatedAt.Before(t)) {
+			out[r.Candidate] = r.CreatedAt
+		}
+	}
+	return out
+}
+
+func (d *deriver) verdicts(stage string, rows []store.FlowVerdict, effects map[string][]store.FlowEffect, calls map[string][]store.FlowModelCall, next map[string]time.Time) {
 	success := map[string]string{"verification": "passed", "review": "passed", "publication": "published", "merge": "merged"}[stage]
 	for _, r := range rows {
 		l := d.link(r.FlowLink)
@@ -343,6 +400,20 @@ func (d *deriver) verdicts(stage string, rows []store.FlowVerdict, effects map[s
 		}
 		if end.IsZero() || end.Before(r.CreatedAt) {
 			end = r.CreatedAt
+		}
+		if t, ok := next[r.Candidate]; ok && r.State == success && t.After(end) {
+			// Never past the verdict row's own lease: a long wait before the
+			// next stage's claim must not stretch this stage's bar.
+			limit := r.ExpiresAt
+			if r.ClaimUntil != nil {
+				limit = *r.ClaimUntil
+			}
+			if t.After(limit) {
+				t = limit
+			}
+			if t.After(end) {
+				end = t
+			}
 		}
 		d.calls(l, stage, calls[r.ID], end, key)
 		switch {

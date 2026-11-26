@@ -13,19 +13,44 @@
   'use strict';
 
   const STAGES = ['intake', 'admission', 'planning', 'execution', 'verification', 'review', 'publication', 'merge'];
-  const STAGE_NAME = { intake: 'intake', admission: 'admission', planning: 'planning', execution: 'generate', verification: 'verify', review: 'review', publication: 'publish', merge: 'merge' };
   const STAGE_INITIAL = { intake: 'I', admission: 'A', planning: 'P', execution: 'G', verification: 'V', review: 'R', publication: 'P', merge: 'M' };
-  const STAGE_VERB = { execution: 'generating', verification: 'verifying', review: 'reviewing', publication: 'publishing', merge: 'merging', admission: 'admitting' };
   // Categorical hues validated for the dark surface, in the palette's
   // CVD-safe adjacent order and assigned in flow order.
-  const STAGE_COLOR = { intake: '#8f8e86', admission: '#8f8e86', planning: '#8f8e86', execution: '#3987e5', verification: '#d95926', review: '#199e70', publication: '#c98500', merge: '#d55181' };
-  const INSTANT = { intake: true, planning: true };
-  const OUTCOME_TEXT = {
-    completed: 'completed', failed: 'failed (verdict)', 'stopped-safely': 'stopped safely', running: 'running',
-    waiting: 'waiting', blocked: 'blocked', quarantined: 'quarantined',
+  // Light steps are the same hues stepped for the light surface.
+  const STAGE_COLORS = {
+    dark: { intake: '#8f8e86', admission: '#8f8e86', planning: '#8f8e86', execution: '#3987e5', verification: '#d95926', review: '#199e70', publication: '#c98500', merge: '#d55181' },
+    light: { intake: '#8f8e86', admission: '#8f8e86', planning: '#8f8e86', execution: '#3987e5', verification: '#eb6834', review: '#1baf7a', publication: '#eda100', merge: '#e87ba4' },
   };
+  const STAGE_COLOR = Object.assign({}, STAGE_COLORS.dark);
+
+  // ---------- language ----------
+  const STRINGS = window.FLOW_I18N || { en: {} };
+  let lang = 'en';
+  function t(key, vars) {
+    const table = STRINGS[lang] || STRINGS.en;
+    let value = table[key] !== undefined ? table[key] : (STRINGS.en[key] !== undefined ? STRINGS.en[key] : key);
+    if (vars) value = value.replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined ? String(vars[k]) : m));
+    return value;
+  }
+  const stageName = (stage) => t('stage.' + stage);
+  const stageVerb = (stage) => (STRINGS.en['verb.' + stage] ? t('verb.' + stage) : stageName(stage));
+  const kindLabel = (kind) => t('kind.' + kind);
+  const outcomeText = (outcome) => t('outcome.' + outcome);
+  const markerName = (type) => t('marker.' + type);
+  // Issue links: built only from the validated repository pattern and the
+  // integer issue number, never from other event data.
+  const REPOSITORY = /^[a-z0-9][a-z0-9._-]{0,99}\/[a-z0-9][a-z0-9._-]{0,99}$/;
+  function issueLink(parent, repository, issue, textValue, cls) {
+    if (!REPOSITORY.test(repository || '') || !Number.isInteger(issue) || issue <= 0) return html('span', cls, textValue, parent);
+    const a = html('a', cls, textValue, parent);
+    a.href = 'https://github.com/' + repository + '/issues/' + issue;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.title = t('issue.link', { n: issue });
+    return a;
+  }
+  const INSTANT = { intake: true, planning: true };
   const MARKER_PRIORITY = { quarantined: 5, blocked: 4, degraded: 3, stale: 2, retried: 1 };
-  const MARKER_NAME = { degraded: 'Degraded', retried: 'Retried', stale: 'Stale wait', quarantined: 'Quarantined', blocked: 'Blocked' };
   const NS = 'http://www.w3.org/2000/svg';
 
   const state = {
@@ -196,6 +221,10 @@
     lane.components = new Set(lane.events.map((e) => e.component));
     // Lane status and where its work is now, from the newest work.
     const merged = list.find((s) => s.stage === 'merge' && s.outcome === 'completed');
+    // A refusal of a revision that arrives after the issue's own merge is
+    // still a refusal (its event kind is unchanged) but is drawn softly with
+    // an "after delivery" note: the delivered work is not what was refused.
+    for (const s of list) s.afterDelivery = !!merged && s.stage === 'admission' && s.outcome === 'failed' && s.end !== null && s.end >= merged.end;
     const open = list.filter((s) => s.open && s.outcome !== 'quarantined');
     const problem = list.filter((s) => s.outcome === 'quarantined' || (s.outcome === 'blocked' && (s.open || s.stage === 'admission'))).pop();
     const lastTerminal = list.filter((s) => s.end !== null && !INSTANT[s.stage]).sort((a, b) => a.end - b.end).pop();
@@ -220,12 +249,12 @@
 
   // One short line under the issue number: where the work is or why it ended.
   function laneSummary(lane, now) {
-    if (lane.status === 'delivered') return { text: 'merged after ' + fmtDuration(lane.delivery), cls: '' };
-    if (lane.final) return { text: STAGE_NAME[lane.final.stage] + ' · ' + (lane.final.diagnostic || OUTCOME_TEXT[lane.final.outcome]), cls: 'problem' };
+    if (lane.status === 'delivered') return { text: t('sum.merged', { d: fmtDuration(lane.delivery) }), cls: '' };
+    if (lane.final) return { text: stageName(lane.final.stage) + ' · ' + (lane.final.diagnostic || outcomeText(lane.final.outcome)), cls: 'problem' };
     const s = lane.currentSegment;
-    if (s && s.outcome === 'waiting') return { text: 'queued for ' + STAGE_NAME[s.stage] + ' · ' + fmtDuration(now - s.queued), cls: '' };
-    if (s) return { text: (STAGE_VERB[s.stage] || STAGE_NAME[s.stage]) + ' · ' + fmtDuration(now - (s.start || s.queued)), cls: '' };
-    return { text: 'planned', cls: '' };
+    if (s && s.outcome === 'waiting') return { text: t('queued.for', { stage: stageName(s.stage) }) + ' · ' + fmtDuration(now - s.queued), cls: '' };
+    if (s) return { text: stageVerb(s.stage) + ' · ' + fmtDuration(now - (s.start || s.queued)), cls: '' };
+    return { text: t('sum.planned'), cls: '' };
   }
 
   const STATUS_RANK = { blocked: 0, failed: 1, inflight: 2, delivered: 3 };
@@ -252,38 +281,37 @@
     $('t-inflight').textContent = count('inflight');
     const running = all.reduce((n, l) => n + l.segments.filter((s) => s.outcome === 'running').length, 0);
     const waiting = all.reduce((n, l) => n + l.segments.filter((s) => s.outcome === 'waiting').length, 0);
-    $('t-inflight-note').textContent = running + ' running · ' + waiting + ' waiting';
+    $('t-inflight-note').textContent = t('note.inflight', { running, waiting });
     const delivered = all.filter((l) => l.status === 'delivered');
     $('t-delivered').textContent = delivered.length;
     const retriedDelivered = delivered.filter((l) => l.attempts > 1).length;
-    $('t-delivered-note').textContent = all.length ? (delivered.length - retriedDelivered) + ' first attempt · ' + retriedDelivered + ' after retry' : '';
+    $('t-delivered-note').textContent = all.length ? t('note.delivered', { first: delivered.length - retriedDelivered, retried: retriedDelivered }) : '';
     $('t-failed').textContent = count('failed');
     const stops = all.reduce((n, l) => n + l.stopped, 0);
-    $('t-failed-note').textContent = stops + ' stopped or refused stages';
+    $('t-failed-note').textContent = t('note.failed', { n: stops });
     $('t-blocked').textContent = count('blocked');
     const stale = all.reduce((n, l) => n + l.markers.filter((m) => m.type === 'stale').length, 0);
     const quarantined = all.reduce((n, l) => n + l.markers.filter((m) => m.type === 'quarantined').length, 0);
     const reasons = blockedReasons(all);
-    const note = reasons.length ? reasons.join(' · ') : quarantined + ' quarantined · ' + stale + ' stale waits';
+    const note = reasons.length ? reasons.join(' · ') : t('note.blocked', { q: quarantined, s: stale });
     $('t-blocked-note').textContent = note;
     $('t-blocked-note').title = note;
     const ttd = delivered.map((l) => l.delivery).filter((v) => v !== null);
     $('t-ttd').textContent = ttd.length ? fmtDuration(median(ttd)) : '–';
-    $('t-ttd-note').textContent = ttd.length ? 'intake to merge · ' + ttd.length + ' delivered' : 'no delivery yet';
+    $('t-ttd-note').textContent = ttd.length ? t('note.ttd', { n: ttd.length }) : t('note.ttd.none');
     const lat = [];
     let degraded = 0;
     for (const l of all) for (const s of l.segments) { for (const c of s.calls) if (c.latencyMs) lat.push(c.latencyMs); degraded += s.degraded.length; }
     $('t-latency').textContent = lat.length ? fmtDuration(median(lat)) : '–';
-    $('t-latency-note').textContent = lat.length ? 'p90 ' + fmtDuration(quantile(lat, 0.9)) + ' · ' + lat.length + ' calls · ' + degraded + ' degraded' : 'no model calls';
+    $('t-latency-note').textContent = lat.length ? t('note.latency', { p90: fmtDuration(quantile(lat, 0.9)), n: lat.length, d: degraded }) : t('note.latency.none');
   }
 
-  const STAGE_NOUN = { intake: 'intake', admission: 'admission', planning: 'planning', execution: 'generation', verification: 'verification', review: 'review', publication: 'publication', merge: 'merge' };
   // What blocks: "1 publication quarantined · 1 needs clarification · 1 lease lapsed".
   function blockReason(lane) {
     const s = lane.final;
-    if (!s) return 'blocked';
-    if (s.outcome === 'quarantined') return STAGE_NOUN[s.stage] + ' quarantined';
-    return (s.diagnostic || 'blocked').replace(/-/g, ' ');
+    if (!s) return t('blocked');
+    if (s.outcome === 'quarantined') return t('quarantined.what', { noun: t('noun.' + s.stage) });
+    return s.diagnostic ? s.diagnostic.replace(/-/g, ' ') : t('blocked');
   }
   function blockedReasons(all) {
     const counts = new Map();
@@ -298,7 +326,7 @@
     const out = [];
     for (const l of all) if (l.status === 'blocked' && l.final) {
       const at = (l.final.quarantined || l.final.blocked || l.final.terminal || { t: l.final.drawEnd }).t;
-      out.push({ at, key: l.key, kind: 'blocked', text: (l.issue ? '#' + l.issue + ' ' : '') + blockReason(l) + (l.final.diagnostic && l.final.outcome === 'quarantined' ? ' · ' + l.final.diagnostic : ''), note: fmtDuration(now - at) + ' ago' });
+      out.push({ at, key: l.key, kind: 'blocked', text: (l.issue ? '#' + l.issue + ' ' : '') + blockReason(l) + (l.final.diagnostic && l.final.outcome === 'quarantined' ? ' · ' + l.final.diagnostic : ''), note: t('problems.ago', { d: fmtDuration(now - at) }) });
     }
     // Typical durations: completed stage runs and waits inside the visible window.
     const runs = {}, waits = {};
@@ -314,10 +342,10 @@
       if (sample.length < 3) continue;
       const p90 = quantile(sample, 0.9), age = now - (waiting ? s.queued : s.start);
       if (age > p90 && age > 60e3) {
-        out.push({ at: now - age + p90, key: l.key, kind: 'slow', text: (l.issue ? '#' + l.issue + ' ' : '') + (waiting ? 'queued for ' + STAGE_NAME[s.stage] : (STAGE_VERB[s.stage] || STAGE_NAME[s.stage])) + ' ' + fmtDuration(age), note: 'p90 ' + fmtDuration(p90) });
+        out.push({ at: now - age + p90, key: l.key, kind: 'slow', text: (l.issue ? '#' + l.issue + ' ' : '') + (waiting ? t('queued.for', { stage: stageName(s.stage) }) : stageVerb(s.stage)) + ' ' + fmtDuration(age), note: 'p90 ' + fmtDuration(p90) });
       }
     }
-    for (const b of bands(all)) out.push({ at: b.b, band: b, kind: 'burst', text: 'burst of ' + b.count + ' problems', note: fmtClock(b.a) + '–' + fmtClock(b.b) });
+    for (const b of bands(all)) out.push({ at: b.b, band: b, kind: 'burst', text: t('problems.burst', { n: b.count }), note: fmtClock(b.a) + '–' + fmtClock(b.b) });
     return out.sort((a, b) => b.at - a.at);
   }
   function renderProblems(all, now) {
@@ -340,7 +368,7 @@
     }
     const more = $('problem-more');
     more.hidden = items.length <= 4;
-    more.textContent = state.problemsExpanded ? 'show fewer' : 'show all ' + items.length;
+    more.textContent = state.problemsExpanded ? t('problems.fewer') : t('problems.more', { n: items.length });
   }
 
   // ---------- trends over the visible window ----------
@@ -357,9 +385,9 @@
       else if (e.kind === 'completed' && e.stage === 'merge') delivered[i]++;
     }
     const hours = width / 3600e3;
-    sparkLines($('s-latency'), lat.map((v) => quantile(v, 0.5)), lat.map((v) => quantile(v, 0.9)), width, (v) => fmtDuration(v), 'Model call latency p50 (bright) and p90 (grey) per ' + fmtDuration(width));
-    sparkBars($('s-stops'), stops.map((v) => v / hours), width, (v) => v.toFixed(1) + ' stops/h', 'var(--stopped)', 'Stops and refusals per hour per ' + fmtDuration(width));
-    sparkBars($('s-delivered'), delivered.map((v) => v / hours), width, (v) => v.toFixed(1) + ' merges/h', 'var(--completed)', 'Deliveries (merges) per hour per ' + fmtDuration(width));
+    sparkLines($('s-latency'), lat.map((v) => quantile(v, 0.5)), lat.map((v) => quantile(v, 0.9)), width, (v) => fmtDuration(v), t('spark.latency', { w: fmtDuration(width) }));
+    sparkBars($('s-stops'), stops.map((v) => v / hours), width, (v) => t('unit.stops', { v: v.toFixed(1) }), 'var(--stopped)', t('spark.stops', { w: fmtDuration(width) }));
+    sparkBars($('s-delivered'), delivered.map((v) => v / hours), width, (v) => t('unit.merges', { v: v.toFixed(1) }), 'var(--completed)', t('spark.delivered', { w: fmtDuration(width) }));
     trendTable(width, lat, stops, delivered, hours);
   }
   // The same buckets as a table, for keyboard and screen-reader users.
@@ -391,7 +419,7 @@
       .reduce((d, p, i, a) => (p ? d + (i && a[i - 1] ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1) : d), '');
     svg('path', { d: path(p90), class: 'p90', fill: 'none', 'stroke-width': 1.2 }, el);
     svg('path', { d: path(p50), fill: 'none', stroke: 'var(--running)', 'stroke-width': 2, 'stroke-linejoin': 'round' }, el);
-    hoverBuckets(el, w, h, p50.length, (i) => p50[i] === null ? 'no calls' : 'p50 ' + fmt(p50[i]) + ' · p90 ' + fmt(p90[i]), width);
+    hoverBuckets(el, w, h, p50.length, (i) => p50[i] === null ? t('spark.nocalls') : 'p50 ' + fmt(p50[i]) + ' · p90 ' + fmt(p90[i]), width);
   }
   function sparkBars(el, values, width, fmt, color, label) {
     const { w, h } = sparkFrame(el, label);
@@ -445,18 +473,18 @@
 
   // ---------- funnel ----------
   const FUNNEL = [
-    { key: 'queued', name: 'Queued', note: 'waiting for a claim', swatch: 'outline' },
-    { key: 'execution', name: 'Generating', stage: 'execution' },
-    { key: 'verification', name: 'Verifying', stage: 'verification' },
-    { key: 'review', name: 'Reviewing', stage: 'review' },
-    { key: 'publication', name: 'Publishing', stage: 'publication' },
-    { key: 'merge', name: 'Merging', stage: 'merge' },
-    { key: 'blocked', name: 'Blocked', note: 'or quarantined', swatch: 'hatch' },
+    { key: 'queued', name: 'funnel.queued', note: 'funnel.queued.note', swatch: 'outline' },
+    { key: 'execution', stage: 'execution' },
+    { key: 'verification', stage: 'verification' },
+    { key: 'review', stage: 'review' },
+    { key: 'publication', stage: 'publication' },
+    { key: 'merge', stage: 'merge' },
+    { key: 'blocked', name: 'funnel.blocked', note: 'funnel.blocked.note', swatch: 'hatch' },
   ];
   function renderFunnel(all) {
     const box = $('funnel');
     if (!box.childElementCount) {
-      html('div', 'funnel-title', 'Work now', box);
+      html('div', 'funnel-title', t('funnel.title'), box);
       for (const f of FUNNEL) {
         const b = html('button', null, null, box);
         b.type = 'button';
@@ -466,8 +494,9 @@
         if (f.stage) sw.style.background = STAGE_COLOR[f.stage];
         sw.setAttribute('aria-hidden', 'true');
         html('span', 'count', '0', b);
-        const name = html('span', 'name', f.name, b);
-        if (f.note) html('small', null, f.note, name);
+        const label = f.name ? t(f.name) : stageVerb(f.stage);
+        const name = html('span', 'name', label.charAt(0).toUpperCase() + label.slice(1), b);
+        if (f.note) html('small', null, t(f.note), name);
       }
     }
     for (const b of box.querySelectorAll('button')) {
@@ -475,7 +504,7 @@
       b.querySelector('.count').textContent = String(n);
       b.classList.toggle('zero', n === 0);
       b.setAttribute('aria-pressed', String(state.filter.current === b.dataset.current));
-      b.setAttribute('aria-label', b.querySelector('.name').firstChild.textContent + ': ' + n + ' work items' + (state.filter.current === b.dataset.current ? ', filtering' : ''));
+      b.setAttribute('aria-label', t('funnel.label', { name: b.querySelector('.name').firstChild.textContent, n }) + (state.filter.current === b.dataset.current ? t('funnel.filtering') : ''));
     }
   }
 
@@ -486,7 +515,7 @@
     if (kind === 'problems' && !PROBLEM_KINDS[e.kind] && e.diagnostic !== 'stale-wait') return false;
     if (kind === 'lifecycle' && e.kind === 'progressed') return false;
     if (!q) return true;
-    const hay = ('#' + (e.issue || '') + ' ' + (e.repository || '') + ' ' + e.component + ' ' + STAGE_NAME[e.stage] + ' ' + e.stage + ' ' + e.kind + ' ' + (e.step || '') + ' ' + (e.diagnostic || '')).toLowerCase();
+    const hay = ('#' + (e.issue || '') + ' ' + (e.repository || '') + ' ' + e.component + ' ' + stageName(e.stage) + ' ' + e.stage + ' ' + e.kind + ' ' + (e.step || '') + ' ' + (e.diagnostic || '')).toLowerCase();
     return hay.indexOf(q) >= 0;
   }
   function renderFeed(force) {
@@ -497,7 +526,7 @@
       const pending = arrivals - feedShown;
       const nb = $('feed-new');
       nb.hidden = pending <= 0;
-      nb.textContent = pending + ' new events — show';
+      nb.textContent = t('feed.new', { n: pending });
       return;
     }
     feedShown = arrivals;
@@ -515,8 +544,8 @@
       li.style.borderLeftColor = STAGE_COLOR[e.stage];
       const time = html('span', 'time', fmtClock(e.t, true), li);
       time.title = fmtUTC(e.t);
-      html('span', 'what', (e.issue ? '#' + e.issue + ' ' : '') + STAGE_NAME[e.stage] + (e.step ? ' · ' + e.step : '') + ' — ' + e.kind + (e.diagnostic ? ' (' + e.diagnostic + ')' : ''), li);
-      html('span', 'detail', [e.component, e.attempt ? 'attempt ' + e.attempt : '', e.durationMs ? fmtDuration(e.durationMs) : '', e.latencyMs ? 'latency ' + fmtDuration(e.latencyMs) : ''].filter(Boolean).join(' · '), li);
+      html('span', 'what', (e.issue ? '#' + e.issue + ' ' : '') + stageName(e.stage) + (e.step ? ' · ' + e.step : '') + ' — ' + kindLabel(e.kind) + (e.diagnostic ? ' (' + e.diagnostic + ')' : ''), li);
+      html('span', 'detail', [e.component, e.attempt ? t('attempt', { n: e.attempt }) : '', e.durationMs ? fmtDuration(e.durationMs) : '', e.latencyMs ? t('panel.lat', { d: fmtDuration(e.latencyMs) }) : ''].filter(Boolean).join(' · '), li);
     }
     if (state.follow) list.scrollTop = 0;
   }
@@ -542,17 +571,17 @@
       li.dataset.id = e.id;
       li.style.borderLeftColor = problem ? (e.kind === 'failed' ? 'var(--failed)' : 'var(--degraded)') : STAGE_COLOR[e.stage];
       html('span', 'time', fmtClock(e.t, true), li).title = fmtUTC(e.t);
-      const who = (e.issue ? '#' + e.issue + ' ' : '') + STAGE_NAME[e.stage];
+      const who = (e.issue ? '#' + e.issue + ' ' : '') + stageName(e.stage);
       if (r.group) {
         const lat = r.calls.map((c) => c.latencyMs).filter(Boolean);
         const parts = [who];
-        if (r.calls.length) parts.push(r.calls.length + ' model call' + (r.calls.length > 1 ? 's' : '') + (lat.length ? ' · p50 ' + fmtDuration(median(lat)) : ''));
-        if (r.steps) parts.push(r.steps + ' step' + (r.steps > 1 ? 's' : ''));
+        if (r.calls.length) parts.push((r.calls.length > 1 ? t('feed.calls', { n: r.calls.length }) : t('feed.call')) + (lat.length ? ' · p50 ' + fmtDuration(median(lat)) : ''));
+        if (r.steps) parts.push(r.steps > 1 ? t('feed.steps', { n: r.steps }) : t('feed.step'));
         html('span', 'what', parts.join(' · '), li);
-        html('span', 'detail', ['last ' + fmtClock(e.t, true), e.component, e.attempt ? 'attempt ' + e.attempt : ''].filter(Boolean).join(' · '), li);
+        html('span', 'detail', [t('feed.last', { t: fmtClock(e.t, true) }), e.component, e.attempt ? t('attempt', { n: e.attempt }) : ''].filter(Boolean).join(' · '), li);
       } else {
-        html('span', 'what', who + (e.step ? ' · ' + e.step : '') + ' — ' + e.kind + (e.diagnostic ? ' (' + e.diagnostic + ')' : ''), li);
-        html('span', 'detail', [e.component, e.attempt ? 'attempt ' + e.attempt : '', e.durationMs ? fmtDuration(e.durationMs) : ''].filter(Boolean).join(' · '), li);
+        html('span', 'what', who + (e.step ? ' · ' + e.step : '') + ' — ' + kindLabel(e.kind) + (e.diagnostic ? ' (' + e.diagnostic + ')' : ''), li);
+        html('span', 'detail', [e.component, e.attempt ? t('attempt', { n: e.attempt }) : '', e.durationMs ? fmtDuration(e.durationMs) : ''].filter(Boolean).join(' · '), li);
       }
     }
     if (state.follow) list.scrollTop = 0;
@@ -630,6 +659,11 @@
         svg('circle', { cx, cy, r: 7, fill: '#f0efec', stroke: '#d03b3b', 'stroke-width': 2 }, g);
         svg('path', Object.assign({ d: `M${cx - 3},${cy - 3} l6,6 M${cx + 3},${cy - 3} l-6,6` }, ink), g);
         break;
+      case 'after-delivery':
+        // Muted refusal: a thin ring and a small cross, not the red badge.
+        svg('circle', { cx, cy, r: 6, fill: 'var(--surface-1)', stroke: 'var(--text-muted)', 'stroke-width': 1.2 }, g);
+        svg('path', Object.assign({ d: `M${cx - 2.2},${cy - 2.2} l4.4,4.4 M${cx + 2.2},${cy - 2.2} l-4.4,4.4` }, ink, { stroke: 'var(--text-muted)', 'stroke-width': 1.3 }), g);
+        break;
       case 'stopped-safely':
         svg('circle', { cx, cy, r: 7, fill: '#f0efec', stroke: '#1a1a19', 'stroke-width': 1.5 }, g);
         svg('rect', { x: cx - 3, y: cy - 3, width: 6, height: 6, fill: '#0e0e0d', rx: 1 }, g);
@@ -659,7 +693,7 @@
         svg('path', { d: `M${px},${cy - 2.5} v3.2 M${px},${cy + 2.3} v0.6`, stroke: '#0e0e0d', 'stroke-width': 1.5, 'stroke-linecap': 'round' }, g);
         break;
       case 'retried':
-        svg('circle', { cx: px, cy, r: 6.5, fill: 'var(--text-primary)', stroke: 'var(--surface-1)', 'stroke-width': 1.2 }, g);
+        svg('circle', { cx: px, cy, r: 6.5, fill: '#f0efec', stroke: 'var(--text-secondary)', 'stroke-width': 1.2 }, g);
         svg('path', { d: `M${px + 3.3},${cy + 1.1} A3.5,3.5 0 1 1 ${px + 2.4},${cy - 2.6}`, stroke: '#0e0e0d', 'stroke-width': 1.5, fill: 'none', 'stroke-linecap': 'round' }, g);
         svg('path', { d: `M${px + 3.6},${cy - 4.6} L${px + 3.1},${cy - 1.9} L${px + 0.5},${cy - 2.5}`, stroke: '#0e0e0d', 'stroke-width': 1.3, fill: 'none', 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, g);
         break;
@@ -735,13 +769,13 @@
     }
     const badged = s.outcome === 'failed' || s.outcome === 'stopped-safely' || s.outcome === 'blocked' || s.outcome === 'quarantined';
     const room = width - (badged ? 10 : s.outcome === 'completed' ? 14 : 4) - 6;
-    const name = STAGE_NAME[s.stage] + (s.attempt > 1 && s.stage === 'execution' ? ' #' + s.attempt : '');
+    const name = stageName(s.stage) + (s.attempt > 1 && s.stage === 'execution' ? ' #' + s.attempt : '');
     const label = room >= name.length * 6.3 ? name : room >= 9 ? STAGE_INITIAL[s.stage] : '';
     if (label) text(g, { class: 'bar-label' + (s.outcome === 'waiting' || s.outcome === 'blocked' || s.outcome === 'quarantined' ? ' light' : ''), x: x0 + 5, y: cy + 4 }, label);
     if (s.outcome === 'completed' && width > 22) check(g, x0 + width - 8, cy);
     // Badges go on a layer above every bar, so a retry that starts right
     // after a stop cannot cover the stop's glyph.
-    if (badged) badge(svg('g', { opacity: dim ? 0.28 : 1 }, overlay || g), s.outcome, x0 + width, cy);
+    if (badged) badge(svg('g', { opacity: dim ? 0.28 : s.afterDelivery ? 0.55 : 1 }, overlay || g), s.afterDelivery ? 'after-delivery' : s.outcome, x0 + width, cy);
     return { g, x0: Math.min(xq, x0), x1: x0 + width + (badged ? 8 : 6) };
   }
 
@@ -792,9 +826,9 @@
     }
     // Only lanes with activity inside the visible window.
     const lanes = matching.filter((l) => l.last >= state.view[0] && l.first <= state.view[1]);
-    $('lane-count').textContent = '(' + lanes.length + (lanes.length !== all.length ? ' of ' + all.length : '') + ')';
+    $('lane-count').textContent = '(' + lanes.length + (lanes.length !== all.length ? ' ' + t('of', { n: all.length }) : '') + ')';
     $('empty').hidden = lanes.length > 0 || all.length === 0;
-    $('empty').textContent = matching.length ? 'No matching work in this time window. Use Fit to see all of it.' : 'No work matches the filters.';
+    $('empty').textContent = matching.length ? t('empty.window') : t('empty.filters');
     const LANE_H = laneHeight();
     const w = chartWidth(), height = Math.max(lanes.length * LANE_H, 1);
     chart.textContent = '';
@@ -807,18 +841,18 @@
     const grid = svg('g', {}, chart);
     // Only the lanes inside the scrolled viewport (plus a margin) are drawn,
     // so hundreds of work items cost no more than one screenful.
-    const first = Math.max(0, Math.floor(lanesBox.scrollTop / LANE_H) - 6);
-    const last = Math.min(lanes.length, Math.ceil((lanesBox.scrollTop + (lanesBox.clientHeight || 800)) / LANE_H) + 6);
+    const first = state.printing ? 0 : Math.max(0, Math.floor(lanesBox.scrollTop / LANE_H) - 6);
+    const last = state.printing ? lanes.length : Math.min(lanes.length, Math.ceil((lanesBox.scrollTop + (lanesBox.clientHeight || 800)) / LANE_H) + 6);
     state.visible = lanes;
     for (let i = first; i < last; i++) if (i % 2) svg('rect', { class: 'lane-bg alt', x: 0, y: i * LANE_H, width: w, height: LANE_H }, grid);
-    for (const tk of ticksCache) svg('line', { x1: tk.px, x2: tk.px, y1: 0, y2: height, stroke: tk.major ? '#3a3a37' : 'var(--grid)', 'stroke-width': 1 }, grid);
+    for (const tk of ticksCache) svg('line', { x1: tk.px, x2: tk.px, y1: 0, y2: height, stroke: tk.major ? 'var(--grid-major)' : 'var(--grid)', 'stroke-width': 1 }, grid);
     for (let i = first; i < last; i++) svg('line', { class: 'lane-sep', x1: 0, x2: w, y1: (i + 1) * LANE_H - 0.5, y2: (i + 1) * LANE_H - 0.5 }, grid);
     for (const b of bands(all)) {
       const xa = Math.max(0, x(b.a)), xb = Math.min(w, x(b.b));
       if (xb <= xa) continue;
       const r = svg('rect', { class: 'band', x: xa, y: 0, width: xb - xa, height }, grid);
-      svg('title', {}, r).textContent = 'Degradation period ' + fmtClock(b.a) + '–' + fmtClock(b.b) + ': ' + b.count + ' stops, degradations, retries or quarantines';
-      if (xb - xa > 60) text(axis, { class: 'band-label', x: xa + 3, y: 9 }, b.count + ' problems');
+      svg('title', {}, r).textContent = t('band.title', { from: fmtClock(b.a), to: fmtClock(b.b), n: b.count });
+      if (xb - xa > 60) text(axis, { class: 'band-label', x: xa + 3, y: 9 }, t('band.label', { n: b.count }));
     }
     trends(all);
     renderProblems(all, now);
@@ -842,17 +876,19 @@
       row.dataset.key = lane.key;
       row.dataset.index = String(index);
       const top = html('div', 'label-top', null, row);
-      html('span', 'issue', lane.issue ? '#' + lane.issue : lane.workItem.slice(0, 8), top);
+      // The issue number links to the forge; the row itself opens the details.
+      const num = lane.issue ? issueLink(top, lane.repository, lane.issue, '#' + lane.issue, 'issue') : html('span', 'issue', lane.workItem.slice(0, 8), top);
+      num.tabIndex = -1;
       // The repository is shown per lane only when lanes span several.
       const repo = html('span', 'repo', state.singleRepo ? '' : (lane.repository || '').split('/').pop(), top);
       repo.title = lane.repository;
-      if (lane.attempts > 1) html('span', 'attempts', '×' + lane.attempts, top).title = lane.attempts + ' attempts';
-      const chipText = { inflight: 'in flight', delivered: 'delivered', failed: 'failed', blocked: 'blocked' }[lane.status];
+      if (lane.attempts > 1) html('span', 'attempts', '×' + lane.attempts, top).title = t('attempts.title', { n: lane.attempts });
+      const chipText = t('chip.' + lane.status);
       html('span', 'chip ' + lane.status, chipText, top);
       const summary = laneSummary(lane, now);
       const line = html('div', 'label-sub ' + summary.cls, summary.text, row);
       line.title = summary.text;
-      row.setAttribute('aria-label', (lane.issue ? 'Issue ' + lane.issue : 'Work item') + ', ' + chipText + ', ' + summary.text);
+      row.setAttribute('aria-label', t('lane.aria', { who: lane.issue ? t('lane.issue', { n: lane.issue }) : t('lane.workitem'), chip: chipText, summary: summary.text }));
     });
 
     const bars = svg('g', {}, chart);
@@ -917,9 +953,10 @@
     if (nx >= 0 && nx <= w) {
       svg('line', { class: 'now-line', x1: nx, x2: nx, y1: 0, y2: height }, chart);
       const g = svg('g', { class: 'tick' }, axis);
-      svg('title', {}, g).textContent = 'now · ' + fmtUTC(now);
-      svg('rect', { class: 'now-pill', x: nx - 15, y: 22, width: 30, height: 12, rx: 3 }, g);
-      text(g, { class: 'now-label', x: nx, y: 31, 'text-anchor': 'middle' }, 'NOW');
+      svg('title', {}, g).textContent = t('now') + ' · ' + fmtUTC(now);
+      const pill = t('now.pill').length * 6.6 + 8;
+      svg('rect', { class: 'now-pill', x: nx - pill / 2, y: 22, width: pill, height: 12, rx: 3 }, g);
+      text(g, { class: 'now-label', x: nx, y: 31, 'text-anchor': 'middle' }, t('now.pill'));
     }
     if (state.selected) renderPanel();
     renderFeed(false);
@@ -939,33 +976,33 @@
   // ---------- tooltip ----------
   function segmentTooltip(lane, s) {
     const rows = [];
-    rows.push(['Stage', STAGE_NAME[s.stage] + ' (' + s.events[0].component + ')']);
-    rows.push(['Outcome', OUTCOME_TEXT[s.outcome] || s.outcome]);
-    if (s.diagnostic) rows.push(['Diagnostic', s.diagnostic]);
-    if (s.attempt) rows.push(['Attempt', String(s.attempt)]);
-    if (s.start !== null && s.queued < s.start) rows.push(['Waited', fmtDuration(s.start - s.queued)]);
-    if (s.start !== null) rows.push(['Started', fmtClock(s.start, true) + ' · ' + fmtUTC(s.start)]);
-    if (s.end !== null) rows.push(['Ended', fmtClock(s.end, true) + ' · ' + fmtUTC(s.end)]);
-    if (s.start !== null && !INSTANT[s.stage]) rows.push(['Duration', fmtDuration((s.end !== null ? s.end : Date.now()) - s.start) + (s.end === null ? ' (so far)' : '')]);
+    rows.push([t('tt.stage'), stageName(s.stage) + ' (' + s.events[0].component + ')']);
+    rows.push([t('tt.outcome'), outcomeText(s.outcome) + (s.afterDelivery ? ' · ' + t('after.delivery') : '')]);
+    if (s.diagnostic) rows.push([t('tt.diagnostic'), s.diagnostic]);
+    if (s.attempt) rows.push([t('tt.attempt'), String(s.attempt)]);
+    if (s.start !== null && s.queued < s.start) rows.push([t('tt.waited'), fmtDuration(s.start - s.queued)]);
+    if (s.start !== null) rows.push([t('tt.started'), fmtClock(s.start, true) + ' · ' + fmtUTC(s.start)]);
+    if (s.end !== null) rows.push([t('tt.ended'), fmtClock(s.end, true) + ' · ' + fmtUTC(s.end)]);
+    if (s.start !== null && !INSTANT[s.stage]) rows.push([t('tt.duration'), fmtDuration((s.end !== null ? s.end : Date.now()) - s.start) + (s.end === null ? t('tt.sofar') : '')]);
     if (s.calls.length) {
       const lat = s.calls.map((c) => c.latencyMs).filter(Boolean);
-      rows.push(['Model calls', s.calls.length + (lat.length ? ' · p50 ' + fmtDuration(median(lat)) + ' · max ' + fmtDuration(Math.max.apply(null, lat)) : '')]);
+      rows.push([t('tt.calls'), s.calls.length + (lat.length ? ' · p50 ' + fmtDuration(median(lat)) + ' · ' + t('tt.max') + ' ' + fmtDuration(Math.max.apply(null, lat)) : '')]);
     }
-    if (s.effects) rows.push(['Effects', String(s.effects)]);
-    if (s.degraded.length) rows.push(['Degraded', s.degraded.map((d) => d.diagnostic).join(', ')]);
-    if (s.stale) rows.push(['Stale wait', 'queued over ' + fmtDuration(Number(s.stale.attributes && s.stale.attributes.waitedMs) || 0)]);
+    if (s.effects) rows.push([t('tt.effects'), String(s.effects)]);
+    if (s.degraded.length) rows.push([t('tt.degraded'), s.degraded.map((d) => d.diagnostic).join(', ')]);
+    if (s.stale) rows.push([t('tt.stale'), t('tt.queuedover', { d: fmtDuration(Number(s.stale.attributes && s.stale.attributes.waitedMs) || 0) })]);
     const attrs = s.terminal && s.terminal.attributes;
     if (attrs) for (const k of ['phase', 'exitCode', 'changes', 'reason']) if (attrs[k]) rows.push([k, attrs[k]]);
-    return { title: (lane.issue ? '#' + lane.issue + ' · ' : '') + STAGE_NAME[s.stage], rows };
+    return { title: (lane.issue ? '#' + lane.issue + ' · ' : '') + stageName(s.stage), rows };
   }
   function markerTooltip(lane, items) {
     const rows = [];
     for (const m of items) {
       const e = m.e;
-      rows.push([fmtClock(e.t, true), MARKER_NAME[m.type] + ' · ' + STAGE_NAME[e.stage] + (e.diagnostic ? ' · ' + e.diagnostic : '') + (e.attempt ? ' · attempt ' + e.attempt : '')]);
+      rows.push([fmtClock(e.t, true), markerName(m.type) + ' · ' + stageName(e.stage) + (e.diagnostic ? ' · ' + e.diagnostic : '') + (e.attempt ? ' · ' + t('attempt', { n: e.attempt }) : '')]);
     }
     rows.push(['UTC', fmtUTC(items[0].e.t)]);
-    return { title: (lane.issue ? '#' + lane.issue + ' · ' : '') + (items.length > 1 ? items.length + ' markers' : MARKER_NAME[items[0].type]), rows };
+    return { title: (lane.issue ? '#' + lane.issue + ' · ' : '') + (items.length > 1 ? t('tt.markers', { n: items.length }) : markerName(items[0].type)), rows };
   }
   function showTooltip(ev, content) {
     tooltip.textContent = '';
@@ -990,23 +1027,27 @@
   function renderPanel() {
     const lane = state.lanes.get(state.selected);
     if (!lane) return;
-    $('panel-title').textContent = lane.issue ? 'Issue #' + lane.issue : 'Work item';
+    const title = $('panel-title');
+    title.textContent = '';
+    if (lane.issue) issueLink(title, lane.repository, lane.issue, t('panel.title', { n: lane.issue }), 'issue-link');
+    else title.textContent = t('panel.workitem');
+    renderBreakdown(lane);
     const meta = $('panel-meta');
     meta.textContent = '';
     const add = (k, v) => { html('dt', null, k, meta); html('dd', null, v, meta); };
-    if (lane.repository) add('Repository', lane.repository);
-    add('Status', { inflight: 'in flight', delivered: 'delivered', failed: 'failed', blocked: 'blocked or quarantined' }[lane.status]);
-    add('Now', laneSummary(lane, Date.now()).text);
-    add('Attempts', String(Math.max(lane.attempts, 1)));
-    if (lane.delivery !== null) add('Time to delivery', fmtDuration(lane.delivery));
-    add('Events', String(lane.events.length));
+    if (lane.repository) add(t('panel.repo'), lane.repository);
+    add(t('panel.status'), t('status.' + lane.status));
+    add(t('panel.now'), laneSummary(lane, Date.now()).text);
+    add(t('panel.attempts'), String(Math.max(lane.attempts, 1)));
+    if (lane.delivery !== null) add(t('panel.ttd'), fmtDuration(lane.delivery));
+    add(t('panel.events'), String(lane.events.length));
     const list = $('panel-events');
     list.textContent = '';
     let group = '';
     const events = lane.events;
     for (let i = 0; i < events.length; i++) {
       const e = events[i];
-      const g = e.attempt ? 'Attempt ' + e.attempt : 'Intake and planning';
+      const g = e.attempt ? t('panel.attempt', { n: e.attempt }) : t('panel.pre');
       if (g !== group) { group = g; html('li', 'group', g, list); }
       // Consecutive successful model calls of one stage collapse into one row.
       let j = i;
@@ -1023,14 +1064,14 @@
       const details = [];
       if (j > i) {
         const calls = events.slice(i, j + 1), lat = calls.map((c) => c.latencyMs).filter(Boolean);
-        html('span', 'what', STAGE_NAME[e.stage] + ' · ' + calls.length + ' model calls — progressed', li);
-        details.push('until ' + fmtClock(events[j].t, true));
-        if (lat.length) details.push('latency p50 ' + fmtDuration(median(lat)) + ' · max ' + fmtDuration(Math.max.apply(null, lat)));
+        html('span', 'what', t('panel.calls', { stage: stageName(e.stage), n: calls.length, kind: kindLabel('progressed') }), li);
+        details.push(t('panel.until', { t: fmtClock(events[j].t, true) }));
+        if (lat.length) details.push(t('panel.latency', { p50: fmtDuration(median(lat)), max: fmtDuration(Math.max.apply(null, lat)) }));
         i = j;
       } else {
-        html('span', 'what', STAGE_NAME[e.stage] + (e.step ? ' · ' + e.step : '') + ' — ' + e.kind + (e.diagnostic ? ' (' + e.diagnostic + ')' : ''), li);
-        if (e.durationMs) details.push('duration ' + fmtDuration(e.durationMs));
-        if (e.latencyMs) details.push('latency ' + fmtDuration(e.latencyMs));
+        html('span', 'what', stageName(e.stage) + (e.step ? ' · ' + e.step : '') + ' — ' + kindLabel(e.kind) + (e.diagnostic ? ' (' + e.diagnostic + ')' : ''), li);
+        if (e.durationMs) details.push(t('panel.duration', { d: fmtDuration(e.durationMs) }));
+        if (e.latencyMs) details.push(t('panel.lat', { d: fmtDuration(e.latencyMs) }));
         for (const k in e.attributes || {}) details.push(fmtAttribute(k, e.attributes[k]));
       }
       details.push(e.component);
@@ -1038,9 +1079,50 @@
     }
   }
 
+  // ---------- per-stage breakdown ----------
+  // The latest attempt as one bar: each stage's queue wait (hatched) and run
+  // (solid), in order, proportional to time, so a bottleneck shows at once.
+  function renderBreakdown(lane) {
+    const box = $('breakdown');
+    box.textContent = '';
+    if (!lane.segments) return; // not built yet; the next render fills it
+    const attempt = lane.attempts || 0;
+    const segs = lane.segments.filter((s) => !INSTANT[s.stage] && s.stage !== 'admission' && (s.attempt || 0) === attempt && s.start !== null)
+      .sort((a, b) => a.queued - b.queued);
+    if (!segs.length) return;
+    const parts = [];
+    let prevEnd = null;
+    for (const s of segs) {
+      const queued = prevEnd !== null && prevEnd < s.queued ? prevEnd : s.queued;
+      const wait = Math.max(0, s.start - queued), run = Math.max(0, s.drawEnd - s.start);
+      if (wait > 0) parts.push({ stage: s.stage, wait: true, ms: wait });
+      parts.push({ stage: s.stage, wait: false, ms: run, open: s.open });
+      prevEnd = Math.max(prevEnd || 0, s.drawEnd);
+    }
+    const total = parts.reduce((n, p) => n + p.ms, 0);
+    if (total <= 0) return;
+    const head = html('div', 'bd-head', null, box);
+    html('span', 'bd-title', t('bd.title'), head);
+    html('span', 'bd-sub', (attempt ? t('bd.attempt', { n: attempt }) + ' · ' : '') + fmtDuration(total), head);
+    const bar = html('div', 'bd-bar', null, box);
+    const label = (p) => (p.wait ? t('bd.waitfor', { stage: stageName(p.stage) }) : stageName(p.stage)) + ' ' + fmtDuration(p.ms);
+    bar.setAttribute('role', 'img');
+    bar.setAttribute('aria-label', t('bd.aria', { list: parts.map(label).join(', ') }));
+    for (const p of parts) {
+      const seg = html('span', 'bd-seg' + (p.wait ? ' wait' : '') + (p.open ? ' open' : ''), null, bar);
+      seg.style.flexGrow = String(p.ms);
+      seg.style.setProperty('--seg', STAGE_COLOR[p.stage]);
+      seg.title = label(p);
+      if (!p.wait && p.ms / total > 0.08) seg.textContent = STAGE_INITIAL[p.stage];
+    }
+    const top = parts.reduce((a, b) => (b.ms > a.ms ? b : a), parts[0]);
+    html('div', 'bd-note', t('bd.bottleneck', { what: top.wait ? t('bd.waitfor', { stage: stageName(top.stage) }) : stageName(top.stage), d: fmtDuration(top.ms), p: Math.round(top.ms / total * 100), total: fmtDuration(total) }), box);
+  }
+
   // ---------- legends ----------
   function legend() {
     const ul = $('legend');
+    ul.textContent = '';
     const item = (draw, label) => {
       const li = html('li', null, null, ul);
       const s = svg('svg', { width: 40, height: 20, viewBox: '0 0 40 20', 'aria-hidden': 'true' }, li);
@@ -1048,18 +1130,18 @@
       html('span', null, label, li);
     };
     const color = STAGE_COLOR.execution;
-    item((s) => { svg('rect', { x: 1, y: 2, width: 32, height: 16, rx: 4, fill: color }, s); check(s, 26, 10); }, 'Completed (solid, ✓)');
-    item((s) => { defs(s); svg('rect', { x: 1, y: 2, width: 30, height: 16, rx: 4, fill: color }, s); svg('rect', { x: 1, y: 2, width: 30, height: 16, rx: 4, fill: 'url(#stripes)' }, s); svg('path', { d: 'M30,2 l6,8 l-6,8 z', fill: color }, s); }, 'Running (striped, open end)');
-    item((s) => svg('rect', { x: 1.75, y: 2.75, width: 30.5, height: 14.5, rx: 4, fill: 'none', stroke: color, 'stroke-width': 1.5, 'stroke-dasharray': '4 2' }, s), 'Waiting (outline; dashed lead-in before a claim)');
-    item((s) => { svg('rect', { x: 1, y: 2, width: 28, height: 16, rx: 4, fill: color }, s); badge(s, 'failed', 29, 10); }, 'Failed: verdict against the work (✕)');
-    item((s) => { svg('rect', { x: 1, y: 2, width: 28, height: 16, rx: 4, fill: color }, s); badge(s, 'stopped-safely', 29, 10); }, 'Stopped safely (■, diagnostic shown)');
-    item((s) => { defs(s); svg('rect', { x: 1, y: 2, width: 28, height: 16, rx: 4, fill: 'url(#hatch-execution)' }, s); badge(s, 'blocked', 29, 10); }, 'Blocked (hatched, ⏸)');
-    item((s) => { defs(s); svg('rect', { x: 1, y: 2, width: 28, height: 16, rx: 4, fill: 'url(#hatch-execution)' }, s); badge(s, 'quarantined', 29, 10); }, 'Quarantined (hatched, ⛔)');
-    item((s) => marker(s, 'degraded', 20, 11), 'Degraded');
-    item((s) => marker(s, 'retried', 20, 10), 'Retried attempt');
-    item((s) => marker(s, 'stale', 20, 10), 'Stale wait');
-    item((s) => { marker(s, 'quarantined', 16, 10); svg('rect', { x: 21, y: 2, width: 13, height: 11, rx: 5.5, fill: '#f0efec' }, s); text(s, { class: 'count', x: 27.5, y: 10.6, 'text-anchor': 'middle' }, '3'); }, 'Nearby markers (count)');
-    item((s) => { svg('rect', { x: 1, y: 2, width: 32, height: 16, rx: 4, fill: color }, s); for (const px of [8, 14, 18, 26]) svg('line', { x1: px, x2: px, y1: 14, y2: 17, stroke: 'rgba(14,14,13,.7)' }, s); }, 'Model calls (ticks)');
+    item((s) => { svg('rect', { x: 1, y: 2, width: 32, height: 16, rx: 4, fill: color }, s); check(s, 26, 10); }, t('lg.completed'));
+    item((s) => { defs(s); svg('rect', { x: 1, y: 2, width: 30, height: 16, rx: 4, fill: color }, s); svg('rect', { x: 1, y: 2, width: 30, height: 16, rx: 4, fill: 'url(#stripes)' }, s); svg('path', { d: 'M30,2 l6,8 l-6,8 z', fill: color }, s); }, t('lg.running'));
+    item((s) => svg('rect', { x: 1.75, y: 2.75, width: 30.5, height: 14.5, rx: 4, fill: 'none', stroke: color, 'stroke-width': 1.5, 'stroke-dasharray': '4 2' }, s), t('lg.waiting'));
+    item((s) => { svg('rect', { x: 1, y: 2, width: 28, height: 16, rx: 4, fill: color }, s); badge(s, 'failed', 29, 10); }, t('lg.failed'));
+    item((s) => { svg('rect', { x: 1, y: 2, width: 28, height: 16, rx: 4, fill: color }, s); badge(s, 'stopped-safely', 29, 10); }, t('lg.stopped'));
+    item((s) => { defs(s); svg('rect', { x: 1, y: 2, width: 28, height: 16, rx: 4, fill: 'url(#hatch-execution)' }, s); badge(s, 'blocked', 29, 10); }, t('lg.blocked'));
+    item((s) => { defs(s); svg('rect', { x: 1, y: 2, width: 28, height: 16, rx: 4, fill: 'url(#hatch-execution)' }, s); badge(s, 'quarantined', 29, 10); }, t('lg.quarantined'));
+    item((s) => marker(s, 'degraded', 20, 11), t('lg.degraded'));
+    item((s) => marker(s, 'retried', 20, 10), t('lg.retried'));
+    item((s) => marker(s, 'stale', 20, 10), t('lg.stale'));
+    item((s) => { marker(s, 'quarantined', 16, 10); svg('rect', { x: 21, y: 2, width: 13, height: 11, rx: 5.5, fill: '#f0efec' }, s); text(s, { class: 'count', x: 27.5, y: 10.6, 'text-anchor': 'middle' }, '3'); }, t('lg.cluster'));
+    item((s) => { svg('rect', { x: 1, y: 2, width: 32, height: 16, rx: 4, fill: color }, s); for (const px of [8, 14, 18, 26]) svg('line', { x1: px, x2: px, y1: 14, y2: 17, stroke: 'rgba(14,14,13,.7)' }, s); }, t('lg.calls'));
   }
 
   // ---------- interaction ----------
@@ -1125,7 +1207,7 @@
   $('sort').addEventListener('change', (ev) => { state.sort = ev.target.value === 'problems' ? 'problems' : 'recent'; schedule(); });
   $('panel-close').addEventListener('click', closePanel);
   document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && state.selected) closePanel(); });
-  labels.addEventListener('click', (ev) => { const row = ev.target.closest('.label'); if (row) openPanel(row.dataset.key); });
+  labels.addEventListener('click', (ev) => { if (ev.target.closest('a')) return; const row = ev.target.closest('.label'); if (row) openPanel(row.dataset.key); });
   function focusLane(index) {
     const lanes = state.visible || [];
     if (!lanes.length) return;
@@ -1222,15 +1304,15 @@
   }
   function describeStatus() {
     const s = state.status;
-    if (!state.connected) return setSource('reconnecting…', 'down');
+    if (!state.connected) return setSource(t('src.reconnecting'), 'down');
     // A gap stays visible: the hub had already evicted events this page
     // never received, so the view is incomplete until it is rebuilt.
-    const gap = state.gap ? ' · some events were evicted before this page received them' : '';
-    if (!s) return setSource('connected' + gap, gap ? 'down' : 'live');
-    const source = s.source === 'fixture' ? 'recorded fixture' : 'journal';
-    if (!s.healthy) return setSource(source + ' unavailable — showing last known events' + gap, 'down');
-    const when = s.observedAt ? ' · read ' + fmtClock(Date.parse(s.observedAt), true) : '';
-    setSource('live · ' + source + (s.problem === 'window-truncated' ? ' · window truncated' : '') + when + gap, gap ? 'down' : 'live');
+    const gap = state.gap ? t('src.gap') : '';
+    if (!s) return setSource(t('src.connected') + gap, gap ? 'down' : 'live');
+    const source = s.source === 'fixture' ? t('src.fixture') : t('src.journal');
+    if (!s.healthy) return setSource(t('src.unavailable', { source }) + gap, 'down');
+    const when = s.observedAt ? t('src.read', { t: fmtClock(Date.parse(s.observedAt), true) }) : '';
+    setSource(t('src.live', { source }) + (s.problem === 'window-truncated' ? t('src.truncated') : '') + when + gap, gap ? 'down' : 'live');
   }
   let stream = null, cursor = '', retryDelay = 1000;
   function connect() {
@@ -1246,7 +1328,7 @@
       if (Array.isArray(batch)) for (const item of batch) if (item && item.event && typeof item.event.time === 'string') addEvent(item.event);
       // During the replay only a counter updates; the page renders once at "ready".
       if (!state.replaying) schedule();
-      else setSource('loading history · ' + state.events.size + ' events', 'live');
+      else setSource(t('src.loading', { n: state.events.size }), 'live');
     });
     stream.addEventListener('status', (m) => { try { state.status = JSON.parse(m.data); describeStatus(); } catch (_) { /* ignore */ } });
     stream.addEventListener('ready', (m) => {
@@ -1302,9 +1384,53 @@
     schedule();
   }
 
-  $('timezone').textContent = 'Local time ' + tzOffset;
-  $('timezone').title = (tzName ? tzName + ', ' : '') + tzOffset + '. Hover a tick or a bar for UTC.';
-  legend();
+  // Static strings: data-i18n sets the text, data-i18n-<attribute> an attribute.
+  function applyStrings() {
+    document.documentElement.lang = lang;
+    document.title = t('title');
+    for (const el of document.querySelectorAll('[data-i18n]')) el.textContent = t(el.dataset.i18n);
+    for (const el of document.querySelectorAll('*')) {
+      for (const attr of el.getAttributeNames()) {
+        if (attr.startsWith('data-i18n-')) el.setAttribute(attr.slice(10), t(el.getAttribute(attr)));
+      }
+    }
+    $('timezone').textContent = t('tz', { tz: tzOffset });
+    $('timezone').title = t('tz.title', { name: tzName ? tzName + ', ' : '', tz: tzOffset });
+    // Compact toggles: a code or a symbol, with the full name as label.
+    $('theme').textContent = state.theme === 'light' ? '☾' : '☀';
+    $('theme').setAttribute('aria-label', state.theme === 'light' ? t('theme.dark') : t('theme.light'));
+    $('theme').title = $('theme').getAttribute('aria-label');
+    $('lang').textContent = lang === 'es' ? 'EN' : 'ES';
+    $('lang').setAttribute('aria-label', t('lang.title'));
+    $('funnel').textContent = '';
+    legend();
+    describeStatus();
+  }
+  function remember(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* storage unavailable */ } }
+  function recall(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }
+  function setLang(next, save) {
+    lang = STRINGS[next] ? next : 'en';
+    if (save) remember('flow-console-lang', lang);
+    applyStrings();
+    schedule();
+  }
+  function setTheme(next, save) {
+    state.theme = next === 'light' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = state.theme;
+    Object.assign(STAGE_COLOR, STAGE_COLORS[state.theme]);
+    if (save) remember('flow-console-theme', state.theme);
+    applyStrings();
+    schedule();
+  }
+  $('lang').addEventListener('click', () => setLang(lang === 'es' ? 'en' : 'es', true));
+  $('theme').addEventListener('click', () => setTheme(state.theme === 'light' ? 'dark' : 'light', true));
+  // Printing draws every lane, not only those scrolled into view.
+  window.addEventListener('beforeprint', () => { state.printing = true; render(); });
+  window.addEventListener('afterprint', () => { state.printing = false; render(); });
+  const wantedLang = params.get('lang') || recall('flow-console-lang') || ((navigator.language || 'en').toLowerCase().startsWith('es') ? 'es' : 'en');
+  lang = STRINGS[wantedLang] ? wantedLang : 'en';
+  const wantedTheme = params.get('theme') || recall('flow-console-theme') || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  setTheme(wantedTheme, false);
   if (params.get('feed') === '1') setFeed(true);
   if (FUNNEL.some((f) => f.key === params.get('now'))) state.filter.current = params.get('now');
   if (params.get('issue')) { state.filter.issue = params.get('issue').slice(0, 100); $('issue-filter').value = state.filter.issue; }

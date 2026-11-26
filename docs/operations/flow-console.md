@@ -10,6 +10,8 @@ no workflow authority. It is off by default.
 
 ![Flow console with the evaluation-battery fixture](flow-console.png)
 
+In Spanish, with the detail panel: [flow-console-es.png](flow-console-es.png); light theme at 1280×800: [English](flow-console-1280.png), [Spanish](flow-console-es-1280.png).
+
 ## What it shows
 
 - **One swimlane per issue.** Each lane holds that issue's stage bars in flow
@@ -94,6 +96,25 @@ no workflow authority. It is off by default.
   quarantine and stale-wait counts), median time from intake to merge, and the
   model call latency median and 90th percentile.
 - **Text legend** for every colour, texture and marker.
+- **Language**: English and Spanish (*ES*/*EN* button), remembered in the
+  browser and defaulting to its language; `?lang=es` or `?lang=en` selects
+  one in a link. Every UI string is in `internal/flowconsole/ui/i18n.js`.
+  Contract values (event kinds, diagnostics, steps, components) are shown
+  as they are; their human labels (kinds, outcomes, stages) are translated.
+- **Issue links**: issue numbers in the lanes and the detail panel title
+  link to `https://github.com/<repository>/issues/<n>`, built only from a
+  repository matching the contract's pattern and the integer issue number,
+  opened with `rel="noopener noreferrer"`. Clicking the number opens the
+  issue; clicking the rest of the row opens the details.
+- **Light theme and printing**: the ☀/☾ button switches between the dark
+  and a light theme (remembered; the default follows the operating system,
+  `?theme=light` in a link). Both keep text at WCAG AA. Printing (or saving
+  as PDF) uses the light colours, hides the controls and panels, and draws
+  every lane, not only those scrolled into view.
+- **Time per stage**: the detail panel shows the latest attempt as one bar,
+  each stage's queue wait (hatched) and run (solid) in order and to scale,
+  with the longest part named, for example `Longest: generate 6 min 43 s
+  (51% of 13 min 17 s)`.
 - **Contrast**: all text meets WCAG AA (4.5:1) against every surface it sits
   on; the muted grey (`#9c9b93`) measures 6.2:1 on the panels and 4.9:1 on the
   hovered or pressed controls.
@@ -110,7 +131,7 @@ no workflow authority. It is off by default.
   (the page then keeps the last known events).
 
 The view is shareable: `?range=<hours>`, `?status=inflight|delivered|failed|blocked`,
-`?issue=<text>`, `?sort=problems`, `?now=queued|execution|verification|review|publication|merge|blocked`, `?feed=1` and `?open=<owner>/<repository>%23<issue>` set the initial
+`?issue=<text>`, `?sort=problems`, `?lang=es|en`, `?theme=light|dark`, `?now=queued|execution|verification|review|publication|merge|blocked`, `?feed=1` and `?open=<owner>/<repository>%23<issue>` set the initial
 window, filters and detail panel.
 
 ## Event contract: `ai-sdlc.flow-event/v1`
@@ -149,8 +170,8 @@ ids it has not published before.
 
 | Journal | Events |
 |---|---|
-| `intake_observations` | intake `completed` (step `observed`, attribute `generation`) |
-| `admissions` | admission `completed` (`accepted`), `failed` (`rejected`) or `blocked` (`needs-clarification`, `needs-human`, `requires-decomposition`) |
+| `intake_revisions` | intake `completed` for every observed revision (step `observed`, attribute `generation`); only the repository, issue, generation and time are readable, never the payload |
+| `admissions` | admission `completed` (`accepted`), `failed` (`rejected`) or `blocked` (`needs-clarification`, `needs-human`, `requires-decomposition`); the first rejection after each merge is the closed issue's revision and becomes a `completed` step `issue-closed`; every later rejection (for example of a reopened issue) stays a refusal; the UI draws a refusal that follows the issue's own merge with a muted badge and an "after delivery" note |
 | `work_items`, `plans` | planning `completed`; they also map work items to issues |
 | `execution_requests` | `waiting` (queued), `stale-wait`, `retried` (attempt > 1), `completed` (candidate captured), `stopped-safely` (stop reason, or `worker-exit-<code>` with an observed exit code), `blocked` (`lease-lapsed`) |
 | `execution_lifecycles` | `started` (claim), lifecycle `phase` on stops, `quarantined` (`cleanup-uncertain`), `degraded` (`cleanup-retried`) |
@@ -167,8 +188,15 @@ The journal records state, not a log, so a few timings are derived:
 
 - A stage starts at its claim (the lifecycle row, or its first effect or
   model call); before that it is waiting.
-- Verification and review record no finish time: their terminal event is
-  placed at their last observed effect or model call.
+- Verification and review record no finish time, and their effects are
+  Kubernetes object creations acknowledged long before the pods finish (in
+  a real journal, verification's last effect came about 55 s before its
+  verdict). A passed verification or review therefore ends when the next
+  stage's row for the same candidate was created (review, publication),
+  which happens from the passed verdict, but never past its own claim lease
+  (or expiry), so a long queue before the next stage does not stretch it;
+  otherwise, and for a refusal or a
+  stop, at its last observed effect or model call.
 - Generator model calls record only their hand-off, so their latency is the
   interval since the previous hand-off (or the model allocation): it includes
   the executor's tool time between calls. Reviewer calls record their own
@@ -357,6 +385,34 @@ them (for example a log's `model-provider` stop appears as `uncertain` at phase
 a quarantined publication, a stale queue wait with uncertain cleanup, a
 person-blocked admission and in-flight work.
 
+## Real data
+
+![Flow console on a restored evaluation journal](flow-console-real.png)
+
+The screenshots `flow-console-real.png` (1600×1000, live-events panel open)
+and `flow-console-real-1280.png` (1280×800) show the console in journal mode
+on a local copy of a real evaluation journal: battery 34 on 2026-11-26, nine
+issues of the public sample repository `os-santiago/ai-sdlc-sample`
+(258–266), eight delivered and the ninth stopped in generation when the
+journal was copied. The copy was taken read-only (`pg_dump`, roles without
+passwords), restored into a disposable PostgreSQL, brought to this schema by
+the migrator with throwaway local credentials, and read as the
+`aisdlc_flow_console` role; the copy was deleted afterwards. They contain
+only issue numbers, the public repository name, stage times and counts.
+
+Checked against the battery log: every merge time is within 18 s of the
+battery's measured end, and the generator model-call counts match exactly
+(5 or 6 per issue). The battery log's pull request numbers are not in the
+journal's readable columns, so the console does not show them. The ninth
+lane appears as `generating` beyond its stage's p90 in *What is wrong now*,
+because the copy froze it mid-run.
+
+Three derivation issues were visible only on real data and are fixed:
+the post-merge `issue-closed` admission had shown as a refusal on every
+delivered lane, intake showed only the closing revision, and a passed
+verification looked like a 6-second step (see
+[Where the events come from](#where-the-events-come-from)).
+
 ## Limits
 
 - The console shows work that started within `console.windowHours` (default
@@ -389,6 +445,10 @@ person-blocked admission and in-flight work.
   historical catalog is unchanged.
 - **Role provisioning** accepts the optional `flow-console` credential; with
   it absent nothing changes for existing installations.
+- **Upgrade order**: a console image that reads new columns reports the
+  journal as unavailable (the source badge, `journal-unavailable`) until the
+  upgrade's migrator Job has re-provisioned the roles and granted them; it
+  recovers on the next poll without a restart.
 - **Images**: the `containers` workflow builds `flow-console` with the other
   components and publishes its identity as a separate `console-image-`
   artifact class, which `tools/install_images.py` never selects, so installer
