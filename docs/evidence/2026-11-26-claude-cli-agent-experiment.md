@@ -1,6 +1,6 @@
 # Claude CLI as the generative agent: what works in the autonomous flow, 2026-11-26
 
-**Question:** with the local model, batteries 30–32 delivered 16 of 21 distinct issues (76.2% [54.9%, 89.4%], first attempt per distinct issue). Do the remaining failures come from the generative part (SCC driven by the local model), or from the rest of the flow?
+**Question:** with the local model, batteries 30–32 delivered 16 of 21 distinct issues (76.2% [54.9%, 89.4%], counting each issue's first trial). Do the remaining failures come from the generative part (SCC driven by the local model), or from the rest of the flow?
 
 **Experiment:** an evaluation-only bridge on the host replaced the generative agent. It is not part of the product.
 - **Generation.** When SCC started a generation conversation, the bridge ran a headless Claude CLI session (Sonnet) on a fresh host clone of the issue's source commit. The session could read and edit files and run `go test`, `go build`, `go vet` and `gofmt` only.
@@ -35,7 +35,7 @@ Twelve changes only added files. Six (248, 232, 233, 259, 263 and 266) also modi
 
 1. **The flow outside generation works end to end on these issues.** With the bridge's candidates, every stage after generation delivered every issue on the first attempt, with no human step: label intake, admission, planning, the sandboxed executor, candidate export, verification, the independent review (still on the local model), publication and merge. None of the transport, authority or review stops seen with the local model appeared. The host was less loaded, though, because the local model served only reviews, so this does not show those stops are gone.
 2. **SCC's tool execution and the gateway are not the bottleneck.** SCC applied every replayed change: new files, patches to existing files and test runs. The gateway's guards (#797, #806, #809) did not fire. The replay read no files, so they had nothing to judge; this is not a false-positive test.
-3. **The generative part is.** With the local model, failures came from inside SCC's loop:
+3. **The generative part is.** With the local model, most failures came from inside SCC's loop. Four of the five undelivered issues ended on the generation budget, and the fifth (227) at a review stop (`model-request-binding`):
    - the generation budget ran out (exit 22): at the local model's speed, 32 steps do not fit in 900 s;
    - candidates failed their own tests;
    - the model damaged existing files (whole rewrites, copies, destructive patches), now limited by gateway guards.
@@ -53,7 +53,7 @@ Twelve changes only added files. Six (248, 232, 233, 259, 263 and 266) also modi
 
 - **Easy issues.** The corpus is small Go functions in one sample repository.
 - **Not a product path.** The bridge is evaluation-only, so these batteries are not Beta gate evidence.
-- **Not a controlled comparison.** The local-model figures come from different issues and installs; only 230, 232 and 233 overlap.
+- **Not a controlled comparison.** The local-model figures come from different issues and from three revisions (7f50d07, 4f51e42 and 24c3190); only 230, 232 and 233 overlap.
 - **Host load.** The local model served only reviews, so the cluster was less loaded than in the local-model batteries.
 - **Guards not exercised.** The replay read no files, so the gateway guards had nothing to judge.
 - **No weak candidates.** The reviewer saw none.
