@@ -227,13 +227,33 @@ class IdentityInstallationTests(unittest.TestCase):
 
     def test_flow_console_secret_removal_requires_ownership(self):
         calls = []
-        api = SimpleNamespace(owned_secret=lambda k, n, u: {'password': 'p', 'uri': 'u'}, run=lambda args, **kw: calls.append(args))
+        owned = {'type': 'Opaque', 'metadata': {'annotations': {'ai-sdlc.io/cluster-uid': 'owned-uid'}}}
+        api = SimpleNamespace(read_resource=lambda k, kind, n: owned, run=lambda args, **kw: calls.append(args))
         self.assertTrue(installer.remove_console_credential(['kubectl'], 'owned-uid', api))
         self.assertEqual(calls, [['kubectl', 'delete', 'secret', installer.CONSOLE_SECRET, '-n', installer.NAMESPACE, '--wait=true']])
-        calls.clear()
-        api.owned_secret = lambda k, n, u: None
-        self.assertFalse(installer.remove_console_credential(['kubectl'], 'owned-uid', api))
-        self.assertEqual(calls, [])
+        # Absent or foreign: nothing is deleted and the installation is not blocked.
+        for resource in (None, {'type': 'Opaque', 'metadata': {'annotations': {'ai-sdlc.io/cluster-uid': 'other'}}}):
+            calls.clear()
+            api.read_resource = lambda k, kind, n, r=resource: r
+            self.assertFalse(installer.remove_console_credential(['kubectl'], 'owned-uid', api))
+            self.assertEqual(calls, [])
+
+    def test_a_foreign_console_secret_never_blocks_an_install_without_the_console(self):
+        _, secrets, _ = fixture()
+        def owned(k, name, uid):
+            if name == installer.CONSOLE_SECRET:
+                raise ValueError('Refusing to adopt a Secret without matching installation ownership')
+            return secrets.get(name)
+        material, _, resource = fixture()
+        lock = {'image': {'repository': 'quay.io/os-santiago/ai-sdlc'}, 'migrator': {'digest': 'sha256:' + 'a' * 64}}
+        with patch.object(installer, 'identity_material', return_value=material), \
+             patch.object(installer, 'owned_secret', side_effect=owned), \
+             patch.object(installer, 'read_resource', return_value=resource), \
+             patch.object(installer, 'run'), patch.object(installer, 'create_owned_secret') as create:
+            installer.configure_identities([], 'podman', lock, 'owned-uid', 'example/project', 'production-test')
+            create.assert_not_called()
+            with self.assertRaisesRegex(ValueError, 'ownership'):
+                installer.configure_identities([], 'podman', lock, 'owned-uid', 'example/project', 'production-test', flow_console=True)
 
     def test_foreign_secret_is_not_adopted(self):
         resource = {'type': 'Opaque', 'metadata': {'annotations': {'ai-sdlc.io/cluster-uid': 'other'}}}

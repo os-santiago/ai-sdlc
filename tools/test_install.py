@@ -177,6 +177,13 @@ class InstallerBoundaryTests(unittest.TestCase):
                 (Path(tmp) / 'console-images.json').write_text(json.dumps(bad))
                 with self.subTest(bad=bad), self.assertRaises(ValueError):
                     installer.console_images(Path(tmp) / 'console-images.json', lock)
+                # A present but invalid pin also fails a plan, unlike an absent one.
+                with self.subTest(plan=bad), patch.object(installer, 'tools', return_value={'helm': 'helm'}), \
+                     patch.object(installer, 'run', side_effect=run), self.assertRaises(ValueError):
+                    installer.main(['plan', '--images', str(path), '--flow-console'])
+            with patch.object(installer, 'tools', return_value={'helm': 'helm'}), patch.object(installer, 'run', side_effect=run), \
+                 self.assertRaises(ValueError):
+                installer.main(['plan', '--images', str(path), '--flow-console', '--console-images', str(Path(tmp) / 'absent.json')])
         for args in (['status', '--flow-console'], ['credentials', '--flow-console'], ['plan', '--console-images', 'x.json'],
                      ['plan', '--flow-console', '--platform', 'konflux']):
             with self.subTest(args=args), patch.object(installer, 'tools') as tools:

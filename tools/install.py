@@ -229,8 +229,10 @@ def console_images(path, lock):
 def remove_console_credential(kubectl, cluster_uid, installer=None):
     """After the migrator ran without the flow-console entry (role set to
     NOLOGIN, privileges revoked), delete the console's URL Secret."""
-    api = installer or SimpleNamespace(owned_secret=owned_secret, run=run)
-    if api.owned_secret(kubectl, CONSOLE_SECRET, cluster_uid) is None:
+    api = installer or SimpleNamespace(read_resource=read_resource, run=run)
+    resource = api.read_resource(kubectl, 'secret', CONSOLE_SECRET)
+    # Delete only this installation's own Secret; leave any other untouched.
+    if resource is None or resource.get('metadata', {}).get('annotations', {}).get('ai-sdlc.io/cluster-uid') != cluster_uid:
         return False
     api.run(kubectl + ['delete', 'secret', CONSOLE_SECRET, '-n', NAMESPACE, '--wait=true'], stdout=subprocess.DEVNULL)
     return True
@@ -306,8 +308,10 @@ def configure_identities(kubectl, provider, lock, cluster_uid, repository, envir
     # The flow console's password: same generator, same custody (its own
     # URL Secret plus the same passwords.json entry). Without the option the
     # entry is dropped, and the migrator disables the observer role.
-    current = api.owned_secret(kubectl, CONSOLE_SECRET, cluster_uid)
     if flow_console:
+        # Only consulted with the option: a foreign Secret of that name never
+        # blocks an installation without the console.
+        current = api.owned_secret(kubectl, CONSOLE_SECRET, cluster_uid)
         if current is not None:
             if set(current) != {'uri', 'password'} or current['uri'] != console_uri(current['password']):
                 raise ValueError('Inconsistent flow console database Secret')
@@ -629,11 +633,10 @@ def _main(argv, stack):
     console_digest = None
     if args.flow_console:
         pin = args.console_images or Path(args.images).with_name('console-images.json')
-        try:
+        # Only an absent default pin is tolerated, and only by plan; a pin
+        # that exists but is invalid, or an explicit path, always fails.
+        if args.command == 'local' or args.console_images is not None or pin.exists():
             console_digest = console_images(pin, image_lock(args.images))
-        except ValueError:
-            if args.command == 'local':
-                raise
     # The prepared transition renders the original complete state first and its
     # complete target after native policy reconciliation. Its partial selection
     # cannot satisfy the chart's mandatory installed merge-policy input yet.
