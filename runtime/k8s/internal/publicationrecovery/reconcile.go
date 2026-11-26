@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/metrics"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publication"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/sourcefetch"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
@@ -175,6 +176,7 @@ func (r *Reconciler) Step(ctx context.Context, observer Observer) (Step, bool, e
 	}
 	// Bounded line: a journal kind and a closed outcome, nothing from the forge.
 	logf("publication reconciliation: effect=%s outcome=%s", step.Kind, step.Outcome)
+	metrics.Reconciliation(step.Kind, step.Outcome)
 	return step, true, nil
 }
 

@@ -487,3 +487,75 @@ func TestPublicationReconciliationRebuildsTreePlanFromCandidate(t *testing.T) {
 		})
 	}
 }
+
+// A branch receipt must name the branch the signed command plans, even when
+// it points at the acknowledged commit.
+func TestPublicationReconciliationRejectsBranchReceiptWithWrongName(t *testing.T) {
+	u := newUncertainPublication(t, "branch")
+	u.settle(t)
+	ctx := context.Background()
+	pending, e := u.db.PublicationReconciliations(ctx, 16)
+	if e != nil || len(pending) != 1 || !pending[0].Consistent {
+		t.Fatal("pending branch", e)
+	}
+	wrong := store.PublicationReceipt{Version: "ai-sdlc.publication-receipt/v1", Kind: "branch", SHA: u.planned.SHA, Branch: "ai-sdlc/issue-9-" + strings.Repeat("c", 32), Observed: true}
+	if u.db.ResolvePublicationEffect(ctx, pending[0], &wrong) == nil {
+		t.Fatal("branch receipt with another name recorded")
+	}
+	if row := u.effect(t, "branch"); row.completed || row.notSent {
+		t.Fatal("rejected receipt changed the effect")
+	}
+	right := wrong
+	right.Branch = u.plan.Branch
+	if u.db.ResolvePublicationEffect(ctx, pending[0], &right) != nil {
+		t.Fatal("planned branch receipt")
+	}
+}
+
+// An inconsistent effect listed before a consistent one does not stop the
+// consistent one from being reconciled. The fixture builds one real request;
+// the second, older one is inserted with foreign keys disabled and has an
+// uncertain branch effect without its predecessors.
+func TestPublicationReconciliationInconsistentRowDoesNotHideConsistentRow(t *testing.T) {
+	u := newUncertainPublication(t, "branch")
+	u.settle(t)
+	ctx := context.Background()
+	other := "publication-" + strings.Repeat("e", 64)
+	tx, e := u.f.Admin.Pool.BeginTx(ctx, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`SET LOCAL session_replication_role=replica`,
+		`INSERT INTO publication_requests(id,review_id,verification_id,candidate_id,repository,payload_digest,payload,receipt,expires_at,state,claim_token,claim_until,plan_digest,commit_time,reason,created_at)
+ SELECT '` + other + `','review-other','verification-other','execution-other',repository,payload_digest,payload,receipt,expires_at,'failed',gen_random_uuid(),claim_until,plan_digest,commit_time,'uncertain',created_at-interval '1 minute' FROM publication_requests WHERE id='` + u.request.ID + `'`,
+		`INSERT INTO publication_effects(request_id,kind,token,request_digest,created_at) VALUES('` + other + `','branch',gen_random_uuid(),repeat('1',64),clock_timestamp()-interval '1 hour')`,
+	} {
+		if _, e = tx.Exec(q); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e = tx.Commit(); e != nil {
+		t.Fatal(e)
+	}
+	pending, e := u.db.PublicationReconciliations(ctx, 16)
+	if e != nil || len(pending) != 2 || pending[0].RequestID != other || pending[0].Consistent || pending[1].RequestID != u.request.ID || !pending[1].Consistent {
+		t.Fatal("listing", len(pending), e)
+	}
+	forge := &reconcileForge{observation: publication.Observation{State: publication.ObservedAbsent}}
+	r := u.reconciler()
+	if step, _, e := r.Step(ctx, forge); e != nil || step.Outcome != publicationrecovery.Unplanned || len(forge.seen) != 0 {
+		t.Fatal("inconsistent row", step, e)
+	}
+	// The inconsistent row now paces; the next poll reconciles the other.
+	if step, _, e := r.Step(ctx, forge); e != nil || step.Outcome != publicationrecovery.NotSent || len(forge.seen) != 1 {
+		t.Fatal("consistent row", step, e)
+	}
+	if row := u.effect(t, "branch"); !row.notSent {
+		t.Fatal("consistent row not reconciled")
+	}
+	if blocked, e := u.db.PublicationBlocked(ctx); e != nil || !blocked {
+		t.Fatal("inconsistent row must keep the quarantine")
+	}
+}

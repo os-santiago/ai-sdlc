@@ -20,6 +20,18 @@ read-only forge observation re-derives the journaled request. The observation
 records either an observed receipt (the effect exists exactly) or a known no-send
 (the forge proves it absent). The request itself stays failed.
 
+This is the one narrow, named exception to the rule that an observation never
+manufactures a missing receipt. It applies only when all of these hold:
+
+- the effect is uncertain;
+- its request is already `failed`;
+- the settle window has passed;
+- the observation is read-only and exactly matches the journaled planned digest;
+- the receipt is marked `observed: true`.
+
+Such a receipt is never accepted where a live receipt is required (see the
+[principle exception](publication-reconciliation.md#principle-exception-an-observed-receipt)).
+
 Completion requires all four receipts and matching commit/branch/PR evidence.
 Its proof explicitly does not authorize merge or deployment. No model content,
 credentials or HTTP response body is stored in an effect receipt.

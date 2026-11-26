@@ -177,11 +177,14 @@ var publicationCandidate = regexp.MustCompile(`^execution-[a-f0-9]{64}$`)
 // plannedPublicationBranch mirrors publication.BranchName for the journaled
 // signed command (the store cannot import the publication package).
 func plannedPublicationBranch(payload []byte) string {
+	// Strict: one JSON value, no duplicate or case-folded keys, so the fields
+	// read here are the ones the signed command carries.
+	var fields map[string]json.RawMessage
 	var c struct {
-		IssueNumber int    `json:"issueNumber"`
-		CandidateID string `json:"candidateId"`
+		IssueNumber int
+		CandidateID string
 	}
-	if json.Unmarshal(payload, &c) != nil || c.IssueNumber < 1 || c.IssueNumber > 2147483647 || !publicationCandidate.MatchString(c.CandidateID) {
+	if authority.DecodeStrict(payload, &fields) != nil || authority.DecodeStrict(fields["issueNumber"], &c.IssueNumber) != nil || authority.DecodeStrict(fields["candidateId"], &c.CandidateID) != nil || c.IssueNumber < 1 || c.IssueNumber > 2147483647 || !publicationCandidate.MatchString(c.CandidateID) {
 		return ""
 	}
 	return fmt.Sprintf("ai-sdlc/issue-%d-%s", c.IssueNumber, c.CandidateID[len("execution-"):len("execution-")+32])

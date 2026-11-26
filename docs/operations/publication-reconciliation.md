@@ -83,8 +83,39 @@ Outcome names are closed:
 - `unplanned`: the journaled facts do not re-derive the journaled request. The publication stays quarantined.
 
 The durable journal of a resolution is the effect row itself: an observed
-receipt, or `not_sent_at` set after the claim ended. The non-resolving outcomes
-change no row; they appear only in the bounded log line.
+receipt, or `not_sent_at` set after the claim ended. Outcomes that leave the
+effect quarantined change no row.
+
+**Attempt records (decision, can be changed later).** No per-attempt table is
+kept. Every attempt is visible in two places: the bounded log line, and the
+counter `ai_sdlc_publication_reconciliations_total{effect,outcome}` (see
+[metrics](metrics.md#publication-reconciliations)), whose labels come only from
+the closed effect and outcome sets. A durable per-attempt table would add a
+table to the schema. Configuration upgrades admit only constraint relaxations,
+so that table would need its own upgrade bridge.
+
+## Principle exception: an observed receipt
+
+Elsewhere the runtime holds that an observation never manufactures a missing
+receipt. For example, deployment recovery never turns an observed image into a
+missing API acknowledgement (see [deployment recovery](deployment-recovery.md)).
+Publication reconciliation is the **one narrow, named exception** to that rule.
+An observed receipt is recorded only when all of the following hold:
+
+1. The effect is uncertain: begun, with neither a receipt nor a known no-send.
+2. Its request is already `failed`. Reconciliation never touches a queued,
+   claimed or published request, and never changes the request's state.
+3. The settle window has passed: the claim ended more than 120 s ago (database
+   time), so the original write can no longer be in flight.
+4. The observation is read-only (GET only) and matches exactly the planned
+   effect. The plan is re-derived from journaled facts, and its request body
+   matches the journaled request digest byte for byte.
+5. The receipt is marked `"observed": true`. It is never accepted where a live
+   receipt is required: `AcknowledgePublicationEffect`, `FinishPublication` and
+   the published-record reader all reject it. It therefore never leads to a
+   publication proof, a merge or a deployment.
+
+Any other journal keeps the rule without exception.
 
 ## Safety argument
 
@@ -131,14 +162,41 @@ Why closing, not retrying with a fresh claim:
 - The signed command and review have finite expiries, often already passed by the
   time the forge recovers.
 
-Consequences for the operator:
+### Re-delivery is an operator action (decision, can be changed later)
 
-- If reconciliation recorded `completed` for a branch or pull request, that
-  branch, or that open PR, exists on the forge without a published record. The
-  merge controller does not act on it. Close the PR and delete the branch, or
-  leave them for review; nothing in the runtime depends on them.
-- The issue's candidate is not published. Deliver it again through a new
-  generation of the issue.
+The runtime does not re-deliver the issue automatically. The candidate of a
+reconciled request is not published. To deliver the issue again, re-label it:
+
+1. Remove the installation's trigger label (the intake configuration's
+   `triggerLabel`) from the issue.
+2. Wait for one intake poll (`pollSeconds`). Intake records a new, ineligible
+   generation.
+3. Add the trigger label back, as one of the authorized actors
+   (`authorizedActorIDs`). Intake records a new eligible generation. The
+   issue is then admitted, generated, verified, reviewed and published again from
+   the start, under a new claim and a new branch name.
+
+### Leftover branch or pull request (decision, can be changed later)
+
+The runtime never deletes or closes anything on the forge, and reconciliation
+only reads. If reconciliation recorded `completed` for a branch or a pull
+request, that branch (and, for a pull request, that open PR) exists on the forge
+without a published record. The merge controller never acts on it, and nothing
+in the runtime depends on it.
+
+The flow console shows it as `publication · reconciled · completed` with
+attribute `effect=branch` or `effect=pull-request`
+([flow console](flow-console.md)). To clean up:
+
+1. Confirm, read-only, that the branch is `ai-sdlc/issue-<n>-<candidate>` at the
+   commit the receipt names. For a pull request, confirm that its head is that
+   branch and that its body carries the plan digest.
+2. Close the pull request with a short comment that it came from a reconciled,
+   unpublished attempt.
+3. Delete the branch.
+
+Do the cleanup before you re-label the issue, so that two pull requests for the
+same issue are never open at the same time.
 
 ## When it stays quarantined
 

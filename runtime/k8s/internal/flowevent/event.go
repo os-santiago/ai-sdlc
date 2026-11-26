@@ -67,7 +67,7 @@ var attributeKeys = map[string]bool{
 	"phase": true, "exitCode": true, "reason": true, "decision": true, "risk": true, "status": true,
 	"changes": true, "modelCalls": true, "sequence": true, "inputBytes": true, "outputBytes": true,
 	"responseStatus": true, "cleanup": true, "cleanupAttempts": true, "generation": true,
-	"previousAttempt": true, "waitedMs": true, "effects": true, "source": true,
+	"previousAttempt": true, "waitedMs": true, "effects": true, "source": true, "effect": true,
 }
 
 var (

@@ -263,3 +263,38 @@ func TestLiveFixturePatterns(t *testing.T) {
 		}
 	}
 }
+
+// A failed publication whose uncertain effect reconciliation resolved after
+// the settle window shows publication / reconciled / completed or not-sent;
+// a live acknowledgement within the claim and an unresolved effect do not.
+func TestReconciledPublicationEffectsAreShown(t *testing.T) {
+	base := time.Date(2026, 11, 26, 4, 0, 0, 0, time.UTC)
+	link := store.FlowLink{WorkItem: "8f9a2c1e-3b4d-4e5f-8a6b-7c8d9e0f1a2b", Attempt: 1, Repository: "example/app"}
+	until := base.Add(2 * time.Minute)
+	live, observed := base.Add(10*time.Second), until.Add(5*time.Minute)
+	verdict := func(id string) store.FlowVerdict {
+		return store.FlowVerdict{ID: id, FlowLink: link, State: "failed", Reason: "uncertain", Cleanup: "complete", CreatedAt: base, ExpiresAt: base.Add(time.Hour), ClaimUntil: &until, Candidate: "execution-" + id}
+	}
+	j := store.FlowJournal{
+		ObservedAt:   base.Add(time.Hour),
+		Publications: []store.FlowVerdict{verdict("p1"), verdict("p2"), verdict("p3")},
+		PublicationEffects: []store.FlowEffect{
+			{Parent: "p1", Kind: "commit", CreatedAt: base.Add(time.Second), CompletedAt: &live},
+			{Parent: "p1", Kind: "branch", CreatedAt: base.Add(2 * time.Second), NotSentAt: &observed},
+			{Parent: "p2", Kind: "tree", CreatedAt: base.Add(time.Second), CompletedAt: &observed},
+			{Parent: "p3", Kind: "tree", CreatedAt: base.Add(time.Second)},
+		},
+	}
+	got := map[string]string{}
+	for _, e := range Derive(j, DeriveOptions{}) {
+		if e.Stage == "publication" && e.Step == "reconciled" {
+			if e.Kind != flowevent.KindProgressed || !e.Time.Equal(observed) || e.Validate() != nil {
+				t.Fatal("reconciled event", e)
+			}
+			got[e.Attributes["effect"]+"/"+e.Diagnostic] = e.Attributes["reason"]
+		}
+	}
+	if len(got) != 2 || got["branch/not-sent"] != "uncertain" || got["tree/completed"] != "uncertain" {
+		t.Fatal("reconciled events", got)
+	}
+}
