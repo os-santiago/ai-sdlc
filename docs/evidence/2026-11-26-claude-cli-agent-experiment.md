@@ -20,7 +20,7 @@
 | 30–32 | SCC + local model (Qwen3-Coder-30B-A3B) | 16/21 = 76.2% [54.9%, 89.4%] | 9/21 | 884 | 15–32 |
 | 33–34 | Claude CLI through the bridge | **18/18 = 100% [82.4%, 100%]** | 18/18 | 402 | 5–6 |
 
-The reports are attached: battery [30](2026-11-25-evaluation-battery-30.json), [31](2026-11-25-evaluation-battery-31.json), [32](2026-11-26-evaluation-battery-32.json), [33](2026-11-26-evaluation-battery-33.json) [34](2026-11-26-evaluation-battery-34.json) and, for the bridge rerun on install d22e8b4 (issues 276–281, 6/6 on the first attempt, median 403 s, 5 model calls each), [35](2026-11-26-evaluation-battery-35.json). Batteries 30–32 are counted by the first trial of each distinct issue (`summarize.py --dedupe first`). Intervals are Wilson 95% intervals from the evaluation harness (#786).
+The reports are attached: battery [30](2026-11-25-evaluation-battery-30.json), [31](2026-11-25-evaluation-battery-31.json), [32](2026-11-26-evaluation-battery-32.json), [33](2026-11-26-evaluation-battery-33.json), [34](2026-11-26-evaluation-battery-34.json) and, for the bridge rerun on install d22e8b4 (issues 276–281, 6/6 on the first attempt, median 403 s, 5 model calls each), [35](2026-11-26-evaluation-battery-35.json). Batteries 30–32 are counted by the first trial of each distinct issue (`summarize.py --dedupe first`). Intervals are Wilson 95% intervals from the evaluation harness (#786).
 
 The bridge's log recorded 18 Claude CLI runs for the battery issues:
 - median 101 s, at most 194 s, with a median of 21.5 agent turns;
