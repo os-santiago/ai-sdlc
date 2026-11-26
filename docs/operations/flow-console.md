@@ -78,6 +78,14 @@ In Spanish, with the detail panel: [flow-console-es.png](flow-console-es.png); l
   quarantine. Markers closer than about 15 px merge into one badge with a
   count; its tooltip lists each of them.
 - **Model calls** as ticks along the generation and review bars.
+- **Issue closed after merge**: once a lane's merge has completed, the
+  closed issue's later intake revisions, its `issue-closed` admission step
+  and any later refusal fold into one small neutral flag just after the merge
+  (legend: *Issue closed after merge*). Its tooltip lists each of those
+  events, and the detail panel keeps them in order. They are not counted as
+  failures or stops in the tiles, the stops-and-refusals trend, the
+  degradation bands, *What is wrong now* or the problem rows of the live
+  events panel, so a delivered lane never reads as failed.
 - **Hover** on a bar or marker for its outcome, diagnostic, wait, start, end,
   duration, model call count and latency (median and maximum), and bounded
   attributes such as the lifecycle phase or exit code.
@@ -171,7 +179,7 @@ ids it has not published before.
 | Journal | Events |
 |---|---|
 | `intake_revisions` | intake `completed` for every observed revision (step `observed`, attribute `generation`); only the repository, issue, generation and time are readable, never the payload |
-| `admissions` | admission `completed` (`accepted`), `failed` (`rejected`) or `blocked` (`needs-clarification`, `needs-human`, `requires-decomposition`); the first rejection after each merge is the closed issue's revision and becomes a `completed` step `issue-closed`; every later rejection (for example of a reopened issue) stays a refusal; the UI draws a refusal that follows the issue's own merge with a muted badge and an "after delivery" note |
+| `admissions` | admission `completed` (`accepted`), `failed` (`rejected`) or `blocked` (`needs-clarification`, `needs-human`, `requires-decomposition`); the first rejection after each merge is the closed issue's revision and becomes a `completed` step `issue-closed`; every later rejection (for example of a reopened issue) stays a refusal; on the lane, anything before planning that follows the issue's own merge is folded into the neutral "issue closed after merge" flag and is not counted as a failure or stop |
 | `work_items`, `plans` | planning `completed`; they also map work items to issues |
 | `execution_requests` | `waiting` (queued), `stale-wait`, `retried` (attempt > 1), `completed` (candidate captured), `stopped-safely` (stop reason, or `worker-exit-<code>` with an observed exit code), `blocked` (`lease-lapsed`) |
 | `execution_lifecycles` | `started` (claim), lifecycle `phase` on stops, `quarantined` (`cleanup-uncertain`), `degraded` (`cleanup-retried`) |
@@ -193,9 +201,10 @@ The journal records state, not a log, so a few timings are derived:
   a real journal, verification's last effect came about 55 s before its
   verdict). A passed verification or review therefore ends when the next
   stage's row for the same candidate was created (review, publication),
-  which happens from the passed verdict, but never past its own claim lease
-  (or expiry), so a long queue before the next stage does not stretch it;
-  otherwise, and for a refusal or a
+  which happens from the passed verdict. That is the next stage's queue
+  start, so the bar never reaches into the next stage, and it never passes
+  the row's expiry. (The claim lease is not used as a bound: on a live
+  journal it ended right after the effect acknowledgements.) Otherwise, and for a refusal or a
   stop, at its last observed effect or model call.
 - Generator model calls record only their hand-off, so their latency is the
   interval since the previous hand-off (or the model allocation): it includes
@@ -425,6 +434,20 @@ them (for example a log's `model-provider` stop appears as `uncertain` at phase
 `source=illustrative` (issues 223–228) add states the batteries did not reach:
 a quarantined publication, a stale queue wait with uncertain cleanup, a
 person-blocked admission and in-flight work.
+
+The fixture `components/flow-console/fixtures/live-battery-35.jsonl` is the
+live console's own snapshot (`/api/snapshot?limit=5000`) during evaluation
+battery 35 on 2026-11-26: 103 events for issues 276 and 277 of the public
+sample repository, with only issue numbers, the repository name, stage times
+and counts. Its two verification verdicts are re-derived with the current
+rule (verdict at the review's creation, about 53 s after the claim); the
+console that recorded it ended them at the claim lease, a third of a second
+after the claim. `TestLiveFixturePatterns` checks the patterns it holds: a
+delivered lane with a post-merge `issue-closed` step followed by a refusal,
+and verification spanning claim to verdict. The screenshots
+[flow-console-live-1280.png](flow-console-live-1280.png) (English, light) and
+[flow-console-live-es-1280.png](flow-console-live-es-1280.png) (Spanish,
+dark) show it at 1280×800.
 
 ## Real data
 
