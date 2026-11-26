@@ -135,13 +135,14 @@ states, not attempts, and are not counted.
 `ai_sdlc_publication_reconciliations_total{effect,outcome}` counts each
 [reconciliation](publication-reconciliation.md) step of an uncertain
 publication effect. `effect` is `tree`, `commit`, `branch` or `pull-request`.
-`outcome` is `completed`, `not-sent`, `mismatch`, `unavailable` or `unplanned`.
+`outcome` is `completed`, `not-sent`, `mismatch`, `unavailable`, `unplanned` or
+`unproven`.
 Together with the bounded log line, this counter is the record of attempts that
 leave an effect quarantined. To alert on a quarantine that keeps failing
 reconciliation:
 
 ```promql
-increase(ai_sdlc_publication_reconciliations_total{outcome=~"mismatch|unplanned"}[1h]) > 0
+increase(ai_sdlc_publication_reconciliations_total{outcome=~"mismatch|unplanned|unproven"}[1h]) > 0
 ```
 
 ## Cardinality

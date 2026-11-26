@@ -2,7 +2,7 @@
 // read-only observation of the forge. It never writes to the forge, never
 // resumes or retries the original publication, and never weakens the journal:
 // an effect changes only to a receipt (it exists exactly as planned) or to a
-// known no-send (the forge proves it absent). Every other observation keeps
+// known no-send (the forge proves it absent, which a missing branch cannot). Every other observation keeps
 // the publication quarantined.
 package publicationrecovery
 
@@ -41,6 +41,10 @@ const (
 	Unavailable = "unavailable"
 	// Unplanned: the journaled facts do not re-derive the journaled request. Quarantined.
 	Unplanned = "unplanned"
+	// Unproven: the planned branch is absent, but a ref can be created and
+	// deleted, so its absence does not prove the request was not applied.
+	// Quarantined.
+	Unproven = "unproven"
 )
 
 // Step reports one reconciliation attempt. It carries no body, token or URL.
@@ -213,6 +217,13 @@ func (r *Reconciler) reconcile(ctx context.Context, observer Observer, c store.P
 		}
 		return Completed
 	case publication.ObservedAbsent:
+		// Only an object that cannot be deleted once written proves a no-send by
+		// its absence: a content-addressed tree or commit that nothing yet
+		// references, or a pull request (the reader checks its head branch).
+		// A branch may have been created and then deleted by someone else.
+		if c.Kind == publication.EffectBranch {
+			return Unproven
+		}
 		if r.DB.ResolvePublicationEffect(ctx, c, nil) != nil {
 			return Unavailable
 		}

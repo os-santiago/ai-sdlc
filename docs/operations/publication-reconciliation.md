@@ -30,7 +30,7 @@ Each publication poll (every 5 s) that finds the quarantine:
    outcome, and logs one bounded line:
 
    ```text
-   publication reconciliation: effect=branch outcome=not-sent
+   publication reconciliation: effect=tree outcome=not-sent
    ```
 
    The line holds only the journal's effect kind and a closed outcome name, never
@@ -58,15 +58,18 @@ journaled before the POST. Otherwise the outcome is `unplanned`.
 The observer (`publication.Reader`) issues only `GET` requests with the
 publication credential, to a closed set of paths. It does not follow redirects
 and does not retry. Before it trusts any `404`, it must read the publication's
-parent commit (`GET /git/commits/<source>`). If the credential cannot see the
-repository's Git objects, the result is an error, not absence.
+parent commit (`GET /git/commits/<source>`), and it reads that commit again
+after the `404`. If the credential cannot see the repository's Git objects at
+either read, the result is an error, not absence. The second read narrows the
+window in which lost access could look like absence; it cannot prove access at
+the instant of the `404`.
 
-| Effect | Exists exactly → `completed` | Absent → `not-sent` | Anything else |
+| Effect | Exists exactly → `completed` | Absent | Anything else |
 | --- | --- | --- | --- |
-| tree | `GET /git/trees/<sha>` is 200, same SHA, not truncated | 404 | `mismatch` or `unavailable` |
-| commit | `GET /git/commits/<sha>` is 200 with the planned tree, single parent, message, author and committer | 404 | `mismatch` or `unavailable` |
-| branch | `GET /git/ref/heads/<branch>` is 200: a commit ref at exactly the planned SHA | 404 | at another SHA: `mismatch` |
-| pull request | `GET /pulls?state=all&head=<owner>:<branch>` lists exactly one PR: open, not draft, head is the branch at the planned SHA in this repository, base `main`, body carries the plan digest | the list is empty (the forge proves that no PR, open or closed, exists for that head) | several PRs, or a closed, edited or different one: `mismatch` |
+| tree | `GET /git/trees/<sha>` is 200, same SHA, not truncated | 404: `not-sent` | `mismatch` or `unavailable` |
+| commit | `GET /git/commits/<sha>` is 200 with the planned tree, single parent, message, author and committer | 404: `not-sent` | `mismatch` or `unavailable` |
+| branch | `GET /git/ref/heads/<branch>` is 200: a commit ref at exactly the planned SHA | 404: `unproven` (stays quarantined) | at another SHA: `mismatch` |
+| pull request | `GET /pulls?state=all&head=<owner>:<branch>` lists exactly one PR: open, not draft, head is the branch at the planned SHA in this repository, base `main` at the planned source SHA (the check the writer applies to the creation response), body carries the plan digest | the list is empty and `GET /git/ref/heads/<branch>` still shows the branch at the planned SHA: `not-sent` | several PRs; a closed, edited, retargeted or differently based one; or an empty list while the branch is gone or moved: `mismatch` |
 
 Outcome names are closed:
 
@@ -81,6 +84,9 @@ Outcome names are closed:
 - `unavailable`: the forge, the source or the journal could not be read or
   written, including any non-200, non-404 status. The publication stays quarantined.
 - `unplanned`: the journaled facts do not re-derive the journaled request. The publication stays quarantined.
+- `unproven`: the planned branch does not exist, but that does not prove it was
+  never created: a maintainer may have deleted it after a lost reply. The
+  publication stays quarantined, and the journal itself refuses a branch no-send.
 
 The durable journal of a resolution is the effect row itself: an observed
 receipt, or `not_sent_at` set after the claim ended. Outcomes that leave the
@@ -136,8 +142,10 @@ Any other journal keeps the rule without exception.
   observed receipt (`AcknowledgePublicationEffect` rejects it). `FinishPublication`
   and the published-record reader reject one. An observed receipt only closes an
   uncertain effect of a failed request.
-- **Absence is proven, not inferred.** Only a `404` after a successful parent
-  commit read, or an empty `state=all` pull request list, counts as absence.
+- **Absence is proven, not inferred.** Only a `404` for a tree or commit with a
+  successful parent commit read before and after it, or an empty `state=all`
+  pull request list while the head branch still points at the planned commit,
+  counts as absence. A missing branch never does, because a ref is mutable.
   Every error keeps the quarantine.
 - **Content-addressed objects.** A tree or commit is the last begun effect, so
   nothing on the forge references it. Even a wrongly computed SHA could at worst
@@ -200,7 +208,7 @@ same issue are never open at the same time.
 
 ## When it stays quarantined
 
-A `mismatch`, `unplanned` or persistent `unavailable` outcome needs an operator.
+A `mismatch`, `unplanned`, `unproven` or persistent `unavailable` outcome needs an operator.
 Inspect the forge read-only, then reconcile the effect row by hand, as before
 this change. The bounded log line names the effect kind and the reason.
 
@@ -210,8 +218,19 @@ this change. The bounded log line names the effect kind and the reason.
   recorded as not sent. Confirm read-only that it is the runtime's PR (head branch
   and head SHA). Then record its receipt by hand and leave the PR closed, or
   reopen and restore it so that the next observation completes it.
+- **Pull request on another base** (`effect=pull-request outcome=mismatch`): the
+  PR's recorded base is not the planned source commit. GitHub may have opened it
+  after `main` moved, which the writer would have refused. Decide by hand whether
+  it is acceptable; the current `main` never proves the original base.
+- **Pull request absent but branch gone** (`effect=pull-request outcome=mismatch`):
+  the list is empty, but the head branch was deleted or moved, so a PR opened
+  from it may no longer match the head filter. Search the PRs for the plan digest.
 - **Branch at another SHA** (`effect=branch outcome=mismatch`): something
   moved the branch. Do not delete it before you have established who moved it.
+- **Branch absent** (`effect=branch outcome=unproven`): the branch does not
+  exist now. Check the repository's activity or audit log for a creation and
+  deletion of `ai-sdlc/issue-<n>-<candidate>`. Record the receipt by hand if it
+  was created, or the no-send if the forge shows it never was.
 
 ## Configuration and migration
 

@@ -117,6 +117,19 @@ type gitObject struct {
 	SHA string `json:"sha"`
 }
 
+type gitRef struct {
+	Ref    string `json:"ref"`
+	Object struct {
+		Type string `json:"type"`
+		SHA  string `json:"sha"`
+	} `json:"object"`
+}
+
+// at reports whether the ref is the branch, pointing directly at the commit.
+func (g gitRef) at(branch, sha string) bool {
+	return g.Ref == "refs/heads/"+branch && g.Object.Type == "commit" && g.Object.SHA == sha
+}
+
 // control proves the credential can read this repository's Git objects: the
 // publication's parent commit must be visible before a 404 counts as absence.
 func (r *Reader) control(ctx context.Context, source string) error {
@@ -137,6 +150,15 @@ func (r *Reader) Observe(ctx context.Context, x Expectation) (Observation, error
 	if r.control(ctx, x.Source) != nil {
 		return Observation{}, ErrPublication
 	}
+	// A 404 counts as absence only if the parent commit is still readable after
+	// it: access lost between the two reads must not turn into a no-send. This
+	// narrows the window; it cannot prove access at the instant of the 404.
+	absent := func() (Observation, error) {
+		if r.control(ctx, x.Source) != nil {
+			return Observation{}, ErrPublication
+		}
+		return Observation{State: ObservedAbsent}, nil
+	}
 	exact := func(ok bool) (Observation, error) {
 		if ok {
 			return Observation{State: ObservedExact}, nil
@@ -154,7 +176,7 @@ func (r *Reader) Observe(ctx context.Context, x Expectation) (Observation, error
 			return Observation{}, e
 		}
 		if !found {
-			return Observation{State: ObservedAbsent}, nil
+			return absent()
 		}
 		return exact(tree.SHA == x.SHA && !tree.Truncated)
 	case EffectCommit:
@@ -171,26 +193,20 @@ func (r *Reader) Observe(ctx context.Context, x Expectation) (Observation, error
 			return Observation{}, e
 		}
 		if !found {
-			return Observation{State: ObservedAbsent}, nil
+			return absent()
 		}
 		person := commitPerson{"Sergio Canales", "sergio.canales.e@gmail.com", x.Date.UTC().Format(time.RFC3339)}
 		return exact(commit.SHA == x.SHA && commit.Tree.SHA == x.Tree && len(commit.Parents) == 1 && commit.Parents[0].SHA == x.Source && strings.TrimSuffix(commit.Message, "\n") == strings.TrimSuffix(x.Message, "\n") && sameInstant(commit.Author, person) && sameInstant(commit.Committer, person))
 	case EffectBranch:
-		var ref struct {
-			Ref    string `json:"ref"`
-			Object struct {
-				Type string `json:"type"`
-				SHA  string `json:"sha"`
-			} `json:"object"`
-		}
+		var ref gitRef
 		found, e := r.get(ctx, "/git/ref/heads/"+x.Branch, nil, &ref)
 		if e != nil {
 			return Observation{}, e
 		}
 		if !found {
-			return Observation{State: ObservedAbsent}, nil
+			return absent()
 		}
-		return exact(ref.Ref == "refs/heads/"+x.Branch && ref.Object.Type == "commit" && ref.Object.SHA == x.SHA)
+		return exact(ref.at(x.Branch, x.SHA))
 	case EffectPullRequest:
 		owner, _, _ := strings.Cut(r.repository, "/")
 		type end struct {
@@ -214,11 +230,26 @@ func (r *Reader) Observe(ctx context.Context, x Expectation) (Observation, error
 			return Observation{}, ErrPublication
 		}
 		if len(pulls) == 0 {
+			// The head filter matches the branch the PR was opened from. Only
+			// while that branch still points exactly at the planned commit does
+			// an empty list show that no PR was opened from it; a deleted or
+			// moved branch leaves the evidence ambiguous.
+			var ref gitRef
+			found, e := r.get(ctx, "/git/ref/heads/"+x.Branch, nil, &ref)
+			if e != nil {
+				return Observation{}, e
+			}
+			if !found || !ref.at(x.Branch, x.SHA) {
+				return Observation{State: ObservedDifferent}, nil
+			}
 			return Observation{State: ObservedAbsent}, nil
 		}
 		// Exactly one pull request may exist for a branch only this runtime creates.
+		// Its recorded base must be the planned source commit, the same check the
+		// writer applies to the creation response: a PR opened after main moved
+		// is not the planned effect, and the current main is never consulted.
 		p := pulls[0]
-		if len(pulls) != 1 || p.Number < 1 || p.Number > 2147483647 || p.State != "open" || p.Draft || p.Body == nil || !strings.Contains(*p.Body, proofMarker(x.PlanDigest)) || p.Head.Ref != x.Branch || p.Head.SHA != x.SHA || p.Head.Repo == nil || p.Head.Repo.FullName != r.repository || p.Base.Ref != "main" || p.Base.Repo == nil || p.Base.Repo.FullName != r.repository {
+		if len(pulls) != 1 || p.Number < 1 || p.Number > 2147483647 || p.State != "open" || p.Draft || p.Body == nil || !strings.Contains(*p.Body, proofMarker(x.PlanDigest)) || p.Head.Ref != x.Branch || p.Head.SHA != x.SHA || p.Head.Repo == nil || p.Head.Repo.FullName != r.repository || p.Base.Ref != "main" || p.Base.SHA != x.Source || p.Base.Repo == nil || p.Base.Repo.FullName != r.repository {
 			return Observation{State: ObservedDifferent}, nil
 		}
 		return Observation{State: ObservedExact, PullRequest: p.Number}, nil

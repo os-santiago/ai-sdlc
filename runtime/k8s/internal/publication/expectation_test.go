@@ -87,7 +87,7 @@ func TestPlannedCommitSHAIsGitObjectIdentity(t *testing.T) {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	run("", nil, "init", "-q")
+	run("", nil, "init", "-q", "--object-format=sha1")
 	blob := run("source\n", nil, "hash-object", "-w", "--stdin")
 	tree := run("100644 blob "+blob+"\tREADME.md\n", nil, "mktree")
 	date := time.Date(2026, 11, 25, 1, 2, 3, 0, time.UTC)

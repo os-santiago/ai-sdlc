@@ -58,7 +58,7 @@ var DeliveryOutcomes = []string{"published", "publication-stopped", "merged", "m
 // one read-only reconciliation of an uncertain publication effect
 // (publicationrecovery.Step).
 var ReconciliationEffects = []string{"tree", "commit", "branch", "pull-request"}
-var ReconciliationOutcomes = []string{"completed", "not-sent", "mismatch", "unavailable", "unplanned"}
+var ReconciliationOutcomes = []string{"completed", "not-sent", "mismatch", "unavailable", "unplanned", "unproven"}
 
 // ModelCallBuckets span a fast local answer up to the 600 s ceiling.
 var ModelCallBuckets = []float64{1, 2.5, 5, 10, 20, 30, 60, 90, 120, 180, 300, 450, 600}

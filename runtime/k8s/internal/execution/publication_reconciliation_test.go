@@ -167,6 +167,12 @@ func (u uncertainPublication) state(t *testing.T) (string, string) {
 }
 
 func testReconcileEffect(t *testing.T, kind string) {
+	// A missing tree, commit or pull request proves a no-send; a missing
+	// branch does not, because a ref can be created and then deleted.
+	absentOutcome := publicationrecovery.NotSent
+	if kind == "branch" {
+		absentOutcome = publicationrecovery.Unproven
+	}
 	cases := []struct {
 		name        string
 		observation publication.Observation
@@ -175,7 +181,7 @@ func testReconcileEffect(t *testing.T, kind string) {
 		lifted      bool
 	}{
 		{"exists-exactly", publication.Observation{State: publication.ObservedExact, PullRequest: 1600}, nil, publicationrecovery.Completed, true},
-		{"absent", publication.Observation{State: publication.ObservedAbsent}, nil, publicationrecovery.NotSent, true},
+		{"absent", publication.Observation{State: publication.ObservedAbsent}, nil, absentOutcome, kind != "branch"},
 		{"exists-differently", publication.Observation{State: publication.ObservedDifferent}, nil, publicationrecovery.Mismatch, false},
 		{"observation-error", publication.Observation{}, errors.New("forge 502"), publicationrecovery.Unavailable, false},
 	}
@@ -278,8 +284,8 @@ func TestPublicationReconciliationSettlesPacesAndLiftsQuarantine(t *testing.T) {
 		t.Fatal("observation not paced")
 	}
 	now = now.Add(31 * time.Second)
-	forge.err, forge.observation = nil, publication.Observation{State: publication.ObservedAbsent}
-	if step, attempted, e := r.Step(ctx, forge); e != nil || !attempted || step.Outcome != publicationrecovery.NotSent {
+	forge.err, forge.observation = nil, publication.Observation{State: publication.ObservedExact}
+	if step, attempted, e := r.Step(ctx, forge); e != nil || !attempted || step.Outcome != publicationrecovery.Completed {
 		t.Fatal("paced observation", step, e)
 	}
 	if blocked, e := u.db.PublicationBlocked(ctx); e != nil || blocked {
@@ -335,11 +341,6 @@ func TestPublicationReconciliationJournalRejectsUnprovenOutcomes(t *testing.T) {
 		if u.db.ResolvePublicationEffect(ctx, c, &receipt) == nil {
 			t.Fatal("unproven outcome recorded", name)
 		}
-	}
-	// A live write can never present an observed receipt.
-	effect := store.PublicationEffect{Claim: u.claim, Kind: "pull-request", Token: p.EffectToken, RequestDigest: p.RequestDigest}
-	if u.db.AcknowledgePublicationEffect(ctx, effect, good) == nil {
-		t.Fatal("observed receipt acknowledged as a write response")
 	}
 	if u.db.ResolvePublicationEffect(ctx, p, &good) != nil {
 		t.Fatal("observed outcome")
@@ -407,13 +408,14 @@ func TestPublicationReconciliationInconsistentEffectDoesNotBlockListing(t *testi
 	if e != nil || len(pending) != 1 || pending[0].Consistent || pending[0].Completed != nil {
 		t.Fatal("inconsistent effect listing", len(pending), e)
 	}
-	forge := &reconcileForge{observation: publication.Observation{State: publication.ObservedAbsent}}
+	forge := &reconcileForge{observation: publication.Observation{State: publication.ObservedExact}}
 	r := u.reconciler()
 	step, attempted, e := r.Step(ctx, forge)
 	if e != nil || !attempted || step.Outcome != publicationrecovery.Unplanned || len(forge.seen) != 0 {
 		t.Fatal("inconsistent effect", step, attempted, e)
 	}
-	if u.db.ResolvePublicationEffect(ctx, pending[0], nil) == nil {
+	receipt := store.PublicationReceipt{Version: "ai-sdlc.publication-receipt/v1", Kind: "branch", SHA: u.planned.SHA, Branch: u.plan.Branch, Observed: true}
+	if u.db.ResolvePublicationEffect(ctx, pending[0], &receipt) == nil {
 		t.Fatal("inconsistent effect resolved")
 	}
 	if blocked, e := u.db.PublicationBlocked(ctx); e != nil || !blocked {
@@ -427,7 +429,7 @@ func TestPublicationReconciliationInconsistentEffectDoesNotBlockListing(t *testi
 	if _, e := u.f.Admin.Pool.Exec(`UPDATE publication_effects SET receipt_digest=$2 WHERE request_id=$1 AND kind='commit'`, u.request.ID, authority.Digest(raw)); e != nil {
 		t.Fatal(e)
 	}
-	if step, _, e := u.reconciler().Step(ctx, forge); e != nil || step.Outcome != publicationrecovery.NotSent {
+	if step, _, e := u.reconciler().Step(ctx, forge); e != nil || step.Outcome != publicationrecovery.Completed {
 		t.Fatal("restored effect", step, e)
 	}
 }
@@ -543,19 +545,86 @@ func TestPublicationReconciliationInconsistentRowDoesNotHideConsistentRow(t *tes
 	if e != nil || len(pending) != 2 || pending[0].RequestID != other || pending[0].Consistent || pending[1].RequestID != u.request.ID || !pending[1].Consistent {
 		t.Fatal("listing", len(pending), e)
 	}
-	forge := &reconcileForge{observation: publication.Observation{State: publication.ObservedAbsent}}
+	forge := &reconcileForge{observation: publication.Observation{State: publication.ObservedExact}}
 	r := u.reconciler()
 	if step, _, e := r.Step(ctx, forge); e != nil || step.Outcome != publicationrecovery.Unplanned || len(forge.seen) != 0 {
 		t.Fatal("inconsistent row", step, e)
 	}
 	// The inconsistent row now paces; the next poll reconciles the other.
-	if step, _, e := r.Step(ctx, forge); e != nil || step.Outcome != publicationrecovery.NotSent || len(forge.seen) != 1 {
+	if step, _, e := r.Step(ctx, forge); e != nil || step.Outcome != publicationrecovery.Completed || len(forge.seen) != 1 {
 		t.Fatal("consistent row", step, e)
 	}
-	if row := u.effect(t, "branch"); !row.notSent {
+	if row := u.effect(t, "branch"); !row.completed {
 		t.Fatal("consistent row not reconciled")
 	}
 	if blocked, e := u.db.PublicationBlocked(ctx); e != nil || !blocked {
 		t.Fatal("inconsistent row must keep the quarantine")
+	}
+}
+
+// No observation proves that a branch was never created: a missing ref may
+// have been created and deleted. The journal refuses a branch no-send even
+// when a caller asks for one, and the effect stays quarantined.
+func TestPublicationReconciliationJournalNeverRecordsBranchNoSend(t *testing.T) {
+	u := newUncertainPublication(t, "branch")
+	u.settle(t)
+	ctx := context.Background()
+	pending, e := u.db.PublicationReconciliations(ctx, 16)
+	if e != nil || len(pending) != 1 || !pending[0].Consistent || pending[0].Kind != "branch" {
+		t.Fatal("pending branch", e)
+	}
+	if u.db.ResolvePublicationEffect(ctx, pending[0], nil) == nil {
+		t.Fatal("branch recorded as not sent")
+	}
+	if row := u.effect(t, "branch"); row.completed || row.notSent {
+		t.Fatal("refused no-send changed the effect", row)
+	}
+	if blocked, e := u.db.PublicationBlocked(ctx); e != nil || !blocked {
+		t.Fatal("refused no-send lifted the quarantine")
+	}
+}
+
+// A live write can never present an observed receipt. The intent is pending
+// under a live claim, so the only reason to refuse the first receipt is its
+// observed mark; the same receipt without it is accepted.
+func TestPublicationAcknowledgementRejectsObservedReceipt(t *testing.T) {
+	f, db, r := publicationJournalFixture(t)
+	ctx := context.Background()
+	var cmd publication.Command
+	if authority.DecodeStrict(r.Payload, &cmd) != nil {
+		t.Fatal("publication command")
+	}
+	plan := publication.TreePlan{Repository: cmd.Repository, Request: publication.TreeRequest{BaseTree: strings.Repeat("a", 40), Tree: []publication.TreeEntry{{Path: verification.LocaleSource, Mode: "100644", Type: "blob", Content: "source"}, {Path: verification.LocaleNewTest, Mode: "100644", Type: "blob", Content: "test"}}},
+		ExpectedTreeSHA: strings.Repeat("b", 40), Branch: publication.BranchName(cmd), CommitMessage: publication.CommitMessage(cmd.IssueNumber)}
+	claim, e := db.ClaimPublication(ctx, r.ID, publication.PlanDigest(cmd, plan))
+	if e != nil {
+		t.Fatal(e)
+	}
+	tree, e := publication.ExpectTree(plan, cmd.SourceSHA)
+	if e != nil {
+		t.Fatal(e)
+	}
+	effect, e := db.BeginPublicationEffect(ctx, claim, tree.Kind, tree.RequestDigest)
+	if e != nil {
+		t.Fatal(e)
+	}
+	completed := func() bool {
+		t.Helper()
+		var done bool
+		if e := f.Admin.Pool.QueryRow(`SELECT completed_at IS NOT NULL FROM publication_effects WHERE request_id=$1 AND kind=$2`, r.ID, tree.Kind).Scan(&done); e != nil {
+			t.Fatal(e)
+		}
+		return done
+	}
+	receipt := store.PublicationReceipt{Version: "ai-sdlc.publication-receipt/v1", Kind: tree.Kind, SHA: tree.SHA, Observed: true}
+	if db.AcknowledgePublicationEffect(ctx, effect, receipt) == nil {
+		t.Fatal("observed receipt acknowledged as a write response")
+	}
+	if completed() {
+		t.Fatal("rejected receipt changed the effect")
+	}
+	receipt.Observed = false
+	if e := db.AcknowledgePublicationEffect(ctx, effect, receipt); e != nil || !completed() {
+		t.Fatal("live receipt under a live claim", e)
 	}
 }

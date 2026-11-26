@@ -21,6 +21,8 @@ type fakeForge struct {
 	objects        map[string]any // path (with query) -> 200 JSON body
 	status         map[string]int // path -> forced status
 	controlMissing bool
+	controlOnce    bool // the parent commit is readable only on the first read
+	controlReads   atomic.Int32
 	lastQuery      string
 	lastAuthorized bool
 }
@@ -42,7 +44,7 @@ func (f *fakeForge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if path == "/pulls" {
 		f.lastQuery = r.URL.RawQuery
 	}
-	if path == "/git/commits/"+strings.Repeat("d", 40) && !f.controlMissing {
+	if path == "/git/commits/"+strings.Repeat("d", 40) && !f.controlMissing && (f.controlReads.Add(1) == 1 || !f.controlOnce) {
 		json.NewEncoder(w).Encode(map[string]string{"sha": strings.Repeat("d", 40)})
 		return
 	}
@@ -97,7 +99,7 @@ func exactObjects(x map[string]Expectation) map[string]map[string]any {
 		EffectCommit: {"/git/commits/" + c.SHA: map[string]any{"sha": c.SHA, "message": c.Message, "tree": map[string]string{"sha": c.Tree}, "parents": []any{map[string]string{"sha": c.Source}}, "author": person, "committer": person}},
 		EffectBranch: {"/git/ref/heads/" + b.Branch: map[string]any{"ref": "refs/heads/" + b.Branch, "object": map[string]string{"type": "commit", "sha": b.SHA}}},
 		EffectPullRequest: {"/pulls": []any{map[string]any{"number": 1600, "state": "open", "draft": false, "body": body,
-			"head": map[string]any{"ref": pr.Branch, "sha": pr.SHA, "repo": repo}, "base": map[string]any{"ref": "main", "sha": strings.Repeat("9", 40), "repo": repo}}}},
+			"head": map[string]any{"ref": pr.Branch, "sha": pr.SHA, "repo": repo}, "base": map[string]any{"ref": "main", "sha": pr.Source, "repo": repo}}}},
 	}
 }
 
@@ -124,10 +126,24 @@ func TestReaderObservesEachEffectReadOnly(t *testing.T) {
 			f := &fakeForge{objects: map[string]any{}}
 			if kind == EffectPullRequest {
 				f.objects[path] = []any{}
+				// The head branch still points at the planned commit.
+				for p, v := range exactObjects(expectations)[EffectBranch] {
+					f.objects[p] = v
+				}
 			}
 			got, e := readerFixture(t, f).Observe(context.Background(), x)
 			if e != nil || got.State != ObservedAbsent {
 				t.Fatal("absent effect", got, e)
+			}
+		})
+		t.Run(kind+"/absent-after-access-lost", func(t *testing.T) {
+			// A 404 counts only if the parent commit is still readable after it.
+			f := &fakeForge{objects: map[string]any{}, controlOnce: true}
+			if kind == EffectPullRequest {
+				f.objects[path] = []any{}
+			}
+			if got, e := readerFixture(t, f).Observe(context.Background(), x); e == nil && got.State == ObservedAbsent {
+				t.Fatal("absence trusted after read access was lost", got)
 			}
 		})
 		t.Run(kind+"/different", func(t *testing.T) {
@@ -186,6 +202,42 @@ func TestReaderPullRequestAmbiguityStaysQuarantined(t *testing.T) {
 		if e == nil && got.State != ObservedDifferent {
 			t.Fatal("ambiguous pull request resolved", name, got)
 		}
+	}
+}
+
+// An empty pull request list proves nothing once the head branch is gone or
+// has moved: a PR opened from it may no longer match the head filter.
+func TestReaderPullRequestAbsenceNeedsThePlannedHeadBranch(t *testing.T) {
+	expectations := readerExpectations(t)
+	x, b := expectations[EffectPullRequest], expectations[EffectBranch]
+	moved := map[string]any{"ref": "refs/heads/" + b.Branch, "object": map[string]string{"type": "commit", "sha": strings.Repeat("7", 40)}}
+	for name, ref := range map[string]any{"deleted": nil, "moved": moved} {
+		f := &fakeForge{objects: map[string]any{"/pulls": []any{}}}
+		if ref != nil {
+			f.objects["/git/ref/heads/"+b.Branch] = ref
+		}
+		got, e := readerFixture(t, f).Observe(context.Background(), x)
+		if e != nil || got.State != ObservedDifferent {
+			t.Fatal("pull request absence trusted without its head branch", name, got, e)
+		}
+	}
+}
+
+// The PR's recorded base must be the planned source commit, as the writer
+// requires of the creation response; a PR opened after main moved is not the
+// planned effect.
+func TestReaderPullRequestRequiresThePlannedBase(t *testing.T) {
+	expectations := readerExpectations(t)
+	x := expectations[EffectPullRequest]
+	exact := exactObjects(expectations)[EffectPullRequest]["/pulls"].([]any)
+	var moved []map[string]any
+	raw, _ := json.Marshal(exact)
+	json.Unmarshal(raw, &moved)
+	moved[0]["base"].(map[string]any)["sha"] = strings.Repeat("9", 40)
+	f := &fakeForge{objects: map[string]any{"/pulls": moved}}
+	got, e := readerFixture(t, f).Observe(context.Background(), x)
+	if e != nil || got.State != ObservedDifferent || got.PullRequest != 0 {
+		t.Fatal("pull request on another base recorded as exact", got, e)
 	}
 }
 

@@ -106,12 +106,18 @@ func publicationPredecessors(kind string, completed []PublicationEvidence) bool 
 
 // ResolvePublicationEffect records an observed outcome for one uncertain
 // effect: a receipt (the effect exists exactly as planned) or, with a nil
-// receipt, a known no-send (the forge proves it absent). It re-checks, under
-// the publication claim lock, that no publication is claimed, the request is
-// still failed and settled, and the effect is the same uncertain intent with
+// receipt, a known no-send (the forge proves it absent; never for a branch).
+// It re-checks, under the publication claim lock, that no publication is
+// claimed, the request is still failed and settled, and the effect is the same
+// uncertain intent with
 // the same request digest. A resolved effect can never change again.
 func (db *DB) ResolvePublicationEffect(ctx context.Context, r PublicationReconciliation, receipt *PublicationReceipt) error {
 	if !publicationIDPattern.MatchString(r.RequestID) || !lifecycleUUID.MatchString(r.EffectToken) || !modelDigest.MatchString(r.RequestDigest) || !modelDigest.MatchString(r.PlanDigest) {
+		return ErrExecution
+	}
+	// A ref can be created and deleted, so no observation proves that a branch
+	// was not created: the journal never records a branch no-send here.
+	if receipt == nil && r.Kind == "branch" {
 		return ErrExecution
 	}
 	var raw []byte
