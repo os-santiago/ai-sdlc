@@ -70,7 +70,7 @@ window.FLOW_I18N = {
     'lg.failed': 'Failed: verdict against the work (✕)', 'lg.stopped': 'Stopped safely (■, diagnostic shown)', 'lg.blocked': 'Blocked (hatched, ⏸)',
     'lg.quarantined': 'Quarantined (hatched, ⛔)', 'lg.degraded': 'Degraded', 'lg.retried': 'Retried attempt', 'lg.stale': 'Stale wait',
     'band.title': 'Degradation period {from}–{to}: {n} stops, degradations, retries or quarantines', 'band.label': '{n} problems',
-    'now': 'now', 'now.pill': 'NOW',
+    'now': 'now', 'now.pill': 'NOW', 'after.delivery': 'after delivery (a later revision of the merged issue)',
     'lg.cluster': 'Nearby markers (count)', 'lg.calls': 'Model calls (ticks)', 'lg.chip': 'Short run (stage initial)', 'lg.attempt': 'Next attempt begins',
   },
   es: {
@@ -141,7 +141,7 @@ window.FLOW_I18N = {
     'lg.failed': 'Fallido: veredicto contra el trabajo (✕)', 'lg.stopped': 'Detenido con seguridad (■, con diagnóstico)', 'lg.blocked': 'Bloqueado (sombreado, ⏸)',
     'lg.quarantined': 'En cuarentena (sombreado, ⛔)', 'lg.degraded': 'Degradado', 'lg.retried': 'Intento reintentado', 'lg.stale': 'Espera larga',
     'band.title': 'Periodo degradado {from}–{to}: {n} detenciones, degradaciones, reintentos o cuarentenas', 'band.label': '{n} problemas',
-    'now': 'ahora', 'now.pill': 'AHORA',
+    'now': 'ahora', 'now.pill': 'AHORA', 'after.delivery': 'después de la entrega (una revisión posterior del issue ya fusionado)',
     'lg.cluster': 'Marcas cercanas (cantidad)', 'lg.calls': 'Llamadas al modelo (marcas)', 'lg.chip': 'Ejecución corta (inicial de la etapa)', 'lg.attempt': 'Comienza el siguiente intento',
   },
 };

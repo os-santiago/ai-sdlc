@@ -221,6 +221,10 @@
     lane.components = new Set(lane.events.map((e) => e.component));
     // Lane status and where its work is now, from the newest work.
     const merged = list.find((s) => s.stage === 'merge' && s.outcome === 'completed');
+    // A refusal of a revision that arrives after the issue's own merge is
+    // still a refusal (its event kind is unchanged) but is drawn softly with
+    // an "after delivery" note: the delivered work is not what was refused.
+    for (const s of list) s.afterDelivery = !!merged && s.stage === 'admission' && s.outcome === 'failed' && s.end !== null && s.end >= merged.end;
     const open = list.filter((s) => s.open && s.outcome !== 'quarantined');
     const problem = list.filter((s) => s.outcome === 'quarantined' || (s.outcome === 'blocked' && (s.open || s.stage === 'admission'))).pop();
     const lastTerminal = list.filter((s) => s.end !== null && !INSTANT[s.stage]).sort((a, b) => a.end - b.end).pop();
@@ -655,6 +659,11 @@
         svg('circle', { cx, cy, r: 7, fill: '#f0efec', stroke: '#d03b3b', 'stroke-width': 2 }, g);
         svg('path', Object.assign({ d: `M${cx - 3},${cy - 3} l6,6 M${cx + 3},${cy - 3} l-6,6` }, ink), g);
         break;
+      case 'after-delivery':
+        // Muted refusal: a thin ring and a small cross, not the red badge.
+        svg('circle', { cx, cy, r: 6, fill: 'var(--surface-1)', stroke: 'var(--text-muted)', 'stroke-width': 1.2 }, g);
+        svg('path', Object.assign({ d: `M${cx - 2.2},${cy - 2.2} l4.4,4.4 M${cx + 2.2},${cy - 2.2} l-4.4,4.4` }, ink, { stroke: 'var(--text-muted)', 'stroke-width': 1.3 }), g);
+        break;
       case 'stopped-safely':
         svg('circle', { cx, cy, r: 7, fill: '#f0efec', stroke: '#1a1a19', 'stroke-width': 1.5 }, g);
         svg('rect', { x: cx - 3, y: cy - 3, width: 6, height: 6, fill: '#0e0e0d', rx: 1 }, g);
@@ -766,7 +775,7 @@
     if (s.outcome === 'completed' && width > 22) check(g, x0 + width - 8, cy);
     // Badges go on a layer above every bar, so a retry that starts right
     // after a stop cannot cover the stop's glyph.
-    if (badged) badge(svg('g', { opacity: dim ? 0.28 : 1 }, overlay || g), s.outcome, x0 + width, cy);
+    if (badged) badge(svg('g', { opacity: dim ? 0.28 : s.afterDelivery ? 0.55 : 1 }, overlay || g), s.afterDelivery ? 'after-delivery' : s.outcome, x0 + width, cy);
     return { g, x0: Math.min(xq, x0), x1: x0 + width + (badged ? 8 : 6) };
   }
 
@@ -968,7 +977,7 @@
   function segmentTooltip(lane, s) {
     const rows = [];
     rows.push([t('tt.stage'), stageName(s.stage) + ' (' + s.events[0].component + ')']);
-    rows.push([t('tt.outcome'), outcomeText(s.outcome)]);
+    rows.push([t('tt.outcome'), outcomeText(s.outcome) + (s.afterDelivery ? ' · ' + t('after.delivery') : '')]);
     if (s.diagnostic) rows.push([t('tt.diagnostic'), s.diagnostic]);
     if (s.attempt) rows.push([t('tt.attempt'), String(s.attempt)]);
     if (s.start !== null && s.queued < s.start) rows.push([t('tt.waited'), fmtDuration(s.start - s.queued)]);
