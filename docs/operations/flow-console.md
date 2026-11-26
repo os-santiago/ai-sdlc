@@ -150,7 +150,7 @@ ids it has not published before.
 | Journal | Events |
 |---|---|
 | `intake_revisions` | intake `completed` for every observed revision (step `observed`, attribute `generation`); only the repository, issue, generation and time are readable, never the payload |
-| `admissions` | admission `completed` (`accepted`), `failed` (`rejected`) or `blocked` (`needs-clarification`, `needs-human`, `requires-decomposition`) |
+| `admissions` | admission `completed` (`accepted`), `failed` (`rejected`) or `blocked` (`needs-clarification`, `needs-human`, `requires-decomposition`); a rejection at or after the issue's merge is the closed issue's last revision and becomes a `completed` step `issue-closed` |
 | `work_items`, `plans` | planning `completed`; they also map work items to issues |
 | `execution_requests` | `waiting` (queued), `stale-wait`, `retried` (attempt > 1), `completed` (candidate captured), `stopped-safely` (stop reason, or `worker-exit-<code>` with an observed exit code), `blocked` (`lease-lapsed`) |
 | `execution_lifecycles` | `started` (claim), lifecycle `phase` on stops, `quarantined` (`cleanup-uncertain`), `degraded` (`cleanup-retried`) |
@@ -167,8 +167,13 @@ The journal records state, not a log, so a few timings are derived:
 
 - A stage starts at its claim (the lifecycle row, or its first effect or
   model call); before that it is waiting.
-- Verification and review record no finish time: their terminal event is
-  placed at their last observed effect or model call.
+- Verification and review record no finish time, and their effects are
+  Kubernetes object creations acknowledged long before the pods finish (in
+  a real journal, verification's last effect came about 55 s before its
+  verdict). A passed verification or review therefore ends when the next
+  stage's row for the same candidate was created (review, publication),
+  which happens from the passed verdict; otherwise, and for a refusal or a
+  stop, at its last observed effect or model call.
 - Generator model calls record only their hand-off, so their latency is the
   interval since the previous hand-off (or the model allocation): it includes
   the executor's tool time between calls. Reviewer calls record their own

@@ -331,7 +331,9 @@ func TestJournalDerivesVerificationReviewPublicationAndMerge(t *testing.T) {
 	events := f.derive(t)
 
 	passed := must(t, events["verification"], flowevent.KindCompleted, "verdict", "")
-	if passed.Issue != 531 || passed.Component != "verifier" || !passed.Time.Equal(f.now.Add(-35*time.Minute)) || passed.DurationMs != 4*60000 {
+	// Passed when the review was created from it (-34), not at its last
+	// effect (-35): effects are object creations, not the verdict.
+	if passed.Issue != 531 || passed.Component != "verifier" || !passed.Time.Equal(f.now.Add(-34*time.Minute)) || passed.DurationMs != 5*60000 {
 		t.Fatalf("verification %+v", passed)
 	}
 	refusal := must(t, events["verification"], flowevent.KindFailed, "verdict", "comparison-failed")
@@ -343,7 +345,7 @@ func TestJournalDerivesVerificationReviewPublicationAndMerge(t *testing.T) {
 	if call.LatencyMs != 60000 || call.Attributes["inputBytes"] != "5000" {
 		t.Fatalf("review model call %+v", call)
 	}
-	if r := must(t, events["review"], flowevent.KindCompleted, "verdict", ""); !r.Time.Equal(f.now.Add(-31 * time.Minute)) {
+	if r := must(t, events["review"], flowevent.KindCompleted, "verdict", ""); !r.Time.Equal(f.now.Add(-30 * time.Minute)) /* the publication's creation */ {
 		t.Fatalf("review %+v", r)
 	}
 	published := must(t, events["publication"], flowevent.KindCompleted, "verdict", "")

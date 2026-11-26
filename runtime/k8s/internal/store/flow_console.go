@@ -207,6 +207,9 @@ type FlowVerdict struct {
 	ClaimUntil             *time.Time
 	// Publication: commit time and published record; merge: merged time.
 	CommitTime, FinishedAt *time.Time
+	// Candidate is the execution request the stage works on: it chains
+	// verification, review, publication and merge of one attempt.
+	Candidate string
 }
 
 // FlowJournal is one consistent read of the timeline surface.
@@ -265,21 +268,21 @@ func ReadFlowJournal(ctx context.Context, db *DB, since time.Time, limit int) (F
 	r.effects(`SELECT e.request_id,e.kind,e.created_at,e.completed_at,NULL::timestamptz FROM execution_effects e JOIN execution_requests r ON r.id=e.request_id
  WHERE r.created_at>=$1 ORDER BY e.created_at DESC LIMIT $2`, &j.ExecutionEffects)
 	r.modelCalls(&j)
-	r.verdicts(`SELECT v.id,r.work_item_uuid,r.attempt,r.repository,v.state,v.reason,v.cleanup_state,v.created_at,v.expires_at,v.claim_until,NULL::timestamptz,NULL::timestamptz
+	r.verdicts(`SELECT v.id,r.work_item_uuid,r.attempt,r.repository,v.state,v.reason,v.cleanup_state,v.created_at,v.expires_at,v.claim_until,NULL::timestamptz,NULL::timestamptz,v.candidate_id
  FROM verification_requests v JOIN execution_requests r ON r.id=v.candidate_id WHERE v.created_at>=$1 ORDER BY v.created_at DESC LIMIT $2`, &j.Verifications)
 	r.effects(`SELECT e.request_id,e.kind,e.created_at,e.completed_at,e.not_sent_at FROM verification_effects e JOIN verification_requests v ON v.id=e.request_id
  WHERE v.created_at>=$1 ORDER BY e.created_at DESC LIMIT $2`, &j.VerificationEffects)
-	r.verdicts(`SELECT v.id,v.work_item_uuid::text,r.attempt,r.repository,v.state,v.reason,v.cleanup_state,v.created_at,v.expires_at,v.claim_until,NULL::timestamptz,NULL::timestamptz
+	r.verdicts(`SELECT v.id,v.work_item_uuid::text,r.attempt,r.repository,v.state,v.reason,v.cleanup_state,v.created_at,v.expires_at,v.claim_until,NULL::timestamptz,NULL::timestamptz,v.candidate_id
  FROM review_runs v JOIN execution_requests r ON r.id=v.candidate_id WHERE v.created_at>=$1 ORDER BY v.created_at DESC LIMIT $2`, &j.Reviews)
 	r.effects(`SELECT e.run_id,e.kind,e.created_at,e.completed_at,e.not_sent_at FROM review_effects e JOIN review_runs v ON v.id=e.run_id
  WHERE v.created_at>=$1 ORDER BY e.created_at DESC LIMIT $2`, &j.ReviewEffects)
 	r.reviewModelCalls(&j)
-	r.verdicts(`SELECT p.id,r.work_item_uuid,r.attempt,r.repository,p.state,p.reason,'complete',p.created_at,p.expires_at,p.claim_until,p.commit_time,d.published_at
+	r.verdicts(`SELECT p.id,r.work_item_uuid,r.attempt,r.repository,p.state,p.reason,'complete',p.created_at,p.expires_at,p.claim_until,p.commit_time,d.published_at,p.candidate_id
  FROM publication_requests p JOIN execution_requests r ON r.id=p.candidate_id LEFT JOIN published_records d ON d.publication_id=p.id
  WHERE p.created_at>=$1 ORDER BY p.created_at DESC LIMIT $2`, &j.Publications)
 	r.effects(`SELECT e.request_id,e.kind,e.created_at,e.completed_at,e.not_sent_at FROM publication_effects e JOIN publication_requests p ON p.id=e.request_id
  WHERE p.created_at>=$1 ORDER BY e.created_at DESC LIMIT $2`, &j.PublicationEffects)
-	r.verdicts(`SELECT m.id,r.work_item_uuid,r.attempt,r.repository,m.state,m.reason,'complete',m.created_at,m.expires_at,m.claim_until,NULL::timestamptz,m.merged_at
+	r.verdicts(`SELECT m.id,r.work_item_uuid,r.attempt,r.repository,m.state,m.reason,'complete',m.created_at,m.expires_at,m.claim_until,NULL::timestamptz,m.merged_at,p.candidate_id
  FROM merge_requests m JOIN publication_requests p ON p.id=m.publication_id JOIN execution_requests r ON r.id=p.candidate_id
  WHERE m.created_at>=$1 ORDER BY m.created_at DESC LIMIT $2`, &j.Merges)
 	r.effects(`SELECT e.request_id,'merge',e.created_at,e.completed_at,e.not_sent_at FROM merge_effects e JOIN merge_requests m ON m.id=e.request_id
@@ -451,7 +454,7 @@ func (r *flowReader) verdicts(query string, target *[]FlowVerdict) {
 	r.query(query, func(rows *sql.Rows) error {
 		var v FlowVerdict
 		var claim, commit, finished sql.NullTime
-		if err := rows.Scan(&v.ID, &v.WorkItem, &v.Attempt, &v.Repository, &v.State, &v.Reason, &v.Cleanup, &v.CreatedAt, &v.ExpiresAt, &claim, &commit, &finished); err != nil {
+		if err := rows.Scan(&v.ID, &v.WorkItem, &v.Attempt, &v.Repository, &v.State, &v.Reason, &v.Cleanup, &v.CreatedAt, &v.ExpiresAt, &claim, &commit, &finished, &v.Candidate); err != nil {
 			return err
 		}
 		v.ClaimUntil, v.CommitTime, v.FinishedAt = timePtr(claim), timePtr(commit), timePtr(finished)

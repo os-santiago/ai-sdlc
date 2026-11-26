@@ -51,10 +51,10 @@ func Derive(j store.FlowJournal, options DeriveOptions) []flowevent.Event {
 	d.admissions(j.Admissions, d.mergedIssues(j.Merges))
 	d.workItems(j.WorkItems)
 	d.executions(j.Executions, group(j.ExecutionEffects), groupCalls(j.ModelCalls))
-	d.verdicts("verification", j.Verifications, group(j.VerificationEffects), nil)
-	d.verdicts("review", j.Reviews, group(j.ReviewEffects), groupCalls(j.ReviewModelCalls))
-	d.verdicts("publication", j.Publications, group(j.PublicationEffects), nil)
-	d.verdicts("merge", j.Merges, group(j.MergeEffects), nil)
+	d.verdicts("verification", j.Verifications, group(j.VerificationEffects), nil, successors(j.Reviews))
+	d.verdicts("review", j.Reviews, group(j.ReviewEffects), groupCalls(j.ReviewModelCalls), successors(j.Publications))
+	d.verdicts("publication", j.Publications, group(j.PublicationEffects), nil, nil)
+	d.verdicts("merge", j.Merges, group(j.MergeEffects), nil, nil)
 	flowevent.Sort(d.out)
 	return d.out
 }
@@ -336,7 +336,23 @@ func (d *deriver) cleanup(l link, stage, state string, attempts int, at *time.Ti
 }
 
 // verdicts covers the four claim-based stages that end in a state and reason.
-func (d *deriver) verdicts(stage string, rows []store.FlowVerdict, effects map[string][]store.FlowEffect, calls map[string][]store.FlowModelCall) {
+// successors maps a candidate to the earliest creation of the next stage's
+// row for it. Verification and review record no finish time, and their
+// effects are Kubernetes object creations acknowledged long before the
+// pods finish: in a real journal verification's last effect came about 55 s
+// before its verdict. The next stage is created from the passed verdict's
+// handoff, so its creation bounds the verdict time.
+func successors(rows []store.FlowVerdict) map[string]time.Time {
+	out := map[string]time.Time{}
+	for _, r := range rows {
+		if t, ok := out[r.Candidate]; r.Candidate != "" && (!ok || r.CreatedAt.Before(t)) {
+			out[r.Candidate] = r.CreatedAt
+		}
+	}
+	return out
+}
+
+func (d *deriver) verdicts(stage string, rows []store.FlowVerdict, effects map[string][]store.FlowEffect, calls map[string][]store.FlowModelCall, next map[string]time.Time) {
 	success := map[string]string{"verification": "passed", "review": "passed", "publication": "published", "merge": "merged"}[stage]
 	for _, r := range rows {
 		l := d.link(r.FlowLink)
@@ -366,6 +382,9 @@ func (d *deriver) verdicts(stage string, rows []store.FlowVerdict, effects map[s
 		}
 		if end.IsZero() || end.Before(r.CreatedAt) {
 			end = r.CreatedAt
+		}
+		if t, ok := next[r.Candidate]; ok && r.State == success && t.After(end) {
+			end = t
 		}
 		d.calls(l, stage, calls[r.ID], end, key)
 		switch {
