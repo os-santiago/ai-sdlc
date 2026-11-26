@@ -161,6 +161,45 @@
     lane.dirty = true;
   }
 
+  // After a merge, intake sees the closed issue, admission records the
+  // server-labelled issue-closed step, and sometimes refuses the closed
+  // issue's next revisions (step after-issue-closed). From each merge up to
+  // the first accepted admission or new work item, those segments and the
+  // intake revisions leading to them fold into one neutral "closed" flag per
+  // merge; they keep their event kinds in the detail panel and count as
+  // neither failures nor stops. Any other refusal or block after the merge
+  // (a reopened issue) stays visible as a problem.
+  const CLOSURE_STEPS = { 'issue-closed': true, 'after-issue-closed': true };
+  function markPostDelivery(lane, list, merges) {
+    lane.closed = [];
+    for (const s of list) s.postDelivery = false;
+    const ordered = list.slice().sort((a, b) => a.first - b.first);
+    const step = (s) => (s.terminal || s.events[0]).step;
+    const closure = (s) => s.stage === 'admission' && s.outcome !== 'blocked' && CLOSURE_STEPS[step(s)];
+    merges.forEach((m, i) => {
+      const next = merges[i + 1] ? merges[i + 1].end : Infinity;
+      let stop = next;
+      for (const s of ordered) {
+        if (s.first < m.end || s.first >= stop) continue;
+        if (s.stage === 'planning' || (s.stage === 'admission' && s.outcome === 'completed' && !closure(s))) stop = s.first;
+      }
+      let group = null;
+      ordered.forEach((s, k) => {
+        if (s.first < m.end || s.first >= stop || STAGES.indexOf(s.stage) >= 2) return;
+        let fold = closure(s);
+        if (s.stage === 'intake') {
+          const adm = ordered.slice(k + 1).find((x) => x.stage === 'admission');
+          fold = adm ? adm.first < stop && closure(adm) : true;
+        }
+        if (!fold) return;
+        s.postDelivery = true;
+        if (!group) lane.closed.push(group = { at: s.first, segments: [] });
+        group.segments.push(s);
+      });
+    });
+    for (const s of list) for (const e of s.events) e.postDelivery = s.postDelivery;
+  }
+
   // Build stage segments of one lane: one per (attempt, stage), in order.
   function buildLane(lane, now) {
     lane.events.sort((a, b) => a.t - b.t || STAGES.indexOf(a.stage) - STAGES.indexOf(b.stage));
@@ -220,28 +259,20 @@
     lane.attempts = attempts;
     lane.components = new Set(lane.events.map((e) => e.component));
     // Lane status and where its work is now, from the newest work.
-    const merged = list.find((s) => s.stage === 'merge' && s.outcome === 'completed');
-    // After the issue's own merge, intake sees the closed issue and admission
-    // records issue-closed, and sometimes refuses a later revision. Those
-    // facts keep their event kinds and stay in the detail panel, but the lane
-    // folds them into one neutral "closed" tick at the merge end, and they
-    // count as neither failures nor stops in the tiles, trends or bands.
-    lane.closed = null;
-    for (const s of list) {
-      s.postDelivery = !!merged && STAGES.indexOf(s.stage) < 3 && s.first >= merged.end;
-      if (!s.postDelivery) continue;
-      for (const e of s.events) e.postDelivery = true;
-      if (!lane.closed) lane.closed = { at: s.first, segments: [] };
-      lane.closed.segments.push(s);
-    }
-    const open = list.filter((s) => s.open && !s.postDelivery && s.outcome !== 'quarantined');
-    const problem = list.filter((s) => s.outcome === 'quarantined' || (s.outcome === 'blocked' && (s.open || s.stage === 'admission'))).pop();
-    const lastTerminal = list.filter((s) => s.end !== null && !INSTANT[s.stage]).sort((a, b) => a.end - b.end).pop();
+    const merges = list.filter((s) => s.stage === 'merge' && s.outcome === 'completed').sort((a, b) => a.end - b.end);
+    const merged = merges[0] || null, lastMerge = merges[merges.length - 1] || null;
+    markPostDelivery(lane, list, merges);
+    // Status comes from the work after the most recent merge: a reopened
+    // issue's refusal, block or new work shows; before that merge, delivered.
+    const after = lastMerge ? list.filter((s) => !s.postDelivery && s.first >= lastMerge.end) : list;
+    const open = after.filter((s) => s.open && s.outcome !== 'quarantined');
+    const problem = after.filter((s) => s.outcome === 'quarantined' || (s.outcome === 'blocked' && (s.open || s.stage === 'admission'))).pop();
+    const lastTerminal = after.filter((s) => s.end !== null && !INSTANT[s.stage]).sort((a, b) => a.end - b.end).pop();
     lane.final = null;
-    if (merged) lane.status = 'delivered';
-    else if (problem) { lane.status = 'blocked'; lane.final = problem; }
+    if (problem) { lane.status = 'blocked'; lane.final = problem; }
     else if (open.length) lane.status = 'inflight';
     else if (lastTerminal && lastTerminal.outcome !== 'completed') { lane.status = 'failed'; lane.final = lastTerminal; }
+    else if (merged) lane.status = 'delivered';
     else lane.status = 'inflight';
     const current = open.length ? open[open.length - 1] : null;
     lane.current = lane.status === 'blocked' ? 'blocked' : current ? (current.outcome === 'waiting' ? 'queued' : current.stage) : null;
@@ -696,9 +727,9 @@
     svg('line', { x1: px, x2: px, y1: cy - 8, y2: cy + 8, stroke: 'var(--text-muted)', 'stroke-width': 1.5 }, g);
     svg('path', { d: `M${px},${cy - 8} l7,2.5 l-7,2.5 z`, fill: 'var(--text-muted)' }, g);
   }
-  function closedTooltip(lane) {
+  function closedTooltip(lane, group) {
     const rows = [];
-    for (const s of lane.closed.segments) for (const e of s.events) {
+    for (const s of group.segments) for (const e of s.events) {
       rows.push([fmtClock(e.t, true), stageName(e.stage) + (e.step ? ' · ' + e.step : '') + ' — ' + kindLabel(e.kind) + (e.diagnostic ? ' (' + e.diagnostic + ')' : '')]);
     }
     rows.push(['', t('closed.note')]);
@@ -925,13 +956,13 @@
         svg('line', { class: 'attempt-divider', x1: px, x2: px, y1: y0 + 17, y2: y0 + LANE_H - 2 }, bars);
         text(bars, { class: 'attempt-label', x: px - 3, y: y0 + 24, 'text-anchor': 'end' }, '#' + a);
       }
-      if (lane.closed) {
-        const px = x(lane.closed.at), cy = y0 + LANE_H - 13;
+      for (const group of lane.closed) {
+        const px = x(group.at), cy = y0 + LANE_H - 13;
         if (px > -10 && px < w + 10) {
           const g = svg('g', { class: 'closed-tick' }, bars);
           closedTick(g, px, cy);
           const hit = svg('rect', { class: 'hit', x: px - 8, y: y0 + 16, width: 16, height: LANE_H - 18 }, g);
-          hit.addEventListener('mousemove', (ev) => showTooltip(ev, closedTooltip(lane)));
+          hit.addEventListener('mousemove', (ev) => showTooltip(ev, closedTooltip(lane, group)));
           hit.addEventListener('mouseleave', hideTooltip);
           hit.addEventListener('click', () => openPanel(lane.key));
         }

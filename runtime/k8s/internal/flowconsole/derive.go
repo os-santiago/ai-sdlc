@@ -28,6 +28,10 @@ const DefaultStaleWait = 10 * time.Minute
 
 // verdictReasons are refusals of the work itself; every other failure reason
 // (expired, revoked, uncertain) is a safe stop without a verdict.
+// closureWindow bounds how long after a merge's issue-closed step a refusal
+// at the same risk still counts as the closed issue's own revision.
+const closureWindow = 10 * time.Minute
+
 var verdictReasons = map[string]bool{"rejected": true, "comparison-failed": true, "request-changes": true}
 
 type deriver struct {
@@ -183,11 +187,21 @@ func (d *deriver) mergedIssues(merges []store.FlowVerdict) map[string][]time.Tim
 // an issue reopened after delivery) stays a refusal. The revision generation
 // that would tie a rejection to the closing revision is not in the console's
 // readable columns, so the first rejection after the merge is used.
+//
+// The closed issue often gets one or two more revisions within seconds (the
+// merge's own comments and labels), each refused again. A rejection is
+// labelled step after-issue-closed (still kind failed, diagnostic rejected)
+// when it follows that merge's issue-closed within closureWindow, at the
+// same risk and with no other decision in between. Anything else, such as a
+// reopened issue refused at another risk or later, stays a plain refusal.
 func (d *deriver) admissions(rows []store.FlowAdmission, merged map[string][]time.Time) {
 	ordered := append([]store.FlowAdmission(nil), rows...)
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].UpdatedAt.Before(ordered[j].UpdatedAt) })
-	closed := map[string]bool{} // repository#issue#merge-index already relabelled
-	for _, r := range ordered {
+	closed := map[string]bool{}                  // repository#issue#merge-index already relabelled
+	closure := map[string]*store.FlowAdmission{} // repository#issue -> its open closure run
+	for i := range ordered {
+		r := &ordered[i]
+		key := r.Repository + "#" + strconv.Itoa(r.Issue)
 		l := link{repository: r.Repository, issue: r.Issue}
 		kind, diagnostic, step := flowevent.KindBlocked, r.Decision, "decision"
 		switch r.Decision {
@@ -195,7 +209,9 @@ func (d *deriver) admissions(rows []store.FlowAdmission, merged map[string][]tim
 			kind, diagnostic = flowevent.KindCompleted, ""
 		case "rejected":
 			kind = flowevent.KindFailed
-			key := r.Repository + "#" + strconv.Itoa(r.Issue)
+			if c := closure[key]; c != nil && c.Risk == r.Risk && r.UpdatedAt.Sub(c.UpdatedAt) <= closureWindow {
+				step = "after-issue-closed"
+			}
 			last := -1
 			for i, at := range merged[key] {
 				if !r.UpdatedAt.Before(at) {
@@ -206,6 +222,13 @@ func (d *deriver) admissions(rows []store.FlowAdmission, merged map[string][]tim
 				closed[slot] = true
 				kind, diagnostic, step = flowevent.KindCompleted, "", "issue-closed"
 			}
+		}
+		switch step {
+		case "issue-closed":
+			closure[key] = r
+		case "after-issue-closed":
+		default:
+			delete(closure, key)
 		}
 		d.emit(l, "admission", step, kind, diagnostic, r.UpdatedAt, ms(r.UpdatedAt.Sub(r.CreatedAt)), 0, attrs("decision", r.Decision, "risk", r.Risk),
 			r.Repository, strconv.Itoa(r.Issue), r.CreatedAt.UTC().Format(time.RFC3339Nano), r.Decision)

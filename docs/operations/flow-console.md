@@ -78,14 +78,18 @@ In Spanish, with the detail panel: [flow-console-es.png](flow-console-es.png); l
   quarantine. Markers closer than about 15 px merge into one badge with a
   count; its tooltip lists each of them.
 - **Model calls** as ticks along the generation and review bars.
-- **Issue closed after merge**: once a lane's merge has completed, the
-  closed issue's later intake revisions, its `issue-closed` admission step
-  and any later refusal fold into one small neutral flag just after the merge
-  (legend: *Issue closed after merge*). Its tooltip lists each of those
-  events, and the detail panel keeps them in order. They are not counted as
-  failures or stops in the tiles, the stops-and-refusals trend, the
-  degradation bands, *What is wrong now* or the problem rows of the live
-  events panel, so a delivered lane never reads as failed.
+- **Issue closed after merge**: after each merge, up to the first accepted
+  admission or new work item, the server-labelled `issue-closed` and
+  `after-issue-closed` admission steps and the intake revisions leading to
+  them fold into one small neutral flag just after that merge (legend:
+  *Issue closed after merge*). Its tooltip lists each of those events, and
+  the detail panel keeps them in order. They are not counted as failures or
+  stops in the tiles, the stops-and-refusals trend, the degradation bands,
+  *What is wrong now* or the problem rows and filter of the live events
+  panel, so a delivered lane never reads as failed. Any other refusal or
+  block after a merge (a reopened issue) stays a visible problem, and the
+  lane's status comes from the work after its most recent merge: a reopened
+  issue that is refused shows as failed, one that is blocked as blocked.
 - **Hover** on a bar or marker for its outcome, diagnostic, wait, start, end,
   duration, model call count and latency (median and maximum), and bounded
   attributes such as the lifecycle phase or exit code.
@@ -179,7 +183,7 @@ ids it has not published before.
 | Journal | Events |
 |---|---|
 | `intake_revisions` | intake `completed` for every observed revision (step `observed`, attribute `generation`); only the repository, issue, generation and time are readable, never the payload |
-| `admissions` | admission `completed` (`accepted`), `failed` (`rejected`) or `blocked` (`needs-clarification`, `needs-human`, `requires-decomposition`); the first rejection after each merge is the closed issue's revision and becomes a `completed` step `issue-closed`; every later rejection (for example of a reopened issue) stays a refusal; on the lane, anything before planning that follows the issue's own merge is folded into the neutral "issue closed after merge" flag and is not counted as a failure or stop |
+| `admissions` | admission `completed` (`accepted`), `failed` (`rejected`) or `blocked` (`needs-clarification`, `needs-human`, `requires-decomposition`); the first rejection after each merge is the closed issue's revision and becomes a `completed` step `issue-closed`; a rejection that follows that `issue-closed` within 10 minutes, at the same risk and with no other decision in between, is the closed issue's next revision and stays `failed` with step `after-issue-closed`; every other rejection (for example of a reopened issue) stays a plain refusal (step `decision`). The revision content that would tell them apart is not readable, so the window and risk are a heuristic: a reopen refused at the same risk within 10 minutes of the closure would fold into the closure |
 | `work_items`, `plans` | planning `completed`; they also map work items to issues |
 | `execution_requests` | `waiting` (queued), `stale-wait`, `retried` (attempt > 1), `completed` (candidate captured), `stopped-safely` (stop reason, or `worker-exit-<code>` with an observed exit code), `blocked` (`lease-lapsed`) |
 | `execution_lifecycles` | `started` (claim), lifecycle `phase` on stops, `quarantined` (`cleanup-uncertain`), `degraded` (`cleanup-retried`) |
@@ -448,6 +452,15 @@ and verification spanning claim to verdict. The screenshots
 [flow-console-live-1280.png](flow-console-live-1280.png) (English, light) and
 [flow-console-live-es-1280.png](flow-console-live-es-1280.png) (Spanish,
 dark) show it at 1280×800.
+
+The fixture `components/flow-console/fixtures/reopened-issue.jsonl` is
+derived by `TestReopenedIssueFixture` from a synthetic journal (regenerate it
+with `-update-fixtures`): one issue merged, closed (`issue-closed` and one
+`after-issue-closed` refusal), reopened and refused at high risk, reopened
+and accepted, and merged again with its own closure. The screenshots
+[flow-console-reopened-1280.png](flow-console-reopened-1280.png) and
+[flow-console-reopened-es-1280.png](flow-console-reopened-es-1280.png) show
+one closed flag per merge and the reopen's refusal as a visible failure.
 
 ## Real data
 

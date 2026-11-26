@@ -71,6 +71,9 @@ func TestOnlyTheFirstRejectionAfterAMergeIsIssueClosed(t *testing.T) {
 	}
 	var closedAt, refusedAt []time.Time
 	for _, e := range Derive(j, DeriveOptions{}) {
+		if e.Step == "after-issue-closed" {
+			t.Fatal("a reopened issue's refusal labelled as the closure's")
+		}
 		if e.Stage == "admission" && e.Step == "issue-closed" {
 			closedAt = append(closedAt, e.Time)
 		}
@@ -80,6 +83,44 @@ func TestOnlyTheFirstRejectionAfterAMergeIsIssueClosed(t *testing.T) {
 	}
 	if len(closedAt) != 1 || !closedAt[0].Equal(at(7)) || len(refusedAt) != 1 || !refusedAt[0].Equal(at(30)) {
 		t.Fatal("closed", closedAt, "refused", refusedAt)
+	}
+}
+
+// The closed issue's next revisions, refused within the closure window at
+// the same risk, are labelled after-issue-closed; a refusal after the window,
+// at another risk, or after another decision stays a plain refusal.
+func TestRefusalsAfterIssueClosed(t *testing.T) {
+	base := time.Date(2026, 11, 26, 4, 0, 0, 0, time.UTC)
+	item := "8f9a2c1e-3b4d-4e5f-8a6b-7c8d9e0f1a2b"
+	at := func(m int) time.Time { return base.Add(time.Duration(m) * time.Minute) }
+	merged := at(6)
+	adm := func(m int, decision, risk string) store.FlowAdmission {
+		return store.FlowAdmission{Repository: "example/app", Issue: 258, Decision: decision, Risk: risk, CreatedAt: at(m), UpdatedAt: at(m)}
+	}
+	j := store.FlowJournal{
+		ObservedAt: base.Add(2 * time.Hour),
+		WorkItems:  []store.FlowWorkItem{{UUID: item, Repository: "example/app", Issues: []int{258}, Status: "ready", CreatedAt: base, UpdatedAt: base}},
+		Admissions: []store.FlowAdmission{
+			adm(0, "accepted", "low"),
+			adm(7, "rejected", "low"),  // issue-closed
+			adm(8, "rejected", "low"),  // after-issue-closed
+			adm(9, "rejected", "high"), // another risk: a refusal, and it ends the run
+			adm(10, "rejected", "low"), // the run ended: a refusal
+			adm(40, "rejected", "low"), // reopened later: a refusal
+		},
+		Merges: []store.FlowVerdict{{ID: "merge-1", FlowLink: store.FlowLink{WorkItem: item, Attempt: 1, Repository: "example/app"}, State: "merged", CreatedAt: at(5), FinishedAt: &merged}},
+	}
+	steps := map[time.Time]string{}
+	for _, e := range Derive(j, DeriveOptions{}) {
+		if e.Stage == "admission" {
+			steps[e.Time] = e.Step + "/" + string(e.Kind)
+		}
+	}
+	want := map[int]string{0: "decision/completed", 7: "issue-closed/completed", 8: "after-issue-closed/failed", 9: "decision/failed", 10: "decision/failed", 40: "decision/failed"}
+	for m, w := range want {
+		if steps[at(m)] != w {
+			t.Errorf("minute %d: %s, want %s", m, steps[at(m)], w)
+		}
 	}
 }
 
@@ -200,6 +241,9 @@ func TestLiveFixturePatterns(t *testing.T) {
 		case e.Stage == "admission" && e.Step == "issue-closed":
 			l.closed = e.Time
 		case e.Stage == "admission" && e.Kind == flowevent.KindFailed:
+			if e.Step != "after-issue-closed" {
+				t.Fatalf("issue %d refusal after its closure not labelled: %+v", e.Issue, e)
+			}
 			l.refused = e.Time
 		case e.Stage == "verification" && e.Kind == flowevent.KindStarted:
 			l.claim = e.Time
