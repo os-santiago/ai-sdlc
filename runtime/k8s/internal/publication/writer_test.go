@@ -19,7 +19,7 @@ import (
 )
 
 func writerPlan() TreePlan {
-	return TreePlan{Repository: "os-santiago/homedir", Request: TreeRequest{BaseTree: strings.Repeat("a", 40), Tree: []TreeEntry{{verification.LocaleSource, "100644", "blob", "source"}, {verification.LocaleNewTest, "100644", "blob", "test"}}}, ExpectedTreeSHA: strings.Repeat("b", 40), Branch: "ai-sdlc/issue-1581-" + strings.Repeat("c", 32), CommitMessage: "fix(ai-sdlc): address issue #1581 [skip release]"}
+	return TreePlan{Repository: "os-santiago/homedir", Request: TreeRequest{BaseTree: strings.Repeat("a", 40), Tree: []TreeEntry{{verification.LocaleSource, "100644", "blob", "source"}, {verification.LocaleNewTest, "100644", "blob", "test"}}}, ExpectedTreeSHA: strings.Repeat("b", 40), Branch: "ai-sdlc/issue-1581-" + strings.Repeat("c", 32), CommitMessage: "fix(ai-sdlc): address issue #1581 [skip release]", CommitIdentity: project.DefaultCommitIdentity}
 }
 func writerFixture(t *testing.T, handler http.HandlerFunc) (*Writer, *httptest.Server) {
 	t.Helper()
@@ -35,8 +35,9 @@ func writerFixture(t *testing.T, handler http.HandlerFunc) (*Writer, *httptest.S
 }
 func TestPublisherFinitePlanThroughActualTLS(t *testing.T) {
 	p := writerPlan()
-	source, commit := strings.Repeat("d", 40), strings.Repeat("e", 40)
+	source := strings.Repeat("d", 40)
 	now := time.Now().UTC().Truncate(time.Second)
+	commit := commitSHA(commitBody(p.CommitMessage, p.ExpectedTreeSHA, source, p.CommitIdentity, now))
 	var calls atomic.Int32
 	fences := 0
 	var expectedDigest atomic.Value
@@ -65,7 +66,7 @@ func TestPublisherFinitePlanThroughActualTLS(t *testing.T) {
 			b, _ := json.Marshal(raw)
 			var c commitRequest
 			json.Unmarshal(b, &c)
-			if c.Tree != p.ExpectedTreeSHA || len(c.Parents) != 1 || c.Parents[0] != source || !strings.Contains(c.Message, "[skip release]") || !strings.Contains(c.Message, "Signed-off-by: Sergio Canales <sergio.canales.e@gmail.com>") || c.Author.Name != "Sergio Canales" || c.Author.Email != "sergio.canales.e@gmail.com" || c.Author != c.Committer {
+			if c.Tree != p.ExpectedTreeSHA || len(c.Parents) != 1 || c.Parents[0] != source || !strings.Contains(c.Message, "[skip release]") || !strings.HasSuffix(c.Message, "\n\nSigned-off-by: ai-sdlc[bot] <noreply@ai-sdlc.invalid>\n") || c.Author.Name != "ai-sdlc[bot]" || c.Author.Email != "noreply@ai-sdlc.invalid" || c.Author != c.Committer {
 				t.Error("commit identity or scope changed")
 			}
 			json.NewEncoder(w).Encode(map[string]any{"sha": commit, "message": c.Message, "tree": map[string]string{"sha": c.Tree}, "parents": []any{map[string]string{"sha": source}}, "author": c.Author, "committer": c.Committer})

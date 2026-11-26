@@ -8,7 +8,7 @@ for(const maxSteps of [16,24]) {
  const root=fs.mkdtempSync('/tmp/scc-budget-'),repo=path.join(root,'repository'),state=path.join(root,'state');
  fs.mkdirSync(repo);fs.mkdirSync(state);fs.mkdirSync(path.join(state,'home'));fs.mkdirSync(path.join(state,'tmp'));
  for(let n=0;n<18;n++)fs.writeFileSync(path.join(repo,`context-${n}.txt`),`Read-only fixture context ${n}\n`);
- execFileSync('git',['init','-q',repo]);execFileSync('git',['-C',repo,'add','.']);execFileSync('git',['-C',repo,'-c','user.name=Sergio Canales','-c','user.email=sergio.canales.e@gmail.com','commit','-qm','test: initialize isolated budget fixture']);
+ execFileSync('git',['init','-q',repo]);execFileSync('git',['-C',repo,'add','.']);execFileSync('git',['-C',repo,'-c','user.name=AI-SDLC Fixture','-c','user.email=fixture@example.invalid','commit','-qm','test: initialize isolated budget fixture']);
  let requests=0, inputBytes=0, outputBytes=0;
  const server=http.createServer((req,res)=>{let input='';req.on('data',d=>{input+=d;if(Buffer.byteLength(input)>131072)req.destroy();});req.on('end',()=>{
   if(!req.url.endsWith('/chat/completions')){res.writeHead(404);res.end();return;}

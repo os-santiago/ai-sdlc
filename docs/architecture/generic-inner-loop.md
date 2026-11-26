@@ -15,7 +15,7 @@ never read from the target repository, an issue or model output.
 |---|---|
 | `repository`, `baseBranch` | Lowercase GitHub repository and target branch |
 | `verification` | Pinned toolchain image (`repo@sha256:`), argv test command, working directory, timeout, resources, `network: none`, exit code and optional JUnit report, repeat count, test globs, harness globs, reviewed toolchain environment, optional static analysis commands (`analysis`, omitted when absent) |
-| `publication` | Allow and deny path globs, file and byte limits |
+| `publication` | Allow and deny path globs, file and byte limits, and the optional `commitIdentity` of published commits (default `ai-sdlc[bot] <noreply@ai-sdlc.invalid>`; omitted when absent, so existing digests do not change) |
 | `merge` | Ruleset, required checks, strict checks, resolved threads, human approvals |
 | `recipes` | Optional reviewed verification plug-ins (the per-issue oracles of the references) |
 | `generation` | Optional. `toolchain.root` names a self-contained toolchain inside the verification image and `toolchain.path` the directories under it for the generation worker's `PATH`. Requires `verification`; omitted when absent, so existing digests do not change. The executor copies it in init containers and the generator runs the verification command before export |

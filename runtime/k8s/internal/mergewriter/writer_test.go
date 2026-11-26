@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/forge"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergegate"
 	"io"
@@ -57,6 +58,10 @@ func TestMergeSingleHeadConditionedWriteAndVerifiedCommit(t *testing.T) {
 			if json.NewDecoder(r.Body).Decode(&body) != nil || len(body) != 4 || body["sha"] != expected().HeadSHA || body["merge_method"] != "merge" || !strings.HasSuffix(body["commit_title"], "[skip release]") {
 				t.Error("unbounded write")
 			}
+			// No personal or other identity is attested in the merge commit.
+			if body["commit_message"] != "Refs #3" || strings.Contains(body["commit_message"], "Signed-off-by") {
+				t.Errorf("merge commit message %q", body["commit_message"])
+			}
 			_ = json.NewEncoder(out).Encode(map[string]any{"merged": true, "sha": strings.Repeat("e", 40)})
 		} else {
 			gets.Add(1)
@@ -82,6 +87,20 @@ func TestMergeSingleHeadConditionedWriteAndVerifiedCommit(t *testing.T) {
 	})
 	if e != nil || calls != 2 || puts.Load() != 1 || gets.Load() != 1 || receipt.CommitSHA != strings.Repeat("e", 40) || receipt.HeadSHA != expected().HeadSHA {
 		t.Fatal("merge receipt", e)
+	}
+	// The journaled intent binds exactly the identity-free request body.
+	body, _ := json.Marshal(struct {
+		SHA     string `json:"sha"`
+		Method  string `json:"merge_method"`
+		Title   string `json:"commit_title"`
+		Message string `json:"commit_message"`
+	}{expected().HeadSHA, "merge", "fix(ai-sdlc): integrate issue #3 [skip release]", "Refs #3"})
+	binding, _ := json.Marshal(struct {
+		Method, Path string
+		Body         json.RawMessage
+	}{http.MethodPut, "/repos/os-santiago/homedir/pulls/42/merge", body})
+	if digest != authority.Digest(binding) {
+		t.Fatal("fence digest does not bind the exact merge request")
 	}
 }
 func TestMergeRejectsInvalidOrUnboundedAuthorityBeforeSend(t *testing.T) {
