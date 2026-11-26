@@ -74,7 +74,7 @@ func TestOfflineWorkspaceGuidanceNamesFrameworkAndVerificationCommand(t *testing
 		"empty command":  func(a *Assignment) { a.Verification.Command = nil },
 		"hidden rune":    func(a *Assignment) { a.Verification.Command = []string{"python3", "x\ny"} },
 		"escaping dir":   func(a *Assignment) { a.Verification.WorkingDir = "../x" },
-		"with toolchain": func(a *Assignment) { a.Toolchain = &Toolchain{} },
+		"with toolchain": func(a *Assignment) { a.Toolchain = toolchainFixture() },
 	} {
 		b := a
 		v := *a.Verification

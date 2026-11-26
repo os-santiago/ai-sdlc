@@ -101,3 +101,34 @@ func TestToolchainRelocatesPathsUnderTheRootForGeneration(t *testing.T) {
 		t.Fatalf("toolchain without paths under the root %+v", got)
 	}
 }
+
+// Preparation names the verification command only in an offline assignment
+// without a toolchain; a toolchain carries the command itself.
+func TestPreparationAddsVerificationOnlyWithoutAToolchain(t *testing.T) {
+	t.Cleanup(func() { project.SetInstalled(nil) })
+	image := "registry.example/python@sha256:" + strings.Repeat("a", 64)
+	m := project.Manifest{Version: project.ManifestVersion, Repository: "example/service", BaseBranch: "main",
+		Verification: &project.Verification{Image: image, Command: []string{"python3", "-m", "unittest"}, WorkingDir: "svc",
+			TimeoutSeconds: 60, CPU: "1", Memory: "1Gi", EphemeralStorage: "1Gi", Network: "none", Result: project.Result{ExitCode: true},
+			Repeat: 1, TestGlobs: []string{"**/test_*.py"}}}
+	project.SetInstalled(&m)
+	a := executor.Assignment{Repository: "example/service"}
+	addRepositoryContext(&a)
+	if a.Workspace != executor.WorkspaceOfflineTests || a.Toolchain != nil ||
+		!reflect.DeepEqual(a.Verification, &executor.Verification{Command: []string{"python3", "-m", "unittest"}, WorkingDir: "svc"}) {
+		t.Fatalf("offline assignment without a toolchain %+v", a)
+	}
+	m.Generation = &project.Generation{Toolchain: &project.Toolchain{Root: "/usr/local/go", Path: []string{"bin"}}}
+	m.Verification.Command = []string{"go", "test", "./..."}
+	project.SetInstalled(&m)
+	a = executor.Assignment{Repository: "example/service"}
+	addRepositoryContext(&a)
+	if a.Workspace != executor.WorkspaceOfflineTests || a.Toolchain == nil || a.Verification != nil {
+		t.Fatalf("toolchain assignment %+v", a)
+	}
+	a = executor.Assignment{Repository: project.Homedir}
+	addRepositoryContext(&a)
+	if a.Workspace != "" || a.Toolchain != nil || a.Verification != nil {
+		t.Fatalf("reference assignment %+v", a)
+	}
+}

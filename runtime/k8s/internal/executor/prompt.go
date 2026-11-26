@@ -134,12 +134,12 @@ install dependencies or run tests here. Read the relevant code, make the change
 and add or update tests that check the requested behaviour. Write them with the
 same test framework, imports and conventions as the repository's existing tests,
 and add no new dependency: verification runs offline with only what its image
-already provides, so a test that imports anything else fails. The repository's
-own test suite then runs in independent offline verification, which requires a
-test that fails on the current code and passes with your change.
+already provides, so a test that imports a package the image lacks fails. The
+repository's own test suite then runs in independent offline verification, which
+requires a test that fails on the current code and passes with your change.
 `
 	if v := a.Verification; v != nil {
-		guidance += fmt.Sprintf("Verification runs this command from %s:\n%s\n", commandDirectory(v.WorkingDir), shellCommand(v.Command))
+		guidance += fmt.Sprintf("Verification runs this command (it cannot run in this workspace) from %s:\n%s\n", commandDirectory(v.WorkingDir), shellCommand(v.Command))
 	}
 	return guidance
 }

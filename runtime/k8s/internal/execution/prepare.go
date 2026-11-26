@@ -201,11 +201,7 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 		Repository: c.Repository, SourceSHA: c.SourceSHA, TreeSHA256: c.ProfileSHA256, ProfileSHA256: c.ProfileSHA256,
 		AuthorityRevision: c.AuthorityRevision, IssueNumbers: []int{c.IssueNumber}, Title: snapshot.Issue.Title, Body: snapshot.Issue.Body,
 		AcceptanceCriteria: normalizedevent.ExtractAcceptanceCriteria(snapshot.Issue.Body), ExpiresAt: c.ExpiresAt}
-	assignment.Workspace = WorkspaceFor(c.Repository)
-	assignment.Toolchain = ToolchainFor(c.Repository)
-	if assignment.Toolchain == nil {
-		assignment.Verification = VerificationFor(c.Repository)
-	}
+	addRepositoryContext(&assignment)
 	var parent store.VerificationCandidate
 	if c.Repair != nil {
 		a, p, e := repairPreparation(ctx, db, in.Policy, c)
@@ -264,6 +260,17 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 		return Prepared{}, ErrAuthority
 	}
 	return Prepared{assignment: raw, source: source, originalSource: originalSource, profile: in.Profile, adev: in.ADev, claim: claim}, nil
+}
+
+// addRepositoryContext adds the reviewed manifest's workspace context to a
+// generation assignment: the workspace mark, the toolchain, and, only without a
+// toolchain (which already carries it), the verification command.
+func addRepositoryContext(a *executor.Assignment) {
+	a.Workspace = WorkspaceFor(a.Repository)
+	a.Toolchain = ToolchainFor(a.Repository)
+	if a.Toolchain == nil {
+		a.Verification = VerificationFor(a.Repository)
+	}
 }
 
 // WorkspaceFor marks the assignment of a repository verified with its own
