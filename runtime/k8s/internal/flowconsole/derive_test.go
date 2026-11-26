@@ -1,6 +1,7 @@
 package flowconsole
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -82,22 +83,56 @@ func TestOnlyTheFirstRejectionAfterAMergeIsIssueClosed(t *testing.T) {
 	}
 }
 
-// A passed verdict's extension to the next stage's creation stops at its
-// own claim lease when the next stage waited long in its queue.
-func TestVerdictExtensionStopsAtTheClaimLease(t *testing.T) {
+// A passed verdict's extension to the next stage's creation never passes
+// the verdict row's expiry.
+func TestVerdictExtensionStopsAtExpiry(t *testing.T) {
 	base := time.Date(2026, 11, 26, 4, 11, 37, 0, time.UTC)
 	link := store.FlowLink{WorkItem: "8f9a2c1e-3b4d-4e5f-8a6b-7c8d9e0f1a2b", Attempt: 1, Repository: "example/app"}
-	done, lease := base.Add(6*time.Second), base.Add(2*time.Minute)
+	done, expiry := base.Add(6*time.Second), base.Add(10*time.Minute)
 	j := store.FlowJournal{
 		ObservedAt:          base.Add(time.Hour),
-		Verifications:       []store.FlowVerdict{{ID: "verification-1", FlowLink: link, State: "passed", Cleanup: "complete", CreatedAt: base, ExpiresAt: base.Add(30 * time.Minute), ClaimUntil: &lease, Candidate: "execution-1"}},
+		Verifications:       []store.FlowVerdict{{ID: "verification-1", FlowLink: link, State: "passed", Cleanup: "complete", CreatedAt: base, ExpiresAt: expiry, Candidate: "execution-1"}},
 		VerificationEffects: []store.FlowEffect{{Parent: "verification-1", Kind: "tests", CreatedAt: base.Add(time.Second), CompletedAt: &done}},
 		Reviews:             []store.FlowVerdict{{ID: "review-1", FlowLink: link, State: "queued", Cleanup: "pending", CreatedAt: base.Add(20 * time.Minute), Candidate: "execution-1"}},
 	}
 	for _, e := range Derive(j, DeriveOptions{}) {
-		if e.Stage == "verification" && e.Kind == flowevent.KindCompleted && !e.Time.Equal(lease) {
-			t.Fatal("extension not capped at the claim lease", e.Time)
+		if e.Stage == "verification" && e.Kind == flowevent.KindCompleted && !e.Time.Equal(expiry) {
+			t.Fatal("extension not capped at the expiry", e.Time)
 		}
+	}
+}
+
+// The live pattern (battery 35, #277): verification claimed at 07:49:38.726,
+// every effect acknowledged within 0.35 s, a claim lease that ended seconds
+// later, and the review created from the passed verdict at 07:50:31.451.
+// The verification bar runs from its claim to that verdict, not to the
+// effect acknowledgements.
+func TestLiveVerificationSpansClaimToVerdict(t *testing.T) {
+	at := func(s string) time.Time { v, _ := time.Parse(time.RFC3339Nano, "2026-11-26T"+s+"Z"); return v }
+	link := store.FlowLink{WorkItem: "8f9a2c1e-3b4d-4e5f-8a6b-7c8d9e0f1a2b", Attempt: 1, Repository: "os-santiago/ai-sdlc-sample"}
+	ack := func(s string) *time.Time { v := at(s); return &v }
+	lease := at("07:49:48.726")
+	j := store.FlowJournal{
+		ObservedAt: at("07:55:00"),
+		Verifications: []store.FlowVerdict{{ID: "verification-277", FlowLink: link, State: "passed", Cleanup: "complete",
+			CreatedAt: at("07:49:34.728"), ExpiresAt: at("08:19:34.728"), ClaimUntil: &lease, Candidate: "execution-277"}},
+		VerificationEffects: []store.FlowEffect{
+			{Parent: "verification-277", Kind: "config", CreatedAt: at("07:49:38.726"), CompletedAt: ack("07:49:38.743")},
+			{Parent: "verification-277", Kind: "baseline", CreatedAt: at("07:49:38.750"), CompletedAt: ack("07:49:38.859")},
+			{Parent: "verification-277", Kind: "tests", CreatedAt: at("07:49:38.867"), CompletedAt: ack("07:49:38.959")},
+			{Parent: "verification-277", Kind: "candidate", CreatedAt: at("07:49:38.968"), CompletedAt: ack("07:49:39.059")},
+		},
+		Reviews: []store.FlowVerdict{{ID: "review-277", FlowLink: link, State: "passed", Cleanup: "complete", CreatedAt: at("07:50:31.451"), ExpiresAt: at("08:20:31.451"), Candidate: "execution-277"}},
+	}
+	var verdict *flowevent.Event
+	events := Derive(j, DeriveOptions{})
+	for i, e := range events {
+		if e.Stage == "verification" && e.Kind == flowevent.KindCompleted {
+			verdict = &events[i]
+		}
+	}
+	if verdict == nil || !verdict.Time.Equal(at("07:50:31.451")) || verdict.DurationMs != 52725 {
+		t.Fatalf("verification verdict %+v", verdict)
 	}
 }
 
@@ -135,5 +170,52 @@ func TestAdmissionRejectionAfterMergeIsIssueClosedNotAFailure(t *testing.T) {
 	}
 	if closed != 1 || refused != 1 {
 		t.Fatal("closed", closed, "refused", refused)
+	}
+}
+
+// The live battery-35 fixture: each delivered issue ends with an
+// issue-closed admission after its merge and, about 34 s later, a refusal of
+// the closed issue's next revision; verification spans claim to verdict.
+func TestLiveFixturePatterns(t *testing.T) {
+	file, err := os.Open("../../components/flow-console/fixtures/live-battery-35.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	events, err := flowevent.Decode(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type lane struct{ merged, closed, refused, verdict, reviewQueued, claim time.Time }
+	lanes := map[int]*lane{}
+	for _, e := range events {
+		l := lanes[e.Issue]
+		if l == nil {
+			l = &lane{}
+			lanes[e.Issue] = l
+		}
+		switch {
+		case e.Stage == "merge" && e.Kind == flowevent.KindCompleted:
+			l.merged = e.Time
+		case e.Stage == "admission" && e.Step == "issue-closed":
+			l.closed = e.Time
+		case e.Stage == "admission" && e.Kind == flowevent.KindFailed:
+			l.refused = e.Time
+		case e.Stage == "verification" && e.Kind == flowevent.KindStarted:
+			l.claim = e.Time
+		case e.Stage == "verification" && e.Kind == flowevent.KindCompleted:
+			l.verdict = e.Time
+		case e.Stage == "review" && e.Kind == flowevent.KindWaiting:
+			l.reviewQueued = e.Time
+		}
+	}
+	for _, issue := range []int{276, 277} {
+		l := lanes[issue]
+		if l == nil || l.merged.IsZero() || !l.closed.After(l.merged) || !l.refused.After(l.closed) || l.refused.Sub(l.closed) > time.Minute {
+			t.Fatalf("issue %d post-merge pattern %+v", issue, l)
+		}
+		if d := l.reviewQueued.Sub(l.verdict); d < 0 || d >= time.Millisecond || l.verdict.Sub(l.claim) < 40*time.Second {
+			t.Fatalf("issue %d verification does not span claim to verdict %+v", issue, l)
+		}
 	}
 }

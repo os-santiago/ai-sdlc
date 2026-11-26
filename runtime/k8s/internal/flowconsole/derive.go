@@ -402,12 +402,13 @@ func (d *deriver) verdicts(stage string, rows []store.FlowVerdict, effects map[s
 			end = r.CreatedAt
 		}
 		if t, ok := next[r.Candidate]; ok && r.State == success && t.After(end) {
-			// Never past the verdict row's own lease: a long wait before the
-			// next stage's claim must not stretch this stage's bar.
+			// The successor's creation is its queue start, so the bar never
+			// reaches past the next stage's start, and the verdict can never
+			// be later than this row's expiry. The claim lease is not a bound:
+			// on a live journal it ended right after the effect
+			// acknowledgements and cut every verification bar to a third of a
+			// second, while the tests actually ran for about 50 s.
 			limit := r.ExpiresAt
-			if r.ClaimUntil != nil {
-				limit = *r.ClaimUntil
-			}
 			if t.After(limit) {
 				t = limit
 			}
