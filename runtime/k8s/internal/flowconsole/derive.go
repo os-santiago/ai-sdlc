@@ -48,7 +48,7 @@ func Derive(j store.FlowJournal, options DeriveOptions) []flowevent.Event {
 		d.issues[w.UUID] = w
 	}
 	d.intake(j.Intake)
-	d.admissions(j.Admissions)
+	d.admissions(j.Admissions, d.mergedIssues(j.Merges))
 	d.workItems(j.WorkItems)
 	d.executions(j.Executions, group(j.ExecutionEffects), groupCalls(j.ModelCalls))
 	d.verdicts("verification", j.Verifications, group(j.VerificationEffects), nil)
@@ -156,17 +156,40 @@ func (d *deriver) intake(rows []store.FlowIntake) {
 	}
 }
 
-func (d *deriver) admissions(rows []store.FlowAdmission) {
+// mergedIssues maps repository#issue to the time its work was merged.
+func (d *deriver) mergedIssues(merges []store.FlowVerdict) map[string]time.Time {
+	out := map[string]time.Time{}
+	for _, m := range merges {
+		if m.State != "merged" || m.FinishedAt == nil {
+			continue
+		}
+		l := d.link(m.FlowLink)
+		key := l.repository + "#" + strconv.Itoa(l.issue)
+		if t, ok := out[key]; l.issue > 0 && (!ok || m.FinishedAt.Before(t)) {
+			out[key] = *m.FinishedAt
+		}
+	}
+	return out
+}
+
+// admissions maps admission decisions. Merging closes the issue, and intake
+// then observes a new revision that admission rejects ("issue is closed").
+// That rejection, at or after the issue's merge, is the end of delivered
+// work, not a refusal: it becomes a completed step named issue-closed.
+func (d *deriver) admissions(rows []store.FlowAdmission, merged map[string]time.Time) {
 	for _, r := range rows {
 		l := link{repository: r.Repository, issue: r.Issue}
-		kind, diagnostic := flowevent.KindBlocked, r.Decision
+		kind, diagnostic, step := flowevent.KindBlocked, r.Decision, "decision"
 		switch r.Decision {
 		case "accepted":
 			kind, diagnostic = flowevent.KindCompleted, ""
 		case "rejected":
 			kind = flowevent.KindFailed
+			if at, ok := merged[r.Repository+"#"+strconv.Itoa(r.Issue)]; ok && !r.UpdatedAt.Before(at) {
+				kind, diagnostic, step = flowevent.KindCompleted, "", "issue-closed"
+			}
 		}
-		d.emit(l, "admission", "decision", kind, diagnostic, r.UpdatedAt, ms(r.UpdatedAt.Sub(r.CreatedAt)), 0, attrs("decision", r.Decision, "risk", r.Risk),
+		d.emit(l, "admission", step, kind, diagnostic, r.UpdatedAt, ms(r.UpdatedAt.Sub(r.CreatedAt)), 0, attrs("decision", r.Decision, "risk", r.Risk),
 			r.Repository, strconv.Itoa(r.Issue), r.CreatedAt.UTC().Format(time.RFC3339Nano), r.Decision)
 	}
 }
