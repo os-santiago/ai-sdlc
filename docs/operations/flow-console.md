@@ -15,15 +15,27 @@ no workflow authority. It is off by default.
 - **One swimlane per issue.** Each lane holds that issue's stage bars in flow
   order: intake → admission → planning → generation (execution, with its
   model calls) → verification → review → publication → merge. A retried
-  attempt continues on the same lane. The newest work is at the top, and only
-  lanes with activity in the visible time window are listed.
-- **Bars coloured by outcome**, each with an end glyph so colour is never the
-  only signal: completed (✓), running (striped, open end), waiting in queue
-  (thin grey lead-in before the claim), failed with a verdict against the work
-  (✕), stopped safely (■, with the diagnostic name next to the bar), blocked
-  and quarantined (hatched).
-- **Markers** above the bars for retries, stale waits, degradations (a failed
-  or uncertain model call, a cleanup retry), blocks and quarantine.
+  attempt continues on the same lane. Only lanes with activity in the visible
+  time window are listed, most recent activity first, or *problems first*
+  (blocked, then failed, then in flight, then delivered).
+- **A label column with a summary line**: issue, repository (truncated, full
+  name on hover), attempt count and status, and under it where the work is
+  now (`verifying · 3 min`, `queued for review · 40 s`) or why it ended. The
+  final stop of a failed or blocked lane always shows its stage and
+  diagnostic there (`generate · worker-exit-22`) and next to its last bar.
+- **Stage and outcome are encoded separately.** The stage is the bar's hue,
+  one fixed hue per stage (generate blue, verify orange, review green, publish
+  amber, merge magenta; intake, admission and planning grey), with its name
+  inside the bar when it fits and its initial (G, V, R, P, M) otherwise; a
+  stage legend sits above the timeline. The outcome is the bar's form: solid
+  with ✓ for completed, striped with an open end for running, a dashed outline
+  for waiting (and a dashed lead-in for the queue time before a claim), a hatch
+  for blocked or quarantined, and an end badge for failed (✕), stopped safely
+  (■), blocked (⏸) and quarantined (⛔).
+- **Markers on their own row** above the bars for retries, stale waits,
+  degradations (a failed or uncertain model call, a cleanup retry), blocks and
+  quarantine. Markers closer than about 15 px merge into one badge with a
+  count; its tooltip lists each of them.
 - **Model calls** as ticks along the generation and review bars.
 - **Hover** on a bar or marker for its outcome, diagnostic, wait, start, end,
   duration, model call count and latency (median and maximum), and bounded
@@ -31,6 +43,8 @@ no workflow authority. It is off by default.
 - **Zoom and scroll**: the 1 h, 6 h, 24 h and Fit buttons, Ctrl or ⌘ with the
   mouse wheel to zoom around the pointer, and drag (or a horizontal wheel) to
   pan. *Follow now* keeps the dashed "now" line in view as events arrive.
+  Times are in the browser's local time zone, named above the label column;
+  axis ticks, bars and panel times show UTC on hover.
 - **Filters** by lane status (in flight, delivered, failed, blocked), by
   component (lanes that component touched; its bars stay at full opacity),
   and by issue number or repository.
@@ -46,7 +60,7 @@ no workflow authority. It is off by default.
   (the page then keeps the last known events).
 
 The view is shareable: `?range=<hours>`, `?status=inflight|delivered|failed|blocked`,
-`?issue=<text>` and `?open=<owner>/<repository>%23<issue>` set the initial
+`?issue=<text>`, `?sort=problems` and `?open=<owner>/<repository>%23<issue>` set the initial
 window, filters and detail panel.
 
 ## Event contract: `ai-sdlc.flow-event/v1`

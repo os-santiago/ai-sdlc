@@ -45,6 +45,12 @@
   <label class="field">Issue
     <input id="issue-filter" type="search" placeholder="#196 or repository" autocomplete="off" spellcheck="false">
   </label>
+  <label class="field">Sort
+    <select id="sort">
+      <option value="recent">Most recent first</option>
+      <option value="problems">Problems first</option>
+    </select>
+  </label>
   <div class="spacer"></div>
   <div class="seg" role="group" aria-label="Time range">
     <button type="button" data-range="1">1 h</button>
@@ -55,9 +61,11 @@
   <button type="button" id="follow" class="toggle" aria-pressed="true" title="Keep the now line in view">Follow now</button>
 </section>
 
+<div class="stage-legend" id="stage-legend" aria-label="Stage colours"></div>
+
 <main class="timeline" id="timeline">
   <div class="axis-row">
-    <div class="lane-head">Work item <span class="muted" id="lane-count"></span></div>
+    <div class="lane-head"><span>Work item <span class="muted" id="lane-count"></span></span><span class="tz" id="timezone"></span></div>
     <svg id="axis" class="axis" aria-hidden="true"></svg>
   </div>
   <div class="lanes" id="lanes" tabindex="-1">
