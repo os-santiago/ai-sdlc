@@ -10,6 +10,8 @@ no workflow authority. It is off by default.
 
 ![Flow console with the evaluation-battery fixture](flow-console.png)
 
+In Spanish, with the detail panel: [flow-console-es.png](flow-console-es.png); light theme at 1280×800: [English](flow-console-1280.png), [Spanish](flow-console-es-1280.png).
+
 ## What it shows
 
 - **One swimlane per issue.** Each lane holds that issue's stage bars in flow
@@ -94,6 +96,25 @@ no workflow authority. It is off by default.
   quarantine and stale-wait counts), median time from intake to merge, and the
   model call latency median and 90th percentile.
 - **Text legend** for every colour, texture and marker.
+- **Language**: English and Spanish (*ES*/*EN* button), remembered in the
+  browser and defaulting to its language; `?lang=es` or `?lang=en` selects
+  one in a link. Every UI string is in `internal/flowconsole/ui/i18n.js`.
+  Contract values (event kinds, diagnostics, steps, components) are shown
+  as they are; their human labels (kinds, outcomes, stages) are translated.
+- **Issue links**: issue numbers in the lanes and the detail panel title
+  link to `https://github.com/<repository>/issues/<n>`, built only from a
+  repository matching the contract's pattern and the integer issue number,
+  opened with `rel="noopener noreferrer"`. Clicking the number opens the
+  issue; clicking the rest of the row opens the details.
+- **Light theme and printing**: the ☀/☾ button switches between the dark
+  and a light theme (remembered; the default follows the operating system,
+  `?theme=light` in a link). Both keep text at WCAG AA. Printing (or saving
+  as PDF) uses the light colours, hides the controls and panels, and draws
+  every lane, not only those scrolled into view.
+- **Time per stage**: the detail panel shows the latest attempt as one bar,
+  each stage's queue wait (hatched) and run (solid) in order and to scale,
+  with the longest part named, for example `Longest: generate 6 min 43 s
+  (51% of 13 min 17 s)`.
 - **Contrast**: all text meets WCAG AA (4.5:1) against every surface it sits
   on; the muted grey (`#9c9b93`) measures 6.2:1 on the panels and 4.9:1 on the
   hovered or pressed controls.
@@ -110,7 +131,7 @@ no workflow authority. It is off by default.
   (the page then keeps the last known events).
 
 The view is shareable: `?range=<hours>`, `?status=inflight|delivered|failed|blocked`,
-`?issue=<text>`, `?sort=problems`, `?now=queued|execution|verification|review|publication|merge|blocked`, `?feed=1` and `?open=<owner>/<repository>%23<issue>` set the initial
+`?issue=<text>`, `?sort=problems`, `?lang=es|en`, `?theme=light|dark`, `?now=queued|execution|verification|review|publication|merge|blocked`, `?feed=1` and `?open=<owner>/<repository>%23<issue>` set the initial
 window, filters and detail panel.
 
 ## Event contract: `ai-sdlc.flow-event/v1`
