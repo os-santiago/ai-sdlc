@@ -172,6 +172,69 @@ class IdentityInstallationTests(unittest.TestCase):
                 installer.configure_identities([], 'podman', lock, 'owned-uid','example/project','production-test',require_build=True)
             create.assert_not_called()
 
+    def run_console(self, secrets, flow_console):
+        material, _, resource = fixture()
+        lock = {'image': {'repository': 'quay.io/os-santiago/ai-sdlc'}, 'migrator': {'digest': 'sha256:' + 'a' * 64}}
+        with patch.object(installer, 'identity_material', return_value=material), \
+             patch.object(installer, 'owned_secret', side_effect=lambda k, n, u: secrets.get(n)), \
+             patch.object(installer, 'read_resource', return_value=resource), \
+             patch.object(installer, 'run') as run, \
+             patch.object(installer, 'create_owned_secret') as create, \
+             patch.object(installer, 'extend_owned_role_secret') as extend:
+            result = installer.configure_identities([], 'podman', lock, 'owned-uid', 'example/project', 'production-test', flow_console=flow_console)
+        # No credential reaches values or a process argument.
+        self.assertNotIn('password', json.dumps(result))
+        for call in run.call_args_list:
+            self.assertNotIn('postgresql://', ' '.join(map(str, call.args[0])))
+        return result, create, extend
+
+    def test_flow_console_credential_is_created_reused_and_withdrawn(self):
+        _, secrets, _ = fixture()
+        base = json.loads(secrets['ai-sdlc-database-roles']['passwords.json'])
+        # On: a new password, its own URL Secret and the same passwords.json document.
+        _, create, extend = self.run_console(secrets, True)
+        self.assertEqual([c.args[1] for c in create.call_args_list], [installer.CONSOLE_SECRET])
+        created = create.call_args.args[2]
+        self.assertRegex(created['password'], r'^[A-Za-z0-9_-]{32,128}$')
+        self.assertEqual(created['uri'], 'postgresql://aisdlc_flow_console:' + created['password'] + '@ai-sdlc-postgres:5432/ai_sdlc?sslmode=disable')
+        upgraded = json.loads(extend.call_args.args[3]['passwords.json'])
+        self.assertEqual(upgraded, dict(base, **{'flow-console': created['password']}))
+        self.assertNotIn(created['password'], base.values())
+        # Re-applied: the existing Secret and entry are reused unchanged.
+        secrets[installer.CONSOLE_SECRET] = created
+        secrets['ai-sdlc-database-roles'] = {'passwords.json': json.dumps(upgraded)}
+        _, create, extend = self.run_console(secrets, True)
+        create.assert_not_called()
+        extend.assert_not_called()
+        # Off: the entry leaves passwords.json (the migrator then disables the role).
+        _, create, extend = self.run_console(secrets, False)
+        create.assert_not_called()
+        self.assertEqual(json.loads(extend.call_args.args[3]['passwords.json']), base)
+
+    def test_flow_console_credential_conflicts_fail_before_effects(self):
+        for conflict in ('uri', 'entry'):
+            with self.subTest(conflict=conflict):
+                _, secrets, _ = fixture()
+                password = 'console' + 'q' * 40
+                secrets[installer.CONSOLE_SECRET] = {'password': password, 'uri': installer.console_uri(password)}
+                passwords = json.loads(secrets['ai-sdlc-database-roles']['passwords.json'])
+                passwords['flow-console'] = password if conflict == 'uri' else 'other' + 'q' * 40
+                secrets['ai-sdlc-database-roles'] = {'passwords.json': json.dumps(passwords)}
+                if conflict == 'uri':
+                    secrets[installer.CONSOLE_SECRET]['uri'] = 'postgresql://aisdlc_worker:x@elsewhere/ai_sdlc'
+                with self.assertRaises(ValueError):
+                    self.run_console(secrets, True)
+
+    def test_flow_console_secret_removal_requires_ownership(self):
+        calls = []
+        api = SimpleNamespace(owned_secret=lambda k, n, u: {'password': 'p', 'uri': 'u'}, run=lambda args, **kw: calls.append(args))
+        self.assertTrue(installer.remove_console_credential(['kubectl'], 'owned-uid', api))
+        self.assertEqual(calls, [['kubectl', 'delete', 'secret', installer.CONSOLE_SECRET, '-n', installer.NAMESPACE, '--wait=true']])
+        calls.clear()
+        api.owned_secret = lambda k, n, u: None
+        self.assertFalse(installer.remove_console_credential(['kubectl'], 'owned-uid', api))
+        self.assertEqual(calls, [])
+
     def test_foreign_secret_is_not_adopted(self):
         resource = {'type': 'Opaque', 'metadata': {'annotations': {'ai-sdlc.io/cluster-uid': 'other'}}}
         with patch.object(installer, 'read_resource', return_value=resource):

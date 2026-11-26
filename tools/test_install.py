@@ -147,6 +147,42 @@ class InstallerBoundaryTests(unittest.TestCase):
         self.assertEqual(json.loads(values['candidate']['configJSON'])['placement']['RuntimeClass'], 'kata')
         self.assertEqual(json.loads(values['review']['configJSON'])['runtimeClass'], 'kata')
 
+    def test_flow_console_pin_scope_and_default_render(self):
+        lock = self.lock()
+        lock['image']['tag'] = 'd' * 40
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'images.json'
+            path.write_text(json.dumps(lock))
+            rendered, printed = [], []
+            def run(command, **kwargs):
+                values = [str(command[i + 1]) for i, arg in enumerate(command) if arg == '-f']
+                rendered.append(json.loads(Path(values[-1]).read_text()))
+                return subprocess.CompletedProcess(command, 0, '')
+            with patch.object(installer, 'tools', return_value={'helm': 'helm'}), patch.object(installer, 'run', side_effect=run), \
+                 patch('builtins.print', side_effect=lambda *a, **k: printed.append(a[0])):
+                self.assertEqual(installer.main(['plan', '--images', str(path)]), 0)
+                default_values, default_plan = rendered[-1], json.loads(printed[-1])
+                # Without a pin a plan still renders the console.
+                self.assertEqual(installer.main(['plan', '--images', str(path), '--flow-console']), 0)
+                self.assertEqual(rendered[-1], dict(default_values, console={'enabled': True}))
+                pin = {'version': 'ai-sdlc.console-images/v1', 'revision': lock['image']['tag'], 'digest': 'sha256:' + 'c' * 64}
+                (Path(tmp) / 'console-images.json').write_text(json.dumps(pin))
+                self.assertEqual(installer.main(['plan', '--images', str(path), '--flow-console']), 0)
+                self.assertEqual(rendered[-1]['console'], {'enabled': True, 'digest': 'sha256:' + 'c' * 64})
+                self.assertTrue(json.loads(printed[-1])['flowConsoleEnabled'])
+            # Default installs are unchanged: no console values or plan field.
+            self.assertNotIn('console', default_values)
+            self.assertNotIn('flowConsoleEnabled', default_plan)
+            for bad in (dict(pin, revision='f' * 40), dict(pin, digest='latest'), dict(pin, extra=1)):
+                (Path(tmp) / 'console-images.json').write_text(json.dumps(bad))
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    installer.console_images(Path(tmp) / 'console-images.json', lock)
+        for args in (['status', '--flow-console'], ['credentials', '--flow-console'], ['plan', '--console-images', 'x.json'],
+                     ['plan', '--flow-console', '--platform', 'konflux']):
+            with self.subTest(args=args), patch.object(installer, 'tools') as tools:
+                with self.assertRaises((ValueError, SystemExit)): installer.main(args)
+                tools.assert_not_called()
+
     def test_corrupt_download_never_becomes_executable(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(installer.platform, 'system', return_value='Linux'), patch.object(installer.platform, 'machine', return_value='x86_64'), patch.object(installer.urllib.request, 'urlopen') as request:
