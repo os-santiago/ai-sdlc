@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -244,7 +245,9 @@ func TestPythonSampleManifestParses(t *testing.T) {
 	}
 	if m.Generation != nil || !m.Verification.MatchesTest("textutil/test_reverse.py") ||
 		m.Verification.MatchesTest("textutil/reverse.py") || !m.Verification.MatchesHarness("pyproject.toml") ||
-		!m.Publication.Allows("kv/pick.py") || m.Publication.Allows("pyproject.toml") {
+		!m.Publication.Allows("kv/pick.py") || m.Publication.Allows("pyproject.toml") ||
+		m.Publication.Allows("unittest.py") || m.Publication.Allows("sitecustomize.py") ||
+		!slices.Contains(m.Verification.Command, "-I") {
 		t.Fatalf("unexpected Python sample manifest: %+v", m)
 	}
 }

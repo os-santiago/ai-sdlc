@@ -78,10 +78,20 @@ The Python example runs the suite as `python3 -I -B -m unittest discover -s . -t
 Isolated mode (`-I`) keeps the candidate's working tree off `sys.path` until
 discovery starts, so a candidate's `unittest.py` or `sitecustomize.py` cannot
 replace the test runner, and it ignores `PYTHON*` variables; `-B` keeps the
-no-bytecode behavior. A package's `load_tests` hook can still change which
+no-bytecode behavior. The example also denies root-level `*.py` files to candidates.
+Isolation protects only the verifier: a repository CI that runs
+`python -m unittest` without `-I` would import a root `unittest.py`, and its
+required check would pass without running tests on every later pull request.
+Use `python -I -m unittest` in the repository's CI too. A package's `load_tests` hook can still change which
 tests run, as Go's `init` functions can in the Go example. Package files are
 product code, so they cannot be listed in `harnessGlobs`; the independent
 review is the control for that case.
+
+An issue that needs a new top-level package is refused with `no-failing-test`.
+The check that a new test fails on the old code runs the base tree plus the
+candidate's test files only. Without the new package's `__init__.py`, discovery
+skips the directory and the run passes. Issues inside existing packages are
+not affected.
 
 #### What the generator gets
 

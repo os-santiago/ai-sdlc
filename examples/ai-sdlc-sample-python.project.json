@@ -13,11 +13,11 @@
     "result": {"exitCode": true},
     "repeat": 2,
     "testGlobs": ["**/test_*.py"],
-    "harnessGlobs": ["pyproject.toml", "setup.cfg", "setup.py", "**/conftest.py", "**/testdata/**"],
-    "env": {"PYTHONDONTWRITEBYTECODE": "1"}
+    "harnessGlobs": ["pyproject.toml", "setup.cfg", "setup.py", "**/conftest.py", "**/testdata/**"]
   },
   "publication": {
     "allow": ["**/*.py", "README.md"],
+    "deny": ["*.py"],
     "maxChangedFiles": 6,
     "maxChangedBytes": 65536,
     "maxFileBytes": 32768
