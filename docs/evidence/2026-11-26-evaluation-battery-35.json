@@ -1,0 +1,140 @@
+{
+  "schemaVersion": 2,
+  "repository": "os-santiago/ai-sdlc-sample",
+  "attemptBudget": 2,
+  "cell": {
+    "repository": "os-santiago/ai-sdlc-sample",
+    "modelPath": "claude-bridge"
+  },
+  "installation": {
+    "imageLockDigest": "sha256:990cb25a6f57a5287462e39f95f6d052846d96e49df904faec7114cf462abea6",
+    "images": {
+      "ai-sdlc-admission-controller": "quay.io/os-santiago/ai-sdlc@sha256:2431ded0b301211e159d8cca3d8a0ffe0dd9519aba7986ae4f57fe63f795e4cd",
+      "ai-sdlc-flow-console": "quay.io/os-santiago/ai-sdlc@sha256:41cd5c939410d78ef31994c45c50c020687f5d610e5faa4db3b2a5b5ffaa4c8d",
+      "ai-sdlc-intake": "quay.io/os-santiago/ai-sdlc@sha256:bf081bed9710ea033eb4985a31e98e4df31bdcfb47b9e26fc68284ac05b82270",
+      "ai-sdlc-orchestrator": "quay.io/os-santiago/ai-sdlc@sha256:c88428a70fabba98cdac00290c4814182fe6c1491dd261a3109eaf0b1bca0451",
+      "ai-sdlc-relay": "quay.io/os-santiago/ai-sdlc@sha256:408a7218fdbbb47dc55c16a34b2fabd0f6c4c9be83db27d5f99899a2ba486165",
+      "ai-sdlc-release-manager": "quay.io/os-santiago/ai-sdlc@sha256:5cdc08b765db0db40a37e63b512f8981b21a57766c88466c52e4aad5801e0542",
+      "ai-sdlc-verifier": "quay.io/os-santiago/ai-sdlc@sha256:565fee1ce29894b764867ef4598404b20a5ea10f39d147af30dd1d91ba1c4638",
+      "ai-sdlc-worker": "quay.io/os-santiago/ai-sdlc@sha256:ae92329954ce4a67d11edf3429fab592174cd462f42717445aae235b5468db60"
+    },
+    "revision": "d22e8b4ea3e7729e1cbc972905b8e9242d683871"
+  },
+  "issues": [
+    {
+      "issue": 276,
+      "attempts": [
+        {
+          "issue": 276,
+          "startedAt": "2026-11-26T07:40:13Z",
+          "outcome": "success",
+          "pullRequest": 282,
+          "seconds": 371,
+          "modelCalls": 5,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 277,
+      "attempts": [
+        {
+          "issue": 277,
+          "startedAt": "2026-11-26T07:47:11Z",
+          "outcome": "success",
+          "pullRequest": 283,
+          "seconds": 393,
+          "modelCalls": 5,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 278,
+      "attempts": [
+        {
+          "issue": 278,
+          "startedAt": "2026-11-26T07:54:32Z",
+          "outcome": "success",
+          "pullRequest": 284,
+          "seconds": 456,
+          "modelCalls": 5,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 279,
+      "attempts": [
+        {
+          "issue": 279,
+          "startedAt": "2026-11-26T08:02:55Z",
+          "outcome": "success",
+          "pullRequest": 285,
+          "seconds": 414,
+          "modelCalls": 5,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 280,
+      "attempts": [
+        {
+          "issue": 280,
+          "startedAt": "2026-11-26T08:10:35Z",
+          "outcome": "success",
+          "pullRequest": 286,
+          "seconds": 326,
+          "modelCalls": 5,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 281,
+      "attempts": [
+        {
+          "issue": 281,
+          "startedAt": "2026-11-26T08:16:47Z",
+          "outcome": "success",
+          "pullRequest": 287,
+          "seconds": 413,
+          "modelCalls": 5,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    }
+  ],
+  "summary": {
+    "issues": 6,
+    "firstAttemptSuccess": 6,
+    "successWithinBudget": 6,
+    "firstAttemptRate": 1.0,
+    "rateWithinBudget": 1.0
+  }
+}
