@@ -8,7 +8,9 @@ for the rules it drives.
 
 ## 1. Write the manifest
 
-Start from [`examples/ai-sdlc-sample.project.json`](../../examples/ai-sdlc-sample.project.json):
+Start from [`examples/ai-sdlc-sample.project.json`](../../examples/ai-sdlc-sample.project.json)
+(Go) or [`examples/ai-sdlc-sample-python.project.json`](../../examples/ai-sdlc-sample-python.project.json)
+(Python, for [ai-sdlc-sample-python](https://github.com/os-santiago/ai-sdlc-sample-python)):
 
 | Section | What to set |
 |---|---|
@@ -66,7 +68,11 @@ The copier enforces these rules:
 - The destination must not exist yet: it is a subdirectory of the volume,
   written atomically.
 
-Only self-contained toolchains, such as Go's, qualify.
+Only self-contained toolchains, such as Go's, qualify. The official Python
+images do not: their interpreter is dynamically linked against glibc, and a
+`path` directory may not contain `python3`. The Python example therefore
+omits `generation.toolchain`; the generator gets the offline guidance and
+the verifier still runs the repository's `unittest` suite.
 
 #### What the generator gets
 

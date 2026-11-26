@@ -230,6 +230,25 @@ func TestManifestDigestsWithoutGenerationAreUnchanged(t *testing.T) {
 	}
 }
 
+// The Python example is a second-language reference: it must parse, carry no
+// generation toolchain (the image's interpreter is dynamically linked) and
+// classify its own test and harness files.
+func TestPythonSampleManifestParses(t *testing.T) {
+	raw, err := os.ReadFile("../../../../examples/ai-sdlc-sample-python.project.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := ParseManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Generation != nil || !m.Verification.MatchesTest("textutil/test_reverse.py") ||
+		m.Verification.MatchesTest("textutil/reverse.py") || !m.Verification.MatchesHarness("pyproject.toml") ||
+		!m.Publication.Allows("kv/pick.py") || m.Publication.Allows("pyproject.toml") {
+		t.Fatalf("unexpected Python sample manifest: %+v", m)
+	}
+}
+
 func TestGenerationToolchainRoundTripsAndChangesTheDigest(t *testing.T) {
 	m := withToolchain()
 	m.Generation.Toolchain.Path = []string{"bin", "pkg/tool/linux_amd64"}
