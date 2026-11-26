@@ -48,6 +48,12 @@ spec:
       {{- end }}
       securityContext:
         runAsNonRoot: true
+        {{- if not .Values.openshift.enabled }}
+        # The distroless image's nonroot user. On OpenShift, restricted-v2
+        # assigns the UID from the namespace range instead.
+        runAsUser: 65532
+        runAsGroup: 65532
+        {{- end }}
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: flow-console

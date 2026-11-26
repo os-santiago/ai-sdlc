@@ -105,28 +105,10 @@ func run() error {
 			Read: func(ctx context.Context, since time.Time, limit int) (store.FlowJournal, error) {
 				return store.ReadFlowJournal(ctx, db, since, limit)
 			}}
-		go func() {
-			ticker := time.NewTicker(*poll)
-			defer ticker.Stop()
-			failing := false
-			for {
-				_, err := collector.Poll(ctx, time.Now())
-				ready.Store(err == nil || ready.Load())
-				if (err != nil) != failing {
-					failing = err != nil
-					if failing {
-						log.Print("flow journal read failed")
-					} else {
-						log.Print("flow journal read restored")
-					}
-				}
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-				}
-			}
-		}()
+		go pollJournal(ctx, func(ctx context.Context) error {
+			_, err := collector.Poll(ctx, time.Now())
+			return err
+		}, *poll, &ready, log.Print)
 	}
 	server := &http.Server{
 		Addr:              *listen,
@@ -147,4 +129,34 @@ func run() error {
 		return errors.New("flow console listener failed")
 	}
 	return nil
+}
+
+// pollJournal reads the journal on every tick until ctx ends. Readiness
+// latches after the first successful read: a later outage keeps serving the
+// last known events (the page shows the source as unavailable) rather than
+// removing the console from its Service. Only transitions are logged, never
+// the driver error.
+func pollJournal(ctx context.Context, poll func(context.Context) error, interval time.Duration, ready *atomic.Bool, logf func(...any)) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	failing := false
+	for {
+		err := poll(ctx)
+		if err == nil {
+			ready.Store(true)
+		}
+		if (err != nil) != failing {
+			failing = err != nil
+			if failing {
+				logf("flow journal read failed")
+			} else {
+				logf("flow journal read restored")
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }

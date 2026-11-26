@@ -149,8 +149,8 @@ The console accepts only `GET` and `HEAD`:
 | Path | Response |
 |---|---|
 | `/` | The embedded UI (HTML, CSS and vanilla JavaScript; no external requests). |
-| `/events` | Server-Sent Events. First a replay of the most recent history (up to 5,000 events), then a `ready` event with the cursor, then live events. Each `flow` event's SSE `id` is its cursor; a reconnecting client sends `Last-Event-ID` (or `?since=<cursor>`) and receives only later events. A `gap` event says events after the cursor were already evicted (also on a live stream that fell behind), and the page then keeps a warning that its view is incomplete; `status` events report the source state. Each write batch has a 10-second deadline, so a client that stops reading frees its slot. At most 32 concurrent streams; a refused page reconnects with a growing delay from its last cursor. |
-| `/api/snapshot` | JSON (`ai-sdlc.flow-snapshot/v1`): the cursor, the source status and the retained events, or only those after `?since=<cursor>`. |
+| `/events` | Server-Sent Events. First a replay of the most recent history (up to 5,000 events), then a `ready` event with the cursor, then live events. Each `flow` event's SSE `id` is its cursor; a reconnecting client sends `Last-Event-ID` (or `?since=<cursor>`) and receives only later events. A `gap` event says events after the cursor were already evicted (also on a live stream that fell behind), and the page then keeps a warning that its view is incomplete; `status` events report the source state. Each write batch has a 10-second deadline, so a client that stops reading frees its slot. A resumed stream replays its backlog in batches of at most 1,000 events. At most 32 concurrent streams; a refused page reconnects with a growing delay from its last cursor. |
+| `/api/snapshot` | JSON (`ai-sdlc.flow-snapshot/v1`): one page of retained events after `?since=<cursor>` (from the oldest without it), at most `?limit=` events (default 1,000, maximum 5,000), with `next` (the cursor for the following page), `more`, the newest `cursor` and the source status. At most four snapshot requests run at once; further ones get 503. |
 | `/api/contract` | The contract version, stages and kinds. |
 | `/healthz`, `/readyz` | Liveness; readiness after the first successful journal read. |
 
@@ -191,7 +191,7 @@ as HTML.
   `console.accessFrom` peers on its port (none by default) and reaches only
   DNS and the database. The internal component policy excludes
   it, so it never reaches a component port.
-- **Pod.** Non-root, `RuntimeDefault` seccomp, no privilege escalation, every
+- **Pod.** Non-root (UID and GID 65532, the distroless `nonroot` user; on OpenShift the platform assigns the UID), `RuntimeDefault` seccomp, no privilege escalation, every
   capability dropped, read-only root filesystem, no volumes and no service
   account token. The image is distroless with the UI embedded in the binary.
 
@@ -221,7 +221,7 @@ as HTML.
    ```yaml
    console:
      enabled: true
-     digest: sha256:...      # the flow-console image digest; empty uses :flow-console-<image.tag>
+     digest: sha256:...      # recommended: the flow-console image digest; empty uses :flow-console-<image.tag>
      accessFrom: []          # NetworkPolicy peers allowed to reach it; empty: port-forward only
      pollSeconds: 3
      windowHours: 24
@@ -230,6 +230,33 @@ as HTML.
 
 With `console.enabled: false` (the default) nothing renders and recorded
 installations render byte-identically.
+
+Pin `console.digest` to the digest of a `flow-console` image published by the
+`containers` workflow on `main` (its identity artifact is
+`console-image-flow-console`). The tag fallback exists for local development;
+a tag is mutable, and the installer's image lock does not cover the console.
+
+### Disable or roll back
+
+To turn the console off, set `console.enabled: false`, remove the
+`flow-console` entry from `passwords.json` and upgrade: the migrator sets the
+role `NOLOGIN` and revokes its privileges. Then delete the console's database
+Secret.
+
+A migrator image older than this change does not know the observer role, so
+restoring one neither disables nor removes it. Before or after such a
+rollback, withdraw the role by hand as the bootstrap owner:
+
+```sql
+ALTER ROLE aisdlc_flow_console NOLOGIN;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM aisdlc_flow_console;
+REVOKE USAGE ON SCHEMA public FROM aisdlc_flow_console;
+```
+
+Column grants survive a table-level revoke; the migrator's own reconciliation
+also revokes them, and they are inert without `LOGIN`. Leave the role and the
+migration 0039 policies in place (migrations are not reverted): the policies
+admit nothing to a role that cannot log in and holds no grants.
 
 ## Reach it
 

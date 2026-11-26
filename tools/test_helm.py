@@ -426,7 +426,7 @@ class ChartTests(unittest.TestCase):
         deployment = next(d for d in console if d['kind'] == 'Deployment')
         pod = deployment['spec']['template']['spec']
         self.assertFalse(pod['automountServiceAccountToken'])
-        self.assertEqual(pod['securityContext'], {'runAsNonRoot': True, 'seccompProfile': {'type': 'RuntimeDefault'}})
+        self.assertEqual(pod['securityContext'], {'runAsNonRoot': True, 'runAsUser': 65532, 'runAsGroup': 65532, 'seccompProfile': {'type': 'RuntimeDefault'}})
         [container] = pod['containers']
         self.assertEqual(container['securityContext'], {'allowPrivilegeEscalation': False, 'capabilities': {'drop': ['ALL']}, 'readOnlyRootFilesystem': True})
         self.assertNotIn('volumeMounts', container)
@@ -472,6 +472,11 @@ class ChartTests(unittest.TestCase):
                     {'enabled': True, 'pollSeconds': 0}):
             with self.subTest(bad=bad):
                 self.assertNotEqual(self.render_build(dict(base, console=bad)).returncode, 0)
+        # OpenShift assigns the UID: no fixed user there.
+        shifted = self.render_build(dict(base, console={'enabled': True}, openshift={'enabled': True}))
+        self.assertEqual(shifted.returncode, 0, shifted.stderr)
+        shifted_pod = next(d for d in yaml.safe_load_all(shifted.stdout) if d and d['kind'] == 'Deployment' and d['metadata']['name'] == 'ai-sdlc-flow-console')['spec']['template']['spec']
+        self.assertEqual(shifted_pod['securityContext'], {'runAsNonRoot': True, 'seccompProfile': {'type': 'RuntimeDefault'}})
         # Without the policy any pod could reach the console: the chart refuses.
         plain = self.render_build(dict(base, networkPolicy={'enabled': False, 'databaseEgressCIDRs': []}, console={'enabled': True}))
         self.assertNotEqual(plain.returncode, 0)
