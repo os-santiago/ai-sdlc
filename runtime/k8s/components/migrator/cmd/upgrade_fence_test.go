@@ -61,13 +61,23 @@ func upgradeProtocolFixture(t *testing.T, schema ...int) (*store.DB, string, str
 	if len(schema) > 0 {
 		count = schema[0]
 	}
-	if count < 34 || count > 38 {
+	if count < 34 || count > 39 {
 		t.Fatal("unsupported fixture schema")
 	}
 	// Owned disposable fixtures may select the historical schema prefix.
 	// Remove the later schema here, never from an operational database.
-	if len(source) != 38 || source[35].Filename != "0036_review_feedback.sql" || source[36].Filename != "0037_review_repair.sql" || source[37].Filename != "0038_generic_publication_scope.sql" {
+	if len(source) != 39 || source[35].Filename != "0036_review_feedback.sql" || source[36].Filename != "0037_review_repair.sql" || source[37].Filename != "0038_generic_publication_scope.sql" || source[38].Filename != "0039_flow_console_reader.sql" {
 		t.Fatal("fixture catalog changed")
+	}
+	if count < 39 {
+		policies := ""
+		for _, table := range []string{"intake_observations", "execution_requests", "execution_lifecycles", "execution_effects", "execution_failures", "execution_candidates", "execution_models", "verification_requests", "verification_effects", "review_runs", "review_effects", "review_model_calls", "publication_requests", "publication_effects", "published_records", "merge_requests", "merge_effects"} {
+			policies += "DROP POLICY flow_console_reader ON public." + table + ";\n"
+		}
+		if _, err = db.Pool.ExecContext(ctx, policies+`DELETE FROM public.schema_migrations WHERE filename='0039_flow_console_reader.sql'`); err != nil {
+			t.Fatal(err)
+		}
+		source = source[:38]
 	}
 	if count < 38 {
 		if _, err = db.Pool.ExecContext(ctx, `ALTER TABLE public.publication_requests DROP CONSTRAINT publication_requests_repository_check;
