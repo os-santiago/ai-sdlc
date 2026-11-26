@@ -362,6 +362,34 @@ them (for example a log's `model-provider` stop appears as `uncertain` at phase
 a quarantined publication, a stale queue wait with uncertain cleanup, a
 person-blocked admission and in-flight work.
 
+## Real data
+
+![Flow console on a restored evaluation journal](flow-console-real.png)
+
+The screenshots `flow-console-real.png` (1600×1000, live-events panel open)
+and `flow-console-real-1280.png` (1280×800) show the console in journal mode
+on a local copy of a real evaluation journal: battery 34 on 2026-11-26, nine
+issues of the public sample repository `os-santiago/ai-sdlc-sample`
+(258–266), eight delivered and the ninth stopped in generation when the
+journal was copied. The copy was taken read-only (`pg_dump`, roles without
+passwords), restored into a disposable PostgreSQL, brought to this schema by
+the migrator with throwaway local credentials, and read as the
+`aisdlc_flow_console` role; the copy was deleted afterwards. They contain
+only issue numbers, the public repository name, stage times and counts.
+
+Checked against the battery log: every merge time is within 18 s of the
+battery's measured end, and the generator model-call counts match exactly
+(5 or 6 per issue). The battery log's pull request numbers are not in the
+journal's readable columns, so the console does not show them. The ninth
+lane appears as `generating` beyond its stage's p90 in *What is wrong now*,
+because the copy froze it mid-run.
+
+Three derivation issues were visible only on real data and are fixed:
+the post-merge `issue-closed` admission had shown as a refusal on every
+delivered lane, intake showed only the closing revision, and a passed
+verification looked like a 6-second step (see
+[Where the events come from](#where-the-events-come-from)).
+
 ## Limits
 
 - The console shows work that started within `console.windowHours` (default
