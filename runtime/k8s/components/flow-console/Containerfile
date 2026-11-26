@@ -1,0 +1,17 @@
+# Build context: runtime/k8s/ (not the repo root)
+#   podman build -f components/flow-console/Containerfile -t ai-sdlc-flow-console:dev .
+# The UI is embedded in the binary (internal/flowconsole/ui); the image has no
+# shell, package manager or Node runtime. The demo fixture is not shipped.
+FROM docker.io/library/golang@sha256:ea30e25680a5470bac02b08bb0e0a735fb75bd0ab7d431b9b95ee0abef362586 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY internal ./internal
+COPY components/flow-console/cmd ./components/flow-console/cmd
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/component ./components/flow-console/cmd
+
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+COPY --from=build /out/component /component
+USER 65532:65532
+EXPOSE 8091
+ENTRYPOINT ["/component"]

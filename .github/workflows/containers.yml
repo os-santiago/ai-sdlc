@@ -35,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: [intake, admission-controller, orchestrator, worker, release-manager, relay, verifier, migrator, model-mailbox, artifact-builder, build-controller, deployer, browser-verifier]
+        component: [intake, admission-controller, orchestrator, worker, release-manager, relay, verifier, migrator, model-mailbox, artifact-builder, build-controller, deployer, browser-verifier, flow-console]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: docker/setup-buildx-action@bf8388060db527dff14f48b6a5fdbe70763c1213
@@ -83,7 +83,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/build/'))
         with:
-          name: ${{ matrix.component == 'browser-verifier' && 'browser-image' || matrix.component == 'deployer' && 'release-image' || (matrix.component == 'artifact-builder' || matrix.component == 'build-controller') && 'supply-chain-image' || 'image' }}-${{ matrix.component }}
+          name: ${{ matrix.component == 'flow-console' && 'console-image' || matrix.component == 'browser-verifier' && 'browser-image' || matrix.component == 'deployer' && 'release-image' || (matrix.component == 'artifact-builder' || matrix.component == 'build-controller') && 'supply-chain-image' || 'image' }}-${{ matrix.component }}
           path: ${{ matrix.component }}.json
           if-no-files-found: error
           retention-days: 30
@@ -140,11 +140,11 @@ jobs:
       fail-fast: false
       matrix:
         # Must equal the images matrix (tools/test_install_images.py checks it).
-        component: [intake, admission-controller, orchestrator, worker, release-manager, relay, verifier, migrator, model-mailbox, artifact-builder, build-controller, deployer, browser-verifier]
+        component: [intake, admission-controller, orchestrator, worker, release-manager, relay, verifier, migrator, model-mailbox, artifact-builder, build-controller, deployer, browser-verifier, flow-console]
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
-          name: ${{ matrix.component == 'browser-verifier' && 'browser-image' || matrix.component == 'deployer' && 'release-image' || (matrix.component == 'artifact-builder' || matrix.component == 'build-controller') && 'supply-chain-image' || 'image' }}-${{ matrix.component }}
+          name: ${{ matrix.component == 'flow-console' && 'console-image' || matrix.component == 'browser-verifier' && 'browser-image' || matrix.component == 'deployer' && 'release-image' || (matrix.component == 'artifact-builder' || matrix.component == 'build-controller') && 'supply-chain-image' || 'image' }}-${{ matrix.component }}
           path: ${{ runner.temp }}/identity
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:

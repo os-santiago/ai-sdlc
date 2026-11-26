@@ -41,6 +41,7 @@ TEMPLATED_NAMES = {
     '{{ $.Values.intake.credentialSecret }}': 'ai-sdlc-github-client',
     '{{ $.Values.modelGateway.upstream.credentialSecret | quote }}': '{modelGateway.upstream.credentialSecret}',
     '{{ .Values.provenance.registryCredentialSecret }}': 'ai-sdlc-provenance-registry',
+    '{{ .Values.console.databaseSecret }}': 'ai-sdlc-flow-console-database',
 }
 
 
@@ -168,9 +169,10 @@ class SecretContractTests(unittest.TestCase):
         source['verifier']['sourceCredential'] = True
         cls.renderings = {}
         backup = dict(copy.deepcopy(maximal), backup={'enabled': True})
+        console = dict(copy.deepcopy(maximal), console={'enabled': True})
         for name, values in [('maintenance', {}), ('shadow', {'runtime': {'mode': 'shadow'}}),
                              ('maximal', maximal), ('upstream', upstream), ('source-credential', source),
-                             ('backup', backup)]:
+                             ('backup', backup), ('console', console)]:
             result = chart.render_build(values)
             if result.returncode != 0:
                 raise AssertionError(name + ': ' + result.stderr)

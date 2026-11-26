@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/os-santiago/ai-sdlc/spec/flow-event.schema.json",
+  "title": "ai-sdlc.flow-event/v1",
+  "description": "One bounded, derived observation of the autonomous flow for the read-only flow console (docs/operations/flow-console.md). It never carries source code, prompts, model output, issue text, tokens or credentials. runtime/k8s/internal/flowevent enforces the same contract, including that component owns stage.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id", "time", "component", "stage", "kind"],
+  "anyOf": [{"required": ["issue"]}, {"required": ["workItem"]}],
+  "properties": {
+    "version": {"const": "ai-sdlc.flow-event/v1"},
+    "id": {"type": "string", "pattern": "^[a-f0-9]{24}$", "description": "Stable id derived from the journal identity of the fact; consumers de-duplicate by id."},
+    "time": {"type": "string", "format": "date-time", "description": "When the fact happened (RFC 3339, UTC)."},
+    "component": {"enum": ["intake", "admission-controller", "orchestrator", "worker", "verifier", "release-manager"]},
+    "repository": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}$"},
+    "issue": {"type": "integer", "minimum": 1, "maximum": 1073741824},
+    "workItem": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 1000},
+    "stage": {"enum": ["intake", "admission", "planning", "execution", "verification", "review", "publication", "merge"]},
+    "step": {"$ref": "#/$defs/name"},
+    "kind": {"enum": ["started", "progressed", "completed", "failed", "stopped-safely", "waiting", "retried", "quarantined", "degraded", "blocked"]},
+    "diagnostic": {"$ref": "#/$defs/name"},
+    "durationMs": {"type": "integer", "minimum": 1, "maximum": 604800000},
+    "latencyMs": {"type": "integer", "minimum": 1, "maximum": 604800000},
+    "attributes": {
+      "type": "object",
+      "maxProperties": 8,
+      "propertyNames": {"enum": ["phase", "exitCode", "reason", "decision", "risk", "status", "changes", "modelCalls", "sequence", "inputBytes", "outputBytes", "responseStatus", "cleanup", "cleanupAttempts", "generation", "previousAttempt", "waitedMs", "effects", "source"]},
+      "additionalProperties": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"}
+    }
+  },
+  "$defs": {
+    "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,79}$"}
+  }
+}

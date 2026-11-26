@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI-SDLC flow console</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>AI-SDLC flow</h1>
+    <span class="header-repo" id="header-repo" hidden title="Every work item shown belongs to this repository"></span>
+    <span class="subtitle">read-only timeline of the autonomous flow</span>
+  </div>
+  <div class="top-right">
+    <div class="source" id="source" role="status" aria-live="polite">
+      <span class="dot" id="source-dot" aria-hidden="true"></span>
+      <span id="source-text">connecting…</span>
+    </div>
+    <button type="button" id="motion" class="toggle" aria-pressed="false" title="Stop the running-bar animation">Reduce motion</button>
+    <button type="button" id="feed-toggle" class="toggle" aria-pressed="false" aria-controls="feed">Live events</button>
+  </div>
+</header>
+
+<section class="tiles" aria-label="Summary">
+  <div class="tile"><div class="tile-label">In flight</div><div class="tile-value" id="t-inflight">–</div><div class="tile-note" id="t-inflight-note"></div></div>
+  <div class="tile"><div class="tile-label">Delivered</div><div class="tile-row"><div class="tile-value" id="t-delivered">–</div><svg class="spark" id="s-delivered" role="img"></svg></div><div class="tile-note" id="t-delivered-note"></div></div>
+  <div class="tile"><div class="tile-label">Failed</div><div class="tile-row"><div class="tile-value" id="t-failed">–</div><svg class="spark" id="s-stops" role="img"></svg></div><div class="tile-note" id="t-failed-note"></div></div>
+  <div class="tile"><div class="tile-label">Blocked or quarantined</div><div class="tile-value" id="t-blocked">–</div><div class="tile-note" id="t-blocked-note"></div></div>
+  <div class="tile"><div class="tile-label">Median time to delivery</div><div class="tile-value" id="t-ttd">–</div><div class="tile-note" id="t-ttd-note"></div></div>
+  <div class="tile"><div class="tile-label">Model call latency</div><div class="tile-row"><div class="tile-value" id="t-latency">–</div><svg class="spark" id="s-latency" role="img"></svg></div><div class="tile-note" id="t-latency-note"></div></div>
+</section>
+
+<details class="trend-table" id="trend-table">
+  <summary>Trend values (table)</summary>
+  <table>
+    <thead><tr><th scope="col">Interval</th><th scope="col">Model call latency p50 / p90</th><th scope="col">Stops per hour</th><th scope="col">Deliveries per hour</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</details>
+
+<section class="filters" aria-label="Filters">
+  <div class="seg" role="group" aria-label="Status filter" id="status-filter">
+    <button type="button" data-status="all" aria-pressed="true">All</button>
+    <button type="button" data-status="inflight" aria-pressed="false">In flight</button>
+    <button type="button" data-status="delivered" aria-pressed="false">Delivered</button>
+    <button type="button" data-status="failed" aria-pressed="false">Failed</button>
+    <button type="button" data-status="blocked" aria-pressed="false">Blocked</button>
+  </div>
+  <label class="field">Component
+    <select id="component-filter">
+      <option value="">All components</option>
+      <option>intake</option><option>admission-controller</option><option>orchestrator</option>
+      <option>worker</option><option>verifier</option><option>release-manager</option>
+    </select>
+  </label>
+  <label class="field">Issue
+    <input id="issue-filter" type="search" placeholder="#196 or repository" autocomplete="off" spellcheck="false">
+  </label>
+  <label class="field">Sort
+    <select id="sort">
+      <option value="recent">Most recent first</option>
+      <option value="problems">Problems first</option>
+    </select>
+  </label>
+  <div class="spacer"></div>
+  <div class="seg" role="group" aria-label="Time range">
+    <button type="button" data-range="1">1 h</button>
+    <button type="button" data-range="6">6 h</button>
+    <button type="button" data-range="24">24 h</button>
+    <button type="button" data-range="fit">Fit</button>
+  </div>
+  <button type="button" id="follow" class="toggle" aria-pressed="true" title="Keep the now line in view">Follow now</button>
+</section>
+
+<nav class="funnel" id="funnel" aria-label="Where the work is now: current stage counts, click to filter"></nav>
+
+<section class="problems" id="problems" hidden aria-labelledby="problems-title">
+  <h2 id="problems-title">What is wrong now <span class="muted" id="problem-count"></span></h2>
+  <ul id="problem-list"></ul>
+  <button type="button" class="problem-more" id="problem-more" hidden></button>
+</section>
+
+<main class="timeline" id="timeline">
+  <div class="axis-row">
+    <div class="lane-head"><span>Work item <span class="muted" id="lane-count"></span></span><span class="tz" id="timezone"></span></div>
+    <svg id="axis" class="axis" aria-hidden="true"></svg>
+  </div>
+  <div class="lanes" id="lanes" tabindex="-1">
+    <div class="labels" id="labels" role="list" aria-label="Work items: arrow keys move between lanes, Enter opens the details"></div>
+    <svg id="chart" class="chart" role="img" aria-label="Stage bars per work item over time"></svg>
+  </div>
+  <div class="empty" id="empty" hidden>No work matches the filters.</div>
+  <div class="hint perf" id="perf" hidden></div>
+  <div class="hint">Drag to pan · Ctrl/⌘ + wheel or the range buttons to zoom · click a work item for its ordered events</div>
+</main>
+
+<section class="legend" aria-label="Legend">
+  <h2>Legend</h2>
+  <ul id="legend"></ul>
+</section>
+
+<aside class="panel" id="panel" hidden aria-labelledby="panel-title">
+  <div class="panel-head">
+    <h2 id="panel-title">Work item</h2>
+    <button type="button" id="panel-close" aria-label="Close details">×</button>
+  </div>
+  <div class="panel-meta" id="panel-meta"></div>
+  <ol class="panel-events" id="panel-events"></ol>
+</aside>
+
+<aside class="feed" id="feed" hidden aria-labelledby="feed-title">
+  <div class="panel-head">
+    <h2 id="feed-title">Live events</h2>
+    <button type="button" id="feed-close" aria-label="Close live events">×</button>
+  </div>
+  <div class="feed-filters">
+    <input id="feed-filter" type="search" placeholder="issue, stage, diagnostic" autocomplete="off" spellcheck="false" aria-label="Filter events">
+    <label class="feed-every"><input type="checkbox" id="feed-every"> every model call</label>
+    <select id="feed-kind" aria-label="Event kinds">
+      <option value="">All kinds</option>
+      <option value="problems">Problems only</option>
+      <option value="lifecycle">Stage starts and ends</option>
+    </select>
+  </div>
+  <button type="button" class="feed-new" id="feed-new" hidden></button>
+  <ol class="feed-list" id="feed-list" aria-live="off"></ol>
+</aside>
+
+<div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
