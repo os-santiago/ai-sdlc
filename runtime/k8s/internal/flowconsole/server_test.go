@@ -23,7 +23,10 @@ func event(n int) flowevent.Event {
 
 type sseMessage struct{ id, event, data string }
 
-// readSSE reads messages until it has n "flow" messages or sees stop.
+// readSSE reads messages until it has n flow events or sees stop. Each event
+// of a "flows" batch is expanded into one "flow" message whose id is its
+// cursor and whose data is the event; a batch's own SSE id must be the
+// cursor of its last event.
 func readSSE(t *testing.T, scanner *bufio.Scanner, n int, stop string) []sseMessage {
 	t.Helper()
 	var out []sseMessage
@@ -33,12 +36,22 @@ func readSSE(t *testing.T, scanner *bufio.Scanner, n int, stop string) []sseMess
 		line := scanner.Text()
 		switch {
 		case line == "":
-			if m.event != "" {
-				out = append(out, m)
-				if m.event == "flow" {
+			if m.event == "flows" {
+				var batch []SnapshotElement
+				if err := json.Unmarshal([]byte(m.data), &batch); err != nil || len(batch) == 0 || len(batch) > sseBatch || fmt.Sprint(batch[len(batch)-1].Cursor) != m.id {
+					t.Fatal("malformed flows batch", err)
+				}
+				for _, e := range batch {
+					raw, _ := json.Marshal(e.Event)
+					out = append(out, sseMessage{id: fmt.Sprint(e.Cursor), event: "flow", data: string(raw)})
 					flows++
 				}
-				if (n > 0 && flows == n) || m.event == stop {
+				if n > 0 && flows >= n {
+					return out
+				}
+			} else if m.event != "" {
+				out = append(out, m)
+				if m.event == stop {
 					return out
 				}
 			}
@@ -69,7 +82,9 @@ func open(t *testing.T, url, lastEventID string) (*bufio.Scanner, func()) {
 	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "text/event-stream" {
 		t.Fatal("not an event stream", resp.StatusCode)
 	}
-	return bufio.NewScanner(resp.Body), func() { cancel(); resp.Body.Close() }
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 1<<16), 1<<24)
+	return scanner, func() { cancel(); resp.Body.Close() }
 }
 
 func TestEventStreamReplaysThenStreamsLiveAndResumesFromCursor(t *testing.T) {

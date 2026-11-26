@@ -54,6 +54,8 @@ func run() error {
 	stale := flag.Duration("stale-wait", duration("AI_SDLC_FLOW_CONSOLE_STALE_WAIT", "10m"), "queued time after which a wait is stale")
 	limit := flag.Int("limit", 5000, "rows per journal table per poll")
 	capacity := flag.Int("capacity", 50000, "retained events")
+	replay := flag.Int("replay", 5000, "events replayed to a new browser before live updates")
+	synthetic := flag.Int("fixture-synthetic", 0, "instead of a fixture file, generate this many synthetic work items over the last day (UI load testing)")
 	flag.Parse()
 	if v := os.Getenv("AI_SDLC_FLOW_CONSOLE_LIMIT"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -62,19 +64,34 @@ func run() error {
 		}
 		*limit = n
 	}
-	if *poll < time.Second || *poll > time.Minute || *window < time.Minute || *window > 7*24*time.Hour || *stale < time.Minute || *limit < 1 || *limit > 20000 || *capacity < 100 || *capacity > 1000000 {
+	if *poll < time.Second || *poll > time.Minute || *window < time.Minute || *window > 7*24*time.Hour || *stale < time.Minute || *limit < 1 || *limit > 20000 || *capacity < 100 || *capacity > 1000000 || *replay < 1 || *replay > 50000 {
 		return errors.New("flow console limits out of range")
 	}
 	databaseURL := os.Getenv("DATABASE_URL")
-	if (*fixture == "") == (databaseURL == "") {
-		return errors.New("configure exactly one source: DATABASE_URL (journal) or -fixture (recorded events)")
+	if *synthetic < 0 || *synthetic > 5000 {
+		return errors.New("flow console limits out of range")
+	}
+	sources := 0
+	for _, set := range []bool{*fixture != "", databaseURL != "", *synthetic > 0} {
+		if set {
+			sources++
+		}
+	}
+	if sources != 1 {
+		return errors.New("configure exactly one source: DATABASE_URL (journal), -fixture (recorded events) or -fixture-synthetic (generated events)")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	var ready atomic.Bool
 	var hub *flowconsole.Hub
-	if *fixture != "" {
+	if *synthetic > 0 {
+		events := flowconsole.Synthetic(*synthetic, time.Now())
+		hub = flowconsole.NewHub(*capacity, "fixture")
+		go flowconsole.Fixture{Hub: hub, Events: events}.Run(ctx, time.Now())
+		ready.Store(true)
+		log.Printf("flow console serving %d synthetic events for %d work items", len(events), *synthetic)
+	} else if *fixture != "" {
 		file, err := os.Open(*fixture)
 		if err != nil {
 			return errors.New("fixture unavailable")
@@ -112,7 +129,7 @@ func run() error {
 	}
 	server := &http.Server{
 		Addr:              *listen,
-		Handler:           (&flowconsole.Server{Hub: hub, Ready: ready.Load}).Handler(),
+		Handler:           (&flowconsole.Server{Hub: hub, Ready: ready.Load, Replay: *replay}).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		IdleTimeout:       60 * time.Second,

@@ -17,6 +17,7 @@
       <span class="dot" id="source-dot" aria-hidden="true"></span>
       <span id="source-text">connecting…</span>
     </div>
+    <button type="button" id="motion" class="toggle" aria-pressed="false" title="Stop the running-bar animation">Reduce motion</button>
     <button type="button" id="feed-toggle" class="toggle" aria-pressed="false" aria-controls="feed">Live events</button>
   </div>
 </header>
@@ -72,10 +73,11 @@
     <svg id="axis" class="axis" aria-hidden="true"></svg>
   </div>
   <div class="lanes" id="lanes" tabindex="-1">
-    <div class="labels" id="labels" role="list" aria-label="Work items"></div>
+    <div class="labels" id="labels" role="list" aria-label="Work items: arrow keys move between lanes, Enter opens the details"></div>
     <svg id="chart" class="chart" role="img" aria-label="Stage bars per work item over time"></svg>
   </div>
   <div class="empty" id="empty" hidden>No work matches the filters.</div>
+  <div class="hint perf" id="perf" hidden></div>
   <div class="hint">Drag to pan · Ctrl/⌘ + wheel or the range buttons to zoom · click a work item for its ordered events</div>
 </main>
 

@@ -108,6 +108,12 @@ svg text { font-family: inherit; }
 .running-stripes { animation: slide 1.2s linear infinite; }
 @keyframes slide { from { transform: translateX(0); } to { transform: translateX(10px); } }
 @media (prefers-reduced-motion: reduce) { .running-stripes { animation: none; } }
+body.reduce-motion .running-stripes { animation: none; }
+body.reduce-motion * { transition: none !important; scroll-behavior: auto !important; }
+.label:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--surface-2); }
+.panel-events li:focus-visible, .feed-list li:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.funnel button:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.labels { box-sizing: border-box; }
 
 .legend { padding: 10px 24px 18px; }
 .legend h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-secondary); margin: 0 0 6px; font-weight: 600; }

@@ -182,9 +182,9 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 
 // events streams Server-Sent Events: first the replay (the newest Replay
 // entries, or every retained entry after the client's cursor), then a
-// "ready" marker, then live entries as the hub receives them. Each event
-// carries its cursor as the SSE id, so EventSource resumes with
-// Last-Event-ID after a reconnect without duplicates. A "status" event
+// "ready" marker, then live entries as the hub receives them, batched in
+// "flows" messages whose SSE id is their last cursor, so EventSource resumes
+// with Last-Event-ID after a reconnect without duplicates. A "status" event
 // reports the source state; "gap" says entries after the cursor were evicted.
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	cursor, resumed, err := parseCursor(r)
@@ -301,12 +301,27 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// sseBatch bounds the events carried by one "flows" message. Browsers
+// dispatch every SSE message as a separate task, so one message per event
+// made a 20,000-event replay take many seconds; batches keep it well under
+// one.
+const sseBatch = 250
+
+// writeEntries writes entries as "flows" messages: a JSON array of
+// {cursor, event} elements (the snapshot's element shape). The SSE id is the
+// last cursor of the message, so Last-Event-ID resumes after it.
 func writeEntries(w http.ResponseWriter, entries []Entry, cursor *uint64) error {
-	for _, e := range entries {
-		if err := writeJSON(w, "flow", strconv.FormatUint(e.Cursor, 10), e.Event); err != nil {
+	for len(entries) > 0 {
+		n := min(len(entries), sseBatch)
+		batch := make([]SnapshotElement, n)
+		for i, e := range entries[:n] {
+			batch[i] = SnapshotElement{Cursor: e.Cursor, Event: e.Event}
+		}
+		if err := writeJSON(w, "flows", strconv.FormatUint(entries[n-1].Cursor, 10), batch); err != nil {
 			return err
 		}
-		*cursor = e.Cursor
+		*cursor = entries[n-1].Cursor
+		entries = entries[n:]
 	}
 	return nil
 }

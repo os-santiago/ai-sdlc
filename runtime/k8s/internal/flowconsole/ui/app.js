@@ -39,6 +39,8 @@
     sort: 'recent',
     filter: { status: 'all', component: '', issue: '', current: '' },
     feedOpen: false,
+    replaying: true,       // receiving the initial replay: render once at "ready"
+    focusIndex: -1,
     selected: null,
   };
 
@@ -329,15 +331,20 @@
       if (e.t < t0 || e.t >= t1) continue;
       if (e.kind === 'failed' || e.kind === 'stopped-safely' || e.kind === 'degraded' || e.kind === 'retried' || e.kind === 'quarantined' || e.kind === 'blocked') counts[Math.floor((e.t - t0) / width)]++;
     }
-    // A burst: at least three problem events within ~15 minutes (or 3 buckets).
+    // A burst window is ~15 minutes (at least one bucket).
     const span = Math.max(1, Math.round(15 * 60e3 / width));
     // Mark the problem buckets of every dense window, then join marked
     // buckets closer than the window: a band spans first to last problem.
+    // The threshold is relative to the window's own background rate, so a
+    // busy installation does not shade everything: at least three problems
+    // and at least twice the average for a window of that length.
+    const total = counts.reduce((a, b) => a + b, 0);
+    const threshold = Math.max(3, 2 * total * span / n);
     const marked = new Array(n).fill(false);
     for (let i = 0; i < n; i++) {
       let sum = 0;
       for (let j = i; j < Math.min(n, i + span); j++) sum += counts[j];
-      if (sum >= 3) for (let j = i; j < Math.min(n, i + span); j++) if (counts[j]) marked[j] = true;
+      if (sum >= threshold) for (let j = i; j < Math.min(n, i + span); j++) if (counts[j]) marked[j] = true;
     }
     const out = [];
     for (let i = 0; i < n; i++) {
@@ -453,6 +460,9 @@
     const w = chartWidth();
     axis.setAttribute('viewBox', '0 0 ' + w + ' 34');
     axis.setAttribute('width', w);
+    // Same pixel width as the chart, which loses the lane list's scrollbar.
+    axis.style.flex = 'none';
+    axis.style.width = w + 'px';
     const [t0, t1] = state.view;
     const target = (t1 - t0) / Math.max(2, w / 110);
     const step = STEPS.find((s) => s >= target) || 86400e3;
@@ -628,9 +638,14 @@
     defs(chart);
     ticksCache = renderAxis();
     const grid = svg('g', {}, chart);
-    lanes.forEach((_, i) => { if (i % 2) svg('rect', { class: 'lane-bg alt', x: 0, y: i * LANE_H, width: w, height: LANE_H }, grid); });
+    // Only the lanes inside the scrolled viewport (plus a margin) are drawn,
+    // so hundreds of work items cost no more than one screenful.
+    const first = Math.max(0, Math.floor(lanesBox.scrollTop / LANE_H) - 6);
+    const last = Math.min(lanes.length, Math.ceil((lanesBox.scrollTop + (lanesBox.clientHeight || 800)) / LANE_H) + 6);
+    state.visible = lanes;
+    for (let i = first; i < last; i++) if (i % 2) svg('rect', { class: 'lane-bg alt', x: 0, y: i * LANE_H, width: w, height: LANE_H }, grid);
     for (const tk of ticksCache) svg('line', { x1: tk.px, x2: tk.px, y1: 0, y2: height, stroke: tk.major ? '#3a3a37' : 'var(--grid)', 'stroke-width': 1 }, grid);
-    lanes.forEach((_, i) => svg('line', { class: 'lane-sep', x1: 0, x2: w, y1: (i + 1) * LANE_H - 0.5, y2: (i + 1) * LANE_H - 0.5 }, grid));
+    for (let i = first; i < last; i++) svg('line', { class: 'lane-sep', x1: 0, x2: w, y1: (i + 1) * LANE_H - 0.5, y2: (i + 1) * LANE_H - 0.5 }, grid);
     for (const b of bands(all)) {
       const xa = Math.max(0, x(b.a)), xb = Math.min(w, x(b.b));
       if (xb <= xa) continue;
@@ -642,11 +657,20 @@
 
     // Labels column: issue, repository, status, and a summary line.
     labels.textContent = '';
-    lanes.forEach((lane) => {
+    labels.style.height = height + 'px';
+    labels.style.paddingTop = first * LANE_H + 'px';
+    labels.setAttribute('aria-rowcount', String(lanes.length));
+    const focused = state.focusIndex >= 0 ? Math.min(state.focusIndex, lanes.length - 1) : -1;
+    lanes.slice(first, last).forEach((lane, k) => {
+      const index = first + k;
       const row = html('div', 'label' + (state.selected === lane.key ? ' active' : ''), null, labels);
       row.setAttribute('role', 'listitem');
-      row.tabIndex = 0;
+      row.setAttribute('aria-posinset', String(index + 1));
+      row.setAttribute('aria-setsize', String(lanes.length));
+      // Roving focus: one lane is in the tab order; arrows move between lanes.
+      row.tabIndex = index === (focused >= 0 ? focused : first) ? 0 : -1;
       row.dataset.key = lane.key;
+      row.dataset.index = String(index);
       const top = html('div', 'label-top', null, row);
       html('span', 'issue', lane.issue ? '#' + lane.issue : lane.workItem.slice(0, 8), top);
       const repo = html('span', 'repo', (lane.repository || '').split('/').pop(), top);
@@ -661,8 +685,8 @@
     });
 
     const bars = svg('g', {}, chart);
-    lanes.forEach((lane, i) => {
-      const y0 = i * LANE_H;
+    lanes.slice(first, last).forEach((lane, k) => {
+      const i = first + k, y0 = i * LANE_H;
       const dim = state.filter.component;
       let lastEnd = -Infinity, finalBox = null;
       for (const s of lane.segments) {
@@ -717,7 +741,17 @@
     }
     if (state.selected) renderPanel();
     renderFeed(false);
-    document.body.dataset.renderMs = String(Math.round(performance.now() - t0perf));
+    // Render timing, readable from the DOM for load measurements.
+    const took = Math.round(performance.now() - t0perf), b = document.body.dataset;
+    b.renderMs = String(took);
+    b.renderMax = String(Math.max(took, Number(b.renderMax || 0)));
+    b.renders = String(Number(b.renders || 0) + 1);
+    b.events = String(state.events.size);
+    b.lanes = String(state.lanes.size);
+    if (params.get('perf') === '1') {
+      $('perf').hidden = false;
+      $('perf').textContent = 'perf · ' + state.events.size + ' events · ' + state.lanes.size + ' lanes · history loaded in ' + (b.readyMs || '–') + ' ms · last render ' + took + ' ms · max ' + b.renderMax + ' ms · ' + b.renders + ' renders';
+    }
   }
 
   // ---------- tooltip ----------
@@ -797,7 +831,7 @@
       const isCall = (o) => o && o.kind === 'progressed' && o.step === 'model-call' && o.stage === e.stage && o.attempt === e.attempt;
       while (isCall(e) && isCall(events[j + 1])) j++;
       const li = html('li', null, null, list);
-      li.tabIndex = -1;
+      li.tabIndex = list.querySelector('li[tabindex="0"]') ? -1 : 0;
       const time = html('span', 'time', fmtClock(e.t, true), li);
       time.title = fmtUTC(e.t);
       const sw = html('span', 'glyph', null, li);
@@ -900,13 +934,53 @@
   $('panel-close').addEventListener('click', closePanel);
   document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && state.selected) closePanel(); });
   labels.addEventListener('click', (ev) => { const row = ev.target.closest('.label'); if (row) openPanel(row.dataset.key); });
+  function focusLane(index) {
+    const lanes = state.visible || [];
+    if (!lanes.length) return;
+    index = Math.max(0, Math.min(lanes.length - 1, index));
+    state.focusIndex = index;
+    const LANE_H = laneHeight(), top = index * LANE_H;
+    if (top < lanesBox.scrollTop) lanesBox.scrollTop = top;
+    else if (top + LANE_H > lanesBox.scrollTop + lanesBox.clientHeight) lanesBox.scrollTop = top + LANE_H - lanesBox.clientHeight;
+    render();
+    const row = labels.querySelector('[data-index="' + index + '"]');
+    if (row) row.focus();
+  }
   labels.addEventListener('keydown', (ev) => {
     const row = ev.target.closest('.label');
     if (!row) return;
+    const index = Number(row.dataset.index), page = Math.max(1, Math.floor(lanesBox.clientHeight / laneHeight()) - 1);
+    const moves = { ArrowDown: index + 1, ArrowUp: index - 1, PageDown: index + page, PageUp: index - page, Home: 0, End: Infinity };
     if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openPanel(row.dataset.key); }
-    if (ev.key === 'ArrowDown' && row.nextElementSibling) { ev.preventDefault(); row.nextElementSibling.focus(); }
-    if (ev.key === 'ArrowUp' && row.previousElementSibling) { ev.preventDefault(); row.previousElementSibling.focus(); }
+    else if (ev.key in moves) { ev.preventDefault(); focusLane(moves[ev.key] === Infinity ? (state.visible || []).length - 1 : moves[ev.key]); }
   });
+  labels.addEventListener('focusin', (ev) => { const row = ev.target.closest('.label'); if (row) state.focusIndex = Number(row.dataset.index); });
+  lanesBox.addEventListener('scroll', schedule, { passive: true });
+  // Detail panel: arrows move between its events.
+  $('panel-events').addEventListener('keydown', (ev) => {
+    const li = ev.target.closest('li');
+    if (!li) return;
+    const items = Array.from($('panel-events').querySelectorAll('li:not(.group)'));
+    const at = items.indexOf(li);
+    const to = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: items.length - 1 }[ev.key];
+    if (to === undefined) return;
+    ev.preventDefault();
+    const next = items[Math.max(0, Math.min(items.length - 1, to))];
+    for (const o of items) o.tabIndex = -1;
+    next.tabIndex = 0;
+    next.focus();
+  });
+  // Reduced motion: follows the OS setting until the viewer chooses.
+  const motion = $('motion');
+  function setReducedMotion(on, remember) {
+    document.body.classList.toggle('reduce-motion', on);
+    motion.setAttribute('aria-pressed', String(on));
+    if (remember) { try { localStorage.setItem('flow-console-reduce-motion', on ? '1' : '0'); } catch (_) { /* storage unavailable */ } }
+  }
+  let stored = null;
+  try { stored = localStorage.getItem('flow-console-reduce-motion'); } catch (_) { /* storage unavailable */ }
+  setReducedMotion(stored !== null ? stored === '1' : window.matchMedia('(prefers-reduced-motion: reduce)').matches, false);
+  motion.addEventListener('click', () => setReducedMotion(motion.getAttribute('aria-pressed') !== 'true', true));
 
   chart.addEventListener('wheel', (ev) => {
     if (!(ev.ctrlKey || ev.metaKey) && Math.abs(ev.deltaX) <= Math.abs(ev.deltaY)) return;
@@ -944,7 +1018,7 @@
 
   let pending = false;
   function schedule() {
-    if (pending) return;
+    if (pending || state.replaying) return;
     pending = true;
     requestAnimationFrame(() => { pending = false; render(); });
   }
@@ -970,14 +1044,23 @@
   function connect() {
     // Resume after the last received cursor, so a reconnect never duplicates.
     stream = new EventSource('events' + (cursor ? '?since=' + encodeURIComponent(cursor) : ''));
+    state.replaying = true;
     stream.addEventListener('open', () => { state.connected = true; retryDelay = 1000; describeStatus(); });
-    stream.addEventListener('flow', (m) => {
+    // Events arrive in "flows" batches: [{cursor, event}, ...].
+    stream.addEventListener('flows', (m) => {
       if (m.lastEventId) cursor = m.lastEventId;
-      try { addEvent(JSON.parse(m.data)); schedule(); } catch (_) { /* ignore malformed */ }
+      let batch = [];
+      try { batch = JSON.parse(m.data); } catch (_) { /* ignore malformed */ }
+      if (Array.isArray(batch)) for (const item of batch) if (item && item.event && typeof item.event.time === 'string') addEvent(item.event);
+      // During the replay only a counter updates; the page renders once at "ready".
+      if (!state.replaying) schedule();
+      else setSource('loading history · ' + state.events.size + ' events', 'live');
     });
     stream.addEventListener('status', (m) => { try { state.status = JSON.parse(m.data); describeStatus(); } catch (_) { /* ignore */ } });
     stream.addEventListener('ready', (m) => {
       try { const c = JSON.parse(m.data).cursor; if (c) cursor = String(c); } catch (_) { /* ignore */ }
+      state.replaying = false;
+      if (!document.body.dataset.readyMs) document.body.dataset.readyMs = String(Math.round(performance.now()));
       state.connected = true; describeStatus(); schedule();
       const open = params.get('open');
       if (open && state.lanes.has(open) && !state.selected) openPanel(open);
