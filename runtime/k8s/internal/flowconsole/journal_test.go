@@ -183,14 +183,20 @@ func TestJournalDerivesIntakeAdmissionAndPlanning(t *testing.T) {
 	f := newJournalFixture(t)
 	f.workItem(t, 501, "ready")
 	f.seed(t,
-		fmt.Sprintf(`INSERT INTO intake_observations(repository,issue_number,generation,config_digest,authority_revision,content_key,observed_at) VALUES('%s',501,3,'%s','%s','%s',%s)`,
-			f.repository, digest(1), digest(2), digest(3), f.at(-61)),
+		// Two revisions: the console shows each, not only the latest.
+		fmt.Sprintf(`INSERT INTO intake_revisions(repository,issue_number,revision,generation,config_digest,event_id,payload,observed_at) VALUES('%s',501,'r2',2,'%s','%s','\x01',%s)`,
+			f.repository, digest(1), digest(f.repository, 2), f.at(-62)),
+		fmt.Sprintf(`INSERT INTO intake_revisions(repository,issue_number,revision,generation,config_digest,event_id,payload,observed_at) VALUES('%s',501,'r3',3,'%s','%s','\x01',%s)`,
+			f.repository, digest(1), digest(f.repository, 3), f.at(-61)),
 		fmt.Sprintf(`INSERT INTO admissions(repository,issue_number,issue_revision,decision,risk,policy_version,correlation_id,created_at,updated_at) VALUES('%s',501,'r1:3','accepted','low','v1','c',%s,%s)`, f.repository, f.at(-60.5), f.at(-60.4)),
 		fmt.Sprintf(`INSERT INTO admissions(repository,issue_number,issue_revision,decision,risk,policy_version,correlation_id,created_at,updated_at) VALUES('%s',506,'r1:1','needs-clarification','medium','v1','c',%s,%s)`, f.repository, f.at(-30), f.at(-30)),
 		fmt.Sprintf(`INSERT INTO admissions(repository,issue_number,issue_revision,decision,risk,policy_version,correlation_id,created_at,updated_at) VALUES('%s',507,'r1:1','rejected','high','v1','c',%s,%s)`, f.repository, f.at(-29), f.at(-29)))
 	events := f.derive(t)
-	intake := must(t, events["intake"], flowevent.KindCompleted, "observed", "")
-	if intake.Issue != 501 || intake.Attributes["generation"] != "3" || intake.Component != "intake" {
+	if len(events["intake"]) != 2 {
+		t.Fatalf("intake revisions %+v", events["intake"])
+	}
+	intake := events["intake"][1]
+	if intake.Kind != flowevent.KindCompleted || intake.Step != "observed" || intake.Issue != 501 || intake.Attributes["generation"] != "3" || intake.Component != "intake" {
 		t.Fatalf("intake %+v", intake)
 	}
 	accepted := must(t, events["admission"], flowevent.KindCompleted, "decision", "")
@@ -385,6 +391,8 @@ func TestFlowConsoleRoleIsReadOnlyAndColumnScoped(t *testing.T) {
 		`SELECT observation FROM review_model_calls LIMIT 1`,
 		`SELECT proof FROM published_records LIMIT 1`,
 		`SELECT payload FROM intake_revisions LIMIT 1`,
+		`SELECT revision FROM intake_revisions LIMIT 1`,
+		`SELECT content_key FROM intake_observations LIMIT 1`,
 		`SELECT decision FROM review_feedback LIMIT 1`,
 		`SELECT payload FROM authorized_outbox LIMIT 1`,
 		`SELECT container_id FROM execution_failures LIMIT 1`,

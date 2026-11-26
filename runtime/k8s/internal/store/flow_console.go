@@ -26,9 +26,12 @@ const FlowConsoleRole = "aisdlc_flow_console"
 // content are deliberately absent. Migration 0039 adds the matching SELECT
 // policies on tables with row security; this list is the column grant.
 var flowConsoleColumns = map[string][]string{
-	"plans":                 {"id", "repository"},
-	"work_items":            {"plan_id", "uuid", "issue_numbers", "status", "created_at", "updated_at"},
-	"intake_observations":   {"repository", "issue_number", "generation", "observed_at"},
+	"plans":      {"id", "repository"},
+	"work_items": {"plan_id", "uuid", "issue_numbers", "status", "created_at", "updated_at"},
+	// Every observed revision (intake_observations keeps only the latest
+	// one per issue). payload, revision, event_id and config_digest are
+	// never granted: the payload is the issue content.
+	"intake_revisions":      {"repository", "issue_number", "generation", "observed_at"},
 	"admissions":            {"repository", "issue_number", "decision", "risk", "created_at", "updated_at"},
 	"execution_requests":    {"id", "work_item_uuid", "attempt", "repository", "state", "stop_reason", "expires_at", "claim_until", "created_at", "updated_at"},
 	"execution_lifecycles":  {"request_id", "phase", "cleanup_state", "cleanup_attempts", "created_at", "updated_at"},
@@ -344,7 +347,7 @@ func intPtr(v sql.NullInt64) *int {
 }
 
 func (r *flowReader) intake(j *FlowJournal) {
-	r.query(`SELECT repository,issue_number,generation,observed_at FROM intake_observations WHERE observed_at>=$1 ORDER BY observed_at DESC LIMIT $2`, func(rows *sql.Rows) error {
+	r.query(`SELECT repository,issue_number,generation,observed_at FROM intake_revisions WHERE observed_at>=$1 ORDER BY observed_at DESC LIMIT $2`, func(rows *sql.Rows) error {
 		var v FlowIntake
 		if err := rows.Scan(&v.Repository, &v.Issue, &v.Generation, &v.ObservedAt); err != nil {
 			return err
