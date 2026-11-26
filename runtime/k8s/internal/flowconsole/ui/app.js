@@ -263,7 +263,10 @@
     $('t-blocked').textContent = count('blocked');
     const stale = all.reduce((n, l) => n + l.markers.filter((m) => m.type === 'stale').length, 0);
     const quarantined = all.reduce((n, l) => n + l.markers.filter((m) => m.type === 'quarantined').length, 0);
-    $('t-blocked-note').textContent = quarantined + ' quarantined · ' + stale + ' stale waits';
+    const reasons = blockedReasons(all);
+    const note = reasons.length ? reasons.join(' · ') : quarantined + ' quarantined · ' + stale + ' stale waits';
+    $('t-blocked-note').textContent = note;
+    $('t-blocked-note').title = note;
     const ttd = delivered.map((l) => l.delivery).filter((v) => v !== null);
     $('t-ttd').textContent = ttd.length ? fmtDuration(median(ttd)) : '–';
     $('t-ttd-note').textContent = ttd.length ? 'intake to merge · ' + ttd.length + ' delivered' : 'no delivery yet';
@@ -272,6 +275,72 @@
     for (const l of all) for (const s of l.segments) { for (const c of s.calls) if (c.latencyMs) lat.push(c.latencyMs); degraded += s.degraded.length; }
     $('t-latency').textContent = lat.length ? fmtDuration(median(lat)) : '–';
     $('t-latency-note').textContent = lat.length ? 'p90 ' + fmtDuration(quantile(lat, 0.9)) + ' · ' + lat.length + ' calls · ' + degraded + ' degraded' : 'no model calls';
+  }
+
+  const STAGE_NOUN = { intake: 'intake', admission: 'admission', planning: 'planning', execution: 'generation', verification: 'verification', review: 'review', publication: 'publication', merge: 'merge' };
+  // What blocks: "1 publication quarantined · 1 needs clarification · 1 lease lapsed".
+  function blockReason(lane) {
+    const s = lane.final;
+    if (!s) return 'blocked';
+    if (s.outcome === 'quarantined') return STAGE_NOUN[s.stage] + ' quarantined';
+    return (s.diagnostic || 'blocked').replace(/-/g, ' ');
+  }
+  function blockedReasons(all) {
+    const counts = new Map();
+    for (const l of all) if (l.status === 'blocked') { const r = blockReason(l); counts.set(r, (counts.get(r) || 0) + 1); }
+    return Array.from(counts).sort((a, b) => b[1] - a[1]).map(([r, n]) => n + ' ' + r);
+  }
+
+  // ---------- what is wrong now ----------
+  // Blocked or quarantined lanes, lanes in a stage longer than that stage's
+  // p90 over the visible window, and degradation bursts; newest first.
+  function problems(all, now) {
+    const out = [];
+    for (const l of all) if (l.status === 'blocked' && l.final) {
+      const at = (l.final.quarantined || l.final.blocked || l.final.terminal || { t: l.final.drawEnd }).t;
+      out.push({ at, key: l.key, kind: 'blocked', text: (l.issue ? '#' + l.issue + ' ' : '') + blockReason(l) + (l.final.diagnostic && l.final.outcome === 'quarantined' ? ' · ' + l.final.diagnostic : ''), note: fmtDuration(now - at) + ' ago' });
+    }
+    // Typical durations: completed stage runs and waits inside the visible window.
+    const runs = {}, waits = {};
+    for (const l of all) for (const s of l.segments) {
+      if (INSTANT[s.stage] || s.end === null || s.end < state.view[0] || s.start === null) continue;
+      (runs[s.stage] = runs[s.stage] || []).push(s.end - s.start);
+      if (s.start > s.queued) (waits[s.stage] = waits[s.stage] || []).push(s.start - s.queued);
+    }
+    for (const l of all) {
+      const s = l.currentSegment;
+      if (!s || l.status === 'blocked') continue;
+      const waiting = s.outcome === 'waiting', sample = (waiting ? waits : runs)[s.stage] || [];
+      if (sample.length < 3) continue;
+      const p90 = quantile(sample, 0.9), age = now - (waiting ? s.queued : s.start);
+      if (age > p90 && age > 60e3) {
+        out.push({ at: now - age + p90, key: l.key, kind: 'slow', text: (l.issue ? '#' + l.issue + ' ' : '') + (waiting ? 'queued for ' + STAGE_NAME[s.stage] : (STAGE_VERB[s.stage] || STAGE_NAME[s.stage])) + ' ' + fmtDuration(age), note: 'p90 ' + fmtDuration(p90) });
+      }
+    }
+    for (const b of bands(all)) out.push({ at: b.b, band: b, kind: 'burst', text: 'burst of ' + b.count + ' problems', note: fmtClock(b.a) + '–' + fmtClock(b.b) });
+    return out.sort((a, b) => b.at - a.at);
+  }
+  function renderProblems(all, now) {
+    const box = $('problems'), list = $('problem-list');
+    const items = problems(all, now);
+    box.hidden = items.length === 0;
+    $('problem-count').textContent = String(items.length);
+    list.textContent = '';
+    const limit = state.problemsExpanded ? items.length : 4;
+    for (const p of items.slice(0, limit)) {
+      const li = html('li', 'problem-' + p.kind, null, list);
+      const b = html('button', null, null, li);
+      b.type = 'button';
+      if (p.key) b.dataset.key = p.key;
+      if (p.band) { b.dataset.a = String(p.band.a); b.dataset.b = String(p.band.b); }
+      html('span', 'problem-icon', { blocked: '⏸', slow: '⏱', burst: '▲' }[p.kind], b).setAttribute('aria-hidden', 'true');
+      html('span', 'problem-text', p.text, b);
+      html('span', 'problem-note', p.note, b);
+      b.title = p.text + ' · ' + p.note;
+    }
+    const more = $('problem-more');
+    more.hidden = items.length <= 4;
+    more.textContent = state.problemsExpanded ? 'show fewer' : 'show all ' + items.length;
   }
 
   // ---------- trends over the visible window ----------
@@ -435,9 +504,10 @@
     $('feed-new').hidden = true;
     const q = $('feed-filter').value.trim().toLowerCase(), kind = $('feed-kind').value;
     const list = $('feed-list');
-    const items = Array.from(state.events.values()).filter((e) => feedMatches(e, q, kind)).sort((a, b) => b.t - a.t).slice(0, 300);
+    const sorted = Array.from(state.events.values()).filter((e) => feedMatches(e, q, kind)).sort((a, b) => b.t - a.t);
     list.textContent = '';
-    for (const e of items) {
+    if (!$('feed-every').checked) return renderFeedGrouped(list, sorted);
+    for (const e of sorted.slice(0, 300)) {
       const li = html('li', PROBLEM_KINDS[e.kind] || e.diagnostic ? 'problem' : '', null, list);
       li.tabIndex = 0;
       li.dataset.key = laneKey(e);
@@ -447,6 +517,43 @@
       time.title = fmtUTC(e.t);
       html('span', 'what', (e.issue ? '#' + e.issue + ' ' : '') + STAGE_NAME[e.stage] + (e.step ? ' · ' + e.step : '') + ' — ' + e.kind + (e.diagnostic ? ' (' + e.diagnostic + ')' : ''), li);
       html('span', 'detail', [e.component, e.attempt ? 'attempt ' + e.attempt : '', e.durationMs ? fmtDuration(e.durationMs) : '', e.latencyMs ? 'latency ' + fmtDuration(e.latencyMs) : ''].filter(Boolean).join(' · '), li);
+    }
+    if (state.follow) list.scrollTop = 0;
+  }
+  // Default feed: model calls and effect steps of one stage of one attempt
+  // fold into one row at their newest time; transitions and problems keep
+  // their own rows, problems with more weight.
+  function renderFeedGrouped(list, sorted) {
+    const rows = [], groups = new Map();
+    for (const e of sorted) {
+      if (e.kind === 'progressed') {
+        const key = laneKey(e) + '|' + (e.attempt || 0) + '|' + e.stage;
+        let g = groups.get(key);
+        if (!g) { g = { group: true, e, calls: [], steps: 0 }; groups.set(key, g); rows.push(g); }
+        if (e.step === 'model-call') g.calls.push(e); else g.steps++;
+      } else rows.push({ e });
+      if (rows.length >= 300) break;
+    }
+    for (const r of rows) {
+      const e = r.e, problem = PROBLEM_KINDS[e.kind] || e.diagnostic === 'stale-wait';
+      const li = html('li', r.group ? 'progress' : problem ? 'problem' : 'transition', null, list);
+      li.tabIndex = 0;
+      li.dataset.key = laneKey(e);
+      li.dataset.id = e.id;
+      li.style.borderLeftColor = problem ? (e.kind === 'failed' ? 'var(--failed)' : 'var(--degraded)') : STAGE_COLOR[e.stage];
+      html('span', 'time', fmtClock(e.t, true), li).title = fmtUTC(e.t);
+      const who = (e.issue ? '#' + e.issue + ' ' : '') + STAGE_NAME[e.stage];
+      if (r.group) {
+        const lat = r.calls.map((c) => c.latencyMs).filter(Boolean);
+        const parts = [who];
+        if (r.calls.length) parts.push(r.calls.length + ' model call' + (r.calls.length > 1 ? 's' : '') + (lat.length ? ' · p50 ' + fmtDuration(median(lat)) : ''));
+        if (r.steps) parts.push(r.steps + ' step' + (r.steps > 1 ? 's' : ''));
+        html('span', 'what', parts.join(' · '), li);
+        html('span', 'detail', ['last ' + fmtClock(e.t, true), e.component, e.attempt ? 'attempt ' + e.attempt : ''].filter(Boolean).join(' · '), li);
+      } else {
+        html('span', 'what', who + (e.step ? ' · ' + e.step : '') + ' — ' + e.kind + (e.diagnostic ? ' (' + e.diagnostic + ')' : ''), li);
+        html('span', 'detail', [e.component, e.attempt ? 'attempt ' + e.attempt : '', e.durationMs ? fmtDuration(e.durationMs) : ''].filter(Boolean).join(' · '), li);
+      }
     }
     if (state.follow) list.scrollTop = 0;
   }
@@ -582,6 +689,7 @@
     return out;
   }
 
+  let chipEnd = -Infinity;
   function drawSegment(parent, lane, s, y0, w, dim, overlay) {
     const LANE_H = laneHeight(), cy = y0 + LANE_H - 13;
     const xq = x(s.queued), xs = s.start !== null ? x(s.start) : x(s.drawEnd), xe = x(s.drawEnd);
@@ -594,7 +702,11 @@
       svg('circle', { cx: xs, cy, r: 3.6, fill: color, stroke: 'var(--surface-1)', 'stroke-width': 1.2 }, g);
       return { g, x0: xs - 4, x1: xs + 4 };
     }
-    let width = Math.max(xe - xs, 4), x0 = xs;
+    // Very short runs keep their true width (at least 2 px) and get a chip
+    // with the stage initial above them, so the axis is not stretched.
+    const short = s.outcome !== 'waiting' && xe - xs < 7;
+    const chip = short && STAGES.indexOf(s.stage) >= 3;
+    let width = short ? Math.max(xe - xs, 2) : Math.max(xe - xs, 4), x0 = xs;
     if (s.outcome === 'waiting') {
       // Waiting: an outline only, from the queue time.
       x0 = xq; width = Math.max(xe - xq, 6);
@@ -612,6 +724,14 @@
         const px = x(c.t);
         if (px > x0 + 2 && px < x0 + width - 2) svg('line', { x1: px, x2: px, y1: cy + BAR_H / 2 - 4, y2: cy + BAR_H / 2 - 1, stroke: 'rgba(14,14,13,.6)', 'stroke-width': 1 }, g);
       }
+    }
+    if (chip) {
+      // Neighbouring chips line up to the right; a hairline ties each to its run.
+      const tx = x0 + width / 2, cx = Math.max(tx, chipEnd + 11);
+      svg('rect', { x: cx - 5, y: cy - BAR_H / 2 - 12, width: 10, height: 10, rx: 2.5, fill: color }, g);
+      text(g, { class: 'chip-label', x: cx, y: cy - BAR_H / 2 - 4, 'text-anchor': 'middle' }, STAGE_INITIAL[s.stage]);
+      if (cx !== tx) svg('line', { x1: cx - 5, x2: tx, y1: cy - BAR_H / 2 - 2, y2: cy - BAR_H / 2, stroke: color, 'stroke-width': 1 }, g);
+      chipEnd = cx;
     }
     const badged = s.outcome === 'failed' || s.outcome === 'stopped-safely' || s.outcome === 'blocked' || s.outcome === 'quarantined';
     const room = width - (badged ? 10 : s.outcome === 'completed' ? 14 : 4) - 6;
@@ -655,6 +775,9 @@
     renderTiles(all);
     renderFunnel(all);
     const matching = visibleLanes();
+    // One repository for every lane: name it once in the header instead.
+    const repos = new Set(all.map((l) => l.repository));
+    state.singleRepo = repos.size === 1 ? Array.from(repos)[0] : '';
     const extent = dataExtent(matching.length ? matching : all, now);
     // The initial window is chosen once the first events exist.
     if (!state.view || (!state.viewChosen && all.length)) {
@@ -698,6 +821,9 @@
       if (xb - xa > 60) text(axis, { class: 'band-label', x: xa + 3, y: 9 }, b.count + ' problems');
     }
     trends(all);
+    renderProblems(all, now);
+    $('header-repo').textContent = state.singleRepo;
+    $('header-repo').hidden = !state.singleRepo;
 
     // Labels column: issue, repository, status, and a summary line.
     labels.textContent = '';
@@ -717,7 +843,8 @@
       row.dataset.index = String(index);
       const top = html('div', 'label-top', null, row);
       html('span', 'issue', lane.issue ? '#' + lane.issue : lane.workItem.slice(0, 8), top);
-      const repo = html('span', 'repo', (lane.repository || '').split('/').pop(), top);
+      // The repository is shown per lane only when lanes span several.
+      const repo = html('span', 'repo', state.singleRepo ? '' : (lane.repository || '').split('/').pop(), top);
       repo.title = lane.repository;
       if (lane.attempts > 1) html('span', 'attempts', '×' + lane.attempts, top).title = lane.attempts + ' attempts';
       const chipText = { inflight: 'in flight', delivered: 'delivered', failed: 'failed', blocked: 'blocked' }[lane.status];
@@ -734,6 +861,16 @@
       const i = first + k, y0 = i * LANE_H;
       const dim = state.filter.component;
       let lastEnd = -Infinity, finalBox = null;
+      chipEnd = -Infinity;
+      // Attempt dividers: a dashed rule where attempt 2, 3, ... begins.
+      for (let a = 2; a <= lane.attempts; a++) {
+        const starts = lane.segments.filter((s) => s.attempt === a).map((s) => s.queued);
+        if (!starts.length) continue;
+        const px = x(Math.min.apply(null, starts)) - 4;
+        if (px < 0 || px > w) continue;
+        svg('line', { class: 'attempt-divider', x1: px, x2: px, y1: y0 + 17, y2: y0 + LANE_H - 2 }, bars);
+        text(bars, { class: 'attempt-label', x: px - 3, y: y0 + 24, 'text-anchor': 'end' }, '#' + a);
+      }
       for (const s of lane.segments) {
         const box = drawSegment(bars, lane, s, y0, w, dim && s.events[0].component !== dim, overlay);
         if (!box) continue;
@@ -968,6 +1105,14 @@
   $('feed-close').addEventListener('click', () => setFeed(false));
   $('feed-filter').addEventListener('input', () => renderFeed(true));
   $('feed-kind').addEventListener('change', () => renderFeed(true));
+  $('feed-every').addEventListener('change', () => renderFeed(true));
+  $('problem-list').addEventListener('click', (ev) => {
+    const b = ev.target.closest('button');
+    if (!b) return;
+    if (b.dataset.key && state.lanes.has(b.dataset.key)) openPanel(b.dataset.key);
+    else if (b.dataset.a) setView(Number(b.dataset.a) - 15 * 60e3, Number(b.dataset.b) + 15 * 60e3, false);
+  });
+  $('problem-more').addEventListener('click', () => { state.problemsExpanded = !state.problemsExpanded; schedule(); });
   $('feed-new').addEventListener('click', () => renderFeed(true));
   $('feed-list').addEventListener('click', (ev) => { const li = ev.target.closest('li'); if (li && state.lanes.has(li.dataset.key)) openPanel(li.dataset.key); });
   $('feed-list').addEventListener('keydown', (ev) => {

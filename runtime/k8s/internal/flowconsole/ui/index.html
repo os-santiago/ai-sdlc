@@ -10,6 +10,7 @@
 <header class="top">
   <div class="brand">
     <h1>AI-SDLC flow</h1>
+    <span class="header-repo" id="header-repo" hidden title="Every work item shown belongs to this repository"></span>
     <span class="subtitle">read-only timeline of the autonomous flow</span>
   </div>
   <div class="top-right">
@@ -75,6 +76,12 @@
 
 <nav class="funnel" id="funnel" aria-label="Where the work is now: current stage counts, click to filter"></nav>
 
+<section class="problems" id="problems" hidden aria-labelledby="problems-title">
+  <h2 id="problems-title">What is wrong now <span class="muted" id="problem-count"></span></h2>
+  <ul id="problem-list"></ul>
+  <button type="button" class="problem-more" id="problem-more" hidden></button>
+</section>
+
 <main class="timeline" id="timeline">
   <div class="axis-row">
     <div class="lane-head"><span>Work item <span class="muted" id="lane-count"></span></span><span class="tz" id="timezone"></span></div>
@@ -110,6 +117,7 @@
   </div>
   <div class="feed-filters">
     <input id="feed-filter" type="search" placeholder="issue, stage, diagnostic" autocomplete="off" spellcheck="false" aria-label="Filter events">
+    <label class="feed-every"><input type="checkbox" id="feed-every"> every model call</label>
     <select id="feed-kind" aria-label="Event kinds">
       <option value="">All kinds</option>
       <option value="problems">Problems only</option>

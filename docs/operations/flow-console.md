@@ -18,8 +18,9 @@ no workflow authority. It is off by default.
   attempt continues on the same lane. Only lanes with activity in the visible
   time window are listed, most recent activity first, or *problems first*
   (blocked, then failed, then in flight, then delivered).
-- **A label column with a summary line**: issue, repository (truncated, full
-  name on hover), attempt count and status, and under it where the work is
+- **A label column with a summary line**: issue, attempt count and status
+  (the repository is named once next to the title when every lane shares it,
+  and per lane, truncated with the full name on hover, when they do not), and under it where the work is
   now (`verifying · 3 min`, `queued for review · 40 s`) or why it ended. The
   final stop of a failed or blocked lane always shows its stage and
   diagnostic there (`generate · worker-exit-22`) and next to its last bar.
@@ -31,7 +32,21 @@ no workflow authority. It is off by default.
   with ✓ for completed, striped with an open end for running, a dashed outline
   for waiting (and a dashed lead-in for the queue time before a claim), a hatch
   for blocked or quarantined, and an end badge for failed (✕), stopped safely
-  (■), blocked (⏸) and quarantined (⛔).
+  (■), blocked (⏸) and quarantined (⛔). A run too short to see at the
+  current zoom (often publish and merge) keeps its true width (at least 2 px)
+  and gets a small chip with its initial above it; neighbouring chips line up
+  to the right with a hairline to their run, so the time axis is never
+  stretched. A dashed rule labelled `#2`, `#3`, ... marks where a later attempt
+  begins inside a lane.
+- **What is wrong now**: a box above the timeline, shown only when there is
+  something to show, lists current problems newest first: blocked or
+  quarantined work items with their reason, diagnostic and age; lanes in a
+  stage (or its queue) longer than that stage's p90 over the visible window
+  (`#226 generating 10 min · p90 6 min`, only once three runs of that stage
+  are visible); and degradation bursts. Click a work item to open it, or a
+  burst to zoom to it. Four items show by default; *show all* expands.
+- **The blocked tile names what blocks**, for example `1 publication
+  quarantined · 1 needs clarification · 1 lease lapsed`.
 - **Work now**: a strip above the timeline counts the work items currently
   queued, generating, verifying, reviewing, publishing, merging and blocked
   or quarantined. Click a cell to show only those lanes; click it again to
@@ -47,9 +62,13 @@ no workflow authority. It is off by default.
   count is shown above the axis. No band does not mean no problems: the
   markers and the failed and blocked lanes still show every one.
 - **Live events**: the *Live events* button opens a side panel with the
-  newest 300 events across all work items (time, issue, stage, step, kind,
-  diagnostic, component), filterable by text and by kind (problems only, or
-  stage starts and ends). It refreshes on its own while *Follow now* is on;
+  newest activity across all work items, filterable by text and by kind
+  (problems only, or stage starts and ends). By default the model calls and
+  effect steps of one stage of one attempt fold into one updating row
+  (`#213 generate · 14 model calls · p50 20 s · last 01:16:54`); stage
+  transitions, waits, retries, stops, failures, quarantine and degradation
+  keep their own rows, problems highlighted. *every model call* shows each
+  event on its own row (newest 300). It refreshes on its own while *Follow now* is on;
   otherwise it offers the count of new events and keeps your position. Click
   or press Enter on an event to open its work item.
 - **Markers on their own row** above the bars for retries, stale waits,
@@ -75,6 +94,9 @@ no workflow authority. It is off by default.
   quarantine and stale-wait counts), median time from intake to merge, and the
   model call latency median and 90th percentile.
 - **Text legend** for every colour, texture and marker.
+- **Contrast**: all text meets WCAG AA (4.5:1) against every surface it sits
+  on; the muted grey (`#9c9b93`) measures 6.2:1 on the panels and 4.9:1 on the
+  hovered or pressed controls.
 - **Keyboard**: the lane list is one tab stop; the arrow keys, Page Up/Down,
   Home and End move between lanes (scrolling as needed) and Enter or Space
   opens the details. Live updates keep the focused lane or event focused. In the detail panel and the live-events list the arrow

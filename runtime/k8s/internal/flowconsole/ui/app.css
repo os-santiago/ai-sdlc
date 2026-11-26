@@ -11,7 +11,7 @@
   --grid: #2a2a28;
   --text-primary: #f0efec;
   --text-secondary: #c3c2b7;
-  --text-muted: #8f8e86;
+  --text-muted: #9c9b93;
   --accent: #3987e5;
   --running: #3987e5;
   --completed: #199e70;
@@ -159,11 +159,35 @@ body.panel-open { padding-right: 420px; }
 .stage-swatch { flex: none; width: 20px; height: 16px; border-radius: 4px; color: #0e0e0d; font-size: 10px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
 .stage-swatch.outline { background: none !important; border: 1.5px dashed var(--text-muted); color: var(--text-secondary); }
 .stage-swatch.hatch { background: repeating-linear-gradient(45deg, #c98500 0 3px, rgba(201,133,0,.3) 3px 6px) !important; }
+/* What is wrong now: a compact, clickable list of current problems. */
+.problems { margin: 0 24px 10px; display: flex; align-items: flex-start; gap: 14px; background: var(--surface-1); border: 1px solid var(--line); border-left: 3px solid var(--degraded); border-radius: 10px; padding: 7px 12px; }
+.problems h2 { margin: 3px 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-secondary); font-weight: 600; white-space: nowrap; }
+.problems ul { list-style: none; margin: 0; padding: 0; flex: 1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 14px; min-width: 0; }
+.problems li button { width: 100%; display: flex; align-items: baseline; gap: 8px; background: none; border: 0; padding: 3px 4px; cursor: pointer; text-align: left; border-radius: 6px; min-width: 0; }
+.problems li button:hover { background: var(--surface-2); }
+.problems li button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.problem-icon { flex: none; width: 14px; text-align: center; }
+.problem-blocked .problem-icon { color: #f2c46b; }
+.problem-slow .problem-icon { color: #9cc4f3; }
+.problem-burst .problem-icon { color: #f09a9a; }
+.problem-text { color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.problem-note { color: var(--text-muted); font-size: 12px; white-space: nowrap; flex: none; }
+.problem-more { background: none; border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; cursor: pointer; color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
+.header-repo { color: var(--text-primary); font-size: 14px; font-weight: 600; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; background: var(--surface-1); }
+.attempt-divider { stroke: #9c9b93; stroke-width: 1; stroke-dasharray: 2 3; }
+.attempt-label { fill: var(--text-muted); font-size: 10px; }
+.chip-label { fill: #0e0e0d; font-size: 8px; font-weight: 700; pointer-events: none; }
+.feed-every { display: inline-flex; align-items: center; gap: 4px; color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
+.feed-list li.progress .what { color: var(--text-secondary); }
+.feed-list li.transition .what { color: var(--text-primary); }
+.feed-list li.problem { background: rgba(250,178,25,.06); }
+.feed-list li.problem .what { color: #f6cfa8; font-weight: 600; }
 .trend-table { margin: -4px 24px 10px; color: var(--text-secondary); font-size: 12.5px; }
 .trend-table summary { cursor: pointer; color: var(--text-muted); width: max-content; }
 .trend-table table { border-collapse: collapse; margin-top: 6px; font-variant-numeric: tabular-nums; }
 .trend-table th, .trend-table td { padding: 2px 14px 2px 0; text-align: left; font-weight: 400; border-bottom: 1px solid var(--grid); }
 .trend-table thead th { color: var(--text-muted); }
+#t-blocked-note { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.3; }
 .tile-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; }
 .spark { width: 92px; height: 30px; flex: none; margin-bottom: 2px; overflow: visible; }
 .spark .p90 { stroke: #8f8e86; }
@@ -173,9 +197,9 @@ body.panel-open { padding-right: 420px; }
 .feed { position: fixed; top: 0; right: 0; bottom: 0; width: 380px; background: var(--surface-1); border-left: 1px solid var(--line); box-shadow: -12px 0 30px rgba(0,0,0,.4); display: flex; flex-direction: column; z-index: 9; }
 body.feed-open { padding-right: 380px; }
 body.feed-open.panel-open { padding-right: 420px; }
-.feed-filters { display: flex; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.feed-filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
 .feed-filters input, .feed-filters select { background: var(--surface-0); border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px; color: var(--text-primary); min-width: 0; }
-.feed-filters input { flex: 1; }
+.feed-filters input[type=search] { flex: 1 1 100%; }
 .feed-new { margin: 8px 14px 0; background: var(--surface-3); border: 1px solid var(--accent); border-radius: 8px; padding: 5px; cursor: pointer; }
 .feed-list { list-style: none; margin: 0; padding: 0 0 20px; overflow-y: auto; flex: 1; }
 .feed-list li { display: grid; grid-template-columns: 58px 1fr; gap: 1px 8px; padding: 6px 14px; border-bottom: 1px solid var(--grid); font-size: 12.5px; cursor: pointer; border-left: 3px solid transparent; }
@@ -187,7 +211,7 @@ body.feed-open.panel-open { padding-right: 420px; }
 @media (max-width: 1400px) {
   :root { --label-w: 214px; font-size: 13px; }
   .top, .tiles, .filters, .legend { padding-left: 16px; padding-right: 16px; }
-  .timeline, .funnel, .trend-table { margin-left: 16px; margin-right: 16px; }
+  .timeline, .funnel, .trend-table, .problems { margin-left: 16px; margin-right: 16px; }
   .funnel button { padding: 6px 9px; gap: 7px; }
   .funnel .count { font-size: 17px; }
   .funnel-title { display: none; }
