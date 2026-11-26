@@ -203,6 +203,9 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 		AcceptanceCriteria: normalizedevent.ExtractAcceptanceCriteria(snapshot.Issue.Body), ExpiresAt: c.ExpiresAt}
 	assignment.Workspace = WorkspaceFor(c.Repository)
 	assignment.Toolchain = ToolchainFor(c.Repository)
+	if assignment.Toolchain == nil {
+		assignment.Verification = VerificationFor(c.Repository)
+	}
 	var parent store.VerificationCandidate
 	if c.Repair != nil {
 		a, p, e := repairPreparation(ctx, db, in.Policy, c)
@@ -273,6 +276,18 @@ func WorkspaceFor(repository string) string {
 		return ""
 	}
 	return executor.WorkspaceOfflineTests
+}
+
+// VerificationFor returns the verification command a repository's reviewed
+// manifest declares, or nil, for the prompt of an offline workspace. It comes
+// only from the manifest, never from issue text; environment, image and limits
+// stay verification-only.
+func VerificationFor(repository string) *executor.Verification {
+	m, ok := project.Lookup(repository)
+	if !ok || m.Verification == nil {
+		return nil
+	}
+	return &executor.Verification{Command: append([]string(nil), m.Verification.Command...), WorkingDir: m.Verification.WorkingDir}
 }
 
 // ToolchainFor returns the generation toolchain a repository's reviewed

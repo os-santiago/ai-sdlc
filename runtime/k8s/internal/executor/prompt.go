@@ -129,25 +129,24 @@ func workspaceGuidance(a Assignment) string {
 	if a.Toolchain != nil {
 		return toolchainGuidance(a.Toolchain)
 	}
-	return `This workspace has no build toolchain and no network: do not try to compile,
+	guidance := `This workspace has no build toolchain and no network: do not try to compile,
 install dependencies or run tests here. Read the relevant code, make the change
-and add or update tests that check the requested behaviour. The repository's own
-test suite then runs in independent offline verification, which requires a test
-that fails on the current code and passes with your change.
+and add or update tests that check the requested behaviour. Write them with the
+same test framework, imports and conventions as the repository's existing tests,
+and add no new dependency: verification runs offline with only what its image
+already provides, so a test that imports anything else fails. The repository's
+own test suite then runs in independent offline verification, which requires a
+test that fails on the current code and passes with your change.
 `
+	if v := a.Verification; v != nil {
+		guidance += fmt.Sprintf("Verification runs this command from %s:\n%s\n", commandDirectory(v.WorkingDir), shellCommand(v.Command))
+	}
+	return guidance
 }
 
 // toolchainGuidance names the manifest's test command. The command and its
 // directory come from the reviewed manifest, never from the issue.
 func toolchainGuidance(t *Toolchain) string {
-	directory := "the repository root"
-	if t.WorkingDir != "" {
-		directory = "the repository directory " + shellQuote(t.WorkingDir)
-	}
-	quoted := make([]string, len(t.Command))
-	for i, arg := range t.Command {
-		quoted[i] = shellQuote(arg)
-	}
 	return fmt.Sprintf(`This workspace has the repository's own toolchain, read-only, and no network:
 do not try to install dependencies or tools. Make the change and add or update
 tests that check the requested behaviour. Before you finish, run the
@@ -165,7 +164,24 @@ answers the question (re-reading a file after a refused edit is not a repeat).
 Once the test command passes, runs your new tests, and you have removed any
 file the command created that is not part of your change, stop calling tools
 and finish with a short summary.
-`, directory, strings.Join(quoted, " "))
+`, commandDirectory(t.WorkingDir), shellCommand(t.Command))
+}
+
+// commandDirectory describes a reviewed manifest working directory.
+func commandDirectory(workingDir string) string {
+	if workingDir == "" {
+		return "the repository root"
+	}
+	return "the repository directory " + shellQuote(workingDir)
+}
+
+// shellCommand displays a reviewed manifest command as one POSIX shell line.
+func shellCommand(command []string) string {
+	quoted := make([]string, len(command))
+	for i, arg := range command {
+		quoted[i] = shellQuote(arg)
+	}
+	return strings.Join(quoted, " ")
 }
 
 // shellQuote quotes an argument for display as one POSIX shell word.

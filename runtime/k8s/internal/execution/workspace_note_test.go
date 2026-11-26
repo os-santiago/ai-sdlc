@@ -22,6 +22,17 @@ func TestWorkspaceNoteOnlyForRepositoryTestsInstallations(t *testing.T) {
 	if WorkspaceFor("example/service") != executor.WorkspaceOfflineTests {
 		t.Fatal("repository-tests installation must mark the workspace")
 	}
+	got := VerificationFor("example/service")
+	if !reflect.DeepEqual(got, &executor.Verification{Command: []string{"go", "test", "./..."}}) {
+		t.Fatalf("verification %+v", got)
+	}
+	got.Command[0] = "changed"
+	if m.Verification.Command[0] != "go" {
+		t.Fatal("aliased verification command")
+	}
+	if VerificationFor(project.Homedir) != nil {
+		t.Fatal("reference repositories name no verification command")
+	}
 }
 
 func TestToolchainOnlyForManifestsThatDeclareOne(t *testing.T) {

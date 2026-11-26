@@ -73,7 +73,12 @@ Only self-contained toolchains, such as Go's, qualify. The official Python
 images do not: their interpreter is dynamically linked against glibc, and a
 `path` directory may not contain `python3`. The Python example therefore
 omits `generation.toolchain`; the generator gets the offline guidance and
-the verifier still runs the repository's `unittest` suite.
+the verifier still runs the repository's `unittest` suite. The offline
+guidance names the manifest's `verification.command` and directory (taken
+only from the reviewed manifest, never from the issue), and asks for tests in
+the same framework, imports and conventions as the repository's existing
+tests with no new dependency, because verification has only the image's
+packages: a test that imports `pytest` fails in the Python image.
 
 The Python example runs the suite as `python3 -I -B -m unittest discover -s . -t .`.
 Isolated mode (`-I`) keeps the candidate's working tree off `sys.path` until
