@@ -34,16 +34,24 @@ type TreePlan struct {
 	ExpectedTreeSHA string
 	Branch          string
 	CommitMessage   string
+	// CommitIdentity is resolved from the installed manifest when the plan
+	// is prepared. The plan digest the claim records binds it, so the
+	// commit a publication creates keeps the identity it was planned with
+	// even if the installation is reconfigured while it is in flight.
+	CommitIdentity project.CommitIdentity
 }
 
 // PrepareTree is pure reconstruction, not a publication authorization. It must
 // be followed by current signed evidence checks and a durable effect journal.
 // Only the finite files in the repository-specific reviewed recipe can be written.
-func PrepareTree(c Command, source workspacebundle.Bundle, delta []byte) (TreePlan, error) {
+// projectSHA256 is the ProjectSHA256 of the policy that authorized c (the
+// policy whose Revision is c.AuthorityRevision). The plan uses only the
+// manifest that policy binds, never a manifest from another policy load.
+func PrepareTree(c Command, projectSHA256 string, source workspacebundle.Bundle, delta []byte) (TreePlan, error) {
 	if !project.Supported(c.Repository) || c.SourceSHA != source.SourceSHA || c.IssueNumber < 1 || !candidateID.MatchString(c.CandidateID) || workspacebundle.Digest(delta) != c.DeltaSHA256 {
 		return TreePlan{}, ErrPublication
 	}
-	manifest, ok := project.Lookup(c.Repository)
+	manifest, ok := project.Bound(c.Repository, projectSHA256)
 	if !ok {
 		return TreePlan{}, ErrPublication
 	}
@@ -85,7 +93,7 @@ func PrepareTree(c Command, source workspacebundle.Bundle, delta []byte) (TreePl
 	// Keep the tested public VPS release workflow out of the local-kind pilot.
 	// No model or issue text can remove the explicit release-skip marker.
 	return TreePlan{Repository: c.Repository, Request: TreeRequest{base, entries}, ExpectedTreeSHA: expected,
-		Branch: BranchName(c), CommitMessage: CommitMessage(c.IssueNumber)}, nil
+		Branch: BranchName(c), CommitMessage: CommitMessage(c.IssueNumber), CommitIdentity: manifest.Publication.Identity()}, nil
 }
 
 // BranchName is the only branch a command may publish to. It is derived from

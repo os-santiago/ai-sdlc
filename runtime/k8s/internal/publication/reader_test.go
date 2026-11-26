@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/forge"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 )
 
 // fakeForge serves a closed set of read endpoints. Any method other than GET
@@ -80,7 +81,7 @@ func readerExpectations(t *testing.T) map[string]Expectation {
 	p := writerPlan()
 	source, commit := strings.Repeat("d", 40), strings.Repeat("e", 40)
 	tree, _ := ExpectTree(p, source)
-	c, _ := ExpectCommit(p.Repository, 1581, p.ExpectedTreeSHA, source, time.Date(2026, 11, 25, 1, 2, 3, 0, time.UTC))
+	c, _ := ExpectCommit(p, source, time.Date(2026, 11, 25, 1, 2, 3, 0, time.UTC))
 	branch, _ := ExpectBranch(p.Repository, p.Branch, commit, source)
 	pr, _ := ExpectPullRequest(p.Repository, 1581, p.Branch, commit, strings.Repeat("f", 64), source)
 	return map[string]Expectation{EffectTree: tree, EffectCommit: c, EffectBranch: branch, EffectPullRequest: pr}
@@ -91,7 +92,7 @@ func readerExpectations(t *testing.T) map[string]Expectation {
 func exactObjects(x map[string]Expectation) map[string]map[string]any {
 	repo := map[string]string{"full_name": "os-santiago/homedir"}
 	c := x[EffectCommit]
-	person := map[string]string{"name": "Sergio Canales", "email": "sergio.canales.e@gmail.com", "date": c.Date.Format(time.RFC3339)}
+	person := map[string]string{"name": c.Identity.Name, "email": c.Identity.Email, "date": c.Date.Format(time.RFC3339)}
 	b, pr := x[EffectBranch], x[EffectPullRequest]
 	body := "Refs #1581\n\nAI-SDLC verified candidate.\n" + proofMarker(pr.PlanDigest) + "\n"
 	return map[string]map[string]any{
@@ -202,6 +203,37 @@ func TestReaderPullRequestAmbiguityStaysQuarantined(t *testing.T) {
 		if e == nil && got.State != ObservedDifferent {
 			t.Fatal("ambiguous pull request resolved", name, got)
 		}
+	}
+}
+
+// The observed commit must carry the plan's recorded identity: a plan with a
+// non-default identity reconciles as exact, and a commit showing another
+// identity is a mismatch, never a receipt.
+func TestReaderCommitUsesThePlannedIdentity(t *testing.T) {
+	p := writerPlan()
+	p.CommitIdentity = configuredIdentity
+	x, e := ExpectCommit(p, strings.Repeat("d", 40), time.Date(2026, 11, 25, 1, 2, 3, 0, time.UTC))
+	if e != nil {
+		t.Fatal(e)
+	}
+	commit := func(identity project.CommitIdentity) map[string]any {
+		person := map[string]string{"name": identity.Name, "email": identity.Email, "date": x.Date.Format(time.RFC3339)}
+		return map[string]any{"sha": x.SHA, "message": x.Message, "tree": map[string]string{"sha": x.Tree}, "parents": []any{map[string]string{"sha": x.Source}}, "author": person, "committer": person}
+	}
+	path := "/git/commits/" + x.SHA
+	f := &fakeForge{objects: map[string]any{path: commit(configuredIdentity)}}
+	if got, e := readerFixture(t, f).Observe(context.Background(), x); e != nil || got.State != ObservedExact {
+		t.Fatal("commit with the planned identity", got, e)
+	}
+	f = &fakeForge{objects: map[string]any{path: commit(project.DefaultCommitIdentity)}}
+	if got, e := readerFixture(t, f).Observe(context.Background(), x); e != nil || got.State != ObservedDifferent {
+		t.Fatal("commit with another identity", got, e)
+	}
+	// An expectation without a recorded identity is refused before the network.
+	x.Identity = project.CommitIdentity{}
+	f = &fakeForge{objects: map[string]any{}}
+	if _, e := readerFixture(t, f).Observe(context.Background(), x); e == nil || f.reads.Load() != 0 {
+		t.Fatal("commit expectation without identity observed")
 	}
 }
 

@@ -67,7 +67,12 @@ type Reconciler struct {
 	// Fetch reads the pinned source to rebuild a tree plan (default: the
 	// public source fetch the controller uses).
 	Fetch SourceLoader
-	// Plan, when set, replaces the default tree-plan rebuild (candidate delta
+	// Policy loads the installed authority policy. The default plan rebuild
+	// binds the manifest of the policy that authorized the command (its
+	// Revision must be the command's AuthorityRevision), exactly as the
+	// controller does; without it the rebuild is unavailable.
+	Policy func() (authority.Policy, error)
+	// Plan, when set, replaces the default plan rebuild (candidate delta
 	// applied to the fetched source). Whatever it returns must still match the
 	// claim's journaled plan digest and the effect's request digest.
 	Plan func(context.Context, publication.Command) (publication.TreePlan, error)
@@ -96,10 +101,22 @@ func fetchSource(ctx context.Context, repo, sha string) (workspacebundle.Bundle,
 
 var errUnavailable = errors.New("publication plan evidence unavailable")
 
-// prepare rebuilds the tree plan exactly as the controller did: the immutable
-// candidate delta applied to the pinned source. A read failure is
-// unavailability; a plan the evidence cannot rebuild is ErrPublication.
+// prepare rebuilds the plan exactly as the controller did: the immutable
+// candidate delta applied to the pinned source, under the manifest (scope and
+// commit identity) of the policy that authorized the command. A read failure
+// is unavailability; a plan the evidence cannot rebuild, including one whose
+// authorizing policy is no longer installed, is ErrPublication.
 func (r *Reconciler) prepare(ctx context.Context, cmd publication.Command) (publication.TreePlan, error) {
+	if r.Policy == nil {
+		return publication.TreePlan{}, errUnavailable
+	}
+	authorizing, e := r.Policy()
+	if e != nil {
+		return publication.TreePlan{}, errUnavailable
+	}
+	if authorizing.Revision() != cmd.AuthorityRevision {
+		return publication.TreePlan{}, publication.ErrPublication
+	}
 	candidate, e := r.DB.ReadPublicationCandidate(ctx, cmd.CandidateID)
 	if e != nil {
 		return publication.TreePlan{}, errUnavailable
@@ -114,7 +131,7 @@ func (r *Reconciler) prepare(ctx context.Context, cmd publication.Command) (publ
 	if e != nil {
 		return publication.TreePlan{}, errUnavailable
 	}
-	plan, e := publication.PrepareTree(cmd, source, candidate.Delta)
+	plan, e := publication.PrepareTree(cmd, authorizing.ProjectSHA256, source, candidate.Delta)
 	if e != nil {
 		return publication.TreePlan{}, publication.ErrPublication
 	}
@@ -250,26 +267,43 @@ func (r *Reconciler) expect(ctx context.Context, c store.PublicationReconciliati
 	}
 	var x publication.Expectation
 	var e error
-	switch c.Kind {
-	case publication.EffectTree:
+	// rebuild returns the plan the claim journaled, or an outcome. The plan
+	// carries the tree and the recorded commit identity.
+	rebuild := func() (publication.TreePlan, string) {
 		plan := r.Plan
 		if plan == nil {
 			plan = r.prepare
 		}
 		p, err := plan(ctx, cmd)
 		if errors.Is(err, publication.ErrPublication) {
-			return x, Unplanned
+			return p, Unplanned
 		}
 		if err != nil {
-			return x, Unavailable
+			return p, Unavailable
 		}
 		// The claim journaled this digest of the command and its whole plan.
 		if publication.PlanDigest(cmd, p) != c.PlanDigest {
-			return x, Unplanned
+			return p, Unplanned
+		}
+		return p, ""
+	}
+	switch c.Kind {
+	case publication.EffectTree:
+		p, outcome := rebuild()
+		if outcome != "" {
+			return x, outcome
 		}
 		x, e = publication.ExpectTree(p, cmd.SourceSHA)
 	case publication.EffectCommit:
-		x, e = publication.ExpectCommit(cmd.Repository, cmd.IssueNumber, receipt(0).SHA, cmd.SourceSHA, c.CommitTime)
+		p, outcome := rebuild()
+		if outcome != "" {
+			return x, outcome
+		}
+		// The commit is made on the acknowledged tree, with the plan's identity.
+		if receipt(0).SHA != p.ExpectedTreeSHA {
+			return x, Unplanned
+		}
+		x, e = publication.ExpectCommit(p, cmd.SourceSHA, c.CommitTime)
 	case publication.EffectBranch:
 		x, e = publication.ExpectBranch(cmd.Repository, publication.BranchName(cmd), receipt(1).SHA, cmd.SourceSHA)
 	case publication.EffectPullRequest:

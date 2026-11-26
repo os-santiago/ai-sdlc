@@ -69,7 +69,7 @@ func TestRealHomedirPublicationTreeFixture(t *testing.T) {
 		t.Fatal("canonical delta")
 	}
 	c := Command{Repository: "os-santiago/homedir", IssueNumber: 3, SourceSHA: source.SourceSHA, CandidateID: "execution-" + strings.Repeat("a", 64), DeltaSHA256: workspacebundle.Digest(raw), CandidateTreeSHA256: delta.CandidateTreeSHA256}
-	plan, err := PrepareTree(c, source, raw)
+	plan, err := PrepareTree(c, "", source, raw)
 	if err != nil {
 		t.Fatal("publication plan")
 	}

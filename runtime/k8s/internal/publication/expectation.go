@@ -1,9 +1,7 @@
 package publication
 
 import (
-	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -32,9 +30,10 @@ type Expectation struct {
 	Source string
 	// SHA is the tree or commit object; for a branch or pull request, the head commit.
 	SHA string
-	// Commit fields.
+	// Commit fields. Identity is the plan's recorded commit identity.
 	Tree, Message string
 	Date          time.Time
+	Identity      project.CommitIdentity
 	// Branch and pull request fields.
 	Branch, PlanDigest string
 }
@@ -58,16 +57,21 @@ func ExpectTree(p TreePlan, source string) (Expectation, error) {
 	return x, e
 }
 
-// ExpectCommit describes the commit created on tree with the claim's commit
-// time. Its SHA is the Git object identity of exactly that commit content.
-func ExpectCommit(repository string, issue int, tree, source string, date time.Time) (Expectation, error) {
-	if issue < 1 || issue > 2147483647 || !workspacebundle.ValidSourceSHA(tree) || date.IsZero() || date.Nanosecond() != 0 {
+// ExpectCommit describes the commit the plan creates on its tree with the
+// claim's commit time: the plan's message and recorded commit identity, built
+// by the writer's own commitBody. Its SHA is the Git object identity of exactly
+// that commit, the one CreateCommit requires the forge to return.
+func ExpectCommit(p TreePlan, source string, date time.Time) (Expectation, error) {
+	if _, e := validatePlan(p.Repository, p); e != nil || date.IsZero() || date.Nanosecond() != 0 || p.CommitIdentity.Name == "" || p.CommitIdentity.Email == "" {
 		return Expectation{}, ErrPublication
 	}
-	body := commitBody(CommitMessage(issue), tree, source, date)
-	x, e := expectation(EffectCommit, repository, source, body)
-	x.Tree, x.Message, x.Date = tree, body.Message, date.UTC()
+	body := commitBody(p.CommitMessage, p.ExpectedTreeSHA, source, p.CommitIdentity, date)
+	x, e := expectation(EffectCommit, p.Repository, source, body)
+	x.Tree, x.Message, x.Date, x.Identity = p.ExpectedTreeSHA, body.Message, date.UTC(), p.CommitIdentity
 	x.SHA = commitSHA(body)
+	if x.SHA == "" {
+		return Expectation{}, ErrPublication
+	}
 	return x, e
 }
 
@@ -90,18 +94,4 @@ func ExpectPullRequest(repository string, issue int, branch, commit, planDigest,
 	x, e := expectation(EffectPullRequest, repository, source, pullRequestBody(repository, issue, CommitMessage(issue), branch, planDigest))
 	x.SHA, x.Branch, x.PlanDigest = commit, branch, planDigest
 	return x, e
-}
-
-// commitSHA is the canonical Git commit object identity GitHub assigns to the
-// commit the Writer requests: one parent, one identity, UTC timestamps.
-func commitSHA(c commitRequest) string {
-	date, e := time.Parse(time.RFC3339, c.Author.Date)
-	if e != nil || len(c.Parents) != 1 {
-		return ""
-	}
-	person := func(p commitPerson) string {
-		return fmt.Sprintf("%s <%s> %d +0000", p.Name, p.Email, date.Unix())
-	}
-	raw := fmt.Sprintf("tree %s\nparent %s\nauthor %s\ncommitter %s\n\n%s", c.Tree, c.Parents[0], person(c.Author), person(c.Committer), c.Message)
-	return hex.EncodeToString(objectID("commit", []byte(raw)))
 }

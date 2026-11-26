@@ -7,7 +7,12 @@ journal claim, current issue/policy evidence and authenticated merge gates.
 
 The transport accepts only a validated AI-SDLC branch and fixed Homedir PR. It
 sends one `PUT /pulls/{number}/merge` with an exact expected head SHA, the `merge`
-method and a fixed commit title containing `[skip release]`. Its caller must
+method, a fixed commit title containing `[skip release]` and the fixed message
+`Refs #<issue>`. The message has no `Signed-off-by` trailer: GitHub sets the merge
+commit's author and committer from the credential's account, so a trailer naming
+any other identity would attest a sign-off by someone who did not create the
+commit. The merged change keeps the publication commit's sign-off by the
+installation's [commit identity](publication-writer.md#commit-identity). Its caller must
 verify applicable strict required checks and no bypass actors immediately before
 sending. The GitHub API has no base-SHA precondition; native strict protection
 is necessary to prevent a concurrent base update from bypassing validation.

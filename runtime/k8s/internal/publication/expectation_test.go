@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
@@ -34,7 +35,7 @@ func TestExpectationsMatchWriterJournalDigests(t *testing.T) {
 		t.Fatal("writer did not journal four requests", len(fenced))
 	}
 	tree, e1 := ExpectTree(p, source)
-	c, e2 := ExpectCommit(p.Repository, 1581, p.ExpectedTreeSHA, source, date)
+	c, e2 := ExpectCommit(p, source, date)
 	branch, e3 := ExpectBranch(p.Repository, p.Branch, commit, source)
 	pr, e4 := ExpectPullRequest(p.Repository, 1581, p.Branch, commit, planDigest, source)
 	if e1 != nil || e2 != nil || e3 != nil || e4 != nil {
@@ -45,17 +46,30 @@ func TestExpectationsMatchWriterJournalDigests(t *testing.T) {
 			t.Fatal("expectation digest differs from the journaled request", x.Kind)
 		}
 	}
-	if tree.SHA != p.ExpectedTreeSHA || c.Tree != p.ExpectedTreeSHA || !workspacebundle.ValidSourceSHA(c.SHA) || branch.SHA != commit || branch.Branch != p.Branch || pr.SHA != commit || pr.PlanDigest != planDigest {
+	if tree.SHA != p.ExpectedTreeSHA || c.Tree != p.ExpectedTreeSHA || c.Identity != p.CommitIdentity || !workspacebundle.ValidSourceSHA(c.SHA) || branch.SHA != commit || branch.Branch != p.Branch || pr.SHA != commit || pr.PlanDigest != planDigest {
 		t.Fatal("planned identities")
 	}
 	// A different commit time is a different planned commit.
-	if other, _ := ExpectCommit(p.Repository, 1581, p.ExpectedTreeSHA, source, date.Add(time.Second)); other.SHA == c.SHA || other.RequestDigest == c.RequestDigest {
+	if other, _ := ExpectCommit(p, source, date.Add(time.Second)); other.SHA == c.SHA || other.RequestDigest == c.RequestDigest {
 		t.Fatal("commit time not bound")
+	}
+	// A different recorded identity is a different planned commit.
+	q := p
+	q.CommitIdentity = configuredIdentity
+	if other, e := ExpectCommit(q, source, date); e != nil || other.SHA == c.SHA || other.RequestDigest == c.RequestDigest || other.Identity != configuredIdentity {
+		t.Fatal("commit identity not bound", e)
 	}
 	for _, bad := range []func() error{
 		func() error { _, e := ExpectBranch(p.Repository, "main", commit, source); return e },
 		func() error {
-			_, e := ExpectCommit(p.Repository, 1581, p.ExpectedTreeSHA, source, date.Add(time.Millisecond))
+			_, e := ExpectCommit(p, source, date.Add(time.Millisecond))
+			return e
+		},
+		func() error {
+			// A plan without a recorded identity cannot plan a commit.
+			q := p
+			q.CommitIdentity = project.CommitIdentity{}
+			_, e := ExpectCommit(q, source, date)
 			return e
 		},
 		func() error {
@@ -91,10 +105,13 @@ func TestPlannedCommitSHAIsGitObjectIdentity(t *testing.T) {
 	blob := run("source\n", nil, "hash-object", "-w", "--stdin")
 	tree := run("100644 blob "+blob+"\tREADME.md\n", nil, "mktree")
 	date := time.Date(2026, 11, 25, 1, 2, 3, 0, time.UTC)
-	identity := []string{"GIT_AUTHOR_NAME=Sergio Canales", "GIT_AUTHOR_EMAIL=sergio.canales.e@gmail.com", "GIT_COMMITTER_NAME=Sergio Canales", "GIT_COMMITTER_EMAIL=sergio.canales.e@gmail.com",
-		"GIT_AUTHOR_DATE=" + date.Format(time.RFC3339), "GIT_COMMITTER_DATE=" + date.Format(time.RFC3339), "TZ=UTC"}
+	// A non-default recorded identity: the expectation must use the plan's.
+	p := writerPlan()
+	p.ExpectedTreeSHA, p.CommitIdentity = tree, configuredIdentity
+	identity := []string{"GIT_AUTHOR_NAME=" + configuredIdentity.Name, "GIT_AUTHOR_EMAIL=" + configuredIdentity.Email, "GIT_COMMITTER_NAME=" + configuredIdentity.Name, "GIT_COMMITTER_EMAIL=" + configuredIdentity.Email,
+		"GIT_AUTHOR_DATE=" + date.Format(time.RFC3339), "GIT_COMMITTER_DATE=" + date.Format(time.RFC3339), "TZ=UTC", "GIT_CONFIG_NOSYSTEM=1", "HOME=" + dir}
 	parent := run("parent\n", identity, "commit-tree", tree)
-	x, e := ExpectCommit("os-santiago/homedir", 1581, tree, parent, date)
+	x, e := ExpectCommit(p, parent, date)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -110,7 +127,7 @@ func TestPlannedCommitSHAIsGitObjectIdentity(t *testing.T) {
 		t.Fatalf("planned commit %s, git %s", x.SHA, got)
 	}
 	var body commitRequest
-	raw, _ := json.Marshal(commitBody(CommitMessage(1581), tree, parent, date))
+	raw, _ := json.Marshal(commitBody(p.CommitMessage, tree, parent, p.CommitIdentity, date))
 	if json.Unmarshal(raw, &body) != nil || body.Message != x.Message {
 		t.Fatal("expectation message differs from the request")
 	}

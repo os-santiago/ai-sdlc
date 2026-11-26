@@ -8,7 +8,9 @@ for the rules it drives.
 
 ## 1. Write the manifest
 
-Start from [`examples/ai-sdlc-sample.project.json`](../../examples/ai-sdlc-sample.project.json):
+Start from [`examples/ai-sdlc-sample.project.json`](../../examples/ai-sdlc-sample.project.json)
+(Go) or [`examples/ai-sdlc-sample-python.project.json`](../../examples/ai-sdlc-sample-python.project.json)
+(Python, for [ai-sdlc-sample-python](https://github.com/os-santiago/ai-sdlc-sample-python)):
 
 | Section | What to set |
 |---|---|
@@ -20,6 +22,7 @@ Start from [`examples/ai-sdlc-sample.project.json`](../../examples/ai-sdlc-sampl
 | `verification.env` | Optional reviewed toolchain variables, for example `GOTOOLCHAIN=local` |
 | `verification.analysis` | Optional static analysis: up to 4 argv `commands` and one `timeoutSeconds` (10–300, at most 600 in total), for example `{"commands": [["go", "vet", "./..."]], "timeoutSeconds": 120}`. They run offline in `verification.image`, on the baseline and on the candidate. A command that passes on the baseline and fails on the candidate refuses it (`refused-candidate-analysis`). See the [candidate baseline](../architecture/candidate-quality-baseline.md#static-analysis) |
 | `publication` | The paths a candidate may change, and the file and size limits |
+| `publication.commitIdentity` | Optional `name` and `email` of the author, committer and `Signed-off-by` of every published commit. Defaults to `ai-sdlc[bot] <noreply@ai-sdlc.invalid>`; omitted when absent, so existing digests do not change. Images older than this field refuse a manifest that sets it, so reinstall the manifest without it before rolling back (see [rollback](publication-writer.md#rollback)). See [commit identity](publication-writer.md#commit-identity) |
 | `merge` | The required checks (context and GitHub App ID), strict checks, resolved threads, zero human approvals. `baseBranch` must be `main` |
 | `generation.toolchain` | Optional. The toolchain root inside `verification.image` and the directories under it for the generator's `PATH`. See below |
 
@@ -66,7 +69,30 @@ The copier enforces these rules:
 - The destination must not exist yet: it is a subdirectory of the volume,
   written atomically.
 
-Only self-contained toolchains, such as Go's, qualify.
+Only self-contained toolchains, such as Go's, qualify. The official Python
+images do not: their interpreter is dynamically linked against glibc, and a
+`path` directory may not contain `python3`. The Python example therefore
+omits `generation.toolchain`; the generator gets the offline guidance and
+the verifier still runs the repository's `unittest` suite.
+
+The Python example runs the suite as `python3 -I -B -m unittest discover -s . -t .`.
+Isolated mode (`-I`) keeps the candidate's working tree off `sys.path` until
+discovery starts, so a candidate's `unittest.py` or `sitecustomize.py` cannot
+replace the test runner, and it ignores `PYTHON*` variables; `-B` keeps the
+no-bytecode behavior. The example also denies root-level `*.py` files to candidates.
+Isolation protects only the verifier: a repository CI that runs
+`python -m unittest` without `-I` would import a root `unittest.py`, and its
+required check would pass without running tests on every later pull request.
+Use `python -I -m unittest` in the repository's CI too. A package's `load_tests` hook can still change which
+tests run, as Go's `init` functions can in the Go example. Package files are
+product code, so they cannot be listed in `harnessGlobs`; the independent
+review is the control for that case.
+
+An issue that needs a new top-level package is refused with `no-failing-test`.
+The check that a new test fails on the old code runs the base tree plus the
+candidate's test files only. Without the new package's `__init__.py`, discovery
+skips the directory and the run passes. Issues inside existing packages are
+not affected.
 
 #### What the generator gets
 

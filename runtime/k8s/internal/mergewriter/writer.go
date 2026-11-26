@@ -54,6 +54,13 @@ func New(credential forge.Credential) (*Writer, error) {
 	return &Writer{token: credential.Token, base: "https://api.github.com", repository: credential.Repository, http: &http.Client{Transport: transport, Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
+// mergeMessage is the merge commit body. It carries no Signed-off-by: GitHub
+// sets the merge commit's author and committer from the credential's account,
+// so a trailer naming any other identity would attest a sign-off by someone
+// who did not create the commit. The merged change keeps the publication
+// commit's sign-off by the installation's configured commit identity.
+func mergeMessage(issue int) string { return "Refs #" + strconv.Itoa(issue) }
+
 // Merge sends exactly one PUT, guarded by the expected head SHA and native
 // protection. The caller must first verify a strict applicable ruleset with no
 // bypass actors. This transport never treats a failure as proof of no effect.
@@ -84,7 +91,7 @@ func (w *Writer) Merge(ctx context.Context, e mergegate.Expected, issue int, fen
 		Method  string `json:"merge_method"`
 		Title   string `json:"commit_title"`
 		Message string `json:"commit_message"`
-	}{e.HeadSHA, "merge", title, "Refs #" + strconv.Itoa(issue) + "\n\nSigned-off-by: Sergio Canales <sergio.canales.e@gmail.com>"}
+	}{e.HeadSHA, "merge", title, mergeMessage(issue)}
 	body, _ := json.Marshal(value)
 	path := "/repos/" + w.repository + "/pulls/" + strconv.Itoa(e.PullRequest) + "/merge"
 	binding, _ := json.Marshal(struct {

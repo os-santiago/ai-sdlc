@@ -7,8 +7,10 @@ read-only evidence identity. It never borrows a verifier or worker credential.
 
 Before acquiring a 120-second claim, it reconstructs the candidate from public
 pinned source and derives the exact two-file Git tree. The plan fixes the branch,
-Sergio Canales commit identity and `[skip release]` marker. Model output cannot
-supply a URL, shell command, branch, publication waiver or deployment target.
+the installation's [commit identity](publication-writer.md#commit-identity) and
+the `[skip release]` marker; the plan digest the claim records binds all three.
+Model output cannot supply a URL, shell command, branch, commit identity,
+publication waiver or deployment target.
 
 The writer's pre-send callback commits an intent bound to the actual serialized
 HTTP body. It checks authority again before transport and after the response.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publication"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publicationrecovery"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
@@ -67,7 +68,7 @@ func newUncertainPublication(t *testing.T, kind string) uncertainPublication {
 
 // newPlannedUncertainPublication journals with the plan that build returns
 // (nil: a synthetic plan), optionally configuring the fixture first.
-func newPlannedUncertainPublication(t *testing.T, kind string, build func(*testing.T, *store.DB, publication.Command) publication.TreePlan, configure ...func(*fixture)) uncertainPublication {
+func newPlannedUncertainPublication(t *testing.T, kind string, build func(*testing.T, *lifecycleFixture, *store.DB, publication.Command) publication.TreePlan, configure ...func(*fixture)) uncertainPublication {
 	t.Helper()
 	f, db, r := publicationJournalFixture(t, configure...)
 	ctx := context.Background()
@@ -76,7 +77,7 @@ func newPlannedUncertainPublication(t *testing.T, kind string, build func(*testi
 		t.Fatal("publication command")
 	}
 	plan := publication.TreePlan{Repository: cmd.Repository, Request: publication.TreeRequest{BaseTree: strings.Repeat("a", 40), Tree: []publication.TreeEntry{{Path: verification.LocaleSource, Mode: "100644", Type: "blob", Content: "source"}, {Path: verification.LocaleNewTest, Mode: "100644", Type: "blob", Content: "test"}}},
-		ExpectedTreeSHA: strings.Repeat("b", 40), Branch: publication.BranchName(cmd), CommitMessage: publication.CommitMessage(cmd.IssueNumber)}
+		ExpectedTreeSHA: strings.Repeat("b", 40), Branch: publication.BranchName(cmd), CommitMessage: publication.CommitMessage(cmd.IssueNumber), CommitIdentity: project.DefaultCommitIdentity}
 	if build != nil {
 		// The candidate projection is part of the installed publication grants.
 		passwords := map[string]string{}
@@ -86,7 +87,7 @@ func newPlannedUncertainPublication(t *testing.T, kind string, build func(*testi
 		if e := f.Admin.ProvisionRolesForCapabilities(ctx, passwords, "verification", true, true); e != nil {
 			t.Fatal(e)
 		}
-		plan = build(t, db, cmd)
+		plan = build(t, f, db, cmd)
 	}
 	claim, e := db.ClaimPublication(ctx, r.ID, publication.PlanDigest(cmd, plan))
 	if e != nil {
@@ -94,7 +95,7 @@ func newPlannedUncertainPublication(t *testing.T, kind string, build func(*testi
 	}
 	u := uncertainPublication{f: f, db: db, request: r, command: cmd, plan: plan, claim: claim}
 	tree, _ := publication.ExpectTree(plan, cmd.SourceSHA)
-	commit, _ := publication.ExpectCommit(cmd.Repository, cmd.IssueNumber, plan.ExpectedTreeSHA, cmd.SourceSHA, claim.CommitTime)
+	commit, _ := publication.ExpectCommit(plan, cmd.SourceSHA, claim.CommitTime)
 	branch, _ := publication.ExpectBranch(cmd.Repository, plan.Branch, commit.SHA, cmd.SourceSHA)
 	pr, _ := publication.ExpectPullRequest(cmd.Repository, cmd.IssueNumber, plan.Branch, commit.SHA, claim.PlanDigest, cmd.SourceSHA)
 	for _, x := range []publication.Expectation{tree, commit, branch, pr} {
@@ -437,7 +438,7 @@ func TestPublicationReconciliationInconsistentEffectDoesNotBlockListing(t *testi
 // The default tree plan: the immutable candidate delta read from the journal,
 // applied to the fetched pinned source and rebuilt by PrepareTree, must match
 // the plan digest the claim journaled, exactly as the controller computes it.
-func TestPublicationReconciliationRebuildsTreePlanFromCandidate(t *testing.T) {
+func TestPublicationReconciliationRebuildsPlanFromCandidate(t *testing.T) {
 	source := workspacebundle.Bundle{Version: workspacebundle.Version, Files: []workspacebundle.File{
 		{Path: "README.md", Mode: 0644, Data: []byte("fixture source\n")},
 		{Path: verification.LocaleSource, Mode: 0644, Data: []byte("old source\n")},
@@ -448,45 +449,123 @@ func TestPublicationReconciliationRebuildsTreePlanFromCandidate(t *testing.T) {
 		f.sourceOverride = &source
 		f.candidateChanges = map[string]string{verification.LocaleSource: "new source\n", verification.LocaleNewTest: "new test\n"}
 	}
-	controllerPlan := func(t *testing.T, db *store.DB, cmd publication.Command) publication.TreePlan {
+	controllerPlan := func(t *testing.T, f *lifecycleFixture, db *store.DB, cmd publication.Command) publication.TreePlan {
 		candidate, e := db.ReadPublicationCandidate(context.Background(), cmd.CandidateID)
 		if e != nil {
 			t.Fatal(e)
 		}
-		plan, e := publication.PrepareTree(cmd, source, candidate.Delta)
+		// As the controller does: the authorizing policy's bound manifest.
+		if f.Material.Policy.Revision() != cmd.AuthorityRevision {
+			t.Fatal("fixture policy did not authorize the command")
+		}
+		plan, e := publication.PrepareTree(cmd, f.Material.Policy.ProjectSHA256, source, candidate.Delta)
 		if e != nil {
 			t.Fatal("controller plan", e)
 		}
 		return plan
 	}
-	for _, c := range []struct {
-		state, outcome string
-	}{{publication.ObservedExact, publicationrecovery.Completed}, {publication.ObservedAbsent, publicationrecovery.NotSent}} {
-		t.Run(c.outcome, func(t *testing.T) {
-			u := newPlannedUncertainPublication(t, "tree", controllerPlan, configure)
-			u.settle(t)
-			ctx := context.Background()
-			fetches := 0
-			r := &publicationrecovery.Reconciler{DB: u.db, Log: func(string, ...any) {},
-				Fetch: func(_ context.Context, repo, sha string) (workspacebundle.Bundle, error) {
-					fetches++
-					if repo != u.command.Repository || sha != u.command.SourceSHA {
-						return workspacebundle.Bundle{}, errors.New("unplanned source")
-					}
-					return source, nil
-				}}
-			forge := &reconcileForge{observation: publication.Observation{State: c.state}}
-			step, attempted, e := r.Step(ctx, forge)
-			if e != nil || !attempted || step.Outcome != c.outcome || fetches != 1 {
-				t.Fatal("default tree plan", step, e, fetches)
-			}
-			if len(forge.seen) != 1 || forge.seen[0].SHA != u.plan.ExpectedTreeSHA || forge.seen[0].RequestDigest != u.planned.RequestDigest || forge.writes.Load() != 0 {
-				t.Fatal("observed tree differs from the controller plan")
-			}
-			if blocked, e := u.db.PublicationBlocked(ctx); e != nil || blocked {
-				t.Fatal("quarantine")
-			}
-		})
+	reconciler := func(u uncertainPublication, fetches *int) *publicationrecovery.Reconciler {
+		return &publicationrecovery.Reconciler{DB: u.db, Log: func(string, ...any) {},
+			Policy: func() (authority.Policy, error) { return u.f.Material.Policy, nil },
+			Fetch: func(_ context.Context, repo, sha string) (workspacebundle.Bundle, error) {
+				*fetches++
+				if repo != u.command.Repository || sha != u.command.SourceSHA {
+					return workspacebundle.Bundle{}, errors.New("unplanned source")
+				}
+				return source, nil
+			}}
+	}
+	// A tree and a commit are both planned from the rebuilt plan: the commit
+	// takes the plan's recorded identity.
+	for _, kind := range []string{"tree", "commit"} {
+		for _, c := range []struct {
+			state, outcome string
+		}{{publication.ObservedExact, publicationrecovery.Completed}, {publication.ObservedAbsent, publicationrecovery.NotSent}} {
+			t.Run(kind+"/"+c.outcome, func(t *testing.T) {
+				u := newPlannedUncertainPublication(t, kind, controllerPlan, configure)
+				u.settle(t)
+				ctx := context.Background()
+				fetches := 0
+				forge := &reconcileForge{observation: publication.Observation{State: c.state}}
+				step, attempted, e := reconciler(u, &fetches).Step(ctx, forge)
+				if e != nil || !attempted || step.Outcome != c.outcome || fetches != 1 {
+					t.Fatal("default plan", step, e, fetches)
+				}
+				if len(forge.seen) != 1 || forge.seen[0] != u.planned || forge.writes.Load() != 0 {
+					t.Fatal("observed effect differs from the controller plan")
+				}
+				if kind == "commit" && (forge.seen[0].Tree != u.plan.ExpectedTreeSHA || forge.seen[0].Identity != u.plan.CommitIdentity) {
+					t.Fatal("commit not planned from the rebuilt plan")
+				}
+				if blocked, e := u.db.PublicationBlocked(ctx); e != nil || blocked {
+					t.Fatal("quarantine")
+				}
+			})
+		}
+	}
+	// Without the authorizing policy the plan cannot be rebuilt: unavailable
+	// when no policy can be read, unplanned once another policy is installed.
+	t.Run("authorizing-policy", func(t *testing.T) {
+		u := newPlannedUncertainPublication(t, "commit", controllerPlan, configure)
+		u.settle(t)
+		ctx := context.Background()
+		forge := &reconcileForge{observation: publication.Observation{State: publication.ObservedExact}}
+		fetches := 0
+		r := reconciler(u, &fetches)
+		r.Policy = nil
+		if step, _, e := r.Step(ctx, forge); e != nil || step.Outcome != publicationrecovery.Unavailable {
+			t.Fatal("rebuild without a policy", step, e)
+		}
+		r = reconciler(u, &fetches)
+		other := u.f.Material.Policy
+		other.Autonomy = "auto-merge-low"
+		if other.Revision() == u.command.AuthorityRevision {
+			t.Fatal("fixture: the other policy has the same revision")
+		}
+		r.Policy = func() (authority.Policy, error) { return other, nil }
+		if step, _, e := r.Step(ctx, forge); e != nil || step.Outcome != publicationrecovery.Unplanned {
+			t.Fatal("rebuild under another policy", step, e)
+		}
+		if len(forge.seen) != 0 || fetches != 0 {
+			t.Fatal("observed without the authorizing plan")
+		}
+		if blocked, e := u.db.PublicationBlocked(ctx); e != nil || !blocked {
+			t.Fatal("quarantine lifted")
+		}
+	})
+}
+
+// A plan with a non-default commit identity reconciles its commit as exact
+// under that identity. A plan rebuilt with another identity is not the plan
+// the claim journaled, so nothing is observed.
+func TestPublicationReconciliationCommitUsesThePlannedIdentity(t *testing.T) {
+	identity := project.CommitIdentity{Name: "Example Delivery Bot", Email: "delivery-bot@example.org"}
+	configured := func(t *testing.T, _ *lifecycleFixture, _ *store.DB, cmd publication.Command) publication.TreePlan {
+		return publication.TreePlan{Repository: cmd.Repository, Request: publication.TreeRequest{BaseTree: strings.Repeat("a", 40), Tree: []publication.TreeEntry{{Path: verification.LocaleSource, Mode: "100644", Type: "blob", Content: "source"}, {Path: verification.LocaleNewTest, Mode: "100644", Type: "blob", Content: "test"}}},
+			ExpectedTreeSHA: strings.Repeat("b", 40), Branch: publication.BranchName(cmd), CommitMessage: publication.CommitMessage(cmd.IssueNumber), CommitIdentity: identity}
+	}
+	u := newPlannedUncertainPublication(t, "commit", configured)
+	u.settle(t)
+	ctx := context.Background()
+	if u.planned.Identity != identity {
+		t.Fatal("fixture commit expectation", u.planned.Identity)
+	}
+	forge := &reconcileForge{observation: publication.Observation{State: publication.ObservedExact}}
+	r := u.reconciler()
+	defaulted := u.plan
+	defaulted.CommitIdentity = project.DefaultCommitIdentity
+	r.Plan = func(context.Context, publication.Command) (publication.TreePlan, error) { return defaulted, nil }
+	if step, _, e := r.Step(ctx, forge); e != nil || step.Outcome != publicationrecovery.Unplanned || len(forge.seen) != 0 {
+		t.Fatal("commit planned with another identity", step, e)
+	}
+	if step, _, e := u.reconciler().Step(ctx, forge); e != nil || step.Outcome != publicationrecovery.Completed {
+		t.Fatal("commit with the planned identity", step, e)
+	}
+	if len(forge.seen) != 1 || forge.seen[0] != u.planned || forge.seen[0].Identity != identity {
+		t.Fatal("observed commit expectation", forge.seen)
+	}
+	if row := u.effect(t, "commit"); !row.completed || row.receipt.SHA != u.planned.SHA || !row.receipt.Observed {
+		t.Fatal("observed commit receipt", row)
 	}
 }
 
@@ -595,7 +674,7 @@ func TestPublicationAcknowledgementRejectsObservedReceipt(t *testing.T) {
 		t.Fatal("publication command")
 	}
 	plan := publication.TreePlan{Repository: cmd.Repository, Request: publication.TreeRequest{BaseTree: strings.Repeat("a", 40), Tree: []publication.TreeEntry{{Path: verification.LocaleSource, Mode: "100644", Type: "blob", Content: "source"}, {Path: verification.LocaleNewTest, Mode: "100644", Type: "blob", Content: "test"}}},
-		ExpectedTreeSHA: strings.Repeat("b", 40), Branch: publication.BranchName(cmd), CommitMessage: publication.CommitMessage(cmd.IssueNumber)}
+		ExpectedTreeSHA: strings.Repeat("b", 40), Branch: publication.BranchName(cmd), CommitMessage: publication.CommitMessage(cmd.IssueNumber), CommitIdentity: project.DefaultCommitIdentity}
 	claim, e := db.ClaimPublication(ctx, r.ID, publication.PlanDigest(cmd, plan))
 	if e != nil {
 		t.Fatal(e)

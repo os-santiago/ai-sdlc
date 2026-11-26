@@ -46,10 +46,20 @@ receipts of earlier effects), it rebuilds the exact request body the writer
 sends. It continues only when that body's SHA-256 equals the request digest
 journaled before the POST. Otherwise the outcome is `unplanned`.
 
+For a tree or a commit it first rebuilds the plan as the controller did: the
+candidate delta applied to the pinned source, under the manifest bound by the
+policy that authorized the command (`PrepareTree` with that policy's
+`ProjectSHA256`). The installed policy's revision must equal the command's
+`authorityRevision`. If no policy can be read, the outcome is `unavailable`. If
+another policy is now installed, the outcome is `unplanned`, because the
+authorizing manifest can no longer be bound. The rebuilt plan's digest must
+equal the claim's plan digest. That digest binds the plan's recorded commit
+identity, so a reconfigured identity cannot change what is observed.
+
 | Effect | Planned from | Planned identity |
 | --- | --- | --- |
 | tree | candidate delta applied to the pinned source (the controller's own rebuild); its command-and-plan digest must equal the claim's plan digest | `ExpectedTreeSHA`, content-addressed |
-| commit | tree receipt, source SHA, claim commit time, fixed message and identity | Git commit object SHA computed locally (tested against `git commit-tree`) |
+| commit | the rebuilt plan (its tree must equal the tree receipt, its message and recorded commit identity), source SHA, claim commit time; built by the writer's own `commitBody` | Git commit object SHA computed by the writer's `commitSHA` (tested against `git commit-tree`), the SHA `CreateCommit` requires the forge to return |
 | branch | `BranchName(command)` and the commit receipt | `refs/heads/<branch>` at the commit SHA |
 | pull request | branch and commit receipts, the claim's plan digest | open PR from the branch at the commit whose body carries `Publication proof SHA-256: <plan digest>` |
 
@@ -67,7 +77,7 @@ the instant of the `404`.
 | Effect | Exists exactly → `completed` | Absent | Anything else |
 | --- | --- | --- | --- |
 | tree | `GET /git/trees/<sha>` is 200, same SHA, not truncated | 404: `not-sent` | `mismatch` or `unavailable` |
-| commit | `GET /git/commits/<sha>` is 200 with the planned tree, single parent, message, author and committer | 404: `not-sent` | `mismatch` or `unavailable` |
+| commit | `GET /git/commits/<sha>` is 200 with the planned tree, single parent, message, and the plan's identity as author and committer | 404: `not-sent` | `mismatch` or `unavailable` |
 | branch | `GET /git/ref/heads/<branch>` is 200: a commit ref at exactly the planned SHA | 404: `unproven` (stays quarantined) | at another SHA: `mismatch` |
 | pull request | `GET /pulls?state=all&head=<owner>:<branch>` lists exactly one PR: open, not draft, head is the branch at the planned SHA in this repository, base `main` at the planned source SHA (the check the writer applies to the creation response), body carries the plan digest | the list is empty and `GET /git/ref/heads/<branch>` still shows the branch at the planned SHA: `not-sent` | several PRs; a closed, edited, retargeted or differently based one; or an empty list while the branch is gone or moved: `mismatch` |
 

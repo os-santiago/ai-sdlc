@@ -104,7 +104,7 @@ func (r *Reader) valid(x Expectation) bool {
 	case EffectTree:
 		return true
 	case EffectCommit:
-		return workspacebundle.ValidSourceSHA(x.Tree) && x.Message != "" && !x.Date.IsZero()
+		return workspacebundle.ValidSourceSHA(x.Tree) && x.Message != "" && !x.Date.IsZero() && x.Identity.Name != "" && x.Identity.Email != ""
 	case EffectBranch:
 		return pilotBranch.MatchString(x.Branch)
 	case EffectPullRequest:
@@ -195,7 +195,8 @@ func (r *Reader) Observe(ctx context.Context, x Expectation) (Observation, error
 		if !found {
 			return absent()
 		}
-		person := commitPerson{"Sergio Canales", "sergio.canales.e@gmail.com", x.Date.UTC().Format(time.RFC3339)}
+		// The plan's recorded identity, exactly as commitBody wrote it.
+		person := commitPerson{x.Identity.Name, x.Identity.Email, x.Date.UTC().Format(time.RFC3339)}
 		return exact(commit.SHA == x.SHA && commit.Tree.SHA == x.Tree && len(commit.Parents) == 1 && commit.Parents[0].SHA == x.Source && strings.TrimSuffix(commit.Message, "\n") == strings.TrimSuffix(x.Message, "\n") && sameInstant(commit.Author, person) && sameInstant(commit.Committer, person))
 	case EffectBranch:
 		var ref gitRef

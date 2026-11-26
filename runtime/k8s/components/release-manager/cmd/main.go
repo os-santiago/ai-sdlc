@@ -178,7 +178,7 @@ func main() {
 		return nil
 	}
 	// Pacing for read-only reconciliation of uncertain effects lives across polls.
-	reconciler := &publicationrecovery.Reconciler{DB: c.DB}
+	reconciler := &publicationrecovery.Reconciler{DB: c.DB, Policy: func() (authority.Policy, error) { p, _, _, e := policy(); return p, e }}
 	stop := bootstrap.Periodic(5*time.Second, func(ctx context.Context) {
 		value, e := credential()
 		if e != nil {

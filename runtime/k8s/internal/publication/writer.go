@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -24,7 +26,8 @@ import (
 // fresh effect intent before calling, revalidate current durable authority via
 // fence, and quarantine every ambiguous result. It cannot resume/adopt a branch,
 // update a ref, merge, release, deploy or derive authority from a model response.
-// Only the reviewed Homedir pilot is supported; URLs and identity are fixed.
+// Only supported repositories are accepted and URLs are fixed. The commit
+// identity comes from the plan, which resolves it from the installed manifest.
 type Writer struct {
 	repository, token, base string
 	http                    *http.Client
@@ -116,7 +119,7 @@ func validatePlan(repository string, p TreePlan) (int, error) {
 		return 0, ErrPublication
 	}
 	n, e := strconv.Atoi(match[1])
-	if e != nil || n > 2147483647 || p.CommitMessage != "fix(ai-sdlc): address issue #"+match[1]+" [skip release]" || !workspacebundle.ValidSourceSHA(p.Request.BaseTree) || !workspacebundle.ValidSourceSHA(p.ExpectedTreeSHA) {
+	if e != nil || n > 2147483647 || p.CommitMessage != "fix(ai-sdlc): address issue #"+match[1]+" [skip release]" || p.CommitIdentity.Validate() != nil || !workspacebundle.ValidSourceSHA(p.Request.BaseTree) || !workspacebundle.ValidSourceSHA(p.ExpectedTreeSHA) {
 		return 0, ErrPublication
 	}
 	paths, total := map[string]bool{}, 0
@@ -162,14 +165,33 @@ type commitRequest struct {
 	Committer commitPerson `json:"committer"`
 }
 
-// The request bodies below are shared with the read-only reconciler, which
-// re-derives them to prove which journaled write it observes.
-func commitBody(subject, tree, parent string, date time.Time) commitRequest {
-	person := commitPerson{"Sergio Canales", "sergio.canales.e@gmail.com", date.UTC().Format(time.RFC3339)}
-	message := subject + "\n\nSigned-off-by: Sergio Canales <sergio.canales.e@gmail.com>\n"
+// commitBody is the single builder of the commit request a publication
+// sends. The identity is the author, the committer and the Signed-off-by
+// trailer; the date is the claim's commit time.
+func commitBody(subject, tree, parent string, identity project.CommitIdentity, date time.Time) commitRequest {
+	person := commitPerson{identity.Name, identity.Email, date.UTC().Format(time.RFC3339)}
+	message := subject + "\n\nSigned-off-by: " + identity.Name + " <" + identity.Email + ">\n"
 	return commitRequest{message, tree, []string{parent}, person, person}
 }
 
+// commitSHA is the Git commit object identity of a commit request: the SHA
+// the forge assigns to exactly that commit (one parent, UTC timestamps).
+func commitSHA(c commitRequest) string {
+	author, e1 := time.Parse(time.RFC3339, c.Author.Date)
+	committer, e2 := time.Parse(time.RFC3339, c.Committer.Date)
+	if e1 != nil || e2 != nil || len(c.Parents) != 1 {
+		return ""
+	}
+	person := func(p commitPerson, date time.Time) string {
+		return fmt.Sprintf("%s <%s> %d +0000", p.Name, p.Email, date.Unix())
+	}
+	raw := fmt.Sprintf("tree %s\nparent %s\nauthor %s\ncommitter %s\n\n%s", c.Tree, c.Parents[0], person(c.Author, author), person(c.Committer, committer), c.Message)
+	return hex.EncodeToString(objectID("commit", []byte(raw)))
+}
+
+// The request bodies below, like commitBody and commitSHA, are shared with
+// the read-only reconciler, which re-derives them to prove which journaled
+// write it observes.
 type refRequest struct {
 	Ref string `json:"ref"`
 	SHA string `json:"sha"`
@@ -196,12 +218,14 @@ func pullRequestBody(repository string, issue int, title, branch, proofDigest st
 	return pullRequestRequest{Title: title, Body: IssueReference(repository, issue) + "\n\nAI-SDLC verified candidate.\n" + proofMarker(proofDigest) + "\nIt merges only after the repository's required checks pass.\n", Head: branch, Base: "main"}
 }
 
+// CreateCommit uses the plan's recorded identity, not the current
+// installation's, and accepts only the commit object it planned.
 func (w *Writer) CreateCommit(ctx context.Context, fence WriteFence, p TreePlan, sourceSHA string, date time.Time) (string, error) {
 	if _, e := w.validatePlan(p); e != nil || !workspacebundle.ValidSourceSHA(sourceSHA) || date.IsZero() || date.Nanosecond() != 0 || date.Before(time.Now().Add(-time.Hour)) || date.After(time.Now().Add(time.Minute)) {
 		return "", ErrPublication
 	}
-	value := commitBody(p.CommitMessage, p.ExpectedTreeSHA, sourceSHA, date)
-	message, person := value.Message, value.Author
+	value := commitBody(p.CommitMessage, p.ExpectedTreeSHA, sourceSHA, p.CommitIdentity, date)
+	message, person, planned := value.Message, value.Author, commitSHA(value)
 	var result struct {
 		SHA     string `json:"sha"`
 		Message string `json:"message"`
@@ -214,7 +238,7 @@ func (w *Writer) CreateCommit(ctx context.Context, fence WriteFence, p TreePlan,
 		Author    commitPerson `json:"author"`
 		Committer commitPerson `json:"committer"`
 	}
-	if w.post(ctx, fence, "/git/commits", value, &result) != nil || !workspacebundle.ValidSourceSHA(result.SHA) || result.Tree.SHA != p.ExpectedTreeSHA || len(result.Parents) != 1 || result.Parents[0].SHA != sourceSHA || strings.TrimSuffix(result.Message, "\n") != strings.TrimSuffix(message, "\n") || result.Author != person || result.Committer != person {
+	if w.post(ctx, fence, "/git/commits", value, &result) != nil || !workspacebundle.ValidSourceSHA(result.SHA) || result.SHA != planned || result.Tree.SHA != p.ExpectedTreeSHA || len(result.Parents) != 1 || result.Parents[0].SHA != sourceSHA || strings.TrimSuffix(result.Message, "\n") != strings.TrimSuffix(message, "\n") || result.Author != person || result.Committer != person {
 		return "", ErrPublication
 	}
 	return result.SHA, nil
