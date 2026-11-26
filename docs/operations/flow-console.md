@@ -150,7 +150,7 @@ ids it has not published before.
 | Journal | Events |
 |---|---|
 | `intake_revisions` | intake `completed` for every observed revision (step `observed`, attribute `generation`); only the repository, issue, generation and time are readable, never the payload |
-| `admissions` | admission `completed` (`accepted`), `failed` (`rejected`) or `blocked` (`needs-clarification`, `needs-human`, `requires-decomposition`); a rejection at or after the issue's merge is the closed issue's last revision and becomes a `completed` step `issue-closed` |
+| `admissions` | admission `completed` (`accepted`), `failed` (`rejected`) or `blocked` (`needs-clarification`, `needs-human`, `requires-decomposition`); the first rejection after each merge is the closed issue's revision and becomes a `completed` step `issue-closed`; every later rejection (for example of a reopened issue) stays a refusal |
 | `work_items`, `plans` | planning `completed`; they also map work items to issues |
 | `execution_requests` | `waiting` (queued), `stale-wait`, `retried` (attempt > 1), `completed` (candidate captured), `stopped-safely` (stop reason, or `worker-exit-<code>` with an observed exit code), `blocked` (`lease-lapsed`) |
 | `execution_lifecycles` | `started` (claim), lifecycle `phase` on stops, `quarantined` (`cleanup-uncertain`), `degraded` (`cleanup-retried`) |
@@ -172,7 +172,9 @@ The journal records state, not a log, so a few timings are derived:
   a real journal, verification's last effect came about 55 s before its
   verdict). A passed verification or review therefore ends when the next
   stage's row for the same candidate was created (review, publication),
-  which happens from the passed verdict; otherwise, and for a refusal or a
+  which happens from the passed verdict, but never past its own claim lease
+  (or expiry), so a long queue before the next stage does not stretch it;
+  otherwise, and for a refusal or a
   stop, at its last observed effect or model call.
 - Generator model calls record only their hand-off, so their latency is the
   interval since the previous hand-off (or the model allocation): it includes
@@ -422,6 +424,10 @@ verification looked like a 6-second step (see
   historical catalog is unchanged.
 - **Role provisioning** accepts the optional `flow-console` credential; with
   it absent nothing changes for existing installations.
+- **Upgrade order**: a console image that reads new columns reports the
+  journal as unavailable (the source badge, `journal-unavailable`) until the
+  upgrade's migrator Job has re-provisioned the roles and granted them; it
+  recovers on the next poll without a restart.
 - **Images**: the `containers` workflow builds `flow-console` with the other
   components and publishes its identity as a separate `console-image-`
   artifact class, which `tools/install_images.py` never selects, so installer

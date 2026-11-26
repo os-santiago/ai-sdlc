@@ -156,28 +156,38 @@ func (d *deriver) intake(rows []store.FlowIntake) {
 	}
 }
 
-// mergedIssues maps repository#issue to the time its work was merged.
-func (d *deriver) mergedIssues(merges []store.FlowVerdict) map[string]time.Time {
-	out := map[string]time.Time{}
+// mergedIssues maps repository#issue to the times its work was merged, in
+// order (an issue can be reopened and delivered again).
+func (d *deriver) mergedIssues(merges []store.FlowVerdict) map[string][]time.Time {
+	out := map[string][]time.Time{}
 	for _, m := range merges {
 		if m.State != "merged" || m.FinishedAt == nil {
 			continue
 		}
 		l := d.link(m.FlowLink)
-		key := l.repository + "#" + strconv.Itoa(l.issue)
-		if t, ok := out[key]; l.issue > 0 && (!ok || m.FinishedAt.Before(t)) {
-			out[key] = *m.FinishedAt
+		if l.issue > 0 {
+			key := l.repository + "#" + strconv.Itoa(l.issue)
+			out[key] = append(out[key], *m.FinishedAt)
 		}
+	}
+	for _, times := range out {
+		sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
 	}
 	return out
 }
 
 // admissions maps admission decisions. Merging closes the issue, and intake
 // then observes a new revision that admission rejects ("issue is closed").
-// That rejection, at or after the issue's merge, is the end of delivered
-// work, not a refusal: it becomes a completed step named issue-closed.
-func (d *deriver) admissions(rows []store.FlowAdmission, merged map[string]time.Time) {
-	for _, r := range rows {
+// Only the first rejection after each merge is that closure and becomes a
+// completed step named issue-closed. Every later rejection (for example of
+// an issue reopened after delivery) stays a refusal. The revision generation
+// that would tie a rejection to the closing revision is not in the console's
+// readable columns, so the first rejection after the merge is used.
+func (d *deriver) admissions(rows []store.FlowAdmission, merged map[string][]time.Time) {
+	ordered := append([]store.FlowAdmission(nil), rows...)
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].UpdatedAt.Before(ordered[j].UpdatedAt) })
+	closed := map[string]bool{} // repository#issue#merge-index already relabelled
+	for _, r := range ordered {
 		l := link{repository: r.Repository, issue: r.Issue}
 		kind, diagnostic, step := flowevent.KindBlocked, r.Decision, "decision"
 		switch r.Decision {
@@ -185,7 +195,15 @@ func (d *deriver) admissions(rows []store.FlowAdmission, merged map[string]time.
 			kind, diagnostic = flowevent.KindCompleted, ""
 		case "rejected":
 			kind = flowevent.KindFailed
-			if at, ok := merged[r.Repository+"#"+strconv.Itoa(r.Issue)]; ok && !r.UpdatedAt.Before(at) {
+			key := r.Repository + "#" + strconv.Itoa(r.Issue)
+			last := -1
+			for i, at := range merged[key] {
+				if !r.UpdatedAt.Before(at) {
+					last = i
+				}
+			}
+			if slot := key + "#" + strconv.Itoa(last); last >= 0 && !closed[slot] {
+				closed[slot] = true
 				kind, diagnostic, step = flowevent.KindCompleted, "", "issue-closed"
 			}
 		}
@@ -384,7 +402,18 @@ func (d *deriver) verdicts(stage string, rows []store.FlowVerdict, effects map[s
 			end = r.CreatedAt
 		}
 		if t, ok := next[r.Candidate]; ok && r.State == success && t.After(end) {
-			end = t
+			// Never past the verdict row's own lease: a long wait before the
+			// next stage's claim must not stretch this stage's bar.
+			limit := r.ExpiresAt
+			if r.ClaimUntil != nil {
+				limit = *r.ClaimUntil
+			}
+			if t.After(limit) {
+				t = limit
+			}
+			if t.After(end) {
+				end = t
+			}
 		}
 		d.calls(l, stage, calls[r.ID], end, key)
 		switch {
