@@ -64,7 +64,7 @@ When a poll stops, the release manager logs
 `publication reconciliation stopped safely: <stage>`. The stage is bounded
 controller metadata, never a response body, URL, credential or candidate text:
 `authority`, `source`, `tree-plan`, `claim`, `proof`, `commit-proof`,
-`quarantined`, or a write stage (`tree`, `commit`, `branch`, `pull-request`)
+`quarantined`, `configuration`, `unknown` (a store error before any write), or a write stage (`tree`, `commit`, `branch`, `pull-request`)
 with the writer's class appended, for example `tree-status-422`:
 
 - `status-<code>` (or `status-4xx`, `status-5xx`): the forge answered with that
@@ -73,7 +73,8 @@ with the writer's class appended, for example `tree-status-422`:
   or may not have reached the forge.
 - `response`: a `201` whose headers or body the writer refused.
 - `mismatch`: a decoded `201` that is not the planned object.
-- `fence`: current authority was lost after the response.
+- `fence`: current authority was lost after the response, or the caller's
+  deadline expired after it arrived.
 
 Every class leaves the effect uncertain, exactly as before; the class only tells
 an operator where to look. The merge loop logs

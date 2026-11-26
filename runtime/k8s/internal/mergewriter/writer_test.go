@@ -248,10 +248,12 @@ func TestMergeAcceptsSlowSynchronousMergeResponse(t *testing.T) {
 	}
 }
 
-// The response deadline must stay well above GitHub's observed merge latency
-// and inside the controller's claim, which the gate caps at 25 seconds.
+// The response deadline must stay well above GitHub's observed merge latency.
+// The caller's context (the claim deadline, at most 25 seconds after the gate
+// observation) still bounds every request, so the transport total stays at or
+// below that cap.
 func TestMergeResponseDeadlineCoversForgeLatency(t *testing.T) {
-	if responseHeaderTimeout < 15*time.Second || requestTimeout <= responseHeaderTimeout || requestTimeout > 30*time.Second {
+	if responseHeaderTimeout < 15*time.Second || requestTimeout <= responseHeaderTimeout || requestTimeout > 25*time.Second {
 		t.Fatal("merge response deadline", responseHeaderTimeout, requestTimeout)
 	}
 }
