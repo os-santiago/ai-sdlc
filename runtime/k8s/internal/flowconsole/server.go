@@ -32,14 +32,29 @@ type Server struct {
 	WriteTimeout time.Duration
 	// Ready reports whether the source has produced a successful read.
 	Ready func() bool
+	// MaxSnapshots bounds concurrent /api/snapshot requests.
+	MaxSnapshots int
 
-	streams chan struct{}
+	streams   chan struct{}
+	snapshots chan struct{}
 }
 
-// Snapshot is the JSON document served at /api/snapshot.
+// Snapshot pages and SSE write batches hold at most these many events.
+const (
+	DefaultSnapshotPage = 1000
+	MaxSnapshotPage     = 5000
+	streamBatch         = 1000
+)
+
+// Snapshot is one page of the JSON document served at /api/snapshot:
+// retained events after the requested cursor, oldest first. Next is the
+// cursor to request the following page with; More says one exists. Cursor
+// is the newest cursor the hub had assigned at the time of the read.
 type Snapshot struct {
 	Version string            `json:"version"`
 	Cursor  uint64            `json:"cursor"`
+	Next    uint64            `json:"next"`
+	More    bool              `json:"more"`
 	Gap     bool              `json:"gap,omitempty"`
 	Status  Status            `json:"status"`
 	Events  []SnapshotElement `json:"events"`
@@ -65,7 +80,11 @@ func (s *Server) Handler() http.Handler {
 	if s.WriteTimeout <= 0 {
 		s.WriteTimeout = 10 * time.Second
 	}
+	if s.MaxSnapshots <= 0 {
+		s.MaxSnapshots = 4
+	}
 	s.streams = make(chan struct{}, s.MaxStreams)
+	s.snapshots = make(chan struct{}, s.MaxSnapshots)
 	static, _ := fs.Sub(uiFS, "ui")
 	files := http.FileServer(http.FS(static))
 	mux := http.NewServeMux()
@@ -130,15 +149,33 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid cursor", http.StatusBadRequest)
 		return
 	}
-	// One hub read: the events and the cursor they end at are consistent.
-	entries, current, gap := s.Hub.Since(cursor, 0)
+	limit := DefaultSnapshotPage
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > MaxSnapshotPage || len(raw) > 5 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = n
+	}
+	select {
+	case s.snapshots <- struct{}{}:
+		defer func() { <-s.snapshots }()
+	default:
+		http.Error(w, "too many snapshot requests", http.StatusServiceUnavailable)
+		return
+	}
+	// One hub read: the page and the cursor it ends at are consistent.
+	entries, current, gap := s.Hub.Since(cursor, limit)
 	if !ok {
 		gap = false
 	}
-	doc := Snapshot{Version: SnapshotVersion, Cursor: current, Gap: gap, Status: s.Hub.Status(), Events: make([]SnapshotElement, 0, len(entries))}
+	doc := Snapshot{Version: SnapshotVersion, Cursor: current, Next: cursor, Gap: gap, Status: s.Hub.Status(), Events: make([]SnapshotElement, 0, len(entries))}
 	for _, e := range entries {
 		doc.Events = append(doc.Events, SnapshotElement{Cursor: e.Cursor, Event: e.Event})
+		doc.Next = e.Cursor
 	}
+	doc.More = doc.Next < current
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(doc)
 }
@@ -180,26 +217,41 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		return write() == nil && control.Flush() == nil
 	}
 
+	// The replay is written in batches of at most streamBatch events, each
+	// with its own write deadline: a resumed client may be far behind.
 	var batch []Entry
 	var gap bool
 	if resumed {
-		batch, _, gap = s.Hub.Since(cursor, 0)
+		batch, _, gap = s.Hub.Since(cursor, streamBatch)
 	} else {
 		batch = s.Hub.Tail(s.Replay)
 	}
-	status := s.Hub.Status()
 	if !send(func() error {
 		if gap {
 			if err := writeJSON(w, "gap", "", map[string]uint64{"after": cursor}); err != nil {
 				return err
 			}
 		}
-		if _, err := fmt.Fprint(w, "retry: 3000\n\n"); err != nil {
-			return err
+		_, err := fmt.Fprint(w, "retry: 3000\n\n")
+		return err
+	}) {
+		return
+	}
+	for len(batch) > 0 {
+		chunk := batch
+		if len(chunk) > streamBatch {
+			chunk = chunk[:streamBatch]
 		}
-		if err := writeEntries(w, batch, &cursor); err != nil {
-			return err
+		if !send(func() error { return writeEntries(w, chunk, &cursor) }) {
+			return
 		}
+		batch = batch[len(chunk):]
+		if resumed && len(batch) == 0 {
+			batch, _, _ = s.Hub.Since(cursor, streamBatch)
+		}
+	}
+	status := s.Hub.Status()
+	if !send(func() error {
 		if err := writeJSON(w, "status", "", status); err != nil {
 			return err
 		}

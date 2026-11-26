@@ -147,6 +147,81 @@ func TestLiveStreamReportsGapWhenItFallsBehindRetention(t *testing.T) {
 	}
 }
 
+func TestSnapshotIsPagedAndConcurrencyBounded(t *testing.T) {
+	hub := NewHub(100, "journal")
+	var events []flowevent.Event
+	for i := 1; i <= 25; i++ {
+		events = append(events, event(i))
+	}
+	hub.Publish(events)
+	srv := &Server{Hub: hub, MaxSnapshots: 2}
+	server := httptest.NewServer(srv.Handler())
+	defer server.Close()
+	get := func(query string) (Snapshot, int) {
+		resp, err := http.Get(server.URL + "/api/snapshot" + query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var snap Snapshot
+		json.NewDecoder(resp.Body).Decode(&snap)
+		return snap, resp.StatusCode
+	}
+	var pages []int
+	next, more := uint64(0), true
+	for more {
+		snap, code := get(fmt.Sprintf("?since=%d&limit=10", next))
+		if code != 200 || snap.Cursor != 25 {
+			t.Fatal("page", code, snap.Cursor)
+		}
+		pages = append(pages, len(snap.Events))
+		next, more = snap.Next, snap.More
+	}
+	if fmt.Sprint(pages) != "[10 10 5]" || next != 25 {
+		t.Fatal("pages", pages, next)
+	}
+	if snap, _ := get(""); len(snap.Events) != 25 || snap.More {
+		t.Fatal("default page", len(snap.Events), snap.More)
+	}
+	for _, bad := range []string{"?limit=0", "?limit=5001", "?limit=x", "?limit=-1"} {
+		if _, code := get(bad); code != http.StatusBadRequest {
+			t.Fatal(bad, "accepted", code)
+		}
+	}
+	// With every snapshot slot taken, a further request is refused at once.
+	srv.snapshots <- struct{}{}
+	srv.snapshots <- struct{}{}
+	if _, code := get(""); code != http.StatusServiceUnavailable {
+		t.Fatal("snapshot concurrency not bounded", code)
+	}
+	<-srv.snapshots
+	<-srv.snapshots
+}
+
+func TestResumedStreamReplaysLongHistoryInBatches(t *testing.T) {
+	hub := NewHub(5000, "journal")
+	var events []flowevent.Event
+	for i := 1; i <= 2500; i++ {
+		events = append(events, flowevent.Event{Version: flowevent.Version, ID: flowevent.NewID("bulk", fmt.Sprint(i)), Time: time.Date(2026, 11, 25, 12, 0, 0, i, time.UTC),
+			Component: "intake", Repository: "example/app", Issue: 7, Stage: "intake", Kind: flowevent.KindCompleted})
+	}
+	hub.Publish(events)
+	server := httptest.NewServer((&Server{Hub: hub}).Handler())
+	defer server.Close()
+	stream, done := open(t, server.URL+"/events?since=1", "")
+	defer done()
+	got := readSSE(t, stream, 0, "ready")
+	flows := 0
+	for _, m := range got {
+		if m.event == "flow" {
+			flows++
+		}
+	}
+	if flows != 2499 || got[len(got)-1].data != `{"cursor":2500}` {
+		t.Fatal("resumed replay", flows, got[len(got)-1])
+	}
+}
+
 func TestSnapshotCursorAndReadOnlySurface(t *testing.T) {
 	hub := NewHub(10, "fixture")
 	hub.Publish([]flowevent.Event{event(1), event(2)})
