@@ -68,6 +68,9 @@ type Request struct {
 }
 
 // FromInvocation builds a pre- or post-generation request from the manifest.
+// The manifest cannot name maven-dependencies (an operator step that only
+// cluster administrators may run); the base-head check below still guards a
+// request assembled by other code.
 // Pre-generation runs use the base revision; post-generation runs use the
 // candidate head. The caller supplies the revision and the current
 // base-branch head it observed; the manifest supplies the rest. A

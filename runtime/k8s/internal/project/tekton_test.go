@@ -45,6 +45,7 @@ func TestInvalidTektonSectionsAreRefused(t *testing.T) {
 		"post unknown check": func(s *Tekton) { s.Post[0].Check = "other" },
 		"post no check":      func(s *Tekton) { s.Post[0].Check = "" },
 		"post dependencies":  func(s *Tekton) { s.Post[0].Pipeline = TektonMavenDependencies },
+		"pre dependencies":   func(s *Tekton) { s.Pre[0].Pipeline = TektonMavenDependencies },
 		"tool dependencies":  func(s *Tekton) { s.Tools[0].Pipeline = TektonMavenDependencies },
 		"tool name":          func(s *Tekton) { s.Tools[0].Name = "Build-Test" },
 		"duplicate tool":     func(s *Tekton) { s.Tools[1].Name = "build_test" },

@@ -30,7 +30,9 @@ type TektonModule struct {
 	MavenArgs []string `json:"mavenArgs,omitempty"`
 }
 
-// TektonInvocation runs one pipeline for one declared target. Check names the
+// TektonInvocation runs one pipeline for one declared target. Pipelines that
+// write a shared cache (maven-dependencies) are operator steps
+// (tools/tekton_ci_run.py) and cannot appear in a manifest stage. Check names the
 // required check a post-generation run reports; it must be one of the merge
 // section's required contexts.
 type TektonInvocation struct {
@@ -164,9 +166,10 @@ func (t Tekton) validate(m Manifest) error {
 		return false
 	}
 	for _, run := range t.Pre {
-		// Dependencies fill the shared cache from trusted base inputs; the
-		// pre-generation stage runs on the base revision, so it may use it.
-		if !target(run.Pipeline, run.Target) || run.Check != "" {
+		// Filling the shared Maven cache (maven-dependencies) is an operator
+		// step: admission admits it only for cluster administrators, so no
+		// manifest stage may request it.
+		if run.Pipeline == TektonMavenDependencies || !target(run.Pipeline, run.Target) || run.Check != "" {
 			return ErrManifest
 		}
 	}
