@@ -562,8 +562,8 @@ func (d *deriver) verdicts(stage string, rows []store.FlowVerdict, effects map[s
 					break
 				}
 			}
-			if stage == "publication" {
-				d.reconciled(l, r, list, key)
+			if stage == "publication" || stage == "merge" {
+				d.reconciled(l, stage, r, list, key)
 			}
 		case r.State == "claimed" && r.ClaimUntil != nil && r.ClaimUntil.Before(d.now):
 			d.emit(l, stage, "lease", flowevent.KindBlocked, "lease-lapsed", *r.ClaimUntil, 0, 0, nil, key)
@@ -574,17 +574,17 @@ func (d *deriver) verdicts(stage string, rows []store.FlowVerdict, effects map[s
 	}
 }
 
-// reconciliationSettle mirrors the store's settle window: reconciliation
-// resolves an uncertain publication effect only once the claim ended this long
+// reconciliationSettle mirrors the store's settle windows (publication and
+// merge use the same one): reconciliation resolves an uncertain effect only once the claim ended this long
 // ago, while a live acknowledgement or pre-send seal happens within (or right
 // at the end of) the claim. A later resolution is therefore a read-only
 // reconciliation, readable from the columns the console already reads.
 const reconciliationSettle = 120 * time.Second
 
-// reconciled emits publication / reconciled / completed or not-sent for each
-// effect of a failed publication that reconciliation resolved. Outcomes that
+// reconciled emits <stage> / reconciled / completed or not-sent for each
+// effect of a failed publication or merge that reconciliation resolved. Outcomes that
 // keep the quarantine change no row, so they remain the quarantined event.
-func (d *deriver) reconciled(l link, r store.FlowVerdict, effects []store.FlowEffect, key string) {
+func (d *deriver) reconciled(l link, stage string, r store.FlowVerdict, effects []store.FlowEffect, key string) {
 	if r.ClaimUntil == nil {
 		return
 	}
@@ -600,6 +600,6 @@ func (d *deriver) reconciled(l link, r store.FlowVerdict, effects []store.FlowEf
 		default:
 			continue
 		}
-		d.emit(l, "publication", "reconciled", flowevent.KindProgressed, outcome, at, 0, 0, attrs("effect", e.Kind, "reason", r.Reason), key, "reconciled", e.Kind)
+		d.emit(l, stage, "reconciled", flowevent.KindProgressed, outcome, at, 0, 0, attrs("effect", e.Kind, "reason", r.Reason), key, "reconciled", e.Kind)
 	}
 }

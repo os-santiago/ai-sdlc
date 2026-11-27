@@ -29,12 +29,13 @@ that must pass before consequential actions. The detailed controls are in
 - **Fail closed, keep evidence.** An uncertain state stops the stage. Effects
   are journaled before they are sent, cleanup is acknowledged, and no stop
   silently retries a consequential action. An observation never manufactures a
-  missing receipt. There is one narrow, named exception:
-  [publication reconciliation](operations/publication-reconciliation.md#principle-exception-an-observed-receipt).
+  missing receipt. There are two narrow, named exceptions:
+  [publication reconciliation](operations/publication-reconciliation.md#principle-exception-an-observed-receipt)
+  and [merge reconciliation](operations/merge-reconciliation.md#principle-exception-an-observed-merge-receipt).
   For an uncertain effect of a request that has already failed, and only after
-  the settle window, it may record an `observed: true` receipt from a read-only
-  observation that exactly matches the journaled planned digest. Such a receipt
-  is never accepted where a live receipt is required.
+  the settle window, each may record an `observed: true` receipt from a
+  read-only observation that exactly matches the journaled planned digest. Such
+  a receipt never leads to a terminal record that requires a live receipt.
 - **Independent checks before consequential actions.** A candidate must pass
   behaviour verification and an independent read-only review before it can be
   published. Merge, build, provenance, promotion and deployment are each gated

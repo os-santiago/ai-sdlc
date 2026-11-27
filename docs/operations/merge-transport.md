@@ -36,7 +36,10 @@ answers a merge only after it has written the merge commit and moved the base,
 which took up to about five seconds in battery 39; a shorter deadline turns a
 merge GitHub completed into an unacknowledged effect that quarantines every later
 merge. A response that still arrives after the claim deadline is recorded as
-uncertain, as before; only a merge reconciler (#830) removes that case.
+uncertain, as before. [Merge reconciliation](merge-reconciliation.md) then
+resolves it from a read-only observation of the pull request, once the claim has
+settled. It re-derives this transport's exact request with `PlanMerge`, the
+function `Merge` itself uses.
 
 TLS fixture tests cover request binding, commit identity, missing/duplicate or
 oversized response fields, connection loss, redirects, conflicts and revocation

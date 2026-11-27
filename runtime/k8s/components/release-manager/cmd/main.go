@@ -12,6 +12,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergeflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergegate"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergerecovery"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergewriter"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/metrics"
@@ -93,6 +94,8 @@ func main() {
 		}
 		return publication.NewWriter(value)
 	}
+	// Pacing for read-only reconciliation of uncertain merge effects lives across polls.
+	mergeReconciler := &mergerecovery.Reconciler{DB: c.DB}
 	mergeRuntime := func() (mergeflow.Runtime, error) {
 		value, e := credential()
 		if e != nil {
@@ -109,7 +112,11 @@ func main() {
 		if e != nil {
 			return mergeflow.Runtime{}, e
 		}
-		return mergeflow.Runtime{DB: c.DB, Policy: policy, Review: review,
+		observer, e := mergewriter.NewReader(value)
+		if e != nil {
+			return mergeflow.Runtime{}, e
+		}
+		return mergeflow.Runtime{DB: c.DB, Policy: policy, Review: review, Reconciler: mergeReconciler, Observer: observer,
 			Identity: func() (authority.Identity, error) { _, key, e := c.Authority(); return key, e },
 			GatePolicy: func() (mergegate.Policy, error) {
 				return mergegate.LoadInstalledForRepository("/etc/ai-sdlc/merge/policy.json", value.Repository)
@@ -161,14 +168,15 @@ func main() {
 		if _, e := writer(); e != nil {
 			return e
 		}
+		// A merge quarantine does not make the release manager unready: it
+		// blocks only later merges, never publication or the inbox routes, and
+		// failing readiness removed the Service endpoints so that every
+		// publish call timed out instead (battery 39). The merge loop reports
+		// it as the stop "merge-quarantined" and the gauge
+		// ai_sdlc_quarantined{journal="merge"}.
 		if bootstrap.MergeEnabled() {
 			if _, e := mergeRuntime(); e != nil {
 				return e
-			}
-			journal := store.NewMergeJournal(c.DB, func() (authority.Policy, error) { p, _, e := c.Authority(); return p, e })
-			blocked, e := journal.MergeBlocked(ctx)
-			if e != nil || blocked {
-				return mergeflow.ErrMerge
 			}
 		}
 		blocked, e := c.DB.PublicationBlocked(ctx)
@@ -183,21 +191,32 @@ func main() {
 		value, e := credential()
 		if e != nil {
 			log.Print("publication credential unavailable")
+			// The loop observed nothing: drop the series, do not keep its last value.
+			metrics.ForgetQuarantined("publication")
 			return
 		}
 		w, e := publication.NewWriter(value)
 		if e != nil {
 			log.Print("publication credential unavailable")
+			// The loop observed nothing: drop the series, do not keep its last value.
+			metrics.ForgetQuarantined("publication")
 			return
 		}
 		observer, e := publication.NewReader(value)
 		if e != nil {
 			log.Print("publication credential unavailable")
+			// The loop observed nothing: drop the series, do not keep its last value.
+			metrics.ForgetQuarantined("publication")
 			return
 		}
 		r := publicationflow.Runtime{DB: c.DB, Policy: policy, Review: review, Writer: w, Reconciler: reconciler, Observer: observer}
 		state, e := r.PollOnce(ctx)
 		countDelivery(state)
+		if blocked, err := c.DB.PublicationBlocked(ctx); err != nil {
+			metrics.ForgetQuarantined("publication")
+		} else {
+			metrics.Quarantined("publication", blocked)
+		}
 		if e != nil {
 			stage := publicationflow.DiagnosticStage(e)
 			if state == "publication-quarantined" {
@@ -235,17 +254,19 @@ func main() {
 			r, e := mergeRuntime()
 			if e != nil {
 				log.Print("merge credential unavailable")
+				metrics.ForgetQuarantined("merge")
 				return
 			}
 			state, e := r.PollOnce(ctx)
 			countDelivery(state)
+			sampleMergeQuarantine(ctx, c.DB, policy)
 			if e != nil {
-				metrics.Stop("release-manager", "merge", metrics.Unclassified)
 				// state is a fixed controller constant ("merge-quarantined",
 				// "merge-stopped", ...); it names why the loop stopped.
 				if state == "" {
-					state = "unclassified"
+					state = metrics.Unclassified
 				}
+				metrics.Stop("release-manager", "merge", state)
 				log.Print("merge reconciliation stopped safely: " + state)
 			} else if state != "" {
 				log.Print("merge reconciliation: " + state)
@@ -331,4 +352,17 @@ func deliveryOutcome(state string) string {
 		return "merge-stopped"
 	}
 	return ""
+}
+
+// sampleMergeQuarantine records whether an uncertain merge effect quarantines
+// merges. A journal that cannot be read is dropped from the output rather than
+// left at its last value.
+func sampleMergeQuarantine(ctx context.Context, db *store.DB, policy func() (authority.Policy, intake.Config, string, error)) {
+	journal := store.NewMergeJournal(db, func() (authority.Policy, error) { p, _, _, e := policy(); return p, e })
+	blocked, e := journal.MergeBlocked(ctx)
+	if e != nil {
+		metrics.ForgetQuarantined("merge")
+		return
+	}
+	metrics.Quarantined("merge", blocked)
 }

@@ -48,6 +48,8 @@ credentials or error text.
 | `ai_sdlc_model_call_duration_seconds` | histogram | `role`, `outcome` | Duration of those calls |
 | `ai_sdlc_deliveries_total` | counter | `outcome` | Each claimed publication or merge attempt |
 | `ai_sdlc_publication_reconciliations_total` | counter | `effect`, `outcome` | Each read-only reconciliation of an uncertain publication effect |
+| `ai_sdlc_merge_reconciliations_total` | counter | `outcome` | Each read-only reconciliation of an uncertain merge effect |
+| `ai_sdlc_quarantined` | gauge | `journal` | Whether an uncertain effect quarantines the release manager's publication or merge journal, sampled each poll |
 
 ### Queue depth
 
@@ -87,13 +89,17 @@ line names:
 - worker `candidate`: `execution.DiagnosticStage`;
 - verifier `review`: `reviewflow.DiagnosticStage`;
 - verifier `verification`: `verificationflow.DiagnosticStage`, including
-  `refused-<reason>` for a correct refusal of the candidate.
+  `refused-<reason>` for a correct refusal of the candidate;
+- release manager `merge`: the merge controller's fixed state, for example
+  `merge-quarantined`, `merge-stopped`, `merge-authority-denied`,
+  `merge-observation-unavailable`, `merge-observation-expired` or
+  `merge-queue-denied`, and `unclassified` when it names none.
 
 Model stages embed `modelbroker.SafeFailureStage`. The other loops log no
 diagnostic and use `stage="unclassified"`. They are: verifier
 `publication-handoff` and `repair-handoff`; provenance verifier `provenance`
 and `promotion-dispatch`; release manager `publication`,
-`merged-source-dispatch`, `merge`, `terminal`, `production-dispatch`,
+`merged-source-dispatch`, `terminal`, `production-dispatch`,
 `promotion` and `planned-release-dispatch`; build controller `build`; and
 deployer `deployment` and `deployment-completion-dispatch`.
 
@@ -145,12 +151,48 @@ reconciliation:
 increase(ai_sdlc_publication_reconciliations_total{outcome=~"mismatch|unplanned|unproven"}[1h]) > 0
 ```
 
+### Merge reconciliations
+
+`ai_sdlc_merge_reconciliations_total{outcome}` counts each
+[reconciliation](merge-reconciliation.md) step of an uncertain merge effect.
+`outcome` is `completed`, `not-sent`, `mismatch`, `unavailable`, `unplanned` or
+`resolved` (another replica or an operator resolved the effect first).
+
+Every outcome except `unavailable` and `resolved` needs an operator.
+`mismatch` and `unplanned` keep the quarantine. `completed` and `not-sent` lift
+it, but leave a work item and an issue to follow up: after `completed` the work
+item stays `running` and the change has no build of its own; after `not-sent` the
+pull request stays open and the issue needs re-delivery (see
+[follow-up after a resolution](merge-reconciliation.md#follow-up-after-a-resolution)).
+One alert covers all four:
+
+```promql
+increase(ai_sdlc_merge_reconciliations_total{outcome=~"completed|not-sent|mismatch|unplanned"}[1h]) > 0
+```
+
+A persistent `unavailable` shows as the quarantine gauge staying at `1` (below).
+
+### Quarantine
+
+`ai_sdlc_quarantined{journal}` is `1` while an uncertain effect of a failed
+request quarantines the journal, and `0` when none does. `journal` is
+`publication` (sampled every publication poll, 5 s) or `merge` (every merge poll,
+60 s, only when merge is enabled). A journal that cannot be read, or whose loop
+cannot run because the credential or the merge runtime is unavailable, is removed
+from the output rather than left at its last value. A merge quarantine does not make
+the release manager unready, so this gauge, not the readiness probe, is the
+signal:
+
+```promql
+max_over_time(ai_sdlc_quarantined{journal="merge"}[15m]) == 1
+```
+
 ## Cardinality
 
 Every label value is bounded twice:
 
-1. **Allowlists.** `component`, `loop`, `role`, `effect`, `outcome` and the queue
-   `stage` accept only fixed values. The stop `stage` accepts only the output
+1. **Allowlists.** `component`, `loop`, `role`, `effect`, `outcome`, `journal`
+   and the queue `stage` accept only fixed values. The stop `stage` accepts only the output
    of the diagnostic functions above, each of which returns a fixed constant
    or `unknown`.
 2. **Registry.** Any value outside its allowlist, or outside
@@ -168,6 +210,8 @@ Expected series per component:
 | `ai_sdlc_model_call_duration_seconds` | 18 label sets × 16 lines | Fewer than 8 label sets |
 | `ai_sdlc_deliveries_total` | 4 | 4 |
 | `ai_sdlc_publication_reconciliations_total` | 20 | Fewer than 4 |
+| `ai_sdlc_merge_reconciliations_total` | 6 | Fewer than 3 |
+| `ai_sdlc_quarantined` | 2 | 2 (release manager only) |
 
 Counters reset when a process starts: use `rate()` and `increase()`. A
 labelled series appears only at its first increment, with no earlier zero

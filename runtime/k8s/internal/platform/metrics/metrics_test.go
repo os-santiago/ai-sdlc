@@ -206,12 +206,17 @@ func TestRuntimeMetricsKeepLabelsBounded(t *testing.T) {
 	Delivery("pull-request https://github.com/x/y/pull/1")
 	Reconciliation("branch", "not-sent")
 	Reconciliation("refs/heads/main", "forge said 502")
+	MergeReconciliation("completed")
+	MergeReconciliation("merge commit deadbeef")
+	Quarantined("merge", true)
+	Quarantined("os-santiago/saferus", false)
 	allowed := map[string]map[string]bool{
 		"component": set(append(Components, Other)...),
 		"loop":      set(append(Loops, Other)...),
 		"role":      set(append(ModelRoles, Other)...),
-		"outcome":   set(append(append(append(ModelOutcomes, DeliveryOutcomes...), ReconciliationOutcomes...), Other)...),
+		"outcome":   set(append(append(append(append(ModelOutcomes, DeliveryOutcomes...), ReconciliationOutcomes...), MergeReconciliationOutcomes...), Other)...),
 		"effect":    set(append(ReconciliationEffects, Other)...),
+		"journal":   set(append(QuarantineJournals, Other)...),
 		"stage":     nil, // bounded by the diagnostic functions and the charset
 	}
 	queue := set(append(QueueStages, Other)...)
@@ -253,6 +258,16 @@ func TestRuntimeMetricsKeepLabelsBounded(t *testing.T) {
 	}
 	if v, _ := Default.Sample("ai_sdlc_model_call_duration_seconds", "reviewer", ModelTimeout); v != 1 {
 		t.Fatal("duration not observed", v)
+	}
+	if v, _ := Default.Sample("ai_sdlc_merge_reconciliations_total", Other); v != 1 {
+		t.Fatal("free-form merge outcome not folded", v)
+	}
+	if v, _ := Default.Sample("ai_sdlc_quarantined", "merge"); v != 1 {
+		t.Fatal("merge quarantine not recorded", v)
+	}
+	ForgetQuarantined("merge")
+	if _, ok := Default.Sample("ai_sdlc_quarantined", "merge"); ok {
+		t.Fatal("unreadable quarantine kept its last value")
 	}
 }
 

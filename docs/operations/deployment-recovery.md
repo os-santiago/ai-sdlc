@@ -31,12 +31,14 @@ permission revocation and Kubernetes permission revocation remain stops.
 
 Recovery does not claim that all ambiguous failures can be repaired
 autonomously. A missing API ACK cannot be manufactured from an observed image.
-This rule has one narrow, named exception, and it is outside deployment:
+This rule has two narrow, named exceptions, both outside deployment:
 [publication reconciliation](publication-reconciliation.md#principle-exception-an-observed-receipt)
-may record an `observed: true` receipt. It does so only for an uncertain effect of
-a publication request that has already failed, after the settle window, and from
-a read-only observation that exactly matches the journaled planned digest. Such a
-receipt is never accepted where a live receipt is required. Deployment has no
+may record an `observed: true` receipt, and
+[merge reconciliation](merge-reconciliation.md#principle-exception-an-observed-merge-receipt)
+may record an `observed: true` merge receipt. Each does so only for an uncertain effect of a
+request that has already failed, after the settle window, and from a read-only
+observation that exactly matches the journaled planned digest. Such a receipt
+never leads to a terminal record that requires a live receipt. Deployment has no
 such exception.
 An uncertain or expired outcome requires separate operator incident handling;
 there is no HTTP endpoint to bypass the journal or manually advance a stage.

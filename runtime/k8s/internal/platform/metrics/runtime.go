@@ -60,6 +60,10 @@ var DeliveryOutcomes = []string{"published", "publication-stopped", "merged", "m
 var ReconciliationEffects = []string{"tree", "commit", "branch", "pull-request"}
 var ReconciliationOutcomes = []string{"completed", "not-sent", "mismatch", "unavailable", "unplanned", "unproven"}
 
+// MergeReconciliationOutcomes is the closed label set of one read-only
+// reconciliation of an uncertain merge effect (mergerecovery.Step).
+var MergeReconciliationOutcomes = []string{"completed", "not-sent", "mismatch", "unavailable", "unplanned", "resolved"}
+
 // ModelCallBuckets span a fast local answer up to the 600 s ceiling.
 var ModelCallBuckets = []float64{1, 2.5, 5, 10, 20, 30, 60, 90, 120, 180, 300, 450, 600}
 
@@ -82,7 +86,17 @@ var (
 	reconciliations = Default.NewCounter("ai_sdlc_publication_reconciliations_total",
 		"Read-only reconciliations of uncertain publication effects, by effect kind and outcome.",
 		OneOf("effect", ReconciliationEffects...), OneOf("outcome", ReconciliationOutcomes...))
+	mergeReconciliations = Default.NewCounter("ai_sdlc_merge_reconciliations_total",
+		"Read-only reconciliations of uncertain merge effects, by outcome.",
+		OneOf("outcome", MergeReconciliationOutcomes...))
+	quarantined = Default.NewGauge("ai_sdlc_quarantined",
+		"1 while an unresolved uncertain effect quarantines a journal of the release manager, 0 when none does.",
+		OneOf("journal", QuarantineJournals...))
 )
+
+// QuarantineJournals are the release manager journals an uncertain effect can
+// quarantine.
+var QuarantineJournals = []string{"publication", "merge"}
 
 // MaxQueueDepth caps the sampled count, so the query stays bounded.
 const MaxQueueDepth = 10000
@@ -115,3 +129,20 @@ func Delivery(outcome string) { deliveries.Inc(outcome) }
 // Reconciliation counts one reconciliation step of an uncertain publication
 // effect. Values outside the closed sets are recorded as "other".
 func Reconciliation(effect, outcome string) { reconciliations.Inc(effect, outcome) }
+
+// MergeReconciliation counts one reconciliation step of an uncertain merge
+// effect. Values outside the closed set are recorded as "other".
+func MergeReconciliation(outcome string) { mergeReconciliations.Inc(outcome) }
+
+// Quarantined records whether a journal is quarantined.
+func Quarantined(journal string, blocked bool) {
+	v := 0.0
+	if blocked {
+		v = 1
+	}
+	quarantined.Set(v, journal)
+}
+
+// ForgetQuarantined drops a journal whose quarantine could not be read, rather
+// than leaving its last value.
+func ForgetQuarantined(journal string) { quarantined.Delete(journal) }

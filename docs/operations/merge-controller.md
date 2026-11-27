@@ -35,8 +35,14 @@ as other post-effect stages bind only to their own durable request and receipt.
 The built-in references keep `Refs #N`, so their issues stay open after the merge.
 
 A missing response or uncertain commit stops the original claim and quarantines
-an unacknowledged effect. Reconciliation cannot adopt that claim, repeat the write
-or give the same publication a new attempt. A terminal merge fact does not grant
+an unacknowledged effect. [Merge reconciliation](merge-reconciliation.md) resolves
+it from a read-only observation once the claim has settled: a receipt when GitHub
+shows the merge exactly as planned, a no-send when the pull request is still open
+at the planned head and its head is not part of `main`, and otherwise the
+quarantine stays.
+Reconciliation cannot adopt that claim, repeat the write, finish the request as
+merged or give the same publication a new attempt. The quarantine does not make
+the release manager unready; it blocks only later merges. A terminal merge fact does not grant
 artifact promotion, release or deployment authority.
 
 The current PostgreSQL fixture uses synthetic forge observations and receipts.

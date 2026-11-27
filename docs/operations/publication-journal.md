@@ -27,8 +27,9 @@ commit. A missing branch never counts, because a ref can be created and then
 deleted, and the journal refuses a branch no-send. The request itself stays
 failed.
 
-This is the one narrow, named exception to the rule that an observation never
-manufactures a missing receipt. It applies only when all of these hold:
+This is one of two narrow, named exceptions to the rule that an observation never
+manufactures a missing receipt (the other is
+[merge reconciliation](merge-reconciliation.md#principle-exception-an-observed-merge-receipt)). It applies only when all of these hold:
 
 - the effect is uncertain;
 - its request is already `failed`;

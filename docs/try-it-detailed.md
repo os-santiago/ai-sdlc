@@ -160,7 +160,7 @@ again; the new label event becomes a fresh work item.
 | Review `request-changes` | The independent review rejected the change (after its repair, when repair is enabled and budget remains) | Re-label, or sharpen the criteria |
 | `...-helper-transport` | A transient pod-exec transport failure | Re-label |
 | `publication-quarantined` | A forge write's outcome is uncertain | The release manager observes GitHub and clears it itself when GitHub proves the write happened or did not (re-checked after 30 s, backing off to every 15 min). Other outcomes stay quarantined and need an operator ([publication reconciliation](operations/publication-reconciliation.md)) |
-| `merge-quarantined` | A merge's outcome is uncertain. Every later merge is blocked and the release manager reports not ready | It does not clear by itself until the merge reconciler (#830) exists, and disabling merge does not clear it. Check on GitHub whether the pull request merged; see [merge transport](operations/merge-transport.md). The batteries recovered on a fresh cluster |
+| `merge-quarantined` | A merge's outcome is uncertain. Every later merge is blocked; publication and the release manager's readiness are not affected | The [merge reconciler](operations/merge-reconciliation.md) clears it by itself, about 2 minutes after the claim, when GitHub shows the pull request merged exactly as planned or still open and untouched; disabling merge does not clear it. If it stays (`ai_sdlc_quarantined{journal="merge"}` at 1), follow the [operator procedure](operations/merge-reconciliation.md#when-it-stays-quarantined-operator-procedure) |
 
 Every verification refusal carries the reason `comparison-failed`; the
 diagnostic (`refused-…`) names the rule. The release manager's log names the

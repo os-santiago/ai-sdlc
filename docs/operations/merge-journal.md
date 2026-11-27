@@ -17,7 +17,10 @@ The journal allows one request per publication and one non-adoptable claim for
 at most 90 seconds, further capped by the gate and command expiry. Its single external-effect intention must commit before a
 transport is attempted. A missing acknowledgement quarantines subsequent merges;
 only a trusted pre-send result can attest that no transport was attempted. No
-HTTP retry, claim adoption or administrative replay is provided.
+HTTP retry, claim adoption or administrative replay is provided. After the claim
+has settled, [merge reconciliation](merge-reconciliation.md) may resolve the
+effect of a failed request through `ResolveMergeEffect`, from a read-only forge
+observation only; the request stays failed and no merged record is written.
 
 Every authority-bearing journal boundary revalidates the receipt against the
 current policy loader, including freeze and the exact autonomy ceiling. Gate

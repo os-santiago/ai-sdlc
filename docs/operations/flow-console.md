@@ -206,7 +206,7 @@ ids it has not published before.
 | `verification_requests`, `verification_effects` | verification `waiting`, `started`, `progressed`, `completed`, `failed` (`comparison-failed`, `rejected`) or `stopped-safely` (`expired`, `revoked`, `uncertain`), `quarantined` (`cleanup-uncertain`) |
 | `review_runs`, `review_effects`, `review_model_calls` | the same for review (`request-changes` is a verdict), with reviewer model call latency |
 | `publication_requests`, `publication_effects`, `published_records` | publication, with `quarantined` (`unresolved-effect`) when a failed publication has an effect that was neither acknowledged nor sealed as not sent: the same condition that blocks the release manager. An effect of a failed publication that was resolved more than 120 s after its claim ended was resolved by [reconciliation](publication-reconciliation.md). It is shown as `progressed`, step `reconciled`, diagnostic `completed` or `not-sent`, with attributes `effect` and `reason`. A reconciliation that keeps the quarantine changes no row, so it stays the `quarantined` event. |
-| `merge_requests`, `merge_effects` | merge, with the same quarantine rule |
+| `merge_requests`, `merge_effects` | merge, with the same quarantine rule, and step `reconciled` (attribute `effect=merge`) for an effect resolved by [merge reconciliation](merge-reconciliation.md) more than 120 s after its claim ended |
 
 The journal records state, not a log, so a few timings are derived:
 
