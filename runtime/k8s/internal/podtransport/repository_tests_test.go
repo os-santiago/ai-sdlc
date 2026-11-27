@@ -58,7 +58,12 @@ type testsCluster struct {
 	// one's status follows the transfer sidecar's unless service rewrites it.
 	services []project.Service
 	service  func(status core.ContainerStatus) core.ContainerStatus
+	run      string // the fixture pod's run; "" is the candidate
 }
+
+// testsFinishedAt is when the fixture's tests container ends; sidecars the
+// kubelet stops afterwards finish one second later.
+var testsFinishedAt = meta.NewTime(time.Unix(1_800_000_000, 0))
 
 func (c *testsCluster) status(name, image, id string, state core.ContainerState) core.ContainerStatus {
 	s := core.ContainerStatus{Name: name, State: state, Image: image}
@@ -90,9 +95,9 @@ func (c *testsCluster) current(t *TestsRun) core.Pod {
 		pod.Status.ContainerStatuses = []core.ContainerStatus{c.status("tests", tests.Image, "", creating)}
 	case "stopping":
 		pod.Status.Phase = core.PodRunning
-		transfer := c.status("transfer", init[1].Image, "b", core.ContainerState{Terminated: &core.ContainerStateTerminated{ExitCode: 137}})
+		transfer := c.status("transfer", init[1].Image, "b", core.ContainerState{Terminated: &core.ContainerStateTerminated{ExitCode: 137, FinishedAt: meta.NewTime(testsFinishedAt.Add(time.Second))}})
 		transfer.State.Terminated.ContainerID = transfer.ContainerID
-		done := c.status("tests", tests.Image, "c", core.ContainerState{Terminated: &core.ContainerStateTerminated{ExitCode: 0}})
+		done := c.status("tests", tests.Image, "c", core.ContainerState{Terminated: &core.ContainerStateTerminated{ExitCode: 0, FinishedAt: testsFinishedAt}})
 		done.State.Terminated.ContainerID = done.ContainerID
 		pod.Status.InitContainerStatuses = []core.ContainerStatus{install, transfer}
 		pod.Status.ContainerStatuses = []core.ContainerStatus{done}
@@ -121,9 +126,9 @@ func (c *testsCluster) current(t *TestsRun) core.Pod {
 		pod.Status.ContainerStatuses = []core.ContainerStatus{c.status("tests", tests.Image, "c", running)}
 	case "succeeded", "failed":
 		pod.Status.Phase = core.PodSucceeded
-		transfer := c.status("transfer", init[1].Image, "b", core.ContainerState{Terminated: &core.ContainerStateTerminated{ExitCode: 0}})
+		transfer := c.status("transfer", init[1].Image, "b", core.ContainerState{Terminated: &core.ContainerStateTerminated{ExitCode: 0, FinishedAt: meta.NewTime(testsFinishedAt.Add(time.Second))}})
 		transfer.State.Terminated.ContainerID = transfer.ContainerID
-		done := c.status("tests", tests.Image, "c", core.ContainerState{Terminated: &core.ContainerStateTerminated{ExitCode: 0}})
+		done := c.status("tests", tests.Image, "c", core.ContainerState{Terminated: &core.ContainerStateTerminated{ExitCode: 0, FinishedAt: testsFinishedAt}})
 		done.State.Terminated.ContainerID = done.ContainerID
 		if c.state == "failed" {
 			pod.Status.Phase = core.PodFailed
@@ -161,6 +166,9 @@ func testsServer(t *testing.T, c *testsCluster) *TestsRun {
 	t.Helper()
 	p, source := testsFixturePod()
 	p.Verification.Services = c.services
+	if c.run != "" {
+		p.Run = c.run
+	}
 	var run *TestsRun
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

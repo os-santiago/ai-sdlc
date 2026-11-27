@@ -15,6 +15,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repositorytests"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 	core "k8s.io/api/core/v1"
+	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // VerifierNamespace is the only namespace repository test pods run in: its
@@ -141,6 +142,10 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 	// A sidecar (transfer or a manifest service) that stopped before the
 	// tests completed means the pod is ending without a result.
 	sidecarStopped := false
+	// Manifest services seen terminated, checked against the tests
+	// container's end once every status is read.
+	var servicesStopped []*core.ContainerStateTerminated
+	var testsFinished meta.Time
 	for _, s := range append(append([]core.ContainerStatus{}, pod.Status.InitContainerStatuses...), pod.Status.ContainerStatuses...) {
 		pin, known := images[s.Name]
 		if !known || seen[s.Name] || s.RestartCount != 0 || s.LastTerminationState.Terminated != nil || s.LastTerminationState.Running != nil ||
@@ -187,6 +192,7 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 				o.tests, o.testsState = s.ContainerID, "running"
 			case completed:
 				o.tests, o.testsState = s.ContainerID, "completed"
+				testsFinished = s.State.Terminated.FinishedAt
 			case !waiting:
 				return testsObservation{}, testsFailure("observe-container", ErrTransport)
 			}
@@ -201,13 +207,33 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 			}
 			if stopped {
 				sidecarStopped = true
+				servicesStopped = append(servicesStopped, s.State.Terminated)
 			}
 		}
 	}
 	if (o.phase == core.PodSucceeded || sidecarStopped) && o.testsState != "completed" {
 		return testsObservation{}, testsFailure("observe-progress", ErrTransport)
 	}
+	for _, stop := range servicesStopped {
+		if !kubeletStop(stop, testsFinished) {
+			return testsObservation{}, testsFailure("observe-service", ErrTransport)
+		}
+	}
 	return o, nil
+}
+
+// kubeletStop reports whether a terminated service was stopped by the
+// kubelet after the tests ended, rather than dying while they ran. A service
+// that crashed or was OOM-killed while the tests ran would make them fail
+// fast, and in the cross run such failures would read as tests that fail on
+// the old code: a false acceptance. So a stopped service counts only when it
+// finished no earlier than the tests container, was not OOM-killed and exited
+// as a kubelet stop does (0, or 143/137 for SIGTERM/SIGKILL). Kubernetes
+// reports these times in whole seconds, so a crash in the same second as the
+// tests' end with one of those exit codes is not distinguishable.
+func kubeletStop(stop *core.ContainerStateTerminated, testsFinished meta.Time) bool {
+	return !testsFinished.IsZero() && !stop.FinishedAt.IsZero() && !stop.FinishedAt.Before(&testsFinished) &&
+		stop.Reason != "OOMKilled" && (stop.ExitCode == 0 || stop.ExitCode == 137 || stop.ExitCode == 143)
 }
 
 func (t *TestsRun) poll(ctx context.Context, uid string, deadline time.Time, done func(testsObservation) bool) (testsObservation, error) {
@@ -335,11 +361,17 @@ func (t *TestsRun) ReadResult(ctx context.Context, uid string) ([]repositorytest
 	if t == nil || t.tests == "" || !resourceUID.MatchString(uid) {
 		return nil, nil, ErrTransport
 	}
-	deadline := time.Now().Add(t.services + time.Duration(t.runs)*t.timeout + t.analysis + repositorytests.MarginSeconds*time.Second)
+	deadline := time.Now().Add(t.resultWindow())
 	if _, err := t.poll(ctx, uid, deadline, func(o testsObservation) bool { return o.phase == core.PodSucceeded }); err != nil {
 		return nil, nil, err
 	}
 	return t.Collect(ctx, uid)
+}
+
+// resultWindow is how long ReadResult waits after the import: the longest
+// service readiness, every repetition's timeout, the analysis and a margin.
+func (t *TestsRun) resultWindow() time.Duration {
+	return t.services + time.Duration(t.runs)*t.timeout + t.analysis + repositorytests.MarginSeconds*time.Second
 }
 
 // Collect requires a succeeded pod (the runner exits 0 only after it wrote
@@ -420,7 +452,7 @@ func exchangeStep(step string, ctx context.Context, err error) string {
 	return step + "-request"
 }
 
-var testsSteps = regexp.MustCompile(`^((import-before|import-after|ready-after)-)?observe-(uid|request|permission|status|template|phase|container|progress)$|^(import-(repeat|before-state|after-state|exit|receipt)|ready-(exit|after-state)|(import|ready)-transfer-(request|permission|timeout))$`)
+var testsSteps = regexp.MustCompile(`^((import-before|import-after|ready-after)-)?observe-(uid|request|permission|status|template|phase|container|progress|service)$|^(import-(repeat|before-state|after-state|exit|receipt)|ready-(exit|after-state)|(import|ready)-transfer-(request|permission|timeout))$`)
 
 // TestsStep returns the failed repository-tests step, or "" for any other
 // error.

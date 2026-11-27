@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repositorytests"
 	core "k8s.io/api/core/v1"
+	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func fixtureServices() []project.Service {
@@ -71,8 +73,13 @@ func TestServicesRunImportsAndReadsResultsWhileServicesRun(t *testing.T) {
 	p, source := testsFixturePod()
 	c := &testsCluster{state: "initializing", reply: honestReply(p, source), log: strings.Repeat(`{"exitCode":0}`+"\n", 2), services: fixtureServices()}
 	run := testsServer(t, c)
-	if run.services != 60*time.Second {
-		t.Fatal("the result deadline must add the service readiness", run.services)
+	// The result wait covers the service readiness, both repetitions and the margin.
+	if run.services != 60*time.Second || run.resultWindow() != 60*time.Second+2*30*time.Second+repositorytests.MarginSeconds*time.Second {
+		t.Fatal("the result deadline must add the service readiness", run.services, run.resultWindow())
+	}
+	without := testsServer(t, &testsCluster{state: "running", reply: honestReply(p, source)})
+	if without.resultWindow() != run.resultWindow()-60*time.Second {
+		t.Fatal("services must only add their readiness to the result deadline", without.resultWindow())
 	}
 	go func() {
 		time.Sleep(300 * time.Millisecond)
@@ -118,5 +125,63 @@ func TestServicesThatRestartCrashOrAreUnknownFailTheRun(t *testing.T) {
 				t.Fatal("accepted a service that", name)
 			}
 		})
+	}
+}
+
+// A service that dies before the tests end could have made them fail; in the
+// cross run that would read as new tests failing on the old code. Only a
+// kubelet stop after the tests finished is accepted, in every run.
+func TestServicesThatDieBeforeTheTestsEndFailTheRun(t *testing.T) {
+	stop := func(exit int32, reason string, offset time.Duration) func(core.ContainerStatus) core.ContainerStatus {
+		return func(s core.ContainerStatus) core.ContainerStatus {
+			if s.State.Terminated != nil {
+				s.State.Terminated.ExitCode, s.State.Terminated.Reason = exit, reason
+				s.State.Terminated.FinishedAt = meta.NewTime(testsFinishedAt.Add(offset))
+			}
+			return s
+		}
+	}
+	cases := map[string]struct {
+		rewrite func(core.ContainerStatus) core.ContainerStatus
+		accept  bool
+	}{
+		"kubelet stop, clean exit": {stop(0, "Completed", time.Second), true},
+		"kubelet stop, SIGTERM":    {stop(143, "Error", time.Second), true},
+		"kubelet stop, SIGKILL":    {stop(137, "Error", 0), true},
+		"died before the tests":    {stop(137, "Error", -time.Second), false},
+		"clean exit before":        {stop(0, "Completed", -2*time.Second), false},
+		"OOM-killed after":         {stop(137, "OOMKilled", time.Second), false},
+		"crashed after":            {stop(1, "Error", time.Second), false},
+		"no finish time": {func(s core.ContainerStatus) core.ContainerStatus {
+			if s.State.Terminated != nil {
+				s.State.Terminated.FinishedAt = meta.Time{}
+			}
+			return s
+		}, false},
+	}
+	for _, runName := range []string{repositorytests.RunCross, repositorytests.RunCandidate} {
+		for name, tc := range cases {
+			t.Run(runName+"/"+name, func(t *testing.T) {
+				p, source := testsFixturePod()
+				p.Run = runName
+				lines := repositorytests.Repetitions(runName, p.Verification)
+				c := &testsCluster{state: "running", reply: honestReply(p, source), log: strings.Repeat(`{"exitCode":1}`+"\n", lines),
+					services: fixtureServices(), service: tc.rewrite, run: runName}
+				run := testsServer(t, c)
+				if err := run.Prepare(context.Background(), testsPodUID); err != nil {
+					t.Fatal(err)
+				}
+				c.mu.Lock()
+				c.state = "succeeded"
+				c.mu.Unlock()
+				_, _, err := run.ReadResult(context.Background(), testsPodUID)
+				if (err == nil) != tc.accept {
+					t.Fatal("service termination decision", err)
+				}
+				if !tc.accept && TestsStep(err) != "observe-service" {
+					t.Fatal("the stop must name the service", TestsStep(err))
+				}
+			})
+		}
 	}
 }

@@ -35,8 +35,8 @@ type Service struct {
 	// never receives it; verification.env configures the tests.
 	Env map[string]string `json:"env,omitempty"`
 	// User and Group are the numeric identity the service runs as. Root is
-	// refused: the verifier namespace enforces the restricted Pod Security
-	// profile. Group defaults to User.
+	// refused for both: the verifier namespace enforces the restricted Pod
+	// Security profile. Group defaults to User.
 	User  int64  `json:"user"`
 	Group *int64 `json:"group,omitempty"`
 	// Port is the loopback TCP port the tests use; it is also the
@@ -121,7 +121,7 @@ func expandable(value string) bool { return strings.ContainsRune(value, '$') }
 
 func (s Service) validate() error {
 	if !serviceName.MatchString(s.Name) || !pinnedImage.MatchString(s.Image) || len(s.Image) > 512 ||
-		s.User < 1 || s.User > maxServiceID || (s.Group != nil && (*s.Group < 0 || *s.Group > maxServiceID)) ||
+		s.User < 1 || s.User > maxServiceID || (s.Group != nil && (*s.Group < 1 || *s.Group > maxServiceID)) ||
 		s.Port < MinServicePort || s.Port > MaxServicePort ||
 		s.ReadySeconds < MinServiceReadySeconds || s.ReadySeconds > MaxServiceReadySeconds ||
 		!cpuQuantity.MatchString(s.CPU) || !byteQuantity.MatchString(s.Memory) || !byteQuantity.MatchString(s.EphemeralStorage) ||

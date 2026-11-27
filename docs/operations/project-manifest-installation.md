@@ -81,7 +81,7 @@ upper case, at most 16 entries.
 | `image` | Pinned by digest |
 | `args` | Optional, at most 32 arguments. They replace the image's `CMD`; its `ENTRYPOINT` is kept |
 | `env` | Optional, at most 16 upper-case variables. These go to the service only, never to the tests |
-| `user`, `group` | Numeric identity, never root (`user` ≥ 1). `group` defaults to `user` |
+| `user`, `group` | Numeric identity, never root (`user` ≥ 1, and `group` ≥ 1 when set). `group` defaults to `user` |
 | `port` | TCP port 1024–65535, unique. Also the readiness check |
 | `readySeconds` | 1–180: how long the runner waits for `port` to accept a connection |
 | `writablePaths` | Up to 8 absolute, distinct, non-nested directories the service writes to (data, sockets, `/tmp`). Each one is mounted from the service's own empty volume |
@@ -97,12 +97,27 @@ verifier's settings, so use throwaway test credentials only.
 empty services. The sidecars start after the transfer sidecar and before the
 tests container. Before any repository code runs, the runner waits for every
 port on `127.0.0.1`. A service that is not ready within `readySeconds` fails
-the run as a transport failure, not a decision. The candidate pod's
+the run as a transport failure, not a decision.
+
+The port is the only readiness signal, so the service must accept
+connections on it only once it is fully ready. The official PostgreSQL and
+MySQL/MariaDB images do this: their entrypoints initialize with TCP off and
+open the port for the final server. A broker or registry that opens its port
+before it can serve, such as Kafka, needs an image whose entrypoint opens
+the port only when ready, or tests that tolerate a warming service. A longer
+`readySeconds` does not help on its own, because the wait ends as soon as
+the port accepts.
+
+The candidate pod's
 repetitions share its services. A test that relies on a pristine database
 can therefore disagree between repetitions, and the verifier refuses that
 candidate as `uncertain`. Recreating the schema at startup avoids this, as
 `rest-villains` does with `drop-and-create`. A service that exits or restarts
-also fails the run.
+also fails the run. So does a service that stops before the tests
+container finishes, is OOM-killed, or exits other than as a kubelet stop (0,
+or 143 or 137 after SIGTERM or SIGKILL), because its failure could have made
+the tests fail (`observe-service`). Without this, the cross run could count
+those failures as new tests that fail on the old code.
 
 **Isolation.** A service gets no service account token, no secrets and no
 service links. It does not mount the workspace, the runner, the settings or

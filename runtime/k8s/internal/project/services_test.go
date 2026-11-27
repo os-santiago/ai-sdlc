@@ -55,20 +55,20 @@ func TestServicesRoundTripAndChangeOnlyOptedInDigests(t *testing.T) {
 
 func TestServiceGroupAndOptionalFieldsAreValidated(t *testing.T) {
 	s := postgresService()
-	zero := int64(0)
-	s.Group, s.Args, s.WritableRootFilesystem = &zero, []string{"-c", "fsync=off"}, true
+	group := int64(1001)
+	s.Group, s.Args, s.WritableRootFilesystem = &group, []string{"-c", "fsync=off"}, true
 	m := withServices(s)
-	if err := m.Validate(); err != nil || s.GroupID() != 0 {
-		t.Fatal("a root group, arguments and a writable root are reviewable", err)
+	if err := m.Validate(); err != nil || s.GroupID() != 1001 {
+		t.Fatal("a group, arguments and a writable root are reviewable", err)
 	}
-	if parsed, err := ParseManifest(m.Canonical()); err != nil || parsed.Verification.Services[0].GroupID() != 0 ||
+	if parsed, err := ParseManifest(m.Canonical()); err != nil || parsed.Verification.Services[0].GroupID() != 1001 ||
 		!parsed.Verification.Services[0].WritableRootFilesystem {
 		t.Fatal("optional service fields must round trip", err)
 	}
 }
 
 func TestInvalidServicesAreRefused(t *testing.T) {
-	negative := int64(-1)
+	negative, root := int64(-1), int64(0)
 	for name, change := range map[string]func(*Service){
 		"no name":          func(s *Service) { s.Name = "" },
 		"upper name":       func(s *Service) { s.Name = "DB" },
@@ -79,6 +79,7 @@ func TestInvalidServicesAreRefused(t *testing.T) {
 		"root user":        func(s *Service) { s.User = 0 },
 		"huge user":        func(s *Service) { s.User = 1 << 31 },
 		"negative group":   func(s *Service) { s.Group = &negative },
+		"root group":       func(s *Service) { s.Group = &root },
 		"privileged port":  func(s *Service) { s.Port = 80 },
 		"no port":          func(s *Service) { s.Port = 0 },
 		"port range":       func(s *Service) { s.Port = 65536 },

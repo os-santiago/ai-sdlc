@@ -140,7 +140,13 @@ container exits, so the pod still completes with the tests. Decisions:
   Fresh services per repetition would need one pod per repetition, a
   change to the effect ledger.
 - *Fail closed.* A service that is not ready in time, exits or restarts
-  fails the run as a transport failure, never as a decision.
+  fails the run as a transport failure, never as a decision. A service may
+  be seen terminated only as a kubelet stop after the tests ended: it
+  finished no earlier than the tests container, was not OOM-killed, and
+  exited 0, 137 or 143. Otherwise its death could have made the tests fail,
+  which the cross run would read as new failing tests on the old code
+  (`observe-service`). The readiness port must open only once the service
+  can serve.
 - *Isolation.* Services inherit the pod's gVisor RuntimeClass, the missing
   token and service links, and RuntimeDefault seccomp. They run non-root
   (the namespace enforces Pod Security `restricted`) with every capability
