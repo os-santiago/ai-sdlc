@@ -144,9 +144,10 @@ func AnalysisSeconds(run string, v project.Verification) int {
 }
 
 // DeadlineSeconds is the pod's hard deadline for a test timeout and, with
-// analysis, the analysis timeouts.
+// analysis, the analysis timeouts, and, with services, the longest service
+// readiness wait.
 func DeadlineSeconds(run string, v project.Verification) int {
-	return PullSeconds + ReadySeconds + Repetitions(run, v)*v.TimeoutSeconds + AnalysisSeconds(run, v) + MarginSeconds
+	return PullSeconds + ReadySeconds + v.ServiceReadySeconds() + Repetitions(run, v)*v.TimeoutSeconds + AnalysisSeconds(run, v) + MarginSeconds
 }
 
 // CompilePod renders one offline run. The repository's command is never in
@@ -204,12 +205,16 @@ func CompilePod(p Pod) (Workload, error) {
 			map[string]any{"name": "scratch", "mountPath": ScratchDirectory},
 			map[string]any{"name": "runner", "mountPath": "/runner", "readOnly": true},
 			map[string]any{"name": "settings", "mountPath": SettingsDirectory, "readOnly": true}}}
+	// Services follow the transfer sidecar, so the controller's exec target
+	// is up first; only manifests with services add containers or volumes,
+	// so every other pod renders exactly as before.
+	services, serviceVolumes := serviceSidecars(p.Verification)
 	pod := map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": name, "namespace": p.Namespace, "labels": labels, "annotations": podAnnotations}, "spec": map[string]any{
 		"runtimeClassName": p.RuntimeClass, "automountServiceAccountToken": false, "enableServiceLinks": false, "restartPolicy": "Never",
 		"activeDeadlineSeconds": DeadlineSeconds(p.Run, p.Verification), "terminationGracePeriodSeconds": 1,
 		"hostNetwork": false, "hostPID": false, "hostIPC": false, "shareProcessNamespace": false,
 		"securityContext": map[string]any{"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000, "seccompProfile": map[string]any{"type": "RuntimeDefault"}},
-		"volumes": []any{
+		"volumes": append([]any{
 			// The imported tree is bounded by the bundle limits; the rest is
 			// room for build output the tests write next to the sources.
 			map[string]any{"name": "workspace", "emptyDir": map[string]any{"sizeLimit": workspaceVolume}},
@@ -217,8 +222,8 @@ func CompilePod(p Pod) (Workload, error) {
 			map[string]any{"name": "runner", "emptyDir": map[string]any{"sizeLimit": runnerVolume}},
 			map[string]any{"name": "settings", "configMap": map[string]any{"name": configName, "defaultMode": 0o444}},
 			map[string]any{"name": "pod-identity", "downwardAPI": map[string]any{"items": []any{map[string]any{"path": "uid", "fieldRef": map[string]any{"fieldPath": "metadata.uid"}}}}},
-		},
-		"initContainers": []any{install, transfer},
+		}, serviceVolumes...),
+		"initContainers": append([]any{install, transfer}, services...),
 		"containers":     []any{tests},
 	}}
 	raw, err := json.Marshal(Workload{config, pod})
