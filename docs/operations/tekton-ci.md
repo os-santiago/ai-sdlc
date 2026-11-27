@@ -207,16 +207,32 @@ or node affinity; the local kind node is single-node.
 
 ### Sandbox
 
-`--sandbox` puts the `build-test` task under the `ai-sdlc-offline` RuntimeClass
-(gVisor, installed by `./install.sh sandbox`) through the PipelineRun's
-per-task pod template. Fetch tasks never use it, because that class sets
-`network = "none"`: an npm run under it failed with `EAI_AGAIN`. In the
-disposable cluster a plain four-container pod (Maven, PostgreSQL and MongoDB
-images, read-only roots) started and ran under gVisor, but Tekton task pods
-failed to start their sub-containers (`failed to setupFS: creating mount
-namespace: creating root file system: input/output error`). The sandbox is
-therefore opt-in until that is understood; the network-less policy, `mvn -o`
-and restricted Pod Security apply either way.
+`maven-build-test`, the only task that runs candidate code, runs under the
+`ai-sdlc-offline` RuntimeClass (gVisor, `network = "none"`) through the
+PipelineRun's per-task pod template. Install it with `./install.sh sandbox`;
+the run tool refuses to start without it unless `--no-sandbox` is given
+(development only). Fetch tasks never use it: the class has no network, so an
+npm run under it failed with `EAI_AGAIN`.
+
+**Node task limit.** gVisor runs every container of a pod (sandbox, gofers and
+systrap stubs) inside the systemd scope of the pod's first container, and
+systemd caps each container scope at `DefaultTasksMax`, 15% of the node's pid
+limit: 307 for a kind node under podman's default of 2048. A Tekton task pod
+has two init containers plus one container per step and sidecar; with three or
+more, the sandbox died with `failed to create new OS thread (have 57 already;
+errno=11)` and the kubelet reported `creating root file system: input/output
+error` or `the sandbox exited before the container started`. One- and
+two-step tasks, emptyDir volumes and PVC workspaces all worked, which is how the
+cause was isolated (runsc debug logs showed the panic). `./install.sh sandbox`
+now installs a reviewed systemd drop-in
+(`runtime/k8s/deploy/local/offline-runtime/systemd-tasks.conf`,
+`DefaultTasksMax=1536`, below the node limit), re-executes the node's systemd
+manager, verifies the value and records `scopeTasksMax` in its report; a
+different existing drop-in is refused. It applies to scopes created afterwards.
+
+Measured: `maven-build-test` rest-villains with the PostgreSQL sidecar under
+gVisor passed 94/94 (72 unit, 22 integration) in 2 min 1 s of Maven, against
+1 min 42 s with the default runtime.
 
 ### Maven proxy
 

@@ -20,6 +20,7 @@ MANIFESTS = ROOT / 'runtime/k8s/deploy/local/offline-runtime'
 PREFIX = '/opt/ai-sdlc/gvisor-release-20261109.0'
 SHIM_CONFIG = '/etc/containerd/ai-sdlc-offline.toml'
 NODE_CONFIG = '/etc/containerd/config.toml'
+TASKS_DROPIN = '/etc/systemd/system.conf.d/ai-sdlc-offline-tasks.conf'
 HANDLER = 'ai-sdlc-offline'
 
 
@@ -110,6 +111,36 @@ def node_configuration(current, fragment):
     desired = current.rstrip() + '\n\n' + fragment
     tomllib.loads(desired)
     return desired
+
+
+def sandbox_task_limit(read, write, command, node_exec):
+    """Raise the node's per-scope task limit for sandboxed pods, idempotently.
+
+    gVisor runs every container of a pod (the sandbox, gofers and systrap
+    stubs) inside the scope of the pod's first container, and systemd caps
+    each container scope at DefaultTasksMax, 15% of the node's pid limit
+    (307 for a kind node under podman's default of 2048). A Tekton task pod
+    with three or more containers exceeded it and the sandbox died with
+    "failed to create new OS thread". The reviewed drop-in raises the default,
+    bounded below the node limit; a different existing drop-in is refused.
+    """
+    desired = (MANIFESTS / 'systemd-tasks.conf').read_text()
+    expected = next(line.split('=', 1)[1].strip() for line in desired.splitlines() if line.startswith('DefaultTasksMax='))
+    current = read(TASKS_DROPIN)
+    if current is not None and current != desired:
+        raise ValueError('Conflicting systemd task limit drop-in on the kind node')
+    if current is None:
+        command(node_exec + ['mkdir', '-p', '/etc/systemd/system.conf.d'])
+        write(TASKS_DROPIN, desired)
+    observed = command(node_exec + ['systemctl', 'show', '-p', 'DefaultTasksMax', '--value']).strip()
+    if observed != expected:
+        # Re-executing the manager applies the default to scopes created
+        # afterwards; running containers keep their limits.
+        command(node_exec + ['systemctl', 'daemon-reexec'])
+        observed = command(node_exec + ['systemctl', 'show', '-p', 'DefaultTasksMax', '--value']).strip()
+    if observed != expected:
+        raise ValueError('The kind node did not apply the sandbox task limit')
+    return int(observed)
 
 
 def install(kubectl, provider, kind, cluster, cluster_uid, cache, image):
@@ -203,6 +234,7 @@ def install(kubectl, provider, kind, cluster, cluster_uid, cache, image):
         finally:
             command(node_exec + ['rm', '-f', '--', stage])
     command(kubectl + ['wait', '--for=condition=Ready', 'node', node, '--timeout=90s'])
+    tasks_max = sandbox_task_limit(read, write, command, node_exec)
     runtime_class = json.loads((MANIFESTS / 'runtimeclass.json').read_text())
     runtime_class['metadata']['annotations'] = {'ai-sdlc.io/cluster-uid': cluster_uid}
     if not existing_class:
@@ -215,4 +247,4 @@ def install(kubectl, provider, kind, cluster, cluster_uid, cache, image):
             'verifiedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'archiveSHA256': lock['sha256'], 'configurationSHA256': sha256(shim.encode()),
             'handlerConfigurationSHA256': sha256(fragment.encode()),
-            'network': 'none', 'verification': result, 'autonomousExecutionEnabled': False}
+            'network': 'none', 'scopeTasksMax': tasks_max, 'verification': result, 'autonomousExecutionEnabled': False}

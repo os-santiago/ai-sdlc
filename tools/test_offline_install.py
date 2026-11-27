@@ -135,5 +135,42 @@ runtime_type = "io.containerd.runc.v2"
         self.assertLessEqual(spec['activeDeadlineSeconds'], 300)
 
 
+class SandboxTaskLimitTests(unittest.TestCase):
+    def fake(self, existing=None, reported=('307', '1536')):
+        files = {} if existing is None else {runtime.TASKS_DROPIN: existing}
+        calls, shown = [], list(reported)
+
+        def command(args, **_kwargs):
+            calls.append(args)
+            if args[-3:] == ['-p', 'DefaultTasksMax', '--value']:
+                return (shown.pop(0) if len(shown) > 1 else shown[0]) + '\n'
+            return ''
+        return files, calls, files.get, files.__setitem__, command
+
+    def test_drop_in_is_written_once_and_applied_with_a_reexec(self):
+        files, calls, read, write, command = self.fake()
+        self.assertEqual(runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n']), 1536)
+        self.assertIn('DefaultTasksMax=1536', files[runtime.TASKS_DROPIN])
+        self.assertIn(['podman', 'exec', 'n', 'systemctl', 'daemon-reexec'], calls)
+        # Reapplication: same file, already applied, nothing re-executed.
+        files2, calls2, read2, write2, command2 = self.fake(existing=files[runtime.TASKS_DROPIN], reported=('1536',))
+        self.assertEqual(runtime.sandbox_task_limit(read2, write2, command2, ['podman', 'exec', 'n']), 1536)
+        self.assertFalse(any('daemon-reexec' in c for c in calls2))
+
+    def test_foreign_drop_in_or_unapplied_limit_is_refused(self):
+        _, calls, read, write, command = self.fake(existing='[Manager]\nDefaultTasksMax=infinity\n')
+        with self.assertRaisesRegex(ValueError, 'Conflicting'):
+            runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n'])
+        self.assertEqual(calls, [])
+        _, _, read, write, command = self.fake(reported=('307', '307'))
+        with self.assertRaisesRegex(ValueError, 'did not apply'):
+            runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n'])
+
+    def test_limit_is_bounded_below_the_kind_node_pid_limit(self):
+        conf = (runtime.MANIFESTS / 'systemd-tasks.conf').read_text()
+        value = int(next(l.split('=')[1] for l in conf.splitlines() if l.startswith('DefaultTasksMax=')))
+        self.assertTrue(307 < value < 2048)
+
+
 if __name__ == '__main__':
     unittest.main()
