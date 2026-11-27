@@ -80,6 +80,18 @@ func TestVerifierQuotaCoversThreeConcurrentRuns(t *testing.T) {
 			t.Fatal(k, quota[k], v)
 		}
 	}
+	// Each run's pod also requests and limits every manifest service.
+	m.Verification.Services = []project.Service{{CPU: "250m", Memory: "256Mi"}, {CPU: "1", Memory: "1Gi"}}
+	quota, err = verifierQuota(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = map[string]string{"requests.cpu": "5310m", "requests.memory": "5472Mi", "limits.cpu": "5850m", "limits.memory": "5568Mi"}
+	for k, v := range want {
+		if quota[k] != v {
+			t.Fatal("with services", k, quota[k], v)
+		}
+	}
 	if q, err := verifierQuota(project.Manifest{}); err != nil || q != nil {
 		t.Fatal("a manifest without verification needs no quota")
 	}
