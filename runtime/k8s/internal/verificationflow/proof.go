@@ -124,11 +124,11 @@ func currentProof(ctx context.Context, db *store.DB, load PolicyLoader, id strin
 }
 
 // BoundManifest reports whether the installed manifest registry holds exactly
-// the manifest the policy binds (or the policy binds none).
+// the manifest the policy binds. For a policy that binds none, a built-in
+// reference requires no installed manifest at all (one then belongs to
+// another policy load), and any other repository requires that no installed
+// manifest names it.
 func BoundManifest(p authority.Policy) bool {
-	if p.ProjectSHA256 == "" {
-		return true
-	}
-	m, ok := project.Lookup(p.Repository)
-	return ok && m.Repository == p.Repository && m.Digest() == p.ProjectSHA256
+	_, ok := project.BoundOrNone(p.Repository, p.ProjectSHA256)
+	return ok
 }

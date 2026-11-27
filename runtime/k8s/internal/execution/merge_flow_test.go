@@ -56,7 +56,7 @@ func TestMergeControllerActualJournalAndSyntheticForge(t *testing.T) {
 			writes, observations := 0, 0
 			r := mergeflow.Runtime{DB: f.DB, Policy: func() (authority.Policy, intake.Config, string, error) { return f.Policy, f.Intake, f.Profile, nil }, Review: func() (publicationflow.ReviewPolicy, error) {
 				return publicationflow.ReviewPolicy{Profile: f.ReviewProfile, Configuration: f.ReviewConfiguration}, nil
-			}, Identity: func() (authority.Identity, error) { return f.Identity, nil }, GatePolicy: func() (mergegate.Policy, error) { return mergegate.PilotPolicy(), nil }}
+			}, Identity: func() (authority.Identity, error) { return f.Identity, nil }, GatePolicy: func(string) (mergegate.Policy, error) { return mergegate.PilotPolicy(), nil }}
 			r.Gates = mergeGatesFunc(func(_ context.Context, e mergegate.Expected, _ mergegate.Policy) (mergegate.Observation, error) {
 				observations++
 				if scenario == "changed-profile" {
@@ -309,7 +309,7 @@ func TestMergeClosingItsIssueFinishesOnlyAfterTheSend(t *testing.T) {
 				return f.Policy, f.Intake, f.Profile, nil
 			}, Review: func() (publicationflow.ReviewPolicy, error) {
 				return publicationflow.ReviewPolicy{Profile: f.ReviewProfile, Configuration: f.ReviewConfiguration}, nil
-			}, Identity: func() (authority.Identity, error) { return f.Identity, nil }, GatePolicy: func() (mergegate.Policy, error) { return mergegate.PilotPolicy(), nil }}
+			}, Identity: func() (authority.Identity, error) { return f.Identity, nil }, GatePolicy: func(string) (mergegate.Policy, error) { return mergegate.PilotPolicy(), nil }}
 			r.Gates = mergeGatesFunc(func(_ context.Context, e mergegate.Expected, _ mergegate.Policy) (mergegate.Observation, error) {
 				observations++
 				if scenario == "during-presend-gate" && observations == 2 {

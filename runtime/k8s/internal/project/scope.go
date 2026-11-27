@@ -56,6 +56,21 @@ func Bound(repository, projectSHA256 string) (Manifest, bool) {
 	return *m, true
 }
 
+// BoundOrNone is Bound for stages that also run for repositories with no
+// manifest at all: when the policy binds none, the repository has no
+// built-in reference and no installed manifest names it, it returns the
+// empty manifest and true (there is nothing another load could substitute).
+// Every other mismatch refuses exactly as Bound does.
+func BoundOrNone(repository, projectSHA256 string) (Manifest, bool) {
+	if m, ok := Bound(repository, projectSHA256); ok {
+		return m, true
+	}
+	if _, found := Lookup(repository); projectSHA256 == "" && !found {
+		return Manifest{}, true
+	}
+	return Manifest{}, false
+}
+
 // Lookup returns the manifest governing a repository: the policy-bound
 // manifest when it names the repository, else a built-in reference.
 func Lookup(repository string) (Manifest, bool) {

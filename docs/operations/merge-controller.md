@@ -46,7 +46,9 @@ merge reconciliation stopped safely: merge-stopped stage=gate-changed-checks
 ```
 
 Stages that end before any send are `request`, `claim`, `publication-fence`,
-`gate-policy`, `gate-unavailable` (a forge read failed or a collection-internal
+`gate-policy`, `gate-manifest` (the installed merge gate's project manifest is
+not the one the authorizing policy binds: another policy load's manifest, or a
+cleared one; `mergegate.ErrManifest`), `gate-unavailable` (a forge read failed or a collection-internal
 consistency check refused), `gate-deadline` (the claim, capped by the 25-second
 gate lifetime, ended while the gate was being observed again),
 `gate-queued-invalid`, `gate-not-ready`, `gate-<reason>` for a closed set of gate
@@ -56,6 +58,10 @@ reasons (`gate-native-merge-not-ready`, `gate-native-protection-insufficient`,
 `gate-changed-reviews`, `effect-intent` and `transport-before-send`. After the
 request may have been sent the stage is `transport`, `sent-fence`, `acknowledge`
 or `finish`. Any other value prints as `unknown`.
+
+The same manifest refusal when a publication is selected, before any merge
+request is queued, logs `merge reconciliation stopped safely:
+merge-gate-manifest` (its stage is also `gate-manifest`).
 
 The journal, not the controller, decides whether the stop sent anything. Under
 the request's row lock (which an effect intent also takes) a request with no

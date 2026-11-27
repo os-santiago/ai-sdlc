@@ -67,16 +67,16 @@ func TestStartSecondsFollowTheInstalledToolchain(t *testing.T) {
 			TimeoutSeconds: 60, CPU: "1", Memory: "1Gi", EphemeralStorage: "1Gi", Network: "none", Result: project.Result{ExitCode: true},
 			Repeat: 1, TestGlobs: []string{"**/*_test.go"}}}
 	project.SetInstalled(&m)
-	if StartSecondsFor("example/service") != 0 || StartSecondsFor(project.Homedir) != 0 {
+	if StartSecondsFor("example/service", m.Digest()) != 0 || StartSecondsFor(project.Homedir, "") != 0 {
 		t.Fatal("start without a toolchain")
 	}
 	m.Generation = &project.Generation{Toolchain: &project.Toolchain{Root: "/usr/local/go", Path: []string{"bin"}}}
 	project.SetInstalled(&m)
-	if StartSecondsFor("example/service") != executor.ToolchainStartSeconds || StartSecondsFor("example/other") != 0 {
+	if StartSecondsFor("example/service", m.Digest()) != executor.ToolchainStartSeconds || StartSecondsFor("example/other", m.Digest()) != 0 {
 		t.Fatal("start with a toolchain")
 	}
 	// A command signed with that lifetime passes the assignment bound.
-	expires := time.Now().Add(CommandLifetime(900, StartSecondsFor("example/service")))
+	expires := time.Now().Add(CommandLifetime(900, StartSecondsFor("example/service", m.Digest())))
 	if expires.After(time.Now().Add(time.Hour)) {
 		t.Fatal("command beyond the assignment bound")
 	}

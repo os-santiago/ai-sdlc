@@ -39,7 +39,7 @@ func fixtureAPI(t *testing.T, mode string) (*Client, *atomic.Int32) {
 	return fixtureAPIForRepository(t, mode, repository)
 }
 func fixtureAPIForRepository(t *testing.T, mode, repository string) (*Client, *atomic.Int32) {
-	policy := PolicyForRepository(repository)
+	policy := PolicyForRepository(repository, "")
 	repoPath := func(suffix string) string { return "/repos/" + repository + suffix }
 	t.Helper()
 	calls := new(atomic.Int32)
@@ -316,12 +316,12 @@ func TestSaferusPolicyAndCredentialScope(t *testing.T) {
 			c, calls := fixtureAPIForRepository(t, mode, "os-santiago/saferus")
 			expected := fixtureExpected()
 			expected.Repository = "os-santiago/saferus"
-			r, err := c.Collect(context.Background(), expected, PolicyForRepository("os-santiago/saferus"))
+			r, err := c.Collect(context.Background(), expected, PolicyForRepository("os-santiago/saferus", ""))
 			if (err != nil) != strings.Contains(mode, "closing-issue") || r.Ready != (mode == "success") || calls.Load() == 0 {
 				t.Fatal(r, err)
 			}
 			before := calls.Load()
-			if _, err := c.Collect(context.Background(), fixtureExpected(), PolicyForRepository("os-santiago/saferus")); err != ErrGate || calls.Load() != before {
+			if _, err := c.Collect(context.Background(), fixtureExpected(), PolicyForRepository("os-santiago/saferus", "")); err != ErrGate || calls.Load() != before {
 				t.Fatal("cross-repository evidence reached API")
 			}
 			if _, err := c.Collect(context.Background(), fixtureExpected(), PilotPolicy()); err != ErrGate || calls.Load() != before {

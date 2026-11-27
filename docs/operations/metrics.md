@@ -93,8 +93,8 @@ line names:
   `refused-<reason>` for a correct refusal of the candidate;
 - release manager `merge`: the merge controller's fixed state, for example
   `merge-quarantined`, `merge-stopped`, `merge-authority-denied`,
-  `merge-observation-unavailable`, `merge-observation-expired` or
-  `merge-queue-denied`, and `unclassified` when it names none. The log line
+  `merge-observation-unavailable`, `merge-observation-expired`,
+  `merge-queue-denied` or `merge-gate-manifest`, and `unclassified` when it names none. The log line
   of `merge-stopped` also names the run's stage, for example
   `merge-stopped stage=gate-changed-checks` (`mergeflow.DiagnosticStage`; see
   the [merge controller](merge-controller.md#stopping-before-the-send)).

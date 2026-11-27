@@ -37,7 +37,7 @@ func newRetryHarness(t *testing.T) *retryHarness {
 	f := h.f
 	h.r = mergeflow.Runtime{DB: f.DB, Policy: func() (authority.Policy, intake.Config, string, error) { return f.Policy, f.Intake, f.Profile, nil }, Review: func() (publicationflow.ReviewPolicy, error) {
 		return publicationflow.ReviewPolicy{Profile: f.ReviewProfile, Configuration: f.ReviewConfiguration}, nil
-	}, Identity: func() (authority.Identity, error) { return f.Identity, nil }, GatePolicy: func() (mergegate.Policy, error) { return mergegate.PilotPolicy(), nil }}
+	}, Identity: func() (authority.Identity, error) { return f.Identity, nil }, GatePolicy: func(string) (mergegate.Policy, error) { return mergegate.PilotPolicy(), nil }}
 	h.r.Gates = mergeGatesFunc(func(_ context.Context, e mergegate.Expected, _ mergegate.Policy) (mergegate.Observation, error) {
 		h.observations++
 		if h.observations%2 == 1 && h.beforeQueue != nil {

@@ -61,10 +61,11 @@ func CommandLifetime(maxSeconds, startSeconds int) time.Duration {
 
 // StartSecondsFor is the lifecycle start a repository's executor pod adds:
 // the toolchain image pull and copy when its reviewed manifest declares a
-// generation toolchain, otherwise 0. It agrees with the claim that
-// lifecycleBinding derives from the assignment.
-func StartSecondsFor(repository string) int {
-	if ToolchainFor(repository) != nil {
+// generation toolchain, otherwise 0. Only the manifest the policy with
+// projectSHA256 binds counts. It agrees with the claim that lifecycleBinding
+// derives from the assignment.
+func StartSecondsFor(repository, projectSHA256 string) int {
+	if ToolchainFor(repository, projectSHA256) != nil {
 		return executor.ToolchainStartSeconds
 	}
 	return 0

@@ -63,7 +63,7 @@ func newUncertainMerge(t *testing.T, digest string) uncertainMerge {
 	u := uncertainMerge{f: f, journal: store.NewMergeJournal(f.DB, func() (authority.Policy, error) { return f.Policy, nil })}
 	r := mergeflow.Runtime{DB: f.DB, Policy: func() (authority.Policy, intake.Config, string, error) { return f.Policy, f.Intake, f.Profile, nil }, Review: func() (publicationflow.ReviewPolicy, error) {
 		return publicationflow.ReviewPolicy{Profile: f.ReviewProfile, Configuration: f.ReviewConfiguration}, nil
-	}, Identity: func() (authority.Identity, error) { return f.Identity, nil }, GatePolicy: func() (mergegate.Policy, error) { return mergegate.PilotPolicy(), nil }}
+	}, Identity: func() (authority.Identity, error) { return f.Identity, nil }, GatePolicy: func(string) (mergegate.Policy, error) { return mergegate.PilotPolicy(), nil }}
 	r.Gates = mergeGatesFunc(func(_ context.Context, e mergegate.Expected, _ mergegate.Policy) (mergegate.Observation, error) {
 		return mergegate.Observation{Expected: e, PolicySHA256: strings.Repeat("a", 64), ChecksSHA256: strings.Repeat("b", 64), ReviewsSHA256: strings.Repeat("c", 64), Ready: true, Reasons: []string{}, ObservedAt: time.Now()}, nil
 	})
