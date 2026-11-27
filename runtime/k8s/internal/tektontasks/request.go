@@ -39,8 +39,10 @@ func CacheClaim(repository string) string {
 }
 
 var (
-	revision   = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	npmPackage = regexp.MustCompile(`^(@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{0,100}(@[0-9A-Za-z.^~<>=*|+-]{1,64})?$`)
+	revision = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	// npm update takes package names only (versions fail with EUPDATEARGS)
+	// and stays within the package.json ranges.
+	npmPackage = regexp.MustCompile(`^(@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{0,100}$`)
 	repository = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}$`)
 	// pipelines maps catalog names to installed Pipeline objects.
 	pipelines = map[string]string{

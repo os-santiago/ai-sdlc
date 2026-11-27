@@ -52,6 +52,9 @@ type NpmChange struct {
 	Path string  `json:"path"`
 	From *string `json:"from"`
 	To   *string `json:"to"`
+	// ResolutionChanged marks an entry whose resolved URL or integrity
+	// changed at the same version.
+	ResolutionChanged bool `json:"resolutionChanged,omitempty"`
 }
 
 // NpmSummary is the bounded result of npm-lock-update.

@@ -64,7 +64,7 @@ func TestToolRequestsRenderInstalledPipelinesWithManifestInputs(t *testing.T) {
 	if err != nil || build.Services[0] != "postgres" || build.MavenArgs[0] != "-Dtest=!UIResourceTests,!*IT" {
 		t.Fatal("build request", build, err)
 	}
-	npm, err := FromTool(m, "npm_lock_update", "ui-super-heroes/src/main/webui", []string{"axios", "vite@6.3.5"}, sha)
+	npm, err := FromTool(m, "npm_lock_update", "ui-super-heroes/src/main/webui", []string{"axios", "@scope/pkg"}, sha)
 	if err != nil || npm.Mode != "update" {
 		t.Fatal("npm request", npm, err)
 	}
@@ -116,6 +116,9 @@ func TestRequestsOutsideTheManifestAreRefused(t *testing.T) {
 		"undeclared dir":    func() (Request, error) { return FromTool(m, "npm_lock_update", "other", []string{"axios"}, sha) },
 		"package injection": func() (Request, error) {
 			return FromTool(m, "npm_lock_update", "ui-super-heroes/src/main/webui", []string{"axios; rm -rf /"}, sha)
+		},
+		"package version": func() (Request, error) {
+			return FromTool(m, "npm_lock_update", "ui-super-heroes/src/main/webui", []string{"vite@6.3.5"}, sha)
 		},
 		"package url": func() (Request, error) {
 			return FromTool(m, "npm_lock_update", "ui-super-heroes/src/main/webui", []string{"git+https://x/y"}, sha)
@@ -198,11 +201,11 @@ func TestSummariesAreDecodedStrictlyAndBounded(t *testing.T) {
 			t.Fatal("accepted", bad[:min(60, len(bad))])
 		}
 	}
-	npm := `{"directory":"ui","mode":"update","npmExitCode":0,"changed":2,"changes":[{"path":"axios","from":"1.21.0","to":"1.21.1"},{"path":"new","from":null,"to":"1.0.0"}],"truncated":false,"resolvedHosts":["registry.npmjs.org"],"newResolvedHosts":[],"diffBytes":3230,"diffSHA256":"` + strings.Repeat("f", 64) + `"}`
-	if s, err := ParseNpmSummary(npm); err != nil || len(s.Changes) != 2 || s.Changes[1].From != nil || !s.Passed() {
+	npm := `{"directory":"ui","mode":"update","npmExitCode":0,"changed":3,"changes":[{"path":"axios","from":"1.21.0","to":"1.21.1"},{"path":"new","from":null,"to":"1.0.0"},{"path":"same","from":"1.0.0","to":"1.0.0","resolutionChanged":true}],"truncated":false,"resolvedHosts":["registry.npmjs.org"],"newResolvedHosts":[],"diffBytes":3230,"diffSHA256":"` + strings.Repeat("f", 64) + `"}`
+	if s, err := ParseNpmSummary(npm); err != nil || len(s.Changes) != 3 || s.Changes[1].From != nil || !s.Changes[2].ResolutionChanged || !s.Passed() {
 		t.Fatal("npm summary", err)
 	}
-	for _, bad := range []string{strings.Replace(npm, `"changed":2`, `"changed":1`, 1), strings.Replace(npm, `"update"`, `"install"`, 1),
+	for _, bad := range []string{strings.Replace(npm, `"changed":3`, `"changed":1`, 1), strings.Replace(npm, `"update"`, `"install"`, 1),
 		strings.Replace(npm, strings.Repeat("f", 64), "zz", 1), strings.Replace(npm, `"newResolvedHosts":[],`, ``, 1)} {
 		if _, err := ParseNpmSummary(bad); err == nil {
 			t.Fatal("accepted npm", bad[:60])
