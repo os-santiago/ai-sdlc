@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -13,6 +14,59 @@ import (
 )
 
 var mergeIDPattern = regexp.MustCompile(`^merge-[a-f0-9]{64}$`)
+
+// MergeNotSent is the failure reason of a merge request that provably sent
+// nothing: it stopped before any merge effect was begun, or its only effect is
+// sealed not-sent. Only the journal assigns it (StopMerge, ExpireMerges).
+const MergeNotSent = "not-sent"
+
+// MergeAttempts bounds the merge requests one publication may receive. Every
+// request but the last must have failed "not-sent".
+const MergeAttempts = 3
+
+// MergeRetryWaits is how long after the previous signed command expired the
+// next attempt may be queued, by the number of earlier attempts: 30 s after the
+// first, 2 min after the second (and 5 min after a third, should
+// MergeAttempts grow). A transient forge fault gets an immediate second chance
+// and a longer third one instead of three attempts spent within minutes.
+var MergeRetryWaits = []time.Duration{30 * time.Second, 2 * time.Minute, 5 * time.Minute}
+
+// mergeAttemptAllowed is the SQL predicate, over the publication id in pub,
+// that admits a new merge request for it: every earlier request failed
+// "not-sent", fewer than MergeAttempts exist, and the latest earlier command
+// expired at least the scheduled wait ago. An aggregate over no rows yields
+// one row (count 0), so a first attempt is admitted.
+func mergeAttemptAllowed(pub string) string {
+	wait := "CASE count(*)"
+	for i, d := range MergeRetryWaits {
+		wait += " WHEN " + strconv.Itoa(i+1) + " THEN interval '" + strconv.Itoa(int(d/time.Second)) + " seconds'"
+	}
+	last := MergeRetryWaits[len(MergeRetryWaits)-1]
+	wait += " ELSE interval '" + strconv.Itoa(int(last/time.Second)) + " seconds' END"
+	return `(SELECT count(*)<` + strconv.Itoa(MergeAttempts) + ` AND bool_and(m.reason='` + MergeNotSent + `') IS NOT FALSE
+  AND COALESCE(max(m.expires_at)+` + wait + `<=clock_timestamp(),true)
+  FROM merge_requests m WHERE m.publication_id=` + pub + `)`
+}
+
+// MergeAttemptsExhausted reports whether the request failed "not-sent" as the
+// last attempt its publication may receive: no further request will be
+// queued for that publication, and an operator must re-deliver the issue.
+func (j *MergeJournal) MergeAttemptsExhausted(ctx context.Context, id string) (bool, error) {
+	if !mergeIDPattern.MatchString(id) {
+		return false, ErrExecution
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if AssertComponent(ctx, j.DB.Pool, "release-manager") != nil {
+		return false, ErrExecution
+	}
+	var exhausted bool
+	e := j.DB.Pool.QueryRowContext(ctx, `SELECT r.state='failed' AND r.reason='`+MergeNotSent+`' AND (SELECT count(*) FROM merge_requests m WHERE m.publication_id=r.publication_id)>=`+strconv.Itoa(MergeAttempts)+` FROM merge_requests r WHERE r.id=$1`, id).Scan(&exhausted)
+	if e != nil {
+		return false, observationError(e)
+	}
+	return exhausted, nil
+}
 
 type MergeRequest struct {
 	ID, PublicationID, RecordDigest, GateDigest, AuthorityRevision, PayloadDigest string
@@ -65,7 +119,14 @@ func (j *MergeJournal) QueueMerge(ctx context.Context, r MergeRequest) error {
 			return ErrExecution
 		}
 
-		result, e := tx.ExecContext(ctx, `INSERT INTO merge_requests(id,publication_id,record_digest,gate_digest,authority_revision,payload_digest,payload,receipt,expires_at,gate,policy) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11 WHERE $9>clock_timestamp() AND $9<=clock_timestamp()+interval '120 seconds'`, r.ID, r.PublicationID, r.RecordDigest, r.GateDigest, r.AuthorityRevision, r.PayloadDigest, r.Payload, r.Receipt, r.ExpiresAt, r.Gate, archived)
+		// The same lock as ClaimMerge serializes attempts for one publication;
+		// the partial unique index (migration 0040) independently admits at
+		// most one request per publication that is not "not-sent".
+		if _, e := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(73421026)`); e != nil {
+			return ErrExecution
+		}
+		result, e := tx.ExecContext(ctx, `INSERT INTO merge_requests(id,publication_id,record_digest,gate_digest,authority_revision,payload_digest,payload,receipt,expires_at,gate,policy) SELECT $1,$2::text,$3,$4,$5,$6,$7,$8,$9,$10,$11 WHERE $9>clock_timestamp() AND $9<=clock_timestamp()+interval '120 seconds'
+  AND `+mergeAttemptAllowed("$2::text"), r.ID, r.PublicationID, r.RecordDigest, r.GateDigest, r.AuthorityRevision, r.PayloadDigest, r.Payload, r.Receipt, r.ExpiresAt, r.Gate, archived)
 		if e != nil {
 			return ErrExecution
 		}
@@ -149,36 +210,85 @@ func (j *MergeJournal) CheckMerge(ctx context.Context, c MergeClaim) error {
 	defer cancel()
 	return j.DB.WithTx(ctx, func(tx *sql.Tx) error { return j.lockMerge(ctx, tx, c) })
 }
+
+// StopMerge fails a claimed request. A caller may report "uncertain"; the
+// journal itself decides whether that stop sent nothing: under the request's
+// row lock (which BeginMergeEffect also takes before journaling an intent), a
+// request with no merge effect, or whose only effect is sealed not-sent, is
+// recorded as "not-sent". No caller can claim "not-sent" directly. A request
+// that may have been sent keeps "uncertain" and quarantines later merges.
 func (j *MergeJournal) StopMerge(ctx context.Context, c MergeClaim, reason string) error {
 	if reason != "expired" && reason != "revoked" && reason != "uncertain" && reason != "rejected" {
 		return ErrExecution
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	if AssertComponent(ctx, j.DB.Pool, "release-manager") != nil {
-		return ErrExecution
-	}
-	result, e := j.DB.Pool.ExecContext(ctx, `UPDATE merge_requests SET state='failed',reason=$3 WHERE id=$1 AND claim_token=$2 AND state='claimed'`, c.ID, c.Token, reason)
-	if e != nil {
-		return ErrExecution
-	}
-	n, e := result.RowsAffected()
-	if e != nil || n != 1 {
-		return ErrExecution
-	}
-	return nil
+	return j.DB.WithTx(ctx, func(tx *sql.Tx) error {
+		if AssertComponent(ctx, tx, "release-manager") != nil {
+			return ErrExecution
+		}
+		var id string
+		if tx.QueryRowContext(ctx, `SELECT id FROM merge_requests WHERE id=$1 AND claim_token=$2 AND state='claimed' FOR UPDATE`, c.ID, c.Token).Scan(&id) != nil {
+			return ErrExecution
+		}
+		// A separate statement after the row lock: its snapshot includes any
+		// effect intent committed by a transaction that held the lock.
+		if reason == "uncertain" {
+			var open bool
+			if tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM merge_effects WHERE request_id=$1 AND not_sent_at IS NULL)`, id).Scan(&open) != nil {
+				return ErrExecution
+			}
+			if !open {
+				reason = MergeNotSent
+			}
+		}
+		result, e := tx.ExecContext(ctx, `UPDATE merge_requests SET state='failed',reason=$3 WHERE id=$1 AND claim_token=$2 AND state='claimed'`, id, c.Token, reason)
+		if e != nil {
+			return ErrExecution
+		}
+		n, e := result.RowsAffected()
+		if e != nil || n != 1 {
+			return ErrExecution
+		}
+		return nil
+	})
 }
+
+// ExpireMerges fails every queued or claimed request whose command or claim
+// has expired. Each is locked first; one with no merge effect, or whose only
+// effect is sealed not-sent, is recorded as "not-sent", otherwise "expired".
 func (j *MergeJournal) ExpireMerges(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	if AssertComponent(ctx, j.DB.Pool, "release-manager") != nil {
-		return ErrExecution
-	}
-	_, e := j.DB.Pool.ExecContext(ctx, `UPDATE merge_requests SET state='failed',reason='expired' WHERE state IN ('queued','claimed') AND (expires_at<=clock_timestamp() OR claim_until<=clock_timestamp())`)
-	if e != nil {
-		return ErrExecution
-	}
-	return nil
+	return j.DB.WithTx(ctx, func(tx *sql.Tx) error {
+		if AssertComponent(ctx, tx, "release-manager") != nil {
+			return ErrExecution
+		}
+		rows, e := tx.QueryContext(ctx, `SELECT id FROM merge_requests WHERE state IN ('queued','claimed') AND (expires_at<=clock_timestamp() OR claim_until<=clock_timestamp()) ORDER BY id LIMIT 64 FOR UPDATE`)
+		if e != nil {
+			return ErrExecution
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if rows.Scan(&id) != nil {
+				rows.Close()
+				return ErrExecution
+			}
+			ids = append(ids, id)
+		}
+		readErr := rows.Err()
+		rows.Close()
+		if readErr != nil {
+			return ErrExecution
+		}
+		for _, id := range ids {
+			if _, e = tx.ExecContext(ctx, `UPDATE merge_requests r SET state='failed',reason=CASE WHEN EXISTS(SELECT 1 FROM merge_effects e WHERE e.request_id=r.id AND e.not_sent_at IS NULL) THEN 'expired' ELSE 'not-sent' END WHERE r.id=$1 AND r.state IN ('queued','claimed')`, id); e != nil {
+				return ErrExecution
+			}
+		}
+		return nil
+	})
 }
 func (j *MergeJournal) MergeBlocked(ctx context.Context) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)

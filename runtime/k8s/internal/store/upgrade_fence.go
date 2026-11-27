@@ -57,8 +57,10 @@ var repairUpgradeTables = []string{"execution_repairs", "repair_model_budgets", 
 // catalog it fences (a source missing them is admitted, and the upgrade's
 // own migrator job applies them). A policy naming the observer admits
 // nothing until role provisioning creates that role and grants its columns.
-// Every other migration needs its own bridge.
-var RelaxationMigrations = []string{"0038_generic_publication_scope.sql", "0039_flow_console_reader.sql"}
+// 0040 narrows the merge request uniqueness to requests that may have sent
+// (a partial unique index replacing the full one) and admits the not-sent
+// reason. Every other migration needs its own bridge.
+var RelaxationMigrations = []string{"0038_generic_publication_scope.sql", "0039_flow_console_reader.sql", "0040_merge_retry_before_send.sql"}
 
 // configurationSource reports whether source is the current catalog, or the
 // current catalog without a suffix of relaxation migrations.
@@ -89,10 +91,10 @@ func scopedUpgradeFenceTables(source []MigrationIdentity, browser, feedback bool
 
 func repairScopedUpgradeFenceTables(source []MigrationIdentity, browser, feedback, repair bool) ([]string, error) {
 	catalog, err := MigrationCatalog()
-	if err != nil || len(catalog) != 39 || catalog[38].Filename != "0039_flow_console_reader.sql" || catalog[37].Filename != "0038_generic_publication_scope.sql" || catalog[36].Filename != "0037_review_repair.sql" || catalog[35].Filename != "0036_review_feedback.sql" || catalog[34].Filename != "0035_deployment_browser.sql" || catalog[32].Filename != "0033_production_completion.sql" || catalog[33].Filename != "0034_execution_failures.sql" || ValidateMigrationSource(source) != nil || (browser && feedback) || (repair && (browser || feedback)) {
+	if err != nil || len(catalog) != 40 || catalog[39].Filename != "0040_merge_retry_before_send.sql" || catalog[38].Filename != "0039_flow_console_reader.sql" || catalog[37].Filename != "0038_generic_publication_scope.sql" || catalog[36].Filename != "0037_review_repair.sql" || catalog[35].Filename != "0036_review_feedback.sql" || catalog[34].Filename != "0035_deployment_browser.sql" || catalog[32].Filename != "0033_production_completion.sql" || catalog[33].Filename != "0034_execution_failures.sql" || ValidateMigrationSource(source) != nil || (browser && feedback) || (repair && (browser || feedback)) {
 		return nil, ErrUpgradeFence
 	}
-	if (repair && len(source) != 36 && len(source) != 37 && len(source) != 38 && len(source) != 39) || (!repair && ((feedback && len(source) != 35 && len(source) != 36) || (!feedback && ((!browser && len(source) != 33 && len(source) != 34) || (browser && len(source) != 34 && len(source) != 35))))) {
+	if (repair && len(source) != 36 && len(source) != 37 && len(source) != 38 && len(source) != 39 && len(source) != 40) || (!repair && ((feedback && len(source) != 35 && len(source) != 36) || (!feedback && ((!browser && len(source) != 33 && len(source) != 34) || (browser && len(source) != 34 && len(source) != 35))))) {
 		return nil, ErrUpgradeFence
 	}
 	// Historical bridges never admit the new feedback schema or its rows.
@@ -296,7 +298,7 @@ func (db *DB) WithReviewFeedbackUpgradeFence(ctx context.Context, database strin
 // Feedback and all child ledgers must be empty: no historical work gains repair.
 func (db *DB) WithReviewRepairUpgradeFence(ctx context.Context, database string, source []MigrationIdentity, pause func(context.Context, *UpgradeFence) error) error {
 	// The shared table selection also serves the configuration protocol,
-	// which admits the current 38- and 39-entry catalogs; this bridge never does.
+	// which admits the current 38-, 39- and 40-entry catalogs; this bridge never does.
 	if len(source) != 36 && len(source) != 37 {
 		return ErrUpgradeFence
 	}

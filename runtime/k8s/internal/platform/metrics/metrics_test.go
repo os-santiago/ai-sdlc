@@ -208,6 +208,7 @@ func TestRuntimeMetricsKeepLabelsBounded(t *testing.T) {
 	Reconciliation("refs/heads/main", "forge said 502")
 	MergeReconciliation("completed")
 	MergeReconciliation("merge commit deadbeef")
+	MergeAttemptsExhausted()
 	Quarantined("merge", true)
 	Quarantined("os-santiago/saferus", false)
 	allowed := map[string]map[string]bool{
@@ -222,6 +223,9 @@ func TestRuntimeMetricsKeepLabelsBounded(t *testing.T) {
 	queue := set(append(QueueStages, Other)...)
 	w := httptest.NewRecorder()
 	Default.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !regexp.MustCompile(`(?m)^ai_sdlc_merge_attempts_exhausted_total [1-9]`).MatchString(w.Body.String()) {
+		t.Fatal("merge attempt exhaustion not rendered")
+	}
 	label := regexp.MustCompile(`([a-z_]+)="([^"]*)"`)
 	for _, line := range strings.Split(w.Body.String(), "\n") {
 		if line == "" || strings.HasPrefix(line, "#") {

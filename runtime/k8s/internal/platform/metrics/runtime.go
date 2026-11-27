@@ -89,6 +89,8 @@ var (
 	mergeReconciliations = Default.NewCounter("ai_sdlc_merge_reconciliations_total",
 		"Read-only reconciliations of uncertain merge effects, by outcome.",
 		OneOf("outcome", MergeReconciliationOutcomes...))
+	mergeAttemptsExhausted = Default.NewCounter("ai_sdlc_merge_attempts_exhausted_total",
+		"Publications whose last allowed merge attempt stopped before any send; none is attempted again.")
 	quarantined = Default.NewGauge("ai_sdlc_quarantined",
 		"1 while an unresolved uncertain effect quarantines a journal of the release manager, 0 when none does.",
 		OneOf("journal", QuarantineJournals...))
@@ -133,6 +135,11 @@ func Reconciliation(effect, outcome string) { reconciliations.Inc(effect, outcom
 // MergeReconciliation counts one reconciliation step of an uncertain merge
 // effect. Values outside the closed set are recorded as "other".
 func MergeReconciliation(outcome string) { mergeReconciliations.Inc(outcome) }
+
+// MergeAttemptsExhausted counts one publication whose last allowed merge
+// attempt stopped before any send. It needs an operator: the issue must be
+// re-delivered.
+func MergeAttemptsExhausted() { mergeAttemptsExhausted.Inc() }
 
 // Quarantined records whether a journal is quarantined.
 func Quarantined(journal string, blocked bool) {

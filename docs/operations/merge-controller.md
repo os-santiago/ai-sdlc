@@ -34,6 +34,71 @@ expected PR/head/base/tree, request digest and merge receipt are still checked,
 as other post-effect stages bind only to their own durable request and receipt.
 The built-in references keep `Refs #N`, so their issues stay open after the merge.
 
+## Stopping before the send
+
+A claimed run can stop before any merge request leaves: the request or claim is
+refused, the publication fence fails, or the pre-send gate observation is
+unavailable or differs from the queued one. The release manager then logs the
+bounded stage (`mergeflow.DiagnosticStage`):
+
+```text
+merge reconciliation stopped safely: merge-stopped stage=gate-changed-checks
+```
+
+Stages that end before any send are `request`, `claim`, `publication-fence`,
+`gate-policy`, `gate-unavailable` (a forge read failed or a collection-internal
+consistency check refused), `gate-deadline` (the claim, capped by the 25-second
+gate lifetime, ended while the gate was being observed again),
+`gate-queued-invalid`, `gate-not-ready`, `gate-<reason>` for a closed set of gate
+reasons (`gate-native-merge-not-ready`, `gate-native-protection-insufficient`,
+`gate-checks-not-passed`, `gate-review-feedback-unresolved`),
+`gate-changed-expected`, `gate-changed-policy`, `gate-changed-checks`,
+`gate-changed-reviews`, `effect-intent` and `transport-before-send`. After the
+request may have been sent the stage is `transport`, `sent-fence`, `acknowledge`
+or `finish`. Any other value prints as `unknown`.
+
+The journal, not the controller, decides whether the stop sent anything. Under
+the request's row lock (which an effect intent also takes) a request with no
+merge effect, or whose only effect the pre-send fence sealed not-sent, fails
+with reason `not-sent`; any other stop stays `uncertain` and quarantines later
+merges. The stage is diagnostic only: a `publication-fence` stop whose not-sent
+seal failed, or an `effect-intent` stop whose intent commit landed, stays
+`uncertain` and is never retried.
+
+A `not-sent` request leaves its publication selectable again: the next attempt
+observes the gate afresh, signs a new command and queues a new request. Each
+publication receives at most three requests (`store.MergeAttempts`). The wait
+grows (`store.MergeRetryWaits`): the second attempt may start 30 seconds after
+the first command expired, the third 2 minutes after the second expired (a
+fourth, if the limit ever grew, 5 minutes). Two signed commands for one
+publication never overlap. Because the merge loop polls once a minute, the
+attempts usually run about 1, then 3, minutes apart, so a forge fault lasting a
+few minutes does not use them all up.
+
+When the last allowed attempt stops before any send, the publication is never
+attempted again. The release manager then logs
+
+```text
+merge reconciliation stopped safely: merge-stopped stage=gate-unavailable attempts=exhausted
+```
+
+and increments `ai_sdlc_merge_attempts_exhausted_total` (see
+[metrics](metrics.md#merge-attempts-exhausted)). The pull request stays open. To
+deliver the issue, close the pull request, delete its branch and re-label the
+issue (the [re-delivery procedure](publication-reconciliation.md#re-delivery-is-an-operator-action-decision-can-be-changed-later)).
+The flow console lists each attempt as its own merge request with reason
+`not-sent`.
+
+In battery 42 a pull request whose required check had passed was queued with a
+ready gate, and its run stopped about 13 seconds later with no merge effect: the
+pre-send gate observation failed or differed (the log then named no stage).
+GitHub showed no change to the pull request, checks, statuses or reviews in that
+window, so the likely cause was a transient forge read failure or a transient
+mergeability recomputation. Because a publication then had exactly one merge
+request, it could never merge and needed a full new attempt.
+
+## Uncertain sends
+
 A missing response or uncertain commit stops the original claim and quarantines
 an unacknowledged effect. [Merge reconciliation](merge-reconciliation.md) resolves
 it from a read-only observation once the claim has settled: a receipt when GitHub
@@ -41,7 +106,7 @@ shows the merge exactly as planned, a no-send when the pull request is still ope
 at the planned head and its head is not part of `main`, and otherwise the
 quarantine stays.
 Reconciliation cannot adopt that claim, repeat the write, finish the request as
-merged or give the same publication a new attempt. The quarantine does not make
+merged or give the same publication a new attempt; only a `not-sent` stop does. The quarantine does not make
 the release manager unready; it blocks only later merges. A terminal merge fact does not grant
 artifact promotion, release or deployment authority.
 

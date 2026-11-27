@@ -4,7 +4,11 @@ A merge effect is *uncertain* when the release manager journaled its intent (the
 exact request digest of the merge `PUT`) and may have sent it, but recorded
 neither a receipt nor a known no-send. That happens when GitHub's answer arrives
 after the claim deadline, the connection drops, or a fence fails after the
-request left. The request then fails with reason `uncertain`, and
+request left. (A run that stopped before journaling any intent, or whose intent
+the pre-send fence sealed, sent nothing: it fails with reason `not-sent`, does
+not quarantine and its publication gets a bounded fresh attempt; see the
+[merge controller](merge-controller.md#stopping-before-the-send).) The request
+then fails with reason `uncertain`, and
 [`MergeBlocked`](merge-journal.md) quarantines every later merge: the merge loop
 logs `merge reconciliation stopped safely: merge-quarantined`.
 
@@ -153,8 +157,9 @@ provenance record. No record names the reconciled change itself.
 
 Reconciliation changes only the effect row. The request keeps state `failed`
 and reason `uncertain`; `ClaimMerge` cannot select it again, and
-`NextMergePublication` never selects its publication again (one merge request
-per publication).
+`NextMergePublication` never selects its publication again: only a request the
+journal itself recorded as `not-sent` admits a fresh attempt, and a
+reconciliation outcome never changes the request's reason.
 
 **The request does not finish as merged (decision, can be changed later).** The
 merge journal's schema allows a merged record only under a live claim, before the
@@ -180,7 +185,9 @@ What follows for each outcome:
   reference repository the merge commit says `Refs #N`, so the issue also stays
   open.
 - **`not-sent`.** The pull request is still open and unmerged. The runtime does
-  not try again: this publication already has its one merge request. To deliver
+  not try again: the request may have been sent, so it keeps reason `uncertain`
+  and its publication keeps its one request that may have been sent (decision,
+  can be changed later; only a stop the journal proves pre-send is retried). To deliver
   the issue, follow the [re-delivery procedure](publication-reconciliation.md#re-delivery-is-an-operator-action-decision-can-be-changed-later):
   close the old pull request and delete its branch, then re-label the issue.
 
@@ -229,7 +236,7 @@ outcomes (see [metrics](metrics.md#merge-reconciliations)).
 **After `not-sent`:**
 
 1. The pull request is still open and unmerged, and the runtime will never merge
-   it (the publication already has its one merge request). Close it with a short
+   it (its request may have been sent, so it is never retried). Close it with a short
    comment that it came from an unresolved merge attempt, and delete its branch.
 2. Re-deliver the issue with the [re-delivery procedure](publication-reconciliation.md#re-delivery-is-an-operator-action-decision-can-be-changed-later)
    (remove and re-add the trigger label). Clean up before you re-label, so that

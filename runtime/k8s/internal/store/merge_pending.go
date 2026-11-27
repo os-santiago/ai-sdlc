@@ -16,7 +16,10 @@ type MergeSelection struct {
 }
 
 // NextMergePublication selects a historical publication without any merge
-// attempt. It never queues authority or replays a failed/uncertain attempt.
+// attempt, or whose every attempt failed "not-sent" (provably nothing sent),
+// fewer than MergeAttempts times and with the last command expired at least
+// the scheduled wait (MergeRetryWaits) ago. It never queues authority, replays a signed command or selects a
+// publication with a queued, claimed, merged, uncertain or expired attempt.
 func (db *DB) NextMergePublication(ctx context.Context, selection MergeSelection) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -43,7 +46,7 @@ func (db *DB) NextMergePublication(ctx context.Context, selection MergeSelection
   AND convert_from(e.payload,'UTF8')::jsonb->>'profileSHA256'=$3
   AND r.profile_digest=$4 AND r.configuration_digest=$5 AND r.state='passed' AND r.cleanup_state='complete'
   AND w.status='running' AND convert_from(v.payload,'UTF8')::jsonb->>'recipeRevision'=$6
-  AND NOT EXISTS(SELECT 1 FROM merge_requests m WHERE m.publication_id=f.publication_id)
+  AND `+mergeAttemptAllowed("f.publication_id")+`
  ORDER BY f.published_at,f.publication_id LIMIT 1`, selection.AuthorityRevision, selection.IntakeConfiguration, selection.ExecutionProfile, selection.ReviewProfile, selection.ReviewConfiguration, selection.RecipeRevision).Scan(&id)
 	if e == sql.ErrNoRows {
 		return "", nil

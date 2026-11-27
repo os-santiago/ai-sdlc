@@ -61,13 +61,23 @@ func upgradeProtocolFixture(t *testing.T, schema ...int) (*store.DB, string, str
 	if len(schema) > 0 {
 		count = schema[0]
 	}
-	if count < 34 || count > 39 {
+	if count < 34 || count > 40 {
 		t.Fatal("unsupported fixture schema")
 	}
 	// Owned disposable fixtures may select the historical schema prefix.
 	// Remove the later schema here, never from an operational database.
-	if len(source) != 39 || source[35].Filename != "0036_review_feedback.sql" || source[36].Filename != "0037_review_repair.sql" || source[37].Filename != "0038_generic_publication_scope.sql" || source[38].Filename != "0039_flow_console_reader.sql" {
+	if len(source) != 40 || source[35].Filename != "0036_review_feedback.sql" || source[36].Filename != "0037_review_repair.sql" || source[37].Filename != "0038_generic_publication_scope.sql" || source[38].Filename != "0039_flow_console_reader.sql" || source[39].Filename != "0040_merge_retry_before_send.sql" {
 		t.Fatal("fixture catalog changed")
+	}
+	if count < 40 {
+		if _, err = db.Pool.ExecContext(ctx, `DROP INDEX public.merge_requests_publication_attempt;
+ ALTER TABLE public.merge_requests ADD CONSTRAINT merge_requests_publication_id_key UNIQUE(publication_id);
+ ALTER TABLE public.merge_requests DROP CONSTRAINT merge_requests_reason_check;
+ ALTER TABLE public.merge_requests ADD CONSTRAINT merge_requests_reason_check CHECK(reason IN ('','expired','revoked','uncertain','rejected'));
+ DELETE FROM public.schema_migrations WHERE filename='0040_merge_retry_before_send.sql'`); err != nil {
+			t.Fatal(err)
+		}
+		source = source[:39]
 	}
 	if count < 39 {
 		policies := ""
