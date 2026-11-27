@@ -112,7 +112,7 @@ Four batteries of new issues measured the main scenario while a series of reliab
 | [43](2026-11-27-evaluation-battery-43.json) | f503a9b (all four) | Python | 98–107 | 10/10 | 9/10 | 284 | 7.5 |
 | [44](2026-11-27-evaluation-battery-44.json) | f503a9b (all four), fresh cluster | Go | 312–321 | 10/10 | 9/10 | 368 | 6.5 |
 
-**Together:** 40 of 40 new issues delivered within two attempts (100% [91.2%, 100%]), and 34 of 40 on the first attempt (85.0% [70.9%, 92.9%]). These pool two repositories (two cells) and four revisions, so they are not gate evidence. Per cell, the Python sample delivered 30/30 (first attempt 25/30, 83.3% [66.4%, 92.7%]) and the Go sample 10/10 (9/10).
+**Together:** 40 of 40 new issues delivered within two attempts (100% [91.2%, 100%]), and 34 of 40 on the first attempt (85.0% [70.9%, 92.9%]). These pool two repositories (two cells) and three revisions, so they are not gate evidence. Per cell, the Python sample delivered 30/30 (first attempt 25/30, 83.3% [66.4%, 92.7%]) and the Go sample 10/10 (9/10).
 
 **What the first-attempt losses were:**
 - **Battery 41, issue 62:** a review mailbox transport stop, the case #835 addresses (no later Python battery has hit it yet, which is too little to call it fixed).
