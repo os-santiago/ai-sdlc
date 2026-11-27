@@ -694,7 +694,7 @@ func (v Verification) MatchesHarness(file string) bool {
 		}
 	}
 	// The files that define the dependency set are always harness: the
-	// cache was prefetched, with network access, from the base revision's.
+	// cache was filled, with network access, from the base revision's.
 	return v.MatchesDependencies(file)
 }
 

@@ -8,10 +8,10 @@ import (
 	core "k8s.io/api/core/v1"
 )
 
-// Metadata of a sealed dependency cache claim. The operator's prefetch
-// (tools/dependency_prefetch.py) writes the cache in its own namespace,
-// hands the volume over to the verifier namespace and only then labels the
-// claim sealed; nothing in the verifier namespace can write to it.
+// Metadata of a sealed dependency cache claim. A trusted dependency task
+// fills the cache in the CI namespace; tools/dependency_cache_install.py seal
+// then hands the volume over to the verifier namespace as a claim that is
+// labelled sealed from creation, so nothing there can write to it.
 const (
 	DependencyKeyAnnotation = "ai-sdlc.io/dependency-key"
 	DependencyStateLabel    = "ai-sdlc.io/dependency-state"

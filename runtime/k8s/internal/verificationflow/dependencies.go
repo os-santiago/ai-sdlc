@@ -15,8 +15,8 @@ type dependencyStop string
 const (
 	// The base tree's dependency key could not be computed.
 	stopDependencyKey dependencyStop = "dependencies-key"
-	// No sealed, bound cache claim exists for the key: run the operator's
-	// prefetch for the base revision (docs/operations/dependency-cache.md).
+	// No sealed, bound cache claim exists for the key: fill and seal the
+	// cache for the base revision (docs/operations/dependency-cache.md).
 	stopDependencyUnavailable dependencyStop = "dependencies-unavailable"
 )
 
