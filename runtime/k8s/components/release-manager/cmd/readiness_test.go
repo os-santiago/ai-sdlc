@@ -60,6 +60,8 @@ func TestReadinessDoesNotDependOnTheMergeQuarantine(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer conn.Close()
+	// Reset before the connection returns to the shared admin pool.
+	defer conn.ExecContext(context.Background(), `RESET session_replication_role`)
 	if _, e = conn.ExecContext(ctx, `SET session_replication_role=replica`); e != nil {
 		t.Fatal(e)
 	}
