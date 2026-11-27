@@ -1,0 +1,74 @@
+# Deny every ingress and egress in the CI namespace, then allow cluster DNS
+# and public HTTPS (TCP 443) to non-private addresses only for pods of the
+# reviewed clone and Maven tasks: Tekton copies each Task's
+# ai-sdlc.io/ci-egress label to its pods. Private, link-local, shared and
+# loopback ranges are excluded, so steps reach neither the Kubernetes API,
+# node addresses nor cluster Services. Enforcement can start a few seconds
+# after a pod starts; ai-sdlc-maven-verify waits for it before running Maven.
+# Sidecar services (for example PostgreSQL) are reached over the pod's own
+# loopback interface, which NetworkPolicy does not filter.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-sdlc-ci-default-deny
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-sdlc-ci-dns
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  podSelector:
+    matchLabels:
+      ai-sdlc.io/ci-egress: public-https
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-sdlc-ci-public-https
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  podSelector:
+    matchLabels:
+      ai-sdlc.io/ci-egress: public-https
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 0.0.0.0/8
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 224.0.0.0/3
+      ports:
+        - protocol: TCP
+          port: 443
