@@ -188,8 +188,8 @@ re-delivery, so every increase needs an operator. The counter is reported by
 the run that stopped the last attempt, so it counts at most once per
 publication and can miss one: a last attempt that expires while queued (for
 example while another replica holds the claim), or whose stop is classified
-later by expiry, is not counted. To find every exhausted publication, query
-publications with three `not-sent` merge requests:
+later by expiry, is not counted. The complete list is the publications with
+three `not-sent` merge requests in the journal. Alert on increases:
 
 ```promql
 increase(ai_sdlc_merge_attempts_exhausted_total[1h]) > 0
