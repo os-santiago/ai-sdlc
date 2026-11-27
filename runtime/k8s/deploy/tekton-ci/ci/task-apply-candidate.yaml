@@ -20,6 +20,10 @@ spec:
       description: Contains the base checkout under source/.
     - name: candidate
       readOnly: true
+      # Optional because the pipeline's candidate workspace is; the pipeline
+      # runs this task only when it is bound, and the script refuses to run
+      # without it.
+      optional: true
       description: ConfigMap with candidate.diff and candidate.sha256.
   results:
     - name: tree

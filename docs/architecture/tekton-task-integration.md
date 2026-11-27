@@ -230,9 +230,13 @@ execution controller (worker) ──pods/exec read-tool──┘
 1. **Done (this change):** the candidate channel (`apply-candidate`, the
    optional `candidate` workspace in the build-test and npm pipelines, its
    admission rule) and `tektontasks.InvokeTool` with allowlist, budget,
-   journal interface and untrusted framing. Live: `build_test` for
-   rest-villains on a breaking candidate diff returned the compiler error, and
-   on a harmless one passed, both bound to the applied tree.
+   journal interface and untrusted framing. Live, through the adapter on a
+   disposable cluster, for os-santiago/quarkus-super-heroes rest-villains at
+   `ae00455` under the gVisor class: a candidate diff that assigns a string to
+   an int field returned `passed: false` and `VillainService.java:[143,33]
+   incompatible types: java.lang.String cannot be converted to int` with tree
+   `5fa25b8e`; a harmless diff passed 94 tests with tree `6d647ccd`. A run
+   without a candidate still completes (the apply task is skipped).
 2. Mailbox tool endpoint and protocol, the executor's MCP tools server, the
    execution controller's dispatch with RBAC, the `tool_calls` migration and
    store, and budgets in the execution profile.

@@ -180,8 +180,13 @@ class ManifestTests(unittest.TestCase):
                 for param in entry.get('params', []):
                     for reference in re.findall(r'\$\(params\.([a-z-]+)', json.dumps(param['value'])):
                         self.assertIn(reference, params)
-                self.assertEqual({w['name'] for w in entry['workspaces']},
-                                 {w['name'] for w in task['workspaces'] if not w.get('optional')})
+                bound = {w['name'] for w in entry['workspaces']}
+                self.assertLessEqual({w['name'] for w in task['workspaces'] if not w.get('optional')}, bound)
+                self.assertLessEqual(bound, {w['name'] for w in task['workspaces']})
+                for w in entry['workspaces']:
+                    # Tekton refuses an optional pipeline workspace bound to a required task workspace.
+                    if next(p for p in spec['workspaces'] if p['name'] == w['workspace']).get('optional'):
+                        self.assertTrue(next(t for t in task['workspaces'] if t['name'] == w['name']).get('optional'), w)
                 self.assertLessEqual({w['workspace'] for w in entry['workspaces']}, workspaces)
             candidate = any(w['name'] == 'candidate' for w in spec['workspaces'])
             self.assertEqual({r['name'] for r in spec['results']}, {'commit', 'summary'} | ({'tree'} if candidate else set()))
@@ -362,6 +367,7 @@ class ScriptTests(unittest.TestCase):
             text = text.replace('/tmp/maven.log', str(log))
             log.write_text(
                 '[INFO] x\n[ERROR] ' + directory + '/source/app/src/main/java/A.java:[12,5] cannot find symbol\n'
+                '[ERROR] ' + directory + '/source/app/src/main/java/A.java:[12,5] cannot find symbol\n'
                 '[ERROR] \tCannot access central in offline mode and the artifact a:b:jar:1 has not been downloaded from it before.\n')
             result = execute(text, env)
             self.assertEqual(result.returncode, 0, 'Tekton publishes no results from a failed step; the verdict is mavenExitCode')
@@ -369,7 +375,7 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual(summary, {'module': 'app', 'mavenExitCode': 1, 'reports': 2, 'tests': 75, 'failures': 2,
                                        'errors': 1, 'skipped': 1,
                                        'failingTests': ['org.a.ATests.breaks', 'org.a.ATests.quo"te', 'org.b.BIT.it'],
-                                       'compilerErrors': ['app/src/main/java/A.java:[12,5] cannot find symbol'],
+                                       'compilerErrors': ['A.java:[12,5] cannot find symbol'],
                                        'missingDependencies': True, 'truncated': False})
             log.write_text('[INFO] ok\n')
             code.write_text('0')
