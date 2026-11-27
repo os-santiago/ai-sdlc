@@ -179,7 +179,7 @@ spec:
           livenessProbe: {httpGet: {path: /healthz, port: http}, initialDelaySeconds: 10}
           {{- /* At the workspace bundle limits (128 MiB of content, 192 MiB on
                  the wire) a review holds the source, the candidate tree, its
-                 encoding and one exported candidate: about 830 MiB live
+                 encoding and the joined export: about 1.0-1.1 GiB live
                  (docs/operations/large-repositories.md). */}}
           resources:
             requests: {cpu: 50m, memory: 64Mi}

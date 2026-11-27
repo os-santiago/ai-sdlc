@@ -338,3 +338,39 @@ func TestExportRefusesAFileChangedAfterListing(t *testing.T) {
 		t.Fatal("refusal after writing output", err)
 	}
 }
+
+// Paths that JSON escapes sixfold can push the encoding over MaxWireBytes
+// while the content stays within its bound; the listing refuses that with
+// its reason before writing.
+func TestExportRefusesAnOversizedEncodingBeforeWriting(t *testing.T) {
+	parent := t.TempDir()
+	b := fixture()
+	b.Files = []File{}
+	if err := Import(parent, b); err != nil {
+		t.Fatal(err)
+	}
+	// 32 files of 4 MiB are exactly the content bound (about 170.7 MiB of
+	// base64); 16,000 empty files whose names hold 245 '<' (each escaped to
+	// six bytes) add about 23 MiB of JSON: over 192 MiB on the wire.
+	root := filepath.Join(parent, "repository")
+	big := make([]byte, MaxFileBytes)
+	for i := 0; i < MaxContentBytes/MaxFileBytes; i++ {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprint("big", i)), big, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 16000; i++ {
+		dir := filepath.Join(root, fmt.Sprintf("d%02d", i%50))
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		name := fmt.Sprintf("%05d", i) + strings.Repeat("<", 245)
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out bytes.Buffer
+	if err := ExportTo(parent, b.SourceSHA, &out); RefusalReason(err) != ExportTotalSize || out.Len() != 0 {
+		t.Fatal("oversized encoding not refused before writing", err, out.Len())
+	}
+}

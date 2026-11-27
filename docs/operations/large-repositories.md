@@ -79,8 +79,8 @@ At the bounds, C = 128 MiB of content and W = 192 MiB on the wire; for
 
 | Component | Change | Worst case live | Reference repository |
 | --- | --- | ---: | ---: |
-| Worker | unchanged limit (2 GiB); soft Go limit at 85% | about 2W + 3C during capture, 1.3 GiB with the cache | about 0.35 GiB |
-| Verifier | memory limit 256 MiB to 1,536 MiB (request unchanged, 64 MiB); soft Go limit at 85% | about 830 MiB in a review | about 0.25 GiB |
+| Worker | unchanged limit (2 GiB); soft Go limit at 85% | about 4W + 3C at the export join and capture, up to about 1.5 GiB with the cache | about 0.35 GiB |
+| Verifier | memory limit 256 MiB to 1,536 MiB (request unchanged, 64 MiB); soft Go limit at 85% | about 1.0-1.1 GiB in a review: source and candidate trees, the candidate encoding and its import copy, the export frames and their join (2W), and the JSON decoder buffer. This is within the 1,306 MiB soft limit, but the collector works hard near it on a 500m CPU limit, which can slow a review toward its time bounds | about 0.25 GiB |
 | Release manager | default memory limit 128 MiB to 512 MiB (`components.releaseManager.resources`); soft Go limit at 85% | about 2C plus one file | about 75 MiB |
 | Executor mailbox and transfer sidecar | unchanged (256 MiB and 64 MiB); the helper sets a 48 MiB soft Go limit | about 40 MiB | under 20 MiB |
 | Executor workspace volume | memory-backed 64 MiB to disk-backed 512 MiB | | |
@@ -117,7 +117,9 @@ named fetch, import or export step, with no partial checkout.
   after the whole document, the tree checks and the digest pass. A refused
   import removes the staging directory without following links, so invalid
   input never produces `repository` and a later valid import still runs.
-- The export helper finds every refusal reason before writing; a file that
+- The export helper finds every refusal reason before writing, including an
+  encoding over the wire bound (computed from the listing, because JSON
+  escaping can grow a path sixfold); a file that
   changes between listing and reading (device, inode, mode, links, owner,
   size and change times) fails the export with a nonzero exit, which voids
   its output.
@@ -135,9 +137,16 @@ the release manager's. The executor and repository-tests pod shapes change
 only in the volumes and disk limits above; their tests check that reverting
 exactly those fields reproduces the previous pods.
 
-Not verified here: a full issue-to-pull-request run of a repository of this
-size in a cluster, and the executor's memory under gVisor with the
-disk-backed workspace (the sandbox may cache file data it reads through its
-gofer; unlike the earlier memory-backed volume, that cache is not the only
-copy). The fetch, codec, import, export and tree checks are verified by tests
-and by the reference repository fetch above.
+Known unverified risks:
+
+- No full issue-to-pull-request run of a repository of this size in a cluster.
+- Page cache under gVisor for the disk-backed executor workspace: the sandbox
+  may cache file data it reads or writes through its gofer and charge it to
+  the pod's memory. This needs a kind/gVisor run at the bounds (a 128 MiB tree)
+  that observes the executor pod's memory. The kind conformance jobs exercise
+  the disk-backed workspace only with the small Homedir fixture.
+- The verifier's collector pressure at the bounds on its 500m CPU limit (see
+  the cost table).
+
+The fetch, codec, import, export and tree checks are verified by tests and by
+the reference repository fetch above.

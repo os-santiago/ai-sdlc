@@ -64,8 +64,9 @@ it. Success is reported only after all file writes, syncs and the rename.
 Export opens that fixed directory with no-follow traversal. It enumerates names
 in batches, counts all visited nodes, and inspects each through its directory
 descriptor. Visible links, special nodes, multiple hard links, oversized files
-and special permission bits fail. This listing pass reads no content, so every
-refusal reason is known before the first output byte. The files are then read
+and special permission bits fail. This listing pass reads no content. It also
+computes the exact encoded size, so every refusal reason, including an encoding
+over the wire bound, is known before the first output byte. The files are then read
 in path order and streamed to stdout one at a time: each is reopened component
 by component without following links, and its identity, owner, size,
 modification/change times and link count must equal the listing's before and

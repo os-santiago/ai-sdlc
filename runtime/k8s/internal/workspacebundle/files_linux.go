@@ -2,6 +2,7 @@ package workspacebundle
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"io"
 	"os"
@@ -277,6 +278,19 @@ func walkTree(parent, sourceSHA string, visit func(File) error, done ...func() e
 		return ErrInvalid
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
+	// The wire size is known from the listing too (JSON escaping can grow a
+	// path sixfold), so an encoding over MaxWireBytes is refused here, with
+	// its reason, before anything is read or written.
+	wire := len(headerBytes(sourceSHA)) + len("]}")
+	for i, f := range files {
+		if i > 0 {
+			wire++
+		}
+		wire += fileSize(File{Path: f.path, Mode: f.mode}) + base64.StdEncoding.EncodedLen(int(f.st.Size))
+		if wire > MaxWireBytes {
+			return exportRefused{ExportTotalSize}
+		}
+	}
 	buffer := make([]byte, 0, 64*1024)
 	for _, f := range files {
 		data, e := readListed(root, f, buffer)
@@ -448,7 +462,8 @@ const (
 	// ExportFileSize: one file over MaxFileBytes, for example a compiled
 	// test binary left in the workspace.
 	ExportFileSize
-	// ExportTotalSize: the content over MaxContentBytes.
+	// ExportTotalSize: the content over MaxContentBytes, or its encoding over
+	// MaxWireBytes.
 	ExportTotalSize
 	// ExportTooMany: over MaxNodes entries or MaxFiles files.
 	ExportTooMany
