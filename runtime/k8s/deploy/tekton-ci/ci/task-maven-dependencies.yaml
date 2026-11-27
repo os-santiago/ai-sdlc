@@ -1,0 +1,346 @@
+# Resolve one Maven module's complete dependency and plugin set into the
+# shared cache, from trusted inputs only: callers run it on the current
+# base-branch head (tools/tekton_ci_run.py enforces this). It runs the full
+# verify lifecycle with test failures ignored, because Maven resolves test
+# providers and packaging plugins only when those phases execute; an
+# offline maven-build-test needs all of them.
+#
+# Egress: the ai-sdlc.io/ci-egress: fetch label allows DNS and public HTTPS.
+# With the in-cluster dependency proxy, pass maven-mirror-url and narrow the
+# policy to the proxy (docs/operations/tekton-ci.md).
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: maven-dependencies
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+    # Tekton copies Task labels to pods; network-policy.yaml selects on it.
+    ai-sdlc.io/ci-egress: fetch
+spec:
+  description: Fill the shared Maven cache for one module from a trusted revision.
+  params:
+    - name: module
+      type: string
+      default: "."
+      description: Module directory relative to the repository root.
+    - name: services
+      type: string
+      default: none
+      description: Comma-separated test services to start (none, postgres, mongodb).
+    - name: maven-args
+      type: array
+      default: []
+      description: Extra Maven arguments, passed as separate argv entries.
+    - name: maven-mirror-url
+      type: string
+      default: ""
+      description: Optional Maven repository proxy URL (mirrorOf *); empty uses Maven Central.
+  workspaces:
+    - name: source
+      description: Contains the checkout under source/.
+    - name: maven-cache
+      description: Shared Maven cache, written by this task.
+  results:
+    - name: summary
+      description: JSON with the Maven exit code and report counts (bounded); test failures do not fail this task.
+  volumes:
+    - name: home
+      emptyDir:
+        sizeLimit: 8Gi
+    - name: tmp
+      emptyDir:
+        sizeLimit: 2Gi
+    - name: postgres-data
+      emptyDir:
+        sizeLimit: 2Gi
+    - name: postgres-run
+      emptyDir:
+        sizeLimit: 16Mi
+    - name: mongodb-data
+      emptyDir:
+        sizeLimit: 2Gi
+  stepTemplate:
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: [ALL]
+      seccompProfile:
+        type: RuntimeDefault
+    volumeMounts:
+      - name: home
+        mountPath: /home/ci
+      - name: tmp
+        mountPath: /tmp
+    env:
+      - name: HOME
+        value: /home/ci
+      - name: MODULE
+        value: $(params.module)
+      - name: SERVICES
+        value: $(params.services)
+      - name: SOURCE
+        value: $(workspaces.source.path)/source
+  sidecars:
+    - name: postgres
+      image: docker.io/library/postgres@sha256:87c8b42f423b45d5247e6aa8fdb2e7762fec164c68a50fe3eb07e7bfcaf4dbcf
+      computeResources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: "1"
+          memory: 512Mi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+        - name: postgres-run
+          mountPath: /var/run/postgresql
+        - name: tmp
+          mountPath: /tmp
+      env:
+        - name: SERVICES
+          value: $(params.services)
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        - name: POSTGRES_USER
+          value: ci
+        - name: POSTGRES_DB
+          value: ci
+        # Loopback-only, single-pod, throwaway database: no credential exists.
+        - name: POSTGRES_HOST_AUTH_METHOD
+          value: trust
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - 'case ",$SERVICES," in *,postgres,*) exec pg_isready -q -h 127.0.0.1 -U ci -d ci;; *) exit 0;; esac'
+        periodSeconds: 2
+        failureThreshold: 60
+      script: |
+        #!/bin/sh
+        case ",$SERVICES," in
+          *,postgres,*)
+            exec docker-entrypoint.sh postgres -c listen_addresses=127.0.0.1 -c fsync=off \
+              -c synchronous_commit=off -c full_page_writes=off;;
+          *) exec sleep 86400;;
+        esac
+    - name: mongodb
+      image: docker.io/library/mongo@sha256:747773029b84309981a3624a1af64ffc8c4d792283cc0834f26fe01fc6d28b34
+      computeResources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        - name: mongodb-data
+          mountPath: /data/db
+        - name: tmp
+          mountPath: /tmp
+      env:
+        - name: SERVICES
+          value: $(params.services)
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - 'case ",$SERVICES," in *,mongodb,*) exec mongosh --quiet --eval "db.runCommand({ping:1}).ok" mongodb://127.0.0.1:27017/test;; *) exit 0;; esac'
+        periodSeconds: 2
+        failureThreshold: 60
+      script: |
+        #!/bin/sh
+        case ",$SERVICES," in
+          *,mongodb,*) exec mongod --bind_ip 127.0.0.1 --port 27017 --dbpath /data/db --nounixsocket;;
+          *) exec sleep 86400;;
+        esac
+  steps:
+    # The pinned kind network-policy agent was observed to leave a new pod
+    # unrestricted for its first seconds. Candidate code must not start before
+    # the namespace policy is enforced, so this step requires repeated denial
+    # of the Kubernetes API Service first. Only a connect timeout or refusal
+    # counts as denial; any other outcome resets the count.
+    - name: egress-gate
+      image: docker.io/library/maven@sha256:93b8a14ea2f412782e4e842651273b4d903e35cc496284f178fbbe2d67d00976
+      computeResources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 200m
+          memory: 64Mi
+      script: |
+        #!/bin/sh
+        set -u
+        [ -n "${KUBERNETES_SERVICE_HOST:-}" ] && [ -n "${KUBERNETES_SERVICE_PORT:-}" ] \
+          || { echo 'no Kubernetes Service address to probe' >&2; exit 1; }
+        target="https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT/"
+        denied=0
+        attempt=0
+        while [ "$attempt" -lt 90 ]; do
+          attempt=$((attempt + 1))
+          code=0
+          curl -sk -o /dev/null --connect-timeout 2 --max-time 3 "$target" || code=$?
+          case "$code" in 7|28) denied=$((denied + 1));; *) denied=0;; esac
+          if [ "$denied" -ge 3 ]; then
+            echo "Network policy enforced after $attempt probes"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo 'network policy is not enforced: the Kubernetes API stays reachable' >&2
+        exit 1
+    - name: maven
+      image: docker.io/library/maven@sha256:93b8a14ea2f412782e4e842651273b4d903e35cc496284f178fbbe2d67d00976
+      onError: continue
+      computeResources:
+        requests:
+          cpu: "1"
+          memory: 2Gi
+        limits:
+          cpu: "4"
+          memory: 6Gi
+      env:
+        - name: MAVEN_CONFIG
+          value: ""
+        - name: MAVEN_OPTS
+          value: -Xmx1g
+        - name: CACHE
+          value: $(workspaces.maven-cache.path)
+        - name: MAVEN_MIRROR_URL
+          value: $(params.maven-mirror-url)
+        # Tests run without a container engine: Dev Services and
+        # Testcontainers cannot start containers, so services come from
+        # the sidecars above.
+        - name: QUARKUS_DEVSERVICES_ENABLED
+          value: "false"
+        - name: TESTCONTAINERS_RYUK_DISABLED
+          value: "true"
+      args: ["$(params.maven-args[*])"]
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+        case "$MODULE" in
+          .) ;;
+          *) printf '%s' "$MODULE" | grep -Eqx '[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*' \
+               || { echo 'module must be a relative directory' >&2; exit 2; }
+             case "/$MODULE/" in */./*|*/../*) echo 'module must be a relative directory' >&2; exit 2;; esac;;
+        esac
+        printf '%s' "$SERVICES" | grep -Eqx '(none|postgres|mongodb)(,(none|postgres|mongodb))*' \
+          || { echo 'unsupported services value' >&2; exit 2; }
+        [ -f "$SOURCE/$MODULE/pom.xml" ] || { echo "no pom.xml in $MODULE" >&2; exit 2; }
+        mkdir -p "$HOME/.m2"
+        settings="$HOME/.m2/settings.xml"
+        if [ -n "$MAVEN_MIRROR_URL" ]; then
+          printf '%s' "$MAVEN_MIRROR_URL" | grep -Eqx 'https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?' \
+            || { echo 'invalid Maven mirror URL' >&2; exit 2; }
+          printf '%s\n' '<settings><mirrors><mirror><id>ai-sdlc-proxy</id><mirrorOf>*</mirrorOf>' \
+            "<url>$MAVEN_MIRROR_URL</url></mirror></mirrors></settings>" > "$settings"
+        else
+          printf '%s\n' '<settings/>' > "$settings"
+        fi
+        set -- "-Dmaven.repo.local=$CACHE/repository" -Dmaven.test.failure.ignore=true "$@"
+        case ",$SERVICES," in
+          *,postgres,*)
+            export QUARKUS_DATASOURCE_USERNAME=ci
+            export QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://127.0.0.1:5432/ci
+            export QUARKUS_DATASOURCE_REACTIVE_URL=postgresql://127.0.0.1:5432/ci;;
+        esac
+        case ",$SERVICES," in
+          *,mongodb,*) export QUARKUS_MONGODB_CONNECTION_STRING=mongodb://127.0.0.1:27017;;
+        esac
+        cd "$SOURCE/$MODULE"
+        echo "Resolving dependencies for module $MODULE (services: $SERVICES)"
+        mvn -B -ntp -s "$settings" "$@" verify 2>&1 | tee /tmp/maven.log
+    - name: summarize
+      image: docker.io/library/maven@sha256:93b8a14ea2f412782e4e842651273b4d903e35cc496284f178fbbe2d67d00976
+      computeResources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 500m
+          memory: 256Mi
+      env:
+        - name: MAVEN_EXIT_CODE_PATH
+          value: $(steps.step-maven.exitCode.path)
+        - name: RESULT
+          value: $(results.summary.path)
+      script: |
+        #!/bin/sh
+        set -eu
+        code="$(cat "$MAVEN_EXIT_CODE_PATH" 2>/dev/null || echo 255)"
+        printf '%s' "$code" | grep -Eqx '[0-9]{1,3}' || code=255
+        # Sum one numeric attribute of a report's <testsuite> header.
+        count() { printf '%s' "$header" | sed -n "s/.* $1=\"\([0-9]\{1,9\}\)\".*/\1/p"; }
+        # JSON-escape one line and bound its length.
+        quote() { printf '%s' "$1" | cut -c1-160 | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/[[:cntrl:]]//g'; }
+        list() {
+          printf '%s\n' "$1" | { first=1; printf '['; while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            [ "$first" = 1 ] || printf ','
+            first=0
+            printf '"%s"' "$(quote "$line")"
+          done; printf ']'; }
+        }
+        reports=0 tests=0 failures=0 errors=0 skipped=0
+        set --
+        for report in "$SOURCE/$MODULE"/target/surefire-reports/TEST-*.xml \
+                      "$SOURCE/$MODULE"/target/failsafe-reports/TEST-*.xml; do
+          [ -f "$report" ] || continue
+          header="$(grep -m1 -o '<testsuite [^>]*>' "$report" || true)"
+          [ -n "$header" ] || continue
+          reports=$((reports + 1))
+          value="$(count tests)"; tests=$((tests + ${value:-0}))
+          value="$(count failures)"; failures=$((failures + ${value:-0}))
+          value="$(count errors)"; errors=$((errors + ${value:-0}))
+          value="$(count skipped)"; skipped=$((skipped + ${value:-0}))
+          set -- "$@" "$report"
+        done
+        # A failure or error element belongs to the testcase element before it.
+        failing=""
+        if [ "$#" -gt 0 ]; then
+          failing="$(awk '
+            function attr(s, a) { if (match(s, " " a "=\"[^\"]*\"")) return substr(s, RSTART + length(a) + 3, RLENGTH - length(a) - 4); return "" }
+            /<testcase / { line = $0; sub(/.*<testcase /, " ", line); name = attr(line, "name"); cls = attr(line, "classname") }
+            /<(failure|error)[ >\/]/ { if (name != "") print cls "." name; name = "" }
+          ' "$@" | sort -u | head -n 10)"
+        fi
+        compile="$(grep -E '^\[ERROR\] .*\.(java|kt|scala):\[[0-9]+(,[0-9]+)?\]' /tmp/maven.log 2>/dev/null \
+          | sed -e 's/^\[ERROR\] //' -e "s#$SOURCE/##" | head -n 5 || true)"
+        missing=false
+        if grep -q 'has not been downloaded from it before' /tmp/maven.log 2>/dev/null; then missing=true; fi
+        module="$MODULE"
+        printf '%s' "$module" | grep -Eqx '[A-Za-z0-9_./-]{1,200}' || module=invalid
+        printf '{"module":"%s","mavenExitCode":%d,"reports":%d,"tests":%d,"failures":%d,"errors":%d,"skipped":%d,"failingTests":%s,"compilerErrors":%s,"missingDependencies":%s}' \
+          "$module" "$code" "$reports" "$tests" "$failures" "$errors" "$skipped" \
+          "$(list "$failing")" "$(list "$compile")" "$missing" > "$RESULT"
+        cat "$RESULT"; echo
+        [ "$code" -eq 0 ] || { echo "Maven exited with $code" >&2; exit 1; }

@@ -5,12 +5,12 @@
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
-  name: ai-sdlc-git-clone
+  name: source-checkout
   namespace: ai-sdlc-ci
   labels:
     app.kubernetes.io/part-of: ai-sdlc
     # Tekton copies Task labels to pods; network-policy.yaml selects on it.
-    ai-sdlc.io/ci-egress: public-https
+    ai-sdlc.io/ci-egress: fetch
 spec:
   description: Fetch one immutable commit of a public GitHub repository.
   params:

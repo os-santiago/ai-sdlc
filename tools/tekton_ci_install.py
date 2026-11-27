@@ -25,9 +25,12 @@ ROOT = Path(__file__).resolve().parents[1]
 DESIRED = ROOT / 'runtime/k8s/deploy/tekton-ci'
 CI_DIR = DESIRED / 'ci'
 CI_FILES = ('namespace.yaml', 'serviceaccount.yaml', 'maven-cache.yaml', 'network-policy.yaml',
-            'task-git-clone.yaml', 'task-maven-verify.yaml', 'pipeline-maven-ci.yaml')
+            'task-source-checkout.yaml', 'task-maven-build-test.yaml', 'task-maven-dependencies.yaml',
+            'task-npm-lock-update.yaml', 'pipeline-maven-build-test.yaml', 'pipeline-maven-dependencies.yaml',
+            'pipeline-npm-lock-update.yaml')
+# The reviewed catalog: pipeline name -> the task that runs candidate or package code.
+PIPELINES = ('ai-sdlc-maven-build-test', 'ai-sdlc-maven-dependencies', 'ai-sdlc-npm-lock-update')
 CI_NAMESPACE = 'ai-sdlc-ci'
-PIPELINE = 'ai-sdlc-maven-ci'
 FIELD_MANAGER = 'ai-sdlc-tekton-ci'
 OWNER_ANNOTATION = 'ai-sdlc.io/cluster-uid'
 OWNER_LABEL = 'ai-sdlc.io/tekton-ci'
@@ -271,12 +274,12 @@ def observe(run, kubectl, lock=None):
                            '-o', 'json'], capture_output=True)
     data = (json.loads(flags.stdout) if flags.stdout.strip() else {}).get('data') or {}
     hardened = all(data.get(k) == v for k, v in configuration()[0]['configMaps']['tekton-pipelines/feature-flags'].items())
-    pipeline = run(kubectl + ['get', 'pipeline.tekton.dev', PIPELINE, '-n', CI_NAMESPACE, '--ignore-not-found',
-                              '-o', 'name'], capture_output=True, check=False)
-    present = pipeline.returncode == 0 and bool(pipeline.stdout.strip())
+    listed = run(kubectl + ['get', 'pipeline.tekton.dev', '-n', CI_NAMESPACE, '-o', 'name'],
+                 capture_output=True, check=False)
+    names = {line.rsplit('/', 1)[-1] for line in listed.stdout.split()} if listed.returncode == 0 else set()
+    present = sorted(set(PIPELINES) & names)
     return {'release': lock['release'], 'deployments': deployments, 'hardenedConfiguration': hardened,
-            'pipeline': CI_NAMESPACE + '/' + PIPELINE if present else None,
-            'ready': all(deployments.values()) and hardened and present}
+            'pipelines': present, 'ready': all(deployments.values()) and hardened and present == sorted(PIPELINES)}
 
 
 def plan():
@@ -285,7 +288,7 @@ def plan():
     _, config_digest = configuration()
     _, ci_digest = ci_manifests()
     return {'release': lock['release'], 'lockSHA256': lock_digest, 'configurationSHA256': config_digest,
-            'ciSHA256': ci_digest, 'namespace': CI_NAMESPACE, 'pipeline': PIPELINE}
+            'ciSHA256': ci_digest, 'namespace': CI_NAMESPACE, 'pipelines': list(PIPELINES)}
 
 
 def install(run, kubectl, cluster_uid, cache, timeout):

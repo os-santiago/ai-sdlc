@@ -57,7 +57,7 @@ class DesiredStateTests(unittest.TestCase):
         raw, _ = tekton.ci_manifests()
         self.assertEqual(set(raw), set(tekton.CI_FILES))
         plan = tekton.plan()
-        self.assertEqual((plan['release'], plan['pipeline']), (lock['release'], 'ai-sdlc-maven-ci'))
+        self.assertEqual((plan['release'], plan['pipelines']), (lock['release'], list(tekton.PIPELINES)))
 
     def test_lock_rejects_unpinned_unsorted_or_redirected_inputs(self):
         lock = json.loads((tekton.DESIRED / 'upstream.lock.json').read_text())
@@ -96,11 +96,11 @@ class DesiredStateTests(unittest.TestCase):
                 (Path(directory) / name).write_bytes((tekton.CI_DIR / name).read_bytes())
             with patch.object(tekton, 'CI_DIR', Path(directory)):
                 tekton.ci_manifests()
-                task = Path(directory) / 'task-git-clone.yaml'
+                task = Path(directory) / 'task-source-checkout.yaml'
                 task.write_text(task.read_text().replace('@sha256:', ':latest#'))
                 with self.assertRaisesRegex(ValueError, 'pinned by digest'):
                     tekton.ci_manifests()
-                task.write_bytes((tekton.CI_DIR / 'task-git-clone.yaml').read_bytes())
+                task.write_bytes((tekton.CI_DIR / 'task-source-checkout.yaml').read_bytes())
                 (Path(directory) / 'extra.yaml').write_text('kind: Secret\n')
                 with self.assertRaisesRegex(ValueError, 'Unexpected'):
                     tekton.ci_manifests()
@@ -227,7 +227,8 @@ class ResourceTests(unittest.TestCase):
 
 
 class ObservationTests(unittest.TestCase):
-    def observe(self, generation=2, ready=1, flags=None, pipeline='pipeline.tekton.dev/ai-sdlc-maven-ci'):
+    def observe(self, generation=2, ready=1, flags=None,
+                pipeline='\n'.join('pipeline.tekton.dev/' + p for p in tekton.PIPELINES)):
         lock = {'release': 'v9.9.9', 'requiredDeployments': ['tekton-pipelines/tekton-pipelines-controller']}
         deployment = {'metadata': {'generation': 2}, 'spec': {'replicas': 1},
                       'status': {'observedGeneration': generation, 'updatedReplicas': 1,
@@ -237,12 +238,13 @@ class ObservationTests(unittest.TestCase):
         run = Mock(side_effect=[completed(json.dumps(deployment)), completed(json.dumps(configmap)), completed(pipeline)])
         return tekton.observe(run, ['kubectl'], lock)
 
-    def test_ready_requires_current_generation_hardening_and_pipeline(self):
+    def test_ready_requires_current_generation_hardening_and_every_pipeline(self):
         self.assertTrue(self.observe()['ready'])
         self.assertFalse(self.observe(generation=1)['ready'])
         self.assertFalse(self.observe(ready=0)['ready'])
         self.assertFalse(self.observe(flags={'set-security-context': 'false'})['ready'])
         self.assertFalse(self.observe(pipeline='')['ready'])
+        self.assertFalse(self.observe(pipeline='pipeline.tekton.dev/' + tekton.PIPELINES[0])['ready'], 'every catalog pipeline')
 
 
 class InstallerOptionTests(unittest.TestCase):

@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""Create a reviewed Maven CI PipelineRun for one module at one immutable commit.
+"""Create a PipelineRun of one reviewed Tekton catalog pipeline and read its bounded results.
 
-The run targets the owned kind cluster that `./install.sh local --tekton-ci`
-prepared. Inputs are validated before any cluster access; the PipelineRun
-references only the installed Pipeline (Tekton refuses inline specifications).
-See docs/operations/tekton-ci.md.
+Pipelines (installed by `./install.sh local --tekton-ci`, docs/operations/tekton-ci.md):
+
+  maven-build-test    offline build and tests of one module at a commit; the
+                      pull-request CI and the build/test tool
+  maven-dependencies  fill the shared Maven cache; current base-branch head only
+  npm-lock-update     update an npm lockfile with scripts disabled
+
+Inputs are validated before any cluster access, and each PipelineRun
+references an installed pipeline (Tekton refuses inline specifications).
 """
 import argparse
 import json
@@ -19,14 +24,26 @@ import tekton_ci_install
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECTS = tekton_ci_install.DESIRED / 'projects'
-SERVICES = ('none', 'postgres')
+SERVICES = ('none', 'postgres', 'mongodb')
 CACHE_CLAIM = 'ai-sdlc-ci-maven-cache'
 SERVICE_ACCOUNT = 'ai-sdlc-ci-runner'
+SANDBOX = 'ai-sdlc-offline'
 REPOSITORY = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9_.-]{1,100}')
 REVISION = re.compile(r'[0-9a-f]{40}')
-MODULE = re.compile(r'[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*')
+PATH = re.compile(r'[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*')
 MIRROR = re.compile(r'https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~/-]*)?')
 MAVEN_ARG = re.compile(r'-[A-Za-z][A-Za-z0-9_.:=,!*/@+-]{0,199}')
+NPM_PACKAGE = re.compile(r'(?:@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{0,100}(?:@[0-9A-Za-z.^~<>=*|+-]{1,64})?')
+# The pipeline task that runs untrusted candidate code offline can get the
+# sandbox runtime class (--sandbox). The installed ai-sdlc-offline class
+# configures gVisor with network=none, so fetch tasks (trusted base inputs, or
+# npm with scripts disabled) always use the default runtime. Opt-in for now:
+# with the pinned runsc build, Tekton task pods failed to start their
+# sub-containers ("creating root file system: input/output error") although a
+# plain four-container pod started; see docs/operations/tekton-ci.md.
+SANDBOXED_TASKS = {'ai-sdlc-maven-build-test': 'build-test'}
+POD_SECURITY = {'runAsNonRoot': True, 'runAsUser': 65532, 'runAsGroup': 65532, 'fsGroup': 65532,
+                'seccompProfile': {'type': 'RuntimeDefault'}}
 
 
 def run(args, **kwargs):
@@ -39,10 +56,16 @@ def validate_repository(value):
     return value
 
 
-def validate_module(value):
-    if value != '.' and (not MODULE.fullmatch(value) or any(p in ('.', '..') for p in value.split('/'))):
-        raise ValueError('Module must be a relative directory without dot segments')
+def validate_revision(value):
+    if not REVISION.fullmatch(value):
+        raise ValueError('Revision must be a full lowercase 40-character commit SHA')
     return value
+
+
+def validate_path(value, what='Module', allow_root=True):
+    if (value == '.' and allow_root) or (PATH.fullmatch(value) and not any(p in ('.', '..') for p in value.split('/'))):
+        return value
+    raise ValueError(what + ' must be a relative directory without dot segments')
 
 
 def validate_services(values):
@@ -56,14 +79,24 @@ def validate_maven_args(values):
     # value reaches Maven as one argv entry, never through a shell.
     if len(values) > 32 or any(not MAVEN_ARG.fullmatch(v) for v in values):
         raise ValueError('Maven arguments must be at most 32 simple -D/-P style switches')
-    if any(v.startswith(('-s', '-gs', '-f', '-Dmaven.repo.local', '--settings', '--file')) for v in values):
-        raise ValueError('Maven arguments must not change settings, POM or local repository')
+    if any(v.startswith(('-s', '-gs', '-f', '-o', '-Dmaven.repo.local', '--settings', '--file', '--offline')) for v in values):
+        raise ValueError('Maven arguments must not change settings, POM, offline mode or local repository')
     return list(values)
+
+
+def validate_packages(mode, packages):
+    if mode not in ('update', 'audit-fix'):
+        raise ValueError('npm mode must be update or audit-fix')
+    if len(packages) > 16 or any(not NPM_PACKAGE.fullmatch(p) for p in packages):
+        raise ValueError('npm packages must be at most 16 name or name@version specs')
+    if (mode == 'update') != bool(packages):
+        raise ValueError('update needs packages; audit-fix takes none')
+    return list(packages)
 
 
 def load_project(path):
     project = json.loads(Path(path).read_text())
-    if set(project) != {'version', 'repository', 'baseBranch', 'modules'} or project['version'] != 1:
+    if set(project) - {'npmDirectories'} != {'version', 'repository', 'baseBranch', 'modules'} or project['version'] != 1:
         raise ValueError('Unsupported Tekton CI project catalog')
     validate_repository(project['repository'])
     if not re.fullmatch(r'[A-Za-z0-9._/-]{1,100}', project['baseBranch']):
@@ -71,7 +104,7 @@ def load_project(path):
     if not isinstance(project['modules'], dict) or not project['modules']:
         raise ValueError('A project catalog lists at least one module')
     for name, module in project['modules'].items():
-        validate_module(name)
+        validate_path(name)
         if (set(module) != {'status', 'services', 'mavenArgs', 'note'}
                 or module['status'] not in ('supported', 'unverified', 'pending')
                 or not isinstance(module['services'], list) or not isinstance(module['mavenArgs'], list)
@@ -80,6 +113,11 @@ def load_project(path):
         validate_maven_args(module['mavenArgs'])
         if module['status'] != 'pending':
             validate_services(module['services'])
+    directories = project.get('npmDirectories', [])
+    if not isinstance(directories, list) or len(directories) > 16:
+        raise ValueError('npmDirectories lists at most 16 directories')
+    for directory in directories:
+        validate_path(directory, 'npm directory', allow_root=False)
     return project
 
 
@@ -88,42 +126,63 @@ def label(value):
     return value or 'none'
 
 
-def render(repository, revision, module, services, maven_args, warm_cache=False, mirror_url=''):
-    validate_repository(repository)
-    if not REVISION.fullmatch(revision):
-        raise ValueError('Revision must be a full lowercase 40-character commit SHA')
-    validate_module(module)
+def pipeline_run(pipeline, repository, revision, params, workspaces, target, runtime_class=None):
+    """Render a PipelineRun of an installed pipeline with restricted, token-free pods."""
+    if pipeline not in tekton_ci_install.PIPELINES:
+        raise ValueError('Pipeline is not in the reviewed catalog')
+    pod = {'automountServiceAccountToken': False, 'securityContext': POD_SECURITY}
+    spec = {
+        'pipelineRef': {'name': pipeline},
+        'params': [{'name': 'repository', 'value': validate_repository(repository)},
+                   {'name': 'revision', 'value': validate_revision(revision)}] + params,
+        'timeouts': {'pipeline': '1h0m0s'},
+        'taskRunTemplate': {'serviceAccountName': SERVICE_ACCOUNT, 'podTemplate': pod},
+        'workspaces': [{'name': 'source', 'volumeClaimTemplate': {'spec': {
+            'accessModes': ['ReadWriteOnce'], 'resources': {'requests': {'storage': '4Gi'}}}}}] + workspaces}
+    if runtime_class and pipeline in SANDBOXED_TASKS:
+        if not re.fullmatch(r'[a-z0-9]([a-z0-9.-]{0,61}[a-z0-9])?', runtime_class):
+            raise ValueError('Invalid runtime class name')
+        spec['taskRunSpecs'] = [{'pipelineTaskName': SANDBOXED_TASKS[pipeline],
+                                 'podTemplate': dict(pod, runtimeClassName=runtime_class)}]
+    return {'apiVersion': 'tekton.dev/v1', 'kind': 'PipelineRun',
+            'metadata': {'generateName': pipeline.removeprefix('ai-sdlc-') + '-', 'namespace': tekton_ci_install.CI_NAMESPACE,
+                         'labels': {'app.kubernetes.io/part-of': 'ai-sdlc', 'ai-sdlc.io/pipeline': pipeline,
+                                    'ai-sdlc.io/repository': label(repository), 'ai-sdlc.io/revision': revision,
+                                    'ai-sdlc.io/target': label(target)},
+                         'annotations': {'ai-sdlc.io/repository': repository, 'ai-sdlc.io/target': target}},
+            'spec': spec}
+
+
+def maven_build_test(repository, revision, module, services, maven_args, runtime_class=None):
+    return pipeline_run('ai-sdlc-maven-build-test', repository, revision,
+                        [{'name': 'module', 'value': validate_path(module)},
+                         {'name': 'services', 'value': validate_services(services)},
+                         {'name': 'maven-args', 'value': validate_maven_args(maven_args)}],
+                        [{'name': 'maven-cache', 'persistentVolumeClaim': {'claimName': CACHE_CLAIM, 'readOnly': True}}],
+                        module, runtime_class)
+
+
+def maven_dependencies(repository, revision, module, services, maven_args, mirror_url=''):
     if mirror_url and not MIRROR.fullmatch(mirror_url):
         raise ValueError('Invalid Maven mirror URL')
-    cache = ({'name': 'maven-cache-writable', 'persistentVolumeClaim': {'claimName': CACHE_CLAIM}} if warm_cache else
-             {'name': 'maven-cache', 'persistentVolumeClaim': {'claimName': CACHE_CLAIM, 'readOnly': True}})
-    return {
-        'apiVersion': 'tekton.dev/v1', 'kind': 'PipelineRun',
-        'metadata': {
-            'generateName': 'maven-ci-', 'namespace': tekton_ci_install.CI_NAMESPACE,
-            'labels': {'app.kubernetes.io/part-of': 'ai-sdlc', 'ai-sdlc.io/repository': label(repository),
-                       'ai-sdlc.io/revision': revision, 'ai-sdlc.io/module': label(module),
-                       'ai-sdlc.io/cache': 'warm' if warm_cache else 'read-only'},
-            'annotations': {'ai-sdlc.io/repository': repository, 'ai-sdlc.io/module': module}},
-        'spec': {
-            'pipelineRef': {'name': tekton_ci_install.PIPELINE},
-            'params': [{'name': 'repository', 'value': repository},
-                       {'name': 'revision', 'value': revision},
-                       {'name': 'module', 'value': module},
-                       {'name': 'services', 'value': validate_services(services)},
-                       {'name': 'maven-args', 'value': validate_maven_args(maven_args)},
-                       {'name': 'maven-mirror-url', 'value': mirror_url}],
-            'timeouts': {'pipeline': '1h0m0s'},
-            'taskRunTemplate': {
-                'serviceAccountName': SERVICE_ACCOUNT,
-                'podTemplate': {
-                    'automountServiceAccountToken': False,
-                    'securityContext': {'runAsNonRoot': True, 'runAsUser': 65532, 'runAsGroup': 65532,
-                                        'fsGroup': 65532, 'seccompProfile': {'type': 'RuntimeDefault'}}}},
-            'workspaces': [
-                {'name': 'source', 'volumeClaimTemplate': {'spec': {
-                    'accessModes': ['ReadWriteOnce'], 'resources': {'requests': {'storage': '4Gi'}}}}},
-                cache]}}
+    return pipeline_run('ai-sdlc-maven-dependencies', repository, revision,
+                        [{'name': 'module', 'value': validate_path(module)},
+                         {'name': 'services', 'value': validate_services(services)},
+                         {'name': 'maven-args', 'value': validate_maven_args(maven_args)},
+                         {'name': 'maven-mirror-url', 'value': mirror_url}],
+                        [{'name': 'maven-cache', 'persistentVolumeClaim': {'claimName': CACHE_CLAIM}}],
+                        module)
+
+
+def npm_lock_update(repository, revision, directory, mode, packages, registry_url=''):
+    if registry_url and not MIRROR.fullmatch(registry_url):
+        raise ValueError('Invalid npm registry URL')
+    return pipeline_run('ai-sdlc-npm-lock-update', repository, revision,
+                        [{'name': 'directory', 'value': validate_path(directory, 'npm directory', allow_root=False)},
+                         {'name': 'mode', 'value': mode},
+                         {'name': 'packages', 'value': validate_packages(mode, packages)},
+                         {'name': 'registry-url', 'value': registry_url}],
+                        [], directory)
 
 
 def base_head(repository, branch):
@@ -136,17 +195,17 @@ def base_head(repository, branch):
     return lines[0]
 
 
-def summarize(pipeline_run):
-    status = pipeline_run.get('status', {})
+def summarize(pipeline_run_object):
+    status = pipeline_run_object.get('status', {})
     condition = next((c for c in status.get('conditions', []) if c.get('type') == 'Succeeded'), {})
     results = {r.get('name'): r.get('value') for r in status.get('results', [])}
     summary = None
-    if isinstance(results.get('summary'), str):
+    if isinstance(results.get('summary'), str) and len(results['summary']) <= 4096:
         try:
             summary = json.loads(results['summary'])
         except ValueError:
             summary = None
-    meta = pipeline_run.get('metadata', {})
+    meta = pipeline_run_object.get('metadata', {})
     return {'pipelineRun': meta.get('namespace', '') + '/' + meta.get('name', ''), 'uid': meta.get('uid'),
             'succeeded': {'True': True, 'False': False}.get(condition.get('status')),
             'reason': condition.get('reason'), 'commit': results.get('commit'), 'summary': summary}
@@ -178,46 +237,82 @@ def connect(cluster):
     return kubectl
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--cluster', default='ai-sdlc')
-    parser.add_argument('--project', type=Path, help='Module catalog, for example ' + str((PROJECTS / 'quarkus-super-heroes.json').relative_to(ROOT)))
-    parser.add_argument('--repository', help='owner/name; defaults to the catalog repository')
-    parser.add_argument('--revision', required=True, help='Full 40-character commit SHA, for example a pull-request head')
-    parser.add_argument('--module', default='.')
-    parser.add_argument('--services', help='Comma-separated services; defaults to the catalog entry or none')
-    parser.add_argument('--maven-arg', action='append', default=None, help='Extra Maven switch; replaces the catalog arguments')
-    parser.add_argument('--maven-mirror-url', default='')
-    parser.add_argument('--warm-cache', action='store_true', help='Write the shared Maven cache; only for the current base-branch head')
-    parser.add_argument('--allow-unverified', action='store_true', help='Run a catalog module whose status is unverified')
-    parser.add_argument('--wait', type=int, default=0, metavar='SECONDS', help='Wait up to SECONDS for completion (0: do not wait)')
-    args = parser.parse_args(argv)
-    if not re.fullmatch(r'[a-z][a-z0-9-]{0,35}', args.cluster) or not 0 <= args.wait <= 7200:
-        raise ValueError('Invalid cluster name or wait bound')
-    project = load_project(args.project) if args.project else None
+def require_runtime_class(kubectl, name):
+    if run(kubectl + ['get', 'runtimeclass', name, '-o', 'name'], capture_output=True, check=False).returncode != 0:
+        raise ValueError('RuntimeClass ' + name + ' is absent; install it with ./install.sh sandbox')
+
+
+def module_entry(project, module, allow_unverified):
+    entry = project['modules'].get(module)
+    if entry is None:
+        raise ValueError('Module is not in the project catalog')
+    if entry['status'] == 'pending':
+        raise ValueError('Module is pending: ' + entry['note'])
+    if entry['status'] == 'unverified' and not allow_unverified:
+        raise ValueError('Module is unverified; pass --allow-unverified to run it: ' + entry['note'])
+    return entry
+
+
+def render_from_args(args, project):
     repository = args.repository or (project or {}).get('repository')
     if not repository:
         raise ValueError('Name --repository or a --project catalog')
     if project and repository != project['repository']:
         raise ValueError('Repository differs from the project catalog')
-    entry = (project or {}).get('modules', {}).get(args.module) if project else None
-    if project and entry is None:
-        raise ValueError('Module is not in the project catalog')
-    if entry and entry['status'] == 'pending':
-        raise ValueError('Module is pending: ' + entry['note'])
-    if entry and entry['status'] == 'unverified' and not args.allow_unverified:
-        raise ValueError('Module is unverified; pass --allow-unverified to run it: ' + entry['note'])
+    runtime_class = args.runtime_class if args.sandbox else None
+    if args.pipeline == 'npm-lock-update':
+        if project and args.directory not in project.get('npmDirectories', []):
+            raise ValueError('npm directory is not in the project catalog')
+        return npm_lock_update(repository, args.revision, args.directory, args.mode, args.package or [],
+                               args.registry_url)
+    entry = module_entry(project, args.module, args.allow_unverified) if project else None
     services = args.services.split(',') if args.services else (entry['services'] if entry else ['none'])
     maven_args = args.maven_arg if args.maven_arg is not None else (entry['mavenArgs'] if entry else [])
-    pipeline_run = render(repository, args.revision, args.module, services, maven_args,
-                          warm_cache=args.warm_cache, mirror_url=args.maven_mirror_url)
-    if args.warm_cache:
+    if args.pipeline == 'maven-build-test':
+        return maven_build_test(repository, args.revision, args.module, services, maven_args, runtime_class)
+    return maven_dependencies(repository, args.revision, args.module, services, maven_args, args.maven_mirror_url)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('pipeline', choices=['maven-build-test', 'maven-dependencies', 'npm-lock-update'])
+    parser.add_argument('--cluster', default='ai-sdlc')
+    parser.add_argument('--project', type=Path, help='Catalog, for example ' + str((PROJECTS / 'quarkus-super-heroes.json').relative_to(ROOT)))
+    parser.add_argument('--repository', help='owner/name; defaults to the catalog repository')
+    parser.add_argument('--revision', help='Full 40-character commit SHA; maven-dependencies defaults to the base-branch head')
+    parser.add_argument('--module', default='.')
+    parser.add_argument('--services', help='Comma-separated services; defaults to the catalog entry or none')
+    parser.add_argument('--maven-arg', action='append', default=None, help='Extra Maven switch; replaces the catalog arguments')
+    parser.add_argument('--maven-mirror-url', default='', help='maven-dependencies only: Maven proxy URL')
+    parser.add_argument('--directory', help='npm-lock-update: directory with package-lock.json')
+    parser.add_argument('--mode', default='update', choices=['update', 'audit-fix'])
+    parser.add_argument('--package', action='append', help='npm-lock-update update mode: package or package@version')
+    parser.add_argument('--registry-url', default='', help='npm-lock-update: registry or proxy URL')
+    parser.add_argument('--allow-unverified', action='store_true', help='Run a catalog module whose status is unverified')
+    parser.add_argument('--sandbox', action='store_true', help='maven-build-test: run build-test under --runtime-class (gVisor)')
+    parser.add_argument('--runtime-class', default=SANDBOX, help='RuntimeClass for --sandbox (default ai-sdlc-offline)')
+    parser.add_argument('--wait', type=int, default=0, metavar='SECONDS', help='Wait up to SECONDS for completion (0: do not wait)')
+    args = parser.parse_args(argv)
+    if not re.fullmatch(r'[a-z][a-z0-9-]{0,35}', args.cluster) or not 0 <= args.wait <= 7200:
+        raise ValueError('Invalid cluster name or wait bound')
+    project = load_project(args.project) if args.project else None
+    if args.pipeline == 'maven-dependencies':
+        # The only pipeline that writes the shared cache: trusted inputs only.
         if project is None:
-            raise ValueError('A warm-cache run needs the project catalog to name its base branch')
-        if base_head(repository, project['baseBranch']) != args.revision:
-            raise ValueError('A warm-cache run must use the current base-branch head')
+            raise ValueError('maven-dependencies needs the project catalog to name its base branch')
+        head = base_head(project['repository'], project['baseBranch'])
+        args.revision = args.revision or head
+        if args.revision != head:
+            raise ValueError('maven-dependencies must use the current base-branch head')
+    if not args.revision:
+        raise ValueError('--revision is required')
+    if args.pipeline == 'npm-lock-update' and not args.directory:
+        raise ValueError('--directory is required')
+    rendered = render_from_args(args, project)
     kubectl = connect(args.cluster)
-    created = json.loads(run(kubectl + ['create', '-o', 'json', '-f', '-'], input=json.dumps(pipeline_run),
+    if 'taskRunSpecs' in rendered['spec']:
+        require_runtime_class(kubectl, args.runtime_class)
+    created = json.loads(run(kubectl + ['create', '-o', 'json', '-f', '-'], input=json.dumps(rendered),
                              capture_output=True).stdout)
     name = created['metadata']['name']
     print('Created ' + tekton_ci_install.CI_NAMESPACE + '/' + name, file=sys.stderr)

@@ -5,7 +5,9 @@
   "modules": {
     "rest-villains": {
       "status": "supported",
-      "services": ["postgres"],
+      "services": [
+        "postgres"
+      ],
       "mavenArgs": [
         "-Dtest=!UIResourceTests,!*IT",
         "-Dit.test=*IT,!UIResourceIT",
@@ -16,7 +18,9 @@
     },
     "rest-heroes": {
       "status": "unverified",
-      "services": ["postgres"],
+      "services": [
+        "postgres"
+      ],
       "mavenArgs": [
         "-Dtest=!UIResourceTests,!*IT",
         "-Dit.test=*IT,!UIResourceIT",
@@ -27,33 +31,47 @@
     },
     "rest-narration": {
       "status": "unverified",
-      "services": ["none"],
+      "services": [
+        "none"
+      ],
       "mavenArgs": [],
       "note": "Uses in-process WireMock Dev Services, which the pipeline's Dev Services switch may disable."
     },
     "event-statistics": {
       "status": "pending",
-      "services": ["kafka"],
+      "services": [
+        "kafka"
+      ],
       "mavenArgs": [],
       "note": "Needs a Kafka sidecar."
     },
     "rest-fights": {
       "status": "pending",
-      "services": ["mongodb", "kafka"],
+      "services": [
+        "mongodb",
+        "kafka"
+      ],
       "mavenArgs": [],
       "note": "Needs MongoDB and Kafka sidecars."
     },
     "grpc-locations": {
       "status": "pending",
-      "services": ["mariadb"],
+      "services": [
+        "mariadb"
+      ],
       "mavenArgs": [],
       "note": "Needs a MariaDB sidecar."
     },
     "ui-super-heroes": {
       "status": "pending",
-      "services": ["none"],
+      "services": [
+        "none"
+      ],
       "mavenArgs": [],
       "note": "Quinoa downloads Node.js and npm packages, and the tests need a browser."
     }
-  }
+  },
+  "npmDirectories": [
+    "ui-super-heroes/src/main/webui"
+  ]
 }

@@ -1,14 +1,15 @@
-# Clone one immutable commit, then build and test one Maven module. Create one
-# PipelineRun per module (tools/tekton_ci_run.py renders and validates them).
+# Check out one immutable commit, then build and test one Maven module
+# offline. Used for pull-request CI (reported as a required check) and for
+# build/test results requested by ai-sdlc before or during generation.
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
-  name: ai-sdlc-maven-ci
+  name: ai-sdlc-maven-build-test
   namespace: ai-sdlc-ci
   labels:
     app.kubernetes.io/part-of: ai-sdlc
 spec:
-  description: Clone a pull-request head at an immutable SHA and run mvn verify for one module.
+  description: Check out a commit at an immutable SHA and run mvn verify offline for one module.
   params:
     - name: repository
       type: string
@@ -23,19 +24,13 @@ spec:
     - name: maven-args
       type: array
       default: []
-    - name: maven-mirror-url
-      type: string
-      default: ""
   workspaces:
     - name: source
     - name: maven-cache
-      optional: true
-    - name: maven-cache-writable
-      optional: true
   tasks:
-    - name: clone
+    - name: checkout
       taskRef:
-        name: ai-sdlc-git-clone
+        name: source-checkout
       params:
         - name: repository
           value: $(params.repository)
@@ -44,10 +39,10 @@ spec:
       workspaces:
         - name: output
           workspace: source
-    - name: verify
-      runAfter: [clone]
+    - name: build-test
+      runAfter: [checkout]
       taskRef:
-        name: ai-sdlc-maven-verify
+        name: maven-build-test
       params:
         - name: module
           value: $(params.module)
@@ -55,17 +50,13 @@ spec:
           value: $(params.services)
         - name: maven-args
           value: ["$(params.maven-args[*])"]
-        - name: maven-mirror-url
-          value: $(params.maven-mirror-url)
       workspaces:
         - name: source
           workspace: source
         - name: maven-cache
           workspace: maven-cache
-        - name: maven-cache-writable
-          workspace: maven-cache-writable
   results:
     - name: commit
-      value: $(tasks.clone.results.commit)
+      value: $(tasks.checkout.results.commit)
     - name: summary
-      value: $(tasks.verify.results.summary)
+      value: $(tasks.build-test.results.summary)

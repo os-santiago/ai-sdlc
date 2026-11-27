@@ -1,0 +1,63 @@
+# Check out one immutable commit and update an npm lockfile with scripts
+# disabled. Callable before or during generation; the change comes back as
+# bounded results.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: ai-sdlc-npm-lock-update
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  description: Check out a commit and update its npm lockfile without running package scripts.
+  params:
+    - name: repository
+      type: string
+    - name: revision
+      type: string
+    - name: directory
+      type: string
+    - name: mode
+      type: string
+      default: update
+    - name: packages
+      type: array
+      default: []
+    - name: registry-url
+      type: string
+      default: ""
+  workspaces:
+    - name: source
+  tasks:
+    - name: checkout
+      taskRef:
+        name: source-checkout
+      params:
+        - name: repository
+          value: $(params.repository)
+        - name: revision
+          value: $(params.revision)
+      workspaces:
+        - name: output
+          workspace: source
+    - name: lock-update
+      runAfter: [checkout]
+      taskRef:
+        name: npm-lock-update
+      params:
+        - name: directory
+          value: $(params.directory)
+        - name: mode
+          value: $(params.mode)
+        - name: packages
+          value: ["$(params.packages[*])"]
+        - name: registry-url
+          value: $(params.registry-url)
+      workspaces:
+        - name: source
+          workspace: source
+  results:
+    - name: commit
+      value: $(tasks.checkout.results.commit)
+    - name: summary
+      value: $(tasks.lock-update.results.summary)

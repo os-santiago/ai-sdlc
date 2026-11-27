@@ -1,12 +1,13 @@
-"""Render and validate the reviewed Tekton CI desired state and its run tool."""
+"""Render and validate the reviewed Tekton task catalog and its run tool."""
 import ipaddress
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import yaml
 
@@ -15,6 +16,7 @@ import tekton_ci_run as runner
 
 PROJECT = tekton.DESIRED / 'projects/quarkus-super-heroes.json'
 SHA = 'ae00455c01a7a50d89ae8f1db99483abd27abe25'
+FETCH_TASKS = {'source-checkout', 'maven-dependencies', 'npm-lock-update'}
 
 
 def documents():
@@ -38,8 +40,15 @@ def containers(task):
         yield 'sidecar', sidecar
 
 
-def script(task, step):
-    return next(s for s in task['spec']['steps'] if s['name'] == step)['script']
+def step(task, name):
+    return next(s for s in by_kind('Task')[task]['spec']['steps'] if s['name'] == name)
+
+
+def execute(text, env, path_prefix=''):
+    """Run a reviewed script with the interpreter its shebang names."""
+    interpreter = 'bash' if text.startswith('#!/bin/bash') else 'sh'
+    return subprocess.run([interpreter, '-c', text], env=dict(env, PATH=path_prefix + '/usr/local/bin:/usr/bin:/bin'),
+                          capture_output=True, text=True, timeout=60)
 
 
 class ManifestTests(unittest.TestCase):
@@ -48,8 +57,9 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(kinds, sorted([
             ('Namespace', 'ai-sdlc-ci'), ('ServiceAccount', 'ai-sdlc-ci-runner'),
             ('PersistentVolumeClaim', 'ai-sdlc-ci-maven-cache'), ('NetworkPolicy', 'ai-sdlc-ci-default-deny'),
-            ('NetworkPolicy', 'ai-sdlc-ci-dns'), ('NetworkPolicy', 'ai-sdlc-ci-public-https'),
-            ('Task', 'ai-sdlc-git-clone'), ('Task', 'ai-sdlc-maven-verify'), ('Pipeline', 'ai-sdlc-maven-ci')]))
+            ('NetworkPolicy', 'ai-sdlc-ci-fetch-dns'), ('NetworkPolicy', 'ai-sdlc-ci-fetch-https'),
+            ('Task', 'source-checkout'), ('Task', 'maven-build-test'), ('Task', 'maven-dependencies'),
+            ('Task', 'npm-lock-update')] + [('Pipeline', p) for p in tekton.PIPELINES]))
         for doc in documents():
             if doc['kind'] != 'Namespace':
                 self.assertEqual(doc['metadata']['namespace'], 'ai-sdlc-ci', doc['metadata']['name'])
@@ -59,7 +69,7 @@ class ManifestTests(unittest.TestCase):
 
     def test_every_container_is_pinned_non_root_and_unprivileged(self):
         for task in by_kind('Task').values():
-            for role, container in containers(task):
+            for _, container in containers(task):
                 where = task['metadata']['name'] + '/' + container['name']
                 self.assertRegex(container['image'], tekton.PINNED_IMAGE.pattern, where)
                 context = container['securityContext']
@@ -75,140 +85,122 @@ class ManifestTests(unittest.TestCase):
                 for env in container.get('env', []):
                     self.assertNotIn('valueFrom', env, where + ': no Secret or API-derived values')
 
-    def test_tasks_mount_no_host_paths_secrets_or_projected_tokens(self):
+    def test_tasks_mount_only_bounded_empty_dirs(self):
         for task in by_kind('Task').values():
             for volume in task['spec'].get('volumes', []):
                 self.assertEqual(set(volume) - {'name'}, {'emptyDir'}, task['metadata']['name'])
                 self.assertIn('sizeLimit', volume['emptyDir'])
 
     def test_parameters_never_reach_script_text(self):
-        # Parameters enter through env; script substitution would let a value
-        # inject shell syntax.
+        # Parameters enter through env or argv; script substitution would let
+        # a value inject shell syntax.
         for task in by_kind('Task').values():
             for _, container in containers(task):
-                self.assertNotRegex(container.get('script', ''), r'\$\(params\.', task['metadata']['name'])
+                self.assertNotRegex(container.get('script', ''), r'\$\((params|workspaces|results)\.', task['metadata']['name'])
 
-    def test_pipeline_references_resolve_to_reviewed_tasks(self):
+    def test_pipelines_reference_reviewed_tasks_with_declared_inputs(self):
         tasks = by_kind('Task')
-        pipeline = by_kind('Pipeline')['ai-sdlc-maven-ci']['spec']
-        params = {p['name'] for p in pipeline['params']}
-        workspaces = {w['name'] for w in pipeline['workspaces']}
-        for entry in pipeline['tasks']:
-            self.assertEqual(set(entry['taskRef']), {'name'}, 'installed tasks only, no resolvers or bundles')
-            task = tasks[entry['taskRef']['name']]['spec']
-            declared = {p['name']: p for p in task['params']}
-            self.assertLessEqual({p['name'] for p in entry['params']}, set(declared))
-            required = {name for name, p in declared.items() if 'default' not in p}
-            self.assertLessEqual(required, {p['name'] for p in entry['params']})
-            for param in entry['params']:
-                for reference in re.findall(r'\$\(params\.([a-z-]+)', json.dumps(param['value'])):
-                    self.assertIn(reference, params)
-            self.assertEqual({w['name'] for w in entry['workspaces']}, {w['name'] for w in task['workspaces']})
-            self.assertLessEqual({w['workspace'] for w in entry['workspaces']}, workspaces)
-        verify = tasks['ai-sdlc-maven-verify']['spec']
-        cache = {w['name']: w for w in verify['workspaces']}
-        self.assertIs(cache['maven-cache']['readOnly'], True)
-        self.assertIs(cache['maven-cache']['optional'], True)
-        self.assertIs(cache['maven-cache-writable']['optional'], True)
-        maven = next(s for s in verify['steps'] if s['name'] == 'maven')
-        self.assertEqual(maven['onError'], 'continue', 'the summary step must still publish a result')
-        self.assertEqual({r['name'] for r in by_kind('Pipeline')['ai-sdlc-maven-ci']['spec']['results']}, {'commit', 'summary'})
+        self.assertEqual(set(by_kind('Pipeline')), set(tekton.PIPELINES))
+        for pipeline in by_kind('Pipeline').values():
+            spec = pipeline['spec']
+            params = {p['name'] for p in spec['params']}
+            workspaces = {w['name'] for w in spec['workspaces']}
+            self.assertEqual(spec['tasks'][0]['taskRef'], {'name': 'source-checkout'})
+            for entry in spec['tasks']:
+                self.assertEqual(set(entry['taskRef']), {'name'}, 'installed tasks only, no resolvers or bundles')
+                task = tasks[entry['taskRef']['name']]['spec']
+                declared = {p['name']: p for p in task['params']}
+                self.assertLessEqual({p['name'] for p in entry['params']}, set(declared))
+                required = {name for name, p in declared.items() if 'default' not in p}
+                self.assertLessEqual(required, {p['name'] for p in entry['params']})
+                for param in entry['params']:
+                    for reference in re.findall(r'\$\(params\.([a-z-]+)', json.dumps(param['value'])):
+                        self.assertIn(reference, params)
+                self.assertEqual({w['name'] for w in entry['workspaces']},
+                                 {w['name'] for w in task['workspaces'] if not w.get('optional')})
+                self.assertLessEqual({w['workspace'] for w in entry['workspaces']}, workspaces)
+            self.assertEqual({r['name'] for r in spec['results']}, {'commit', 'summary'})
+        build = {w['name']: w for w in tasks['maven-build-test']['spec']['workspaces']}
+        self.assertIs(build['maven-cache']['readOnly'], True, 'candidate code never writes the shared cache')
+        self.assertNotIn('readOnly', {w['name']: w for w in tasks['maven-dependencies']['spec']['workspaces']}['maven-cache'])
 
-    def test_network_policy_denies_by_default_and_allows_only_dns_and_public_https(self):
+    def test_build_test_and_dependencies_share_services_gate_and_summary(self):
+        build, deps = by_kind('Task')['maven-build-test']['spec'], by_kind('Task')['maven-dependencies']['spec']
+        for key in ('sidecars', 'volumes', 'stepTemplate'):
+            self.assertEqual(build[key], deps[key], key)
+        for name in ('egress-gate', 'summarize'):
+            self.assertEqual(step('maven-build-test', name), step('maven-dependencies', name), name)
+        self.assertEqual([s['name'] for s in build['steps']], ['egress-gate', 'maven', 'summarize'])
+        self.assertNotIn('onError', build['steps'][0], 'a failed gate stops the task before Maven')
+        self.assertEqual(build['steps'][1]['onError'], 'continue', 'the summary step must still publish a result')
+        self.assertIn(' -o ', step('maven-build-test', 'maven')['script'], 'build-test is offline')
+        self.assertIn('maven.repo.local.tail', step('maven-build-test', 'maven')['script'])
+        self.assertIn('-Dmaven.test.failure.ignore=true', step('maven-dependencies', 'maven')['script'])
+
+    def test_network_policy_denies_by_default_and_fetch_tasks_get_dns_and_public_https_only(self):
         policies = by_kind('NetworkPolicy')
-        deny = policies['ai-sdlc-ci-default-deny']['spec']
-        self.assertEqual(deny, {'podSelector': {}, 'policyTypes': ['Ingress', 'Egress']})
-        for task in by_kind('Task').values():
-            self.assertEqual(task['metadata']['labels']['ai-sdlc.io/ci-egress'], 'public-https')
+        self.assertEqual(policies['ai-sdlc-ci-default-deny']['spec'], {'podSelector': {}, 'policyTypes': ['Ingress', 'Egress']})
+        for name, task in by_kind('Task').items():
+            labels = task['metadata']['labels']
+            if name in FETCH_TASKS:
+                self.assertEqual(labels.get('ai-sdlc.io/ci-egress'), 'fetch', name)
+            else:
+                self.assertNotIn('ai-sdlc.io/ci-egress', labels, name + ' runs candidate code with no network')
         ports = set()
-        for name in ('ai-sdlc-ci-dns', 'ai-sdlc-ci-public-https'):
+        for name in ('ai-sdlc-ci-fetch-dns', 'ai-sdlc-ci-fetch-https'):
             spec = policies[name]['spec']
             self.assertEqual(spec['policyTypes'], ['Egress'])
             self.assertNotIn('ingress', spec)
-            # Tekton copies the Task label below to each task pod.
-            self.assertEqual(spec['podSelector'], {'matchLabels': {'ai-sdlc.io/ci-egress': 'public-https'}})
+            self.assertEqual(spec['podSelector'], {'matchLabels': {'ai-sdlc.io/ci-egress': 'fetch'}})
             for rule in spec['egress']:
                 ports |= {(p['protocol'], p['port']) for p in rule['ports']}
         self.assertEqual(ports, {('UDP', 53), ('TCP', 53), ('TCP', 443)})
-        https = policies['ai-sdlc-ci-public-https']['spec']['egress'][0]['to'][0]['ipBlock']
+        https = policies['ai-sdlc-ci-fetch-https']['spec']['egress'][0]['to'][0]['ipBlock']
         excluded = [ipaddress.ip_network(c) for c in https['except']]
         for address in ('10.96.0.1', '10.244.0.5', '172.18.0.2', '192.168.1.1', '169.254.169.254', '127.0.0.1', '100.64.0.1'):
             self.assertTrue(any(ipaddress.ip_address(address) in n for n in excluded), address)
         self.assertEqual(https['cidr'], '0.0.0.0/0')
 
-    def test_sidecar_starts_only_when_requested_and_binds_loopback(self):
-        verify = by_kind('Task')['ai-sdlc-maven-verify']
-        postgres = verify['spec']['sidecars'][0]
-        self.assertIn('listen_addresses=127.0.0.1', postgres['script'])
-        self.assertIn('exec sleep', postgres['script'])
-        self.assertIn('readinessProbe', postgres)
-        values = {e['name']: e['value'] for e in postgres['env']}
-        self.assertEqual(values['POSTGRES_HOST_AUTH_METHOD'], 'trust')
-        self.assertFalse(any('PASSWORD' in name for name in values))
+    def test_sidecars_start_only_when_requested_and_bind_loopback(self):
+        for sidecar in by_kind('Task')['maven-build-test']['spec']['sidecars']:
+            self.assertIn('127.0.0.1', sidecar['script'], sidecar['name'])
+            self.assertIn('exec sleep', sidecar['script'], sidecar['name'])
+            self.assertIn('readinessProbe', sidecar)
+            self.assertFalse(any('PASSWORD' in e['name'] for e in sidecar.get('env', [])))
 
 
 class ScriptTests(unittest.TestCase):
-    """Run the reviewed shell scripts locally against their input checks and report parsing."""
+    """Run the reviewed scripts locally against input checks, stubs and synthetic reports."""
 
-    def sh(self, text, env):
-        return subprocess.run(['sh', '-c', text], env=dict(env, PATH='/usr/bin:/bin'), capture_output=True, text=True, timeout=30)
-
-    def test_clone_refuses_mutable_or_malformed_inputs_before_network(self):
-        text = script(by_kind('Task')['ai-sdlc-git-clone'], 'clone')
+    def test_checkout_refuses_mutable_or_malformed_inputs_before_network(self):
+        text = step('source-checkout', 'clone')['script']
         with tempfile.TemporaryDirectory() as directory:
             base = {'DESTINATION': directory + '/src', 'RESULT': directory + '/result', 'HOME': directory}
             for repository, revision in (('os-santiago/x', 'main'), ('os-santiago/x', SHA[:12]),
                                          ('os-santiago/x', SHA.upper()), ('../x', SHA), ('a/b;id', SHA),
                                          ('a/..', SHA), ('https://evil/x', SHA)):
-                result = self.sh(text, dict(base, REPOSITORY=repository, REVISION=revision))
+                result = execute(text, dict(base, REPOSITORY=repository, REVISION=revision))
                 self.assertEqual(result.returncode, 2, (repository, revision, result.stderr))
                 self.assertFalse(Path(directory, 'src').exists())
 
-    def test_maven_step_refuses_unsafe_module_services_and_mirror(self):
-        text = script(by_kind('Task')['ai-sdlc-maven-verify'], 'maven')
-        with tempfile.TemporaryDirectory() as directory:
-            Path(directory, 'source/app').mkdir(parents=True)
-            Path(directory, 'source/app/pom.xml').write_text('<project/>')
-            base = {'SOURCE': directory + '/source', 'HOME': directory + '/home', 'MAVEN_MIRROR_URL': '',
-                    'CACHE_READONLY_BOUND': 'false', 'CACHE_WRITABLE_BOUND': 'false', 'CACHE_READONLY': '', 'CACHE_WRITABLE': ''}
-            for module, services, mirror in (('../app', 'none', ''), ('app/../..', 'none', ''), ('/etc', 'none', ''),
-                                             ('app', 'redis', ''), ('app', 'postgres;id', ''), ('missing', 'none', ''),
-                                             ('app', 'none', 'http://x/<y>'), ('app', 'none', 'file:///etc')):
-                result = self.sh(text, dict(base, MODULE=module, SERVICES=services, MAVEN_MIRROR_URL=mirror))
-                self.assertEqual(result.returncode, 2, (module, services, mirror, result.stderr))
-
-    def test_summary_sums_surefire_and_failsafe_reports_and_propagates_failure(self):
-        text = script(by_kind('Task')['ai-sdlc-maven-verify'], 'summarize')
-        with tempfile.TemporaryDirectory() as directory:
-            reports = Path(directory, 'source/app/target')
-            for kind, attributes in (('surefire', 'tests="70" errors="0" skipped="1" failures="2"'),
-                                     ('failsafe', 'tests="5" errors="1" skipped="0" failures="0"')):
-                Path(reports, kind + '-reports').mkdir(parents=True)
-                Path(reports, kind + '-reports/TEST-a.xml').write_text(
-                    '<?xml version="1.0"?>\n<testsuite xmlns:xsi="x" name="a" time="1.2" ' + attributes + '>\n</testsuite>\n')
-            Path(reports, 'surefire-reports/TEST-broken.xml').write_text('not xml')
-            code = Path(directory, 'exit')
-            env = {'SOURCE': directory + '/source', 'MODULE': 'app', 'MAVEN_EXIT_CODE_PATH': str(code),
-                   'RESULT': directory + '/result'}
-            code.write_text('1')
-            result = self.sh(text, env)
-            self.assertEqual(result.returncode, 1)
-            summary = json.loads(Path(directory, 'result').read_text())
-            self.assertEqual(summary, {'module': 'app', 'mavenExitCode': 1, 'reports': 2, 'tests': 75,
-                                       'failures': 2, 'errors': 1, 'skipped': 1})
-            code.write_text('0')
-            self.assertEqual(self.sh(text, env).returncode, 0)
-            code.unlink()
-            self.assertEqual(self.sh(text, env).returncode, 1, 'a missing exit code is a failure')
-            self.assertEqual(json.loads(Path(directory, 'result').read_text())['mavenExitCode'], 255)
-            env['MODULE'] = 'a"b'
-            code.write_text('0')
-            self.sh(text, env)
-            self.assertEqual(json.loads(Path(directory, 'result').read_text())['module'], 'invalid')
-
+    def test_maven_steps_refuse_unsafe_module_services_and_mirror(self):
+        for task in ('maven-build-test', 'maven-dependencies'):
+            text = step(task, 'maven')['script']
+            with tempfile.TemporaryDirectory() as directory:
+                Path(directory, 'source/app').mkdir(parents=True)
+                Path(directory, 'source/app/pom.xml').write_text('<project/>')
+                base = {'SOURCE': directory + '/source', 'HOME': directory + '/home', 'CACHE': directory + '/cache',
+                        'MAVEN_MIRROR_URL': ''}
+                cases = [('../app', 'none', ''), ('app/../..', 'none', ''), ('/etc', 'none', ''), ('app', 'redis', ''),
+                         ('app', 'postgres;id', ''), ('missing', 'none', '')]
+                if task == 'maven-dependencies':
+                    cases += [('app', 'none', 'http://x/<y>'), ('app', 'none', 'file:///etc')]
+                for module, services, mirror in cases:
+                    result = execute(text, dict(base, MODULE=module, SERVICES=services, MAVEN_MIRROR_URL=mirror))
+                    self.assertEqual(result.returncode, 2, (task, module, services, mirror, result.stderr))
 
     def gate(self, curl_exit_codes):
-        text = script(by_kind('Task')['ai-sdlc-maven-verify'], 'egress-gate')
+        text = step('maven-build-test', 'egress-gate')['script']
         with tempfile.TemporaryDirectory() as directory:
             codes = Path(directory, 'codes')
             codes.write_text('\n'.join(map(str, curl_exit_codes)) + '\n')
@@ -217,47 +209,167 @@ class ScriptTests(unittest.TestCase):
             Path(directory, 'sleep').write_text('#!/bin/sh\nexit 0\n')
             for stub in ('curl', 'sleep'):
                 Path(directory, stub).chmod(0o755)
-            env = {'KUBERNETES_SERVICE_HOST': '10.96.0.1', 'KUBERNETES_SERVICE_PORT': '443'}
-            return subprocess.run(['sh', '-c', text], env=dict(env, PATH=directory + ':/usr/bin:/bin'),
-                                  capture_output=True, text=True, timeout=60)
+            return execute(text, {'KUBERNETES_SERVICE_HOST': '10.96.0.1', 'KUBERNETES_SERVICE_PORT': '443'}, directory + ':')
 
-    def test_egress_gate_requires_repeated_denial_before_maven_runs(self):
-        steps = [s['name'] for s in by_kind('Task')['ai-sdlc-maven-verify']['spec']['steps']]
-        self.assertEqual(steps, ['egress-gate', 'maven', 'summarize'])
-        gate = by_kind('Task')['ai-sdlc-maven-verify']['spec']['steps'][0]
-        self.assertNotIn('onError', gate, 'a failed gate must stop the task before Maven')
+    def test_egress_gate_requires_repeated_denial(self):
         self.assertEqual(self.gate([28, 28, 28]).returncode, 0)
         self.assertEqual(self.gate([0, 0, 7, 28, 7]).returncode, 0, 'enforcement may start late')
         self.assertEqual(self.gate([28, 28, 0, 28, 28, 0]).returncode, 1, 'a success resets the denial count')
         self.assertEqual(self.gate([0]).returncode, 1)
         self.assertEqual(self.gate([6]).returncode, 1, 'a resolution or tool failure is not a denial')
-        text = script(by_kind('Task')['ai-sdlc-maven-verify'], 'egress-gate')
-        self.assertEqual(subprocess.run(['sh', '-c', text], env={'PATH': '/usr/bin:/bin'}, capture_output=True,
-                                        timeout=10).returncode, 1, 'no address to probe is not a denial')
+        text = step('maven-build-test', 'egress-gate')['script']
+        self.assertEqual(execute(text, {}).returncode, 1, 'no address to probe is not a denial')
+
+    def test_summary_reports_counts_failing_tests_compiler_errors_and_missing_dependencies(self):
+        text = step('maven-build-test', 'summarize')['script']
+        with tempfile.TemporaryDirectory() as directory:
+            reports = Path(directory, 'source/app/target')
+            Path(reports, 'surefire-reports').mkdir(parents=True)
+            Path(reports, 'failsafe-reports').mkdir(parents=True)
+            Path(reports, 'surefire-reports/TEST-a.xml').write_text(
+                '<?xml version="1.0"?>\n<testsuite xmlns:xsi="x" name="a" time="1.2" tests="70" errors="0" skipped="1" failures="2">\n'
+                '<testcase name="ok" classname="org.a.ATests" time="0.1"/>\n'
+                '<testcase name="breaks" classname="org.a.ATests" time="0.1">\n<failure message="x" type="y">trace</failure>\n</testcase>\n'
+                '<testcase name="quo&quot;te" classname="org.a.ATests" time="0.1">\n<failure message="x"/>\n</testcase>\n</testsuite>\n')
+            Path(reports, 'failsafe-reports/TEST-b.xml').write_text(
+                '<testsuite name="b" tests="5" errors="1" skipped="0" failures="0">\n'
+                '<testcase name="it" classname="org.b.BIT" time="2">\n<error message="boom"/>\n</testcase>\n</testsuite>\n')
+            Path(reports, 'surefire-reports/TEST-broken.xml').write_text('not xml')
+            log = Path(directory, 'maven.log')
+            code = Path(directory, 'exit')
+            env = {'SOURCE': directory + '/source', 'MODULE': 'app', 'MAVEN_EXIT_CODE_PATH': str(code),
+                   'RESULT': directory + '/result'}
+            code.write_text('1')
+            text = text.replace('/tmp/maven.log', str(log))
+            log.write_text(
+                '[INFO] x\n[ERROR] ' + directory + '/source/app/src/main/java/A.java:[12,5] cannot find symbol\n'
+                '[ERROR] \tCannot access central in offline mode and the artifact a:b:jar:1 has not been downloaded from it before.\n')
+            result = execute(text, env)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            summary = json.loads(Path(directory, 'result').read_text())
+            self.assertEqual(summary, {'module': 'app', 'mavenExitCode': 1, 'reports': 2, 'tests': 75, 'failures': 2,
+                                       'errors': 1, 'skipped': 1,
+                                       'failingTests': ['org.a.ATests.breaks', 'org.a.ATests.quo&quot;te', 'org.b.BIT.it'],
+                                       'compilerErrors': ['app/src/main/java/A.java:[12,5] cannot find symbol'],
+                                       'missingDependencies': True})
+            log.write_text('[INFO] ok\n')
+            code.write_text('0')
+            self.assertEqual(execute(text, env).returncode, 0)
+            self.assertFalse(json.loads(Path(directory, 'result').read_text())['missingDependencies'])
+            code.unlink()
+            self.assertEqual(execute(text, env).returncode, 1, 'a missing exit code is a failure')
+            self.assertEqual(json.loads(Path(directory, 'result').read_text())['mavenExitCode'], 255)
+            env['MODULE'] = 'a"b'
+            code.write_text('0')
+            execute(text, env)
+            self.assertEqual(json.loads(Path(directory, 'result').read_text())['module'], 'invalid')
+
+    def test_summary_stays_within_the_result_bound(self):
+        text = step('maven-build-test', 'summarize')['script']
+        with tempfile.TemporaryDirectory() as directory:
+            reports = Path(directory, 'source/app/target/surefire-reports')
+            reports.mkdir(parents=True)
+            cases = ''.join('<testcase name="%s" classname="%s">\n<failure/>\n</testcase>\n' % ('n' * 300 + str(i), 'c' * 300)
+                            for i in range(50))
+            Path(reports, 'TEST-a.xml').write_text('<testsuite tests="50" failures="50">\n' + cases + '</testsuite>\n')
+            log = Path(directory, 'maven.log')
+            log.write_text(''.join('[ERROR] /x/A%d.java:[1,1] %s\n' % (i, 'e' * 400) for i in range(50)))
+            Path(directory, 'exit').write_text('1')
+            execute(text.replace('/tmp/maven.log', str(log)),
+                    {'SOURCE': directory + '/source', 'MODULE': 'app', 'MAVEN_EXIT_CODE_PATH': directory + '/exit',
+                     'RESULT': directory + '/result'})
+            raw = Path(directory, 'result').read_text()
+            self.assertLess(len(raw), 3500, 'Tekton keeps at most 4096 bytes of results per task')
+            summary = json.loads(raw)
+            self.assertEqual((len(summary['failingTests']), len(summary['compilerErrors'])), (10, 5))
+
+    def test_npm_lock_update_refuses_unsafe_inputs(self):
+        text = step('npm-lock-update', 'update')['script']
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, 'source/web').mkdir(parents=True)
+            base = {'SOURCE': directory + '/source', 'OUTPUT': directory + '/out', 'RESULT': directory + '/r',
+                    'HOME': directory, 'REGISTRY_URL': ''}
+            for directory_value, mode, packages, registry in (
+                    ('../web', 'update', ['vite'], ''), ('/web', 'update', ['vite'], ''), ('web', 'install', ['vite'], ''),
+                    ('web', 'update', [], ''), ('web', 'audit-fix', ['vite'], ''), ('web', 'update', ['vite;id'], ''),
+                    ('web', 'update', ['../x'], ''), ('web', 'update', ['git+https://x/y'], ''),
+                    ('web', 'update', ['vite'], 'file:///x'), ('web', 'update', ['vite'], ''),
+                    ('web', 'update', ['a'] * 17, '')):
+                env = dict(base, DIRECTORY=directory_value, MODE=mode, REGISTRY_URL=registry, PATH='/usr/bin:/bin')
+                result = subprocess.run(['sh', '-c', text, 'npm-lock-update'] + packages, env=env,
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 2, (directory_value, mode, packages, registry, result.stderr))
+
+    def test_npm_lock_update_reports_bounded_lockfile_changes(self):
+        if not shutil.which('node'):
+            self.skipTest('node is not installed')
+        text = step('npm-lock-update', 'update')['script']
+        with tempfile.TemporaryDirectory() as directory:
+            web = Path(directory, 'source/web')
+            web.mkdir(parents=True)
+            web.joinpath('package.json').write_text('{"name":"w"}')
+            lock = {'lockfileVersion': 3, 'packages': {'': {'name': 'w'}, 'node_modules/vite': {'version': '6.0.0'},
+                                                       'node_modules/old': {'version': '1.0.0'}}}
+            web.joinpath('package-lock.json').write_text(json.dumps(lock, indent=2))
+            stubs = Path(directory, 'bin')
+            stubs.mkdir()
+            # A stub npm records its argv and rewrites the lockfile as an update would.
+            stubs.joinpath('npm').write_text('#!/bin/sh\necho "$@" > "%s/argv"\nnode -e \'const f="package-lock.json",'
+                                             'j=JSON.parse(require("fs").readFileSync(f));j.packages["node_modules/vite"].version="6.3.5";'
+                                             'delete j.packages["node_modules/old"];j.packages["node_modules/new"]={version:"2.0.0"};'
+                                             'require("fs").writeFileSync(f,JSON.stringify(j,null,2))\'\n' % directory)
+            stubs.joinpath('npm').chmod(0o755)
+            env = {'SOURCE': directory + '/source', 'OUTPUT': directory + '/out', 'RESULT': directory + '/result',
+                   'HOME': directory, 'DIRECTORY': 'web', 'MODE': 'update', 'REGISTRY_URL': '',
+                   'PATH': str(stubs) + ':' + str(Path(shutil.which('node')).parent) + ':/usr/bin:/bin'}
+            result = subprocess.run(['sh', '-c', text, 'npm-lock-update', 'vite@6.3.5'], env=env,
+                                    capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(Path(directory, 'argv').read_text().split(),
+                             ['update', 'vite@6.3.5', '--package-lock-only', '--ignore-scripts', '--no-audit'])
+            summary = json.loads(Path(directory, 'result').read_text())
+            self.assertEqual(summary['changes'], [{'path': 'new', 'from': None, 'to': '2.0.0'},
+                                                  {'path': 'old', 'from': '1.0.0', 'to': None},
+                                                  {'path': 'vite', 'from': '6.0.0', 'to': '6.3.5'}])
+            self.assertEqual((summary['changed'], summary['truncated'], summary['npmExitCode']), (3, False, 0))
+            diff = Path(directory, 'out/package-lock.diff').read_bytes()
+            self.assertEqual(summary['diffBytes'], len(diff))
+            self.assertRegex(summary['diffSHA256'], '^[0-9a-f]{64}$')
 
 
 class RunToolTests(unittest.TestCase):
-    def test_rendered_run_binds_reviewed_pipeline_inputs(self):
-        pipeline = by_kind('Pipeline')['ai-sdlc-maven-ci']['spec']
-        run = runner.render('os-santiago/quarkus-super-heroes', SHA, 'rest-villains', ['postgres'], ['-Dtest=!UIResourceTests'])
+    def test_build_test_run_is_read_only_and_can_be_sandboxed(self):
+        pipeline = by_kind('Pipeline')['ai-sdlc-maven-build-test']['spec']
+        run = runner.maven_build_test('os-santiago/quarkus-super-heroes', SHA, 'rest-villains', ['postgres'], ['-Dtest=!UIResourceTests'],
+                                      runtime_class='ai-sdlc-offline')
         spec = run['spec']
-        self.assertEqual(spec['pipelineRef'], {'name': 'ai-sdlc-maven-ci'})
+        self.assertEqual(spec['pipelineRef'], {'name': 'ai-sdlc-maven-build-test'})
         self.assertNotIn('pipelineSpec', spec)
-        self.assertLessEqual({p['name'] for p in spec['params']}, {p['name'] for p in pipeline['params']})
-        self.assertLessEqual({w['name'] for w in spec['workspaces']}, {w['name'] for w in pipeline['workspaces']})
-        params = {p['name']: p['value'] for p in spec['params']}
-        self.assertEqual(params['revision'], SHA)
-        self.assertEqual(params['services'], 'postgres')
-        self.assertEqual(params['maven-args'], ['-Dtest=!UIResourceTests'])
-        cache = next(w for w in spec['workspaces'] if w['name'].startswith('maven-cache'))
+        self.assertEqual({p['name'] for p in spec['params']}, {p['name'] for p in pipeline['params']})
+        self.assertEqual({w['name'] for w in spec['workspaces']}, {w['name'] for w in pipeline['workspaces']})
+        cache = spec['workspaces'][1]
         self.assertEqual(cache, {'name': 'maven-cache', 'persistentVolumeClaim': {'claimName': 'ai-sdlc-ci-maven-cache', 'readOnly': True}})
         template = spec['taskRunTemplate']
         self.assertEqual(template['serviceAccountName'], 'ai-sdlc-ci-runner')
         self.assertIs(template['podTemplate']['automountServiceAccountToken'], False)
-        self.assertIs(template['podTemplate']['securityContext']['runAsNonRoot'], True)
+        self.assertEqual(spec['taskRunSpecs'], [{'pipelineTaskName': 'build-test', 'podTemplate': dict(
+            template['podTemplate'], runtimeClassName='ai-sdlc-offline')}])
+        for name, task in runner.SANDBOXED_TASKS.items():
+            self.assertIn(task, {t['name'] for t in by_kind('Pipeline')[name]['spec']['tasks']})
+        self.assertNotIn('taskRunSpecs', runner.maven_build_test('a/b', SHA, '.', ['none'], [])['spec'], 'sandbox is opt-in')
+        self.assertNotIn('taskRunSpecs', runner.maven_dependencies('a/b', SHA, '.', ['none'], [])['spec'],
+                         'the offline gVisor class would cut the fetch task off')
         self.assertEqual(run['metadata']['labels']['ai-sdlc.io/repository'], 'os-santiago.quarkus-super-heroes')
-        warm = runner.render('os-santiago/quarkus-super-heroes', SHA, 'rest-villains', ['postgres'], [], warm_cache=True)
-        self.assertEqual(warm['spec']['workspaces'][1]['name'], 'maven-cache-writable')
+
+    def test_dependencies_and_npm_runs_bind_their_pipeline_inputs(self):
+        deps = runner.maven_dependencies('a/b', SHA, 'm', ['postgres'], [], mirror_url='http://dependency-proxy.ai-sdlc-dependencies.svc/maven2')
+        self.assertEqual(deps['spec']['workspaces'][1], {'name': 'maven-cache', 'persistentVolumeClaim': {'claimName': 'ai-sdlc-ci-maven-cache'}})
+        npm = runner.npm_lock_update('a/b', SHA, 'ui/web', 'update', ['vite@6.3.5'])
+        for run, name in ((deps, 'ai-sdlc-maven-dependencies'), (npm, 'ai-sdlc-npm-lock-update')):
+            pipeline = by_kind('Pipeline')[name]['spec']
+            self.assertEqual({p['name'] for p in run['spec']['params']}, {p['name'] for p in pipeline['params']})
+            self.assertEqual({w['name'] for w in run['spec']['workspaces']}, {w['name'] for w in pipeline['workspaces']})
+        self.assertEqual({p['name']: p['value'] for p in npm['spec']['params']}['packages'], ['vite@6.3.5'])
 
     def test_render_rejects_mutable_or_unsafe_inputs(self):
         good = ('os-santiago/x', SHA, 'app', ['none'], [])
@@ -266,58 +378,58 @@ class RunToolTests(unittest.TestCase):
             dict(repository='x'), dict(repository='a/..'), dict(module='../x'), dict(module='/abs'),
             dict(services=['redis']), dict(services=['none', 'postgres']), dict(services=[]),
             dict(maven_args=['clean']), dict(maven_args=['-s', '/x']), dict(maven_args=['-Dmaven.repo.local=/x']),
-            dict(maven_args=['-Dx=$(id)']), dict(maven_args=['-Da=b c']), dict(maven_args=['-D'] * 40),
+            dict(maven_args=['-o']), dict(maven_args=['-Dx=$(id)']), dict(maven_args=['-Da=b c']), dict(maven_args=['-D'] * 40),
         ]
         names = ('repository', 'revision', 'module', 'services', 'maven_args')
         for case in cases:
             values = dict(zip(names, good), **case)
             with self.assertRaises(ValueError, msg=case):
-                runner.render(*(values[n] for n in names))
+                runner.maven_build_test(*(values[n] for n in names))
         with self.assertRaises(ValueError):
-            runner.render(*good, mirror_url='file:///etc')
+            runner.maven_dependencies(*good, mirror_url='file:///etc')
+        with self.assertRaises(ValueError):
+            runner.maven_build_test(*good, runtime_class='Bad Class')
+        for directory, mode, packages in (('.', 'update', ['vite']), ('w', 'update', []), ('w', 'audit-fix', ['vite']),
+                                          ('w', 'update', ['vite; rm']), ('w', 'install', ['vite'])):
+            with self.assertRaises(ValueError, msg=(directory, mode, packages)):
+                runner.npm_lock_update('a/b', SHA, directory, mode, packages)
 
-    def test_project_catalog_is_valid_and_only_supported_modules_run_by_default(self):
+    def test_catalog_gates_modules_directories_and_repository(self):
         project = runner.load_project(PROJECT)
         self.assertEqual(project['repository'], 'os-santiago/quarkus-super-heroes')
-        supported = {n for n, m in project['modules'].items() if m['status'] == 'supported'}
-        self.assertEqual(supported, {'rest-villains'})
-        for module in project['modules'].values():
-            if module['status'] != 'pending':
-                self.assertLessEqual(set(module['services']), set(runner.SERVICES))
+        self.assertEqual({n for n, m in project['modules'].items() if m['status'] == 'supported'}, {'rest-villains'})
+        self.assertEqual(project['npmDirectories'], ['ui-super-heroes/src/main/webui'])
+        base = ['maven-build-test', '--project', str(PROJECT), '--revision', SHA]
         with self.assertRaisesRegex(ValueError, 'pending'):
-            runner.main(['--project', str(PROJECT), '--revision', SHA, '--module', 'rest-fights'])
+            runner.main(base + ['--module', 'rest-fights'])
         with self.assertRaisesRegex(ValueError, 'unverified'):
-            runner.main(['--project', str(PROJECT), '--revision', SHA, '--module', 'rest-heroes'])
+            runner.main(base + ['--module', 'rest-heroes'])
         with self.assertRaisesRegex(ValueError, 'differs'):
-            runner.main(['--project', str(PROJECT), '--repository', 'a/b', '--revision', SHA, '--module', 'rest-villains'])
+            runner.main(base + ['--repository', 'a/b', '--module', 'rest-villains'])
+        with self.assertRaisesRegex(ValueError, 'not in the project catalog'):
+            runner.main(['npm-lock-update', '--project', str(PROJECT), '--revision', SHA, '--directory', 'other', '--package', 'vite'])
 
-    def test_warm_cache_requires_current_base_branch_head(self):
-        original = runner.base_head
-        try:
-            runner.base_head = Mock(return_value='0' * 40)
+    def test_dependencies_only_from_the_current_base_branch_head(self):
+        with patch.object(runner, 'base_head', return_value='0' * 40):
             with self.assertRaisesRegex(ValueError, 'base-branch head'):
-                runner.main(['--project', str(PROJECT), '--revision', SHA, '--module', 'rest-villains', '--warm-cache'])
-        finally:
-            runner.base_head = original
+                runner.main(['maven-dependencies', '--project', str(PROJECT), '--revision', SHA, '--module', 'rest-villains'])
+        with self.assertRaisesRegex(ValueError, 'catalog'):
+            runner.main(['maven-dependencies', '--repository', 'a/b', '--revision', SHA])
 
     def test_wait_reports_terminal_result_and_bounds_polling(self):
-        done = {'metadata': {'name': 'maven-ci-x', 'namespace': 'ai-sdlc-ci', 'uid': 'u'},
+        done = {'metadata': {'name': 'x', 'namespace': 'ai-sdlc-ci', 'uid': 'u'},
                 'status': {'conditions': [{'type': 'Succeeded', 'status': 'True', 'reason': 'Succeeded'}],
                            'results': [{'name': 'commit', 'value': SHA},
-                                       {'name': 'summary', 'value': '{"tests":74,"failures":0}'}]}}
-        running = {'metadata': {'name': 'maven-ci-x'}, 'status': {'conditions': [{'type': 'Succeeded', 'status': 'Unknown'}]}}
-        original = runner.run
-        try:
-            runner.run = Mock(side_effect=[Mock(returncode=0, stdout=json.dumps(running)),
-                                           Mock(returncode=1, stdout=''),
-                                           Mock(returncode=0, stdout=json.dumps(done))])
-            observed = runner.wait(['kubectl'], 'maven-ci-x', 100, sleep=Mock(), clock=Mock(return_value=0))
-            self.assertEqual((observed['succeeded'], observed['commit'], observed['summary']['tests']), (True, SHA, 74))
-            runner.run = Mock(return_value=Mock(returncode=0, stdout=json.dumps(running)))
-            with self.assertRaisesRegex(ValueError, 'wait bound'):
-                runner.wait(['kubectl'], 'maven-ci-x', 5, sleep=Mock(), clock=Mock(side_effect=[0, 1, 10]))
-        finally:
-            runner.run = original
+                                       {'name': 'summary', 'value': '{"tests":94,"failures":0}'}]}}
+        running = {'metadata': {'name': 'x'}, 'status': {'conditions': [{'type': 'Succeeded', 'status': 'Unknown'}]}}
+        with patch.object(runner, 'run', side_effect=[Mock(returncode=0, stdout=json.dumps(running)),
+                                                     Mock(returncode=1, stdout=''),
+                                                     Mock(returncode=0, stdout=json.dumps(done))]):
+            observed = runner.wait(['kubectl'], 'x', 100, sleep=Mock(), clock=Mock(return_value=0))
+        self.assertEqual((observed['succeeded'], observed['commit'], observed['summary']['tests']), (True, SHA, 94))
+        with patch.object(runner, 'run', return_value=Mock(returncode=0, stdout=json.dumps(running))), \
+             self.assertRaisesRegex(ValueError, 'wait bound'):
+            runner.wait(['kubectl'], 'x', 5, sleep=Mock(), clock=Mock(side_effect=[0, 1, 10]))
 
 
 if __name__ == '__main__':
