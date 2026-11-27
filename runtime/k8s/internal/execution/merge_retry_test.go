@@ -26,6 +26,9 @@ type retryHarness struct {
 	writes, observations int
 	// changing makes every second gate observation (the pre-send one) differ.
 	changing bool
+	// beforeQueue, when set, runs during each queue-time gate observation:
+	// after the publication was selected and before QueueMerge.
+	beforeQueue func()
 }
 
 func newRetryHarness(t *testing.T) *retryHarness {
@@ -37,6 +40,9 @@ func newRetryHarness(t *testing.T) *retryHarness {
 	}, Identity: func() (authority.Identity, error) { return f.Identity, nil }, GatePolicy: func() (mergegate.Policy, error) { return mergegate.PilotPolicy(), nil }}
 	h.r.Gates = mergeGatesFunc(func(_ context.Context, e mergegate.Expected, _ mergegate.Policy) (mergegate.Observation, error) {
 		h.observations++
+		if h.observations%2 == 1 && h.beforeQueue != nil {
+			h.beforeQueue()
+		}
 		o := mergegate.Observation{Expected: e, PolicySHA256: strings.Repeat("a", 64), ChecksSHA256: strings.Repeat("b", 64), ReviewsSHA256: strings.Repeat("c", 64), Ready: true, Reasons: []string{}, ObservedAt: time.Now()}
 		if h.changing && h.observations%2 == 0 {
 			o.ChecksSHA256 = strings.Repeat("d", 64)
@@ -69,7 +75,7 @@ func (h *retryHarness) count(t *testing.T, query string) int {
 // time would.
 func (h *retryHarness) age(t *testing.T) {
 	t.Helper()
-	if _, e := h.f.Admin.Pool.Exec(`UPDATE merge_requests SET expires_at=t.v,claim_until=CASE WHEN claim_until IS NULL THEN NULL ELSE t.v END FROM (SELECT clock_timestamp()-interval '1 minute' AS v) t WHERE state='failed'`); e != nil {
+	if _, e := h.f.Admin.Pool.Exec(`UPDATE merge_requests SET expires_at=t.v,claim_until=CASE WHEN claim_until IS NULL THEN NULL ELSE t.v END FROM (SELECT clock_timestamp()-interval '10 minutes' AS v) t WHERE state='failed'`); e != nil {
 		t.Fatal(e)
 	}
 }
@@ -80,7 +86,7 @@ func (h *retryHarness) journal() *store.MergeJournal {
 
 // stopBeforeSend runs one poll that must stop before any merge effect, with
 // the given stage, and leave a not-sent request that quarantines nothing.
-func (h *retryHarness) stopBeforeSend(t *testing.T, stage string) {
+func (h *retryHarness) stopBeforeSend(t *testing.T, stage string) error {
 	t.Helper()
 	failed := h.count(t, `SELECT count(*) FROM merge_requests WHERE state='failed'`)
 	state, e := h.r.PollOnce(context.Background())
@@ -93,6 +99,7 @@ func (h *retryHarness) stopBeforeSend(t *testing.T, stage string) {
 	if blocked, e := h.journal().MergeBlocked(context.Background()); e != nil || blocked {
 		t.Fatal("a stop that sent nothing quarantined merges", blocked, e)
 	}
+	return e
 }
 
 // Battery 42: the pre-send gate re-observation refused a ready queued gate and
@@ -102,7 +109,9 @@ func (h *retryHarness) stopBeforeSend(t *testing.T, stage string) {
 func TestMergeStoppedBeforeSendGetsAFreshAttempt(t *testing.T) {
 	h := newRetryHarness(t)
 	ctx := context.Background()
-	h.stopBeforeSend(t, "gate-changed-checks")
+	if mergeflow.AttemptsExhausted(h.stopBeforeSend(t, "gate-changed-checks")) {
+		t.Fatal("first attempt reported exhaustion")
+	}
 	if h.count(t, `SELECT count(*) FROM merge_effects`) != 0 {
 		t.Fatal("a merge effect was begun")
 	}
@@ -147,7 +156,11 @@ func TestMergeStoppedBeforeSendAttemptsAreBounded(t *testing.T) {
 	h := newRetryHarness(t)
 	ctx := context.Background()
 	for i := 0; i < store.MergeAttempts; i++ {
-		h.stopBeforeSend(t, "gate-changed-checks")
+		e := h.stopBeforeSend(t, "gate-changed-checks")
+		// Only the last allowed attempt reports exhaustion.
+		if mergeflow.AttemptsExhausted(e) != (i == store.MergeAttempts-1) {
+			t.Fatal("exhaustion", i, e)
+		}
 		h.age(t)
 	}
 	if state, e := h.r.PollOnce(ctx); e != nil || state != "" || h.writes != 0 || h.observations != 2*store.MergeAttempts {
@@ -227,5 +240,117 @@ func TestExpiredMergeIsNotSentOnlyWithoutAnIntent(t *testing.T) {
 	}
 	if blocked, e := u.journal.MergeBlocked(ctx); e != nil || !blocked {
 		t.Fatal("expired intent did not quarantine", blocked, e)
+	}
+}
+
+// setLatestExpiry moves every request's command (and claim) expiry to the
+// given offset from now, so the newest command expired then.
+func (h *retryHarness) setLatestExpiry(t *testing.T, offset string) {
+	t.Helper()
+	if _, e := h.f.Admin.Pool.Exec(`UPDATE merge_requests SET expires_at=t.v,claim_until=CASE WHEN claim_until IS NULL THEN NULL ELSE t.v END FROM (SELECT clock_timestamp()+$1::interval AS v) t`, offset); e != nil {
+		t.Fatal(e)
+	}
+}
+
+// The wait before a fresh attempt grows: 30 s after the first stopped command
+// expired, 2 min after the second.
+func TestMergeRetryWaitGrows(t *testing.T) {
+	h := newRetryHarness(t)
+	ctx := context.Background()
+	selectable := func() bool {
+		t.Helper()
+		id, e := h.f.DB.NextMergePublication(ctx, mergeSelection(h.f))
+		if e != nil {
+			t.Fatal(e)
+		}
+		return id != ""
+	}
+	h.stopBeforeSend(t, "gate-changed-checks")
+	h.setLatestExpiry(t, "-20 seconds")
+	if selectable() {
+		t.Fatal("second attempt before 30 s")
+	}
+	h.setLatestExpiry(t, "-40 seconds")
+	if !selectable() {
+		t.Fatal("second attempt not admitted after 30 s")
+	}
+	h.stopBeforeSend(t, "gate-changed-checks")
+	h.setLatestExpiry(t, "-40 seconds")
+	if selectable() {
+		t.Fatal("third attempt after only 30 s")
+	}
+	h.setLatestExpiry(t, "-130 seconds")
+	if !selectable() {
+		t.Fatal("third attempt not admitted after 2 min")
+	}
+}
+
+// QueueMerge enforces the wait itself, not only the selection: a stopped
+// command whose wait has not elapsed by the time the fresh request is queued
+// refuses the request.
+func TestQueueMergeEnforcesTheRetryWait(t *testing.T) {
+	h := newRetryHarness(t)
+	ctx := context.Background()
+	h.stopBeforeSend(t, "gate-changed-checks")
+	h.age(t)
+	h.beforeQueue = func() { h.setLatestExpiry(t, "-1 second") }
+	if state, e := h.r.PollOnce(ctx); e == nil || state != "merge-queue-denied" || h.writes != 0 || h.count(t, `SELECT count(*) FROM merge_requests`) != 1 {
+		t.Fatal("queue ignored the retry wait", state, e, h.writes)
+	}
+	h.beforeQueue = nil
+	h.changing = false
+	h.age(t)
+	if state, e := h.r.PollOnce(ctx); e != nil || state != "merge-complete" || h.writes != 1 {
+		t.Fatal("attempt after the wait", state, e, h.writes)
+	}
+}
+
+// QueueMerge enforces the attempt limit itself: a request that would exceed
+// store.MergeAttempts is refused even after the publication was selected.
+func TestQueueMergeEnforcesTheAttemptLimit(t *testing.T) {
+	h := newRetryHarness(t)
+	ctx := context.Background()
+	for i := 0; i < store.MergeAttempts-1; i++ {
+		h.stopBeforeSend(t, "gate-changed-checks")
+		h.age(t)
+	}
+	h.beforeQueue = func() {
+		// Another attempt lands between selection and queueing.
+		if _, e := h.f.Admin.Pool.Exec(`INSERT INTO merge_requests(id,publication_id,record_digest,gate_digest,authority_revision,payload_digest,payload,receipt,gate,policy,expires_at,state,claim_token,claim_until,reason)
+ SELECT 'merge-'||repeat('a',64),publication_id,record_digest,gate_digest,authority_revision,payload_digest,payload,receipt,gate,policy,expires_at,state,claim_token,claim_until,reason FROM merge_requests ORDER BY created_at DESC LIMIT 1`); e != nil {
+			t.Error(e)
+		}
+	}
+	h.changing = false
+	if state, e := h.r.PollOnce(ctx); e == nil || state != "merge-queue-denied" || h.writes != 0 || h.count(t, `SELECT count(*) FROM merge_requests`) != store.MergeAttempts {
+		t.Fatal("queue exceeded the attempt limit", state, e, h.writes)
+	}
+}
+
+// A reconciler "no-send" outcome resolves the quarantine but never retries
+// the publication: the request may have been sent, so it stays uncertain.
+func TestMergeReconciledNoSendIsNeverRetried(t *testing.T) {
+	u := newUncertainMerge(t, "")
+	u.settle(t)
+	ctx := context.Background()
+	forge := &mergeForge{observation: mergewriter.Observation{State: mergewriter.ObservedUnmerged}}
+	u.runtime.Reconciler, u.runtime.Observer = quietReconciler(u.f.DB), forge
+	if state, e := u.runtime.PollOnce(ctx); e != nil || state != "merge-reconciled" {
+		t.Fatal("no-send reconciliation", state, e)
+	}
+	if u.count(t, `SELECT count(*) FROM merge_effects WHERE not_sent_at IS NOT NULL`) != 1 {
+		t.Fatal("no-send not recorded")
+	}
+	if _, e := u.f.Admin.Pool.Exec(`UPDATE merge_requests SET expires_at=t.v,claim_until=t.v FROM (SELECT clock_timestamp()-interval '1 hour' AS v) t WHERE id=$1`, u.id); e != nil {
+		t.Fatal(e)
+	}
+	if id, e := u.f.DB.NextMergePublication(ctx, mergeSelection(u.f)); e != nil || id != "" {
+		t.Fatal("reconciled no-send publication selected", id, e)
+	}
+	if state, e := u.runtime.PollOnce(ctx); e != nil || state != "" || forge.writes.Load() != 0 {
+		t.Fatal("reconciled no-send retried", state, e)
+	}
+	if u.count(t, `SELECT count(*) FROM merge_requests`) != 1 || u.count(t, `SELECT count(*) FROM merge_requests WHERE reason='uncertain'`) != 1 {
+		t.Fatal("reconciled no-send changed the request or queued another")
 	}
 }

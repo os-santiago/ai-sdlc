@@ -21,17 +21,51 @@ var mergeIDPattern = regexp.MustCompile(`^merge-[a-f0-9]{64}$`)
 const MergeNotSent = "not-sent"
 
 // MergeAttempts bounds the merge requests one publication may receive. Every
-// request but the last must have failed "not-sent"; the next one is admitted
-// only once the previous signed command expired more than mergeRetryDelay ago.
+// request but the last must have failed "not-sent".
 const MergeAttempts = 3
 
-const mergeRetryDelay = "interval '30 seconds'"
+// MergeRetryWaits is how long after the previous signed command expired the
+// next attempt may be queued, by the number of earlier attempts: 30 s after the
+// first, 2 min after the second (and 5 min after a third, should
+// MergeAttempts grow). A transient forge fault gets an immediate second chance
+// and a longer third one instead of three attempts spent within minutes.
+var MergeRetryWaits = []time.Duration{30 * time.Second, 2 * time.Minute, 5 * time.Minute}
 
-// mergeAttemptAllowed is the SQL predicate, over the publication id in $pub,
-// that admits a new merge request for it.
+// mergeAttemptAllowed is the SQL predicate, over the publication id in pub,
+// that admits a new merge request for it: every earlier request failed
+// "not-sent", fewer than MergeAttempts exist, and the latest earlier command
+// expired at least the scheduled wait ago. An aggregate over no rows yields
+// one row (count 0), so a first attempt is admitted.
 func mergeAttemptAllowed(pub string) string {
-	return `NOT EXISTS(SELECT 1 FROM merge_requests m WHERE m.publication_id=` + pub + ` AND (m.reason<>'` + MergeNotSent + `' OR m.expires_at+` + mergeRetryDelay + `>clock_timestamp()))
-  AND (SELECT count(*) FROM merge_requests m WHERE m.publication_id=` + pub + `)<` + strconv.Itoa(MergeAttempts)
+	wait := "CASE count(*)"
+	for i, d := range MergeRetryWaits {
+		wait += " WHEN " + strconv.Itoa(i+1) + " THEN interval '" + strconv.Itoa(int(d/time.Second)) + " seconds'"
+	}
+	last := MergeRetryWaits[len(MergeRetryWaits)-1]
+	wait += " ELSE interval '" + strconv.Itoa(int(last/time.Second)) + " seconds' END"
+	return `(SELECT count(*)<` + strconv.Itoa(MergeAttempts) + ` AND bool_and(m.reason='` + MergeNotSent + `') IS NOT FALSE
+  AND COALESCE(max(m.expires_at)+` + wait + `<=clock_timestamp(),true)
+  FROM merge_requests m WHERE m.publication_id=` + pub + `)`
+}
+
+// MergeAttemptsExhausted reports whether the request failed "not-sent" as the
+// last attempt its publication may receive: no further request will be
+// queued for that publication, and an operator must re-deliver the issue.
+func (j *MergeJournal) MergeAttemptsExhausted(ctx context.Context, id string) (bool, error) {
+	if !mergeIDPattern.MatchString(id) {
+		return false, ErrExecution
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if AssertComponent(ctx, j.DB.Pool, "release-manager") != nil {
+		return false, ErrExecution
+	}
+	var exhausted bool
+	e := j.DB.Pool.QueryRowContext(ctx, `SELECT r.state='failed' AND r.reason='`+MergeNotSent+`' AND (SELECT count(*) FROM merge_requests m WHERE m.publication_id=r.publication_id)>=`+strconv.Itoa(MergeAttempts)+` FROM merge_requests r WHERE r.id=$1`, id).Scan(&exhausted)
+	if e != nil {
+		return false, observationError(e)
+	}
+	return exhausted, nil
 }
 
 type MergeRequest struct {

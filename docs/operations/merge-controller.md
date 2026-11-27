@@ -61,12 +61,33 @@ The journal, not the controller, decides whether the stop sent anything. Under
 the request's row lock (which an effect intent also takes) a request with no
 merge effect, or whose only effect the pre-send fence sealed not-sent, fails
 with reason `not-sent`; any other stop stays `uncertain` and quarantines later
-merges. A `not-sent` request leaves its publication selectable again: the next
-attempt observes the gate afresh, signs a new command and queues a new request.
-Each publication receives at most three requests (`store.MergeAttempts`), and a
-new one only after the stopped command expired more than 30 seconds earlier, so
-two signed commands for one publication never overlap. Since the merge loop
-polls once a minute, the next attempt usually runs one or two polls later.
+merges. The stage is diagnostic only: a `publication-fence` stop whose not-sent
+seal failed, or an `effect-intent` stop whose intent commit landed, stays
+`uncertain` and is never retried.
+
+A `not-sent` request leaves its publication selectable again: the next attempt
+observes the gate afresh, signs a new command and queues a new request. Each
+publication receives at most three requests (`store.MergeAttempts`). The wait
+grows (`store.MergeRetryWaits`): the second attempt may start 30 seconds after
+the first command expired, the third 2 minutes after the second expired (a
+fourth, if the limit ever grew, 5 minutes). Two signed commands for one
+publication never overlap. Because the merge loop polls once a minute, the
+attempts usually run about 1, then 3, minutes apart, so a forge fault lasting a
+few minutes does not use them all up.
+
+When the last allowed attempt stops before any send, the publication is never
+attempted again. The release manager then logs
+
+```text
+merge reconciliation stopped safely: merge-stopped stage=gate-unavailable attempts=exhausted
+```
+
+and increments `ai_sdlc_merge_attempts_exhausted_total` (see
+[metrics](metrics.md#merge-attempts-exhausted)). The pull request stays open. To
+deliver the issue, close the pull request, delete its branch and re-label the
+issue (the [re-delivery procedure](publication-reconciliation.md#re-delivery-is-an-operator-action-decision-can-be-changed-later)).
+The flow console lists each attempt as its own merge request with reason
+`not-sent`.
 
 In battery 42 a pull request whose required check had passed was queued with a
 ready gate, and its run stopped about 13 seconds later with no merge effect: the

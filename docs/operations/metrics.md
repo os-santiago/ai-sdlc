@@ -49,6 +49,7 @@ credentials or error text.
 | `ai_sdlc_deliveries_total` | counter | `outcome` | Each claimed publication or merge attempt |
 | `ai_sdlc_publication_reconciliations_total` | counter | `effect`, `outcome` | Each read-only reconciliation of an uncertain publication effect |
 | `ai_sdlc_merge_reconciliations_total` | counter | `outcome` | Each read-only reconciliation of an uncertain merge effect |
+| `ai_sdlc_merge_attempts_exhausted_total` | counter | none | Each publication whose last allowed merge attempt stopped before any send |
 | `ai_sdlc_quarantined` | gauge | `journal` | Whether an uncertain effect quarantines the release manager's publication or merge journal, sampled each poll |
 
 ### Queue depth
@@ -174,6 +175,20 @@ increase(ai_sdlc_merge_reconciliations_total{outcome=~"completed|not-sent|mismat
 ```
 
 A persistent `unavailable` shows as the quarantine gauge staying at `1` (below).
+
+### Merge attempts exhausted
+
+`ai_sdlc_merge_attempts_exhausted_total` counts each publication whose last
+allowed merge attempt (`store.MergeAttempts`, 3) stopped before any merge request
+was sent. Earlier pre-send stops are retried automatically, with a growing wait
+(see the [merge controller](merge-controller.md#stopping-before-the-send)). After
+the last one the publication is never attempted again, and the stop log line
+ends in `attempts=exhausted`. The pull request stays open and the issue needs
+re-delivery, so every increase needs an operator:
+
+```promql
+increase(ai_sdlc_merge_attempts_exhausted_total[1h]) > 0
+```
 
 ### Quarantine
 

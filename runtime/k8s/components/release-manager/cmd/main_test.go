@@ -47,6 +47,7 @@ func TestMergeStopLineNamesTheStage(t *testing.T) {
 	}{
 		{"merge-stopped", mergeflow.StopError{Stage: "gate-changed-checks"}, "merge reconciliation stopped safely: merge-stopped stage=gate-changed-checks"},
 		{"merge-stopped", errors.New("forge body"), "merge reconciliation stopped safely: merge-stopped stage=unknown"},
+		{"merge-stopped", mergeflow.StopError{Stage: "gate-unavailable", Exhausted: true}, "merge reconciliation stopped safely: merge-stopped stage=gate-unavailable attempts=exhausted"},
 		{"merge-quarantined", mergeflow.ErrMerge, "merge reconciliation stopped safely: merge-quarantined"},
 	} {
 		if got := mergeStopLine(c.state, c.err); got != c.want {

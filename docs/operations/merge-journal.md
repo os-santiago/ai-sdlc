@@ -31,8 +31,9 @@ not-sent, is `not-sent`; otherwise the reason stays `uncertain` (or `expired`). 
 failed request can never gain an effect afterwards, because an intent needs a
 live claim. Only then may `NextMergePublication` and `QueueMerge` admit a new
 request for that publication: with a fresh gate observation and signed command,
-at most `store.MergeAttempts` (3) requests per publication, and only after every
-earlier command expired more than 30 seconds ago. `QueueMerge` takes the merge claim lock
+at most `store.MergeAttempts` (3) requests per publication, and only after the
+latest earlier command expired at least the scheduled wait ago
+(`store.MergeRetryWaits`: 30 seconds after one attempt, 2 minutes after two). `QueueMerge` takes the merge claim lock
 to serialize those checks. Existing failed requests keep their recorded reason;
 the migration reclassifies nothing. After the claim
 has settled, [merge reconciliation](merge-reconciliation.md) may resolve the

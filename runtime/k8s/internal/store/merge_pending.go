@@ -17,8 +17,8 @@ type MergeSelection struct {
 
 // NextMergePublication selects a historical publication without any merge
 // attempt, or whose every attempt failed "not-sent" (provably nothing sent),
-// fewer than MergeAttempts times and with the last command expired more than
-// 30 s ago. It never queues authority, replays a signed command or selects a
+// fewer than MergeAttempts times and with the last command expired at least
+// the scheduled wait (MergeRetryWaits) ago. It never queues authority, replays a signed command or selects a
 // publication with a queued, claimed, merged, uncertain or expired attempt.
 func (db *DB) NextMergePublication(ctx context.Context, selection MergeSelection) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)

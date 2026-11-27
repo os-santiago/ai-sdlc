@@ -85,14 +85,27 @@ func gateChange(queued, current mergegate.Observation) string {
 }
 
 // StopError names the bounded stage that stopped a claimed merge run. The
-// stages up to and including "effect-intent" end before any merge request can
-// have been sent; the journal then records the request as failed with reason
-// "not-sent" (see store.StopMerge), and the publication may get a bounded
-// fresh attempt. It unwraps to ErrMerge.
-type StopError struct{ Stage string }
+// stage is diagnostic only: the journal, not this controller, decides whether
+// the run sent nothing (store.StopMerge records "not-sent" only when, under the
+// request's row lock, no merge effect exists or the only one is sealed
+// not-sent). So a "publication-fence" stop whose not-sent seal failed, or an
+// "effect-intent" stop whose intent commit landed, stays "uncertain" and is
+// never retried. Exhausted is set when the journal recorded this not-sent
+// request as the publication's last allowed attempt. It unwraps to ErrMerge.
+type StopError struct {
+	Stage     string
+	Exhausted bool
+}
 
 func (e StopError) Error() string { return "merge stopped at " + e.Stage }
 func (e StopError) Unwrap() error { return ErrMerge }
+
+// AttemptsExhausted reports whether a stop ended the publication's last
+// allowed merge attempt (store.MergeAttempts) without sending anything.
+func AttemptsExhausted(err error) bool {
+	var stop StopError
+	return errors.As(err, &stop) && stop.Exhausted
+}
 
 func stopped(stage string) error { return StopError{Stage: stage} }
 
@@ -231,6 +244,13 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		id = command.ID()
 	}
 	if e = r.run(ctx, j, id); e != nil {
+		var stop StopError
+		if errors.As(e, &stop) {
+			if exhausted, err := j.MergeAttemptsExhausted(ctx, id); err == nil && exhausted {
+				stop.Exhausted = true
+				e = stop
+			}
+		}
 		return "merge-stopped", e
 	}
 	return "merge-complete", nil

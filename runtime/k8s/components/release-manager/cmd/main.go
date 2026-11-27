@@ -267,6 +267,9 @@ func main() {
 					state = metrics.Unclassified
 				}
 				metrics.Stop("release-manager", "merge", state)
+				if mergeflow.AttemptsExhausted(e) {
+					metrics.MergeAttemptsExhausted()
+				}
 				log.Print(mergeStopLine(state, e))
 			} else if state != "" {
 				log.Print("merge reconciliation: " + state)
@@ -334,12 +337,18 @@ func main() {
 
 // mergeStopLine is the bounded merge stop log line. A stopped claimed run also
 // names its stage (mergeflow.DiagnosticStage), for example
-// "merge-stopped stage=gate-changed-checks"; stages up to "effect-intent" sent
-// nothing, and the journal records that request as "not-sent".
+// "merge-stopped stage=gate-changed-checks". The stage is diagnostic only: the
+// journal decides whether the run sent nothing and records "not-sent" only
+// then; a publication-fence stop whose seal failed, or an effect-intent stop
+// whose commit landed, stays uncertain. When that not-sent request was the
+// publication's last allowed attempt, the line adds "attempts=exhausted".
 func mergeStopLine(state string, e error) string {
 	line := "merge reconciliation stopped safely: " + state
 	if state == "merge-stopped" {
 		line += " stage=" + mergeflow.DiagnosticStage(e)
+		if mergeflow.AttemptsExhausted(e) {
+			line += " attempts=exhausted"
+		}
 	}
 	return line
 }
