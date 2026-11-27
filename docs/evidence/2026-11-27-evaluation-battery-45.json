@@ -1,0 +1,206 @@
+{
+  "schemaVersion": 2,
+  "repository": "os-santiago/ai-sdlc-sample",
+  "attemptBudget": 2,
+  "cell": {
+    "repository": "os-santiago/ai-sdlc-sample",
+    "modelPath": "local-llama"
+  },
+  "installation": {
+    "imageLockDigest": "sha256:68385f3ea633d643517b4f9dd14b2f3464c7409596512717fd3bc527df7addb4",
+    "images": {
+      "ai-sdlc-admission-controller": "quay.io/os-santiago/ai-sdlc@sha256:8c6ffef1cc208411ca1360e279fd674509dc057766b2267fe339043d81ce309b",
+      "ai-sdlc-flow-console": "quay.io/os-santiago/ai-sdlc@sha256:5647b54f192a1c05a57f4c3dd1fd6ad29fa3568d399d3059920455619f58b8d2",
+      "ai-sdlc-intake": "quay.io/os-santiago/ai-sdlc@sha256:e74e8c86cb66a7fb2505e5ffcbc52552bd78e08547b679112970d1f086e81ac7",
+      "ai-sdlc-orchestrator": "quay.io/os-santiago/ai-sdlc@sha256:ff37df2af83721d8cc6e419c9f4fddfcbb681f9b7f5024a61b40032377cd9e13",
+      "ai-sdlc-relay": "quay.io/os-santiago/ai-sdlc@sha256:df06e0c778562b0ec033c578744ce11103d6c55259c1026608a5f29bcd448597",
+      "ai-sdlc-release-manager": "quay.io/os-santiago/ai-sdlc@sha256:392eba8c0305ebc2989780f6ea2c77c65f861f2c6f38f19693709f65627e42b6",
+      "ai-sdlc-verifier": "quay.io/os-santiago/ai-sdlc@sha256:a8254a3090f9eb9c8cf9f3900e8f8a5e6aa2bf92c8962e56c4d590753f577f0f",
+      "ai-sdlc-worker": "quay.io/os-santiago/ai-sdlc@sha256:1e802fb6a61e561e4c68e45696b8b27433dfce115de7512cff4c0b62da476252"
+    },
+    "revision": "f503a9b0db960741914bcabb5b50acb0b84a3543"
+  },
+  "issues": [
+    {
+      "issue": 332,
+      "attempts": [
+        {
+          "issue": 332,
+          "startedAt": "2026-11-27T06:34:52Z",
+          "outcome": "success",
+          "pullRequest": 340,
+          "seconds": 840,
+          "modelCalls": 23,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 333,
+      "attempts": [
+        {
+          "issue": 333,
+          "startedAt": "2026-11-27T06:49:39Z",
+          "outcome": "failure",
+          "stage": "verification",
+          "reason": "comparison-failed",
+          "seconds": 832,
+          "modelCalls": 32,
+          "stageReached": "verification",
+          "reviews": [],
+          "diagnostics": [
+            "verification reconciliation stopped safely: refused-candidate-failed"
+          ]
+        },
+        {
+          "issue": 333,
+          "startedAt": "2026-11-27T07:04:17Z",
+          "outcome": "failure",
+          "stage": "verification",
+          "reason": "comparison-failed",
+          "seconds": 709,
+          "modelCalls": 31,
+          "stageReached": "verification",
+          "reviews": [],
+          "diagnostics": [
+            "verification reconciliation stopped safely: refused-candidate-failed"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 334,
+      "attempts": [
+        {
+          "issue": 334,
+          "startedAt": "2026-11-27T07:16:54Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 906,
+          "modelCalls": 32,
+          "stageReached": "execution",
+          "reviews": [],
+          "diagnostics": [
+            "candidate reconciliation stopped safely: worker-exit cleanupPending=false workerExitCode=22 failureRecorded=true"
+          ]
+        },
+        {
+          "issue": 334,
+          "startedAt": "2026-11-27T07:32:45Z",
+          "outcome": "success",
+          "pullRequest": 341,
+          "seconds": 515,
+          "modelCalls": 12,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 335,
+      "attempts": [
+        {
+          "issue": 335,
+          "startedAt": "2026-11-27T07:42:08Z",
+          "outcome": "success",
+          "pullRequest": 342,
+          "seconds": 1067,
+          "modelCalls": 21,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 336,
+      "attempts": [
+        {
+          "issue": 336,
+          "startedAt": "2026-11-27T08:00:42Z",
+          "outcome": "success",
+          "pullRequest": 343,
+          "seconds": 634,
+          "modelCalls": 24,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 337,
+      "attempts": [
+        {
+          "issue": 337,
+          "startedAt": "2026-11-27T08:12:02Z",
+          "outcome": "success",
+          "pullRequest": 344,
+          "seconds": 774,
+          "modelCalls": 17,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 338,
+      "attempts": [
+        {
+          "issue": 338,
+          "startedAt": "2026-11-27T08:25:43Z",
+          "outcome": "success",
+          "pullRequest": 345,
+          "seconds": 699,
+          "modelCalls": 16,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 339,
+      "attempts": [
+        {
+          "issue": 339,
+          "startedAt": "2026-11-27T08:38:09Z",
+          "outcome": "success",
+          "pullRequest": 346,
+          "seconds": 755,
+          "modelCalls": 32,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    }
+  ],
+  "summary": {
+    "issues": 8,
+    "firstAttemptSuccess": 6,
+    "successWithinBudget": 7,
+    "firstAttemptRate": 0.75,
+    "rateWithinBudget": 0.875
+  }
+}

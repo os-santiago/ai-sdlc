@@ -125,6 +125,23 @@ Four batteries of new issues measured the main scenario while a series of reliab
 
 **What did not recur on f503a9b (20 issues):** the reports show no transport stop, and every other attempt merged, so no uncertain publication or merge, and no quarantine, stopped delivery.
 
+## Follow-up: the latest main and the local model (batteries 45–46)
+
+| Battery | Install | Model path | Repository | Issues (new) | Within two attempts | First attempt | Median seconds | Model calls (median) |
+|---|---|---|---|---|---|---|---|---|
+| [45](2026-11-27-evaluation-battery-45.json) | f503a9b | local model (Qwen3-Coder-30B-A3B, `local-llama`) | Go | 332–339 | 7/8 (87.5% [52.9%, 97.8%]) | 6/8 | 774 | 21 |
+| [46](2026-11-27-evaluation-battery-46.json) | 3e4f48c (+#840), in-place upgrade | Claude Sonnet (`agent-cli-claude-sonnet`) | Python | 118–127 | 10/10 (100% [72.2%, 100%]) | 9/10 | 336 | 7.5 |
+
+- **Battery 45, local model:**
+  - It ran on the reliability changes from batteries 41–44.
+  - Six issues delivered on the first attempt. Issue 334 delivered on the second, after its first generation exhausted its step budget (`worker-exit`, exit code 2, 32 calls).
+  - Issue 333 was refused twice because the candidate's own tests failed.
+  - No transport, publication or merge stop occurred.
+  - For comparison only (different issues and revisions): batteries 30–32 on the local model delivered 16 of 21 (9 of 21 on the first attempt).
+- **Battery 46, latest main:**
+  - It ran after an in-place upgrade of the Python installation to 3e4f48c, which applied migration 0040 from #840.
+  - The only first-attempt loss was issue 120, where the independent review requested changes; it delivered on the second attempt.
+
 ## Limits
 
 - **Easy issues.** The corpus is small Go functions in one sample repository (and, for batteries 37–43, small Python functions in a second).
