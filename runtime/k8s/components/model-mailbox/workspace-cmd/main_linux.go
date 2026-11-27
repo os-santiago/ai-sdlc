@@ -77,6 +77,11 @@ func run(args []string, input io.Reader, output io.Writer, uidPath, parent strin
 		// bundle, so its memory does not grow with the repository.
 		summary, e := workspacebundle.ImportFrom(parent, input, *digest, *source)
 		if e != nil {
+			// A refusal can come before stdin is read (an existing
+			// repository) or midway. Drain the rest, bounded, as the earlier
+			// read-everything-first helper did, so the exec client never
+			// blocks writing stdin to a helper that already exited.
+			io.Copy(io.Discard, io.LimitReader(input, workspacebundle.MaxWireBytes+1))
 			return workspacebundle.ErrInvalid
 		}
 		return json.NewEncoder(output).Encode(map[string]any{"imported": true, "files": summary.Files, "sourceSHA": *source, "bundleSHA256": *digest})
