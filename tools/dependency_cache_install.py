@@ -231,11 +231,15 @@ def finish(cluster, key, volume_name, sleep):
             or claim['spec'].get('volumeName') != volume_name):
         raise RuntimeError('The claim %s/%s is not the sealed cache of this key' % (VERIFIER_NAMESPACE, name))
     volume = cluster.get('pv', volume_name)
-    original = (volume or {}).get('metadata', {}).get('annotations', {}).get(RECLAIM_ANNOTATION)
-    if original:
-        cluster.kubectl('patch', 'pv', volume_name, '--type', 'merge', '-p', json.dumps({
-            'metadata': {'annotations': {RECLAIM_ANNOTATION: None}},
-            'spec': {'persistentVolumeReclaimPolicy': original}}))
+    annotations = (volume or {}).get('metadata', {}).get('annotations', {})
+    if RECLAIM_ANNOTATION in annotations or KEY_ANNOTATION in annotations:
+        # Restore the original policy and drop the seal's markers, so a volume
+        # that later outlives its claim (an original Retain) is never taken
+        # for an interrupted seal.
+        patch = {'metadata': {'annotations': {RECLAIM_ANNOTATION: None, KEY_ANNOTATION: None}}}
+        if annotations.get(RECLAIM_ANNOTATION):
+            patch['spec'] = {'persistentVolumeReclaimPolicy': annotations[RECLAIM_ANNOTATION]}
+        cluster.kubectl('patch', 'pv', volume_name, '--type', 'merge', '-p', json.dumps(patch))
     return name
 
 

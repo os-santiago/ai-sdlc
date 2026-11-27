@@ -205,6 +205,7 @@ class SealTests(unittest.TestCase):
         volume = self.fake.volumes['pv-1']
         self.assertEqual(volume['spec']['persistentVolumeReclaimPolicy'], reclaim)
         self.assertNotIn(deps.RECLAIM_ANNOTATION, volume['metadata']['annotations'])
+        self.assertNotIn(deps.KEY_ANNOTATION, volume['metadata']['annotations'])
         self.assertNotIn(('ai-sdlc-ci', 'deps-' + GO_VECTOR), self.fake.claims)
 
     def test_prepare_then_seal_hands_the_volume_over(self):

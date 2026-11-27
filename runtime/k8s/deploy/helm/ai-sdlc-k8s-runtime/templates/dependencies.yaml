@@ -118,11 +118,12 @@ data:
     proxy_set_header Accept $http_accept;
   {{- end }}
   # Requests are matched, cached and forwarded by the same normalized URI
-  # ($uri): a query string, or a path outside the conservative character set
-  # after decoding, is refused, so an encoded separator or dot segment cannot
+  # ($uri): a query string, a read with a body, or a path outside the
+  # conservative character set after decoding, is refused, so an encoded separator or dot segment cannot
   # make the forwarded path differ from the allowlisted and cached one.
   request-filter.conf: |
     if ($request_uri ~ "[?#]") { return 403; }
+    if ($bodied_read) { return 403; }
     if ($uri !~ "^/([A-Za-z0-9@_~+-][A-Za-z0-9@._~+-]*(/[A-Za-z0-9@_~+-][A-Za-z0-9@._~+-]*)*)?$") { return 403; }
   nginx.conf: |
     pid /tmp/nginx.pid;
@@ -152,6 +153,12 @@ data:
       # except to the npm audit endpoints.
       proxy_pass_request_headers off;
       proxy_pass_request_body off;
+      # A GET or HEAD with a body (a length or a transfer encoding) is
+      # refused: its length would otherwise reach the upstream with no body.
+      map "$request_method:$http_content_length$http_transfer_encoding" $bodied_read {
+        "~^(GET|HEAD):.+" 1;
+        default 0;
+      }
       proxy_ignore_headers Cache-Control Expires Set-Cookie Vary;
       proxy_hide_header Set-Cookie;
       proxy_cache_lock on;

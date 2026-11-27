@@ -796,6 +796,8 @@ class ProjectManifestChartTests(unittest.TestCase):
                 self.assertIn(line, data[name])
         self.assertEqual(config.count('include /etc/nginx/ai-sdlc/request-filter.conf;'), 2)
         self.assertIn('if ($request_uri ~ "[?#]") { return 403; }', data['request-filter.conf'])
+        self.assertIn('if ($bodied_read) { return 403; }', data['request-filter.conf'])
+        self.assertIn('"~^(GET|HEAD):.+" 1;', config)
         self.assertIn('max_size=18432m', config)
         container = pod['containers'][0]
         self.assertEqual(container['args'][:3], ['nginx', '-c', '/etc/nginx/ai-sdlc/nginx.conf'])
