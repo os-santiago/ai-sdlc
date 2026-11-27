@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "repository": "os-santiago/quarkus-super-heroes",
+  "baseBranch": "main",
+  "modules": {
+    "rest-villains": {
+      "status": "supported",
+      "services": ["postgres"],
+      "mavenArgs": [
+        "-Dtest=!UIResourceTests,!*IT",
+        "-Dit.test=*IT,!UIResourceIT",
+        "-Dsurefire.failIfNoSpecifiedTests=false",
+        "-Dfailsafe.failIfNoSpecifiedTests=false"
+      ],
+      "note": "Playwright UI tests are excluded: the pipeline provisions no browser. -Dtest and -Dit.test replace the plugins' include patterns, so each keeps its own class pattern."
+    },
+    "rest-heroes": {
+      "status": "unverified",
+      "services": ["postgres"],
+      "mavenArgs": [
+        "-Dtest=!UIResourceTests,!*IT",
+        "-Dit.test=*IT,!UIResourceIT",
+        "-Dsurefire.failIfNoSpecifiedTests=false",
+        "-Dfailsafe.failIfNoSpecifiedTests=false"
+      ],
+      "note": "Reactive PostgreSQL client; same sidecar, not yet run in the pipeline."
+    },
+    "rest-narration": {
+      "status": "unverified",
+      "services": ["none"],
+      "mavenArgs": [],
+      "note": "Uses in-process WireMock Dev Services, which the pipeline's Dev Services switch may disable."
+    },
+    "event-statistics": {
+      "status": "pending",
+      "services": ["kafka"],
+      "mavenArgs": [],
+      "note": "Needs a Kafka sidecar."
+    },
+    "rest-fights": {
+      "status": "pending",
+      "services": ["mongodb", "kafka"],
+      "mavenArgs": [],
+      "note": "Needs MongoDB and Kafka sidecars."
+    },
+    "grpc-locations": {
+      "status": "pending",
+      "services": ["mariadb"],
+      "mavenArgs": [],
+      "note": "Needs a MariaDB sidecar."
+    },
+    "ui-super-heroes": {
+      "status": "pending",
+      "services": ["none"],
+      "mavenArgs": [],
+      "note": "Quinoa downloads Node.js and npm packages, and the tests need a browser."
+    }
+  }
+}
