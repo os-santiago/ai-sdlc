@@ -16,6 +16,8 @@ Start here:
 - [Runtime upgrades and installation details](operations/runtime-upgrades.md).
 - [Runtime metrics](operations/metrics.md): queue depth, safe stops, model
   calls and deliveries, and how to scrape them.
+- [Try it](try-it.md) ([detailed](try-it-detailed.md)): label one issue and
+  watch it become a merged pull request in the flow console.
 - [Flow console](operations/flow-console.md): a read-only web timeline of the
   autonomous flow, derived from the journal, and its event contract.
 - [Database backup and restore](operations/backup-and-restore.md): the
