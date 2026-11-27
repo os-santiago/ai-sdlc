@@ -78,7 +78,12 @@ guidance names the manifest's `verification.command` and directory (taken
 only from the reviewed manifest, never from the issue), and asks for tests in
 the same framework, imports and conventions as the repository's existing
 tests with no new dependency, because verification has only the image's
-packages: a test that imports `pytest` fails in the Python image.
+packages: a test that imports `pytest` fails in the Python image. Since the
+generator cannot run the tests, the guidance also asks it to check every
+expected value by hand and prefer small inputs with obvious results: in the
+Python batteries most remaining refusals were correct code with a miscounted
+expected value. A generation toolchain (#831) or a verification repair (#837)
+would catch these mechanically.
 
 The Python example runs the suite as `python3 -I -B -m unittest discover -s . -t .`.
 Isolated mode (`-I`) keeps the candidate's working tree off `sys.path` until
