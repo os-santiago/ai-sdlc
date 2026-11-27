@@ -95,7 +95,7 @@ All three ran on the Python sample with the same cell label (`agent-cli-claude-s
 **Reading:**
 - The merge stop came from a pre-existing 5 s response deadline, not from #828. The tree-write stop's cause is unknown, because its HTTP status was discarded. The replay rules out the content, and the stop did not recur in battery 40.
 - Battery 40 re-delivers issues that failed before, so it is not a fresh sample, and the harness counts those issues from their earlier trials. With #829, its seven merges completed with no uncertain merge, and the tree-write stop did not recur. A slower merge would still quarantine merges until #830 adds a reconciler.
-- In these batteries, the remaining refusals were wrong expectations in candidates' own tests, four of them on a single issue (46). The generator cannot run tests there, because the Python image cannot be a generation toolchain (#831).
+- After #828 (batteries 39–40), the remaining refusals were wrong expectations in candidates' own tests, all four on a single issue (46). The generator cannot run tests there, because the Python image cannot be a generation toolchain (#831).
 
 ## Limits
 
