@@ -133,9 +133,40 @@ func TestRequestsOutsideTheManifestAreRefused(t *testing.T) {
 	if _, err := (Request{Pipeline: "shell", Repository: m.Repository, Revision: sha}).PipelineRun(""); err == nil {
 		t.Fatal("rendered an unknown pipeline")
 	}
-	pre, err := FromInvocation(m, m.Tekton.Pre[0], sha)
+	pre, err := FromInvocation(m, m.Tekton.Pre[0], sha, sha)
 	if err != nil || pre.Pipeline != project.TektonMavenBuildTest {
 		t.Fatal("pre invocation", err)
+	}
+	deps := project.TektonInvocation{Pipeline: project.TektonMavenDependencies, Target: "rest-villains"}
+	if _, err := FromInvocation(m, deps, sha, strings.Repeat("0", 40)); !errors.Is(err, ErrRequest) {
+		t.Fatal("maven-dependencies accepted a revision other than the base head", err)
+	}
+	if _, err := FromInvocation(m, deps, sha, ""); !errors.Is(err, ErrRequest) {
+		t.Fatal("maven-dependencies accepted an unknown base head", err)
+	}
+	filled, err := FromInvocation(m, deps, sha, sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (Request{Pipeline: project.TektonMavenDependencies, Repository: m.Repository, Revision: sha, Target: "rest-villains",
+		Services: []string{"none"}}).PipelineRun(""); err == nil {
+		t.Fatal("rendered maven-dependencies without a base head")
+	}
+	object, _ := filled.PipelineRun("")
+	cache := object["spec"].(map[string]any)["workspaces"].([]any)[1].(map[string]any)["persistentVolumeClaim"].(map[string]any)
+	if cache["readOnly"] != nil || cache["claimName"] != CacheClaim(m.Repository) {
+		t.Fatal("dependencies cache binding", cache)
+	}
+}
+
+// The installer (tools/tekton_ci_install.py cache_claim) created exactly this
+// claim for the repository in the disposable cluster run.
+func TestCacheClaimMatchesTheInstaller(t *testing.T) {
+	if got := CacheClaim("os-santiago/quarkus-super-heroes"); got != "ai-sdlc-ci-maven-cache-ccbf9cd8126eafc6" {
+		t.Fatal(got)
+	}
+	if CacheClaim("os-santiago/a") == CacheClaim("os-santiago/b") {
+		t.Fatal("repositories share a cache")
 	}
 }
 
@@ -148,9 +179,13 @@ func make17() []string {
 }
 
 func TestSummariesAreDecodedStrictlyAndBounded(t *testing.T) {
-	good := `{"module":"rest-villains","mavenExitCode":0,"reports":6,"tests":94,"failures":0,"errors":0,"skipped":0,"failingTests":[],"compilerErrors":[],"missingDependencies":false}`
-	if s, err := ParseMavenSummary(good); err != nil || s.Tests != 94 {
+	good := `{"module":"rest-villains","mavenExitCode":0,"reports":6,"tests":94,"failures":0,"errors":0,"skipped":0,"failingTests":[],"compilerErrors":[],"missingDependencies":false,"truncated":false}`
+	if s, err := ParseMavenSummary(good); err != nil || s.Tests != 94 || !s.Passed() {
 		t.Fatal("maven summary", err)
+	}
+	failing := `{"module":"rest-villains","mavenExitCode":1,"reports":6,"tests":94,"failures":0,"errors":3,"skipped":0,"failingTests":["a.B.c"],"compilerErrors":[],"missingDependencies":false,"truncated":false}`
+	if s, err := ParseMavenSummary(failing); err != nil || s.Passed() || s.FailingTests[0] != "a.B.c" {
+		t.Fatal("failing summary", err)
 	}
 	for _, bad := range []string{
 		strings.Replace(good, `"module"`, `"extra":1,"module"`, 1),
@@ -163,12 +198,12 @@ func TestSummariesAreDecodedStrictlyAndBounded(t *testing.T) {
 			t.Fatal("accepted", bad[:min(60, len(bad))])
 		}
 	}
-	npm := `{"directory":"ui","mode":"update","npmExitCode":0,"changed":2,"changes":[{"path":"axios","from":"1.21.0","to":"1.21.1"},{"path":"new","from":null,"to":"1.0.0"}],"truncated":false,"diffBytes":3230,"diffSHA256":"` + strings.Repeat("f", 64) + `"}`
-	if s, err := ParseNpmSummary(npm); err != nil || len(s.Changes) != 2 || s.Changes[1].From != nil {
+	npm := `{"directory":"ui","mode":"update","npmExitCode":0,"changed":2,"changes":[{"path":"axios","from":"1.21.0","to":"1.21.1"},{"path":"new","from":null,"to":"1.0.0"}],"truncated":false,"resolvedHosts":["registry.npmjs.org"],"newResolvedHosts":[],"diffBytes":3230,"diffSHA256":"` + strings.Repeat("f", 64) + `"}`
+	if s, err := ParseNpmSummary(npm); err != nil || len(s.Changes) != 2 || s.Changes[1].From != nil || !s.Passed() {
 		t.Fatal("npm summary", err)
 	}
 	for _, bad := range []string{strings.Replace(npm, `"changed":2`, `"changed":1`, 1), strings.Replace(npm, `"update"`, `"install"`, 1),
-		strings.Replace(npm, strings.Repeat("f", 64), "zz", 1)} {
+		strings.Replace(npm, strings.Repeat("f", 64), "zz", 1), strings.Replace(npm, `"newResolvedHosts":[],`, ``, 1)} {
 		if _, err := ParseNpmSummary(bad); err == nil {
 			t.Fatal("accepted npm", bad[:60])
 		}
@@ -176,9 +211,15 @@ func TestSummariesAreDecodedStrictlyAndBounded(t *testing.T) {
 }
 
 type fakeCluster struct {
-	reads   []map[string]any
-	fails   int
-	created map[string]any
+	reads     []map[string]any
+	fails     int
+	created   map[string]any
+	cancelled string
+}
+
+func (f *fakeCluster) Cancel(_ context.Context, name string) error {
+	f.cancelled = name
+	return nil
 }
 
 func (f *fakeCluster) Create(_ context.Context, object map[string]any) (string, error) {
@@ -218,8 +259,23 @@ func TestRunPollsToCompletionAndBindsTheRequestedCommit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	stuck := &fakeCluster{reads: []map[string]any{status("Unknown", "")}}
-	if _, err := Run(ctx, stuck, request, "", time.Millisecond); !errors.Is(err, ErrDeadline) {
-		t.Fatal("unbounded wait", err)
+	if _, err := Run(ctx, stuck, request, "", time.Millisecond); !errors.Is(err, ErrDeadline) || stuck.cancelled != "run-1" {
+		t.Fatal("unbounded wait or run left running", err, stuck.cancelled)
+	}
+	if _, err := Run(context.Background(), &fakeCluster{reads: []map[string]any{status("True", "")}}, request, "", time.Millisecond); !errors.Is(err, ErrOutcome) {
+		t.Fatal("accepted a succeeded run without its commit", err)
+	}
+	if out, err := Run(context.Background(), &fakeCluster{reads: []map[string]any{status("False", "")}}, request, "", time.Millisecond); err != nil || out.Succeeded {
+		t.Fatal("a run whose checkout failed is a failure, not an error", err)
+	}
+	// A failing build is a succeeded pipeline whose summary carries the verdict.
+	failed := status("True", sha)
+	failed["status"].(map[string]any)["results"] = []any{map[string]any{"name": "commit", "value": sha}, map[string]any{"name": "summary",
+		"value": `{"module":"rest-villains","mavenExitCode":1,"reports":1,"tests":2,"failures":1,"errors":0,"skipped":0,"failingTests":["a.B.c"],"compilerErrors":[],"missingDependencies":false,"truncated":false}`}}
+	out, err := Run(context.Background(), &fakeCluster{reads: []map[string]any{failed}}, request, "", time.Millisecond)
+	summary, perr := ParseMavenSummary(out.Summary)
+	if err != nil || perr != nil || !out.Succeeded || summary.Passed() || summary.FailingTests[0] != "a.B.c" {
+		t.Fatal("failing build outcome", err, perr, summary)
 	}
 	huge := status("True", sha)
 	huge["status"].(map[string]any)["results"] = []any{map[string]any{"name": "summary", "value": strings.Repeat("x", MaxResultBytes+1)}}

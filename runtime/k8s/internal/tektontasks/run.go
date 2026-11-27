@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 )
 
@@ -39,7 +40,12 @@ type MavenSummary struct {
 	FailingTests        []string `json:"failingTests"`
 	CompilerErrors      []string `json:"compilerErrors"`
 	MissingDependencies bool     `json:"missingDependencies"`
+	Truncated           bool     `json:"truncated"`
 }
+
+// Passed reports Maven's verdict; the task itself succeeds whenever it
+// published a summary, so callers gate on this.
+func (s MavenSummary) Passed() bool { return s.MavenExitCode == 0 }
 
 // NpmChange is one changed lockfile entry.
 type NpmChange struct {
@@ -56,9 +62,16 @@ type NpmSummary struct {
 	Changed     int         `json:"changed"`
 	Changes     []NpmChange `json:"changes"`
 	Truncated   bool        `json:"truncated"`
-	DiffBytes   int         `json:"diffBytes"`
-	DiffSHA256  string      `json:"diffSHA256"`
+	// ResolvedHosts are the registry hosts the updated lockfile resolves
+	// from; NewResolvedHosts are those it did not resolve from before.
+	ResolvedHosts    []string `json:"resolvedHosts"`
+	NewResolvedHosts []string `json:"newResolvedHosts"`
+	DiffBytes        int      `json:"diffBytes"`
+	DiffSHA256       string   `json:"diffSHA256"`
 }
+
+// Passed reports npm's verdict.
+func (s NpmSummary) Passed() bool { return s.NpmExitCode == 0 }
 
 var digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
@@ -89,6 +102,7 @@ func ParseMavenSummary(raw string) (MavenSummary, error) {
 func ParseNpmSummary(raw string) (NpmSummary, error) {
 	var s NpmSummary
 	if strict(raw, &s) != nil || s.Changes == nil || len(s.Changes) > 25 || s.Changed < len(s.Changes) ||
+		s.ResolvedHosts == nil || s.NewResolvedHosts == nil || len(s.ResolvedHosts) > 10 || len(s.NewResolvedHosts) > 10 ||
 		(s.Mode != "update" && s.Mode != "audit-fix") || !digest.MatchString(s.DiffSHA256) || s.DiffBytes < 0 {
 		return NpmSummary{}, ErrOutcome
 	}
@@ -141,10 +155,11 @@ func observe(object map[string]any) (Outcome, bool, error) {
 	return outcome, true, nil
 }
 
-// Cluster creates and reads PipelineRuns in the CI namespace.
+// Cluster creates, reads and cancels PipelineRuns in the CI namespace.
 type Cluster interface {
 	Create(ctx context.Context, object map[string]any) (string, error)
 	Get(ctx context.Context, name string) (map[string]any, error)
+	Cancel(ctx context.Context, name string) error
 }
 
 // DynamicCluster implements Cluster with a dynamic client whose identity may
@@ -159,6 +174,13 @@ func (d DynamicCluster) Create(ctx context.Context, object map[string]any) (stri
 	return created.GetName(), nil
 }
 
+// Cancel asks Tekton to stop the run (spec.status Cancelled).
+func (d DynamicCluster) Cancel(ctx context.Context, name string) error {
+	_, err := d.Client.Resource(pipelineRuns).Namespace(Namespace).Patch(ctx, name, types.MergePatchType,
+		[]byte(`{"spec":{"status":"Cancelled"}}`), metav1.PatchOptions{})
+	return err
+}
+
 func (d DynamicCluster) Get(ctx context.Context, name string) (map[string]any, error) {
 	run, err := d.Client.Resource(pipelineRuns).Namespace(Namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
@@ -168,8 +190,12 @@ func (d DynamicCluster) Get(ctx context.Context, name string) (map[string]any, e
 }
 
 // Run creates the request's PipelineRun once and polls it until it finishes
-// or ctx ends. A failed read is retried at the next poll; the deadline bounds
-// everything. The run's commit must equal the requested revision.
+// or ctx ends, then cancels it so candidate code does not keep running
+// unobserved. A failed read is retried at the next poll; the deadline bounds
+// everything. A succeeded run must report exactly the requested commit, and a
+// failed one may report none (checkout failed) but never another. Outcome
+// Succeeded is the pipeline's status; the tool's verdict is in the summary
+// (MavenSummary.Passed, NpmSummary.Passed).
 func Run(ctx context.Context, cluster Cluster, r Request, runtimeClass string, poll time.Duration) (Outcome, error) {
 	object, err := r.PipelineRun(runtimeClass)
 	if err != nil {
@@ -188,7 +214,8 @@ func Run(ctx context.Context, cluster Cluster, r Request, runtimeClass string, p
 				return Outcome{}, err
 			}
 			if done {
-				if outcome.Name != name || (outcome.Commit != "" && outcome.Commit != r.Revision) {
+				if outcome.Name != name || (outcome.Succeeded && outcome.Commit != r.Revision) ||
+					(outcome.Commit != "" && outcome.Commit != r.Revision) {
 					return Outcome{}, ErrOutcome
 				}
 				return outcome, nil
@@ -196,7 +223,10 @@ func Run(ctx context.Context, cluster Cluster, r Request, runtimeClass string, p
 		}
 		select {
 		case <-ctx.Done():
-			return Outcome{}, ErrDeadline
+			cancelCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			err := cluster.Cancel(cancelCtx, name)
+			cancel()
+			return Outcome{}, errors.Join(ErrDeadline, err)
 		case <-ticker.C:
 		}
 	}

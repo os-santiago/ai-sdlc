@@ -11,6 +11,8 @@
 package tektontasks
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"regexp"
 	"strings"
@@ -25,9 +27,16 @@ var ErrRequest = errors.New("tekton request outside the reviewed catalog scope")
 const (
 	Namespace      = "ai-sdlc-ci"
 	ServiceAccount = "ai-sdlc-ci-runner"
-	CacheClaim     = "ai-sdlc-ci-maven-cache"
 	MaxPackages    = 16
 )
+
+// CacheClaim is the repository's own Maven cache claim, named from the digest
+// of owner/name exactly as tools/tekton_ci_install.py creates it, so a run can
+// bind only its own repository's cache.
+func CacheClaim(repository string) string {
+	sum := sha256.Sum256([]byte(repository))
+	return "ai-sdlc-ci-maven-cache-" + hex.EncodeToString(sum[:])[:16]
+}
 
 var (
 	revision   = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -51,16 +60,21 @@ type Request struct {
 	MavenArgs  []string
 	Mode       string
 	Packages   []string
+	// BaseHead is the current base-branch head; maven-dependencies, the only
+	// writer of the shared cache, runs only when Revision equals it.
+	BaseHead string
 }
 
 // FromInvocation builds a pre- or post-generation request from the manifest.
 // Pre-generation runs use the base revision; post-generation runs use the
-// candidate head. The caller supplies the revision; the manifest supplies the rest.
-func FromInvocation(m project.Manifest, run project.TektonInvocation, commit string) (Request, error) {
+// candidate head. The caller supplies the revision and the current
+// base-branch head it observed; the manifest supplies the rest. A
+// maven-dependencies request for any revision other than baseHead is refused.
+func FromInvocation(m project.Manifest, run project.TektonInvocation, commit, baseHead string) (Request, error) {
 	if m.Tekton == nil {
 		return Request{}, ErrRequest
 	}
-	return resolve(m, run.Pipeline, run.Target, nil, commit)
+	return resolve(m, run.Pipeline, run.Target, nil, commit, baseHead)
 }
 
 // FromTool builds a request for a generator tool call. Only target and npm
@@ -72,14 +86,16 @@ func FromTool(m project.Manifest, tool, target string, packages []string, commit
 	}
 	for _, declared := range m.Tekton.Tools {
 		if declared.Name == tool {
-			return resolve(m, declared.Pipeline, target, packages, commit)
+			// Tools never include maven-dependencies (the manifest refuses
+			// it), so no base head is needed.
+			return resolve(m, declared.Pipeline, target, packages, commit, "")
 		}
 	}
 	return Request{}, ErrRequest
 }
 
-func resolve(m project.Manifest, pipeline, target string, packages []string, commit string) (Request, error) {
-	r := Request{Pipeline: pipeline, Repository: m.Repository, Revision: commit, Target: target}
+func resolve(m project.Manifest, pipeline, target string, packages []string, commit, baseHead string) (Request, error) {
+	r := Request{Pipeline: pipeline, Repository: m.Repository, Revision: commit, Target: target, BaseHead: baseHead}
 	switch project.TektonTargetKind(pipeline) {
 	case "module":
 		module, ok := m.Tekton.Modules[target]
@@ -108,6 +124,9 @@ func resolve(m project.Manifest, pipeline, target string, packages []string, com
 // Validate re-checks every field against the catalog's own bounds.
 func (r Request) Validate() error {
 	if pipelines[r.Pipeline] == "" || !repository.MatchString(r.Repository) || !revision.MatchString(r.Revision) {
+		return ErrRequest
+	}
+	if r.Pipeline == project.TektonMavenDependencies && r.Revision != r.BaseHead {
 		return ErrRequest
 	}
 	switch project.TektonTargetKind(r.Pipeline) {
@@ -148,7 +167,7 @@ func (r Request) PipelineRun(runtimeClass string) (map[string]any, error) {
 	case project.TektonMavenBuildTest, project.TektonMavenDependencies:
 		params = append(params, param("module", r.Target), param("services", strings.Join(r.Services, ",")),
 			param("maven-args", strings2any(r.MavenArgs)))
-		cache := map[string]any{"claimName": CacheClaim}
+		cache := map[string]any{"claimName": CacheClaim(r.Repository)}
 		if r.Pipeline == project.TektonMavenBuildTest {
 			cache["readOnly"] = true
 		} else {

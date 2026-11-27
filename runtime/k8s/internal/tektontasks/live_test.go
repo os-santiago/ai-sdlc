@@ -30,15 +30,26 @@ func TestLiveRunAgainstAnOwnedCluster(t *testing.T) {
 	}
 	request.MavenArgs = append(request.MavenArgs, "-Dit.test=*IT,!UIResourceIT",
 		"-Dsurefire.failIfNoSpecifiedTests=false", "-Dfailsafe.failIfNoSpecifiedTests=false")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-	outcome, err := Run(ctx, DynamicCluster{Client: client}, request, "", 10*time.Second)
-	if err != nil {
-		t.Fatal(err)
+	// The second run points the datasource at a closed port: a failing build
+	// must still return its failing tests.
+	failing := request
+	failing.MavenArgs = append(append([]string{}, request.MavenArgs...), "-Dquarkus.datasource.jdbc.url=jdbc:postgresql://127.0.0.1:1/ci")
+	for _, c := range []struct {
+		request Request
+		pass    bool
+	}{{request, true}, {failing, false}} {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		outcome, err := Run(ctx, DynamicCluster{Client: client}, c.request, "", 10*time.Second)
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		summary, err := ParseMavenSummary(outcome.Summary)
+		if err != nil || !outcome.Succeeded || outcome.Commit != sha || summary.Tests == 0 || summary.Passed() != c.pass ||
+			(!c.pass && len(summary.FailingTests) == 0) {
+			t.Fatal("live outcome", outcome, summary, err)
+		}
+		t.Logf("%s: passed=%v %d tests, %d failures, %d errors, failing %v", outcome.Name, summary.Passed(), summary.Tests,
+			summary.Failures, summary.Errors, summary.FailingTests)
 	}
-	summary, err := ParseMavenSummary(outcome.Summary)
-	if err != nil || !outcome.Succeeded || outcome.Commit != sha || summary.Tests == 0 || summary.MavenExitCode != 0 {
-		t.Fatal("live outcome", outcome, summary, err)
-	}
-	t.Logf("%s: %d tests, %d failures, %d errors", outcome.Name, summary.Tests, summary.Failures, summary.Errors)
 }
