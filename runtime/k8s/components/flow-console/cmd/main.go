@@ -85,6 +85,7 @@ func run() error {
 
 	var ready atomic.Bool
 	var hub *flowconsole.Hub
+	fatal := make(chan error, 1)
 	if *synthetic > 0 {
 		events := flowconsole.Synthetic(*synthetic, time.Now())
 		hub = flowconsole.NewHub(*capacity, "fixture")
@@ -106,26 +107,36 @@ func run() error {
 		ready.Store(true)
 		log.Printf("flow console replaying %d fixture events", len(events))
 	} else {
-		db, err := store.Open(ctx, databaseURL)
-		if err != nil {
-			return errors.New("journal database unavailable")
-		}
-		defer db.Close()
-		check, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err = store.AssertFlowConsole(check, db.Pool)
-		cancel()
-		if err != nil {
-			return errors.New("flow console requires its dedicated read-only database role")
-		}
+		// Journal mode serves at once: liveness answers while the database is
+		// still unreachable (a fresh install starts the console before
+		// PostgreSQL and its role are ready), readiness stays false and the
+		// page says it is waiting. Only a wrong database identity is fatal.
 		hub = flowconsole.NewHub(*capacity, "journal")
-		collector := flowconsole.Collector{Hub: hub, Interval: *poll, Window: *window, Limit: *limit, Options: flowconsole.DeriveOptions{StaleWait: *stale},
-			Read: func(ctx context.Context, since time.Time, limit int) (store.FlowJournal, error) {
-				return store.ReadFlowJournal(ctx, db, since, limit)
-			}}
-		go pollJournal(ctx, func(ctx context.Context) error {
-			_, err := collector.Poll(ctx, time.Now())
-			return err
-		}, *poll, &ready, log.Print)
+		hub.SetStatus(flowconsole.Status{Source: "journal", Problem: flowconsole.ProblemConnecting, Window: window.String()})
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		go func() {
+			db, err := connectJournal(ctx, func(ctx context.Context) (*store.DB, error) { return store.Open(ctx, databaseURL) }, store.OpenFailure,
+				func(ctx context.Context, db *store.DB) error { return store.AssertFlowConsole(ctx, db.Pool) },
+				hub, *window, journalBackoff, journalRefusedGrace, log.Print)
+			if err != nil {
+				if ctx.Err() == nil {
+					fatal <- err
+					cancel()
+				}
+				return
+			}
+			defer db.Close()
+			collector := flowconsole.Collector{Hub: hub, Interval: *poll, Window: *window, Limit: *limit, Options: flowconsole.DeriveOptions{StaleWait: *stale},
+				Read: func(ctx context.Context, since time.Time, limit int) (store.FlowJournal, error) {
+					return store.ReadFlowJournal(ctx, db, since, limit)
+				}}
+			pollJournal(ctx, func(ctx context.Context) error {
+				_, err := collector.Poll(ctx, time.Now())
+				return err
+			}, *poll, &ready, log.Print)
+		}()
 	}
 	server := &http.Server{
 		Addr:              *listen,
@@ -145,7 +156,104 @@ func run() error {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return errors.New("flow console listener failed")
 	}
+	select {
+	case err := <-fatal:
+		return err
+	default:
+	}
 	return nil
+}
+
+// backoff is a bounded retry schedule: Initial, doubling up to Max.
+type backoff struct{ Initial, Max time.Duration }
+
+// journalBackoff paces startup connection attempts: 1 s doubling to 30 s,
+// so a database that becomes ready is noticed within 30 s.
+var journalBackoff = backoff{Initial: time.Second, Max: 30 * time.Second}
+
+func (b backoff) next(d time.Duration) time.Duration {
+	if d < b.Initial {
+		return b.Initial
+	}
+	if d *= 2; d > b.Max {
+		return b.Max
+	}
+	return d
+}
+
+// journalRefusedGrace is how long a refused login is retried before the
+// console exits. PostgreSQL reports a role that does not exist yet exactly
+// like a wrong password, and on a fresh install the migrator provisions the
+// console's role only after PostgreSQL is up; ten minutes covers that, while a
+// credential that is really wrong still ends in a visible restart.
+const journalRefusedGrace = 10 * time.Minute
+
+// connectJournal opens the journal and asserts the console's dedicated
+// read-only role, retrying with schedule until ctx ends instead of exiting:
+// on a fresh install the exit made the pod crash-loop until PostgreSQL was
+// ready. classify maps an open error to store's fixed failure classes:
+//   - unavailable (connection refused, PostgreSQL starting) and an unreadable
+//     role check are retried without limit;
+//   - a refused login (wrong password, unknown role, missing database) is
+//     retried for refusedGrace, then returned;
+//   - an invalid database URL, and any identity other than the dedicated
+//     role, are configuration errors returned at once.
+//
+// While waiting the hub reports ProblemConnecting, so readiness and the page
+// say the console is waiting; once connected it reports a source that has not
+// been read yet. Each change of failure class is logged with a fixed message,
+// never the driver error.
+func connectJournal(ctx context.Context, open func(context.Context) (*store.DB, error), classify func(error) string, assert func(context.Context, *store.DB) error, hub *flowconsole.Hub, window time.Duration, schedule backoff, refusedGrace time.Duration, logf func(...any)) (*store.DB, error) {
+	start := time.Now()
+	var delay time.Duration
+	logged := ""
+	for attempt := 1; ; attempt++ {
+		class := store.OpenUnavailable
+		db, err := open(ctx)
+		if err == nil {
+			check, cancel := context.WithTimeout(ctx, 5*time.Second)
+			err = assert(check, db)
+			cancel()
+			if err == nil {
+				if attempt > 1 {
+					logf("flow journal database reachable after ", attempt, " attempts")
+				}
+				hub.SetStatus(flowconsole.Status{Source: "journal", Window: window.String()})
+				return db, nil
+			}
+			_ = db.Close()
+			if !errors.Is(err, store.ErrObservationUnavailable) {
+				return nil, errors.New("flow console requires its dedicated read-only database role")
+			}
+		} else {
+			class = classify(err)
+		}
+		switch class {
+		case store.OpenInvalidConfiguration:
+			return nil, errors.New("flow console database URL is invalid")
+		case store.OpenRefused:
+			if time.Since(start) >= refusedGrace {
+				return nil, errors.New("flow journal database refused the console's login")
+			}
+		}
+		if class != logged {
+			logged = class
+			if class == store.OpenRefused {
+				logf("flow journal database refused the console's login; retrying for up to ", refusedGrace, " in case its role is not provisioned yet")
+			} else {
+				logf("flow journal database unavailable; retrying every ", schedule.Initial, " to ", schedule.Max, " until it is reachable")
+			}
+		}
+		hub.SetStatus(flowconsole.Status{Source: "journal", Problem: flowconsole.ProblemConnecting, Window: window.String()})
+		delay = schedule.next(delay)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 // pollJournal reads the journal on every tick until ctx ends. Readiness

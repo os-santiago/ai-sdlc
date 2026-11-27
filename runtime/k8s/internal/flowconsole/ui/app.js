@@ -170,6 +170,16 @@
   // neither failures nor stops. Any other refusal or block after the merge
   // (a reopened issue) stays visible as a problem.
   const CLOSURE_STEPS = { 'issue-closed': true, 'after-issue-closed': true };
+  // A rejection the server labels after-work-stopped refused a later revision
+  // (trigger label removed or issue closed) after the issue's work had
+  // already been refused or stopped. It stays visible as its own admission
+  // bar and in the detail panel, but it did not end the work: it is never the
+  // lane's final stage and, like the closure steps, never counts as a
+  // failure, stop or problem, so the lane keeps the stage and reason that
+  // ended the work (for example verification · comparison-failed).
+  const AFTER_STOP = 'after-work-stopped';
+  const afterStop = (s) => s.stage === 'admission' && !!s.terminal && s.terminal.step === AFTER_STOP;
+  const quiet = (e) => e.postDelivery || e.step === AFTER_STOP;
   function markPostDelivery(lane, list, merges) {
     lane.closed = [];
     for (const s of list) s.postDelivery = false;
@@ -267,7 +277,7 @@
     const after = lastMerge ? list.filter((s) => !s.postDelivery && s.first >= lastMerge.end) : list;
     const open = after.filter((s) => s.open && s.outcome !== 'quarantined');
     const problem = after.filter((s) => s.outcome === 'quarantined' || (s.outcome === 'blocked' && (s.open || s.stage === 'admission'))).pop();
-    const lastTerminal = after.filter((s) => s.end !== null && !INSTANT[s.stage]).sort((a, b) => a.end - b.end).pop();
+    const lastTerminal = after.filter((s) => s.end !== null && !INSTANT[s.stage] && !afterStop(s)).sort((a, b) => a.end - b.end).pop();
     lane.final = null;
     if (problem) { lane.status = 'blocked'; lane.final = problem; }
     else if (open.length) lane.status = 'inflight';
@@ -282,7 +292,7 @@
     // Sorting uses the newest event, not the end of an open bar (which is now).
     lane.lastActivity = lane.events.length ? lane.events[lane.events.length - 1].t : lane.first;
     lane.delivery = merged ? merged.end - lane.first : null;
-    lane.stopped = list.filter((s) => !s.postDelivery && (s.outcome === 'failed' || s.outcome === 'stopped-safely')).length;
+    lane.stopped = list.filter((s) => !s.postDelivery && !afterStop(s) && (s.outcome === 'failed' || s.outcome === 'stopped-safely')).length;
     lane.hasOpen = list.some((s) => s.open);
     lane.dirty = false;
   }
@@ -418,7 +428,7 @@
     const lat = Array.from({ length: BUCKETS }, () => []), stops = new Array(BUCKETS).fill(0), delivered = new Array(BUCKETS).fill(0);
     const at = (t) => Math.floor((t - t0) / width);
     for (const l of all) for (const e of l.events) {
-      if (e.t < t0 || e.t >= t1 || e.postDelivery) continue;
+      if (e.t < t0 || e.t >= t1 || quiet(e)) continue;
       const i = at(e.t);
       if (e.step === 'model-call' && e.kind === 'progressed' && e.latencyMs) lat[i].push(e.latencyMs);
       else if (e.kind === 'failed' || e.kind === 'stopped-safely') stops[i]++;
@@ -485,7 +495,7 @@
     const counts = new Array(n).fill(0);
     for (const l of all) for (const e of l.events) {
       if (e.t < t0 || e.t >= t1) continue;
-      if (e.postDelivery) continue;
+      if (quiet(e)) continue;
       if (e.kind === 'failed' || e.kind === 'stopped-safely' || e.kind === 'degraded' || e.kind === 'retried' || e.kind === 'quarantined' || e.kind === 'blocked') counts[Math.floor((e.t - t0) / width)]++;
     }
     // A burst window is ~15 minutes (at least one bucket).
@@ -553,7 +563,7 @@
   const PROBLEM_KINDS = { failed: true, 'stopped-safely': true, degraded: true, quarantined: true, blocked: true, retried: true };
   let feedShown = 0;
   function feedMatches(e, q, kind) {
-    if (kind === 'problems' && (e.postDelivery || (!PROBLEM_KINDS[e.kind] && e.diagnostic !== 'stale-wait'))) return false;
+    if (kind === 'problems' && (quiet(e) || (!PROBLEM_KINDS[e.kind] && e.diagnostic !== 'stale-wait'))) return false;
     if (kind === 'lifecycle' && e.kind === 'progressed') return false;
     if (!q) return true;
     const hay = ('#' + (e.issue || '') + ' ' + (e.repository || '') + ' ' + e.component + ' ' + stageName(e.stage) + ' ' + e.stage + ' ' + e.kind + ' ' + (e.step || '') + ' ' + (e.diagnostic || '')).toLowerCase();
@@ -578,7 +588,7 @@
     list.textContent = '';
     if (!$('feed-every').checked) return renderFeedGrouped(list, sorted);
     for (const e of sorted.slice(0, 300)) {
-      const li = html('li', !e.postDelivery && (PROBLEM_KINDS[e.kind] || e.diagnostic) ? 'problem' : '', null, list);
+      const li = html('li', !quiet(e) && (PROBLEM_KINDS[e.kind] || e.diagnostic) ? 'problem' : '', null, list);
       li.tabIndex = 0;
       li.dataset.key = laneKey(e);
       li.dataset.id = e.id;
@@ -605,7 +615,7 @@
       if (rows.length >= 300) break;
     }
     for (const r of rows) {
-      const e = r.e, problem = !e.postDelivery && (PROBLEM_KINDS[e.kind] || e.diagnostic === 'stale-wait');
+      const e = r.e, problem = !quiet(e) && (PROBLEM_KINDS[e.kind] || e.diagnostic === 'stale-wait');
       const li = html('li', r.group ? 'progress' : problem ? 'problem' : 'transition', null, list);
       li.tabIndex = 0;
       li.dataset.key = laneKey(e);
@@ -1372,6 +1382,7 @@
     const gap = state.gap ? t('src.gap') : '';
     if (!s) return setSource(t('src.connected') + gap, gap ? 'down' : 'live');
     const source = s.source === 'fixture' ? t('src.fixture') : t('src.journal');
+    if (!s.healthy && s.problem === 'journal-connecting') return setSource(t('src.connecting', { source }), 'down');
     if (!s.healthy) return setSource(t('src.unavailable', { source }) + gap, 'down');
     const when = s.observedAt ? t('src.read', { t: fmtClock(Date.parse(s.observedAt), true) }) : '';
     setSource(t('src.live', { source }) + (s.problem === 'window-truncated' ? t('src.truncated') : '') + when + gap, gap ? 'down' : 'live');
