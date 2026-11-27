@@ -137,6 +137,10 @@ and add no new dependency: verification runs offline with only what its image
 already provides, so a test that imports a package the image lacks fails. The
 repository's own test suite then runs in independent offline verification, which
 requires a test that fails on the current code and passes with your change.
+Because you cannot run the tests, check every expected value by hand against the
+requested behaviour before you finish (count, sum or trace each case step by
+step), and prefer small inputs whose result is obvious: a wrong expected value
+fails verification even when the code is right.
 `
 	if v := a.Verification; v != nil {
 		guidance += fmt.Sprintf("Verification runs this command (it cannot run in this workspace) from %s:\n%s\n", commandDirectory(v.WorkingDir), shellCommand(v.Command))

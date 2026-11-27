@@ -41,7 +41,7 @@ func TestOfflineWorkspaceGuidanceNamesFrameworkAndVerificationCommand(t *testing
 	a.Workspace = WorkspaceOfflineTests
 	plain := BuildPrompt(a, "policy")
 	flat := strings.Join(strings.Fields(plain), " ")
-	for _, rule := range []string{"same test framework, imports and conventions as the repository's existing tests", "add no new dependency", "only what its image already provides"} {
+	for _, rule := range []string{"same test framework, imports and conventions as the repository's existing tests", "add no new dependency", "only what its image already provides", "check every expected value by hand", "a wrong expected value fails verification"} {
 		if !strings.Contains(flat, rule) {
 			t.Fatal("framework guidance missing", rule)
 		}
