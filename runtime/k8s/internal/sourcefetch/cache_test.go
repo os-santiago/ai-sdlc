@@ -110,7 +110,7 @@ func TestCacheCancellationAndUnverifiedSourceCannotPopulate(t *testing.T) {
 		b.Files[0].Path = "../escape"
 		return b, nil
 	}
-	if _, e := c.Fetch(context.Background(), "fixture/product", testSHA); e == nil || c.raw != nil {
+	if _, e := c.Fetch(context.Background(), "fixture/product", testSHA); e == nil || c.bundle != nil {
 		t.Fatal("invalid bundle cached")
 	}
 	ctx, cancel := context.WithCancel(context.Background())

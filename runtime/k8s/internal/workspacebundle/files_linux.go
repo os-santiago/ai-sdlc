@@ -1,6 +1,7 @@
 package workspacebundle
 
 import (
+	"crypto/sha256"
 	"errors"
 	"io"
 	"os"
@@ -75,25 +76,174 @@ func writeFile(root int, f File) error {
 	return nil
 }
 
+// ImportFrom streams one bundle from input into parent/repository and returns
+// its identity. It holds the paths and one decoded file at a time, never the
+// whole wire document or tree. Files are written to a fresh staging directory
+// next to repository; repository appears, by one rename, only after the whole
+// document was parsed, the tree checks passed, the wire SHA-256 equals
+// expectedDigest and the document names sourceSHA. Any refusal leaves at most
+// the staging directory: the workspace is then failed and non-reusable, as
+// after any partial import, and its owner discards the volume.
+func ImportFrom(parent string, input io.Reader, expectedDigest, sourceSHA string) (Summary, error) {
+	if input == nil || !ValidDigest(expectedDigest) || !ValidSourceSHA(sourceSHA) {
+		return Summary{}, ErrInvalid
+	}
+	fd, e := unix.Open(parent, dirFlags, 0)
+	if e != nil {
+		return Summary{}, ErrInvalid
+	}
+	defer unix.Close(fd)
+	var st unix.Stat_t
+	if unix.Fstatat(fd, "repository", &st, unix.AT_SYMLINK_NOFOLLOW) != unix.ENOENT {
+		return Summary{}, ErrInvalid
+	}
+	if unix.Mkdirat(fd, stagingName, 0750) != nil {
+		return Summary{}, ErrInvalid
+	}
+	staging, e := unix.Openat(fd, stagingName, dirFlags, 0)
+	if e != nil {
+		return Summary{}, ErrInvalid
+	}
+	defer unix.Close(staging)
+	wire := newWireReader(input)
+	summary, _, e := scan(wire, true, func(f File) error { return writeFile(staging, f) })
+	if e != nil || wire.err != nil || wire.digest() != expectedDigest || summary.SourceSHA != sourceSHA {
+		return Summary{}, ErrInvalid
+	}
+	if unix.Fsync(staging) != nil || unix.Renameat(fd, stagingName, fd, "repository") != nil || unix.Fsync(fd) != nil {
+		return Summary{}, ErrInvalid
+	}
+	return summary, nil
+}
+
+// stagingName is the fixed directory ImportFrom fills before renaming it to
+// repository. Its leading dot keeps it apart from the repository name.
+const stagingName = ".repository-import"
+
 // Export returns untrusted bytes, not an atomic snapshot or provenance proof.
 // The external controller must independently establish writer termination first.
 // Root .git is never opened; other Git metadata, links and special nodes fail.
 func Export(parent, sourceSHA string) (Bundle, error) {
 	b := Bundle{Version: Version, SourceSHA: sourceSHA, Files: make([]File, 0)}
+	e := walkTree(parent, sourceSHA, func(f File) error {
+		f.Data = append(make([]byte, 0, len(f.Data)), f.Data...)
+		b.Files = append(b.Files, f)
+		return nil
+	})
+	if e != nil {
+		return Bundle{}, e
+	}
+	return b, b.Validate()
+}
+
+// ExportTo writes Encode(Export(parent, sourceSHA)) to w while reading one file
+// at a time. Every refusal reason is found before the first byte is written; a
+// file that changes between the listing and its read fails with a partial
+// document on w, which the caller must discard (the helper exits nonzero).
+func ExportTo(parent, sourceSHA string, w io.Writer) error {
+	var enc *encoder
+	return walkTree(parent, sourceSHA, func(f File) error {
+		if enc == nil {
+			var e error
+			if enc, e = newEncoder(w, sourceSHA); e != nil {
+				return ErrInvalid
+			}
+		}
+		return enc.file(f)
+	}, func() error {
+		if enc == nil {
+			var e error
+			if enc, e = newEncoder(w, sourceSHA); e != nil {
+				return ErrInvalid
+			}
+		}
+		return enc.end()
+	})
+}
+
+// ExportSummary returns the identity Export(parent, sourceSHA) would have,
+// tree digest included, holding one file's bytes at a time.
+func ExportSummary(parent, sourceSHA string) (Summary, error) {
+	s := Summary{SourceSHA: sourceSHA}
+	entries := []entry{}
+	e := walkTree(parent, sourceSHA, func(f File) error {
+		entries = append(entries, entry{path: f.Path, mode: f.Mode, size: len(f.Data), sum: sha256.Sum256(f.Data)})
+		s.ContentBytes += len(f.Data)
+		return nil
+	})
+	if e != nil {
+		return Summary{}, e
+	}
+	s.Files, s.TreeDigest = len(entries), treeDigest(sourceSHA, entries)
+	return s, nil
+}
+
+// listed is one regular file found by the listing pass, with the state its
+// read must still observe.
+type listed struct {
+	path string
+	mode uint32
+	st   unix.Stat_t
+}
+
+// walkTree lists parent/repository without reading file contents, checks
+// every bound and the tree, then reads the files in path order and passes
+// each to visit, followed by done (when given). A read reopens the file
+// component by component without following links and requires the same
+// device, inode, mode, link count, owner, size and change times as the
+// listing, before and after reading. visit must copy Data to keep it.
+func walkTree(parent, sourceSHA string, visit func(File) error, done ...func() error) error {
 	if !ValidSourceSHA(sourceSHA) {
-		return b, ErrInvalid
+		return ErrInvalid
 	}
 	fd, e := unix.Open(parent, dirFlags, 0)
 	if e != nil {
-		return b, ErrInvalid
+		return ErrInvalid
 	}
 	defer unix.Close(fd)
 	root, e := unix.Openat(fd, "repository", dirFlags, 0)
 	if e != nil {
-		return b, ErrInvalid
+		return ErrInvalid
 	}
 	defer unix.Close(root)
-	nodes, total := 0, 0
+	files, e := listTree(root)
+	if e != nil {
+		var refused exportRefused
+		if errors.As(e, &refused) {
+			return refused
+		}
+		return ErrInvalid
+	}
+	names := make(map[string]bool, len(files))
+	for _, f := range files {
+		names[f.path] = true
+	}
+	if checkTree(names) != nil {
+		return ErrInvalid
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
+	buffer := make([]byte, 0, 64*1024)
+	for _, f := range files {
+		data, e := readListed(root, f, buffer)
+		if e != nil {
+			return ErrInvalid
+		}
+		buffer = data[:0]
+		if visit(File{Path: f.path, Mode: f.mode, Data: data}) != nil {
+			return ErrInvalid
+		}
+	}
+	for _, finish := range done {
+		if finish() != nil {
+			return ErrInvalid
+		}
+	}
+	return nil
+}
+
+func listTree(root int) ([]listed, error) {
+	var files []listed
+	nodes, total := 0, int64(0)
 	var walk func(int, string) error
 	walk = func(dir int, prefix string) error {
 		copied, e := unix.Dup(dir)
@@ -146,27 +296,17 @@ func Export(parent, sourceSHA string) (Bundle, error) {
 						return e
 					}
 				case unix.S_IFREG:
-					if len(b.Files) >= MaxFiles {
-						unix.Close(child)
+					unix.Close(child)
+					if len(files) >= MaxFiles {
 						return exportRefused{ExportTooMany}
 					}
 					if st.Nlink != 1 || st.Mode&07000 != 0 {
-						unix.Close(child)
 						return exportRefused{ExportNode}
 					}
 					if st.Size < 0 || st.Size > MaxFileBytes {
-						unix.Close(child)
 						return exportRefused{ExportFileSize}
 					}
-					f := os.NewFile(uintptr(child), "workspace-file")
-					data, e := io.ReadAll(io.LimitReader(f, MaxFileBytes+1))
-					var after unix.Stat_t
-					statErr := unix.Fstat(child, &after)
-					closeErr := f.Close()
-					if e != nil || statErr != nil || closeErr != nil || len(data) > MaxFileBytes || int64(len(data)) != st.Size || !sameFileState(st, after) {
-						return ErrInvalid
-					}
-					total += len(data)
+					total += st.Size
 					if total > MaxContentBytes {
 						return exportRefused{ExportTotalSize}
 					}
@@ -174,7 +314,7 @@ func Export(parent, sourceSHA string) (Bundle, error) {
 					if st.Mode&0100 != 0 {
 						mode = 0755
 					}
-					b.Files = append(b.Files, File{Path: name, Mode: mode, Data: data})
+					files = append(files, listed{path: name, mode: mode, st: st})
 				default:
 					unix.Close(child)
 					return exportRefused{ExportNode}
@@ -187,14 +327,51 @@ func Export(parent, sourceSHA string) (Bundle, error) {
 		return nil
 	}
 	if e := walk(root, ""); e != nil {
-		var refused exportRefused
-		if errors.As(e, &refused) {
-			return Bundle{}, refused
-		}
-		return Bundle{}, ErrInvalid
+		return nil, e
 	}
-	sort.Slice(b.Files, func(i, j int) bool { return b.Files[i].Path < b.Files[j].Path })
-	return b, b.Validate()
+	return files, nil
+}
+
+// readListed reopens one listed file below root without following links and
+// reads exactly its listed size into buffer's storage when it fits.
+func readListed(root int, f listed, buffer []byte) ([]byte, error) {
+	parent, e := unix.Dup(root)
+	if e != nil {
+		return nil, ErrInvalid
+	}
+	defer func() { unix.Close(parent) }()
+	parts := strings.Split(f.path, "/")
+	for _, part := range parts[:len(parts)-1] {
+		next, e := unix.Openat(parent, part, dirFlags, 0)
+		if e != nil {
+			return nil, ErrInvalid
+		}
+		unix.Close(parent)
+		parent = next
+	}
+	child, e := unix.Openat(parent, parts[len(parts)-1], unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if e != nil {
+		return nil, ErrInvalid
+	}
+	file := os.NewFile(uintptr(child), "workspace-file")
+	defer file.Close()
+	var before, after unix.Stat_t
+	if unix.Fstat(child, &before) != nil || !sameFileState(f.st, before) {
+		return nil, ErrInvalid
+	}
+	size := int(f.st.Size)
+	if cap(buffer) < size+1 {
+		buffer = make([]byte, 0, size+1)
+	}
+	data := buffer[:size+1]
+	n, e := io.ReadFull(file, data)
+	if e != io.ErrUnexpectedEOF && !(e == io.EOF && size == 0) || n != size {
+		return nil, ErrInvalid
+	}
+	if unix.Fstat(child, &after) != nil || !sameFileState(f.st, after) {
+		return nil, ErrInvalid
+	}
+	return data[:size], nil
 }
 
 func sameFileState(a, b unix.Stat_t) bool {

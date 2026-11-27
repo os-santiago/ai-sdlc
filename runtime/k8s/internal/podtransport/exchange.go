@@ -1,7 +1,6 @@
 package podtransport
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -137,9 +136,11 @@ func (s *Session) exchangeFixed(ctx context.Context, operation helperOperation, 
 			<-written
 		}
 	}()
-	var stdout, stderr, status bytes.Buffer
+	// Each channel keeps its frames and joins them once at the end: a growing
+	// buffer would briefly hold up to three times a large export.
+	var stdout, stderr, status frames
 	limits := map[byte]int{protocol.StreamStdOut: operation.outputLimit, protocol.StreamStdErr: 8192, protocol.StreamErr: 8192}
-	buffers := map[byte]*bytes.Buffer{protocol.StreamStdOut: &stdout, protocol.StreamStdErr: &stderr, protocol.StreamErr: &status}
+	buffers := map[byte]*frames{protocol.StreamStdOut: &stdout, protocol.StreamStdErr: &stderr, protocol.StreamErr: &status}
 	closed := false
 	for frames := 0; frames < operation.frames; frames++ {
 		kind, reader, err := conn.NextReader()
@@ -172,7 +173,7 @@ func (s *Session) exchangeFixed(ctx context.Context, operation helperOperation, 
 		if err != nil || len(raw) > remaining {
 			return nil, 0, ErrTransport
 		}
-		buffer.Write(raw)
+		buffer.add(raw)
 	}
 	writeErr := <-written
 	joined = true
@@ -461,3 +462,30 @@ type publicationError struct {
 func (e publicationError) Error() string            { return "mailbox publication failed at " + e.stage }
 func (e publicationError) Unwrap() error            { return e.cause }
 func (e publicationError) PublicationStage() string { return e.stage }
+
+// frames accumulates one channel's messages without regrowing a buffer.
+type frames struct {
+	parts [][]byte
+	size  int
+}
+
+func (f *frames) add(p []byte) {
+	if len(p) > 0 {
+		f.parts = append(f.parts, p)
+		f.size += len(p)
+	}
+}
+func (f *frames) Len() int { return f.size }
+
+// Bytes joins the frames into one exact allocation and releases them.
+func (f *frames) Bytes() []byte {
+	if f.size == 0 {
+		return nil
+	}
+	joined := make([]byte, 0, f.size)
+	for _, p := range f.parts {
+		joined = append(joined, p...)
+	}
+	f.parts = nil
+	return joined
+}

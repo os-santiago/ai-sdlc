@@ -199,9 +199,12 @@ components:
     name: release-manager
     digest: ""
     port: 8084
+    # Publication fetches the pinned source and applies the candidate: up to
+    # two trees at the workspace bundle limit of 128 MiB of content
+    # (docs/operations/large-repositories.md).
     resources:
       requests: {cpu: 25m, memory: 32Mi}
-      limits: {cpu: 250m, memory: 128Mi}
+      limits: {cpu: 250m, memory: 512Mi}
   relay:
     name: relay
     digest: ""

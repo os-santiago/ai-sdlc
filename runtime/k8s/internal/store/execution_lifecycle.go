@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"regexp"
 	"time"
+
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
 var lifecycleDigest = regexp.MustCompile(`^[a-f0-9]{64}$`)
@@ -72,7 +74,7 @@ func lockLifecycleClaim(ctx context.Context, tx *sql.Tx, claim ExecutionClaim) e
 // command and reviewed profile bound the nonrenewable lifetime. No existing
 // reservation is adopted, even by the same token or after a lost COMMIT ACK.
 func (db *DB) ReserveLifecycle(ctx context.Context, claim ExecutionClaim, binding LifecycleBinding) (Lifecycle, error) {
-	if binding.SourceBytes < 1 || binding.SourceBytes > 32*1024*1024 || binding.MaxSeconds < 1 || binding.MaxSeconds > 900 || binding.StartSeconds < 0 || binding.StartSeconds > MaxStartSeconds || !lifecycleDigest.MatchString(binding.BindingDigest) || !lifecycleDigest.MatchString(binding.SourceDigest) {
+	if binding.SourceBytes < 1 || binding.SourceBytes > workspacebundle.MaxWireBytes || binding.MaxSeconds < 1 || binding.MaxSeconds > 900 || binding.StartSeconds < 0 || binding.StartSeconds > MaxStartSeconds || !lifecycleDigest.MatchString(binding.BindingDigest) || !lifecycleDigest.MatchString(binding.SourceDigest) {
 		return Lifecycle{}, ErrExecution
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -179,7 +181,7 @@ func (db *DB) CompleteLifecycleEffect(ctx context.Context, e LifecycleEffect, re
 				return ErrExecution
 			}
 		case "export":
-			if result.UID != podUID || !lifecycleDigest.MatchString(result.Digest) || result.Bytes < 1 || result.Bytes > 32*1024*1024 || result.ExitCode == nil {
+			if result.UID != podUID || !lifecycleDigest.MatchString(result.Digest) || result.Bytes < 1 || result.Bytes > workspacebundle.MaxWireBytes || result.ExitCode == nil {
 				return ErrExecution
 			}
 		}

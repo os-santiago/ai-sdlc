@@ -101,19 +101,14 @@ func (l *Lifecycle) Unchanged(exported []byte) bool {
 	if l == nil || len(exported) < 1 || len(exported) > workspacebundle.MaxWireBytes {
 		return false
 	}
-	result, err := workspacebundle.Decode(exported)
-	if err != nil {
-		return false
-	}
-	tree, err := result.TreeDigest()
+	// Inspect binds each tree without decoding a copy of it.
+	result, err := workspacebundle.Inspect(exported)
 	if err != nil {
 		return false
 	}
 	for _, raw := range [][]byte{l.prepared.originalSource, l.prepared.source} {
-		if base, e := workspacebundle.Decode(raw); e == nil {
-			if digest, e := base.TreeDigest(); e == nil && digest == tree {
-				return true
-			}
+		if base, e := workspacebundle.Inspect(raw); e == nil && base.TreeDigest == result.TreeDigest {
+			return true
 		}
 	}
 	return false

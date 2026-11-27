@@ -130,10 +130,12 @@ succeeded pod, from the same container instance, as exactly one line.
 ## Limits for adopters
 
 - `repeat` is 1–3 and the test timeout 30–600 seconds.
-- The imported tree is bounded by the workspace-bundle limits (16 MiB of
-  content, 4096 files) and has no `.git`: builds that need git metadata fail.
+- The imported tree is bounded by the workspace-bundle limits (128 MiB of
+  content, 16,384 files, 4 MiB per file; see
+  [Large repositories](../operations/large-repositories.md)) and has no `.git`:
+  builds that need git metadata fail.
   Dependencies must be vendored or in the toolchain image (no network).
-- The workspace volume holds the tree and any build output (256 MiB).
+- The workspace volume holds the tree and any build output (1 GiB, on disk).
 - At most 512 test cases, a 4 MiB report and 16 levels of suite nesting.
 - The verifier namespace's resource quota bounds what a run can request; the
   installer must size it for the manifest (slice 7).

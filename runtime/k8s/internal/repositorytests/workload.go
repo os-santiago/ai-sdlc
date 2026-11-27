@@ -23,9 +23,19 @@ const (
 	ScratchDirectory = "/tmp"
 	// PullSeconds bounds scheduling, image pulls and the runner install
 	// before the runner starts waiting for its marker (ReadySeconds).
-	PullSeconds     = 300
-	workspaceVolume = "256Mi"
+	PullSeconds = 300
+	// WorkspaceVolume holds the imported tree (up to the bundle's 128 MiB
+	// of content and 32,768 nodes) and the build output the tests write
+	// next to the sources; a multi-module build needs several times the
+	// tree.
+	WorkspaceVolume = "1Gi"
 	runnerVolume    = "128Mi"
+	// TransferMemory is the transfer sidecar's memory limit, unchanged by
+	// the larger bundle bounds: its streamed import and tree check hold the
+	// paths and one file, never the tree (at most about 40 MiB of heap, for
+	// 16,384 paths of 1 KiB and a 4 MiB file), and the helper sets a soft
+	// Go memory limit below it. The verifier quota counts it per pod.
+	TransferMemory = "64Mi"
 	// MarginSeconds covers tree verification, the report and termination.
 	MarginSeconds = 60
 )
@@ -174,7 +184,7 @@ func CompilePod(p Pod) (Workload, error) {
 	security := map[string]any{"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "readOnlyRootFilesystem": true, "allowPrivilegeEscalation": false, "capabilities": map[string]any{"drop": []string{"ALL"}}}
 	workspace := map[string]any{"name": "workspace", "mountPath": "/workspaces"}
 	identity := map[string]any{"name": "pod-identity", "mountPath": "/var/run/ai-sdlc/pod", "readOnly": true}
-	small := map[string]any{"requests": map[string]any{"cpu": "20m", "memory": "32Mi"}, "limits": map[string]any{"cpu": "200m", "memory": "64Mi", "ephemeral-storage": "64Mi"}}
+	small := map[string]any{"requests": map[string]any{"cpu": "20m", "memory": "32Mi"}, "limits": map[string]any{"cpu": "200m", "memory": TransferMemory, "ephemeral-storage": "64Mi"}}
 	// The runner volume is disk-backed: a memory-backed copy would be charged
 	// to the init container's small memory limit.
 	copying := map[string]any{"requests": map[string]any{"cpu": "20m", "memory": "32Mi"}, "limits": map[string]any{"cpu": "200m", "memory": "64Mi", "ephemeral-storage": "128Mi"}}
@@ -188,7 +198,7 @@ func CompilePod(p Pod) (Workload, error) {
 	// The pod is evicted when its disk use exceeds the sum of its container
 	// limits, so the tests container's limit also covers the shared volumes.
 	disk := resource.MustParse(p.Verification.EphemeralStorage)
-	disk.Add(resource.MustParse(workspaceVolume))
+	disk.Add(resource.MustParse(WorkspaceVolume))
 	disk.Add(resource.MustParse(runnerVolume))
 	quota := map[string]any{"cpu": p.Verification.CPU, "memory": p.Verification.Memory, "ephemeral-storage": disk.String()}
 	command := []string{RunnerPath, "run", SettingsDirectory + "/verification.json", ScratchDirectory, p.SourceSHA, p.TreeSHA256, fmt.Sprint(Repetitions(p.Run, p.Verification))}
@@ -212,7 +222,7 @@ func CompilePod(p Pod) (Workload, error) {
 		"volumes": []any{
 			// The imported tree is bounded by the bundle limits; the rest is
 			// room for build output the tests write next to the sources.
-			map[string]any{"name": "workspace", "emptyDir": map[string]any{"sizeLimit": workspaceVolume}},
+			map[string]any{"name": "workspace", "emptyDir": map[string]any{"sizeLimit": WorkspaceVolume}},
 			map[string]any{"name": "scratch", "emptyDir": map[string]any{"sizeLimit": p.Verification.EphemeralStorage}},
 			map[string]any{"name": "runner", "emptyDir": map[string]any{"sizeLimit": runnerVolume}},
 			map[string]any{"name": "settings", "configMap": map[string]any{"name": configName, "defaultMode": 0o444}},

@@ -4,6 +4,7 @@ package sourcefetch
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"errors"
@@ -16,30 +17,71 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
-const MaxArchiveBytes = 32 * 1024 * 1024
+// MaxArchiveBytes bounds the compressed archive and MaxExpandedArchiveBytes
+// its tar stream: the workspace content plus, per node, a 512-byte header and
+// less than 512 bytes of padding, and 1 MiB for the global header, the end
+// blocks and record padding. Neither is ever held in memory: the archive is
+// decompressed and parsed as it arrives, keeping one file at a time besides
+// the bundle being built.
+const (
+	MaxArchiveBytes         = 96 * 1024 * 1024
+	MaxExpandedArchiveBytes = workspacebundle.MaxContentBytes + workspacebundle.MaxNodes*1024 + 1024*1024
+)
 
 var ErrSource = errors.New("pinned source unavailable or outside archive contract")
+
+// countingReader counts bytes read, refuses more than limit, and keeps the
+// last 1024 bytes, which the tar end-of-archive check needs.
+type countingReader struct {
+	r     io.Reader
+	n     int64
+	limit int64
+	tail  [1024]byte
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	if c.n > c.limit {
+		return 0, ErrSource
+	}
+	if n >= len(c.tail) {
+		copy(c.tail[:], p[n-len(c.tail):n])
+	} else {
+		copy(c.tail[:], c.tail[n:])
+		copy(c.tail[len(c.tail)-n:], p[:n])
+	}
+	return n, err
+}
 
 // DecodeArchive consumes exactly one gzip member and one bounded tar archive.
 // Git archive's global PAX commit comment must match the requested immutable
 // SHA. This is a consistency binding, not an independent signature/provenance.
 func DecodeArchive(raw []byte, sourceSHA string) (workspacebundle.Bundle, error) {
+	if len(raw) == 0 || len(raw) > MaxArchiveBytes {
+		return workspacebundle.Bundle{Version: workspacebundle.Version, SourceSHA: sourceSHA, Files: []workspacebundle.File{}}, ErrSource
+	}
+	return DecodeArchiveFrom(bytes.NewReader(raw), sourceSHA)
+}
+
+// DecodeArchiveFrom is DecodeArchive over a stream: the compressed bytes are
+// counted against MaxArchiveBytes and the tar stream against
+// MaxExpandedArchiveBytes as they are read, so neither is buffered whole.
+func DecodeArchiveFrom(raw io.Reader, sourceSHA string) (workspacebundle.Bundle, error) {
 	b := workspacebundle.Bundle{Version: workspacebundle.Version, SourceSHA: sourceSHA, Files: []workspacebundle.File{}}
-	if len(raw) == 0 || len(raw) > MaxArchiveBytes || !workspacebundle.ValidSourceSHA(sourceSHA) {
+	if raw == nil || !workspacebundle.ValidSourceSHA(sourceSHA) {
 		return b, ErrSource
 	}
-	compressed := bytes.NewReader(raw)
+	compressedCount := &countingReader{r: raw, limit: MaxArchiveBytes}
+	// A ByteReader keeps gzip from reading past its member, so the bytes left
+	// in compressed afterwards are exactly the trailing data.
+	compressed := bufio.NewReader(compressedCount)
 	gz, err := gzip.NewReader(compressed)
 	if err != nil {
 		return b, ErrSource
 	}
 	gz.Multistream(false)
-	expanded, err := io.ReadAll(io.LimitReader(gz, MaxArchiveBytes+1))
-	closeErr := gz.Close()
-	if err != nil || closeErr != nil || len(expanded) > MaxArchiveBytes || compressed.Len() != 0 {
-		return b, ErrSource
-	}
-	input := bytes.NewReader(expanded)
+	input := &countingReader{r: gz, limit: MaxExpandedArchiveBytes}
 	reader := tar.NewReader(input)
 	root := ""
 	global := false
@@ -50,13 +92,12 @@ func DecodeArchive(raw []byte, sourceSHA string) (workspacebundle.Bundle, error)
 	files := map[string]bool{}
 	endPadding := 0
 	for {
-		beforeNext := input.Len()
+		beforeNext := input.n
 		h, err := reader.Next()
 		if err == io.EOF {
-			consumed := beforeNext - input.Len()
-			end := len(expanded) - input.Len()
+			consumed := input.n - beforeNext
 			var zeros [1024]byte
-			if consumed != endPadding+1024 || end < 1024 || !bytes.Equal(expanded[end-1024:end], zeros[:]) {
+			if consumed != int64(endPadding+1024) || input.n < 1024 || input.tail != zeros {
 				return b, ErrSource
 			}
 			break
@@ -147,8 +188,12 @@ func DecodeArchive(raw []byte, sourceSHA string) (workspacebundle.Bundle, error)
 			if total > workspacebundle.MaxContentBytes {
 				return b, ErrSource
 			}
-			data, err := io.ReadAll(io.LimitReader(reader, h.Size+1))
-			if err != nil || int64(len(data)) != h.Size {
+			data := make([]byte, h.Size)
+			var extra [1]byte
+			if _, err := io.ReadFull(reader, data); err != nil {
+				return b, ErrSource
+			}
+			if n, err := reader.Read(extra[:]); n != 0 || err != io.EOF {
 				return b, ErrSource
 			}
 			// Git tracks only regular/executable identity. GitHub archives use
@@ -164,11 +209,27 @@ func DecodeArchive(raw []byte, sourceSHA string) (workspacebundle.Bundle, error)
 	}
 	// tar.Reader permits block padding; only zero padding after its end marker
 	// is accepted. Concatenated tar/gzip archives and trailing junk are denied.
-	tail, _ := io.ReadAll(input)
-	for _, v := range tail {
-		if v != 0 {
+	// Reading to the end of the member also verifies the gzip checksum.
+	var block [32 * 1024]byte
+	for {
+		n, err := input.Read(block[:])
+		for _, v := range block[:n] {
+			if v != 0 {
+				return b, ErrSource
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
 			return b, ErrSource
 		}
+	}
+	if gz.Close() != nil {
+		return b, ErrSource
+	}
+	if _, err := compressed.ReadByte(); err != io.EOF {
+		return b, ErrSource
 	}
 	if !global || root == "" || b.Validate() != nil {
 		return b, ErrSource

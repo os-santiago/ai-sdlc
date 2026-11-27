@@ -17,13 +17,18 @@ The parser checks encoded data size before allocating decoded bytes.
 
 | Limit | Maximum |
 | --- | ---: |
-| Wire bytes | 32 MiB |
-| Decoded file bytes in total | 16 MiB |
+| Wire bytes | 192 MiB |
+| Decoded file bytes in total | 128 MiB |
 | Individual file | 4 MiB |
-| Files | 4,096 |
-| Files plus distinct directory prefixes / visited nodes | 8,192 |
+| Files | 16,384 |
+| Files plus distinct directory prefixes / visited nodes | 32,768 |
 | Path bytes / segment bytes / depth | 1,024 / 255 / 32 |
 | Helper process, including blocked stdin/stdout/stderr | 60 seconds |
+
+The bounds were raised from 32 MiB / 16 MiB / 4,096 / 8,192 for large
+repositories; [Large repositories](../operations/large-repositories.md) lists
+where size matters and what holding a tree costs. The encoder writes exactly
+the bytes `json.Marshal` produced, so digests are unchanged.
 
 Paths must be relative normalized POSIX paths with valid UTF-8, without control
 characters, replacement runes, backslashes, `.`/`..`, empty segments or any
@@ -41,18 +46,29 @@ snapshot, not a filesystem backup.
 
 Neither command accepts a path, URL, shell fragment or credentials. Both compare
 the assigned UID with the read-only Downward API projection at
-`/var/run/ai-sdlc/pod/uid`. Import reads bounded stdin, verifies the exact wire
-SHA-256 and expected source commit, and creates `/workspaces/repository` only
-when it does not already exist. It uses directory descriptors, no-follow opens,
-exclusive file creation and permissions applied by descriptor. A partial import
-is a failed, non-reusable workspace; discard the owned Pod/volume instead of
-retrying over it. Success is reported only after all file writes and syncs.
+`/var/run/ai-sdlc/pod/uid`. Import streams bounded stdin: it holds the paths and
+one decoded file at a time, never the whole document or tree, so its memory does
+not grow with the repository. It refuses to start when `/workspaces/repository`
+exists, and writes each file into the fixed staging directory
+`/workspaces/.repository-import` with directory descriptors, no-follow opens,
+exclusive file creation and permissions applied by descriptor. Only after the
+whole document parsed, every bound and tree check passed, the exact wire SHA-256
+matched and the document named the expected source commit is the staging
+directory renamed to `repository`. A refused or partial import leaves at most
+the staging directory: it is a failed, non-reusable workspace; discard the owned
+Pod/volume instead of retrying over it. Success is reported only after all file
+writes, syncs and the rename.
 
 Export opens that fixed directory with no-follow traversal. It enumerates names
 in batches, counts all visited nodes, and inspects each through its directory
 descriptor. Visible links, special nodes, multiple hard links, oversized files
-and special permission bits fail. Reads are bounded and compare file identity,
-size, modification/change times and link count before and after reading.
+and special permission bits fail. This listing pass reads no content, so every
+refusal reason is known before the first output byte. The files are then read
+in path order and streamed to stdout one at a time: each is reopened component
+by component without following links, and its identity, owner, size,
+modification/change times and link count must equal the listing's before and
+after reading. A file changed in between fails the export with a nonzero exit,
+which voids the partial output.
 Root `.git` is never opened or exported. Regular-file permissions are normalized
 to Git's owner-executable bit. The helper does not configure providers or Git;
 project configuration files may travel as untrusted data, and future executors

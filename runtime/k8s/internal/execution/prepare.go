@@ -242,9 +242,13 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 			return Prepared{}, ErrAuthority
 		}
 	}
-	source, err := workspacebundle.Encode(bundle)
-	if err != nil {
-		return Prepared{}, ErrAuthority
+	// Without a repair the workspace source is the original source: share the
+	// immutable encoding instead of holding the same bytes twice.
+	source := originalSource
+	if c.Repair != nil {
+		if source, err = workspacebundle.Encode(bundle); err != nil {
+			return Prepared{}, ErrAuthority
+		}
 	}
 	assignment.TreeSHA256, err = bundle.TreeDigest()
 	if err != nil || (c.Repair != nil && assignment.TreeSHA256 != c.Repair.ParentTreeSHA256) {

@@ -295,14 +295,15 @@ func runWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		testRuns = map[string]*podtransport.TestsRun{}
 		for _, run := range repositorytests.RunNames() {
 			bundle, _ := trees.Tree(run)
-			raw, e := workspacebundle.Encode(bundle)
 			tree, treeErr := bundle.TreeDigest()
-			if e != nil || treeErr != nil {
+			if treeErr != nil {
 				return proof, ControllerError{stage}
 			}
 			p := repositorytests.Pod{Namespace: podtransport.VerifierNamespace, MailboxImage: mailboxImage, RuntimeClass: runtimeClass, VerificationID: c.ID(), WorkItemID: c.WorkItemID,
 				Run: run, SourceSHA: c.SourceSHA, TreeSHA256: tree, Verification: v}
-			planned, e := podtransport.PlanTestsRun(client, p, admission, raw, time.UnixMilli(c.ExpiresAt))
+			// The run shares the tree's bytes with source and encodes it only
+			// while importing, so three runs do not hold three wire copies.
+			planned, e := podtransport.PlanTestsRunTree(client, p, admission, bundle, time.UnixMilli(c.ExpiresAt))
 			if e != nil {
 				return proof, ControllerError{stage}
 			}

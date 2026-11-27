@@ -22,6 +22,8 @@ Start here:
   autonomous flow, derived from the journal, and its event contract.
 - [Database backup and restore](operations/backup-and-restore.md): the
   opt-in scheduled backup, checking a backup, and restoring it.
+- [Large repositories](operations/large-repositories.md): the workspace size
+  bounds, where a repository's size matters, and its memory and storage cost.
 
 Current operational documentation lives with the Kubernetes/OpenShift runtime:
 

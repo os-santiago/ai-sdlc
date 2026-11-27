@@ -76,13 +76,14 @@ func httpSourceError(response *http.Response) error {
 }
 
 // Cache owns at most one verified immutable source bundle (bounded by the bundle
-// codec). It stores no credential and confers no claim. Copies prevent a caller
-// from modifying a later result. Availability backoff suppresses repeated reads;
+// codec). It stores no credential and confers no claim. Deep copies prevent a
+// caller from modifying a later result; the cache holds the decoded tree once,
+// not a wire encoding plus a decoded copy per read. Availability backoff suppresses repeated reads;
 // restarting never resumes or replays an execution/model attempt.
 type Cache struct {
 	gate                        chan struct{}
 	repository, sha             string
-	raw                         []byte
+	bundle                      *workspacebundle.Bundle
 	failedRepository, failedSHA string
 	failure                     error
 	retryAt                     time.Time
@@ -117,8 +118,8 @@ func (c *Cache) Fetch(ctx context.Context, repository, sha string) (workspacebun
 	if ctx.Err() != nil {
 		return workspacebundle.Bundle{}, ErrSource
 	}
-	if c.repository == repository && c.sha == sha && c.raw != nil {
-		return workspacebundle.Decode(c.raw)
+	if c.repository == repository && c.sha == sha && c.bundle != nil {
+		return cloneBundle(*c.bundle), nil
 	}
 	if time.Now().Before(c.retryAt) && (RateLimited(c.failure) || c.failedRepository == repository && c.failedSHA == sha) {
 		return workspacebundle.Bundle{}, c.failure
@@ -142,12 +143,26 @@ func (c *Cache) Fetch(ctx context.Context, repository, sha string) (workspacebun
 	if ctx.Err() != nil || bundle.SourceSHA != sha || bundle.Validate() != nil {
 		return workspacebundle.Bundle{}, ErrSource
 	}
-	raw, e := workspacebundle.Encode(bundle)
-	if e != nil {
-		return workspacebundle.Bundle{}, ErrSource
-	}
-	c.repository, c.sha, c.raw = repository, sha, raw
+	kept := cloneBundle(bundle)
+	c.repository, c.sha, c.bundle = repository, sha, &kept
 	c.failure = nil
 	c.retryAt = time.Time{}
-	return workspacebundle.Decode(c.raw)
+	return bundle, nil
+}
+
+// cloneBundle copies every file's bytes into one allocation, so a copy costs
+// the content size once and shares nothing with its source.
+func cloneBundle(b workspacebundle.Bundle) workspacebundle.Bundle {
+	total := 0
+	for _, f := range b.Files {
+		total += len(f.Data)
+	}
+	storage := make([]byte, 0, total)
+	files := make([]workspacebundle.File, len(b.Files))
+	for i, f := range b.Files {
+		start := len(storage)
+		storage = append(storage, f.Data...)
+		files[i] = workspacebundle.File{Path: f.Path, Mode: f.Mode, Data: storage[start:len(storage):len(storage)]}
+	}
+	return workspacebundle.Bundle{Version: b.Version, SourceSHA: b.SourceSHA, Files: files}
 }

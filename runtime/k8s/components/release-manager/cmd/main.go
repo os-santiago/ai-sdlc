@@ -10,6 +10,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/execution"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/forge"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/memlimit"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergeflow"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergegate"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergerecovery"
@@ -35,6 +36,8 @@ import (
 )
 
 func main() {
+	// Large workspace trees: collect before the container limit (internal/memlimit).
+	memlimit.Apply()
 	c, e := bootstrap.Open(context.Background(), "release-manager")
 	if e != nil {
 		log.Fatal(e)

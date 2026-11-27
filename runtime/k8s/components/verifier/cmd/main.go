@@ -13,6 +13,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/delivery"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/execution"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/intake"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/memlimit"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelbroker"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/bootstrap"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/metrics"
@@ -26,6 +27,8 @@ import (
 )
 
 func main() {
+	// Large workspace trees: collect before the container limit (internal/memlimit).
+	memlimit.Apply()
 	if len(os.Args) == 2 && os.Args[1] == "provenance" {
 		if e := runProvenance(); e != nil {
 			log.Fatal(e)
