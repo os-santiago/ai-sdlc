@@ -16,7 +16,7 @@ MANIFEST = {'version': 'ai-sdlc.project/v1', 'repository': 'example/service', 'b
 FILES = {'rest-villains/pom.xml': b'<project>villains</project>\n', 'pom.xml': b'<project>root</project>\n',
          '.mvn/wrapper/maven-wrapper.properties': b'distributionType=only-script\n',
          'rest-villains/src/main/java/A.java': b'class A {}\n'}
-GO_KEY = 'dc42c7e381a6295819ee1e442d42f621130901df35f6b4930b5598a5d28accea'
+GO_VECTOR = 'dc42c7e381a6295819ee1e442d42f621130901df35f6b4930b5598a5d28accea'
 
 
 def repository(directory):
@@ -34,15 +34,15 @@ def repository(directory):
 class DependencyKeyTests(unittest.TestCase):
     def test_key_matches_the_runtime(self):
         verification, section = deps.dependencies(MANIFEST)
-        self.assertEqual(deps.dependency_key(verification, section, FILES), GO_KEY)
+        self.assertEqual(deps.dependency_key(verification, section, FILES), GO_VECTOR)
         changed = dict(FILES, **{'rest-villains/src/main/java/A.java': b'class A { int x; }\n'})
-        self.assertEqual(deps.dependency_key(verification, section, changed), GO_KEY)
+        self.assertEqual(deps.dependency_key(verification, section, changed), GO_VECTOR)
         for name, files in {'pom': dict(FILES, **{'pom.xml': b'<project>2</project>\n'}),
                             'new pom': dict(FILES, **{'rest-heroes/pom.xml': b''})}.items():
-            self.assertNotEqual(deps.dependency_key(verification, section, files), GO_KEY, name)
+            self.assertNotEqual(deps.dependency_key(verification, section, files), GO_VECTOR, name)
         other = copy.deepcopy(MANIFEST)
         other['verification']['dependencies']['cachePath'] = '/m2'
-        self.assertNotEqual(deps.dependency_key(*deps.dependencies(other), FILES), GO_KEY)
+        self.assertNotEqual(deps.dependency_key(*deps.dependencies(other), FILES), GO_VECTOR)
 
     def test_canonical_section_uses_go_struct_order(self):
         shuffled = dict(reversed(list(SECTION.items())))
@@ -62,7 +62,7 @@ class DependencyKeyTests(unittest.TestCase):
             (Path(directory) / 'pom.xml').write_bytes(b'uncommitted')
             files = deps.key_files(subprocess.run, directory, revision, SECTION['keyGlobs'])
             self.assertEqual(set(files), {'pom.xml', 'rest-villains/pom.xml', '.mvn/wrapper/maven-wrapper.properties'})
-            self.assertEqual(deps.revision_key(subprocess.run, MANIFEST, directory, revision), GO_KEY)
+            self.assertEqual(deps.revision_key(subprocess.run, MANIFEST, directory, revision), GO_VECTOR)
             with self.assertRaises(ValueError):
                 deps.key_files(subprocess.run, directory, 'HEAD', SECTION['keyGlobs'])
 
@@ -80,23 +80,23 @@ class DependencyKeyTests(unittest.TestCase):
                 deps.dependencies(manifest)
 
     def test_claims(self):
-        claim = deps.work_claim(GO_KEY, 'ai-sdlc-ci', '8Gi', 'standard')
+        claim = deps.work_claim(GO_VECTOR, 'ai-sdlc-ci', '8Gi', 'standard')
         self.assertEqual(claim['metadata']['labels']['ai-sdlc.io/dependency-state'], 'filling')
-        self.assertEqual(claim['metadata']['annotations'], {'ai-sdlc.io/dependency-key': GO_KEY})
+        self.assertEqual(claim['metadata']['annotations'], {'ai-sdlc.io/dependency-key': GO_VECTOR})
         self.assertEqual(claim['spec']['storageClassName'], 'standard')
         for bad in (('ai-sdlc-verifiers', '8Gi'), ('ai-sdlc-ci', '8Ti'), ('Bad', '8Gi')):
             with self.assertRaises(ValueError):
-                deps.work_claim(GO_KEY, *bad)
+                deps.work_claim(GO_VECTOR, *bad)
         volume = {'metadata': {'name': 'pv-1'}, 'spec': {'accessModes': ['ReadWriteOnce'], 'storageClassName': 'standard',
                                                           'capacity': {'storage': '8Gi'}}}
-        sealed = deps.sealed_claim(GO_KEY, volume)
-        self.assertEqual(sealed['metadata'], {'name': 'deps-' + GO_KEY, 'namespace': 'ai-sdlc-verifiers',
+        sealed = deps.sealed_claim(GO_VECTOR, volume)
+        self.assertEqual(sealed['metadata'], {'name': 'deps-' + GO_VECTOR, 'namespace': 'ai-sdlc-verifiers',
                                               'labels': {'app.kubernetes.io/part-of': 'ai-sdlc', 'ai-sdlc.io/dependency-state': 'sealed'},
-                                              'annotations': {'ai-sdlc.io/dependency-key': GO_KEY}})
+                                              'annotations': {'ai-sdlc.io/dependency-key': GO_VECTOR}})
         self.assertEqual(sealed['spec']['volumeName'], 'pv-1')
         volume['spec']['accessModes'] = ['ReadWriteMany']
         with self.assertRaises(ValueError):
-            deps.sealed_claim(GO_KEY, volume)
+            deps.sealed_claim(GO_VECTOR, volume)
         with self.assertRaises(ValueError):
             deps.claim_name('../x')
 
@@ -143,49 +143,49 @@ class SealTests(unittest.TestCase):
         self.cluster = deps.Cluster(self.fake.run, 'kind-test')
 
     def test_prepare_then_seal_hands_the_volume_over(self):
-        self.assertEqual(deps.prepare(self.cluster, GO_KEY), 'deps-' + GO_KEY)
-        self.assertIn('pvc/deps-%s/ai-sdlc-ci' % GO_KEY, self.fake.store)
+        self.assertEqual(deps.prepare(self.cluster, GO_VECTOR), 'deps-' + GO_VECTOR)
+        self.assertIn('pvc/deps-%s/ai-sdlc-ci' % GO_VECTOR, self.fake.store)
         self.fake.calls.clear()
-        self.assertEqual(deps.seal(self.cluster, GO_KEY, sleep=lambda _: None), 'deps-' + GO_KEY)
+        self.assertEqual(deps.seal(self.cluster, GO_VECTOR, sleep=lambda _: None), 'deps-' + GO_VECTOR)
         verbs = [' '.join(c[:3]) for c in self.fake.calls if c[0] != 'get']
-        self.assertEqual(verbs, ['patch pv pv-1', 'delete pvc deps-' + GO_KEY, 'patch pv pv-1', 'create -f -', 'patch pv pv-1'])
+        self.assertEqual(verbs, ['patch pv pv-1', 'delete pvc deps-' + GO_VECTOR, 'patch pv pv-1', 'create -f -', 'patch pv pv-1'])
         self.assertIn('--wait=false', next(c for c in self.fake.calls if c[:2] == ['delete', 'pvc']))
         patches = [json.loads(c[-1]) for c in self.fake.calls if c[:2] == ['patch', 'pv']]
         self.assertEqual(patches[0], {'spec': {'persistentVolumeReclaimPolicy': 'Retain'}})
         self.assertEqual(patches[1][0]['value'], {'apiVersion': 'v1', 'kind': 'PersistentVolumeClaim',
-                                                  'namespace': 'ai-sdlc-verifiers', 'name': 'deps-' + GO_KEY})
+                                                  'namespace': 'ai-sdlc-verifiers', 'name': 'deps-' + GO_VECTOR})
         self.assertEqual(patches[2], {'spec': {'persistentVolumeReclaimPolicy': 'Delete'}})
-        sealed = self.fake.store['pvc/deps-%s/ai-sdlc-verifiers' % GO_KEY]
+        sealed = self.fake.store['pvc/deps-%s/ai-sdlc-verifiers' % GO_VECTOR]
         self.assertEqual(sealed['metadata']['labels']['ai-sdlc.io/dependency-state'], 'sealed')
         # A sealed cache is final: seal is idempotent and prepare refuses it.
         self.fake.calls.clear()
-        self.assertEqual(deps.seal(self.cluster, GO_KEY, sleep=lambda _: None), 'deps-' + GO_KEY)
+        self.assertEqual(deps.seal(self.cluster, GO_VECTOR, sleep=lambda _: None), 'deps-' + GO_VECTOR)
         self.assertTrue(all(c[0] == 'get' for c in self.fake.calls))
         with self.assertRaises(ValueError):
-            deps.prepare(self.cluster, GO_KEY)
+            deps.prepare(self.cluster, GO_VECTOR)
 
     def test_an_interrupted_seal_resumes_from_the_released_volume(self):
-        deps.prepare(self.cluster, GO_KEY)
+        deps.prepare(self.cluster, GO_VECTOR)
         self.fake.interrupt = True
         with self.assertRaises(subprocess.CalledProcessError):
-            deps.seal(self.cluster, GO_KEY, sleep=lambda _: None)
+            deps.seal(self.cluster, GO_VECTOR, sleep=lambda _: None)
         self.fake.interrupt = False
-        self.assertNotIn('pvc/deps-%s/ai-sdlc-ci' % GO_KEY, self.fake.store)
-        self.assertEqual(deps.seal(self.cluster, GO_KEY, sleep=lambda _: None), 'deps-' + GO_KEY)
-        self.assertIn('pvc/deps-%s/ai-sdlc-verifiers' % GO_KEY, self.fake.store)
+        self.assertNotIn('pvc/deps-%s/ai-sdlc-ci' % GO_VECTOR, self.fake.store)
+        self.assertEqual(deps.seal(self.cluster, GO_VECTOR, sleep=lambda _: None), 'deps-' + GO_VECTOR)
+        self.assertIn('pvc/deps-%s/ai-sdlc-verifiers' % GO_VECTOR, self.fake.store)
         self.assertEqual(self.fake.store['pv/pv-1']['spec']['persistentVolumeReclaimPolicy'], 'Delete')
 
     def test_seal_refuses_a_claim_in_use_or_of_another_key(self):
-        deps.prepare(self.cluster, GO_KEY)
-        self.fake.pods = [{'status': {'phase': 'Running'}, 'spec': {'volumes': [{'persistentVolumeClaim': {'claimName': 'deps-' + GO_KEY}}]}}]
+        deps.prepare(self.cluster, GO_VECTOR)
+        self.fake.pods = [{'status': {'phase': 'Running'}, 'spec': {'volumes': [{'persistentVolumeClaim': {'claimName': 'deps-' + GO_VECTOR}}]}}]
         with self.assertRaisesRegex(RuntimeError, 'still uses'):
-            deps.seal(self.cluster, GO_KEY, sleep=lambda _: None)
+            deps.seal(self.cluster, GO_VECTOR, sleep=lambda _: None)
         self.fake.pods[0]['status']['phase'] = 'Succeeded'
-        self.fake.store['pvc/deps-%s/ai-sdlc-ci' % GO_KEY]['metadata']['annotations'][deps.KEY_ANNOTATION] = 'f' * 64
+        self.fake.store['pvc/deps-%s/ai-sdlc-ci' % GO_VECTOR]['metadata']['annotations'][deps.KEY_ANNOTATION] = 'f' * 64
         with self.assertRaisesRegex(RuntimeError, 'No bound work claim'):
-            deps.seal(self.cluster, GO_KEY, sleep=lambda _: None)
+            deps.seal(self.cluster, GO_VECTOR, sleep=lambda _: None)
         with self.assertRaises(ValueError):
-            deps.seal(self.cluster, GO_KEY, namespace='ai-sdlc-verifiers')
+            deps.seal(self.cluster, GO_VECTOR, namespace='ai-sdlc-verifiers')
         self.assertFalse(any(c[0] == 'patch' for c in self.fake.calls))
         with self.assertRaises(ValueError):
             deps.Cluster(self.fake.run, '--kubeconfig=/x')
@@ -202,7 +202,7 @@ class SealTests(unittest.TestCase):
                 self.assertEqual(deps.main(['key', '--project-manifest', manifest.name, '--source', directory, '--revision', revision]), 0)
             finally:
                 builtins.print = original
-            self.assertEqual(printed, ['deps-' + GO_KEY])
+            self.assertEqual(printed, ['deps-' + GO_VECTOR])
 
 
 if __name__ == '__main__':
