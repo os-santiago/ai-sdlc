@@ -122,19 +122,7 @@ func (r *Reconciler) Step(ctx context.Context, observer Observer) (Step, bool, e
 		return Step{}, false, nil
 	}
 	step := Step{r.reconcile(ctx, observer, *selected)}
-	r.mu.Lock()
-	if step.Outcome == Completed || step.Outcome == NotSent || step.Outcome == Resolved {
-		delete(r.failures, selected.EffectToken)
-		delete(r.next, selected.EffectToken)
-	} else {
-		r.failures[selected.EffectToken]++
-		wait := maxRetry
-		if n := r.failures[selected.EffectToken]; n < 6 {
-			wait = min(firstRetry<<(n-1), maxRetry)
-		}
-		r.next[selected.EffectToken] = r.now().Add(wait)
-	}
-	r.mu.Unlock()
+	r.pace(selected.EffectToken, step.Outcome)
 	logf := r.Log
 	if logf == nil {
 		logf = log.Printf
@@ -143,6 +131,28 @@ func (r *Reconciler) Step(ctx context.Context, observer Observer) (Step, bool, e
 	logf("merge reconciliation: effect=merge outcome=%s", step.Outcome)
 	metrics.MergeReconciliation(step.Outcome)
 	return step, true, nil
+}
+
+// pace records the outcome of one step for an effect: an outcome that leaves
+// nothing to observe (recorded here, or resolved elsewhere) forgets its
+// pacing; any other outcome backs off exponentially.
+func (r *Reconciler) pace(token, outcome string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.failures == nil {
+		r.failures, r.next = map[string]int{}, map[string]time.Time{}
+	}
+	if outcome == Completed || outcome == NotSent || outcome == Resolved {
+		delete(r.failures, token)
+		delete(r.next, token)
+		return
+	}
+	r.failures[token]++
+	wait := maxRetry
+	if n := r.failures[token]; n < 6 {
+		wait = min(firstRetry<<(n-1), maxRetry)
+	}
+	r.next[token] = r.now().Add(wait)
 }
 
 // Plan re-derives the exact merge request the journal recorded from the

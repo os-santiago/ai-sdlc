@@ -148,42 +148,28 @@ func main() {
 	}
 	terminalJournal := store.NewTerminalJournal(c.DB, loadRelease)
 	ready := func(ctx context.Context) error {
-		if bootstrap.ReleaseEnabled() {
-			if _, _, e := productionIdentity(); e != nil {
+		return releaseReadiness(ctx, c.DB,
+			func(context.Context) error {
+				if !bootstrap.ReleaseEnabled() {
+					return nil
+				}
+				if _, _, e := productionIdentity(); e != nil {
+					return e
+				}
+				_, e := loadRelease()
 				return e
-			}
-			if _, e := loadRelease(); e != nil {
+			},
+			c.Ready,
+			func(context.Context) error { _, _, _, e := policy(); return e },
+			func(context.Context) error { _, e := review(); return e },
+			func(context.Context) error { _, e := writer(); return e },
+			func(context.Context) error {
+				if !bootstrap.MergeEnabled() {
+					return nil
+				}
+				_, e := mergeRuntime()
 				return e
-			}
-		}
-		if e := c.Ready(ctx); e != nil {
-			return e
-		}
-		if _, _, _, e := policy(); e != nil {
-			return e
-		}
-		if _, e := review(); e != nil {
-			return e
-		}
-		if _, e := writer(); e != nil {
-			return e
-		}
-		// A merge quarantine does not make the release manager unready: it
-		// blocks only later merges, never publication or the inbox routes, and
-		// failing readiness removed the Service endpoints so that every
-		// publish call timed out instead (battery 39). The merge loop reports
-		// it as the stop "merge-quarantined" and the gauge
-		// ai_sdlc_quarantined{journal="merge"}.
-		if bootstrap.MergeEnabled() {
-			if _, e := mergeRuntime(); e != nil {
-				return e
-			}
-		}
-		blocked, e := c.DB.PublicationBlocked(ctx)
-		if e != nil || blocked {
-			return publication.ErrPublication
-		}
-		return nil
+			})
 	}
 	// Pacing for read-only reconciliation of uncertain effects lives across polls.
 	reconciler := &publicationrecovery.Reconciler{DB: c.DB, Policy: func() (authority.Policy, error) { p, _, _, e := policy(); return p, e }}
@@ -333,6 +319,27 @@ func main() {
 	if e != nil {
 		log.Fatal(e)
 	}
+}
+
+// releaseReadiness runs the configuration checks in order, then requires an
+// unblocked publication journal.
+//
+// A merge quarantine does not make the release manager unready: it blocks only
+// later merges, never publication or the inbox routes, and failing readiness
+// removed the Service endpoints so that every publish call timed out instead
+// (battery 39). The merge loop reports it as the stop "merge-quarantined" and
+// the gauge ai_sdlc_quarantined{journal="merge"}.
+func releaseReadiness(ctx context.Context, db *store.DB, checks ...func(context.Context) error) error {
+	for _, check := range checks {
+		if e := check(ctx); e != nil {
+			return e
+		}
+	}
+	blocked, e := db.PublicationBlocked(ctx)
+	if e != nil || blocked {
+		return publication.ErrPublication
+	}
+	return nil
 }
 
 // mergeStopLine is the bounded merge stop log line. A stopped claimed run also

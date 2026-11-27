@@ -584,3 +584,46 @@ func TestMergedRecordSurvivesExpiryWithoutRenewal(t *testing.T) {
 		t.Fatal("terminal fact renewed authority")
 	}
 }
+
+// A merged record is readable only with a live merge receipt. The same record
+// re-encoded with every digest kept consistent stays readable; marking its
+// receipt observed (as only reconciliation writes it) makes it unreadable, so
+// an observed receipt can never become a merged record or a build source.
+func TestMergedRecordRefusesAnObservedReceipt(t *testing.T) {
+	for _, observed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "live", true: "observed"}[observed], func(t *testing.T) {
+			f, db, r, cmd := mergeJournalFixture(t)
+			ctx := context.Background()
+			c := queuedMerge(t, db, r)
+			if e := db.FinishMerge(ctx, c, completeMerge(t, db, c, cmd)); e != nil {
+				t.Fatal(e)
+			}
+			var proofRaw, effectRaw []byte
+			if e := f.Admin.Pool.QueryRow(`SELECT proof,effect FROM merged_records WHERE merge_id=$1`, r.ID).Scan(&proofRaw, &effectRaw); e != nil {
+				t.Fatal(e)
+			}
+			var p store.MergeProof
+			var effect store.MergeEvidence
+			if json.Unmarshal(proofRaw, &p) != nil || json.Unmarshal(effectRaw, &effect) != nil {
+				t.Fatal("merged record encoding")
+			}
+			effect.Receipt.Observed, p.Receipt.Observed = observed, observed
+			receipt, _ := json.Marshal(effect.Receipt)
+			effect.ReceiptDigest = authority.Digest(receipt)
+			effectRaw, _ = json.Marshal(effect)
+			p.EffectSHA256 = authority.Digest(effectRaw)
+			proofRaw, _ = json.Marshal(p)
+			if _, e := f.Admin.Pool.Exec(`UPDATE merged_records SET proof=$2,proof_digest=$3,effect=$4,effect_digest=$5 WHERE merge_id=$1`, r.ID, proofRaw, authority.Digest(proofRaw), effectRaw, authority.Digest(effectRaw)); e != nil {
+				t.Fatal(e)
+			}
+			if _, e := f.Admin.Pool.Exec(`UPDATE merge_requests SET proof=$2 WHERE id=$1`, r.ID, proofRaw); e != nil {
+				t.Fatal(e)
+			}
+			_, readErr := db.ReadMergedRecord(ctx, r.ID)
+			_, sourceErr := db.ReadMergedBuildSource(ctx, r.ID)
+			if (readErr == nil) == observed || (sourceErr == nil) == observed {
+				t.Fatal("merged record with an observed receipt", observed, readErr, sourceErr)
+			}
+		})
+	}
+}

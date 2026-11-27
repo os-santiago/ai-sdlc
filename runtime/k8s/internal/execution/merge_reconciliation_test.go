@@ -329,3 +329,50 @@ func TestMergeReconciliationLosingTheRaceIsResolved(t *testing.T) {
 		t.Fatal("the other resolution was overwritten")
 	}
 }
+
+// Under the merge claim lock, ResolveMergeEffect records nothing while any
+// merge request is claimed: an in-flight claim may be sending, so the forge
+// observation could be stale. Once nothing is claimed the same call records.
+func TestResolveMergeEffectWaitsWhileAMergeIsClaimed(t *testing.T) {
+	u := newUncertainMerge(t, "")
+	u.settle(t)
+	ctx := context.Background()
+	list, e := u.f.DB.MergeReconciliations(ctx, 16)
+	if e != nil || len(list) != 1 {
+		t.Fatal("reconciliation list", list, e)
+	}
+	// A claimed request for another publication. The fixture holds a single
+	// published record, so only the foreign key is bypassed (replica role,
+	// admin connection only); every check constraint still applies.
+	conn, e := u.f.Admin.Pool.Conn(ctx)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer conn.Close()
+	other := "merge-" + strings.Repeat("e", 64)
+	if _, e = conn.ExecContext(ctx, `SET session_replication_role=replica`); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = conn.ExecContext(ctx, `INSERT INTO merge_requests(id,publication_id,record_digest,gate_digest,authority_revision,payload_digest,payload,receipt,gate,policy,expires_at,state,claim_token,claim_until)
+ SELECT $2,'publication-'||repeat('e',64),record_digest,gate_digest,authority_revision,payload_digest,payload,receipt,gate,policy,clock_timestamp()+interval '1 hour','claimed',gen_random_uuid(),clock_timestamp()+interval '1 minute' FROM merge_requests WHERE id=$1`, u.id, other); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = conn.ExecContext(ctx, `RESET session_replication_role`); e != nil {
+		t.Fatal(e)
+	}
+	good := store.MergeReceipt{Version: "ai-sdlc.merge-receipt/v1", CommitSHA: strings.Repeat("d", 40), HeadSHA: u.planned.Expected.HeadSHA, BaseSHA: u.planned.Expected.BaseSHA, TreeSHA: u.planned.Expected.TreeSHA, PullRequest: u.planned.Expected.PullRequest, Observed: true}
+	for _, receipt := range []*store.MergeReceipt{nil, &good} {
+		if e = u.f.DB.ResolveMergeEffect(ctx, list[0], receipt); e == nil || errors.Is(e, store.ErrMergeEffectResolved) {
+			t.Fatal("resolved while a merge was claimed", e)
+		}
+	}
+	if u.count(t, `SELECT count(*) FROM merge_effects WHERE completed_at IS NULL AND not_sent_at IS NULL`) != 1 {
+		t.Fatal("effect changed while a merge was claimed")
+	}
+	if _, e = u.f.Admin.Pool.Exec(`DELETE FROM merge_requests WHERE id=$1`, other); e != nil {
+		t.Fatal(e)
+	}
+	if e = u.f.DB.ResolveMergeEffect(ctx, list[0], &good); e != nil {
+		t.Fatal("resolution once nothing is claimed", e)
+	}
+}
