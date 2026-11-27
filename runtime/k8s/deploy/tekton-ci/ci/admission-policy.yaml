@@ -12,9 +12,10 @@
 # templates and per-task overrides are allowlisted field by field: env,
 # volumes, DNS or host aliases there would let a run reshape candidate pods
 # (for example fake the address the egress gate probes, or load a candidate
-# file with NODE_OPTIONS). RBAC must never grant create on TaskRuns, CustomRuns
-# or Pods in ai-sdlc-ci: this policy covers PipelineRuns only, because the
-# Tekton controller creates the TaskRuns and Pods itself.
+# file with NODE_OPTIONS). RBAC must never grant create, update or patch on
+# TaskRuns, CustomRuns or Pods in ai-sdlc-ci: these policies cover
+# PipelineRuns only, because the Tekton controller creates the TaskRuns and
+# Pods itself, and a label patched onto a pod would change its egress at once.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -99,6 +100,50 @@ metadata:
     app.kubernetes.io/part-of: ai-sdlc
 spec:
   policyName: ai-sdlc-ci-pipelineruns
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: ai-sdlc-ci
+---
+# Labels propagate from a PipelineRun to TaskRuns and pods created later, so
+# an update must not add, change or remove the egress label; other updates
+# (such as cancellation through spec.status) stay admitted.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ai-sdlc-ci-pipelinerun-labels
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [tekton.dev]
+        apiVersions: ["*"]
+        operations: [UPDATE]
+        resources: [pipelineruns]
+  variables:
+    - name: egress
+      expression: >-
+        has(object.metadata.labels) && 'ai-sdlc.io/ci-egress' in object.metadata.labels ?
+        object.metadata.labels['ai-sdlc.io/ci-egress'] : ''
+    - name: oldEgress
+      expression: >-
+        has(oldObject.metadata.labels) && 'ai-sdlc.io/ci-egress' in oldObject.metadata.labels ?
+        oldObject.metadata.labels['ai-sdlc.io/ci-egress'] : ''
+  validations:
+    - expression: variables.egress == variables.oldEgress
+      message: the egress label of a PipelineRun cannot change
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ai-sdlc-ci-pipelinerun-labels
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  policyName: ai-sdlc-ci-pipelinerun-labels
   validationActions: [Deny]
   matchResources:
     namespaceSelector:
