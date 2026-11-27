@@ -14,13 +14,24 @@ console. The [detailed guide](try-it-detailed.md) explains each step.
      --independent-review --publication --merge --review-repair \
      --github-auth gh-cli --codex-auth-file ~/.codex/auth.json \
      --model-upstream upstream.json --project-manifest manifest.json \
-     --flow-console
+     --images /tmp/ai-sdlc-images/images.lock.json --flow-console
+   ```
+
+   The console image is pinned beside the image lock. Resolve both first, from
+   a signed `containers` run on `main` (see
+   [enable the console](operations/flow-console.md#with-the-installer)):
+
+   ```bash
+   python3 tools/install_images.py --run RUN_ID --revision FULL_COMMIT_SHA \
+     --include-console --output /tmp/ai-sdlc-images
    ```
 
 2. **Open the console:**
 
    ```bash
-   kubectl -n ai-sdlc-runtime port-forward svc/ai-sdlc-flow-console 8080:8091
+   kubectl --kubeconfig ~/.local/state/ai-sdlc/my-eval/kubeconfig \
+     --context kind-my-eval -n ai-sdlc-runtime \
+     port-forward svc/ai-sdlc-flow-console 8080:8091
    ```
 
    Then browse to <http://127.0.0.1:8080/>.

@@ -35,8 +35,17 @@ Reference measurements on the sample repositories are in
   --independent-review --publication --merge --review-repair \
   --github-auth gh-cli --codex-auth-file ~/.codex/auth.json \
   --model-upstream upstream.json --project-manifest manifest.json \
-  --flow-console
+  --images /tmp/ai-sdlc-images/images.lock.json --flow-console
 ```
+
+- **Console image pin.** The installer reads `console-images.json` beside the
+  image lock. Resolve both from a signed `containers` run on `main` before the
+  first install (see [enable the console](operations/flow-console.md#with-the-installer)):
+
+  ```bash
+  python3 tools/install_images.py --run RUN_ID --revision FULL_COMMIT_SHA \
+    --include-console --output /tmp/ai-sdlc-images
+  ```
 
 - **Merge rule ID.** The first run creates the native merge rule on GitHub,
   then stops and prints its ID. Set `merge.rulesetID` in the manifest to it
@@ -52,11 +61,14 @@ Reference measurements on the sample repositories are in
 ## 2. Open the console
 
 ```bash
-kubectl -n ai-sdlc-runtime port-forward svc/ai-sdlc-flow-console 8080:8091
+kubectl --kubeconfig ~/.local/state/ai-sdlc/my-eval/kubeconfig \
+  --context kind-my-eval -n ai-sdlc-runtime \
+  port-forward svc/ai-sdlc-flow-console 8080:8091
 ```
 
-Browse to <http://127.0.0.1:8080/>. The installer prints the same command
-with your cluster's kubeconfig at the end of the run.
+Browse to <http://127.0.0.1:8080/>. The installer keeps each cluster's
+kubeconfig in its own file (above, for `--cluster my-eval`) and prints this
+command at the end of the run.
 
 What you see:
 
