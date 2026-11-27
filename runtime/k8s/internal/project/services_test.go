@@ -1,6 +1,7 @@
 package project
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -173,5 +174,38 @@ func TestQuarkusServicesExampleParses(t *testing.T) {
 		!v.MatchesTest("rest-villains/src/test/java/io/quarkus/sample/superheroes/villain/VillainTests.java") ||
 		!v.MatchesHarness("rest-villains/pom.xml") {
 		t.Fatalf("unexpected Quarkus example: %+v", v)
+	}
+}
+
+// With services, the candidate run must fit the signed command's lifetime:
+// 480 s of overhead + 180 s readiness + 2 x 600 s is 1860 s and is refused
+// with a named error; manifests without services are not bounded here.
+func TestServicesMustFitTheVerificationCommandLifetime(t *testing.T) {
+	s := postgresService()
+	s.ReadySeconds = MaxServiceReadySeconds
+	m := withServices(s)
+	m.Verification.TimeoutSeconds, m.Verification.Repeat = 600, 2
+	if got := m.Verification.LongestRunSeconds(); got != 1860 {
+		t.Fatal("longest run", got)
+	}
+	err := m.Validate()
+	if !errors.Is(err, ErrServiceBudget) || !errors.Is(err, ErrManifest) {
+		t.Fatal("an over-budget manifest with services was not refused by name", err)
+	}
+	if _, err := ParseManifest(m.Canonical()); !errors.Is(err, ErrServiceBudget) || !strings.Contains(err.Error(), "1800 s") {
+		t.Fatal("the parser must report the budget", err)
+	}
+	m.Verification.Services[0].ReadySeconds = 120 // 480 + 120 + 1200 = 1800
+	if err := m.Validate(); err != nil {
+		t.Fatal("a manifest exactly at the budget was refused", err)
+	}
+	m.Verification.Analysis = &Analysis{Commands: [][]string{{"go", "vet", "./..."}}, TimeoutSeconds: 10}
+	if !errors.Is(m.Validate(), ErrServiceBudget) {
+		t.Fatal("the analysis counts toward the budget")
+	}
+	without := generic()
+	without.Verification.TimeoutSeconds, without.Verification.Repeat = 600, 3
+	if err := without.Validate(); err != nil {
+		t.Fatal("a manifest without services must keep its previous validity", err)
 	}
 }

@@ -96,7 +96,8 @@ verifier's settings, so use throwaway test credentials only.
 **Lifecycle.** Each run (baseline, cross, candidate) is a new pod with new,
 empty services. The sidecars start after the transfer sidecar and before the
 tests container. Before any repository code runs, the runner waits for every
-port on `127.0.0.1`. A service that is not ready within `readySeconds` fails
+port on `127.0.0.1`. It checks all services in parallel, each within its own
+`readySeconds` from the same start. A service that is not ready in time fails
 the run as a transport failure, not a decision.
 
 The port is the only readiness signal, so the service must accept
@@ -109,10 +110,13 @@ the port only when ready, or tests that tolerate a warming service. A longer
 the port accepts.
 
 The candidate pod's
-repetitions share its services. A test that relies on a pristine database
-can therefore disagree between repetitions, and the verifier refuses that
-candidate as `uncertain`. Recreating the schema at startup avoids this, as
-`rest-villains` does with `drop-and-create`. A service that exits or restarts
+repetitions share its services. Repetition 1 always runs on fresh services,
+and later repetitions see what earlier ones left. A test that relies on a
+pristine database can therefore disagree between repetitions, and the
+verifier refuses that candidate as `uncertain`. Shared state can also hide
+flakiness: a test that stores a favourable result in repetition 1 may skip
+the flaky operation later, so the repetitions agree. Recreating the schema
+at startup avoids both, as `rest-villains` does with `drop-and-create`. A service that exits or restarts
 also fails the run. So does a service that stops before the tests
 container finishes, is OOM-killed, or exits other than as a kubelet stop (0,
 or 143 or 137 after SIGTERM or SIGKILL), because its failure could have made
@@ -133,9 +137,13 @@ by the cluster, like the toolchain image.
 pull budget, before the tests container starts; pre-pull large images on the
 nodes. The pod deadline adds the longest `readySeconds`. The verifier
 namespace quota adds every service's CPU and memory to each of the three
-concurrent runs. The test timeout stays at most 600 seconds: the whole
-verification (pulls, import, readiness, `repeat` runs and analysis) must fit
-the signed verification command's 30-minute lifetime.
+concurrent runs. The test timeout stays at most 600 seconds. With services,
+the candidate run's deadline must fit the signed verification command's
+1800-second lifetime. That deadline is 480 s of pulls, import wait and
+margin, plus the longest `readySeconds`, `repeat` × `timeoutSeconds` and
+the analysis. The installer refuses a manifest that exceeds it with a
+message naming the budget. For example, 480 + 180 + 2 × 600 = 1860 is
+refused, and lowering `readySeconds` to 120 brings it to exactly 1800.
 
 The example is for illustration. The Maven image above has no project
 dependencies, and tests run offline, so use a toolchain image that already

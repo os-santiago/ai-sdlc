@@ -134,11 +134,15 @@ container exits, so the pod still completes with the tests. Decisions:
   code runs, so the repository cannot open a port first.
 - *Fresh state per pod.* Each run is a new pod with empty, size-limited
   `emptyDir` volumes, so baseline, cross and candidate never share service
-  state. The candidate's repetitions share one set of services. Leftover
-  state can only make repetitions disagree, which refuses the candidate
-  (`uncertain`). A false refusal is possible, a false acceptance is not.
-  Fresh services per repetition would need one pod per repetition, a
-  change to the effect ledger.
+  state. The candidate's repetitions share one set of services. Repetition
+  1 always runs on fresh services, so the cross run and the first candidate
+  run are unaffected. Later repetitions see what earlier ones left behind.
+  Leftover state can make them disagree (`uncertain`, a possible false
+  refusal). It can also make them agree when fresh services would not: a
+  test may store a favourable result in repetition 1 and skip the flaky
+  operation later. So shared services weaken the flakiness check of
+  `repeat`. Fresh services per repetition would need one pod per
+  repetition, a change to the effect ledger.
 - *Fail closed.* A service that is not ready in time, exits or restarts
   fails the run as a transport failure, never as a decision. A service may
   be seen terminated only as a kubelet stop after the tests ended: it
@@ -157,8 +161,13 @@ container exits, so the pod still completes with the tests. Decisions:
 - *Budgets.* The pod deadline adds the longest `readySeconds` (at most
   180). Service requests equal their limits and are added to the verifier
   namespace quota for each of the three concurrent runs. The test timeout
-  stays at 30–600 seconds because the whole verification must fit the
-  signed command's 30-minute lifetime (`verification.MaxCommandAge`).
+  stays at 30–600 seconds. A manifest with services is refused
+  (`ErrServiceBudget`) when the candidate run's deadline does not fit the
+  signed command's 30-minute lifetime (`verification.MaxCommandAge`). That
+  deadline is 480 s of pulls, import wait and margin, plus the longest
+  `readySeconds`, `repeat` × `timeoutSeconds` and the analysis. Otherwise
+  a run that could still finish would end as a failure. Manifests without
+  services are not bounded this way, so their validity is unchanged.
 
 - *Reusable definition.* `project.Service` holds no Kubernetes types.
   Only the repository-tests compiler turns it into a pod sidecar, so a

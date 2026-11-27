@@ -474,6 +474,9 @@ func ParseManifest(raw []byte) (Manifest, error) {
 		if errors.Is(err, ErrGenerationEnv) {
 			return Manifest{}, ErrGenerationEnv
 		}
+		if errors.Is(err, ErrServiceBudget) {
+			return Manifest{}, ErrServiceBudget
+		}
 		return Manifest{}, ErrManifest
 	}
 	return m, nil
@@ -549,8 +552,10 @@ func (m Manifest) Validate() error {
 	if m.Verification == nil && len(m.Recipes) == 0 {
 		return ErrManifest
 	}
-	if m.Verification != nil && m.Verification.validate() != nil {
-		return ErrManifest
+	if m.Verification != nil {
+		if err := m.Verification.validate(); err != nil {
+			return err
+		}
 	}
 	if m.Generation != nil && (m.Verification == nil || m.Generation.validate() != nil) {
 		return ErrManifest
@@ -621,6 +626,11 @@ func (v Verification) validate() error {
 	}
 	if v.Result.JUnitPath != "" && cleanPath(v.Result.JUnitPath) != nil {
 		return ErrManifest
+	}
+	// Only manifests with services are bounded here, so every manifest
+	// accepted before services existed stays valid.
+	if len(v.Services) > 0 && v.LongestRunSeconds() > MaxVerificationSeconds {
+		return ErrServiceBudget
 	}
 	for _, g := range v.TestGlobs {
 		if validGlob(g) != nil {

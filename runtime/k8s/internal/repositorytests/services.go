@@ -73,17 +73,24 @@ var ErrServices = errors.New("verification service not ready")
 
 // WaitServices waits until every service accepts a TCP connection on
 // 127.0.0.1 at its port, each within its own ReadySeconds measured from the
-// call (the services start together, before the tests container). It only
-// connects and closes: nothing is sent. The runner calls it before any
-// repository code runs, so the repository cannot have opened the port first.
+// same start (the services start together, before the tests container). The
+// services are checked in parallel, so a slow service never uses up the
+// bound of another. It only connects and closes: nothing is sent. The runner
+// calls it before any repository code runs, so the repository cannot have
+// opened a port first.
 func WaitServices(ctx context.Context, services []project.Service) error {
 	start := time.Now()
+	results := make(chan error, len(services))
 	for _, s := range services {
-		if err := waitPort(ctx, s.Port, start.Add(time.Duration(s.ReadySeconds)*time.Second)); err != nil {
-			return err
+		go func(port int, deadline time.Time) { results <- waitPort(ctx, port, deadline) }(s.Port, start.Add(time.Duration(s.ReadySeconds)*time.Second))
+	}
+	var failed error
+	for range services {
+		if err := <-results; err != nil {
+			failed = err
 		}
 	}
-	return nil
+	return failed
 }
 
 func waitPort(ctx context.Context, port int, deadline time.Time) error {

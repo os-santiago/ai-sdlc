@@ -1,6 +1,7 @@
 package project
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -73,6 +74,34 @@ const (
 	MaxServiceReadySeconds = 180
 	maxServiceID           = 1<<31 - 1
 )
+
+// Budget of a verification with services. A run pod's deadline (pulls, the
+// import wait, the longest service readiness, every repetition, the analysis
+// and a margin) must fit the signed verification command's lifetime, or a
+// run that could still finish would end as a failure instead of a decision.
+const (
+	// MaxVerificationSeconds is verification.MaxCommandAge in seconds.
+	MaxVerificationSeconds = 1800
+	// RunOverheadSeconds is the fixed part of a run pod's deadline:
+	// repositorytests.PullSeconds + ReadySeconds + MarginSeconds.
+	RunOverheadSeconds = 480
+)
+
+// ErrServiceBudget refuses a manifest with services whose longest run (the
+// candidate, with every repetition and the analysis) cannot fit the signed
+// verification command's lifetime.
+var ErrServiceBudget = fmt.Errorf("%w: with verification.services, the candidate run's deadline (480 s of pulls, import wait and margin + the longest readySeconds + repeat x timeoutSeconds + analysis) exceeds the 1800 s verification command lifetime; lower timeoutSeconds, repeat, readySeconds or the analysis", ErrManifest)
+
+// LongestRunSeconds is the deadline of the longest run pod, the candidate:
+// RunOverheadSeconds, the longest service readiness, every repetition's
+// timeout and the analysis.
+func (v Verification) LongestRunSeconds() int {
+	analysis := 0
+	if v.Analysis != nil {
+		analysis = len(v.Analysis.Commands) * v.Analysis.TimeoutSeconds
+	}
+	return RunOverheadSeconds + v.ServiceReadySeconds() + v.Repeat*v.TimeoutSeconds + analysis
+}
 
 var (
 	serviceName = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,13}[a-z0-9])?$`)

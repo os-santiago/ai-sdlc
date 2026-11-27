@@ -31,7 +31,7 @@ func compileProjectInstallation(input io.Reader, output io.Writer) error {
 		return err
 	}
 	manifest, err := project.ParseManifest(request.Manifest)
-	if errors.Is(err, project.ErrGenerationEnv) {
+	if errors.Is(err, project.ErrGenerationEnv) || errors.Is(err, project.ErrServiceBudget) {
 		return err
 	}
 	if err != nil || manifest.Repository != policy.Repository {

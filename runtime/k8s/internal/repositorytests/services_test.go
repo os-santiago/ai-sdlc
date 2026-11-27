@@ -224,3 +224,55 @@ func mounts(c map[string]any) []map[string]any {
 	}
 	return out
 }
+
+// Each service has its own bound from the same start: a service that is
+// slow within a long bound must not use up the short bound of a service that
+// listens from the start.
+func TestWaitServicesChecksEveryServiceInParallel(t *testing.T) {
+	ready, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ready.Close()
+	reserved, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	slow := reserved.Addr().(*net.TCPAddr).Port
+	reserved.Close()
+	go func() {
+		time.Sleep(1500 * time.Millisecond)
+		if l, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", itoa(slow))); err == nil {
+			time.Sleep(3 * time.Second)
+			l.Close()
+		}
+	}()
+	// The slow service comes first and listens after 1.5 s, past the fast
+	// service's 1 s bound; checked in order, the fast one would expire.
+	services := []project.Service{{Port: slow, ReadySeconds: 4}, {Port: ready.Addr().(*net.TCPAddr).Port, ReadySeconds: 1}}
+	start := time.Now()
+	if err := WaitServices(context.Background(), services); err != nil {
+		t.Fatal("a ready service failed because an earlier one was slow", err)
+	}
+	if elapsed := time.Since(start); elapsed < time.Second || elapsed > 4*time.Second {
+		t.Fatal("the wait must last until the slowest service is ready", elapsed)
+	}
+}
+
+// The manifest's budget check mirrors this package's run deadline.
+func TestManifestBudgetMatchesTheRunDeadline(t *testing.T) {
+	if PullSeconds+ReadySeconds+MarginSeconds != project.RunOverheadSeconds {
+		t.Fatal("project.RunOverheadSeconds is out of date")
+	}
+	p := servicesPod()
+	p.Verification.Repeat = 3
+	p.Verification.Analysis = &project.Analysis{Commands: [][]string{{"go", "vet", "./..."}}, TimeoutSeconds: 30}
+	if DeadlineSeconds(RunCandidate, p.Verification) != p.Verification.LongestRunSeconds() {
+		t.Fatal("the longest run must be the candidate's deadline", DeadlineSeconds(RunCandidate, p.Verification), p.Verification.LongestRunSeconds())
+	}
+	for _, run := range RunNames() {
+		if DeadlineSeconds(run, p.Verification) > p.Verification.LongestRunSeconds() {
+			t.Fatal(run, "exceeds the longest run")
+		}
+	}
+}
