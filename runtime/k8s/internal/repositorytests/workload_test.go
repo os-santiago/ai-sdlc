@@ -290,3 +290,31 @@ func TestDependencyCacheMustMatchTheManifest(t *testing.T) {
 		}
 	}
 }
+
+// A manifest with both backing services and a dependency cache renders both:
+// the cache only in the tests container, the services as sidecars.
+func TestDependenciesComposeWithServices(t *testing.T) {
+	p := dependencyPod(RunCandidate)
+	p.Verification.Services = []project.Service{postgres()}
+	w, err := CompilePod(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := w.Pod["spec"].(map[string]any)
+	claims := 0
+	for _, v := range spec["volumes"].([]any) {
+		if _, ok := v.(map[string]any)["persistentVolumeClaim"]; ok {
+			claims++
+		}
+	}
+	if claims != 1 || len(spec["initContainers"].([]any)) != 3 {
+		t.Fatal("cache and service not both rendered", spec["volumes"], len(spec["initContainers"].([]any)))
+	}
+	for _, c := range spec["initContainers"].([]any) {
+		for _, m := range c.(map[string]any)["volumeMounts"].([]any) {
+			if m.(map[string]any)["name"] == DependencyVolume {
+				t.Fatal("a sidecar mounts the dependency cache", c.(map[string]any)["name"])
+			}
+		}
+	}
+}

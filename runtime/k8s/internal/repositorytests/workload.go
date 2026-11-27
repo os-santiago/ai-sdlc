@@ -152,9 +152,10 @@ func AnalysisSeconds(run string, v project.Verification) int {
 }
 
 // DeadlineSeconds is the pod's hard deadline for a test timeout and, with
-// analysis, the analysis timeouts.
+// analysis, the analysis timeouts, and, with services, the longest service
+// readiness wait.
 func DeadlineSeconds(run string, v project.Verification) int {
-	return PullSeconds + ReadySeconds + Repetitions(run, v)*v.TimeoutSeconds + AnalysisSeconds(run, v) + MarginSeconds
+	return PullSeconds + ReadySeconds + v.ServiceReadySeconds() + Repetitions(run, v)*v.TimeoutSeconds + AnalysisSeconds(run, v) + MarginSeconds
 }
 
 // CompilePod renders one offline run. The repository's command is never in
@@ -231,13 +232,17 @@ func CompilePod(p Pod) (Workload, error) {
 		"command":         command,
 		"securityContext": security, "resources": map[string]any{"requests": quota, "limits": quota},
 		"volumeMounts": mounts}
+	// Services follow the transfer sidecar, so the controller's exec target
+	// is up first; only manifests with services add containers or volumes,
+	// so every other pod renders exactly as before.
+	services, serviceVolumes := serviceSidecars(p.Verification)
 	pod := map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": name, "namespace": p.Namespace, "labels": labels, "annotations": podAnnotations}, "spec": map[string]any{
 		"runtimeClassName": p.RuntimeClass, "automountServiceAccountToken": false, "enableServiceLinks": false, "restartPolicy": "Never",
 		"activeDeadlineSeconds": DeadlineSeconds(p.Run, p.Verification), "terminationGracePeriodSeconds": 1,
 		"hostNetwork": false, "hostPID": false, "hostIPC": false, "shareProcessNamespace": false,
 		"securityContext": map[string]any{"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000, "seccompProfile": map[string]any{"type": "RuntimeDefault"}},
-		"volumes":         volumes,
-		"initContainers":  []any{install, transfer},
+		"volumes":         append(volumes, serviceVolumes...),
+		"initContainers":  append([]any{install, transfer}, services...),
 		"containers":      []any{tests},
 	}}
 	raw, err := json.Marshal(Workload{config, pod})

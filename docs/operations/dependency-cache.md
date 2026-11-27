@@ -129,7 +129,7 @@ runs) can mount the same kind of cache. Add to the project manifest:
 }
 ```
 
-See [`examples/quarkus-super-heroes.project.json`](../../examples/quarkus-super-heroes.project.json).
+See [`examples/quarkus-super-heroes-rest-villains.project.json`](../../examples/quarkus-super-heroes-rest-villains.project.json).
 
 The section is omitted when absent: existing manifests keep their digest,
 verifier settings and rendered pods.

@@ -424,6 +424,7 @@ step, for example `candidate-import-transfer-timeout`:
 | `unimported-success` | The pod succeeded before its source was imported |
 | `observe-request`, `observe-permission`, `observe-status` | Reading the pod failed, was denied, or returned another status |
 | `observe-template`, `observe-phase`, `observe-container`, `observe-progress` | The pod differs from its template, failed, has a refused container state, or ended without a completed tests container |
+| `observe-service` | A `verification.services` sidecar terminated before the tests container finished, was OOM-killed, or exited other than as a kubelet stop (0, 137, 143). Its failure could have made the tests fail, so the run counts as no result |
 | `import-before-*`, `import-after-*`, `ready-after-*` | The same observation steps around the import and the ready marker; `-state` means the observed containers changed |
 | `import-transfer-*`, `ready-transfer-*` | The helper exchange through the API server failed: `-request`, `-permission` or `-timeout` |
 | `import-exit`, `ready-exit` | A helper exited nonzero |

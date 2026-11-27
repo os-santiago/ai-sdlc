@@ -173,7 +173,7 @@ func TestDependencyKeyIsStableAndCoversItsInputs(t *testing.T) {
 // parse, mount its cache where its offline command reads it, and classify
 // its dependency files as harness.
 func TestMavenExampleManifestParses(t *testing.T) {
-	raw, err := os.ReadFile("../../../../examples/quarkus-super-heroes.project.json")
+	raw, err := os.ReadFile("../../../../examples/quarkus-super-heroes-rest-villains.project.json")
 	if err != nil {
 		t.Fatal(err)
 	}

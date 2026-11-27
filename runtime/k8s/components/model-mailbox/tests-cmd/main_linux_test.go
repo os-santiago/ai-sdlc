@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -279,5 +280,45 @@ func TestAnalysisCannotAlterTheTestEvidence(t *testing.T) {
 	// The analyzer did run, and did tamper with the trees, after the tests.
 	if raw, err := os.ReadFile(filepath.Join(p.parent, "repository", "go.mod")); err != nil || string(raw) != "broken\n" {
 		t.Fatal("the hostile analyzer did not run after the tests", string(raw), err)
+	}
+}
+
+// With manifest services the runner waits for each loopback port after the
+// tree is verified and before any repository code runs; a service that never
+// listens stops the run with no result line.
+func TestRepositoryTestsEntrypointWaitsForServices(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	service := project.Service{Name: "db", Image: "registry.example/postgres@sha256:" + strings.Repeat("b", 64), User: 999,
+		Port: listener.Addr().(*net.TCPAddr).Port, ReadySeconds: 2, CPU: "500m", Memory: "512Mi", EphemeralStorage: "512Mi"}
+	v := settings()
+	v.Services = []project.Service{service}
+	p := newTestsPod(t, v)
+	p.ready(t)
+	var out bytes.Buffer
+	if err := runRepositoryTests(context.Background(), p.args(), &out, p.parent, p.uidPath); err != nil {
+		t.Fatal("a ready service blocked the run", err)
+	}
+	if run, err := repositorytests.ParseRun(bytes.TrimSuffix(out.Bytes(), []byte("\n"))); err != nil || run.ExitCode != 7 {
+		t.Fatal("the command must run once the services are ready", run, err)
+	}
+	listener.Close()
+	silent := newTestsPod(t, v)
+	silent.ready(t)
+	out.Reset()
+	marker := filepath.Join(silent.scratch, "ran")
+	v.Command = []string{"/bin/sh", "-c", "touch " + marker}
+	raw, _ := json.Marshal(v)
+	if err := os.WriteFile(silent.settings, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runRepositoryTests(context.Background(), silent.args(), &out, silent.parent, silent.uidPath); err == nil || out.Len() != 0 {
+		t.Fatal("a service that is not listening must stop the run without a result", err, out.String())
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("repository code ran before the services were ready")
 	}
 }
