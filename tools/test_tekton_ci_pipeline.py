@@ -181,7 +181,7 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(proxy['egress'][0]['to'], [{'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': 'ai-sdlc-dependencies'}},
                                                      'podSelector': {'matchLabels': {'app.kubernetes.io/component': 'dependency-proxy'}}}])
         self.assertEqual({p['port'] for p in proxy['egress'][0]['ports']}, {8080, 8081})
-        self.assertFalse(any('ipBlock' in peer for rule in proxy['egress'] for peer in rule['to']))
+        self.assertEqual(len(proxy['egress']), 1, 'no DNS: callers pass the proxy cluster IP')
 
     def test_sidecars_start_only_when_requested_and_bind_loopback(self):
         for sidecar in by_kind('Task')['maven-build-test']['spec']['sidecars']:

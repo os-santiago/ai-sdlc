@@ -226,7 +226,8 @@ pods labelled `app.kubernetes.io/component: dependency-proxy` on 8080; nginx
 forwards only to one upstream host and allowed path prefixes). The CI side of
 its contract is already installed: policy `ai-sdlc-ci-dependency-proxy` lets
 pods labelled `ai-sdlc.io/ci-egress: dependency-proxy` reach only the proxy pods
-(Maven 8080, npm 8081) and cluster DNS, and the proxy admits that label from
+(Maven 8080 at `/maven2`, npm 8081) and nothing else, not even DNS, so callers
+pass the proxy Service's cluster IP; the proxy admits that label from
 `ai-sdlc-ci`. No task carries the label yet. Once the proxy is installed:
 
 1. Switch `maven-dependencies` and `npm-lock-update` from the `fetch` label to
