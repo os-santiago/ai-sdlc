@@ -16,7 +16,7 @@ import (
 func TestConfigurationUpgradeFenceAdmitsCompletedHistoryAndRejectsInFlightWork(t *testing.T) {
 	// The current catalog, and the current catalog without its relaxation
 	// migrations (which the configuration upgrade's migrator job applies).
-	for _, count := range []int{39, 38, 37} {
+	for _, count := range []int{40, 39, 38, 37} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) { configurationFenceAt(t, count) })
 	}
 }

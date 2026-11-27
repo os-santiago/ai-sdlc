@@ -267,7 +267,7 @@ func main() {
 					state = metrics.Unclassified
 				}
 				metrics.Stop("release-manager", "merge", state)
-				log.Print("merge reconciliation stopped safely: " + state)
+				log.Print(mergeStopLine(state, e))
 			} else if state != "" {
 				log.Print("merge reconciliation: " + state)
 			}
@@ -330,6 +330,18 @@ func main() {
 	if e != nil {
 		log.Fatal(e)
 	}
+}
+
+// mergeStopLine is the bounded merge stop log line. A stopped claimed run also
+// names its stage (mergeflow.DiagnosticStage), for example
+// "merge-stopped stage=gate-changed-checks"; stages up to "effect-intent" sent
+// nothing, and the journal records that request as "not-sent".
+func mergeStopLine(state string, e error) string {
+	line := "merge reconciliation stopped safely: " + state
+	if state == "merge-stopped" {
+		line += " stage=" + mergeflow.DiagnosticStage(e)
+	}
+	return line
 }
 
 // countDelivery counts the outcome of one claimed publication or merge

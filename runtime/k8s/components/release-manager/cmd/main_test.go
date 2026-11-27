@@ -1,7 +1,10 @@
 package main
 
 import (
+	"errors"
 	"testing"
+
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergeflow"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/platform/metrics"
 )
@@ -31,6 +34,23 @@ func TestDeliveriesCountOnlyAttemptOutcomes(t *testing.T) {
 		}
 		if !found {
 			t.Fatal("documented outcome never produced", outcome)
+		}
+	}
+}
+
+// A stopped merge run names its bounded stage; nothing else is echoed.
+func TestMergeStopLineNamesTheStage(t *testing.T) {
+	for _, c := range []struct {
+		state string
+		err   error
+		want  string
+	}{
+		{"merge-stopped", mergeflow.StopError{Stage: "gate-changed-checks"}, "merge reconciliation stopped safely: merge-stopped stage=gate-changed-checks"},
+		{"merge-stopped", errors.New("forge body"), "merge reconciliation stopped safely: merge-stopped stage=unknown"},
+		{"merge-quarantined", mergeflow.ErrMerge, "merge reconciliation stopped safely: merge-quarantined"},
+	} {
+		if got := mergeStopLine(c.state, c.err); got != c.want {
+			t.Errorf("mergeStopLine(%q) = %q, want %q", c.state, got, c.want)
 		}
 	}
 }

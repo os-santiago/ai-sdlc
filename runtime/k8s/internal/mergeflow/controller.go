@@ -54,13 +54,80 @@ func expected(c publication.Command, f store.PublishedRecord) (mergegate.Expecte
 	}
 	return mergegate.Expected{Repository: c.Repository, PullRequest: proof.PullRequest, HeadSHA: proof.CommitSHA, BaseSHA: c.SourceSHA, TreeSHA: effects[0].Receipt.SHA, Branch: proof.Branch}, nil
 }
-func sameGate(a, b mergegate.Observation) bool {
-	return a.Ready && b.Ready && !a.MergeAuthorized && !b.MergeAuthorized && len(a.Reasons) == 0 && len(b.Reasons) == 0 && a.Expected == b.Expected && a.PolicySHA256 == b.PolicySHA256 && a.ChecksSHA256 == b.ChecksSHA256 && a.ReviewsSHA256 == b.ReviewsSHA256
+
+// gateChange names the first difference between the queued gate and its
+// pre-send re-observation, or "" when the fresh observation is the same ready
+// gate. Every name is a fixed constant.
+func gateChange(queued, current mergegate.Observation) string {
+	switch {
+	case !queued.Ready || queued.MergeAuthorized || len(queued.Reasons) != 0:
+		return "gate-queued-invalid"
+	case current.MergeAuthorized:
+		return "gate-not-ready"
+	case !current.Ready || len(current.Reasons) != 0:
+		for _, reason := range current.Reasons {
+			switch reason {
+			case "native-merge-not-ready", "native-protection-insufficient", "checks-not-passed", "review-feedback-unresolved":
+				return "gate-" + reason
+			}
+		}
+		return "gate-not-ready"
+	case queued.Expected != current.Expected:
+		return "gate-changed-expected"
+	case queued.PolicySHA256 != current.PolicySHA256:
+		return "gate-changed-policy"
+	case queued.ChecksSHA256 != current.ChecksSHA256:
+		return "gate-changed-checks"
+	case queued.ReviewsSHA256 != current.ReviewsSHA256:
+		return "gate-changed-reviews"
+	}
+	return ""
+}
+
+// StopError names the bounded stage that stopped a claimed merge run. The
+// stages up to and including "effect-intent" end before any merge request can
+// have been sent; the journal then records the request as failed with reason
+// "not-sent" (see store.StopMerge), and the publication may get a bounded
+// fresh attempt. It unwraps to ErrMerge.
+type StopError struct{ Stage string }
+
+func (e StopError) Error() string { return "merge stopped at " + e.Stage }
+func (e StopError) Unwrap() error { return ErrMerge }
+
+func stopped(stage string) error { return StopError{Stage: stage} }
+
+// stopStages is the closed set of stage names a StopError may carry.
+var stopStages = map[string]bool{
+	// Before the claim or before any merge effect was begun.
+	"request": true, "claim": true, "publication-fence": true, "gate-policy": true,
+	"gate-unavailable": true, "gate-deadline": true, "gate-queued-invalid": true, "gate-not-ready": true,
+	"gate-native-merge-not-ready": true, "gate-native-protection-insufficient": true,
+	"gate-checks-not-passed": true, "gate-review-feedback-unresolved": true,
+	"gate-changed-expected": true, "gate-changed-policy": true, "gate-changed-checks": true,
+	"gate-changed-reviews": true, "effect-intent": true, "transport-before-send": true,
+	// After the merge request may have been sent.
+	"transport": true, "sent-fence": true, "acknowledge": true, "finish": true,
+}
+
+// DiagnosticStage is bounded controller metadata for the stop log, for example
+// "gate-changed-checks" or "transport". It never carries a response body, URL,
+// credential or forge text; anything outside the closed set is "unknown".
+func DiagnosticStage(err error) string {
+	var stop StopError
+	if !errors.As(err, &stop) || !stopStages[stop.Stage] {
+		return "unknown"
+	}
+	return stop.Stage
 }
 
 // PollOnce is called only by the owning component loop. Waiting for CI does not
-// reserve or extend a lease. An uncertain write blocks the component, and an
-// already-attempted publication is never turned into a fresh request.
+// reserve or extend a lease. An uncertain write blocks the component, and a
+// publication whose request may have been sent is never turned into a fresh
+// request. Only a request the journal recorded as "not-sent" (stopped before
+// any merge effect was begun, or with its only effect sealed not-sent) leaves
+// its publication selectable again, for a bounded number of attempts and only
+// after the stopped command has expired (store.NextMergePublication). Each
+// attempt observes the gate afresh and signs a new command.
 func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	if r.DB == nil || r.Policy == nil || r.Review == nil || r.Identity == nil || r.GatePolicy == nil || r.Gates == nil || r.Writer == nil {
 		return "", ErrMerge
@@ -171,35 +238,38 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 func (r Runtime) run(ctx context.Context, j *store.MergeJournal, id string) (err error) {
 	request, e := j.ReadMerge(ctx, id)
 	if e != nil {
-		return ErrMerge
+		return stopped("request")
 	}
 	p, _, _, e := r.Policy()
 	if e != nil {
-		return ErrMerge
+		return stopped("request")
 	}
 	var signed authority.Receipt
 	if authority.DecodeStrict(request.Receipt, &signed) != nil {
-		return ErrMerge
+		return stopped("request")
 	}
 	command, e := merging.Verify(p, signed, request.Payload, time.Now())
 	if e != nil || command.ID() != id {
-		return ErrMerge
+		return stopped("request")
 	}
 	var gate mergegate.Observation
 	if authority.DecodeStrict(request.Gate, &gate) != nil {
-		return ErrMerge
+		return stopped("request")
 	}
 	claim, e := j.ClaimMerge(ctx, id)
 	if e != nil {
-		return ErrMerge
+		return stopped("claim")
 	}
 	ctx, cancel := context.WithDeadline(ctx, claim.Until)
 	defer cancel()
 	defer func() {
 		if recover() != nil {
-			err = ErrMerge
+			err = stopped("transport")
 		}
 		if err != nil {
+			// The journal records "not-sent" instead when, under the claim
+			// lock, no merge effect was begun or the only one is sealed
+			// not-sent; any other stop stays uncertain.
 			cleanup, stop := context.WithTimeout(context.Background(), 3*time.Second)
 			defer stop()
 			_ = j.StopMerge(cleanup, claim, "uncertain")
@@ -234,35 +304,47 @@ func (r Runtime) run(ctx context.Context, j *store.MergeJournal, id string) (err
 	}
 	var effect store.MergeEffect
 	calls, armed := 0, false
+	// presend holds the stage that refused the first fence call, so the stop
+	// names why no merge request was sent.
+	presend := ""
 	transportFence := func(ctx context.Context, digest string) error {
 		calls++
 		if calls > 2 {
 			return ErrMerge
 		}
 		if calls == 1 {
+			deny := func(stage string) error { presend = stage; return ErrMerge }
 			if fence(ctx) != nil {
-				return ErrMerge
+				return deny("publication-fence")
 			}
 			gp, e := r.GatePolicy()
 			if e != nil {
-				return ErrMerge
+				return deny("gate-policy")
 			}
 			current, e := r.Gates.Collect(ctx, gate.Expected, gp)
-			if e != nil || !sameGate(gate, current) {
-				return ErrMerge
+			if e != nil {
+				if ctx.Err() != nil {
+					// The claim (capped by the gate's lifetime) ended while
+					// the gate was being observed again.
+					return deny("gate-deadline")
+				}
+				return deny("gate-unavailable")
+			}
+			if change := gateChange(gate, current); change != "" {
+				return deny(change)
 			}
 			if fence(ctx) != nil {
-				return ErrMerge
+				return deny("publication-fence")
 			}
 			effect, e = j.BeginMergeEffect(ctx, claim, digest)
 			if e != nil {
-				return ErrMerge
+				return deny("effect-intent")
 			}
 			if fence(ctx) != nil {
 				cleanup, stop := context.WithTimeout(context.Background(), 3*time.Second)
 				defer stop()
 				_ = j.SealMergeNotSent(cleanup, effect)
-				return ErrMerge
+				return deny("publication-fence")
 			}
 			armed = true
 			return nil
@@ -274,22 +356,37 @@ func (r Runtime) run(ctx context.Context, j *store.MergeJournal, id string) (err
 		return nil
 	}
 	receipt, e := r.Writer.Merge(ctx, gate.Expected, command.IssueNumber, transportFence)
-	if e != nil || calls != 2 || effect.Token == "" || sent(ctx) != nil {
-		return ErrMerge
+	if e != nil || calls != 2 || effect.Token == "" {
+		switch {
+		case presend != "":
+			return stopped(presend)
+		case !armed:
+			return stopped("transport-before-send")
+		}
+		return stopped("transport")
+	}
+	if sent(ctx) != nil {
+		return stopped("sent-fence")
 	}
 	stored := store.MergeReceipt{Version: receipt.Version, CommitSHA: receipt.CommitSHA, HeadSHA: receipt.HeadSHA, BaseSHA: receipt.BaseSHA, TreeSHA: receipt.TreeSHA, PullRequest: receipt.PullRequest}
-	if j.AcknowledgeMergeEffect(ctx, effect, stored) != nil || sent(ctx) != nil {
-		return ErrMerge
+	if j.AcknowledgeMergeEffect(ctx, effect, stored) != nil {
+		return stopped("acknowledge")
+	}
+	if sent(ctx) != nil {
+		return stopped("sent-fence")
 	}
 	evidence, e := j.ReadMergeEvidence(ctx, claim)
 	if e != nil {
-		return ErrMerge
+		return stopped("finish")
 	}
 	raw, _ := json.Marshal(evidence)
 	proof := store.MergeProof{Version: "ai-sdlc.merge-proof/v1", MergeID: id, PublicationID: command.PublicationID, PublicationRecordSHA256: claim.RecordDigest, GateSHA256: claim.GateDigest, EffectSHA256: authority.Digest(raw), Receipt: stored}
 	raw, _ = json.Marshal(proof)
-	if sent(ctx) != nil || j.FinishMerge(ctx, claim, raw) != nil {
-		return ErrMerge
+	if sent(ctx) != nil {
+		return stopped("sent-fence")
+	}
+	if j.FinishMerge(ctx, claim, raw) != nil {
+		return stopped("finish")
 	}
 	return nil
 }

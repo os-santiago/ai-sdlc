@@ -13,11 +13,28 @@ entire command and claim; no effect or completion can outlive that observation.
 It binds the immutable publication record, authenticated gate
 observation, repository, issue, PR, head, base, tree and branch.
 
-The journal allows one request per publication and one non-adoptable claim for
-at most 90 seconds, further capped by the gate and command expiry. Its single external-effect intention must commit before a
-transport is attempted. A missing acknowledgement quarantines subsequent merges;
-only a trusted pre-send result can attest that no transport was attempted. No
-HTTP retry, claim adoption or administrative replay is provided. After the claim
+Each request has one non-adoptable claim for at most 90 seconds, further capped
+by the gate and command expiry. Its single external-effect intention must commit
+before a transport is attempted. A missing acknowledgement quarantines
+subsequent merges; only a trusted pre-send result can attest that no transport
+was attempted. No HTTP retry, claim adoption or administrative replay is
+provided.
+
+A publication has at most one request that may have been sent: the partial
+unique index `merge_requests_publication_attempt` (migration 0040) covers every
+request whose reason is not `not-sent`, so a publication can never hold two
+queued, claimed, merged, uncertain or expired requests, nor be merged twice.
+`StopMerge` and `ExpireMerges` assign `not-sent` themselves, never on a caller's
+word: under the request's row lock, after any concurrent effect intent has
+committed, a request with no merge effect, or whose only effect is sealed
+not-sent, is `not-sent`; otherwise the reason stays `uncertain` (or `expired`). A
+failed request can never gain an effect afterwards, because an intent needs a
+live claim. Only then may `NextMergePublication` and `QueueMerge` admit a new
+request for that publication: with a fresh gate observation and signed command,
+at most `store.MergeAttempts` (3) requests per publication, and only after every
+earlier command expired more than 30 seconds ago. `QueueMerge` takes the merge claim lock
+to serialize those checks. Existing failed requests keep their recorded reason;
+the migration reclassifies nothing. After the claim
 has settled, [merge reconciliation](merge-reconciliation.md) may resolve the
 effect of a failed request through `ResolveMergeEffect`, from a read-only forge
 observation only; the request stays failed and no merged record is written.
