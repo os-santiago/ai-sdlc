@@ -434,6 +434,12 @@ step, for example `candidate-import-transfer-timeout`:
 The stop and cleanup are unchanged. A failed cleanup after such a stop keeps
 the step, for example `cleanup-after-runs-renew`.
 
+A manifest with `verification.dependencies` adds two stops before any pod is
+created: `dependencies-key` (the base tree's dependency key could not be
+computed) and `dependencies-unavailable` (the verifier namespace has no
+sealed, bound cache claim `deps-<key>` for the base revision). Fill and seal
+the cache for that revision; see [the dependency cache](dependency-cache.md).
+
 In battery 24 a verification stopped at plain `candidate` 3 s after the
 verifier's readiness probe timed out, while its pods were transferring source.
 That image named the last run for a claim renewal, deadline or context stop

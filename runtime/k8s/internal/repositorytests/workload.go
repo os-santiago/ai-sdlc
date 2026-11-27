@@ -26,6 +26,8 @@ const (
 	PullSeconds     = 300
 	workspaceVolume = "256Mi"
 	runnerVolume    = "128Mi"
+	// DependencyVolume is the read-only dependency cache volume.
+	DependencyVolume = "dependencies"
 	// MarginSeconds covers tree verification, the report and termination.
 	MarginSeconds = 60
 )
@@ -83,6 +85,10 @@ type Pod struct {
 	SourceSHA      string
 	TreeSHA256     string
 	Verification   project.Verification
+	// DependencyCache is the sealed dependency cache claim
+	// (project.DependencyClaimName of the base tree's key) when the manifest
+	// declares verification.dependencies, and empty otherwise.
+	DependencyCache string
 }
 
 // Names returns the settings ConfigMap (shared by the runs of one
@@ -107,7 +113,9 @@ func (p Pod) validate() error {
 		!imagePattern.MatchString(p.MailboxImage) || !executor.ValidRuntimeClass(p.RuntimeClass) ||
 		!uuidPattern.MatchString(p.WorkItemID) ||
 		!workspacebundle.ValidSourceSHA(p.SourceSHA) || !workspacebundle.ValidDigest(p.TreeSHA256) ||
-		p.Verification.Validate() != nil {
+		p.Verification.Validate() != nil ||
+		(p.Verification.Dependencies == nil) != (p.DependencyCache == "") ||
+		(p.DependencyCache != "" && !project.ValidDependencyClaimName(p.DependencyCache)) {
 		return ErrWorkload
 	}
 	return nil
@@ -197,29 +205,40 @@ func CompilePod(p Pod) (Workload, error) {
 		// renders exactly as before.
 		command = append(command, AnalyzeArgument)
 	}
+	mounts := []any{workspace, identity,
+		map[string]any{"name": "scratch", "mountPath": ScratchDirectory},
+		map[string]any{"name": "runner", "mountPath": "/runner", "readOnly": true},
+		map[string]any{"name": "settings", "mountPath": SettingsDirectory, "readOnly": true}}
+	volumes := []any{
+		// The imported tree is bounded by the bundle limits; the rest is
+		// room for build output the tests write next to the sources.
+		map[string]any{"name": "workspace", "emptyDir": map[string]any{"sizeLimit": workspaceVolume}},
+		map[string]any{"name": "scratch", "emptyDir": map[string]any{"sizeLimit": p.Verification.EphemeralStorage}},
+		map[string]any{"name": "runner", "emptyDir": map[string]any{"sizeLimit": runnerVolume}},
+		map[string]any{"name": "settings", "configMap": map[string]any{"name": configName, "defaultMode": 0o444}},
+		map[string]any{"name": "pod-identity", "downwardAPI": map[string]any{"items": []any{map[string]any{"path": "uid", "fieldRef": map[string]any{"fieldPath": "metadata.uid"}}}}},
+	}
+	if p.DependencyCache != "" {
+		// The sealed cache is read-only twice: the claim is attached
+		// read-only and the mount is read-only, so repository code can
+		// read the prefetched dependencies but never change them for a
+		// later run. Only manifests with dependencies add it, so every
+		// other pod renders exactly as before.
+		mounts = append(mounts, map[string]any{"name": DependencyVolume, "mountPath": p.Verification.Dependencies.CachePath, "readOnly": true})
+		volumes = append(volumes, map[string]any{"name": DependencyVolume, "persistentVolumeClaim": map[string]any{"claimName": p.DependencyCache, "readOnly": true}})
+	}
 	tests := map[string]any{"name": "tests", "image": p.Verification.Image, "imagePullPolicy": "IfNotPresent",
 		"command":         command,
 		"securityContext": security, "resources": map[string]any{"requests": quota, "limits": quota},
-		"volumeMounts": []any{workspace, identity,
-			map[string]any{"name": "scratch", "mountPath": ScratchDirectory},
-			map[string]any{"name": "runner", "mountPath": "/runner", "readOnly": true},
-			map[string]any{"name": "settings", "mountPath": SettingsDirectory, "readOnly": true}}}
+		"volumeMounts": mounts}
 	pod := map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": map[string]any{"name": name, "namespace": p.Namespace, "labels": labels, "annotations": podAnnotations}, "spec": map[string]any{
 		"runtimeClassName": p.RuntimeClass, "automountServiceAccountToken": false, "enableServiceLinks": false, "restartPolicy": "Never",
 		"activeDeadlineSeconds": DeadlineSeconds(p.Run, p.Verification), "terminationGracePeriodSeconds": 1,
 		"hostNetwork": false, "hostPID": false, "hostIPC": false, "shareProcessNamespace": false,
 		"securityContext": map[string]any{"runAsNonRoot": true, "runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000, "seccompProfile": map[string]any{"type": "RuntimeDefault"}},
-		"volumes": []any{
-			// The imported tree is bounded by the bundle limits; the rest is
-			// room for build output the tests write next to the sources.
-			map[string]any{"name": "workspace", "emptyDir": map[string]any{"sizeLimit": workspaceVolume}},
-			map[string]any{"name": "scratch", "emptyDir": map[string]any{"sizeLimit": p.Verification.EphemeralStorage}},
-			map[string]any{"name": "runner", "emptyDir": map[string]any{"sizeLimit": runnerVolume}},
-			map[string]any{"name": "settings", "configMap": map[string]any{"name": configName, "defaultMode": 0o444}},
-			map[string]any{"name": "pod-identity", "downwardAPI": map[string]any{"items": []any{map[string]any{"path": "uid", "fieldRef": map[string]any{"fieldPath": "metadata.uid"}}}}},
-		},
-		"initContainers": []any{install, transfer},
-		"containers":     []any{tests},
+		"volumes":         volumes,
+		"initContainers":  []any{install, transfer},
+		"containers":      []any{tests},
 	}}
 	raw, err := json.Marshal(Workload{config, pod})
 	if err != nil {

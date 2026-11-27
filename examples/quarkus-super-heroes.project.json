@@ -1,0 +1,35 @@
+{
+  "version": "ai-sdlc.project/v1",
+  "repository": "os-santiago/quarkus-super-heroes",
+  "baseBranch": "main",
+  "verification": {
+    "image": "docker.io/library/maven@sha256:93b8a14ea2f412782e4e842651273b4d903e35cc496284f178fbbe2d67d00976",
+    "command": ["mvn", "-B", "-o", "-C", "-Dmaven.repo.local=/tmp/m2", "-Dmaven.repo.local.tail=/deps", "-pl", "rest-villains", "test", "-Dquarkus.devservices.enabled=false"],
+    "timeoutSeconds": 600,
+    "cpu": "2",
+    "memory": "3Gi",
+    "ephemeralStorage": "2Gi",
+    "network": "none",
+    "result": {"exitCode": true},
+    "repeat": 1,
+    "testGlobs": ["rest-villains/src/test/java/**"],
+    "harnessGlobs": ["**/src/test/resources/**", "**/src/main/resources/application.properties"],
+    "dependencies": {
+      "cachePath": "/deps",
+      "keyGlobs": ["**/pom.xml", ".mvn/**", "mvnw", "mvnw.cmd"]
+    }
+  },
+  "publication": {
+    "allow": ["rest-villains/src/main/java/**", "rest-villains/src/test/java/**"],
+    "maxChangedFiles": 8,
+    "maxChangedBytes": 131072,
+    "maxFileBytes": 65536
+  },
+  "merge": {
+    "rulesetID": 1,
+    "required": [{"context": "build", "appID": 15368}],
+    "strictChecks": true,
+    "resolveThreads": true,
+    "humanApprovals": 0
+  }
+}

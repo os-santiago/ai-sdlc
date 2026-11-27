@@ -720,6 +720,30 @@ class ProjectManifestChartTests(unittest.TestCase):
             self.assertNotEqual(tests.sandbox_docs({'project': {'manifestJSON': bad}})[0].returncode, 0, bad)
         self.assertNotIn('executorQuota', (ROOT / 'runtime/k8s/deploy/helm/ai-sdlc-k8s-runtime/values.yaml').read_text())
 
+    def test_verifier_reads_dependency_caches_only_with_a_dependencies_section(self):
+        """The claim read is granted only when manifestJSON declares
+        verification.dependencies, and it is get-only."""
+        tests = ChartTests()
+        base = ['--set', 'runtime.mode=verification', '--set', 'verifier.digest=sha256:' + 'a' * 64]
+        def rules(verification):
+            manifest = {'version': 'ai-sdlc.project/v1', 'repository': 'example/service'}
+            if verification is not None:
+                manifest['verification'] = verification
+            with tempfile.NamedTemporaryFile('w', suffix='.yaml') as file:
+                yaml.safe_dump({'project': {'manifestJSON': json.dumps(manifest, separators=(',', ':'))}}, file)
+                file.flush()
+                rendered = tests.render(*base, '-f', file.name)
+            self.assertEqual(rendered.returncode, 0, rendered.stderr)
+            role = next(d for d in yaml.safe_load_all(rendered.stdout)
+                        if d and d['kind'] == 'Role' and d['metadata']['name'] == 'verification-controller')
+            return [rule for rule in role['rules'] if 'persistentvolumeclaims' in rule['resources']]
+        self.assertEqual(rules(None), [])
+        self.assertEqual(rules({'image': 'x'}), [])
+        self.assertEqual(rules({'dependencies': None}), [])
+        self.assertEqual(rules({'dependencies': {'ecosystem': 'maven'}}),
+                         [{'apiGroups': [''], 'resources': ['persistentvolumeclaims'], 'verbs': ['get']}])
+        self.assertNotEqual(tests.render(*base, '--set-string', 'project.manifestJSON=[1]').returncode, 0)
+
     def test_publication_accepts_only_the_policy_bound_manifest_repository(self):
         tests = ChartTests()
         manifest = json.dumps({'version': 'ai-sdlc.project/v1', 'repository': 'example/service'}, separators=(',', ':'))

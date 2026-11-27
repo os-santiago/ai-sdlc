@@ -14,7 +14,7 @@ never read from the target repository, an issue or model output.
 | Section | Content |
 |---|---|
 | `repository`, `baseBranch` | Lowercase GitHub repository and target branch |
-| `verification` | Pinned toolchain image (`repo@sha256:`), argv test command, working directory, timeout, resources, `network: none`, exit code and optional JUnit report, repeat count, test globs, harness globs, reviewed toolchain environment, optional static analysis commands (`analysis`, omitted when absent) |
+| `verification` | Pinned toolchain image (`repo@sha256:`), argv test command, working directory, timeout, resources, `network: none`, exit code and optional JUnit report, repeat count, test globs, harness globs, reviewed toolchain environment, optional static analysis commands (`analysis`, omitted when absent), optional read-only dependency cache (`dependencies`, omitted when absent) |
 | `publication` | Allow and deny path globs, file and byte limits, and the optional `commitIdentity` of published commits (default `ai-sdlc[bot] <noreply@ai-sdlc.invalid>`; omitted when absent, so existing digests do not change) |
 | `merge` | Ruleset, required checks, strict checks, resolved threads, human approvals |
 | `recipes` | Optional reviewed verification plug-ins (the per-issue oracles of the references) |
@@ -132,7 +132,9 @@ succeeded pod, from the same container instance, as exactly one line.
 - `repeat` is 1–3 and the test timeout 30–600 seconds.
 - The imported tree is bounded by the workspace-bundle limits (16 MiB of
   content, 4096 files) and has no `.git`: builds that need git metadata fail.
-  Dependencies must be vendored or in the toolchain image (no network).
+  Dependencies must be vendored, in the toolchain image, or in a sealed
+  dependency cache that every run mounts read-only (no network; see
+  [the dependency cache](../operations/dependency-cache.md)).
 - The workspace volume holds the tree and any build output (256 MiB).
 - At most 512 test cases, a 4 MiB report and 16 levels of suite nesting.
 - The verifier namespace's resource quota bounds what a run can request; the
