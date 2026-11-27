@@ -419,7 +419,6 @@ type encoder struct {
 	w       io.Writer
 	written int
 	files   int
-	scratch []byte
 }
 
 func newEncoder(w io.Writer, sourceSHA string) (*encoder, error) {
@@ -441,30 +440,38 @@ func (e *encoder) write(p []byte) error {
 	return nil
 }
 func (e *encoder) file(f File) error {
-	// Bounded inputs keep the size below MaxWireBytes, far from overflow.
 	if e.files >= MaxFiles || len(f.Path) > MaxPathBytes || len(f.Data) > MaxFileBytes {
 		return ErrInvalid
 	}
-	size := fileSize(f)
-	if size < 0 || size >= MaxWireBytes {
+	// Pieces are written straight to w; base64 streams through a fixed
+	// internal buffer, so no allocation depends on the file's size.
+	prefix := []byte(fileOpen)
+	if e.files > 0 {
+		prefix = []byte("," + fileOpen)
+	}
+	prefix = append(prefix, jsonString(f.Path)...)
+	prefix = append(prefix, fileMode...)
+	prefix = strconv.AppendUint(prefix, uint64(f.Mode), 10)
+	prefix = append(prefix, fileData...)
+	if e.write(prefix) != nil {
 		return ErrInvalid
 	}
-	if cap(e.scratch) <= size {
-		e.scratch = make([]byte, 0, size+1)
+	data := base64.NewEncoder(base64.StdEncoding, encoderWriter{e})
+	if _, err := data.Write(f.Data); err != nil || data.Close() != nil {
+		return ErrInvalid
 	}
-	p := e.scratch[:0]
-	if e.files > 0 {
-		p = append(p, ',')
-	}
-	p = append(p, fileOpen...)
-	p = append(p, jsonString(f.Path)...)
-	p = append(p, fileMode...)
-	p = strconv.AppendUint(p, uint64(f.Mode), 10)
-	p = append(p, fileData...)
-	p = base64.StdEncoding.AppendEncode(p, f.Data)
-	p = append(p, fileClose...)
 	e.files++
-	return e.write(p)
+	return e.write([]byte(fileClose))
+}
+
+// encoderWriter routes base64 output through the encoder's wire count.
+type encoderWriter struct{ e *encoder }
+
+func (w encoderWriter) Write(p []byte) (int, error) {
+	if w.e.write(p) != nil {
+		return 0, ErrInvalid
+	}
+	return len(p), nil
 }
 func (e *encoder) end() error { return e.write([]byte("]}")) }
 
