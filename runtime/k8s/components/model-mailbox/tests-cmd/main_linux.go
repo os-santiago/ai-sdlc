@@ -64,7 +64,9 @@ func main() {
 // tree, checks the imported tree, runs the repository's test command <runs>
 // times (each on a fresh copy of the verified tree, made before any run) and
 // writes one bounded result line per run to stdout. It opens no database,
-// network or cluster connection and loads no signing identity.
+// network or cluster connection and loads no signing identity; with manifest
+// services it only connects to, and closes, each service's loopback port
+// to wait for it before the first run.
 //
 // With the analyze argument (only for settings with analysis) it then runs
 // the analysis commands, after every test run has finished and its result
@@ -106,6 +108,13 @@ func runRepositoryTests(ctx context.Context, args []string, out io.Writer, paren
 	}
 	if repositorytests.VerifyTree(parent, args[2], args[3]) != nil {
 		return errors.New("imported tree does not match")
+	}
+	// The manifest's services (native sidecars in this pod, started before
+	// this container) must accept a loopback connection before any
+	// repository code runs. They serve every repetition of this pod; a new
+	// pod, with empty service volumes, starts each run.
+	if repositorytests.WaitServices(ctx, v.Services) != nil {
+		return errors.New("verification services not ready")
 	}
 	// A non-dumpable runner cannot be traced, and its /proc entries (and so
 	// its stdout) cannot be opened, by the same-uid repository code; the flag
