@@ -312,17 +312,17 @@ def render_from_args(args, project):
     if project and repository != project['repository']:
         raise ValueError('Repository differs from the project catalog')
     runtime_class = args.runtime_class if args.sandbox else None
+    if args.pipeline == 'npm-lock-update':
+        if project and args.directory not in project.get('npmDirectories', []):
+            raise ValueError('npm directory is not in the project catalog')
+        return npm_lock_update(repository, args.revision, args.directory, args.mode, args.package or [],
+                               args.registry_url)
     if args.pipeline == 'dependency-audit':
         declared = (project.get('npmDirectories', []) if args.ecosystem == 'npm' else list(project['modules'])) if project else []
         if project and args.directory not in declared:
             raise ValueError('Audit target is not a catalog ' + ('npm directory' if args.ecosystem == 'npm' else 'Maven module'))
         return dependency_audit(repository, args.revision, args.ecosystem, args.directory, args.registry_url,
                                 args.maven_mirror_url)
-    if args.pipeline == 'npm-lock-update':
-        if project and args.directory not in project.get('npmDirectories', []):
-            raise ValueError('npm directory is not in the project catalog')
-        return npm_lock_update(repository, args.revision, args.directory, args.mode, args.package or [],
-                               args.registry_url)
     entry = module_entry(project, args.module, args.allow_unverified) if project else None
     services = args.services.split(',') if args.services else (entry['services'] if entry else ['none'])
     maven_args = args.maven_arg if args.maven_arg is not None else (entry['mavenArgs'] if entry else [])
