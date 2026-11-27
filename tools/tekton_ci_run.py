@@ -345,7 +345,7 @@ def main(argv=None):
     parser.add_argument('--directory', help='npm-lock-update: directory with package-lock.json; dependency-audit: the target directory or module')
     parser.add_argument('--ecosystem', choices=['npm', 'maven'], help='dependency-audit: npm or maven')
     parser.add_argument('--mode', default='update', choices=['update', 'audit-fix'])
-    parser.add_argument('--package', action='append', help='npm-lock-update update mode: package or package@version')
+    parser.add_argument('--package', action='append', help='npm-lock-update update mode: a package name (npm update takes no versions)')
     parser.add_argument('--registry-url', default='', help='npm-lock-update: registry or proxy URL')
     parser.add_argument('--allow-unverified', action='store_true', help='Run a catalog module whose status is unverified')
     parser.add_argument('--sandbox', action='store_true', help='maven-build-test: run build-test under --runtime-class (gVisor)')

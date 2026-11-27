@@ -57,10 +57,15 @@ current base-branch head (trusted inputs). A candidate that adds a dependency
 fails offline with `missingDependencies: true`. `maven-dependencies` cannot fill
 it: it runs only on the base-branch head. The decided recovery (planned) is a
 resolution-only step for the candidate revision (`dependency:resolve` and
-plugin resolution, no lifecycle phase, so no plugin executes) through the
-proxy only, writing a separate per-candidate cache layer that never touches
-the shared base cache; the offline build then reads the base cache and the
-candidate layer, both read-only.
+plugin resolution, no lifecycle phase) through the proxy only, writing a
+separate per-candidate cache layer that never touches the shared base cache;
+the offline build then reads the base cache and the candidate layer, both
+read-only. That step still runs untrusted code: `dependency:resolve` is a goal
+of the Maven Dependency Plugin, and Maven loads the extensions a POM declares
+and the repository's `.mvn/` files while building the project. It therefore
+needs its own controls: refuse candidates that change `<extensions>`,
+`.mvn/` or plugin declarations, and run it under the `maven-build-test`
+restrictions (sandbox, no token) with egress only to the proxy.
 
 **Sandbox.** The adapter and the run tool can put `maven-build-test` under the
 `ai-sdlc-offline` gVisor RuntimeClass through the PipelineRun's per-task pod

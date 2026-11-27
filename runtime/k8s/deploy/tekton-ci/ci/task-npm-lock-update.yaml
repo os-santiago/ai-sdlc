@@ -200,18 +200,20 @@ spec:
           const a = entries(before), b = entries(after), changes = [];
           for (const key of [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()) {
             if (key === "") continue;
-            const x = a[key] || {}, y = b[key] || {}, from = clip(x.version, 64), to = clip(y.version, 64);
+            // Compare full values; bound only what is published.
+            const x = a[key] || {}, y = b[key] || {}, from = x.version || null, to = y.version || null;
             // A changed resolved URL or integrity is a change even at the same version.
             const resolution = from === to && (x.resolved !== y.resolved || x.integrity !== y.integrity);
-            if (from !== to || resolution) changes.push(Object.assign({path: clip(key.replace(/^node_modules\//, ""), 120), from, to},
-              resolution ? {resolutionChanged: true} : {}));
+            if (from !== to || resolution) changes.push(Object.assign({path: clip(key.replace(/^node_modules\//, ""), 120),
+              from: clip(from, 64), to: clip(to, 64)}, resolution ? {resolutionChanged: true} : {}));
           }
-          const hosts = e => new Set(Object.values(e).map(p => { try { return clip(new URL(p.resolved).host, 64); } catch { return null; } }).filter(Boolean));
+          const hosts = e => new Set(Object.values(e).map(p => { try { return new URL(p.resolved).host; } catch { return null; } }).filter(Boolean));
           const old = hosts(a), now = [...hosts(b)].sort();
+          const fresh = now.filter(h => !old.has(h));
           const diff = fs.readFileSync(diffPath);
           const out = {directory: clip(process.env.DIRECTORY, 200), mode: process.env.MODE, npmExitCode: Number(process.env.NPM_EXIT_CODE),
             changed: changes.length, changes: changes.slice(0, 25), truncated: changes.length > 25,
-            resolvedHosts: now.slice(0, 10), newResolvedHosts: now.filter(h => !old.has(h)).slice(0, 10),
+            resolvedHosts: now.slice(0, 10).map(h => clip(h, 64)), newResolvedHosts: fresh.slice(0, 10).map(h => clip(h, 64)),
             diffBytes: diff.length, diffSHA256: crypto.createHash("sha256").update(diff).digest("hex")};
           // Tekton stores the result in the termination message encoded by Go
           // json.Marshal (quotes and backslashes take 2 bytes, <, > and & take 6),
