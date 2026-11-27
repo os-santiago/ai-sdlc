@@ -740,7 +740,7 @@ class ProjectManifestChartTests(unittest.TestCase):
         self.assertEqual(rules(None), [])
         self.assertEqual(rules({'image': 'x'}), [])
         self.assertEqual(rules({'dependencies': None}), [])
-        self.assertEqual(rules({'dependencies': {'ecosystem': 'maven'}}),
+        self.assertEqual(rules({'dependencies': {'cachePath': '/deps', 'keyGlobs': ['**/pom.xml']}}),
                          [{'apiGroups': [''], 'resources': ['persistentvolumeclaims'], 'verbs': ['get']}])
         self.assertNotEqual(tests.render(*base, '--set-string', 'project.manifestJSON=[1]').returncode, 0)
 
@@ -769,15 +769,43 @@ class ProjectManifestChartTests(unittest.TestCase):
         self.assertIs(pod['automountServiceAccountToken'], False)
         self.assertRegex(pod['containers'][0]['image'], r'@sha256:[a-f0-9]{64}$')
         self.assertIs(pod['containers'][0]['securityContext']['readOnlyRootFilesystem'], True)
-        config = objects['ConfigMap/dependency-proxy']['data']['nginx.conf']
-        for line in ('proxy_pass https://repo.maven.apache.org;', 'proxy_pass https://registry.npmjs.org;', 'proxy_ssl_verify on;',
-                     'limit_except GET { deny all; }', 'location / { return 403; }'):
+        data = objects['ConfigMap/dependency-proxy']['data']
+        config = data['nginx.conf']
+        for line in ('proxy_ssl_verify on;', 'proxy_pass_request_headers off;', 'proxy_pass_request_body off;',
+                     'limit_except GET { deny all; }', 'location / { return 403; }', 'include /tmp/resolver.conf;',
+                     'set $upstream https://repo.maven.apache.org;', 'set $upstream https://registry.npmjs.org;',
+                     'location ^~ /-/ { return 403; }'):
             self.assertIn(line, config)
         self.assertNotIn('advisories/bulk', config)
+        self.assertIn('resolver ${NGINX_LOCAL_RESOLVERS}', data['resolver.conf.template'])
+        # Every proxying location forwards the normalized URI through the
+        # re-resolving variable and includes its ecosystem's header reset,
+        # so no client header or credential reaches the upstream or the cache.
+        blocks = config.split('location ')
+        proxying = [b for b in blocks if 'proxy_pass ' in b.split('location ~ /maven-metadata')[0]]
+        self.assertEqual(len(proxying), 4)
+        for block in blocks:
+            body = block.split('location ~ /maven-metadata')[0]
+            if 'proxy_pass ' not in body:
+                continue
+            self.assertIn('proxy_pass $upstream$uri;', body)
+            self.assertRegex(body, r'include /etc/nginx/ai-sdlc/(maven|npm)-request\.conf;')
+        for name, host in (('maven-request.conf', 'repo.maven.apache.org'), ('npm-request.conf', 'registry.npmjs.org')):
+            for line in ('proxy_set_header Host %s;' % host, 'proxy_set_header Authorization "";', 'proxy_set_header Cookie "";',
+                         'proxy_set_header Accept-Encoding "";'):
+                self.assertIn(line, data[name])
+        self.assertEqual(config.count('include /etc/nginx/ai-sdlc/request-filter.conf;'), 2)
+        self.assertIn('if ($request_uri ~ "[?#]") { return 403; }', data['request-filter.conf'])
+        self.assertIn('max_size=18432m', config)
+        container = pod['containers'][0]
+        self.assertEqual(container['args'][:3], ['nginx', '-c', '/etc/nginx/ai-sdlc/nginx.conf'])
+        self.assertIn({'name': 'NGINX_ENTRYPOINT_LOCAL_RESOLVERS', 'value': '1'}, container['env'])
+        self.assertIn('198.18.0.0/15', https[0]['to'][0]['ipBlock']['except'])
         self.assertEqual([p['port'] for p in objects['Service/dependency-proxy']['spec']['ports']], [8080, 8081])
         maven_only = {d['kind'] + '/' + d['metadata']['name']: d for d in docs('--set', 'dependencyProxy.enabled=true',
                       '--set', 'dependencyProxy.maven.allowedPaths={io/quarkus/,org/apache/maven/}')}
         config = maven_only['ConfigMap/dependency-proxy']['data']['nginx.conf']
+        self.assertNotIn('npm-request.conf', maven_only['ConfigMap/dependency-proxy']['data'])
         self.assertIn('location ~ ^/maven2/(io/quarkus/|org/apache/maven/) {', config)
         self.assertNotIn('listen 8081', config)
         self.assertEqual([p['port'] for p in maven_only['Service/dependency-proxy']['spec']['ports']], [8080])

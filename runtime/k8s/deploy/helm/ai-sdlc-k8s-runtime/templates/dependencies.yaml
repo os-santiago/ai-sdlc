@@ -80,7 +80,7 @@ spec:
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
-            except: [0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4]
+            except: [0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.0.2.0/24, 192.168.0.0/16, 198.18.0.0/15, 198.51.100.0/24, 203.0.113.0/24, 224.0.0.0/4, 240.0.0.0/4]
       ports: [{protocol: TCP, port: 443}]
 ---
 apiVersion: v1
@@ -90,6 +90,40 @@ metadata:
   namespace: ai-sdlc-dependencies
   labels: {app.kubernetes.io/part-of: ai-sdlc, app.kubernetes.io/component: dependency-proxy}
 data:
+  # The image's entrypoint renders the resolver from /etc/resolv.conf (the
+  # cluster DNS), so upstream hosts are resolved per request and re-resolved
+  # when their records expire, instead of once at startup.
+  resolver.conf.template: |
+    resolver ${NGINX_LOCAL_RESOLVERS} valid=60s ipv6=off;
+    resolver_timeout 5s;
+  {{- if .maven.enabled }}
+  # Included in every proxying location: proxy_set_header is inherited only
+  # by a level that sets none itself. With proxy_pass_request_headers off, no
+  # client header, cookie, credential or encoding preference reaches the
+  # upstream, and the cached response is the same for every client.
+  maven-request.conf: |
+    proxy_set_header Host {{ .maven.upstreamHost }};
+    proxy_set_header Authorization "";
+    proxy_set_header Cookie "";
+    proxy_set_header Accept-Encoding "";
+    proxy_set_header User-Agent ai-sdlc-dependency-proxy;
+  {{- end }}
+  {{- if .npm.enabled }}
+  npm-request.conf: |
+    proxy_set_header Host {{ .npm.upstreamHost }};
+    proxy_set_header Authorization "";
+    proxy_set_header Cookie "";
+    proxy_set_header Accept-Encoding "";
+    proxy_set_header User-Agent ai-sdlc-dependency-proxy;
+    proxy_set_header Accept $http_accept;
+  {{- end }}
+  # Requests are matched, cached and forwarded by the same normalized URI
+  # ($uri): a query string, or a path outside the conservative character set
+  # after decoding, is refused, so an encoded separator or dot segment cannot
+  # make the forwarded path differ from the allowlisted and cached one.
+  request-filter.conf: |
+    if ($request_uri ~ "[?#]") { return 403; }
+    if ($uri !~ "^/([A-Za-z0-9@_~+-][A-Za-z0-9@._~+-]*(/[A-Za-z0-9@_~+-][A-Za-z0-9@._~+-]*)*)?$") { return 403; }
   nginx.conf: |
     pid /tmp/nginx.pid;
     worker_processes 2;
@@ -98,47 +132,58 @@ data:
     http {
       access_log /dev/stdout;
       server_tokens off;
+      include /tmp/resolver.conf;
       client_body_temp_path /tmp/client_body;
       proxy_temp_path /tmp/proxy;
       fastcgi_temp_path /tmp/fastcgi;
       uwsgi_temp_path /tmp/uwsgi;
       scgi_temp_path /tmp/scgi;
+      client_max_body_size 0;
       # Released artifacts and tarballs are immutable: cached for ten years.
       # Metadata (maven-metadata.xml, npm packuments) is cached ten minutes.
-      proxy_cache_path /var/cache/proxy levels=1:2 keys_zone=dependencies:32m max_size={{ trimSuffix "Gi" (toString .storageSize) }}g inactive=3650d use_temp_path=off;
+      # max_size keeps a tenth of the claim free for temporary files and the
+      # file system's own use.
+      proxy_cache_path /var/cache/proxy levels=1:2 keys_zone=dependencies:32m max_size={{ div (mul (int (trimSuffix "Gi" (toString .storageSize))) 9216) 10 }}m inactive=3650d use_temp_path=off;
       proxy_ssl_server_name on;
       proxy_ssl_verify on;
       proxy_ssl_verify_depth 4;
       proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
-      proxy_set_header Authorization "";
-      proxy_set_header Cookie "";
+      # Only the headers the request includes set are sent, and no body
+      # except to the npm audit endpoints.
+      proxy_pass_request_headers off;
+      proxy_pass_request_body off;
       proxy_ignore_headers Cache-Control Expires Set-Cookie Vary;
       proxy_hide_header Set-Cookie;
       proxy_cache_lock on;
       proxy_cache_use_stale error timeout updating;
-      proxy_cache_valid 404 1m;
       {{- if .maven.enabled }}
       server {
         listen 8080;
+        set $upstream https://{{ .maven.upstreamHost }};
         proxy_ssl_name {{ .maven.upstreamHost }};
-        proxy_set_header Host {{ .maven.upstreamHost }};
-        proxy_cache_key "maven$uri";
         location = /healthz { access_log off; return 200 "ok\n"; }
+        include /etc/nginx/ai-sdlc/request-filter.conf;
         {{- if $mavenPaths }}
         location ~ ^/maven2/({{ join "|" $mavenPaths }}) {
         {{- else }}
         location /maven2/ {
         {{- end }}
           limit_except GET { deny all; }
-          proxy_pass https://{{ .maven.upstreamHost }};
+          include /etc/nginx/ai-sdlc/maven-request.conf;
+          proxy_pass $upstream$uri;
           proxy_cache dependencies;
+          proxy_cache_key "maven$uri";
           proxy_cache_valid 200 3650d;
+          proxy_cache_valid 404 1m;
           add_header X-Cache-Status $upstream_cache_status always;
           location ~ /maven-metadata\.xml(\.(md5|sha1|sha256|sha512))?$ {
             limit_except GET { deny all; }
-            proxy_pass https://{{ .maven.upstreamHost }};
+            include /etc/nginx/ai-sdlc/maven-request.conf;
+            proxy_pass $upstream$uri;
             proxy_cache dependencies;
+            proxy_cache_key "maven$uri";
             proxy_cache_valid 200 10m;
+            proxy_cache_valid 404 1m;
           }
         }
         location / { return 403; }
@@ -147,23 +192,32 @@ data:
       {{- if .npm.enabled }}
       server {
         listen 8081;
+        set $upstream https://{{ .npm.upstreamHost }};
         proxy_ssl_name {{ .npm.upstreamHost }};
-        proxy_set_header Host {{ .npm.upstreamHost }};
         location = /healthz { access_log off; return 200 "ok\n"; }
+        include /etc/nginx/ai-sdlc/request-filter.conf;
         {{- if .npm.audit }}
-        # npm audit: POST passed through, never cached.
+        # npm audit: the only requests with a body (POST), never cached.
         location = /-/npm/v1/security/advisories/bulk {
           limit_except POST { deny all; }
           client_max_body_size 8m;
-          proxy_pass https://{{ .npm.upstreamHost }};
+          include /etc/nginx/ai-sdlc/npm-request.conf;
+          proxy_pass_request_body on;
+          proxy_set_header Content-Type $content_type;
+          proxy_set_header Content-Encoding $http_content_encoding;
+          proxy_pass $upstream$uri;
         }
         location = /-/npm/v1/security/audits/quick {
           limit_except POST { deny all; }
           client_max_body_size 8m;
-          proxy_pass https://{{ .npm.upstreamHost }};
+          include /etc/nginx/ai-sdlc/npm-request.conf;
+          proxy_pass_request_body on;
+          proxy_set_header Content-Type $content_type;
+          proxy_set_header Content-Encoding $http_content_encoding;
+          proxy_pass $upstream$uri;
         }
         {{- end }}
-        location /-/ { return 403; }
+        location ^~ /-/ { return 403; }
         # Tarballs are immutable.
         {{- if $npmPackages }}
         location ~ ^/({{ join "|" $npmPackages }})/-/[^/]+\.tgz$ {
@@ -171,24 +225,28 @@ data:
         location ~ ^/(@[^/]+/)?[^/]+/-/[^/]+\.tgz$ {
         {{- end }}
           limit_except GET { deny all; }
-          proxy_pass https://{{ .npm.upstreamHost }};
+          include /etc/nginx/ai-sdlc/npm-request.conf;
+          proxy_pass $upstream$uri;
           proxy_cache dependencies;
           proxy_cache_key "npm$uri";
           proxy_cache_valid 200 3650d;
+          proxy_cache_valid 404 1m;
           add_header X-Cache-Status $upstream_cache_status always;
         }
-        # Packuments, keyed by the requested representation. The original
-        # request URI (with an encoded scope separator) is passed unchanged.
+        # Packuments, keyed by the requested representation. A scoped name
+        # arrives as /@scope%2fname and is forwarded as /@scope/name.
         {{- if $npmPackages }}
         location ~ ^/({{ join "|" $npmPackages }})$ {
         {{- else }}
         location ~ ^/(@[^/]+/)?[^/]+$ {
         {{- end }}
           limit_except GET { deny all; }
-          proxy_pass https://{{ .npm.upstreamHost }};
+          include /etc/nginx/ai-sdlc/npm-request.conf;
+          proxy_pass $upstream$uri;
           proxy_cache dependencies;
           proxy_cache_key "npm$uri|$http_accept";
           proxy_cache_valid 200 10m;
+          proxy_cache_valid 404 1m;
           add_header X-Cache-Status $upstream_cache_status always;
         }
         location / { return 403; }
@@ -252,7 +310,14 @@ spec:
         - name: proxy
           image: {{ .image }}
           imagePullPolicy: IfNotPresent
-          command: [nginx, -g, "daemon off;"]
+          # The image entrypoint renders resolver.conf from the template
+          # (only NGINX_LOCAL_RESOLVERS is substituted) before nginx starts.
+          args: [nginx, -c, /etc/nginx/ai-sdlc/nginx.conf, -g, "daemon off;"]
+          env:
+            - {name: NGINX_ENTRYPOINT_LOCAL_RESOLVERS, value: "1"}
+            - {name: NGINX_ENVSUBST_TEMPLATE_DIR, value: /etc/nginx/ai-sdlc/templates}
+            - {name: NGINX_ENVSUBST_OUTPUT_DIR, value: /tmp}
+            - {name: NGINX_ENVSUBST_FILTER, value: ^NGINX_LOCAL_RESOLVERS$}
           ports:
             {{- if .maven.enabled }}
             - {name: maven, containerPort: 8080}
@@ -267,12 +332,23 @@ spec:
             limits: {cpu: "1", memory: 256Mi, ephemeral-storage: 1Gi}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
           volumeMounts:
-            - {name: config, mountPath: /etc/nginx/nginx.conf, subPath: nginx.conf, readOnly: true}
+            - {name: config, mountPath: /etc/nginx/ai-sdlc, readOnly: true}
             - {name: cache, mountPath: /var/cache/proxy}
             - {name: tmp, mountPath: /tmp}
       volumes:
         - name: config
-          configMap: {name: dependency-proxy}
+          configMap:
+            name: dependency-proxy
+            items:
+              - {key: nginx.conf, path: nginx.conf}
+              - {key: request-filter.conf, path: request-filter.conf}
+              - {key: resolver.conf.template, path: templates/resolver.conf.template}
+              {{- if .maven.enabled }}
+              - {key: maven-request.conf, path: maven-request.conf}
+              {{- end }}
+              {{- if .npm.enabled }}
+              - {key: npm-request.conf, path: npm-request.conf}
+              {{- end }}
         - name: cache
           persistentVolumeClaim: {claimName: dependency-proxy-cache}
         - name: tmp
