@@ -65,7 +65,21 @@ type Request struct {
 	// BaseHead is the current base-branch head; maven-dependencies, the only
 	// writer of the shared cache, runs only when Revision equals it.
 	BaseHead string
+	// Candidate is a generator's change as a unified diff against Revision.
+	// When set, the pipeline applies it before building, through a ConfigMap
+	// named by CandidateConfigMap and bound as the candidate workspace.
+	Candidate []byte
+	// CandidateConfigMap names that ConfigMap (set by Run).
+	CandidateConfigMap string
 }
+
+// MaxCandidateBytes bounds a candidate diff; a ConfigMap holds at most 1 MiB
+// and apply-candidate refuses more than 768 KiB.
+const MaxCandidateBytes = 768 * 1024
+
+// candidatePipelines accept a candidate diff.
+var candidatePipelines = map[string]bool{project.TektonMavenBuildTest: true, project.TektonNpmLockUpdate: true}
+var configMapName = regexp.MustCompile(`^ai-sdlc-candidate-[0-9a-f]{16}-[0-9a-z]{6}$`)
 
 // FromInvocation builds a pre- or post-generation request from the manifest.
 // The manifest cannot name maven-dependencies (an operator step that only
@@ -134,6 +148,10 @@ func (r Request) Validate() error {
 	if r.Pipeline == project.TektonMavenDependencies && r.Revision != r.BaseHead {
 		return ErrRequest
 	}
+	if len(r.Candidate) > 0 && (!candidatePipelines[r.Pipeline] || len(r.Candidate) > MaxCandidateBytes ||
+		!configMapName.MatchString(r.CandidateConfigMap)) {
+		return ErrRequest
+	}
 	switch project.TektonTargetKind(r.Pipeline) {
 	case "module":
 		if !project.TektonTargetPath(r.Target, true) || !project.TektonServiceList(r.Services) ||
@@ -189,6 +207,9 @@ func (r Request) PipelineRun(runtimeClass string) (map[string]any, error) {
 		"timeouts":        map[string]any{"pipeline": "1h0m0s"},
 		"taskRunTemplate": map[string]any{"serviceAccountName": ServiceAccount, "podTemplate": pod},
 		"workspaces":      workspaces,
+	}
+	if len(r.Candidate) > 0 {
+		spec["workspaces"] = append(workspaces, map[string]any{"name": "candidate", "configMap": map[string]any{"name": r.CandidateConfigMap}})
 	}
 	if runtimeClass != "" && r.Pipeline == project.TektonMavenBuildTest {
 		sandboxed := map[string]any{"runtimeClassName": runtimeClass}

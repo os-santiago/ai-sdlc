@@ -80,11 +80,14 @@ spec:
         !has(object.spec.workspaces) || object.spec.workspaces.all(w,
           (w.name == 'source' && w.all(k, k in ['name', 'volumeClaimTemplate']) && has(w.volumeClaimTemplate.spec) &&
            w.volumeClaimTemplate.spec.all(k, k in ['accessModes', 'resources'])) ||
+          (w.name == 'candidate' && w.all(k, k in ['name', 'configMap']) && w.configMap.all(k, k in ['name']) &&
+           w.configMap.name.startsWith('ai-sdlc-candidate-') &&
+           object.spec.pipelineRef.name in ['ai-sdlc-maven-build-test', 'ai-sdlc-npm-lock-update']) ||
           (w.name == 'maven-cache' && w.all(k, k in ['name', 'persistentVolumeClaim']) && has(w.persistentVolumeClaim) &&
            w.persistentVolumeClaim.claimName.startsWith('ai-sdlc-ci-maven-cache-') &&
            (object.spec.pipelineRef.name == 'ai-sdlc-maven-dependencies' ||
             (has(w.persistentVolumeClaim.readOnly) && w.persistentVolumeClaim.readOnly == true))))
-      message: workspaces are a fresh source claim and a repository cache, read-only except for maven-dependencies
+      message: workspaces are a fresh source claim, a candidate ConfigMap and a repository cache, read-only except for maven-dependencies
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

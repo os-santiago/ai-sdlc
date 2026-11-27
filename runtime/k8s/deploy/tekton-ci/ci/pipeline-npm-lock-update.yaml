@@ -28,6 +28,10 @@ spec:
       default: ""
   workspaces:
     - name: source
+    # A generator tool call binds the candidate diff here (a ConfigMap);
+    # without it the pipeline tests the commit itself.
+    - name: candidate
+      optional: true
   tasks:
     - name: checkout
       taskRef:
@@ -40,8 +44,21 @@ spec:
       workspaces:
         - name: output
           workspace: source
-    - name: lock-update
+    - name: apply
       runAfter: [checkout]
+      when:
+        - input: $(workspaces.candidate.bound)
+          operator: in
+          values: ["true"]
+      taskRef:
+        name: apply-candidate
+      workspaces:
+        - name: source
+          workspace: source
+        - name: candidate
+          workspace: candidate
+    - name: lock-update
+      runAfter: [apply]
       taskRef:
         name: npm-lock-update
       params:
@@ -59,5 +76,7 @@ spec:
   results:
     - name: commit
       value: $(tasks.checkout.results.commit)
+    - name: tree
+      value: $(tasks.apply.results.tree)
     - name: summary
       value: $(tasks.lock-update.results.summary)

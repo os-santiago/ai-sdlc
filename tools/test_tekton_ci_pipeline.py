@@ -1,4 +1,5 @@
 """Render and validate the reviewed Tekton task catalog and its run tool."""
+import hashlib
 import ipaddress
 import json
 from pathlib import Path
@@ -96,7 +97,7 @@ class ManifestTests(unittest.TestCase):
             ('ValidatingAdmissionPolicyBinding', 'ai-sdlc-ci-pipelinerun-labels'),
             ('NetworkPolicy', 'ai-sdlc-ci-fetch-dns'), ('NetworkPolicy', 'ai-sdlc-ci-fetch-https'),
             ('NetworkPolicy', 'ai-sdlc-ci-dependency-proxy'),
-            ('Task', 'source-checkout'), ('Task', 'maven-build-test'), ('Task', 'maven-dependencies'),
+            ('Task', 'source-checkout'), ('Task', 'apply-candidate'), ('Task', 'maven-build-test'), ('Task', 'maven-dependencies'),
             ('Task', 'npm-lock-update')] + [('Pipeline', p) for p in tekton.PIPELINES]))
         for doc in documents():
             if doc['kind'] not in ('Namespace', 'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding'):
@@ -172,17 +173,22 @@ class ManifestTests(unittest.TestCase):
             for entry in spec['tasks']:
                 self.assertEqual(set(entry['taskRef']), {'name'}, 'installed tasks only, no resolvers or bundles')
                 task = tasks[entry['taskRef']['name']]['spec']
-                declared = {p['name']: p for p in task['params']}
-                self.assertLessEqual({p['name'] for p in entry['params']}, set(declared))
+                declared = {p['name']: p for p in task.get('params', [])}
+                self.assertLessEqual({p['name'] for p in entry.get('params', [])}, set(declared))
                 required = {name for name, p in declared.items() if 'default' not in p}
-                self.assertLessEqual(required, {p['name'] for p in entry['params']})
-                for param in entry['params']:
+                self.assertLessEqual(required, {p['name'] for p in entry.get('params', [])})
+                for param in entry.get('params', []):
                     for reference in re.findall(r'\$\(params\.([a-z-]+)', json.dumps(param['value'])):
                         self.assertIn(reference, params)
                 self.assertEqual({w['name'] for w in entry['workspaces']},
                                  {w['name'] for w in task['workspaces'] if not w.get('optional')})
                 self.assertLessEqual({w['workspace'] for w in entry['workspaces']}, workspaces)
-            self.assertEqual({r['name'] for r in spec['results']}, {'commit', 'summary'})
+            candidate = any(w['name'] == 'candidate' for w in spec['workspaces'])
+            self.assertEqual({r['name'] for r in spec['results']}, {'commit', 'summary'} | ({'tree'} if candidate else set()))
+            if candidate:
+                apply = next(t for t in spec['tasks'] if t['name'] == 'apply')
+                self.assertEqual(apply['when'], [{'input': '$(workspaces.candidate.bound)', 'operator': 'in', 'values': ['true']}])
+                self.assertEqual(next(w for w in spec['workspaces'] if w['name'] == 'candidate'), {'name': 'candidate', 'optional': True})
         build = {w['name']: w for w in tasks['maven-build-test']['spec']['workspaces']}
         self.assertIs(build['maven-cache']['readOnly'], True, 'candidate code never writes the shared cache')
         self.assertNotIn('readOnly', {w['name']: w for w in tasks['maven-dependencies']['spec']['workspaces']}['maven-cache'])
@@ -254,6 +260,39 @@ class ScriptTests(unittest.TestCase):
                 result = execute(text, dict(base, REPOSITORY=repository, REVISION=revision))
                 self.assertEqual(result.returncode, 2, (repository, revision, result.stderr))
                 self.assertFalse(Path(directory, 'src').exists())
+
+    def apply_candidate(self, diff, digest=None):
+        text = step('apply-candidate', 'apply')['script']
+        directory = tempfile.mkdtemp()
+        source = Path(directory, 'source')
+        source.mkdir()
+        git = lambda *a: subprocess.run(['git', '-C', str(source), *a], check=True, capture_output=True, text=True,
+                                        env={'HOME': directory, 'GIT_CONFIG_NOSYSTEM': '1', 'PATH': '/usr/bin:/bin'})
+        git('init', '-q')
+        source.joinpath('A.java').write_text('class A {}\n')
+        git('add', '-A')
+        git('-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-qm', 'base')
+        candidate = Path(directory, 'candidate')
+        candidate.mkdir()
+        candidate.joinpath('candidate.diff').write_bytes(diff)
+        candidate.joinpath('candidate.sha256').write_text(digest or hashlib.sha256(diff).hexdigest())
+        result = execute(text, {'SOURCE': str(source), 'CANDIDATE': str(candidate), 'RESULT': directory + '/tree',
+                                'HOME': directory, 'GIT_CONFIG_NOSYSTEM': '1'})
+        tree = Path(directory, 'tree').read_text() if Path(directory, 'tree').exists() else None
+        return result, tree, source
+
+    def test_apply_candidate_verifies_digest_and_paths_and_publishes_the_tree(self):
+        good = b'--- a/A.java\n+++ b/A.java\n@@ -1 +1 @@\n-class A {}\n+class A { int x; }\n'
+        result, tree, source = self.apply_candidate(good)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(tree, '^[0-9a-f]{40}$')
+        self.assertEqual(source.joinpath('A.java').read_text(), 'class A { int x; }\n')
+        self.assertEqual(self.apply_candidate(good, digest='0' * 64)[0].returncode, 2, 'digest mismatch')
+        for bad in (b'--- a/../x\n+++ b/../x\n@@ -0,0 +1 @@\n+x\n',
+                    b'--- /dev/null\n+++ b/.git/hooks/pre-commit\n@@ -0,0 +1 @@\n+x\n',
+                    b'diff --git a/b.bin b/b.bin\nGIT binary patch\nliteral 1\nIcmZ?d00001\n\n'):
+            self.assertNotEqual(self.apply_candidate(bad)[0].returncode, 0, bad[:40])
+        self.assertEqual(self.apply_candidate(b'x' * (786432 + 1))[0].returncode, 2, 'size bound')
 
     def test_maven_steps_refuse_unsafe_module_services_and_mirror(self):
         for task in ('maven-build-test', 'maven-dependencies'):
@@ -562,7 +601,7 @@ class RunToolTests(unittest.TestCase):
         self.assertEqual(spec['pipelineRef'], {'name': 'ai-sdlc-maven-build-test'})
         self.assertNotIn('pipelineSpec', spec)
         self.assertEqual({p['name'] for p in spec['params']}, {p['name'] for p in pipeline['params']})
-        self.assertEqual({w['name'] for w in spec['workspaces']}, {w['name'] for w in pipeline['workspaces']})
+        self.assertEqual({w['name'] for w in spec['workspaces']}, {w['name'] for w in pipeline['workspaces'] if not w.get('optional')})
         cache = spec['workspaces'][1]
         self.assertEqual(cache, {'name': 'maven-cache', 'persistentVolumeClaim': {
             'claimName': tekton.cache_claim('os-santiago/quarkus-super-heroes'), 'readOnly': True}})
@@ -585,7 +624,7 @@ class RunToolTests(unittest.TestCase):
         for run, name in ((deps, 'ai-sdlc-maven-dependencies'), (npm, 'ai-sdlc-npm-lock-update')):
             pipeline = by_kind('Pipeline')[name]['spec']
             self.assertEqual({p['name'] for p in run['spec']['params']}, {p['name'] for p in pipeline['params']})
-            self.assertEqual({w['name'] for w in run['spec']['workspaces']}, {w['name'] for w in pipeline['workspaces']})
+            self.assertEqual({w['name'] for w in run['spec']['workspaces']}, {w['name'] for w in pipeline['workspaces'] if not w.get('optional')})
         self.assertEqual({p['name']: p['value'] for p in npm['spec']['params']}['packages'], ['vite', '@scope/pkg'])
         with self.assertRaisesRegex(ValueError, 'names'):
             runner.npm_lock_update('a/b', SHA, 'ui/web', 'update', ['vite@6.3.5'])

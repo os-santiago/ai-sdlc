@@ -2,6 +2,8 @@ package tektontasks
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -214,14 +216,32 @@ func TestSummariesAreDecodedStrictlyAndBounded(t *testing.T) {
 }
 
 type fakeCluster struct {
-	reads     []map[string]any
-	fails     int
-	created   map[string]any
-	cancelled string
+	reads      []map[string]any
+	fails      int
+	created    map[string]any
+	cancelled  string
+	configMaps []map[string]any
+	owned      string
+	deleted    string
 }
 
 func (f *fakeCluster) Cancel(_ context.Context, name string) error {
 	f.cancelled = name
+	return nil
+}
+
+func (f *fakeCluster) CreateConfigMap(_ context.Context, object map[string]any) error {
+	f.configMaps = append(f.configMaps, object)
+	return nil
+}
+
+func (f *fakeCluster) OwnConfigMap(_ context.Context, configMap, run, uid string) error {
+	f.owned = configMap + "/" + run + "/" + uid
+	return nil
+}
+
+func (f *fakeCluster) DeleteConfigMap(_ context.Context, name string) error {
+	f.deleted = name
 	return nil
 }
 
@@ -284,5 +304,49 @@ func TestRunPollsToCompletionAndBindsTheRequestedCommit(t *testing.T) {
 	huge["status"].(map[string]any)["results"] = []any{map[string]any{"name": "summary", "value": strings.Repeat("x", MaxResultBytes+1)}}
 	if _, err := Run(context.Background(), &fakeCluster{reads: []map[string]any{huge}}, request, "", time.Millisecond); !errors.Is(err, ErrOutcome) {
 		t.Fatal("accepted an oversized result", err)
+	}
+}
+
+func TestCandidateRunsCarryTheDiffInAnOwnedConfigMap(t *testing.T) {
+	request, _ := FromTool(manifest(), "build_test", "rest-villains", nil, sha)
+	request.Candidate = []byte("--- a/A.java\n+++ b/A.java\n@@ -1 +1 @@\n-a\n+b\n")
+	withTree := status("True", sha)
+	withTree["status"].(map[string]any)["results"] = append(withTree["status"].(map[string]any)["results"].([]any),
+		map[string]any{"name": "tree", "value": strings.Repeat("a", 40)})
+	cluster := &fakeCluster{reads: []map[string]any{withTree}}
+	outcome, err := Run(context.Background(), cluster, request, "", time.Millisecond)
+	if err != nil || outcome.Tree != strings.Repeat("a", 40) || len(cluster.configMaps) != 1 {
+		t.Fatal("candidate run", outcome, err)
+	}
+	cm := cluster.configMaps[0]
+	name := cm["metadata"].(map[string]any)["name"].(string)
+	data := cm["data"].(map[string]any)
+	sum := sha256.Sum256(request.Candidate)
+	if data["candidate.diff"] != string(request.Candidate) || data["candidate.sha256"] != hex.EncodeToString(sum[:]) ||
+		!strings.HasPrefix(name, "ai-sdlc-candidate-"+hex.EncodeToString(sum[:])[:16]) || cluster.owned != name+"/run-1/u-1" {
+		t.Fatal("candidate ConfigMap", cm, cluster.owned)
+	}
+	bound := false
+	for _, w := range cluster.created["spec"].(map[string]any)["workspaces"].([]any) {
+		if w.(map[string]any)["name"] == "candidate" && w.(map[string]any)["configMap"].(map[string]any)["name"] == name {
+			bound = true
+		}
+	}
+	if !bound {
+		t.Fatal("candidate workspace not bound")
+	}
+	// A succeeded candidate run without a tree did not apply the diff.
+	if _, err := Run(context.Background(), &fakeCluster{reads: []map[string]any{status("True", sha)}}, request, "", time.Millisecond); !errors.Is(err, ErrOutcome) {
+		t.Fatal("accepted a candidate run without its tree", err)
+	}
+	big := request
+	big.Candidate = make([]byte, MaxCandidateBytes+1)
+	if _, err := Run(context.Background(), &fakeCluster{}, big, "", time.Millisecond); !errors.Is(err, ErrRequest) {
+		t.Fatal("accepted an oversized candidate", err)
+	}
+	deps := Request{Pipeline: project.TektonMavenDependencies, Repository: request.Repository, Revision: sha, BaseHead: sha,
+		Target: "rest-villains", Services: []string{"none"}, Candidate: request.Candidate}
+	if _, err := Run(context.Background(), &fakeCluster{}, deps, "", time.Millisecond); !errors.Is(err, ErrRequest) {
+		t.Fatal("a candidate diff reached the cache-writing pipeline", err)
 	}
 }

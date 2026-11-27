@@ -1,0 +1,87 @@
+# Apply a generator's candidate change to a checked-out base commit, so a
+# catalog pipeline can build and test a tree that exists only inside the
+# generation sandbox. The change arrives as a unified diff in a ConfigMap that
+# the trusted tool controller creates (internal/tektontasks), bound read-only
+# as the candidate workspace together with its SHA-256. This step verifies the
+# digest, refuses binary or out-of-tree paths, applies the diff with git, and
+# publishes the resulting tree id so the caller can bind the result to the
+# exact tree it asked about. It runs no repository code and has no network.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: apply-candidate
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  description: Verify and apply a bounded candidate diff to the checkout.
+  workspaces:
+    - name: source
+      description: Contains the base checkout under source/.
+    - name: candidate
+      readOnly: true
+      description: ConfigMap with candidate.diff and candidate.sha256.
+  results:
+    - name: tree
+      description: git tree id of the source after the candidate diff.
+  volumes:
+    - name: home
+      emptyDir:
+        sizeLimit: 64Mi
+  steps:
+    - name: apply
+      image: docker.io/alpine/git@sha256:c0280cf9572316299b08544065d3bf35db65043d5e3963982ec50647d2746e26
+      computeResources:
+        requests:
+          cpu: 100m
+          memory: 64Mi
+        limits:
+          cpu: "1"
+          memory: 512Mi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        - name: home
+          mountPath: /home/ci
+      env:
+        - name: HOME
+          value: /home/ci
+        - name: GIT_CONFIG_NOSYSTEM
+          value: "1"
+        - name: SOURCE
+          value: $(workspaces.source.path)/source
+        - name: CANDIDATE
+          value: $(workspaces.candidate.path)
+        - name: RESULT
+          value: $(results.tree.path)
+      script: |
+        #!/bin/sh
+        set -eu
+        diff="$CANDIDATE/candidate.diff"
+        [ -f "$diff" ] && [ -f "$CANDIDATE/candidate.sha256" ] || { echo 'candidate diff and digest are required' >&2; exit 2; }
+        size="$(wc -c < "$diff")"
+        [ "$size" -le 786432 ] || { echo 'candidate diff exceeds 768 KiB' >&2; exit 2; }
+        expected="$(tr -d ' \n' < "$CANDIDATE/candidate.sha256")"
+        actual="$(sha256sum "$diff" | cut -d' ' -f1)"
+        [ "$actual" = "$expected" ] || { echo 'candidate diff digest mismatch' >&2; exit 2; }
+        cd "$SOURCE"
+        # Text diffs inside the tree only: no binary patches, no absolute or
+        # parent paths, no changes to git metadata.
+        if grep -Eq '^(GIT binary patch|Binary files )' "$diff"; then echo 'binary candidate changes are not supported' >&2; exit 2; fi
+        if git apply --numstat "$diff" | cut -f3- | grep -Eq '(^/|(^|/)\.\.(/|$)|(^|/)\.git(/|$))'; then
+          echo 'candidate diff touches a path outside the tree' >&2; exit 2
+        fi
+        git -c core.symlinks=false apply --whitespace=nowarn --check "$diff"
+        git -c core.symlinks=false apply --whitespace=nowarn "$diff"
+        git add -A
+        tree="$(git write-tree)"
+        printf '%s' "$tree" > "$RESULT"
+        echo "Applied candidate diff ($size bytes, sha256 $actual); tree $tree"
