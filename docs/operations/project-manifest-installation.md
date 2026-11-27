@@ -80,9 +80,10 @@ the same framework, imports and conventions as the repository's existing
 tests with no new dependency, because verification has only the image's
 packages: a test that imports `pytest` fails in the Python image. Since the
 generator cannot run the tests, the guidance also asks it to check every
-expected value by hand and prefer small inputs with obvious results: in the
-Python batteries most remaining refusals were correct code with a miscounted
-expected value. A generation toolchain (#831) or a verification repair (#837)
+expected value by hand and prefer small inputs with obvious results: in Python
+batteries 38–40 most remaining refusals were correct code with a miscounted
+expected value, most of them on one issue
+([evidence](../evidence/2026-11-26-claude-cli-agent-experiment.md)). A generation toolchain (#831) or a verification repair (#837)
 would catch these mechanically.
 
 The Python example runs the suite as `python3 -I -B -m unittest discover -s . -t .`.
