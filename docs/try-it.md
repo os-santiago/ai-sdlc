@@ -4,9 +4,18 @@ You need an installation with delivery enabled for your repository and the flow
 console. The [detailed guide](try-it-detailed.md) explains each step.
 
 1. **Install** with delivery and the console (once per repository; see the
-   [adoption guide](adoption.md) for the manifest and model endpoint). The first
-   run creates the merge rule, stops and prints its ID; set `merge.rulesetID` in
-   the manifest and run it again:
+   [adoption guide](adoption.md) for the manifest and model endpoint). First
+   resolve the image pins, including the console's, from a signed `containers`
+   run on `main` (see [enable the console](operations/flow-console.md#with-the-installer);
+   use a new `--output` directory each time):
+
+   ```bash
+   python3 tools/install_images.py --run RUN_ID --revision FULL_COMMIT_SHA \
+     --include-console --output /tmp/ai-sdlc-images
+   ```
+
+   Then install. The first run creates the merge rule, stops and prints its ID;
+   set `merge.rulesetID` in the manifest and run it again:
 
    ```bash
    ./install.sh local --cluster my-eval --repository OWNER/REPO \
@@ -17,15 +26,6 @@ console. The [detailed guide](try-it-detailed.md) explains each step.
      --images /tmp/ai-sdlc-images/images.lock.json --flow-console
    ```
 
-   The console image is pinned beside the image lock. Resolve both first, from
-   a signed `containers` run on `main` (see
-   [enable the console](operations/flow-console.md#with-the-installer)):
-
-   ```bash
-   python3 tools/install_images.py --run RUN_ID --revision FULL_COMMIT_SHA \
-     --include-console --output /tmp/ai-sdlc-images
-   ```
-
 2. **Open the console:**
 
    ```bash
@@ -34,7 +34,8 @@ console. The [detailed guide](try-it-detailed.md) explains each step.
      port-forward svc/ai-sdlc-flow-console 8080:8091
    ```
 
-   Then browse to <http://127.0.0.1:8080/>.
+   Then browse to <http://127.0.0.1:8080/>. (The kubeconfig lives under
+   `$XDG_STATE_HOME` instead of `~/.local/state` if you set it.)
 
 3. **File a small issue** in that repository, with an `## Acceptance criteria`
    section, inside a package that already exists:

@@ -47,6 +47,8 @@ Reference measurements on the sample repositories are in
     --include-console --output /tmp/ai-sdlc-images
   ```
 
+  The tool refuses an existing output directory, so use a new one each time.
+
 - **Merge rule ID.** The first run creates the native merge rule on GitHub,
   then stops and prints its ID. Set `merge.rulesetID` in the manifest to it
   and run the same command again.
@@ -67,7 +69,8 @@ kubectl --kubeconfig ~/.local/state/ai-sdlc/my-eval/kubeconfig \
 ```
 
 Browse to <http://127.0.0.1:8080/>. The installer keeps each cluster's
-kubeconfig in its own file (above, for `--cluster my-eval`) and prints this
+kubeconfig in its own file (above, for `--cluster my-eval`; under
+`$XDG_STATE_HOME` if you set it) and prints this
 command at the end of the run.
 
 What you see:
