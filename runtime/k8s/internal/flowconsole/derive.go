@@ -145,7 +145,13 @@ func (d *deriver) link(l store.FlowLink) link {
 }
 
 func (d *deriver) emit(l link, stage, step, kind, diagnostic string, at time.Time, duration, latency int64, attributes map[string]string, key ...string) {
-	e := flowevent.Event{Version: flowevent.Version, ID: flowevent.NewID(append([]string{stage, kind, step}, key...)...), Time: at.UTC(),
+	d.emitAs(step, l, stage, step, kind, diagnostic, at, duration, latency, attributes, key...)
+}
+
+// emitAs is emit with the step used in the event id given separately, for a
+// step label that can change between reads of the same row.
+func (d *deriver) emitAs(idStep string, l link, stage, step, kind, diagnostic string, at time.Time, duration, latency int64, attributes map[string]string, key ...string) {
+	e := flowevent.Event{Version: flowevent.Version, ID: flowevent.NewID(append([]string{stage, kind, idStep}, key...)...), Time: at.UTC(),
 		Component: flowevent.ComponentOf(stage), Repository: l.repository, Issue: l.issue, WorkItem: l.workItem, Attempt: l.attempt,
 		Stage: stage, Step: name(step), Kind: kind, Diagnostic: name(diagnostic), DurationMs: duration, LatencyMs: latency, Attributes: attributes}
 	if e.Validate() == nil {
@@ -197,16 +203,31 @@ func (d *deriver) mergedIssues(merges []store.FlowVerdict) map[string][]time.Tim
 // reopened issue refused at another risk or later, stays a plain refusal.
 //
 // A rejection that follows the issue's stopped work is labelled step
-// after-work-stopped (still kind failed, diagnostic rejected): the latest
-// work transition before it is a refusal or safe stop (a failed or
-// stopped-safely verdict, or a stopped execution), nothing was queued or
-// claimed since, and no other admission decision came after that stop. Such a
-// rejection refuses a later revision of an issue whose work had already
-// ended, typically because its trigger label was removed (an operator or the
-// evaluation runner withdrawing authorization after a refused attempt) or
-// because it was closed; it neither stopped nor refused that work. Without
-// the label the newest event of the issue, the rejection, read as the reason
-// the work ended and hid the verification refusal that actually ended it.
+// after-work-stopped (still kind failed, diagnostic rejected): its risk is
+// not critical, the latest work transition before it is a refusal or safe
+// stop (a failed or stopped-safely verdict, or a stopped execution) strictly
+// earlier than it, nothing was queued or claimed since, and no admission
+// decision other than a rejection came after that stop, so every rejection
+// in a row after the stop is labelled. Admission rejects either because the
+// issue became ineligible (closed, or its trigger label or authorized actor
+// withdrawn; the risk is then the evaluation's, never critical) or because
+// the issue asks for destructive or secret-disclosing work (risk critical).
+// An ineligible revision after the work ended, typically after an operator or
+// the evaluation runner removed the label from a refused attempt, neither
+// stopped nor refused that work. Without the label the newest event of the
+// issue, the rejection, read as the reason the work ended and hid the
+// verification refusal that actually ended it. A critical rejection stays a
+// plain refusal: it is a finding about the issue itself.
+//
+// The label keeps the plain refusal's event id, and the hub publishes an id
+// only once, so the first read that sees the rejection decides its label.
+// A rejection read while its work was still running stays decision even
+// when that work later stops, and work rows leaving the window later do not
+// relabel or duplicate it. After a console restart the history is derived
+// again from the journal alone; a refusal of verification or review then
+// carries its last recorded effect time, earlier than the unrecorded verdict,
+// so a rejection that came in the final seconds before such a verdict is
+// labelled after-work-stopped.
 func (d *deriver) admissions(rows []store.FlowAdmission, merged map[string][]time.Time, work map[string][]transition) {
 	ordered := append([]store.FlowAdmission(nil), rows...)
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].UpdatedAt.Before(ordered[j].UpdatedAt) })
@@ -237,8 +258,8 @@ func (d *deriver) admissions(rows []store.FlowAdmission, merged map[string][]tim
 				closed[slot] = true
 				kind, diagnostic, step = flowevent.KindCompleted, "", "issue-closed"
 			}
-			if step == "decision" {
-				if stop, ok := lastTransition(work[key], r.UpdatedAt); ok && stop.stopped && stop.at.After(decided[key]) {
+			if step == "decision" && r.Risk != "critical" {
+				if stop, ok := lastTransition(work[key], r.UpdatedAt); ok && stop.stopped && stop.at.Before(r.UpdatedAt) && stop.at.After(decided[key]) {
 					step = "after-work-stopped"
 				}
 			}
@@ -252,7 +273,15 @@ func (d *deriver) admissions(rows []store.FlowAdmission, merged map[string][]tim
 		default:
 			delete(closure, key)
 		}
-		d.emit(l, "admission", step, kind, diagnostic, r.UpdatedAt, ms(r.UpdatedAt.Sub(r.CreatedAt)), 0, attrs("decision", r.Decision, "risk", r.Risk),
+		// The label after-work-stopped depends on other rows, so it keeps the
+		// id of the plain refusal: a later read that labels the same row
+		// differently is the same event, which the hub has already published
+		// and does not publish again (see admissions).
+		idStep := step
+		if step == "after-work-stopped" {
+			idStep = "decision"
+		}
+		d.emitAs(idStep, l, "admission", step, kind, diagnostic, r.UpdatedAt, ms(r.UpdatedAt.Sub(r.CreatedAt)), 0, attrs("decision", r.Decision, "risk", r.Risk),
 			r.Repository, strconv.Itoa(r.Issue), r.CreatedAt.UTC().Format(time.RFC3339Nano), r.Decision)
 	}
 }

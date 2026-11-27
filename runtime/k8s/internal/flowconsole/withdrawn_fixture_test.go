@@ -2,6 +2,7 @@ package flowconsole
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"testing"
@@ -168,5 +169,80 @@ func TestRejectionStaysARefusalUnlessWorkHadStopped(t *testing.T) {
 		if steps[issue] != w {
 			t.Errorf("issue %d: %q, want %q", issue, steps[issue], w)
 		}
+	}
+}
+
+// A critical rejection is a finding about the issue (destructive or
+// secret-disclosing work), not a withdrawal: it stays a plain refusal even
+// right after a refused attempt.
+func TestCriticalRejectionAfterARefusalStaysARefusal(t *testing.T) {
+	j := refusedThenWithdrawnJournal()
+	j.Admissions[len(j.Admissions)-1].Risk = "critical"
+	got := map[string]string{}
+	for _, e := range Derive(j, DeriveOptions{}) {
+		if e.Stage == "admission" && e.Attributes["decision"] == "rejected" {
+			got[e.Attributes["risk"]] = e.Step
+		}
+	}
+	if got["low"] != "after-work-stopped" || got["critical"] != "decision" {
+		t.Fatal("steps by risk", got)
+	}
+}
+
+// The first read that sees a rejection decides its label. Read while
+// verification is still running, the rejection is a plain refusal; when the
+// verification later fails, the re-derived row keeps the same id, so the hub
+// neither relabels nor duplicates it. A fresh console reading only the later
+// journal labels the same id after-work-stopped.
+func TestRejectionLabelIsDecidedByItsFirstRead(t *testing.T) {
+	base := time.Date(2026, 11, 27, 0, 0, 0, 0, time.UTC)
+	at := func(s int) time.Time { return base.Add(time.Duration(s) * time.Second) }
+	ptr := func(s int) *time.Time { v := at(s); return &v }
+	const repo, issue, item = "example/app", 47, "5a6b7c8d-0c1d-4e2f-9a3b-4c5d6e7f8a9b"
+	link := store.FlowLink{WorkItem: item, Attempt: 1, Repository: repo}
+	journal := func(state, reason string) store.FlowJournal {
+		return store.FlowJournal{
+			ObservedAt: at(600),
+			WorkItems:  []store.FlowWorkItem{{UUID: item, Repository: repo, Issues: []int{issue}, Status: "ready", CreatedAt: at(1), UpdatedAt: at(1)}},
+			Admissions: []store.FlowAdmission{
+				{Repository: repo, Issue: issue, Decision: "accepted", Risk: "low", CreatedAt: at(0), UpdatedAt: at(0)},
+				// The label is removed while the tests still run.
+				{Repository: repo, Issue: issue, Decision: "rejected", Risk: "low", CreatedAt: at(130), UpdatedAt: at(130)},
+			},
+			Verifications:       []store.FlowVerdict{{ID: "verification-47", FlowLink: link, State: state, Reason: reason, Cleanup: "complete", CreatedAt: at(100), ExpiresAt: at(3600), ClaimUntil: ptr(3000), Candidate: "execution-47"}},
+			VerificationEffects: []store.FlowEffect{{Parent: "verification-47", Kind: "tests", CreatedAt: at(101), CompletedAt: ptr(102)}},
+		}
+	}
+	reads := []store.FlowJournal{journal("claimed", ""), journal("failed", "comparison-failed")}
+	hub := NewHub(100, "journal")
+	collector := Collector{Hub: hub, Window: 24 * time.Hour, Limit: 100, Read: func(context.Context, time.Time, int) (store.FlowJournal, error) {
+		j := reads[0]
+		reads = reads[1:]
+		return j, nil
+	}}
+	for range 2 {
+		if _, err := collector.Poll(context.Background(), at(600)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rejections := func(h *Hub) []flowevent.Event {
+		var out []flowevent.Event
+		entries, _, _ := h.Since(0, 0)
+		for _, entry := range entries {
+			if entry.Event.Stage == "admission" && entry.Event.Attributes["decision"] == "rejected" {
+				out = append(out, entry.Event)
+			}
+		}
+		return out
+	}
+	live := rejections(hub)
+	if len(live) != 1 || live[0].Step != "decision" {
+		t.Fatal("rejection read during in-flight work", live)
+	}
+	fresh := NewHub(100, "journal")
+	fresh.Publish(Derive(journal("failed", "comparison-failed"), DeriveOptions{}))
+	later := rejections(fresh)
+	if len(later) != 1 || later[0].Step != "after-work-stopped" || later[0].ID != live[0].ID {
+		t.Fatal("rejection derived from the later journal", later, live)
 	}
 }

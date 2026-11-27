@@ -92,8 +92,10 @@ In Spanish, with the detail panel: [flow-console-es.png](flow-console-es.png); l
   issue that is refused shows as failed, one that is blocked as blocked.
 - **Rejection after the work stopped**: when an issue's work was refused or
   stopped (for example verification `comparison-failed`) and admission then
-  rejects a later revision (the trigger label was removed, or the issue was
-  closed), the server labels that rejection step `after-work-stopped`. It
+  rejects later revisions for ineligibility (the trigger label was removed,
+  or the issue was closed), the server labels each of those rejections step
+  `after-work-stopped`. A rejection at risk `critical` (destructive or
+  secret-disclosing work) is never relabelled. Each labelled rejection
   keeps its admission bar and its place in the detail panel, but it is never
   the lane's final stage and is not counted as a failure, stop or problem, so
   the lane's summary names the stage and reason that ended the work
@@ -193,7 +195,7 @@ ids it has not published before.
 | Journal | Events |
 |---|---|
 | `intake_revisions` | intake `completed` for every observed revision (step `observed`, attribute `generation`); only the repository, issue, generation and time are readable, never the payload |
-| `admissions` | admission `completed` (`accepted`), `failed` (`rejected`) or `blocked` (`needs-clarification`, `needs-human`, `requires-decomposition`); the first rejection after each merge is the closed issue's revision and becomes a `completed` step `issue-closed`; a rejection that follows that `issue-closed` within 10 minutes, at the same risk and with no other decision in between, is the closed issue's next revision and stays `failed` with step `after-issue-closed`; a rejection that follows the issue's stopped work (the latest work transition before it is a `failed` or `stopped-safely` event, nothing was queued or claimed since, and no other admission decision came after that stop) stays `failed` with step `after-work-stopped`: it refused a later revision, typically after the trigger label was removed (by an operator or by the evaluation runner, which removes it after each refused attempt), not the work itself; every other rejection (for example of a reopened issue) stays a plain refusal (step `decision`). The revision content that would tell them apart is not readable, so the window and risk are a heuristic: a reopen refused at the same risk within 10 minutes of the closure would fold into the closure |
+| `admissions` | admission `completed` (`accepted`), `failed` (`rejected`) or `blocked` (`needs-clarification`, `needs-human`, `requires-decomposition`); the first rejection after each merge is the closed issue's revision and becomes a `completed` step `issue-closed`; a rejection that follows that `issue-closed` within 10 minutes, at the same risk and with no other decision in between, is the closed issue's next revision and stays `failed` with step `after-issue-closed`; a rejection that follows the issue's stopped work stays `failed` with step `after-work-stopped`. This applies when its risk is not `critical`, the latest work transition before it is a `failed` or `stopped-safely` event strictly earlier than it, nothing was queued or claimed since, and no admission decision other than a rejection came after that stop. Every rejection in a row after the stop is labelled. Risk tells the two causes of a rejection apart. An ineligible revision (issue closed, or trigger label or authorized actor withdrawn) keeps the evaluation's risk, never `critical`; it usually comes after an operator or the evaluation runner (which removes the label after each refused attempt) withdrew it, and it did not refuse the work itself. Destructive or secret-disclosing work is rejected at risk `critical`, and that rejection stays a plain refusal. The label keeps the plain refusal's event id, and the hub and the page accept an id only once, so the first read that sees the rejection decides its label. A rejection read while its work was still running stays `decision` even when that work later stops, and work rows leaving the window do not relabel or duplicate it. After a console restart the history is derived again from the journal alone. A verification or review refusal then carries its last recorded effect time, earlier than its verdict, which the journal does not record, so a rejection in the final seconds before such a verdict is labelled `after-work-stopped`; every other rejection (for example of a reopened issue) stays a plain refusal (step `decision`). The revision content that would tell them apart is not readable, so the window and risk are a heuristic: a reopen refused at the same risk within 10 minutes of the closure would fold into the closure |
 | `work_items`, `plans` | planning `completed`; they also map work items to issues |
 | `execution_requests` | `waiting` (queued), `stale-wait`, `retried` (attempt > 1), `completed` (candidate captured), `stopped-safely` (stop reason, or `worker-exit-<code>` with an observed exit code), `blocked` (`lease-lapsed`) |
 | `execution_lifecycles` | `started` (claim), lifecycle `phase` on stops, `quarantined` (`cleanup-uncertain`), `degraded` (`cleanup-retried`) |
@@ -237,7 +239,7 @@ The console accepts only `GET` and `HEAD`:
 | `/events` | Server-Sent Events. First a replay of the most recent history (up to 5,000 events, `-replay` to change it), then a `ready` event with the cursor, then live events. Events travel in `flows` messages: a JSON array of up to 250 `{cursor, event}` elements (the snapshot's element shape), whose SSE `id` is the cursor of its last element. Browsers dispatch every SSE message as a separate task, so batching keeps a 20,000-event replay under a second; a reconnecting client sends `Last-Event-ID` (or `?since=<cursor>`) and receives only later events. A `gap` event says events after the cursor were already evicted (also on a live stream that fell behind), and the page then keeps a warning that its view is incomplete; `status` events report the source state. Each write batch has a 10-second deadline, so a client that stops reading frees its slot. A resumed stream replays its backlog in batches of at most 1,000 events. At most 32 concurrent streams; a refused page reconnects with a growing delay from its last cursor. |
 | `/api/snapshot` | JSON (`ai-sdlc.flow-snapshot/v1`): one page of retained events after `?since=<cursor>` (from the oldest without it), at most `?limit=` events (default 1,000, maximum 5,000), with `next` (the cursor for the following page), `more`, the newest `cursor` and the source status. At most four snapshot requests run at once; further ones get 503. |
 | `/api/contract` | The contract version, stages and kinds. |
-| `/healthz`, `/readyz` | Liveness, which answers as soon as the process listens, including while it waits for the database; readiness after the first successful journal read. While the journal database has never been reached, `/readyz` returns 503 `journal database not reachable yet; retrying`; after that and before the first read, `source not ready`. |
+| `/healthz`, `/readyz` | Liveness, which answers as soon as the process listens, including while it waits for the database; readiness after the first successful journal read. While the journal database has never been reached, `/readyz` returns 503 `journal database not reachable yet; retrying`; once connected and until the first successful read, `source not ready`. |
 
 Every response carries a strict Content-Security-Policy (`default-src 'none'`;
 scripts, styles and connections only from the console itself), `nosniff`,
@@ -536,18 +538,25 @@ verification looked like a 6-second step (see
 ## Startup
 
 In journal mode the console starts its HTTP listener at once and then
-connects to the database. If the database is not reachable (a fresh install
-starts the console before PostgreSQL, or before the migrator has provisioned
-the console's role), it does not exit: it retries with a bounded backoff (1 s,
-doubling to at most 30 s) until the database answers, logging only
-`flow journal database unavailable; retrying ...` on the first failure and
-`flow journal database reachable after N attempts` once connected, never the
-driver error. Meanwhile liveness answers, readiness is false with the reason
-above, and the page's source badge says it is waiting for the database. A
-role check that cannot be read is retried the same way. A connection as any
-identity other than the dedicated read-only role is still a configuration
-error: the console exits with `flow console requires its dedicated read-only
-database role`. Earlier images exited with `journal database unavailable`,
+connects to the database. It does not exit while the database is not ready.
+It retries with a bounded backoff (1 s, doubling to at most 30 s) and
+classifies each failure without reading the driver's text:
+
+| Failure | Behaviour | Log line (once per change) |
+|---|---|---|
+| No answer (connection refused or timed out, PostgreSQL starting), or a role check that cannot be read | Retried until it succeeds | `flow journal database unavailable; retrying every 1s to 30s until it is reachable` |
+| Login refused (wrong password, unknown role, missing database) | Retried for 10 minutes, then the console exits with `flow journal database refused the console's login` | `flow journal database refused the console's login; retrying for up to 10m0s in case its role is not provisioned yet` |
+| Database URL that cannot be parsed | Exits at once with `flow console database URL is invalid` | none |
+| Connected as any identity other than the dedicated read-only role | Exits at once with `flow console requires its dedicated read-only database role` | none |
+
+A refused login is not fatal at once because PostgreSQL reports a role that
+does not exist exactly like a wrong password. On a fresh install the migrator
+creates the console's role only after PostgreSQL is up, so failing at once
+would bring back the crash loop. After 10 minutes, a credential that is still
+refused ends in a visible restart. Once connected the console logs
+`flow journal database reachable after N attempts`. While it waits, liveness
+answers, readiness is false with the reason above, and the page's source
+badge says it is waiting for the database. Earlier images exited with `journal database unavailable`,
 so on a fresh install the pod restarted a few times before PostgreSQL was
 ready.
 
