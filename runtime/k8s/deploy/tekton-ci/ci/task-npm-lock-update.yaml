@@ -201,8 +201,9 @@ spec:
             changed: changes.length, changes: changes.slice(0, 25), truncated: changes.length > 25,
             resolvedHosts: now.slice(0, 10), newResolvedHosts: now.filter(h => !old.has(h)).slice(0, 10),
             diffBytes: diff.length, diffSHA256: crypto.createHash("sha256").update(diff).digest("hex")};
-          // Tekton stores results JSON-escaped in a 4096-byte termination message.
-          while (JSON.stringify(JSON.stringify(out)).length > 3300 && out.changes.length) { out.changes.pop(); out.truncated = true; }
+          // Tekton stores results JSON-escaped in the termination message; the
+          // kubelet gives each of the four containers in this pod 3072 bytes.
+          while (JSON.stringify(JSON.stringify(out)).length > 2800 && out.changes.length) { out.changes.pop(); out.truncated = true; }
           fs.writeFileSync(process.env.RESULT, JSON.stringify(out));
         ' /tmp/before.json package-lock.json "$OUTPUT/package-lock.diff"
         cat "$RESULT"; echo

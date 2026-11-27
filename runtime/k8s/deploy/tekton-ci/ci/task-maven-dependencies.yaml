@@ -345,10 +345,18 @@ spec:
           printf '{"module":"%s","mavenExitCode":%d,"reports":%d,"tests":%d,"failures":%d,"errors":%d,"skipped":%d,"failingTests":%s,"compilerErrors":%s,"missingDependencies":%s,"truncated":%s}' \
             "$module" "$code" "$reports" "$tests" "$failures" "$errors" "$skipped" "$1" "$2" "$missing" "$3" > "$RESULT"
         }
-        write "$(list "$failing")" "$(list "$compile")" false
-        # Tekton stores results JSON-escaped in a 4096-byte termination
-        # message: count each quote and backslash twice.
-        if [ $(( $(wc -c < "$RESULT") + $(tr -cd '"\\' < "$RESULT" | wc -c) )) -gt 3300 ]; then write '[]' '[]' true; fi
+        # Tekton stores results JSON-escaped in the step's termination message,
+        # and the kubelet gives each container min(4096, 12288 / containers)
+        # bytes: 1755 for this pod's seven containers. Trim the lists until the
+        # escaped size (quotes and backslashes count twice) fits 1600 bytes.
+        escaped() { echo $(( $(wc -c < "$RESULT") + $(tr -cd '"\\' < "$RESULT" | wc -c) )); }
+        truncated=false
+        for keep in "10 5" "5 3" "3 1" "1 0" "0 0"; do
+          set -- $keep
+          write "$(list "$(printf '%s\n' "$failing" | head -n "$1")")" "$(list "$(printf '%s\n' "$compile" | head -n "$2")")" "$truncated"
+          [ "$(escaped)" -gt 1600 ] || break
+          truncated=true
+        done
         cat "$RESULT"; echo
         # The verdict travels in mavenExitCode: Tekton publishes no results
         # from a failed task, so this step succeeds whenever it wrote one.

@@ -124,8 +124,13 @@ pod. A separate step publishes the bounded `summary`:
 reports, `compilerErrors` up to 5 `[ERROR] File.java:[line,col]` lines with the
 workspace prefix removed, and `missingDependencies` reports Maven's offline
 "has not been downloaded" error. Each entry is printable ASCII cut to 100
-characters before escaping, and a summary over 3,800 bytes drops both lists
-and sets `truncated`, so it always fits Tekton's 4,096-byte result limit.
+characters before escaping. Tekton stores results JSON-escaped in each step's
+termination message, and the kubelet gives each container min(4,096, 12,288 /
+containers) bytes: 1,755 for the seven containers of a Maven task pod, 3,072
+for `npm-lock-update`. Summaries are trimmed (fewer list entries, then none,
+with `truncated: true`) until their escaped size fits that budget. A live
+`dependency-audit` summary of 2,754 bytes was cut to 1,755 and its pipeline
+failed with `CouldntGetPipelineResult` before this rule.
 
 **The verdict is `mavenExitCode`, not the task status.** Tekton publishes no
 pipeline results from a failed task, so the Maven step uses `onError: continue`

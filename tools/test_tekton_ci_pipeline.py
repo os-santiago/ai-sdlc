@@ -301,9 +301,10 @@ class ScriptTests(unittest.TestCase):
                     {'SOURCE': directory + '/source', 'MODULE': 'app', 'MAVEN_EXIT_CODE_PATH': directory + '/exit',
                      'RESULT': directory + '/result'})
             raw = Path(directory, 'result').read_text()
-            self.assertLess(len(json.dumps(raw)), 3400, 'Tekton keeps at most 4096 bytes of JSON-escaped results per task')
+            self.assertLessEqual(len(json.dumps(raw)), 1602, 'the kubelet keeps 12288 / 7 containers = 1755 bytes per step')
             summary = json.loads(raw)
-            self.assertEqual((len(summary['failingTests']), len(summary['compilerErrors'])), (10, 5))
+            self.assertTrue(summary['truncated'])
+            self.assertGreater(len(summary['failingTests']), 0, 'lists are trimmed, not dropped, while some entries fit')
 
     def test_summary_escaping_cannot_exceed_the_result_bound(self):
         # Names made of characters that double when escaped, plus non-ASCII and
@@ -322,7 +323,7 @@ class ScriptTests(unittest.TestCase):
                     {'SOURCE': directory + '/source', 'MODULE': 'app', 'MAVEN_EXIT_CODE_PATH': directory + '/exit',
                      'RESULT': directory + '/result'})
             raw = Path(directory, 'result').read_bytes()
-            self.assertLess(len(json.dumps(raw.decode())), 3400, 'measured JSON-escaped, as Tekton stores it')
+            self.assertLessEqual(len(json.dumps(raw.decode())), 1602, 'measured JSON-escaped, as Tekton stores it')
             summary = json.loads(raw)
             self.assertTrue(all(len(name) <= 100 and name.isascii() for name in summary['failingTests']))
             self.assertEqual(summary['mavenExitCode'], 1)
