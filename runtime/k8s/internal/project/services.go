@@ -18,6 +18,12 @@ import (
 // repository, an issue or model output, and a candidate cannot change them.
 // Values are not secrets: they are visible in the pod spec and in the
 // verifier's settings, so a service must use throwaway test credentials.
+//
+// Service is a renderer-neutral definition: it holds no Kubernetes types and
+// this package does not build pods. The repository-tests pod compiler renders
+// it as a native sidecar (repositorytests.serviceSidecars); a Tekton task
+// renderer can map the same value to a Task's sidecars, with the same
+// identity, security, volume and readiness rules.
 type Service struct {
 	// Name is the sidecar's name suffix (container service-<name>).
 	Name string `json:"name"`

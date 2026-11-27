@@ -154,6 +154,10 @@ container exits, so the pod still completes with the tests. Decisions:
   stays at 30–600 seconds because the whole verification must fit the
   signed command's 30-minute lifetime (`verification.MaxCommandAge`).
 
+- *Reusable definition.* `project.Service` holds no Kubernetes types.
+  Only the repository-tests compiler turns it into a pod sidecar, so a
+  Tekton task renderer can map the same manifest entry to Tekton `sidecars`.
+
 **Sequence.** The controller:
 1. imports the exact tree through the sidecar (verified workspace-bundle
    protocol), checking the receipt;

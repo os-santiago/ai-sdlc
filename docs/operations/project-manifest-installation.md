@@ -139,6 +139,27 @@ Measured on 2026-11-27 in a podman pod with `--network none`:
 - that was the second run against the same database, so repetitions
   sharing a service work for this module.
 
+**Reuse beyond the verifier.** A service definition is independent of the
+code that builds pods. It is the reusable `project.Service` type
+(`runtime/k8s/internal/project/services.go`), with no Kubernetes types in
+it. The offline verifier renders it as a native sidecar. A Tekton task
+renderer for deterministic build and test tasks can map the same manifest
+entry to a Task's `sidecars`:
+
+| `project.Service` field | Tekton sidecar |
+|---|---|
+| `name` | sidecar name (`service-<name>`) |
+| `image` | the same digest-pinned image |
+| `args` | `args` |
+| `env` | `env` |
+| `user`, `group`, `writableRootFilesystem` | `securityContext` |
+| `writablePaths` | `volumeMounts` from a task `emptyDir` |
+| `cpu`, `memory`, `ephemeralStorage` | `computeResources` |
+| `port`, `readySeconds` | a step waits for the port, or a TCP readiness probe where the sidecar is reachable |
+
+The same rules should hold there: non-root, all capabilities dropped,
+pinned images from the reviewed manifest only, fresh state per task run.
+
 ### Optional: a toolchain for the generator
 
 A top-level `generation.toolchain` section declares a self-contained
