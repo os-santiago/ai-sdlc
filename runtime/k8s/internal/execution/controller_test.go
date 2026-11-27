@@ -227,7 +227,7 @@ func TestEveryAuthorityStepIsReportedByTheBroker(t *testing.T) {
 }
 
 func TestReadStopNamesTheBoundedReadStep(t *testing.T) {
-	for _, stage := range []string{"execution-read-helper-exit-1", "execution-read-envelope", "execution-read-after-observation"} {
+	for _, stage := range []string{"execution-read-helper-exit-1", "execution-read-envelope", "execution-read-after-observation", "execution-read-helper-transport", "execution-read-helper-transport-exec", "execution-read-helper-transport-deadline", "execution-read-helper-transport-expired"} {
 		if got := DiagnosticStage(ControllerError{stage}); got != stage {
 			t.Fatalf("%s: %q", stage, got)
 		}

@@ -25,7 +25,8 @@ import (
 // exchange implements only the V5 channels needed by two fixed helper modes.
 // client-go owns verified upgrade/authentication; its generic remotecommand
 // reader is intentionally not used because its status channel is unbounded and
-// accepts clean EOF without an explicit status. No fallback or retry exists.
+// accepts clean EOF without an explicit status. No fallback or retry exists
+// here; only ReadRequest repeats a failed read exchange (see readExchange).
 func (s *Session) exchange(ctx context.Context, mode string, input []byte) ([]byte, int, error) {
 	limit := modelmailbox.MaxEnvelopeBytes
 	if mode == "respond" {
@@ -49,8 +50,11 @@ type helperOperation struct {
 // Private callers construct fixed helpers. No exported API accepts commands,
 // containers, destinations, byte limits or transport settings.
 func (s *Session) exchangeFixed(ctx context.Context, operation helperOperation, input []byte) ([]byte, int, error) {
-	if !time.Now().Before(s.expires) || len(input) > operation.inputLimit || (!operation.stdin && len(input) != 0) {
+	if len(input) > operation.inputLimit || (!operation.stdin && len(input) != 0) {
 		return nil, 0, ErrTransport
+	}
+	if !time.Now().Before(s.expires) {
+		return nil, 0, transportError{"expired"}
 	}
 	ctx, cancel := context.WithDeadline(ctx, minDeadline(time.Now().Add(operation.timeout), s.expires))
 	defer cancel()
@@ -74,10 +78,19 @@ func (s *Session) exchangeFixed(ctx context.Context, operation helperOperation, 
 	conn, err := upgrade.Negotiate(roundTripper, holder, request, protocol.StreamProtocolV5Name)
 	if err != nil {
 		var failure *httpstream.UpgradeFailureError
-		if errors.As(err, &failure) && apierrors.IsForbidden(failure.Cause) {
-			return nil, 0, ErrPermission
+		if errors.As(err, &failure) {
+			var status apierrors.APIStatus
+			if apierrors.IsForbidden(failure.Cause) {
+				return nil, 0, ErrPermission
+			}
+			// A throttled or unavailable API server is transient; any other
+			// refused upgrade (for example a vanished Pod) is not.
+			if errors.As(failure.Cause, &status) && transientStatus(int(status.Status().Code)) {
+				return nil, 0, s.interrupted(ctx)
+			}
+			return nil, 0, ErrTransport
 		}
-		return nil, 0, ErrTransport
+		return nil, 0, s.interrupted(ctx)
 	}
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
@@ -128,14 +141,17 @@ func (s *Session) exchangeFixed(ctx context.Context, operation helperOperation, 
 				closed = true
 				break
 			}
-			return nil, 0, ErrTransport
+			if errors.Is(err, websocket.ErrReadLimit) {
+				return nil, 0, ErrTransport
+			}
+			return nil, 0, s.interrupted(ctx)
 		}
 		if kind != websocket.BinaryMessage {
 			return nil, 0, ErrTransport
 		}
 		var channel [1]byte
 		if _, err := io.ReadFull(reader, channel[:]); err != nil {
-			return nil, 0, ErrTransport
+			return nil, 0, s.interrupted(ctx)
 		}
 		buffer, ok := buffers[channel[0]]
 		if !ok {
@@ -143,6 +159,9 @@ func (s *Session) exchangeFixed(ctx context.Context, operation helperOperation, 
 		}
 		remaining := limits[channel[0]] - buffer.Len()
 		raw, err := io.ReadAll(io.LimitReader(reader, int64(remaining)+1))
+		if err != nil && !errors.Is(err, websocket.ErrReadLimit) {
+			return nil, 0, s.interrupted(ctx)
+		}
 		if err != nil || len(raw) > remaining {
 			return nil, 0, ErrTransport
 		}
@@ -150,7 +169,10 @@ func (s *Session) exchangeFixed(ctx context.Context, operation helperOperation, 
 	}
 	writeErr := <-written
 	joined = true
-	if !closed || ctx.Err() != nil || writeErr != nil {
+	if ctx.Err() != nil || writeErr != nil {
+		return nil, 0, s.interrupted(ctx)
+	}
+	if !closed {
 		return nil, 0, ErrTransport
 	}
 	var result meta.Status
@@ -190,9 +212,9 @@ func (s *Session) ReadRequest(ctx context.Context) (modelmailbox.Envelope, error
 	if err := s.requestWorkerActive(ctx); err != nil {
 		return modelmailbox.Envelope{}, readFailure("before-observation", err)
 	}
-	raw, code, err := s.exchange(ctx, "read", nil)
+	raw, code, err := s.readExchange(ctx)
 	if err != nil {
-		return modelmailbox.Envelope{}, readFailure("helper-transport", err)
+		return modelmailbox.Envelope{}, readFailure(transportStep(err), err)
 	}
 	// Validate the helper result before observing a concurrent worker exit.
 	// An invalid envelope cannot be hidden behind a later zero exit.
@@ -218,6 +240,80 @@ func (s *Session) ReadRequest(ctx context.Context) (modelmailbox.Envelope, error
 	return e, nil
 }
 
+// readExchange runs the fixed read helper, repeating it after a transient
+// transport failure (an exec error or the 5-second read deadline). Batteries
+// 36, 37 and 39 lost whole attempts at model-mailbox-read-helper-transport and
+// execution-read-helper-transport although the work was fine.
+//
+// Repeating is safe: the read helper only reads the pending request file and
+// has no stdin, and the drive acknowledges a request (publishes its response)
+// only after ReadRequest has returned, so no attempt reads after an
+// acknowledgement. The respond exchange is never repeated.
+//
+// As with retryTransient, the window bounds only when another attempt may
+// start, never an attempt: another starts while observeRetryWindow lasts or
+// until minReadAttempts were made, and only while a whole attempt plus the
+// after-observation still fit before the session expiry and ctx's deadline.
+// A session expiry, a permission refusal, a refused upgrade, a protocol
+// violation or a cancelled ctx stops at once.
+func (s *Session) readExchange(ctx context.Context) ([]byte, int, error) {
+	last := time.Now().Add(observeRetryWindow)
+	for attempts := 1; ; attempts++ {
+		raw, code, err := s.exchange(ctx, "read", nil)
+		var failed transportError
+		if err == nil || !errors.As(err, &failed) || !failed.transient() {
+			return raw, code, err
+		}
+		limit := s.expires
+		if deadline, ok := ctx.Deadline(); ok {
+			limit = minDeadline(limit, deadline)
+		}
+		more := time.Now().Before(last) || attempts < minReadAttempts
+		if !more || time.Until(limit) < 2*readAttemptBound+250*time.Millisecond || !retryRemoval(ctx) {
+			return raw, code, err
+		}
+	}
+}
+
+// transportError is a helper exchange interrupted by its cause: "exec" (the
+// exec upgrade or stream failed, or the API server was throttled or
+// unavailable), "deadline" (the exchange's own deadline or the caller's ended
+// first) or "expired" (the session's assignment expired). It unwraps to
+// ErrTransport, so every caller decides exactly as before.
+type transportError struct{ cause string }
+
+func (e transportError) Error() string   { return "helper exchange failed: " + e.cause }
+func (e transportError) Unwrap() error   { return ErrTransport }
+func (e transportError) transient() bool { return e.cause == "exec" || e.cause == "deadline" }
+
+// interrupted names why an exchange ended without a complete answer. A
+// cancelled ctx is not a transport cause and keeps the plain ErrTransport.
+// The connection's own deadline equals ctx's, so a read that timed out just
+// before ctx's timer fired is a deadline too.
+func (s *Session) interrupted(ctx context.Context) error {
+	deadline, bounded := ctx.Deadline()
+	switch {
+	case !time.Now().Before(s.expires):
+		return transportError{"expired"}
+	case errors.Is(ctx.Err(), context.DeadlineExceeded), ctx.Err() == nil && bounded && !time.Now().Before(deadline):
+		return transportError{"deadline"}
+	case ctx.Err() != nil:
+		return ErrTransport
+	}
+	return transportError{"exec"}
+}
+
+// transportStep is the read step of a failed read exchange: its cause when
+// it has one, otherwise the plain helper-transport (a refused upgrade, a
+// permission refusal, a protocol violation or a cancelled ctx).
+func transportStep(err error) string {
+	var failed transportError
+	if errors.As(err, &failed) {
+		return "helper-transport-" + failed.cause
+	}
+	return "helper-transport"
+}
+
 // readError names the bounded mailbox read step that failed. It unwraps to
 // the original error (ErrWorkerExited, ErrTransport, ErrPermission), so every
 // caller decides exactly as before; the step only refines the stop diagnostic.
@@ -238,7 +334,7 @@ func readFailure(step string, err error) error {
 	return readError{step: step, cause: err}
 }
 
-var readSteps = regexp.MustCompile(`^(before-observation|helper-transport|envelope|after-observation|helper-exit-([1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))$`)
+var readSteps = regexp.MustCompile(`^(before-observation|helper-transport(-(exec|deadline|expired))?|envelope|after-observation|helper-exit-([1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))$`)
 
 // ReadStep returns the failed mailbox read step, or "" for any other error.
 func ReadStep(err error) string {

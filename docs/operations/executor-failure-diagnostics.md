@@ -251,6 +251,42 @@ change. Before this stop had its own name, it was reported as
 `model-request-binding` (battery 31, issue 227). Like every review stop, it
 fails the run without replay.
 
+## Mailbox read stops
+
+The generator's drive (`candidate reconciliation stopped safely:
+execution-read-<step>`) and the independent review's drive (`independent
+review stopped safely: model-mailbox-read-<step>`) read each model request
+from the executor pod with the fixed `/model-mailbox read` helper. A failed
+read names one bounded step:
+
+| Step | Meaning |
+|---|---|
+| `before-observation`, `after-observation` | The pod observation before or after the read failed |
+| `helper-transport-exec` | The exec upgrade or its stream failed (a dropped connection, an abnormal closure, or a throttled or unavailable API server: 429, 500, 502, 503 or 504) |
+| `helper-transport-deadline` | The exchange's own 5-second deadline, or the caller's deadline, ended before a complete answer |
+| `helper-transport-expired` | The assignment expired during the read |
+| `helper-transport` | Any other exchange failure: a permission refusal, another refused upgrade (for example a vanished pod), a protocol violation (unknown channel, text frame, oversized output, missing or malformed status, unexpected stderr) or a cancelled controller |
+| `helper-exit-N` | The helper exited with code N (1 to 255) |
+| `envelope` | The request envelope was invalid or bound to another attempt |
+
+Batteries 36, 37 and 39 lost whole attempts at
+`model-mailbox-read-helper-transport` and `execution-read-helper-transport`
+although the work was fine (issue #826). The read helper only reads the
+pending request file and receives no stdin, and the drive publishes a
+response only after the read has returned, so repeating a read never
+duplicates an effect or reads after an acknowledgement. An `exec` or
+`deadline` failure is therefore repeated within the same read, bounded by
+attempt starts as for
+[transient pod reads](../security/offline-executor-runtime.md#transient-reads-reasons-and-the-readiness-grace): another
+attempt starts while 3 seconds have not passed since the first or until 3
+attempts were made, and only while a whole 5-second attempt plus the
+after-observation still fit before the assignment expiry and the drive's
+deadline. Each attempt keeps its own 5-second bound. The step names the last
+attempt's cause. An expiry, the plain `helper-transport` causes and a helper
+exit stop at once. The `respond` exchange that publishes a response is never
+repeated. Controllers older than this change report all three causes as
+`helper-transport`.
+
 ## Readiness stops
 
 An attempt that stops before the executor runs logs a `readiness` stage. A
