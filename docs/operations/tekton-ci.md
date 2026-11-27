@@ -267,6 +267,16 @@ code, so the build and test phases are equally untrusted; they run only in
   Admission cannot read GitHub or compute the claim digest, so the rules that
   a cache write uses the base-branch head and the repository's own claim are
   enforced by the callers (the run tool and the adapter).
+  Run fields are allowlisted: the spec may set only `pipelineRef`, `params`,
+  `timeouts`, `taskRunTemplate`, `workspaces` and `taskRunSpecs`; pod templates
+  only `automountServiceAccountToken`, `securityContext` and the
+  `ai-sdlc-offline` runtime class; step and sidecar overrides only
+  `computeResources`; the source claim only `accessModes` and `resources`. Env,
+  volumes, DNS settings or host aliases in a pod template would otherwise let a
+  run fake the address the egress gate probes or load a candidate file into a
+  fetch task with `NODE_OPTIONS`. **RBAC must never grant create on TaskRuns,
+  CustomRuns or Pods in `ai-sdlc-ci`**: the policy covers PipelineRuns, and the
+  Tekton controller creates TaskRuns and Pods itself.
 - **Restricted pods.** The namespace enforces restricted Pod Security. Every
   step and sidecar is non-root, drops all capabilities, disallows privilege
   escalation, uses RuntimeDefault seccomp, a read-only root filesystem,
