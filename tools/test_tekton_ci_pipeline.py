@@ -51,6 +51,40 @@ def execute(text, env, path_prefix=''):
                           capture_output=True, text=True, timeout=60)
 
 
+def go_marshal_string(value):
+    """Encode a string exactly as Go's encoding/json does (HTML escaping on)."""
+    out = ['"']
+    for ch in value:
+        if ch == '"':
+            out.append('\\"')
+        elif ch == '\\':
+            out.append('\\\\')
+        elif ch == '\n':
+            out.append('\\n')
+        elif ch == '\r':
+            out.append('\\r')
+        elif ch == '\t':
+            out.append('\\t')
+        elif ord(ch) < 0x20 or ch in '<>&\u2028\u2029':
+            out.append('\\u%04x' % ord(ch))
+        else:
+            out.append(ch)
+    return ''.join(out) + '"'
+
+
+def termination_message(summary):
+    """The step's termination message bytes as Tekton writes them for one result."""
+    return ('[{"key":"summary","value":' + go_marshal_string(summary) + ',"type":1},'
+            '{"key":"StartedAt","value":"2026-11-27T21:18:36.996Z","type":3}]').encode()
+
+
+class GoMarshalEmulationTests(unittest.TestCase):
+    def test_emulation_matches_known_go_output(self):
+        # Reference encodings of encoding/json.Marshal for these strings.
+        self.assertEqual(go_marshal_string('a"b\\c<d>&e\n'), '"a\\"b\\\\c\\u003cd\\u003e\\u0026e\\n"')
+        self.assertEqual(go_marshal_string('\u2028\u00e9'), '"\\u2028\u00e9"')
+
+
 class ManifestTests(unittest.TestCase):
     def test_inventory_and_namespace_scope(self):
         kinds = sorted((d['kind'], d['metadata']['name']) for d in documents())
@@ -79,7 +113,9 @@ class ManifestTests(unittest.TestCase):
         self.assertIn("'ai-sdlc.io/ci-egress' in object.metadata.labels", rules, 'labels propagate to pods')
         self.assertIn('s.metadata.labels', rules)
         self.assertIn('request.userInfo.groups', rules, 'cache writers are administrators')
-        self.assertIn('dataSourceRef', rules)
+        self.assertIn("['accessModes', 'resources']", rules, 'source claims allow no selector, class, data source or volume')
+        self.assertIn("['automountServiceAccountToken', 'securityContext', 'runtimeClassName']", rules, 'pod template allowlist')
+        self.assertIn("['name', 'computeResources']", rules, 'step and sidecar overrides')
         self.assertIn('readOnly == true', rules)
         namespace = by_kind('Namespace')['ai-sdlc-ci']['metadata']['labels']
         self.assertEqual(namespace['pod-security.kubernetes.io/enforce'], 'restricted')
@@ -339,6 +375,30 @@ class ScriptTests(unittest.TestCase):
             self.assertTrue(all(len(name) <= 100 and name.isascii() for name in summary['failingTests']))
             self.assertEqual(summary['mavenExitCode'], 1)
 
+    def test_summary_fits_the_kubelet_budget_after_go_encoding(self):
+        # Names decoded from &lt; and generic compiler errors are full of <, >
+        # and &, which Go's json.Marshal writes as 6 bytes each.
+        text = step('maven-build-test', 'summarize')['script']
+        with tempfile.TemporaryDirectory() as directory:
+            reports = Path(directory, 'source/app/target/surefire-reports')
+            reports.mkdir(parents=True)
+            name = '&lt;' * 40 + '&amp;&gt;'
+            cases = ''.join('<testcase name="%s%d" classname="%s">\n<failure/>\n</testcase>\n' % (name, i, name) for i in range(10))
+            Path(reports, 'TEST-a.xml').write_text('<testsuite tests="10" failures="10">\n' + cases + '</testsuite>\n')
+            log = Path(directory, 'maven.log')
+            log.write_text(''.join('[ERROR] /x/A%d.java:[1,1] incompatible types: List<Map<String,Set<T>>> & <? extends X>\n' % i for i in range(9)))
+            Path(directory, 'exit').write_text('1')
+            for task in ('maven-build-test', 'maven-dependencies'):
+                result = execute(step(task, 'summarize')['script'].replace('/tmp/maven.log', str(log)),
+                                 {'SOURCE': directory + '/source', 'MODULE': 'app', 'MAVEN_EXIT_CODE_PATH': directory + '/exit',
+                                  'RESULT': directory + '/result'})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                raw = Path(directory, 'result').read_text()
+                self.assertLessEqual(len(termination_message(raw)), 1755, task)
+                summary = json.loads(raw)
+                self.assertTrue(summary['truncated'])
+                self.assertIn('<', ''.join(summary['failingTests'] + summary['compilerErrors']) or '<')
+
     def test_npm_lock_update_refuses_unsafe_inputs(self):
         text = step('npm-lock-update', 'update')['script']
         with tempfile.TemporaryDirectory() as directory:
@@ -418,6 +478,26 @@ class ScriptTests(unittest.TestCase):
             self.assertRegex(summary['diffSHA256'], '^[0-9a-f]{64}$')
             self.assertEqual(json.loads(Path(directory, 'source/web/package-lock.json').read_text())['packages']['node_modules/vite']['version'],
                              '6.0.0', 'the checkout itself is not modified')
+
+    def test_npm_summary_bounds_hosts_and_fits_after_go_encoding(self):
+        if not shutil.which('node'):
+            self.skipTest('node is not installed')
+        with tempfile.TemporaryDirectory() as directory:
+            # The stub rewrites the lockfile with 60 packages on long, HTML-heavy
+            # hosts and versions.
+            stub = ('#!/bin/sh\nnode -e \'const f="package-lock.json",j=JSON.parse(require("fs").readFileSync(f));'
+                    'for(let i=0;i<60;i++){j.packages["node_modules/p"+i]={version:"1.0.0-<&>".repeat(20)+i,'
+                    'resolved:"https://"+"h".repeat(200)+i+".example/p.tgz"};}'
+                    'require("fs").writeFileSync(f,JSON.stringify(j,null,2))\'\n')
+            result = self.npm(directory, stub)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            raw = Path(directory, 'result').read_text()
+            self.assertLessEqual(len(termination_message(raw)), 3072, 'four containers keep 3072 bytes each')
+            summary = json.loads(raw)
+            self.assertTrue(summary['truncated'])
+            self.assertLessEqual(len(summary['resolvedHosts']), 10)
+            self.assertTrue(all(len(h) <= 64 for h in summary['resolvedHosts'] + summary['newResolvedHosts']))
+            self.assertTrue(all(len(c['to'] or '') <= 64 for c in summary['changes']))
 
     def test_npm_failure_still_publishes_its_summary(self):
         if not shutil.which('node'):

@@ -356,11 +356,13 @@ spec:
           printf '{"module":"%s","mavenExitCode":%d,"reports":%d,"tests":%d,"failures":%d,"errors":%d,"skipped":%d,"failingTests":%s,"compilerErrors":%s,"missingDependencies":%s,"truncated":%s}' \
             "$module" "$code" "$reports" "$tests" "$failures" "$errors" "$skipped" "$1" "$2" "$missing" "$3" > "$RESULT"
         }
-        # Tekton stores results JSON-escaped in the step's termination message,
-        # and the kubelet gives each container min(4096, 12288 / containers)
-        # bytes: 1755 for this pod's seven containers. Trim the lists until the
-        # escaped size (quotes and backslashes count twice) fits 1600 bytes.
-        escaped() { echo $(( $(wc -c < "$RESULT") + $(tr -cd '"\\' < "$RESULT" | wc -c) )); }
+        # Tekton stores results in the step's termination message, encoded by
+        # Go's json.Marshal: a quote or backslash takes 2 bytes, and <, > and &
+        # take 6 (\u003c). The kubelet keeps min(4096, 12288 / containers)
+        # bytes per container, 1755 here; the message envelope (result key,
+        # type and the StartedAt entry) takes about 120 of them. Trim the lists
+        # until the encoded summary fits 1600 bytes.
+        escaped() { echo $(( $(wc -c < "$RESULT") + $(tr -cd '"\\' < "$RESULT" | wc -c) + 5 * $(tr -cd '<>&' < "$RESULT" | wc -c) )); }
         truncated=false
         for keep in "10 5" "5 3" "3 1" "1 0" "0 0"; do
           set -- $keep

@@ -195,25 +195,32 @@ spec:
           const fs = require("fs"), crypto = require("crypto");
           const [before, after, diffPath] = process.argv.slice(1);
           const entries = f => JSON.parse(fs.readFileSync(f, "utf8")).packages || {};
+          // Every published string is printable ASCII and length-bounded.
+          const clip = (v, n) => v == null ? null : String(v).replace(/[^ -~]/g, "").slice(0, n);
           const a = entries(before), b = entries(after), changes = [];
           for (const key of [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()) {
             if (key === "") continue;
-            const x = a[key] || {}, y = b[key] || {}, from = x.version || null, to = y.version || null;
+            const x = a[key] || {}, y = b[key] || {}, from = clip(x.version, 64), to = clip(y.version, 64);
             // A changed resolved URL or integrity is a change even at the same version.
             const resolution = from === to && (x.resolved !== y.resolved || x.integrity !== y.integrity);
-            if (from !== to || resolution) changes.push(Object.assign({path: key.replace(/^node_modules\//, "").slice(0, 120), from, to},
+            if (from !== to || resolution) changes.push(Object.assign({path: clip(key.replace(/^node_modules\//, ""), 120), from, to},
               resolution ? {resolutionChanged: true} : {}));
           }
-          const hosts = e => new Set(Object.values(e).map(p => { try { return new URL(p.resolved).host; } catch { return null; } }).filter(Boolean));
+          const hosts = e => new Set(Object.values(e).map(p => { try { return clip(new URL(p.resolved).host, 64); } catch { return null; } }).filter(Boolean));
           const old = hosts(a), now = [...hosts(b)].sort();
           const diff = fs.readFileSync(diffPath);
-          const out = {directory: process.env.DIRECTORY, mode: process.env.MODE, npmExitCode: Number(process.env.NPM_EXIT_CODE),
+          const out = {directory: clip(process.env.DIRECTORY, 200), mode: process.env.MODE, npmExitCode: Number(process.env.NPM_EXIT_CODE),
             changed: changes.length, changes: changes.slice(0, 25), truncated: changes.length > 25,
             resolvedHosts: now.slice(0, 10), newResolvedHosts: now.filter(h => !old.has(h)).slice(0, 10),
             diffBytes: diff.length, diffSHA256: crypto.createHash("sha256").update(diff).digest("hex")};
-          // Tekton stores results JSON-escaped in the termination message; the
-          // kubelet gives each of the four containers in this pod 3072 bytes.
-          while (JSON.stringify(JSON.stringify(out)).length > 2800 && out.changes.length) { out.changes.pop(); out.truncated = true; }
+          // Tekton stores the result in the termination message encoded by Go
+          // json.Marshal (quotes and backslashes take 2 bytes, <, > and & take 6),
+          // and the kubelet keeps 3072 bytes for each of the four containers in
+          // this pod, including about 150 bytes of envelope.
+          const encoded = v => { const t = JSON.stringify(JSON.stringify(v)); return Buffer.byteLength(t) + 5 * (t.match(/[<>&]/g) || []).length; };
+          for (const list of ["changes", "newResolvedHosts", "resolvedHosts"]) {
+            while (encoded(out) > 2800 && out[list].length) { out[list].pop(); out.truncated = true; }
+          }
           fs.writeFileSync(process.env.RESULT, JSON.stringify(out));
         ' /tmp/before.json package-lock.json "$OUTPUT/package-lock.diff"
         cat "$RESULT"; echo
