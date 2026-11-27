@@ -183,8 +183,12 @@ tool runs project code. **What leaves the cluster:**
   `http://CLUSTER-IP:8080/maven2`), instead of its default deps.dev. It sends
   package names and versions to `api.osv.dev` to look up advisories.
 
-Once the proxy is installed, pass it for both so dependency lists go through
-it (osv-scanner's api.osv.dev query is not proxied). The summary is the input
+Passing the proxy for both sends the dependency lists through it
+(osv-scanner's api.osv.dev query is not proxied), but it only becomes the sole
+path once the task carries the `dependency-proxy` egress label instead of
+`fetch` (Stage 2b, after the proxy change merges). Until then the pod's fetch
+egress allows HTTPS to any public host, including repositories that a
+`pom.xml` declares, which native resolution contacts. The summary is the input
 the vulnerability intake consumes:
 
 ```json

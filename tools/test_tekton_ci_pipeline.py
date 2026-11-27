@@ -677,6 +677,10 @@ class RunToolTests(unittest.TestCase):
             runner.main(base + ['--ecosystem', 'maven', '--directory', 'ui-super-heroes/src/main/webui'])
         with self.assertRaisesRegex(ValueError, 'npm directory'):
             runner.main(base + ['--ecosystem', 'npm', '--directory', 'rest-villains'])
+        # Without a catalog the target is only validated, never looked up.
+        args = runner.argparse.Namespace(pipeline='dependency-audit', repository='a/b', revision=SHA, ecosystem='maven',
+                                         directory='m', registry_url='', maven_mirror_url='', sandbox=False, runtime_class='ai-sdlc-offline')
+        self.assertEqual(runner.render_from_args(args, None)['spec']['pipelineRef'], {'name': 'ai-sdlc-dependency-audit'})
         observed = {'succeeded': True, 'commit': SHA, 'summary': {'complete': True, 'vulnerable': 3}}
         self.assertTrue(runner.passed(observed, SHA), 'findings are output, not failure')
         self.assertFalse(runner.passed(dict(observed, summary={'complete': False}), SHA))
