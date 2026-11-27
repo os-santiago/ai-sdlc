@@ -338,7 +338,9 @@ spec:
             "$module" "$code" "$reports" "$tests" "$failures" "$errors" "$skipped" "$1" "$2" "$missing" "$3" > "$RESULT"
         }
         write "$(list "$failing")" "$(list "$compile")" false
-        if [ "$(wc -c < "$RESULT")" -gt 3800 ]; then write '[]' '[]' true; fi
+        # Tekton stores results JSON-escaped in a 4096-byte termination
+        # message: count each quote and backslash twice.
+        if [ $(( $(wc -c < "$RESULT") + $(tr -cd '"\\' < "$RESULT" | wc -c) )) -gt 3300 ]; then write '[]' '[]' true; fi
         cat "$RESULT"; echo
         # The verdict travels in mavenExitCode: Tekton publishes no results
         # from a failed task, so this step succeeds whenever it wrote one.

@@ -301,7 +301,7 @@ class ScriptTests(unittest.TestCase):
                     {'SOURCE': directory + '/source', 'MODULE': 'app', 'MAVEN_EXIT_CODE_PATH': directory + '/exit',
                      'RESULT': directory + '/result'})
             raw = Path(directory, 'result').read_text()
-            self.assertLess(len(raw), 3800, 'Tekton keeps at most 4096 bytes of results per task')
+            self.assertLess(len(json.dumps(raw)), 3400, 'Tekton keeps at most 4096 bytes of JSON-escaped results per task')
             summary = json.loads(raw)
             self.assertEqual((len(summary['failingTests']), len(summary['compilerErrors'])), (10, 5))
 
@@ -322,7 +322,7 @@ class ScriptTests(unittest.TestCase):
                     {'SOURCE': directory + '/source', 'MODULE': 'app', 'MAVEN_EXIT_CODE_PATH': directory + '/exit',
                      'RESULT': directory + '/result'})
             raw = Path(directory, 'result').read_bytes()
-            self.assertLess(len(raw), 3800)
+            self.assertLess(len(json.dumps(raw.decode())), 3400, 'measured JSON-escaped, as Tekton stores it')
             summary = json.loads(raw)
             self.assertTrue(all(len(name) <= 100 and name.isascii() for name in summary['failingTests']))
             self.assertEqual(summary['mavenExitCode'], 1)
