@@ -106,7 +106,9 @@ directories, 8 pre, 8 post and 4 tools.
 
 `internal/tektontasks` is the only path from ai-sdlc components to Tekton:
 
-- `FromInvocation(manifest, invocation, revision)` for pre/post runs, and
+- `FromInvocation(manifest, invocation, revision, baseHead)` for pre/post runs
+  (a `maven-dependencies` request is refused unless the revision equals the
+  observed base-branch head), and
   `FromTool(manifest, tool, target, packages, revision)` for generator tool
   calls. A tool call supplies only a declared target and, for npm, package
   specs matching `name` or `name@range` (no URLs, paths or shell syntax, at
@@ -116,12 +118,19 @@ directories, 8 pre, 8 post and 4 tools.
   optional sandbox for build-test only). A test checks its parameters against
   the installed Pipeline YAML.
 - `Run(ctx, cluster, request, runtimeClass, poll)` creates the run once and
-  polls until it finishes or the context ends; the run's `commit` must equal the
-  requested revision; results over 4096 bytes are refused.
+  polls until it finishes, or cancels it when the context ends; a succeeded
+  run must report exactly the requested commit; results over 4096 bytes are
+  refused. A failing build is a *succeeded* pipeline whose summary carries the
+  verdict (Tekton publishes no results from failed tasks), so callers gate on
+  `MavenSummary.Passed` / `NpmSummary.Passed`.
+- Each repository has its own cache claim (`CacheClaim(repository)`, the
+  same digest-derived name the installer creates).
 - `ParseMavenSummary` and `ParseNpmSummary` decode results strictly (unknown
   fields, trailing data and out-of-bound lists refused).
-- `DynamicCluster` implements creation and reads with a dynamic client. The
-  identity using it needs only `create`, `get` on `pipelineruns` in `ai-sdlc-ci`.
+- `DynamicCluster` implements creation, reads and cancellation with a dynamic
+  client. The identity using it needs only `create`, `get` and `patch` on
+  `pipelineruns` in `ai-sdlc-ci`; the namespace's admission policy limits what
+  it can create to the catalog.
 
 ## Uses
 
