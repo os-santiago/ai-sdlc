@@ -136,8 +136,10 @@ runtime_type = "io.containerd.runc.v2"
 
 
 class SandboxTaskLimitTests(unittest.TestCase):
-    def fake(self, existing=None, reported=('307', '1536')):
-        files = {} if existing is None else {runtime.TASKS_DROPIN: existing}
+    def fake(self, existing=None, reported=('307', '1024'), pids_max='2048', kubelet='kind: KubeletConfiguration\n'):
+        files = {'/sys/fs/cgroup/pids.max': pids_max + '\n', runtime.KUBELET_CONFIG: kubelet}
+        if existing is not None:
+            files[runtime.TASKS_DROPIN] = existing
         calls, shown = [], list(reported)
 
         def command(args, **_kwargs):
@@ -147,29 +149,63 @@ class SandboxTaskLimitTests(unittest.TestCase):
             return ''
         return files, calls, files.get, files.__setitem__, command
 
+    def desired(self):
+        return (runtime.MANIFESTS / 'systemd-tasks.conf').read_text()
+
     def test_drop_in_is_written_once_and_applied_with_a_reexec(self):
         files, calls, read, write, command = self.fake()
-        self.assertEqual(runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n']), 1536)
-        self.assertIn('DefaultTasksMax=1536', files[runtime.TASKS_DROPIN])
+        self.assertEqual(runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n']), 1024)
+        self.assertIn('DefaultTasksMax=1024', files[runtime.TASKS_DROPIN])
         self.assertIn(['podman', 'exec', 'n', 'systemctl', 'daemon-reexec'], calls)
-        # Reapplication: same file, already applied, nothing re-executed.
-        files2, calls2, read2, write2, command2 = self.fake(existing=files[runtime.TASKS_DROPIN], reported=('1536',))
-        self.assertEqual(runtime.sandbox_task_limit(read2, write2, command2, ['podman', 'exec', 'n']), 1536)
-        self.assertFalse(any('daemon-reexec' in c for c in calls2))
+        files2, calls2, read2, write2, command2 = self.fake(existing=self.desired(), reported=('1024',))
+        self.assertEqual(runtime.sandbox_task_limit(read2, write2, command2, ['podman', 'exec', 'n']), 1024)
+        self.assertFalse(any('daemon-reexec' in c for c in calls2), 'reapplication changes nothing')
 
-    def test_foreign_drop_in_or_unapplied_limit_is_refused(self):
+    def test_an_earlier_ai_sdlc_value_is_replaced(self):
+        files, calls, read, write, command = self.fake(existing=runtime.DROPIN_MARK + ' old\n[Manager]\nDefaultTasksMax=1536\n',
+                                                       reported=('1536', '1024'))
+        self.assertEqual(runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n']), 1024)
+        self.assertEqual(files[runtime.TASKS_DROPIN], self.desired())
+
+    def test_a_node_without_pid_limit_is_never_lowered(self):
+        # Docker kind nodes have no pid limit and a far larger systemd default.
+        files, calls, read, write, command = self.fake(pids_max='max', reported=('629145',))
+        self.assertEqual(runtime.sandbox_task_limit(read, write, command, ['docker', 'exec', 'n']), 629145)
+        self.assertNotIn(runtime.TASKS_DROPIN, files)
+        self.assertFalse(any('daemon-reexec' in c for c in calls))
+        files, calls, read, write, command = self.fake(pids_max='max', reported=('infinity',))
+        self.assertIsNone(runtime.sandbox_task_limit(read, write, command, ['docker', 'exec', 'n']))
+        self.assertNotIn(runtime.TASKS_DROPIN, files)
+
+    def test_foreign_drop_in_small_node_or_unapplied_limit_is_refused(self):
         _, calls, read, write, command = self.fake(existing='[Manager]\nDefaultTasksMax=infinity\n')
         with self.assertRaisesRegex(ValueError, 'Conflicting'):
             runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n'])
-        self.assertEqual(calls, [])
+        _, _, read, write, command = self.fake(pids_max='1500')
+        with self.assertRaisesRegex(ValueError, 'too small'):
+            runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n'])
         _, _, read, write, command = self.fake(reported=('307', '307'))
         with self.assertRaisesRegex(ValueError, 'did not apply'):
             runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n'])
 
-    def test_limit_is_bounded_below_the_kind_node_pid_limit(self):
-        conf = (runtime.MANIFESTS / 'systemd-tasks.conf').read_text()
-        value = int(next(l.split('=')[1] for l in conf.splitlines() if l.startswith('DefaultTasksMax=')))
-        self.assertTrue(307 < value < 2048)
+    def test_every_pod_gets_a_bounded_pid_limit(self):
+        files, calls, read, write, command = self.fake()
+        self.assertEqual(runtime.pod_pid_limit(read, write, command, ['podman', 'exec', 'n']), 1024)
+        self.assertTrue(files[runtime.KUBELET_CONFIG].endswith(runtime.KUBELET_MARK + '\npodPidsLimit: 1024\n'))
+        self.assertIn(['podman', 'exec', 'n', 'systemctl', 'restart', 'kubelet'], calls)
+        # From kind.yaml or a previous run: unchanged, no restart.
+        files, calls, read, write, command = self.fake(kubelet='kind: KubeletConfiguration\npodPidsLimit: 1024\n')
+        runtime.pod_pid_limit(read, write, command, ['podman', 'exec', 'n'])
+        self.assertEqual(calls, [])
+        files, calls, read, write, command = self.fake(kubelet='podPidsLimit: 4096\n')
+        with self.assertRaisesRegex(ValueError, 'different podPidsLimit'):
+            runtime.pod_pid_limit(read, write, command, ['podman', 'exec', 'n'])
+
+    def test_limits_are_bounded_and_kind_config_matches(self):
+        value = int(next(l.split('=')[1] for l in self.desired().splitlines() if l.startswith('DefaultTasksMax=')))
+        self.assertTrue(603 < value <= 1024, 'above the measured sandbox peak, at most half of a 2048 node')
+        pods = json.loads((runtime.MANIFESTS / 'kubelet-pods.json').read_text())['podPidsLimit']
+        self.assertIn('podPidsLimit: %d' % pods, (runtime.MANIFESTS.parent / 'kind.yaml').read_text())
 
 
 if __name__ == '__main__':

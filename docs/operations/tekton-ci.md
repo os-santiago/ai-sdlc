@@ -217,8 +217,9 @@ or node affinity; the local kind node is single-node.
 `maven-build-test`, the only task that runs candidate code, runs under the
 `ai-sdlc-offline` RuntimeClass (gVisor, `network = "none"`) through the
 PipelineRun's per-task pod template. Install it with `./install.sh sandbox`;
-the run tool refuses to start without it unless `--no-sandbox` is given
-(development only). Fetch tasks never use it: the class has no network, so an
+admission refuses a `maven-build-test` run whose `build-test` task does not
+request it, and the run tool also checks that the node's per-scope task limit
+was raised (otherwise: re-run `./install.sh sandbox`). Fetch tasks never use it: the class has no network, so an
 npm run under it failed with `EAI_AGAIN`.
 
 **Node task limit.** gVisor runs every container of a pod (sandbox, gofers and
@@ -230,12 +231,35 @@ more, the sandbox died with `failed to create new OS thread (have 57 already;
 errno=11)` and the kubelet reported `creating root file system: input/output
 error` or `the sandbox exited before the container started`. One- and
 two-step tasks, emptyDir volumes and PVC workspaces all worked, which is how the
-cause was isolated (runsc debug logs showed the panic). `./install.sh sandbox`
-now installs a reviewed systemd drop-in
-(`runtime/k8s/deploy/local/offline-runtime/systemd-tasks.conf`,
-`DefaultTasksMax=1536`, below the node limit), re-executes the node's systemd
-manager, verifies the value and records `scopeTasksMax` in its report; a
-different existing drop-in is refused. It applies to scopes created afterwards.
+cause was isolated (runsc debug logs showed the panic).
+
+`./install.sh sandbox` (and every `./install.sh local` that installs the
+offline runtime) now sets two node limits:
+
+- **Per-scope tasks:** a reviewed systemd drop-in
+  (`runtime/k8s/deploy/local/offline-runtime/systemd-tasks.conf`,
+  `DefaultTasksMax=1024`) sized from the measured peak of a sandboxed Maven
+  build-test (603 tasks) plus a margin. It re-executes the node's systemd
+  manager, verifies the value and records `scopeTasksMax` in its report. It
+  only ever raises the default: a node without a pid limit (docker) keeps its
+  larger default and gets no drop-in. It refuses a node whose pid limit is
+  below twice the value, and a drop-in that ai-sdlc did not write. **It applies
+  to every container scope created afterwards, sandboxed or not.**
+- **Per-pod pids:** the kubelet `podPidsLimit` (1024,
+  `kubelet-pods.json`), in `deploy/local/kind.yaml` for new clusters and added
+  to an existing node's kubelet configuration (the kubelet restarts; running
+  pods keep running). A runc Maven pod with tests peaked at 146 pids. Together
+  they keep a fork bomb in one pod, sandboxed or not, from exhausting the
+  node's 2,048 pids.
+
+Changing the value: edit the reviewed files and re-run `./install.sh
+sandbox`; the installer replaces its own earlier drop-in and kubelet line.
+Upgrading from an install without them works the same way, and until then the
+run tool refuses sandboxed runs with "re-run ./install.sh sandbox". Removal:
+delete `/etc/systemd/system.conf.d/ai-sdlc-offline-tasks.conf` on the node and
+run `systemctl daemon-reexec`, and remove the marked `podPidsLimit` lines from
+`/var/lib/kubelet/config.yaml` and restart the kubelet; sandboxed Tekton pods
+then fail again.
 
 Measured: `maven-build-test` rest-villains with the PostgreSQL sidecar under
 gVisor passed 94/94 (72 unit, 22 integration) in 2 min 1 s of Maven, against

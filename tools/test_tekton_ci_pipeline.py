@@ -637,6 +637,26 @@ class RunToolTests(unittest.TestCase):
         self.assertEqual(upper['spec']['workspaces'][1]['persistentVolumeClaim']['claimName'],
                          tekton.cache_claim('os-santiago/quarkus-super-heroes'))
 
+    def test_sandboxed_runs_require_the_raised_task_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory, 'ai-sdlc/c')
+            state.mkdir(parents=True)
+            state.joinpath('ownership.json').write_text('{"provider": "podman"}')
+            with patch.dict('os.environ', {'XDG_STATE_HOME': directory}):
+                for shown, ok in (('1024', True), ('infinity', True), ('629145', True), ('307', False), ('', False)):
+                    run = Mock(return_value=Mock(stdout=shown + '\n'))
+                    if ok:
+                        runner.sandbox_ready('c', 1024, run=run)
+                    else:
+                        with self.assertRaisesRegex(ValueError, 're-run ./install.sh sandbox'):
+                            runner.sandbox_ready('c', 1024, run=run)
+                self.assertEqual(run.call_args.args[0][:3], ['podman', 'exec', 'c-control-plane'])
+
+    def test_admission_requires_the_sandbox_for_build_test(self):
+        rules = ' '.join(v['expression'] for v in by_kind('ValidatingAdmissionPolicy')['ai-sdlc-ci-pipelineruns']['spec']['validations'])
+        self.assertIn("s.pipelineTaskName == 'build-test'", rules)
+        self.assertIn("s.podTemplate.runtimeClassName == 'ai-sdlc-offline'", rules)
+
     def test_a_run_passes_only_with_success_the_requested_commit_and_exit_code_zero(self):
         ok = {'succeeded': True, 'commit': SHA, 'summary': {'mavenExitCode': 0}}
         self.assertTrue(runner.passed(ok, SHA))

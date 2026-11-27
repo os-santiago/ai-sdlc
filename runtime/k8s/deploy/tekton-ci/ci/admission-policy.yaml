@@ -76,6 +76,12 @@ spec:
         request.userInfo.groups.exists(g, g == 'system:masters' || g == 'kubeadm:cluster-admins')
       message: only cluster administrators may run maven-dependencies, which writes a shared cache
     - expression: >-
+        object.spec.pipelineRef.name != 'ai-sdlc-maven-build-test' ||
+        (has(object.spec.taskRunSpecs) && object.spec.taskRunSpecs.exists(s,
+          s.pipelineTaskName == 'build-test' && has(s.podTemplate) && has(s.podTemplate.runtimeClassName) &&
+          s.podTemplate.runtimeClassName == 'ai-sdlc-offline'))
+      message: maven-build-test runs candidate code only under the ai-sdlc-offline sandbox
+    - expression: >-
         !has(object.spec.workspaces) || object.spec.workspaces.all(w,
           (w.name == 'source' && w.all(k, k in ['name', 'volumeClaimTemplate']) && has(w.volumeClaimTemplate.spec) &&
            w.volumeClaimTemplate.spec.all(k, k in ['accessModes', 'resources'])) ||

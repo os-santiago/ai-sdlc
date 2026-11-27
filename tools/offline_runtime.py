@@ -113,34 +113,88 @@ def node_configuration(current, fragment):
     return desired
 
 
+DROPIN_MARK = '# AI-SDLC offline runtime:'
+KUBELET_CONFIG = '/var/lib/kubelet/config.yaml'
+KUBELET_MARK = '# AI-SDLC offline runtime: bounded pids per pod'
+
+
+def node_pid_limit(read):
+    """The kind node container's own pid limit, or None when unlimited."""
+    value = (read('/sys/fs/cgroup/pids.max') or '').strip()
+    if value == 'max':
+        return None
+    if not value.isdigit():
+        raise ValueError('Cannot read the kind node pid limit')
+    return int(value)
+
+
 def sandbox_task_limit(read, write, command, node_exec):
-    """Raise the node's per-scope task limit for sandboxed pods, idempotently.
+    """Make the node's per-scope task limit fit sandboxed pods, idempotently.
 
     gVisor runs every container of a pod (the sandbox, gofers and systrap
     stubs) inside the scope of the pod's first container, and systemd caps
     each container scope at DefaultTasksMax, 15% of the node's pid limit
     (307 for a kind node under podman's default of 2048). A Tekton task pod
     with three or more containers exceeded it and the sandbox died with
-    "failed to create new OS thread". The reviewed drop-in raises the default,
-    bounded below the node limit; a different existing drop-in is refused.
+    "failed to create new OS thread". The reviewed drop-in sets the value
+    measured for a sandboxed Maven build (603 tasks) plus a margin. It only
+    ever raises the default: a node without a pid limit (docker) already has
+    a larger default and gets no drop-in. The value must stay at or below half
+    the node's pid limit. An earlier ai-sdlc drop-in is replaced (upgrade or
+    change); a foreign one is refused. It applies to every container scope
+    created afterwards, sandboxed or not; every pod is also bounded by the
+    kubelet podPidsLimit (pod_pid_limit).
     """
     desired = (MANIFESTS / 'systemd-tasks.conf').read_text()
-    expected = next(line.split('=', 1)[1].strip() for line in desired.splitlines() if line.startswith('DefaultTasksMax='))
+    expected = int(next(line.split('=', 1)[1].strip() for line in desired.splitlines() if line.startswith('DefaultTasksMax=')))
+    limit = node_pid_limit(read)
+    if limit is not None and expected * 2 > limit:
+        raise ValueError('The kind node pid limit is too small for sandboxed pods')
     current = read(TASKS_DROPIN)
-    if current is not None and current != desired:
+    if current is not None and not current.startswith(DROPIN_MARK):
         raise ValueError('Conflicting systemd task limit drop-in on the kind node')
-    if current is None:
+
+    def shown():
+        value = command(node_exec + ['systemctl', 'show', '-p', 'DefaultTasksMax', '--value']).strip()
+        return None if value == 'infinity' else int(value)
+    observed = shown()
+    if current is None and (observed is None or observed >= expected):
+        return observed if observed is not None else limit
+    if current != desired:
         command(node_exec + ['mkdir', '-p', '/etc/systemd/system.conf.d'])
         write(TASKS_DROPIN, desired)
-    observed = command(node_exec + ['systemctl', 'show', '-p', 'DefaultTasksMax', '--value']).strip()
     if observed != expected:
         # Re-executing the manager applies the default to scopes created
         # afterwards; running containers keep their limits.
         command(node_exec + ['systemctl', 'daemon-reexec'])
-        observed = command(node_exec + ['systemctl', 'show', '-p', 'DefaultTasksMax', '--value']).strip()
+        observed = shown()
     if observed != expected:
         raise ValueError('The kind node did not apply the sandbox task limit')
-    return int(observed)
+    return observed
+
+
+def pod_pid_limit(read, write, command, node_exec):
+    """Bound every pod's pids with the kubelet podPidsLimit, idempotently.
+
+    New clusters get it from deploy/local/kind.yaml; an existing node's
+    kubelet configuration gains the reviewed value and the kubelet restarts
+    (running pods keep running). A different value that ai-sdlc did not set
+    is refused.
+    """
+    expected = json.loads((MANIFESTS / 'kubelet-pods.json').read_text())['podPidsLimit']
+    config = read(KUBELET_CONFIG)
+    if config is None:
+        raise ValueError('Kubelet configuration is unavailable on the kind node')
+    lines = config.splitlines()
+    values = [line for line in lines if line.startswith('podPidsLimit:')]
+    if values == ['podPidsLimit: ' + str(expected)]:
+        return expected
+    if values and KUBELET_MARK not in lines:
+        raise ValueError('The kind node kubelet already sets a different podPidsLimit')
+    kept = [line for line in lines if line != KUBELET_MARK and not line.startswith('podPidsLimit:')]
+    write(KUBELET_CONFIG, '\n'.join(kept + [KUBELET_MARK, 'podPidsLimit: ' + str(expected)]) + '\n')
+    command(node_exec + ['systemctl', 'restart', 'kubelet'])
+    return expected
 
 
 def install(kubectl, provider, kind, cluster, cluster_uid, cache, image):
@@ -234,6 +288,8 @@ def install(kubectl, provider, kind, cluster, cluster_uid, cache, image):
         finally:
             command(node_exec + ['rm', '-f', '--', stage])
     command(kubectl + ['wait', '--for=condition=Ready', 'node', node, '--timeout=90s'])
+    pods_max = pod_pid_limit(read, write, command, node_exec)
+    command(kubectl + ['wait', '--for=condition=Ready', 'node', node, '--timeout=90s'])
     tasks_max = sandbox_task_limit(read, write, command, node_exec)
     runtime_class = json.loads((MANIFESTS / 'runtimeclass.json').read_text())
     runtime_class['metadata']['annotations'] = {'ai-sdlc.io/cluster-uid': cluster_uid}
@@ -247,4 +303,4 @@ def install(kubectl, provider, kind, cluster, cluster_uid, cache, image):
             'verifiedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(),
             'archiveSHA256': lock['sha256'], 'configurationSHA256': sha256(shim.encode()),
             'handlerConfigurationSHA256': sha256(fragment.encode()),
-            'network': 'none', 'scopeTasksMax': tasks_max, 'verification': result, 'autonomousExecutionEnabled': False}
+            'network': 'none', 'scopeTasksMax': tasks_max, 'podPidsLimit': pods_max, 'verification': result, 'autonomousExecutionEnabled': False}
