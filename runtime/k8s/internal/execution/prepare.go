@@ -272,7 +272,7 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 // the installed manifest refuses at "manifest" instead of preparing the
 // assignment with another load's manifest or none.
 func addRepositoryContext(a *executor.Assignment, projectSHA256 string) error {
-	m, ok := project.Bound(a.Repository, projectSHA256)
+	m, ok := project.BoundOrNone(a.Repository, projectSHA256)
 	if !ok {
 		return authorityStop("manifest")
 	}
@@ -290,7 +290,7 @@ func addRepositoryContext(a *executor.Assignment, projectSHA256 string) error {
 // budget on failing test commands. Only the manifest the policy with
 // projectSHA256 binds counts.
 func WorkspaceFor(repository, projectSHA256 string) string {
-	m, ok := project.Bound(repository, projectSHA256)
+	m, ok := project.BoundOrNone(repository, projectSHA256)
 	if !ok {
 		return ""
 	}
@@ -309,7 +309,7 @@ func workspaceOf(m project.Manifest) string {
 // only from the manifest the policy with projectSHA256 binds, never from issue
 // text; environment, image and limits stay verification-only.
 func VerificationFor(repository, projectSHA256 string) *executor.Verification {
-	m, ok := project.Bound(repository, projectSHA256)
+	m, ok := project.BoundOrNone(repository, projectSHA256)
 	if !ok {
 		return nil
 	}
@@ -338,7 +338,7 @@ func verificationOf(m project.Manifest) *executor.Verification {
 // Manifest validation refuses any toolchain variable this cannot translate
 // or that names the writable volumes, so nothing is dropped here.
 func ToolchainFor(repository, projectSHA256 string) *executor.Toolchain {
-	m, ok := project.Bound(repository, projectSHA256)
+	m, ok := project.BoundOrNone(repository, projectSHA256)
 	if !ok {
 		return nil
 	}

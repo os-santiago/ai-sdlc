@@ -24,3 +24,39 @@ func TestInstalledManifestExtendsOnlyItsRepository(t *testing.T) {
 		t.Fatal("cleared manifest still supported")
 	}
 }
+
+// BoundOrNone prepares a repository with no manifest at all as before, and
+// otherwise refuses every manifest the policy does not bind.
+func TestBoundOrNoneAllowsOnlyAnAbsentManifest(t *testing.T) {
+	t.Cleanup(func() { SetInstalled(nil) })
+	m := generic()
+	digest := m.Digest()
+	if got, ok := BoundOrNone("example/service", ""); !ok || got.Repository != "" {
+		t.Fatal("an unbound repository without any manifest refused")
+	}
+	if got, ok := BoundOrNone(Saferus, ""); !ok || got.Repository != Saferus {
+		t.Fatal("reference refused")
+	}
+	if _, ok := BoundOrNone("example/service", digest); ok {
+		t.Fatal("a cleared registry satisfied a bound policy")
+	}
+	SetInstalled(&m)
+	if got, ok := BoundOrNone("example/service", digest); !ok || got.Digest() != digest {
+		t.Fatal("the bound manifest refused")
+	}
+	if _, ok := BoundOrNone("example/service", ""); ok {
+		t.Fatal("an unbound policy took another load's manifest")
+	}
+	if _, ok := BoundOrNone(Saferus, ""); ok {
+		t.Fatal("a reference policy accepted another load's installed manifest")
+	}
+	if got, ok := BoundOrNone("example/other", ""); !ok || got.Repository != "" {
+		t.Fatal("a manifest naming another repository changed nothing for this one")
+	}
+	other := m
+	other.BaseBranch = "develop"
+	SetInstalled(&other)
+	if _, ok := BoundOrNone("example/service", digest); ok {
+		t.Fatal("another load's manifest accepted")
+	}
+}
