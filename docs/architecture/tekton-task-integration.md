@@ -72,8 +72,8 @@ RuntimeClass through the PipelineRun's per-task pod template; fetch tasks
 never use it, because that class sets `network = "none"`. Tekton task pods
 first failed under gVisor because systemd capped the sandbox's scope at 307
 tasks; the offline runtime installer now raises the node's `DefaultTasksMax`
-to 1,024 (measured peak 603) and bounds every pod with a kubelet
-`podPidsLimit`, admission requires the sandbox for build-test, and the
+to 768 (measured peak 603), bounds every pod with a kubelet `podPidsLimit`
+of 768 and caps the CI namespace at two pods, admission requires the sandbox for build-test, and the
 sandboxed build passed 94/94 (stage 2a). The
 network-less policy, `mvn -o` and restricted Pod Security apply as well.
 

@@ -136,7 +136,7 @@ runtime_type = "io.containerd.runc.v2"
 
 
 class SandboxTaskLimitTests(unittest.TestCase):
-    def fake(self, existing=None, reported=('307', '1024'), pids_max='2048', kubelet='kind: KubeletConfiguration\n'):
+    def fake(self, existing=None, reported=('307', '768'), pids_max='2048', kubelet='kind: KubeletConfiguration\n'):
         files = {'/sys/fs/cgroup/pids.max': pids_max + '\n', runtime.KUBELET_CONFIG: kubelet}
         if existing is not None:
             files[runtime.TASKS_DROPIN] = existing
@@ -154,17 +154,17 @@ class SandboxTaskLimitTests(unittest.TestCase):
 
     def test_drop_in_is_written_once_and_applied_with_a_reexec(self):
         files, calls, read, write, command = self.fake()
-        self.assertEqual(runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n']), 1024)
-        self.assertIn('DefaultTasksMax=1024', files[runtime.TASKS_DROPIN])
+        self.assertEqual(runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n']), 768)
+        self.assertIn('DefaultTasksMax=768', files[runtime.TASKS_DROPIN])
         self.assertIn(['podman', 'exec', 'n', 'systemctl', 'daemon-reexec'], calls)
-        files2, calls2, read2, write2, command2 = self.fake(existing=self.desired(), reported=('1024',))
-        self.assertEqual(runtime.sandbox_task_limit(read2, write2, command2, ['podman', 'exec', 'n']), 1024)
+        files2, calls2, read2, write2, command2 = self.fake(existing=self.desired(), reported=('768',))
+        self.assertEqual(runtime.sandbox_task_limit(read2, write2, command2, ['podman', 'exec', 'n']), 768)
         self.assertFalse(any('daemon-reexec' in c for c in calls2), 'reapplication changes nothing')
 
     def test_an_earlier_ai_sdlc_value_is_replaced(self):
         files, calls, read, write, command = self.fake(existing=runtime.DROPIN_MARK + ' old\n[Manager]\nDefaultTasksMax=1536\n',
-                                                       reported=('1536', '1024'))
-        self.assertEqual(runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n']), 1024)
+                                                       reported=('1536', '768'))
+        self.assertEqual(runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n']), 768)
         self.assertEqual(files[runtime.TASKS_DROPIN], self.desired())
 
     def test_a_node_without_pid_limit_is_never_lowered(self):
@@ -181,29 +181,59 @@ class SandboxTaskLimitTests(unittest.TestCase):
         _, calls, read, write, command = self.fake(existing='[Manager]\nDefaultTasksMax=infinity\n')
         with self.assertRaisesRegex(ValueError, 'Conflicting'):
             runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n'])
-        _, _, read, write, command = self.fake(pids_max='1500')
+        _, _, read, write, command = self.fake(pids_max='1500')  # below 2 x 768
         with self.assertRaisesRegex(ValueError, 'too small'):
             runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n'])
         _, _, read, write, command = self.fake(reported=('307', '307'))
         with self.assertRaisesRegex(ValueError, 'did not apply'):
             runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n'])
 
-    def test_every_pod_gets_a_bounded_pid_limit(self):
+    @staticmethod
+    def moving(files, command):
+        def run(args, **kwargs):
+            if args[3:5] == ['mv', '-T'] and args[-2] in files:
+                files[args[-1]] = files.pop(args[-2])
+            if args[3:5] == ['rm', '-f']:
+                files.pop(args[-1], None)
+            return command(args, **kwargs)
+        return run
+
+    def test_every_pod_gets_a_bounded_pid_limit_atomically(self):
         files, calls, read, write, command = self.fake()
-        self.assertEqual(runtime.pod_pid_limit(read, write, command, ['podman', 'exec', 'n']), 1024)
-        self.assertTrue(files[runtime.KUBELET_CONFIG].endswith(runtime.KUBELET_MARK + '\npodPidsLimit: 1024\n'))
+        command = self.moving(files, command)
+        self.assertEqual(runtime.pod_pid_limit(read, write, command, ['podman', 'exec', 'n'], lambda: 768), 768)
+        self.assertTrue(files[runtime.KUBELET_CONFIG].endswith(runtime.KUBELET_MARK + '\npodPidsLimit: 768\n'))
+        moves = [c for c in calls if c[3:5] == ['mv', '-T']]
+        self.assertEqual(len(moves), 1, 'staged, then moved into place')
         self.assertIn(['podman', 'exec', 'n', 'systemctl', 'restart', 'kubelet'], calls)
-        # From kind.yaml or a previous run: unchanged, no restart.
-        files, calls, read, write, command = self.fake(kubelet='kind: KubeletConfiguration\npodPidsLimit: 1024\n')
-        runtime.pod_pid_limit(read, write, command, ['podman', 'exec', 'n'])
+        # From kind.yaml or a previous run: unchanged, only confirmed.
+        files, calls, read, write, command = self.fake(kubelet='kind: KubeletConfiguration\npodPidsLimit: 768\n')
+        runtime.pod_pid_limit(read, write, command, ['podman', 'exec', 'n'], lambda: 768)
         self.assertEqual(calls, [])
         files, calls, read, write, command = self.fake(kubelet='podPidsLimit: 4096\n')
         with self.assertRaisesRegex(ValueError, 'different podPidsLimit'):
-            runtime.pod_pid_limit(read, write, command, ['podman', 'exec', 'n'])
+            runtime.pod_pid_limit(read, write, command, ['podman', 'exec', 'n'], lambda: 768)
+
+    def test_an_earlier_reviewed_value_is_upgraded(self):
+        # kind.yaml of the previous revision set 1024 without the marker.
+        files, calls, read, write, command = self.fake(kubelet='kind: KubeletConfiguration\npodPidsLimit: 1024\n')
+        command = self.moving(files, command)
+        self.assertEqual(runtime.pod_pid_limit(read, write, command, ['podman', 'exec', 'n'], lambda: 768), 768)
+        self.assertEqual(files[runtime.KUBELET_CONFIG].count('podPidsLimit:'), 1)
+
+    def test_a_kubelet_that_does_not_apply_the_value_is_restored(self):
+        original = 'kind: KubeletConfiguration\n'
+        files, calls, read, write, command = self.fake(kubelet=original)
+
+        move = self.moving(files, command)
+        with self.assertRaisesRegex(ValueError, 'restored'):
+            runtime.pod_pid_limit(read, write, move, ['podman', 'exec', 'n'], lambda: None)
+        self.assertEqual(files[runtime.KUBELET_CONFIG], original)
+        self.assertEqual(sum(1 for c in calls if c[3:] == ['systemctl', 'restart', 'kubelet']), 2)
 
     def test_limits_are_bounded_and_kind_config_matches(self):
         value = int(next(l.split('=')[1] for l in self.desired().splitlines() if l.startswith('DefaultTasksMax=')))
-        self.assertTrue(603 < value <= 1024, 'above the measured sandbox peak, at most half of a 2048 node')
+        self.assertTrue(603 < value <= 768, 'above the measured sandbox peak (603), well below a 2048 node')
         pods = json.loads((runtime.MANIFESTS / 'kubelet-pods.json').read_text())['podPidsLimit']
         self.assertIn('podPidsLimit: %d' % pods, (runtime.MANIFESTS.parent / 'kind.yaml').read_text())
 

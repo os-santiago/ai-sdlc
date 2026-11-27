@@ -8,5 +8,6 @@ nodes:
     kubeadmConfigPatches:
       - |
         kind: KubeletConfiguration
-        # Bound every pod's pids (also applied by the offline runtime installer).
-        podPidsLimit: 1024
+        # Bound every pod's pids (also applied by the offline runtime installer;
+        # keep equal to offline-runtime/kubelet-pods.json).
+        podPidsLimit: 768

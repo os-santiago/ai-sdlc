@@ -238,19 +238,31 @@ offline runtime) now sets two node limits:
 
 - **Per-scope tasks:** a reviewed systemd drop-in
   (`runtime/k8s/deploy/local/offline-runtime/systemd-tasks.conf`,
-  `DefaultTasksMax=1024`) sized from the measured peak of a sandboxed Maven
-  build-test (603 tasks) plus a margin. It re-executes the node's systemd
+  `DefaultTasksMax=768`) sized from the measured peak of a sandboxed Maven
+  build-test (603 tasks) plus a 27% margin. It re-executes the node's systemd
   manager, verifies the value and records `scopeTasksMax` in its report. It
   only ever raises the default: a node without a pid limit (docker) keeps its
   larger default and gets no drop-in. It refuses a node whose pid limit is
   below twice the value, and a drop-in that ai-sdlc did not write. **It applies
   to every container scope created afterwards, sandboxed or not.**
-- **Per-pod pids:** the kubelet `podPidsLimit` (1024,
-  `kubelet-pods.json`), in `deploy/local/kind.yaml` for new clusters and added
-  to an existing node's kubelet configuration (the kubelet restarts; running
-  pods keep running). A runc Maven pod with tests peaked at 146 pids. Together
-  they keep a fork bomb in one pod, sandboxed or not, from exhausting the
-  node's 2,048 pids.
+- **Per-pod pids:** the kubelet `podPidsLimit` (768, `kubelet-pods.json`), in
+  `deploy/local/kind.yaml` for new clusters and added to an existing node's
+  kubelet configuration atomically: the installer stages the file, checks it is
+  the original plus the reviewed value, moves it into place, restarts the
+  kubelet and confirms the value through the node's `/configz`; on failure it
+  restores the original and restarts the kubelet again. Pods created before
+  the change keep running without the bound until they are recreated. A value
+  that an earlier ai-sdlc revision set (marked, or listed under `previous`,
+  such as the earlier 1024 in kind.yaml) is upgraded; any other is refused.
+- **CI concurrency:** a ResourceQuota (`ai-sdlc-ci-pods`) allows two pods in
+  `ai-sdlc-ci`: one PipelineRun's affinity assistant and its current task pod.
+  Tekton keeps further task pods pending until a pod ends.
+
+The arithmetic for a podman kind node (2,048 pids): CI pods hold at most 2 x
+768 = 1,536 pids (75%), the rest is left for the runtime and system pods, each
+of which is also capped at 768. A runc Maven pod with tests peaked at 146
+pids and the sandboxed build-test at 603, so legitimate runs fit with margin,
+while a fork bomb in any one pod stops at 768.
 
 Changing the value: edit the reviewed files and re-run `./install.sh
 sandbox`; the installer replaces its own earlier drop-in and kubelet line.

@@ -24,7 +24,7 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 DESIRED = ROOT / 'runtime/k8s/deploy/tekton-ci'
 CI_DIR = DESIRED / 'ci'
-CI_FILES = ('namespace.yaml', 'serviceaccount.yaml', 'admission-policy.yaml', 'network-policy.yaml',
+CI_FILES = ('namespace.yaml', 'serviceaccount.yaml', 'admission-policy.yaml', 'network-policy.yaml', 'resourcequota.yaml',
             'task-source-checkout.yaml', 'task-maven-build-test.yaml', 'task-maven-dependencies.yaml',
             'task-npm-lock-update.yaml', 'pipeline-maven-build-test.yaml', 'pipeline-maven-dependencies.yaml',
             'pipeline-npm-lock-update.yaml')

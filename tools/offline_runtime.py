@@ -12,6 +12,7 @@ import secrets
 import subprocess
 import tarfile
 import tempfile
+import time
 import tomllib
 import urllib.request
 
@@ -173,28 +174,69 @@ def sandbox_task_limit(read, write, command, node_exec):
     return observed
 
 
-def pod_pid_limit(read, write, command, node_exec):
-    """Bound every pod's pids with the kubelet podPidsLimit, idempotently.
+def pod_pid_limit(read, write, command, node_exec, configz):
+    """Bound every pod's pids with the kubelet podPidsLimit, idempotently and atomically.
 
-    New clusters get it from deploy/local/kind.yaml; an existing node's
-    kubelet configuration gains the reviewed value and the kubelet restarts
-    (running pods keep running). A different value that ai-sdlc did not set
-    is refused.
+    New clusters get it from deploy/local/kind.yaml. On an existing node the
+    installer stages the kubelet configuration with the reviewed value,
+    checks the staged file is exactly the original plus that value, moves it
+    into place, restarts the kubelet and confirms through the node's /configz
+    that the value is in effect; on any failure it restores the original file
+    and restarts the kubelet again. A value ai-sdlc set before (marked, or an
+    earlier reviewed value) is upgraded; any other value is refused. Pods
+    created before the change keep running without the bound until they are
+    recreated.
     """
-    expected = json.loads((MANIFESTS / 'kubelet-pods.json').read_text())['podPidsLimit']
+    policy = json.loads((MANIFESTS / 'kubelet-pods.json').read_text())
+    expected, previous = policy['podPidsLimit'], set(policy.get('previous', []))
     config = read(KUBELET_CONFIG)
     if config is None:
         raise ValueError('Kubelet configuration is unavailable on the kind node')
     lines = config.splitlines()
     values = [line for line in lines if line.startswith('podPidsLimit:')]
     if values == ['podPidsLimit: ' + str(expected)]:
+        if configz() != expected:
+            raise ValueError('The kubelet does not report the configured podPidsLimit')
         return expected
-    if values and KUBELET_MARK not in lines:
+    ours = KUBELET_MARK in lines or (len(values) == 1 and values[0].split(':', 1)[1].strip().isdigit()
+                                     and int(values[0].split(':', 1)[1]) in previous)
+    if values and not ours:
         raise ValueError('The kind node kubelet already sets a different podPidsLimit')
     kept = [line for line in lines if line != KUBELET_MARK and not line.startswith('podPidsLimit:')]
-    write(KUBELET_CONFIG, '\n'.join(kept + [KUBELET_MARK, 'podPidsLimit: ' + str(expected)]) + '\n')
-    command(node_exec + ['systemctl', 'restart', 'kubelet'])
+    desired = '\n'.join(kept + [KUBELET_MARK, 'podPidsLimit: ' + str(expected)]) + '\n'
+    stage = KUBELET_CONFIG + '.ai-sdlc-' + secrets.token_hex(6)
+    write(stage, desired)
+    try:
+        staged = read(stage)
+        if staged != desired or [line for line in staged.splitlines() if line not in (KUBELET_MARK, 'podPidsLimit: ' + str(expected))] != kept:
+            raise ValueError('Staged kubelet configuration differs from the reviewed change')
+        if read(KUBELET_CONFIG) != config:
+            raise ValueError('Kubelet configuration changed concurrently; no replacement applied')
+        command(node_exec + ['mv', '-T', stage, KUBELET_CONFIG])
+    finally:
+        command(node_exec + ['rm', '-f', '--', stage])
+    try:
+        command(node_exec + ['systemctl', 'restart', 'kubelet'])
+        observed = configz()
+        if observed != expected:
+            raise ValueError('The kubelet reports podPidsLimit ' + str(observed))
+    except (ValueError, subprocess.SubprocessError, OSError):
+        write(stage, config)
+        command(node_exec + ['mv', '-T', stage, KUBELET_CONFIG])
+        command(node_exec + ['systemctl', 'restart', 'kubelet'])
+        raise ValueError('The kubelet did not apply podPidsLimit; its prior configuration was restored')
     return expected
+
+
+def kubelet_configz(kubectl, node, command, attempts=30, sleep=time.sleep):
+    """podPidsLimit as the running kubelet reports it through /configz."""
+    for _ in range(attempts):
+        try:
+            raw = command(kubectl + ['get', '--raw', '/api/v1/nodes/' + node + '/proxy/configz'])
+            return json.loads(raw).get('kubeletconfig', {}).get('podPidsLimit')
+        except (subprocess.SubprocessError, ValueError, OSError):
+            sleep(2)
+    raise ValueError('The kubelet /configz did not answer after the restart')
 
 
 def install(kubectl, provider, kind, cluster, cluster_uid, cache, image):
@@ -288,7 +330,7 @@ def install(kubectl, provider, kind, cluster, cluster_uid, cache, image):
         finally:
             command(node_exec + ['rm', '-f', '--', stage])
     command(kubectl + ['wait', '--for=condition=Ready', 'node', node, '--timeout=90s'])
-    pods_max = pod_pid_limit(read, write, command, node_exec)
+    pods_max = pod_pid_limit(read, write, command, node_exec, lambda: kubelet_configz(kubectl, node, command))
     command(kubectl + ['wait', '--for=condition=Ready', 'node', node, '--timeout=90s'])
     tasks_max = sandbox_task_limit(read, write, command, node_exec)
     runtime_class = json.loads((MANIFESTS / 'runtimeclass.json').read_text())

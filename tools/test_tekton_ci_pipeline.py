@@ -90,7 +90,7 @@ class ManifestTests(unittest.TestCase):
         kinds = sorted((d['kind'], d['metadata']['name']) for d in documents())
         self.assertEqual(kinds, sorted([
             ('Namespace', 'ai-sdlc-ci'), ('ServiceAccount', 'ai-sdlc-ci-runner'),
-            ('ServiceAccount', 'default'), ('NetworkPolicy', 'ai-sdlc-ci-default-deny'),
+            ('ServiceAccount', 'default'), ('NetworkPolicy', 'ai-sdlc-ci-default-deny'), ('ResourceQuota', 'ai-sdlc-ci-pods'),
             ('ValidatingAdmissionPolicy', 'ai-sdlc-ci-pipelineruns'), ('ValidatingAdmissionPolicyBinding', 'ai-sdlc-ci-pipelineruns'),
             ('ValidatingAdmissionPolicy', 'ai-sdlc-ci-pipelinerun-labels'),
             ('ValidatingAdmissionPolicyBinding', 'ai-sdlc-ci-pipelinerun-labels'),
@@ -129,6 +129,12 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual([v['expression'] for v in policy['validations']], ['variables.egress == variables.oldEgress'])
         binding = by_kind('ValidatingAdmissionPolicyBinding')['ai-sdlc-ci-pipelinerun-labels']['spec']
         self.assertEqual((binding['policyName'], binding['validationActions']), ('ai-sdlc-ci-pipelinerun-labels', ['Deny']))
+
+    def test_ci_pods_hold_at_most_three_quarters_of_a_podman_node_pid_limit(self):
+        quota = by_kind('ResourceQuota')['ai-sdlc-ci-pods']['spec']['hard']['pods']
+        pods = json.loads((tekton.ROOT / 'runtime/k8s/deploy/local/offline-runtime/kubelet-pods.json').read_text())['podPidsLimit']
+        self.assertLessEqual(int(quota) * pods, 0.75 * 2048)
+        self.assertIn('podPidsLimit: %d' % pods, (tekton.ROOT / 'runtime/k8s/deploy/local/kind.yaml').read_text())
 
     def test_every_container_is_pinned_non_root_and_unprivileged(self):
         for task in by_kind('Task').values():

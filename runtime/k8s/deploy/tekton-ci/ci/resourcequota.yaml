@@ -1,0 +1,15 @@
+# At most two pods at a time in the CI namespace (one PipelineRun: its
+# affinity assistant and its current task pod). With the kubelet podPidsLimit
+# of 768 (deploy/local/offline-runtime/kubelet-pods.json), CI pods hold at most
+# 2 x 768 = 1536 pids, 75% of a 2048-pid kind node under podman. Tekton keeps a
+# task pending while the quota is exhausted and creates it when a pod ends.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: ai-sdlc-ci-pods
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  hard:
+    pods: "2"
