@@ -40,6 +40,9 @@ type Manifest struct {
 	// part of Verification, because the verifier's settings digest encodes
 	// Verification.
 	Generation *Generation `json:"generation,omitempty"`
+	// Tekton is optional and omitted when absent (canonical form and digest
+	// unchanged); see tekton.go.
+	Tekton *Tekton `json:"tekton,omitempty"`
 }
 
 // Verification runs the repository's own tests in the sandboxed verifier.
@@ -560,6 +563,9 @@ func (m Manifest) Validate() error {
 				return ErrGenerationEnv
 			}
 		}
+	}
+	if m.Tekton != nil && m.Tekton.validate(m) != nil {
+		return ErrManifest
 	}
 	if m.Publication.validate() != nil || m.Merge.validate() != nil || len(m.Recipes) > 8 {
 		return ErrManifest
