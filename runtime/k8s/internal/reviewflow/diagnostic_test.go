@@ -40,6 +40,13 @@ func TestReviewDiagnosticStageIsBounded(t *testing.T) {
 		ControllerError{Stage: "cleanup-pod-sensitive"}:             "unknown",
 		ControllerError{Stage: "preparation-source-rate-limited"}:   "preparation-source-rate-limited",
 		ControllerError{Stage: "preparation-sensitive"}:             "unknown",
+
+		// Mailbox read transport failures, by cause (issue #826).
+		ControllerError{Stage: "model-mailbox-read-helper-transport-exec"}:     "model-mailbox-read-helper-transport-exec",
+		ControllerError{Stage: "model-mailbox-read-helper-transport-relay"}:    "model-mailbox-read-helper-transport-relay",
+		ControllerError{Stage: "model-mailbox-read-helper-transport-deadline"}: "model-mailbox-read-helper-transport-deadline",
+		ControllerError{Stage: "model-mailbox-read-helper-transport-expired"}:  "model-mailbox-read-helper-transport-expired",
+		ControllerError{Stage: "model-mailbox-read-helper-transport-other"}:    "model-unknown",
 	} {
 		if got := DiagnosticStage(err); got != want {
 			t.Fatalf("%v: got %q, want %q", err, got, want)
