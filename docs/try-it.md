@@ -41,8 +41,8 @@ console. The [detailed guide](try-it-detailed.md) explains each step.
    installation authorized. Creating the issue alone does nothing.
 
 5. **Watch it** in the console: type the issue number in the "Issue" filter.
-   In about 4 to 8 minutes with a hosted model (median under 5 in our runs) the row goes through
-   generation, verification, review, publication and merge. A pull request
+   In about 4 to 8 minutes with a hosted model (median under 5 in our runs),
+   the row goes through generation, verification, review, publication and merge. A pull request
    opens and merges, and the issue closes.
 
 If it stops, the row's label names the stage and diagnostic (for example
