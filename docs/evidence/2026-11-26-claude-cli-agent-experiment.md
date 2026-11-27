@@ -97,9 +97,37 @@ All three ran on the Python sample with the same cell label (`agent-cli-claude-s
 - Battery 40 re-delivers issues that failed before, so it is not a fresh sample, and the harness counts those issues from their earlier trials. With #829, its seven merges completed with no uncertain merge, and the tree-write stop did not recur. A slower merge would still quarantine merges until #830 adds a reconciler.
 - After #828 (batteries 39–40), the remaining refusals were wrong expectations in candidates' own tests, all four on a single issue (46). The generator cannot run tests there, because the Python image cannot be a generation toolchain (#831).
 
+## Follow-up: the refinement window (batteries 41–44, 2026-11-27)
+
+Four batteries of new issues measured the main scenario while a series of reliability changes merged:
+- #835: bounded retries of transient pod-exec reads, including the apiserver-to-kubelet relay;
+- #836: a read-only merge reconciler, with release-manager readiness no longer tied to the merge quarantine;
+- #834: the flow console waits for its database and names the real end of a failed lane;
+- #838: a generator without a toolchain is asked to check expected values by hand.
+
+| Battery | Install | Repository | Issues (new) | Within two attempts | First attempt | Median seconds | Model calls (median) |
+|---|---|---|---|---|---|---|---|
+| [41](2026-11-27-evaluation-battery-41.json) | 127e220 | Python | 57–66 | 10/10 | 9/10 | 324 | 7 |
+| [42](2026-11-27-evaluation-battery-42.json) | 1d50d8a (+#838) | Python | 77–86 | 10/10 | 7/10 | 345 | 8 |
+| [43](2026-11-27-evaluation-battery-43.json) | f503a9b (all four) | Python | 98–107 | 10/10 | 9/10 | 284 | 7.5 |
+| [44](2026-11-27-evaluation-battery-44.json) | f503a9b (all four), fresh cluster | Go | 312–321 | 10/10 | 9/10 | 368 | 6.5 |
+
+**Together:** 40 of 40 new issues delivered within two attempts (100% [91.2%, 100%]), and 35 of 40 on the first attempt (87.5% [73.9%, 94.5%]). These pool four revisions, so they are not gate evidence.
+
+**What the first-attempt losses were:**
+- **Battery 41, issue 62:** a review mailbox transport stop, the case #835 fixes.
+- **Battery 42** used issues that mostly involve counting:
+  - Issue 78: the reviewer broke its response policy (`model-response-policy`), a model error the policy rejects.
+  - Issue 80: the generator's edit corrupted the package's `__init__.py` (a duplicated fragment and a dropped import). The generator cannot run Python, so it did not notice (#831).
+  - Issue 86: a merge stopped before anything was sent but was recorded as permanently failed, so a second attempt was needed. #840 addresses this.
+- **Battery 43, issue 107:** the independent review requested changes.
+- **Battery 44, issue 320:** the candidate's own tests failed verification.
+
+**What did not recur on f503a9b:** no transport stop, no uncertain publication or merge, and no quarantine.
+
 ## Limits
 
-- **Easy issues.** The corpus is small Go functions in one sample repository (and, for batteries 37–40, small Python functions in a second).
+- **Easy issues.** The corpus is small Go functions in one sample repository (and, for batteries 37–44, small Python functions in a second).
 - **Not a product path.** The bridge is evaluation-only, so batteries 33–35 are not Beta gate evidence. Battery 36 is a product path but shares the easy-issue, single-Go-repository limit, and ran on an in-place install rather than a fresh cluster.
 - **Not a controlled comparison.** The local-model figures come from different issues and from three revisions (7f50d07, 4f51e42 and 24c3190); only 230, 232 and 233 overlap.
 - **Host load.** The local model served only reviews, so the cluster was less loaded than in the local-model batteries.
