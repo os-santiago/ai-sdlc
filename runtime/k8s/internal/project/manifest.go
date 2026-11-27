@@ -69,6 +69,10 @@ type Verification struct {
 	// Analysis is optional static analysis, omitted when absent so manifests
 	// without it keep their canonical form, digest and verifier settings.
 	Analysis *Analysis `json:"analysis,omitempty"`
+	// Services are optional backing services the tests reach over the pod's
+	// loopback (see Service). Omitted when absent, so manifests without
+	// them keep their canonical form, digest and verifier settings.
+	Services []Service `json:"services,omitempty"`
 }
 
 // Analysis declares static analysis commands (for example go vet ./...) that
@@ -473,6 +477,9 @@ func ParseManifest(raw []byte) (Manifest, error) {
 		if errors.Is(err, ErrGenerationEnv) {
 			return Manifest{}, ErrGenerationEnv
 		}
+		if errors.Is(err, ErrServiceBudget) {
+			return Manifest{}, ErrServiceBudget
+		}
 		return Manifest{}, ErrManifest
 	}
 	return m, nil
@@ -548,8 +555,10 @@ func (m Manifest) Validate() error {
 	if m.Verification == nil && len(m.Recipes) == 0 {
 		return ErrManifest
 	}
-	if m.Verification != nil && m.Verification.validate() != nil {
-		return ErrManifest
+	if m.Verification != nil {
+		if err := m.Verification.validate(); err != nil {
+			return err
+		}
 	}
 	if m.Generation != nil && (m.Verification == nil || m.Generation.validate() != nil) {
 		return ErrManifest
@@ -606,7 +615,8 @@ func (v Verification) validate() error {
 		v.TimeoutSeconds < 30 || v.TimeoutSeconds > 600 || !cpuQuantity.MatchString(v.CPU) ||
 		!byteQuantity.MatchString(v.Memory) || !byteQuantity.MatchString(v.EphemeralStorage) ||
 		v.Network != "none" || !v.Result.ExitCode || v.Repeat < 1 || v.Repeat > 3 ||
-		len(v.TestGlobs) == 0 || len(v.TestGlobs) > 32 || len(v.HarnessGlobs) > 64 || !validEnv(v.Env) {
+		len(v.TestGlobs) == 0 || len(v.TestGlobs) > 32 || len(v.HarnessGlobs) > 64 || !validEnv(v.Env) ||
+		!validServices(v.Services) {
 		return ErrManifest
 	}
 	for _, g := range v.HarnessGlobs {
@@ -622,6 +632,11 @@ func (v Verification) validate() error {
 	}
 	if v.Result.JUnitPath != "" && cleanPath(v.Result.JUnitPath) != nil {
 		return ErrManifest
+	}
+	// Only manifests with services are bounded here, so every manifest
+	// accepted before services existed stays valid.
+	if len(v.Services) > 0 && v.LongestRunSeconds() > MaxVerificationSeconds {
+		return ErrServiceBudget
 	}
 	for _, g := range v.TestGlobs {
 		if validGlob(g) != nil {

@@ -96,7 +96,7 @@ read-only reviewer receives the changed test files for that judgement.
 
 Status: in review (slice 6).
 
-Each run (baseline, cross, candidate 1..n) is its own offline pod in the
+Each run (baseline, cross, candidate) is its own offline pod in the
 `ai-sdlc-verifiers` namespace (single deny-all network policy, checked before
 every effect) and the `ai-sdlc-offline` RuntimeClass (gVisor, `network=none`):
 
@@ -104,7 +104,11 @@ every effect) and the `ai-sdlc-offline` RuntimeClass (gVisor, `network=none`):
 |---|---|---|
 | `install-runner` (init) | verifier | copies the static runner into a volume |
 | `transfer` (native sidecar) | model mailbox | idles in `workspace-transfer hold`; the controller's exec target |
+| `service-<name>` (native sidecar, optional) | pinned by the installation manifest | a backing service from `verification.services` (database, broker), reached on loopback |
 | `tests` | toolchain pinned by the installation manifest | runs the runner, which runs the repository's command |
+
+The candidate pod runs the command `repeat` times, each time on a fresh copy
+of the verified tree.
 
 - No service account token, no secrets, no service links, `restartPolicy: Never`.
 - Non-root user, read-only root filesystem, all capabilities dropped,
@@ -115,12 +119,67 @@ every effect) and the `ai-sdlc-offline` RuntimeClass (gVisor, `network=none`):
   per-run settings ConfigMap, never the pod spec. The manifest may add a
   reviewed toolchain environment (`verification.env`, for example `PATH`).
 
+**Backing services.** `verification.services` (at most 6) replaces Quarkus
+Dev Services or Testcontainers, which need a container engine. Each service
+is a native sidecar (an init container with `restartPolicy: Always`), started
+after `transfer` and before `tests`. The kubelet stops it when the tests
+container exits, so the pod still completes with the tests. Decisions:
+
+- *Native sidecars, runner-side readiness.* The ordering and the clean stop
+  come from native sidecars, which the pod already uses for `transfer`. The
+  readiness check is not a kubelet probe. A kubelet TCP probe targets the
+  pod IP, which the sandbox does not serve under `network=none`, and a
+  probe would also add API defaults to the exact template comparison. Instead, the runner connects to
+  `127.0.0.1:<port>` after verifying the tree and before any repository
+  code runs, so the repository cannot open a port first.
+- *Fresh state per pod.* Each run is a new pod with empty, size-limited
+  `emptyDir` volumes, so baseline, cross and candidate never share service
+  state. The candidate's repetitions share one set of services. Repetition
+  1 always runs on fresh services, so the cross run and the first candidate
+  run are unaffected. Later repetitions see what earlier ones left behind.
+  Leftover state can make them disagree (`uncertain`, a possible false
+  refusal). It can also make them agree when fresh services would not: a
+  test may store a favourable result in repetition 1 and skip the flaky
+  operation later. So shared services weaken the flakiness check of
+  `repeat`. Fresh services per repetition would need one pod per
+  repetition, a change to the effect ledger.
+- *Fail closed.* A service that is not ready in time, exits or restarts
+  fails the run as a transport failure, never as a decision. A service may
+  be seen terminated only as a kubelet stop after the tests ended: it
+  finished no earlier than the tests container, was not OOM-killed, and
+  exited 0, 137 or 143. Otherwise its death could have made the tests fail,
+  which the cross run would read as new failing tests on the old code
+  (`observe-service`). The readiness port must open only once the service
+  can serve.
+- *Isolation.* Services inherit the pod's gVisor RuntimeClass, the missing
+  token and service links, and RuntimeDefault seccomp. They run non-root
+  (the namespace enforces Pod Security `restricted`) with every capability
+  dropped, no privilege escalation and, unless the manifest opts out, a
+  read-only root filesystem. They mount only their own volume. Images,
+  arguments and environment come only from the installed manifest. `$` is
+  refused so that Kubernetes expansion cannot change a reviewed value.
+- *Budgets.* The pod deadline adds the longest `readySeconds` (at most
+  180). Service requests equal their limits and are added to the verifier
+  namespace quota for each of the three concurrent runs. The test timeout
+  stays at 30–600 seconds. A manifest with services is refused
+  (`ErrServiceBudget`) when the candidate run's deadline does not fit the
+  signed command's 30-minute lifetime (`verification.MaxCommandAge`). That
+  deadline is 480 s of pulls, import wait and margin, plus the longest
+  `readySeconds`, `repeat` × `timeoutSeconds` and the analysis. Otherwise
+  a run that could still finish would end as a failure. Manifests without
+  services are not bounded this way, so their validity is unchanged.
+
+- *Reusable definition.* `project.Service` holds no Kubernetes types.
+  Only the repository-tests compiler turns it into a pod sidecar, so a
+  Tekton task renderer can map the same manifest entry to Tekton `sidecars`.
+
 **Sequence.** The controller:
 1. imports the exact tree through the sidecar (verified workspace-bundle
    protocol), checking the receipt;
 2. publishes a ready marker bound to the pod UID, source and tree.
 
-The runner waits for that exact marker, verifies the tree digest again, turns
+The runner waits for that exact marker, verifies the tree digest again, waits
+for the manifest's services (if any) on loopback, turns
 non-dumpable (same-uid repository code cannot trace it or open its output),
 runs the command, kills any leftover process (it is the pid namespace's init),
 reads the report and prints one result line. No helper runs once the
@@ -130,6 +189,8 @@ succeeded pod, from the same container instance, as exactly one line.
 ## Limits for adopters
 
 - `repeat` is 1–3 and the test timeout 30–600 seconds.
+- At most 6 backing services. Each one is non-root, uses a port of at least
+  1024 and is ready within 180 seconds. A candidate's repetitions share them.
 - The imported tree is bounded by the workspace-bundle limits (16 MiB of
   content, 4096 files) and has no `.git`: builds that need git metadata fail.
   Dependencies must be vendored or in the toolchain image (no network).
