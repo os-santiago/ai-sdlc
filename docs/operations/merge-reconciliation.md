@@ -173,7 +173,8 @@ What follows for each outcome:
   runtime never closes an issue after a merge; only the release's terminal stage
   does that, after a deployment. Because no merged record exists, the
   merged-source build, provenance, promotion and deployment stages do not start
-  for this change, and the work item stays `running`. The code itself is on
+  for this change, and the work item stays `running` (or becomes `blocked` once
+  the orchestrator sees the closed issue as a superseding generation). The code itself is on
   `main` and ships inside the next merged change's tree, without its own
   provenance record (see the principle exception above). For a built-in
   reference repository the merge commit says `Refs #N`, so the issue also stays
@@ -215,11 +216,11 @@ outcomes (see [metrics](metrics.md#merge-reconciliations)).
 3. Decide how the change reaches production. Either the next merged change
    carries it (its tree contains the code), or you trigger a release by hand.
    Note that no provenance record names this change.
-4. Close out the work item, which otherwise stays `running`:
+4. Close out the work item, which otherwise stays `running` or `blocked`:
 
    ```sql
    UPDATE work_items SET status = 'completed', updated_at = clock_timestamp()
-    WHERE uuid = '<work item>' AND status = 'running';
+    WHERE uuid = '<work item>' AND status IN ('running', 'blocked');
    ```
 
    This records no production fact. Use `failed` instead if you decide the
@@ -233,6 +234,10 @@ outcomes (see [metrics](metrics.md#merge-reconciliations)).
 2. Re-deliver the issue with the [re-delivery procedure](publication-reconciliation.md#re-delivery-is-an-operator-action-decision-can-be-changed-later)
    (remove and re-add the trigger label). Clean up before you re-label, so that
    two pull requests for the same issue are never open at the same time.
+3. `not-sent` proves only that this merge request did not merge the planned
+   head. If someone already put the same change on `main` another way (a
+   cherry-pick or a squash outside the pull request), check `main` before you
+   re-deliver, so the work is not done twice.
 
 ## Readiness and the quarantine
 
