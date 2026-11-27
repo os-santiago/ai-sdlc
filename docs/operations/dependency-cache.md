@@ -184,6 +184,12 @@ python3 tools/dependency_cache_install.py seal --context kind-ai-sdlc \
   --project-manifest manifest.json --source ./clone --revision <base SHA>
 ```
 
+The work claim `deps-<key>` is separate from the Tekton CI catalog's
+per-repository Maven cache (`ai-sdlc-ci-maven-cache-<first 16 hex digits of
+sha256(owner/name)>`). That cache stays in `ai-sdlc-ci` for Tekton test tasks
+and is never handed over: a sealed `deps-<key>` volume is keyed to one base
+revision's dependency files and becomes read-only in the verifier namespace.
+
 `key` prints the claim name without a cluster. The tool reads key files from
 `git archive` of the given revision in a local clone (with LF line endings
 and no local `autocrlf`), never from a working tree. The runtime reads the
