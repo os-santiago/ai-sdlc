@@ -54,9 +54,13 @@ the namespace NetworkPolicy is enforced.
 Maven local-repository tail, so it can neither fetch nor poison anything.
 `maven-dependencies` is the only writer of the cache and runs only on the
 current base-branch head (trusted inputs). A candidate that adds a dependency
-fails offline with `missingDependencies: true`; resolving it is a deliberate
-step (dependency analysis by the generator plus an operator-approved
-`maven-dependencies` run on that revision, or the proxy policy below).
+fails offline with `missingDependencies: true`. `maven-dependencies` cannot fill
+it: it runs only on the base-branch head. The decided recovery (planned) is a
+resolution-only step for the candidate revision (`dependency:resolve` and
+plugin resolution, no lifecycle phase, so no plugin executes) through the
+proxy only, writing a separate per-candidate cache layer that never touches
+the shared base cache; the offline build then reads the base cache and the
+candidate layer, both read-only.
 
 **Sandbox.** `maven-build-test` runs under the `ai-sdlc-offline` gVisor
 RuntimeClass through the PipelineRun's per-task pod template; fetch tasks
@@ -110,8 +114,8 @@ directories, 8 pre, 8 post and 4 tools.
   observed base-branch head), and
   `FromTool(manifest, tool, target, packages, revision)` for generator tool
   calls. A tool call supplies only a declared target and, for npm, package
-  specs matching `name` or `name@range` (no URLs, paths or shell syntax, at
-  most 16). Everything else comes from the manifest and the runtime.
+  names (`npm update` takes no versions and stays within `package.json`
+  ranges; no URLs, paths or shell syntax, at most 16). Everything else comes from the manifest and the runtime.
 - `Request.PipelineRun(runtimeClass)` renders the object (installed pipeline
   reference, token-free restricted pods, read-only cache for build-test,
   optional sandbox for build-test only). A test checks its parameters against

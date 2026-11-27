@@ -32,7 +32,8 @@ REVISION = re.compile(r'[0-9a-f]{40}')
 PATH = re.compile(r'[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*')
 MIRROR = re.compile(r'https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~/-]*)?')
 MAVEN_ARG = re.compile(r'-[A-Za-z][A-Za-z0-9_.:=,!*/@+-]{0,199}')
-NPM_PACKAGE = re.compile(r'(?:@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{0,100}(?:@[0-9A-Za-z.^~<>=*|+-]{1,64})?')
+# npm update takes package names only and stays within package.json ranges.
+NPM_PACKAGE = re.compile(r'(?:@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{0,100}')
 # The pipeline task that runs untrusted candidate code offline runs under the
 # sandbox runtime class (gVisor, installed by ./install.sh sandbox, which also
 # raises the node's per-scope task limit that gVisor pods need). The class has
@@ -85,7 +86,7 @@ def validate_packages(mode, packages):
     if mode not in ('update', 'audit-fix'):
         raise ValueError('npm mode must be update or audit-fix')
     if len(packages) > 16 or any(not NPM_PACKAGE.fullmatch(p) for p in packages):
-        raise ValueError('npm packages must be at most 16 name or name@version specs')
+        raise ValueError('npm packages must be at most 16 package names (npm update takes no versions)')
     if (mode == 'update') != bool(packages):
         raise ValueError('update needs packages; audit-fix takes none')
     return list(packages)
@@ -155,7 +156,7 @@ def maven_build_test(repository, revision, module, services, maven_args, runtime
                         [{'name': 'module', 'value': validate_path(module)},
                          {'name': 'services', 'value': validate_services(services)},
                          {'name': 'maven-args', 'value': validate_maven_args(maven_args)}],
-                        [{'name': 'maven-cache', 'persistentVolumeClaim': {'claimName': tekton_ci_install.cache_claim(repository), 'readOnly': True}}],
+                        [{'name': 'maven-cache', 'persistentVolumeClaim': {'claimName': tekton_ci_install.cache_claim(repository.lower()), 'readOnly': True}}],
                         module, runtime_class)
 
 
@@ -167,7 +168,7 @@ def maven_dependencies(repository, revision, module, services, maven_args, mirro
                          {'name': 'services', 'value': validate_services(services)},
                          {'name': 'maven-args', 'value': validate_maven_args(maven_args)},
                          {'name': 'maven-mirror-url', 'value': mirror_url}],
-                        [{'name': 'maven-cache', 'persistentVolumeClaim': {'claimName': tekton_ci_install.cache_claim(repository)}}],
+                        [{'name': 'maven-cache', 'persistentVolumeClaim': {'claimName': tekton_ci_install.cache_claim(repository.lower())}}],
                         module)
 
 
@@ -217,21 +218,35 @@ def summarize(pipeline_run_object):
             'reason': condition.get('reason'), 'commit': results.get('commit'), 'summary': summary}
 
 
+def cancel(kubectl, name):
+    """Ask Tekton to stop a run; report whether the request was accepted."""
+    try:
+        result = run(kubectl + ['patch', 'pipelinerun.tekton.dev', name, '-n', tekton_ci_install.CI_NAMESPACE,
+                                '--type', 'merge', '-p', '{"spec":{"status":"Cancelled"}}'],
+                     capture_output=True, check=False, timeout=60)
+    except subprocess.SubprocessError:
+        return False
+    return result.returncode == 0
+
+
 def wait(kubectl, name, seconds, poll=10, sleep=time.sleep, clock=time.monotonic):
     deadline = clock() + seconds
     while True:
-        result = run(kubectl + ['get', 'pipelinerun.tekton.dev', name, '-n', tekton_ci_install.CI_NAMESPACE, '-o', 'json'],
-                     capture_output=True, check=False, timeout=60)
-        if result.returncode == 0:
+        try:
+            result = run(kubectl + ['get', 'pipelinerun.tekton.dev', name, '-n', tekton_ci_install.CI_NAMESPACE, '-o', 'json'],
+                         capture_output=True, check=False, timeout=60)
+        except subprocess.TimeoutExpired:
+            result = None  # A slow read is retried within the deadline.
+        if result is not None and result.returncode == 0:
             observed = summarize(json.loads(result.stdout))
             if observed['succeeded'] is not None:
                 return observed
         if clock() >= deadline:
             # Stop the run rather than leave candidate code running unobserved.
-            run(kubectl + ['patch', 'pipelinerun.tekton.dev', name, '-n', tekton_ci_install.CI_NAMESPACE,
-                           '--type', 'merge', '-p', '{"spec":{"status":"Cancelled"}}'],
-                capture_output=True, check=False, timeout=60)
-            raise ValueError('PipelineRun did not finish within the wait bound and was cancelled: ' + name)
+            if cancel(kubectl, name):
+                raise ValueError('PipelineRun did not finish within the wait bound and was cancelled: ' + name)
+            raise ValueError('PipelineRun did not finish within the wait bound; cancellation is NOT confirmed, '
+                             'cancel it manually: ' + name)
         sleep(poll)
 
 

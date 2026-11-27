@@ -1,6 +1,7 @@
 # Check out one immutable commit, then build and test one Maven module
-# offline. Used for pull-request CI (reported as a required check) and for
-# build/test results requested by ai-sdlc before or during generation.
+# offline. Runs are available locally (tools/tekton_ci_run.py,
+# internal/tektontasks); publishing a run as a GitHub check, so that it can be
+# a required check, is planned work and not part of this pipeline.
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
