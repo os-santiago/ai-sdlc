@@ -1,0 +1,302 @@
+{
+  "schemaVersion": 2,
+  "repository": "os-santiago/ai-sdlc-sample-python",
+  "attemptBudget": 2,
+  "cell": {
+    "repository": "os-santiago/ai-sdlc-sample-python",
+    "modelPath": "agent-cli-claude-sonnet"
+  },
+  "installation": {
+    "imageLockDigest": "sha256:1de9f9e3a1c7491ca8500aceb20cbc080cbfa8bd18dd89bc6ed06b64cf0c896d",
+    "images": {
+      "ai-sdlc-admission-controller": "quay.io/os-santiago/ai-sdlc@sha256:ea2f67fb42b98faedfbe3527cb54565595aee3548aa8071a317169f863ec6d0a",
+      "ai-sdlc-flow-console": "quay.io/os-santiago/ai-sdlc@sha256:1f552a67b464d13bedec6f135ff3e65830414554f2e1af8a3033ad086348d6c2",
+      "ai-sdlc-intake": "quay.io/os-santiago/ai-sdlc@sha256:8df7e8dbc0f90d7f633982e63a354347ca7e6366f167bcb4f44223a88d7e611a",
+      "ai-sdlc-orchestrator": "quay.io/os-santiago/ai-sdlc@sha256:721b1b3e5228d7a1926d1e9f0d9d49422b7b82ee13eab692056a2c755fae9cf6",
+      "ai-sdlc-relay": "quay.io/os-santiago/ai-sdlc@sha256:d649c5b975c1cbc5bf293a3546974ab9ea064fbcba6575cee39b30f67ce2bdb2",
+      "ai-sdlc-release-manager": "quay.io/os-santiago/ai-sdlc@sha256:cd07925b1dd2421cf429819ad99fdedde4b9d7ceff5ac8e22f395d2e87ced363",
+      "ai-sdlc-verifier": "quay.io/os-santiago/ai-sdlc@sha256:2bf2a26159707f719bff6852153604002b211aa070820001a2cc2059b86b6975",
+      "ai-sdlc-worker": "quay.io/os-santiago/ai-sdlc@sha256:2ed0578623ad960edc8e4b5085f13d1be2dcbe7267f1c4fe39df6bc23b298cb3"
+    },
+    "revision": "0694b2f7cede480c2d42ae2ce427598ed33bbef7"
+  },
+  "issues": [
+    {
+      "issue": 37,
+      "attempts": [
+        {
+          "issue": 37,
+          "startedAt": "2026-11-26T16:17:30Z",
+          "outcome": "success",
+          "pullRequest": 47,
+          "seconds": 238,
+          "modelCalls": 7,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 38,
+      "attempts": [
+        {
+          "issue": 38,
+          "startedAt": "2026-11-26T16:22:15Z",
+          "outcome": "timeout",
+          "seconds": 1810,
+          "modelCalls": 9,
+          "stageReached": "review",
+          "reviews": [
+            "passed|"
+          ],
+          "diagnostics": []
+        },
+        {
+          "issue": 38,
+          "startedAt": "2026-11-26T16:53:10Z",
+          "outcome": "timeout",
+          "seconds": 1809,
+          "modelCalls": 9,
+          "stageReached": "review",
+          "reviews": [
+            "passed|"
+          ],
+          "diagnostics": []
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 39,
+      "attempts": [
+        {
+          "issue": 39,
+          "startedAt": "2026-11-26T17:24:06Z",
+          "outcome": "success",
+          "pullRequest": 48,
+          "seconds": 346,
+          "modelCalls": 6,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 40,
+      "attempts": [
+        {
+          "issue": 40,
+          "startedAt": "2026-11-26T17:30:38Z",
+          "outcome": "success",
+          "pullRequest": 49,
+          "seconds": 280,
+          "modelCalls": 7,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 41,
+      "attempts": [
+        {
+          "issue": 41,
+          "startedAt": "2026-11-26T17:36:05Z",
+          "outcome": "timeout",
+          "seconds": 1812,
+          "modelCalls": 9,
+          "stageReached": "review",
+          "reviews": [
+            "passed|"
+          ],
+          "diagnostics": []
+        },
+        {
+          "issue": 41,
+          "startedAt": "2026-11-26T18:07:02Z",
+          "outcome": "timeout",
+          "seconds": 1815,
+          "modelCalls": 7,
+          "stageReached": "review",
+          "reviews": [
+            "passed|"
+          ],
+          "diagnostics": []
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 42,
+      "attempts": [
+        {
+          "issue": 42,
+          "startedAt": "2026-11-26T18:38:03Z",
+          "outcome": "timeout",
+          "seconds": 1811,
+          "modelCalls": 7,
+          "stageReached": "review",
+          "reviews": [
+            "passed|"
+          ],
+          "diagnostics": []
+        },
+        {
+          "issue": 42,
+          "startedAt": "2026-11-26T19:09:00Z",
+          "outcome": "timeout",
+          "seconds": 1809,
+          "modelCalls": 7,
+          "stageReached": "review",
+          "reviews": [
+            "passed|"
+          ],
+          "diagnostics": []
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 43,
+      "attempts": [
+        {
+          "issue": 43,
+          "startedAt": "2026-11-26T19:39:56Z",
+          "outcome": "timeout",
+          "seconds": 1810,
+          "modelCalls": 7,
+          "stageReached": "review",
+          "reviews": [
+            "passed|"
+          ],
+          "diagnostics": []
+        },
+        {
+          "issue": 43,
+          "startedAt": "2026-11-26T20:10:52Z",
+          "outcome": "failure",
+          "stage": "execution",
+          "reason": "uncertain",
+          "seconds": 130,
+          "modelCalls": 7,
+          "stageReached": "execution",
+          "reviews": [],
+          "diagnostics": [
+            "candidate reconciliation stopped safely: execution-read-helper-transport cleanupPending=false workerExitCode=0 failureRecorded=false"
+          ]
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 44,
+      "attempts": [
+        {
+          "issue": 44,
+          "startedAt": "2026-11-26T20:13:49Z",
+          "outcome": "timeout",
+          "seconds": 1810,
+          "modelCalls": 9,
+          "stageReached": "review",
+          "reviews": [
+            "passed|"
+          ],
+          "diagnostics": []
+        },
+        {
+          "issue": 44,
+          "startedAt": "2026-11-26T20:44:45Z",
+          "outcome": "timeout",
+          "seconds": 1809,
+          "modelCalls": 9,
+          "stageReached": "review",
+          "reviews": [
+            "passed|"
+          ],
+          "diagnostics": []
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 45,
+      "attempts": [
+        {
+          "issue": 45,
+          "startedAt": "2026-11-26T21:15:41Z",
+          "outcome": "timeout",
+          "seconds": 1806,
+          "modelCalls": 7,
+          "stageReached": "review",
+          "reviews": [
+            "passed|"
+          ],
+          "diagnostics": []
+        },
+        {
+          "issue": 45,
+          "startedAt": "2026-11-26T21:46:32Z",
+          "outcome": "timeout",
+          "seconds": 1809,
+          "modelCalls": 7,
+          "stageReached": "review",
+          "reviews": [
+            "passed|"
+          ],
+          "diagnostics": []
+        }
+      ],
+      "success": false
+    },
+    {
+      "issue": 46,
+      "attempts": [
+        {
+          "issue": 46,
+          "startedAt": "2026-11-26T22:17:29Z",
+          "outcome": "failure",
+          "stage": "verification",
+          "reason": "comparison-failed",
+          "seconds": 130,
+          "modelCalls": 7,
+          "stageReached": "verification",
+          "reviews": [],
+          "diagnostics": [
+            "verification reconciliation stopped safely: refused-candidate-failed"
+          ]
+        },
+        {
+          "issue": 46,
+          "startedAt": "2026-11-26T22:20:25Z",
+          "outcome": "failure",
+          "stage": "verification",
+          "reason": "comparison-failed",
+          "seconds": 151,
+          "modelCalls": 7,
+          "stageReached": "verification",
+          "reviews": [],
+          "diagnostics": [
+            "verification reconciliation stopped safely: refused-candidate-failed"
+          ]
+        }
+      ],
+      "success": false
+    }
+  ],
+  "summary": {
+    "issues": 10,
+    "firstAttemptSuccess": 3,
+    "successWithinBudget": 3,
+    "firstAttemptRate": 0.3,
+    "rateWithinBudget": 0.3
+  }
+}
