@@ -165,7 +165,7 @@ accepts as `{context, appID}`; see the
    Validated against os-santiago/quarkus-super-heroes in a disposable kind
    cluster.
 2. Pre-generation wiring in the runtime (RBAC for the adapter identity,
-   results into reviewed context), gVisor for Tekton pods (2a, done),
+   results into reviewed context), gVisor for Tekton pods (2a, in review),
    proxy-only egress once the proxy merges, `dependency-audit`.
 3. Generator tools: candidate diff transfer, `apply-candidate` step, tool
    schema in the model gateway, budgets.
