@@ -72,6 +72,13 @@ stopped fail-closed at provenance and at build capacity, exposing two
 installation defects that are now fixed or designed. See the
 [issue-only E2E record](docs/evidence/2026-11-20-issue-only-e2e.md).
 
+## Try it: one issue, end to end
+
+Label an issue in your repository and watch it become a merged pull request in
+the read-only flow console: **[TL;DR](docs/try-it.md)** (five steps) or the
+**[detailed guide](docs/try-it-detailed.md)** (what each stage does, how to read
+the console, and what to do when it stops).
+
 ## Quickstart (local, kind)
 
 On Linux amd64 with Python 3.11+ and Docker or Podman:
