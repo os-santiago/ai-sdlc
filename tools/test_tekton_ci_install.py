@@ -270,6 +270,29 @@ class ObservationTests(unittest.TestCase):
         self.assertFalse(self.observe(tasks='task.tekton.dev/' + tekton.TASKS[0])['ready'], 'every catalog task')
 
 
+class AssistantTests(unittest.TestCase):
+    def test_only_assistants_of_finished_or_missing_runs_are_released(self):
+        def sts(name, owner):
+            return {'metadata': {'name': name, 'ownerReferences': [{'kind': 'PipelineRun', 'name': owner}]}}
+        listed = json.dumps({'items': [sts('aa-done', 'done'), sts('aa-running', 'running'), sts('aa-gone', 'gone'),
+                                       {'metadata': {'name': 'aa-orphan'}}]})
+        runs = {'done': {'status': {'conditions': [{'type': 'Succeeded', 'status': 'True'}]}},
+                'running': {'status': {'conditions': [{'type': 'Succeeded', 'status': 'Unknown'}]}}}
+        deleted = []
+
+        def run(args, **_kwargs):
+            if args[1:3] == ['get', 'statefulset']:
+                return completed(listed)
+            if args[1:3] == ['get', 'pipelinerun.tekton.dev']:
+                return completed(json.dumps(runs[args[3]]) if args[3] in runs else '')
+            if args[1:3] == ['delete', 'statefulset']:
+                deleted.append(args[3])
+                return completed()
+            raise AssertionError(args)
+        self.assertEqual(tekton.release_stale_assistants(run, ['kubectl']), ['aa-done', 'aa-gone'])
+        self.assertEqual(deleted, ['aa-done', 'aa-gone'], 'a running run keeps its assistant; unowned sets are left alone')
+
+
 class InstallerOptionTests(unittest.TestCase):
     def test_option_is_limited_to_kind_installation_scopes(self):
         tekton.validate_options(SimpleNamespace(tekton_ci=None, command='tools', platform='konflux'))
@@ -300,6 +323,7 @@ class InstallerOptionTests(unittest.TestCase):
                  ('apply', items[0] if isinstance(items[0], str) else ('namespace' if items[0]['kind'] == 'Namespace' else 'ci')))), \
              patch.object(tekton, 'wait_ready', side_effect=lambda *a: calls.append('ready')), \
              patch.object(tekton, 'wait_admission', side_effect=lambda *a: calls.append('admission') or 1), \
+             patch.object(tekton, 'release_stale_assistants', return_value=[]), \
              patch.object(tekton, 'observe', return_value={'ready': True, 'release': lock['release']}):
             report = tekton.install(Mock(), ['kubectl'], UID, Path('/nonexistent'), '5m', ['os-santiago/quarkus-super-heroes'])
         self.assertEqual(calls, ['verify', 'objects', 'own', ('apply', 'tekton'), 'ready', 'objects', 'own',
@@ -311,6 +335,7 @@ class InstallerOptionTests(unittest.TestCase):
              patch.object(tekton, 'objects', return_value=[]), patch.object(tekton, 'desired_tekton', return_value=[]), \
              patch.object(tekton, 'desired_ci', return_value=[]), patch.object(tekton, 'apply'), \
              patch.object(tekton, 'wait_ready'), patch.object(tekton, 'wait_admission', return_value=1), \
+             patch.object(tekton, 'release_stale_assistants', return_value=[]), \
              patch.object(tekton, 'observe', return_value={'ready': False}), \
              self.assertRaisesRegex(ValueError, 'not ready'):
             tekton.install(Mock(), ['kubectl'], UID, Path('/nonexistent'), '5m', ['a/b'])

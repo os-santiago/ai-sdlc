@@ -288,6 +288,35 @@ def wait_admission(run, kubectl, items, sleep=time.sleep):
     raise ValueError('Tekton admission did not accept the reviewed CI definitions' + (': ' + detail if detail else ''))
 
 
+def release_stale_assistants(run, kubectl):
+    """Delete affinity-assistant StatefulSets left by finished runs.
+
+    The catalog runs with coschedule: disabled. Assistants that an earlier
+    configuration started are not removed by Tekton once the mode changes,
+    and each holds one of the CI namespace's two pods, which leaves task pods
+    pending. Only assistants whose owning PipelineRun is gone or finished are
+    deleted, so a run still using its assistant keeps it.
+    """
+    listed = run(kubectl + ['get', 'statefulset', '-n', CI_NAMESPACE, '-l', 'app.kubernetes.io/component=affinity-assistant',
+                            '-o', 'json'], capture_output=True)
+    released = []
+    for item in json.loads(listed.stdout or '{"items": []}').get('items', []):
+        owners = [o for o in item['metadata'].get('ownerReferences', []) if o.get('kind') == 'PipelineRun']
+        finished = True
+        for owner in owners:
+            found = run(kubectl + ['get', 'pipelinerun.tekton.dev', owner['name'], '-n', CI_NAMESPACE, '--ignore-not-found',
+                                   '-o', 'json'], capture_output=True)
+            if found.stdout.strip():
+                conditions = json.loads(found.stdout).get('status', {}).get('conditions', [])
+                state = next((c.get('status') for c in conditions if c.get('type') == 'Succeeded'), 'Unknown')
+                finished = finished and state in ('True', 'False')
+        if owners and finished:
+            run(kubectl + ['delete', 'statefulset', item['metadata']['name'], '-n', CI_NAMESPACE, '--wait=false'],
+                stdout=subprocess.DEVNULL)
+            released.append(item['metadata']['name'])
+    return released
+
+
 def observe(run, kubectl, lock=None):
     """Fresh, read-only readiness of the owned Tekton installation and CI definitions."""
     lock = lock or lockfile()[0]
@@ -348,11 +377,12 @@ def install(run, kubectl, cluster_uid, cache, timeout, repositories):
     namespaced = [i for i in ci if i['kind'] != 'Namespace']
     attempts = wait_admission(run, kubectl, namespaced)
     apply(run, kubectl, namespaced)
+    released = release_stale_assistants(run, kubectl)
     observation = observe(run, kubectl, lock)
     if not observation['ready']:
         raise ValueError('Tekton CI is not ready after installation; owned state is retained for reapplication')
     return dict(observation, lockSHA256=lock_digest, configurationSHA256=config_digest, ciSHA256=ci_digest,
-                admissionAttempts=attempts, cacheClaims={r: cache_claim(r) for r in sorted(set(repositories))})
+                admissionAttempts=attempts, releasedAssistants=released, cacheClaims={r: cache_claim(r) for r in sorted(set(repositories))})
 
 
 def validate_options(args):

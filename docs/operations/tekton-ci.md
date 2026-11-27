@@ -260,7 +260,11 @@ offline runtime) now sets two node limits:
   ends. Tekton's affinity assistant is disabled (`coschedule: disabled`):
   with it, each run held an assistant pod, and two concurrent runs took the
   whole quota while their task pods stayed pending, a deadlock observed in the
-  disposable cluster.
+  disposable cluster. Tekton does not remove assistants that an earlier
+  configuration started once the mode changes, so the installer deletes
+  affinity-assistant StatefulSets whose PipelineRun is finished or gone
+  (`releasedAssistants` in its report) and keeps those of runs still in
+  progress.
 
 The arithmetic for a podman kind node (2,048 pids): CI pods hold at most 2 x
 768 = 1,536 pids (75%), the rest is left for the runtime and system pods, each
