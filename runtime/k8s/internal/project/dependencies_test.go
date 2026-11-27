@@ -101,7 +101,7 @@ func TestDependencyFilesAreHarness(t *testing.T) {
 	}
 }
 
-// The key is a documented text format; tools/test_dependency_prefetch.py
+// The key is a documented text format; tools/test_dependency_cache_install.py
 // checks the same vector, so the operator's prefetch and the verifier name
 // the same cache.
 func TestDependencyKeyIsStableAndCoversItsInputs(t *testing.T) {

@@ -63,7 +63,7 @@ func TestDependencyCacheMustBeSealedBoundAndKeyed(t *testing.T) {
 				t.Fatal(err)
 			}
 			err = client.CheckDependencyCache(context.Background(), key)
-			if (err == nil) != (name == "sealed" || name == "rwo") || calls.Load() != 1 {
+			if (err == nil) != (name == "sealed" || name == "rwo" || name == "rwx") || calls.Load() != 1 {
 				t.Fatal(name, err, calls.Load())
 			}
 		})

@@ -11,8 +11,9 @@ Tekton Task, on the base revision only, with the dependency proxy as its only
 reachable host. This operator tool brackets that run:
 
 ``key``
-    print the claim name for a base revision, computed from a local Git object
-    database (``git ls-tree`` and ``git cat-file``, never a working tree);
+    print the claim name for a base revision, computed from ``git archive`` of
+    that revision in a local clone (the same bytes as the forge archive the
+    runtime reads; never a working tree);
 ``prepare``
     create the empty work claim ``deps-<key>`` in the CI namespace, to bind as
     the Task's writable ``maven-cache`` workspace;
@@ -27,11 +28,13 @@ reachable host. This operator tool brackets that run:
 import argparse
 import fnmatch
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tarfile
 import time
 
 KEY_VERSION = 'ai-sdlc.dependencies/v1'
@@ -46,6 +49,9 @@ KEY = re.compile(r'[a-f0-9]{64}')
 REVISION = re.compile(r'[a-f0-9]{40}')
 NAMESPACE = re.compile(r'[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?')
 SIZE = re.compile(r'[1-9][0-9]{0,3}Gi')
+MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024
+ACCESS_MODES = ('ReadWriteOnce', 'ReadWriteMany')
+RECLAIM_ANNOTATION = 'ai-sdlc.io/original-reclaim-policy'
 
 
 def dependencies(manifest):
@@ -99,22 +105,23 @@ def dependency_key(verification, section, files):
 
 
 def key_files(run, repository, revision, globs):
-    """The contents of the key files at revision, read from the object database."""
+    """The contents of the key files at revision as the runtime reads them.
+
+    The runtime fetches the forge's archive of the revision, which git archive
+    produces: .gitattributes export-ignore, export-subst and end-of-line
+    conversion apply. Reading the same git archive output here (with LF line
+    endings and no local autocrlf) makes both sides hash the same bytes."""
     if not REVISION.fullmatch(revision):
         raise ValueError('The base revision must be a full commit SHA')
-    listing = run(['git', '-C', str(repository), 'ls-tree', '-r', '-z', '--full-tree', revision],
-                  capture_output=True, check=True).stdout
+    archive = run(['git', '-c', 'core.autocrlf=false', '-c', 'core.eol=lf', '-C', str(repository), 'archive',
+                   '--format=tar', revision], capture_output=True, check=True).stdout
+    if len(archive) > MAX_ARCHIVE_BYTES:
+        raise ValueError('The base revision archive exceeds its bound')
     files = {}
-    for entry in listing.split(b'\0'):
-        if not entry:
-            continue
-        meta, path = entry.split(b'\t', 1)
-        kind, obj = meta.split()[1:3]
-        name = path.decode()
-        if kind != b'blob' or not any(match_glob(g, name) for g in globs):
-            continue
-        files[name] = run(['git', '-C', str(repository), 'cat-file', 'blob', obj.decode()],
-                          capture_output=True, check=True).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive), mode='r:') as tar:
+        for member in tar:
+            if member.isfile() and any(match_glob(g, member.name) for g in globs):
+                files[member.name] = tar.extractfile(member).read()
     return files
 
 
@@ -129,15 +136,19 @@ def revision_key(run, manifest, repository, revision):
     return dependency_key(verification, section, key_files(run, repository, revision, section['keyGlobs']))
 
 
-def work_claim(key, namespace, size, storage_class=None):
-    """The empty claim the maven-dependencies Task fills."""
-    if not NAMESPACE.fullmatch(namespace) or namespace == VERIFIER_NAMESPACE or not SIZE.fullmatch(size):
-        raise ValueError('Invalid work namespace or size')
+def work_claim(key, namespace, size, storage_class=None, access_mode='ReadWriteOnce'):
+    """The empty claim the maven-dependencies Task fills. ReadWriteOnce
+    suits node-local storage (single node, or all runs on the volume's node);
+    on a multi-node cluster use a ReadWriteMany class, so the three concurrent
+    verification runs can attach the sealed volume on any node."""
+    if (not NAMESPACE.fullmatch(namespace) or namespace == VERIFIER_NAMESPACE or not SIZE.fullmatch(size)
+            or access_mode not in ACCESS_MODES):
+        raise ValueError('Invalid work namespace, size or access mode')
     claim = {'apiVersion': 'v1', 'kind': 'PersistentVolumeClaim',
              'metadata': {'name': claim_name(key), 'namespace': namespace,
                           'labels': {'app.kubernetes.io/part-of': 'ai-sdlc', STATE_LABEL: 'filling'},
                           'annotations': {KEY_ANNOTATION: key}},
-             'spec': {'accessModes': ['ReadWriteOnce'], 'resources': {'requests': {'storage': size}}}}
+             'spec': {'accessModes': [access_mode], 'resources': {'requests': {'storage': size}}}}
     if storage_class:
         claim['spec']['storageClassName'] = storage_class
     return claim
@@ -153,8 +164,9 @@ def sealed_claim(key, volume):
              'spec': {'accessModes': list(spec['accessModes']), 'volumeName': volume['metadata']['name'],
                       'storageClassName': spec.get('storageClassName', ''),
                       'resources': {'requests': {'storage': spec['capacity']['storage']}}}}
-    if any(mode not in ('ReadOnlyMany', 'ReadWriteOnce') for mode in claim['spec']['accessModes']):
-        raise ValueError('The cache volume must be ReadWriteOnce or ReadOnlyMany')
+    if not claim['spec']['accessModes'] or any(mode not in ('ReadOnlyMany', 'ReadWriteMany', 'ReadWriteOnce')
+                                               for mode in claim['spec']['accessModes']):
+        raise ValueError('The cache volume must be ReadWriteOnce, ReadWriteMany or ReadOnlyMany')
     return claim
 
 
@@ -187,10 +199,10 @@ class Cluster:
         raise RuntimeError('Timed out waiting for ' + what)
 
 
-def prepare(cluster, key, namespace=CI_NAMESPACE, size='8Gi', storage_class=None):
+def prepare(cluster, key, namespace=CI_NAMESPACE, size='8Gi', storage_class=None, access_mode='ReadWriteOnce'):
     """Create the work claim; refuse when a sealed cache already exists."""
     name = claim_name(key)
-    claim = work_claim(key, namespace, size, storage_class)
+    claim = work_claim(key, namespace, size, storage_class, access_mode)
     if cluster.get('pvc', name, VERIFIER_NAMESPACE):
         raise ValueError('The cache %s is already sealed' % name)
     if not cluster.get('pvc', name, namespace):
@@ -198,53 +210,88 @@ def prepare(cluster, key, namespace=CI_NAMESPACE, size='8Gi', storage_class=None
     return name
 
 
-def released_volume(cluster, name, namespace):
-    """A retained volume released by the work claim, from an interrupted seal."""
+def handed_volume(cluster, key):
+    """The volume a seal of key has already retained, wherever its claimRef
+    points (the work claim, or the not yet created sealed claim)."""
     volumes = json.loads(cluster.kubectl('get', 'pv', '-o', 'json').stdout).get('items', [])
-    found = [v for v in volumes if (v['spec'].get('claimRef') or {}).get('namespace') == namespace
-             and v['spec']['claimRef'].get('name') == name and v['spec'].get('persistentVolumeReclaimPolicy') == 'Retain']
-    return found[0] if len(found) == 1 else None
+    found = [v for v in volumes if v['metadata'].get('annotations', {}).get(KEY_ANNOTATION) == key]
+    if len(found) > 1:
+        raise RuntimeError('More than one volume is marked for this key')
+    return found[0] if found else None
+
+
+def finish(cluster, key, volume_name, sleep):
+    """Wait for the sealed claim to bind, check it, and restore the volume's
+    original reclaim policy."""
+    name = claim_name(key)
+    claim = cluster.wait(lambda: (lambda c: c if c and c['status'].get('phase') == 'Bound' else None)(
+        cluster.get('pvc', name, VERIFIER_NAMESPACE)), 'the sealed claim to bind', 120, sleep)
+    if (claim['metadata'].get('annotations', {}).get(KEY_ANNOTATION) != key
+            or claim['metadata'].get('labels', {}).get(STATE_LABEL) != 'sealed'
+            or claim['spec'].get('volumeName') != volume_name):
+        raise RuntimeError('The claim %s/%s is not the sealed cache of this key' % (VERIFIER_NAMESPACE, name))
+    volume = cluster.get('pv', volume_name)
+    original = (volume or {}).get('metadata', {}).get('annotations', {}).get(RECLAIM_ANNOTATION)
+    if original:
+        cluster.kubectl('patch', 'pv', volume_name, '--type', 'merge', '-p', json.dumps({
+            'metadata': {'annotations': {RECLAIM_ANNOTATION: None}},
+            'spec': {'persistentVolumeReclaimPolicy': original}}))
+    return name
 
 
 def seal(cluster, key, namespace=CI_NAMESPACE, sleep=time.sleep):
     """Move the filled volume from the work claim to the sealed verifier claim.
-    Every step is checked, so an interrupted seal resumes where it stopped."""
+
+    Each step is recorded on the volume (the key and the original reclaim
+    policy as annotations) before the next one, so a rerun resumes from any
+    interruption and finishes by checking the sealed claim and restoring the
+    original policy."""
     name = claim_name(key)
     if not NAMESPACE.fullmatch(namespace) or namespace == VERIFIER_NAMESPACE:
         raise ValueError('Invalid work namespace')
-    if cluster.get('pvc', name, VERIFIER_NAMESPACE):
-        return name
+    sealed = cluster.get('pvc', name, VERIFIER_NAMESPACE)
+    if sealed:
+        if not sealed['spec'].get('volumeName'):
+            raise RuntimeError('The claim %s/%s is not bound to a volume' % (VERIFIER_NAMESPACE, name))
+        return finish(cluster, key, sealed['spec']['volumeName'], sleep)
+    volume = handed_volume(cluster, key)
     work = cluster.get('pvc', name, namespace)
     if work:
         if (work['status'].get('phase') != 'Bound' or work['metadata'].get('annotations', {}).get(KEY_ANNOTATION) != key
-                or work['metadata'].get('labels', {}).get(STATE_LABEL) != 'filling'):
+                or work['metadata'].get('labels', {}).get(STATE_LABEL) != 'filling'
+                or (volume is not None and work['spec'].get('volumeName') != volume['metadata']['name'])):
             raise RuntimeError('No bound work claim %s/%s for this key' % (namespace, name))
         pods = json.loads(cluster.kubectl('get', 'pods', '-n', namespace, '-o', 'json').stdout).get('items', [])
         if any(v.get('persistentVolumeClaim', {}).get('claimName') == name
                for p in pods if p.get('status', {}).get('phase') not in ('Succeeded', 'Failed')
                for v in p.get('spec', {}).get('volumes', [])):
             raise RuntimeError('A pod still uses %s; seal it after the dependency task has finished' % name)
-        volume_name = work['spec']['volumeName']
-        cluster.kubectl('patch', 'pv', volume_name, '--type', 'merge', '-p', json.dumps({'spec': {'persistentVolumeReclaimPolicy': 'Retain'}}))
+    elif volume is None:
+        raise RuntimeError('No bound work claim %s/%s for this key' % (namespace, name))
+    if volume is None:
+        volume = cluster.get('pv', work['spec']['volumeName'])
+        if not volume:
+            raise RuntimeError('The work claim volume is missing')
+        original = volume['spec'].get('persistentVolumeReclaimPolicy', 'Delete')
+        # One patch records the key and the original policy and retains the
+        # volume, so deleting the work claim can never delete the cache.
+        cluster.kubectl('patch', 'pv', volume['metadata']['name'], '--type', 'merge', '-p', json.dumps({
+            'metadata': {'annotations': {KEY_ANNOTATION: key, RECLAIM_ANNOTATION: original}},
+            'spec': {'persistentVolumeReclaimPolicy': 'Retain'}}))
+    volume_name = volume['metadata']['name']
+    if cluster.get('pvc', name, namespace):
         cluster.kubectl('delete', 'pvc', name, '-n', namespace, '--wait=false')
         cluster.wait(lambda: cluster.get('pvc', name, namespace) is None, 'the work claim to be deleted', 300, sleep)
-    else:
-        volume = released_volume(cluster, name, namespace)
-        if not volume:
-            raise RuntimeError('No bound work claim %s/%s for this key' % (namespace, name))
-        volume_name = volume['metadata']['name']
-    volume = cluster.wait(lambda: (lambda v: v if v and v['status'].get('phase') == 'Released' else None)(cluster.get('pv', volume_name)),
-                          'the volume to be released', 120, sleep)
-    claim = sealed_claim(key, volume)
-    cluster.kubectl('patch', 'pv', volume_name, '--type', 'json', '-p', json.dumps([
-        {'op': 'replace', 'path': '/spec/claimRef', 'value': {'apiVersion': 'v1', 'kind': 'PersistentVolumeClaim',
-                                                                'namespace': VERIFIER_NAMESPACE, 'name': name}}]))
-    cluster.create([claim])
-    cluster.wait(lambda: (lambda c: c and c['status'].get('phase') == 'Bound')(cluster.get('pvc', name, VERIFIER_NAMESPACE)),
-                 'the sealed claim to bind', 120, sleep)
-    # Deleting the sealed claim later deletes the volume.
-    cluster.kubectl('patch', 'pv', volume_name, '--type', 'merge', '-p', json.dumps({'spec': {'persistentVolumeReclaimPolicy': 'Delete'}}))
-    return name
+    volume = cluster.get('pv', volume_name)
+    reference = volume['spec'].get('claimRef') or {}
+    if (reference.get('namespace'), reference.get('name')) != (VERIFIER_NAMESPACE, name):
+        cluster.wait(lambda: (lambda v: v if v and v['status'].get('phase') == 'Released' else None)(cluster.get('pv', volume_name)),
+                     'the volume to be released', 120, sleep)
+        cluster.kubectl('patch', 'pv', volume_name, '--type', 'json', '-p', json.dumps([
+            {'op': 'replace', 'path': '/spec/claimRef', 'value': {'apiVersion': 'v1', 'kind': 'PersistentVolumeClaim',
+                                                                    'namespace': VERIFIER_NAMESPACE, 'name': name}}]))
+    cluster.create([sealed_claim(key, volume)])
+    return finish(cluster, key, volume_name, sleep)
 
 
 def main(argv=None, run=subprocess.run):
@@ -257,6 +304,9 @@ def main(argv=None, run=subprocess.run):
     parser.add_argument('--namespace', default=CI_NAMESPACE, help='namespace of the work claim (default %(default)s)')
     parser.add_argument('--size', default='8Gi', help='work claim size (prepare; default %(default)s)')
     parser.add_argument('--storage-class', help='StorageClass of the work claim (prepare; default: the cluster default)')
+    parser.add_argument('--access-mode', choices=ACCESS_MODES, default='ReadWriteOnce',
+                        help='work claim access mode (prepare): ReadWriteOnce needs node-local storage on one node; '
+                             'use ReadWriteMany on multi-node clusters (default %(default)s)')
     args = parser.parse_args(argv)
     raw = args.project_manifest.read_bytes()
     if len(raw) > 16384:
@@ -267,7 +317,7 @@ def main(argv=None, run=subprocess.run):
         return 0
     cluster = Cluster(run, args.context or '')
     if args.action == 'prepare':
-        print(prepare(cluster, key, args.namespace, args.size, args.storage_class))
+        print(prepare(cluster, key, args.namespace, args.size, args.storage_class, args.access_mode))
     else:
         print(seal(cluster, key, args.namespace))
     return 0

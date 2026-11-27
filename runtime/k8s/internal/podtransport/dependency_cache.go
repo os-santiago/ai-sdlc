@@ -39,11 +39,13 @@ func (client *Client) CheckDependencyCache(ctx context.Context, key string) erro
 		len(pvc.Spec.AccessModes) == 0 {
 		return ErrTransport
 	}
-	// Pods attach the claim read-only; a ReadWriteMany volume could still be
-	// written by a pod elsewhere, so only ReadOnlyMany and ReadWriteOnce
-	// (bound to the verifier namespace's read-only pods) are accepted.
+	// Pods attach the claim read-only. A volume binds to this one claim
+	// only, so no pod outside the verifier namespace can mount it. The three
+	// runs of a verification share it concurrently: ReadWriteOncePod (or an
+	// unknown mode) would leave runs pending, so only ReadOnlyMany,
+	// ReadWriteMany and ReadWriteOnce (node-local storage) are accepted.
 	for _, mode := range pvc.Spec.AccessModes {
-		if mode != core.ReadOnlyMany && mode != core.ReadWriteOnce {
+		if mode != core.ReadOnlyMany && mode != core.ReadWriteMany && mode != core.ReadWriteOnce {
 			return ErrTransport
 		}
 	}
