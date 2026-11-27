@@ -85,7 +85,7 @@ func signedEffect(component *bootstrap.Component, config intake.Config) delivery
 			return nil, err
 		}
 		if state == Ready {
-			command := execution.Command{Version: execution.Version, WorkItemID: itemID, Attempt: 1, Repository: snapshot.Repository, IssueNumber: snapshot.Issue.Number, Generation: snapshot.Generation, AdmissionID: admission.ID(), SourceSHA: snapshot.BaseSHA, ProfileSHA256: workspacebundle.Digest(profile), AuthorityRevision: policy.Revision(), ExpiresAt: time.Now().Add(execution.CommandLifetime(installed.Profile.MaxSeconds, execution.StartSecondsFor(snapshot.Repository))).UnixMilli()}
+			command := execution.Command{Version: execution.Version, WorkItemID: itemID, Attempt: 1, Repository: snapshot.Repository, IssueNumber: snapshot.Issue.Number, Generation: snapshot.Generation, AdmissionID: admission.ID(), SourceSHA: snapshot.BaseSHA, ProfileSHA256: workspacebundle.Digest(profile), AuthorityRevision: policy.Revision(), ExpiresAt: time.Now().Add(execution.CommandLifetime(installed.Profile.MaxSeconds, execution.StartSecondsFor(snapshot.Repository, policy.ProjectSHA256))).UnixMilli()}
 			payload, e := json.Marshal(command)
 			if e != nil {
 				return nil, e

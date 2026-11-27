@@ -118,6 +118,12 @@ func sent(post error, matches bool) error {
 	}
 	return nil
 }
+
+// validatePlan only re-checks a plan PrepareTree built from the manifest the
+// authorizing policy binds (project.Bound), and the plan digest the claim
+// records fixes its contents. The writer has no policy in scope, so it uses
+// Lookup: another policy load's manifest can at worst refuse the plan here,
+// never widen what was planned.
 func validatePlan(repository string, p TreePlan) (int, error) {
 	manifest, ok := project.Lookup(repository)
 	if !ok || !project.Supported(repository) || p.Repository != repository {

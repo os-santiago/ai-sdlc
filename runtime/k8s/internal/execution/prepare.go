@@ -201,7 +201,9 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 		Repository: c.Repository, SourceSHA: c.SourceSHA, TreeSHA256: c.ProfileSHA256, ProfileSHA256: c.ProfileSHA256,
 		AuthorityRevision: c.AuthorityRevision, IssueNumbers: []int{c.IssueNumber}, Title: snapshot.Issue.Title, Body: snapshot.Issue.Body,
 		AcceptanceCriteria: normalizedevent.ExtractAcceptanceCriteria(snapshot.Issue.Body), ExpiresAt: c.ExpiresAt}
-	addRepositoryContext(&assignment)
+	if err = addRepositoryContext(&assignment, in.Policy.ProjectSHA256); err != nil {
+		return Prepared{}, err
+	}
 	var parent store.VerificationCandidate
 	if c.Repair != nil {
 		a, p, e := repairPreparation(ctx, db, in.Policy, c)
@@ -264,22 +266,39 @@ func prepare(ctx context.Context, db *store.DB, load PreparationLoader, claim st
 
 // addRepositoryContext adds the reviewed manifest's workspace context to a
 // generation assignment: the workspace mark, the toolchain, and, only without a
-// toolchain (which already carries it), the verification command.
-func addRepositoryContext(a *executor.Assignment) {
-	a.Workspace = WorkspaceFor(a.Repository)
-	a.Toolchain = ToolchainFor(a.Repository)
-	if a.Toolchain == nil {
-		a.Verification = VerificationFor(a.Repository)
+// toolchain (which already carries it), the verification command. The context
+// comes only from the manifest the authorizing policy binds (projectSHA256 is
+// that policy's ProjectSHA256): a concurrent reload that clears or replaces
+// the installed manifest refuses at "manifest" instead of preparing the
+// assignment with another load's manifest or none.
+func addRepositoryContext(a *executor.Assignment, projectSHA256 string) error {
+	m, ok := project.Bound(a.Repository, projectSHA256)
+	if !ok {
+		return authorityStop("manifest")
 	}
+	a.Workspace = workspaceOf(m)
+	a.Toolchain = toolchainOf(m)
+	if a.Toolchain == nil {
+		a.Verification = verificationOf(m)
+	}
+	return nil
 }
 
 // WorkspaceFor marks the assignment of a repository verified with its own
 // tests, whose generator workspace cannot build or test: the prompt then says
 // so as reviewed installation context. Without it, agents spend their step
-// budget on failing test commands.
-func WorkspaceFor(repository string) string {
-	m, ok := project.Lookup(repository)
-	if !ok || m.Verification == nil {
+// budget on failing test commands. Only the manifest the policy with
+// projectSHA256 binds counts.
+func WorkspaceFor(repository, projectSHA256 string) string {
+	m, ok := project.Bound(repository, projectSHA256)
+	if !ok {
+		return ""
+	}
+	return workspaceOf(m)
+}
+
+func workspaceOf(m project.Manifest) string {
+	if m.Verification == nil {
 		return ""
 	}
 	return executor.WorkspaceOfflineTests
@@ -287,18 +306,26 @@ func WorkspaceFor(repository string) string {
 
 // VerificationFor returns the verification command a repository's reviewed
 // manifest declares, or nil, for the prompt of an offline workspace. It comes
-// only from the manifest, never from issue text; environment, image and limits
-// stay verification-only.
-func VerificationFor(repository string) *executor.Verification {
-	m, ok := project.Lookup(repository)
-	if !ok || m.Verification == nil {
+// only from the manifest the policy with projectSHA256 binds, never from issue
+// text; environment, image and limits stay verification-only.
+func VerificationFor(repository, projectSHA256 string) *executor.Verification {
+	m, ok := project.Bound(repository, projectSHA256)
+	if !ok {
+		return nil
+	}
+	return verificationOf(m)
+}
+
+func verificationOf(m project.Manifest) *executor.Verification {
+	if m.Verification == nil {
 		return nil
 	}
 	return &executor.Verification{Command: append([]string(nil), m.Verification.Command...), WorkingDir: m.Verification.WorkingDir}
 }
 
 // ToolchainFor returns the generation toolchain a repository's reviewed
-// manifest declares, or nil. The image is the verifier's pinned image, so the
+// manifest declares, or nil. Only the manifest the policy with projectSHA256
+// binds counts. The image is the verifier's pinned image, so the
 // generator runs the same toolchain as verification. PATH is not passed: the
 // worker's PATH is rebuilt from the declared directories. Only the toolchain
 // variables the manifest allowlists (Go, cgo and Rust names) are passed;
@@ -310,9 +337,16 @@ func VerificationFor(repository string) *executor.Verification {
 // The verifier keeps the manifest's original command and environment.
 // Manifest validation refuses any toolchain variable this cannot translate
 // or that names the writable volumes, so nothing is dropped here.
-func ToolchainFor(repository string) *executor.Toolchain {
-	m, ok := project.Lookup(repository)
-	if !ok || m.Verification == nil || m.Generation == nil || m.Generation.Toolchain == nil {
+func ToolchainFor(repository, projectSHA256 string) *executor.Toolchain {
+	m, ok := project.Bound(repository, projectSHA256)
+	if !ok {
+		return nil
+	}
+	return toolchainOf(m)
+}
+
+func toolchainOf(m project.Manifest) *executor.Toolchain {
+	if m.Verification == nil || m.Generation == nil || m.Generation.Toolchain == nil {
 		return nil
 	}
 	v, t := m.Verification, m.Generation.Toolchain

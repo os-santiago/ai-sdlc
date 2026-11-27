@@ -34,7 +34,7 @@ type Runtime struct {
 	Policy     verificationflow.PolicyLoader
 	Review     publicationflow.ReviewLoader
 	Identity   func() (authority.Identity, error)
-	GatePolicy func() (mergegate.Policy, error)
+	GatePolicy func(projectSHA256 string) (mergegate.Policy, error)
 	Gates      Gates
 	Writer     Transport
 	// Reconciler and Observer, when both set, resolve an uncertain merge
@@ -112,7 +112,7 @@ func stopped(stage string) error { return StopError{Stage: stage} }
 // stopStages is the closed set of stage names a StopError may carry.
 var stopStages = map[string]bool{
 	// Before the claim or before any merge effect was begun.
-	"request": true, "claim": true, "publication-fence": true, "gate-policy": true,
+	"request": true, "claim": true, "publication-fence": true, "gate-policy": true, "gate-manifest": true,
 	"gate-unavailable": true, "gate-deadline": true, "gate-queued-invalid": true, "gate-not-ready": true,
 	"gate-native-merge-not-ready": true, "gate-native-protection-insufficient": true,
 	"gate-checks-not-passed": true, "gate-review-feedback-unresolved": true,
@@ -198,7 +198,12 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		if e != nil {
 			return "", ErrMerge
 		}
-		gp, e := r.GatePolicy()
+		// The gate's merge settings come from the manifest the policy that
+		// authorized the publication binds, never another policy load's.
+		if p.Revision() != c.AuthorityRevision {
+			return "", ErrMerge
+		}
+		gp, e := r.GatePolicy(p.ProjectSHA256)
 		if e != nil {
 			return "", ErrMerge
 		}
@@ -337,7 +342,14 @@ func (r Runtime) run(ctx context.Context, j *store.MergeJournal, id string) (err
 			if fence(ctx) != nil {
 				return deny("publication-fence")
 			}
-			gp, e := r.GatePolicy()
+			authorizing, _, _, e := r.Policy()
+			if e != nil || authorizing.Revision() != command.AuthorityRevision {
+				return deny("publication-fence")
+			}
+			gp, e := r.GatePolicy(authorizing.ProjectSHA256)
+			if errors.Is(e, mergegate.ErrManifest) {
+				return deny("gate-manifest")
+			}
 			if e != nil {
 				return deny("gate-policy")
 			}

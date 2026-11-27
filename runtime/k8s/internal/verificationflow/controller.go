@@ -280,8 +280,11 @@ func runWithMailbox(ctx context.Context, db *store.DB, load PolicyLoader, id str
 		// command's authority revision covers that digest, and every fence
 		// re-checks it.
 		p, _, _, e := load()
-		m, ok := project.Lookup(c.Repository)
-		if e != nil || !ok || m.Verification == nil || p.Revision() != c.AuthorityRevision || p.ProjectSHA256 == "" || m.Digest() != p.ProjectSHA256 {
+		if e != nil || p.Revision() != c.AuthorityRevision || p.ProjectSHA256 == "" {
+			return proof, ControllerError{stage}
+		}
+		m, ok := project.Bound(c.Repository, p.ProjectSHA256)
+		if !ok || m.Verification == nil {
 			return proof, ControllerError{stage}
 		}
 		v := *m.Verification

@@ -36,7 +36,13 @@ func RecipeForRepository(repository string) string {
 		return LifetimeRecipe
 	}
 	// Any other repository is verified with its own tests when the policy
-	// binds an installed manifest that declares them.
+	// binds an installed manifest that declares them. Lookup (not Bound) is
+	// safe here: callers have no policy in scope, and the result is only the
+	// recipe name, which carries no manifest content. Every command signs the
+	// recipe and its revision under the authorizing policy, and the settings
+	// the recipe runs with are resolved by verificationflow through
+	// project.Bound, so another policy load's manifest can at worst make this
+	// return "" (a refusal), never different verification settings.
 	if m, ok := project.Lookup(repository); ok && m.Verification != nil {
 		return repositorytests.Recipe
 	}

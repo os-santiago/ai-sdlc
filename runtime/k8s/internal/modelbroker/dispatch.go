@@ -376,7 +376,7 @@ func refusedStage(stage string, err error) string {
 
 // The refusal steps of Dispatcher.authorize and the execution lifecycle's
 // Authorize; any other text stays unknown.
-var authorizationRefusalStage = regexp.MustCompile(`^authorization-(reservation|dispatch|publication)-(authority|deadline|claim-expired|scope-expired|busy|stopped|scope|panic|phase|model-proof|model-policy|prepared|binding|claim|claim-read|inputs|record|repair|snapshot|snapshot-stale|reload)$`)
+var authorizationRefusalStage = regexp.MustCompile(`^authorization-(reservation|dispatch|publication)-(authority|deadline|claim-expired|scope-expired|busy|stopped|scope|panic|phase|model-proof|model-policy|prepared|binding|claim|claim-read|inputs|record|repair|snapshot|snapshot-stale|reload|manifest)$`)
 
 func safePublicationStage(stage string) string {
 	switch stage {

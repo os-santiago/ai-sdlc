@@ -101,7 +101,11 @@ func main() {
 		if e != nil {
 			return mergeflow.Runtime{}, e
 		}
-		if _, e := mergegate.LoadInstalledForRepository("/etc/ai-sdlc/merge/policy.json", value.Repository); e != nil {
+		authorizing, _, _, e := policy()
+		if e != nil {
+			return mergeflow.Runtime{}, e
+		}
+		if _, e := mergegate.LoadInstalledForRepository("/etc/ai-sdlc/merge/policy.json", value.Repository, authorizing.ProjectSHA256); e != nil {
 			return mergeflow.Runtime{}, e
 		}
 		gates, e := mergegate.New(value)
@@ -118,8 +122,8 @@ func main() {
 		}
 		return mergeflow.Runtime{DB: c.DB, Policy: policy, Review: review, Reconciler: mergeReconciler, Observer: observer,
 			Identity: func() (authority.Identity, error) { _, key, e := c.Authority(); return key, e },
-			GatePolicy: func() (mergegate.Policy, error) {
-				return mergegate.LoadInstalledForRepository("/etc/ai-sdlc/merge/policy.json", value.Repository)
+			GatePolicy: func(projectSHA256 string) (mergegate.Policy, error) {
+				return mergegate.LoadInstalledForRepository("/etc/ai-sdlc/merge/policy.json", value.Repository, projectSHA256)
 			},
 			Gates: gates, Writer: writer}, nil
 	}

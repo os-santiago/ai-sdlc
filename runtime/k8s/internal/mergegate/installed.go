@@ -1,6 +1,7 @@
 package mergegate
 
 import (
+	"errors"
 	"io"
 	"os"
 
@@ -12,7 +13,11 @@ const DedicatedName = "AI-SDLC low-risk merge protection"
 
 // LoadInstalled reads only a trusted configuration mount, never an issue or
 // generated workspace. The returned ID must have been verified by the installer.
-func LoadInstalled(path string) (Policy, error) {
+// projectSHA256 is the ProjectSHA256 of the authorizing policy: for a
+// manifest repository the installed gate must match the merge settings of
+// exactly that manifest, and ErrManifest refuses when the installed manifest
+// is another policy load's or was cleared.
+func LoadInstalled(path, projectSHA256 string) (Policy, error) {
 	deny := func() (Policy, error) { return Policy{}, ErrGate }
 	f, e := os.Open(path)
 	if e != nil {
@@ -31,10 +36,15 @@ func LoadInstalled(path string) (Policy, error) {
 	if p.Repository == "" {
 		p.Repository = project.Homedir
 	}
+	if _, reference := project.Builtin(p.Repository); !reference {
+		if _, ok := project.Bound(p.Repository, projectSHA256); !ok {
+			return Policy{}, ErrManifest
+		}
+	}
 	if !p.valid() || p.Name != DedicatedName {
 		return deny()
 	}
-	floor := PolicyForRepository(p.Repository)
+	floor := PolicyForRepository(p.Repository, projectSHA256)
 	if len(p.Required) != len(floor.Required) {
 		return deny()
 	}
@@ -46,8 +56,11 @@ func LoadInstalled(path string) (Policy, error) {
 	return p, nil
 }
 
-func LoadInstalledForRepository(path, repository string) (Policy, error) {
-	p, err := LoadInstalled(path)
+func LoadInstalledForRepository(path, repository, projectSHA256 string) (Policy, error) {
+	p, err := LoadInstalled(path, projectSHA256)
+	if errors.Is(err, ErrManifest) {
+		return Policy{}, err
+	}
 	if err != nil || p.Repository != repository {
 		return Policy{}, ErrGate
 	}

@@ -110,32 +110,32 @@ func TestInstalledPolicyRequiresPinnedIdentityAndExactCheckFloor(t *testing.T) {
 		}
 	}
 	write(p)
-	if got, e := LoadInstalled(file); e != nil || got.RulesetID != 999 {
+	if got, e := LoadInstalled(file, ""); e != nil || got.RulesetID != 999 {
 		t.Fatal("installed policy", e)
 	}
 	bad := p
 	bad.Name = ""
 	write(bad)
-	if _, e := LoadInstalled(file); e == nil {
+	if _, e := LoadInstalled(file, ""); e == nil {
 		t.Fatal("unowned rule accepted")
 	}
 	bad = p
 	bad.RulesetID = 0
 	write(bad)
-	if _, e := LoadInstalled(file); e == nil {
+	if _, e := LoadInstalled(file, ""); e == nil {
 		t.Fatal("missing pinned ID")
 	}
 	bad = p
 	bad.Required = append([]RequiredCheck{}, p.Required...)
 	bad.Required[0].AppID = 123
 	write(bad)
-	if _, e := LoadInstalled(file); e == nil {
+	if _, e := LoadInstalled(file, ""); e == nil {
 		t.Fatal("wrong check owner")
 	}
 	if os.WriteFile(file, []byte(`{"RulesetID":999,"RulesetID":1}`), 0600) != nil {
 		t.Fatal("fixture")
 	}
-	if _, e := LoadInstalled(file); e == nil {
+	if _, e := LoadInstalled(file, ""); e == nil {
 		t.Fatal("duplicate config accepted")
 	}
 }

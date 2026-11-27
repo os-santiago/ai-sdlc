@@ -40,10 +40,14 @@ var pilotManifest []byte
 var saferusManifest []byte
 
 func PilotPolicy() Policy {
-	return PolicyForRepository(project.Homedir)
+	return PolicyForRepository(project.Homedir, "")
 }
 
-func PolicyForRepository(repository string) Policy {
+// PolicyForRepository returns the merge policy for a repository: the compiled
+// policy of a built-in reference, otherwise the merge settings of the
+// manifest the authorizing policy binds (projectSHA256 is that policy's
+// ProjectSHA256), never another policy load's manifest.
+func PolicyForRepository(repository, projectSHA256 string) Policy {
 	var raw []byte
 	switch repository {
 	case project.Homedir:
@@ -53,7 +57,7 @@ func PolicyForRepository(repository string) Policy {
 	default:
 		// Other repositories take their merge policy from the
 		// policy-bound project manifest.
-		m, ok := project.Lookup(repository)
+		m, ok := project.Bound(repository, projectSHA256)
 		// Only values the merge gate enforces today are accepted: strict
 		// required checks, resolved threads, no human approval count and
 		// the main branch.

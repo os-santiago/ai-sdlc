@@ -22,6 +22,10 @@ import (
 
 var ErrGate = errors.New("merge gate observation unavailable or denied")
 
+// ErrManifest refuses a merge policy whose project manifest is not the one
+// the authorizing policy binds (another policy load's, or none).
+var ErrManifest = errors.New("merge gate manifest is not the one the authorizing policy binds")
+
 type Client struct {
 	token, base, repository string
 	http                    *http.Client

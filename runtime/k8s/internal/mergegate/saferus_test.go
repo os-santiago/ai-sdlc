@@ -8,7 +8,7 @@ import (
 )
 
 func TestInstalledSaferusPolicyCannotCrossRepositoryOrWeakenChecks(t *testing.T) {
-	p := PolicyForRepository("os-santiago/saferus")
+	p := PolicyForRepository("os-santiago/saferus", "")
 	p.Name = DedicatedName
 	p.RulesetID = 999
 	path := filepath.Join(t.TempDir(), "policy.json")
@@ -19,10 +19,10 @@ func TestInstalledSaferusPolicyCannotCrossRepositoryOrWeakenChecks(t *testing.T)
 		}
 	}
 	write(p)
-	if _, err := LoadInstalledForRepository(path, "os-santiago/saferus"); err != nil {
+	if _, err := LoadInstalledForRepository(path, "os-santiago/saferus", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadInstalledForRepository(path, "os-santiago/homedir"); err != ErrGate {
+	if _, err := LoadInstalledForRepository(path, "os-santiago/homedir", ""); err != ErrGate {
 		t.Fatal("cross-repo policy")
 	}
 	for _, mutate := range []func(*Policy){
@@ -35,7 +35,7 @@ func TestInstalledSaferusPolicyCannotCrossRepositoryOrWeakenChecks(t *testing.T)
 		copy.Required = append([]RequiredCheck{}, p.Required...)
 		mutate(&copy)
 		write(copy)
-		if _, err := LoadInstalledForRepository(path, "os-santiago/saferus"); err != ErrGate {
+		if _, err := LoadInstalledForRepository(path, "os-santiago/saferus", ""); err != ErrGate {
 			t.Fatal("unsafe installed policy")
 		}
 	}

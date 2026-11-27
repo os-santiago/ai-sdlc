@@ -28,7 +28,16 @@ func TestBoundManifestRequiresTheExactInstalledDigest(t *testing.T) {
 	if BoundManifest(p) {
 		t.Fatal("another digest accepted")
 	}
-	if !BoundManifest(authority.Policy{Repository: project.Homedir}) {
-		t.Fatal("an unbound policy needs no manifest")
+	// A reference policy binds no manifest, so an installed one belongs to
+	// another policy load; a cleared registry refuses a bound policy.
+	if BoundManifest(authority.Policy{Repository: project.Homedir}) {
+		t.Fatal("an unbound policy accepted another load's manifest")
+	}
+	project.SetInstalled(nil)
+	if BoundManifest(authority.Policy{Repository: "example/service", ProjectSHA256: m.Digest()}) {
+		t.Fatal("a cleared registry satisfied a bound policy")
+	}
+	if !BoundManifest(authority.Policy{Repository: project.Homedir}) || !BoundManifest(authority.Policy{Repository: project.Saferus}) {
+		t.Fatal("an unbound reference policy needs no manifest")
 	}
 }

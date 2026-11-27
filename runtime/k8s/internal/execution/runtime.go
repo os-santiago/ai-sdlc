@@ -84,7 +84,7 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 	// start exactly like the signed command.
 	start := 0
 	if p, _, e := r.Component.Authority(); e == nil {
-		start = StartSecondsFor(p.Repository)
+		start = StartSecondsFor(p.Repository, p.ProjectSHA256)
 	}
 	ctx, cancel := context.WithTimeout(ctx, CommandLifetime(config.Profile.MaxSeconds, start))
 	defer cancel()
