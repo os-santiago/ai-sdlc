@@ -73,10 +73,13 @@ spec:
       script: |
         #!/bin/sh
         set -eu
-        printf '%s' "$REPOSITORY" | grep -Eqx '[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9_.-]{1,100}' \
+        # Whole-value match: grep -x matches lines, so refuse a newline first.
+        matches() { case "$1" in *"
+        "*) return 1;; esac; printf '%s' "$1" | grep -Eqx "$2"; }
+        matches "$REPOSITORY" '[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9_.-]{1,100}' \
           || { echo 'repository must be owner/name' >&2; exit 2; }
         case "/$REPOSITORY/" in */./*|*/../*) echo 'repository must be owner/name' >&2; exit 2;; esac
-        printf '%s' "$REVISION" | grep -Eqx '[0-9a-f]{40}' \
+        matches "$REVISION" '[0-9a-f]{40}' \
           || { echo 'revision must be a full lowercase commit SHA' >&2; exit 2; }
         rm -rf "$DESTINATION"
         git init -q "$DESTINATION"

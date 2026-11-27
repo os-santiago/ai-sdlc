@@ -160,9 +160,11 @@ the registry is always set explicitly (the public registry or the proxy). An
 egress gate (in Node; the image has no curl) runs first. The summary also lists
 the hosts the lockfile resolves from and any new ones (`newResolvedHosts`), and
 the verdict is `npmExitCode`.
-Package specs must be `name` or `name@range` (at most 16; no URLs, paths or
-shell syntax). The summary lists up to 25 changed lockfile entries with old and
-new versions, the diff size and its SHA-256; the full diff and lockfile are
+Packages are names only (at most 16; no URLs, paths, versions or shell syntax):
+`npm update` rejects versions (`EUPDATEARGS`) and stays within the
+`package.json` ranges. The summary lists up to 25 changed lockfile entries with
+old and new versions (or `resolutionChanged` when only the resolved URL or
+integrity changed), the diff size and its SHA-256; the full diff and lockfile are
 written under `npm-lock-update/` in the run's source workspace.
 
 The pipelines use the image's pinned Maven rather than the project's `./mvnw`,
@@ -257,9 +259,14 @@ code, so the build and test phases are equally untrusted; they run only in
 - **Admission.** The `ai-sdlc-ci-pipelineruns` ValidatingAdmissionPolicy admits
   a PipelineRun in `ai-sdlc-ci` only when it references a catalog pipeline,
   uses the runner account without a token (also in per-task overrides), and
-  binds only a fresh `source` claim and a repository cache, read-only except for
-  `maven-dependencies`. Combined with the refusal of inline specifications,
-  whoever can create PipelineRuns there can only run the reviewed catalog.
+  sets no `ai-sdlc.io/ci-egress` label on the run or a per-task override
+  (labels propagate to pods, where the network policy reads them), and binds
+  only a fresh `source` claim (no data source or pre-bound volume) and a
+  repository cache, read-only except for `maven-dependencies`. Only cluster
+  administrators may create `maven-dependencies` runs, which write a cache.
+  Admission cannot read GitHub or compute the claim digest, so the rules that
+  a cache write uses the base-branch head and the repository's own claim are
+  enforced by the callers (the run tool and the adapter).
 - **Restricted pods.** The namespace enforces restricted Pod Security. Every
   step and sidecar is non-root, drops all capabilities, disallows privilege
   escalation, uses RuntimeDefault seccomp, a read-only root filesystem,

@@ -248,14 +248,16 @@ class ResourceTests(unittest.TestCase):
 
 class ObservationTests(unittest.TestCase):
     def observe(self, generation=2, ready=1, flags=None,
-                pipeline='\n'.join('pipeline.tekton.dev/' + p for p in tekton.PIPELINES)):
+                pipeline='\n'.join('pipeline.tekton.dev/' + p for p in tekton.PIPELINES),
+                tasks='\n'.join('task.tekton.dev/' + t for t in tekton.TASKS)):
         lock = {'release': 'v9.9.9', 'requiredDeployments': ['tekton-pipelines/tekton-pipelines-controller']}
         deployment = {'metadata': {'generation': 2}, 'spec': {'replicas': 1},
                       'status': {'observedGeneration': generation, 'updatedReplicas': 1,
                                  'readyReplicas': ready, 'availableReplicas': ready}}
         wanted = tekton.configuration()[0]['configMaps']['tekton-pipelines/feature-flags']
         configmap = {'data': dict(wanted, **(flags or {}))}
-        run = Mock(side_effect=[completed(json.dumps(deployment)), completed(json.dumps(configmap)), completed(pipeline)])
+        run = Mock(side_effect=[completed(json.dumps(deployment)), completed(json.dumps(configmap)), completed(pipeline),
+                                completed(tasks)])
         return tekton.observe(run, ['kubectl'], lock)
 
     def test_ready_requires_current_generation_hardening_and_every_pipeline(self):
@@ -265,6 +267,7 @@ class ObservationTests(unittest.TestCase):
         self.assertFalse(self.observe(flags={'set-security-context': 'false'})['ready'])
         self.assertFalse(self.observe(pipeline='')['ready'])
         self.assertFalse(self.observe(pipeline='pipeline.tekton.dev/' + tekton.PIPELINES[0])['ready'], 'every catalog pipeline')
+        self.assertFalse(self.observe(tasks='task.tekton.dev/' + tekton.TASKS[0])['ready'], 'every catalog task')
 
 
 class InstallerOptionTests(unittest.TestCase):

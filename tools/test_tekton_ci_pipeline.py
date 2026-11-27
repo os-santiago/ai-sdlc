@@ -76,6 +76,10 @@ class ManifestTests(unittest.TestCase):
         for pipeline in tekton.PIPELINES:
             self.assertIn(pipeline, rules)
         self.assertIn("'ai-sdlc-ci-runner'", rules)
+        self.assertIn("'ai-sdlc.io/ci-egress' in object.metadata.labels", rules, 'labels propagate to pods')
+        self.assertIn('s.metadata.labels', rules)
+        self.assertIn('request.userInfo.groups', rules, 'cache writers are administrators')
+        self.assertIn('dataSourceRef', rules)
         self.assertIn('readOnly == true', rules)
         namespace = by_kind('Namespace')['ai-sdlc-ci']['metadata']['labels']
         self.assertEqual(namespace['pod-security.kubernetes.io/enforce'], 'restricted')
@@ -200,7 +204,8 @@ class ScriptTests(unittest.TestCase):
             base = {'DESTINATION': directory + '/src', 'RESULT': directory + '/result', 'HOME': directory}
             for repository, revision in (('os-santiago/x', 'main'), ('os-santiago/x', SHA[:12]),
                                          ('os-santiago/x', SHA.upper()), ('../x', SHA), ('a/b;id', SHA),
-                                         ('a/..', SHA), ('https://evil/x', SHA)):
+                                         ('a/..', SHA), ('https://evil/x', SHA), ('os-santiago/x', SHA + '\nextra'),
+                                         ('os-santiago/x\n../../y', SHA)):
                 result = execute(text, dict(base, REPOSITORY=repository, REVISION=revision))
                 self.assertEqual(result.returncode, 2, (repository, revision, result.stderr))
                 self.assertFalse(Path(directory, 'src').exists())
@@ -214,6 +219,7 @@ class ScriptTests(unittest.TestCase):
                 base = {'SOURCE': directory + '/source', 'HOME': directory + '/home', 'CACHE': directory + '/cache',
                         'MAVEN_MIRROR_URL': ''}
                 cases = [('../app', 'none', ''), ('app/../..', 'none', ''), ('/etc', 'none', ''), ('app', 'redis', ''),
+                         ('app\n../x', 'none', ''), ('app', 'none\npostgres', ''),
                          ('app', 'postgres;id', ''), ('missing', 'none', '')]
                 if task == 'maven-dependencies':
                     cases += [('app', 'none', 'http://x/<y>'), ('app', 'none', 'file:///etc')]
@@ -221,24 +227,29 @@ class ScriptTests(unittest.TestCase):
                     result = execute(text, dict(base, MODULE=module, SERVICES=services, MAVEN_MIRROR_URL=mirror))
                     self.assertEqual(result.returncode, 2, (task, module, services, mirror, result.stderr))
 
-    def gate(self, curl_exit_codes):
+    def gate(self, outcomes):
+        """Replay connect outcomes: 'timeout' (exit 124), 'refused', 'open' or 'other'."""
         text = step('maven-build-test', 'egress-gate')['script']
         with tempfile.TemporaryDirectory() as directory:
-            codes = Path(directory, 'codes')
-            codes.write_text('\n'.join(map(str, curl_exit_codes)) + '\n')
-            # Stubs: curl replays the next exit code (repeating the last), sleep returns at once.
-            Path(directory, 'curl').write_text('#!/bin/sh\nc=$(head -n1 "%s")\n[ "$(wc -l < "%s")" -gt 1 ] && sed -i 1d "%s"\nexit "$c"\n' % (codes, codes, codes))
+            plan = Path(directory, 'plan')
+            plan.write_text('\n'.join(outcomes) + '\n')
+            # Stubs: timeout replays the next outcome (repeating the last), sleep returns at once.
+            Path(directory, 'timeout').write_text(
+                '#!/bin/sh\no=$(head -n1 "%s")\n[ "$(wc -l < "%s")" -gt 1 ] && sed -i 1d "%s"\n'
+                'case "$o" in timeout) exit 124;; refused) echo "bash: connect: Connection refused" >&2; exit 1;;'
+                ' open) exit 0;; *) echo "bash: unknown host" >&2; exit 1;; esac\n' % (plan, plan, plan))
             Path(directory, 'sleep').write_text('#!/bin/sh\nexit 0\n')
-            for stub in ('curl', 'sleep'):
+            for stub in ('timeout', 'sleep'):
                 Path(directory, stub).chmod(0o755)
             return execute(text, {'KUBERNETES_SERVICE_HOST': '10.96.0.1', 'KUBERNETES_SERVICE_PORT': '443'}, directory + ':')
 
     def test_egress_gate_requires_repeated_denial(self):
-        self.assertEqual(self.gate([28, 28, 28]).returncode, 0)
-        self.assertEqual(self.gate([0, 0, 7, 28, 7]).returncode, 0, 'enforcement may start late')
-        self.assertEqual(self.gate([28, 28, 0, 28, 28, 0]).returncode, 1, 'a success resets the denial count')
-        self.assertEqual(self.gate([0]).returncode, 1)
-        self.assertEqual(self.gate([6]).returncode, 1, 'a resolution or tool failure is not a denial')
+        self.assertEqual(self.gate(['timeout', 'timeout', 'timeout']).returncode, 0)
+        self.assertEqual(self.gate(['open', 'open', 'refused', 'timeout', 'refused']).returncode, 0, 'enforcement may start late')
+        self.assertEqual(self.gate(['timeout', 'timeout', 'open', 'timeout', 'timeout', 'open']).returncode, 1,
+                         'an established connection resets the count, however slow the server is')
+        self.assertEqual(self.gate(['open']).returncode, 1)
+        self.assertEqual(self.gate(['other']).returncode, 1, 'a resolution or tool failure is not a denial')
         text = step('maven-build-test', 'egress-gate')['script']
         self.assertEqual(execute(text, {}).returncode, 1, 'no address to probe is not a denial')
 
@@ -271,7 +282,7 @@ class ScriptTests(unittest.TestCase):
             summary = json.loads(Path(directory, 'result').read_text())
             self.assertEqual(summary, {'module': 'app', 'mavenExitCode': 1, 'reports': 2, 'tests': 75, 'failures': 2,
                                        'errors': 1, 'skipped': 1,
-                                       'failingTests': ['org.a.ATests.breaks', 'org.a.ATests.quo&quot;te', 'org.b.BIT.it'],
+                                       'failingTests': ['org.a.ATests.breaks', 'org.a.ATests.quo"te', 'org.b.BIT.it'],
                                        'compilerErrors': ['app/src/main/java/A.java:[12,5] cannot find symbol'],
                                        'missingDependencies': True, 'truncated': False})
             log.write_text('[INFO] ok\n')
@@ -339,14 +350,15 @@ class ScriptTests(unittest.TestCase):
                     ('../web', 'update', ['vite'], ''), ('/web', 'update', ['vite'], ''), ('web', 'install', ['vite'], ''),
                     ('web', 'update', [], ''), ('web', 'audit-fix', ['vite'], ''), ('web', 'update', ['vite;id'], ''),
                     ('web', 'update', ['../x'], ''), ('web', 'update', ['git+https://x/y'], ''),
-                    ('web', 'update', ['vite'], 'file:///x'), ('web', 'update', ['vite'], ''),
+                    ('web', 'update', ['vite'], 'file:///x'), ('web', 'update', ['vite'], ''), ('web', 'update', ['vite@6.3.5'], ''),
+                    ('web\nother', 'update', ['vite'], ''),
                     ('web', 'update', ['a'] * 17, '')):
                 env = dict(base, DIRECTORY=directory_value, MODE=mode, REGISTRY_URL=registry, PATH='/usr/bin:/bin')
                 result = subprocess.run(['sh', '-c', text.replace('/tmp/', directory + '/tmp/'), 'npm-lock-update'] + packages, env=env,
                                         capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, 2, (directory_value, mode, packages, registry, result.stderr))
 
-    def npm(self, directory, stub, packages=('vite@6.3.5',), npmrc=True):
+    def npm(self, directory, stub, packages=('vite',), npmrc=True):
         """Run the update step against a stub npm, with /tmp mapped into the test directory."""
         text = step('npm-lock-update', 'update')['script'].replace('/tmp/', directory + '/tmp/')
         Path(directory, 'tmp').mkdir(exist_ok=True)
@@ -356,7 +368,8 @@ class ScriptTests(unittest.TestCase):
         lock = {'lockfileVersion': 3, 'packages': {
             '': {'name': 'w'},
             'node_modules/vite': {'version': '6.0.0', 'resolved': 'https://registry.npmjs.org/vite/-/vite-6.0.0.tgz'},
-            'node_modules/old': {'version': '1.0.0', 'resolved': 'https://registry.npmjs.org/old/-/old-1.0.0.tgz'}}}
+            'node_modules/old': {'version': '1.0.0', 'resolved': 'https://registry.npmjs.org/old/-/old-1.0.0.tgz'},
+            'node_modules/same': {'version': '1.0.0', 'resolved': 'https://registry.npmjs.org/same/-/same-1.0.0.tgz'}}}
         web.joinpath('package-lock.json').write_text(json.dumps(lock, indent=2))
         if npmrc:
             web.joinpath('.npmrc').write_text('registry=https://evil.example/\n')
@@ -377,13 +390,14 @@ class ScriptTests(unittest.TestCase):
             # then rewrites the lockfile as an update would.
             stub = ('#!/bin/sh\necho "$@" > "%s/argv"\nls -A > "%s/listing"\necho "$NPM_CONFIG_REGISTRY $NPM_CONFIG_GIT $NPM_CONFIG_USERCONFIG $NPM_CONFIG_GLOBALCONFIG" > "%s/config"\n'
                     'node -e \'const f="package-lock.json",j=JSON.parse(require("fs").readFileSync(f));'
+                    'j.packages["node_modules/same"].resolved="https://mirror.example/same-1.0.0.tgz";'
                     'j.packages["node_modules/vite"]={version:"6.3.5",resolved:"https://registry.npmjs.org/vite/-/vite-6.3.5.tgz"};'
                     'delete j.packages["node_modules/old"];j.packages["node_modules/new"]={version:"2.0.0",resolved:"https://other.example/new.tgz"};'
                     'require("fs").writeFileSync(f,JSON.stringify(j,null,2))\'\n') % (directory, directory, directory)
             result = self.npm(directory, stub)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(Path(directory, 'argv').read_text().split(),
-                             ['update', 'vite@6.3.5', '--package-lock-only', '--ignore-scripts', '--no-audit'])
+                             ['update', 'vite', '--package-lock-only', '--ignore-scripts', '--no-audit'])
             self.assertEqual(Path(directory, 'listing').read_text().split(), ['package-lock.json', 'package.json'],
                              'npm runs on copies; the project .npmrc is not there to read')
             self.assertEqual(Path(directory, 'config').read_text().split(),
@@ -394,10 +408,11 @@ class ScriptTests(unittest.TestCase):
             summary = json.loads(Path(directory, 'result').read_text())
             self.assertEqual(summary['changes'], [{'path': 'new', 'from': None, 'to': '2.0.0'},
                                                   {'path': 'old', 'from': '1.0.0', 'to': None},
+                                                  {'path': 'same', 'from': '1.0.0', 'to': '1.0.0', 'resolutionChanged': True},
                                                   {'path': 'vite', 'from': '6.0.0', 'to': '6.3.5'}])
-            self.assertEqual((summary['changed'], summary['truncated'], summary['npmExitCode']), (3, False, 0))
-            self.assertEqual(summary['resolvedHosts'], ['other.example', 'registry.npmjs.org'])
-            self.assertEqual(summary['newResolvedHosts'], ['other.example'])
+            self.assertEqual((summary['changed'], summary['truncated'], summary['npmExitCode']), (4, False, 0))
+            self.assertEqual(summary['resolvedHosts'], ['mirror.example', 'other.example', 'registry.npmjs.org'])
+            self.assertEqual(summary['newResolvedHosts'], ['mirror.example', 'other.example'])
             diff = Path(directory, 'out/package-lock.diff').read_bytes()
             self.assertEqual(summary['diffBytes'], len(diff))
             self.assertRegex(summary['diffSHA256'], '^[0-9a-f]{64}$')
@@ -454,12 +469,14 @@ class RunToolTests(unittest.TestCase):
     def test_dependencies_and_npm_runs_bind_their_pipeline_inputs(self):
         deps = runner.maven_dependencies('a/b', SHA, 'm', ['postgres'], [], mirror_url='http://dependency-proxy.ai-sdlc-dependencies.svc/maven2')
         self.assertEqual(deps['spec']['workspaces'][1], {'name': 'maven-cache', 'persistentVolumeClaim': {'claimName': tekton.cache_claim('a/b')}})
-        npm = runner.npm_lock_update('a/b', SHA, 'ui/web', 'update', ['vite@6.3.5'])
+        npm = runner.npm_lock_update('a/b', SHA, 'ui/web', 'update', ['vite', '@scope/pkg'])
         for run, name in ((deps, 'ai-sdlc-maven-dependencies'), (npm, 'ai-sdlc-npm-lock-update')):
             pipeline = by_kind('Pipeline')[name]['spec']
             self.assertEqual({p['name'] for p in run['spec']['params']}, {p['name'] for p in pipeline['params']})
             self.assertEqual({w['name'] for w in run['spec']['workspaces']}, {w['name'] for w in pipeline['workspaces']})
-        self.assertEqual({p['name']: p['value'] for p in npm['spec']['params']}['packages'], ['vite@6.3.5'])
+        self.assertEqual({p['name']: p['value'] for p in npm['spec']['params']}['packages'], ['vite', '@scope/pkg'])
+        with self.assertRaisesRegex(ValueError, 'names'):
+            runner.npm_lock_update('a/b', SHA, 'ui/web', 'update', ['vite@6.3.5'])
 
     def test_render_rejects_mutable_or_unsafe_inputs(self):
         good = ('os-santiago/x', SHA, 'app', ['none'], [])
@@ -523,6 +540,20 @@ class RunToolTests(unittest.TestCase):
         cancel = calls.call_args.args[0]
         self.assertEqual(cancel[1:3], ['patch', 'pipelinerun.tekton.dev'])
         self.assertIn('{"spec":{"status":"Cancelled"}}', cancel)
+
+    def test_wait_survives_slow_reads_and_reports_unconfirmed_cancellation(self):
+        running = {'metadata': {'name': 'x'}, 'status': {'conditions': [{'type': 'Succeeded', 'status': 'Unknown'}]}}
+        responses = [subprocess.TimeoutExpired('kubectl', 60), Mock(returncode=0, stdout=json.dumps(running)), Mock(returncode=1, stdout='')]
+        with patch.object(runner, 'run', side_effect=responses), \
+             self.assertRaisesRegex(ValueError, 'NOT confirmed.*x'):
+            runner.wait(['kubectl'], 'x', 5, sleep=Mock(), clock=Mock(side_effect=[0, 1, 10]))
+        with patch.object(runner, 'run', side_effect=subprocess.TimeoutExpired('kubectl', 60)):
+            self.assertFalse(runner.cancel(['kubectl'], 'x'))
+
+    def test_cache_claim_ignores_repository_case(self):
+        upper = runner.maven_build_test('OS-Santiago/Quarkus-Super-Heroes', SHA, 'm', ['none'], [])
+        self.assertEqual(upper['spec']['workspaces'][1]['persistentVolumeClaim']['claimName'],
+                         tekton.cache_claim('os-santiago/quarkus-super-heroes'))
 
     def test_a_run_passes_only_with_success_the_requested_commit_and_exit_code_zero(self):
         ok = {'succeeded': True, 'commit': SHA, 'summary': {'mavenExitCode': 0}}

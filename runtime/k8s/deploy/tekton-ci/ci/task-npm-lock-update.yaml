@@ -36,7 +36,7 @@ spec:
     - name: packages
       type: array
       default: []
-      description: Package specs for update mode, such as vite or vite@6.3.5.
+      description: Package names for update mode, such as vite; npm update takes no versions and stays within package.json ranges.
     - name: registry-url
       type: string
       default: ""
@@ -146,19 +146,22 @@ spec:
       script: |
         #!/bin/sh
         set -eu
-        printf '%s' "$DIRECTORY" | grep -Eqx '[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*' \
+        # Whole-value match: grep -x matches lines, so refuse a newline first.
+        matches() { case "$1" in *"
+        "*) return 1;; esac; printf '%s' "$1" | grep -Eqx "$2"; }
+        matches "$DIRECTORY" '[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*' \
           || { echo 'directory must be a relative path' >&2; exit 2; }
         case "/$DIRECTORY/" in */./*|*/../*) echo 'directory must be a relative path' >&2; exit 2;; esac
         case "$MODE" in update|audit-fix) ;; *) echo 'mode must be update or audit-fix' >&2; exit 2;; esac
         [ "$#" -le 16 ] || { echo 'at most 16 packages' >&2; exit 2; }
         for spec in "$@"; do
-          printf '%s' "$spec" | grep -Eqx '(@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{0,100}(@[0-9A-Za-z.^~<>=*|+-]{1,64})?' \
-            || { echo "invalid package spec: $spec" >&2; exit 2; }
+          matches "$spec" '(@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{0,100}' \
+            || { echo "invalid package name (npm update takes names, not versions): $spec" >&2; exit 2; }
         done
         if [ "$MODE" = update ] && [ "$#" -eq 0 ]; then echo 'update mode needs packages' >&2; exit 2; fi
         if [ "$MODE" = audit-fix ] && [ "$#" -gt 0 ]; then echo 'audit-fix takes no packages' >&2; exit 2; fi
         registry="${REGISTRY_URL:-https://registry.npmjs.org/}"
-        printf '%s' "$registry" | grep -Eqx 'https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?' \
+        matches "$registry" 'https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?' \
           || { echo 'invalid registry URL' >&2; exit 2; }
         # Only this configuration applies: empty user and global files (npm
         # refuses one file for both), git disabled, scripts disabled and an
@@ -182,7 +185,11 @@ spec:
         else
           npm audit fix --package-lock-only --ignore-scripts || code=$?
         fi
-        diff -u /tmp/before.json package-lock.json > "$OUTPUT/package-lock.diff" || true
+        # diff exits 1 when the files differ; anything above is an I/O error,
+        # and no summary is published for a partial diff.
+        rc=0
+        diff -u /tmp/before.json package-lock.json > "$OUTPUT/package-lock.diff" || rc=$?
+        [ "$rc" -le 1 ] || { echo "diff failed with $rc" >&2; exit 1; }
         cp package-lock.json "$OUTPUT/package-lock.json"
         NPM_EXIT_CODE="$code" node -e '
           const fs = require("fs"), crypto = require("crypto");
@@ -191,8 +198,11 @@ spec:
           const a = entries(before), b = entries(after), changes = [];
           for (const key of [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()) {
             if (key === "") continue;
-            const from = (a[key] || {}).version || null, to = (b[key] || {}).version || null;
-            if (from !== to) changes.push({path: key.replace(/^node_modules\//, "").slice(0, 120), from, to});
+            const x = a[key] || {}, y = b[key] || {}, from = x.version || null, to = y.version || null;
+            // A changed resolved URL or integrity is a change even at the same version.
+            const resolution = from === to && (x.resolved !== y.resolved || x.integrity !== y.integrity);
+            if (from !== to || resolution) changes.push(Object.assign({path: key.replace(/^node_modules\//, "").slice(0, 120), from, to},
+              resolution ? {resolutionChanged: true} : {}));
           }
           const hosts = e => new Set(Object.values(e).map(p => { try { return new URL(p.resolved).host; } catch { return null; } }).filter(Boolean));
           const old = hosts(a), now = [...hosts(b)].sort();
