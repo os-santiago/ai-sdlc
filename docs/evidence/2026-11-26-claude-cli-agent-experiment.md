@@ -112,22 +112,22 @@ Four batteries of new issues measured the main scenario while a series of reliab
 | [43](2026-11-27-evaluation-battery-43.json) | f503a9b (all four) | Python | 98–107 | 10/10 | 9/10 | 284 | 7.5 |
 | [44](2026-11-27-evaluation-battery-44.json) | f503a9b (all four), fresh cluster | Go | 312–321 | 10/10 | 9/10 | 368 | 6.5 |
 
-**Together:** 40 of 40 new issues delivered within two attempts (100% [91.2%, 100%]), and 35 of 40 on the first attempt (87.5% [73.9%, 94.5%]). These pool four revisions, so they are not gate evidence.
+**Together:** 40 of 40 new issues delivered within two attempts (100% [91.2%, 100%]), and 34 of 40 on the first attempt (85.0% [70.9%, 92.9%]). These pool two repositories (two cells) and four revisions, so they are not gate evidence. Per cell, the Python sample delivered 30/30 (first attempt 25/30, 83.3% [66.4%, 92.7%]) and the Go sample 10/10 (9/10).
 
 **What the first-attempt losses were:**
-- **Battery 41, issue 62:** a review mailbox transport stop, the case #835 fixes.
+- **Battery 41, issue 62:** a review mailbox transport stop, the case #835 addresses (no later Python battery has hit it yet, which is too little to call it fixed).
 - **Battery 42** used issues that mostly involve counting:
   - Issue 78: the reviewer broke its response policy (`model-response-policy`), a model error the policy rejects.
   - Issue 80: the generator's edit corrupted the package's `__init__.py` (a duplicated fragment and a dropped import). The generator cannot run Python, so it did not notice (#831).
-  - Issue 86: a merge stopped before anything was sent but was recorded as permanently failed, so a second attempt was needed. #840 addresses this.
+  - Issue 86: a merge stopped before anything was sent but was recorded as permanently failed, so a second attempt was needed (the report records only a timeout after a passed review; its first pull request, #96, was left open). #840 addresses this.
 - **Battery 43, issue 107:** the independent review requested changes.
 - **Battery 44, issue 320:** the candidate's own tests failed verification.
 
-**What did not recur on f503a9b:** no transport stop, no uncertain publication or merge, and no quarantine.
+**What did not recur on f503a9b (20 issues):** the reports show no transport stop, and every other attempt merged, so no uncertain publication or merge, and no quarantine, stopped delivery.
 
 ## Limits
 
-- **Easy issues.** The corpus is small Go functions in one sample repository (and, for batteries 37–44, small Python functions in a second).
+- **Easy issues.** The corpus is small Go functions in one sample repository (and, for batteries 37–43, small Python functions in a second).
 - **Not a product path.** The bridge is evaluation-only, so batteries 33–35 are not Beta gate evidence. Battery 36 is a product path but shares the easy-issue, single-Go-repository limit, and ran on an in-place install rather than a fresh cluster.
 - **Not a controlled comparison.** The local-model figures come from different issues and from three revisions (7f50d07, 4f51e42 and 24c3190); only 230, 232 and 233 overlap.
 - **Host load.** The local model served only reviews, so the cluster was less loaded than in the local-model batteries.
