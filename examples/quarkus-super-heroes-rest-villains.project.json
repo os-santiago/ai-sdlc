@@ -1,0 +1,57 @@
+{
+  "version": "ai-sdlc.project/v1",
+  "repository": "os-santiago/quarkus-super-heroes",
+  "baseBranch": "main",
+  "verification": {
+    "image": "docker.io/library/maven@sha256:93b8a14ea2f412782e4e842651273b4d903e35cc496284f178fbbe2d67d00976",
+    "command": ["mvn", "-B", "-o", "-pl", "rest-villains", "test", "-Dtest=!UIResourceTests,!*IT", "-Dsurefire.failIfNoSpecifiedTests=false"],
+    "timeoutSeconds": 600,
+    "cpu": "2",
+    "memory": "3Gi",
+    "ephemeralStorage": "2Gi",
+    "network": "none",
+    "result": {"exitCode": true},
+    "repeat": 1,
+    "testGlobs": ["rest-villains/src/test/**"],
+    "harnessGlobs": ["pom.xml", "**/pom.xml", ".mvn/**", "mvnw", "rest-villains/src/main/resources/**", "rest-villains/src/test/resources/**"],
+    "env": {
+      "QUARKUS_DEVSERVICES_ENABLED": "false",
+      "QUARKUS_DATASOURCE_JDBC_URL": "jdbc:postgresql://localhost:5432/villains_database",
+      "QUARKUS_DATASOURCE_USERNAME": "superbad",
+      "QUARKUS_DATASOURCE_PASSWORD": "superbad",
+      "QUARKUS_OTEL_SDK_DISABLED": "true"
+    },
+    "services": [
+      {
+        "name": "villains-db",
+        "image": "docker.io/library/postgres@sha256:87c8b42f423b45d5247e6aa8fdb2e7762fec164c68a50fe3eb07e7bfcaf4dbcf",
+        "env": {
+          "POSTGRES_USER": "superbad",
+          "POSTGRES_PASSWORD": "superbad",
+          "POSTGRES_DB": "villains_database",
+          "PGDATA": "/var/lib/postgresql/data/pgdata"
+        },
+        "user": 999,
+        "port": 5432,
+        "readySeconds": 120,
+        "writablePaths": ["/var/lib/postgresql/data", "/var/run/postgresql", "/tmp"],
+        "cpu": "500m",
+        "memory": "512Mi",
+        "ephemeralStorage": "512Mi"
+      }
+    ]
+  },
+  "publication": {
+    "allow": ["rest-villains/src/main/java/**", "rest-villains/src/test/java/**"],
+    "maxChangedFiles": 8,
+    "maxChangedBytes": 65536,
+    "maxFileBytes": 32768
+  },
+  "merge": {
+    "rulesetID": 1,
+    "required": [{"context": "build", "appID": 15368}],
+    "strictChecks": true,
+    "resolveThreads": true,
+    "humanApprovals": 0
+  }
+}
