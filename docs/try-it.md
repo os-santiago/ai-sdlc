@@ -4,7 +4,9 @@ You need an installation with delivery enabled for your repository and the flow
 console. The [detailed guide](try-it-detailed.md) explains each step.
 
 1. **Install** with delivery and the console (once per repository; see the
-   [adoption guide](adoption.md) for the manifest and model endpoint):
+   [adoption guide](adoption.md) for the manifest and model endpoint). The first
+   run creates the merge rule, stops and prints its ID; set `merge.rulesetID` in
+   the manifest and run it again:
 
    ```bash
    ./install.sh local --cluster my-eval --repository OWNER/REPO \
@@ -39,10 +41,12 @@ console. The [detailed guide](try-it-detailed.md) explains each step.
    installation authorized. Creating the issue alone does nothing.
 
 5. **Watch it** in the console: type the issue number in the "Issue" filter.
-   In about 4 to 6 minutes (with a hosted model) the row goes through
+   In about 4 to 8 minutes with a hosted model (median under 5 in our runs) the row goes through
    generation, verification, review, publication and merge. A pull request
    opens and merges, and the issue closes.
 
-If it stops, the console's "What is wrong now" box names the stage and reason.
+If it stops, the row's label names the stage and diagnostic (for example
+`verify · refused-candidate-failed`). Blocked or quarantined work also appears
+in the "What is wrong now" box.
 To retry, remove the label, wait about 30 seconds and add it again. Common
 stops and fixes are in the [detailed guide](try-it-detailed.md#when-it-stops).

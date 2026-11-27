@@ -18,7 +18,7 @@ console. The short version is [Try it (TL;DR)](try-it.md).
   benchmarks the model. Wait until both report it before filing work: look for
   the `model-benchmark` line in the `model-gateway` container logs of the
   worker and verifier pods. A hosted model typically delivers a small issue in
-  about 4 to 7 minutes; a local model on modest hardware is much slower (see
+  about 4 to 8 minutes (median under 5 in batteries 36–40); a local model on modest hardware is much slower (see
   [selecting the generation budget](operations/candidate-runtime.md#selecting-the-generation-budget)).
 - **The GitHub account the installation authorized.** With `--github-auth
   gh-cli`, that is the account of your `gh` session. Only its label events
@@ -68,7 +68,8 @@ What you see:
   latency.
 - **"Work now"** counts items per stage: queued, generating, verifying,
   reviewing, publishing, merging, blocked.
-- **"What is wrong now"** lists current problems with their stage and reason.
+- **"What is wrong now"** lists blocked or quarantined work with its reason,
+  stages running longer than usual, and bursts of problems.
 - **The timeline** has one row per issue. Each stage is a bar: solid when
   completed, striped while running, outlined while waiting, hatched when
   blocked or quarantined. A cross marks a verdict against the work, and a
@@ -88,8 +89,9 @@ Write it like a small, reviewable task:
   code does not see the new package.
 - **Within the manifest's publication rules.** Only the paths in
   `publication.allow` may change, within its file and size limits. In the
-  Python example these are `*.py` files inside packages and `README.md`; files
-  at the repository root are denied.
+  Python example these are `.py` files below the root (`**/*.py`; root-level
+  `*.py` is denied) and `README.md`, at most 6 files, 64 KiB in total and
+  32 KiB per file.
 
 Example:
 
@@ -117,8 +119,8 @@ on. The row goes through these stages:
 |---|---|---|
 | Intake and admission | The issue and its criteria are observed and admitted | seconds |
 | Generation (G) | SCC writes the change and its tests in an offline sandbox, using the model as a service | 1–3 min |
-| Verification (V) | The repository's own tests run offline, twice; a new test must fail on the old code and pass with the change | about 1 min |
-| Review (R) | An independent, read-only model review of the diff; one autonomous repair if it requests changes | about 1 min |
+| Verification (V) | The repository's own tests run offline: on the old code, and twice on the change (`verification.repeat`); a new test must fail on the old code and pass with the change | about 1 min |
+| Review (R) | An independent, read-only model review of the diff; at most one autonomous repair if it requests changes (with `--review-repair`, within the remaining budget) | about 1 min |
 | Publication (P) | Branch, commit and pull request on GitHub | seconds |
 | Merge (M) | Merged once the required check passes; the issue closes | under 1 min after the check |
 
@@ -127,23 +129,27 @@ closed issue.
 
 ## When it stops
 
-Every stop is fail-closed, and the reason is shown in "What is wrong now" and
-in the row's events. The runtime does not start a second attempt by itself. To
+Every stop is fail-closed. The stage and diagnostic are shown in the row's
+label, next to its last bar, and in its events. Blocked or quarantined work
+also appears in "What is wrong now". The runtime does not start a second attempt by itself. To
 retry, remove the label, wait about 30 seconds (one intake poll) and add it
 again; the new label event becomes a fresh work item.
 
 | You see | Meaning | What to do |
 |---|---|---|
-| Nothing happens | No label; the label was added by an account the installation did not authorize; or the gateways are still benchmarking | Check the label and the account. Check for the `model-benchmark` line in both gateways |
-| Gateways never benchmark (`model unavailable`) | The model endpoint is unreachable or refuses the gateway | Check the endpoint's allowlist or token. With the [local model service](../tools/local_model_service/README.md), a recreated kind node gets a new address, and the service must come from the same revision as the cluster |
+| Nothing happens | No label, or the label was added by an account the installation did not authorize | Check the label and the account |
+| The row stays queued before generation | The gateways have not benchmarked yet | Wait for the `model-benchmark` line in both gateways |
+| Gateways never benchmark (`model-benchmark-failed`, reason `model unavailable`; the gateway restarts) | The model endpoint is unreachable or refuses the gateway | Check the endpoint's allowlist or token. With the [local model service](../tools/local_model_service/README.md), a recreated kind node gets a new address, and the service must come from the same revision as the cluster |
 | `refused-candidate-failed` | The candidate's own new tests failed verification | Re-label. Without a generation toolchain (e.g. Python), the generator cannot run tests and sometimes miscomputes an expected value |
-| `no-failing-test` or `comparison-failed` | The new test does not fail on the old code | Make the criteria test new behavior. Avoid new top-level packages |
-| Review `request-changes` | The independent review rejected the change after its repair | Re-label, or sharpen the criteria |
+| `refused-no-failing-test` | No new test fails on the old code | Make the criteria test new behavior. Avoid new top-level packages (Python) |
+| Review `request-changes` | The independent review rejected the change (after its repair, when repair is enabled and budget remains) | Re-label, or sharpen the criteria |
 | `...-helper-transport` | A transient pod-exec transport failure | Re-label |
-| `publication-quarantined` | A forge write's outcome is uncertain | It usually reconciles itself within minutes by observing GitHub ([publication reconciliation](operations/publication-reconciliation.md)) |
-| `merge-quarantined` | A merge's outcome is uncertain; later merges wait | Check whether GitHub merged the pull request; see [merge transport](operations/merge-transport.md) |
+| `publication-quarantined` | A forge write's outcome is uncertain | The release manager observes GitHub and clears it itself when GitHub proves the write happened or did not (re-checked after 30 s, backing off to every 15 min). Other outcomes stay quarantined and need an operator ([publication reconciliation](operations/publication-reconciliation.md)) |
+| `merge-quarantined` | A merge's outcome is uncertain. Every later merge is blocked and the release manager reports not ready | It does not clear by itself until the merge reconciler (#830) exists, and disabling merge does not clear it. Check on GitHub whether the pull request merged; see [merge transport](operations/merge-transport.md). The batteries recovered on a fresh cluster |
 
-The release manager's log names the stage of a publication stop, for example
+Every verification refusal carries the reason `comparison-failed`; the
+diagnostic (`refused-…`) names the rule. The release manager's log names the
+stage of a publication stop, for example
 `publication reconciliation stopped safely: tree-status-422`.
 
 ## Limits
