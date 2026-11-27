@@ -25,6 +25,9 @@ Start here:
   autonomous flow, derived from the journal, and its event contract.
 - [Database backup and restore](operations/backup-and-restore.md): the
   opt-in scheduled backup, checking a backup, and restoring it.
+- [Vulnerability intake](architecture/vulnerability-intake.md): reports from
+  any scanner become de-duplicated, AI-SDLC-ready issues through Tekton tasks
+  and a validated triage stage.
 
 Current operational documentation lives with the Kubernetes/OpenShift runtime:
 
