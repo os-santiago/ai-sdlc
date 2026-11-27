@@ -1,13 +1,19 @@
 # Report known vulnerabilities as bounded, structured findings that ai-sdlc can
-# give the generator as context (vulnerability intake) and attach to checks:
-# npm audit --json for an npm lockfile, osv-scanner for a Maven module. Neither
-# tool runs project code: npm works on copies with scripts and project config
-# disabled, and osv-scanner parses POMs and resolves the dependency graph. The
-# summary carries severity counts, up to 20 findings sorted by severity and the
-# tool's exit code; this task succeeds whenever it wrote one.
+# give the generator as context (vulnerability intake) and attach to checks.
+# Neither tool runs project code.
 #
-# Egress: the ai-sdlc.io/ci-egress: fetch label (registry, advisory database
-# and Maven Central over public HTTPS).
+# What leaves the cluster (documented in docs/operations/tekton-ci.md):
+# - npm: npm audit sends the lockfile's package names and versions to the
+#   registry's bulk advisory endpoint (registry-url: the public registry or
+#   the dependency proxy, by cluster IP).
+# - maven: osv-scanner resolves the dependency graph natively, fetching POMs
+#   from maven-registry-url (Maven Central or the proxy), and sends package
+#   names and versions to api.osv.dev. Test-scope dependencies are not
+#   resolved; the summary says so in coverage.
+#
+# The summary carries severity counts, up to 20 findings sorted by severity,
+# coverage and a complete verdict; this task succeeds whenever it wrote one.
+# Egress: the ai-sdlc.io/ci-egress: fetch label.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -15,34 +21,39 @@ metadata:
   namespace: ai-sdlc-ci
   labels:
     app.kubernetes.io/part-of: ai-sdlc
+    # Tekton copies Task labels to pods; network-policy.yaml selects on it.
     ai-sdlc.io/ci-egress: fetch
 spec:
   description: Report known vulnerabilities in one npm lockfile or Maven module as bounded structured findings.
   params:
-  - name: ecosystem
-    type: string
-    description: npm or maven.
-  - name: target
-    type: string
-    description: Directory with package-lock.json (npm) or pom.xml (maven), relative to the repository root.
-  - name: registry-url
-    type: string
-    default: ''
-    description: 'npm only: registry or proxy URL; empty uses the public registry.'
+    - name: ecosystem
+      type: string
+      description: npm or maven.
+    - name: target
+      type: string
+      description: Directory with package-lock.json (npm) or pom.xml (maven), relative to the repository root.
+    - name: registry-url
+      type: string
+      default: ""
+      description: npm only; empty, https://registry.npmjs.org/ or the dependency proxy (http://CLUSTER-IP:8081/).
+    - name: maven-registry-url
+      type: string
+      default: ""
+      description: maven only; empty (Maven Central) or the dependency proxy (http://CLUSTER-IP:8080/maven2).
   workspaces:
-  - name: source
-    readOnly: true
-    description: Contains the checkout under source/.
+    - name: source
+      readOnly: true
+      description: Contains the checkout under source/.
   results:
-  - name: summary
-    description: JSON with the tool exit code, severity counts and up to 20 findings.
+    - name: summary
+      description: JSON with the tool exit code, severity counts, coverage and up to 20 findings.
   volumes:
-  - name: home
-    emptyDir:
-      sizeLimit: 2Gi
-  - name: tmp
-    emptyDir:
-      sizeLimit: 512Mi
+    - name: home
+      emptyDir:
+        sizeLimit: 2Gi
+    - name: tmp
+      emptyDir:
+        sizeLimit: 512Mi
   stepTemplate:
     securityContext:
       runAsNonRoot: true
@@ -51,193 +62,224 @@ spec:
       allowPrivilegeEscalation: false
       readOnlyRootFilesystem: true
       capabilities:
-        drop:
-        - ALL
+        drop: [ALL]
       seccompProfile:
         type: RuntimeDefault
     volumeMounts:
-    - name: home
-      mountPath: /home/ci
-    - name: tmp
-      mountPath: /tmp
+      - name: home
+        mountPath: /home/ci
+      - name: tmp
+        mountPath: /tmp
     env:
-    - name: HOME
-      value: /home/ci
-    - name: ECOSYSTEM
-      value: $(params.ecosystem)
-    - name: TARGET
-      value: $(params.target)
-    - name: SOURCE
-      value: $(workspaces.source.path)/source
+      - name: HOME
+        value: /home/ci
+      - name: ECOSYSTEM
+        value: $(params.ecosystem)
+      - name: TARGET
+        value: $(params.target)
+      - name: SOURCE
+        value: $(workspaces.source.path)/source
+      - name: REGISTRY_URL
+        value: $(params.registry-url)
+      - name: MAVEN_REGISTRY_URL
+        value: $(params.maven-registry-url)
   steps:
-  - name: validate
-    image: docker.io/library/node@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
-    computeResources: &id001
-      requests:
-        cpu: 10m
-        memory: 32Mi
-      limits:
-        cpu: 200m
-        memory: 128Mi
-    script: |
-      #!/bin/sh
-      set -eu
-        # Whole-value match: grep -x matches lines, so refuse a newline first.
-        matches() { case "$1" in *"
-        "*) return 1;; esac; printf '%s' "$1" | grep -Eqx "$2"; }
-      case "$ECOSYSTEM" in npm|maven) ;; *) echo 'ecosystem must be npm or maven' >&2; exit 2;; esac
-      case "$TARGET" in
-        .) [ "$ECOSYSTEM" = maven ] || { echo 'target must be a relative directory' >&2; exit 2; };;
-        *) matches "$TARGET" '[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*' \
-             || { echo 'target must be a relative directory' >&2; exit 2; }
-           case "/$TARGET/" in */./*|*/../*) echo 'target must be a relative directory' >&2; exit 2;; esac;;
-      esac
-  - name: egress-gate
-    image: docker.io/library/node@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
-    computeResources:
-      requests:
-        cpu: 10m
-        memory: 32Mi
-      limits:
-        cpu: 200m
-        memory: 128Mi
-    script: |
-      #!/usr/local/bin/node
-      const net = require("net");
-      const host = process.env.KUBERNETES_SERVICE_HOST, port = Number(process.env.KUBERNETES_SERVICE_PORT);
-      if (!host || !port) { console.error("no Kubernetes Service address to probe"); process.exit(1); }
-      const probe = () => new Promise(done => {
-        const socket = net.connect({host, port, timeout: 2000});
-        socket.on("connect", () => { socket.destroy(); done("connected"); });
-        socket.on("timeout", () => { socket.destroy(); done("denied"); });
-        socket.on("error", e => done(e.code === "ECONNREFUSED" ? "denied" : "error"));
-      });
-      (async () => {
-        let denied = 0;
-        for (let attempt = 1; attempt <= 90; attempt++) {
-          denied = (await probe()) === "denied" ? denied + 1 : 0;
-          if (denied >= 3) { console.log("Network policy enforced after " + attempt + " probes"); return; }
-          await new Promise(r => setTimeout(r, 1000));
-        }
-        console.error("network policy is not enforced: the Kubernetes API stays reachable");
-        process.exit(1);
-      })();
-  - name: npm-audit
-    image: docker.io/library/node@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
-    computeResources:
-      requests:
-        cpu: 250m
-        memory: 256Mi
-      limits:
-        cpu: '2'
-        memory: 2Gi
-    env:
-    - name: REGISTRY_URL
-      value: $(params.registry-url)
-    - name: NPM_CONFIG_CACHE
-      value: /home/ci/.npm
-    - name: NPM_CONFIG_UPDATE_NOTIFIER
-      value: 'false'
-    - name: NPM_CONFIG_FUND
-      value: 'false'
-    script: |
-      #!/bin/sh
-      set -eu
-        # Whole-value match: grep -x matches lines, so refuse a newline first.
-        matches() { case "$1" in *"
-        "*) return 1;; esac; printf '%s' "$1" | grep -Eqx "$2"; }
-      mkdir -p /tmp/audit
-      [ "$ECOSYSTEM" = npm ] || exit 0
-      registry="${REGISTRY_URL:-https://registry.npmjs.org/}"
-      matches "$registry" 'https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?' \
-        || { echo 'invalid registry URL' >&2; exit 2; }
-      project="$SOURCE/$TARGET"
-      [ -f "$project/package.json" ] && [ -f "$project/package-lock.json" ] \
-        || { echo 'package.json and package-lock.json are required' >&2; exit 2; }
-      # Same isolation as npm-lock-update: copies only, no project or user config.
-      : > /tmp/empty-user-npmrc
-      : > /tmp/empty-global-npmrc
-      export NPM_CONFIG_REGISTRY="$registry" NPM_CONFIG_USERCONFIG=/tmp/empty-user-npmrc \
-        NPM_CONFIG_GLOBALCONFIG=/tmp/empty-global-npmrc NPM_CONFIG_GIT=false NPM_CONFIG_IGNORE_SCRIPTS=true
-      rm -rf /tmp/work; mkdir -p /tmp/work
-      cp "$project/package.json" "$project/package-lock.json" /tmp/work/
-      cd /tmp/work
-      code=0
-      npm audit --json --package-lock-only > /tmp/audit/report.json || code=$?
-      printf '%s' "$code" > /tmp/audit/exit-code
-  - name: osv-scanner
-    image: ghcr.io/google/osv-scanner@sha256:a70ffffc2bfd33482953e5d6b64c6fcdb30239717a07b0f0d3ab2859ce3e4cde
-    computeResources:
-      requests:
-        cpu: 250m
-        memory: 256Mi
-      limits:
-        cpu: '2'
-        memory: 2Gi
-    script: |
-      #!/bin/sh
-      set -eu
-      mkdir -p /tmp/audit
-      [ "$ECOSYSTEM" = maven ] || exit 0
-      [ -f "$SOURCE/$TARGET/pom.xml" ] || { echo "no pom.xml in $TARGET" >&2; exit 2; }
-      code=0
-      # Reads pom.xml and resolves the dependency graph from Maven Central; it
-      # parses POMs and runs no build plugin or project code.
-      /osv-scanner scan source --format json --recursive=false "$SOURCE/$TARGET" > /tmp/audit/report.json || code=$?
-      printf '%s' "$code" > /tmp/audit/exit-code
-  - name: summarize
-    image: docker.io/library/node@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
-    computeResources: *id001
-    env:
-    - name: RESULT
-      value: $(results.summary.path)
-    script: |
-      #!/usr/local/bin/node
-      // Bounded, structured findings from npm audit (npm) or osv-scanner (maven).
-      // Always exits 0 once it wrote a summary: the verdict is in the fields.
-      const fs = require("fs");
-      const read = f => { try { return fs.readFileSync(f, "utf8"); } catch { return null; } };
-      const code = Number((read("/tmp/audit/exit-code") || "255").trim());
-      const band = score => { const s = Number(score); if (!(s > 0)) return "unknown";
-        return s >= 9 ? "critical" : s >= 7 ? "high" : s >= 4 ? "moderate" : "low"; };
-      const clip = (v, n) => String(v == null ? "" : v).replace(/[^ -~]/g, "").slice(0, n);
-      const out = {ecosystem: process.env.ECOSYSTEM, target: clip(process.env.TARGET, 200), toolExitCode: code,
-        complete: false, packages: 0, vulnerable: 0,
-        bySeverity: {critical: 0, high: 0, moderate: 0, low: 0, unknown: 0}, findings: [], truncated: false};
-      const raw = read("/tmp/audit/report.json");
-      let report = null;
-      try { report = raw ? JSON.parse(raw) : null; } catch { report = null; }
-      const findings = [];
-      if (report && process.env.ECOSYSTEM === "npm" && report.vulnerabilities) {
-        out.complete = code === 0 || code === 1;
-        out.packages = ((report.metadata || {}).dependencies || {}).total || 0;
-        for (const [name, v] of Object.entries(report.vulnerabilities)) {
-          const ids = (v.via || []).filter(x => typeof x === "object").map(x => clip(x.url || x.source, 80)).slice(0, 3);
-          findings.push({package: clip(name, 100), version: clip(v.range, 60), severity: ["critical", "high", "moderate", "low"].includes(v.severity) ? v.severity : "unknown",
-            ids, fixAvailable: v.fixAvailable === true || typeof v.fixAvailable === "object"});
-        }
-      } else if (report && process.env.ECOSYSTEM === "maven" && Array.isArray(report.results)) {
-        // osv-scanner exits 1 when it finds vulnerabilities and 0 when it finds none.
-        out.complete = code === 0 || code === 1;
-        // osv-scanner lists only vulnerable packages, so the scanned count is unknown.
-        out.packages = null;
-        for (const result of report.results) for (const p of result.packages || []) {
-          for (const g of p.groups || []) {
-            findings.push({package: clip(p.package.name, 100), version: clip(p.package.version, 60), severity: band(g.max_severity),
-              ids: (g.aliases || g.ids || []).map(x => clip(x, 40)).slice(0, 3), fixAvailable: null});
+    - name: validate
+      image: docker.io/library/node@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
+      computeResources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 200m
+          memory: 128Mi
+      script: |
+        #!/bin/sh
+        set -eu
+        # Whole-value match: grep -x matches lines, so refuse any newline first.
+        nl="$(printf '\n.')"; nl="${nl%.}"
+        matches() { case "$1" in *"$nl"*) return 1;; esac; printf '%s' "$1" | grep -Eqx "$2"; }
+        case "$ECOSYSTEM" in npm|maven) ;; *) echo 'ecosystem must be npm or maven' >&2; exit 2;; esac
+        case "$TARGET" in
+          .) [ "$ECOSYSTEM" = maven ] || { echo 'target must be a relative directory' >&2; exit 2; };;
+          *) matches "$TARGET" '[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*' \
+               || { echo 'target must be a relative directory' >&2; exit 2; }
+             case "/$TARGET/" in */./*|*/../*) echo 'target must be a relative directory' >&2; exit 2;; esac;;
+        esac
+        # Only the public registries or the in-cluster dependency proxy by cluster IP.
+        [ -z "$REGISTRY_URL" ] || matches "$REGISTRY_URL" 'https://registry\.npmjs\.org/|http://[0-9]{1,3}(\.[0-9]{1,3}){3}:8081/' \
+          || { echo 'registry-url must be the public npm registry or the dependency proxy' >&2; exit 2; }
+        [ -z "$MAVEN_REGISTRY_URL" ] || matches "$MAVEN_REGISTRY_URL" 'https://repo\.maven\.apache\.org/maven2|http://[0-9]{1,3}(\.[0-9]{1,3}){3}:8080/maven2' \
+          || { echo 'maven-registry-url must be Maven Central or the dependency proxy' >&2; exit 2; }
+    - name: egress-gate
+      image: docker.io/library/node@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
+      computeResources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 200m
+          memory: 128Mi
+      script: |
+        #!/usr/local/bin/node
+        const net = require("net");
+        const host = process.env.KUBERNETES_SERVICE_HOST, port = Number(process.env.KUBERNETES_SERVICE_PORT);
+        if (!host || !port) { console.error("no Kubernetes Service address to probe"); process.exit(1); }
+        const probe = () => new Promise(done => {
+          const socket = net.connect({host, port, timeout: 2000});
+          socket.on("connect", () => { socket.destroy(); done("connected"); });
+          socket.on("timeout", () => { socket.destroy(); done("denied"); });
+          socket.on("error", e => done(e.code === "ECONNREFUSED" ? "denied" : "error"));
+        });
+        (async () => {
+          let denied = 0;
+          for (let attempt = 1; attempt <= 90; attempt++) {
+            denied = (await probe()) === "denied" ? denied + 1 : 0;
+            if (denied >= 3) { console.log("Network policy enforced after " + attempt + " probes"); return; }
+            await new Promise(r => setTimeout(r, 1000));
           }
+          console.error("network policy is not enforced: the Kubernetes API stays reachable");
+          process.exit(1);
+        })();
+    - name: npm-audit
+      image: docker.io/library/node@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
+      computeResources:
+        requests:
+          cpu: 250m
+          memory: 256Mi
+        limits:
+          cpu: "2"
+          memory: 2Gi
+      env:
+        - name: NPM_CONFIG_CACHE
+          value: /home/ci/.npm
+        - name: NPM_CONFIG_UPDATE_NOTIFIER
+          value: "false"
+        - name: NPM_CONFIG_FUND
+          value: "false"
+      script: |
+        #!/bin/sh
+        set -eu
+        mkdir -p /tmp/audit
+        [ "$ECOSYSTEM" = npm ] || exit 0
+        registry="${REGISTRY_URL:-https://registry.npmjs.org/}"
+        project="$SOURCE/$TARGET"
+        [ -f "$project/package.json" ] && [ -f "$project/package-lock.json" ] \
+          || { echo 'package.json and package-lock.json are required' >&2; exit 2; }
+        # Same isolation as npm-lock-update: copies only, no project or user config.
+        : > /tmp/empty-user-npmrc
+        : > /tmp/empty-global-npmrc
+        export NPM_CONFIG_REGISTRY="$registry" NPM_CONFIG_USERCONFIG=/tmp/empty-user-npmrc \
+          NPM_CONFIG_GLOBALCONFIG=/tmp/empty-global-npmrc NPM_CONFIG_GIT=false NPM_CONFIG_IGNORE_SCRIPTS=true
+        rm -rf /tmp/work; mkdir -p /tmp/work
+        cp "$project/package.json" "$project/package-lock.json" /tmp/work/
+        cd /tmp/work
+        code=0
+        # Sends the lockfile's package names and versions to the registry's bulk
+        # advisory endpoint.
+        npm audit --json --package-lock-only > /tmp/audit/report.json 2> /tmp/audit/stderr.txt || code=$?
+        printf '%s' "$code" > /tmp/audit/exit-code
+    - name: osv-scanner
+      image: ghcr.io/google/osv-scanner@sha256:a70ffffc2bfd33482953e5d6b64c6fcdb30239717a07b0f0d3ab2859ce3e4cde
+      computeResources:
+        requests:
+          cpu: 250m
+          memory: 256Mi
+        limits:
+          cpu: "2"
+          memory: 2Gi
+      script: |
+        #!/bin/sh
+        set -eu
+        mkdir -p /tmp/audit
+        [ "$ECOSYSTEM" = maven ] || exit 0
+        [ -f "$SOURCE/$TARGET/pom.xml" ] || { echo "no pom.xml in $TARGET" >&2; exit 2; }
+        registry="${MAVEN_REGISTRY_URL:-https://repo.maven.apache.org/maven2}"
+        code=0
+        # Native resolution: osv-scanner fetches POMs from the Maven registry itself
+        # (not deps.dev), parses them and runs no build or plugin. It sends package
+        # names and versions to api.osv.dev to look up advisories.
+        /osv-scanner scan source --format json --recursive=false --data-source=native --maven-registry="$registry" \
+          "$SOURCE/$TARGET" > /tmp/audit/report.json 2> /tmp/audit/stderr.txt || code=$?
+        printf '%s' "$code" > /tmp/audit/exit-code
+    - name: summarize
+      image: docker.io/library/node@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
+      computeResources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 200m
+          memory: 256Mi
+      env:
+        - name: RESULT
+          value: $(results.summary.path)
+      script: |
+        #!/usr/local/bin/node
+        // Bounded, structured findings from npm audit (npm) or osv-scanner (maven).
+        // Always exits 0 once it wrote a summary: the verdict is in the fields.
+        const fs = require("fs");
+        const MAX_REPORT = 16 * 1024 * 1024;
+        const read = f => { try { return fs.readFileSync(f, "utf8"); } catch { return null; } };
+        const size = f => { try { return fs.statSync(f).size; } catch { return -1; } };
+        const code = Number((read("/tmp/audit/exit-code") || "255").trim());
+        const band = score => { const s = Number(score); if (!(s > 0)) return "unknown";
+          return s >= 9 ? "critical" : s >= 7 ? "high" : s >= 4 ? "moderate" : "low"; };
+        const clip = (v, n) => String(v == null ? "" : v).replace(/[^ -~]/g, "").slice(0, n);
+        const stderr = (read("/tmp/audit/stderr.txt") || "").split("\n");
+        const ecosystem = process.env.ECOSYSTEM;
+        const out = {ecosystem, target: clip(process.env.TARGET, 200), toolExitCode: code, complete: false, reason: "",
+          packages: 0, vulnerable: 0, bySeverity: {critical: 0, high: 0, moderate: 0, low: 0, unknown: 0},
+          coverage: ecosystem === "maven"
+            ? {resolution: "native", testScope: false, resolutionMessages: stderr.filter(l => /error|fail|could not|unable/i.test(l)).length}
+            : {lockfile: true, devDependencies: true},
+          findings: [], truncated: false};
+        const findings = [];
+        const bytes = size("/tmp/audit/report.json");
+        let report = null;
+        if (bytes > MAX_REPORT) {
+          out.reason = "report larger than 16 MiB";
+        } else if (bytes >= 0) {
+          try { report = JSON.parse(read("/tmp/audit/report.json")); } catch { out.reason = "report is not JSON"; }
+        } else {
+          out.reason = "no report";
         }
-      } else if (code === 0 && process.env.ECOSYSTEM === "maven" && !raw) {
-        out.complete = false;
-      }
-      const order = {critical: 0, high: 1, moderate: 2, low: 3, unknown: 4};
-      findings.sort((a, b) => order[a.severity] - order[b.severity] || a.package.localeCompare(b.package));
-      out.vulnerable = new Set(findings.map(f => f.package)).size;
-      for (const f of findings) out.bySeverity[f.severity]++;
-      out.findings = findings.slice(0, 20);
-      out.truncated = findings.length > 20;
-      // Tekton stores results JSON-escaped in the termination message, and the
-        // kubelet keeps 12288 / 7 containers = 1755 bytes for this step.
-        while (JSON.stringify(JSON.stringify(out)).length > 1600 && out.findings.length) { out.findings.pop(); out.truncated = true; }
-      fs.writeFileSync(process.env.RESULT, JSON.stringify(out));
-      console.log(JSON.stringify(out));
+        if (report && ecosystem === "npm" && report.vulnerabilities) {
+          out.complete = code === 0 || code === 1;
+          out.packages = ((report.metadata || {}).dependencies || {}).total || 0;
+          for (const [name, v] of Object.entries(report.vulnerabilities)) {
+            const ids = (v.via || []).filter(x => typeof x === "object").map(x => clip(x.url || x.source, 80)).slice(0, 3);
+            findings.push({package: clip(name, 100), version: clip(v.range, 60), severity: ["critical", "high", "moderate", "low"].includes(v.severity) ? v.severity : "unknown",
+              ids, fixAvailable: v.fixAvailable === true || typeof v.fixAvailable === "object"});
+          }
+        } else if (report && ecosystem === "maven" && Array.isArray(report.results)) {
+          // osv-scanner exits 1 when it finds vulnerabilities and 0 when it finds none.
+          // A resolution failure does not change its exit code, so messages that
+          // report one make the audit incomplete.
+          out.complete = (code === 0 || code === 1) && out.coverage.resolutionMessages === 0;
+          if (!out.complete && out.reason === "") out.reason = out.coverage.resolutionMessages ? "dependency resolution reported errors" : "tool failed";
+          // osv-scanner lists only vulnerable packages, so the scanned count is unknown.
+          out.packages = null;
+          for (const result of report.results) for (const p of result.packages || []) {
+            for (const g of p.groups || []) {
+              findings.push({package: clip(p.package.name, 100), version: clip(p.package.version, 60), severity: band(g.max_severity),
+                ids: (g.aliases || g.ids || []).map(x => clip(x, 40)).slice(0, 3), fixAvailable: null});
+            }
+          }
+        } else if (out.reason === "") {
+          out.reason = "tool failed";
+        }
+        const order = {critical: 0, high: 1, moderate: 2, low: 3, unknown: 4};
+        findings.sort((a, b) => order[a.severity] - order[b.severity] || a.package.localeCompare(b.package));
+        out.vulnerable = new Set(findings.map(f => f.package)).size;
+        for (const f of findings) out.bySeverity[f.severity]++;
+        out.findings = findings.slice(0, 20);
+        out.truncated = findings.length > 20;
+        // Tekton stores the result in the termination message encoded by Go
+        // json.Marshal (quotes and backslashes take 2 bytes, <, > and & take 6), and
+        // the kubelet keeps 12288 / 7 containers = 1755 bytes for this step,
+        // including about 150 bytes of envelope.
+        const encoded = v => { const t = JSON.stringify(JSON.stringify(v)); return Buffer.byteLength(t) + 5 * (t.match(/[<>&]/g) || []).length; };
+        while (encoded(out) > 1600 && out.findings.length) { out.findings.pop(); out.truncated = true; }
+        fs.writeFileSync(process.env.RESULT, JSON.stringify(out));
+        console.log(JSON.stringify(out));

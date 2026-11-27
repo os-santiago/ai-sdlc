@@ -21,6 +21,9 @@ spec:
     - name: registry-url
       type: string
       default: ""
+    - name: maven-registry-url
+      type: string
+      default: ""
   workspaces:
     - name: source
   tasks:
@@ -46,6 +49,8 @@ spec:
           value: $(params.target)
         - name: registry-url
           value: $(params.registry-url)
+        - name: maven-registry-url
+          value: $(params.maven-registry-url)
       workspaces:
         - name: source
           workspace: source

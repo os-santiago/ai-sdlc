@@ -534,6 +534,34 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(Path(directory, 'result').read_text())
 
+    def test_osv_resolves_natively_through_the_reviewed_registry(self):
+        text = step('dependency-audit', 'osv-scanner')['script']
+        self.assertIn('--data-source=native', text)
+        self.assertIn('--maven-registry="$registry"', text)
+        self.assertIn('https://repo.maven.apache.org/maven2', text)
+
+    def test_audit_bounds_oversized_reports_and_reports_coverage(self):
+        if not shutil.which('node'):
+            self.skipTest('node is not installed')
+        text = step('dependency-audit', 'summarize')['script']
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, 'tmp/audit').mkdir(parents=True)
+            with open(Path(directory, 'tmp/audit/report.json'), 'wb') as report:
+                report.truncate(17 * 1024 * 1024)
+            Path(directory, 'tmp/audit/exit-code').write_text('1')
+            subprocess.run([shutil.which('node'), '-e', text.replace('/tmp/', directory + '/tmp/')],
+                           env={'ECOSYSTEM': 'maven', 'TARGET': 'm', 'RESULT': directory + '/result'}, check=True, timeout=30)
+            summary = json.loads(Path(directory, 'result').read_text())
+        self.assertEqual((summary['complete'], summary['reason']), (False, 'report larger than 16 MiB'))
+        osv = {'results': [{'packages': [{'package': {'name': 'g:a', 'version': '1'}, 'groups': [{'ids': ['X'], 'max_severity': '7'}]}]}]}
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, 'tmp/audit').mkdir(parents=True)
+            Path(directory, 'tmp/audit/stderr.txt').write_text('failed resolving org.example:parent:1.0\n')
+            summary = self.audit(directory, 'maven', osv, 1)
+        self.assertEqual(summary['coverage'], {'resolution': 'native', 'testScope': False, 'resolutionMessages': 1})
+        self.assertFalse(summary['complete'], 'a resolution failure leaves the audit incomplete')
+        self.assertEqual(summary['reason'], 'dependency resolution reported errors')
+
     def test_audit_summarizes_npm_and_osv_reports_within_bounds(self):
         if not shutil.which('node'):
             self.skipTest('node is not installed')
@@ -561,13 +589,20 @@ class ScriptTests(unittest.TestCase):
             broken = self.audit(directory, 'maven', None, 2)
         self.assertEqual((broken['complete'], broken['toolExitCode'], broken['findings']), (False, 2, []))
 
-    def test_audit_validation_refuses_unsafe_targets(self):
+    def test_audit_validation_refuses_unsafe_targets_and_registries(self):
         text = step('dependency-audit', 'validate')['script']
-        for ecosystem, target in (('pip', 'web'), ('npm', '.'), ('npm', '../x'), ('maven', 'a/../b'), ('npm', '/abs')):
-            result = subprocess.run(['sh', '-c', text], env={'ECOSYSTEM': ecosystem, 'TARGET': target, 'PATH': '/usr/bin:/bin'},
-                                    capture_output=True, timeout=10)
-            self.assertEqual(result.returncode, 2, (ecosystem, target))
-        self.assertEqual(subprocess.run(['sh', '-c', text], env={'ECOSYSTEM': 'maven', 'TARGET': 'rest-villains', 'PATH': '/usr/bin:/bin'}).returncode, 0)
+        def check(ecosystem, target, registry='', maven=''):
+            return subprocess.run(['sh', '-c', text], env={'ECOSYSTEM': ecosystem, 'TARGET': target, 'REGISTRY_URL': registry,
+                                                           'MAVEN_REGISTRY_URL': maven, 'PATH': '/usr/bin:/bin'},
+                                  capture_output=True, timeout=10).returncode
+        for case in (('pip', 'web'), ('npm', '.'), ('npm', '../x'), ('maven', 'a/../b'), ('npm', '/abs'),
+                     ('npm', 'evil\n;rm -rf'), ('maven', 'rest-villains\n../x'),
+                     ('npm', 'web', 'https://evil.example/'), ('npm', 'web', 'http://10.96.0.12:8081/\nx'),
+                     ('maven', 'm', '', 'https://deps.dev/maven2'), ('maven', 'm', '', 'http://evil:8080/maven2')):
+            self.assertEqual(check(*case), 2, case)
+        for case in (('maven', 'rest-villains'), ('npm', 'web', 'https://registry.npmjs.org/'),
+                     ('npm', 'web', 'http://10.96.0.12:8081/'), ('maven', 'm', '', 'http://10.96.0.12:8080/maven2')):
+            self.assertEqual(check(*case), 0, case)
 
 
 class RunToolTests(unittest.TestCase):
@@ -600,9 +635,16 @@ class RunToolTests(unittest.TestCase):
         pipeline = by_kind('Pipeline')['ai-sdlc-dependency-audit']['spec']
         self.assertEqual({p['name'] for p in run['spec']['params']}, {p['name'] for p in pipeline['params']})
         self.assertNotIn('taskRunSpecs', run['spec'])
-        for bad in (('pip', 'x', ''), ('npm', '.', ''), ('maven', 'x', 'https://r.example/')):
+        for bad in (('pip', 'x', ''), ('npm', '.', ''), ('maven', 'x', 'https://r.example/'), ('npm', 'x', 'https://evil.example/')):
             with self.assertRaises(ValueError):
                 runner.dependency_audit('a/b', SHA, *bad)
+        with self.assertRaises(ValueError):
+            runner.dependency_audit('a/b', SHA, 'maven', 'x', '', 'https://deps.dev/maven2')
+        base = ['dependency-audit', '--project', str(PROJECT), '--revision', SHA]
+        with self.assertRaisesRegex(ValueError, 'Maven module'):
+            runner.main(base + ['--ecosystem', 'maven', '--directory', 'ui-super-heroes/src/main/webui'])
+        with self.assertRaisesRegex(ValueError, 'npm directory'):
+            runner.main(base + ['--ecosystem', 'npm', '--directory', 'rest-villains'])
         observed = {'succeeded': True, 'commit': SHA, 'summary': {'complete': True, 'vulnerable': 3}}
         self.assertTrue(runner.passed(observed, SHA), 'findings are output, not failure')
         self.assertFalse(runner.passed(dict(observed, summary={'complete': False}), SHA))

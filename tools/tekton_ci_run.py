@@ -186,15 +186,24 @@ def npm_lock_update(repository, revision, directory, mode, packages, registry_ur
                         [], directory)
 
 
-def dependency_audit(repository, revision, ecosystem, target, registry_url=''):
+# Registries an audit may send dependency lists to: the public ones, or the
+# in-cluster dependency proxy by cluster IP.
+AUDIT_NPM_REGISTRY = re.compile(r'https://registry\.npmjs\.org/|http://[0-9]{1,3}(?:\.[0-9]{1,3}){3}:8081/')
+AUDIT_MAVEN_REGISTRY = re.compile(r'https://repo\.maven\.apache\.org/maven2|http://[0-9]{1,3}(?:\.[0-9]{1,3}){3}:8080/maven2')
+
+
+def dependency_audit(repository, revision, ecosystem, target, registry_url='', maven_registry_url=''):
     if ecosystem not in ('npm', 'maven'):
         raise ValueError('ecosystem must be npm or maven')
-    if registry_url and (ecosystem != 'npm' or not MIRROR.fullmatch(registry_url)):
-        raise ValueError('Invalid npm registry URL')
+    if registry_url and (ecosystem != 'npm' or not AUDIT_NPM_REGISTRY.fullmatch(registry_url)):
+        raise ValueError('registry-url must be the public npm registry or the dependency proxy')
+    if maven_registry_url and (ecosystem != 'maven' or not AUDIT_MAVEN_REGISTRY.fullmatch(maven_registry_url)):
+        raise ValueError('maven-registry-url must be Maven Central or the dependency proxy')
     return pipeline_run('ai-sdlc-dependency-audit', repository, revision,
                         [{'name': 'ecosystem', 'value': ecosystem},
                          {'name': 'target', 'value': validate_path(target, 'Audit target', allow_root=ecosystem == 'maven')},
-                         {'name': 'registry-url', 'value': registry_url}],
+                         {'name': 'registry-url', 'value': registry_url},
+                         {'name': 'maven-registry-url', 'value': maven_registry_url}],
                         [], target)
 
 
@@ -304,9 +313,11 @@ def render_from_args(args, project):
         raise ValueError('Repository differs from the project catalog')
     runtime_class = args.runtime_class if args.sandbox else None
     if args.pipeline == 'dependency-audit':
-        if project and args.directory not in project.get('npmDirectories', []) + list(project['modules']):
-            raise ValueError('Audit target is not in the project catalog')
-        return dependency_audit(repository, args.revision, args.ecosystem, args.directory, args.registry_url)
+        declared = project.get('npmDirectories', []) if args.ecosystem == 'npm' else list(project['modules']) if project else []
+        if project and args.directory not in declared:
+            raise ValueError('Audit target is not a catalog ' + ('npm directory' if args.ecosystem == 'npm' else 'Maven module'))
+        return dependency_audit(repository, args.revision, args.ecosystem, args.directory, args.registry_url,
+                                args.maven_mirror_url)
     if args.pipeline == 'npm-lock-update':
         if project and args.directory not in project.get('npmDirectories', []):
             raise ValueError('npm directory is not in the project catalog')
@@ -330,7 +341,7 @@ def main(argv=None):
     parser.add_argument('--module', default='.')
     parser.add_argument('--services', help='Comma-separated services; defaults to the catalog entry or none')
     parser.add_argument('--maven-arg', action='append', default=None, help='Extra Maven switch; replaces the catalog arguments')
-    parser.add_argument('--maven-mirror-url', default='', help='maven-dependencies only: Maven proxy URL')
+    parser.add_argument('--maven-mirror-url', default='', help='maven-dependencies: Maven proxy URL; dependency-audit (maven): Maven registry, Central or the proxy')
     parser.add_argument('--directory', help='npm-lock-update: directory with package-lock.json; dependency-audit: the target directory or module')
     parser.add_argument('--ecosystem', choices=['npm', 'maven'], help='dependency-audit: npm or maven')
     parser.add_argument('--mode', default='update', choices=['update', 'audit-fix'])
