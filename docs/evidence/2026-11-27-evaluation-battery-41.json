@@ -1,0 +1,228 @@
+{
+  "schemaVersion": 2,
+  "repository": "os-santiago/ai-sdlc-sample-python",
+  "attemptBudget": 2,
+  "cell": {
+    "repository": "os-santiago/ai-sdlc-sample-python",
+    "modelPath": "agent-cli-claude-sonnet"
+  },
+  "installation": {
+    "imageLockDigest": "sha256:7f22a9ce0491117318ef0b4f4ea61d461d21535ce81de3c7ef5bb1e57d4345d4",
+    "images": {
+      "ai-sdlc-admission-controller": "quay.io/os-santiago/ai-sdlc@sha256:ff5b9fa9599097f2ba3ee855586017b5a46dd04bd2efa865880b7d5915306bdc",
+      "ai-sdlc-flow-console": "quay.io/os-santiago/ai-sdlc@sha256:3dd8c4889d244b6f08812fddbe4c0585063085bde9b0fc1661bbe0e196d4a8b7",
+      "ai-sdlc-intake": "quay.io/os-santiago/ai-sdlc@sha256:f7cfef6543ee8b71a6e90e93f9f0db8ca7135cbdde90c58706b9a4b075ea567d",
+      "ai-sdlc-orchestrator": "quay.io/os-santiago/ai-sdlc@sha256:1c6508b7979bdf2cab3c7622a5fff1c3f7dd18814e22df43af0e09ad8c89b5f4",
+      "ai-sdlc-relay": "quay.io/os-santiago/ai-sdlc@sha256:df0955dbd772de3066026e52a5b20477ba3b8ea8dd88e0a6979ef5e185ea2d04",
+      "ai-sdlc-release-manager": "quay.io/os-santiago/ai-sdlc@sha256:8b0881f1f5d0a49f6e308cf0887d127ff9d818b775ec2a86127b9a38997b4c5a",
+      "ai-sdlc-verifier": "quay.io/os-santiago/ai-sdlc@sha256:dda8b4ab4f6f69af26d40fb4913f099073ab9d40b9b98029f15aa5e8eaf7fefe",
+      "ai-sdlc-worker": "quay.io/os-santiago/ai-sdlc@sha256:cc202ceb65618e8269039adc0361f13d57964c0f34b57d3bd21f3db3602da9f6"
+    },
+    "revision": "127e220d4270a5317db5cf59a7aa66ebe47de8f9"
+  },
+  "issues": [
+    {
+      "issue": 57,
+      "attempts": [
+        {
+          "issue": 57,
+          "startedAt": "2026-11-27T01:35:39Z",
+          "outcome": "success",
+          "pullRequest": 67,
+          "seconds": 216,
+          "modelCalls": 5,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 58,
+      "attempts": [
+        {
+          "issue": 58,
+          "startedAt": "2026-11-27T01:40:01Z",
+          "outcome": "success",
+          "pullRequest": 68,
+          "seconds": 259,
+          "modelCalls": 9,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 59,
+      "attempts": [
+        {
+          "issue": 59,
+          "startedAt": "2026-11-27T01:45:06Z",
+          "outcome": "success",
+          "pullRequest": 69,
+          "seconds": 346,
+          "modelCalls": 7,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 60,
+      "attempts": [
+        {
+          "issue": 60,
+          "startedAt": "2026-11-27T01:51:39Z",
+          "outcome": "success",
+          "pullRequest": 70,
+          "seconds": 259,
+          "modelCalls": 5,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 61,
+      "attempts": [
+        {
+          "issue": 61,
+          "startedAt": "2026-11-27T01:56:45Z",
+          "outcome": "success",
+          "pullRequest": 71,
+          "seconds": 345,
+          "modelCalls": 9,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 62,
+      "attempts": [
+        {
+          "issue": 62,
+          "startedAt": "2026-11-27T02:03:18Z",
+          "outcome": "failure",
+          "stage": "review",
+          "reason": "uncertain",
+          "seconds": 216,
+          "modelCalls": 9,
+          "stageReached": "review",
+          "reviews": [
+            "failed|uncertain"
+          ],
+          "diagnostics": [
+            "independent review stopped safely: model-mailbox-read-helper-transport"
+          ]
+        },
+        {
+          "issue": 62,
+          "startedAt": "2026-11-27T02:07:38Z",
+          "outcome": "success",
+          "pullRequest": 72,
+          "seconds": 259,
+          "modelCalls": 9,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 63,
+      "attempts": [
+        {
+          "issue": 63,
+          "startedAt": "2026-11-27T02:12:44Z",
+          "outcome": "success",
+          "pullRequest": 73,
+          "seconds": 280,
+          "modelCalls": 7,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 64,
+      "attempts": [
+        {
+          "issue": 64,
+          "startedAt": "2026-11-27T02:18:11Z",
+          "outcome": "success",
+          "pullRequest": 74,
+          "seconds": 323,
+          "modelCalls": 7,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 65,
+      "attempts": [
+        {
+          "issue": 65,
+          "startedAt": "2026-11-27T02:24:22Z",
+          "outcome": "success",
+          "pullRequest": 75,
+          "seconds": 345,
+          "modelCalls": 11,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    },
+    {
+      "issue": 66,
+      "attempts": [
+        {
+          "issue": 66,
+          "startedAt": "2026-11-27T02:30:54Z",
+          "outcome": "success",
+          "pullRequest": 76,
+          "seconds": 324,
+          "modelCalls": 7,
+          "stageReached": "merge",
+          "reviews": [
+            "passed|"
+          ]
+        }
+      ],
+      "success": true
+    }
+  ],
+  "summary": {
+    "issues": 10,
+    "firstAttemptSuccess": 9,
+    "successWithinBudget": 10,
+    "firstAttemptRate": 0.9,
+    "rateWithinBudget": 1.0
+  }
+}
