@@ -508,6 +508,7 @@ def _main(argv, stack):
     parser.add_argument('--runtime-class', help='Existing sandbox RuntimeClass for executor, reviewer and verification pods (for example kata); --platform openshift with the candidate or verification profile. kind installs and uses ai-sdlc-offline')
     parser.add_argument('--project-manifest', type=Path, help='Reviewed ai-sdlc.project/v1 manifest for a repository that is not a built-in reference')
     parser.add_argument('--flow-console', action='store_true', default=None, help='Enable the read-only flow console (docs/operations/flow-console.md); omitting it on a later install disables it')
+    parser.add_argument('--dependency-proxy', help='Deploy the in-cluster dependency proxy for maven, npm or maven,npm (docs/operations/dependency-cache.md); omitting it on a later install removes it')
     parser.add_argument('--console-images', type=Path, help='Reviewed console-images.json from tools/install_images.py --include-console; default: beside the image lock')
     parser.add_argument('--generation-seconds', type=int, help='Generation time budget in seconds (600-900, default 600); candidate or verification only, recorded in the execution configuration')
     parser.add_argument('--generation-steps', type=int, help='Generation SCC tool-step budget (24-32, default 24; above 24 requires --model-upstream); candidate or verification only, recorded in the execution configuration')
@@ -560,6 +561,12 @@ def _main(argv, stack):
         raise ValueError('Publication option requires an installation scope')
     if (args.flow_console is not None or args.console_images is not None) and args.command not in ('plan', 'local'):
         raise ValueError('--flow-console requires plan or local')
+    dependency_proxy = None
+    if args.dependency_proxy is not None:
+        import dependency_proxy_install
+        if args.command not in ('plan', 'local'):
+            raise ValueError('--dependency-proxy requires plan or local')
+        dependency_proxy = dependency_proxy_install.values(dependency_proxy_install.parse(args.dependency_proxy))
     if args.console_images is not None and not args.flow_console:
         raise ValueError('--console-images requires --flow-console')
     if args.flow_console and args.platform == 'konflux':
@@ -655,6 +662,8 @@ def _main(argv, stack):
                     preview_values['project'] = {'manifestJSON': preview_json}
                     preview_values['authority'] = {'policyJSON': json.dumps({'repository': args.repository,
                         'projectSHA256': hashlib.sha256(preview_json.encode()).hexdigest()})}
+            if dependency_proxy is not None:
+                preview_values['dependencyProxy'] = dependency_proxy
             if args.flow_console:
                 preview_values['console'] = {'enabled': True}
                 if console_digest is not None:
@@ -808,6 +817,8 @@ def _main(argv, stack):
                                          cluster_uid, args.repository, args.environment,
                                          freeze=args.profile == 'maintenance', candidate=args.profile in ('candidate', 'verification'), verification=args.profile == 'verification', publication=bool(args.publication), merge=bool(args.merge), build=build_bundle is not None, review=bool(args.independent_review),
                                          project_manifest=project_manifest, flow_console=bool(args.flow_console))
+    if dependency_proxy is not None:
+        public_values['dependencyProxy'] = dependency_proxy
     if args.flow_console:
         # Values name the image only; the credential stays in its Secret.
         public_values['console'] = {'enabled': True, 'digest': console_digest}

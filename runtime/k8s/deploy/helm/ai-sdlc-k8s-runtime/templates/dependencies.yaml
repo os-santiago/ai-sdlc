@@ -1,0 +1,281 @@
+{{- with .Values.dependencyProxy }}
+{{- if .enabled }}
+{{- /* The schema bounds every value; these checks repeat the ones the
+       rendered configuration depends on. */}}
+{{- if not (regexMatch "^[a-z0-9.-]+(:[0-9]{1,5})?(/[a-z0-9._-]+)+@sha256:[a-f0-9]{64}$" .image) }}
+{{- fail "dependencyProxy.image must be pinned by digest" }}
+{{- end }}
+{{- if not (or .maven.enabled .npm.enabled) }}
+{{- fail "dependencyProxy needs maven, npm or both enabled" }}
+{{- end }}
+{{- $host := "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$" }}
+{{- if not (and (regexMatch $host .maven.upstreamHost) (regexMatch $host .npm.upstreamHost)) }}
+{{- fail "dependencyProxy upstream hosts must be DNS host names" }}
+{{- end }}
+{{- $mavenPaths := list }}
+{{- range .maven.allowedPaths }}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9_-]+)*(/[a-z0-9][a-z0-9._-]*)*/$" (toString .)) }}
+{{- fail "dependencyProxy.maven.allowedPaths entries are repository path prefixes such as io/quarkus/" }}
+{{- end }}
+{{- $mavenPaths = append $mavenPaths (regexReplaceAll "\\." (toString .) "\\.") }}
+{{- end }}
+{{- $npmPackages := list }}
+{{- range .npm.allowedPackages }}
+{{- if not (regexMatch "^(@[a-z0-9][a-z0-9._-]*/(\\*|[a-z0-9][a-z0-9._-]*)|[a-z0-9][a-z0-9._-]*)$" (toString .)) }}
+{{- fail "dependencyProxy.npm.allowedPackages entries are package names or scopes such as @types/*" }}
+{{- end }}
+{{- $npmPackages = append $npmPackages (regexReplaceAll "\\*" (regexReplaceAll "\\." (toString .) "\\.") "[^/]+") }}
+{{- end }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-sdlc-dependencies
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+    pod-security.kubernetes.io/enforce: restricted
+---
+# Everything in the namespace is isolated; the proxy policy below is the only
+# allowed traffic.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: deny-all, namespace: ai-sdlc-dependencies}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# The proxy accepts only dependency task pods (the CI catalog's
+# ai-sdlc-ci-dependency-proxy policy gives them this as their only egress)
+# and is the single egress point: DNS, and HTTPS to public addresses. nginx
+# proxies only to the configured upstream hosts; a request cannot choose
+# another host.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: dependency-proxy, namespace: ai-sdlc-dependencies}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: dependency-proxy}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ .clientNamespace }}}
+          podSelector:
+            matchLabels: {ai-sdlc.io/ci-egress: dependency-proxy}
+      ports:
+        {{- if .maven.enabled }}
+        - {protocol: TCP, port: 8080}
+        {{- end }}
+        {{- if .npm.enabled }}
+        - {protocol: TCP, port: 8081}
+        {{- end }}
+  egress:
+{{- if $.Values.openshift.enabled }}
+    {{- include "ai-sdlc-k8s-runtime.openshiftDNSEgress" $ | nindent 4 }}
+{{- else }}
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+{{- end }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4]
+      ports: [{protocol: TCP, port: 443}]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dependency-proxy
+  namespace: ai-sdlc-dependencies
+  labels: {app.kubernetes.io/part-of: ai-sdlc, app.kubernetes.io/component: dependency-proxy}
+data:
+  nginx.conf: |
+    pid /tmp/nginx.pid;
+    worker_processes 2;
+    error_log /dev/stderr warn;
+    events { worker_connections 256; }
+    http {
+      access_log /dev/stdout;
+      server_tokens off;
+      client_body_temp_path /tmp/client_body;
+      proxy_temp_path /tmp/proxy;
+      fastcgi_temp_path /tmp/fastcgi;
+      uwsgi_temp_path /tmp/uwsgi;
+      scgi_temp_path /tmp/scgi;
+      # Released artifacts and tarballs are immutable: cached for ten years.
+      # Metadata (maven-metadata.xml, npm packuments) is cached ten minutes.
+      proxy_cache_path /var/cache/proxy levels=1:2 keys_zone=dependencies:32m max_size={{ trimSuffix "Gi" (toString .storageSize) }}g inactive=3650d use_temp_path=off;
+      proxy_ssl_server_name on;
+      proxy_ssl_verify on;
+      proxy_ssl_verify_depth 4;
+      proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+      proxy_set_header Authorization "";
+      proxy_set_header Cookie "";
+      proxy_ignore_headers Cache-Control Expires Set-Cookie Vary;
+      proxy_hide_header Set-Cookie;
+      proxy_cache_lock on;
+      proxy_cache_use_stale error timeout updating;
+      proxy_cache_valid 404 1m;
+      {{- if .maven.enabled }}
+      server {
+        listen 8080;
+        proxy_ssl_name {{ .maven.upstreamHost }};
+        proxy_set_header Host {{ .maven.upstreamHost }};
+        proxy_cache_key "maven$uri";
+        location = /healthz { access_log off; return 200 "ok\n"; }
+        {{- if $mavenPaths }}
+        location ~ ^/maven2/({{ join "|" $mavenPaths }}) {
+        {{- else }}
+        location /maven2/ {
+        {{- end }}
+          limit_except GET { deny all; }
+          proxy_pass https://{{ .maven.upstreamHost }};
+          proxy_cache dependencies;
+          proxy_cache_valid 200 3650d;
+          add_header X-Cache-Status $upstream_cache_status always;
+          location ~ /maven-metadata\.xml(\.(md5|sha1|sha256|sha512))?$ {
+            limit_except GET { deny all; }
+            proxy_pass https://{{ .maven.upstreamHost }};
+            proxy_cache dependencies;
+            proxy_cache_valid 200 10m;
+          }
+        }
+        location / { return 403; }
+      }
+      {{- end }}
+      {{- if .npm.enabled }}
+      server {
+        listen 8081;
+        proxy_ssl_name {{ .npm.upstreamHost }};
+        proxy_set_header Host {{ .npm.upstreamHost }};
+        location = /healthz { access_log off; return 200 "ok\n"; }
+        {{- if .npm.audit }}
+        # npm audit: POST passed through, never cached.
+        location = /-/npm/v1/security/advisories/bulk {
+          limit_except POST { deny all; }
+          client_max_body_size 8m;
+          proxy_pass https://{{ .npm.upstreamHost }};
+        }
+        location = /-/npm/v1/security/audits/quick {
+          limit_except POST { deny all; }
+          client_max_body_size 8m;
+          proxy_pass https://{{ .npm.upstreamHost }};
+        }
+        {{- end }}
+        location /-/ { return 403; }
+        # Tarballs are immutable.
+        {{- if $npmPackages }}
+        location ~ ^/({{ join "|" $npmPackages }})/-/[^/]+\.tgz$ {
+        {{- else }}
+        location ~ ^/(@[^/]+/)?[^/]+/-/[^/]+\.tgz$ {
+        {{- end }}
+          limit_except GET { deny all; }
+          proxy_pass https://{{ .npm.upstreamHost }};
+          proxy_cache dependencies;
+          proxy_cache_key "npm$uri";
+          proxy_cache_valid 200 3650d;
+          add_header X-Cache-Status $upstream_cache_status always;
+        }
+        # Packuments, keyed by the requested representation. The original
+        # request URI (with an encoded scope separator) is passed unchanged.
+        {{- if $npmPackages }}
+        location ~ ^/({{ join "|" $npmPackages }})$ {
+        {{- else }}
+        location ~ ^/(@[^/]+/)?[^/]+$ {
+        {{- end }}
+          limit_except GET { deny all; }
+          proxy_pass https://{{ .npm.upstreamHost }};
+          proxy_cache dependencies;
+          proxy_cache_key "npm$uri|$http_accept";
+          proxy_cache_valid 200 10m;
+          add_header X-Cache-Status $upstream_cache_status always;
+        }
+        location / { return 403; }
+      }
+      {{- end }}
+    }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dependency-proxy-cache
+  namespace: ai-sdlc-dependencies
+  labels: {app.kubernetes.io/part-of: ai-sdlc, app.kubernetes.io/component: dependency-proxy}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources: {requests: {storage: {{ .storageSize }}}}
+---
+# Dependency tasks use the cluster IP (no DNS egress), for example
+# http://<cluster IP>:8080/maven2 and http://<cluster IP>:8081/.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dependency-proxy
+  namespace: ai-sdlc-dependencies
+  labels: {app.kubernetes.io/part-of: ai-sdlc, app.kubernetes.io/component: dependency-proxy}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/component: dependency-proxy}
+  ports:
+    {{- if .maven.enabled }}
+    - {name: maven, port: 8080, targetPort: 8080, protocol: TCP}
+    {{- end }}
+    {{- if .npm.enabled }}
+    - {name: npm, port: 8081, targetPort: 8081, protocol: TCP}
+    {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dependency-proxy
+  namespace: ai-sdlc-dependencies
+  labels: {app.kubernetes.io/part-of: ai-sdlc, app.kubernetes.io/component: dependency-proxy}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/component: dependency-proxy}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/part-of: ai-sdlc, app.kubernetes.io/component: dependency-proxy}
+      annotations:
+        checksum/config: {{ toJson . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext: {runAsNonRoot: true, runAsUser: 101, runAsGroup: 101, fsGroup: 101, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: proxy
+          image: {{ .image }}
+          imagePullPolicy: IfNotPresent
+          command: [nginx, -g, "daemon off;"]
+          ports:
+            {{- if .maven.enabled }}
+            - {name: maven, containerPort: 8080}
+            {{- end }}
+            {{- if .npm.enabled }}
+            - {name: npm, containerPort: 8081}
+            {{- end }}
+          readinessProbe: {httpGet: {path: /healthz, port: {{ if .maven.enabled }}8080{{ else }}8081{{ end }}}}
+          livenessProbe: {httpGet: {path: /healthz, port: {{ if .maven.enabled }}8080{{ else }}8081{{ end }}}, initialDelaySeconds: 10}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: "1", memory: 256Mi, ephemeral-storage: 1Gi}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}, readOnlyRootFilesystem: true}
+          volumeMounts:
+            - {name: config, mountPath: /etc/nginx/nginx.conf, subPath: nginx.conf, readOnly: true}
+            - {name: cache, mountPath: /var/cache/proxy}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          configMap: {name: dependency-proxy}
+        - name: cache
+          persistentVolumeClaim: {claimName: dependency-proxy-cache}
+        - name: tmp
+          emptyDir: {sizeLimit: 1Gi}
+{{- end }}
+{{- end }}
