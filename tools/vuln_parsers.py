@@ -34,6 +34,11 @@ LOCKFILE_ECOSYSTEM = {'package-lock.json': 'npm', 'npm-shrinkwrap.json': 'npm', 
                       'Gemfile.lock': 'rubygems'}
 
 
+GITHUB_URL = re.compile(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/security/')
+ENVELOPE_FORMATS = {'github-code-scanning': {'github-code-scanning-alerts', 'sarif'},
+                    'dependabot': {'dependabot-alerts'}, 'file': {'json', 'text'}}
+
+
 class ReportError(ValueError):
     """A report is malformed or exceeds a bound."""
 
@@ -119,7 +124,7 @@ def observation(**fields):
         base['tool'] = 'unknown'
     if base['ruleId'] is not None and not schema.RULE.fullmatch(base['ruleId']):
         base['ruleId'] = None
-    if base['url'] is not None and not schema.URL.fullmatch(base['url']):
+    if base['url'] is not None and not (schema.URL.fullmatch(base['url']) and GITHUB_URL.match(base['url'])):
         base['url'] = None
     if base['revision'] is not None and not schema.REVISION.fullmatch(base['revision']):
         base['revision'] = None
@@ -337,11 +342,7 @@ def detect_format(data):
     return None
 
 
-def parse_envelope(envelope):
-    """Observations from one fetch artifact (see vuln_fetch.envelope)."""
-    if not isinstance(envelope, dict) or envelope.get('schema') != 'ai-sdlc.vulnerability-report/v1':
-        raise ReportError('Not a vulnerability report envelope')
-    fmt, data, name = envelope.get('format'), envelope.get('data'), envelope.get('name') or 'report'
+def _parse_content(fmt, data, name):
     if fmt == 'text':
         if isinstance(data, str):
             try:
@@ -357,9 +358,35 @@ def parse_envelope(envelope):
         if detected:
             return PARSERS[detected](data, 'sarif')
         return [document_observation(name, json.dumps(data, sort_keys=True)[:MAX_DOCUMENT_CHARS + 1])]
-    if fmt not in PARSERS:
-        raise ReportError(f'Unknown report format {fmt!r}')
     return PARSERS[fmt](data, 'sarif')
+
+
+def _as_file(obs, name):
+    """A report file can carry any content, including a copy of GitHub's alert formats. Its
+    observations stay provider "file": they cannot claim a real alert number or link."""
+    if obs['provider'] == 'file':
+        return obs
+    obs = dict(obs, provider='file', url=None)
+    obs['providerId'] = re.sub(r'[^A-Za-z0-9_.:/#-]', '-', f'{name}#{obs["providerId"]}')[:128]
+    obs['id'] = f'file:{obs["providerId"]}'
+    return obs
+
+
+def parse_envelope(envelope):
+    """Observations from one fetch artifact (see vuln_fetch.envelope)."""
+    if not isinstance(envelope, dict) or envelope.get('schema') != 'ai-sdlc.vulnerability-report/v1':
+        raise ReportError('Not a vulnerability report envelope')
+    provider, fmt, data = envelope.get('provider'), envelope.get('format'), envelope.get('data')
+    name = re.sub(r'[^A-Za-z0-9_.-]', '-', str(envelope.get('name') or 'report'))[:96]
+    if fmt not in ENVELOPE_FORMATS.get(provider, ()):
+        raise ReportError(f'Format {fmt!r} is not accepted from provider {provider!r}')
+    observations = _parse_content(fmt, data, name)
+    if provider == 'file':
+        return [_as_file(o, name) for o in observations]
+    foreign = [o for o in observations if o['provider'] != provider]
+    if foreign:
+        raise ReportError(f'Report from {provider} holds results of another provider')
+    return observations
 
 
 def merge_observations(groups):

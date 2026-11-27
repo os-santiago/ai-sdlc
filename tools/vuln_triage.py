@@ -356,8 +356,11 @@ def validate_answer(answer, observations, index):
             seen[oid] = where
             members.append(by_id[oid])
         _check(all(m['kind'] == 'finding' for m in members), f'{where} groups an unparsed document; use extracted')
-        keys = {unit_key(m) for m in members}
-        _check(len(keys) == 1, f'{where} groups observations from different files or packages')
+        keys = {group_key(m) for m in members}
+        # Only observations of one identity (same primary weakness and file, or same
+        # package version and manifest) may be grouped: merging another weakness would
+        # inherit its severity and arming, lose its fix and change the fingerprint.
+        _check(len(keys) == 1, f'{where} groups observations of different weaknesses, files or packages')
         _check(item['module'] is None or item['module'] in modules, f'{where}.module is not a repository module')
         if item['module'] is not None:
             target = members[0]['package']['manifest'] if members[0]['package'] else members[0]['path']
@@ -376,6 +379,14 @@ def validate_answer(answer, observations, index):
         _check(item['observation'] not in seen, f'observation {item["observation"]!r} appears more than once')
         _check(isinstance(item['reason'], str) and 0 < len(item['reason']) <= MAX_RATIONALE, f'{where}.reason is invalid')
         seen[item['observation']] = where
+        observation = by_id[item['observation']]
+        if observation['kind'] == 'finding' and group_key(observation) is not None:
+            # A parsed finding is never dropped: the rejection becomes a judgement
+            # that files it for human triage instead of arming it.
+            groups.append({'members': [observation], 'module': None, 'disposition': 'likely-false-positive',
+                           'reachable': 'unknown', 'confidence': 0.2, 'overruled': True,
+                           'rationale': schema.clean_text(f'model rejected: {item["reason"]}', MAX_RATIONALE)})
+            continue
         rejected.append({'observation': item['observation'], 'reason': schema.clean_text(item['reason'])})
     missing = sorted(set(by_id) - set(seen))
     _check(not missing, f'observations missing from the answer: {missing[:5]}')
@@ -384,6 +395,33 @@ def validate_answer(answer, observations, index):
         extracted.append(_validate_extracted(item, f'extracted[{i}]', by_id, i))
     _check(len(extracted) <= 200, 'too many extracted findings')
     return groups, extracted, rejected
+
+
+SEVERITY_WORDS = {'critical': 'critical', 'high': 'high', 'medium': 'medium', 'moderate': 'medium', 'low': 'low',
+                  'info': 'note', 'informational': 'note', 'note': 'note'}
+
+
+def _token_in(value, text):
+    """value occurs in text as a whole token (CWE-79 does not match CWE-790 or a bare 79)."""
+    return re.search(r'(?<![A-Za-z0-9_])' + re.escape(value) + r'(?![A-Za-z0-9_])', text, re.I) is not None
+
+
+def _verified_severity(claimed, text, excerpt):
+    """The claimed severity only when the report states it on the quoted lines or the line
+    just before or after them; otherwise unknown."""
+    word = claimed.strip().lower() if isinstance(claimed, str) else ''
+    if word in ('unknown', ''):
+        return 'unknown'
+    _check(word in SEVERITY_WORDS or word in schema.SEVERITIES, 'extracted severity is invalid')
+    lines = text.splitlines()
+    head = _normalized(excerpt)[:40]
+    for i, line in enumerate(lines):
+        if head and head in _normalized(line + ' ' + ' '.join(lines[i + 1:i + 3])) and \
+                _normalized(excerpt).split(' ')[0] in line:
+            span = len(excerpt.splitlines()) or 1
+            window = ' '.join(lines[max(0, i - 1):i + span + 1])
+            return SEVERITY_WORDS.get(word, word) if _token_in(word, window) else 'unknown'
+    return 'unknown'
 
 
 def _validate_extracted(item, where, by_id, position):
@@ -395,24 +433,21 @@ def _validate_extracted(item, where, by_id, position):
     _check(isinstance(item['excerpt'], str) and 8 <= len(item['excerpt']) <= 300
            and _normalized(item['excerpt']) in text, f'{where}.excerpt is not a verbatim quote of the report')
     _check(item['category'] in schema.CATEGORIES, f'{where}.category is invalid')
-    # Scanner vocabularies differ ("moderate", "HIGH", no rating): map the known synonyms.
-    severity = item['severity'].lower() if isinstance(item['severity'], str) else 'unknown'
-    item = dict(item, severity={'moderate': 'medium', 'info': 'note', 'informational': 'note'}.get(severity, severity))
-    _check(item['severity'] in schema.SEVERITIES, f'{where}.severity is invalid')
+    _check(isinstance(item['title'], str) and len(item['title']) <= schema.MAX_TITLE, f'{where}.title is invalid')
     for name, pattern in (('cwe', schema.CWE), ('cve', schema.CVE), ('ghsa', schema.GHSA)):
         values = item[name]
         _check(isinstance(values, list) and len(values) <= 20 and all(isinstance(v, str) and pattern.fullmatch(v) for v in values),
                f'{where}.{name} is invalid')
         for value in values:
-            needle = value if name != 'cwe' else value.split('-')[1]
-            _check(needle.lower() in doc['text'].lower(), f'{where}.{name} {value} does not appear in the report')
-    _check(isinstance(item['title'], str) and 0 < len(item['title']) <= schema.MAX_TITLE, f'{where}.title is invalid')
+            _check(_token_in(value, doc['text']), f'{where}.{name} {value} does not appear in the report')
+    severity = _verified_severity(item['severity'], doc['text'], item['excerpt'])
     _check(item['disposition'] in schema.DISPOSITIONS, f'{where}.disposition is invalid')
     package = None
     path = None
     if item['category'] == 'code':
         _check(isinstance(item['path'], str) and schema.PATH.fullmatch(item['path'])
                and not any(p in ('.', '..') for p in item['path'].split('/')), f'{where}.path is required for code')
+        _check(_token_in(item['path'], doc['text']), f'{where}.path does not appear in the report')
         _check(item['line'] is None or (type(item['line']) is int and item['line'] >= 1), f'{where}.line is invalid')
         _check(item['package'] is None, f'{where}.package must be null for code')
         path = item['path']
@@ -420,21 +455,25 @@ def _validate_extracted(item, where, by_id, position):
         p = item['package']
         _keys(p, ('ecosystem', 'name', 'version', 'fixedVersion'), (), f'{where}.package')
         _check(isinstance(p['ecosystem'], str) and schema.ECOSYSTEM.fullmatch(p['ecosystem'].lower()), f'{where}.package.ecosystem is invalid')
-        _check(isinstance(p['name'], str) and schema.PACKAGE.fullmatch(p['name']) and p['name'].lower() in doc['text'].lower(),
+        _check(isinstance(p['name'], str) and schema.PACKAGE.fullmatch(p['name']) and _token_in(p['name'], doc['text']),
                f'{where}.package.name must appear in the report')
         for key in ('version', 'fixedVersion'):
             _check(p[key] is None or (isinstance(p[key], str) and schema.VERSION.fullmatch(p[key]) and p[key] in doc['text']),
                    f'{where}.package.{key} must be null or appear in the report')
         _check(item['path'] is None or (isinstance(item['path'], str) and schema.PATH.fullmatch(item['path'])),
                f'{where}.path is invalid')
+        manifest = item['path'] if item['path'] and _token_in(item['path'], doc['text']) else None
         package = {'ecosystem': p['ecosystem'].lower(), 'name': p['name'], 'versions': [p['version']] if p['version'] else [],
-                   'manifest': item['path'], 'fixedVersion': p['fixedVersion'], 'vulnerableRange': None,
+                   'manifest': manifest, 'fixedVersion': p['fixedVersion'], 'vulnerableRange': None,
                    'scope': 'unknown', 'relationship': 'unknown'}
     observation = {
         'schema': schema.OBSERVATION_SCHEMA, 'kind': 'finding', 'provider': 'file',
         'providerId': f'{doc["providerId"]}#{position + 1}'[:128], 'tool': 'unknown', 'url': None,
-        'revision': None, 'ruleId': None, 'title': schema.clean_text(item['title'], schema.MAX_TITLE),
-        'message': schema.clean_text(item['excerpt']), 'severity': item['severity'], 'cwe': sorted(set(item['cwe'])),
+        # Fixed title template: the model's own title never reaches an issue.
+        'revision': None, 'ruleId': None,
+        'title': (f'{schema.primary_cwe(item["cwe"]) or "Unclassified"} weakness' if item['category'] == 'code'
+                  else 'Vulnerable package'),
+        'message': schema.clean_text(item['excerpt']), 'severity': severity, 'cwe': sorted(set(item['cwe'])),
         'cve': sorted(set(item['cve'])), 'ghsa': sorted(set(item['ghsa'])), 'path': path,
         'lines': [{'start': item['line'], 'end': item['line']}] if path and item['line'] else [],
         'package': package, 'text': None, 'category': item['category']}
@@ -520,6 +559,7 @@ def with_model(repository, revision, observations, index, complete, model_name, 
     base = deterministic(repository, revision, others, index)
     rejected = list(base['rejected'])
     judged = {}
+    overruled = []
     by_id = {o['id']: o for o in others}
 
     def add(group):
@@ -535,6 +575,8 @@ def with_model(repository, revision, observations, index, complete, model_name, 
         groups, extracted, batch_rejected = triage_batch(complete, batch, index, model_name, log)
         rejected.extend(r for r in batch_rejected if r['reason'] != 'extracted')
         for group in groups + extracted:
+            if group.pop('overruled', False):
+                overruled.append(group['members'][0]['id'])
             add(dict(group, method='model'))
     findings, rationales = {}, {}
     for group in judged.values():
@@ -548,6 +590,10 @@ def with_model(repository, revision, observations, index, complete, model_name, 
         findings[finding['fingerprint']] = finding
         if group['rationale']:
             rationales[finding['id']] = group['rationale']
+    if overruled:
+        if log:
+            log(f'model rejected {len(overruled)} parsed observations; kept for human triage')
+        rationales['_overruled'] = sorted(overruled)
     return _document(repository, revision, list(findings.values()), rejected), rationales
 
 

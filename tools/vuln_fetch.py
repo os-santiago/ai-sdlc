@@ -164,25 +164,52 @@ def fetch_code_scanning_alerts(client, repository):
     return envelope('github-code-scanning', repository, 'code-scanning-alerts', 'github-code-scanning-alerts', alerts)
 
 
+def default_branch(client, repository):
+    meta = client.get_json(f'/repos/{repository}')
+    branch = meta.get('default_branch') if isinstance(meta, dict) else None
+    if not isinstance(branch, str) or not re.fullmatch(r'[A-Za-z0-9._/-]{1,200}', branch):
+        raise FetchError('Repository default branch is unavailable')
+    return branch
+
+
 def fetch_code_scanning_sarif(client, repository, ref=None):
-    """The SARIF of the latest analysis per category on a ref (default branch when None)."""
+    """The SARIF of the latest default-branch analysis per category, reconciled with open alerts.
+
+    Only analyses of one ref are read (the default branch unless ref is
+    given), never pull-request merge refs, and only the newest page of them.
+    Results are kept only when they carry the number of a currently open
+    alert, so dismissed and fixed alerts never re-enter the intake."""
     validate_repository(repository)
-    query = 'per_page=100' + (f'&ref={urllib.parse.quote(ref, safe="")}' if ref else '')
-    analyses = client.get_pages(f'/repos/{repository}/code-scanning/analyses?{query}', max_pages=3)
+    ref = ref or 'refs/heads/' + default_branch(client, repository)
+    if not re.fullmatch(r'refs/heads/[A-Za-z0-9._/-]{1,200}', ref):
+        raise FetchError('SARIF fetch needs a branch ref')
+    analyses = client.get_json(f'/repos/{repository}/code-scanning/analyses?per_page=100'
+                               f'&ref={urllib.parse.quote(ref, safe="")}')
+    if not isinstance(analyses, list):
+        raise FetchError('Code scanning analyses listing is not an array')
     latest = {}
     for analysis in analyses:
         if not isinstance(analysis, dict) or type(analysis.get('id')) is not int:
             raise FetchError('Malformed code scanning analysis')
+        if analysis.get('ref') not in (None, ref):
+            continue
         category = analysis.get('category') or ''
         if category not in latest and not analysis.get('error'):
             latest[category] = analysis
+    open_alerts = client.get_pages(f'/repos/{repository}/code-scanning/alerts?state=open&per_page=100'
+                                   f'&ref={urllib.parse.quote(ref, safe="")}')
+    open_numbers = {a['number'] for a in open_alerts if isinstance(a, dict) and type(a.get('number')) is int}
     runs = []
     for category in sorted(latest):
         sarif = client.get_json(f'/repos/{repository}/code-scanning/analyses/{latest[category]["id"]}',
                                 accept='application/sarif+json')
         if not isinstance(sarif, dict) or sarif.get('version') != '2.1.0':
             raise FetchError('Code scanning analysis is not SARIF 2.1.0')
-        runs.extend(sarif.get('runs') or [])
+        for run in sarif.get('runs') or []:
+            if isinstance(run, dict):
+                run = dict(run, results=[r for r in run.get('results') or [] if isinstance(r, dict)
+                                         and (r.get('properties') or {}).get('github/alertNumber') in open_numbers])
+                runs.append(run)
     return envelope('github-code-scanning', repository, 'code-scanning-sarif', 'sarif',
                     {'version': '2.1.0', 'runs': runs})
 
@@ -219,10 +246,7 @@ def repository_index(client, repository, revision=None):
     """Paths and module roots of one commit, for cheap correlation without a checkout."""
     validate_repository(repository)
     if revision is None:
-        meta = client.get_json(f'/repos/{repository}')
-        branch = meta.get('default_branch') if isinstance(meta, dict) else None
-        if not isinstance(branch, str) or not re.fullmatch(r'[A-Za-z0-9._/-]{1,200}', branch):
-            raise FetchError('Repository default branch is unavailable')
+        branch = default_branch(client, repository)
         commit = client.get_json(f'/repos/{repository}/commits/{urllib.parse.quote(branch, safe="")}')
         revision = commit.get('sha') if isinstance(commit, dict) else None
     if not isinstance(revision, str) or not schema.REVISION.fullmatch(revision):

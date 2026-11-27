@@ -42,6 +42,9 @@ DEFAULT_POLICY = {
     # The npm lockfile-update task accepts at most 16 packages per run.
     'dependencyGroupSize': 16,
     'maxIssuesPerRun': 25,
+    # The account that files the intake's issues. Only its issues are trusted to carry
+    # de-duplication markers; anyone else could suppress a finding by pasting a marker.
+    'intakeLogin': None,
 }
 
 LOCK_UPDATE = {'npm': {'pipeline': 'ai-sdlc-npm-lock-update', 'lockfiles': ('package-lock.json', 'npm-shrinkwrap.json')}}
@@ -75,7 +78,10 @@ def load_policy(value=None):
             or type(trigger['minConfidence']) not in (int, float) or not 0 <= trigger['minConfidence'] <= 1
             or type(trigger['requirePathExists']) is not bool
             or type(policy['dependencyGroupSize']) is not int or not 1 <= policy['dependencyGroupSize'] <= 16
-            or type(policy['maxIssuesPerRun']) is not int or not 0 <= policy['maxIssuesPerRun'] <= 200):
+            or type(policy['maxIssuesPerRun']) is not int or not 0 <= policy['maxIssuesPerRun'] <= 200
+            or not (policy['intakeLogin'] is None or (isinstance(policy['intakeLogin'], str)
+                                                       and re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?',
+                                                                        policy['intakeLogin'])))):
         raise PolicyError('Policy values are out of range')
     labels = [policy['triggerLabel'], policy['labels']['triage'], policy['labels']['dependency'],
               *policy['labels']['base']]
@@ -192,6 +198,16 @@ def render_code(finding, policy):
     lead = short[:1].lower() + short[1:] if not short[:2].isupper() else short
     title = _title(f'fix(security): {lead} in {module or component["path"].rsplit("/", 1)[-1]}')
     sources = sorted({s['tool'] for s in finding['sources']})
+    armed = triggers(finding, policy)
+    if armed:
+        # An armed issue is the next agent's task input: no untrusted scanner prose in it,
+        # only the rule identity and location.
+        rules = ', '.join(_code(r) for r in finding['identifiers']['rules']) or 'no rule id'
+        evidence = ['Reported by ' + ', '.join(sources) + f' ({rules}) at {_code(component["path"])}, '
+                    f'{_lines(component)}. Scanner messages are kept in the triage artifact.']
+    else:
+        evidence = ['Reported evidence (scanner text, quoted as data):', '',
+                    *[f'> {item}' for item in finding['evidence']]]
     lines = [
         f'{short} reported by {", ".join(sources)} in {_code(component["path"])} ({_lines(component)}). '
         f'Severity {finding["severity"]}. Fix it in the code so the weakness no longer exists.',
@@ -205,9 +221,7 @@ def render_code(finding, policy):
         f'- Severity: {finding["severity"]}; triage: {finding["disposition"]}, confidence {finding["confidence"]:.2f} '
         f'({finding["triage"]["method"]})',
         '',
-        'Reported evidence (scanner text, quoted as data):',
-        '',
-        *[f'> {item}' for item in finding['evidence']],
+        *evidence,
         '',
         '## Acceptance criteria',
         '',
@@ -219,7 +233,6 @@ def render_code(finding, policy):
         '',
         *_markers([finding]),
     ]
-    armed = triggers(finding, policy)
     labels = list(policy['labels']['base']) + [policy['triggerLabel'] if armed else policy['labels']['triage']]
     return {'title': title, 'body': '\n'.join(lines) + '\n', 'labels': labels, 'armed': armed,
             'findings': [finding['fingerprint']], 'severity': finding['severity'], 'kind': 'code-change'}
@@ -304,11 +317,15 @@ def render_unfixable(manifest, ecosystem, findings, policy):
             'findings': [f['fingerprint'] for f in findings], 'severity': severity, 'kind': 'human-triage'}
 
 
-def existing_fingerprints(issues):
-    """Fingerprint -> issue number from issue bodies (open and closed)."""
+def existing_fingerprints(issues, login=None):
+    """Fingerprint -> issue number from issue bodies (open and closed).
+
+    With a login, only issues authored by that account count."""
     found = {}
     for issue in issues:
         if not isinstance(issue, dict) or 'pull_request' in issue or type(issue.get('number')) is not int:
+            continue
+        if login is not None and ((issue.get('user') or {}).get('login') or '').lower() != login.lower():
             continue
         for fp in MARKER.findall(issue.get('body') or ''):
             found.setdefault(fp, {'number': issue['number'], 'state': issue.get('state')})
@@ -318,7 +335,9 @@ def existing_fingerprints(issues):
 def plan(document, existing_issues, policy):
     """The issues to create, in priority order, and what was skipped and why."""
     schema.validate_document(document)
-    known = existing_fingerprints(existing_issues)
+    known = existing_fingerprints(existing_issues, policy['intakeLogin'])
+    warnings = [] if policy['intakeLogin'] else [
+        'intakeLogin is not set: de-duplication markers are trusted from any issue author']
     skipped, code, deps = [], [], {}
     for finding in document['findings']:
         if finding['fingerprint'] in known:
@@ -348,13 +367,19 @@ def plan(document, existing_issues, policy):
         if len(issue['body']) > MAX_BODY:
             raise PolicyError('Rendered issue body exceeds the bound')
     return {'schema': PLAN_SCHEMA, 'repository': document['repository'], 'issues': issues,
-            'deferred': [{'title': i['title'], 'findings': i['findings']} for i in deferred], 'skipped': skipped}
+            'deferred': [{'title': i['title'], 'findings': i['findings']} for i in deferred], 'skipped': skipped,
+            'warnings': warnings}
 
 
 def list_intake_issues(client, repository, policy):
-    """Issues that may carry markers: everything labelled by this intake, open or closed."""
+    """Issues that may carry markers, open or closed: those filed by the intake account
+    (even if a label was removed), or without one, those carrying the intake label."""
     label = policy['labels']['base'][-1] if policy['labels']['base'] else None
-    query = 'state=all&per_page=100' + (f'&labels={label}' if label else '')
+    query = 'state=all&per_page=100'
+    if policy['intakeLogin']:
+        query += f'&creator={policy["intakeLogin"]}'
+    elif label:
+        query += f'&labels={label}'
     return client.get_pages(f'/repos/{repository}/issues?{query}', max_pages=20)
 
 
