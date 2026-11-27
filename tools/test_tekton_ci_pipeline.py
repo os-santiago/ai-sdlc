@@ -273,6 +273,7 @@ class ScriptTests(unittest.TestCase):
             Path(directory, 'timeout').write_text(
                 '#!/bin/sh\no=$(head -n1 "%s")\n[ "$(wc -l < "%s")" -gt 1 ] && sed -i 1d "%s"\n'
                 'case "$o" in timeout) exit 124;; refused) echo "bash: connect: Connection refused" >&2; exit 1;;'
+                ' unreachable) echo "bash: connect: Network is unreachable" >&2; exit 1;;'
                 ' open) exit 0;; *) echo "bash: unknown host" >&2; exit 1;; esac\n' % (plan, plan, plan))
             Path(directory, 'sleep').write_text('#!/bin/sh\nexit 0\n')
             for stub in ('timeout', 'sleep'):
@@ -284,6 +285,7 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(self.gate(['open', 'open', 'refused', 'timeout', 'refused']).returncode, 0, 'enforcement may start late')
         self.assertEqual(self.gate(['timeout', 'timeout', 'open', 'timeout', 'timeout', 'open']).returncode, 1,
                          'an established connection resets the count, however slow the server is')
+        self.assertEqual(self.gate(['unreachable', 'unreachable', 'unreachable']).returncode, 0, 'the gVisor sandbox has no network')
         self.assertEqual(self.gate(['open']).returncode, 1)
         self.assertEqual(self.gate(['other']).returncode, 1, 'a resolution or tool failure is not a denial')
         text = step('maven-build-test', 'egress-gate')['script']

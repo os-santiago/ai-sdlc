@@ -204,12 +204,13 @@ spec:
         attempt=0
         while [ "$attempt" -lt 90 ]; do
           attempt=$((attempt + 1))
-          # TCP connect only: a timeout before the connection (exit 124) or a
-          # refusal is a denial; an established connection, slow or not, is not.
+          # TCP connect only: a timeout before the connection (exit 124), a
+          # refusal or no route (the sandbox has no network at all) is a
+          # denial; an established connection, slow or not, is not.
           code=0
           out="$(timeout 2 bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$KUBERNETES_SERVICE_HOST" "$KUBERNETES_SERVICE_PORT" 2>&1)" || code=$?
           case "$code:$out" in
-            124:*|*"Connection refused"*) denied=$((denied + 1));;
+            124:*|*"Connection refused"*|*"Network is unreachable"*|*"No route to host"*) denied=$((denied + 1));;
             *) denied=0;;
           esac
           if [ "$denied" -ge 3 ]; then
