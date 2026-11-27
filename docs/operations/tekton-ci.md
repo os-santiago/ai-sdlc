@@ -100,6 +100,7 @@ Four Tasks and three Pipelines in namespace `ai-sdlc-ci`. Each pipeline is
 | `ai-sdlc-maven-build-test` | `maven-build-test` | none | yes (offline) |
 | `ai-sdlc-maven-dependencies` | `maven-dependencies` | DNS + public HTTPS | trusted base-branch head only |
 | `ai-sdlc-npm-lock-update` | `npm-lock-update` | DNS + public HTTPS | no (`--ignore-scripts`) |
+| `ai-sdlc-dependency-audit` | `dependency-audit` | DNS + public HTTPS | no (npm audit on copies; osv-scanner parses POMs) |
 
 **`source-checkout`** accepts `repository` (`owner/name`) and `revision`. The
 revision must be a full lowercase 40-character SHA; branch names and short
@@ -166,6 +167,26 @@ Packages are names only (at most 16; no URLs, paths, versions or shell syntax):
 old and new versions (or `resolutionChanged` when only the resolved URL or
 integrity changed), the diff size and its SHA-256; the full diff and lockfile are
 written under `npm-lock-update/` in the run's source workspace.
+
+**`dependency-audit`** reports known vulnerabilities of one npm lockfile
+(`npm audit --json --package-lock-only`, with the same copy-and-isolate rules as
+`npm-lock-update`) or one Maven module (`osv-scanner scan source`, pinned
+v2.7.1, which reads `pom.xml` and resolves the dependency graph from Maven
+Central without running a build). The summary is the input the vulnerability
+intake consumes:
+
+```json
+{"ecosystem":"npm","target":"ui-super-heroes/src/main/webui","toolExitCode":1,"complete":true,
+ "packages":1398,"vulnerable":66,"bySeverity":{"critical":4,"high":34,"moderate":17,"low":11,"unknown":0},
+ "findings":[{"package":"form-data","version":"3.0.0 - 3.0.4","severity":"critical",
+              "ids":["https://github.com/advisories/GHSA-fjxv-7rqg-78g4"],"fixAvailable":true}],"truncated":true}
+```
+
+Findings are sorted by severity and trimmed to the result budget; osv-scanner
+severities are CVSS scores mapped to bands. `packages` is the scanned count for
+npm and `null` for Maven, because osv-scanner reports only vulnerable packages. `complete` is the verdict: the tool
+ran and produced a report (npm audit and osv-scanner exit 1 when they find
+vulnerabilities). Findings are the output, not a failure.
 
 The pipelines use the image's pinned Maven rather than the project's `./mvnw`,
 so the build tool is reviewed and pinned instead of downloaded by a script in
@@ -329,7 +350,16 @@ per service directory. Its upstream workflow `simple-build-test.yml` runs
      --module rest-villains --revision "$sha" --wait 3600
    ```
 
-4. Update the UI's npm lockfile for one package, or apply audit fixes:
+4. Audit dependencies:
+
+   ```bash
+   python3 tools/tekton_ci_run.py dependency-audit --cluster ai-sdlc --project $P \
+     --revision "$sha" --ecosystem maven --directory rest-villains --wait 1800
+   python3 tools/tekton_ci_run.py dependency-audit --cluster ai-sdlc --project $P \
+     --revision "$sha" --ecosystem npm --directory ui-super-heroes/src/main/webui --wait 1200
+   ```
+
+5. Update the UI's npm lockfile for one package, or apply audit fixes:
 
    ```bash
    python3 tools/tekton_ci_run.py npm-lock-update --cluster ai-sdlc --project $P \

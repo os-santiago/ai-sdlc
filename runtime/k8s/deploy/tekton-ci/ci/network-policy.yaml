@@ -1,5 +1,5 @@
 # Deny every ingress and egress in the CI namespace. Fetch tasks
-# (source-checkout, maven-dependencies, npm-lock-update) carry the
+# (source-checkout, maven-dependencies, npm-lock-update, dependency-audit) carry the
 # ai-sdlc.io/ci-egress: fetch label, which Tekton copies from each Task to its
 # pods; they may use cluster DNS and public HTTPS (TCP 443) to non-private
 # addresses. Private, link-local, shared and loopback ranges are excluded, so

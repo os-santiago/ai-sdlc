@@ -1,0 +1,56 @@
+# Check out one immutable commit and report known vulnerabilities in one npm
+# lockfile or Maven module.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: ai-sdlc-dependency-audit
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  description: Check out a commit and report known vulnerabilities as structured findings.
+  params:
+    - name: repository
+      type: string
+    - name: revision
+      type: string
+    - name: ecosystem
+      type: string
+    - name: target
+      type: string
+    - name: registry-url
+      type: string
+      default: ""
+  workspaces:
+    - name: source
+  tasks:
+    - name: checkout
+      taskRef:
+        name: source-checkout
+      params:
+        - name: repository
+          value: $(params.repository)
+        - name: revision
+          value: $(params.revision)
+      workspaces:
+        - name: output
+          workspace: source
+    - name: audit
+      runAfter: [checkout]
+      taskRef:
+        name: dependency-audit
+      params:
+        - name: ecosystem
+          value: $(params.ecosystem)
+        - name: target
+          value: $(params.target)
+        - name: registry-url
+          value: $(params.registry-url)
+      workspaces:
+        - name: source
+          workspace: source
+  results:
+    - name: commit
+      value: $(tasks.checkout.results.commit)
+    - name: summary
+      value: $(tasks.audit.results.summary)

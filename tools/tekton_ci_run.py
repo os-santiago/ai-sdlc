@@ -7,6 +7,7 @@ Pipelines (installed by `./install.sh local --tekton-ci`, docs/operations/tekton
                       pull-request CI and the build/test tool
   maven-dependencies  fill the shared Maven cache; current base-branch head only
   npm-lock-update     update an npm lockfile with scripts disabled
+  dependency-audit    known vulnerabilities of an npm lockfile or Maven module
 
 Inputs are validated before any cluster access, and each PipelineRun
 references an installed pipeline (Tekton refuses inline specifications).
@@ -185,6 +186,18 @@ def npm_lock_update(repository, revision, directory, mode, packages, registry_ur
                         [], directory)
 
 
+def dependency_audit(repository, revision, ecosystem, target, registry_url=''):
+    if ecosystem not in ('npm', 'maven'):
+        raise ValueError('ecosystem must be npm or maven')
+    if registry_url and (ecosystem != 'npm' or not MIRROR.fullmatch(registry_url)):
+        raise ValueError('Invalid npm registry URL')
+    return pipeline_run('ai-sdlc-dependency-audit', repository, revision,
+                        [{'name': 'ecosystem', 'value': ecosystem},
+                         {'name': 'target', 'value': validate_path(target, 'Audit target', allow_root=ecosystem == 'maven')},
+                         {'name': 'registry-url', 'value': registry_url}],
+                        [], target)
+
+
 def base_head(repository, branch):
     """Read the public base-branch head without credentials."""
     result = run(['git', 'ls-remote', '--', 'https://github.com/' + repository + '.git', 'refs/heads/' + branch],
@@ -200,6 +213,9 @@ def passed(observed, revision):
     commit and its tool reported exit code 0. The tasks publish a summary even
     when the tool fails, so the pipeline's own verdict is not enough."""
     summary = observed.get('summary') or {}
+    if 'complete' in summary:
+        # An audit passes when it completed; findings are its output, not a failure.
+        return observed.get('succeeded') is True and observed.get('commit') == revision and summary.get('complete') is True
     code = summary.get('mavenExitCode', summary.get('npmExitCode'))
     return observed.get('succeeded') is True and observed.get('commit') == revision and type(code) is int and code == 0
 
@@ -287,6 +303,10 @@ def render_from_args(args, project):
     if project and repository != project['repository']:
         raise ValueError('Repository differs from the project catalog')
     runtime_class = args.runtime_class if args.sandbox else None
+    if args.pipeline == 'dependency-audit':
+        if project and args.directory not in project.get('npmDirectories', []) + list(project['modules']):
+            raise ValueError('Audit target is not in the project catalog')
+        return dependency_audit(repository, args.revision, args.ecosystem, args.directory, args.registry_url)
     if args.pipeline == 'npm-lock-update':
         if project and args.directory not in project.get('npmDirectories', []):
             raise ValueError('npm directory is not in the project catalog')
@@ -302,7 +322,7 @@ def render_from_args(args, project):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('pipeline', choices=['maven-build-test', 'maven-dependencies', 'npm-lock-update'])
+    parser.add_argument('pipeline', choices=['maven-build-test', 'maven-dependencies', 'npm-lock-update', 'dependency-audit'])
     parser.add_argument('--cluster', default='ai-sdlc')
     parser.add_argument('--project', type=Path, help='Catalog, for example ' + str((PROJECTS / 'quarkus-super-heroes.json').relative_to(ROOT)))
     parser.add_argument('--repository', help='owner/name; defaults to the catalog repository')
@@ -311,7 +331,8 @@ def main(argv=None):
     parser.add_argument('--services', help='Comma-separated services; defaults to the catalog entry or none')
     parser.add_argument('--maven-arg', action='append', default=None, help='Extra Maven switch; replaces the catalog arguments')
     parser.add_argument('--maven-mirror-url', default='', help='maven-dependencies only: Maven proxy URL')
-    parser.add_argument('--directory', help='npm-lock-update: directory with package-lock.json')
+    parser.add_argument('--directory', help='npm-lock-update: directory with package-lock.json; dependency-audit: the target directory or module')
+    parser.add_argument('--ecosystem', choices=['npm', 'maven'], help='dependency-audit: npm or maven')
     parser.add_argument('--mode', default='update', choices=['update', 'audit-fix'])
     parser.add_argument('--package', action='append', help='npm-lock-update update mode: package or package@version')
     parser.add_argument('--registry-url', default='', help='npm-lock-update: registry or proxy URL')
@@ -333,8 +354,10 @@ def main(argv=None):
             raise ValueError('maven-dependencies must use the current base-branch head')
     if not args.revision:
         raise ValueError('--revision is required')
-    if args.pipeline == 'npm-lock-update' and not args.directory:
+    if args.pipeline in ('npm-lock-update', 'dependency-audit') and not args.directory:
         raise ValueError('--directory is required')
+    if args.pipeline == 'dependency-audit' and not args.ecosystem:
+        raise ValueError('--ecosystem is required')
     rendered = render_from_args(args, project)
     kubectl = connect(args.cluster)
     if 'taskRunSpecs' in rendered['spec']:
