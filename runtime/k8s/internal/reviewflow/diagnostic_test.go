@@ -43,6 +43,7 @@ func TestReviewDiagnosticStageIsBounded(t *testing.T) {
 
 		// Mailbox read transport failures, by cause (issue #826).
 		ControllerError{Stage: "model-mailbox-read-helper-transport-exec"}:     "model-mailbox-read-helper-transport-exec",
+		ControllerError{Stage: "model-mailbox-read-helper-transport-relay"}:    "model-mailbox-read-helper-transport-relay",
 		ControllerError{Stage: "model-mailbox-read-helper-transport-deadline"}: "model-mailbox-read-helper-transport-deadline",
 		ControllerError{Stage: "model-mailbox-read-helper-transport-expired"}:  "model-mailbox-read-helper-transport-expired",
 		ControllerError{Stage: "model-mailbox-read-helper-transport-other"}:    "model-unknown",

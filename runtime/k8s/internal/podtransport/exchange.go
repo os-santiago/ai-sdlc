@@ -3,6 +3,8 @@ package podtransport
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
@@ -88,6 +90,11 @@ func (s *Session) exchangeFixed(ctx context.Context, operation helperOperation, 
 			if errors.As(failure.Cause, &status) && transientStatus(int(status.Status().Code)) {
 				return nil, 0, s.interrupted(ctx)
 			}
+			return nil, 0, ErrTransport
+		}
+		// A certificate or TLS verification failure is a configuration fault,
+		// not a transient one; the controller only ever dials https.
+		if tlsRefusal(err) {
 			return nil, 0, ErrTransport
 		}
 		return nil, 0, s.interrupted(ctx)
@@ -191,6 +198,12 @@ func (s *Session) exchangeFixed(ctx context.Context, operation helperOperation, 
 			return stdout.Bytes(), int(code), nil
 		}
 	}
+	// From Kubernetes 1.30 the API server upgrades the client's WebSocket
+	// before it dials the kubelet (its stream translator). A failed relay hop
+	// arrives as this well-formed status after a 101, not as a refused upgrade.
+	if result.Status == meta.StatusFailure && result.Reason == meta.StatusReasonInternalError && result.Code == http.StatusInternalServerError {
+		return nil, 0, transportError{"relay"}
+	}
 	return nil, 0, ErrTransport
 }
 
@@ -241,7 +254,8 @@ func (s *Session) ReadRequest(ctx context.Context) (modelmailbox.Envelope, error
 }
 
 // readExchange runs the fixed read helper, repeating it after a transient
-// transport failure (an exec error or the 5-second read deadline). Batteries
+// transport failure (an exec error, a failed relay to the kubelet or the
+// 5-second read deadline). Batteries
 // 36, 37 and 39 lost whole attempts at model-mailbox-read-helper-transport and
 // execution-read-helper-transport although the work was fine.
 //
@@ -254,8 +268,9 @@ func (s *Session) ReadRequest(ctx context.Context) (modelmailbox.Envelope, error
 // start, never an attempt: another starts while observeRetryWindow lasts or
 // until minReadAttempts were made, and only while a whole attempt plus the
 // after-observation still fit before the session expiry and ctx's deadline.
-// A session expiry, a permission refusal, a refused upgrade, a protocol
-// violation or a cancelled ctx stops at once.
+// A session expiry, a permission refusal, another refused upgrade (including
+// a 5xx without a Status body), a certificate failure, a protocol violation
+// or a cancelled ctx stops at once.
 func (s *Session) readExchange(ctx context.Context) ([]byte, int, error) {
 	last := time.Now().Add(observeRetryWindow)
 	for attempts := 1; ; attempts++ {
@@ -276,15 +291,29 @@ func (s *Session) readExchange(ctx context.Context) ([]byte, int, error) {
 }
 
 // transportError is a helper exchange interrupted by its cause: "exec" (the
-// exec upgrade or stream failed, or the API server was throttled or
-// unavailable), "deadline" (the exchange's own deadline or the caller's ended
-// first) or "expired" (the session's assignment expired). It unwraps to
-// ErrTransport, so every caller decides exactly as before.
+// exec upgrade or stream failed, or the API server answered the upgrade with
+// a 429/5xx Status), "relay" (the API server accepted the upgrade but its hop
+// to the kubelet failed: an InternalError 500 status), "deadline" (the
+// exchange's own deadline or the caller's ended first) or "expired" (the
+// session's assignment expired). It unwraps to ErrTransport, so every caller
+// decides exactly as before.
 type transportError struct{ cause string }
 
-func (e transportError) Error() string   { return "helper exchange failed: " + e.cause }
-func (e transportError) Unwrap() error   { return ErrTransport }
-func (e transportError) transient() bool { return e.cause == "exec" || e.cause == "deadline" }
+func (e transportError) Error() string { return "helper exchange failed: " + e.cause }
+func (e transportError) Unwrap() error { return ErrTransport }
+func (e transportError) transient() bool {
+	return e.cause == "exec" || e.cause == "relay" || e.cause == "deadline"
+}
+
+// tlsRefusal reports a certificate or TLS verification failure.
+func tlsRefusal(err error) bool {
+	var unknown x509.UnknownAuthorityError
+	var invalid x509.CertificateInvalidError
+	var hostname x509.HostnameError
+	var verification *tls.CertificateVerificationError
+	var record tls.RecordHeaderError
+	return errors.As(err, &unknown) || errors.As(err, &invalid) || errors.As(err, &hostname) || errors.As(err, &verification) || errors.As(err, &record)
+}
 
 // interrupted names why an exchange ended without a complete answer. A
 // cancelled ctx is not a transport cause and keeps the plain ErrTransport.
@@ -334,7 +363,7 @@ func readFailure(step string, err error) error {
 	return readError{step: step, cause: err}
 }
 
-var readSteps = regexp.MustCompile(`^(before-observation|helper-transport(-(exec|deadline|expired))?|envelope|after-observation|helper-exit-([1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))$`)
+var readSteps = regexp.MustCompile(`^(before-observation|helper-transport(-(exec|relay|deadline|expired))?|envelope|after-observation|helper-exit-([1-9][0-9]?|1[0-9][0-9]|2[0-4][0-9]|25[0-5]))$`)
 
 // ReadStep returns the failed mailbox read step, or "" for any other error.
 func ReadStep(err error) string {

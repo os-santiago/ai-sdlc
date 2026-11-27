@@ -2,6 +2,8 @@ package podtransport
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -84,8 +86,29 @@ func unavailableExec(w http.ResponseWriter, code int, reason string) {
 	w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"` + reason + `","code":` + strconv.Itoa(code) + `}`))
 }
 
+// plainExec answers the upgrade with a 5xx whose body is not a Status.
+func plainExec(w http.ResponseWriter, code int) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(code)
+	w.Write([]byte("upstream unavailable"))
+}
+
+// relayFailure is the API server's stream translator (Kubernetes 1.30 and
+// later) after its dial to the kubelet failed: a 101, then an InternalError
+// status on the error channel and a normal closure.
+func relayFailure(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	conn := upgradeExec(t, w, r)
+	if conn == nil {
+		return
+	}
+	defer conn.Close()
+	status := `{"metadata":{},"status":"Failure","message":"Internal error occurred: error dialing backend","reason":"InternalError","details":{"causes":[{"message":"error dialing backend"}]},"code":500}`
+	_ = conn.WriteMessage(websocket.BinaryMessage, append([]byte{protocol.StreamErr}, status...))
+	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+}
+
 func TestMailboxReadRetriesTransientTransportFailures(t *testing.T) {
-	for _, kind := range []string{"dropped", "unavailable", "throttled", "slow"} {
+	for _, kind := range []string{"dropped", "unavailable", "internal", "bad-gateway", "gateway-timeout", "throttled", "relay", "slow"} {
 		t.Run(kind, func(t *testing.T) {
 			session, execs := readExecFixture(t, func(n int32, w http.ResponseWriter, r *http.Request) {
 				if n > 1 {
@@ -97,8 +120,16 @@ func TestMailboxReadRetriesTransientTransportFailures(t *testing.T) {
 					dropExec(t, w, r)
 				case "unavailable":
 					unavailableExec(w, 503, "ServiceUnavailable")
+				case "internal":
+					unavailableExec(w, 500, "InternalError")
+				case "bad-gateway":
+					unavailableExec(w, 502, "InternalError")
+				case "gateway-timeout":
+					unavailableExec(w, 504, "Timeout")
 				case "throttled":
 					unavailableExec(w, 429, "TooManyRequests")
+				case "relay":
+					relayFailure(t, w, r)
 				case "slow":
 					// The first exchange outlives its own 5-second read deadline.
 					if conn := upgradeExec(t, w, r); conn != nil {
@@ -130,7 +161,18 @@ func TestMailboxReadNamesTheTransportCauseAndStopsWithinItsBounds(t *testing.T) 
 	once := func(n int32) bool { return n == 1 }
 	cases := map[string]outcome{
 		// A persistently dropped stream is retried only while attempts may start.
-		"persistent-drop": {"helper-transport-exec", ErrTransport, func(n int32) bool { return n >= minReadAttempts }, observeRetryWindow + 3*time.Second, 40 * time.Second},
+		// Each quick failure is followed by a 250 ms pause, so at most about
+		// window/pause+1 attempts start.
+		"persistent-drop": {"helper-transport-exec", ErrTransport, func(n int32) bool {
+			return n >= minReadAttempts && n <= int32(observeRetryWindow/(250*time.Millisecond))+2
+		}, observeRetryWindow + 3*time.Second, 40 * time.Second},
+		"persistent-relay": {"helper-transport-relay", ErrTransport, func(n int32) bool {
+			return n >= minReadAttempts && n <= int32(observeRetryWindow/(250*time.Millisecond))+2
+		}, observeRetryWindow + 3*time.Second, 40 * time.Second},
+		// A cancelled controller is not a transport cause and is not retried.
+		"cancelled": {"helper-transport", ErrTransport, once, 3 * time.Second, 40 * time.Second},
+		// A 5xx without a Status body cannot be told from a misrouted answer.
+		"plain-5xx": {"helper-transport", ErrTransport, once, time.Second, 40 * time.Second},
 		// No retry starts when a whole attempt and the after-observation no
 		// longer fit before the caller's deadline.
 		"drop-near-deadline": {"helper-transport-exec", ErrTransport, once, time.Second, 9 * time.Second},
@@ -150,7 +192,11 @@ func TestMailboxReadNamesTheTransportCauseAndStopsWithinItsBounds(t *testing.T) 
 				switch kind {
 				case "persistent-drop", "drop-near-deadline":
 					dropExec(t, w, r)
-				case "stall-past-deadline", "expired":
+				case "persistent-relay":
+					relayFailure(t, w, r)
+				case "plain-5xx":
+					plainExec(w, 503)
+				case "stall-past-deadline", "expired", "cancelled":
 					if conn := upgradeExec(t, w, r); conn != nil {
 						time.Sleep(2 * time.Second)
 						conn.Close()
@@ -179,6 +225,10 @@ func TestMailboxReadNamesTheTransportCauseAndStopsWithinItsBounds(t *testing.T) 
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), want.timeout)
 			defer cancel()
+			if kind == "cancelled" {
+				stop := time.AfterFunc(500*time.Millisecond, cancel)
+				defer stop.Stop()
+			}
 			start := time.Now()
 			_, err := session.ReadRequest(ctx)
 			if ReadStep(err) != want.step || !KnownReadStep(want.step) || !errors.Is(err, want.cause) {
@@ -195,7 +245,7 @@ func TestMailboxReadNamesTheTransportCauseAndStopsWithinItsBounds(t *testing.T) 
 }
 
 func TestReadTransportStepsAreBounded(t *testing.T) {
-	for _, step := range []string{"helper-transport", "helper-transport-exec", "helper-transport-deadline", "helper-transport-expired"} {
+	for _, step := range []string{"helper-transport", "helper-transport-exec", "helper-transport-relay", "helper-transport-deadline", "helper-transport-expired"} {
 		if !KnownReadStep(step) {
 			t.Fatal(step)
 		}
@@ -208,7 +258,54 @@ func TestReadTransportStepsAreBounded(t *testing.T) {
 	if transportStep(ErrPermission) != "helper-transport" || transportStep(transportError{"exec"}) != "helper-transport-exec" {
 		t.Fatal("transport step naming changed")
 	}
+	if tlsRefusal(errors.New("dial failed")) || !tlsRefusal(&tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}}) || !tlsRefusal(x509.HostnameError{}) {
+		t.Fatal("only certificate and TLS verification failures are permanent")
+	}
 	if (transportError{"expired"}).transient() || !errors.Is(transportError{"deadline"}, ErrTransport) {
 		t.Fatal("expiry must not be retried and causes must keep ErrTransport")
+	}
+}
+
+// A transient failure of the respond exchange is never repeated: the helper
+// may already have published, and a second respond could duplicate it.
+func TestPublicationIsNeverRepeatedOnTransientFailures(t *testing.T) {
+	for _, kind := range []string{"dropped", "unavailable", "relay"} {
+		t.Run(kind, func(t *testing.T) {
+			binding, pod, reply := bindingFixture(t)
+			var execs atomic.Int32
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.HasSuffix(r.URL.Path, "/exec") {
+					json.NewEncoder(w).Encode(pod)
+					return
+				}
+				execs.Add(1)
+				switch kind {
+				case "dropped":
+					dropExec(t, w, r)
+				case "unavailable":
+					unavailableExec(w, 503, "ServiceUnavailable")
+				case "relay":
+					relayFailure(t, w, r)
+				}
+			}))
+			defer server.Close()
+			ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+			client, err := NewClient(Config{APIServer: server.URL, CA: ca, BearerToken: strings.Repeat("x", 32)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			session, err := Bind(context.Background(), client, binding)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = session.Publish(context.Background(), reply)
+			var stage interface{ PublicationStage() string }
+			if !errors.Is(err, ErrTransport) || !errors.As(err, &stage) || stage.PublicationStage() != "helper-transport" {
+				t.Fatalf("publication stop changed: %v", err)
+			}
+			if execs.Load() != 1 {
+				t.Fatalf("respond repeated: %d exchanges", execs.Load())
+			}
+		})
 	}
 }

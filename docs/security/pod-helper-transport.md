@@ -72,7 +72,8 @@ observations have a five-second limit and a 1-MiB response cap. There is no
 SPDY/protocol fallback or redirect following. The only automatic retries are
 bounded repeats of idempotent reads: pod observations after a transport
 failure or a 429/5xx answer, and a `/model-mailbox read` exchange interrupted
-by an exec error or its deadline (see
+by an exec error, a 429/5xx upgrade answer with a `Status` body, a failed API
+server relay to the kubelet, or its deadline (see
 [mailbox read stops](../operations/executor-failure-diagnostics.md#mailbox-read-stops)).
 `respond` and every other helper are never repeated. Raw API errors,
 credentials and provider bodies are not returned in diagnostics.
