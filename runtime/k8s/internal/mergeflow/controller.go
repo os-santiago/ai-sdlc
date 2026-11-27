@@ -11,6 +11,7 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergegate"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergerecovery"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/mergewriter"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/merging"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/publication"
@@ -36,6 +37,10 @@ type Runtime struct {
 	GatePolicy func() (mergegate.Policy, error)
 	Gates      Gates
 	Writer     Transport
+	// Reconciler and Observer, when both set, resolve an uncertain merge
+	// effect that quarantines merges by a read-only forge observation.
+	Reconciler *mergerecovery.Reconciler
+	Observer   mergerecovery.Observer
 }
 
 func (r Runtime) journal() *store.MergeJournal {
@@ -67,8 +72,23 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		return "", ErrMerge
 	}
 	blocked, e := j.MergeBlocked(ctx)
-	if e != nil || blocked {
-		return "merge-quarantined", ErrMerge
+	if e != nil {
+		return "", ErrMerge
+	}
+	if blocked {
+		if r.Reconciler == nil || r.Observer == nil {
+			return "merge-quarantined", ErrMerge
+		}
+		// The failed request stays failed: reconciliation only records what the
+		// forge shows. The quarantine lifts once no uncertain effect remains;
+		// the next poll then selects work as usual.
+		if _, _, e = r.Reconciler.Step(ctx, r.Observer); e != nil {
+			return "merge-quarantined", ErrMerge
+		}
+		if blocked, e = j.MergeBlocked(ctx); e != nil || blocked {
+			return "merge-quarantined", ErrMerge
+		}
+		return "merge-reconciled", nil
 	}
 	id, e := j.NextMerge(ctx)
 	if e != nil {

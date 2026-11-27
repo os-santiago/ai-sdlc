@@ -79,4 +79,7 @@ with the writer's class appended, for example `tree-status-422`:
 Every class leaves the effect uncertain, exactly as before; the class only tells
 an operator where to look. The merge loop logs
 `merge reconciliation stopped safely: <state>`, for example `merge-quarantined`
-while an unacknowledged merge effect blocks every later merge.
+while an unacknowledged merge effect blocks every later merge, and counts the
+same state as the stop `stage`. It logs `merge reconciliation: merge-reconciled`
+when [merge reconciliation](merge-reconciliation.md) lifts the quarantine. A merge
+quarantine does not make the release manager unready.

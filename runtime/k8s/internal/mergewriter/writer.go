@@ -28,6 +28,7 @@ import (
 var ErrMerge = errors.New("merge transport unavailable or denied")
 
 var branch = regexp.MustCompile(`^ai-sdlc/issue-([1-9][0-9]{0,9})-[a-f0-9]{32}$`)
+var repositoryName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9_.-]{1,100}$`)
 
 type Writer struct {
 	token, base, repository string
@@ -72,29 +73,36 @@ func New(credential forge.Credential) (*Writer, error) {
 // commit's sign-off by the installation's configured commit identity.
 func mergeMessage(issue int) string { return "Refs #" + strconv.Itoa(issue) }
 
-// Merge sends exactly one PUT, guarded by the expected head SHA and native
-// protection. The caller must first verify a strict applicable ruleset with no
-// bypass actors. This transport never treats a failure as proof of no effect.
-// It does not retry, adopt an already-merged PR, close an issue or deploy.
-func (w *Writer) Merge(ctx context.Context, e mergegate.Expected, issue int, fence Fence) (Receipt, error) {
-	deny := func() (Receipt, error) { return Receipt{}, ErrMerge }
-	if w == nil || w.http == nil || e.Repository != w.repository || !project.Supported(w.repository) || fence == nil || issue < 1 || issue > 2147483647 || e.PullRequest < 1 || e.PullRequest > 2147483647 || e.HeadSHA == e.BaseSHA {
-		return deny()
+// Plan is the exact merge request the transport sends for an expected pull
+// request and issue: the path, the JSON body and the digest of method, path
+// and body that the pre-send fence journals. A reconciler re-derives it from
+// the journaled command to prove that it observes the merge the journal
+// recorded. A Plan authorizes nothing by itself.
+type Plan struct {
+	Expected       mergegate.Expected
+	Issue          int
+	Path           string
+	Title, Message string
+	Body           []byte
+	RequestDigest  string
+}
+
+// PlanMerge validates the expected pull request and builds the single request
+// Merge sends. It reads nothing and sends nothing.
+func PlanMerge(e mergegate.Expected, issue int) (Plan, error) {
+	// The transport and the reader additionally require their credential's
+	// supported repository; a plan only needs a well-formed path.
+	if !repositoryName.MatchString(e.Repository) || issue < 1 || issue > 2147483647 || e.PullRequest < 1 || e.PullRequest > 2147483647 || e.HeadSHA == e.BaseSHA {
+		return Plan{}, ErrMerge
 	}
 	match := branch.FindStringSubmatch(e.Branch)
 	if len(match) != 2 || match[1] != strconv.Itoa(issue) {
-		return deny()
+		return Plan{}, ErrMerge
 	}
 	for _, sha := range []string{e.HeadSHA, e.BaseSHA, e.TreeSHA} {
 		if !workspacebundle.ValidSourceSHA(sha) {
-			return deny()
+			return Plan{}, ErrMerge
 		}
-	}
-	// The fresh authority owns a tighter deadline; the transport cannot create one
-	// on behalf of an unbounded caller or outlive its original context.
-	deadline, ok := ctx.Deadline()
-	if !ok || !deadline.After(time.Now()) || deadline.After(time.Now().Add(90*time.Second)) {
-		return deny()
 	}
 	title := "fix(ai-sdlc): integrate issue #" + strconv.Itoa(issue) + " [skip release]"
 	value := struct {
@@ -104,12 +112,45 @@ func (w *Writer) Merge(ctx context.Context, e mergegate.Expected, issue int, fen
 		Message string `json:"commit_message"`
 	}{e.HeadSHA, "merge", title, mergeMessage(issue)}
 	body, _ := json.Marshal(value)
-	path := "/repos/" + w.repository + "/pulls/" + strconv.Itoa(e.PullRequest) + "/merge"
+	path := "/repos/" + e.Repository + "/pulls/" + strconv.Itoa(e.PullRequest) + "/merge"
 	binding, _ := json.Marshal(struct {
 		Method, Path string
 		Body         json.RawMessage
 	}{http.MethodPut, path, body})
-	digest := authority.Digest(binding)
+	return Plan{Expected: e, Issue: issue, Path: path, Title: title, Message: mergeMessage(issue), Body: body, RequestDigest: authority.Digest(binding)}, nil
+}
+
+// mergedAsPlanned reports whether a merge commit is exactly the planned one:
+// the reviewed tree, the expected base and head as its parents in that order,
+// and the fixed title followed by the fixed message.
+func (p Plan) mergedAsPlanned(sha, tree string, parents []string, message string) bool {
+	if !workspacebundle.ValidSourceSHA(sha) || sha == p.Expected.HeadSHA || sha == p.Expected.BaseSHA || tree != p.Expected.TreeSHA || len(parents) != 2 || parents[0] != p.Expected.BaseSHA || parents[1] != p.Expected.HeadSHA {
+		return false
+	}
+	rest, ok := strings.CutPrefix(message, p.Title+"\n")
+	return ok && strings.TrimSpace(rest) == p.Message
+}
+
+// Merge sends exactly one PUT, guarded by the expected head SHA and native
+// protection. The caller must first verify a strict applicable ruleset with no
+// bypass actors. This transport never treats a failure as proof of no effect.
+// It does not retry, adopt an already-merged PR, close an issue or deploy.
+func (w *Writer) Merge(ctx context.Context, e mergegate.Expected, issue int, fence Fence) (Receipt, error) {
+	deny := func() (Receipt, error) { return Receipt{}, ErrMerge }
+	if w == nil || w.http == nil || e.Repository != w.repository || !project.Supported(w.repository) || fence == nil {
+		return deny()
+	}
+	plan, err := PlanMerge(e, issue)
+	if err != nil {
+		return deny()
+	}
+	// The fresh authority owns a tighter deadline; the transport cannot create one
+	// on behalf of an unbounded caller or outlive its original context.
+	deadline, ok := ctx.Deadline()
+	if !ok || !deadline.After(time.Now()) || deadline.After(time.Now().Add(90*time.Second)) {
+		return deny()
+	}
+	path, body, digest := plan.Path, plan.Body, plan.RequestDigest
 	if ctx.Err() != nil || fence(ctx, digest) != nil {
 		return deny()
 	}
@@ -125,7 +166,7 @@ func (w *Writer) Merge(ctx context.Context, e mergegate.Expected, issue int, fen
 		Tree         struct{ SHA string }
 		Parents      []struct{ SHA string }
 	}
-	if w.request(ctx, http.MethodGet, "/repos/"+w.repository+"/git/commits/"+response.SHA, nil, &commit) != nil || commit.SHA != response.SHA || commit.Tree.SHA != e.TreeSHA || len(commit.Parents) != 2 || commit.Parents[0].SHA != e.BaseSHA || commit.Parents[1].SHA != e.HeadSHA || !strings.HasPrefix(commit.Message, title+"\n") {
+	if w.request(ctx, http.MethodGet, "/repos/"+w.repository+"/git/commits/"+response.SHA, nil, &commit) != nil || commit.SHA != response.SHA || commit.Tree.SHA != e.TreeSHA || len(commit.Parents) != 2 || commit.Parents[0].SHA != e.BaseSHA || commit.Parents[1].SHA != e.HeadSHA || !strings.HasPrefix(commit.Message, plan.Title+"\n") {
 		return deny()
 	}
 	if ctx.Err() != nil || fence(ctx, digest) != nil {

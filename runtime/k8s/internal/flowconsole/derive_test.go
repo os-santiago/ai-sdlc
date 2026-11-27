@@ -298,3 +298,41 @@ func TestReconciledPublicationEffectsAreShown(t *testing.T) {
 		t.Fatal("reconciled events", got)
 	}
 }
+
+// A failed merge whose uncertain effect the merge reconciler resolved after the
+// settle window shows merge / reconciled; an unresolved one stays quarantined.
+func TestReconciledMergeEffectsAreShown(t *testing.T) {
+	base := time.Date(2026, 11, 26, 4, 0, 0, 0, time.UTC)
+	link := store.FlowLink{WorkItem: "8f9a2c1e-3b4d-4e5f-8a6b-7c8d9e0f1a2b", Attempt: 1, Repository: "example/app"}
+	until := base.Add(30 * time.Second)
+	observed := until.Add(3 * time.Minute)
+	verdict := func(id string) store.FlowVerdict {
+		return store.FlowVerdict{ID: id, FlowLink: link, State: "failed", Reason: "uncertain", Cleanup: "complete", CreatedAt: base, ExpiresAt: until, ClaimUntil: &until, Candidate: "execution-" + id}
+	}
+	j := store.FlowJournal{
+		ObservedAt: base.Add(time.Hour),
+		Merges:     []store.FlowVerdict{verdict("m1"), verdict("m2")},
+		MergeEffects: []store.FlowEffect{
+			{Parent: "m1", Kind: "merge", CreatedAt: base.Add(time.Second), CompletedAt: &observed},
+			{Parent: "m2", Kind: "merge", CreatedAt: base.Add(time.Second)},
+		},
+	}
+	reconciled, quarantined := 0, 0
+	for _, e := range Derive(j, DeriveOptions{}) {
+		if e.Stage != "merge" {
+			continue
+		}
+		if e.Step == "reconciled" {
+			reconciled++
+			if e.Kind != flowevent.KindProgressed || e.Diagnostic != "completed" || e.Attributes["effect"] != "merge" || !e.Time.Equal(observed) || e.Validate() != nil {
+				t.Fatal("reconciled merge event", e)
+			}
+		}
+		if e.Kind == flowevent.KindQuarantined {
+			quarantined++
+		}
+	}
+	if reconciled != 1 || quarantined != 1 {
+		t.Fatal("merge reconciliation events", reconciled, quarantined)
+	}
+}

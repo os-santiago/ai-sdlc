@@ -115,7 +115,10 @@ so that table would need its own upgrade bridge.
 Elsewhere the runtime holds that an observation never manufactures a missing
 receipt. For example, deployment recovery never turns an observed image into a
 missing API acknowledgement (see [deployment recovery](deployment-recovery.md)).
-Publication reconciliation is the **one narrow, named exception** to that rule.
+Publication reconciliation is one of **two narrow, named exceptions** to that
+rule; the other is
+[merge reconciliation](merge-reconciliation.md#principle-exception-an-observed-merge-receipt),
+which follows the same design.
 An observed receipt is recorded only when all of the following hold:
 
 1. The effect is uncertain: begun, with neither a receipt nor a known no-send.
@@ -131,7 +134,7 @@ An observed receipt is recorded only when all of the following hold:
    the published-record reader all reject it. It therefore never leads to a
    publication proof, a merge or a deployment.
 
-Any other journal keeps the rule without exception.
+Every journal other than these two keeps the rule without exception.
 
 ## Safety argument
 
