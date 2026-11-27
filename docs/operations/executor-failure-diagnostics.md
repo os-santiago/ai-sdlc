@@ -231,6 +231,20 @@ unchanged.
 step existed, stale evidence was reported as `snapshot` by the broker and as
 `execution-authority` by the generation loop.
 
+### Manifest step
+
+`manifest` refuses when the project manifest the process holds is not the one
+the authorizing policy binds (its `projectSHA256`): a concurrent policy reload
+installed another manifest or cleared it. Preparation resolves the
+assignment's workspace context (workspace mark, generation toolchain and
+verification command) only from the bound manifest, so it refuses at this
+step instead of preparing with another load's manifest or none. The refused
+preparation releases its claim as `aborted`, and the worker logs
+`candidate reconciliation stopped safely: authority-or-storage`. A built-in
+reference repository, or one with no manifest at all, prepares as before.
+The broker reports `manifest` like the other steps
+(`model-authorization-<check>-manifest`).
+
 ## Review request stops
 
 The independent review broker refuses a reviewer model request before any

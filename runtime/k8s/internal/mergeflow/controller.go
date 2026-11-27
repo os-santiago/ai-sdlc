@@ -204,6 +204,9 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 			return "", ErrMerge
 		}
 		gp, e := r.GatePolicy(p.ProjectSHA256)
+		if errors.Is(e, mergegate.ErrManifest) {
+			return "merge-gate-manifest", stopped("gate-manifest")
+		}
 		if e != nil {
 			return "", ErrMerge
 		}
