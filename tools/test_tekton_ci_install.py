@@ -51,7 +51,7 @@ class DesiredStateTests(unittest.TestCase):
         config, _ = tekton.configuration()
         flags = config['configMaps']['tekton-pipelines/feature-flags']
         self.assertEqual(flags['set-security-context'], 'true')
-        self.assertEqual(flags['coschedule'], 'pipelineruns')
+        self.assertEqual(flags['coschedule'], 'disabled', 'affinity-assistant pods would deadlock the CI pod quota')
         resolvers = config['configMaps']['tekton-pipelines-resolvers/resolvers-feature-flags']
         self.assertEqual(set(resolvers.values()), {'false'}, 'remote resolvers fetch unreviewed definitions')
         raw, _ = tekton.ci_manifests()

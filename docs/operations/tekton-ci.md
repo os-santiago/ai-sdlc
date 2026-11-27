@@ -87,7 +87,7 @@ its history, so removal is a deliberate operator action
 | remote resolvers (`git`, `http`, `hub`, `bundles`, `cluster`) | disabled | No run can fetch an unreviewed definition. |
 | `enable-api-fields` | `stable` | No alpha or beta behavior. |
 | `disable-creds-init` | `true` | No credential initialization; the CI carries no credentials. |
-| `coschedule` | `pipelineruns` | One affinity assistant per run, which permits a task to bind both the source and cache claims. |
+| `coschedule` | `disabled` | No affinity-assistant pods: they would hold CI pod quota (see the node limits) and deadlock concurrent runs. A task can still bind both the source and cache claims; on a multi-node cluster the claims need storage reachable from any node. |
 | `send-cloudevents-for-runs` | `false` | No event sink is configured. |
 
 ## The catalog
@@ -255,8 +255,12 @@ offline runtime) now sets two node limits:
   that an earlier ai-sdlc revision set (marked, or listed under `previous`,
   such as the earlier 1024 in kind.yaml) is upgraded; any other is refused.
 - **CI concurrency:** a ResourceQuota (`ai-sdlc-ci-pods`) allows two pods in
-  `ai-sdlc-ci`: one PipelineRun's affinity assistant and its current task pod.
-  Tekton keeps further task pods pending until a pod ends.
+  `ai-sdlc-ci`, so at most two PipelineRuns make progress at once, each with
+  one task pod; Tekton retries a task pod refused by the quota until a pod
+  ends. Tekton's affinity assistant is disabled (`coschedule: disabled`):
+  with it, each run held an assistant pod, and two concurrent runs took the
+  whole quota while their task pods stayed pending, a deadlock observed in the
+  disposable cluster.
 
 The arithmetic for a podman kind node (2,048 pids): CI pods hold at most 2 x
 768 = 1,536 pids (75%), the rest is left for the runtime and system pods, each
