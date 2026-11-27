@@ -51,12 +51,31 @@ no DNS egress.
 
 nginx serves only these routes:
 - `GET` requests, except the two npm audit endpoints when `npm.audit` is set;
-- the configured upstream host only, with certificate verification;
+- the configured upstream host only, with certificate verification (TLS SNI
+  and name check); the host is re-resolved through the cluster DNS (`resolver`
+  rendered from the pod's `/etc/resolv.conf`), so the proxy starts without
+  DNS and follows CDN address changes;
 - released artifacts and npm tarballs, cached as immutable (ten years);
-- `maven-metadata.xml` and npm packuments, cached for ten minutes;
+- `maven-metadata.xml` and npm packuments, cached for ten minutes; a `404`
+  for one minute;
 - anything else, including `/-/` npm endpoints such as `whoami`, gets `403`.
 
-It drops `Authorization` and `Cookie` headers.
+**Requests.** A request is matched, cached and forwarded by the same
+normalized path (`$uri`). A query string, or a path that after decoding
+leaves the conservative character set, is refused with `403`, so an encoded
+separator (`%2F`) or dot segment cannot make the forwarded path differ from
+the allowlisted one. A scoped npm packument (`/@scope%2fname`) is forwarded as
+`/@scope/name`.
+
+**Headers and bodies.** No client header is forwarded
+(`proxy_pass_request_headers off`), and every proxying location sets only
+`Host`, an empty `Authorization`, `Cookie` and `Accept-Encoding`, a fixed
+`User-Agent` and, for npm, `Accept` (which is part of the packument cache
+key). No request body is forwarded except to the npm audit endpoints. The
+cached response is therefore the same for every client.
+
+**Cache size.** `max_size` is nine tenths of `storageSize`, leaving room for
+temporary files and the file system.
 
 ### The CI side of the contract
 
@@ -141,7 +160,9 @@ claim must:
 - be bound;
 - carry `ai-sdlc.io/dependency-key: <key>`;
 - carry the label `ai-sdlc.io/dependency-state: sealed`;
-- have only the `ReadOnlyMany` or `ReadWriteOnce` access modes.
+- have only the `ReadOnlyMany`, `ReadWriteMany` or `ReadWriteOnce` access
+  modes (`ReadWriteOncePod` would leave two of the three concurrent runs
+  pending).
 
 Otherwise the verification stops with `dependencies-unavailable`, and with
 `dependencies-key` when the key cannot be computed. Every run attaches the
@@ -164,14 +185,31 @@ python3 tools/dependency_cache_install.py seal --context kind-ai-sdlc \
 ```
 
 `key` prints the claim name without a cluster. The tool reads key files from
-the Git object database at the given revision, never from a working tree.
+`git archive` of the given revision in a local clone (with LF line endings
+and no local `autocrlf`), never from a working tree. The runtime reads the
+forge's archive of the same revision, which git archive also produces, so
+`.gitattributes` `export-ignore`, `export-subst` and end-of-line rules apply
+the same way on both sides. If `seal` and the runtime still disagree (for
+example a forge-specific `export-subst` value in a key file), the verifier
+stops with `dependencies-unavailable`; compare `key` with the claim names.
+
+**Access mode.** `prepare --access-mode` takes `ReadWriteOnce` (default) or
+`ReadWriteMany`. A ReadWriteOnce volume can be attached to one node only: the
+three concurrent verification runs then work only on a single-node cluster or
+with node-local storage whose volume affinity schedules every run on that
+node (for example local-path). On a multi-node cluster with network block
+storage they fail with Multi-Attach errors; use a ReadWriteMany class (NFS,
+CephFS, a cloud file service).
 
 `seal` works as follows:
 - It refuses a claim with another key, and one that a running pod still uses.
 - It retains the volume, deletes the work claim, rebinds the volume
   (`claimRef`) to `ai-sdlc-verifiers/deps-<key>`, and creates that claim
-  already labelled `sealed`. It then restores the `Delete` reclaim policy.
-- It resumes an interrupted hand-over.
+  already labelled `sealed`. After the claim binds it checks the key, the
+  label and the volume, and restores the volume's original reclaim policy.
+- It records the key and the original policy on the volume before deleting
+  the work claim, so a rerun resumes after any interruption (including after
+  the `claimRef` patch or a bind timeout).
 - It is idempotent once sealed.
 - It patches a PersistentVolume, so it needs a cluster-admin kubeconfig.
 
@@ -197,8 +235,11 @@ Image `maven:3.9-eclipse-temurin-25` (Maven 3.9.16). Kind and podman, 2026-11-27
   deny-all policy, checked before every effect. Test tasks match only the
   CI default deny.
 - **Only reviewed base code runs with network, and only towards the proxy.**
-  The proxy is not the open internet: it forwards `GET`s for artifacts, so
-  exfiltration through it is limited to request paths.
+  The proxy is not the open internet, but it is not a data diode either:
+  code that runs in a dependency task can still encode data in request paths
+  (one GET per artifact-shaped path, which the upstream logs), within the
+  path allowlist when one is set. Bodies, query strings and client headers
+  are not forwarded. This is why only reviewed base code runs there.
   - A cache fill runs the base revision's build. The Tekton run tool accepts a
     warm run only on the current base-branch head.
   - Key files are harness, so a candidate that changes the build or
@@ -214,12 +255,16 @@ Image `maven:3.9-eclipse-temurin-25` (Maven 3.9.16). Kind and podman, 2026-11-27
     verification. A request cannot choose the host.
   - Methods are limited to `GET`, and optional allowlists narrow the paths.
 - **Integrity.**
-  - Maven runs with strict checksums (`-C`), and npm verifies every tarball
-    against the lockfile's `integrity` hash.
+  - npm verifies every tarball against the lockfile's `integrity` hash, which
+    the reviewed lockfile pins.
+  - Maven's strict checksums (`-C`) compare each file with the `.sha1` or
+    `.sha512` file served by the same upstream through the same proxy. That
+    detects corruption in transit or in the cache, not a malicious upstream,
+    and nothing pins Maven artifacts the way a lockfile does.
   - Cached artifacts are immutable, so a later upstream change is not
     served.
-  - The proxy does not verify PGP signatures; neither do Maven or npm by
-    default.
+  - The proxy does not verify checksums or PGP signatures itself; neither do
+    Maven or npm verify signatures by default.
 - **No credentials anywhere.** The proxy uses anonymous upstream access.
   The dependency tasks and the seal tool use no tokens. `seal` needs an
   administrator's kubeconfig, used locally.
