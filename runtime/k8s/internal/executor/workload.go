@@ -93,6 +93,10 @@ func Compile(namespace, workerImage, mailboxImage, runtimeClass string, assignme
 	if p.CallSeconds != 0 {
 		mailbox["command"] = append(mailbox["command"].([]string), "--wait-seconds", fmt.Sprint(p.CallSeconds))
 	}
+	if p.Tools != nil {
+		mailbox["command"] = append(mailbox["command"].([]string), "--tool-calls", fmt.Sprint(p.Tools.Calls),
+			"--tool-wait-seconds", fmt.Sprint(p.Tools.Seconds))
+	}
 	pod := map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": metadata(name), "spec": map[string]any{
 		"runtimeClassName": runtimeClass, "automountServiceAccountToken": false, "enableServiceLinks": false, "restartPolicy": "Never", "activeDeadlineSeconds": PodDeadlineSeconds(p), "terminationGracePeriodSeconds": 1,
 		"hostNetwork": false, "hostPID": false, "hostIPC": false, "shareProcessNamespace": false,

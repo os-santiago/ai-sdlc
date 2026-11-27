@@ -18,10 +18,10 @@ import (
 
 func run(ctx context.Context, args []string, input io.Reader, output io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("expected serve, read or respond")
+		return errors.New("expected serve, read, respond, read-tool or respond-tool")
 	}
 	mode := args[0]
-	if mode != "serve" && mode != "read" && mode != "respond" {
+	if mode != "serve" && mode != "read" && mode != "respond" && mode != "read-tool" && mode != "respond-tool" {
 		return errors.New("unsupported mailbox mode")
 	}
 	flags := flag.NewFlagSet("model-mailbox", flag.ContinueOnError)
@@ -31,6 +31,8 @@ func run(ctx context.Context, args []string, input io.Reader, output io.Writer) 
 	model := flags.String("model", "", "reviewed model, required with token cap")
 	maxTokens := flags.Int("max-tokens", 0, "reviewed per-request token cap")
 	waitSeconds := flags.Int("wait-seconds", 60, "reviewed per-call window from the profile")
+	toolCalls := flags.Int("tool-calls", 0, "generator tool calls allowed in this attempt (0: route off)")
+	toolWait := flags.Int("tool-wait-seconds", 0, "window for one generator tool call")
 	if flags.Parse(args[1:]) != nil || flags.NArg() != 0 {
 		return errors.New("invalid mailbox arguments")
 	}
@@ -38,6 +40,9 @@ func run(ctx context.Context, args []string, input io.Reader, output io.Writer) 
 		return errors.New("invalid mailbox call window")
 	}
 	wait := time.Duration(*waitSeconds) * time.Second
+	if (*toolCalls == 0) != (*toolWait == 0) || (mode != "serve" && *toolCalls != 0) {
+		return errors.New("invalid mailbox tool limits")
+	}
 	if (mode != "serve" && (*model != "" || *maxTokens != 0)) || ((*model == "") != (*maxTokens == 0)) {
 		return errors.New("invalid mailbox request limits")
 	}
@@ -73,6 +78,11 @@ func run(ctx context.Context, args []string, input io.Reader, output io.Writer) 
 		if err != nil {
 			return err
 		}
+		if *toolCalls != 0 {
+			if err := server.EnableTools(modelmailbox.ToolLimits{MaxCalls: *toolCalls, Wait: time.Duration(*toolWait) * time.Second}); err != nil {
+				return err
+			}
+		}
 		return server.Listen(ctx)
 	case "read":
 		request, err := store.ReadRequest(id)
@@ -94,6 +104,25 @@ func run(ctx context.Context, args []string, input io.Reader, output io.Writer) 
 			return err
 		}
 		return json.NewEncoder(output).Encode(receipt)
+	case "read-tool":
+		request, err := store.ReadToolRequest(id)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(request)
+	case "respond-tool":
+		raw, err := io.ReadAll(io.LimitReader(input, modelmailbox.MaxEnvelopeBytes+1))
+		if err != nil {
+			return errors.New("cannot read bounded tool response")
+		}
+		response, err := modelmailbox.Decode(raw)
+		if err != nil {
+			return err
+		}
+		if err := store.WriteToolResponse(id, response); err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(map[string]string{"published": response.RequestSHA256})
 	}
 	return errors.New("unsupported mailbox mode")
 }

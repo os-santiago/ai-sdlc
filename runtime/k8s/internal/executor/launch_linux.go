@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -17,6 +18,9 @@ import (
 
 const InputDirectory = "/var/run/ai-sdlc/assignment"
 const WorkspaceDirectory = "/workspaces"
+
+// ToolServerName names the generator tools MCP server in SCC's configuration.
+const ToolServerName = "ai-sdlc"
 
 // SCCConfiguration is deterministic and contains no provider credential. The
 // endpoint is Pod-local; external model calls require a separate authority.
@@ -37,9 +41,24 @@ func SCCConfiguration(p Profile, toolchain *Toolchain) []byte {
 		// SCC waits past the mailbox window so the bounded broker decides.
 		model["timeout"] = sccWaitMillis(p)
 	}
+	if p.Version == ProfileVersion && p.Tools != nil {
+		// SCC loads MCP servers only from this trusted configuration; tools
+		// surface as mcp__<server>__<tool> and need the same auto-approval.
+		for _, tool := range p.Tools.Spec.Tools {
+			tools = append(tools, "mcp__"+ToolServerName+"__"+tool.Name)
+		}
+	}
 	config := map[string]any{
 		"model":       model,
 		"permissions": map[string]any{"autoApprove": tools, "denyPaths": []string{".env", ".env.*", "**/*.key", "**/*.pem", "**/id_rsa*", "**/.ssh/*", "**/credentials*"}},
+	}
+	if p.Version == ProfileVersion && p.Tools != nil {
+		spec, _ := json.Marshal(p.Tools.Spec)
+		config["mcp"] = map[string]any{"servers": map[string]any{ToolServerName: map[string]any{
+			"command":   "/executor",
+			"args":      []string{"tools-mcp", "--spec", string(spec), "--wait-seconds", fmt.Sprint(p.Tools.Seconds)},
+			"timeoutMs": (p.Tools.Seconds + 30) * 1000,
+		}}}
 	}
 	if p.Version != ReviewProfileVersion {
 		// Toolchain variables reach run_shell children the same way; PATH,

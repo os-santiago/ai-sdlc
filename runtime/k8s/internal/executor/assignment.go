@@ -13,6 +13,7 @@ import (
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/candidate"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/generatortools"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repair"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
@@ -82,6 +83,34 @@ type Profile struct {
 	// call reservation). Omitted keeps the original 60 s window and identical
 	// workloads; slower installed models select 60-600 s, within MaxSeconds.
 	CallSeconds int `json:"callSeconds,omitempty"`
+	// Tools enables generator tools backed by Tekton catalog runs (an MCP
+	// server in SCC's trusted configuration and the mailbox tool route).
+	// Omitted keeps the original configuration and workloads.
+	Tools *ToolProfile `json:"tools,omitempty"`
+}
+
+// ToolProfile bounds the generator's tool calls: how many, how long each may
+// take, and which tools and targets exist. Tool time is spent inside the
+// generation's own MaxSeconds, because the generator waits for each result.
+type ToolProfile struct {
+	Calls   int                 `json:"calls"`
+	Seconds int                 `json:"seconds"`
+	Spec    generatortools.Spec `json:"spec"`
+}
+
+// Bounds of ToolProfile.
+const (
+	MaxToolCalls   = 8
+	MinToolSeconds = 120
+	MaxToolSeconds = 900
+)
+
+func (t ToolProfile) validate(maxSeconds int) error {
+	if t.Calls < 1 || t.Calls > MaxToolCalls || t.Seconds < MinToolSeconds || t.Seconds > MaxToolSeconds || t.Seconds > maxSeconds ||
+		t.Spec.Validate() != nil {
+		return ErrInvalid
+	}
+	return nil
 }
 
 const (
@@ -171,6 +200,10 @@ func parseProfile(raw []byte, expected, version string) (Profile, error) {
 	if window {
 		keys = append(keys, "callSeconds")
 	}
+	tools := fields["tools"] != nil
+	if tools {
+		keys = append(keys, "tools")
+	}
 	if strictBound(raw, expected, MaxProfileBytes, keys, &p) != nil || p.Version != version || !modelPattern.MatchString(p.Model) || p.MaxSteps < 1 || p.MaxSteps > 32 || p.MaxSeconds < 1 || p.MaxSeconds > 900 || p.MaxTokens < 1 || p.MaxTokens > 8192 || !workspacebundle.ValidDigest(p.ADevSHA256) {
 		return Profile{}, ErrInvalid
 	}
@@ -178,6 +211,9 @@ func parseProfile(raw []byte, expected, version string) (Profile, error) {
 		return Profile{}, ErrInvalid
 	}
 	if window && (p.CallSeconds < DefaultCallSeconds || p.CallSeconds > MaxCallSeconds || p.CallSeconds > p.MaxSeconds) {
+		return Profile{}, ErrInvalid
+	}
+	if tools && (version != ProfileVersion || p.Tools == nil || p.Tools.validate(p.MaxSeconds) != nil) {
 		return Profile{}, ErrInvalid
 	}
 	return p, nil
