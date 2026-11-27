@@ -1,0 +1,60 @@
+# Admission control for PipelineRuns in ai-sdlc-ci, independent of who creates
+# them: only the catalog pipelines, only the token-free runner account, and
+# only the reviewed workspace bindings. The shared Maven cache of a repository
+# is writable only by maven-dependencies; every other pipeline must bind it
+# read-only. Tekton accepts no inline specifications (feature flag), so a run
+# cannot bring its own tasks.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ai-sdlc-ci-pipelineruns
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [tekton.dev]
+        apiVersions: ["*"]
+        operations: [CREATE]
+        resources: [pipelineruns]
+  validations:
+    - expression: >-
+        has(object.spec.pipelineRef) && has(object.spec.pipelineRef.name) &&
+        object.spec.pipelineRef.name in ['ai-sdlc-maven-build-test', 'ai-sdlc-maven-dependencies', 'ai-sdlc-npm-lock-update']
+      message: only the reviewed catalog pipelines may run
+    - expression: >-
+        has(object.spec.taskRunTemplate) && has(object.spec.taskRunTemplate.serviceAccountName) &&
+        object.spec.taskRunTemplate.serviceAccountName == 'ai-sdlc-ci-runner' &&
+        (!has(object.spec.taskRunTemplate.podTemplate) ||
+         !has(object.spec.taskRunTemplate.podTemplate.automountServiceAccountToken) ||
+         object.spec.taskRunTemplate.podTemplate.automountServiceAccountToken == false)
+      message: runs use the token-free ai-sdlc-ci-runner account
+    - expression: >-
+        !has(object.spec.taskRunSpecs) || object.spec.taskRunSpecs.all(s,
+          (!has(s.serviceAccountName) || s.serviceAccountName == 'ai-sdlc-ci-runner') &&
+          (!has(s.podTemplate) || !has(s.podTemplate.automountServiceAccountToken) ||
+           s.podTemplate.automountServiceAccountToken == false))
+      message: per-task overrides keep the token-free runner account
+    - expression: >-
+        !has(object.spec.workspaces) || object.spec.workspaces.all(w,
+          (w.name == 'source' && has(w.volumeClaimTemplate)) ||
+          (w.name == 'maven-cache' && has(w.persistentVolumeClaim) &&
+           w.persistentVolumeClaim.claimName.startsWith('ai-sdlc-ci-maven-cache-') &&
+           (object.spec.pipelineRef.name == 'ai-sdlc-maven-dependencies' ||
+            (has(w.persistentVolumeClaim.readOnly) && w.persistentVolumeClaim.readOnly == true))))
+      message: workspaces are a fresh source claim and a repository cache, read-only except for maven-dependencies
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ai-sdlc-ci-pipelineruns
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  policyName: ai-sdlc-ci-pipelineruns
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: ai-sdlc-ci

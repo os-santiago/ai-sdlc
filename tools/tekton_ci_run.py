@@ -25,7 +25,6 @@ import tekton_ci_install
 ROOT = Path(__file__).resolve().parents[1]
 PROJECTS = tekton_ci_install.DESIRED / 'projects'
 SERVICES = ('none', 'postgres', 'mongodb')
-CACHE_CLAIM = 'ai-sdlc-ci-maven-cache'
 SERVICE_ACCOUNT = 'ai-sdlc-ci-runner'
 SANDBOX = 'ai-sdlc-offline'
 REPOSITORY = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9_.-]{1,100}')
@@ -158,7 +157,7 @@ def maven_build_test(repository, revision, module, services, maven_args, runtime
                         [{'name': 'module', 'value': validate_path(module)},
                          {'name': 'services', 'value': validate_services(services)},
                          {'name': 'maven-args', 'value': validate_maven_args(maven_args)}],
-                        [{'name': 'maven-cache', 'persistentVolumeClaim': {'claimName': CACHE_CLAIM, 'readOnly': True}}],
+                        [{'name': 'maven-cache', 'persistentVolumeClaim': {'claimName': tekton_ci_install.cache_claim(repository), 'readOnly': True}}],
                         module, runtime_class)
 
 
@@ -170,7 +169,7 @@ def maven_dependencies(repository, revision, module, services, maven_args, mirro
                          {'name': 'services', 'value': validate_services(services)},
                          {'name': 'maven-args', 'value': validate_maven_args(maven_args)},
                          {'name': 'maven-mirror-url', 'value': mirror_url}],
-                        [{'name': 'maven-cache', 'persistentVolumeClaim': {'claimName': CACHE_CLAIM}}],
+                        [{'name': 'maven-cache', 'persistentVolumeClaim': {'claimName': tekton_ci_install.cache_claim(repository)}}],
                         module)
 
 
@@ -193,6 +192,15 @@ def base_head(repository, branch):
     if len(lines) != 2 or not REVISION.fullmatch(lines[0]):
         raise ValueError('Cannot read the base branch head')
     return lines[0]
+
+
+def passed(observed, revision):
+    """A run passes only when the pipeline succeeded, checked out the requested
+    commit and its tool reported exit code 0. The tasks publish a summary even
+    when the tool fails, so the pipeline's own verdict is not enough."""
+    summary = observed.get('summary') or {}
+    code = summary.get('mavenExitCode', summary.get('npmExitCode'))
+    return observed.get('succeeded') is True and observed.get('commit') == revision and type(code) is int and code == 0
 
 
 def summarize(pipeline_run_object):
@@ -221,7 +229,11 @@ def wait(kubectl, name, seconds, poll=10, sleep=time.sleep, clock=time.monotonic
             if observed['succeeded'] is not None:
                 return observed
         if clock() >= deadline:
-            raise ValueError('PipelineRun did not finish within the wait bound: ' + name)
+            # Stop the run rather than leave candidate code running unobserved.
+            run(kubectl + ['patch', 'pipelinerun.tekton.dev', name, '-n', tekton_ci_install.CI_NAMESPACE,
+                           '--type', 'merge', '-p', '{"spec":{"status":"Cancelled"}}'],
+                capture_output=True, check=False, timeout=60)
+            raise ValueError('PipelineRun did not finish within the wait bound and was cancelled: ' + name)
         sleep(poll)
 
 
@@ -320,8 +332,9 @@ def main(argv=None):
         print(json.dumps(summarize(created), indent=2))
         return 0
     observed = wait(kubectl, name, args.wait)
+    observed['passed'] = passed(observed, args.revision)
     print(json.dumps(observed, indent=2))
-    return 0 if observed['succeeded'] else 1
+    return 0 if observed['passed'] else 1
 
 
 if __name__ == '__main__':

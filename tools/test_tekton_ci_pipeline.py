@@ -56,14 +56,27 @@ class ManifestTests(unittest.TestCase):
         kinds = sorted((d['kind'], d['metadata']['name']) for d in documents())
         self.assertEqual(kinds, sorted([
             ('Namespace', 'ai-sdlc-ci'), ('ServiceAccount', 'ai-sdlc-ci-runner'),
-            ('PersistentVolumeClaim', 'ai-sdlc-ci-maven-cache'), ('NetworkPolicy', 'ai-sdlc-ci-default-deny'),
+            ('ServiceAccount', 'default'), ('NetworkPolicy', 'ai-sdlc-ci-default-deny'),
+            ('ValidatingAdmissionPolicy', 'ai-sdlc-ci-pipelineruns'), ('ValidatingAdmissionPolicyBinding', 'ai-sdlc-ci-pipelineruns'),
             ('NetworkPolicy', 'ai-sdlc-ci-fetch-dns'), ('NetworkPolicy', 'ai-sdlc-ci-fetch-https'),
             ('NetworkPolicy', 'ai-sdlc-ci-dependency-proxy'),
             ('Task', 'source-checkout'), ('Task', 'maven-build-test'), ('Task', 'maven-dependencies'),
             ('Task', 'npm-lock-update')] + [('Pipeline', p) for p in tekton.PIPELINES]))
         for doc in documents():
-            if doc['kind'] != 'Namespace':
+            if doc['kind'] not in ('Namespace', 'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding'):
                 self.assertEqual(doc['metadata']['namespace'], 'ai-sdlc-ci', doc['metadata']['name'])
+        for account in by_kind('ServiceAccount').values():
+            self.assertIs(account['automountServiceAccountToken'], False, account['metadata']['name'])
+        binding = by_kind('ValidatingAdmissionPolicyBinding')['ai-sdlc-ci-pipelineruns']['spec']
+        self.assertEqual((binding['validationActions'], binding['matchResources']['namespaceSelector']),
+                         (['Deny'], {'matchLabels': {'kubernetes.io/metadata.name': 'ai-sdlc-ci'}}))
+        policy = by_kind('ValidatingAdmissionPolicy')['ai-sdlc-ci-pipelineruns']['spec']
+        self.assertEqual(policy['failurePolicy'], 'Fail')
+        rules = ' '.join(v['expression'] for v in policy['validations'])
+        for pipeline in tekton.PIPELINES:
+            self.assertIn(pipeline, rules)
+        self.assertIn("'ai-sdlc-ci-runner'", rules)
+        self.assertIn('readOnly == true', rules)
         namespace = by_kind('Namespace')['ai-sdlc-ci']['metadata']['labels']
         self.assertEqual(namespace['pod-security.kubernetes.io/enforce'], 'restricted')
         self.assertIs(by_kind('ServiceAccount')['ai-sdlc-ci-runner']['automountServiceAccountToken'], False)
@@ -254,19 +267,19 @@ class ScriptTests(unittest.TestCase):
                 '[INFO] x\n[ERROR] ' + directory + '/source/app/src/main/java/A.java:[12,5] cannot find symbol\n'
                 '[ERROR] \tCannot access central in offline mode and the artifact a:b:jar:1 has not been downloaded from it before.\n')
             result = execute(text, env)
-            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertEqual(result.returncode, 0, 'Tekton publishes no results from a failed step; the verdict is mavenExitCode')
             summary = json.loads(Path(directory, 'result').read_text())
             self.assertEqual(summary, {'module': 'app', 'mavenExitCode': 1, 'reports': 2, 'tests': 75, 'failures': 2,
                                        'errors': 1, 'skipped': 1,
                                        'failingTests': ['org.a.ATests.breaks', 'org.a.ATests.quo&quot;te', 'org.b.BIT.it'],
                                        'compilerErrors': ['app/src/main/java/A.java:[12,5] cannot find symbol'],
-                                       'missingDependencies': True})
+                                       'missingDependencies': True, 'truncated': False})
             log.write_text('[INFO] ok\n')
             code.write_text('0')
             self.assertEqual(execute(text, env).returncode, 0)
             self.assertFalse(json.loads(Path(directory, 'result').read_text())['missingDependencies'])
             code.unlink()
-            self.assertEqual(execute(text, env).returncode, 1, 'a missing exit code is a failure')
+            self.assertEqual(execute(text, env).returncode, 0)
             self.assertEqual(json.loads(Path(directory, 'result').read_text())['mavenExitCode'], 255)
             env['MODULE'] = 'a"b'
             code.write_text('0')
@@ -288,14 +301,37 @@ class ScriptTests(unittest.TestCase):
                     {'SOURCE': directory + '/source', 'MODULE': 'app', 'MAVEN_EXIT_CODE_PATH': directory + '/exit',
                      'RESULT': directory + '/result'})
             raw = Path(directory, 'result').read_text()
-            self.assertLess(len(raw), 3500, 'Tekton keeps at most 4096 bytes of results per task')
+            self.assertLess(len(raw), 3800, 'Tekton keeps at most 4096 bytes of results per task')
             summary = json.loads(raw)
             self.assertEqual((len(summary['failingTests']), len(summary['compilerErrors'])), (10, 5))
+
+    def test_summary_escaping_cannot_exceed_the_result_bound(self):
+        # Names made of characters that double when escaped, plus non-ASCII and
+        # control characters: escaping happens after the length bound.
+        text = step('maven-build-test', 'summarize')['script']
+        hostile = ('\\"' * 200) + '\u00e9\u202e\t'
+        with tempfile.TemporaryDirectory() as directory:
+            reports = Path(directory, 'source/app/target/surefire-reports')
+            reports.mkdir(parents=True)
+            cases = ''.join('<testcase name="%s%d" classname="%s">\n<failure/>\n</testcase>\n' % (hostile, i, hostile) for i in range(50))
+            Path(reports, 'TEST-a.xml').write_text('<testsuite tests="50" failures="50">\n' + cases + '</testsuite>\n')
+            log = Path(directory, 'maven.log')
+            log.write_text(''.join('[ERROR] /x/A%d.java:[1,1] %s\n' % (i, hostile) for i in range(50)))
+            Path(directory, 'exit').write_text('1')
+            execute(text.replace('/tmp/maven.log', str(log)),
+                    {'SOURCE': directory + '/source', 'MODULE': 'app', 'MAVEN_EXIT_CODE_PATH': directory + '/exit',
+                     'RESULT': directory + '/result'})
+            raw = Path(directory, 'result').read_bytes()
+            self.assertLess(len(raw), 3800)
+            summary = json.loads(raw)
+            self.assertTrue(all(len(name) <= 100 and name.isascii() for name in summary['failingTests']))
+            self.assertEqual(summary['mavenExitCode'], 1)
 
     def test_npm_lock_update_refuses_unsafe_inputs(self):
         text = step('npm-lock-update', 'update')['script']
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, 'source/web').mkdir(parents=True)
+            Path(directory, 'tmp').mkdir()
             base = {'SOURCE': directory + '/source', 'OUTPUT': directory + '/out', 'RESULT': directory + '/r',
                     'HOME': directory, 'REGISTRY_URL': ''}
             for directory_value, mode, packages, registry in (
@@ -305,45 +341,86 @@ class ScriptTests(unittest.TestCase):
                     ('web', 'update', ['vite'], 'file:///x'), ('web', 'update', ['vite'], ''),
                     ('web', 'update', ['a'] * 17, '')):
                 env = dict(base, DIRECTORY=directory_value, MODE=mode, REGISTRY_URL=registry, PATH='/usr/bin:/bin')
-                result = subprocess.run(['sh', '-c', text, 'npm-lock-update'] + packages, env=env,
+                result = subprocess.run(['sh', '-c', text.replace('/tmp/', directory + '/tmp/'), 'npm-lock-update'] + packages, env=env,
                                         capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, 2, (directory_value, mode, packages, registry, result.stderr))
 
-    def test_npm_lock_update_reports_bounded_lockfile_changes(self):
+    def npm(self, directory, stub, packages=('vite@6.3.5',), npmrc=True):
+        """Run the update step against a stub npm, with /tmp mapped into the test directory."""
+        text = step('npm-lock-update', 'update')['script'].replace('/tmp/', directory + '/tmp/')
+        Path(directory, 'tmp').mkdir(exist_ok=True)
+        web = Path(directory, 'source/web')
+        web.mkdir(parents=True, exist_ok=True)
+        web.joinpath('package.json').write_text('{"name":"w"}')
+        lock = {'lockfileVersion': 3, 'packages': {
+            '': {'name': 'w'},
+            'node_modules/vite': {'version': '6.0.0', 'resolved': 'https://registry.npmjs.org/vite/-/vite-6.0.0.tgz'},
+            'node_modules/old': {'version': '1.0.0', 'resolved': 'https://registry.npmjs.org/old/-/old-1.0.0.tgz'}}}
+        web.joinpath('package-lock.json').write_text(json.dumps(lock, indent=2))
+        if npmrc:
+            web.joinpath('.npmrc').write_text('registry=https://evil.example/\n')
+        stubs = Path(directory, 'bin')
+        stubs.mkdir(exist_ok=True)
+        stubs.joinpath('npm').write_text(stub)
+        stubs.joinpath('npm').chmod(0o755)
+        env = {'SOURCE': directory + '/source', 'OUTPUT': directory + '/out', 'RESULT': directory + '/result',
+               'HOME': directory, 'DIRECTORY': 'web', 'MODE': 'update', 'REGISTRY_URL': '',
+               'PATH': str(stubs) + ':' + str(Path(shutil.which('node')).parent) + ':/usr/bin:/bin'}
+        return subprocess.run(['sh', '-c', text, 'npm-lock-update', *packages], env=env, capture_output=True, text=True, timeout=60)
+
+    def test_npm_lock_update_reports_bounded_changes_without_project_config(self):
         if not shutil.which('node'):
             self.skipTest('node is not installed')
-        text = step('npm-lock-update', 'update')['script']
         with tempfile.TemporaryDirectory() as directory:
-            web = Path(directory, 'source/web')
-            web.mkdir(parents=True)
-            web.joinpath('package.json').write_text('{"name":"w"}')
-            lock = {'lockfileVersion': 3, 'packages': {'': {'name': 'w'}, 'node_modules/vite': {'version': '6.0.0'},
-                                                       'node_modules/old': {'version': '1.0.0'}}}
-            web.joinpath('package-lock.json').write_text(json.dumps(lock, indent=2))
-            stubs = Path(directory, 'bin')
-            stubs.mkdir()
-            # A stub npm records its argv and rewrites the lockfile as an update would.
-            stubs.joinpath('npm').write_text('#!/bin/sh\necho "$@" > "%s/argv"\nnode -e \'const f="package-lock.json",'
-                                             'j=JSON.parse(require("fs").readFileSync(f));j.packages["node_modules/vite"].version="6.3.5";'
-                                             'delete j.packages["node_modules/old"];j.packages["node_modules/new"]={version:"2.0.0"};'
-                                             'require("fs").writeFileSync(f,JSON.stringify(j,null,2))\'\n' % directory)
-            stubs.joinpath('npm').chmod(0o755)
-            env = {'SOURCE': directory + '/source', 'OUTPUT': directory + '/out', 'RESULT': directory + '/result',
-                   'HOME': directory, 'DIRECTORY': 'web', 'MODE': 'update', 'REGISTRY_URL': '',
-                   'PATH': str(stubs) + ':' + str(Path(shutil.which('node')).parent) + ':/usr/bin:/bin'}
-            result = subprocess.run(['sh', '-c', text, 'npm-lock-update', 'vite@6.3.5'], env=env,
-                                    capture_output=True, text=True, timeout=60)
+            # The stub records its argv, working directory listing and registry,
+            # then rewrites the lockfile as an update would.
+            stub = ('#!/bin/sh\necho "$@" > "%s/argv"\nls -A > "%s/listing"\necho "$NPM_CONFIG_REGISTRY $NPM_CONFIG_GIT $NPM_CONFIG_USERCONFIG $NPM_CONFIG_GLOBALCONFIG" > "%s/config"\n'
+                    'node -e \'const f="package-lock.json",j=JSON.parse(require("fs").readFileSync(f));'
+                    'j.packages["node_modules/vite"]={version:"6.3.5",resolved:"https://registry.npmjs.org/vite/-/vite-6.3.5.tgz"};'
+                    'delete j.packages["node_modules/old"];j.packages["node_modules/new"]={version:"2.0.0",resolved:"https://other.example/new.tgz"};'
+                    'require("fs").writeFileSync(f,JSON.stringify(j,null,2))\'\n') % (directory, directory, directory)
+            result = self.npm(directory, stub)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(Path(directory, 'argv').read_text().split(),
                              ['update', 'vite@6.3.5', '--package-lock-only', '--ignore-scripts', '--no-audit'])
+            self.assertEqual(Path(directory, 'listing').read_text().split(), ['package-lock.json', 'package.json'],
+                             'npm runs on copies; the project .npmrc is not there to read')
+            self.assertEqual(Path(directory, 'config').read_text().split(),
+                             ['https://registry.npmjs.org/', 'false', directory + '/tmp/empty-npmrc', directory + '/tmp/empty-npmrc'])
+            self.assertEqual(Path(directory, 'tmp/empty-npmrc').read_text(), '')
             summary = json.loads(Path(directory, 'result').read_text())
             self.assertEqual(summary['changes'], [{'path': 'new', 'from': None, 'to': '2.0.0'},
                                                   {'path': 'old', 'from': '1.0.0', 'to': None},
                                                   {'path': 'vite', 'from': '6.0.0', 'to': '6.3.5'}])
             self.assertEqual((summary['changed'], summary['truncated'], summary['npmExitCode']), (3, False, 0))
+            self.assertEqual(summary['resolvedHosts'], ['other.example', 'registry.npmjs.org'])
+            self.assertEqual(summary['newResolvedHosts'], ['other.example'])
             diff = Path(directory, 'out/package-lock.diff').read_bytes()
             self.assertEqual(summary['diffBytes'], len(diff))
             self.assertRegex(summary['diffSHA256'], '^[0-9a-f]{64}$')
+            self.assertEqual(json.loads(Path(directory, 'source/web/package-lock.json').read_text())['packages']['node_modules/vite']['version'],
+                             '6.0.0', 'the checkout itself is not modified')
+
+    def test_npm_failure_still_publishes_its_summary(self):
+        if not shutil.which('node'):
+            self.skipTest('node is not installed')
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.npm(directory, '#!/bin/sh\necho "npm error E404" >&2\nexit 1\n', npmrc=False)
+            self.assertEqual(result.returncode, 0, 'Tekton publishes no results from a failed step; the verdict is npmExitCode')
+            summary = json.loads(Path(directory, 'result').read_text())
+            self.assertEqual((summary['npmExitCode'], summary['changed']), (1, 0))
+
+    def test_npm_egress_gate_requires_repeated_denial(self):
+        if not shutil.which('node'):
+            self.skipTest('node is not installed')
+        text = step('npm-lock-update', 'egress-gate')['script']
+        node = shutil.which('node')
+        refused = subprocess.run([node, '-e', text], env={'KUBERNETES_SERVICE_HOST': '127.0.0.1', 'KUBERNETES_SERVICE_PORT': '1'},
+                                 capture_output=True, text=True, timeout=30)
+        self.assertEqual(refused.returncode, 0, refused.stderr)
+        self.assertEqual(subprocess.run([node, '-e', text], env={}, capture_output=True, timeout=30).returncode, 1,
+                         'no address to probe is not a denial')
+        self.assertTrue(text.startswith('#!/usr/local/bin/node'))
 
 
 class RunToolTests(unittest.TestCase):
@@ -357,7 +434,8 @@ class RunToolTests(unittest.TestCase):
         self.assertEqual({p['name'] for p in spec['params']}, {p['name'] for p in pipeline['params']})
         self.assertEqual({w['name'] for w in spec['workspaces']}, {w['name'] for w in pipeline['workspaces']})
         cache = spec['workspaces'][1]
-        self.assertEqual(cache, {'name': 'maven-cache', 'persistentVolumeClaim': {'claimName': 'ai-sdlc-ci-maven-cache', 'readOnly': True}})
+        self.assertEqual(cache, {'name': 'maven-cache', 'persistentVolumeClaim': {
+            'claimName': tekton.cache_claim('os-santiago/quarkus-super-heroes'), 'readOnly': True}})
         template = spec['taskRunTemplate']
         self.assertEqual(template['serviceAccountName'], 'ai-sdlc-ci-runner')
         self.assertIs(template['podTemplate']['automountServiceAccountToken'], False)
@@ -372,7 +450,7 @@ class RunToolTests(unittest.TestCase):
 
     def test_dependencies_and_npm_runs_bind_their_pipeline_inputs(self):
         deps = runner.maven_dependencies('a/b', SHA, 'm', ['postgres'], [], mirror_url='http://dependency-proxy.ai-sdlc-dependencies.svc/maven2')
-        self.assertEqual(deps['spec']['workspaces'][1], {'name': 'maven-cache', 'persistentVolumeClaim': {'claimName': 'ai-sdlc-ci-maven-cache'}})
+        self.assertEqual(deps['spec']['workspaces'][1], {'name': 'maven-cache', 'persistentVolumeClaim': {'claimName': tekton.cache_claim('a/b')}})
         npm = runner.npm_lock_update('a/b', SHA, 'ui/web', 'update', ['vite@6.3.5'])
         for run, name in ((deps, 'ai-sdlc-maven-dependencies'), (npm, 'ai-sdlc-npm-lock-update')):
             pipeline = by_kind('Pipeline')[name]['spec']
@@ -436,9 +514,20 @@ class RunToolTests(unittest.TestCase):
                                                      Mock(returncode=0, stdout=json.dumps(done))]):
             observed = runner.wait(['kubectl'], 'x', 100, sleep=Mock(), clock=Mock(return_value=0))
         self.assertEqual((observed['succeeded'], observed['commit'], observed['summary']['tests']), (True, SHA, 94))
-        with patch.object(runner, 'run', return_value=Mock(returncode=0, stdout=json.dumps(running))), \
-             self.assertRaisesRegex(ValueError, 'wait bound'):
+        with patch.object(runner, 'run', return_value=Mock(returncode=0, stdout=json.dumps(running))) as calls, \
+             self.assertRaisesRegex(ValueError, 'cancelled'):
             runner.wait(['kubectl'], 'x', 5, sleep=Mock(), clock=Mock(side_effect=[0, 1, 10]))
+        cancel = calls.call_args.args[0]
+        self.assertEqual(cancel[1:3], ['patch', 'pipelinerun.tekton.dev'])
+        self.assertIn('{"spec":{"status":"Cancelled"}}', cancel)
+
+    def test_a_run_passes_only_with_success_the_requested_commit_and_exit_code_zero(self):
+        ok = {'succeeded': True, 'commit': SHA, 'summary': {'mavenExitCode': 0}}
+        self.assertTrue(runner.passed(ok, SHA))
+        self.assertTrue(runner.passed(dict(ok, summary={'npmExitCode': 0}), SHA))
+        for bad in (dict(ok, succeeded=False), dict(ok, commit='0' * 40), dict(ok, commit=None),
+                    dict(ok, summary={'mavenExitCode': 1}), dict(ok, summary=None), dict(ok, summary={'mavenExitCode': '0'})):
+            self.assertFalse(runner.passed(bad, SHA), bad)
 
 
 if __name__ == '__main__':

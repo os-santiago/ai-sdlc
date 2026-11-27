@@ -301,7 +301,9 @@ spec:
         # Sum one numeric attribute of a report's <testsuite> header.
         count() { printf '%s' "$header" | sed -n "s/.* $1=\"\([0-9]\{1,9\}\)\".*/\1/p"; }
         # JSON-escape one line and bound its length.
-        quote() { printf '%s' "$1" | cut -c1-160 | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/[[:cntrl:]]//g'; }
+        # Printable ASCII only, at most 100 characters, then escaped (at most
+        # 200 bytes), so 15 entries stay well inside Tekton's 4096-byte bound.
+        quote() { printf '%s' "$1" | LC_ALL=C tr -cd ' -~' | cut -c1-100 | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
         list() {
           printf '%s\n' "$1" | { first=1; printf '['; while IFS= read -r line; do
             [ -n "$line" ] || continue
@@ -339,8 +341,13 @@ spec:
         if grep -q 'has not been downloaded from it before' /tmp/maven.log 2>/dev/null; then missing=true; fi
         module="$MODULE"
         printf '%s' "$module" | grep -Eqx '[A-Za-z0-9_./-]{1,200}' || module=invalid
-        printf '{"module":"%s","mavenExitCode":%d,"reports":%d,"tests":%d,"failures":%d,"errors":%d,"skipped":%d,"failingTests":%s,"compilerErrors":%s,"missingDependencies":%s}' \
-          "$module" "$code" "$reports" "$tests" "$failures" "$errors" "$skipped" \
-          "$(list "$failing")" "$(list "$compile")" "$missing" > "$RESULT"
+        write() {
+          printf '{"module":"%s","mavenExitCode":%d,"reports":%d,"tests":%d,"failures":%d,"errors":%d,"skipped":%d,"failingTests":%s,"compilerErrors":%s,"missingDependencies":%s,"truncated":%s}' \
+            "$module" "$code" "$reports" "$tests" "$failures" "$errors" "$skipped" "$1" "$2" "$missing" "$3" > "$RESULT"
+        }
+        write "$(list "$failing")" "$(list "$compile")" false
+        if [ "$(wc -c < "$RESULT")" -gt 3800 ]; then write '[]' '[]' true; fi
         cat "$RESULT"; echo
-        [ "$code" -eq 0 ] || { echo "Maven exited with $code" >&2; exit 1; }
+        # The verdict travels in mavenExitCode: Tekton publishes no results
+        # from a failed task, so this step succeeds whenever it wrote one.
+        [ "$code" -eq 0 ] || echo "Maven exited with $code" >&2
