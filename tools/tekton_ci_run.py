@@ -362,8 +362,13 @@ def main(argv=None):
     kubectl = connect(args.cluster)
     if 'taskRunSpecs' in rendered['spec']:
         require_runtime_class(kubectl, args.runtime_class)
-    created = json.loads(run(kubectl + ['create', '-o', 'json', '-f', '-'], input=json.dumps(rendered),
-                             capture_output=True).stdout)
+    result = run(kubectl + ['create', '-o', 'json', '-f', '-'], input=json.dumps(rendered), capture_output=True, check=False)
+    if result.returncode != 0:
+        # The rendered run carries no credential; show the API's reason (for
+        # example an admission denial), bounded to one line.
+        lines = result.stderr.strip().splitlines()
+        raise ValueError('PipelineRun creation refused: ' + (lines[-1][:300] if lines else 'no reason given'))
+    created = json.loads(result.stdout)
     name = created['metadata']['name']
     print('Created ' + tekton_ci_install.CI_NAMESPACE + '/' + name, file=sys.stderr)
     if not args.wait:
