@@ -58,6 +58,7 @@ class ManifestTests(unittest.TestCase):
             ('Namespace', 'ai-sdlc-ci'), ('ServiceAccount', 'ai-sdlc-ci-runner'),
             ('PersistentVolumeClaim', 'ai-sdlc-ci-maven-cache'), ('NetworkPolicy', 'ai-sdlc-ci-default-deny'),
             ('NetworkPolicy', 'ai-sdlc-ci-fetch-dns'), ('NetworkPolicy', 'ai-sdlc-ci-fetch-https'),
+            ('NetworkPolicy', 'ai-sdlc-ci-dependency-proxy'),
             ('Task', 'source-checkout'), ('Task', 'maven-build-test'), ('Task', 'maven-dependencies'),
             ('Task', 'npm-lock-update')] + [('Pipeline', p) for p in tekton.PIPELINES]))
         for doc in documents():
@@ -160,6 +161,14 @@ class ManifestTests(unittest.TestCase):
         for address in ('10.96.0.1', '10.244.0.5', '172.18.0.2', '192.168.1.1', '169.254.169.254', '127.0.0.1', '100.64.0.1'):
             self.assertTrue(any(ipaddress.ip_address(address) in n for n in excluded), address)
         self.assertEqual(https['cidr'], '0.0.0.0/0')
+        # The proxy contract: only the proxy pods (Maven, npm) and DNS, and no
+        # task carries the label until the proxy is installed.
+        proxy = policies['ai-sdlc-ci-dependency-proxy']['spec']
+        self.assertEqual(proxy['podSelector'], {'matchLabels': {'ai-sdlc.io/ci-egress': 'dependency-proxy'}})
+        self.assertEqual(proxy['egress'][0]['to'], [{'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': 'ai-sdlc-dependencies'}},
+                                                     'podSelector': {'matchLabels': {'app.kubernetes.io/component': 'dependency-proxy'}}}])
+        self.assertEqual({p['port'] for p in proxy['egress'][0]['ports']}, {8080, 8081})
+        self.assertFalse(any('ipBlock' in peer for rule in proxy['egress'] for peer in rule['to']))
 
     def test_sidecars_start_only_when_requested_and_bind_loopback(self):
         for sidecar in by_kind('Task')['maven-build-test']['spec']['sidecars']:

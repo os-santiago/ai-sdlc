@@ -200,25 +200,23 @@ and restricted Pod Security apply either way.
 
 ### Maven proxy
 
-The `verification.dependencies` work adds an in-cluster Maven proxy
+The `verification.dependencies` work adds an in-cluster Maven and npm proxy
 (Service `dependency-proxy` in namespace `ai-sdlc-dependencies`, port 80 to
 pods labelled `app.kubernetes.io/component: dependency-proxy` on 8080; nginx
-forwards only to one upstream host and allowed path prefixes). Once it is
-installed, pass its URL as `maven-mirror-url` (`--maven-mirror-url` in the run
-tool), for example `http://dependency-proxy.ai-sdlc-dependencies.svc/maven2`;
-the Maven step writes a settings file with one `mirrorOf *` entry. Two policy
-changes then make the fetch tasks proxy-only:
+forwards only to one upstream host and allowed path prefixes). The CI side of
+its contract is already installed: policy `ai-sdlc-ci-dependency-proxy` lets
+pods labelled `ai-sdlc.io/ci-egress: dependency-proxy` reach only the proxy pods
+(Maven 8080, npm 8081) and cluster DNS, and the proxy admits that label from
+`ai-sdlc-ci`. No task carries the label yet. Once the proxy is installed:
 
-1. In `ai-sdlc-ci`, give `maven-dependencies` (and an npm proxy's client) its
-   own egress label and a policy allowing DNS plus TCP 8080 to the proxy pods
-   in `ai-sdlc-dependencies`, instead of public HTTPS. `source-checkout` keeps
-   GitHub HTTPS.
-2. In `ai-sdlc-dependencies`, admit ingress to the proxy from that label in
-   namespace `ai-sdlc-ci` (today it admits only its own prefetch pods).
+1. Switch `maven-dependencies` and `npm-lock-update` from the `fetch` label to
+   `dependency-proxy` (one line per Task). `source-checkout` keeps GitHub HTTPS.
+2. Pass the proxy as `maven-mirror-url` (`--maven-mirror-url` in the run tool;
+   the Maven step writes one `mirrorOf *` entry) or `registry-url`
+   (`--registry-url`).
 
-Both are deferred until the proxy merges, so this change does not edit its
-chart. Until then dependencies come from Maven Central and the npm registry
-over public HTTPS.
+Until then dependencies come from Maven Central and the npm registry over
+public HTTPS.
 
 ### Security boundaries and network exposure
 

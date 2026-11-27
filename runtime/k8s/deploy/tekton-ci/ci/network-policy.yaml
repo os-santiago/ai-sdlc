@@ -73,3 +73,46 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+---
+# The CI side of the dependency proxy contract (docs/operations/dependency-cache.md
+# in the proxy change): pods labelled ai-sdlc.io/ci-egress: dependency-proxy
+# reach only the proxy pods (Maven 8080, npm 8081) and cluster DNS for the
+# proxy Service name. No task carries this label until the proxy is installed;
+# then maven-dependencies and npm-lock-update switch to it from fetch.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-sdlc-ci-dependency-proxy
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  podSelector:
+    matchLabels:
+      ai-sdlc.io/ci-egress: dependency-proxy
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ai-sdlc-dependencies
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: dependency-proxy
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 8081
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
