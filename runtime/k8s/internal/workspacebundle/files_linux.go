@@ -81,9 +81,9 @@ func writeFile(root int, f File) error {
 // whole wire document or tree. Files are written to a fresh staging directory
 // next to repository; repository appears, by one rename, only after the whole
 // document was parsed, the tree checks passed, the wire SHA-256 equals
-// expectedDigest and the document names sourceSHA. Any refusal leaves at most
-// the staging directory: the workspace is then failed and non-reusable, as
-// after any partial import, and its owner discards the volume.
+// expectedDigest and the document names sourceSHA. A refusal removes the
+// staging directory, so repository never exists for refused input and a
+// later valid import can still run.
 func ImportFrom(parent string, input io.Reader, expectedDigest, sourceSHA string) (Summary, error) {
 	if input == nil || !ValidDigest(expectedDigest) || !ValidSourceSHA(sourceSHA) {
 		return Summary{}, ErrInvalid
@@ -97,23 +97,78 @@ func ImportFrom(parent string, input io.Reader, expectedDigest, sourceSHA string
 	if unix.Fstatat(fd, "repository", &st, unix.AT_SYMLINK_NOFOLLOW) != unix.ENOENT {
 		return Summary{}, ErrInvalid
 	}
-	if unix.Mkdirat(fd, stagingName, 0750) != nil {
+	// A staging directory left by an earlier refused or interrupted import is
+	// removed first, so a refusal never blocks a later valid import.
+	if removeTree(fd, stagingName) != nil || unix.Mkdirat(fd, stagingName, 0750) != nil {
 		return Summary{}, ErrInvalid
 	}
 	staging, e := unix.Openat(fd, stagingName, dirFlags, 0)
 	if e != nil {
 		return Summary{}, ErrInvalid
 	}
-	defer unix.Close(staging)
 	wire := newWireReader(input)
 	summary, _, e := scan(wire, true, func(f File) error { return writeFile(staging, f) })
-	if e != nil || wire.err != nil || wire.digest() != expectedDigest || summary.SourceSHA != sourceSHA {
+	if e != nil || wire.err != nil || wire.digest() != expectedDigest || summary.SourceSHA != sourceSHA || unix.Fsync(staging) != nil {
+		unix.Close(staging)
+		removeTree(fd, stagingName)
 		return Summary{}, ErrInvalid
 	}
-	if unix.Fsync(staging) != nil || unix.Renameat(fd, stagingName, fd, "repository") != nil || unix.Fsync(fd) != nil {
+	unix.Close(staging)
+	if unix.Renameat(fd, stagingName, fd, "repository") != nil || unix.Fsync(fd) != nil {
+		removeTree(fd, stagingName)
 		return Summary{}, ErrInvalid
 	}
 	return summary, nil
+}
+
+// removeTree deletes name below the directory dirfd and everything in it,
+// opening every directory without following links and unlinking entries by
+// descriptor, so a link inside is removed, never followed. A missing name is
+// not an error. The import calls it only for its own staging directory.
+func removeTree(dirfd int, name string) error {
+	var st unix.Stat_t
+	if e := unix.Fstatat(dirfd, name, &st, unix.AT_SYMLINK_NOFOLLOW); e == unix.ENOENT {
+		return nil
+	} else if e != nil {
+		return ErrInvalid
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFDIR {
+		return unix.Unlinkat(dirfd, name, 0)
+	}
+	child, e := unix.Openat(dirfd, name, dirFlags, 0)
+	if e != nil {
+		return ErrInvalid
+	}
+	copied, e := unix.Dup(child)
+	if e != nil {
+		unix.Close(child)
+		return ErrInvalid
+	}
+	directory := os.NewFile(uintptr(copied), "workspace-staging")
+	for {
+		entries, e := directory.Readdirnames(128)
+		for _, entry := range entries {
+			if removeTree(child, entry) != nil {
+				directory.Close()
+				unix.Close(child)
+				return ErrInvalid
+			}
+		}
+		if e == io.EOF || (e == nil && len(entries) == 0) {
+			break
+		}
+		if e != nil {
+			directory.Close()
+			unix.Close(child)
+			return ErrInvalid
+		}
+	}
+	directory.Close()
+	unix.Close(child)
+	if unix.Unlinkat(dirfd, name, unix.AT_REMOVEDIR) != nil {
+		return ErrInvalid
+	}
+	return nil
 }
 
 // stagingName is the fixed directory ImportFrom fills before renaming it to

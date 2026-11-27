@@ -115,7 +115,8 @@ named fetch, import or export step, with no partial checkout.
   tree becomes `repository`: files are written to `.repository-import` with
   the same no-follow, exclusive creation, and the directory is renamed only
   after the whole document, the tree checks and the digest pass. A refused
-  import leaves the workspace failed, as any partial import did.
+  import removes the staging directory without following links, so invalid
+  input never produces `repository` and a later valid import still runs.
 - The export helper finds every refusal reason before writing; a file that
   changes between listing and reading (device, inode, mode, links, owner,
   size and change times) fails the export with a nonzero exit, which voids

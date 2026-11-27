@@ -391,8 +391,10 @@ const (
 	fileClose = `"}`
 )
 
+// headerBytes needs no escaping: Version is a fixed ASCII constant and every
+// caller has checked that sourceSHA is 40 lowercase hex digits.
 func headerBytes(sourceSHA string) []byte {
-	return []byte(`{"version":` + string(jsonString(Version)) + `,"sourceSHA":` + string(jsonString(sourceSHA)) + `,"files":[`)
+	return []byte(`{"version":"` + Version + `","sourceSHA":"` + sourceSHA + `","files":[`)
 }
 func fileSize(f File) int {
 	return len(fileOpen) + len(jsonString(f.Path)) + len(fileMode) + len(strconv.FormatUint(uint64(f.Mode), 10)) + len(fileData) + base64.StdEncoding.EncodedLen(len(f.Data)) + len(fileClose)
@@ -421,6 +423,9 @@ type encoder struct {
 }
 
 func newEncoder(w io.Writer, sourceSHA string) (*encoder, error) {
+	if !ValidSourceSHA(sourceSHA) {
+		return nil, ErrInvalid
+	}
 	e := &encoder{w: w}
 	return e, e.write(headerBytes(sourceSHA))
 }
@@ -436,7 +441,8 @@ func (e *encoder) write(p []byte) error {
 	return nil
 }
 func (e *encoder) file(f File) error {
-	if e.files >= MaxFiles {
+	// Bounded inputs keep the size below MaxWireBytes, far from overflow.
+	if e.files >= MaxFiles || len(f.Path) > MaxPathBytes || len(f.Data) > MaxFileBytes {
 		return ErrInvalid
 	}
 	size := fileSize(f) + 1

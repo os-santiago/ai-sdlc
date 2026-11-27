@@ -260,7 +260,29 @@ func TestImportFromPublishesOnlyAVerifiedTree(t *testing.T) {
 			if _, err := os.Lstat(filepath.Join(parent, "repository")); !os.IsNotExist(err) {
 				t.Fatal("repository published for a refused import")
 			}
+			if _, err := os.Lstat(filepath.Join(parent, stagingName)); !os.IsNotExist(err) {
+				t.Fatal("staging left after a refused import")
+			}
 		})
+	}
+	// A staging directory from an interrupted import (with a link inside,
+	// which is removed, never followed) does not block a valid import.
+	retry := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "keep")
+	if err := os.WriteFile(outside, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(retry, stagingName, "a", "b"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Dir(outside), filepath.Join(retry, stagingName, "a", "link")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ImportFrom(retry, bytes.NewReader(raw), Digest(raw), b.SourceSHA); err != nil {
+		t.Fatal("stale staging blocked a valid import", err)
+	}
+	if data, err := os.ReadFile(outside); err != nil || string(data) != "keep" {
+		t.Fatal("removal followed a link")
 	}
 	parent := t.TempDir()
 	// A rune split across every read boundary is still valid UTF-8.

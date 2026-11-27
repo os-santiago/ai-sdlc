@@ -54,10 +54,12 @@ exists, and writes each file into the fixed staging directory
 exclusive file creation and permissions applied by descriptor. Only after the
 whole document parsed, every bound and tree check passed, the exact wire SHA-256
 matched and the document named the expected source commit is the staging
-directory renamed to `repository`. A refused or partial import leaves at most
-the staging directory: it is a failed, non-reusable workspace; discard the owned
-Pod/volume instead of retrying over it. Success is reported only after all file
-writes, syncs and the rename.
+directory renamed to `repository`. A refusal removes the staging directory
+(opening each directory without following links and unlinking by descriptor),
+and a stale one is removed before a new import, so `repository` never exists for
+refused input. An import interrupted after the rename began is still a failed,
+non-reusable workspace; discard the owned Pod/volume instead of retrying over
+it. Success is reported only after all file writes, syncs and the rename.
 
 Export opens that fixed directory with no-follow traversal. It enumerates names
 in batches, counts all visited nodes, and inspects each through its directory
