@@ -76,9 +76,30 @@ Battery 37 repeated the product path on the second sample repository, in another
 
 **Reading:** the path delivers on a second language with the same median call count as on Go (7; 5–9 here, 5–15 on Go). Each repository now has a first 12-issue measurement on this model path: 12 of the 60 distinct issues each cell needs. They are not gate evidence, because they ran on development revisions.
 
+## Follow-up: credential, generator guidance and two forge stops (batteries 38–40)
+
+All three ran on the Python sample with the same cell label (`agent-cli-claude-sonnet`).
+
+| Battery | Install | Issues | Within two attempts | First attempt | What it tested |
+|---|---|---|---|---|---|
+| [38](2026-11-26-evaluation-battery-38.json) | 32321e1 | 26–31 (new) | 5/6 (83.3% [43.6%, 97.0%]) | 4/6 | The read-only source credential (#796) mounted in the verifier |
+| [39](2026-11-26-evaluation-battery-39.json) | 0694b2f | 37–46 (new) | 3/10 (30.0% [10.8%, 60.3%]) | 3/10 | The generator guidance from #828 |
+| [40](2026-11-26-evaluation-battery-40.json) | 127e220 | 26, 38, 41–46 (re-delivery) | 7/8 (87.5% [52.9%, 97.8%]) | 7/8 | The merge deadline and stop diagnostics from #829, on a fresh cluster |
+
+- **Battery 38:** verification and review read the source with the read-only credential, and no stop involved it. Two first attempts were refused because the candidates' own tests failed. In one the expectation was hand-computed wrong. In two other refused candidates (here and in battery 37) the tests imported `pytest`, which the offline verification image lacks. Issue 26's retry timed out after the review requested changes.
+- **Battery 39:** #828 tells a generator without a toolchain to use the repository's test framework and names the reviewed verification command. All 16 candidates used `unittest` (none used `pytest`). Delivery still fell to 3/10. Six of the seven undelivered issues stopped for two reasons outside generation; the seventh (46) was refused because its own test was wrong (see battery 40):
+  - **A merge left uncertain.** The merge transport waited only 5 s for GitHub's response. GitHub merged PR 49 about 5.1 s after the effect began, so the merge was journaled as uncertain. With no merge reconciler (#830), every later merge was quarantined, and release-manager readiness failed with it. Five issues passed review and then timed out waiting to publish. The second attempt of one of them (43) stopped earlier, in candidate execution, on a transport stop (`execution-read-helper-transport`).
+  - **A publication stop.** One issue's tree write stopped about 3 s after it began, twice, with the HTTP status discarded. Replaying the same digest-verified request later returned 201 with the planned tree SHA, so the content (which included non-ASCII text) was not the cause.
+- **Battery 40:** after #829 (a longer merge response deadline, and stop logs that name the stage and HTTP class), on a fresh cluster, it re-delivered the eight issues battery 38 or 39 left undelivered. Seven delivered on the first attempt, including the one whose tree write had stopped. The eighth (46) was refused in all four attempts across batteries 39 and 40. Each time the code was right and the candidate's own test expected a wrong count.
+
+**Reading:**
+- The merge stop came from a pre-existing 5 s response deadline, not from #828. The tree-write stop's cause is unknown, because its HTTP status was discarded. The replay rules out the content, and the stop did not recur in battery 40.
+- Battery 40 re-delivers issues that failed before, so it is not a fresh sample, and the harness counts those issues from their earlier trials. With #829, its seven merges completed with no uncertain merge, and the tree-write stop did not recur. A slower merge would still quarantine merges until #830 adds a reconciler.
+- After #828 (batteries 39–40), the remaining refusals were wrong expectations in candidates' own tests, all four on a single issue (46). The generator cannot run tests there, because the Python image cannot be a generation toolchain (#831).
+
 ## Limits
 
-- **Easy issues.** The corpus is small Go functions in one sample repository (and, for battery 37, small Python functions in a second).
+- **Easy issues.** The corpus is small Go functions in one sample repository (and, for batteries 37–40, small Python functions in a second).
 - **Not a product path.** The bridge is evaluation-only, so batteries 33–35 are not Beta gate evidence. Battery 36 is a product path but shares the easy-issue, single-Go-repository limit, and ran on an in-place install rather than a fresh cluster.
 - **Not a controlled comparison.** The local-model figures come from different issues and from three revisions (7f50d07, 4f51e42 and 24c3190); only 230, 232 and 233 overlap.
 - **Host load.** The local model served only reviews, so the cluster was less loaded than in the local-model batteries.
