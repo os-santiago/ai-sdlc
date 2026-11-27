@@ -66,6 +66,10 @@ type Verification struct {
 	// Analysis is optional static analysis, omitted when absent so manifests
 	// without it keep their canonical form, digest and verifier settings.
 	Analysis *Analysis `json:"analysis,omitempty"`
+	// Services are optional backing services the tests reach over the pod's
+	// loopback (see Service). Omitted when absent, so manifests without
+	// them keep their canonical form, digest and verifier settings.
+	Services []Service `json:"services,omitempty"`
 }
 
 // Analysis declares static analysis commands (for example go vet ./...) that
@@ -600,7 +604,8 @@ func (v Verification) validate() error {
 		v.TimeoutSeconds < 30 || v.TimeoutSeconds > 600 || !cpuQuantity.MatchString(v.CPU) ||
 		!byteQuantity.MatchString(v.Memory) || !byteQuantity.MatchString(v.EphemeralStorage) ||
 		v.Network != "none" || !v.Result.ExitCode || v.Repeat < 1 || v.Repeat > 3 ||
-		len(v.TestGlobs) == 0 || len(v.TestGlobs) > 32 || len(v.HarnessGlobs) > 64 || !validEnv(v.Env) {
+		len(v.TestGlobs) == 0 || len(v.TestGlobs) > 32 || len(v.HarnessGlobs) > 64 || !validEnv(v.Env) ||
+		!validServices(v.Services) {
 		return ErrManifest
 	}
 	for _, g := range v.HarnessGlobs {

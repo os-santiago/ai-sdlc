@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -32,6 +33,7 @@ type TestsRun struct {
 	source    []byte
 	timeout   time.Duration
 	analysis  time.Duration // the run's analysis commands, 0 without
+	services  time.Duration // the longest service readiness wait, 0 without
 	runs      int
 	imported  bool
 	tests     string // container ID of the tests container seen by Import
@@ -58,7 +60,8 @@ func PlanTestsRun(client *Client, p repositorytests.Pod, admission RuntimeClassA
 	}
 	t := &TestsRun{resources: &Resources{client: client, binding: Binding{Namespace: p.Namespace, RuntimeClass: p.RuntimeClass, Admission: admission}, expires: expires},
 		run: p.Run, sourceSHA: p.SourceSHA, treeSHA: p.TreeSHA256, source: source, runs: repositorytests.Repetitions(p.Run, p.Verification),
-		timeout: time.Duration(p.Verification.TimeoutSeconds) * time.Second, analysis: time.Duration(repositorytests.AnalysisSeconds(p.Run, p.Verification)) * time.Second}
+		timeout: time.Duration(p.Verification.TimeoutSeconds) * time.Second, analysis: time.Duration(repositorytests.AnalysisSeconds(p.Run, p.Verification)) * time.Second,
+		services: time.Duration(p.Verification.ServiceReadySeconds()) * time.Second}
 	config, _ := json.Marshal(w.ConfigMap)
 	pod, _ := json.Marshal(w.Pod)
 	if authority.DecodeStrict(config, &t.resources.config) != nil || authority.DecodeStrict(pod, &t.resources.pod) != nil {
@@ -123,7 +126,7 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 	}
 	var pod core.Pod
 	if authority.DecodeStrict(raw, &pod) != nil || !exactPodTemplate(pod, r.pod, uid, r.binding.Admission) || len(pod.Status.EphemeralContainerStatuses) != 0 ||
-		len(pod.Status.InitContainerStatuses) > 2 || len(pod.Status.ContainerStatuses) > 1 {
+		len(pod.Status.InitContainerStatuses) > len(r.pod.Spec.InitContainers) || len(pod.Status.ContainerStatuses) > 1 {
 		return testsObservation{}, testsFailure("observe-template", ErrTransport)
 	}
 	o := testsObservation{phase: pod.Status.Phase, testsState: "waiting"}
@@ -135,7 +138,9 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 		images[c.Name] = c.Image
 	}
 	seen := map[string]bool{}
-	transferStopped := false
+	// A sidecar (transfer or a manifest service) that stopped before the
+	// tests completed means the pod is ending without a result.
+	sidecarStopped := false
 	for _, s := range append(append([]core.ContainerStatus{}, pod.Status.InitContainerStatuses...), pod.Status.ContainerStatuses...) {
 		pin, known := images[s.Name]
 		if !known || seen[s.Name] || s.RestartCount != 0 || s.LastTerminationState.Terminated != nil || s.LastTerminationState.Running != nil ||
@@ -174,7 +179,7 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 			if running {
 				o.transfer = s.ContainerID
 			} else if stopped {
-				transferStopped = true
+				sidecarStopped = true
 			}
 		case "tests":
 			switch {
@@ -185,9 +190,21 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 			case !waiting:
 				return testsObservation{}, testsFailure("observe-container", ErrTransport)
 			}
+		default:
+			// A manifest service (the only other compiled name): waiting,
+			// running or, once the tests end, stopped by the kubelet. A
+			// restart was refused above, so a service that crashed and came
+			// back never serves a later repetition unnoticed.
+			stopped := s.State.Terminated != nil && s.State.Running == nil && s.State.Waiting == nil && started
+			if !strings.HasPrefix(s.Name, repositorytests.ServiceContainerPrefix) || (!waiting && !running && !stopped) {
+				return testsObservation{}, testsFailure("observe-container", ErrTransport)
+			}
+			if stopped {
+				sidecarStopped = true
+			}
 		}
 	}
-	if (o.phase == core.PodSucceeded || transferStopped) && o.testsState != "completed" {
+	if (o.phase == core.PodSucceeded || sidecarStopped) && o.testsState != "completed" {
 		return testsObservation{}, testsFailure("observe-progress", ErrTransport)
 	}
 	return o, nil
@@ -318,7 +335,7 @@ func (t *TestsRun) ReadResult(ctx context.Context, uid string) ([]repositorytest
 	if t == nil || t.tests == "" || !resourceUID.MatchString(uid) {
 		return nil, nil, ErrTransport
 	}
-	deadline := time.Now().Add(time.Duration(t.runs)*t.timeout + t.analysis + repositorytests.MarginSeconds*time.Second)
+	deadline := time.Now().Add(t.services + time.Duration(t.runs)*t.timeout + t.analysis + repositorytests.MarginSeconds*time.Second)
 	if _, err := t.poll(ctx, uid, deadline, func(o testsObservation) bool { return o.phase == core.PodSucceeded }); err != nil {
 		return nil, nil, err
 	}

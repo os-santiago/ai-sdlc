@@ -20,6 +20,7 @@ Start from [`examples/ai-sdlc-sample.project.json`](../../examples/ai-sdlc-sampl
 | `verification.testGlobs` | The files that count as tests |
 | `verification.harnessGlobs` | Files a candidate may not change (build, dependency and test configuration, and the configuration of any `verification.analysis` tool, such as `.golangci.yml`, so a candidate cannot switch off its own analysis) |
 | `verification.env` | Optional reviewed toolchain variables, for example `GOTOOLCHAIN=local` |
+| `verification.services` | Optional backing services (databases, brokers) that the tests reach on `localhost`, in place of Quarkus Dev Services or Testcontainers. See [backing services](#optional-backing-services-for-the-tests) |
 | `verification.analysis` | Optional static analysis: up to 4 argv `commands` and one `timeoutSeconds` (10–300, at most 600 in total), for example `{"commands": [["go", "vet", "./..."]], "timeoutSeconds": 120}`. They run offline in `verification.image`, on the baseline and on the candidate. A command that passes on the baseline and fails on the candidate refuses it (`refused-candidate-analysis`). See the [candidate baseline](../architecture/candidate-quality-baseline.md#static-analysis) |
 | `publication` | The paths a candidate may change, and the file and size limits |
 | `publication.commitIdentity` | Optional `name` and `email` of the author, committer and `Signed-off-by` of every published commit. Defaults to `ai-sdlc[bot] <noreply@ai-sdlc.invalid>`; omitted when absent, so existing digests do not change. Images older than this field refuse a manifest that sets it, so reinstall the manifest without it before rolling back (see [rollback](publication-writer.md#rollback)). See [commit identity](publication-writer.md#commit-identity) |
@@ -33,6 +34,110 @@ Every candidate is also scanned for added credentials before verification
 starts, whatever the manifest says (`refused-candidate-secret`). Test
 fixtures that need a key or token-shaped value should generate it at run
 time; see the [candidate baseline](../architecture/candidate-quality-baseline.md#secret-scanning).
+
+### Optional: backing services for the tests
+
+Frameworks such as Quarkus (Dev Services) and Spring Boot (Testcontainers)
+start databases and brokers for their tests through a container engine. The
+offline verifier has none, so those tests fail. `verification.services`
+declares up to six reviewed services instead. Each one runs as a sidecar of
+every test pod, and the tests reach it on `localhost`.
+
+Example: the `rest-villains` module of
+[quarkus-super-heroes](https://github.com/os-santiago/quarkus-super-heroes)
+with a PostgreSQL sidecar
+([`examples/quarkus-super-heroes-rest-villains.project.json`](../../examples/quarkus-super-heroes-rest-villains.project.json)):
+
+```json
+"env": {
+  "QUARKUS_DEVSERVICES_ENABLED": "false",
+  "QUARKUS_DATASOURCE_JDBC_URL": "jdbc:postgresql://localhost:5432/villains_database",
+  "QUARKUS_DATASOURCE_USERNAME": "superbad",
+  "QUARKUS_DATASOURCE_PASSWORD": "superbad",
+  "QUARKUS_OTEL_SDK_DISABLED": "true"
+},
+"services": [{
+  "name": "villains-db",
+  "image": "docker.io/library/postgres@sha256:87c8b42f423b45d5247e6aa8fdb2e7762fec164c68a50fe3eb07e7bfcaf4dbcf",
+  "env": {"POSTGRES_USER": "superbad", "POSTGRES_PASSWORD": "superbad",
+          "POSTGRES_DB": "villains_database", "PGDATA": "/var/lib/postgresql/data/pgdata"},
+  "user": 999,
+  "port": 5432,
+  "readySeconds": 120,
+  "writablePaths": ["/var/lib/postgresql/data", "/var/run/postgresql", "/tmp"],
+  "cpu": "500m", "memory": "512Mi", "ephemeralStorage": "512Mi"
+}]
+```
+
+The framework switches go in `verification.env`. That map already reaches
+the test command, so no other mechanism is needed: Quarkus reads
+`quarkus.devservices.enabled` from `QUARKUS_DEVSERVICES_ENABLED`, and Spring
+reads `spring.datasource.url` from `SPRING_DATASOURCE_URL`. Variable names are
+upper case, at most 16 entries.
+
+| Field | Rule |
+|---|---|
+| `name` | 1–15 lower-case letters, digits and inner hyphens; unique. The sidecar is `service-<name>` |
+| `image` | Pinned by digest |
+| `args` | Optional, at most 32 arguments. They replace the image's `CMD`; its `ENTRYPOINT` is kept |
+| `env` | Optional, at most 16 upper-case variables. These go to the service only, never to the tests |
+| `user`, `group` | Numeric identity, never root (`user` ≥ 1). `group` defaults to `user` |
+| `port` | TCP port 1024–65535, unique. Also the readiness check |
+| `readySeconds` | 1–180: how long the runner waits for `port` to accept a connection |
+| `writablePaths` | Up to 8 absolute, distinct, non-nested directories the service writes to (data, sockets, `/tmp`). Each one is mounted from the service's own empty volume |
+| `writableRootFilesystem` | Optional `true` for an image that cannot run with a read-only root filesystem. Omit it whenever possible |
+| `cpu`, `memory`, `ephemeralStorage` | Same formats as the tests container. Requests equal limits. `ephemeralStorage` also bounds the service's volume |
+
+`args` and `env` values cannot contain `$`. Kubernetes would expand
+`$(NAME)` and collapse `$$`, so the value that runs would differ from the
+reviewed one. Service values are visible in the pod spec and in the
+verifier's settings, so use throwaway test credentials only.
+
+**Lifecycle.** Each run (baseline, cross, candidate) is a new pod with new,
+empty services. The sidecars start after the transfer sidecar and before the
+tests container. Before any repository code runs, the runner waits for every
+port on `127.0.0.1`. A service that is not ready within `readySeconds` fails
+the run as a transport failure, not a decision. The candidate pod's
+repetitions share its services. A test that relies on a pristine database
+can therefore disagree between repetitions, and the verifier refuses that
+candidate as `uncertain`. Recreating the schema at startup avoids this, as
+`rest-villains` does with `drop-and-create`. A service that exits or restarts
+also fails the run.
+
+**Isolation.** A service gets no service account token, no secrets and no
+service links. It does not mount the workspace, the runner, the settings or
+the pod identity. It runs non-root with every capability dropped, no
+privilege escalation, RuntimeDefault seccomp and, unless the manifest opts
+out, a read-only root filesystem. It runs inside the same gVisor sandbox
+(`network=none`) as the tests, so loopback is its only network. The images
+come only from the installed manifest. A candidate cannot change them
+because the manifest is installation configuration. Images must be pullable
+by the cluster, like the toolchain image.
+
+**Budgets.** Service images are pulled within the pod's existing 300-second
+pull budget, before the tests container starts; pre-pull large images on the
+nodes. The pod deadline adds the longest `readySeconds`. The verifier
+namespace quota adds every service's CPU and memory to each of the three
+concurrent runs. The test timeout stays at most 600 seconds: the whole
+verification (pulls, import, readiness, `repeat` runs and analysis) must fit
+the signed verification command's 30-minute lifetime.
+
+The example is for illustration. The Maven image above has no project
+dependencies, and tests run offline, so use a toolchain image that already
+holds the dependency repository. The command excludes `UIResourceTests`,
+which needs a browser that the offline pod does not have. It also excludes
+the `*IT` integration tests: an explicit `-Dtest` overrides Surefire's
+default excludes, and those tests need the packaged application.
+
+Measured on 2026-11-27 in a podman pod with `--network none`:
+- the sidecar used this PostgreSQL image with the example's hardening (uid
+  999, read-only root, every capability dropped, no new privileges, the
+  three writable paths on group-writable volumes);
+- the tests container ran as uid 1000 with a read-only root and a populated
+  local Maven repository;
+- the example command passed 72 of 72 tests in 69 seconds;
+- that was the second run against the same database, so repetitions
+  sharing a service work for this module.
 
 ### Optional: a toolchain for the generator
 

@@ -57,8 +57,9 @@ func compileProjectInstallation(input io.Reader, output io.Writer) error {
 
 // verifierQuota sizes the verifier namespace for the manifest's three
 // concurrent test runs. Each pod's effective requests are the tests
-// container's plus the transfer sidecar's (the init copy is smaller); its
-// limits add the sidecar's limits. The reference recipes need less.
+// container's plus the transfer sidecar's and every manifest service
+// sidecar's (the init copy is smaller); its limits add the sidecars' limits.
+// A service's requests equal its limits. The reference recipes need less.
 func verifierQuota(m project.Manifest) (map[string]string, error) {
 	if m.Verification == nil {
 		return nil, nil
@@ -70,6 +71,15 @@ func verifierQuota(m project.Manifest) (map[string]string, error) {
 	memory, err := resource.ParseQuantity(m.Verification.Memory)
 	if err != nil {
 		return nil, errors.New("invalid verification memory")
+	}
+	for _, s := range m.Verification.Services {
+		serviceCPU, cpuErr := resource.ParseQuantity(s.CPU)
+		serviceMemory, memoryErr := resource.ParseQuantity(s.Memory)
+		if cpuErr != nil || memoryErr != nil {
+			return nil, errors.New("invalid verification service resources")
+		}
+		cpu.Add(serviceCPU)
+		memory.Add(serviceMemory)
 	}
 	sum := func(base resource.Quantity, extra string) string {
 		total := resource.Quantity{Format: base.Format}

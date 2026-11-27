@@ -54,6 +54,10 @@ type testsCluster struct {
 	// written as the status, 0 serves the pod.
 	podFault func(n int) int
 	podGets  int
+	// services, when set, adds manifest services to the fixture pod; each
+	// one's status follows the transfer sidecar's unless service rewrites it.
+	services []project.Service
+	service  func(status core.ContainerStatus) core.ContainerStatus
 }
 
 func (c *testsCluster) status(name, image, id string, state core.ContainerState) core.ContainerStatus {
@@ -128,12 +132,35 @@ func (c *testsCluster) current(t *TestsRun) core.Pod {
 		pod.Status.InitContainerStatuses = []core.ContainerStatus{install, transfer}
 		pod.Status.ContainerStatuses = []core.ContainerStatus{done}
 	}
+	// Manifest services follow the transfer sidecar's state unless the test
+	// overrides them.
+	for _, sidecar := range init[min(2, len(init)):] {
+		status := core.ContainerStatus{Name: sidecar.Name, Image: sidecar.Image, State: core.ContainerState{Waiting: &core.ContainerStateWaiting{Reason: "PodInitializing"}}}
+		for _, transfer := range pod.Status.InitContainerStatuses {
+			if transfer.Name == "transfer" {
+				status = transfer
+				status.Name, status.Image = sidecar.Name, sidecar.Image
+				if status.ImageID != "" {
+					status.ImageID = sidecar.Image
+				}
+				if status.State.Terminated != nil {
+					terminated := *status.State.Terminated
+					status.State.Terminated = &terminated
+				}
+			}
+		}
+		if c.service != nil {
+			status = c.service(status)
+		}
+		pod.Status.InitContainerStatuses = append(pod.Status.InitContainerStatuses, status)
+	}
 	return pod
 }
 
 func testsServer(t *testing.T, c *testsCluster) *TestsRun {
 	t.Helper()
 	p, source := testsFixturePod()
+	p.Verification.Services = c.services
 	var run *TestsRun
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
