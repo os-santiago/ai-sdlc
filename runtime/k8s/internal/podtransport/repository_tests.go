@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -14,6 +15,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/repositorytests"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 	core "k8s.io/api/core/v1"
+	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // VerifierNamespace is the only namespace repository test pods run in: its
@@ -32,6 +34,7 @@ type TestsRun struct {
 	tree      workspacebundle.Bundle
 	timeout   time.Duration
 	analysis  time.Duration // the run's analysis commands, 0 without
+	services  time.Duration // the longest service readiness wait, 0 without
 	runs      int
 	imported  bool
 	tests     string // container ID of the tests container seen by Import
@@ -71,7 +74,8 @@ func PlanTestsRunTree(client *Client, p repositorytests.Pod, admission RuntimeCl
 	}
 	t := &TestsRun{resources: &Resources{client: client, binding: Binding{Namespace: p.Namespace, RuntimeClass: p.RuntimeClass, Admission: admission}, expires: expires},
 		run: p.Run, sourceSHA: p.SourceSHA, treeSHA: p.TreeSHA256, tree: tree, runs: repositorytests.Repetitions(p.Run, p.Verification),
-		timeout: time.Duration(p.Verification.TimeoutSeconds) * time.Second, analysis: time.Duration(repositorytests.AnalysisSeconds(p.Run, p.Verification)) * time.Second}
+		timeout: time.Duration(p.Verification.TimeoutSeconds) * time.Second, analysis: time.Duration(repositorytests.AnalysisSeconds(p.Run, p.Verification)) * time.Second,
+		services: time.Duration(p.Verification.ServiceReadySeconds()) * time.Second}
 	config, _ := json.Marshal(w.ConfigMap)
 	pod, _ := json.Marshal(w.Pod)
 	if authority.DecodeStrict(config, &t.resources.config) != nil || authority.DecodeStrict(pod, &t.resources.pod) != nil {
@@ -136,7 +140,7 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 	}
 	var pod core.Pod
 	if authority.DecodeStrict(raw, &pod) != nil || !exactPodTemplate(pod, r.pod, uid, r.binding.Admission) || len(pod.Status.EphemeralContainerStatuses) != 0 ||
-		len(pod.Status.InitContainerStatuses) > 2 || len(pod.Status.ContainerStatuses) > 1 {
+		len(pod.Status.InitContainerStatuses) > len(r.pod.Spec.InitContainers) || len(pod.Status.ContainerStatuses) > 1 {
 		return testsObservation{}, testsFailure("observe-template", ErrTransport)
 	}
 	o := testsObservation{phase: pod.Status.Phase, testsState: "waiting"}
@@ -148,7 +152,13 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 		images[c.Name] = c.Image
 	}
 	seen := map[string]bool{}
-	transferStopped := false
+	// A sidecar (transfer or a manifest service) that stopped before the
+	// tests completed means the pod is ending without a result.
+	sidecarStopped := false
+	// Manifest services seen terminated, checked against the tests
+	// container's end once every status is read.
+	var servicesStopped []*core.ContainerStateTerminated
+	var testsFinished meta.Time
 	for _, s := range append(append([]core.ContainerStatus{}, pod.Status.InitContainerStatuses...), pod.Status.ContainerStatuses...) {
 		pin, known := images[s.Name]
 		if !known || seen[s.Name] || s.RestartCount != 0 || s.LastTerminationState.Terminated != nil || s.LastTerminationState.Running != nil ||
@@ -187,7 +197,7 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 			if running {
 				o.transfer = s.ContainerID
 			} else if stopped {
-				transferStopped = true
+				sidecarStopped = true
 			}
 		case "tests":
 			switch {
@@ -195,15 +205,48 @@ func (t *TestsRun) observe(ctx context.Context, uid string) (testsObservation, e
 				o.tests, o.testsState = s.ContainerID, "running"
 			case completed:
 				o.tests, o.testsState = s.ContainerID, "completed"
+				testsFinished = s.State.Terminated.FinishedAt
 			case !waiting:
 				return testsObservation{}, testsFailure("observe-container", ErrTransport)
 			}
+		default:
+			// A manifest service (the only other compiled name): waiting,
+			// running or, once the tests end, stopped by the kubelet. A
+			// restart was refused above, so a service that crashed and came
+			// back never serves a later repetition unnoticed.
+			stopped := s.State.Terminated != nil && s.State.Running == nil && s.State.Waiting == nil && started
+			if !strings.HasPrefix(s.Name, repositorytests.ServiceContainerPrefix) || (!waiting && !running && !stopped) {
+				return testsObservation{}, testsFailure("observe-container", ErrTransport)
+			}
+			if stopped {
+				sidecarStopped = true
+				servicesStopped = append(servicesStopped, s.State.Terminated)
+			}
 		}
 	}
-	if (o.phase == core.PodSucceeded || transferStopped) && o.testsState != "completed" {
+	if (o.phase == core.PodSucceeded || sidecarStopped) && o.testsState != "completed" {
 		return testsObservation{}, testsFailure("observe-progress", ErrTransport)
 	}
+	for _, stop := range servicesStopped {
+		if !kubeletStop(stop, testsFinished) {
+			return testsObservation{}, testsFailure("observe-service", ErrTransport)
+		}
+	}
 	return o, nil
+}
+
+// kubeletStop reports whether a terminated service was stopped by the
+// kubelet after the tests ended, rather than dying while they ran. A service
+// that crashed or was OOM-killed while the tests ran would make them fail
+// fast, and in the cross run such failures would read as tests that fail on
+// the old code: a false acceptance. So a stopped service counts only when it
+// finished no earlier than the tests container, was not OOM-killed and exited
+// as a kubelet stop does (0, or 143/137 for SIGTERM/SIGKILL). Kubernetes
+// reports these times in whole seconds, so a crash in the same second as the
+// tests' end with one of those exit codes is not distinguishable.
+func kubeletStop(stop *core.ContainerStateTerminated, testsFinished meta.Time) bool {
+	return !testsFinished.IsZero() && !stop.FinishedAt.IsZero() && !stop.FinishedAt.Before(&testsFinished) &&
+		stop.Reason != "OOMKilled" && (stop.ExitCode == 0 || stop.ExitCode == 137 || stop.ExitCode == 143)
 }
 
 func (t *TestsRun) poll(ctx context.Context, uid string, deadline time.Time, done func(testsObservation) bool) (testsObservation, error) {
@@ -336,11 +379,17 @@ func (t *TestsRun) ReadResult(ctx context.Context, uid string) ([]repositorytest
 	if t == nil || t.tests == "" || !resourceUID.MatchString(uid) {
 		return nil, nil, ErrTransport
 	}
-	deadline := time.Now().Add(time.Duration(t.runs)*t.timeout + t.analysis + repositorytests.MarginSeconds*time.Second)
+	deadline := time.Now().Add(t.resultWindow())
 	if _, err := t.poll(ctx, uid, deadline, func(o testsObservation) bool { return o.phase == core.PodSucceeded }); err != nil {
 		return nil, nil, err
 	}
 	return t.Collect(ctx, uid)
+}
+
+// resultWindow is how long ReadResult waits after the import: the longest
+// service readiness, every repetition's timeout, the analysis and a margin.
+func (t *TestsRun) resultWindow() time.Duration {
+	return t.services + time.Duration(t.runs)*t.timeout + t.analysis + repositorytests.MarginSeconds*time.Second
 }
 
 // Collect requires a succeeded pod (the runner exits 0 only after it wrote
@@ -421,7 +470,7 @@ func exchangeStep(step string, ctx context.Context, err error) string {
 	return step + "-request"
 }
 
-var testsSteps = regexp.MustCompile(`^((import-before|import-after|ready-after)-)?observe-(uid|request|permission|status|template|phase|container|progress)$|^(import-(repeat|encode|before-state|after-state|exit|receipt)|ready-(exit|after-state)|(import|ready)-transfer-(request|permission|timeout))$`)
+var testsSteps = regexp.MustCompile(`^((import-before|import-after|ready-after)-)?observe-(uid|request|permission|status|template|phase|container|progress|service)$|^(import-(repeat|encode|before-state|after-state|exit|receipt)|ready-(exit|after-state)|(import|ready)-transfer-(request|permission|timeout))$`)
 
 // TestsStep returns the failed repository-tests step, or "" for any other
 // error.
