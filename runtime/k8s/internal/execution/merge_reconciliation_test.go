@@ -28,10 +28,15 @@ type mergeForge struct {
 	err         error
 	seen        []mergewriter.Plan
 	writes      atomic.Int32
+	// during, when set, runs while the forge is being read.
+	during func()
 }
 
 func (f *mergeForge) Observe(_ context.Context, p mergewriter.Plan) (mergewriter.Observation, error) {
 	f.seen = append(f.seen, p)
+	if f.during != nil {
+		f.during()
+	}
 	return f.observation, f.err
 }
 func (f *mergeForge) Merge(context.Context, mergegate.Expected, int, mergewriter.Fence) (mergewriter.Receipt, error) {
@@ -194,8 +199,11 @@ func TestMergeReconciliationOutcomes(t *testing.T) {
 			}
 			switch c.outcome {
 			case mergerecovery.Completed:
-				// The same receipt, byte for byte, that the live acknowledgement stores.
-				want, _ := json.Marshal(store.MergeReceipt{Version: "ai-sdlc.merge-receipt/v1", CommitSHA: merged.CommitSHA, HeadSHA: u.planned.Expected.HeadSHA, BaseSHA: u.planned.Expected.BaseSHA, TreeSHA: u.planned.Expected.TreeSHA, PullRequest: u.planned.Expected.PullRequest})
+				// The receipt the live acknowledgement stores, marked observed.
+				want, _ := json.Marshal(store.MergeReceipt{Version: "ai-sdlc.merge-receipt/v1", CommitSHA: merged.CommitSHA, HeadSHA: u.planned.Expected.HeadSHA, BaseSHA: u.planned.Expected.BaseSHA, TreeSHA: u.planned.Expected.TreeSHA, PullRequest: u.planned.Expected.PullRequest, Observed: true})
+				if !strings.HasSuffix(string(want), `,"observed":true}`) {
+					t.Fatal("observed marker", string(want))
+				}
 				if receipt == nil || string(*receipt) != string(want) || receiptDigest == nil || *receiptDigest != authority.Digest(want) || completed == nil || notSent != nil {
 					t.Fatal("observed receipt", receipt)
 				}
@@ -237,8 +245,10 @@ func TestResolveMergeEffectBindsTheJournaledCommand(t *testing.T) {
 	if p, ok := mergerecovery.Plan(c); !ok || p.RequestDigest != u.planned.RequestDigest {
 		t.Fatal("plan not re-derived from the journal")
 	}
-	good := store.MergeReceipt{Version: "ai-sdlc.merge-receipt/v1", CommitSHA: strings.Repeat("d", 40), HeadSHA: u.planned.Expected.HeadSHA, BaseSHA: u.planned.Expected.BaseSHA, TreeSHA: u.planned.Expected.TreeSHA, PullRequest: u.planned.Expected.PullRequest}
+	good := store.MergeReceipt{Version: "ai-sdlc.merge-receipt/v1", CommitSHA: strings.Repeat("d", 40), HeadSHA: u.planned.Expected.HeadSHA, BaseSHA: u.planned.Expected.BaseSHA, TreeSHA: u.planned.Expected.TreeSHA, PullRequest: u.planned.Expected.PullRequest, Observed: true}
 	for _, mutate := range []func(*store.MergeReceipt){
+		// A live receipt never comes from reconciliation.
+		func(r *store.MergeReceipt) { r.Observed = false },
 		func(r *store.MergeReceipt) { r.HeadSHA = strings.Repeat("7", 40) },
 		func(r *store.MergeReceipt) { r.TreeSHA = strings.Repeat("7", 40) },
 		func(r *store.MergeReceipt) { r.BaseSHA = strings.Repeat("7", 40) },
@@ -262,11 +272,32 @@ func TestResolveMergeEffectBindsTheJournaledCommand(t *testing.T) {
 	if u.f.DB.ResolveMergeEffect(ctx, other, &good) == nil {
 		t.Fatal("receipt for another payload")
 	}
+	// The resolution takes the merge claim lock: while another session holds
+	// it (a claim starting), nothing is recorded.
+	conn, e := u.f.Admin.Pool.Conn(ctx)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer conn.Close()
+	if _, e = conn.ExecContext(ctx, `SELECT pg_advisory_lock(73421026)`); e != nil {
+		t.Fatal(e)
+	}
+	if u.f.DB.ResolveMergeEffect(ctx, c, &good) == nil {
+		t.Fatal("resolved while the merge claim lock was held")
+	}
+	if _, e = conn.ExecContext(ctx, `SELECT pg_advisory_unlock(73421026)`); e != nil {
+		t.Fatal(e)
+	}
+	if u.count(t, `SELECT count(*) FROM merge_effects WHERE completed_at IS NULL AND not_sent_at IS NULL`) != 1 {
+		t.Fatal("effect changed under the lock")
+	}
 	if e := u.f.DB.ResolveMergeEffect(ctx, c, &good); e != nil {
 		t.Fatal(e)
 	}
-	if u.f.DB.ResolveMergeEffect(ctx, c, nil) == nil || u.f.DB.ResolveMergeEffect(ctx, c, &good) == nil {
-		t.Fatal("a resolved effect changed again")
+	for _, again := range []*store.MergeReceipt{nil, &good} {
+		if e := u.f.DB.ResolveMergeEffect(ctx, c, again); !errors.Is(e, store.ErrMergeEffectResolved) {
+			t.Fatal("a resolved effect changed again or was not reported as resolved", e)
+		}
 	}
 	if list, e := u.f.DB.MergeReconciliations(ctx, 16); e != nil || len(list) != 0 {
 		t.Fatal("resolved effect still listed", list, e)
@@ -275,5 +306,26 @@ func TestResolveMergeEffectBindsTheJournaledCommand(t *testing.T) {
 	// write a merged record, and a failed request is never claimed again.
 	if _, e := u.journal.ClaimMerge(ctx, u.id); e == nil {
 		t.Fatal("reconciled request claimed again")
+	}
+}
+
+// Another replica (or an operator) resolving the effect while this one reads
+// the forge is a bounded, quiet outcome, not an unavailable journal.
+func TestMergeReconciliationLosingTheRaceIsResolved(t *testing.T) {
+	u := newUncertainMerge(t, "")
+	u.settle(t)
+	ctx := context.Background()
+	forge := &mergeForge{observation: mergewriter.Observation{State: mergewriter.ObservedMerged, CommitSHA: strings.Repeat("d", 40)}}
+	forge.during = func() {
+		if _, e := u.f.Admin.Pool.Exec(`UPDATE merge_effects SET not_sent_at=clock_timestamp() WHERE request_id=$1`, u.id); e != nil {
+			t.Error(e)
+		}
+	}
+	step, attempted, e := quietReconciler(u.f.DB).Step(ctx, forge)
+	if e != nil || !attempted || step.Outcome != mergerecovery.Resolved {
+		t.Fatal("lost race", step, attempted, e)
+	}
+	if u.count(t, `SELECT count(*) FROM merge_effects WHERE completed_at IS NOT NULL`) != 0 {
+		t.Fatal("the other resolution was overwritten")
 	}
 }

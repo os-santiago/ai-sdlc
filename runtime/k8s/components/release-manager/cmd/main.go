@@ -191,16 +191,22 @@ func main() {
 		value, e := credential()
 		if e != nil {
 			log.Print("publication credential unavailable")
+			// The loop observed nothing: drop the series, do not keep its last value.
+			metrics.ForgetQuarantined("publication")
 			return
 		}
 		w, e := publication.NewWriter(value)
 		if e != nil {
 			log.Print("publication credential unavailable")
+			// The loop observed nothing: drop the series, do not keep its last value.
+			metrics.ForgetQuarantined("publication")
 			return
 		}
 		observer, e := publication.NewReader(value)
 		if e != nil {
 			log.Print("publication credential unavailable")
+			// The loop observed nothing: drop the series, do not keep its last value.
+			metrics.ForgetQuarantined("publication")
 			return
 		}
 		r := publicationflow.Runtime{DB: c.DB, Policy: policy, Review: review, Writer: w, Reconciler: reconciler, Observer: observer}
@@ -248,6 +254,7 @@ func main() {
 			r, e := mergeRuntime()
 			if e != nil {
 				log.Print("merge credential unavailable")
+				metrics.ForgetQuarantined("merge")
 				return
 			}
 			state, e := r.PollOnce(ctx)

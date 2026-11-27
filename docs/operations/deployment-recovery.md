@@ -35,7 +35,7 @@ This rule has two narrow, named exceptions, both outside deployment:
 [publication reconciliation](publication-reconciliation.md#principle-exception-an-observed-receipt)
 may record an `observed: true` receipt, and
 [merge reconciliation](merge-reconciliation.md#principle-exception-an-observed-merge-receipt)
-may record a merge receipt. Each does so only for an uncertain effect of a
+may record an `observed: true` merge receipt. Each does so only for an uncertain effect of a
 request that has already failed, after the settle window, and from a read-only
 observation that exactly matches the journaled planned digest. Such a receipt
 never leads to a terminal record that requires a live receipt. Deployment has no

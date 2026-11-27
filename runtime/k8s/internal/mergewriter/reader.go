@@ -25,7 +25,8 @@ const (
 	// commit with exactly the planned tree, parents and message.
 	ObservedMerged = "merged"
 	// ObservedUnmerged: the pull request is still open, not a draft, at the
-	// planned head, and the base branch still points at the planned base.
+	// planned head, and either the base branch still points at the planned base
+	// or GitHub's comparison shows the planned head is not contained in it.
 	ObservedUnmerged = "unmerged"
 	// ObservedDifferent: anything else the forge answered with.
 	ObservedDifferent = "different"
@@ -164,9 +165,9 @@ func (r *Reader) Observe(ctx context.Context, p Plan) (Observation, error) {
 		}
 		return Observation{State: ObservedMerged, CommitSHA: sha}, nil
 	}
-	// Not merged. Only an open, ready pull request at the planned head over an
-	// unchanged base is the state before the send; a closed one, a draft, or a
-	// base that moved leaves the outcome to an operator.
+	// Not merged. Only an open, ready pull request at the planned head is the
+	// state before the send; a closed one or a draft leaves the outcome to an
+	// operator.
 	if pull.State != "open" || *pull.Draft {
 		return different, nil
 	}
@@ -180,7 +181,27 @@ func (r *Reader) Observe(ctx context.Context, p Plan) (Observation, error) {
 	if e := r.get(ctx, "/git/ref/heads/main", &ref); e != nil {
 		return Observation{}, e
 	}
-	if ref.Ref != "refs/heads/main" || ref.Object.Type != "commit" || ref.Object.SHA != x.BaseSHA {
+	if ref.Ref != "refs/heads/main" || ref.Object.Type != "commit" || !workspacebundle.ValidSourceSHA(ref.Object.SHA) {
+		return different, nil
+	}
+	if ref.Object.SHA == x.BaseSHA {
+		return Observation{State: ObservedUnmerged}, nil
+	}
+	// main moved. The planned head is still not part of main only if GitHub's
+	// comparison of main with it is "ahead" or "diverged"; "behind" or
+	// "identical" means main contains the head, which this merge, or another,
+	// may have brought there.
+	var compare struct {
+		Status     string `json:"status"`
+		AheadBy    *int   `json:"ahead_by"`
+		BaseCommit struct {
+			SHA string `json:"sha"`
+		} `json:"base_commit"`
+	}
+	if e := r.get(ctx, "/compare/"+ref.Object.SHA+"..."+x.HeadSHA+"?per_page=1", &compare); e != nil {
+		return Observation{}, e
+	}
+	if compare.BaseCommit.SHA != ref.Object.SHA || compare.AheadBy == nil || *compare.AheadBy < 1 || (compare.Status != "ahead" && compare.Status != "diverged") {
 		return different, nil
 	}
 	return Observation{State: ObservedUnmerged}, nil

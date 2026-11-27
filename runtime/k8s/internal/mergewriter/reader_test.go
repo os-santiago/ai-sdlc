@@ -61,8 +61,14 @@ func mainRef(sha string) map[string]any {
 }
 
 type forgeView struct {
-	pull, commit, ref map[string]any
-	status            map[string]int
+	pull, commit, ref, compare map[string]any
+	status                     map[string]int
+}
+
+const movedMain = "6666666666666666666666666666666666666666"
+
+func compareResponse(status string, ahead int) map[string]any {
+	return map[string]any{"status": status, "ahead_by": ahead, "behind_by": 3, "base_commit": map[string]string{"sha": movedMain}}
 }
 
 func (v forgeView) serve(t *testing.T, paths *[]string) http.HandlerFunc {
@@ -77,6 +83,11 @@ func (v forgeView) serve(t *testing.T, paths *[]string) http.HandlerFunc {
 			body, kind = v.commit, "commit"
 		case "/repos/os-santiago/homedir/git/ref/heads/main":
 			body, kind = v.ref, "ref"
+		case "/repos/os-santiago/homedir/compare/" + movedMain + "..." + expected().HeadSHA:
+			if r.URL.RawQuery != "per_page=1" {
+				t.Errorf("unbounded comparison %q", r.URL.RawQuery)
+			}
+			body, kind = v.compare, "compare"
 		default:
 			t.Errorf("unbounded read %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -160,15 +171,60 @@ func TestReaderObservesOnlyThePlannedMerge(t *testing.T) {
 		"merged-no-commit":    {func(v *forgeView) { v.pull["merge_commit_sha"] = nil }, ObservedDifferent, false},
 		"merged-field-absent": {func(v *forgeView) { delete(v.pull, "merged") }, "", true},
 		"open-unmerged":       {func(v *forgeView) { v.pull = openPull() }, ObservedUnmerged, false},
-		"open-base-moved":     {func(v *forgeView) { v.pull, v.ref = openPull(), mainRef(strings.Repeat("6", 40)) }, ObservedDifferent, false},
-		"open-draft":          {func(v *forgeView) { v.pull = openPull(); v.pull["draft"] = true }, ObservedDifferent, false},
-		"closed-unmerged":     {func(v *forgeView) { v.pull = openPull(); v.pull["state"] = "closed" }, ObservedDifferent, false},
-		"pull-missing":        {func(v *forgeView) { v.status = map[string]int{"pull": 404} }, "", true},
-		"pull-forbidden":      {func(v *forgeView) { v.status = map[string]int{"pull": 403} }, "", true},
-		"pull-unavailable":    {func(v *forgeView) { v.status = map[string]int{"pull": 502} }, "", true},
-		"commit-missing":      {func(v *forgeView) { v.status = map[string]int{"commit": 404} }, "", true},
-		"main-missing":        {func(v *forgeView) { v.pull = openPull(); v.status = map[string]int{"ref": 404} }, "", true},
-		"main-forbidden":      {func(v *forgeView) { v.pull = openPull(); v.status = map[string]int{"ref": 403} }, "", true},
+		// main moved: only a comparison that shows the head outside main proves
+		// that nothing was merged.
+		"open-base-moved-ahead": {func(v *forgeView) {
+			v.pull, v.ref, v.compare = openPull(), mainRef(movedMain), compareResponse("ahead", 1)
+		}, ObservedUnmerged, false},
+		"open-base-moved-diverged": {func(v *forgeView) {
+			v.pull, v.ref, v.compare = openPull(), mainRef(movedMain), compareResponse("diverged", 2)
+		}, ObservedUnmerged, false},
+		"open-base-moved-behind": {func(v *forgeView) {
+			v.pull, v.ref, v.compare = openPull(), mainRef(movedMain), compareResponse("behind", 1)
+		}, ObservedDifferent, false},
+		"open-base-moved-identical": {func(v *forgeView) {
+			v.pull, v.ref, v.compare = openPull(), mainRef(movedMain), compareResponse("identical", 1)
+		}, ObservedDifferent, false},
+		"open-base-moved-ahead-by-zero": {func(v *forgeView) {
+			v.pull, v.ref, v.compare = openPull(), mainRef(movedMain), compareResponse("ahead", 0)
+		}, ObservedDifferent, false},
+		"open-base-moved-other-base-commit": {func(v *forgeView) {
+			v.pull, v.ref, v.compare = openPull(), mainRef(movedMain), compareResponse("ahead", 1)
+			v.compare["base_commit"] = map[string]string{"sha": e.BaseSHA}
+		}, ObservedDifferent, false},
+		"open-base-moved-compare-missing": {func(v *forgeView) {
+			v.pull, v.ref, v.compare = openPull(), mainRef(movedMain), compareResponse("ahead", 1)
+			v.status = map[string]int{"compare": 404}
+		}, "", true},
+		"open-base-moved-closed-pull": {func(v *forgeView) {
+			v.pull, v.ref, v.compare = openPull(), mainRef(movedMain), compareResponse("ahead", 1)
+			v.pull["state"] = "closed"
+		}, ObservedDifferent, false},
+		"open-head-moved-base-moved": {func(v *forgeView) {
+			v.pull, v.ref, v.compare = openPull(), mainRef(movedMain), compareResponse("ahead", 1)
+			v.pull["head"] = map[string]any{"ref": e.Branch, "sha": strings.Repeat("7", 40), "repo": map[string]string{"full_name": repository}}
+		}, ObservedDifferent, false},
+		"base-other-repo": {func(v *forgeView) {
+			v.pull["base"] = map[string]any{"ref": "main", "sha": e.BaseSHA, "repo": map[string]string{"full_name": "someone/homedir"}}
+		}, ObservedDifferent, false},
+		"base-repo-absent": {func(v *forgeView) {
+			v.pull["base"] = map[string]any{"ref": "main", "sha": e.BaseSHA}
+		}, ObservedDifferent, false},
+		"head-other-branch": {func(v *forgeView) {
+			v.pull["head"] = map[string]any{"ref": "ai-sdlc/issue-3-" + strings.Repeat("0", 32), "sha": e.HeadSHA, "repo": map[string]string{"full_name": repository}}
+		}, ObservedDifferent, false},
+		"open-base-other-repo": {func(v *forgeView) {
+			v.pull = openPull()
+			v.pull["base"] = map[string]any{"ref": "main", "sha": e.BaseSHA, "repo": map[string]string{"full_name": "someone/homedir"}}
+		}, ObservedDifferent, false},
+		"open-draft":       {func(v *forgeView) { v.pull = openPull(); v.pull["draft"] = true }, ObservedDifferent, false},
+		"closed-unmerged":  {func(v *forgeView) { v.pull = openPull(); v.pull["state"] = "closed" }, ObservedDifferent, false},
+		"pull-missing":     {func(v *forgeView) { v.status = map[string]int{"pull": 404} }, "", true},
+		"pull-forbidden":   {func(v *forgeView) { v.status = map[string]int{"pull": 403} }, "", true},
+		"pull-unavailable": {func(v *forgeView) { v.status = map[string]int{"pull": 502} }, "", true},
+		"commit-missing":   {func(v *forgeView) { v.status = map[string]int{"commit": 404} }, "", true},
+		"main-missing":     {func(v *forgeView) { v.pull = openPull(); v.status = map[string]int{"ref": 404} }, "", true},
+		"main-forbidden":   {func(v *forgeView) { v.pull = openPull(); v.status = map[string]int{"ref": 403} }, "", true},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

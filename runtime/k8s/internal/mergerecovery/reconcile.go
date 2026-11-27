@@ -3,7 +3,7 @@
 // retries the original merge, and never weakens the journal: an effect changes
 // only to a receipt (the pull request was merged exactly as planned) or to a
 // known no-send (the pull request is provably still unmerged at the planned
-// head over an unchanged base). Every other observation keeps merges
+// head, which is not part of main). Every other observation keeps merges
 // quarantined. The request stays failed and no merged record is created.
 package mergerecovery
 
@@ -33,7 +33,7 @@ const (
 	// the transport would have returned is recorded.
 	Completed = "completed"
 	// NotSent: the pull request is still open and unmerged at the planned head
-	// and the base is unchanged; a known no-send is recorded.
+	// and that head is not part of main; a known no-send is recorded.
 	NotSent = "not-sent"
 	// Mismatch: the forge shows neither the planned merge nor the untouched
 	// pull request. Quarantined.
@@ -44,6 +44,9 @@ const (
 	// Unplanned: the journaled command does not re-derive the journaled
 	// request digest. Quarantined.
 	Unplanned = "unplanned"
+	// Resolved: the effect was resolved elsewhere (another release-manager
+	// replica, or an operator) before this step could record its outcome.
+	Resolved = "resolved"
 )
 
 // Step reports one reconciliation attempt. It carries no body, token or URL.
@@ -120,7 +123,7 @@ func (r *Reconciler) Step(ctx context.Context, observer Observer) (Step, bool, e
 	}
 	step := Step{r.reconcile(ctx, observer, *selected)}
 	r.mu.Lock()
-	if step.Outcome == Completed || step.Outcome == NotSent {
+	if step.Outcome == Completed || step.Outcome == NotSent || step.Outcome == Resolved {
 		delete(r.failures, selected.EffectToken)
 		delete(r.next, selected.EffectToken)
 	} else {
@@ -171,19 +174,24 @@ func (r *Reconciler) reconcile(ctx context.Context, observer Observer, c store.M
 	}
 	switch seen.State {
 	case mergewriter.ObservedMerged:
-		// The exact receipt the transport returns after a verified merge.
-		receipt := store.MergeReceipt{Version: "ai-sdlc.merge-receipt/v1", CommitSHA: seen.CommitSHA, HeadSHA: p.Expected.HeadSHA, BaseSHA: p.Expected.BaseSHA, TreeSHA: p.Expected.TreeSHA, PullRequest: p.Expected.PullRequest}
-		if r.DB.ResolveMergeEffect(ctx, c, &receipt) != nil {
-			return Unavailable
-		}
-		return Completed
+		// The receipt the transport returns after a verified merge, marked as
+		// observed so that no live boundary can accept it.
+		receipt := store.MergeReceipt{Version: "ai-sdlc.merge-receipt/v1", CommitSHA: seen.CommitSHA, HeadSHA: p.Expected.HeadSHA, BaseSHA: p.Expected.BaseSHA, TreeSHA: p.Expected.TreeSHA, PullRequest: p.Expected.PullRequest, Observed: true}
+		return resolve(r.DB.ResolveMergeEffect(ctx, c, &receipt), Completed)
 	case mergewriter.ObservedUnmerged:
-		if r.DB.ResolveMergeEffect(ctx, c, nil) != nil {
-			return Unavailable
-		}
-		return NotSent
+		return resolve(r.DB.ResolveMergeEffect(ctx, c, nil), NotSent)
 	case mergewriter.ObservedDifferent:
 		return Mismatch
+	}
+	return Unavailable
+}
+
+func resolve(e error, outcome string) string {
+	switch {
+	case e == nil:
+		return outcome
+	case errors.Is(e, store.ErrMergeEffectResolved):
+		return Resolved
 	}
 	return Unavailable
 }

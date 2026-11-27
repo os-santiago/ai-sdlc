@@ -78,25 +78,33 @@ an error. No response is ever read as absence.
 | --- | --- | --- |
 | The pull request is merged and closed at the planned head, from the planned branch of this repository into `main`. Its merge commit has the planned tree, exactly two parents (planned base, then planned head), and the message `<title>\n` followed by `Refs #<n>` (blank lines aside). | `GET /pulls/<n>`, `GET /git/commits/<merge commit>` | `completed` |
 | The pull request is open, not a draft and not merged, at the planned head, from the planned branch into `main`, and `refs/heads/main` still points at the planned base. | `GET /pulls/<n>`, `GET /git/ref/heads/main` | `not-sent` |
-| Anything else: a moved head, a fork head, a retargeted base, another tree, parents or message, a squash or rebase merge, a closed unmerged pull request, a draft, or a `main` that moved. | | `mismatch` |
+| The same open pull request, but `main` moved: GitHub's comparison of the current `main` with the planned head reports `ahead` or `diverged` (with at least one commit ahead), so the head is not contained in `main`. | the reads above, then `GET /compare/<main>...<head>?per_page=1` | `not-sent` |
+| Anything else: a moved head, a fork head, a retargeted base, another tree, parents or message, a squash or rebase merge, a closed unmerged pull request, a draft, or a moved `main` that the comparison reports as `behind` or `identical` (it already contains the head). | | `mismatch` |
 | Any read failed: transport, status (`403`, `404`, `5xx`), body shape or size. | | `unavailable` |
 
 Outcome names are closed:
 
-- `completed`: the receipt the original call would have produced is recorded.
-  It has exactly the format the live acknowledgement stores
-  (`ai-sdlc.merge-receipt/v1` with the merge commit and the planned head, base,
-  tree and pull request), and the same digest rule.
+- `completed`: the receipt the original call would have produced is recorded,
+  in the format the live acknowledgement stores (`ai-sdlc.merge-receipt/v1` with
+  the merge commit and the planned head, base, tree and pull request) and marked
+  `"observed": true`.
 - `not-sent`: the forge proves that the planned merge did not happen, so the
-  effect is recorded as not sent (`not_sent_at`). The pull request is in exactly
-  the state the gate observed before the send. A merged pull request cannot be
-  reopened, so after the settle window that request can no longer apply.
+  effect is recorded as not sent (`not_sent_at`). The pull request is open at the
+  planned head, and its head is not part of `main`. A merged pull request cannot
+  be reopened, so after the settle window that request can no longer apply.
 - `mismatch`: the forge shows neither the planned merge nor the untouched pull
   request. Merges stay quarantined.
 - `unavailable`: the forge or the journal could not be read or written. Merges
   stay quarantined.
 - `unplanned`: the journaled command does not re-derive the journaled request
   digest. Merges stay quarantined.
+- `resolved`: another release-manager replica, or an operator, resolved the
+  effect after this step listed it and before it could record its own outcome.
+  Nothing is written, and the effect is no longer paced.
+
+Both `completed` and `not-sent` lift the quarantine but still need an operator
+follow-up for the issue (see [what follows](#state-machine-the-request-stays-failed)
+and [follow-up after a resolution](#follow-up-after-a-resolution)).
 
 The durable record of a resolution is the effect row itself: a receipt, or
 `not_sent_at` set more than 120 s after the claim ended. Outcomes that leave the
@@ -125,12 +133,21 @@ hold:
 6. The receipt names the command's pull request, head, base and tree; the
    journal re-checks this.
 
-Unlike a publication receipt, a merge receipt carries no `observed` marker: it is
-byte-for-byte the format the live acknowledgement stores. It still never
-authorizes anything. A merged record (`merged_records`) can only be written
-under a live claim of the request, before its signed authority expires, by
-`FinishMerge`. A failed request is never claimed again, so an observed merge
-receipt never becomes a merged record, a build, a release or a deployment.
+7. The receipt is marked `"observed": true`. The field is omitted for every live
+   write, so live receipts and their digests are unchanged.
+
+An observed receipt never authorizes anything. `AcknowledgeMergeEffect`,
+`FinishMerge` (the merge proof) and the merged-record reader all refuse one, and
+the journal records an observed receipt only through `ResolveMergeEffect`. A
+merged record (`merged_records`) can only be written under a live claim of the
+request, before its signed authority expires. A failed request is never claimed
+again, so an observed merge receipt never becomes a merged record, nor its own
+build, provenance record, release or deployment.
+
+This does not keep the change off the release path. The merged code is on `main`.
+The next change that the runtime merges is built from a tree that contains it,
+so it ships inside that change's artifact, covered only by that change's
+provenance record. No record names the reconciled change itself.
 
 ## State machine: the request stays failed
 
@@ -156,8 +173,11 @@ What follows for each outcome:
   runtime never closes an issue after a merge; only the release's terminal stage
   does that, after a deployment. Because no merged record exists, the
   merged-source build, provenance, promotion and deployment stages do not start
-  for this change, and the work item stays `running`. For a built-in reference
-  repository the merge commit says `Refs #N`, so the issue also stays open.
+  for this change, and the work item stays `running`. The code itself is on
+  `main` and ships inside the next merged change's tree, without its own
+  provenance record (see the principle exception above). For a built-in
+  reference repository the merge commit says `Refs #N`, so the issue also stays
+  open.
 - **`not-sent`.** The pull request is still open and unmerged. The runtime does
   not try again: this publication already has its one merge request. To deliver
   the issue, follow the [re-delivery procedure](publication-reconciliation.md#re-delivery-is-an-operator-action-decision-can-be-changed-later):
@@ -165,6 +185,54 @@ What follows for each outcome:
 
 In both cases the next merge poll lifts the quarantine and merges other
 publications as usual.
+
+## Follow-up after a resolution
+
+A resolution lifts the quarantine but leaves work for an operator. Alert on both
+outcomes (see [metrics](metrics.md#merge-reconciliations)).
+
+**After `completed`:**
+
+1. Find the work item and the issue (administrator session):
+
+   ```sql
+   SELECT e.work_item_uuid, w.status,
+          convert_from(m.payload, 'UTF8')::jsonb ->> 'issueNumber' AS issue,
+          convert_from(m.payload, 'UTF8')::jsonb ->> 'pullRequest' AS pull_request
+     FROM merge_requests m
+     JOIN publication_requests p ON p.id = m.publication_id
+     JOIN execution_requests e ON e.id = p.candidate_id
+     JOIN work_items w ON w.uuid = e.work_item_uuid
+     JOIN merge_effects f ON f.request_id = m.id
+    WHERE m.state = 'failed' AND f.completed_at IS NOT NULL
+      AND f.receipt_digest IS NOT NULL
+      AND convert_from(f.receipt, 'UTF8')::jsonb ->> 'observed' = 'true';
+   ```
+
+2. Confirm read-only that the pull request is merged and, for a manifest
+   repository, that the issue is closed. For a built-in reference repository,
+   close the issue by hand with a comment naming the pull request.
+3. Decide how the change reaches production. Either the next merged change
+   carries it (its tree contains the code), or you trigger a release by hand.
+   Note that no provenance record names this change.
+4. Close out the work item, which otherwise stays `running`:
+
+   ```sql
+   UPDATE work_items SET status = 'completed', updated_at = clock_timestamp()
+    WHERE uuid = '<work item>' AND status = 'running';
+   ```
+
+   This records no production fact. Use `failed` instead if you decide the
+   change must not ship.
+
+**After `not-sent`:**
+
+1. The pull request is still open and unmerged, and the runtime will never merge
+   it (the publication already has its one merge request). Close it with a short
+   comment that it came from an unresolved merge attempt, and delete its branch.
+2. Re-deliver the issue with the [re-delivery procedure](publication-reconciliation.md#re-delivery-is-an-operator-action-decision-can-be-changed-later)
+   (remove and re-add the trigger label). Clean up before you re-label, so that
+   two pull requests for the same issue are never open at the same time.
 
 ## Readiness and the quarantine
 
@@ -220,8 +288,10 @@ in the runtime retries the merge.
      rebase merge, a manual merge with another message, or a merge after `main`
      moved, so the first parent is not the planned base. The change is on `main`,
      but not as the gate authorized it. Review the merge commit, then decide.
-   - **Open, but `main` moved** (`mismatch`): nothing was merged by this request,
-     but the reconciler requires an unchanged base to record a no-send.
+   - **Open, but `main` already contains the head** (`mismatch`): GitHub compares
+     `main` with the head as `behind` or `identical`, so the head reached `main`
+     by another route (for example a manual merge of the branch). Find that
+     merge before you decide.
    - **Closed without merge, or a draft** (`mismatch`): someone acted on the pull
      request. Confirm with the repository's activity or audit log that no merge
      happened.
@@ -257,15 +327,18 @@ in the runtime retries the merge.
   can only `GET`. The tests fail on any other method and count zero writes.
 - **Positive evidence only.** A receipt needs the merged pull request and its
   merge commit to match the plan field by field. A no-send needs an open pull
-  request at the planned head over an unchanged `main`. Every error, including
-  a `404` or `403`, keeps the quarantine.
+  request at the planned head over an unchanged `main`, or a comparison that
+  shows the head outside a moved `main`. Every error, including a `404` or
+  `403`, keeps the quarantine.
 - **No weakened fence.** Recording an outcome takes the merge claim lock and, in
   one transaction, re-checks that no merge is claimed, that the request is still
   `failed`, settled and carries the same signed payload, and that the effect is
   the same uncertain intent (token and request digest). A resolved effect can
-  never change again.
+  never change again; a second resolution reports `resolved`.
 - **No new authority.** The request stays failed and no merged record is
-  written, so nothing downstream starts.
+  written, so nothing downstream starts for the reconciled change itself. Its
+  code is on `main`, though, and ships inside the next merged change's tree,
+  without a provenance record of its own.
 
 ## Configuration and migration
 

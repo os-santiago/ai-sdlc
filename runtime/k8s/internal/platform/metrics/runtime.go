@@ -62,7 +62,7 @@ var ReconciliationOutcomes = []string{"completed", "not-sent", "mismatch", "unav
 
 // MergeReconciliationOutcomes is the closed label set of one read-only
 // reconciliation of an uncertain merge effect (mergerecovery.Step).
-var MergeReconciliationOutcomes = []string{"completed", "not-sent", "mismatch", "unavailable", "unplanned"}
+var MergeReconciliationOutcomes = []string{"completed", "not-sent", "mismatch", "unavailable", "unplanned", "resolved"}
 
 // ModelCallBuckets span a fast local answer up to the 600 s ceiling.
 var ModelCallBuckets = []float64{1, 2.5, 5, 10, 20, 30, 60, 90, 120, 180, 300, 450, 600}

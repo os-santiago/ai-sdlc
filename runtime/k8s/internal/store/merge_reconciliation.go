@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/authority"
@@ -19,6 +20,10 @@ import (
 // accepted but had not yet applied. The window is fixed here, not supplied by
 // the caller, and equals the publication settle window.
 const mergeSettle = `interval '120 seconds'`
+
+// ErrMergeEffectResolved reports that the effect was already resolved when
+// ResolveMergeEffect took the merge claim lock.
+var ErrMergeEffectResolved = errors.New("merge effect already resolved")
 
 // MergeReconciliation is a read-only snapshot of one uncertain merge effect and
 // the journaled signed command its planned request is re-derived from. It
@@ -63,22 +68,24 @@ func (db *DB) MergeReconciliations(ctx context.Context, limit int) ([]MergeRecon
 }
 
 // ResolveMergeEffect records an observed outcome for one uncertain merge
-// effect: a receipt in exactly the format the live acknowledgement stores (the
-// forge shows the planned merge), or, with a nil receipt, a known no-send (the
-// forge shows the pull request still open at the planned head over an
-// unchanged base). Under the merge claim lock it re-checks that no merge is
+// effect: a receipt in the format the live acknowledgement stores, marked
+// observed (the forge shows the planned merge), or, with a nil receipt, a known
+// no-send (the forge shows the pull request still open and unmerged at the
+// planned head). Under the merge claim lock it re-checks that no merge is
 // claimed, the request is still failed and settled with the same signed
 // payload, and the effect is the same uncertain intent with the same request
 // digest. A receipt must name the command's pull request, head, base and tree.
 // The request keeps its failed state: no merged record is ever created here.
-// A resolved effect can never change again.
+// A resolved effect can never change again: when another release-manager
+// replica resolved it first, the result is ErrMergeEffectResolved.
 func (db *DB) ResolveMergeEffect(ctx context.Context, r MergeReconciliation, receipt *MergeReceipt) error {
 	if !mergeIDPattern.MatchString(r.RequestID) || !lifecycleUUID.MatchString(r.EffectToken) || !modelDigest.MatchString(r.RequestDigest) || !modelDigest.MatchString(r.PayloadDigest) {
 		return ErrExecution
 	}
 	var raw []byte
 	if receipt != nil {
-		if !validMergeReceipt(*receipt) {
+		// Only an observed receipt: a live acknowledgement never comes from here.
+		if !receipt.Observed || !validMergeReceipt(*receipt) {
 			return ErrExecution
 		}
 		raw, _ = json.Marshal(receipt)
@@ -92,6 +99,15 @@ func (db *DB) ResolveMergeEffect(ctx context.Context, r MergeReconciliation, rec
 		// The same lock ClaimMerge takes: no claim can start meanwhile.
 		if _, e := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(73421026)`); e != nil {
 			return ErrExecution
+		}
+		// Lost the race: the same intent was already resolved, by another
+		// replica or by hand. Nothing to record, and nothing is wrong.
+		var resolved bool
+		if tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM merge_effects WHERE request_id=$1 AND token=$2::uuid AND request_digest=$3 AND (completed_at IS NOT NULL OR not_sent_at IS NOT NULL))`, r.RequestID, r.EffectToken, r.RequestDigest).Scan(&resolved) != nil {
+			return ErrExecution
+		}
+		if resolved {
+			return ErrMergeEffectResolved
 		}
 		var idle bool
 		var payload []byte

@@ -38,7 +38,8 @@ A missing response or uncertain commit stops the original claim and quarantines
 an unacknowledged effect. [Merge reconciliation](merge-reconciliation.md) resolves
 it from a read-only observation once the claim has settled: a receipt when GitHub
 shows the merge exactly as planned, a no-send when the pull request is still open
-at the planned head over an unchanged base, and otherwise the quarantine stays.
+at the planned head and its head is not part of `main`, and otherwise the
+quarantine stays.
 Reconciliation cannot adopt that claim, repeat the write, finish the request as
 merged or give the same publication a new attempt. The quarantine does not make
 the release manager unready; it blocks only later merges. A terminal merge fact does not grant

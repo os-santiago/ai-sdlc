@@ -155,20 +155,31 @@ increase(ai_sdlc_publication_reconciliations_total{outcome=~"mismatch|unplanned|
 
 `ai_sdlc_merge_reconciliations_total{outcome}` counts each
 [reconciliation](merge-reconciliation.md) step of an uncertain merge effect.
-`outcome` is `completed`, `not-sent`, `mismatch`, `unavailable` or `unplanned`.
-To alert on a merge quarantine that reconciliation cannot resolve:
+`outcome` is `completed`, `not-sent`, `mismatch`, `unavailable`, `unplanned` or
+`resolved` (another replica or an operator resolved the effect first).
+
+Every outcome except `unavailable` and `resolved` needs an operator.
+`mismatch` and `unplanned` keep the quarantine. `completed` and `not-sent` lift
+it, but leave a work item and an issue to follow up: after `completed` the work
+item stays `running` and the change has no build of its own; after `not-sent` the
+pull request stays open and the issue needs re-delivery (see
+[follow-up after a resolution](merge-reconciliation.md#follow-up-after-a-resolution)).
+One alert covers all four:
 
 ```promql
-increase(ai_sdlc_merge_reconciliations_total{outcome=~"mismatch|unplanned"}[1h]) > 0
+increase(ai_sdlc_merge_reconciliations_total{outcome=~"completed|not-sent|mismatch|unplanned"}[1h]) > 0
 ```
+
+A persistent `unavailable` shows as the quarantine gauge staying at `1` (below).
 
 ### Quarantine
 
 `ai_sdlc_quarantined{journal}` is `1` while an uncertain effect of a failed
 request quarantines the journal, and `0` when none does. `journal` is
 `publication` (sampled every publication poll, 5 s) or `merge` (every merge poll,
-60 s, only when merge is enabled). A journal that cannot be read is removed from
-the output rather than left at its last value. A merge quarantine does not make
+60 s, only when merge is enabled). A journal that cannot be read, or whose loop
+cannot run because the credential or the merge runtime is unavailable, is removed
+from the output rather than left at its last value. A merge quarantine does not make
 the release manager unready, so this gauge, not the readiness probe, is the
 signal:
 
@@ -199,7 +210,7 @@ Expected series per component:
 | `ai_sdlc_model_call_duration_seconds` | 18 label sets × 16 lines | Fewer than 8 label sets |
 | `ai_sdlc_deliveries_total` | 4 | 4 |
 | `ai_sdlc_publication_reconciliations_total` | 20 | Fewer than 4 |
-| `ai_sdlc_merge_reconciliations_total` | 5 | Fewer than 3 |
+| `ai_sdlc_merge_reconciliations_total` | 6 | Fewer than 3 |
 | `ai_sdlc_quarantined` | 2 | 2 (release manager only) |
 
 Counters reset when a process starts: use `rate()` and `increase()`. A

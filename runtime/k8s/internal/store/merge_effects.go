@@ -21,6 +21,11 @@ type MergeReceipt struct {
 	BaseSHA     string `json:"baseSHA"`
 	TreeSHA     string `json:"treeSHA"`
 	PullRequest int    `json:"pullRequest"`
+	// Observed marks a receipt recorded by merge reconciliation from a
+	// read-only forge observation. It is omitted for every live write, so
+	// live receipts and their digests are unchanged; no live boundary accepts
+	// an observed receipt.
+	Observed bool `json:"observed,omitempty"`
 }
 type MergeEvidence struct {
 	RequestDigest, ReceiptDigest string
@@ -48,6 +53,10 @@ func validMergeReceipt(r MergeReceipt) bool {
 	}
 	return true
 }
+
+// liveMergeReceipt is a receipt the transport returned under a live claim:
+// the only kind an acknowledgement, a merge proof or a merged record accepts.
+func liveMergeReceipt(r MergeReceipt) bool { return validMergeReceipt(r) && !r.Observed }
 func (j *MergeJournal) BeginMergeEffect(ctx context.Context, c MergeClaim, digest string) (MergeEffect, error) {
 	if !modelDigest.MatchString(digest) {
 		return MergeEffect{}, ErrExecution
@@ -73,7 +82,7 @@ func (j *MergeJournal) BeginMergeEffect(ctx context.Context, c MergeClaim, diges
 	return effect, nil
 }
 func (j *MergeJournal) AcknowledgeMergeEffect(ctx context.Context, effect MergeEffect, r MergeReceipt) error {
-	if !validMergeReceipt(r) || !lifecycleUUID.MatchString(effect.Token) || !modelDigest.MatchString(effect.RequestDigest) {
+	if !liveMergeReceipt(r) || !lifecycleUUID.MatchString(effect.Token) || !modelDigest.MatchString(effect.RequestDigest) {
 		return ErrExecution
 	}
 	raw, _ := json.Marshal(r)
@@ -121,7 +130,7 @@ func (j *MergeJournal) SealMergeNotSent(ctx context.Context, effect MergeEffect)
 func readMergeEvidence(ctx context.Context, tx *sql.Tx, id string) (MergeEvidence, error) {
 	var e MergeEvidence
 	var raw []byte
-	if tx.QueryRowContext(ctx, `SELECT request_digest,receipt_digest,receipt FROM merge_effects WHERE request_id=$1 AND completed_at IS NOT NULL AND not_sent_at IS NULL`, id).Scan(&e.RequestDigest, &e.ReceiptDigest, &raw) != nil || authority.Digest(raw) != e.ReceiptDigest || authority.DecodeStrict(raw, &e.Receipt) != nil || !validMergeReceipt(e.Receipt) {
+	if tx.QueryRowContext(ctx, `SELECT request_digest,receipt_digest,receipt FROM merge_effects WHERE request_id=$1 AND completed_at IS NOT NULL AND not_sent_at IS NULL`, id).Scan(&e.RequestDigest, &e.ReceiptDigest, &raw) != nil || authority.Digest(raw) != e.ReceiptDigest || authority.DecodeStrict(raw, &e.Receipt) != nil || !liveMergeReceipt(e.Receipt) {
 		return MergeEvidence{}, ErrExecution
 	}
 	return e, nil
@@ -145,7 +154,7 @@ func (j *MergeJournal) ReadMergeEvidence(ctx context.Context, c MergeClaim) (Mer
 }
 func (j *MergeJournal) FinishMerge(ctx context.Context, c MergeClaim, raw []byte) error {
 	var p MergeProof
-	if len(raw) == 0 || len(raw) > 16384 || authority.DecodeStrict(raw, &p) != nil || p.Version != "ai-sdlc.merge-proof/v1" || p.MergeID != c.ID || p.PublicationRecordSHA256 != c.RecordDigest || p.GateSHA256 != c.GateDigest || !publicationIDPattern.MatchString(p.PublicationID) || !modelDigest.MatchString(p.EffectSHA256) || !validMergeReceipt(p.Receipt) || p.DeploymentAuthorized {
+	if len(raw) == 0 || len(raw) > 16384 || authority.DecodeStrict(raw, &p) != nil || p.Version != "ai-sdlc.merge-proof/v1" || p.MergeID != c.ID || p.PublicationRecordSHA256 != c.RecordDigest || p.GateSHA256 != c.GateDigest || !publicationIDPattern.MatchString(p.PublicationID) || !modelDigest.MatchString(p.EffectSHA256) || !liveMergeReceipt(p.Receipt) || p.DeploymentAuthorized {
 		return ErrExecution
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)

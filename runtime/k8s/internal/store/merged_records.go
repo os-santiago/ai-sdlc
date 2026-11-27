@@ -42,7 +42,7 @@ func readMergedRecord(ctx context.Context, q Querier, id, role string) (MergedRe
 		return MergedRecord{}, ErrExecution
 	}
 	raw, _ := json.Marshal(effect.Receipt)
-	if c.Version != merging.Version || c.ID() != id || p.Version != "ai-sdlc.merge-proof/v1" || p.MergeID != id || p.PublicationID != c.PublicationID || p.PublicationRecordSHA256 != c.PublicationRecordSHA256 || p.GateSHA256 != c.GateSHA256 || p.EffectSHA256 != r.EffectDigest || p.DeploymentAuthorized || p.Receipt != effect.Receipt || !validMergeReceipt(p.Receipt) || !modelDigest.MatchString(effect.RequestDigest) || authority.Digest(raw) != effect.ReceiptDigest || p.Receipt.HeadSHA != c.HeadSHA || p.Receipt.BaseSHA != c.BaseSHA || p.Receipt.TreeSHA != c.TreeSHA || p.Receipt.PullRequest != c.PullRequest || !time.UnixMilli(c.ExpiresAt).Equal(r.AuthorityExpiresAt) {
+	if c.Version != merging.Version || c.ID() != id || p.Version != "ai-sdlc.merge-proof/v1" || p.MergeID != id || p.PublicationID != c.PublicationID || p.PublicationRecordSHA256 != c.PublicationRecordSHA256 || p.GateSHA256 != c.GateSHA256 || p.EffectSHA256 != r.EffectDigest || p.DeploymentAuthorized || p.Receipt != effect.Receipt || !liveMergeReceipt(p.Receipt) || !modelDigest.MatchString(effect.RequestDigest) || authority.Digest(raw) != effect.ReceiptDigest || p.Receipt.HeadSHA != c.HeadSHA || p.Receipt.BaseSHA != c.BaseSHA || p.Receipt.TreeSHA != c.TreeSHA || p.Receipt.PullRequest != c.PullRequest || !time.UnixMilli(c.ExpiresAt).Equal(r.AuthorityExpiresAt) {
 		return MergedRecord{}, ErrExecution
 	}
 	return r, nil
