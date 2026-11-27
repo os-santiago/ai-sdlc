@@ -274,9 +274,12 @@ code, so the build and test phases are equally untrusted; they run only in
   `computeResources`; the source claim only `accessModes` and `resources`. Env,
   volumes, DNS settings or host aliases in a pod template would otherwise let a
   run fake the address the egress gate probes or load a candidate file into a
-  fetch task with `NODE_OPTIONS`. **RBAC must never grant create on TaskRuns,
-  CustomRuns or Pods in `ai-sdlc-ci`**: the policy covers PipelineRuns, and the
-  Tekton controller creates TaskRuns and Pods itself.
+  fetch task with `NODE_OPTIONS`. A second policy keeps a PipelineRun's egress label from
+  changing on update (labels propagate to pods created later); cancellation
+  stays allowed. **RBAC must never grant create, update or patch on TaskRuns,
+  CustomRuns or Pods in `ai-sdlc-ci`**: the policies cover PipelineRuns, the
+  Tekton controller creates TaskRuns and Pods itself, and a label patched onto
+  a pod changes its egress at once.
 - **Restricted pods.** The namespace enforces restricted Pod Security. Every
   step and sidecar is non-root, drops all capabilities, disallows privilege
   escalation, uses RuntimeDefault seccomp, a read-only root filesystem,

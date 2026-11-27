@@ -92,6 +92,8 @@ class ManifestTests(unittest.TestCase):
             ('Namespace', 'ai-sdlc-ci'), ('ServiceAccount', 'ai-sdlc-ci-runner'),
             ('ServiceAccount', 'default'), ('NetworkPolicy', 'ai-sdlc-ci-default-deny'),
             ('ValidatingAdmissionPolicy', 'ai-sdlc-ci-pipelineruns'), ('ValidatingAdmissionPolicyBinding', 'ai-sdlc-ci-pipelineruns'),
+            ('ValidatingAdmissionPolicy', 'ai-sdlc-ci-pipelinerun-labels'),
+            ('ValidatingAdmissionPolicyBinding', 'ai-sdlc-ci-pipelinerun-labels'),
             ('NetworkPolicy', 'ai-sdlc-ci-fetch-dns'), ('NetworkPolicy', 'ai-sdlc-ci-fetch-https'),
             ('NetworkPolicy', 'ai-sdlc-ci-dependency-proxy'),
             ('Task', 'source-checkout'), ('Task', 'maven-build-test'), ('Task', 'maven-dependencies'),
@@ -120,6 +122,13 @@ class ManifestTests(unittest.TestCase):
         namespace = by_kind('Namespace')['ai-sdlc-ci']['metadata']['labels']
         self.assertEqual(namespace['pod-security.kubernetes.io/enforce'], 'restricted')
         self.assertIs(by_kind('ServiceAccount')['ai-sdlc-ci-runner']['automountServiceAccountToken'], False)
+
+    def test_egress_label_cannot_change_on_update(self):
+        policy = by_kind('ValidatingAdmissionPolicy')['ai-sdlc-ci-pipelinerun-labels']['spec']
+        self.assertEqual(policy['matchConstraints']['resourceRules'][0]['operations'], ['UPDATE'])
+        self.assertEqual([v['expression'] for v in policy['validations']], ['variables.egress == variables.oldEgress'])
+        binding = by_kind('ValidatingAdmissionPolicyBinding')['ai-sdlc-ci-pipelinerun-labels']['spec']
+        self.assertEqual((binding['policyName'], binding['validationActions']), ('ai-sdlc-ci-pipelinerun-labels', ['Deny']))
 
     def test_every_container_is_pinned_non_root_and_unprivileged(self):
         for task in by_kind('Task').values():
@@ -420,19 +429,20 @@ class ScriptTests(unittest.TestCase):
                                         capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, 2, (directory_value, mode, packages, registry, result.stderr))
 
-    def npm(self, directory, stub, packages=('vite',), npmrc=True):
+    def npm(self, directory, stub, packages=('vite',), npmrc=True, lock=None):
         """Run the update step against a stub npm, with /tmp mapped into the test directory."""
         text = step('npm-lock-update', 'update')['script'].replace('/tmp/', directory + '/tmp/')
         Path(directory, 'tmp').mkdir(exist_ok=True)
         web = Path(directory, 'source/web')
         web.mkdir(parents=True, exist_ok=True)
         web.joinpath('package.json').write_text('{"name":"w"}')
+        override = lock
         lock = {'lockfileVersion': 3, 'packages': {
             '': {'name': 'w'},
             'node_modules/vite': {'version': '6.0.0', 'resolved': 'https://registry.npmjs.org/vite/-/vite-6.0.0.tgz'},
             'node_modules/old': {'version': '1.0.0', 'resolved': 'https://registry.npmjs.org/old/-/old-1.0.0.tgz'},
             'node_modules/same': {'version': '1.0.0', 'resolved': 'https://registry.npmjs.org/same/-/same-1.0.0.tgz'}}}
-        web.joinpath('package-lock.json').write_text(json.dumps(lock, indent=2))
+        web.joinpath('package-lock.json').write_text(json.dumps(override or lock, indent=2))
         if npmrc:
             web.joinpath('.npmrc').write_text('registry=https://evil.example/\n')
         stubs = Path(directory, 'bin')
@@ -488,6 +498,7 @@ class ScriptTests(unittest.TestCase):
             # The stub rewrites the lockfile with 60 packages on long, HTML-heavy
             # hosts and versions.
             stub = ('#!/bin/sh\nnode -e \'const f="package-lock.json",j=JSON.parse(require("fs").readFileSync(f));'
+                    'j.packages["node_modules/vite"]={version:"6.0.0-"+"x".repeat(80)+"b",resolved:"https://"+"a".repeat(63)+".new.example/v.tgz"};'
                     'for(let i=0;i<60;i++){j.packages["node_modules/p"+i]={version:"1.0.0-<&>".repeat(20)+i,'
                     'resolved:"https://"+"h".repeat(200)+i+".example/p.tgz"};}'
                     'require("fs").writeFileSync(f,JSON.stringify(j,null,2))\'\n')
@@ -500,6 +511,25 @@ class ScriptTests(unittest.TestCase):
             self.assertLessEqual(len(summary['resolvedHosts']), 10)
             self.assertTrue(all(len(h) <= 64 for h in summary['resolvedHosts'] + summary['newResolvedHosts']))
             self.assertTrue(all(len(c['to'] or '') <= 64 for c in summary['changes']))
+
+    def test_npm_changes_are_compared_before_values_are_bounded(self):
+        if not shutil.which('node'):
+            self.skipTest('node is not installed')
+        long = '1.0.0-' + 'x' * 80
+        host = 'a' * 63
+        lock = {'lockfileVersion': 3, 'packages': {'': {'name': 'w'}, 'node_modules/p': {
+            'version': long + 'a', 'resolved': 'https://' + host + '.old.example/p.tgz', 'integrity': 'sha512-same'}}}
+        with tempfile.TemporaryDirectory() as directory:
+            stub = ('#!/bin/sh\nnode -e \'const f="package-lock.json",j=JSON.parse(require("fs").readFileSync(f));'
+                    'j.packages["node_modules/p"].version=j.packages["node_modules/p"].version.slice(0,-1)+"b";'
+                    'j.packages["node_modules/p"].resolved=j.packages["node_modules/p"].resolved.replace(".old.",".new.");'
+                    'require("fs").writeFileSync(f,JSON.stringify(j,null,2))\'\n')
+            result = self.npm(directory, stub, lock=lock)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(Path(directory, 'result').read_text())
+        self.assertEqual(summary['changed'], 1, 'versions that differ after the published bound still count')
+        self.assertEqual(len(summary['newResolvedHosts']), 1, 'hosts that share the published prefix still count as new')
+        self.assertTrue(all(len(v) <= 64 for c in summary['changes'] for v in (c['from'], c['to'])))
 
     def test_npm_failure_still_publishes_its_summary(self):
         if not shutil.which('node'):
