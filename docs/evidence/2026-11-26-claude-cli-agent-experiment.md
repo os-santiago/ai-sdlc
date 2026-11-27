@@ -134,9 +134,9 @@ Four batteries of new issues measured the main scenario while a series of reliab
 
 - **Battery 45, local model:**
   - It ran on the reliability changes from batteries 41–44.
-  - Six issues delivered on the first attempt. Issue 334 delivered on the second, after its first generation exhausted its step budget (`worker-exit`, exit code 2, 32 calls).
+  - Six issues delivered on the first attempt. Issue 334 delivered on the second, after its first generation ran out of its generation budget (`worker-exit`, exit code 22: a time-out, or the step budget reached at the deadline; 906 s and 32 calls).
   - Issue 333 was refused twice because the candidate's own tests failed.
-  - No transport, publication or merge stop occurred.
+  - The reports show no transport, publication or merge stop; every other attempt merged.
   - For comparison only (different issues and revisions): batteries 30–32 on the local model delivered 16 of 21 (9 of 21 on the first attempt).
 - **Battery 46, latest main:**
   - It ran after an in-place upgrade of the Python installation to 3e4f48c, which applied migration 0040 from #840.
