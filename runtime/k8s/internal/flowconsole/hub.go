@@ -27,6 +27,12 @@ type Status struct {
 	Window     string    `json:"window,omitempty"`
 }
 
+// ProblemConnecting is the status problem while the console has not yet
+// reached the journal database at startup (for example on a fresh install,
+// before PostgreSQL or the console's role is ready). It is retried with
+// bounded backoff; readiness stays false until the first successful read.
+const ProblemConnecting = "journal-connecting"
+
 // Hub retains at most capacity entries, de-duplicates by event id, and wakes
 // subscribers on every append or status change.
 type Hub struct {

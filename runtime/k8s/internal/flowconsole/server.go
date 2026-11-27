@@ -91,7 +91,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok\n")) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		if s.Ready != nil && !s.Ready() {
-			http.Error(w, "source not ready", http.StatusServiceUnavailable)
+			// The reason is the hub's fixed problem vocabulary, never driver text.
+			reason := "source not ready"
+			if s.Hub != nil && s.Hub.Status().Problem == ProblemConnecting {
+				reason = "journal database not reachable yet; retrying"
+			}
+			http.Error(w, reason, http.StatusServiceUnavailable)
 			return
 		}
 		w.Write([]byte("ready\n"))

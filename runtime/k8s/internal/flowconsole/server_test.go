@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -366,5 +367,38 @@ func TestFixtureReleasesShiftedEventsLive(t *testing.T) {
 			t.Fatal("fixture history not released", len(entries))
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// While the console waits for the journal database at startup, liveness
+// answers, readiness is false and says why, without any driver text.
+func TestReadinessReportsTheJournalConnectionWait(t *testing.T) {
+	hub := NewHub(10, "journal")
+	hub.SetStatus(Status{Source: "journal", Problem: ProblemConnecting})
+	ready := false
+	server := httptest.NewServer((&Server{Hub: hub, Ready: func() bool { return ready }}).Handler())
+	defer server.Close()
+	get := func(path string) (int, string) {
+		response, err := http.Get(server.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		body, _ := io.ReadAll(response.Body)
+		return response.StatusCode, string(body)
+	}
+	if code, _ := get("/healthz"); code != http.StatusOK {
+		t.Fatal("liveness while connecting", code)
+	}
+	if code, body := get("/readyz"); code != http.StatusServiceUnavailable || body != "journal database not reachable yet; retrying\n" {
+		t.Fatal("readiness while connecting", code, body)
+	}
+	hub.SetStatus(Status{Source: "journal", Problem: "journal-unavailable"})
+	if code, body := get("/readyz"); code != http.StatusServiceUnavailable || body != "source not ready\n" {
+		t.Fatal("readiness before the first read", code, body)
+	}
+	ready = true
+	if code, _ := get("/readyz"); code != http.StatusOK {
+		t.Fatal("readiness after the first read", code)
 	}
 }
