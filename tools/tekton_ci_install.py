@@ -28,7 +28,8 @@ CI_FILES = ('namespace.yaml', 'serviceaccount.yaml', 'admission-policy.yaml', 'n
             'task-source-checkout.yaml', 'task-maven-build-test.yaml', 'task-maven-dependencies.yaml',
             'task-npm-lock-update.yaml', 'pipeline-maven-build-test.yaml', 'pipeline-maven-dependencies.yaml',
             'pipeline-npm-lock-update.yaml')
-# The reviewed catalog: pipeline name -> the task that runs candidate or package code.
+TASKS = ('source-checkout', 'maven-build-test', 'maven-dependencies', 'npm-lock-update')
+# The reviewed catalog pipelines.
 PIPELINES = ('ai-sdlc-maven-build-test', 'ai-sdlc-maven-dependencies', 'ai-sdlc-npm-lock-update')
 CI_NAMESPACE = 'ai-sdlc-ci'
 FIELD_MANAGER = 'ai-sdlc-tekton-ci'
@@ -311,8 +312,12 @@ def observe(run, kubectl, lock=None):
                  capture_output=True, check=False)
     names = {line.rsplit('/', 1)[-1] for line in listed.stdout.split()} if listed.returncode == 0 else set()
     present = sorted(set(PIPELINES) & names)
+    tasks = run(kubectl + ['get', 'task.tekton.dev', '-n', CI_NAMESPACE, '-o', 'name'], capture_output=True, check=False)
+    task_names = {line.rsplit('/', 1)[-1] for line in tasks.stdout.split()} if tasks.returncode == 0 else set()
+    present_tasks = sorted(set(TASKS) & task_names)
     return {'release': lock['release'], 'deployments': deployments, 'hardenedConfiguration': hardened,
-            'pipelines': present, 'ready': all(deployments.values()) and hardened and present == sorted(PIPELINES)}
+            'pipelines': present, 'tasks': present_tasks,
+            'ready': all(deployments.values()) and hardened and present == sorted(PIPELINES) and present_tasks == sorted(TASKS)}
 
 
 def plan():

@@ -1,9 +1,14 @@
-# Admission control for PipelineRuns in ai-sdlc-ci, independent of who creates
-# them: only the catalog pipelines, only the token-free runner account, and
-# only the reviewed workspace bindings. The shared Maven cache of a repository
-# is writable only by maven-dependencies; every other pipeline must bind it
-# read-only. Tekton accepts no inline specifications (feature flag), so a run
-# cannot bring its own tasks.
+# Admission control for PipelineRuns in ai-sdlc-ci: only the catalog
+# pipelines, only the token-free runner account, no egress label (labels
+# propagate from the PipelineRun to its pods, where network-policy.yaml reads
+# them), and only the reviewed workspace bindings: a fresh source claim
+# without a data source, and a repository cache that is read-only except for
+# maven-dependencies. Writing a cache (maven-dependencies) is limited to
+# cluster administrators; that its revision is the current base-branch head
+# and its claim belongs to its repository is checked by the caller
+# (tools/tekton_ci_run.py, internal/tektontasks), because admission can
+# neither read GitHub nor compute the claim digest. Tekton accepts no inline
+# specifications (feature flag), so a run cannot bring its own tasks.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -37,8 +42,19 @@ spec:
            s.podTemplate.automountServiceAccountToken == false))
       message: per-task overrides keep the token-free runner account
     - expression: >-
+        (!has(object.metadata.labels) || !('ai-sdlc.io/ci-egress' in object.metadata.labels)) &&
+        (!has(object.spec.taskRunSpecs) || object.spec.taskRunSpecs.all(s,
+          !has(s.metadata) || !has(s.metadata.labels) || !('ai-sdlc.io/ci-egress' in s.metadata.labels)))
+      message: egress labels come only from the reviewed Tasks
+    - expression: >-
+        object.spec.pipelineRef.name != 'ai-sdlc-maven-dependencies' ||
+        request.userInfo.groups.exists(g, g == 'system:masters' || g == 'kubeadm:cluster-admins')
+      message: only cluster administrators may run maven-dependencies, which writes a shared cache
+    - expression: >-
         !has(object.spec.workspaces) || object.spec.workspaces.all(w,
-          (w.name == 'source' && has(w.volumeClaimTemplate)) ||
+          (w.name == 'source' && has(w.volumeClaimTemplate) && has(w.volumeClaimTemplate.spec) &&
+           !has(w.volumeClaimTemplate.spec.dataSource) && !has(w.volumeClaimTemplate.spec.dataSourceRef) &&
+           !has(w.volumeClaimTemplate.spec.volumeName)) ||
           (w.name == 'maven-cache' && has(w.persistentVolumeClaim) &&
            w.persistentVolumeClaim.claimName.startsWith('ai-sdlc-ci-maven-cache-') &&
            (object.spec.pipelineRef.name == 'ai-sdlc-maven-dependencies' ||

@@ -124,8 +124,13 @@ pod. A separate step publishes the bounded `summary`:
 reports, `compilerErrors` up to 5 `[ERROR] File.java:[line,col]` lines with the
 workspace prefix removed, and `missingDependencies` reports Maven's offline
 "has not been downloaded" error. Each entry is printable ASCII cut to 100
-characters before escaping, and a summary over 3,800 bytes drops both lists
-and sets `truncated`, so it always fits Tekton's 4,096-byte result limit.
+characters before escaping. Tekton stores results JSON-escaped in each step's
+termination message, and the kubelet gives each container min(4,096, 12,288 /
+containers) bytes: 1,755 for the seven containers of a Maven task pod, 3,072
+for `npm-lock-update`. Summaries are trimmed (fewer list entries, then none,
+with `truncated: true`) until their escaped size fits that budget. A live
+`dependency-audit` summary of 2,754 bytes was cut to 1,755 and its pipeline
+failed with `CouldntGetPipelineResult` before this rule.
 
 **The verdict is `mavenExitCode`, not the task status.** Tekton publishes no
 pipeline results from a failed task, so the Maven step uses `onError: continue`
@@ -155,9 +160,11 @@ the registry is always set explicitly (the public registry or the proxy). An
 egress gate (in Node; the image has no curl) runs first. The summary also lists
 the hosts the lockfile resolves from and any new ones (`newResolvedHosts`), and
 the verdict is `npmExitCode`.
-Package specs must be `name` or `name@range` (at most 16; no URLs, paths or
-shell syntax). The summary lists up to 25 changed lockfile entries with old and
-new versions, the diff size and its SHA-256; the full diff and lockfile are
+Packages are names only (at most 16; no URLs, paths, versions or shell syntax):
+`npm update` rejects versions (`EUPDATEARGS`) and stays within the
+`package.json` ranges. The summary lists up to 25 changed lockfile entries with
+old and new versions (or `resolutionChanged` when only the resolved URL or
+integrity changed), the diff size and its SHA-256; the full diff and lockfile are
 written under `npm-lock-update/` in the run's source workspace.
 
 The pipelines use the image's pinned Maven rather than the project's `./mvnw`,
@@ -226,7 +233,8 @@ pods labelled `app.kubernetes.io/component: dependency-proxy` on 8080; nginx
 forwards only to one upstream host and allowed path prefixes). The CI side of
 its contract is already installed: policy `ai-sdlc-ci-dependency-proxy` lets
 pods labelled `ai-sdlc.io/ci-egress: dependency-proxy` reach only the proxy pods
-(Maven 8080, npm 8081) and cluster DNS, and the proxy admits that label from
+(Maven 8080 at `/maven2`, npm 8081) and nothing else, not even DNS, so callers
+pass the proxy Service's cluster IP; the proxy admits that label from
 `ai-sdlc-ci`. No task carries the label yet. Once the proxy is installed:
 
 1. Switch `maven-dependencies` and `npm-lock-update` from the `fetch` label to
@@ -251,9 +259,14 @@ code, so the build and test phases are equally untrusted; they run only in
 - **Admission.** The `ai-sdlc-ci-pipelineruns` ValidatingAdmissionPolicy admits
   a PipelineRun in `ai-sdlc-ci` only when it references a catalog pipeline,
   uses the runner account without a token (also in per-task overrides), and
-  binds only a fresh `source` claim and a repository cache, read-only except for
-  `maven-dependencies`. Combined with the refusal of inline specifications,
-  whoever can create PipelineRuns there can only run the reviewed catalog.
+  sets no `ai-sdlc.io/ci-egress` label on the run or a per-task override
+  (labels propagate to pods, where the network policy reads them), and binds
+  only a fresh `source` claim (no data source or pre-bound volume) and a
+  repository cache, read-only except for `maven-dependencies`. Only cluster
+  administrators may create `maven-dependencies` runs, which write a cache.
+  Admission cannot read GitHub or compute the claim digest, so the rules that
+  a cache write uses the base-branch head and the repository's own claim are
+  enforced by the callers (the run tool and the adapter).
 - **Restricted pods.** The namespace enforces restricted Pod Security. Every
   step and sidecar is non-root, drops all capabilities, disallows privilege
   escalation, uses RuntimeDefault seccomp, a read-only root filesystem,
