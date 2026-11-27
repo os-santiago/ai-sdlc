@@ -445,9 +445,12 @@ func (e *encoder) file(f File) error {
 	if e.files >= MaxFiles || len(f.Path) > MaxPathBytes || len(f.Data) > MaxFileBytes {
 		return ErrInvalid
 	}
-	size := fileSize(f) + 1
-	if cap(e.scratch) < size {
-		e.scratch = make([]byte, 0, size)
+	size := fileSize(f)
+	if size < 0 || size >= MaxWireBytes {
+		return ErrInvalid
+	}
+	if cap(e.scratch) <= size {
+		e.scratch = make([]byte, 0, size+1)
 	}
 	p := e.scratch[:0]
 	if e.files > 0 {
