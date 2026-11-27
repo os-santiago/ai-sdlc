@@ -24,7 +24,7 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 DESIRED = ROOT / 'runtime/k8s/deploy/tekton-ci'
 CI_DIR = DESIRED / 'ci'
-CI_FILES = ('namespace.yaml', 'serviceaccount.yaml', 'maven-cache.yaml', 'network-policy.yaml',
+CI_FILES = ('namespace.yaml', 'serviceaccount.yaml', 'admission-policy.yaml', 'network-policy.yaml',
             'task-source-checkout.yaml', 'task-maven-build-test.yaml', 'task-maven-dependencies.yaml',
             'task-npm-lock-update.yaml', 'pipeline-maven-build-test.yaml', 'pipeline-maven-dependencies.yaml',
             'pipeline-npm-lock-update.yaml')
@@ -37,6 +37,32 @@ OWNER_LABEL = 'ai-sdlc.io/tekton-ci'
 IMAGE_LINE = re.compile(r'^\s*(?:-\s*)?image:\s*(\S+)\s*$', re.M)
 PINNED_IMAGE = re.compile(r'[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9._/-]+(?::[A-Za-z0-9._-]+)?@sha256:[a-f0-9]{64}')
 ADMISSION_ATTEMPTS = 30
+# Cluster-scoped CI objects (the admission policy) carry this name prefix.
+CI_CLUSTER_PREFIX = 'ai-sdlc-ci-'
+CACHE_PREFIX = 'ai-sdlc-ci-maven-cache-'
+CACHE_SIZE = '8Gi'
+REPOSITORY = re.compile(r'[a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}')
+
+
+def cache_claim(repository):
+    """One Maven cache claim per repository, named from its digest.
+
+    A run can bind only the claim derived from its own repository, and only
+    claims the installer created exist, so one repository's dependencies never
+    serve another's build. tools/tekton_ci_run.py and internal/tektontasks
+    derive the same name."""
+    if not REPOSITORY.fullmatch(repository) or any(p in ('.', '..') for p in repository.split('/')):
+        raise ValueError('Tekton CI cache repositories must be lowercase owner/name')
+    return CACHE_PREFIX + hashlib.sha256(repository.encode()).hexdigest()[:16]
+
+
+def cache_claims(repositories):
+    return [{'apiVersion': 'v1', 'kind': 'PersistentVolumeClaim',
+             'metadata': {'name': cache_claim(r), 'namespace': CI_NAMESPACE,
+                          'labels': {'app.kubernetes.io/part-of': 'ai-sdlc'},
+                          'annotations': {'ai-sdlc.io/repository': r}},
+             'spec': {'accessModes': ['ReadWriteOnce'], 'resources': {'requests': {'storage': CACHE_SIZE}}}}
+            for r in sorted(set(repositories))]
 
 
 def digest(raw):
@@ -202,7 +228,10 @@ def desired_tekton(items, lock, config, cluster_uid):
 def desired_ci(items, cluster_uid):
     for item in items:
         kind, namespace, name = key(item)
-        if (kind == 'Namespace' and name != CI_NAMESPACE) or (kind != 'Namespace' and namespace != CI_NAMESPACE):
+        cluster_scoped = kind in ('ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding')
+        if cluster_scoped and (namespace or not name.startswith(CI_CLUSTER_PREFIX)):
+            raise ValueError('Cluster-scoped Tekton CI objects must be named ' + CI_CLUSTER_PREFIX + '*')
+        if not cluster_scoped and ((kind == 'Namespace' and name != CI_NAMESPACE) or (kind != 'Namespace' and namespace != CI_NAMESPACE)):
             raise ValueError('Tekton CI resources must stay in ' + CI_NAMESPACE)
         if kind in ('Role', 'RoleBinding', 'ClusterRole', 'ClusterRoleBinding', 'Secret'):
             raise ValueError('Tekton CI desired state must not grant API access or carry Secrets')
@@ -211,10 +240,14 @@ def desired_ci(items, cluster_uid):
     return own(items, cluster_uid)
 
 
-def require_ownership(run, kubectl, lock, cluster_uid):
-    """Refuse to adopt any existing Tekton or CI root this installation did not create."""
-    roots = ([('namespace', n) for n in lock['namespaces'] + [CI_NAMESPACE]]
-             + [('customresourcedefinition', n) for n in lock['customResourceDefinitions']])
+def require_ownership(run, kubectl, items, cluster_uid):
+    """Refuse to adopt any existing namespace or cluster-scoped object this installation did not create.
+
+    This covers the Tekton and CI namespaces, CRDs, ClusterRoles and their
+    bindings, webhook configurations and the CI admission policy: every object
+    that is not inside a namespace this check has already proven to be ours."""
+    roots = [(i['kind'].lower() + '.' + i['apiVersion'].split('/')[0] if '/' in i['apiVersion'] else i['kind'].lower(),
+              i['metadata']['name']) for i in items if not i['metadata'].get('namespace')]
     for kind, name in roots:
         result = run(kubectl + ['get', kind, name, '--ignore-not-found', '-o', 'json'], capture_output=True)
         if not result.stdout.strip():
@@ -291,17 +324,20 @@ def plan():
             'ciSHA256': ci_digest, 'namespace': CI_NAMESPACE, 'pipelines': list(PIPELINES)}
 
 
-def install(run, kubectl, cluster_uid, cache, timeout):
+def install(run, kubectl, cluster_uid, cache, timeout, repositories):
     lock, lock_digest = lockfile()
     config, config_digest = configuration()
     ci_raw, ci_digest = ci_manifests()
+    claims = cache_claims(repositories)
     raw = fetch_release(cache, lock)
     verify_release(raw, lock)
-    require_ownership(run, kubectl, lock, cluster_uid)
-    apply(run, kubectl, desired_tekton(objects(run, kubectl, raw), lock, config, cluster_uid))
+    tekton = desired_tekton(objects(run, kubectl, raw), lock, config, cluster_uid)
+    require_ownership(run, kubectl, tekton + [{'apiVersion': 'v1', 'kind': 'Namespace', 'metadata': {'name': CI_NAMESPACE}}], cluster_uid)
+    apply(run, kubectl, tekton)
     wait_ready(run, kubectl, lock, timeout)
     # Tekton kinds are only known to kubectl once the CRDs are established.
-    ci = desired_ci(objects(run, kubectl, b'\n---\n'.join(ci_raw[name] for name in CI_FILES)), cluster_uid)
+    ci = desired_ci(objects(run, kubectl, b'\n---\n'.join(ci_raw[name] for name in CI_FILES)) + claims, cluster_uid)
+    require_ownership(run, kubectl, ci, cluster_uid)
     # A server dry run cannot create the namespace its other objects need.
     apply(run, kubectl, [i for i in ci if i['kind'] == 'Namespace'])
     namespaced = [i for i in ci if i['kind'] != 'Namespace']
@@ -311,16 +347,20 @@ def install(run, kubectl, cluster_uid, cache, timeout):
     if not observation['ready']:
         raise ValueError('Tekton CI is not ready after installation; owned state is retained for reapplication')
     return dict(observation, lockSHA256=lock_digest, configurationSHA256=config_digest, ciSHA256=ci_digest,
-                admissionAttempts=attempts)
+                admissionAttempts=attempts, cacheClaims={r: cache_claim(r) for r in sorted(set(repositories))})
 
 
 def validate_options(args):
     if not getattr(args, 'tekton_ci', None):
+        if getattr(args, 'tekton_ci_repository', None):
+            raise ValueError('--tekton-ci-repository requires --tekton-ci')
         return
     if args.command not in ('plan', 'local', 'status'):
         raise ValueError('--tekton-ci requires plan, local or status')
     if args.platform != 'kind':
         raise ValueError('--tekton-ci supports the kind platform only; Konflux and OpenShift provide their own Tekton')
+    for repository in getattr(args, 'tekton_ci_repository', None) or []:
+        cache_claim(repository)
 
 
 def cache_dir():

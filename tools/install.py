@@ -510,6 +510,7 @@ def _main(argv, stack):
     parser.add_argument('--project-manifest', type=Path, help='Reviewed ai-sdlc.project/v1 manifest for a repository that is not a built-in reference')
     parser.add_argument('--flow-console', action='store_true', default=None, help='Enable the read-only flow console (docs/operations/flow-console.md); omitting it on a later install disables it')
     parser.add_argument('--tekton-ci', action='store_true', default=None, help='Install pinned Tekton Pipelines and the reviewed Maven CI pipeline (docs/operations/tekton-ci.md); kind only')
+    parser.add_argument('--tekton-ci-repository', action='append', help='Repository (owner/name) that gets its own Tekton CI Maven cache; repeatable; default: --repository')
     parser.add_argument('--console-images', type=Path, help='Reviewed console-images.json from tools/install_images.py --include-console; default: beside the image lock')
     parser.add_argument('--generation-seconds', type=int, help='Generation time budget in seconds (600-900, default 600); candidate or verification only, recorded in the execution configuration')
     parser.add_argument('--generation-steps', type=int, help='Generation SCC tool-step budget (24-32, default 24; above 24 requires --model-upstream); candidate or verification only, recorded in the execution configuration')
@@ -871,7 +872,8 @@ def _main(argv, stack):
     network = network_probe.verify(kubectl, lock['image']['repository'] + '@' + lock['components']['worker']['digest'])
     # After the runtime is ready: a Tekton failure leaves the runtime intact
     # and the owned Tekton state in place for reapplication.
-    tekton_ci = tekton_ci_install.install(run, kubectl, cluster_uid, tekton_ci_install.cache_dir(), args.timeout) if args.tekton_ci else None
+    tekton_ci = tekton_ci_install.install(run, kubectl, cluster_uid, tekton_ci_install.cache_dir(), args.timeout,
+                                          args.tekton_ci_repository or [args.repository.lower()]) if args.tekton_ci else None
     report = {'cluster': args.cluster, 'platform': args.platform, 'namespace': NAMESPACE, 'provider': provider,
               'repository': args.repository, 'environment': args.environment,
               'configurationDigest': config_digest,

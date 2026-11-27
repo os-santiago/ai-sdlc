@@ -53,10 +53,11 @@ Everything lives in `runtime/k8s/deploy/tekton-ci/`:
    size, SHA-256, that every Tekton image reference equals the locked set, and
    that every container image is pinned by digest. A cached copy is reused
    only when it verifies.
-2. Refuses to adopt an existing `tekton-pipelines`, `tekton-pipelines-resolvers`
-   or `ai-sdlc-ci` namespace, or any locked Tekton CRD, that does not carry
-   this installation's `ai-sdlc.io/cluster-uid` annotation. A Tekton installed
-   by anything else is never modified.
+2. Refuses to adopt any existing namespace or cluster-scoped object it would
+   apply (the Tekton and `ai-sdlc-ci` namespaces, CRDs, ClusterRoles and their
+   bindings, webhook configurations, the CI admission policy) that does not
+   carry this installation's `ai-sdlc.io/cluster-uid` annotation. A Tekton
+   installed by anything else is never modified.
 3. Converts the manifest with kubectl's own parser (the installer is
    standard-library Python), checks that every object stays in the locked
    namespaces, that Deployment images equal the lock, applies the reviewed
@@ -122,9 +123,17 @@ pod. A separate step publishes the bounded `summary`:
 `failingTests` lists up to 10 `Class.method` names from Surefire/Failsafe
 reports, `compilerErrors` up to 5 `[ERROR] File.java:[line,col]` lines with the
 workspace prefix removed, and `missingDependencies` reports Maven's offline
-"has not been downloaded" error. The Maven step uses `onError: continue` so the
-summary is always published; the summary step then fails the task when Maven
-failed. `maven-args` is an array passed as separate argv entries, never
+"has not been downloaded" error. Each entry is printable ASCII cut to 100
+characters before escaping, and a summary over 3,800 bytes drops both lists
+and sets `truncated`, so it always fits Tekton's 4,096-byte result limit.
+
+**The verdict is `mavenExitCode`, not the task status.** Tekton publishes no
+pipeline results from a failed task, so the Maven step uses `onError: continue`
+and the summary step succeeds whenever it wrote a summary. A failing build
+therefore ends in a *succeeded* PipelineRun whose summary carries the failing
+tests and compiler errors. A run passes only when the PipelineRun succeeded,
+its `commit` equals the requested revision and the exit code is 0; the run tool
+(`passed`) and the adapter apply that rule. `maven-args` is an array passed as separate argv entries, never
 through a shell; parameters reach scripts only through the environment, and
 scripts revalidate them.
 
@@ -139,6 +148,13 @@ passed 72 unit tests and then failed packaging.
 --ignore-scripts --no-audit` (mode `update`) or `npm audit fix
 --package-lock-only --ignore-scripts` (mode `audit-fix`) in `directory` with the
 pinned Node 24 image. No install script runs and no `node_modules` is written.
+npm works on copies of `package.json` and `package-lock.json` in a scratch
+directory, so a project `.npmrc` (registry, auth, git settings) is never read;
+user and global configuration point at an empty file, `git` is disabled and
+the registry is always set explicitly (the public registry or the proxy). An
+egress gate (in Node; the image has no curl) runs first. The summary also lists
+the hosts the lockfile resolves from and any new ones (`newResolvedHosts`), and
+the verdict is `npmExitCode`.
 Package specs must be `name` or `name@range` (at most 16; no URLs, paths or
 shell syntax). The summary lists up to 25 changed lockfile entries with old and
 new versions, the diff size and its SHA-256; the full diff and lockfile are
@@ -174,7 +190,11 @@ engine. Kafka (needed by event-statistics and rest-fights) and MariaDB
 
 ### Dependency cache
 
-The `ai-sdlc-ci-maven-cache` claim (8 GiB) holds a resolved Maven repository.
+Each repository has its own claim (8 GiB), `ai-sdlc-ci-maven-cache-` plus the
+first 16 hex digits of the SHA-256 of `owner/name`. The installer creates one
+per `--tekton-ci-repository` (repeatable; default: `--repository`), and runs
+derive the name from their own repository, so a run can only bind its own
+repository's cache, and a repository without one cannot run Maven pipelines.
 `maven-dependencies` is its only writer, and the run tool allows it only when
 the revision is the current head of the catalog's base branch (read with an
 anonymous `git ls-remote`), i.e. reviewed, merged code. Every other run mounts
@@ -225,8 +245,15 @@ code, so the build and test phases are equally untrusted; they run only in
 `maven-build-test`, which has no network. The controls are:
 
 - **No credentials.** The `ai-sdlc-ci-runner` ServiceAccount has no Role and
-  `automountServiceAccountToken: false`; the run's pod template repeats it. No
-  Secret, `valueFrom` or `envFrom` appears in any Task (tests enforce this).
+  `automountServiceAccountToken: false`, as does the namespace's `default`
+  account; the run's pod template repeats it. No Secret, `valueFrom` or
+  `envFrom` appears in any Task (tests enforce this).
+- **Admission.** The `ai-sdlc-ci-pipelineruns` ValidatingAdmissionPolicy admits
+  a PipelineRun in `ai-sdlc-ci` only when it references a catalog pipeline,
+  uses the runner account without a token (also in per-task overrides), and
+  binds only a fresh `source` claim and a repository cache, read-only except for
+  `maven-dependencies`. Combined with the refusal of inline specifications,
+  whoever can create PipelineRuns there can only run the reviewed catalog.
 - **Restricted pods.** The namespace enforces restricted Pod Security. Every
   step and sidecar is non-root, drops all capabilities, disallows privilege
   escalation, uses RuntimeDefault seccomp, a read-only root filesystem,
@@ -237,7 +264,7 @@ code, so the build and test phases are equally untrusted; they run only in
   namespace. Pods of the fetch tasks (`source-checkout`, `maven-dependencies`,
   `npm-lock-update`, selected by the `ai-sdlc.io/ci-egress: fetch` label that
   Tekton copies from each Task to its pods) may use cluster DNS and TCP 443 to
-  any address **outside** private, loopback, link-local, shared (100.64/10)
+  any address **outside** private, loopback, link-local, shared (100.64/10), benchmarking (198.18/15), IETF protocol (192.0.0/24)
   and multicast ranges. No pod can reach the Kubernetes API, node addresses,
   cluster Services, other pods or the host network. `maven-build-test` has no
   network at all.

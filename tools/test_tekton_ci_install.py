@@ -178,23 +178,43 @@ class ResourceTests(unittest.TestCase):
                      {'kind': 'RoleBinding', 'metadata': {'name': 'r', 'namespace': 'ai-sdlc-ci'}},
                      {'kind': 'ServiceAccount', 'metadata': {'name': 'a', 'namespace': 'ai-sdlc-ci'}},
                      {'kind': 'Pipeline', 'metadata': {'name': 'p', 'namespace': 'default'}},
-                     {'kind': 'Namespace', 'metadata': {'name': 'other'}}):
+                     {'kind': 'Namespace', 'metadata': {'name': 'other'}},
+                     {'kind': 'ValidatingAdmissionPolicy', 'metadata': {'name': 'other-policy'}},
+                     {'kind': 'ClusterRole', 'metadata': {'name': 'ai-sdlc-ci-x'}}):
             with self.assertRaises(ValueError):
                 tekton.desired_ci([item], UID)
+        policy = {'kind': 'ValidatingAdmissionPolicy', 'metadata': {'name': 'ai-sdlc-ci-pipelineruns'}}
+        self.assertEqual(tekton.desired_ci([policy], UID)[0]['metadata']['annotations'][tekton.OWNER_ANNOTATION], UID)
 
-    def test_existing_tekton_without_this_installation_mark_is_never_adopted(self):
-        lock = {'namespaces': ['tekton-pipelines'], 'customResourceDefinitions': ['tasks.tekton.dev']}
+    def test_one_cache_claim_per_repository(self):
+        claims = tekton.cache_claims(['os-santiago/quarkus-super-heroes', 'os-santiago/ai-sdlc', 'os-santiago/ai-sdlc'])
+        self.assertEqual(len(claims), 2)
+        names = {c['metadata']['annotations']['ai-sdlc.io/repository']: c['metadata']['name'] for c in claims}
+        self.assertEqual(names['os-santiago/ai-sdlc'], tekton.cache_claim('os-santiago/ai-sdlc'))
+        self.assertNotEqual(names['os-santiago/ai-sdlc'], names['os-santiago/quarkus-super-heroes'])
+        self.assertRegex(names['os-santiago/ai-sdlc'], r'^ai-sdlc-ci-maven-cache-[0-9a-f]{16}$')
+        for bad in ('Owner/Repo', 'a/..', 'x', 'a/b/c'):
+            with self.assertRaises(ValueError):
+                tekton.cache_claim(bad)
+
+    def test_existing_cluster_scoped_objects_without_this_installation_mark_are_never_adopted(self):
+        items = [{'apiVersion': 'v1', 'kind': 'Namespace', 'metadata': {'name': 'tekton-pipelines'}},
+                 {'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'ClusterRole', 'metadata': {'name': 'tekton-pipelines-controller-cluster-access'}},
+                 {'apiVersion': 'admissionregistration.k8s.io/v1', 'kind': 'ValidatingWebhookConfiguration', 'metadata': {'name': 'validation.webhook.pipeline.tekton.dev'}},
+                 {'apiVersion': 'v1', 'kind': 'ConfigMap', 'metadata': {'name': 'feature-flags', 'namespace': 'tekton-pipelines'}}]
         foreign = json.dumps({'metadata': {'annotations': {tekton.OWNER_ANNOTATION: 'other'}}})
         run = Mock(side_effect=[completed(''), completed(''), completed(foreign)])
-        with self.assertRaisesRegex(ValueError, 'not owned'):
-            tekton.require_ownership(run, ['kubectl'], lock, UID)
+        with self.assertRaisesRegex(ValueError, 'validatingwebhookconfiguration.admissionregistration.k8s.io .*not owned'):
+            tekton.require_ownership(run, ['kubectl'], items, UID)
+        self.assertEqual([c.args[0][2] for c in run.call_args_list],
+                         ['namespace', 'clusterrole.rbac.authorization.k8s.io', 'validatingwebhookconfiguration.admissionregistration.k8s.io'])
         owned = json.dumps({'metadata': {'annotations': {tekton.OWNER_ANNOTATION: UID}}})
         run = Mock(return_value=completed(owned))
-        tekton.require_ownership(run, ['kubectl'], lock, UID)
-        self.assertEqual(run.call_count, 3)
+        tekton.require_ownership(run, ['kubectl'], items, UID)
+        self.assertEqual(run.call_count, 3, 'namespaced objects inside owned namespaces are not read')
         unmarked = json.dumps({'metadata': {}})
         with self.assertRaisesRegex(ValueError, 'not owned'):
-            tekton.require_ownership(Mock(return_value=completed(unmarked)), ['kubectl'], lock, UID)
+            tekton.require_ownership(Mock(return_value=completed(unmarked)), ['kubectl'], items, UID)
 
     def test_apply_is_server_side_under_one_manager_without_forcing_conflicts(self):
         run = Mock(return_value=completed())
@@ -254,6 +274,10 @@ class InstallerOptionTests(unittest.TestCase):
         for command, platform in (('credentials', 'kind'), ('sandbox', 'kind'), ('local', 'konflux'), ('plan', 'openshift')):
             with self.assertRaises(ValueError):
                 tekton.validate_options(SimpleNamespace(tekton_ci=True, command=command, platform=platform))
+        with self.assertRaisesRegex(ValueError, 'requires --tekton-ci'):
+            tekton.validate_options(SimpleNamespace(tekton_ci=None, tekton_ci_repository=['a/b'], command='local', platform='kind'))
+        with self.assertRaises(ValueError):
+            tekton.validate_options(SimpleNamespace(tekton_ci=True, tekton_ci_repository=['A/B'], command='local', platform='kind'))
 
     def test_installer_entrypoint_rejects_option_outside_its_scope_before_effects(self):
         with patch.object(install, 'tools', side_effect=AssertionError('no tool bootstrap')), \
@@ -268,16 +292,17 @@ class InstallerOptionTests(unittest.TestCase):
              patch.object(tekton, 'require_ownership', side_effect=lambda *a: calls.append('own')), \
              patch.object(tekton, 'objects', side_effect=lambda run, k, raw: calls.append('objects') or []), \
              patch.object(tekton, 'desired_tekton', side_effect=lambda *a: ['tekton']), \
-             patch.object(tekton, 'desired_ci', side_effect=lambda *a: [{'kind': 'Namespace'}, {'kind': 'Task'}]), \
+             patch.object(tekton, 'desired_ci', side_effect=lambda items, uid: [{'kind': 'Namespace'}, {'kind': 'Task'}] + items), \
              patch.object(tekton, 'apply', side_effect=lambda run, k, items, dry_run=False: calls.append(
                  ('apply', items[0] if isinstance(items[0], str) else ('namespace' if items[0]['kind'] == 'Namespace' else 'ci')))), \
              patch.object(tekton, 'wait_ready', side_effect=lambda *a: calls.append('ready')), \
              patch.object(tekton, 'wait_admission', side_effect=lambda *a: calls.append('admission') or 1), \
              patch.object(tekton, 'observe', return_value={'ready': True, 'release': lock['release']}):
-            report = tekton.install(Mock(), ['kubectl'], UID, Path('/nonexistent'), '5m')
-        self.assertEqual(calls, ['verify', 'own', 'objects', ('apply', 'tekton'), 'ready', 'objects',
+            report = tekton.install(Mock(), ['kubectl'], UID, Path('/nonexistent'), '5m', ['os-santiago/quarkus-super-heroes'])
+        self.assertEqual(calls, ['verify', 'objects', 'own', ('apply', 'tekton'), 'ready', 'objects', 'own',
                                  ('apply', 'namespace'), 'admission', ('apply', 'ci')])
         self.assertTrue(report['ready'])
+        self.assertEqual(report['cacheClaims'], {'os-santiago/quarkus-super-heroes': tekton.cache_claim('os-santiago/quarkus-super-heroes')})
         with patch.object(tekton, 'fetch_release', return_value=b'raw'), \
              patch.object(tekton, 'verify_release'), patch.object(tekton, 'require_ownership'), \
              patch.object(tekton, 'objects', return_value=[]), patch.object(tekton, 'desired_tekton', return_value=[]), \
@@ -285,7 +310,7 @@ class InstallerOptionTests(unittest.TestCase):
              patch.object(tekton, 'wait_ready'), patch.object(tekton, 'wait_admission', return_value=1), \
              patch.object(tekton, 'observe', return_value={'ready': False}), \
              self.assertRaisesRegex(ValueError, 'not ready'):
-            tekton.install(Mock(), ['kubectl'], UID, Path('/nonexistent'), '5m')
+            tekton.install(Mock(), ['kubectl'], UID, Path('/nonexistent'), '5m', ['a/b'])
 
 
 if __name__ == '__main__':
