@@ -8,7 +8,13 @@
 # and its claim belongs to its repository is checked by the caller
 # (tools/tekton_ci_run.py, internal/tektontasks), because admission can
 # neither read GitHub nor compute the claim digest. Tekton accepts no inline
-# specifications (feature flag), so a run cannot bring its own tasks.
+# specifications (feature flag), so a run cannot bring its own tasks. Pod
+# templates and per-task overrides are allowlisted field by field: env,
+# volumes, DNS or host aliases there would let a run reshape candidate pods
+# (for example fake the address the egress gate probes, or load a candidate
+# file with NODE_OPTIONS). RBAC must never grant create on TaskRuns, CustomRuns
+# or Pods in ai-sdlc-ci: this policy covers PipelineRuns only, because the
+# Tekton controller creates the TaskRuns and Pods itself.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -24,6 +30,25 @@ spec:
         operations: [CREATE]
         resources: [pipelineruns]
   validations:
+    - expression: >-
+        object.spec.all(k, k in ['pipelineRef', 'params', 'timeouts', 'taskRunTemplate', 'workspaces', 'taskRunSpecs'])
+      message: only reviewed PipelineRun fields may be set
+    - expression: >-
+        !has(object.spec.taskRunTemplate) || object.spec.taskRunTemplate.all(k, k in ['serviceAccountName', 'podTemplate'])
+      message: taskRunTemplate allows only serviceAccountName and podTemplate
+    - expression: >-
+        (!has(object.spec.taskRunTemplate) || !has(object.spec.taskRunTemplate.podTemplate) ||
+         (object.spec.taskRunTemplate.podTemplate.all(k, k in ['automountServiceAccountToken', 'securityContext', 'runtimeClassName']) &&
+          (!has(object.spec.taskRunTemplate.podTemplate.runtimeClassName) ||
+           object.spec.taskRunTemplate.podTemplate.runtimeClassName in ['ai-sdlc-offline']))) &&
+        (!has(object.spec.taskRunSpecs) || object.spec.taskRunSpecs.all(s,
+          s.all(k, k in ['pipelineTaskName', 'podTemplate', 'stepSpecs', 'sidecarSpecs', 'computeResources', 'metadata']) &&
+          (!has(s.podTemplate) ||
+           (s.podTemplate.all(k, k in ['automountServiceAccountToken', 'securityContext', 'runtimeClassName']) &&
+            (!has(s.podTemplate.runtimeClassName) || s.podTemplate.runtimeClassName in ['ai-sdlc-offline']))) &&
+          (!has(s.stepSpecs) || s.stepSpecs.all(x, x.all(k, k in ['name', 'computeResources']))) &&
+          (!has(s.sidecarSpecs) || s.sidecarSpecs.all(x, x.all(k, k in ['name', 'computeResources'])))))
+      message: pod templates allow only automountServiceAccountToken, securityContext and the offline runtime class; step and sidecar overrides only computeResources
     - expression: >-
         has(object.spec.pipelineRef) && has(object.spec.pipelineRef.name) &&
         object.spec.pipelineRef.name in ['ai-sdlc-maven-build-test', 'ai-sdlc-maven-dependencies', 'ai-sdlc-npm-lock-update', 'ai-sdlc-dependency-audit']
@@ -52,10 +77,9 @@ spec:
       message: only cluster administrators may run maven-dependencies, which writes a shared cache
     - expression: >-
         !has(object.spec.workspaces) || object.spec.workspaces.all(w,
-          (w.name == 'source' && has(w.volumeClaimTemplate) && has(w.volumeClaimTemplate.spec) &&
-           !has(w.volumeClaimTemplate.spec.dataSource) && !has(w.volumeClaimTemplate.spec.dataSourceRef) &&
-           !has(w.volumeClaimTemplate.spec.volumeName)) ||
-          (w.name == 'maven-cache' && has(w.persistentVolumeClaim) &&
+          (w.name == 'source' && w.all(k, k in ['name', 'volumeClaimTemplate']) && has(w.volumeClaimTemplate.spec) &&
+           w.volumeClaimTemplate.spec.all(k, k in ['accessModes', 'resources'])) ||
+          (w.name == 'maven-cache' && w.all(k, k in ['name', 'persistentVolumeClaim']) && has(w.persistentVolumeClaim) &&
            w.persistentVolumeClaim.claimName.startsWith('ai-sdlc-ci-maven-cache-') &&
            (object.spec.pipelineRef.name == 'ai-sdlc-maven-dependencies' ||
             (has(w.persistentVolumeClaim.readOnly) && w.persistentVolumeClaim.readOnly == true))))

@@ -102,7 +102,9 @@ digests are unchanged.
 Rules: targets must be declared modules or directories (relative, no dot
 segments); services come from the catalog; Maven switches cannot change
 settings, POM, offline mode or the local repository; `maven-dependencies` may
-appear only in `pre` (base revision), never as a tool or post check; every
+not appear in any stage: filling a cache is an operator step
+(`tools/tekton_ci_run.py maven-dependencies`, admitted only for cluster
+administrators); every
 `post.check` must be one of `merge.required`; at most 16 modules, 16
 directories, 8 pre, 8 post and 4 tools.
 
