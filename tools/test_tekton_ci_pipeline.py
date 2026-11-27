@@ -386,8 +386,10 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual(Path(directory, 'listing').read_text().split(), ['package-lock.json', 'package.json'],
                              'npm runs on copies; the project .npmrc is not there to read')
             self.assertEqual(Path(directory, 'config').read_text().split(),
-                             ['https://registry.npmjs.org/', 'false', directory + '/tmp/empty-npmrc', directory + '/tmp/empty-npmrc'])
-            self.assertEqual(Path(directory, 'tmp/empty-npmrc').read_text(), '')
+                             ['https://registry.npmjs.org/', 'false', directory + '/tmp/empty-user-npmrc', directory + '/tmp/empty-global-npmrc'])
+            # npm refuses to load one file as both user and global config.
+            self.assertEqual(Path(directory, 'tmp/empty-user-npmrc').read_text(), '')
+            self.assertEqual(Path(directory, 'tmp/empty-global-npmrc').read_text(), '')
             summary = json.loads(Path(directory, 'result').read_text())
             self.assertEqual(summary['changes'], [{'path': 'new', 'from': None, 'to': '2.0.0'},
                                                   {'path': 'old', 'from': '1.0.0', 'to': None},

@@ -131,9 +131,9 @@ spec:
         - name: NPM_CONFIG_CACHE
           value: /home/ci/.npm
         - name: NPM_CONFIG_USERCONFIG
-          value: /tmp/empty-npmrc
+          value: /tmp/empty-user-npmrc
         - name: NPM_CONFIG_GLOBALCONFIG
-          value: /tmp/empty-npmrc
+          value: /tmp/empty-global-npmrc
         - name: NPM_CONFIG_GIT
           value: "false"
         - name: NPM_CONFIG_UPDATE_NOTIFIER
@@ -160,11 +160,13 @@ spec:
         registry="${REGISTRY_URL:-https://registry.npmjs.org/}"
         printf '%s' "$registry" | grep -Eqx 'https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?' \
           || { echo 'invalid registry URL' >&2; exit 2; }
-        # Only this configuration applies: an empty user and global file, git
-        # disabled, scripts disabled and an explicit registry.
-        : > /tmp/empty-npmrc
-        export NPM_CONFIG_REGISTRY="$registry" NPM_CONFIG_USERCONFIG=/tmp/empty-npmrc \
-          NPM_CONFIG_GLOBALCONFIG=/tmp/empty-npmrc NPM_CONFIG_GIT=false NPM_CONFIG_IGNORE_SCRIPTS=true
+        # Only this configuration applies: empty user and global files (npm
+        # refuses one file for both), git disabled, scripts disabled and an
+        # explicit registry.
+        : > /tmp/empty-user-npmrc
+        : > /tmp/empty-global-npmrc
+        export NPM_CONFIG_REGISTRY="$registry" NPM_CONFIG_USERCONFIG=/tmp/empty-user-npmrc \
+          NPM_CONFIG_GLOBALCONFIG=/tmp/empty-global-npmrc NPM_CONFIG_GIT=false NPM_CONFIG_IGNORE_SCRIPTS=true
         project="$SOURCE/$DIRECTORY"
         [ -f "$project/package.json" ] && [ -f "$project/package-lock.json" ] \
           || { echo 'package.json and package-lock.json are required' >&2; exit 2; }
