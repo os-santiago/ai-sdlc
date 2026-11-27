@@ -36,6 +36,9 @@ DEFAULT_POLICY = {
     'minSeverity': 'medium',
     'triggerLabel': 'ai-sdlc:shadow',
     'trigger': {'minSeverity': 'high', 'fixTypes': ['code-change'], 'dispositions': ['actionable'],
+                # provider/tool pairs whose rule metadata is trusted enough to arm a finding.
+                # Report files never arm unless a pair such as "file/Trivy" is listed here.
+                'allowedSources': ['github-code-scanning/CodeQL'],
                 'minConfidence': 0.7, 'requirePathExists': True},
     'labels': {'base': ['security', 'vulnerability-intake'], 'triage': 'needs-triage',
                'dependency': 'dependency-update'},
@@ -77,6 +80,9 @@ def load_policy(value=None):
             or not set(trigger['dispositions']) <= set(schema.DISPOSITIONS)
             or type(trigger['minConfidence']) not in (int, float) or not 0 <= trigger['minConfidence'] <= 1
             or type(trigger['requirePathExists']) is not bool
+            or not isinstance(trigger['allowedSources'], list)
+            or not all(isinstance(v, str) and re.fullmatch(r'(github-code-scanning|dependabot|sarif|file)/[A-Za-z0-9][A-Za-z0-9_.:/@+-]{0,63}', v)
+                       for v in trigger['allowedSources'])
             or type(policy['dependencyGroupSize']) is not int or not 1 <= policy['dependencyGroupSize'] <= 16
             or type(policy['maxIssuesPerRun']) is not int or not 0 <= policy['maxIssuesPerRun'] <= 200
             or not (policy['intakeLogin'] is None or (isinstance(policy['intakeLogin'], str)
@@ -100,10 +106,35 @@ def triggers(finding, policy):
             and finding['disposition'] in rule['dispositions']
             and finding['confidence'] >= rule['minConfidence']
             and (finding['correlation']['pathExists'] is True or not rule['requirePathExists'])
-            and all(s['provider'] != 'file' or s['tool'] != 'unknown' for s in finding['sources']))
+            and all(f'{s["provider"]}/{s["tool"]}' in rule['allowedSources'] for s in finding['sources']))
 
 
 # ---------------------------------------------------------------- templates
+
+CWE_NAMES = {
+    'CWE-20': 'improper input validation', 'CWE-22': 'path traversal', 'CWE-78': 'OS command injection',
+    'CWE-79': 'cross-site scripting', 'CWE-80': 'cross-site scripting', 'CWE-89': 'SQL injection',
+    'CWE-94': 'code injection', 'CWE-116': 'improper output encoding', 'CWE-117': 'log injection',
+    'CWE-200': 'information exposure', 'CWE-312': 'cleartext storage of sensitive data',
+    'CWE-327': 'broken or risky cryptography', 'CWE-352': 'cross-site request forgery',
+    'CWE-400': 'uncontrolled resource consumption', 'CWE-502': 'unsafe deserialization',
+    'CWE-601': 'open redirect', 'CWE-611': 'XML external entity reference', 'CWE-798': 'hard-coded credentials',
+    'CWE-829': 'inclusion of functionality from an untrusted source',
+    'CWE-830': 'inclusion of functionality from an untrusted source', 'CWE-918': 'server-side request forgery',
+    'CWE-1333': 'inefficient regular expression'}
+
+
+def weakness_name(finding):
+    """A deterministic name: the first CWE in the built-in table, else the CWE or rule id."""
+    cwes = sorted(finding['identifiers']['cwe'], key=lambda c: int(c[4:]))
+    for cwe in cwes:
+        if cwe in CWE_NAMES:
+            return f'{CWE_NAMES[cwe]} ({cwe})'
+    if cwes:
+        return f'{cwes[0]} weakness'
+    rules = finding['identifiers']['rules']
+    return f'{rules[0]} finding' if rules else 'unclassified weakness'
+
 
 def _code(text):
     """Inline code that cannot be closed by its content."""
@@ -194,9 +225,11 @@ def _title(text):
 def render_code(finding, policy):
     component = finding['component']
     module = finding['module']
-    short = (finding['title'].split(' in ', 1)[0] or 'Security weakness')
-    lead = short[:1].lower() + short[1:] if not short[:2].isupper() else short
-    title = _title(f'fix(security): {lead} in {module or component["path"].rsplit("/", 1)[-1]}')
+    # Titles and descriptions use deterministic tokens only (CWE name from a built-in table, rule
+    # id, path, lines): rule descriptions are tool-supplied text and can carry instructions.
+    short = weakness_name(finding)
+    title = _title(f'fix(security): {short} in {module or component["path"].rsplit("/", 1)[-1]}')
+    short = short[:1].upper() + short[1:]
     sources = sorted({s['tool'] for s in finding['sources']})
     armed = triggers(finding, policy)
     if armed:
