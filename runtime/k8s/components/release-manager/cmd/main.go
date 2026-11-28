@@ -243,6 +243,9 @@ func main() {
 		defer stopBuild()
 	}
 	if bootstrap.MergeEnabled() {
+		// The rotation outlives each poll, so a publication whose gate stays
+		// unready cannot hold later ones.
+		rotation := &mergeflow.Rotation{}
 		stopMerge := bootstrap.Periodic(time.Minute, func(ctx context.Context) {
 			r, e := mergeRuntime()
 			if e != nil {
@@ -250,6 +253,7 @@ func main() {
 				metrics.ForgetQuarantined("merge")
 				return
 			}
+			r.Rotation = rotation
 			state, e := r.PollOnce(ctx)
 			countDelivery(state)
 			sampleMergeQuarantine(ctx, c.DB, policy)

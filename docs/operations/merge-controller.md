@@ -34,6 +34,28 @@ expected PR/head/base/tree, request digest and merge receipt are still checked,
 as other post-effect stages bind only to their own durable request and receipt.
 The built-in references keep `Refs #N`, so their issues stay open after the merge.
 
+## Selecting a publication
+
+Each poll selects one published publication that has no merge attempt (or
+only bounded `not-sent` ones). The release manager remembers, in memory only,
+when it last observed each publication, and selection takes one it has never
+observed first, then the least recently observed, in publication order on
+ties. So a publication whose gate stays unready, for example one held by a
+review thread, is observed in turn with the others and no longer holds every
+later merge. The memory holds at most 256 publication IDs and forgets an entry
+after a day; after a restart, selection starts again from the oldest.
+
+When the gate observes the expected pull request (same number, branch and
+head) closed, the release manager logs `merge reconciliation:
+merge-pull-request-closed` (or `merge-pull-request-merged-outside` when
+something else merged it) instead of stopping with
+`merge-observation-unavailable`, and parks the publication for 30 minutes
+(`mergeflow.ParkClosed`): it is not selected, then observed once more, so a
+reopened pull request resumes. Nothing is written. To deliver the issue again,
+delete the branch and re-label the issue (the
+[re-delivery procedure](publication-reconciliation.md#re-delivery-is-an-operator-action-decision-can-be-changed-later));
+the new generation's publication replaces the parked one.
+
 ## Stopping before the send
 
 A claimed run can stop before any merge request leaves: the request or claim is

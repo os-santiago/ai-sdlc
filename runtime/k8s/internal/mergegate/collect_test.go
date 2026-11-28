@@ -91,7 +91,17 @@ func fixtureAPIForRepository(t *testing.T, mode, repository string) (*Client, *a
 				base = strings.Repeat("e", 40)
 			}
 			pulls.Add(1)
-			out = map[string]any{"number": 42, "state": "open", "draft": false, "merged": false, "mergeable": true, "mergeable_state": "clean", "head": map[string]any{"ref": expected.Branch, "sha": head, "repo": map[string]any{"full_name": repository}}, "base": map[string]any{"ref": "main", "sha": base, "repo": map[string]any{"full_name": repository, "default_branch": "main"}}}
+			state, merged := "open", false
+			switch mode {
+			case "closed", "closed-other-head":
+				state = "closed"
+			case "merged-outside":
+				state, merged = "closed", true
+			}
+			if mode == "closed-other-head" {
+				head = strings.Repeat("e", 40)
+			}
+			out = map[string]any{"number": 42, "state": state, "draft": false, "merged": merged, "mergeable": true, "mergeable_state": "clean", "head": map[string]any{"ref": expected.Branch, "sha": head, "repo": map[string]any{"full_name": repository}}, "base": map[string]any{"ref": "main", "sha": base, "repo": map[string]any{"full_name": repository, "default_branch": "main"}}}
 		case repoPath("/git/commits/" + expected.HeadSHA):
 			tree := expected.TreeSHA
 			if mode == "wrong-tree" {
@@ -271,6 +281,20 @@ func TestAuthenticatedGateBlocksIncompleteOrUnsafeEvidence(t *testing.T) {
 			r, e := c.Collect(context.Background(), fixtureExpected(), PilotPolicy())
 			if e != nil || r.Ready || len(r.Reasons) == 0 {
 				t.Fatal("unsafe observation", r, e)
+			}
+		})
+	}
+}
+
+// A closed pull request is a distinct observation, not an unavailable gate,
+// but only for the expected pull request, branch and head.
+func TestAuthenticatedGateReportsAClosedPullRequest(t *testing.T) {
+	for mode, want := range map[string]error{"closed": ErrClosed, "merged-outside": ErrMergedOutside, "closed-other-head": ErrGate} {
+		t.Run(mode, func(t *testing.T) {
+			c, calls := fixtureAPI(t, mode)
+			r, e := c.Collect(context.Background(), fixtureExpected(), PilotPolicy())
+			if e != want || r.Ready || calls.Load() != 1 {
+				t.Fatal("closed pull request", r, e, calls.Load())
 			}
 		})
 	}

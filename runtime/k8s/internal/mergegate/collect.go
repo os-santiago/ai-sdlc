@@ -122,6 +122,21 @@ type pull struct {
 func (p pull) matches(e Expected, repository string) bool {
 	return p.Number == e.PullRequest && p.State == "open" && p.Draft != nil && !*p.Draft && p.Merged != nil && !*p.Merged && p.Head.SHA == e.HeadSHA && p.Head.Ref == e.Branch && p.Head.Repo.FullName == repository && p.Base.SHA == e.BaseSHA && p.Base.Ref == "main" && p.Base.Repo.FullName == repository && p.Base.Repo.DefaultBranch == "main"
 }
+
+// closed reports an authenticated observation of the expected pull request,
+// same head branch and commit, that is no longer open: ErrClosed when it was
+// closed unmerged, ErrMergedOutside when something other than this controller
+// merged it. Anything else is not a closure and returns nil.
+func (p pull) closed(e Expected, repository string) error {
+	if p.Number != e.PullRequest || p.State != "closed" || p.Merged == nil || p.Head.SHA != e.HeadSHA || p.Head.Ref != e.Branch || p.Head.Repo.FullName != repository || p.Base.Ref != "main" || p.Base.Repo.FullName != repository {
+		return nil
+	}
+	if *p.Merged {
+		return ErrMergedOutside
+	}
+	return ErrClosed
+}
+
 func (c *Client) Collect(ctx context.Context, e Expected, p Policy) (Observation, error) {
 	deny := func() (Observation, error) { return Observation{}, ErrGate }
 	if c == nil || c.http == nil || !project.Supported(c.repository) || p.Repository != c.repository || e.Repository != c.repository || e.PullRequest < 1 || e.PullRequest > 2147483647 || !workspacebundle.ValidSourceSHA(e.HeadSHA) || !workspacebundle.ValidSourceSHA(e.BaseSHA) || !workspacebundle.ValidSourceSHA(e.TreeSHA) || !branch.MatchString(e.Branch) || !p.valid() {
@@ -130,7 +145,13 @@ func (c *Client) Collect(ctx context.Context, e Expected, p Policy) (Observation
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	var first pull
-	if c.read(ctx, c.repoPath("/pulls/"+number(e.PullRequest)), nil, &first) != nil || !first.matches(e, c.repository) {
+	if c.read(ctx, c.repoPath("/pulls/"+number(e.PullRequest)), nil, &first) != nil {
+		return deny()
+	}
+	if closed := first.closed(e, c.repository); closed != nil {
+		return Observation{}, closed
+	}
+	if !first.matches(e, c.repository) {
 		return deny()
 	}
 	reasons := map[string]bool{}

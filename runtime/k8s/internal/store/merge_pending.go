@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 )
 
@@ -15,12 +16,54 @@ type MergeSelection struct {
 	RecipeRevision string
 }
 
-// NextMergePublication selects a historical publication without any merge
+// MaxMergeRotation bounds the publications a caller may order or park in
+// one selection.
+const MaxMergeRotation = 256
+
+// MergeRotation orders selection so one waiting publication cannot hold every
+// later one. Recent lists publications in the order they were last observed,
+// least recently first; a candidate not listed has never been observed and
+// is selected before any listed one. Parked publications (for example one
+// whose pull request was closed) are not selected. Both hold publication IDs
+// only; an empty rotation selects the oldest publication, as before.
+type MergeRotation struct {
+	Recent, Parked []string
+}
+
+func (r MergeRotation) arrays() (string, string, bool) {
+	if len(r.Recent) > MaxMergeRotation || len(r.Parked) > MaxMergeRotation {
+		return "", "", false
+	}
+	for _, list := range [][]string{r.Recent, r.Parked} {
+		for _, id := range list {
+			if !publicationIDPattern.MatchString(id) {
+				return "", "", false
+			}
+		}
+	}
+	// IDs are validated to [a-z0-9-], so the array literal needs no quoting.
+	return "{" + strings.Join(r.Recent, ",") + "}", "{" + strings.Join(r.Parked, ",") + "}", true
+}
+
+// NextMergePublication selects the oldest eligible publication. It is
+// NextRotatedMergePublication with an empty rotation.
+func (db *DB) NextMergePublication(ctx context.Context, selection MergeSelection) (string, error) {
+	return db.NextRotatedMergePublication(ctx, selection, MergeRotation{})
+}
+
+// NextRotatedMergePublication selects a historical publication without any merge
 // attempt, or whose every attempt failed "not-sent" (provably nothing sent),
 // fewer than MergeAttempts times and with the last command expired at least
 // the scheduled wait (MergeRetryWaits) ago. It never queues authority, replays a signed command or selects a
 // publication with a queued, claimed, merged, uncertain or expired attempt.
-func (db *DB) NextMergePublication(ctx context.Context, selection MergeSelection) (string, error) {
+// Among eligible publications it takes one never observed by the rotation
+// first, then the least recently observed, and skips parked ones; ties keep
+// publication order.
+func (db *DB) NextRotatedMergePublication(ctx context.Context, selection MergeSelection, rotation MergeRotation) (string, error) {
+	recent, parked, ok := rotation.arrays()
+	if !ok {
+		return "", ErrExecution
+	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	for _, value := range []string{selection.AuthorityRevision, selection.IntakeConfiguration, selection.ExecutionProfile, selection.ReviewProfile, selection.ReviewConfiguration, selection.RecipeRevision} {
@@ -47,7 +90,8 @@ func (db *DB) NextMergePublication(ctx context.Context, selection MergeSelection
   AND r.profile_digest=$4 AND r.configuration_digest=$5 AND r.state='passed' AND r.cleanup_state='complete'
   AND w.status='running' AND convert_from(v.payload,'UTF8')::jsonb->>'recipeRevision'=$6
   AND `+mergeAttemptAllowed("f.publication_id")+`
- ORDER BY f.published_at,f.publication_id LIMIT 1`, selection.AuthorityRevision, selection.IntakeConfiguration, selection.ExecutionProfile, selection.ReviewProfile, selection.ReviewConfiguration, selection.RecipeRevision).Scan(&id)
+  AND NOT (f.publication_id = ANY($8::text[]))
+ ORDER BY array_position($7::text[], f.publication_id) NULLS FIRST, f.published_at, f.publication_id LIMIT 1`, selection.AuthorityRevision, selection.IntakeConfiguration, selection.ExecutionProfile, selection.ReviewProfile, selection.ReviewConfiguration, selection.RecipeRevision, recent, parked).Scan(&id)
 	if e == sql.ErrNoRows {
 		return "", nil
 	}

@@ -41,6 +41,10 @@ type Runtime struct {
 	// effect that quarantines merges by a read-only forge observation.
 	Reconciler *mergerecovery.Reconciler
 	Observer   mergerecovery.Observer
+	// Rotation, when set, orders selection so a publication whose gate stays
+	// unready cannot hold later ones, and parks one whose pull request was
+	// closed. It must outlive a single poll.
+	Rotation *Rotation
 }
 
 func (r Runtime) journal() *store.MergeJournal {
@@ -183,13 +187,17 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		if e != nil {
 			return "", ErrMerge
 		}
-		publicationID, e := r.DB.NextMergePublication(ctx, store.MergeSelection{AuthorityRevision: p.Revision(), IntakeConfiguration: intake.Digest(), ExecutionProfile: profile, ReviewProfile: review.Profile, ReviewConfiguration: review.Configuration, RecipeRevision: verification.CurrentRecipeRevision(p.Repository)})
+		publicationID, e := r.DB.NextRotatedMergePublication(ctx, store.MergeSelection{AuthorityRevision: p.Revision(), IntakeConfiguration: intake.Digest(), ExecutionProfile: profile, ReviewProfile: review.Profile, ReviewConfiguration: review.Configuration, RecipeRevision: verification.CurrentRecipeRevision(p.Repository)}, r.Rotation.snapshot())
 		if e != nil {
 			return "", ErrMerge
 		}
 		if publicationID == "" {
 			return "", nil
 		}
+		// Every selected publication goes to the back of the rotation,
+		// whatever this poll finds, so the next poll offers the next one.
+		park := time.Duration(0)
+		defer func() { r.Rotation.observed(publicationID, park) }()
 		c, fact, e := publicationflow.CurrentPublishedProof(ctx, r.DB, r.Policy, r.Review, publicationID)
 		if e != nil {
 			return "merge-authority-denied", ErrMerge
@@ -211,7 +219,17 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 			return "", ErrMerge
 		}
 		observed, e := r.Gates.Collect(ctx, want, gp)
-		if e != nil {
+		switch {
+		case errors.Is(e, mergegate.ErrClosed):
+			// An observation, not a fault: the publication is parked so it
+			// does not hold the loop, and is observed again after
+			// ParkClosed in case the pull request is reopened.
+			park = ParkClosed
+			return "merge-pull-request-closed", nil
+		case errors.Is(e, mergegate.ErrMergedOutside):
+			park = ParkClosed
+			return "merge-pull-request-merged-outside", nil
+		case e != nil:
 			return "merge-observation-unavailable", ErrMerge
 		}
 		if !observed.Ready {

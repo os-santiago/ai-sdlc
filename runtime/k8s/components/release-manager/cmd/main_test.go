@@ -22,7 +22,7 @@ func TestDeliveriesCountOnlyAttemptOutcomes(t *testing.T) {
 			t.Fatal(state)
 		}
 	}
-	for _, state := range []string{"", "publication-idle", "publication-quarantined", "publication-reconciled", "merge-quarantined", "merge-reconciled", "merge-waiting-for-checks", "merge-authority-denied"} {
+	for _, state := range []string{"", "publication-idle", "publication-quarantined", "publication-reconciled", "merge-quarantined", "merge-reconciled", "merge-waiting-for-checks", "merge-authority-denied", "merge-pull-request-closed", "merge-pull-request-merged-outside"} {
 		if deliveryOutcome(state) != "" {
 			t.Fatal("standing state counted", state)
 		}
