@@ -58,3 +58,52 @@ func TestGateChangeNamesTheFirstDifference(t *testing.T) {
 		t.Fatal("an unready queued gate was accepted", got)
 	}
 }
+
+// A gate that is not ready names its real blocker: an unresolved review
+// thread is not a pending check, and every blocker is listed.
+func TestWaitNamesEachBlocker(t *testing.T) {
+	for _, c := range []struct {
+		reasons []string
+		threads int
+		state   string
+		listed  []string
+		count   int
+	}{
+		{[]string{"checks-not-passed"}, 0, "merge-waiting-for-checks", []string{"checks-not-passed"}, 0},
+		// Observed on a published pull request held by one third-party thread.
+		{[]string{"native-merge-not-ready", "review-threads-unresolved"}, 1, "merge-waiting-for-review-threads", []string{"review-threads-unresolved", "native-merge-not-ready"}, 1},
+		{[]string{"review-changes-requested", "review-threads-unresolved"}, 3, "merge-waiting-for-changes-requested", []string{"review-changes-requested", "review-threads-unresolved"}, 3},
+		{[]string{"checks-not-passed", "review-threads-unresolved"}, 2, "merge-waiting-for-checks", []string{"checks-not-passed", "review-threads-unresolved"}, 2},
+		{[]string{"native-protection-insufficient", "checks-not-passed"}, 0, "merge-waiting-for-protection", []string{"native-protection-insufficient", "checks-not-passed"}, 0},
+		{[]string{"native-merge-not-ready"}, 0, "merge-waiting-for-mergeability", []string{"native-merge-not-ready"}, 0},
+		{[]string{"unlisted forge text"}, 0, "merge-waiting", []string{}, 0},
+		// A count without its reason, or beyond the gate's bound, is not reported.
+		{[]string{"checks-not-passed"}, 4, "merge-waiting-for-checks", []string{"checks-not-passed"}, 0},
+		{[]string{"review-threads-unresolved"}, 101, "merge-waiting-for-review-threads", []string{"review-threads-unresolved"}, 0},
+	} {
+		w := waitFor(mergegate.Observation{Expected: mergegate.Expected{PullRequest: 11}, Reasons: c.reasons, UnresolvedThreads: c.threads})
+		if w.State != c.state || w.PullRequest != 11 || strings.Join(w.Reasons, ",") != strings.Join(c.listed, ",") || w.UnresolvedThreads != c.count {
+			t.Errorf("waitFor(%v) = %+v", c.reasons, w)
+		}
+	}
+	states := map[string]bool{}
+	for _, s := range WaitStates() {
+		states[s] = true
+	}
+	if len(states) != len(mergegate.Reasons)+1 || !states["merge-waiting"] {
+		t.Fatal("wait states", WaitStates())
+	}
+	for _, reason := range mergegate.Reasons {
+		if !stopStages["gate-"+reason] {
+			t.Error("gate reason without a stop stage", reason)
+		}
+		if !states[waitFor(mergegate.Observation{Reasons: []string{reason}}).State] {
+			t.Error("gate reason without a wait state", reason)
+		}
+	}
+	threads := mergegate.Observation{Reasons: []string{"native-merge-not-ready", "review-threads-unresolved"}}
+	ready := mergegate.Observation{Ready: true, Reasons: []string{}}
+	if got := gateChange(ready, threads); got != "gate-review-threads-unresolved" {
+		t.Fatal("pre-send stop hid the thread blocker", got)
+	}
+}

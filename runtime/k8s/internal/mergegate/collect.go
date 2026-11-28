@@ -87,7 +87,23 @@ type Observation struct {
 	ObservedAt      time.Time `json:"observedAt"`
 	Ready           bool      `json:"ready"`
 	Reasons         []string  `json:"reasons"`
+	// UnresolvedThreads counts the pull request's unresolved review threads
+	// (at most 100; more fails closed). It is nonzero exactly when Reasons
+	// holds "review-threads-unresolved", so a ready gate omits it.
+	UnresolvedThreads int `json:"unresolvedThreads,omitempty"`
 }
+
+// The closed set of reasons an observation may carry. Each names one blocker.
+const (
+	ReasonNativeMergeNotReady          = "native-merge-not-ready"
+	ReasonNativeProtectionInsufficient = "native-protection-insufficient"
+	ReasonChecksNotPassed              = "checks-not-passed"
+	ReasonChangesRequested             = "review-changes-requested"
+	ReasonThreadsUnresolved            = "review-threads-unresolved"
+)
+
+// Reasons lists every reason Collect can report.
+var Reasons = []string{ReasonNativeProtectionInsufficient, ReasonChecksNotPassed, ReasonChangesRequested, ReasonThreadsUnresolved, ReasonNativeMergeNotReady}
 
 var branch = regexp.MustCompile(`^ai-sdlc/issue-[1-9][0-9]{0,9}-[a-f0-9]{32}$`)
 
@@ -156,7 +172,7 @@ func (c *Client) Collect(ctx context.Context, e Expected, p Policy) (Observation
 	}
 	reasons := map[string]bool{}
 	if first.Mergeable == nil || !*first.Mergeable || first.MergeableState != "clean" {
-		reasons["native-merge-not-ready"] = true
+		reasons[ReasonNativeMergeNotReady] = true
 	}
 	var commit struct {
 		SHA     string
@@ -171,21 +187,24 @@ func (c *Client) Collect(ctx context.Context, e Expected, p Policy) (Observation
 		return deny()
 	}
 	if !safe {
-		reasons["native-protection-insufficient"] = true
+		reasons[ReasonNativeProtectionInsufficient] = true
 	}
 	checks, digest, err := c.checks(ctx, e.HeadSHA, required)
 	if err != nil {
 		return deny()
 	}
 	if !checks {
-		reasons["checks-not-passed"] = true
+		reasons[ReasonChecksNotPassed] = true
 	}
 	reviews, reviewDigest, err := c.reviews(ctx, e)
 	if err != nil {
 		return deny()
 	}
-	if !reviews {
-		reasons["review-feedback-unresolved"] = true
+	if reviews.ChangesRequested {
+		reasons[ReasonChangesRequested] = true
+	}
+	if reviews.UnresolvedThreads > 0 {
+		reasons[ReasonThreadsUnresolved] = true
 	}
 	// A ready snapshot cannot silently retain checks or feedback which changed
 	// while other evidence was being collected. Native protection remains the
@@ -208,7 +227,7 @@ func (c *Client) Collect(ctx context.Context, e Expected, p Policy) (Observation
 		return deny()
 	}
 	if latest.Mergeable == nil || !*latest.Mergeable || latest.MergeableState != "clean" {
-		reasons["native-merge-not-ready"] = true
+		reasons[ReasonNativeMergeNotReady] = true
 	}
 	if ctx.Err() != nil {
 		return deny()
@@ -218,6 +237,6 @@ func (c *Client) Collect(ctx context.Context, e Expected, p Policy) (Observation
 		list = append(list, reason)
 	}
 	sort.Strings(list)
-	return Observation{Expected: e, PolicySHA256: policyDigest, ChecksSHA256: digest, ReviewsSHA256: reviewDigest, ObservedAt: time.Now().UTC(), Ready: len(list) == 0, Reasons: list}, nil
+	return Observation{Expected: e, PolicySHA256: policyDigest, ChecksSHA256: digest, ReviewsSHA256: reviewDigest, ObservedAt: time.Now().UTC(), Ready: len(list) == 0, Reasons: list, UnresolvedThreads: reviews.UnresolvedThreads}, nil
 }
 func digest(v any) string { raw, _ := json.Marshal(v); return authority.Digest(raw) }

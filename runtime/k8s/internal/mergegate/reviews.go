@@ -18,16 +18,25 @@ type review struct {
 
 const threadQuery = `query($number:Int!,$owner:String!,$name:String!){repository(owner:$owner,name:$name){nameWithOwner pullRequest(number:$number){number headRefOid baseRefOid closingIssuesReferences(first:1,excludeUserLinked:false){totalCount pageInfo{hasNextPage} nodes{id}} reviewThreads(first:100){totalCount pageInfo{hasNextPage} nodes{id isResolved}}}}}`
 
-func (c *Client) reviews(ctx context.Context, e Expected) (bool, string, error) {
+// reviewState is the review evidence of one observation. ChangesRequested and
+// UnresolvedThreads are separate blockers, so the merge controller can name
+// the one that actually holds the pull request.
+type reviewState struct {
+	ChangesRequested  bool
+	UnresolvedThreads int
+}
+
+func (c *Client) reviews(ctx context.Context, e Expected) (reviewState, string, error) {
+	deny := func() (reviewState, string, error) { return reviewState{}, "", ErrGate }
 	var reviews []review
 	if c.read(ctx, c.repoPath("/pulls/"+number(e.PullRequest)+"/reviews?per_page=100"), nil, &reviews) != nil || reviews == nil || len(reviews) > 100 {
-		return false, "", ErrGate
+		return deny()
 	}
 	latest := map[int64]review{}
 	seen := map[int64]bool{}
 	for _, r := range reviews {
 		if r.ID <= 0 || r.User.ID <= 0 || seen[r.ID] {
-			return false, "", ErrGate
+			return deny()
 		}
 		seen[r.ID] = true
 		switch r.State {
@@ -44,15 +53,15 @@ func (c *Client) reviews(ctx context.Context, e Expected) (bool, string, error) 
 			// A comment is not resolution of a prior changes-requested review. A
 			// dismissed entry no longer requests changes; other active requests stand.
 		case "PENDING":
-			return false, "", ErrGate
+			return deny()
 		default:
-			return false, "", ErrGate
+			return deny()
 		}
 	}
-	ready := true
+	state := reviewState{}
 	for _, r := range latest {
 		if r.State == "CHANGES_REQUESTED" {
-			ready = false
+			state.ChangesRequested = true
 		}
 	}
 	raw, _ := json.Marshal(map[string]any{"query": threadQuery, "variables": map[string]any{"number": e.PullRequest, "owner": strings.Split(c.repository, "/")[0], "name": strings.Split(c.repository, "/")[1]}})
@@ -87,33 +96,33 @@ func (c *Client) reviews(ctx context.Context, e Expected) (bool, string, error) 
 		}
 	}
 	if c.read(ctx, "/graphql", raw, &response) != nil || len(response.Errors) != 0 || response.Data == nil || response.Data.Repository == nil || response.Data.Repository.Name != c.repository || response.Data.Repository.Pull == nil {
-		return false, "", ErrGate
+		return deny()
 	}
 	p := response.Data.Repository.Pull
 	if p.Number != e.PullRequest || p.Head != e.HeadSHA || p.Base != e.BaseSHA || p.Threads == nil {
-		return false, "", ErrGate
+		return deny()
 	}
 	// Saferus closes issues only after its acknowledged production release. The
 	// GraphQL connection includes manually linked issues, not just body keywords.
 	// Missing, truncated or nonempty data cannot authorize a premature close.
 	if c.repository == "os-santiago/saferus" && (p.Closing == nil || p.Closing.Total == nil || *p.Closing.Total != 0 || p.Closing.Page == nil || p.Closing.Page.Next == nil || *p.Closing.Page.Next || p.Closing.Nodes == nil || len(p.Closing.Nodes) != 0) {
-		return false, "", ErrGate
+		return deny()
 	}
 	threads := p.Threads
 	if threads.Total == nil || *threads.Total < 0 || *threads.Total > 100 || threads.Page == nil || threads.Page.Next == nil || *threads.Page.Next || threads.Nodes == nil || len(threads.Nodes) != *threads.Total {
-		return false, "", ErrGate
+		return deny()
 	}
 	threadIDs := map[string]bool{}
 	for _, thread := range threads.Nodes {
 		if thread.ID == "" || len(thread.ID) > 256 || threadIDs[thread.ID] || thread.Resolved == nil {
-			return false, "", ErrGate
+			return deny()
 		}
 		threadIDs[thread.ID] = true
 		if !*thread.Resolved {
-			ready = false
+			state.UnresolvedThreads++
 		}
 	}
-	return ready, digest(struct {
+	return state, digest(struct {
 		Reviews []review
 		Threads any
 		Closing any

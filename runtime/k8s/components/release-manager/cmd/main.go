@@ -32,6 +32,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -251,12 +253,16 @@ func main() {
 			if e != nil {
 				log.Print("merge credential unavailable")
 				metrics.ForgetQuarantined("merge")
+				metrics.ForgetMergeWaiting()
 				return
 			}
 			r.Rotation = rotation
+			var wait *mergeflow.Wait
+			r.Waiting = func(w mergeflow.Wait) { wait = &w }
 			state, e := r.PollOnce(ctx)
 			countDelivery(state)
 			sampleMergeQuarantine(ctx, c.DB, policy)
+			sampleMergeWait(wait, e)
 			if e != nil {
 				// state is a fixed controller constant ("merge-quarantined",
 				// "merge-stopped", ...); it names why the loop stopped.
@@ -269,7 +275,7 @@ func main() {
 				}
 				log.Print(mergeStopLine(state, e))
 			} else if state != "" {
-				log.Print("merge reconciliation: " + state)
+				log.Print(mergeStateLine(state, wait))
 			}
 		})
 		defer stopMerge()
@@ -369,6 +375,42 @@ func mergeStopLine(state string, e error) string {
 		}
 	}
 	return line
+}
+
+// mergeStateLine is the bounded log line of a merge poll that did not stop.
+// A wait also names the pull request, every gate blocker and, for review
+// threads, their count, for example "merge reconciliation:
+// merge-waiting-for-review-threads pull_request=11
+// reasons=review-threads-unresolved,native-merge-not-ready
+// unresolved_threads=1". Every value is a fixed constant or a number.
+func mergeStateLine(state string, wait *mergeflow.Wait) string {
+	line := "merge reconciliation: " + state
+	if wait == nil || wait.State != state {
+		return line
+	}
+	line += " pull_request=" + strconv.Itoa(wait.PullRequest)
+	if len(wait.Reasons) > 0 {
+		line += " reasons=" + strings.Join(wait.Reasons, ",")
+	}
+	if wait.UnresolvedThreads > 0 {
+		line += " unresolved_threads=" + strconv.Itoa(wait.UnresolvedThreads)
+	}
+	return line
+}
+
+// sampleMergeWait records the blockers of the publication the last merge poll
+// found waiting, or none when that poll found no waiting publication. A poll
+// that stopped observed nothing reliable, so its series are removed.
+func sampleMergeWait(wait *mergeflow.Wait, e error) {
+	if e != nil {
+		metrics.ForgetMergeWaiting()
+		return
+	}
+	if wait == nil {
+		metrics.MergeWaiting(nil, 0)
+		return
+	}
+	metrics.MergeWaiting(wait.Reasons, wait.UnresolvedThreads)
 }
 
 // countDelivery counts the outcome of one claimed publication or merge
