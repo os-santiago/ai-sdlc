@@ -1,0 +1,113 @@
+# Apply a generator's candidate change to a checked-out base commit, so a
+# catalog pipeline can build and test a tree that exists only inside the
+# generation sandbox. The change arrives as a unified diff in a ConfigMap that
+# the trusted tool controller creates (internal/tektontasks), bound read-only
+# as the candidate workspace together with its SHA-256. This step verifies the
+# digest, refuses binary changes, symbolic links, submodules and out-of-tree
+# paths, applies the diff to the work tree and the index, and reports the
+# resulting tree id and the diff digest it applied. It runs no repository code and has no network.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: apply-candidate
+  namespace: ai-sdlc-ci
+  labels:
+    app.kubernetes.io/part-of: ai-sdlc
+spec:
+  description: Verify and apply a bounded candidate diff to the checkout.
+  workspaces:
+    - name: source
+      description: Contains the base checkout under source/.
+    - name: candidate
+      readOnly: true
+      # Optional because the pipeline's candidate workspace is; the pipeline
+      # runs this task only when it is bound, and the script refuses to run
+      # without it.
+      optional: true
+      description: ConfigMap with candidate.diff and candidate.sha256.
+  results:
+    - name: tree
+      description: git tree id of the source after the candidate diff.
+    - name: candidate-sha256
+      description: SHA-256 of the candidate diff this task verified and applied.
+  volumes:
+    - name: home
+      emptyDir:
+        sizeLimit: 64Mi
+  steps:
+    - name: apply
+      image: docker.io/alpine/git@sha256:c0280cf9572316299b08544065d3bf35db65043d5e3963982ec50647d2746e26
+      computeResources:
+        requests:
+          cpu: 100m
+          memory: 64Mi
+        limits:
+          cpu: "1"
+          memory: 512Mi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        - name: home
+          mountPath: /home/ci
+      env:
+        - name: HOME
+          value: /home/ci
+        - name: GIT_CONFIG_NOSYSTEM
+          value: "1"
+        - name: SOURCE
+          value: $(workspaces.source.path)/source
+        - name: CANDIDATE
+          value: $(workspaces.candidate.path)
+        - name: RESULT
+          value: $(results.tree.path)
+        - name: DIGEST_RESULT
+          value: $(results.candidate-sha256.path)
+      script: |
+        #!/bin/sh
+        set -eu
+        diff="$CANDIDATE/candidate.diff"
+        [ -f "$diff" ] && [ -f "$CANDIDATE/candidate.sha256" ] || { echo 'candidate diff and digest are required' >&2; exit 2; }
+        size="$(wc -c < "$diff")"
+        [ "$size" -le 786432 ] || { echo 'candidate diff exceeds 768 KiB' >&2; exit 2; }
+        expected="$(tr -d ' \n' < "$CANDIDATE/candidate.sha256")"
+        actual="$(sha256sum "$diff" | cut -d' ' -f1)"
+        [ "$actual" = "$expected" ] || { echo 'candidate diff digest mismatch' >&2; exit 2; }
+        cd "$SOURCE"
+        # Text diffs inside the tree only: no binary patches, no absolute or
+        # parent paths, no changes to git metadata.
+        if grep -Eq '^(GIT binary patch|Binary files )' "$diff"; then echo 'binary candidate changes are not supported' >&2; exit 2; fi
+        # Regular files only: no symbolic links (mode 120000) or submodules
+        # (160000), whatever core.symlinks would do with them.
+        if grep -Eq '^((old|new|new file|deleted file) mode|index [0-9a-f]+\.\.[0-9a-f]+) (120000|160000)$' "$diff"; then
+          echo 'candidate diff adds a symbolic link or submodule' >&2; exit 2
+        fi
+        if git apply --numstat "$diff" | cut -f3- | grep -Eq '(^/|(^|/)\.\.(/|$)|(^|/)\.git(/|$))'; then
+          echo 'candidate diff touches a path outside the tree' >&2; exit 2
+        fi
+        # --index applies to the work tree and the index together, so every
+        # changed path is in the published tree, including paths a
+        # .gitignore in the diff would hide from git add.
+        git -c core.symlinks=false apply --index --whitespace=nowarn --check "$diff" ||
+          { echo 'candidate diff does not apply to the base commit' >&2; exit 2; }
+        git -c core.symlinks=false apply --index --whitespace=nowarn "$diff" ||
+          { echo 'candidate diff does not apply to the base commit' >&2; exit 2; }
+        # The build compiles the work tree; the tree id must describe all of
+        # it. Anything not staged (untracked, ignored or modified outside
+        # the index) means the two differ.
+        # --no-renames: status would otherwise pair a staged deletion and
+        # addition into R, which is the same content and still in the index.
+        if git status --porcelain=v1 --no-renames --ignored --untracked-files=all | grep -Ev '^[MAD] ' | grep -q .; then
+          echo 'candidate work tree differs from the applied index' >&2; exit 2
+        fi
+        tree="$(git write-tree)"
+        printf '%s' "$tree" > "$RESULT"
+        printf '%s' "$actual" > "$DIGEST_RESULT"
+        echo "Applied candidate diff ($size bytes, sha256 $actual); tree $tree"

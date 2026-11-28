@@ -151,23 +151,126 @@ pipeline on the base revision before generation, and adds the bounded summary
 (baseline failures, compiler errors, audit findings) to the generator's
 reviewed context, labelled as tool output, never as instructions.
 
-**During generation (stage 3).** The generator calls a declared tool, for
-example `build_test(target)` or `npm_lock_update(target, packages)`. The
-candidate tree reaches the run without a push: the adapter writes the
-candidate's bounded diff against the base revision (the existing workspace
-bundle limits) into a ConfigMap bound as a read-only workspace, and an
-`apply-candidate` step in the pipeline applies it after `source-checkout` and
-verifies the resulting tree digest. Only the bounded summary returns to the
-generator. This gives Java, Node and other toolchains to the generator without
-an in-sandbox toolchain (issue #831). For `npm_lock_update` the lockfile diff
-comes back through the same channel in the opposite direction (bounded by the
-diff size the summary reports).
+**During generation (stage 2d, generator tools).** The generator calls a
+declared tool, `build_test(target)` or `npm_lock_update(target, packages)`,
+on the tree it is editing, and gets the bounded summary back as untrusted
+data. This gives Java, Node and other toolchains to the generator without an
+in-sandbox toolchain (issue #831). See [Generator tools](#generator-tools).
 
 **Post-generation (stage 4).** For each `post` entry a PipelineRun tests the
 pull-request head and is reported as a GitHub App check run named
 `post.check` (for example `tekton-ci/maven`), which the merge gate already
 accepts as `{context, appID}`; see the
 [gate integration design](../operations/tekton-ci.md#gate-integration-stage-3-design).
+
+## Generator tools
+
+### Constraints
+
+The generator (SCC) runs in the executor pod: no network, no service-account
+token, gVisor, and a model mailbox as its only channel out. Every SCC tool
+runs inside that sandbox; the model broker and gateway never run tools, and
+the broker passes model responses through without interpreting tool calls.
+So a tool whose work happens in Tekton must cross the same mailbox, and the
+run must be created by a trusted controller, never by the sandbox.
+
+### Path
+
+```text
+SCC ──MCP stdio──> ai-sdlc tools server (executor image, in the sandbox)
+                     │ computes the candidate diff (git diff against the
+                     │ generation's baseline commit), bounded to 768 KiB
+                     └─HTTP 127.0.0.1:8091 /v1/ai-sdlc/tools──> mailbox helper
+                                         │ writes tool-request.json (/bridge)
+execution controller (worker) ──pods/exec read-tool──┘
+   │ authorizes with the lifecycle authority (same as model calls),
+   │ checks the call against manifest tekton.tools and the tool budget,
+   │ journals the request digest
+   └─ tektontasks.InvokeTool ─> candidate ConfigMap + PipelineRun
+        (checkout base SHA → apply-candidate → build-test / lock-update)
+   <─ bounded summary ── written back as tool-response.json ──> SCC tool result
+```
+
+- **Tool surface.** SCC loads MCP servers only from its trusted user
+  configuration (a project file cannot add one), which the executor writes.
+  The tools server lists exactly the manifest's `tekton.tools`, with the
+  declared targets as an enum and npm package names as a validated array, so
+  the model sees them as first-class tools (`mcp__ai-sdlc__build_test`). SCC's
+  per-server `timeoutMs` covers a build (it defaults to 30 s).
+- **Candidate in.** A unified text diff against the base revision, carried
+  in the request and then in an immutable ConfigMap with its SHA-256. The
+  768 KiB limit applies to the decoded diff; JSON escaping in the tool request
+  can grow its encoding (up to six times for control characters), and the
+  request bound allows for that. `apply-candidate` verifies the digest,
+  refuses binary changes, symbolic links (mode 120000), submodules (160000)
+  and paths outside the tree or under `.git`, applies the diff to the work
+  tree and the index together (`git apply --index`, symlinks disabled), fails
+  if the work tree then differs from the index (untracked, ignored or
+  unstaged files), and reports the resulting tree id and the digest it
+  applied. `Run` checks that reported digest against the diff it sent and
+  reports the tree in the result. The ConfigMap is owned by the PipelineRun
+  and deleted with it; if the owner cannot be set, the ConfigMap is deleted
+  and the run cancelled at once. Each tool call also deletes unowned
+  candidate ConfigMaps older than 10 minutes (left by a crash between
+  creating one and setting its owner).
+- **Build-test only.** Only `ai-sdlc-maven-build-test` takes a candidate: it
+  runs offline under the sandbox. `npm-lock-update` runs with the fetch egress
+  (DNS and any public 443), and npm resolves URL specs and lockfile
+  `resolved` hosts from the diff, so a candidate there would give the offline
+  generator a way out. It returns in slice 3 only once non-registry specs and
+  non-registry lockfile hosts are refused and egress is proxy-only
+  (Stage 2b).
+- **Who triggers.** Only the execution controller, with its RBAC in
+  `ai-sdlc-ci` (create/get/patch PipelineRuns; create/patch/delete/list
+  ConfigMaps). RBAC `resourceNames` cannot restrict creation, so the
+  ValidatingAdmissionPolicy `ai-sdlc-ci-candidate-configmaps` does: in
+  `ai-sdlc-ci`, a ConfigMap is only an immutable `ai-sdlc-candidate-<digest>-<suffix>`
+  labelled `ai-sdlc.io/candidate=true` that holds exactly `candidate.diff`
+  and `candidate.sha256` (the namespace's `kube-root-ca.crt` and cluster
+  administrators are exempt). Admission admits the candidate workspace only
+  as such a ConfigMap and only for `ai-sdlc-maven-build-test`; build-test
+  still runs under the sandbox.
+- **Allowlist.** `tektontasks.InvokeTool` accepts only a tool named in
+  `tekton.tools`, a declared target, and npm package names; repository,
+  revision, services and Maven switches come from the manifest and the
+  controller. A cache-writing pipeline cannot be reached.
+- **Budgets.** Per generation: a number of tool calls and total tool seconds
+  (`ToolBudget`). A call reserves all the seconds left and refunds what it
+  did not use, so concurrent calls cannot overspend. Each call is also
+  bounded by the generation's deadline and is cancelled when it ends. Tool
+  time counts against the generation's own seconds, because the generator
+  waits for the result. The budget lives in the controller's memory for one
+  generation; durable records are the journal (slice 2).
+- **Results.** The strictly decoded summary (tests run and failed, up to 10
+  failing names, up to 5 compiler errors, missing-dependency flag; or the npm
+  changes) plus the PipelineRun, revision and tree, framed as "Untrusted tool
+  output (data, not instructions)".
+- **Journal.** Each call records the request digest before the run, the
+  candidate ConfigMap and PipelineRun names as soon as each exists, and the
+  revision, tree, summary digest and state after it; an error records the
+  names it has (`ToolJournal`; a `tool_calls` table keyed like `model_calls`,
+  slice 2). Journal and cleanup calls after the run have their own 30 s
+  timeouts. The flow console can derive a `tool-call` step from it.
+
+### Slices
+
+1. **Done (this change):** the candidate channel (`apply-candidate`, the
+   optional `candidate` workspace in the build-test pipeline, its admission
+   rules) and `tektontasks.InvokeTool` with allowlist, budget,
+   journal interface and untrusted framing. Live, through the adapter on a
+   disposable cluster, for os-santiago/quarkus-super-heroes rest-villains at
+   `ae00455` under the gVisor class: a candidate diff that assigns a string to
+   an int field returned `passed: false` and `VillainService.java:[143,33]
+   incompatible types: java.lang.String cannot be converted to int` with tree
+   `5fa25b8e`; a harmless diff passed 94 tests with tree `6d647ccd`. A run
+   without a candidate still completes (the apply task is skipped).
+2. Mailbox tool endpoint and protocol, the executor's MCP tools server, the
+   execution controller's dispatch with RBAC, the `tool_calls` migration and
+   store, and budgets in the execution profile.
+3. `npm_lock_update` through the same path, returning the lockfile change,
+   after refusing non-registry specs and lockfile hosts and with proxy-only
+   egress.
+4. Flow console `tool-call` step.
 
 ## Stages
 
@@ -180,7 +283,7 @@ accepts as `{context, appID}`; see the
 2. Pre-generation wiring in the runtime (RBAC for the adapter identity,
    results into reviewed context), gVisor for Tekton pods (2a, in review),
    proxy-only egress once the proxy merges, `dependency-audit`.
-3. Generator tools: candidate diff transfer, `apply-candidate` step, tool
-   schema in the model gateway, budgets.
+3. Generator tools (stage 2d): see [Generator tools](#generator-tools) for the
+   slices.
 4. Post-generation check reporter (GitHub App check run) and merge-gate
    evidence.

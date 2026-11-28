@@ -2,7 +2,11 @@ package tektontasks
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"os"
 	"path/filepath"
 	"sort"
@@ -218,10 +222,16 @@ func TestSummariesAreDecodedStrictlyAndBounded(t *testing.T) {
 }
 
 type fakeCluster struct {
-	reads     []map[string]any
-	fails     int
-	created   map[string]any
-	cancelled string
+	reads      []map[string]any
+	fails      int
+	created    map[string]any
+	cancelled  string
+	configMaps []map[string]any
+	owned      string
+	deleted    []string
+	ownFails   bool
+	listed     []map[string]any
+	conflict   map[string]bool
 }
 
 func (f *fakeCluster) Cancel(_ context.Context, name string) error {
@@ -229,9 +239,34 @@ func (f *fakeCluster) Cancel(_ context.Context, name string) error {
 	return nil
 }
 
-func (f *fakeCluster) Create(_ context.Context, object map[string]any) (string, error) {
+func (f *fakeCluster) CreateConfigMap(_ context.Context, object map[string]any) error {
+	f.configMaps = append(f.configMaps, object)
+	return nil
+}
+
+func (f *fakeCluster) OwnConfigMap(_ context.Context, configMap, run, uid string) error {
+	if f.ownFails {
+		return errors.New("forbidden")
+	}
+	f.owned = configMap + "/" + run + "/" + uid
+	return nil
+}
+
+func (f *fakeCluster) ListCandidateConfigMaps(context.Context) ([]map[string]any, error) {
+	return f.listed, nil
+}
+
+func (f *fakeCluster) DeleteConfigMap(_ context.Context, name, uid, version string) error {
+	if f.conflict[name] {
+		return apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, name, errors.New("precondition failed"))
+	}
+	f.deleted = append(f.deleted, name+map[bool]string{true: "@" + uid + "/" + version, false: ""}[uid != ""])
+	return nil
+}
+
+func (f *fakeCluster) Create(_ context.Context, object map[string]any) (string, string, error) {
 	f.created = object
-	return "run-1", nil
+	return "run-1", "u-1", nil
 }
 
 func (f *fakeCluster) Get(context.Context, string) (map[string]any, error) {
@@ -288,5 +323,105 @@ func TestRunPollsToCompletionAndBindsTheRequestedCommit(t *testing.T) {
 	huge["status"].(map[string]any)["results"] = []any{map[string]any{"name": "summary", "value": strings.Repeat("x", MaxResultBytes+1)}}
 	if _, err := Run(context.Background(), &fakeCluster{reads: []map[string]any{huge}}, request, "", time.Millisecond); !errors.Is(err, ErrOutcome) {
 		t.Fatal("accepted an oversized result", err)
+	}
+}
+
+func TestCandidateRunsCarryTheDiffInAnOwnedConfigMap(t *testing.T) {
+	request, _ := FromTool(manifest(), "build_test", "rest-villains", nil, sha)
+	request.Candidate = []byte("--- a/A.java\n+++ b/A.java\n@@ -1 +1 @@\n-a\n+b\n")
+	sum := sha256.Sum256(request.Candidate)
+	applied := func(digest string) map[string]any {
+		s := status("True", sha)
+		s["status"].(map[string]any)["results"] = append(s["status"].(map[string]any)["results"].([]any),
+			map[string]any{"name": "tree", "value": strings.Repeat("a", 40)}, map[string]any{"name": "candidate-sha256", "value": digest})
+		return s
+	}
+	withTree := applied(hex.EncodeToString(sum[:]))
+	cluster := &fakeCluster{reads: []map[string]any{withTree}}
+	outcome, err := Run(context.Background(), cluster, request, "", time.Millisecond)
+	if err != nil || outcome.Tree != strings.Repeat("a", 40) || len(cluster.configMaps) != 1 {
+		t.Fatal("candidate run", outcome, err)
+	}
+	cm := cluster.configMaps[0]
+	name := cm["metadata"].(map[string]any)["name"].(string)
+	data := cm["data"].(map[string]any)
+	if cm["immutable"] != true || len(cluster.deleted) != 0 {
+		t.Fatal("candidate ConfigMap must be immutable and kept for its run", cm["immutable"], cluster.deleted)
+	}
+	if data["candidate.diff"] != string(request.Candidate) || data["candidate.sha256"] != hex.EncodeToString(sum[:]) ||
+		!strings.HasPrefix(name, "ai-sdlc-candidate-"+hex.EncodeToString(sum[:])[:16]) || cluster.owned != name+"/run-1/u-1" {
+		t.Fatal("candidate ConfigMap", cm, cluster.owned)
+	}
+	bound := false
+	for _, w := range cluster.created["spec"].(map[string]any)["workspaces"].([]any) {
+		if w.(map[string]any)["name"] == "candidate" && w.(map[string]any)["configMap"].(map[string]any)["name"] == name {
+			bound = true
+		}
+	}
+	if !bound {
+		t.Fatal("candidate workspace not bound")
+	}
+	// A succeeded candidate run without a tree did not apply the diff.
+	if _, err := Run(context.Background(), &fakeCluster{reads: []map[string]any{status("True", sha)}}, request, "", time.Millisecond); !errors.Is(err, ErrOutcome) {
+		t.Fatal("accepted a candidate run without its tree", err)
+	}
+	// The applied diff must be the one sent.
+	if _, err := Run(context.Background(), &fakeCluster{reads: []map[string]any{applied(strings.Repeat("0", 64))}}, request, "", time.Millisecond); !errors.Is(err, ErrOutcome) {
+		t.Fatal("accepted a run that applied another diff", err)
+	}
+	// Without an owner the ConfigMap is deleted and the run cancelled, not
+	// left waiting for its workspace while holding a quota slot.
+	orphan := &fakeCluster{reads: []map[string]any{withTree}, ownFails: true}
+	if _, err := Run(context.Background(), orphan, request, "", time.Millisecond); !errors.Is(err, ErrOutcome) ||
+		orphan.cancelled != "run-1" || len(orphan.deleted) != 1 || strings.Contains(orphan.deleted[0], "@") || !strings.HasPrefix(orphan.deleted[0], "ai-sdlc-candidate-"+hex.EncodeToString(sum[:])[:16]) {
+		t.Fatal("unowned candidate left behind", err, orphan.cancelled, orphan.deleted)
+	}
+	for label, diff := range map[string]string{
+		"symlink":       "diff --git a/l b/l\nnew file mode 120000\n--- /dev/null\n+++ b/l\n@@ -0,0 +1 @@\n+/etc/passwd\n",
+		"symlink index": "diff --git a/l b/l\nindex 1111111..2222222 120000\n--- a/l\n+++ b/l\n@@ -1 +1 @@\n-a\n+b\n",
+		"submodule":     "diff --git a/m b/m\nnew file mode 160000\n--- /dev/null\n+++ b/m\n@@ -0,0 +1 @@\n+Subproject commit 1\n",
+		"binary":        "diff --git a/b b/b\nGIT binary patch\nliteral 1\n",
+	} {
+		refused := request
+		refused.Candidate = []byte(diff)
+		if _, err := Run(context.Background(), &fakeCluster{}, refused, "", time.Millisecond); !errors.Is(err, ErrRequest) {
+			t.Fatal("accepted a candidate with", label, err)
+		}
+	}
+	npm, _ := FromTool(manifest(), "npm_lock_update", "ui-super-heroes/src/main/webui", []string{"axios"}, sha)
+	npm.Candidate = request.Candidate
+	if _, err := Run(context.Background(), &fakeCluster{}, npm, "", time.Millisecond); !errors.Is(err, ErrRequest) {
+		t.Fatal("a candidate diff reached npm under the fetch egress", err)
+	}
+	big := request
+	big.Candidate = make([]byte, MaxCandidateBytes+1)
+	if _, err := Run(context.Background(), &fakeCluster{}, big, "", time.Millisecond); !errors.Is(err, ErrRequest) {
+		t.Fatal("accepted an oversized candidate", err)
+	}
+	deps := Request{Pipeline: project.TektonMavenDependencies, Repository: request.Repository, Revision: sha, BaseHead: sha,
+		Target: "rest-villains", Services: []string{"none"}, Candidate: request.Candidate}
+	if _, err := Run(context.Background(), &fakeCluster{}, deps, "", time.Millisecond); !errors.Is(err, ErrRequest) {
+		t.Fatal("a candidate diff reached the cache-writing pipeline", err)
+	}
+}
+
+func TestSweepDeletesOnlyOldUnownedCandidates(t *testing.T) {
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	item := func(name string, age time.Duration, owned bool) map[string]any {
+		meta := map[string]any{"name": name, "uid": "uid-" + name[len(name)-6:], "resourceVersion": "7", "creationTimestamp": now.Add(-age).Format(time.RFC3339)}
+		if owned {
+			meta["ownerReferences"] = []any{map[string]any{"kind": "PipelineRun", "name": "r"}}
+		}
+		return map[string]any{"metadata": meta}
+	}
+	old := "ai-sdlc-candidate-0123456789abcdef-abc123"
+	raced := "ai-sdlc-candidate-0123456789abcdef-race00"
+	cluster := &fakeCluster{listed: []map[string]any{item(old, time.Hour, false), item("ai-sdlc-candidate-0123456789abcdef-new000", time.Minute, false),
+		item("ai-sdlc-candidate-0123456789abcdef-own000", time.Hour, true), item("kube-root-ca.crt", time.Hour, false), item(raced, time.Hour, false)},
+		conflict: map[string]bool{raced: true}}
+	// The delete carries the observed uid and resourceVersion; one that a run
+	// took ownership of since the list fails its precondition and is skipped.
+	if err := SweepCandidates(context.Background(), cluster, now, CandidateSweepAge); err != nil || len(cluster.deleted) != 1 || cluster.deleted[0] != old+"@uid-abc123/7" {
+		t.Fatal("sweep", err, cluster.deleted)
 	}
 }
