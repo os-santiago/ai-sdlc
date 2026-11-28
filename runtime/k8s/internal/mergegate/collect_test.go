@@ -3,6 +3,7 @@ package mergegate
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -91,7 +92,17 @@ func fixtureAPIForRepository(t *testing.T, mode, repository string) (*Client, *a
 				base = strings.Repeat("e", 40)
 			}
 			pulls.Add(1)
-			out = map[string]any{"number": 42, "state": "open", "draft": false, "merged": false, "mergeable": true, "mergeable_state": "clean", "head": map[string]any{"ref": expected.Branch, "sha": head, "repo": map[string]any{"full_name": repository}}, "base": map[string]any{"ref": "main", "sha": base, "repo": map[string]any{"full_name": repository, "default_branch": "main"}}}
+			state, merged := "open", false
+			switch mode {
+			case "closed", "closed-other-head":
+				state = "closed"
+			case "merged-outside":
+				state, merged = "closed", true
+			}
+			if mode == "closed-other-head" {
+				head = strings.Repeat("e", 40)
+			}
+			out = map[string]any{"number": 42, "state": state, "draft": false, "merged": merged, "mergeable": true, "mergeable_state": "clean", "head": map[string]any{"ref": expected.Branch, "sha": head, "repo": map[string]any{"full_name": repository}}, "base": map[string]any{"ref": "main", "sha": base, "repo": map[string]any{"full_name": repository, "default_branch": "main"}}}
 		case repoPath("/git/commits/" + expected.HeadSHA):
 			tree := expected.TreeSHA
 			if mode == "wrong-tree" {
@@ -222,6 +233,13 @@ func fixtureAPIForRepository(t *testing.T, mode, repository string) (*Client, *a
 			}
 			out = map[string]any{"data": map[string]any{"repository": map[string]any{"nameWithOwner": repository, "pullRequest": map[string]any{"number": 42, "headRefOid": expected.HeadSHA, "baseRefOid": expected.BaseSHA, "closingIssuesReferences": map[string]any{"totalCount": 0, "pageInfo": map[string]bool{"hasNextPage": false}, "nodes": []map[string]string{}}, "reviewThreads": map[string]any{"totalCount": 1, "pageInfo": map[string]any{"hasNextPage": mode == "truncated-threads"}, "nodes": []map[string]any{{"id": "thread1", "isResolved": mode != "unresolved-thread" && !(mode == "late-thread" && threadReads.Load() > 0)}}}}}}}
 			pull := out.(map[string]any)["data"].(map[string]any)["repository"].(map[string]any)["pullRequest"].(map[string]any)
+			if mode == "many-threads" || mode == "many-threads-short" {
+				nodes := []map[string]any{}
+				for i := 0; i < 100 && (mode == "many-threads" || i < 1); i++ {
+					nodes = append(nodes, map[string]any{"id": fmt.Sprintf("thread%d", i), "isResolved": true})
+				}
+				pull["reviewThreads"] = map[string]any{"totalCount": 150, "pageInfo": map[string]any{"hasNextPage": true}, "nodes": nodes}
+			}
 			if mode == "closing-issue" || mode == "late-closing-issue" && threadReads.Load() > 0 {
 				pull["closingIssuesReferences"] = map[string]any{"totalCount": 1, "pageInfo": map[string]bool{"hasNextPage": false}, "nodes": []map[string]string{{"id": "linked-issue"}}}
 			}
@@ -271,6 +289,35 @@ func TestAuthenticatedGateBlocksIncompleteOrUnsafeEvidence(t *testing.T) {
 			r, e := c.Collect(context.Background(), fixtureExpected(), PilotPolicy())
 			if e != nil || r.Ready || len(r.Reasons) == 0 {
 				t.Fatal("unsafe observation", r, e)
+			}
+		})
+	}
+}
+
+// More review threads than one page holds is a thread wait with an unknown
+// count, not an unavailable gate; a page that does not hold exactly the
+// first 100 is still refused.
+func TestAuthenticatedGateWaitsOnTooManyThreads(t *testing.T) {
+	c, _ := fixtureAPI(t, "many-threads")
+	r, e := c.Collect(context.Background(), fixtureExpected(), PilotPolicy())
+	if e != nil || r.Ready || len(r.Reasons) != 1 || r.Reasons[0] != ReasonThreadsUnresolved || r.UnresolvedThreads != 0 || !r.UnresolvedThreadsUnknown {
+		t.Fatal("truncated threads", r, e)
+	}
+	c, _ = fixtureAPI(t, "many-threads-short")
+	if r, e := c.Collect(context.Background(), fixtureExpected(), PilotPolicy()); e != ErrGate || r.Ready {
+		t.Fatal("short truncated page accepted", r, e)
+	}
+}
+
+// A closed pull request is a distinct observation, not an unavailable gate,
+// but only for the expected pull request, branch and head.
+func TestAuthenticatedGateReportsAClosedPullRequest(t *testing.T) {
+	for mode, want := range map[string]error{"closed": ErrClosed, "merged-outside": ErrMergedOutside, "closed-other-head": ErrGate} {
+		t.Run(mode, func(t *testing.T) {
+			c, calls := fixtureAPI(t, mode)
+			r, e := c.Collect(context.Background(), fixtureExpected(), PilotPolicy())
+			if e != want || r.Ready || calls.Load() != 1 {
+				t.Fatal("closed pull request", r, e, calls.Load())
 			}
 		})
 	}

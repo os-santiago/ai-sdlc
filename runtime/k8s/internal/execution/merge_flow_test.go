@@ -409,3 +409,70 @@ func TestMergeClosingItsIssueFinishesOnlyAfterTheSend(t *testing.T) {
 		})
 	}
 }
+
+// A closed pull request is parked, not an unavailable gate: it stops nothing,
+// is not selected again until the park ends, and is then observed once more.
+// The rotation still selects the only candidate when it was merely observed.
+func TestMergeRotationParksAClosedPullRequest(t *testing.T) {
+	f := execution.NewPublishedMergeTestFixture(t)
+	ctx := context.Background()
+	now := time.Now()
+	rotation := mergeflow.NewRotation(func() time.Time { return now })
+	closed, observations := true, 0
+	r := mergeflow.Runtime{DB: f.DB, Policy: func() (authority.Policy, intake.Config, string, error) { return f.Policy, f.Intake, f.Profile, nil }, Review: func() (publicationflow.ReviewPolicy, error) {
+		return publicationflow.ReviewPolicy{Profile: f.ReviewProfile, Configuration: f.ReviewConfiguration}, nil
+	}, Identity: func() (authority.Identity, error) { return f.Identity, nil }, GatePolicy: func(string) (mergegate.Policy, error) { return mergegate.PilotPolicy(), nil }, Rotation: rotation}
+	r.Gates = mergeGatesFunc(func(_ context.Context, e mergegate.Expected, _ mergegate.Policy) (mergegate.Observation, error) {
+		observations++
+		if closed {
+			return mergegate.Observation{}, mergegate.ErrClosed
+		}
+		return mergegate.Observation{Expected: e, Ready: false, Reasons: []string{"checks-not-passed"}, ObservedAt: time.Now()}, nil
+	})
+	r.Writer = mergeWriterFunc(func(context.Context, mergegate.Expected, int, mergewriter.Fence) (mergewriter.Receipt, error) {
+		t.Fatal("closed pull request reached the writer")
+		return mergewriter.Receipt{}, nil
+	})
+	if state, e := r.PollOnce(ctx); e != nil || state != "merge-pull-request-closed" || observations != 1 {
+		t.Fatal(state, e, observations)
+	}
+	if state, e := r.PollOnce(ctx); e != nil || state != "" || observations != 1 {
+		t.Fatal("parked publication selected", state, e, observations)
+	}
+	now = now.Add(mergeflow.ParkClosed + time.Second)
+	closed = false
+	// Reopened: observed again, and as the only candidate it stays selectable
+	// on every poll even though it was just observed.
+	for i := 2; i <= 3; i++ {
+		if state, e := r.PollOnce(ctx); e != nil || state != "merge-waiting-for-checks" || observations != i {
+			t.Fatal("reopened publication", state, e, observations)
+		}
+	}
+	var n int
+	if f.Admin.Pool.QueryRow(`SELECT count(*) FROM merge_requests`).Scan(&n) != nil || n != 0 {
+		t.Fatal("a closed pull request acquired authority")
+	}
+}
+
+// The store refuses a rotation it cannot bound or that names anything but
+// publication IDs, and excludes parked publications.
+func TestMergeRotationSelectionIsBounded(t *testing.T) {
+	f := execution.NewPublishedMergeTestFixture(t)
+	ctx := context.Background()
+	selection := mergeSelection(f)
+	if id, e := f.DB.NextRotatedMergePublication(ctx, selection, store.MergeRotation{Recent: []string{f.PublicationID}}); e != nil || id != f.PublicationID {
+		t.Fatal("observed publication not selectable", id, e)
+	}
+	if id, e := f.DB.NextRotatedMergePublication(ctx, selection, store.MergeRotation{Parked: []string{f.PublicationID}}); e != nil || id != "" {
+		t.Fatal("parked publication selected", id, e)
+	}
+	for _, bad := range []store.MergeRotation{
+		{Recent: []string{"publication-x'); DROP TABLE merge_requests; --"}},
+		{Parked: []string{"{" + f.PublicationID + "}"}},
+		{Recent: make([]string, store.MaxMergeRotation+1)},
+	} {
+		if _, e := f.DB.NextRotatedMergePublication(ctx, selection, bad); e == nil {
+			t.Fatal("unbounded rotation accepted", bad.Recent, bad.Parked)
+		}
+	}
+}

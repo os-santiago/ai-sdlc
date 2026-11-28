@@ -80,6 +80,7 @@ func TestWaitNamesEachBlocker(t *testing.T) {
 		// A count without its reason, or beyond the gate's bound, is not reported.
 		{[]string{"checks-not-passed"}, 4, "merge-waiting-for-checks", []string{"checks-not-passed"}, 0},
 		{[]string{"review-threads-unresolved"}, 101, "merge-waiting-for-review-threads", []string{"review-threads-unresolved"}, 0},
+		// A count the gate reports beyond its page bound is never echoed.
 	} {
 		w := waitFor(mergegate.Observation{Expected: mergegate.Expected{PullRequest: 11}, Reasons: c.reasons, UnresolvedThreads: c.threads})
 		if w.State != c.state || w.PullRequest != 11 || strings.Join(w.Reasons, ",") != strings.Join(c.listed, ",") || w.UnresolvedThreads != c.count {
@@ -100,6 +101,9 @@ func TestWaitNamesEachBlocker(t *testing.T) {
 		if !states[waitFor(mergegate.Observation{Reasons: []string{reason}}).State] {
 			t.Error("gate reason without a wait state", reason)
 		}
+	}
+	if w := waitFor(mergegate.Observation{Reasons: []string{"review-threads-unresolved"}, UnresolvedThreadsUnknown: true}); w.State != "merge-waiting-for-review-threads" || !w.UnresolvedThreadsUnknown || w.UnresolvedThreads != 0 {
+		t.Fatal("unknown thread count", w)
 	}
 	threads := mergegate.Observation{Reasons: []string{"native-merge-not-ready", "review-threads-unresolved"}}
 	ready := mergegate.Observation{Ready: true, Reasons: []string{}}

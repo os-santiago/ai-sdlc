@@ -88,9 +88,14 @@ type Observation struct {
 	Ready           bool      `json:"ready"`
 	Reasons         []string  `json:"reasons"`
 	// UnresolvedThreads counts the pull request's unresolved review threads
-	// (at most 100; more fails closed). It is nonzero exactly when Reasons
-	// holds "review-threads-unresolved", so a ready gate omits it.
+	// (at most 100). It is nonzero when Reasons holds
+	// "review-threads-unresolved" and the count is known, so a ready gate
+	// omits it.
 	UnresolvedThreads int `json:"unresolvedThreads,omitempty"`
+	// UnresolvedThreadsUnknown is set with "review-threads-unresolved" when
+	// the pull request has more than 100 review threads: the gate cannot see
+	// them all, waits on them and reports no count (UnresolvedThreads 0).
+	UnresolvedThreadsUnknown bool `json:"unresolvedThreadsUnknown,omitempty"`
 }
 
 // The closed set of reasons an observation may carry. Each names one blocker.
@@ -138,6 +143,21 @@ type pull struct {
 func (p pull) matches(e Expected, repository string) bool {
 	return p.Number == e.PullRequest && p.State == "open" && p.Draft != nil && !*p.Draft && p.Merged != nil && !*p.Merged && p.Head.SHA == e.HeadSHA && p.Head.Ref == e.Branch && p.Head.Repo.FullName == repository && p.Base.SHA == e.BaseSHA && p.Base.Ref == "main" && p.Base.Repo.FullName == repository && p.Base.Repo.DefaultBranch == "main"
 }
+
+// closed reports an authenticated observation of the expected pull request,
+// same head branch and commit, that is no longer open: ErrClosed when it was
+// closed unmerged, ErrMergedOutside when something other than this controller
+// merged it. Anything else is not a closure and returns nil.
+func (p pull) closed(e Expected, repository string) error {
+	if p.Number != e.PullRequest || p.State != "closed" || p.Merged == nil || p.Head.SHA != e.HeadSHA || p.Head.Ref != e.Branch || p.Head.Repo.FullName != repository || p.Base.Ref != "main" || p.Base.Repo.FullName != repository {
+		return nil
+	}
+	if *p.Merged {
+		return ErrMergedOutside
+	}
+	return ErrClosed
+}
+
 func (c *Client) Collect(ctx context.Context, e Expected, p Policy) (Observation, error) {
 	deny := func() (Observation, error) { return Observation{}, ErrGate }
 	if c == nil || c.http == nil || !project.Supported(c.repository) || p.Repository != c.repository || e.Repository != c.repository || e.PullRequest < 1 || e.PullRequest > 2147483647 || !workspacebundle.ValidSourceSHA(e.HeadSHA) || !workspacebundle.ValidSourceSHA(e.BaseSHA) || !workspacebundle.ValidSourceSHA(e.TreeSHA) || !branch.MatchString(e.Branch) || !p.valid() {
@@ -146,7 +166,13 @@ func (c *Client) Collect(ctx context.Context, e Expected, p Policy) (Observation
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	var first pull
-	if c.read(ctx, c.repoPath("/pulls/"+number(e.PullRequest)), nil, &first) != nil || !first.matches(e, c.repository) {
+	if c.read(ctx, c.repoPath("/pulls/"+number(e.PullRequest)), nil, &first) != nil {
+		return deny()
+	}
+	if closed := first.closed(e, c.repository); closed != nil {
+		return Observation{}, closed
+	}
+	if !first.matches(e, c.repository) {
 		return deny()
 	}
 	reasons := map[string]bool{}
@@ -182,7 +208,7 @@ func (c *Client) Collect(ctx context.Context, e Expected, p Policy) (Observation
 	if reviews.ChangesRequested {
 		reasons[ReasonChangesRequested] = true
 	}
-	if reviews.UnresolvedThreads > 0 {
+	if reviews.UnresolvedThreads > 0 || reviews.ThreadsTruncated {
 		reasons[ReasonThreadsUnresolved] = true
 	}
 	// A ready snapshot cannot silently retain checks or feedback which changed
@@ -216,6 +242,6 @@ func (c *Client) Collect(ctx context.Context, e Expected, p Policy) (Observation
 		list = append(list, reason)
 	}
 	sort.Strings(list)
-	return Observation{Expected: e, PolicySHA256: policyDigest, ChecksSHA256: digest, ReviewsSHA256: reviewDigest, ObservedAt: time.Now().UTC(), Ready: len(list) == 0, Reasons: list, UnresolvedThreads: reviews.UnresolvedThreads}, nil
+	return Observation{Expected: e, PolicySHA256: policyDigest, ChecksSHA256: digest, ReviewsSHA256: reviewDigest, ObservedAt: time.Now().UTC(), Ready: len(list) == 0, Reasons: list, UnresolvedThreads: reviews.UnresolvedThreads, UnresolvedThreadsUnknown: reviews.ThreadsTruncated}, nil
 }
 func digest(v any) string { raw, _ := json.Marshal(v); return authority.Digest(raw) }

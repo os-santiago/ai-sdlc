@@ -22,6 +22,15 @@ import (
 
 var ErrGate = errors.New("merge gate observation unavailable or denied")
 
+// ErrClosed reports that the expected pull request was closed without being
+// merged. It is an observation, not a fault: the publication cannot merge
+// until its issue is re-delivered (or the pull request is reopened).
+var ErrClosed = errors.New("merge gate observed the pull request closed")
+
+// ErrMergedOutside reports that the expected pull request was merged by
+// something other than the merge controller.
+var ErrMergedOutside = errors.New("merge gate observed the pull request merged outside the controller")
+
 // ErrManifest refuses a merge policy whose project manifest is not the one
 // the authorizing policy binds (another policy load's, or none).
 var ErrManifest = errors.New("merge gate manifest is not the one the authorizing policy binds")

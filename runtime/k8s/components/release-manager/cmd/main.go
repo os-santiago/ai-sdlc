@@ -245,6 +245,9 @@ func main() {
 		defer stopBuild()
 	}
 	if bootstrap.MergeEnabled() {
+		// The rotation outlives each poll, so a publication whose gate stays
+		// unready cannot hold later ones.
+		rotation := &mergeflow.Rotation{}
 		stopMerge := bootstrap.Periodic(time.Minute, func(ctx context.Context) {
 			r, e := mergeRuntime()
 			if e != nil {
@@ -253,12 +256,13 @@ func main() {
 				metrics.ForgetMergeWaiting()
 				return
 			}
+			r.Rotation = rotation
 			var wait *mergeflow.Wait
 			r.Waiting = func(w mergeflow.Wait) { wait = &w }
 			state, e := r.PollOnce(ctx)
 			countDelivery(state)
 			sampleMergeQuarantine(ctx, c.DB, policy)
-			sampleMergeWait(wait, e)
+			sampleMergeWait(rotation.Waits())
 			if e != nil {
 				// state is a fixed controller constant ("merge-quarantined",
 				// "merge-stopped", ...); it names why the loop stopped.
@@ -388,25 +392,20 @@ func mergeStateLine(state string, wait *mergeflow.Wait) string {
 	if len(wait.Reasons) > 0 {
 		line += " reasons=" + strings.Join(wait.Reasons, ",")
 	}
-	if wait.UnresolvedThreads > 0 {
+	switch {
+	case wait.UnresolvedThreadsUnknown:
+		line += " unresolved_threads=unknown"
+	case wait.UnresolvedThreads > 0:
 		line += " unresolved_threads=" + strconv.Itoa(wait.UnresolvedThreads)
 	}
 	return line
 }
 
-// sampleMergeWait records the blockers of the publication the last merge poll
-// found waiting, or none when that poll found no waiting publication. A poll
-// that stopped observed nothing reliable, so its series are removed.
-func sampleMergeWait(wait *mergeflow.Wait, e error) {
-	if e != nil {
-		metrics.ForgetMergeWaiting()
-		return
-	}
-	if wait == nil {
-		metrics.MergeWaiting(nil, 0)
-		return
-	}
-	metrics.MergeWaiting(wait.Reasons, wait.UnresolvedThreads)
+// sampleMergeWait records the latest waits the rotation holds. It does not
+// depend on what one poll handled (a queued request, a reconciliation or a
+// stop), so the gauges do not drop while a pull request still waits.
+func sampleMergeWait(w mergeflow.WaitSummary) {
+	metrics.MergeWaiting(w.Reasons, w.UnresolvedThreads)
 }
 
 // countDelivery counts the outcome of one claimed publication or merge

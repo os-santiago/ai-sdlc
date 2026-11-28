@@ -92,10 +92,10 @@ var (
 	mergeAttemptsExhausted = Default.NewCounter("ai_sdlc_merge_attempts_exhausted_total",
 		"Publications whose last allowed merge attempt stopped before any send; none is attempted again.")
 	mergeWaiting = Default.NewGauge("ai_sdlc_merge_waiting",
-		"1 for each gate blocker holding the published pull request the last merge poll observed, 0 otherwise.",
+		"Published pull requests whose latest merge gate observation (within 30 minutes) waits on each blocker.",
 		OneOf("reason", MergeWaitReasons...))
 	mergeUnresolvedThreads = Default.NewGauge("ai_sdlc_merge_unresolved_review_threads",
-		"Unresolved review threads on the published pull request the last merge poll observed waiting (0 when none).")
+		"Known unresolved review threads on the published pull requests counted by ai_sdlc_merge_waiting.")
 	quarantined = Default.NewGauge("ai_sdlc_quarantined",
 		"1 while an unresolved uncertain effect quarantines a journal of the release manager, 0 when none does.",
 		OneOf("journal", QuarantineJournals...))
@@ -105,31 +105,28 @@ var (
 // (mergegate.Reasons).
 var MergeWaitReasons = []string{"native-protection-insufficient", "checks-not-passed", "review-changes-requested", "review-threads-unresolved", "native-merge-not-ready"}
 
-// MergeWaiting records the gate blockers of the published pull request the
-// last merge poll observed waiting: 1 for each reason present, 0 for the
-// others, and the count of unresolved review threads. Nil reasons record a
-// poll that found no waiting pull request. Reasons outside the closed set are
-// ignored.
-func MergeWaiting(reasons []string, unresolvedThreads int) {
-	present := map[string]bool{}
-	for _, r := range reasons {
-		present[r] = true
-	}
+// MergeWaiting records how many published pull requests currently wait on
+// each gate blocker (their latest wait, observed within the last 30
+// minutes), 0 for blockers none waits on, and their known unresolved review
+// threads. Reasons outside the closed set are dropped, not recorded; negative
+// values count as 0.
+func MergeWaiting(reasons map[string]int, unresolvedThreads int) {
 	for _, r := range MergeWaitReasons {
-		v := 0.0
-		if present[r] {
-			v = 1
+		v := reasons[r]
+		if v < 0 {
+			v = 0
 		}
-		mergeWaiting.Set(v, r)
+		mergeWaiting.Set(float64(v), r)
 	}
-	if unresolvedThreads < 0 || reasons == nil {
+	if unresolvedThreads < 0 {
 		unresolvedThreads = 0
 	}
 	mergeUnresolvedThreads.Set(float64(unresolvedThreads))
 }
 
-// ForgetMergeWaiting drops the merge wait series when the merge poll could
-// not observe a gate, rather than leaving their last values.
+// ForgetMergeWaiting drops the merge wait series when the merge loop cannot
+// run (its credential or runtime is unavailable), rather than leaving their
+// last values.
 func ForgetMergeWaiting() {
 	for _, r := range MergeWaitReasons {
 		mergeWaiting.Delete(r)

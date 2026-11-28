@@ -41,6 +41,10 @@ type Runtime struct {
 	// effect that quarantines merges by a read-only forge observation.
 	Reconciler *mergerecovery.Reconciler
 	Observer   mergerecovery.Observer
+	// Rotation, when set, orders selection so a publication whose gate stays
+	// unready cannot hold later ones, and parks one whose pull request was
+	// closed. It must outlive a single poll.
+	Rotation *Rotation
 	// Waiting, when set, receives the bounded blockers of a publication whose
 	// gate is not ready, so the caller can log and count them. It never
 	// carries forge text.
@@ -55,6 +59,9 @@ type Wait struct {
 	PullRequest       int
 	Reasons           []string
 	UnresolvedThreads int
+	// UnresolvedThreadsUnknown: the pull request has more review threads
+	// than the gate can see, so UnresolvedThreads is 0 and the count unknown.
+	UnresolvedThreadsUnknown bool
 }
 
 // waitStates maps each gate reason to the wait state that names it, in the
@@ -100,8 +107,13 @@ func waitFor(o mergegate.Observation) Wait {
 			break
 		}
 	}
-	if present[mergegate.ReasonThreadsUnresolved] && o.UnresolvedThreads > 0 && o.UnresolvedThreads <= 100 {
-		w.UnresolvedThreads = o.UnresolvedThreads
+	if present[mergegate.ReasonThreadsUnresolved] {
+		switch {
+		case o.UnresolvedThreadsUnknown:
+			w.UnresolvedThreadsUnknown = true
+		case o.UnresolvedThreads > 0 && o.UnresolvedThreads <= 100:
+			w.UnresolvedThreads = o.UnresolvedThreads
+		}
 	}
 	return w
 }
@@ -251,13 +263,23 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 		if e != nil {
 			return "", ErrMerge
 		}
-		publicationID, e := r.DB.NextMergePublication(ctx, store.MergeSelection{AuthorityRevision: p.Revision(), IntakeConfiguration: intake.Digest(), ExecutionProfile: profile, ReviewProfile: review.Profile, ReviewConfiguration: review.Configuration, RecipeRevision: verification.CurrentRecipeRevision(p.Repository)})
+		publicationID, e := r.DB.NextRotatedMergePublication(ctx, store.MergeSelection{AuthorityRevision: p.Revision(), IntakeConfiguration: intake.Digest(), ExecutionProfile: profile, ReviewProfile: review.Profile, ReviewConfiguration: review.Configuration, RecipeRevision: verification.CurrentRecipeRevision(p.Repository)}, r.Rotation.snapshot())
 		if e != nil {
 			return "", ErrMerge
 		}
 		if publicationID == "" {
 			return "", nil
 		}
+		// Every selected publication goes to the back of the rotation,
+		// whatever this poll finds, so the next poll offers the next one.
+		// The rotation also keeps the publication's latest wait (cleared by
+		// a gate observation that is not a wait, kept when the gate could
+		// not be observed), so wait metrics do not depend on which
+		// publication or request one poll happened to handle.
+		park := time.Duration(0)
+		var waited *Wait
+		gateObserved := false
+		defer func() { r.Rotation.observed(publicationID, park, gateObserved, waited) }()
 		c, fact, e := publicationflow.CurrentPublishedProof(ctx, r.DB, r.Policy, r.Review, publicationID)
 		if e != nil {
 			return "merge-authority-denied", ErrMerge
@@ -279,11 +301,25 @@ func (r Runtime) PollOnce(ctx context.Context) (string, error) {
 			return "", ErrMerge
 		}
 		observed, e := r.Gates.Collect(ctx, want, gp)
-		if e != nil {
+		switch {
+		case errors.Is(e, mergegate.ErrClosed):
+			gateObserved = true
+			// An observation, not a fault: the publication is parked so it
+			// does not hold the loop, and is observed again after
+			// ParkClosed in case the pull request is reopened.
+			park = ParkClosed
+			return "merge-pull-request-closed", nil
+		case errors.Is(e, mergegate.ErrMergedOutside):
+			gateObserved = true
+			park = ParkClosed
+			return "merge-pull-request-merged-outside", nil
+		case e != nil:
 			return "merge-observation-unavailable", ErrMerge
 		}
+		gateObserved = true
 		if !observed.Ready {
 			wait := waitFor(observed)
+			waited = &wait
 			if r.Waiting != nil {
 				r.Waiting(wait)
 			}
