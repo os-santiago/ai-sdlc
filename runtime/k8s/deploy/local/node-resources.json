@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "pidsLimit": {
+    "default": 8192,
+    "hostShare": 4,
+    "minimum": 2048,
+    "maximum": 1048576
+  },
+  "pidBudget": {
+    "nodeBaseline": 1100,
+    "concurrentSandboxPods": 3
+  }
+}

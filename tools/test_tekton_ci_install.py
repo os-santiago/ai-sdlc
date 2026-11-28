@@ -305,6 +305,47 @@ class InstallerOptionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             tekton.validate_options(SimpleNamespace(tekton_ci=True, tekton_ci_repository=['A/B'], command='local', platform='kind'))
 
+    def test_pod_quotas_default_to_one_and_set_the_committed_quotas(self):
+        self.assertEqual(tekton.pod_quotas(), {'candidate': 1, 'fetch': 1})
+        self.assertEqual(tekton.pod_quotas(3, 2), {'candidate': 3, 'fetch': 2})
+        for bad in ((0, 1), (1, 33), ('2', 1), (True, 1)):
+            with self.assertRaises(ValueError):
+                tekton.pod_quotas(*bad)
+        raw, _ = tekton.ci_manifests()
+        import re
+        quotas = [{'kind': 'ResourceQuota', 'metadata': {'name': name}, 'spec': {'hard': {'pods': '1'}}}
+                  for name in re.findall(r'name: (ai-sdlc-ci-[a-z]+-pods)', raw['resourcequota.yaml'].decode())]
+        self.assertEqual(sorted(q['metadata']['name'] for q in quotas), sorted(tekton.QUOTAS.values()))
+        applied = tekton.apply_pod_quotas(copy.deepcopy(quotas), {'candidate': 3, 'fetch': 2})
+        self.assertEqual({q['metadata']['name']: q['spec']['hard']['pods'] for q in applied},
+                         {'ai-sdlc-ci-candidate-pods': '3', 'ai-sdlc-ci-fetch-pods': '2'})
+        with self.assertRaisesRegex(ValueError, 'missing'):
+            tekton.apply_pod_quotas(quotas[:1], {'candidate': 1, 'fetch': 1})
+        with self.assertRaisesRegex(ValueError, 'Unexpected'):
+            tekton.apply_pod_quotas([{'kind': 'ResourceQuota', 'metadata': {'name': 'other'}, 'spec': {'hard': {'pods': '9'}}}],
+                                    {'candidate': 1, 'fetch': 1})
+        with self.assertRaisesRegex(ValueError, 'require --tekton-ci'):
+            tekton.validate_options(SimpleNamespace(tekton_ci=None, tekton_ci_candidate_pods=2, command='local', platform='kind'))
+
+    def test_installed_pod_quotas_feed_the_node_budget(self):
+        quotas = {'items': [{'metadata': {'name': 'ai-sdlc-ci-candidate-pods'}, 'spec': {'hard': {'pods': '6'}}},
+                            {'metadata': {'name': 'ai-sdlc-ci-fetch-pods'}, 'spec': {'hard': {'pods': '1'}}},
+                            {'metadata': {'name': 'other'}, 'spec': {'hard': {'pods': 'x'}}}]}
+        run = Mock(return_value=completed(json.dumps(quotas)))
+        self.assertEqual(tekton.installed_pod_quotas(run, ['kubectl']), {'candidate': 6, 'fetch': 1})
+        self.assertIn('--ignore-not-found', run.call_args.args[0])
+        self.assertEqual(tekton.installed_pod_quotas(Mock(return_value=completed('')), ['kubectl']), {'candidate': 0, 'fetch': 0})
+        # A quota lowered while pods still run: the running pods count.
+        lowered = {'items': [{'metadata': {'name': 'ai-sdlc-ci-candidate-pods'}, 'spec': {'hard': {'pods': '1'}},
+                              'status': {'used': {'pods': '4'}}},
+                             {'metadata': {'name': 'ai-sdlc-ci-fetch-pods'}, 'spec': {'hard': {'pods': '2'}},
+                              'status': {'used': {'pods': '0'}}}]}
+        self.assertEqual(tekton.installed_pod_quotas(Mock(return_value=completed(json.dumps(lowered))), ['kubectl']),
+                         {'candidate': 4, 'fetch': 2})
+        quotas['items'][0]['spec']['hard']['pods'] = '1Gi'
+        with self.assertRaises(ValueError):
+            tekton.installed_pod_quotas(Mock(return_value=completed(json.dumps(quotas))), ['kubectl'])
+
     def test_installer_entrypoint_rejects_option_outside_its_scope_before_effects(self):
         with patch.object(install, 'tools', side_effect=AssertionError('no tool bootstrap')), \
              self.assertRaisesRegex(ValueError, '--tekton-ci requires'):
@@ -319,6 +360,7 @@ class InstallerOptionTests(unittest.TestCase):
              patch.object(tekton, 'objects', side_effect=lambda run, k, raw: calls.append('objects') or []), \
              patch.object(tekton, 'desired_tekton', side_effect=lambda *a: ['tekton']), \
              patch.object(tekton, 'desired_ci', side_effect=lambda items, uid: [{'kind': 'Namespace'}, {'kind': 'Task'}] + items), \
+             patch.object(tekton, 'apply_pod_quotas', side_effect=lambda items, quotas: calls.append(('quotas', quotas)) or items), \
              patch.object(tekton, 'apply', side_effect=lambda run, k, items, dry_run=False: calls.append(
                  ('apply', items[0] if isinstance(items[0], str) else ('namespace' if items[0]['kind'] == 'Namespace' else 'ci')))), \
              patch.object(tekton, 'wait_ready', side_effect=lambda *a: calls.append('ready')), \
@@ -326,14 +368,17 @@ class InstallerOptionTests(unittest.TestCase):
              patch.object(tekton, 'release_stale_assistants', return_value=[]), \
              patch.object(tekton, 'observe', return_value={'ready': True, 'release': lock['release']}):
             report = tekton.install(Mock(), ['kubectl'], UID, Path('/nonexistent'), '5m', ['os-santiago/quarkus-super-heroes'])
-        self.assertEqual(calls, ['verify', 'objects', 'own', ('apply', 'tekton'), 'ready', 'objects', 'own',
+        self.assertEqual(calls, ['verify', 'objects', 'own', ('apply', 'tekton'), 'ready', 'objects',
+                                 ('quotas', {'candidate': 1, 'fetch': 1}), 'own',
                                  ('apply', 'namespace'), 'admission', ('apply', 'ci')])
+        self.assertEqual(report['podQuotas'], {'candidate': 1, 'fetch': 1})
         self.assertTrue(report['ready'])
         self.assertEqual(report['cacheClaims'], {'os-santiago/quarkus-super-heroes': tekton.cache_claim('os-santiago/quarkus-super-heroes')})
         with patch.object(tekton, 'fetch_release', return_value=b'raw'), \
              patch.object(tekton, 'verify_release'), patch.object(tekton, 'require_ownership'), \
              patch.object(tekton, 'objects', return_value=[]), patch.object(tekton, 'desired_tekton', return_value=[]), \
-             patch.object(tekton, 'desired_ci', return_value=[]), patch.object(tekton, 'apply'), \
+             patch.object(tekton, 'desired_ci', return_value=[]), patch.object(tekton, 'apply_pod_quotas', return_value=[]), \
+             patch.object(tekton, 'apply'), \
              patch.object(tekton, 'wait_ready'), patch.object(tekton, 'wait_admission', return_value=1), \
              patch.object(tekton, 'release_stale_assistants', return_value=[]), \
              patch.object(tekton, 'observe', return_value={'ready': False}), \

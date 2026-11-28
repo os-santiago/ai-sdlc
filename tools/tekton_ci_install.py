@@ -43,6 +43,10 @@ CI_CLUSTER_PREFIX = 'ai-sdlc-ci-'
 CACHE_PREFIX = 'ai-sdlc-ci-maven-cache-'
 CACHE_SIZE = '8Gi'
 REPOSITORY = re.compile(r'[a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}')
+# The candidate and fetch pod quotas of resourcequota.yaml, by object name.
+QUOTAS = {'candidate': 'ai-sdlc-ci-candidate-pods', 'fetch': 'ai-sdlc-ci-fetch-pods'}
+DEFAULT_PODS = {'candidate': 1, 'fetch': 1}
+MAX_PODS = 32
 
 
 def cache_claim(repository):
@@ -241,6 +245,52 @@ def desired_ci(items, cluster_uid):
     return own(items, cluster_uid)
 
 
+def pod_quotas(candidate=None, fetch=None):
+    """The reviewed pod quotas, defaulting to one candidate and one fetch pod."""
+    quotas = {'candidate': DEFAULT_PODS['candidate'] if candidate is None else candidate,
+              'fetch': DEFAULT_PODS['fetch'] if fetch is None else fetch}
+    if any(type(v) is not int or not 1 <= v <= MAX_PODS for v in quotas.values()):
+        raise ValueError('Tekton CI pod quotas must be integers from 1 to %d' % MAX_PODS)
+    return quotas
+
+
+def installed_pod_quotas(run, kubectl):
+    """The candidate and fetch pod quotas currently in the cluster (0 when
+    Tekton CI is not installed). Omitting --tekton-ci later keeps them, so the
+    node pid budget must cover them as well as any requested change. Lowering
+    a quota does not stop pods already running, so each counts the larger of
+    its hard limit and the pods it currently admits (status.used)."""
+    raw = run(kubectl + ['get', 'resourcequota', '-n', CI_NAMESPACE, '--ignore-not-found', '-o', 'json'],
+              capture_output=True).stdout
+    items = json.loads(raw).get('items', []) if raw.strip() else []
+    found = {role: 0 for role in QUOTAS}
+    for item in items:
+        role = next((r for r, name in QUOTAS.items() if name == item['metadata']['name']), None)
+        pods = str(item.get('spec', {}).get('hard', {}).get('pods', '0'))
+        used = str((item.get('status', {}).get('used') or {}).get('pods', '0'))
+        if role is not None:
+            if not pods.isdigit() or not used.isdigit():
+                raise ValueError('Unexpected Tekton CI pod quota value')
+            found[role] = max(int(pods), int(used))
+    return found
+
+
+def apply_pod_quotas(items, quotas):
+    """Set the committed candidate and fetch ResourceQuotas to the configured
+    pod counts; the installer checked them against the node pid budget."""
+    found = set()
+    for item in items:
+        if item['kind'] == 'ResourceQuota':
+            role = next((r for r, name in QUOTAS.items() if name == item['metadata']['name']), None)
+            if role is None or set(item['spec']['hard']) != {'pods'}:
+                raise ValueError('Unexpected Tekton CI ResourceQuota')
+            item['spec']['hard']['pods'] = str(quotas[role])
+            found.add(role)
+    if found != set(QUOTAS):
+        raise ValueError('The Tekton CI candidate and fetch quotas are missing')
+    return items
+
+
 def require_ownership(run, kubectl, items, cluster_uid):
     """Refuse to adopt any existing namespace or cluster-scoped object this installation did not create.
 
@@ -358,7 +408,8 @@ def plan():
             'ciSHA256': ci_digest, 'namespace': CI_NAMESPACE, 'pipelines': list(PIPELINES)}
 
 
-def install(run, kubectl, cluster_uid, cache, timeout, repositories):
+def install(run, kubectl, cluster_uid, cache, timeout, repositories, quotas=None):
+    quotas = quotas or pod_quotas()
     lock, lock_digest = lockfile()
     config, config_digest = configuration()
     ci_raw, ci_digest = ci_manifests()
@@ -370,7 +421,8 @@ def install(run, kubectl, cluster_uid, cache, timeout, repositories):
     apply(run, kubectl, tekton)
     wait_ready(run, kubectl, lock, timeout)
     # Tekton kinds are only known to kubectl once the CRDs are established.
-    ci = desired_ci(objects(run, kubectl, b'\n---\n'.join(ci_raw[name] for name in CI_FILES)) + claims, cluster_uid)
+    ci = apply_pod_quotas(desired_ci(objects(run, kubectl, b'\n---\n'.join(ci_raw[name] for name in CI_FILES)) + claims,
+                                     cluster_uid), quotas)
     require_ownership(run, kubectl, ci, cluster_uid)
     # A server dry run cannot create the namespace its other objects need.
     apply(run, kubectl, [i for i in ci if i['kind'] == 'Namespace'])
@@ -386,13 +438,16 @@ def install(run, kubectl, cluster_uid, cache, timeout, repositories):
     if not observation['ready']:
         raise ValueError('Tekton CI is not ready after installation; owned state is retained for reapplication')
     return dict(observation, lockSHA256=lock_digest, configurationSHA256=config_digest, ciSHA256=ci_digest,
-                admissionAttempts=attempts, releasedAssistants=released, cacheClaims={r: cache_claim(r) for r in sorted(set(repositories))})
+                admissionAttempts=attempts, releasedAssistants=released, podQuotas=quotas,
+                cacheClaims={r: cache_claim(r) for r in sorted(set(repositories))})
 
 
 def validate_options(args):
     if not getattr(args, 'tekton_ci', None):
         if getattr(args, 'tekton_ci_repository', None):
             raise ValueError('--tekton-ci-repository requires --tekton-ci')
+        if getattr(args, 'tekton_ci_candidate_pods', None) is not None or getattr(args, 'tekton_ci_fetch_pods', None) is not None:
+            raise ValueError('--tekton-ci-candidate-pods and --tekton-ci-fetch-pods require --tekton-ci')
         return
     if args.command not in ('plan', 'local', 'status'):
         raise ValueError('--tekton-ci requires plan, local or status')
@@ -400,6 +455,7 @@ def validate_options(args):
         raise ValueError('--tekton-ci supports the kind platform only; Konflux and OpenShift provide their own Tekton')
     for repository in getattr(args, 'tekton_ci_repository', None) or []:
         cache_claim(repository)
+    pod_quotas(getattr(args, 'tekton_ci_candidate_pods', None), getattr(args, 'tekton_ci_fetch_pods', None))
 
 
 def cache_dir():

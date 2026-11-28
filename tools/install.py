@@ -27,6 +27,7 @@ import github_merge_policy
 import konflux_runtime_install
 import openshift_install
 import build_runtime_install
+import kind_nodes
 import tekton_ci_install
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -512,6 +513,11 @@ def _main(argv, stack):
     parser.add_argument('--dependency-proxy', help='Deploy the in-cluster dependency proxy for maven, npm or maven,npm (docs/operations/dependency-cache.md); omitting it on a later install removes it')
     parser.add_argument('--tekton-ci', action='store_true', default=None, help='Install pinned Tekton Pipelines and the reviewed Maven CI pipeline (docs/operations/tekton-ci.md); kind only')
     parser.add_argument('--tekton-ci-repository', action='append', help='Repository (owner/name) that gets its own Tekton CI Maven cache; repeatable; default: --repository')
+    parser.add_argument('--tekton-ci-candidate-pods', type=int, help='Tekton CI candidate-code (build-test) pods that may run at once (1-32, default 1); checked against the node pid budget')
+    parser.add_argument('--tekton-ci-fetch-pods', type=int, help='Tekton CI fetch pods that may run at once (1-32, default 1); checked against the node pid budget')
+    parser.add_argument('--node-pids-limit', type=int, help='Pid limit of each kind node container (default 8192, or a quarter of the host pid_max or threads-max when smaller; without the option a larger limit already set is kept); kind only (docs/operations/kind-node-resources.md)')
+    parser.add_argument('--node-memory', help='Optional memory cap of each kind node container, for example 12g; off by default; kind only')
+    parser.add_argument('--node-cpus', help='Optional CPU cap of each kind node container, for example 8 or 6.5; off by default; kind only')
     parser.add_argument('--console-images', type=Path, help='Reviewed console-images.json from tools/install_images.py --include-console; default: beside the image lock')
     parser.add_argument('--generation-seconds', type=int, help='Generation time budget in seconds (600-900, default 600); candidate or verification only, recorded in the execution configuration')
     parser.add_argument('--generation-steps', type=int, help='Generation SCC tool-step budget (24-32, default 24; above 24 requires --model-upstream); candidate or verification only, recorded in the execution configuration')
@@ -547,6 +553,17 @@ def _main(argv, stack):
     konflux_runtime_install.validate_options(args)
     openshift_install.validate_options(args)
     tekton_ci_install.validate_options(args)
+    node_resources = kind_nodes.validate_options(args)
+    node_budget = None
+    tekton_quotas = tekton_ci_install.pod_quotas(args.tekton_ci_candidate_pods, args.tekton_ci_fetch_pods) if args.tekton_ci else None
+    if node_resources is not None and args.command == 'plan':
+        # The node must hold its baseline, one verification run when sandboxed
+        # execution is installed, and every CI pod the quotas admit. local
+        # checks before creating a cluster, and a reinstall in reconcile_nodes
+        # against the nodes' effective limit and the installed quotas.
+        node_budget = kind_nodes.pid_budget(node_resources['pidsLimit'], sandbox=args.profile in ('candidate', 'verification'),
+                                            candidate_pods=(tekton_quotas or {}).get('candidate', 0),
+                                            fetch_pods=(tekton_quotas or {}).get('fetch', 0))
     if args.runtime_class is not None:
         import candidate_install
         candidate_install.validate_runtime_class(args.runtime_class)
@@ -687,7 +704,8 @@ def _main(argv, stack):
                           'buildEnabled': build_bundle is not None,
                           # Only with the option: default output is unchanged.
                           **({'flowConsoleEnabled': True} if args.flow_console else {}),
-                          **({'tektonCI': tekton_plan} if tekton_plan else {}),
+                          **({'tektonCI': dict(tekton_plan, podQuotas=tekton_quotas)} if tekton_plan else {}),
+                          **({'nodeResources': dict(node_resources, pidBudget=node_budget)} if node_resources else {}),
                           'githubAuth': args.github_auth, 'repository': args.repository,
                           'environment': args.environment, 'configurationDigest': config_digest}, indent=2))
         return 0
@@ -730,6 +748,11 @@ def _main(argv, stack):
         if args.command in ('status', 'credentials', 'sandbox') and args.cluster not in clusters:
             raise ValueError('The requested local cluster does not exist')
         created = args.cluster not in clusters
+        if created and node_resources is not None and args.command == 'local':
+            # Refuse an impossible budget before creating anything.
+            node_budget = kind_nodes.pid_budget(node_resources['pidsLimit'], sandbox=args.profile in ('candidate', 'verification'),
+                                                candidate_pods=(tekton_quotas or {}).get('candidate', 0),
+                                                fetch_pods=(tekton_quotas or {}).get('fetch', 0))
         if created:
             run([kind, 'create', 'cluster', '--name', args.cluster, '--config', LOCAL / 'kind.yaml',
                  '--kubeconfig', kubeconfig, '--wait', args.timeout], env=env)
@@ -745,6 +768,30 @@ def _main(argv, stack):
             konflux_runtime_install.verify_cluster(run, kubectl, state, args.cluster, provider, cluster_uid)
         else:
             check_ownership(marker, args.cluster, provider, cluster_uid)
+
+    def reconcile_nodes():
+        nonlocal node_budget
+        # The budget covers both the quotas in the cluster and any requested
+        # change, so it holds before, during and after this reconciliation,
+        # and whether or not this run reapplies Tekton CI. Sandboxed pods are
+        # counted when this run installs the offline runtime or it exists.
+        installed = tekton_ci_install.installed_pod_quotas(run, kubectl)
+        requested = tekton_quotas or {}
+        sandboxed = (args.command == 'sandbox' or args.profile in ('candidate', 'verification') or bool(run(
+            kubectl + ['get', 'runtimeclass', 'ai-sdlc-offline', '--ignore-not-found', '-o', 'name'],
+            capture_output=True).stdout.strip()))
+        # A default keeps a larger limit already on a node: budget against
+        # the smallest limit the nodes will actually have.
+        limit = kind_nodes.effective_limit(run, provider, args.cluster, kind, env, node_resources)
+        node_budget = kind_nodes.pid_budget(limit, sandbox=sandboxed,
+                                            candidate_pods=max(installed['candidate'], requested.get('candidate', 0)),
+                                            fetch_pods=max(installed['fetch'], requested.get('fetch', 0)))
+        # Set on creation and reconciled on every later install: podman's
+        # default node pid limit (2048) is too small (#859).
+        report = kind_nodes.apply_cluster(run, provider, args.cluster, kind, env, node_resources)
+        print(json.dumps({'nodeResources': report}), file=sys.stderr)
+        return report
+    node_report = None
     if args.command == 'local' and execution_values is not None:
         candidate_install.require_runtime_class(kubectl, args.runtime_class)
         candidate_install.require_unchanged_tool_budget(kubectl, execution_values)
@@ -777,6 +824,8 @@ def _main(argv, stack):
         if (policy is None or policy.get('metadata', {}).get('annotations', {}).get('ai-sdlc.io/cluster-uid') != cluster_uid
                 or scope.get('repository') != args.repository or scope.get('environment') != args.environment):
             raise ValueError('Install matching authority scope before configuring the offline runtime')
+        if node_resources is not None:
+            reconcile_nodes()
         lock = image_lock(args.images)
         result = offline_runtime.install(kubectl, provider, kind, args.cluster, cluster_uid,
                                          cache / 'offline-runtime',
@@ -798,6 +847,8 @@ def _main(argv, stack):
                        '--timeout', args.timeout])
         run(kubectl + ['rollout', 'status', 'deployment/local-path-provisioner',
                        '-n', 'local-path-storage', '--timeout', args.timeout])
+        if node_resources is not None:
+            node_report = reconcile_nodes()
     if args.platform != 'konflux':
         run(kubectl + ['apply', '-f', LOCAL / 'namespace.yaml'])
     if build_bundle is not None:
@@ -886,7 +937,8 @@ def _main(argv, stack):
     # After the runtime is ready: a Tekton failure leaves the runtime intact
     # and the owned Tekton state in place for reapplication.
     tekton_ci = tekton_ci_install.install(run, kubectl, cluster_uid, tekton_ci_install.cache_dir(), args.timeout,
-                                          args.tekton_ci_repository or [args.repository.lower()]) if args.tekton_ci else None
+                                          args.tekton_ci_repository or [args.repository.lower()],
+                                          tekton_quotas) if args.tekton_ci else None
     report = {'cluster': args.cluster, 'platform': args.platform, 'namespace': NAMESPACE, 'provider': provider,
               'repository': args.repository, 'environment': args.environment,
               'configurationDigest': config_digest,
@@ -903,6 +955,7 @@ def _main(argv, stack):
                           **({'flowConsoleEnabled': True} if args.flow_console else {}),
               'networkPolicyVerification': network,
               **({'tektonCI': tekton_ci} if tekton_ci else {}),
+              **({'nodeResources': {'nodes': node_report, 'pidBudget': node_budget}} if node_resources else {}),
               'images': image_lock(args.images)}
     (state / 'installation.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
