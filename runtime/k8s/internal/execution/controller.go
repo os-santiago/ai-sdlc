@@ -11,6 +11,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/podtransport"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/tektontasks"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
 
@@ -88,7 +89,7 @@ func DiagnosticStage(err error) string {
 		}
 	}
 	switch stopped.Stage {
-	case "source-preflight-authority", "sandbox-runtime-class", "source-rate-limited", "source-unavailable", "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "execution", "execution-authority", "execution-authority-snapshot-stale", "execution-observe", "execution-read", "execution-sequence", "execution-exit-race", "execution-tool-read", "execution-tool-sequence", "execution-tool-publish", "worker-exit", "export", "capture", "cleanup", "cleanup-pod", "cleanup-config", "cleanup-confirm":
+	case "source-preflight-authority", "sandbox-runtime-class", "source-rate-limited", "source-unavailable", "configuration", "ownership", "resources", "config", "pod", "readiness", "source", "model", "start", "tools", "execution", "execution-authority", "execution-authority-snapshot-stale", "execution-observe", "execution-read", "execution-sequence", "execution-exit-race", "execution-tool-read", "execution-tool-sequence", "execution-tool-publish", "worker-exit", "export", "capture", "cleanup", "cleanup-pod", "cleanup-config", "cleanup-confirm":
 		return stopped.Stage
 	}
 	if strings.HasPrefix(stopped.Stage, "model-") {
@@ -210,6 +211,11 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 	if err != nil {
 		return record, ControllerError{stage}
 	}
+	stage = "tools"
+	tools, err := generatorTools(ctx, prepared, load, session, func() (tektontasks.Cluster, error) { return client.TektonCluster() }, newToolJournal(db, scope.AllocationID))
+	if err != nil {
+		return record, ControllerError{stage}
+	}
 	stage = "start"
 	if err = l.RunEffect(ctx, stage, func(ctx context.Context, in EffectInput) (store.LifecycleResult, error) {
 		return store.LifecycleResult{UID: in.PodUID}, session.Start(ctx)
@@ -218,14 +224,14 @@ func RunController(ctx context.Context, db *store.DB, load LifecycleLoader, prep
 	}
 	stage = "execution"
 	dispatcher := modelbroker.Dispatcher{DB: db, Provider: provider, Mailbox: session, Authority: l}
-	if err = driveModel(ctx, session, func(ctx context.Context) error { _, e := l.Authorize(ctx, scope); return e }, func(ctx context.Context, request modelmailbox.Envelope) error {
+	if err = driveGeneration(ctx, session, func(ctx context.Context) error { _, e := l.Authorize(ctx, scope); return e }, func(ctx context.Context, request modelmailbox.Envelope) error {
 		result, e := dispatcher.Deliver(ctx, scope.AllocationID, prepared.Profile(), request)
 		if e != nil || !result.HandoffConfirmed {
 			stage = "model-" + modelbroker.SafeFailureStage(result.FailureStage)
 			return ErrAuthority
 		}
 		return nil
-	}); err != nil && !errors.Is(err, errWorkerNonzero) {
+	}, tools); err != nil && !errors.Is(err, errWorkerNonzero) {
 		var stopped driveStop
 		if stage == "execution" && errors.As(err, &stopped) {
 			stage = stopped.stage

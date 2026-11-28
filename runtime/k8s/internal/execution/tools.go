@@ -10,6 +10,7 @@ import (
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/executor"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/modelmailbox"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/project"
+	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/store"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/tektontasks"
 	"github.com/os-santiago/ai-sdlc/runtime/k8s/internal/workspacebundle"
 )
@@ -156,4 +157,27 @@ func generatorTools(ctx context.Context, prepared Prepared, load LifecycleLoader
 		return tektontasks.InvokeTool(ctx, c, journal, budget, m, call, a.SourceSHA, CIRuntimeClass, toolPoll)
 	}}
 	return dispatch.poll, nil
+}
+
+// storeToolJournal implements tektontasks.ToolJournal over the store's
+// tool_calls journal for one model allocation.
+type storeToolJournal struct {
+	db           *store.DB
+	allocationID string
+}
+
+func newToolJournal(db *store.DB, allocationID string) tektontasks.ToolJournal {
+	if db == nil || allocationID == "" {
+		return nil
+	}
+	return storeToolJournal{db: db, allocationID: allocationID}
+}
+
+func (j storeToolJournal) Begin(ctx context.Context, requestDigest string) (int, error) {
+	return j.db.BeginToolCall(ctx, j.allocationID, requestDigest)
+}
+
+func (j storeToolJournal) Finish(ctx context.Context, sequence int, r tektontasks.ToolRecord) error {
+	return j.db.FinishToolCall(ctx, j.allocationID, sequence, store.ToolCallRecord{PipelineRun: r.PipelineRun, Revision: r.Revision,
+		Tree: r.Tree, SummarySHA256: r.SummarySHA256, State: r.State})
 }
