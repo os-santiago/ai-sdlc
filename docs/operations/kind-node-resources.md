@@ -23,9 +23,10 @@ it creates the cluster and reconciles them on every later run.
 The pid limit is always reconciled to the requested value, or to the default
 when the option is omitted. It is lowered only while the node runs fewer pids
 than the new limit. Memory and CPU caps are set when requested and left as
-they are otherwise; to remove one, run `podman update --memory -1` (or
-`--cpus 0`) on the node. A memory cap below what the node already uses is
-refused.
+they are otherwise. A memory cap below what the node already uses is refused.
+`podman update` cannot remove a cap (`--memory 0` and `--cpus 0` leave it in
+place), so to lift one either pass a larger value (up to the host's memory or
+CPU count) or recreate the cluster.
 
 ## Why
 
