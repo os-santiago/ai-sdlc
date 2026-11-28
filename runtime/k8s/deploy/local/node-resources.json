@@ -9,7 +9,6 @@
   "pidBudget": {
     "nodeBaseline": 1100,
     "workerBaseline": 400,
-    "fetchPod": 150,
     "concurrentSandboxPods": 3
   },
   "workers": {
