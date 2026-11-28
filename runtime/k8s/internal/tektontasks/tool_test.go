@@ -197,6 +197,29 @@ func TestToolBudgetChargesTheJournalTime(t *testing.T) {
 	}
 }
 
+type stalledJournal struct{ memJournal }
+
+func (j *stalledJournal) Begin(ctx context.Context, _ string) (int, error) {
+	<-ctx.Done()
+	return 0, ctx.Err()
+}
+
+// The reservation bounds preparation too: a journal entry that stalls ends
+// at the budget's deadline, not at the caller's.
+func TestToolBudgetDeadlineBoundsTheJournalEntry(t *testing.T) {
+	budget := &ToolBudget{MaxCalls: 1, MaxSeconds: 1}
+	call := ToolCall{Tool: "build_test", Target: "rest-villains"}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	start := time.Now()
+	if _, err := InvokeTool(ctx, &fakeCluster{}, &stalledJournal{}, budget, manifest(), call, sha, "", time.Millisecond); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("stalled journal", err)
+	}
+	if took := time.Since(start); took < time.Second || took > 5*time.Second {
+		t.Fatal("deadline not the reservation", took)
+	}
+}
+
 func TestToolCallsDecodeStrictly(t *testing.T) {
 	if _, err := ParseToolCall([]byte(`{"tool":"build_test","target":"m","diff":"","extra":1}`)); err == nil {
 		t.Fatal("accepted an unknown field")

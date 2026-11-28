@@ -172,7 +172,11 @@ func InvokeTool(ctx context.Context, cluster Cluster, journal ToolJournal, budge
 	// The whole call counts against the budget, from the journal entry
 	// through the sweep and the run.
 	started := time.Now()
-	sequence, err := journal.Begin(ctx, call.Digest())
+	// One deadline, the reservation, bounds the journal entry, the sweep
+	// and the run; the failure journal and cleanup keep their own contexts.
+	runCtx, cancel := context.WithDeadline(ctx, started.Add(allowed))
+	defer cancel()
+	sequence, err := journal.Begin(runCtx, call.Digest())
 	if err != nil {
 		budget.settle(allowed, time.Since(started))
 		return ToolResult{}, err
@@ -184,12 +188,10 @@ func InvokeTool(ctx context.Context, cluster Cluster, journal ToolJournal, budge
 	}
 	if request.CandidateConfigMap != "" {
 		// Candidates a crashed or failed earlier call left unowned.
-		sweep, cancel := context.WithTimeout(ctx, 10*time.Second)
+		sweep, stopSweep := context.WithTimeout(runCtx, 10*time.Second)
 		_ = SweepCandidates(sweep, cluster, time.Now(), CandidateSweepAge)
-		cancel()
+		stopSweep()
 	}
-	runCtx, cancel := context.WithDeadline(ctx, started.Add(allowed))
-	defer cancel()
 	run := ""
 	outcome, err := RunReporting(runCtx, cluster, request, runtimeClass, poll, func(pipelineRun, configMap string) error {
 		if pipelineRun != "" {
