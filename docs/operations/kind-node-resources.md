@@ -77,6 +77,16 @@ for 2,048:
   candidate quota can rise to 6 with one fetch pod. At podman's 2,048 the
   verification profile is refused, which is issue #859.
 
+The installer checks this budget against both the quotas already in the
+cluster and the requested ones, so it holds before, during and after a
+reconciliation, and when a later run omits `--tekton-ci` (which keeps Tekton
+and its quotas). `./install.sh sandbox` counts the verification run too.
+
 No single pod can exceed its `podPidsLimit` and no scope its
-`DefaultTasksMax`, both well below the node limit, so a runaway pod still
-cannot exhaust the node.
+`DefaultTasksMax`, both well below the node limit, so one runaway pod cannot
+exhaust the node. The fetch term is a measurement, not a limit: only the
+`podPidsLimit` caps a fetch pod. The budget assumes fetch pods stay near their
+measured peak (146), which their reviewed, scriptless inputs make likely. Six
+candidate pods, one verification run and one fetch pod that grew to 768 would
+need 8,780 pids, more than 8,192, so re-measure before making a fetch task run
+unreviewed code (see [Tekton CI](tekton-ci.md#sandbox)).

@@ -129,6 +129,17 @@ def node_pid_limit(read):
     return int(value)
 
 
+def system_tasks_max(read, limit):
+    """The base systemd scales DefaultTasksMax against: the smallest of the
+    node's pid limit, kernel.threads-max and kernel.pid_max - 1."""
+    values = [limit] if limit is not None else []
+    for path, offset in (('/proc/sys/kernel/threads-max', 0), ('/proc/sys/kernel/pid_max', 1)):
+        raw = (read(path) or '').strip()
+        if raw.isdigit() and int(raw) > offset:
+            values.append(int(raw) - offset)
+    return min(values) if values else None
+
+
 def tasks_share(desired):
     """The DefaultTasksMax share of the reviewed drop-in, in permyriad."""
     value = next(line.split('=', 1)[1].strip() for line in desired.splitlines() if line.startswith('DefaultTasksMax='))
@@ -154,7 +165,9 @@ def sandbox_task_limit(read, write, command, node_exec, minimum=None):
     (tools/kind_nodes.py) instead of a number sized for one node size: 768 at
     2048, 3072 at 8192. systemd resolves the share against the current limit,
     so a later `podman update --pids-limit` moves it without a re-exec. The
-    resolved value must be at least the kubelet podPidsLimit (minimum), so a
+    resolved value (systemd scales the smallest of the pid limit,
+    kernel.threads-max and kernel.pid_max - 1) must be at least the kubelet
+    podPidsLimit (minimum), so a
     sandboxed pod is bounded by its pod limit; a smaller node is refused. A
     node without a pid limit (docker without one) already has a larger
     default and gets no drop-in. An earlier ai-sdlc drop-in is replaced
@@ -167,7 +180,8 @@ def sandbox_task_limit(read, write, command, node_exec, minimum=None):
     if minimum is None:
         minimum = json.loads((MANIFESTS / 'kubelet-pods.json').read_text())['podPidsLimit']
     limit = node_pid_limit(read)
-    if limit is not None and limit * share // 10000 < minimum:
+    base = system_tasks_max(read, limit)
+    if limit is not None and base * share // 10000 < minimum:
         raise ValueError('The kind node pid limit is too small for sandboxed pods; raise --node-pids-limit')
     current = read(TASKS_DROPIN)
     if current is not None and not current.startswith(DROPIN_MARK):
@@ -179,8 +193,9 @@ def sandbox_task_limit(read, write, command, node_exec, minimum=None):
     observed = shown()
     if current is None and limit is None and (observed is None or observed >= minimum):
         return observed
-    # systemd floors the share of the limit (pids.max or, unlimited, pid_max).
-    expected = None if limit is None else limit * share // 10000
+    # systemd floors the share of the smallest of pids.max, threads-max and
+    # pid_max - 1.
+    expected = None if limit is None else base * share // 10000
     if current != desired:
         command(node_exec + ['mkdir', '-p', '/etc/systemd/system.conf.d'])
         write(TASKS_DROPIN, desired)

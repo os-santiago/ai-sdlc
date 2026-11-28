@@ -254,6 +254,24 @@ def pod_quotas(candidate=None, fetch=None):
     return quotas
 
 
+def installed_pod_quotas(run, kubectl):
+    """The candidate and fetch pod quotas currently in the cluster (0 when
+    Tekton CI is not installed). Omitting --tekton-ci later keeps them, so the
+    node pid budget must cover them as well as any requested change."""
+    raw = run(kubectl + ['get', 'resourcequota', '-n', CI_NAMESPACE, '--ignore-not-found', '-o', 'json'],
+              capture_output=True).stdout
+    items = json.loads(raw).get('items', []) if raw.strip() else []
+    found = {role: 0 for role in QUOTAS}
+    for item in items:
+        role = next((r for r, name in QUOTAS.items() if name == item['metadata']['name']), None)
+        pods = str(item.get('spec', {}).get('hard', {}).get('pods', '0'))
+        if role is not None:
+            if not pods.isdigit():
+                raise ValueError('Unexpected Tekton CI pod quota value')
+            found[role] = int(pods)
+    return found
+
+
 def apply_pod_quotas(items, quotas):
     """Set the committed candidate and fetch ResourceQuotas to the configured
     pod counts; the installer checked them against the node pid budget."""

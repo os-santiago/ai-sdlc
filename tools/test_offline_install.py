@@ -170,6 +170,15 @@ class SandboxTaskLimitTests(unittest.TestCase):
         self.assertEqual(runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n']), 6144)
         self.assertFalse(any('daemon-reexec' in c for c in calls))
 
+    def test_the_value_follows_systemds_smallest_base(self):
+        # systemd scales the smallest of pids.max, threads-max and pid_max - 1.
+        files, calls, read, write, command = self.fake(pids_max='65536', reported=('4915', '12288'))
+        files['/proc/sys/kernel/threads-max'] = '32768\n'
+        files['/proc/sys/kernel/pid_max'] = '4194304\n'
+        self.assertEqual(runtime.sandbox_task_limit(read, write, command, ['podman', 'exec', 'n']), 12288)
+        self.assertEqual(runtime.system_tasks_max({'/proc/sys/kernel/pid_max': '4097\n'}.get, 8192), 4096)
+        self.assertEqual(runtime.system_tasks_max({}.get, None), None)
+
     def test_an_earlier_ai_sdlc_value_is_replaced(self):
         files, calls, read, write, command = self.fake(existing=runtime.DROPIN_MARK + ' old\n[Manager]\nDefaultTasksMax=768\n',
                                                        pids_max='8192', reported=('768', '3072'))

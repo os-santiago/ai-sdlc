@@ -97,7 +97,10 @@ def pid_budget(limit, sandbox=False, candidate_pods=0, fetch_pods=0):
     pod. Each sandboxed or candidate pod counts at the kubelet podPidsLimit,
     which bounds it; fetch pods run trusted inputs and count at their measured
     size. No single pod or systemd scope can exceed its own bound, so a
-    runaway pod cannot exhaust the node either way.
+    runaway pod cannot exhaust the node either way. The fetch term is a
+    measurement (146 for a Maven pod with tests), not a limit: only the
+    podPidsLimit caps a fetch pod, so the budget assumes fetch pods stay near
+    their measured size, which their reviewed, scriptless inputs make likely.
     """
     budget = policy()['pidBudget']
     pod = sandbox_pod_pids()

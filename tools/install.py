@@ -763,6 +763,19 @@ def _main(argv, stack):
             check_ownership(marker, args.cluster, provider, cluster_uid)
 
     def reconcile_nodes():
+        nonlocal node_budget
+        # The budget covers both the quotas in the cluster and any requested
+        # change, so it holds before, during and after this reconciliation,
+        # and whether or not this run reapplies Tekton CI. Sandboxed pods are
+        # counted when this run installs the offline runtime or it exists.
+        installed = tekton_ci_install.installed_pod_quotas(run, kubectl)
+        requested = tekton_quotas or {}
+        sandboxed = (args.command == 'sandbox' or args.profile in ('candidate', 'verification') or bool(run(
+            kubectl + ['get', 'runtimeclass', 'ai-sdlc-offline', '--ignore-not-found', '-o', 'name'],
+            capture_output=True).stdout.strip()))
+        node_budget = kind_nodes.pid_budget(node_resources['pidsLimit'], sandbox=sandboxed,
+                                            candidate_pods=max(installed['candidate'], requested.get('candidate', 0)),
+                                            fetch_pods=max(installed['fetch'], requested.get('fetch', 0)))
         # Set on creation and reconciled on every later install: podman's
         # default node pid limit (2048) is too small (#859).
         report = kind_nodes.apply_cluster(run, provider, args.cluster, kind, env, node_resources)

@@ -327,6 +327,18 @@ class InstallerOptionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'require --tekton-ci'):
             tekton.validate_options(SimpleNamespace(tekton_ci=None, tekton_ci_candidate_pods=2, command='local', platform='kind'))
 
+    def test_installed_pod_quotas_feed_the_node_budget(self):
+        quotas = {'items': [{'metadata': {'name': 'ai-sdlc-ci-candidate-pods'}, 'spec': {'hard': {'pods': '6'}}},
+                            {'metadata': {'name': 'ai-sdlc-ci-fetch-pods'}, 'spec': {'hard': {'pods': '1'}}},
+                            {'metadata': {'name': 'other'}, 'spec': {'hard': {'pods': 'x'}}}]}
+        run = Mock(return_value=completed(json.dumps(quotas)))
+        self.assertEqual(tekton.installed_pod_quotas(run, ['kubectl']), {'candidate': 6, 'fetch': 1})
+        self.assertIn('--ignore-not-found', run.call_args.args[0])
+        self.assertEqual(tekton.installed_pod_quotas(Mock(return_value=completed('')), ['kubectl']), {'candidate': 0, 'fetch': 0})
+        quotas['items'][0]['spec']['hard']['pods'] = '1Gi'
+        with self.assertRaises(ValueError):
+            tekton.installed_pod_quotas(Mock(return_value=completed(json.dumps(quotas))), ['kubectl'])
+
     def test_installer_entrypoint_rejects_option_outside_its_scope_before_effects(self):
         with patch.object(install, 'tools', side_effect=AssertionError('no tool bootstrap')), \
              self.assertRaisesRegex(ValueError, '--tekton-ci requires'):
