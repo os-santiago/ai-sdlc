@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"os"
 	"path/filepath"
 	"sort"
@@ -229,6 +231,7 @@ type fakeCluster struct {
 	deleted    []string
 	ownFails   bool
 	listed     []map[string]any
+	conflict   map[string]bool
 }
 
 func (f *fakeCluster) Cancel(_ context.Context, name string) error {
@@ -253,8 +256,11 @@ func (f *fakeCluster) ListCandidateConfigMaps(context.Context) ([]map[string]any
 	return f.listed, nil
 }
 
-func (f *fakeCluster) DeleteConfigMap(_ context.Context, name string) error {
-	f.deleted = append(f.deleted, name)
+func (f *fakeCluster) DeleteConfigMap(_ context.Context, name, uid, version string) error {
+	if f.conflict[name] {
+		return apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, name, errors.New("precondition failed"))
+	}
+	f.deleted = append(f.deleted, name+map[bool]string{true: "@" + uid + "/" + version, false: ""}[uid != ""])
 	return nil
 }
 
@@ -367,7 +373,7 @@ func TestCandidateRunsCarryTheDiffInAnOwnedConfigMap(t *testing.T) {
 	// left waiting for its workspace while holding a quota slot.
 	orphan := &fakeCluster{reads: []map[string]any{withTree}, ownFails: true}
 	if _, err := Run(context.Background(), orphan, request, "", time.Millisecond); !errors.Is(err, ErrOutcome) ||
-		orphan.cancelled != "run-1" || len(orphan.deleted) != 1 || !strings.HasPrefix(orphan.deleted[0], "ai-sdlc-candidate-"+hex.EncodeToString(sum[:])[:16]) {
+		orphan.cancelled != "run-1" || len(orphan.deleted) != 1 || strings.Contains(orphan.deleted[0], "@") || !strings.HasPrefix(orphan.deleted[0], "ai-sdlc-candidate-"+hex.EncodeToString(sum[:])[:16]) {
 		t.Fatal("unowned candidate left behind", err, orphan.cancelled, orphan.deleted)
 	}
 	for label, diff := range map[string]string{
@@ -402,16 +408,20 @@ func TestCandidateRunsCarryTheDiffInAnOwnedConfigMap(t *testing.T) {
 func TestSweepDeletesOnlyOldUnownedCandidates(t *testing.T) {
 	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
 	item := func(name string, age time.Duration, owned bool) map[string]any {
-		meta := map[string]any{"name": name, "creationTimestamp": now.Add(-age).Format(time.RFC3339)}
+		meta := map[string]any{"name": name, "uid": "uid-" + name[len(name)-6:], "resourceVersion": "7", "creationTimestamp": now.Add(-age).Format(time.RFC3339)}
 		if owned {
 			meta["ownerReferences"] = []any{map[string]any{"kind": "PipelineRun", "name": "r"}}
 		}
 		return map[string]any{"metadata": meta}
 	}
 	old := "ai-sdlc-candidate-0123456789abcdef-abc123"
+	raced := "ai-sdlc-candidate-0123456789abcdef-race00"
 	cluster := &fakeCluster{listed: []map[string]any{item(old, time.Hour, false), item("ai-sdlc-candidate-0123456789abcdef-new000", time.Minute, false),
-		item("ai-sdlc-candidate-0123456789abcdef-own000", time.Hour, true), item("kube-root-ca.crt", time.Hour, false)}}
-	if err := SweepCandidates(context.Background(), cluster, now, CandidateSweepAge); err != nil || len(cluster.deleted) != 1 || cluster.deleted[0] != old {
+		item("ai-sdlc-candidate-0123456789abcdef-own000", time.Hour, true), item("kube-root-ca.crt", time.Hour, false), item(raced, time.Hour, false)},
+		conflict: map[string]bool{raced: true}}
+	// The delete carries the observed uid and resourceVersion; one that a run
+	// took ownership of since the list fails its precondition and is skipped.
+	if err := SweepCandidates(context.Background(), cluster, now, CandidateSweepAge); err != nil || len(cluster.deleted) != 1 || cluster.deleted[0] != old+"@uid-abc123/7" {
 		t.Fatal("sweep", err, cluster.deleted)
 	}
 }

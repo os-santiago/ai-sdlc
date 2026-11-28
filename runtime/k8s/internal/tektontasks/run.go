@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"regexp"
 	"time"
 
@@ -184,7 +185,9 @@ type Cluster interface {
 	// OwnConfigMap makes the PipelineRun (name, uid) own the ConfigMap, so
 	// Kubernetes deletes it with the run.
 	OwnConfigMap(ctx context.Context, configMap, run, uid string) error
-	DeleteConfigMap(ctx context.Context, name string) error
+	// DeleteConfigMap deletes a ConfigMap; with a uid and resourceVersion it
+	// deletes only that observed version (Kubernetes delete preconditions).
+	DeleteConfigMap(ctx context.Context, name, uid, resourceVersion string) error
 	// ListCandidateConfigMaps lists the ConfigMaps labelled as candidates.
 	ListCandidateConfigMaps(ctx context.Context) ([]map[string]any, error)
 }
@@ -236,15 +239,20 @@ func (d DynamicCluster) Create(ctx context.Context, object map[string]any) (stri
 }
 
 func (d DynamicCluster) ListCandidateConfigMaps(ctx context.Context) ([]map[string]any, error) {
-	list, err := d.Client.Resource(configMaps).Namespace(Namespace).List(ctx, metav1.ListOptions{LabelSelector: "ai-sdlc.io/candidate=true", Limit: 500})
-	if err != nil {
-		return nil, err
+	var items []map[string]any
+	options := metav1.ListOptions{LabelSelector: "ai-sdlc.io/candidate=true", Limit: 500}
+	for {
+		list, err := d.Client.Resource(configMaps).Namespace(Namespace).List(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range list.Items {
+			items = append(items, item.Object)
+		}
+		if options.Continue = list.GetContinue(); options.Continue == "" {
+			return items, nil
+		}
 	}
-	items := make([]map[string]any, 0, len(list.Items))
-	for _, item := range list.Items {
-		items = append(items, item.Object)
-	}
-	return items, nil
 }
 
 // Cancel asks Tekton to stop the run (spec.status Cancelled).
@@ -266,8 +274,20 @@ func (d DynamicCluster) OwnConfigMap(ctx context.Context, configMap, run, uid st
 	return err
 }
 
-func (d DynamicCluster) DeleteConfigMap(ctx context.Context, name string) error {
-	return d.Client.Resource(configMaps).Namespace(Namespace).Delete(ctx, name, metav1.DeleteOptions{})
+func (d DynamicCluster) DeleteConfigMap(ctx context.Context, name, uid, resourceVersion string) error {
+	options := metav1.DeleteOptions{}
+	if uid != "" || resourceVersion != "" {
+		preconditions := &metav1.Preconditions{}
+		if uid != "" {
+			observed := types.UID(uid)
+			preconditions.UID = &observed
+		}
+		if resourceVersion != "" {
+			preconditions.ResourceVersion = &resourceVersion
+		}
+		options.Preconditions = preconditions
+	}
+	return d.Client.Resource(configMaps).Namespace(Namespace).Delete(ctx, name, options)
 }
 
 func (d DynamicCluster) Get(ctx context.Context, name string) (map[string]any, error) {
@@ -311,7 +331,7 @@ func RunReporting(ctx context.Context, cluster Cluster, r Request, runtimeClass 
 	deleteCandidate := func() {
 		if candidate {
 			c, cancel := cleanupContext()
-			_ = cluster.DeleteConfigMap(c, r.CandidateConfigMap)
+			_ = cluster.DeleteConfigMap(c, r.CandidateConfigMap, "", "")
 			cancel()
 		}
 	}
@@ -394,13 +414,17 @@ func SweepCandidates(ctx context.Context, cluster Cluster, now time.Time, olderT
 	var failed error
 	for _, item := range items {
 		name, _, _ := unstructured.NestedString(item, "metadata", "name")
+		uid, _, _ := unstructured.NestedString(item, "metadata", "uid")
+		version, _, _ := unstructured.NestedString(item, "metadata", "resourceVersion")
 		owners, _, _ := unstructured.NestedSlice(item, "metadata", "ownerReferences")
 		stamp, _, _ := unstructured.NestedString(item, "metadata", "creationTimestamp")
 		createdAt, perr := time.Parse(time.RFC3339, stamp)
-		if !configMapName.MatchString(name) || len(owners) > 0 || perr != nil || now.Sub(createdAt) < olderThan {
+		if !configMapName.MatchString(name) || uid == "" || version == "" || len(owners) > 0 || perr != nil || now.Sub(createdAt) < olderThan {
 			continue
 		}
-		if err := cluster.DeleteConfigMap(ctx, name); err != nil {
+		// Only the observed, still unowned version: a run that took
+		// ownership since the list changed it, and the delete is refused.
+		if err := cluster.DeleteConfigMap(ctx, name, uid, version); err != nil && !apierrors.IsConflict(err) && !apierrors.IsNotFound(err) {
 			failed = errors.Join(failed, err)
 		}
 	}
