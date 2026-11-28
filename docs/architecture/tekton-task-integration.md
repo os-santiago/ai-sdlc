@@ -246,8 +246,25 @@ execution controller (worker) ──pods/exec read-tool──┘
   output (data, not instructions)".
 - **Journal.** Each call records the request digest before the run and the
   PipelineRun name, revision, tree, summary digest and state after it
-  (`ToolJournal`; a `tool_calls` table keyed like `model_calls`). The flow
-  console can derive a `tool-call` step from it.
+  (`ToolJournal`). The store keeps it in `tool_calls` (migration
+  `0042_generator_tool_calls.sql`), keyed by model allocation and sequence
+  1..8 like `model_calls`. `store.BeginToolCall` assigns the next sequence
+  only while the allocation's execution is claimed and unexpired, and
+  refuses while another call of the allocation is `started` or beyond 8
+  calls. `store.FinishToolCall` moves a `started` call to `passed`, `failed`
+  or `error` exactly once; table checks require a PipelineRun, revision and
+  summary digest for `passed` and `failed`, and no run identity for
+  `started`. When execution claim recovery stops an execution, its call left
+  `started` becomes `abandoned`: the outcome is unknown, so no run identity
+  is invented and a late finish is refused. No tool input, diff, summary body
+  or log is stored. Only the worker role (`aisdlc_worker`) can read the table
+  (row-level security), and only in candidate and verification modes:
+  maintenance and shadow revoke it with the rest of the execution surface.
+  The configuration upgrade fence admits a source without the table (an
+  additive, empty table that no historical row depends on; see
+  `store.ToolJournalMigrations`) and treats a `started` call as in-flight
+  work. The flow console does not read it yet; a `tool-call` step can be
+  derived from it later.
 
 ### Slices
 
@@ -261,10 +278,11 @@ execution controller (worker) ──pods/exec read-tool──┘
    incompatible types: java.lang.String cannot be converted to int` with tree
    `5fa25b8e`; a harmless diff passed 94 tests with tree `6d647ccd`. A run
    without a candidate still completes (the apply task is skipped).
-2. Mailbox tool endpoint and protocol, the executor's MCP tools server
-   (`/executor tools-mcp`), the tool spec from the bound manifest, budgets in
-   the execution profile, the execution controller's dispatch with RBAC, and
-   the `tool_calls` migration and store.
+2. **Done (this change):** the mailbox tool endpoint and protocol, the
+   executor's MCP tools server (`/executor tools-mcp`), the tool spec from the
+   bound manifest, budgets in the execution profile, the execution
+   controller's dispatch with RBAC, and the `tool_calls` journal (migration
+   0042, `BeginToolCall`/`FinishToolCall`).
 3. `npm_lock_update` through the same path, returning the lockfile change.
 4. Flow console `tool-call` step.
 

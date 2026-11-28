@@ -25,7 +25,7 @@ var bootstrapTables = []string{
 	"outbox", "planning_heads", "plans", "production_handoffs", "production_records", "promotion_handoffs", "promotion_records", "promotion_requests", "provenance_handoffs", "provenance_records", "provenance_requests",
 	"publication_effects", "publication_handoffs", "publication_requests", "published_records", "release_gates",
 	"repair_model_budgets", "review_effects", "review_feedback", "review_model_calls", "review_repair_handoffs", "review_repair_stops", "review_runs", "schema_migrations",
-	"terminal_intents", "terminal_receipts", "terminal_requests", "terminal_sends",
+	"terminal_intents", "terminal_receipts", "terminal_requests", "terminal_sends", "tool_calls",
 	"verification_effects", "verification_handoffs", "verification_requests", "work_items",
 }
 
